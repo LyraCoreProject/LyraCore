@@ -197,10 +197,10 @@ fn scanned_roots() -> Vec<(&'static str, Vec<PathBuf>)> {
                  test would pass by looking at nothing while a `spacetime publish -c` sat in the \
                  repo waiting to wipe every account and character row"
             );
-            println!(
+            crate::test_scan::note(&format!(
                 "note: skipping the destructive-publish scan of {dir}/ — it is not present in this \
                  checkout (the public mirror filters it out)"
-            );
+            ));
             continue;
         }
         let mut files = Vec::new();
@@ -397,8 +397,8 @@ spacetime publish -cy lyracore
         // When scripts/ IS here so is every other root (only the mirror filter removes them), so the
         // publish-site floor below still spans all four exactly as it did before.
         if !roots.iter().any(|(d, _)| *d == "scripts") {
-            println!(
-                "note: skipping the publish-site floor — scripts/ is not present in this checkout"
+            crate::test_scan::note(
+                "note: skipping the publish-site floor — scripts/ is not present in this checkout",
             );
             return;
         }

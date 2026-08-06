@@ -136,11 +136,28 @@ pub(crate) fn is_installed(rel: &str) -> bool {
     optional_owner(rel).is_none_or(|dir| repo_root().join(dir).is_dir())
 }
 
+/// Emit a one-line note about a skipped scan.
+///
+/// Deliberately NOT one of the std print macros. `spacetime generate` — which preflight runs to
+/// extract the module schema — text-scans every file under `module/src/` for those macro names and
+/// fails the build on a hit. That scan understands nothing: not `#[cfg]` (so the notes here and in
+/// `publish_safety` tripped it even though both modules are `#[cfg(test)]` and reach no wasm), and
+/// not comments (so naming the macros in THIS doc comment tripped it too — don't). The stderr
+/// variant is no escape either; the scan matches it twice over. Writing to the stream directly says
+/// the same thing and is invisible to a scan looking for macro names.
+///
+/// stderr, not stdout, because the test harness does not capture it — so these notes surface
+/// without `--nocapture`, which is the whole point of emitting them.
+pub(crate) fn note(message: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "{message}");
+}
+
 /// Read a repo-relative source file for a scan.
 ///
 /// * `Some(contents)` — scan it, exactly as an `include_str!` would have.
 /// * `None` — the file's whole optional directory is not installed in this checkout; a one-line
-///   note is printed so a skip is never silent in the test output.
+///   note is emitted so a skip is never silent in the test output.
 ///
 /// Panics if the file is missing while its directory IS installed: that is the path-typo case, and
 /// a scan that cannot find its target has lost its pin, not passed it.
@@ -149,7 +166,9 @@ pub(crate) fn read_scanned(rel: &str) -> Option<String> {
         Ok(src) => Some(src),
         Err(_) if !is_installed(rel) => {
             let dir = optional_owner(rel).unwrap_or_default();
-            println!("note: skipping the scan of {rel} — {dir}/ is not installed in this checkout");
+            note(&format!(
+                "note: skipping the scan of {rel} — {dir}/ is not installed in this checkout"
+            ));
             None
         }
         Err(e) => panic!(
