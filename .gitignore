@@ -27,3 +27,8 @@ gateway/gateway-stderr.log
 # Heap-profiling output from the `dhat-heap` feature (work-item 292, Runbook C).
 dhat-heap.json
 __pycache__/
+
+# cargo-mutants report output (#380). Regenerated on every run; the CI job uploads it as an
+# artifact instead. `.cargo/mutants.toml` is the configuration and IS checked in.
+/mutants.out/
+/mutants.out.old/

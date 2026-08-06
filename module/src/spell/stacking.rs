@@ -1,27 +1,22 @@
-//! Stacking-group exclusion + CC diminishing returns — work-item 192. ONE pure chokepoint,
-//! `resolve_aura_apply`, decides every conflict; `module/src/spell/cast.rs`'s `aura_apply` (already the
-//! sole `game_aura` insert site — verified by grep, see the work-item report) is the ONLY caller, so every
-//! aura placement in the engine routes through this file (the "filtered_gossip_options lesson": one
-//! chokepoint, never a second copy of the policy).
+//! Stacking-group exclusion + CC diminishing returns — work-item 192. `module/src/spell/cast/targeting.rs`'s
+//! `aura_apply` (already the sole `game_aura` insert site — verified by grep, see the work-item report) is
+//! the ONLY caller of `apply_group_conflict`/`resolve_dr_for_target`, so every aura placement in the engine
+//! routes through this file (the "filtered_gossip_options lesson": one chokepoint, never a second copy of
+//! the policy).
 //!
-//! Three concerns share the one decision type (`ApplyDecision`) because they're mutually exclusive per
-//! effect (a spell effect is either a stacking-group member OR a CC-DR effect, never both in today's
-//! data):
+//! Two concerns, two pure decision fns, sharing one result type (`ApplyDecision`) — they're mutually
+//! exclusive per effect (a spell effect is either a stacking-group member OR a CC-DR effect, never both in
+//! today's data), so there's no shared "incoming application" struct pretending to unify them:
 //!   1. STACKING GROUPS (`game_spell_group` + `game_spell_group_rule`) — same-effect exclusive families
 //!      across casters/spells (Fortitude, Blessings, armor debuffs, ...). Module-only tables (no
 //!      `public`, no gateway binding — mirrors the `game_spell_chain`/`game_spell_learn` precedent),
 //!      because `game_aura` itself carries everything the client needs (the eviction just deletes rows);
 //!      NO `game_aura` column was added for this (verified: see the report's "zero subscribed-schema
-//!      change" note).
+//!      change" note). Decided by [`resolve_group_conflict`].
 //!   2. CC DIMINISHING RETURNS (`game_dr_state`) — PLAYER targets only; same-category CC within 15s of
 //!      the PREVIOUS REMOVAL lands at 100/50/25/0% duration. The window starts at REMOVAL (natural expiry
-//!      OR dispel), never at apply — the classically-misimplemented part the work item calls out.
-//!
-//! Divergence from the work item's literal `resolve_aura_apply(incoming, existing, dr_state, now)`
-//! sketch: `dr_state` is folded into `incoming.dr` (an `Option<DrRequest>`) rather than a separate
-//! top-level parameter, since a single call is always EITHER a group check (`existing` populated,
-//! `incoming.dr == None`) OR a DR check (`incoming.dr == Some`, `existing` empty) — never both. Still one
-//! pure fn, one shared `ApplyDecision` result, one call site per concern in `cast.rs`.
+//!      OR dispel), never at apply — the classically-misimplemented part the work item calls out. Decided
+//!      by [`resolve_dr`].
 
 use spacetimedb::{log, table, ReducerContext, Table};
 
@@ -80,7 +75,7 @@ pub(crate) const RULE_EXCLUSIVE_STRONGER: u8 = 3;
 /// `dr_pre_level`). `window_expires_micros` is stamped at APPLY time as a PROVISIONAL value (this aura's
 /// own scaled expiry + 15s, so a recast of the SAME spell while it's still active reads a sane in-window
 /// state) and OVERWRITTEN with the AUTHORITATIVE value at REMOVAL (natural expiry in
-/// `scheduler::tick_auras`, or dispel in `math::dispel_target`) — see `bump_dr_level` / `dr_window_on_removal`.
+/// `scheduler::tick_auras`, or dispel in `effects::dispel_target`) — see `bump_dr_level` / `dr_window_on_removal`.
 /// [entity]
 #[table(accessor = game_dr_state, index(accessor = by_target, btree(columns = [target_guid])))]
 pub struct DrState {
@@ -118,7 +113,7 @@ pub(crate) const DR_CAT_DISORIENT: u8 = 7;
 pub(crate) const DR_WINDOW_MICROS: i64 = 15_000_000;
 
 // ===========================================================================================
-//  Pure types + the ONE chokepoint fn.
+//  Pure types + the two chokepoint fns (resolve_group_conflict / resolve_dr).
 // ===========================================================================================
 
 /// A minimal snapshot of an EXISTING aura relevant to a stacking-group decision — just enough to compare
@@ -159,26 +154,8 @@ pub(crate) struct DrWindow {
     pub window_expires_micros: i64,
 }
 
-/// A CC-diminishing-returns request: the category this effect belongs to + the prior window state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct DrRequest {
-    pub category: u8,
-    pub prior: Option<DrWindow>,
-}
-
-/// The incoming aura application, pre-resolved by the caller (DB reads all happen BEFORE this fn — it's
-/// pure). Exactly one of `group_rule`/`dr` is `Some` in practice (see the module doc); both `None` is the
-/// overwhelmingly common case (a plain, unconflicted aura) and resolves to a full-duration `Apply`.
-#[derive(Clone, Debug)]
-pub(crate) struct IncomingAura {
-    pub caster_guid: u64,
-    pub strength: i32,
-    pub group_rule: Option<GroupRule>,
-    pub dr: Option<DrRequest>,
-}
-
-/// The chokepoint's verdict. `evict` is always empty for a DR decision (DR only scales/refuses, it never
-/// evicts another aura — the two concerns don't overlap).
+/// The verdict shared by both chokepoints below. `evict` is always empty for a DR decision (DR only
+/// scales/refuses, it never evicts another aura — the two concerns don't overlap).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ApplyDecision {
     Apply {
@@ -190,69 +167,65 @@ pub(crate) enum ApplyDecision {
     },
 }
 
-/// THE chokepoint (work-item 192). Every `game_aura` insert in the engine routes through
-/// `cast::aura_apply`, and `aura_apply` calls this fn for (a) a fresh stacking-group member application
-/// and (b) every `A_CONTROL(mechanic)` effect on a player target — so this is the ONE place stacking +
-/// DR policy is decided. Pure: no DB access, no logging, no side effects — callers do all the I/O
-/// (`apply_group_conflict`, `resolve_dr_for_target`) and act on the returned `ApplyDecision`.
-pub(crate) fn resolve_aura_apply(
-    incoming: &IncomingAura,
+/// THE stacking-group chokepoint (work-item 192). Called by `apply_group_conflict` for a fresh
+/// stacking-group member application (a same-spell refresh never reaches this — see that fn's doc). Pure:
+/// no DB access, no logging, no side effects — the caller does all the I/O and acts on the returned
+/// `ApplyDecision`.
+pub(crate) fn resolve_group_conflict(
+    caster_guid: u64,
+    strength: i32,
+    rule: GroupRule,
     existing: &[AuraSummary],
-    now_micros: i64,
 ) -> ApplyDecision {
-    if let Some(rule) = incoming.group_rule {
-        return match rule {
-            GroupRule::Stacks => ApplyDecision::Apply {
-                duration_scale_bp: 10_000,
-                evict: Vec::new(),
-            },
-            GroupRule::Exclusive => ApplyDecision::Apply {
-                duration_scale_bp: 10_000,
-                evict: existing.iter().map(|a| a.aura_id).collect(),
-            },
-            GroupRule::ExclusivePerCaster => ApplyDecision::Apply {
-                duration_scale_bp: 10_000,
-                evict: existing
-                    .iter()
-                    .filter(|a| a.caster_guid == incoming.caster_guid)
-                    .map(|a| a.aura_id)
-                    .collect(),
-            },
-            GroupRule::ExclusiveStronger => {
-                if let Some(strongest) = existing.iter().map(|a| a.strength).max() {
-                    if strongest > incoming.strength {
-                        return ApplyDecision::Refuse { reason: "weaker" };
-                    }
-                }
-                ApplyDecision::Apply {
-                    duration_scale_bp: 10_000,
-                    evict: existing.iter().map(|a| a.aura_id).collect(),
+    match rule {
+        GroupRule::Stacks => ApplyDecision::Apply {
+            duration_scale_bp: 10_000,
+            evict: Vec::new(),
+        },
+        GroupRule::Exclusive => ApplyDecision::Apply {
+            duration_scale_bp: 10_000,
+            evict: existing.iter().map(|a| a.aura_id).collect(),
+        },
+        GroupRule::ExclusivePerCaster => ApplyDecision::Apply {
+            duration_scale_bp: 10_000,
+            evict: existing
+                .iter()
+                .filter(|a| a.caster_guid == caster_guid)
+                .map(|a| a.aura_id)
+                .collect(),
+        },
+        GroupRule::ExclusiveStronger => {
+            if let Some(strongest) = existing.iter().map(|a| a.strength).max() {
+                if strongest > strength {
+                    return ApplyDecision::Refuse { reason: "weaker" };
                 }
             }
-        };
+            ApplyDecision::Apply {
+                duration_scale_bp: 10_000,
+                evict: existing.iter().map(|a| a.aura_id).collect(),
+            }
+        }
     }
+}
 
-    if let Some(dr) = &incoming.dr {
-        let pre_level = dr_pre_level(dr.prior, now_micros);
-        return match dr_scale_bp(pre_level) {
-            Some(bp) => ApplyDecision::Apply {
-                duration_scale_bp: bp,
-                evict: Vec::new(),
-            },
-            None => ApplyDecision::Refuse { reason: "immune" },
-        };
-    }
-
-    // No group, no DR: the vast majority of aura applications — a plain, unconflicted, full-duration Apply.
-    ApplyDecision::Apply {
-        duration_scale_bp: 10_000,
-        evict: Vec::new(),
+/// THE CC-diminishing-returns chokepoint (work-item 192). Called by `resolve_dr_for_target` for every
+/// `A_CONTROL(mechanic)` effect on a player target. `prior` is the DR window state read for this
+/// `(target, category)` BEFORE this application (`None` if the target has never taken this category of
+/// CC, or its prior window has lapsed by `now_micros`). Pure: no DB access, no logging, no side effects —
+/// the caller does all the I/O and acts on the returned `ApplyDecision`.
+pub(crate) fn resolve_dr(prior: Option<DrWindow>, now_micros: i64) -> ApplyDecision {
+    match dr_scale_bp(dr_pre_level(prior, now_micros)) {
+        Some(bp) => ApplyDecision::Apply {
+            duration_scale_bp: bp,
+            evict: Vec::new(),
+        },
+        None => ApplyDecision::Refuse { reason: "immune" },
     }
 }
 
 /// The DR level EFFECTIVE for an application at `now_micros`: the stored level IF a window is still live
 /// (`now_micros <= window_expires_micros`), else 0 (no row, or the window lapsed — a fresh chain). Shared
-/// by `resolve_aura_apply`'s DR branch and `bump_dr_level` (so the "what level are we bumping FROM" logic
+/// by `resolve_dr` and `bump_dr_level` (so the "what level are we bumping FROM" logic
 /// has exactly one definition).
 pub(crate) fn dr_pre_level(prior: Option<DrWindow>, now_micros: i64) -> u8 {
     match prior {
@@ -304,7 +277,7 @@ pub(crate) fn rank_of(ctx: &ReducerContext, spell_id: u32) -> u8 {
 /// Creatures are explicitly OUT (per the work item: "creatures take full duration, skip the PvE stun cap"
 /// — this fn returning `None` for a creature is exactly that skip). The ONE mapping both the apply-side
 /// (`cast::aura_apply`, before the row exists — passes the raw effect fields) and the two removal-side
-/// hooks (`scheduler::tick_auras`'s expiry pass, `math::dispel_target` — pass an existing `Aura` row's
+/// hooks (`scheduler::tick_auras`'s expiry pass, `effects::dispel_target` — pass an existing `Aura` row's
 /// frozen `eff_*` fields) go through, so "is this aura DR-tracked" has exactly one definition.
 pub(crate) fn dr_category_for_effect(
     ctx: &ReducerContext,
@@ -342,7 +315,7 @@ const fn dr_category_for_mechanic(mechanic: i32) -> Option<u8> {
 }
 
 // ===========================================================================================
-//  ctx-bound orchestration — the DB I/O around the pure fn above. Called from `cast::aura_apply` (the
+//  ctx-bound orchestration — the DB I/O around the two pure fns above. Called from `cast::aura_apply` (the
 //  chokepoint) and the two removal paths.
 // ===========================================================================================
 
@@ -401,13 +374,7 @@ pub(crate) fn apply_group_conflict(
             ),
         })
         .collect();
-    let incoming = IncomingAura {
-        caster_guid,
-        strength,
-        group_rule: Some(rule),
-        dr: None,
-    };
-    match resolve_aura_apply(&incoming, &members, 0) {
+    match resolve_group_conflict(caster_guid, strength, rule, &members) {
         ApplyDecision::Refuse { reason } => {
             log::info!(
                 "stacking group {group_id}: spell {spell_id} onto {target_guid} refused ({reason})"
@@ -441,13 +408,7 @@ pub(crate) fn resolve_dr_for_target(
             level: r.level,
             window_expires_micros: r.window_expires_micros,
         });
-    let incoming = IncomingAura {
-        caster_guid: 0,
-        strength: 0,
-        group_rule: None,
-        dr: Some(DrRequest { category, prior }),
-    };
-    resolve_aura_apply(&incoming, &[], now_micros)
+    resolve_dr(prior, now_micros)
 }
 
 /// Persist the DR level bump after a successful `Apply` from `resolve_dr_for_target` — increments the
@@ -494,7 +455,7 @@ pub(crate) fn bump_dr_level(
 
 /// Stamp the AUTHORITATIVE DR window on `(target_guid, category)`'s removal — `removed_at_micros + 15s`,
 /// per the work item's "window starts at removal" pin. Called from BOTH removal paths:
-/// `scheduler::tick_auras`'s natural-expiry pass and `math::dispel_target`'s dispel. No-op if no row exists
+/// `scheduler::tick_auras`'s natural-expiry pass and `effects::dispel_target`'s dispel. No-op if no row exists
 /// (can't happen in practice — a DR-tracked aura always got `bump_dr_level`'d at its own apply — but
 /// defensive rather than materializing a level-0 row purely from a removal).
 pub(crate) fn dr_window_on_removal(
@@ -515,16 +476,12 @@ pub(crate) fn dr_window_on_removal(
 }
 
 /// Reap `game_dr_state` rows whose window has long lapsed — pure bookkeeping (a lapsed window already
-/// reads as level-0/fresh via `dr_pre_level`, so this is a size-bound, not a correctness fix). NOT wired
-/// into `gc.rs` here (out of this work item's territory this wave — gc.rs is orchestrator-owned): the
-/// orchestrator adds ONE call, `crate::spell::stacking::sweep_dr_state(ctx);`, at the end of
-/// `gc::reap_movement_events` (module/src/gc.rs) — `game_dr_state` doesn't fit the file's `reap!` macro
-/// (that macro assumes an `id: u64` + `created_at: Timestamp` shape; this table's time column is a plain
-/// `i64`, and its liveness test is `window_expires_micros`, not the row's own age), so a bespoke call is
-/// the right shape, mirroring the teleport-event / corpse-decay bespoke blocks already in that file.
-/// `#[allow(dead_code)]`: unused until that one line lands (this wave's territory boundary — see the
-/// work-item report).
-#[allow(dead_code)]
+/// reads as level-0/fresh via `dr_pre_level`, so this is a size-bound, not a correctness fix). WIRED into
+/// `gc::reap_movement_events` (module/src/gc.rs) via one bespoke call — `game_dr_state` doesn't fit the
+/// file's `reap!` macro (that macro assumes an `id: u64` + `created_at: Timestamp` shape; this table's
+/// time column is a plain `i64`, and its liveness test is `window_expires_micros`, not the row's own age),
+/// so a bespoke call is the right shape, mirroring the teleport-event / corpse-decay bespoke blocks
+/// already in that file.
 pub(crate) fn sweep_dr_state(ctx: &ReducerContext) {
     let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
     let table = ctx.db.game_dr_state();
@@ -554,14 +511,13 @@ mod tests {
             caster_guid: 200,
             strength: compute_strength(1, 20),
         };
-        let rank2_a = IncomingAura {
-            caster_guid: 100,
-            strength: compute_strength(2, 34),
-            group_rule: Some(GroupRule::ExclusiveStronger),
-            dr: None,
-        };
         assert_eq!(
-            resolve_aura_apply(&rank2_a, &[rank1_b], 0),
+            resolve_group_conflict(
+                100,
+                compute_strength(2, 34),
+                GroupRule::ExclusiveStronger,
+                &[rank1_b],
+            ),
             ApplyDecision::Apply {
                 duration_scale_bp: 10_000,
                 evict: vec![42]
@@ -574,14 +530,13 @@ mod tests {
             caster_guid: 200,
             strength: compute_strength(2, 34),
         };
-        let rank1_a = IncomingAura {
-            caster_guid: 100,
-            strength: compute_strength(1, 20),
-            group_rule: Some(GroupRule::ExclusiveStronger),
-            dr: None,
-        };
         assert_eq!(
-            resolve_aura_apply(&rank1_a, &[rank2_b], 0),
+            resolve_group_conflict(
+                100,
+                compute_strength(1, 20),
+                GroupRule::ExclusiveStronger,
+                &[rank2_b],
+            ),
             ApplyDecision::Refuse { reason: "weaker" }
         );
     }
@@ -597,28 +552,16 @@ mod tests {
             strength: 0,
         };
         // Wisdom cast by the SAME caster (500) — replaces Might.
-        let wisdom_same_caster = IncomingAura {
-            caster_guid: 500,
-            strength: 0,
-            group_rule: Some(GroupRule::ExclusivePerCaster),
-            dr: None,
-        };
         assert_eq!(
-            resolve_aura_apply(&wisdom_same_caster, &[might_a], 0),
+            resolve_group_conflict(500, 0, GroupRule::ExclusivePerCaster, &[might_a]),
             ApplyDecision::Apply {
                 duration_scale_bp: 10_000,
                 evict: vec![1]
             }
         );
         // Wisdom cast by a DIFFERENT caster (600) — both stand, nothing evicted.
-        let wisdom_other_caster = IncomingAura {
-            caster_guid: 600,
-            strength: 0,
-            group_rule: Some(GroupRule::ExclusivePerCaster),
-            dr: None,
-        };
         assert_eq!(
-            resolve_aura_apply(&wisdom_other_caster, &[might_a], 0),
+            resolve_group_conflict(600, 0, GroupRule::ExclusivePerCaster, &[might_a]),
             ApplyDecision::Apply {
                 duration_scale_bp: 10_000,
                 evict: vec![]
@@ -643,14 +586,13 @@ mod tests {
             caster_guid: 1,
             strength: compute_strength(0, EXPOSE_FLAT),
         };
-        let sunder_fresh = IncomingAura {
-            caster_guid: 2,
-            strength: compute_strength(0, SUNDER_PER_STACK),
-            group_rule: Some(GroupRule::ExclusiveStronger),
-            dr: None,
-        };
         assert_eq!(
-            resolve_aura_apply(&sunder_fresh, &[expose_existing], 0),
+            resolve_group_conflict(
+                2,
+                compute_strength(0, SUNDER_PER_STACK),
+                GroupRule::ExclusiveStronger,
+                &[expose_existing],
+            ),
             ApplyDecision::Refuse { reason: "weaker" }
         );
 
@@ -662,48 +604,31 @@ mod tests {
             caster_guid: 2,
             strength: sunder_5_stack_strength,
         };
-        let expose_fresh = IncomingAura {
-            caster_guid: 1,
-            strength: compute_strength(0, EXPOSE_FLAT),
-            group_rule: Some(GroupRule::ExclusiveStronger),
-            dr: None,
-        };
         assert_eq!(
-            resolve_aura_apply(&expose_fresh, &[sunder_existing], 0),
+            resolve_group_conflict(
+                1,
+                compute_strength(0, EXPOSE_FLAT),
+                GroupRule::ExclusiveStronger,
+                &[sunder_existing],
+            ),
             ApplyDecision::Refuse { reason: "weaker" }
         );
     }
 
-    /// A plain STACKS-rule group (or no group at all — `group_rule: None`) is a complete no-op: full
-    /// duration, nothing evicted, regardless of what else is on the target.
+    /// A plain STACKS-rule group is a complete no-op: full duration, nothing evicted, regardless of what
+    /// else is on the target. (The OTHER "no-op" case — a spell not in any group at all — no longer has a
+    /// pure-fn equivalent to pin: `apply_group_conflict` now returns `true` directly without ever calling
+    /// `resolve_group_conflict`, so there is nothing here to unit-test beyond that caller-side short
+    /// circuit.)
     #[test]
-    fn stacks_rule_and_no_group_are_both_a_full_duration_noop() {
+    fn stacks_rule_is_a_full_duration_noop() {
         let other = AuraSummary {
             aura_id: 99,
             caster_guid: 1,
             strength: 1_000_000,
         };
-        let stacks_member = IncomingAura {
-            caster_guid: 2,
-            strength: 0,
-            group_rule: Some(GroupRule::Stacks),
-            dr: None,
-        };
         assert_eq!(
-            resolve_aura_apply(&stacks_member, &[other], 0),
-            ApplyDecision::Apply {
-                duration_scale_bp: 10_000,
-                evict: vec![]
-            }
-        );
-        let ungrouped = IncomingAura {
-            caster_guid: 2,
-            strength: 0,
-            group_rule: None,
-            dr: None,
-        };
-        assert_eq!(
-            resolve_aura_apply(&ungrouped, &[other], 0),
+            resolve_group_conflict(2, 0, GroupRule::Stacks, &[other]),
             ApplyDecision::Apply {
                 duration_scale_bp: 10_000,
                 evict: vec![]
@@ -727,19 +652,7 @@ mod tests {
 
         // t=0: no prior row -> full duration.
         let t0 = 0 * SECOND;
-        let decision0 = resolve_aura_apply(
-            &IncomingAura {
-                caster_guid: 0,
-                strength: 0,
-                group_rule: None,
-                dr: Some(DrRequest {
-                    category: DR_CAT_POLY,
-                    prior: None,
-                }),
-            },
-            &[],
-            t0,
-        );
+        let decision0 = resolve_dr(None, t0);
         assert_eq!(
             decision0,
             ApplyDecision::Apply {
@@ -758,19 +671,7 @@ mod tests {
 
         // t=12: within window (12 <= 25) at level 1 -> 50%, i.e. 5s of a 10s base.
         let t12 = 12 * SECOND;
-        let decision12 = resolve_aura_apply(
-            &IncomingAura {
-                caster_guid: 0,
-                strength: 0,
-                group_rule: None,
-                dr: Some(DrRequest {
-                    category: DR_CAT_POLY,
-                    prior: Some(row_after_removal_1),
-                }),
-            },
-            &[],
-            t12,
-        );
+        let decision12 = resolve_dr(Some(row_after_removal_1), t12);
         assert_eq!(
             decision12,
             ApplyDecision::Apply {
@@ -789,19 +690,7 @@ mod tests {
         // t=16: aura #2 still active (expires t=17) — a recast reads the row AS-IS (no removal happened),
         // level 2 -> 25%, i.e. 2.5s of a 10s base.
         let t16 = 16 * SECOND;
-        let decision16 = resolve_aura_apply(
-            &IncomingAura {
-                caster_guid: 0,
-                strength: 0,
-                group_rule: None,
-                dr: Some(DrRequest {
-                    category: DR_CAT_POLY,
-                    prior: Some(row_after_apply_2),
-                }),
-            },
-            &[],
-            t16,
-        );
+        let decision16 = resolve_dr(Some(row_after_apply_2), t16);
         assert_eq!(
             decision16,
             ApplyDecision::Apply {
@@ -820,19 +709,7 @@ mod tests {
 
         // t=20: within window (20 <= 33.5) at level 3 -> immune -> Refuse.
         let t20 = 20 * SECOND;
-        let decision20 = resolve_aura_apply(
-            &IncomingAura {
-                caster_guid: 0,
-                strength: 0,
-                group_rule: None,
-                dr: Some(DrRequest {
-                    category: DR_CAT_POLY,
-                    prior: Some(row_after_removal_3),
-                }),
-            },
-            &[],
-            t20,
-        );
+        let decision20 = resolve_dr(Some(row_after_removal_3), t20);
         assert_eq!(decision20, ApplyDecision::Refuse { reason: "immune" });
         // Refused: the row is untouched (no bump on a Refuse) — level stays 3, window stays 33.5s.
         assert_eq!(dr_pre_level(Some(row_after_removal_3), t20), 3);
@@ -840,19 +717,7 @@ mod tests {
         // t=40.1: past the window (40.1 > 33.5) -> lapsed -> full duration, level effectively reset to 0
         // (the next `bump_dr_level` would store level 1, a fresh chain).
         let t40_1 = 40 * SECOND + SECOND / 10;
-        let decision40 = resolve_aura_apply(
-            &IncomingAura {
-                caster_guid: 0,
-                strength: 0,
-                group_rule: None,
-                dr: Some(DrRequest {
-                    category: DR_CAT_POLY,
-                    prior: Some(row_after_removal_3),
-                }),
-            },
-            &[],
-            t40_1,
-        );
+        let decision40 = resolve_dr(Some(row_after_removal_3), t40_1);
         assert_eq!(
             decision40,
             ApplyDecision::Apply {
@@ -865,27 +730,21 @@ mod tests {
 
     /// Same double-poly scenario against a CREATURE target: `dr_category_for_effect` returns `None` for a
     /// non-player target (checked at the call site, before `resolve_dr_for_target` is ever invoked), so
-    /// `aura_apply` never builds a `dr: Some(..)` request at all — modeled here as `dr: None`, which always
-    /// resolves to full duration regardless of any hypothetical prior state (there is none to pass).
+    /// `aura_apply` never calls `resolve_dr` at all for a creature — modeled here as a `None` prior with no
+    /// window ever recorded, which always resolves to full duration regardless of `now`.
     #[test]
     fn creature_target_skips_dr_entirely_full_duration_both_casts() {
-        let incoming = IncomingAura {
-            caster_guid: 0,
-            strength: 0,
-            group_rule: None,
-            dr: None,
-        };
         // "Both casts" — calling twice (as if back-to-back on the creature) yields full duration each time,
         // since there is no DR bookkeeping in play for a creature target at all.
         assert_eq!(
-            resolve_aura_apply(&incoming, &[], 0),
+            resolve_dr(None, 0),
             ApplyDecision::Apply {
                 duration_scale_bp: 10_000,
                 evict: vec![]
             }
         );
         assert_eq!(
-            resolve_aura_apply(&incoming, &[], 999_999_999),
+            resolve_dr(None, 999_999_999),
             ApplyDecision::Apply {
                 duration_scale_bp: 10_000,
                 evict: vec![]

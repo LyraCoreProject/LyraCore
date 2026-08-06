@@ -83,6 +83,116 @@ pub(crate) fn shape_of(src: &str, signature: &str) -> String {
 }
 
 // ================================================================================================
+//  Shared engine for a "raw table read outside its chokepoint" tripwire (issue #379).
+// ================================================================================================
+//
+// `partition_discipline_tripwire::raw_scans` (spatial whole-table `.iter()`/`.count()`) and
+// `character_fence_tripwire::raw_lookups` (raw `game_character` point lookups) used to be ~70-line
+// near-clones of this — identical bound-handle walk-back, handle dedup and comment-line filtering
+// — and had already drifted from each other in small ways neither review caught. The exact drift
+// pattern issue #64 consolidated once already, one layer up (`body_of`/`code_of`, above). One
+// engine now; the two callers differ only in which accessor(s) they watch and what counts as
+// "opens a read" they care about.
+
+/// `byte_idx` sits on a `//` line, i.e. it is prose rather than code.
+pub(crate) fn on_comment_line(content: &str, byte_idx: usize) -> bool {
+    let line_start = content[..byte_idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    content[line_start..byte_idx].trim_start().starts_with("//")
+}
+
+/// 1-based line number of `byte_idx`.
+pub(crate) fn line_of(content: &str, byte_idx: usize) -> usize {
+    content[..byte_idx].matches('\n').count() + 1
+}
+
+/// `name` at `byte_idx` is a standalone identifier, not a substring of a longer one and not a
+/// field access (`self.entities` is somebody else's business).
+pub(crate) fn is_standalone_ident(content: &str, byte_idx: usize, name: &str) -> bool {
+    let before_ok = content[..byte_idx]
+        .chars()
+        .next_back()
+        .map(|c| !(c.is_alphanumeric() || c == '_' || c == '.'))
+        .unwrap_or(true);
+    let after_ok = content[byte_idx + name.len()..]
+        .chars()
+        .next()
+        .map(|c| !(c.is_alphanumeric() || c == '_'))
+        .unwrap_or(true);
+    before_ok && after_ok
+}
+
+/// Every `(line, accessor)` in `content` where one of `accessors` is read through a call matching
+/// `opens` — either straight off the accessor (`ctx.db.<accessor>().<opens-shaped tail>`) or off a
+/// local handle bound from it one line earlier (`let entities = ctx.db.<accessor>();` ...
+/// `entities.<...>`, this codebase's DOMINANT binding idiom — ~120 bindings vs ~18 inline calls, so
+/// a scanner that only matched the inline form would wave through most of the real reads).
+/// `opens(content, byte_idx)` decides whether the text starting right where the accessor call or
+/// handle name ends is a read the caller cares about: `.iter()`/`.count()` for a whole-table scan,
+/// `.guid().find(` for a raw point lookup — the only thing that differs between the two tripwires
+/// built on this.
+///
+/// Ceiling (inherited by both callers): still a text scan — a handle passed to another fn, or an
+/// accessor name assembled by a macro, defeats it. That is a deliberate trade, not an oversight: the
+/// job is to make the LAZY path (copy the code next to you) fail, not to be a sound analysis.
+pub(crate) fn raw_table_reads(
+    content: &str,
+    accessors: &[&'static str],
+    opens: impl Fn(&str, usize) -> bool,
+) -> Vec<(usize, &'static str)> {
+    let mut out = Vec::new();
+    // `(local handle name, accessor it was bound from)`, deduped by name so a file that binds
+    // `entities` a dozen times doesn't count each downstream read a dozen times.
+    let mut handles: Vec<(String, &'static str)> = Vec::new();
+    for accessor in accessors {
+        let call = format!("{accessor}()");
+        for (idx, _) in content.match_indices(&call) {
+            if on_comment_line(content, idx) {
+                continue;
+            }
+            if opens(content, idx + call.len()) {
+                out.push((line_of(content, idx), *accessor));
+            }
+        }
+        let bind = format!("ctx.db.{accessor}();");
+        for (idx, _) in content.match_indices(&bind) {
+            if on_comment_line(content, idx) {
+                continue;
+            }
+            // Walk back over `let [mut] NAME =` on the same line to name the handle.
+            let line_start = content[..idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let Some(head) = content[line_start..idx].trim_end().strip_suffix('=') else {
+                continue;
+            };
+            let mut words = head.split_whitespace();
+            if words.next() != Some("let") {
+                continue;
+            }
+            let Some(name) = words.next_back() else {
+                continue;
+            };
+            if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                continue;
+            }
+            if !handles.iter().any(|(n, _)| n == name) {
+                handles.push((name.to_string(), *accessor));
+            }
+        }
+    }
+    for (name, accessor) in &handles {
+        for (idx, _) in content.match_indices(name.as_str()) {
+            if on_comment_line(content, idx) || !is_standalone_ident(content, idx, name) {
+                continue;
+            }
+            if opens(content, idx + name.len()) {
+                out.push((line_of(content, idx), *accessor));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+// ================================================================================================
 //  Resolving a scanned file that may legitimately not be in this checkout.
 // ================================================================================================
 //
@@ -102,6 +212,29 @@ pub(crate) fn shape_of(src: &str, signature: &str) -> String {
 //
 //   skip ONLY when the whole optional directory is absent — if the directory is there and the
 //   named file is not, that is a PATH TYPO, and the tripwire must fail on it.
+
+/// Concatenate every file in `module/src/debug/` (the `#[cfg(feature = "debug_reducers")]`
+/// directory module #386 split out of the former single `debug.rs`) into one blob, so a text-scan
+/// tripwire that used to `include_str!("debug.rs")` keeps seeing every debug reducer regardless of
+/// which of the seven files it landed in. Directory-read order (unspecified) is fine — every caller
+/// only substring/signature-searches, never anchors on cross-file position or file boundaries.
+pub(crate) fn debug_dir_src() -> String {
+    let dir = repo_root().join("module/src/debug");
+    let mut out = String::new();
+    for entry in
+        std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
+    {
+        let path = entry.expect("readable dir entry").path();
+        if path.extension().map(|e| e == "rs").unwrap_or(false) {
+            out.push_str(
+                &std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display())),
+            );
+            out.push('\n');
+        }
+    }
+    out
+}
 
 /// The repo root: `module/`'s parent.
 pub(crate) fn repo_root() -> std::path::PathBuf {

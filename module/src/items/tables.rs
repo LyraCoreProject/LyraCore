@@ -236,14 +236,9 @@ crate::character_owned!(delete, fn sweep_delete_game_item_instance(ctx, characte
 // the id the CLIENT knows an item by (equipment slots, loot, trade). Re-minting it would make every
 // item look brand new to the arriving client.
 crate::character_owned!(transfer, fn sweep_transfer_game_item_instance(ctx, character_guid, io) {
-    crate::transfer::move_rows(
-        ctx,
-        io,
-        || ctx.db.game_item_instance().by_owner_guid().filter(&character_guid).collect::<Vec<_>>(),
-        |ctx, r| {
-            ctx.db.game_item_instance().insert(r);
-        },
-    );
+    table = game_item_instance,
+    by = by_owner_guid,
+    keep_key,
 });
 crate::character_owned!(restamp, fn sweep_restamp_game_item_instance(ctx, character_guid, identity) {
     let items = ctx.db.game_item_instance();
@@ -360,13 +355,7 @@ crate::character_owned!(delete, fn sweep_delete_game_character_buyback(ctx, char
 // `id` orders the ring (newest = highest), so re-minting preserves the order: `move_rows` inserts in
 // export order, and export order is index order.
 crate::character_owned!(transfer, fn sweep_transfer_game_character_buyback(ctx, character_guid, io) {
-    crate::transfer::move_rows(
-        ctx,
-        io,
-        || ctx.db.game_character_buyback().by_player_guid().filter(&character_guid).collect::<Vec<_>>(),
-        |ctx, mut r| {
-            r.id = 0;
-            ctx.db.game_character_buyback().insert(r);
-        },
-    );
+    table = game_character_buyback,
+    by = by_player_guid,
+    remint = id,
 });

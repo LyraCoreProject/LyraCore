@@ -8,6 +8,9 @@ use spacetimedb::{
 };
 
 use crate::faction::game_faction_template;
+// Graveyard resolution (work-item 209/226) lives in `graveyard.rs` (issue #385 extraction) — this
+// alias keeps every `graveyard::...` call site below byte-identical.
+use crate::graveyard;
 use crate::helpers::{account_by_identity, entity_by_owner};
 use crate::spell::game_resurrect_request;
 use crate::{game_character, game_character_buyback, game_corpse, game_instance};
@@ -366,8 +369,34 @@ fn is_gm_character(ctx: &ReducerContext, guid: u64) -> bool {
         .unwrap_or(false)
 }
 
-// The movement sample's full shape (position + flags + timing) plus the actor — the anti-cheat scorer's whole input.
-#[allow(clippy::too_many_arguments)]
+/// One heartbeat's raw position/time delta since the mover's last PERSISTED heartbeat — the anti-cheat
+/// scorer's whole input, and what `plan_movement` derives `moved` from. Issue #385: bundled instead of
+/// 7 loose positional floats/u32s (`score_and_log_movement` used to take 9 arguments counting
+/// `ctx`/`guid`; `debug_score_movement` builds one of these from its own flat wire args to call it).
+pub(crate) struct MovementDelta {
+    pub old_x: f32,
+    pub old_y: f32,
+    pub old_z: f32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub old_move_ms: u32,
+    pub move_time_ms: u32,
+}
+
+impl MovementDelta {
+    /// A real translation vs a pure-turn/stationary heartbeat — vanilla breaks a channel on movement,
+    /// not on turning in place. Both `movement_update` call sites that used to re-derive this
+    /// independently (`break_channel`'s guard and the anti-cheat scoring guard) now read the one
+    /// value computed here.
+    pub(crate) fn moved(&self) -> bool {
+        (self.x - self.old_x).powi(2)
+            + (self.y - self.old_y).powi(2)
+            + (self.z - self.old_z).powi(2)
+            > 0.0001
+    }
+}
+
 /// Score ONE persisted movement delta against speed/teleport plausibility and, if anomalous, LOG a
 /// `game_movement_violation` row (never rejects — the move already persisted). Shared by `movement_update`
 /// (the live path) and `debug_score_movement` (server-side verification by explicit guid). `dt_s` uses the
@@ -377,24 +406,14 @@ fn is_gm_character(ctx: &ReducerContext, guid: u64) -> bool {
 /// EXEMPTIONS (the single policy chokepoint): only PLAYERS are scored, never godmode, and never a GM
 /// character (`gm_level != 0`) — a GM's `.speed`/`.tele` are legitimate, so flagging them is always a
 /// false positive. Creatures/godmode/GM return without touching the table.
-pub(crate) fn score_and_log_movement(
-    ctx: &ReducerContext,
-    guid: u64,
-    old_x: f32,
-    old_y: f32,
-    x: f32,
-    y: f32,
-    z: f32,
-    old_move_ms: u32,
-    move_time_ms: u32,
-) {
+pub(crate) fn score_and_log_movement(ctx: &ReducerContext, guid: u64, delta: &MovementDelta) {
     // Perf catalog 1.22: the three table reads (entity re-fetch, GM character row, aura speed fold)
     // used to run BEFORE the pure math on every moving heartbeat, even though the check almost always
     // returns None. Reordered so the free arithmetic gates them. Byte-identical: the exemptions only
     // decide whether a violation gets LOGGED, and nothing is logged when there is no violation.
-    let dist_2d = ((x - old_x).powi(2) + (y - old_y).powi(2)).sqrt();
-    let dt_s = if move_time_ms > old_move_ms {
-        (move_time_ms - old_move_ms) as f32 / 1000.0
+    let dist_2d = ((delta.x - delta.old_x).powi(2) + (delta.y - delta.old_y).powi(2)).sqrt();
+    let dt_s = if delta.move_time_ms > delta.old_move_ms {
+        (delta.move_time_ms - delta.old_move_ms) as f32 / 1000.0
     } else {
         0.0
     };
@@ -419,9 +438,9 @@ pub(crate) fn score_and_log_movement(
         guid,
         kind,
         magnitude,
-        x,
-        y,
-        z,
+        x: delta.x,
+        y: delta.y,
+        z: delta.z,
         created_at: ctx.timestamp,
     });
 }
@@ -567,7 +586,7 @@ pub(crate) fn teleport_player(
         c.pending_instance_id = instance_id;
         // Zone follows the destination (the persist_entity stamp's teleport twin): a cross-map
         // hop persisted the OLD position's zone above, and the char-select label reads this row.
-        if let Some(zone) = graveyard::resolve_zone_id(ctx, map_id, x, y) {
+        if let Some(zone) = crate::terrain::zone_id_at(ctx, map_id, x, y) {
             c.zone_id = zone;
         }
         chars.guid().update(c);
@@ -929,23 +948,15 @@ pub(crate) fn cascade_delete_character(ctx: &ReducerContext, character_guid: u64
     // ENGAGED WITH A GHOST: the aggro pass skips any creature that is already an attacker, so it could
     // never be re-armed, and nothing ever disengaged it. Despawning 300 bots orphaned ~100 creatures
     // this way (live, 2026-07-29) and they piled onto the only player left standing.
-    {
-        use crate::combat::game_melee_attack;
-        let melee = ctx.db.game_melee_attack();
-        melee.attacker_guid().delete(character_guid); // its own outgoing attack (attacker is the PK)
-                                                      // …and every attack ON it. Free each attacker and clear its target so the next tick treats it
-                                                      // as idle — eligible to re-aggro, leash home, or resume patrolling like any other creature.
-        let orphaned: Vec<u64> = melee
-            .by_target()
-            .filter(&character_guid)
-            .map(|r| r.attacker_guid)
-            .collect();
-        for attacker in orphaned {
-            melee.attacker_guid().delete(attacker);
-            crate::combat::clear_target(ctx, attacker);
-        }
-        crate::threat::clear_for_unit(ctx, character_guid);
-    }
+    //
+    // Issue #365: this used to hand-roll `combat::disengage` inline (delete the outgoing row, free
+    // attackers via `by_target`, clear_target each, `threat::clear_for_unit`) — the same three steps
+    // the logout path (below) and the cross-map teleport path call the real helper for. The hand-roll
+    // had drifted: `disengage` ALSO drops IN_COMBAT (+ zeroes `combat_until_ms`) on any attacker left
+    // with no remaining engagement (the 249 rule), which the copy silently omitted — attackers of a
+    // deleted character kept the flag set forever. Routing through the canonical helper closes that
+    // gap and keeps this chokepoint from drifting again.
+    crate::combat::disengage(ctx, character_guid);
     ctx.db
         .game_corpse()
         .guid()
@@ -1041,6 +1052,76 @@ pub(crate) fn snapshot_needs_persist(
         || drift_sq > PERSIST_MAX_DRIFT_YD * PERSIST_MAX_DRIFT_YD
 }
 
+/// FALL DAMAGE (058), absorbed out of `movement_update`'s own inline block (issue #385): given the
+/// shared curve's damage figure (`lyracore_shared::env::fall_damage`, already computed by the caller
+/// from the client's airborne time + max_health) and the mover's CURRENT health, decide the health to
+/// carry forward and whether the landing is lethal. A lethal fall does NOT subtract here — the
+/// position persists first (if `MovementPlan::persist_entity` says so) and `combat::kill_player`
+/// re-fetches fresh (the shared death funnel: channel teardown, durability, on_death hooks — identical
+/// to a melee death, so release/reclaim works). `dmg == 0` (a soft landing) is a no-op pass-through.
+/// Pure/testable.
+pub(crate) fn resolve_fall_damage(dmg: u32, health: u32) -> (u32, bool) {
+    if dmg == 0 {
+        return (health, false);
+    }
+    if health <= dmg {
+        (health, true) // lethal: caller does not subtract; kill_player re-fetches
+    } else {
+        (health - dmg, false)
+    }
+}
+
+/// What `movement_update` decided to DO with one heartbeat — computed once every impure,
+/// DB-touching mutator on the path (exploration/rest, which can flip `resting`/`health`/`xp`) has
+/// already run against `mover`. From here on the reducer does nothing but execute this: no further
+/// branching on raw movement state happens after `plan_movement` returns.
+///
+/// Issue #385: this replaces the reducer's own formatted source as what the "relay is never gated on
+/// the persist decision" invariant pins against — a whitespace-collapsed exact-body match that broke
+/// on every rename or rustfmt re-wrap. `relay_motion` is unconditionally `true` (see `plan_movement`'s
+/// doc) regardless of every other field, which is exactly the shape `#109` regressed on once (only the
+/// entity row gated; the per-mover motion relay never is) — and it is now an ordinary value-level unit
+/// test (`plan_movement`'s tests, below) instead of a source scan.
+pub(crate) struct MovementPlan {
+    /// Write the (possibly-mutated) entity row back — gated on [`snapshot_needs_persist`].
+    pub persist_entity: bool,
+    /// Relay this heartbeat's motion to nearby peers via `game_entity_motion`. Always `true` by
+    /// construction — see the struct doc.
+    pub relay_motion: bool,
+    /// A lethal fall (see [`resolve_fall_damage`]): the position already persisted (if
+    /// `persist_entity`), `combat::kill_player` runs next.
+    pub fall_lethal: bool,
+    /// A real translation, not a pure turn ([`MovementDelta::moved`]) — gates the channel break and
+    /// the anti-cheat scorer.
+    pub moved: bool,
+}
+
+/// Build the plan `movement_update` executes. Pure — no `ReducerContext` — so every decision this
+/// used to make inline (and that the old source-scan pin existed to guard) is now a plain function of
+/// its inputs, directly unit-tested below.
+pub(crate) fn plan_movement(
+    opcode: u16,
+    grid_changed: bool,
+    flags_changed: bool,
+    state_changed: bool,
+    drift_sq: f32,
+    fall_lethal: bool,
+    delta: &MovementDelta,
+) -> MovementPlan {
+    MovementPlan {
+        persist_entity: snapshot_needs_persist(
+            opcode,
+            grid_changed,
+            flags_changed,
+            state_changed,
+            drift_sq,
+        ),
+        relay_motion: true,
+        fall_lethal,
+        moved: delta.moved(),
+    }
+}
+
 #[reducer]
 #[allow(clippy::too_many_arguments)]
 pub fn movement_update(
@@ -1122,10 +1203,9 @@ pub fn movement_update(
     let map_id = mover.map_id;
     let instance_id = mover.instance_id;
     // FALL DAMAGE (058): a landing packet carries the client's airborne time — fold it through the
-    // shared curve (lyracore_shared::env, the SAME one the gateway's flavor-log line uses). Non-lethal
-    // damage rides this same row write; a LETHAL fall defers to `kill_player` AFTER the position
-    // persists (the shared death funnel: channel teardown, durability, on_death hooks — identical
-    // to a melee death, so release/reclaim works). Godmode and already-dead movers skip.
+    // shared curve (lyracore_shared::env, the SAME one the gateway's flavor-log line uses). The
+    // health/lethal DECISION is `resolve_fall_damage` (pure, tested); this block only computes the
+    // curve's raw damage figure and applies the decision. Godmode and already-dead movers skip.
     let mut fall_lethal = false;
     if opcode as u32 == lyracore_shared::opcodes::movement::MSG_MOVE_FALL_LAND
         && !mover.dead
@@ -1134,13 +1214,9 @@ pub fn movement_update(
     {
         if let Some(ft) = lyracore_shared::env::fall_time_from_movement_info(&movement_info) {
             let dmg = lyracore_shared::env::fall_damage(ft, mover.max_health);
-            if dmg > 0 {
-                if mover.health <= dmg {
-                    fall_lethal = true; // position persists first; the funnel re-fetches
-                } else {
-                    mover.health -= dmg;
-                }
-            }
+            let (health, lethal) = resolve_fall_damage(dmg, mover.health);
+            mover.health = health;
+            fall_lethal = lethal;
         }
     }
     // Exploration (200): on crossing into a new grid cell, award discovery XP if this is a fresh
@@ -1156,19 +1232,35 @@ pub fn movement_update(
     if mover.is_player() && !mover.dead {
         crate::rest::check_rest_state(ctx, &mut mover);
     }
-    // THE WRITE, now conditional (perf catalog 2.2). `old_x/old_y/old_z` are the last PERSISTED
-    // position, so this drift is exactly how far the stored row has fallen behind the client.
+    // `old_x/old_y/old_z` are the last PERSISTED position, so this drift is exactly how far the
+    // stored row has fallen behind the client.
     let drift_sq = (x - old_x).powi(2) + (y - old_y).powi(2) + (z - old_z).powi(2);
-    if snapshot_needs_persist(
+    let delta = MovementDelta {
+        old_x,
+        old_y,
+        old_z,
+        x,
+        y,
+        z,
+        old_move_ms,
+        move_time_ms,
+    };
+    // THE PLAN: every remaining decision on this heartbeat, made ONCE, purely (see `MovementPlan`'s
+    // doc for why the reducer applies it rather than deciding anything itself from here on).
+    let plan = plan_movement(
         opcode,
         grid_x != old_gx || grid_y != old_gy,
         mover.movement_flags != old_flags,
         mover.resting != old_resting || mover.health != old_health,
         drift_sq,
-    ) {
+        fall_lethal,
+        &delta,
+    );
+
+    if plan.persist_entity {
         entities.guid().update(mover);
     }
-    if fall_lethal {
+    if plan.fall_lethal {
         // Killer = self: no kill credit, no loot — an environmental death.
         crate::combat::kill_player(ctx, mover_guid, mover_guid);
     }
@@ -1176,9 +1268,8 @@ pub fn movement_update(
     // BREAK the mover's CHANNEL on a real move (Arcane Missiles stops if you walk). Only on an actual
     // translation — a pure-turn / stationary heartbeat (same x/y/z, only orientation changed) does NOT
     // break it, matching vanilla. `break_channel` is a no-op for a mover with no channel/cast (the common
-    // path), so the squared-distance guard is just to skip the table scan on a non-move heartbeat.
-    let moved = (x - old_x).powi(2) + (y - old_y).powi(2) + (z - old_z).powi(2) > 0.0001;
-    if moved {
+    // path), so the `plan.moved` guard is just to skip the table scan on a non-move heartbeat.
+    if plan.moved {
         crate::spell::break_channel(ctx, mover_guid);
     }
 
@@ -1186,21 +1277,14 @@ pub fn movement_update(
     // anomaly (exemptions — player-only, godmode, GM — are enforced inside the helper). Server-side
     // teleport/blink/charge write the stored position first, so the following client delta is small and
     // auto-exempt (no special-case).
-    if moved {
-        score_and_log_movement(
-            ctx,
-            mover_guid,
-            old_x,
-            old_y,
-            x,
-            y,
-            z,
-            old_move_ms,
-            move_time_ms,
-        );
+    if plan.moved {
+        score_and_log_movement(ctx, mover_guid, &delta);
     }
 
-    // PER-MOVER MOTION ROW (perf catalog 2.1) — the ONLY movement relay path.
+    // PER-MOVER MOTION ROW (perf catalog 2.1) — the ONLY movement relay path. Gated on
+    // `plan.relay_motion` — which `plan_movement`'s own tests prove is ALWAYS `true` — never on
+    // `plan.persist_entity` or any raw movement state re-derived here: recreating that coupling is
+    // exactly the #109 regression this used to guard against with a much larger, rename-brittle scan.
     //
     // This replaced a 25-probe recipient scan plus one `game_movement_event` INSERT per nearby
     // player: O(C) writes per heartbeat, so O(C²) per second zone-wide, plus the same again for the
@@ -1211,7 +1295,7 @@ pub fn movement_update(
     // `instance_id`/`map_id`/grid come from the mover we just persisted, so the motion row and the
     // entity row can never disagree about which box they belong to (that agreement is what stops the
     // "spawned-but-frozen" desync the old shared-GridBox comment described).
-    {
+    if plan.relay_motion {
         let motions = ctx.db.game_entity_motion();
         match motions.guid().find(mover_guid) {
             Some(prev) => {
@@ -1303,12 +1387,8 @@ pub(crate) fn can_inspect(
 pub fn inspect(ctx: &ReducerContext, target_guid: u64) -> Result<(), String> {
     let inspector =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caller not in world".to_string())?;
-    let target = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(target_guid)
-        .ok_or_else(|| "no such inspect target".to_string())?;
+    let target = crate::helpers::live_entity(ctx, target_guid)
+        .map_err(|_| "no such inspect target".to_string())?;
     let (dx, dy, dz) = (
         target.x - inspector.x,
         target.y - inspector.y,
@@ -1507,372 +1587,6 @@ pub(crate) fn ghost_restored_fields(player_flags: u32, unit_bytes_1: u32) -> (bo
     )
 }
 
-/// One `WorldSafeLocs.dbc` row (a graveyard's fixed position) — imported by the importer's `--dbc`
-/// mode (work-item 209; see `importer/src/dbc.rs::graveyard_sql`). Replaces the hardcoded
-/// `graveyard::{NORTHSHIRE, GOLDSHIRE, ...}` consts below as the primary data source once imported;
-/// those consts remain as the no-import fallback (`graveyard::nearest`), and `seed.rs` row-seeds the
-/// SAME five points here too, mirroring the `game_start_position` seed/import precedent (init seeds,
-/// import clear+reloads over it). No orientation column — `WorldSafeLocs.dbc` carries none (a
-/// graveyard release always faces 0.0). No Timestamp → plain SQL. [static]
-#[table(accessor = game_graveyard, public)]
-pub struct GraveyardLoc {
-    #[primary_key]
-    pub id: u32,
-    pub map_id: u32,
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    /// Ghost-spawn facing. WorldSafeLocs.dbc carries none (importer writes 0.0); the SEED rows keep
-    /// the consts' verified orientations — without this column the DB path silently dropped
-    /// Northshire's 2.72271 facing on every fresh init (review catch).
-    pub o: f32,
-    pub name: String,
-}
-
-/// One cmangos `game_graveyard_zone` row — links a `game_graveyard.id` (`safe_loc_id`) to the zone
-/// it serves, with an optional faction restriction (0 = both factions; else the cmangos team-faction
-/// id, see `graveyard::team_for_race`). Imported by the importer's `--dump` mode (work-item 209; see
-/// `importer/src/main.rs::build_graveyard_zone_sql`); `graveyard::resolve_graveyard` reads it via
-/// `by_zone` to prefer a zone-linked graveyard over a merely-closer unlinked one (the cmangos release
-/// rule). No Timestamp → plain SQL. [static]
-#[table(
-    accessor = game_graveyard_zone,
-    public,
-    index(accessor = by_zone, btree(columns = [zone_id]))
-)]
-pub struct GraveyardZone {
-    #[primary_key]
-    #[auto_inc]
-    pub row_id: u64,
-    pub safe_loc_id: u32,
-    pub zone_id: u32,
-    pub faction: u32,
-}
-
-/// A single graveyard release point — either one of the hardcoded Elwynn/Westfall fallback consts
-/// below, or one resolved from the imported `game_graveyard`/`game_graveyard_zone` tables (work-item
-/// 209). Both paths converge on this same shape so `nearest_of`/`pick_graveyard` never care which
-/// source a candidate came from.
-#[derive(Clone, Copy)]
-struct Graveyard {
-    map: u32,
-    x: f32,
-    y: f32,
-    z: f32,
-    o: f32,
-}
-
-/// Graveyard resolution (work-item 209): `resolve_graveyard` is the real entry point a release
-/// should call — it prefers a zone-linked imported graveyard, falls back to the nearest of every
-/// imported graveyard on the map, and finally falls back to five hardcoded Elwynn/Westfall consts
-/// (cmangos `world_safe_locs` + `game_graveyard_zone`) when nothing is imported at all. `seed.rs`
-/// row-seeds the SAME five points into `game_graveyard`/`game_graveyard_zone`, so a fresh unimported
-/// DB and the static fallback agree; the importer's clear+reload overwrites both with the real
-/// client/dump data once run (the `game_start_position` seed/import precedent). [static]
-mod graveyard {
-    use super::Graveyard;
-    use crate::{game_area, game_graveyard, game_graveyard_zone};
-    use spacetimedb::{ReducerContext, Table};
-
-    // world_safe_locs id 105 — Northshire Abbey
-    const NORTHSHIRE: Graveyard = Graveyard {
-        map: 0,
-        x: -8935.33,
-        y: -188.646,
-        z: 80.4165,
-        o: 2.72271,
-    };
-
-    // world_safe_locs id 106 — Goldshire
-    const GOLDSHIRE: Graveyard = Graveyard {
-        map: 0,
-        x: -9339.59,
-        y: 171.73,
-        z: 63.5258,
-        o: 0.0,
-    };
-
-    // world_safe_locs id 854 — Eastvale Logging Camp
-    const EASTVALE: Graveyard = Graveyard {
-        map: 0,
-        x: -9552.73,
-        y: -1374.84,
-        z: 57.0867,
-        o: 0.0,
-    };
-
-    // world_safe_locs id ≈80 [V] — Sentinel Hill (Westfall, zone 40). Hand-added for work-item 206
-    // (the Westfall 1-20 slice); coords are an UNVERIFIED estimate (this sandbox has no reference
-    // world-database to read the real row from); orientation defaults to 0.0 (not sourced). CONFIRM
-    // x/y/z against your own imported world_safe_locs before relying on this for a live release.
-    const SENTINEL_HILL: Graveyard = Graveyard {
-        map: 0,
-        x: -10650.0, // [V]
-        y: 1180.0,   // [V]
-        z: 34.0,     // [V]
-        o: 0.0,      // [V] — orientation not sourced
-    };
-
-    // world_safe_locs id ≈81 [V] — Westfall coast (the western shoreline graveyard, zone 40). Same
-    // provenance caveat as SENTINEL_HILL: coords UNVERIFIED.
-    const WESTFALL_COAST: Graveyard = Graveyard {
-        map: 0,
-        x: -11390.0, // [V]
-        y: 1590.0,   // [V]
-        z: 6.0,      // [V]
-        o: 0.0,      // [V] — orientation not sourced
-    };
-
-    const STATIC_CANDIDATES: [Graveyard; 5] = [
-        NORTHSHIRE,
-        GOLDSHIRE,
-        EASTVALE,
-        SENTINEL_HILL,
-        WESTFALL_COAST,
-    ];
-
-    // ---- Instance-map release (work-item 226) --------------------------------------------------
-    //
-    // An instance map (Deadmines, map 36) has NO imported terrain (WMO geometry — deliberately no ADT
-    // import), so `resolve_zone_id` can never resolve a zone there,
-    // and it has NO graveyards of its own (`all_on_map(36)` is empty) — the pre-226 chain therefore
-    // fell all the way to `nearest(px, py)`, comparing map-36 interior coordinates against map-0
-    // consts by raw 2-D distance: a meaningless pick (a Deadmines death "released" at Northshire).
-    // The vanilla rule for instance deaths is the EXTERNAL graveyard linked to the instance's own
-    // zone id in `game_graveyard_zone` (cmangos `ghost_zone`) — which lives on ANOTHER map (Deadmines
-    // zone → a Westfall graveyard on map 0), so the instance arm deliberately does NOT map-filter its
-    // candidates the way `zone_linked` does. The release itself riding cross-map is exactly the 224
-    // teleport + the 226 pending_ghost preservation above.
-
-    /// The instance map's own zone id (cmangos `game_graveyard_zone.ghost_zone` for deaths inside) —
-    /// the map→zone hop `resolve_zone_id` can't make without terrain. Deadmines = zone 1581 `[V]`
-    /// (cmangos AreaTable "The Deadmines" — CONFIRM against your own dump's game_graveyard_zone rows;
-    /// a wrong id here just means the DB arm resolves nothing and the static fallback below applies).
-    /// `None` = not an instance map → the normal open-world chain runs untouched.
-    pub(crate) fn instance_release_zone(map_id: u32) -> Option<u32> {
-        match map_id {
-            36 => Some(1581), // [V] The Deadmines
-            _ => None,
-        }
-    }
-
-    /// Static release floor for an instance map when NOTHING is imported (this sandbox's default
-    /// state): Deadmines releases at Sentinel Hill (the Westfall graveyard nearest the Moonbrook
-    /// entrance in spirit — the exact safe loc is `[V]`, same provenance caveat as the const itself).
-    /// NEVER fall through to `nearest(px, py)` for an instance map — cross-map 2-D distance against
-    /// the static consts is meaningless (see the section comment above).
-    pub(crate) fn instance_static_fallback(map_id: u32) -> Option<Graveyard> {
-        match map_id {
-            36 => Some(SENTINEL_HILL),
-            _ => None,
-        }
-    }
-
-    /// The pure instance-release pick: zone-linked external candidates first (nearest by 2-D distance
-    /// if several — a DETERMINISTIC tie-break, not a meaningful one: the coords compared are the
-    /// death position INSIDE the instance vs candidates on the external map; vanilla keys the choice
-    /// off the entrance instead. Moot with the expected single link row — 226 review), else the
-    /// static per-map fallback. `None` = not handled as an instance release (caller falls through to
-    /// the normal chain). Pure/testable — the DB read lives in `resolve_graveyard`.
-    pub(crate) fn pick_instance_graveyard(
-        linked: &[Graveyard],
-        static_fallback: Option<Graveyard>,
-        px: f32,
-        py: f32,
-    ) -> Option<Graveyard> {
-        nearest_of(linked, px, py).or(static_fallback)
-    }
-
-    /// The pure nearest-by-squared-2D-distance picker, shared by every candidate source (the static
-    /// fallback list AND the DB-resolved zone-linked/all-imported lists `resolve_graveyard` builds).
-    /// `None` for an empty slice — never panics; the caller chains to the next fallback.
-    pub(crate) fn nearest_of(candidates: &[Graveyard], px: f32, py: f32) -> Option<Graveyard> {
-        candidates
-            .iter()
-            .min_by(|a, b| {
-                let da = (a.x - px).powi(2) + (a.y - py).powi(2);
-                let db = (b.x - px).powi(2) + (b.y - py).powi(2);
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .copied()
-    }
-
-    /// Return the graveyard whose 2-D position is closest (squared distance) to `(px, py)`, among
-    /// ONLY the five hardcoded fallback consts (never touches the DB). Kept as the pre-209 API for
-    /// the unit tests below and as `resolve_graveyard`'s last-resort floor; live release code should
-    /// call `resolve_graveyard` instead so an imported `game_graveyard` table actually gets consulted.
-    pub fn nearest(px: f32, py: f32) -> Graveyard {
-        nearest_of(&STATIC_CANDIDATES, px, py).unwrap_or(NORTHSHIRE)
-    }
-
-    /// Pick a release point per the cmangos rule, given already-resolved candidate lists: prefer a
-    /// ZONE-LINKED graveyard (`zone_linked` — faction-filtered rows from `game_graveyard_zone` for
-    /// the death position's zone) even over a geometrically closer graveyard outside that zone; if
-    /// none is zone-linked (an unresolved zone, or an empty/unimported table), fall back to the
-    /// nearest of EVERY imported graveyard (`all`); if that's empty too (nothing imported), fall back
-    /// to the static consts. Pure/testable — no `ReducerContext` — the DB reads live in
-    /// `resolve_graveyard` below.
-    pub(crate) fn pick_graveyard(
-        zone_linked: &[Graveyard],
-        all: &[Graveyard],
-        px: f32,
-        py: f32,
-    ) -> Graveyard {
-        nearest_of(zone_linked, px, py)
-            .or_else(|| nearest_of(all, px, py))
-            .unwrap_or_else(|| nearest(px, py))
-    }
-
-    /// cmangos team-faction id used by `game_graveyard_zone.faction` (0 = both factions serve a zone;
-    /// 469 = Alliance-only; 67 = Horde-only). Alliance races: Human(1)/Dwarf(3)/NightElf(4)/Gnome(7)/
-    /// Draenei(11 — a TBC-era id some DBC builds still carry a placeholder row for); every other race
-    /// byte — including an unrecognized one — defaults to ALLIANCE: the only content this sandbox has
-    /// ever imported is Alliance-side (Elwynn/Westfall), so failing toward Alliance keeps the common
-    /// path correct. A real Horde launch needs this list extended (and Horde-side content imported)
-    /// before it matters.
-    const TEAM_ALLIANCE: u32 = 469;
-    const TEAM_HORDE: u32 = 67;
-    pub(crate) fn team_for_race(race: u8) -> u32 {
-        match race {
-            2 | 5 | 6 | 8 => TEAM_HORDE, // Orc / Undead / Tauren / Troll
-            _ => TEAM_ALLIANCE,
-        }
-    }
-
-    /// Chase the death position's MCNK `area_id` (terrain, work-item 173) ONE hop up
-    /// `game_area.parent_area_id` to its enclosing zone — e.g. a Goldshire subzone area resolves to
-    /// zone 12 (Elwynn). NOT a full recursive area-hierarchy walk (a subzone-of-a-subzone would need
-    /// more than one hop; deferred to work-item 200, which needs full area resolution for exploration
-    /// XP anyway). Returns `None` when `game_area` is empty (unimported — the common pre-209/pre-200
-    /// state) or the position's terrain cell has no recorded/imported area, so the caller
-    /// (`resolve_graveyard`) skips zone-scoping entirely rather than guessing wrong — a wrong guess
-    /// would silently narrow the candidate set to the WRONG zone's graveyards.
-    pub(crate) fn resolve_zone_id(
-        ctx: &ReducerContext,
-        map_id: u32,
-        x: f32,
-        y: f32,
-    ) -> Option<u32> {
-        if ctx.db.game_area().count() == 0 {
-            return None;
-        }
-        let area_id = crate::terrain::area_id_at(ctx, map_id, x, y)?;
-        let area = ctx.db.game_area().id().find(area_id)?;
-        Some(if area.parent_area_id != 0 {
-            area.parent_area_id
-        } else {
-            area.id
-        })
-    }
-
-    /// Zone-linked graveyards for `zone_id`, faction-filtered (`faction == 0 || faction == team`),
-    /// resolved to positions via `game_graveyard`, and map-filtered (never cross-map). A
-    /// `game_graveyard_zone` row whose `safe_loc_id` has no matching `game_graveyard` row is silently
-    /// dropped — an inconsistent import shouldn't panic a release.
-    // NOTE (190 slice 2, RESOLVED — no instance gate needed here): graveyard data is static,
-    // instance-0-by-nature, and this open-world chain only ever serves releases on NON-instance
-    // maps — an instance-map death routes through `resolve_graveyard`'s instance arm above (226),
-    // whose release teleport always lands at instance 0 (`do_repop` passes 0 explicitly). The
-    // corpse itself keeps its own `instance_id` (stamped in `do_repop`) for the run-back/reclaim.
-    fn zone_linked(ctx: &ReducerContext, zone_id: u32, team: u32, map_id: u32) -> Vec<Graveyard> {
-        ctx.db
-            .game_graveyard_zone()
-            .by_zone()
-            .filter(&zone_id)
-            .filter(|gz| gz.faction == 0 || gz.faction == team)
-            .filter_map(|gz| ctx.db.game_graveyard().id().find(gz.safe_loc_id))
-            .filter(|g| g.map_id == map_id)
-            .map(|g| Graveyard {
-                map: g.map_id,
-                x: g.x,
-                y: g.y,
-                z: g.z,
-                o: g.o,
-            })
-            .collect()
-    }
-
-    /// `zone_linked` WITHOUT the map filter — the instance-release arm (work-item 226): a dungeon
-    /// zone's linked graveyard is deliberately on ANOTHER map (Deadmines zone → Westfall, map 0),
-    /// which is precisely what the same-map filter above exists to prevent for open-world zones.
-    fn zone_linked_cross_map(ctx: &ReducerContext, zone_id: u32, team: u32) -> Vec<Graveyard> {
-        ctx.db
-            .game_graveyard_zone()
-            .by_zone()
-            .filter(&zone_id)
-            .filter(|gz| gz.faction == 0 || gz.faction == team)
-            .filter_map(|gz| ctx.db.game_graveyard().id().find(gz.safe_loc_id))
-            .map(|g| Graveyard {
-                map: g.map_id,
-                x: g.x,
-                y: g.y,
-                z: g.z,
-                o: g.o,
-            })
-            .collect()
-    }
-
-    /// Every imported graveyard on `map_id`, regardless of zone — the fallback once zone-scoping
-    /// isn't available or didn't resolve (see `resolve_graveyard`). Map-only — same RESOLVED note
-    /// as `zone_linked` (190 slice 2): only non-instance-map releases ever reach this chain.
-    fn all_on_map(ctx: &ReducerContext, map_id: u32) -> Vec<Graveyard> {
-        ctx.db
-            .game_graveyard()
-            .iter()
-            .filter(|g| g.map_id == map_id)
-            .map(|g| Graveyard {
-                map: g.map_id,
-                x: g.x,
-                y: g.y,
-                z: g.z,
-                o: g.o,
-            })
-            .collect()
-    }
-
-    /// The real entry point for a release: resolve the nearest graveyard to `(x, y)` on `map_id` for
-    /// a player of `race`, per the fallback chain zone-linked → all-imported-on-map → static consts
-    /// (see `pick_graveyard`). Never panics on an empty DB — every step degrades gracefully; the
-    /// static consts are the final floor.
-    pub(crate) fn resolve_graveyard(
-        ctx: &ReducerContext,
-        map_id: u32,
-        x: f32,
-        y: f32,
-        race: u8,
-    ) -> Graveyard {
-        let team = team_for_race(race);
-        // Instance-map arm (work-item 226): a death INSIDE a dungeon releases to the EXTERNAL
-        // graveyard linked to the instance's own zone (cross-map — see the section comment above),
-        // falling back to the per-map static const when nothing is imported. Handled BEFORE the
-        // open-world chain, whose every step (terrain zone resolve / same-map candidates / raw
-        // nearest-const) is meaningless inside a WMO map.
-        if let Some(zone_id) = instance_release_zone(map_id) {
-            let linked = zone_linked_cross_map(ctx, zone_id, team);
-            if let Some(g) =
-                pick_instance_graveyard(&linked, instance_static_fallback(map_id), x, y)
-            {
-                return g;
-            }
-        } else if map_id != 0 {
-            // A non-zero map with NO instance arm (226 review): the open-world chain below would
-            // degrade to comparing this map's interior coords against map-0 candidates by raw 2-D
-            // distance — the exact garbage the map-36 arm exists to prevent. Every new instance map
-            // MUST gain an `instance_release_zone` + `instance_static_fallback` arm; warn loudly so
-            // the miss is visible in `spacetime logs` instead of a silently wrong graveyard.
-            spacetimedb::log::warn!(
-                "resolve_graveyard: map {map_id} has no instance_release_zone arm — falling through                  to the open-world chain, which is meaningless for an instance map (add the arm)"
-            );
-        }
-        let linked = match resolve_zone_id(ctx, map_id, x, y) {
-            Some(zone_id) => zone_linked(ctx, zone_id, team, map_id),
-            None => Vec::new(),
-        };
-        let all = all_on_map(ctx, map_id);
-        pick_graveyard(&linked, &all, x, y)
-    }
-}
-
 /// Resurrection Sickness debuff spell id (vanilla 15007). Seeded in `seed.rs` as a single negative
 /// A_MOD_STAT(STAT_ALL) aura and landed by `do_spirit_healer_res` via the shared aura engine.
 pub const RESURRECTION_SICKNESS_SPELL: u32 = 15007;
@@ -1978,7 +1692,7 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
         // kept the start-zone label forever (a Dun Morogh dwarf GM-teleported to Northshire
         // still read "Dun Morogh" at char select). None (off-slice/unimported terrain) keeps
         // the stored zone rather than guessing.
-        if let Some(z) = graveyard::resolve_zone_id(ctx, entity.map_id, entity.x, entity.y) {
+        if let Some(z) = crate::terrain::zone_id_at(ctx, entity.map_id, entity.x, entity.y) {
             c.zone_id = z;
         }
         c.level = entity.level as u8;
@@ -2150,10 +1864,10 @@ pub fn on_disconnect(ctx: &ReducerContext) {
 #[cfg(test)]
 mod tests {
     use super::{
-        accrue_played_on_persist, can_inspect, ghost_restored_fields, graveyard,
-        is_cross_map_teleport, movement_violation, persisted_gm_playtest, persisted_pending_ghost,
-        snapshot_needs_persist, spirit_res_vitals, Graveyard, INSPECT_RANGE_SQ,
-        MOVE_VIOLATION_SPEED, MOVE_VIOLATION_TELEPORT, PERSIST_MAX_DRIFT_YD,
+        accrue_played_on_persist, can_inspect, ghost_restored_fields, is_cross_map_teleport,
+        movement_violation, persisted_gm_playtest, persisted_pending_ghost, plan_movement,
+        resolve_fall_damage, snapshot_needs_persist, spirit_res_vitals, MovementDelta,
+        INSPECT_RANGE_SQ, MOVE_VIOLATION_SPEED, MOVE_VIOLATION_TELEPORT, PERSIST_MAX_DRIFT_YD,
         RESURRECTION_SICKNESS_SPELL, RUN_SPEED_BP_1X,
     };
 
@@ -2228,69 +1942,153 @@ mod tests {
     /// reach the per-mover MOTION row. `game_entity_motion` is the only peer-movement relay when
     /// AOI is on — gating it would recreate #109 (peers frozen, server perfectly healthy) as a
     /// performance optimisation.
+    // ---- Issue #385: movement_update as plan-then-apply --------------------------------------
+    //
+    // `plan_movement` (and the `MovementDelta`/`resolve_fall_damage` pieces it's built from) replace
+    // the reducer's own formatted source as what the "relay is never gated on the persist decision"
+    // invariant pins against. That invariant — and the fall-damage decision the old inline block used
+    // to hide — are now ordinary value-level unit tests instead of a whitespace-collapsed exact-body
+    // match that broke on every rename or rustfmt re-wrap. What's left below
+    // (`movement_update_applies_the_plan_and_never_re_derives_the_persist_gate`) is a MUCH smaller
+    // presence/wiring scan for the one thing no pure unit test can reach without a `ReducerContext`
+    // harness (playbook §7): does the reducer actually route through the plan, or silently re-derive
+    // its own copy of the gate.
+
     #[test]
-    fn the_persist_gate_covers_the_entity_row_and_never_the_relay() {
-        let body = crate::test_scan::code_of(include_str!("world.rs"), "pub fn movement_update(");
-        // EXACT SHAPE, not `.contains()`: `if true || snapshot_needs_persist(..)` keeps every needle
-        // an order/presence check looks for while defeating the gate entirely (it survived exactly
-        // that mutation). Equality against the whole block also pins the ARGUMENTS, so a dropped or
-        // swapped one — say `old_health` for `old_resting` — cannot pass either.
-        let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
-        let want = "if snapshot_needs_persist( opcode, grid_x != old_gx || grid_y != old_gy,                     mover.movement_flags != old_flags, mover.resting != old_resting ||                     mover.health != old_health, drift_sq, ) { entities.guid().update(mover); }";
-        assert!(
-            flat.contains(&want.split_whitespace().collect::<Vec<_>>().join(" ")),
-            "the gated entity write is not the exact expected block. Body was:\n{body}"
-        );
-        let gate_at = body
-            .find("snapshot_needs_persist(")
-            .expect("the gate must be wired in");
-        let entity_at = body
-            .find("entities.guid().update(mover)")
-            .expect("the entity write");
-        assert!(
-            gate_at < entity_at,
-            "the entity row write must sit INSIDE the gate"
-        );
-        let motion_at = body
-            .find("game_entity_motion()")
-            .expect("the motion relay write");
-        assert!(
-            entity_at < motion_at,
-            "the motion relay must come AFTER the gated entity write, unconditionally"
-        );
-        let after_gate = &body[gate_at..motion_at];
+    fn resolve_fall_damage_subtracts_short_of_lethal_and_flags_lethal_without_mutating() {
         assert_eq!(
-            after_gate.matches("entities.guid().update(mover)").count(),
-            1,
-            "exactly one gated entity write"
+            resolve_fall_damage(0, 50),
+            (50, false),
+            "a soft landing (no damage) is a no-op"
         );
-        // ONE gate in the whole reducer. Wrapping the motion block in a second
-        // `if snapshot_needs_persist(..)` is the obvious "make it faster" edit and it would recreate
-        // #109 as an optimisation — peers frozen, server perfectly healthy. It also survived every
-        // order/presence check above, which is why the invariant is a COUNT.
+        assert_eq!(
+            resolve_fall_damage(20, 50),
+            (30, false),
+            "sub-lethal damage subtracts"
+        );
+        assert_eq!(
+            resolve_fall_damage(50, 50),
+            (50, true),
+            "exactly-lethal damage is flagged, not subtracted — kill_player re-fetches fresh"
+        );
+        assert_eq!(
+            resolve_fall_damage(80, 50),
+            (50, true),
+            "over-lethal damage is flagged, not subtracted either"
+        );
+    }
+
+    #[test]
+    fn plan_movement_mirrors_snapshot_needs_persist_and_never_gates_the_relay() {
+        let stationary = MovementDelta {
+            old_x: 0.0,
+            old_y: 0.0,
+            old_z: 0.0,
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            old_move_ms: 0,
+            move_time_ms: 0,
+        };
+        // The persist decision is EXACTLY snapshot_needs_persist's, for every trigger that matters —
+        // and for every one of them, the relay is NEVER gated on the outcome. This second assertion,
+        // repeated across every persist/no-persist combination below, IS the invariant the old
+        // source-scan pin existed to guard.
+        for &(grid, flags, state, drift) in &[
+            (false, false, false, 0.0),
+            (true, false, false, 0.0),
+            (false, true, false, 0.0),
+            (false, false, true, 0.0),
+            (
+                false,
+                false,
+                false,
+                PERSIST_MAX_DRIFT_YD * PERSIST_MAX_DRIFT_YD + 1.0,
+            ),
+        ] {
+            let want = snapshot_needs_persist(HEARTBEAT, grid, flags, state, drift);
+            let plan = plan_movement(HEARTBEAT, grid, flags, state, drift, false, &stationary);
+            assert_eq!(
+                plan.persist_entity, want,
+                "persist_entity must mirror snapshot_needs_persist exactly"
+            );
+            assert!(
+                plan.relay_motion,
+                "the motion relay must never be gated on the persist decision"
+            );
+        }
+        // A lethal fall on an otherwise-quiet heartbeat need not force a persist, and still relays —
+        // `fall_lethal` and `relay_motion` are independent fields, not one derived from the other.
+        let lethal = plan_movement(HEARTBEAT, false, false, false, 0.0, true, &stationary);
+        assert!(lethal.fall_lethal);
+        assert!(!lethal.persist_entity);
+        assert!(
+            lethal.relay_motion,
+            "even a lethal-fall heartbeat still relays"
+        );
+        // `moved` reflects the delta the caller passes in, not the persist gate.
+        let moving = MovementDelta {
+            old_x: 0.0,
+            old_y: 0.0,
+            old_z: 0.0,
+            x: 10.0,
+            y: 0.0,
+            z: 0.0,
+            old_move_ms: 0,
+            move_time_ms: 500,
+        };
+        assert!(plan_movement(HEARTBEAT, false, false, false, 0.0, false, &moving).moved);
+        assert!(!plan_movement(HEARTBEAT, false, false, false, 0.0, false, &stationary).moved);
+    }
+
+    #[test]
+    fn movement_update_applies_the_plan_and_never_re_derives_the_persist_gate() {
+        let body = crate::test_scan::code_of(include_str!("world.rs"), "pub fn movement_update(");
+        // The persist/relay/channel/score decisions must route through `plan_movement` — not a
+        // second, hand-rolled `snapshot_needs_persist` call inline (that decision, and the "relay is
+        // never gated on it" invariant, are pinned directly by the tests above instead).
         assert_eq!(
             body.matches("snapshot_needs_persist(").count(),
+            0,
+            "movement_update must not call snapshot_needs_persist directly — plan_movement owns \
+             that decision now. Body was:\n{body}"
+        );
+        let plan_at = body
+            .find("plan_movement(")
+            .expect("movement_update must build its plan via plan_movement");
+        let entity_at = body
+            .find("entities.guid().update(mover)")
+            .expect("the gated entity write");
+        assert!(
+            plan_at < entity_at,
+            "the plan must be built before the entity row write"
+        );
+        assert_eq!(
+            body.matches("entities.guid().update(mover)").count(),
             1,
-            "the persist gate must appear exactly once — the relay is never gated. Body was:\n{body}"
+            "exactly one entity write"
         );
-        // …and the relay block must OPEN unconditionally, so it cannot be gated on some OTHER
-        // expression either. Whatever precedes the relay's `let motions` is a bare `{`, and the
-        // token before that brace is never a `)` — which is exactly what `if <cond> {` leaves.
+        assert!(
+            body.contains("if plan.persist_entity {"),
+            "the entity write must be gated on plan.persist_entity, not re-derived inline. Body \
+             was:\n{body}"
+        );
+        // The relay must come after the entity write and be gated on `plan.relay_motion` — never on
+        // `plan.persist_entity` or anything else re-derived inline. `plan_movement`'s own tests prove
+        // `relay_motion` is ALWAYS true; this only pins that the reducer actually routes the relay
+        // through it, which is the one piece no pure unit test (no ReducerContext in this crate) can
+        // reach on its own.
         let relay_at = body
-            .find("let motions = ctx.db.game_entity_motion();")
-            .expect("the relay's motions handle");
-        let before = body[..relay_at].trim_end();
+            .find("if plan.relay_motion {")
+            .expect("the motion relay's own (always-true) gate");
         assert!(
-            before.ends_with('{'),
-            "the motion relay must open a block; found:\n{}",
-            &before[before.len().saturating_sub(60)..]
+            entity_at < relay_at,
+            "the motion relay must come after the gated entity write"
         );
-        let before_brace = before[..before.len() - 1].trim_end();
-        assert!(
-            !before_brace.ends_with(')'),
-            "the motion relay is inside a CONDITIONAL block — it is the only peer-movement relay \
-             when AOI is on, so gating it recreates #109 as an optimisation. Found:\n{}",
-            &before_brace[before_brace.len().saturating_sub(80)..]
+        assert_eq!(
+            body.matches("if plan.relay_motion {").count(),
+            1,
+            "exactly one relay gate"
         );
     }
 
@@ -2473,154 +2271,6 @@ mod tests {
     }
 
     #[test]
-    fn deadmines_release_resolves_cross_map_to_westfall_never_by_raw_distance() {
-        // Map 36 is an instance map: its release zone is The Deadmines (1581 [V]) and its no-import
-        // static floor is Sentinel Hill on MAP 0 — the release itself is cross-map by design
-        // (corpse stays on 36; the ghost walks back in through the portal).
-        assert_eq!(graveyard::instance_release_zone(36), Some(1581));
-        assert_eq!(
-            graveyard::instance_release_zone(0),
-            None,
-            "open-world maps use the normal chain"
-        );
-        let fallback = graveyard::instance_static_fallback(36).expect("map 36 has a static floor");
-        assert_eq!(
-            fallback.map, 0,
-            "the Deadmines release floor is on map 0 (Westfall), not map 36"
-        );
-        assert_eq!(
-            (fallback.x, fallback.y),
-            (-10650.0, 1180.0),
-            "…at Sentinel Hill"
-        );
-        assert!(graveyard::instance_static_fallback(0).is_none());
-
-        // The pick order: an imported zone-linked external graveyard wins over the static floor;
-        // with nothing imported the floor applies; a non-instance map (no floor, no links) yields
-        // None so the caller falls through to the normal open-world chain.
-        let linked = Graveyard {
-            map: 0,
-            x: -10600.0,
-            y: 1100.0,
-            z: 30.0,
-            o: 0.0,
-        };
-        let picked = graveyard::pick_instance_graveyard(&[linked], Some(fallback), -16.4, -383.0)
-            .expect("linked candidate resolves");
-        assert_eq!(
-            (picked.x, picked.y),
-            (-10600.0, 1100.0),
-            "an imported link beats the static floor"
-        );
-        let floor = graveyard::pick_instance_graveyard(&[], Some(fallback), -16.4, -383.0).unwrap();
-        assert_eq!(
-            (floor.x, floor.y),
-            (fallback.x, fallback.y),
-            "no import → the Sentinel Hill floor"
-        );
-        assert!(graveyard::pick_instance_graveyard(&[], None, 0.0, 0.0).is_none());
-    }
-
-    #[test]
-    fn nearest_graveyard_picks_the_closest_of_the_three_by_squared_distance() {
-        // Dying at each graveyard's own coordinates picks that graveyard (distance 0 beats the others).
-        let n = graveyard::nearest(-8935.33, -188.646);
-        assert_eq!(
-            (n.x, n.y),
-            (-8935.33, -188.646),
-            "Northshire death releases at Northshire"
-        );
-        let g = graveyard::nearest(-9339.59, 171.73);
-        assert_eq!(
-            (g.x, g.y),
-            (-9339.59, 171.73),
-            "Goldshire death releases at Goldshire"
-        );
-        let e = graveyard::nearest(-9552.73, -1374.84);
-        assert_eq!(
-            (e.x, e.y),
-            (-9552.73, -1374.84),
-            "Eastvale death releases at Eastvale"
-        );
-        // A south-east Elwynn death picks Eastvale (~380yd) over Northshire (~990yd) and Goldshire
-        // (~1180yd) — the exact wrong-direction corpse run `nearest` exists to avoid.
-        let s = graveyard::nearest(-9500.0, -1000.0);
-        assert_eq!((s.x, s.y), (-9552.73, -1374.84));
-        // work-item 206: a Westfall-ish death point (near Sentinel Hill) picks Sentinel Hill over
-        // Eastvale — the nearest Elwynn graveyard is nowhere close once Westfall is in the candidate
-        // set (Sentinel Hill ~95yd away vs Eastvale's ~2700yd), proving the two new graveyards
-        // actually widen the release map rather than sitting unreachable in the candidate slice.
-        let w = graveyard::nearest(-10700.0, 1100.0);
-        assert_eq!((w.x, w.y), (-10650.0, 1180.0));
-    }
-
-    #[test]
-    fn pick_graveyard_prefers_a_zone_linked_graveyard_over_a_closer_unlinked_one() {
-        // work-item 209: game_graveyard_zone's whole point is that a graveyard EXPLICITLY linked to
-        // the death position's resolved zone wins even when an unlinked (or wrong-zone) graveyard
-        // sits geometrically closer — the cmangos release rule.
-        let close_unlinked = Graveyard {
-            map: 0,
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-            o: 0.0,
-        };
-        let far_linked = Graveyard {
-            map: 0,
-            x: 500.0,
-            y: 500.0,
-            z: 0.0,
-            o: 0.0,
-        };
-        let linked = [far_linked];
-        let all = [close_unlinked, far_linked];
-        let picked = graveyard::pick_graveyard(&linked, &all, 0.0, 0.0);
-        assert_eq!(
-            (picked.x, picked.y),
-            (500.0, 500.0),
-            "zone-linked wins despite being farther"
-        );
-    }
-
-    #[test]
-    fn pick_graveyard_falls_back_through_all_then_to_the_static_consts() {
-        // No zone-linked candidates (empty zone-link set, e.g. an unresolved zone) → falls to `all`
-        // (every imported graveyard on the map).
-        let only_all = [Graveyard {
-            map: 0,
-            x: 42.0,
-            y: 42.0,
-            z: 0.0,
-            o: 0.0,
-        }];
-        let picked = graveyard::pick_graveyard(&[], &only_all, 0.0, 0.0);
-        assert_eq!((picked.x, picked.y), (42.0, 42.0));
-        // BOTH empty (nothing imported at all) → falls to the static consts (never panics), matching
-        // `graveyard::nearest` directly.
-        let picked_static = graveyard::pick_graveyard(&[], &[], -10700.0, 1100.0);
-        let expected = graveyard::nearest(-10700.0, 1100.0);
-        assert_eq!((picked_static.x, picked_static.y), (expected.x, expected.y));
-    }
-
-    #[test]
-    fn team_for_race_maps_alliance_and_horde_and_defaults_alliance() {
-        assert_eq!(graveyard::team_for_race(1), 469); // Human
-        assert_eq!(graveyard::team_for_race(3), 469); // Dwarf
-        assert_eq!(graveyard::team_for_race(4), 469); // Night Elf
-        assert_eq!(graveyard::team_for_race(7), 469); // Gnome
-        assert_eq!(graveyard::team_for_race(2), 67); // Orc
-        assert_eq!(graveyard::team_for_race(5), 67); // Undead
-        assert_eq!(graveyard::team_for_race(6), 67); // Tauren
-        assert_eq!(graveyard::team_for_race(8), 67); // Troll
-        assert_eq!(
-            graveyard::team_for_race(200),
-            469,
-            "an unrecognized race byte defaults Alliance"
-        );
-    }
-
-    #[test]
     fn inspect_gate_admits_only_an_in_range_friendly_player() {
         // The all-pass baseline: a friendly player, same map, point-blank.
         assert!(can_inspect(true, true, 0.0, true).is_ok());
@@ -2700,28 +2350,25 @@ mod tests {
     /// stranded ~100 creatures on a live realm when 300 bots despawned — each still holding a melee
     /// row against a guid that no longer existed, which the aggro pass then refuses to re-arm
     /// (it skips anything already attacking) and nothing ever disengages.
+    ///
+    /// Issue #365: this used to assert the three hand-rolled needles (`melee.attacker_guid().delete`,
+    /// `melee.by_target().filter`, `threat::clear_for_unit`) that `cascade_delete_character` inlined
+    /// instead of calling the real `combat::disengage` helper — which is exactly why the hand-roll
+    /// was free to drift (it silently omitted `disengage`'s IN_COMBAT clear on freed attackers). Now
+    /// that the body routes through the canonical helper, assert THAT call instead of its innards —
+    /// pinning the needles again would just let the same drift happen a second time.
     #[test]
     fn cascade_delete_frees_both_directions_of_combat() {
         let body = crate::test_scan::code_of(
             include_str!("world.rs"),
             "pub(crate) fn cascade_delete_character(",
         );
-        // Whitespace-collapsed alongside the raw `body`: `melee.by_target().filter(..)` below is a
-        // multi-line method chain in source (rustfmt wraps it), so a raw `.contains()` on `body`
-        // would miss it over the newline/indent between `melee` and `.by_target()`.
-        let n: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(
-            body.contains("melee.attacker_guid().delete(character_guid)"),
-            "the departing character's OWN attack is not cleared. Body was:\n{body}"
-        );
-        assert!(
-            n.contains("melee .by_target() .filter(&character_guid)"),
-            "attacks ON the departing character are not cleared — its attackers stay engaged with a \
-             ghost forever. Body was:\n{body}"
-        );
-        assert!(
-            body.contains("crate::threat::clear_for_unit(ctx, character_guid)"),
-            "threat rows naming the departing character survive it. Body was:\n{body}"
+            body.contains("crate::combat::disengage(ctx, character_guid)"),
+            "cascade_delete_character no longer routes combat teardown through the canonical \
+             `combat::disengage` helper — issue #365 needs this chokepoint to stay routed through \
+             the one place that also clears IN_COMBAT on freed attackers, not a hand-rolled copy of \
+             its steps. Body was:\n{body}"
         );
     }
 

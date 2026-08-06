@@ -71,10 +71,9 @@ use std::collections::{HashMap, HashSet};
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::{
-    game_config, game_corpse, game_corpse_loot, game_corpse_loot_eligible,
-    game_creature_move_event, game_creature_move_schedule, game_creature_spawn,
+    game_config, game_corpse, game_creature_move_schedule, game_creature_spawn,
     game_creature_template, game_encounter_spawn, game_gameobject, game_gameobject_template,
-    game_group, game_loot_roll, game_loot_roll_vote, game_threat, game_world_entity,
+    game_group, game_world_entity,
 };
 
 // ===========================================================================================
@@ -92,30 +91,73 @@ use crate::{
 /// (unit-pinned below) so a reaped-instance login can never strand.
 pub(crate) use lyracore_shared::instance::is_dungeon_map;
 /// The set itself has no non-test caller in this crate (`is_dungeon_map` is the read path); it is
-/// imported for the entrance-arm pin below, which is the invariant that keeps the shared set safe to
-/// extend from either tier.
+/// imported under a distinct name — issue #376 reserves `DUNGEON_MAPS` locally for the
+/// dungeon-detail table below — for the cross-tier consistency pin, which is the invariant that
+/// keeps the shared set safe to extend from either tier.
 #[cfg(test)]
-pub(crate) use lyracore_shared::instance::DUNGEON_MAPS;
+pub(crate) use lyracore_shared::instance::DUNGEON_MAPS as SHARED_DUNGEON_MAP_IDS;
 
-/// The open-world position OUTSIDE a dungeon's entrance — the stranding fallback for a login whose
-/// `pending_instance_id` was reaped ("fall back to the entrance at instance 0", design doc §3).
-/// Returns `(map, x, y, z, o)`.
+/// One fully-described dungeon (issue #376). This used to be FOUR hand-synchronized `match map_id`
+/// sites — [`entrance_fallback`] here, plus `world::graveyard::instance_release_zone` and
+/// `...instance_static_fallback` — each of which could independently gain (or omit) an arm for a
+/// map, and the omission surfaced only as a runtime `warn!` the first time a release actually hit
+/// the gap (`resolve_graveyard`, pre-#376). A `DungeonMap` has no optional fields, so a map is now
+/// either fully described here — entrance AND release zone AND release fallback, together — or
+/// absent, i.e. not a dungeon; there is no half-configured state left to warn about.
+pub(crate) struct DungeonMap {
+    pub(crate) map_id: u32,
+    /// The open-world position OUTSIDE the entrance — `(map, x, y, z, o)`, the stranding fallback
+    /// for a login whose `pending_instance_id` was reaped ("fall back to the entrance at instance
+    /// 0", design doc §3).
+    ///
+    /// PREMISE CORRECTION (vs. the work item's "reverse-lookup the areatrigger pair" option): the
+    /// reverse-lookup is NOT implementable with current data — `game_areatrigger_teleport` rows
+    /// carry only the TARGET (the entrance row's target is INSIDE the dungeon; the exit row's
+    /// target is the coords we want but the row records neither its source map nor which dungeon it
+    /// exits, so with a second dungeon imported the lookup is ambiguous). Hence the per-map record,
+    /// `[V]`.
+    pub(crate) entrance: (u32, f32, f32, f32, f32),
+    /// The instance's own zone id for graveyard release (cmangos `game_graveyard_zone.ghost_zone`)
+    /// — the map→zone hop `world::graveyard::resolve_zone_id` can't make without terrain.
+    pub(crate) release_zone: u32,
+    /// Static release floor when nothing is imported — `(map, x, y, z, o)`. NEVER
+    /// `world::graveyard::nearest(px, py)` for an instance map: cross-map 2-D distance against the
+    /// open-world consts is meaningless (see `world::graveyard`'s section doc).
+    pub(crate) release_fallback: (u32, f32, f32, f32, f32),
+}
+
+/// The dungeon-detail table — one entry per dungeon, pinned 1:1 against
+/// [`lyracore_shared::instance::DUNGEON_MAPS`] by
+/// `every_shared_dungeon_map_has_a_dungeon_maps_record` below (the test-time tripwire that replaced
+/// the old runtime `warn!`).
 ///
-/// PREMISE CORRECTION (vs. the work item's "reverse-lookup the areatrigger pair" option): the
-/// reverse-lookup is NOT implementable with current data — `game_areatrigger_teleport` rows carry
-/// only the TARGET (the entrance row's target is INSIDE the dungeon; the exit row's target is the
-/// coords we want but the row records neither its source map nor which dungeon it exits, so with a
-/// second dungeon imported the lookup is ambiguous). Hence the per-map const, `[V]`.
-///
-/// `[V]` Map 36 → Moonbrook village, Westfall (map 0, ~(-11080, 1520, 46)) — approximate vanilla
-/// Moonbrook coords, no dump/client in this sandbox to confirm; the fail-safe is inherent (any
-/// error of tens of yards still lands in open-world Westfall — never stranded, never inside WMO
+/// `[V]` Map 36 → Deadmines: entrance ≈ Moonbrook village, Westfall (map 0, ~(-11080, 1520, 46)) —
+/// approximate vanilla coords, no dump/client in this sandbox to confirm; the fail-safe is inherent
+/// (any error of tens of yards still lands in open-world Westfall — never stranded, never inside WMO
 /// geometry). Confirm against your dump's areatrigger_teleport EXIT row (~1448) target and tighten.
+/// Release zone 1581 (The Deadmines, cmangos AreaTable — CONFIRM against your own dump's
+/// `game_graveyard_zone` rows; a wrong id here just means the zone-linked lookup resolves nothing
+/// and the static fallback below applies) and release fallback Sentinel Hill are the same `[V]`
+/// estimates the pre-#376 per-site consts always carried.
+pub(crate) const DUNGEON_MAPS: &[DungeonMap] = &[DungeonMap {
+    map_id: 36,
+    entrance: (0, -11080.0, 1520.0, 46.0, 0.0), // [V] Moonbrook, Westfall
+    release_zone: 1581,                         // [V] The Deadmines
+    release_fallback: (0, -10650.0, 1180.0, 34.0, 0.0), // [V] Sentinel Hill
+}];
+
+/// Look up `map_id`'s full dungeon record, or `None` if it is not a dungeon. Pure — the one read
+/// path every former match site (entrance / release-zone / release-fallback) now goes through.
+pub(crate) fn dungeon(map_id: u32) -> Option<&'static DungeonMap> {
+    DUNGEON_MAPS.iter().find(|d| d.map_id == map_id)
+}
+
+/// The open-world position OUTSIDE a dungeon's entrance — see [`DungeonMap::entrance`]. Kept as its
+/// own function: every call site outside this module (`world.rs`'s stranding guard, the tests below)
+/// still names it, and a thin field-read is clearer at the call site than repeating
+/// `dungeon(m).map(|d| d.entrance)`.
 pub(crate) fn entrance_fallback(map_id: u32) -> Option<(u32, f32, f32, f32, f32)> {
-    match map_id {
-        36 => Some((0, -11080.0, 1520.0, 46.0, 0.0)), // [V] Moonbrook, Westfall
-        _ => None,
-    }
+    dungeon(map_id).map(|d| d.entrance)
 }
 
 /// Reap an instance after it has been EMPTY this long (30min const, per the 190 design). Vanilla
@@ -257,20 +299,15 @@ crate::character_owned!(delete, fn sweep_delete_game_instance_binding(ctx, chara
 // in after a disconnect. `instance_id` is carried VERBATIM — it is the id the gateway mirrored to
 // this shard via `ensure_instance`, so the two agree by construction. `id` is a surrogate PK.
 crate::character_owned!(transfer, fn sweep_transfer_game_instance_binding(ctx, character_guid, io) {
-    crate::transfer::move_rows(
-        ctx,
-        io,
-        || ctx.db.game_instance_binding().by_character().filter(&character_guid).collect::<Vec<_>>(),
-        |ctx, mut r| {
-            r.id = 0;
-            ctx.db.game_instance_binding().insert(r);
-        },
-    );
+    table = game_instance_binding,
+    by = by_character,
+    remint = id,
 });
 
 /// Drives the instance reaper (slice 3) — its OWN scheduled table per the `EventReaperSchedule`
 /// precedent (gc.rs untouched by design). Seeded by `seed::init` at 60s; a live (auto-migrated)
-/// node re-arms via `debug_rearm_instance_reaper` (init does not re-run on a plain publish —
+/// node re-arms via `debug_repair_after_publish` (#378, formerly the standalone
+/// `debug_rearm_instance_reaper`) (init does not re-run on a plain publish —
 /// danger-zones "init only on fresh publish" rule). [server]
 #[table(accessor = game_instance_reaper_schedule, scheduled(reap_instances))]
 pub struct InstanceReaperSchedule {
@@ -912,33 +949,17 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
         return;
     }
 
-    // 1. Population: every non-player entity in the instance (alive or corpse), with the same
-    //    per-creature cleanup the encounter kernel's despawn_tracked does, PLUS the loot-roll
-    //    family pass_decay reaps (a dead instance creature may still carry group-loot state).
+    // 1. Population: every non-player entity in the instance (alive or corpse), through the ONE
+    //    canonical creature-teardown checklist (issue #359 — this loop, `encounter::despawn_tracked`
+    //    and `creatures::tick::pass_decay` had each grown their own copy, and they had diverged on
+    //    the loot family, the taunt lock and the #50 withheld gate).
     let doomed: Vec<u64> = entities
         .iter()
         .filter(|e| e.instance_id == instance_id && !e.is_player())
         .map(|e| e.guid)
         .collect();
     for guid in &doomed {
-        crate::combat::disengage(ctx, *guid);
-        crate::threat::clear_taunt_lock(ctx, *guid);
-        let threats = ctx.db.game_threat();
-        let stale: Vec<u64> = threats.by_creature().filter(guid).map(|t| t.id).collect();
-        for id in stale {
-            threats.id().delete(id);
-        }
-        let events = ctx.db.game_creature_move_event();
-        let legs: Vec<u64> = events
-            .iter()
-            .filter(|m| m.mover_guid == *guid)
-            .map(|m| m.id)
-            .collect();
-        for id in legs {
-            events.id().delete(id);
-        }
-        reap_corpse_loot_family(ctx, *guid);
-        entities.guid().delete(guid);
+        crate::creatures::despawn_creature_entity(ctx, *guid);
     }
 
     // 2. Player corpses left in the instance (a ghost who never corpse-ran back). The owner's
@@ -962,7 +983,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
         .map(|g| g.guid)
         .collect();
     for guid in &copies {
-        reap_corpse_loot_family(ctx, *guid);
+        crate::loot::reap_corpse_loot_family(ctx, *guid); // a GO is not a creature — the loot family only
         gos.guid().delete(guid);
     }
 
@@ -1016,53 +1037,6 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
         doomed.len(),
         copies.len()
     );
-}
-
-/// Reap every loot-family row keyed on `corpse_guid` (creature corpse OR chest-GO guid): item
-/// rows, the group-loot eligibility snapshot, rolls + votes — the same family `pass_decay` reaps
-/// on corpse decay, shared here so an instance teardown can't orphan any of it.
-///
-/// Issue #50 fix: a `game_corpse_loot` row still `withheld` is locked by a live NEED/GREED roll —
-/// which, in a sharded deployment, may be authoritative on realm-core and invisible to this
-/// database's own `game_loot_roll` table (promoted away within ~200ms of kill-time; see
-/// `creatures::tick::pass_decay`'s matching fix). Reaping it here would delete the item out from
-/// under a roll that has not resolved yet, so `settle_loot_roll`'s eventual grant finds nothing and
-/// silently no-ops. Leave a withheld row behind — orphaned-but-safe, the same posture the
-/// inventory-full fallback already uses for a row exclusively reserved for a winner.
-fn reap_corpse_loot_family(ctx: &ReducerContext, corpse_guid: u64) {
-    let loot = ctx.db.game_corpse_loot();
-    let stale: Vec<u64> = loot
-        .by_corpse()
-        .filter(&corpse_guid)
-        .filter(|l| !l.withheld)
-        .map(|l| l.id)
-        .collect();
-    for id in stale {
-        loot.id().delete(id);
-    }
-    let eligible = ctx.db.game_corpse_loot_eligible();
-    let stale: Vec<u64> = eligible
-        .by_corpse()
-        .filter(&corpse_guid)
-        .map(|e| e.id)
-        .collect();
-    for id in stale {
-        eligible.id().delete(id);
-    }
-    let rolls = ctx.db.game_loot_roll();
-    let votes = ctx.db.game_loot_roll_vote();
-    let stale_rolls: Vec<u64> = rolls
-        .by_corpse()
-        .filter(&corpse_guid)
-        .map(|r| r.id)
-        .collect();
-    for roll_id in stale_rolls {
-        let stale_votes: Vec<u64> = votes.by_roll().filter(&roll_id).map(|v| v.id).collect();
-        for id in stale_votes {
-            votes.id().delete(id);
-        }
-        rolls.id().delete(roll_id);
-    }
 }
 
 // ===========================================================================================
@@ -1146,8 +1120,10 @@ mod tests {
     fn every_dungeon_map_has_an_entrance_fallback_arm() {
         // The stranding guard's invariant: a reaped-instance login on ANY dungeon map must have an
         // entrance to fall back to (the HearthstoneHome branch is the never-strand net for a
-        // violation of exactly this pin).
-        for &m in DUNGEON_MAPS {
+        // violation of exactly this pin). Checked against the SHARED (cross-tier) id set, not the
+        // module-local DUNGEON_MAPS table — see `every_shared_dungeon_map_has_a_dungeon_maps_record`
+        // for why that distinction is the actual tripwire (issue #376).
+        for &m in SHARED_DUNGEON_MAP_IDS {
             assert!(
                 entrance_fallback(m).is_some(),
                 "dungeon map {m} has no entrance_fallback arm — logins after a reap would divert to hearthstone"
@@ -1159,6 +1135,34 @@ mod tests {
             !is_dungeon_map(m),
             "an entrance fallback must land on an open-world map"
         );
+    }
+
+    /// The cross-tier tripwire (issue #376): [`lyracore_shared::instance::DUNGEON_MAPS`] is the id
+    /// list `gateway::config::ShardMap::check_instance_hosting` walks (issue #48) — every id in it
+    /// MUST have a full record in this crate's [`DUNGEON_MAPS`], or a login/release on that map
+    /// would silently take the "not a dungeon" path every helper here takes for an absent
+    /// `DungeonMap`. This is the test-time replacement for the runtime `warn!` `resolve_graveyard`
+    /// used to log the first time a release actually hit a half-configured map (deleted by #376 — a
+    /// `DungeonMap` has no optional fields, so once an id clears this pin it can never regress into
+    /// a half-configured state).
+    #[test]
+    fn every_shared_dungeon_map_has_a_dungeon_maps_record() {
+        for &m in SHARED_DUNGEON_MAP_IDS {
+            assert!(
+                dungeon(m).is_some(),
+                "map {m} is in lyracore_shared::instance::DUNGEON_MAPS (the gateway's \
+                 hosting-check set) but has no module::instance::DUNGEON_MAPS record"
+            );
+        }
+        for d in DUNGEON_MAPS {
+            assert!(
+                is_dungeon_map(d.map_id),
+                "map {} has a module::instance::DUNGEON_MAPS record but is missing from \
+                 lyracore_shared::instance::DUNGEON_MAPS — its instance-hosting would never be \
+                 checked at gateway startup (issue #48)",
+                d.map_id
+            );
+        }
     }
 
     #[test]
@@ -1311,11 +1315,16 @@ mod tests {
              `false` default would switch dungeon spawning off on every existing database the moment \
              it auto-migrates"
         );
-        let seed = code_of(include_str!("seed.rs"), "pub fn init(");
+        // #377: `init` is a 4-line dispatcher over four banner-stratum fns now (see seed.rs's
+        // header) — `game_config` is seeded in stratum 1, `seed_production_core`.
+        let seed = code_of(
+            include_str!("seed.rs"),
+            "fn seed_production_core(ctx: &ReducerContext) {",
+        );
         assert!(
             seed.contains("hosts_instances: true"),
-            "seed::init must seed hosts_instances = true — a fresh single-database realm hosts its \
-             own dungeons, exactly as it did before #39"
+            "seed::seed_production_core must seed hosts_instances = true — a fresh single-database \
+             realm hosts its own dungeons, exactly as it did before #39"
         );
     }
 

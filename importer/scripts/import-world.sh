@@ -376,8 +376,13 @@ echo "[world] caster-mob spell-import (Elwynn+Westfall 1-20)"
 ./target/debug/lyracore-importer --db "$DB" --dbc "$DBC" --spells --apply \
   --only "53,133,143,1776,145,744,745,3149,3150,3238,3248,5416,5708,6016,6268,6524,6660,6730,7159,7357,8014,8260,8646,8873,9080,10101,10277,12023,12024,12170,12544,13322,13342,13375,13443,14030,15572,15652,15657,15661,16144,16244,20712,20714,20720,20746,20793,20808,23114,23260,23504,28265" \
   2>&1 | grep -iE "imported [0-9]|WARNING|error" | tail -1
-echo "[world] re-arm creature tick"
-spacetime call "$DB" debug_rearm_creature_tick >/dev/null 2>&1
+echo "[world] repair (re-arm creature tick + re-seed fixtures/schedules)"
+# #378: debug_rearm_creature_tick was collapsed into debug_repair_after_publish, along with the
+# other 16 debug_seed_*/debug_ensure_*/debug_rearm_* reducers — this now also re-seeds the fixture
+# families the ETL truncates/leaves untouched (this precedent is why debug_seed_scenario_fixtures
+# used to bolt extra seeders onto itself, per #378's history). Preconditions above (this database is
+# already published + claimed) satisfy debug_repair_after_publish's `require_operator` gate.
+spacetime call "$DB" debug_repair_after_publish >/dev/null 2>&1
 # ARM the synthesized gather pools → max_active live game_gameobject rows per pool (init does NOT re-run
 # on an auto-migrate publish, and the importer writes pool members via SQL but no live rows). Idempotent.
 # This call is UNCONDITIONAL (every MAP) on purpose — `arm_pool` itself map-fences each

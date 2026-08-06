@@ -3,7 +3,7 @@
 //! gateway relays the corpse as a CORPSE-type CREATE_OBJECT (and DESTROY on delete); the ghost runs
 //! back and `reclaim_corpse` resurrects at 50%. [entity]/[server]
 
-use spacetimedb::{reducer, table, ReducerContext, Timestamp};
+use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 use lyracore_shared::packing::unpack4;
 
@@ -23,11 +23,6 @@ pub(crate) fn corpse_guid_for(owner_guid: u64) -> u64 {
 
 /// Reclaim radius² — (39 yd)² (vanilla `CORPSE_RECLAIM_RADIUS`). CONFIRM the exact value.
 const RECLAIM_RADIUS_SQ: f32 = 1521.0;
-
-/// Microseconds before a corpse may be reclaimed (vanilla base 30s). Superseded per-corpse by
-/// `Corpse::reclaim_delay_micros` (the escalated value stamped by `escalated_reclaim` at repop time);
-/// kept as the fallback/legacy constant other callers may still reference.
-pub const RECLAIM_DELAY_MICROS: i64 = 30_000_000;
 
 // ===========================================================================================
 //  Reclaim-delay escalation — the behavioural spec this section implements
@@ -132,6 +127,166 @@ pub(crate) fn corpse_appearance_bytes(
     let bytes_1 = (race << 8) | (gender << 16) | (skin << 24);
     let bytes_2 = face | (hairstyle << 8) | (haircolor << 16) | (facialhair << 24);
     (bytes_1, bytes_2)
+}
+
+/// The dead body left at a player's death location. A CORPSE-type world object: the gateway
+/// relays its insert as CREATE_OBJECT and its delete as SMSG_DESTROY_OBJECT (like a creature). [entity]
+#[table(accessor = game_corpse, public)]
+pub struct Corpse {
+    #[primary_key]
+    pub guid: u64, // HIGHGUID_CORPSE in the high bits
+    pub owner_guid: u64,
+    pub map_id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub orientation: f32,
+    pub display_id: u32, // the player's body model, so the corpse renders as them
+    pub bytes_1: u32,    // CORPSE_FIELD_BYTES_1 (race/sex/skin) — from the player's player_bytes
+    pub bytes_2: u32,    // CORPSE_FIELD_BYTES_2 (face/hair) — from player_bytes_2
+    pub created_at: Timestamp, // for the reclaim delay + corpse decay-to-bones timer
+
+    // The reclaim delay stamped by `escalated_reclaim` at insert time (repeated quick deaths climb
+    // the 30s/60s/120s ladder), superseding the old flat 30s comparison in `reclaim_corpse`.
+    // `#[default(30_000_000i64)]` (typed — an i64 column needs an explicitly-typed
+    // literal, same as the u64 fields elsewhere: a bare untyped literal encodes 4 bytes, publish
+    // needs 8) + end-appended so `publish` auto-migrates existing rows (the migration rule:
+    // column-add needs a default annotation AND end-append).
+    #[default(30_000_000i64)]
+    pub reclaim_delay_micros: i64,
+
+    // Body → bones state flip (the gc.rs reaper sets this once `CORPSE_DECAY_MICROS` elapses
+    // unreclaimed); bones are cosmetic remains — no longer a reclaim target — and reap on their own
+    // timer (`BONES_DECAY_MICROS` after the bones flip). `#[default(false)]` + end-appended so
+    // `publish` auto-migrates existing rows.
+    #[default(false)]
+    pub is_bones: bool,
+
+    // Which instance the death happened in (work-item 190 slice 2): stamped from the dying
+    // player's own entity in `do_repop`; 0 = open world (every existing row auto-migrates to 0).
+    // Gates reclaim (below) and the gateway's corpse CREATE relay by viewer instance; the instance
+    // reap deletes any corpse left inside (the ghost's outcome is then spirit-healer-only —
+    // vanilla's expired-corpse rule). END-appended + `#[default(0u64)]` (danger-zones §2).
+    // GATEWAY-SUBSCRIBED table → `gateway/src/stdb/bindings/corpse_type.rs` + the
+    // `schema_parity.rs` manifest hand-synced in the SAME change (playbook failure-mode #1).
+    #[default(0u64)]
+    pub instance_id: u64,
+}
+
+/// Resurrect the caller at their corpse (`CMSG_RECLAIM_CORPSE`). Validates the caller is a
+/// ghost that OWNS this corpse, is on the same map within reclaim range, and the 30s delay elapsed;
+/// then restores 50% health, clears the ghost state (health > 0 + cleared flags replicate → the
+/// client comes alive), and deletes the corpse (→ SMSG_DESTROY_OBJECT). Authorized via `ctx.sender`.
+#[reducer]
+pub fn reclaim_corpse(ctx: &ReducerContext, _corpse_guid: u64) -> Result<(), String> {
+    use lyracore_shared::constants::{player_flags, unit_vis_flags};
+    let entities = ctx.db.game_world_entity();
+    let corpses = ctx.db.game_corpse();
+
+    let mut player =
+        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caller not in world".to_string())?;
+    if !player.dead || player.player_flags & player_flags::GHOST == 0 {
+        return Err("caller is not a ghost".to_string());
+    }
+    // Resolve the corpse from the CALLER, never the packet guid. In vanilla 1.12 the client fills
+    // CMSG_RECLAIM_CORPSE with its own PLAYER guid (bare low guid), not the 0xF101 corpse guid — so a
+    // `find(&packet_guid)` always misses and the reclaim silently fails (this bricked the death loop).
+    // There is exactly one corpse per player (`corpse_guid_for`), so derive it; `_corpse_guid` is ignored
+    // (kept as a self-sanity arg for wire-shape compatibility). This makes the owner check redundant.
+    let corpse_guid = corpse_guid_for(player.guid);
+    let corpse = corpses
+        .guid()
+        .find(corpse_guid)
+        .ok_or_else(|| "no such corpse".to_string())?;
+    // Map + instance gated (190 slice 2 — corpse rows carry `instance_id` now): a ghost must
+    // corpse-run back into the SAME instance it died in (the areatrigger resolve re-binds it to
+    // that instance, so the run-back lands right); a ghost in another party's copy — or in the
+    // open world — can never reclaim through the wall.
+    if corpse.map_id != player.map_id {
+        return Err("corpse on another map".to_string());
+    }
+    if corpse.instance_id != player.instance_id {
+        return Err("corpse in another instance".to_string());
+    }
+    if corpse.is_bones {
+        return Err("corpse has decayed to bones".to_string());
+    }
+    let (dx, dy, dz) = (
+        corpse.x - player.x,
+        corpse.y - player.y,
+        corpse.z - player.z,
+    );
+    if dx * dx + dy * dy + dz * dz > RECLAIM_RADIUS_SQ {
+        return Err("too far from corpse".to_string());
+    }
+    let elapsed =
+        ctx.timestamp.to_micros_since_unix_epoch() - corpse.created_at.to_micros_since_unix_epoch();
+    if elapsed < corpse.reclaim_delay_micros {
+        return Err("corpse reclaim delay not elapsed".to_string());
+    }
+
+    // Resurrect at 50% (vanilla corpse-reclaim percent). Clearing dead + the GHOST flags + restoring
+    // health replicates to the client, which leaves the ghost/death state (no "alive" opcode exists).
+    player.health = (player.max_health / 2).max(1);
+    player.dead = false;
+    player.player_flags &= !player_flags::GHOST;
+    player.unit_bytes_1 &= !unit_vis_flags::GHOST;
+    let player_guid = player.guid;
+    entities.guid().update(player);
+    corpses.guid().delete(corpse_guid);
+
+    // Reclaiming resolves the death outside of accepting a pending resurrect offer — drop any
+    // outstanding `game_resurrect_request` for this player so a stale offer doesn't resurface as a
+    // phantom SMSG_RESURRECT_REQUEST on a future reconnect. Idempotent (no-op if none pending).
+    ctx.db
+        .game_resurrect_request()
+        .target_guid()
+        .delete(player_guid);
+    Ok(())
+}
+
+/// Player corpses: an unreclaimed body decays to bones (cosmetic remains, no longer a reclaim
+/// target — `reclaim_corpse` above rejects `is_bones` rows) after `CORPSE_DECAY_MICROS`, then the
+/// bones themselves despawn after `BONES_DECAY_MICROS` more. Keyed off the corpse's OWN
+/// `created_at` — independent of the ghost's reclaim-escalation deadline
+/// (`WorldEntity::death_expire_micros`), which only governs how long the NEXT death's delay is, not
+/// this body's decay. The state flip is an in-place UPDATE (coords/appearance kept) so the
+/// gateway's `on_update` relay can re-emit the CREATE with the bones flag; the despawn is a plain
+/// delete (→ SMSG_DESTROY_OBJECT), same as reclaim.
+///
+/// Called from `gc.rs`'s `reap_movement_events` tick — the same sibling-sweep pattern as
+/// `spell::stacking::sweep_dr_state` / `loot::sweep_loot_rolls` (#379 pulled the inline block out of
+/// `gc.rs`, which had no business knowing what bones are).
+///
+/// Full scan is safe: the corpse table holds at most one row per RECENTLY-dead player (reclaim
+/// deletes; this pass despawns the rest) — it stays tiny by construction.
+pub(crate) fn sweep_corpse_decay(ctx: &ReducerContext) {
+    let t = ctx.db.game_corpse();
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let to_bones: Vec<u64> = t
+        .iter()
+        .filter(|c| {
+            !c.is_bones && now - c.created_at.to_micros_since_unix_epoch() >= CORPSE_DECAY_MICROS
+        })
+        .map(|c| c.guid)
+        .collect();
+    for guid in to_bones {
+        if let Some(mut c) = t.guid().find(guid) {
+            c.is_bones = true;
+            t.guid().update(c);
+        }
+    }
+    let bones_gone_micros = CORPSE_DECAY_MICROS + BONES_DECAY_MICROS;
+    let to_despawn: Vec<u64> = t
+        .iter()
+        .filter(|c| {
+            c.is_bones && now - c.created_at.to_micros_since_unix_epoch() >= bones_gone_micros
+        })
+        .map(|c| c.guid)
+        .collect();
+    for guid in to_despawn {
+        t.guid().delete(guid);
+    }
 }
 
 #[cfg(test)]
@@ -264,120 +419,4 @@ mod tests {
             "a lapsed streak is back to the base delay"
         );
     }
-}
-
-/// The dead body left at a player's death location. A CORPSE-type world object: the gateway
-/// relays its insert as CREATE_OBJECT and its delete as SMSG_DESTROY_OBJECT (like a creature). [entity]
-#[table(accessor = game_corpse, public)]
-pub struct Corpse {
-    #[primary_key]
-    pub guid: u64, // HIGHGUID_CORPSE in the high bits
-    pub owner_guid: u64,
-    pub map_id: u32,
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub orientation: f32,
-    pub display_id: u32, // the player's body model, so the corpse renders as them
-    pub bytes_1: u32,    // CORPSE_FIELD_BYTES_1 (race/sex/skin) — from the player's player_bytes
-    pub bytes_2: u32,    // CORPSE_FIELD_BYTES_2 (face/hair) — from player_bytes_2
-    pub created_at: Timestamp, // for the reclaim delay + corpse decay-to-bones timer
-
-    // The reclaim delay stamped by `escalated_reclaim` at insert time (repeated quick deaths climb
-    // the 30s/60s/120s ladder). Replaces the flat `RECLAIM_DELAY_MICROS` comparison in
-    // `reclaim_corpse`. `#[default(30_000_000i64)]` (typed — an i64 column needs an explicitly-typed
-    // literal, same as the u64 fields elsewhere: a bare untyped literal encodes 4 bytes, publish
-    // needs 8) + end-appended so `publish` auto-migrates existing rows (the migration rule:
-    // column-add needs a default annotation AND end-append).
-    #[default(30_000_000i64)]
-    pub reclaim_delay_micros: i64,
-
-    // Body → bones state flip (the gc.rs reaper sets this once `CORPSE_DECAY_MICROS` elapses
-    // unreclaimed); bones are cosmetic remains — no longer a reclaim target — and reap on their own
-    // timer (`BONES_DECAY_MICROS` after the bones flip). `#[default(false)]` + end-appended so
-    // `publish` auto-migrates existing rows.
-    #[default(false)]
-    pub is_bones: bool,
-
-    // Which instance the death happened in (work-item 190 slice 2): stamped from the dying
-    // player's own entity in `do_repop`; 0 = open world (every existing row auto-migrates to 0).
-    // Gates reclaim (below) and the gateway's corpse CREATE relay by viewer instance; the instance
-    // reap deletes any corpse left inside (the ghost's outcome is then spirit-healer-only —
-    // vanilla's expired-corpse rule). END-appended + `#[default(0u64)]` (danger-zones §2).
-    // GATEWAY-SUBSCRIBED table → `gateway/src/stdb/bindings/corpse_type.rs` + the
-    // `schema_parity.rs` manifest hand-synced in the SAME change (playbook failure-mode #1).
-    #[default(0u64)]
-    pub instance_id: u64,
-}
-
-/// Resurrect the caller at their corpse (`CMSG_RECLAIM_CORPSE`). Validates the caller is a
-/// ghost that OWNS this corpse, is on the same map within reclaim range, and the 30s delay elapsed;
-/// then restores 50% health, clears the ghost state (health > 0 + cleared flags replicate → the
-/// client comes alive), and deletes the corpse (→ SMSG_DESTROY_OBJECT). Authorized via `ctx.sender`.
-#[reducer]
-pub fn reclaim_corpse(ctx: &ReducerContext, _corpse_guid: u64) -> Result<(), String> {
-    use lyracore_shared::constants::{player_flags, unit_vis_flags};
-    let entities = ctx.db.game_world_entity();
-    let corpses = ctx.db.game_corpse();
-
-    let mut player =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caller not in world".to_string())?;
-    if !player.dead || player.player_flags & player_flags::GHOST == 0 {
-        return Err("caller is not a ghost".to_string());
-    }
-    // Resolve the corpse from the CALLER, never the packet guid. In vanilla 1.12 the client fills
-    // CMSG_RECLAIM_CORPSE with its own PLAYER guid (bare low guid), not the 0xF101 corpse guid — so a
-    // `find(&packet_guid)` always misses and the reclaim silently fails (this bricked the death loop).
-    // There is exactly one corpse per player (`corpse_guid_for`), so derive it; `_corpse_guid` is ignored
-    // (kept as a self-sanity arg for wire-shape compatibility). This makes the owner check redundant.
-    let corpse_guid = corpse_guid_for(player.guid);
-    let corpse = corpses
-        .guid()
-        .find(corpse_guid)
-        .ok_or_else(|| "no such corpse".to_string())?;
-    // Map + instance gated (190 slice 2 — corpse rows carry `instance_id` now): a ghost must
-    // corpse-run back into the SAME instance it died in (the areatrigger resolve re-binds it to
-    // that instance, so the run-back lands right); a ghost in another party's copy — or in the
-    // open world — can never reclaim through the wall.
-    if corpse.map_id != player.map_id {
-        return Err("corpse on another map".to_string());
-    }
-    if corpse.instance_id != player.instance_id {
-        return Err("corpse in another instance".to_string());
-    }
-    if corpse.is_bones {
-        return Err("corpse has decayed to bones".to_string());
-    }
-    let (dx, dy, dz) = (
-        corpse.x - player.x,
-        corpse.y - player.y,
-        corpse.z - player.z,
-    );
-    if dx * dx + dy * dy + dz * dz > RECLAIM_RADIUS_SQ {
-        return Err("too far from corpse".to_string());
-    }
-    let elapsed =
-        ctx.timestamp.to_micros_since_unix_epoch() - corpse.created_at.to_micros_since_unix_epoch();
-    if elapsed < corpse.reclaim_delay_micros {
-        return Err("corpse reclaim delay not elapsed".to_string());
-    }
-
-    // Resurrect at 50% (vanilla corpse-reclaim percent). Clearing dead + the GHOST flags + restoring
-    // health replicates to the client, which leaves the ghost/death state (no "alive" opcode exists).
-    player.health = (player.max_health / 2).max(1);
-    player.dead = false;
-    player.player_flags &= !player_flags::GHOST;
-    player.unit_bytes_1 &= !unit_vis_flags::GHOST;
-    let player_guid = player.guid;
-    entities.guid().update(player);
-    corpses.guid().delete(corpse_guid);
-
-    // Reclaiming resolves the death outside of accepting a pending resurrect offer — drop any
-    // outstanding `game_resurrect_request` for this player so a stale offer doesn't resurface as a
-    // phantom SMSG_RESURRECT_REQUEST on a future reconnect. Idempotent (no-op if none pending).
-    ctx.db
-        .game_resurrect_request()
-        .target_guid()
-        .delete(player_guid);
-    Ok(())
 }

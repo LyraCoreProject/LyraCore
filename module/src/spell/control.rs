@@ -1,9 +1,13 @@
 //! Crowd-control model — the composable CC predicate lattice over one shared `has_control_mechanic`
-//! scanner. `mod.rs` re-exports the public predicates so every `crate::spell::<predicate>` path
-//! resolves; `is_immune_to_mechanic` is `pub(crate)` (the cast pipeline reads it) and
-//! `break_auras_on_damage` is `pub(crate)` (every real-damage path calls it).
+//! scanner, PLUS (381 split) the cast-bar teardown family (`pushback_cast` / `interrupt_cast` /
+//! `break_channel` / `interrupt_cast_and_lock`), moved here from the old flat `cast.rs`: this file
+//! already called `pushback_cast` from `break_auras_on_damage` below, so co-locating the teardown with
+//! the rest of the crowd-control model removes a cross-module callback instead of adding one. `mod.rs`
+//! re-exports the public predicates so every `crate::spell::<predicate>` path resolves;
+//! `is_immune_to_mechanic` is `pub(crate)` (the cast pipeline reads it) and `break_auras_on_damage` is
+//! `pub(crate)` (every real-damage path calls it).
 
-use spacetimedb::ReducerContext;
+use spacetimedb::{log, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 // The taxonomy consts (A_CONTROL/M_*/A_IMMUNITY/P_MECHANIC) and the generated `game_aura`/`game_spell`
 // accessor traits are re-exported by `mod.rs` — pull them all into scope here.
@@ -214,7 +218,7 @@ pub(crate) fn break_auras_on_damage(
         })
         .collect();
     // CC DR: break-on-damage is the THIRD removal event that starts the 15s DR window (with natural
-    // expiry — scheduler::tick_auras — and dispel — math::dispel_target; 192 review finding #1).
+    // expiry — scheduler::tick_auras — and dispel — effects::dispel_target; 192 review finding #1).
     // Without this stamp the window keeps the provisional apply-time value (scheduled expiry + 15s),
     // running LONGER than vanilla's actual-break + 15s. No-op for non-CC auras / creature targets.
     let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
@@ -295,9 +299,215 @@ pub(crate) fn is_immune_to_mechanic(ctx: &ReducerContext, unit_guid: u64, mechan
         .any(|a| a.eff_kind == A_IMMUNITY && a.eff_p0_kind == P_MECHANIC && a.eff_p0 == mechanic)
 }
 
+// ===========================================================================================
+//  Cast-bar teardown (381 split, moved from the old flat `cast.rs`) — pushback / interrupt / channel
+//  break / Kick-style interrupt-and-lock. `break_auras_on_damage` above already calls `pushback_cast`.
+// ===========================================================================================
+
+/// Per-hit cast-bar slide (vanilla 1.12 "pushback"), in milliseconds — cmangos's fixed
+/// `PUSHBACK_SPELL_DELAY_TIME` (500ms). Applied to a pending cast's `scheduled_at` by `pushback_cast`,
+/// once per landed direct hit, up to `CAST_PUSHBACK_MAX` pushbacks.
+pub(crate) const CAST_PUSHBACK_MS: i64 = 500;
+
+/// Max pushbacks per cast — the vanilla cap of 2 (so at most +1000ms total). The
+/// 3rd+ direct hit on the same cast neither delays nor cancels it; the cast simply completes on schedule.
+pub(crate) const CAST_PUSHBACK_MAX: u8 = 2;
+
+/// Pure decision: should a landed direct hit push this pending cast back further? True while
+/// `pushback_count` (the number of pushbacks already applied to THIS cast) is under the cap. Extracted
+/// so the cap logic is unit-tested without a live `ReducerContext` (the module crate has no ctx harness
+/// by design).
+pub(crate) fn should_pushback(pushback_count: u8) -> bool {
+    pushback_count < CAST_PUSHBACK_MAX
+}
+
+/// PUSH BACK `caster_guid`'s in-progress (timed) cast(s) on DIRECT damage — vanilla 1.12's actual on-hit
+/// behavior for a regular cast (NOT a cancel): each landed direct hit slides the pending cast's
+/// `scheduled_at` by `CAST_PUSHBACK_MS`, up to `CAST_PUSHBACK_MAX` pushbacks (cmangos's
+/// two-pushbacks-per-cast convention). Past the cap, further hits are a no-op — they neither delay nor
+/// cancel, so the cast completes on schedule. Updating `scheduled_at` on the scheduled row reschedules
+/// the pending `fire_pending_cast` callback to the new deadline (the same table SpacetimeDB primitive
+/// `interrupt_cast`'s delete already leans on to CANCEL it outright).
+///
+/// Only called for DIRECT damage (`break_auras_on_damage` skips this when `periodic`, matching vanilla:
+/// a DoT tick does not push back a cast). Kick/Counterspell-style interrupts stay on the unconditional
+/// `interrupt_cast`/`interrupt_cast_and_lock` cancel path — untouched by this function.
+///
+/// Emits a `game_spell_cast_event` row with `delay_ms > 0` per actual pushback (never for a capped-out
+/// no-op hit) so the gateway relays `SMSG_SPELL_DELAYED{guid, delay_time}` and the client's cast bar
+/// visibly shifts. No-op for a caster with no pending cast (the common path) — every real-damage call
+/// site can call this unconditionally. [entity]
+pub(crate) fn pushback_cast(ctx: &ReducerContext, caster_guid: u64) {
+    let pending = ctx.db.game_pending_cast();
+    // perf catalog 1.18 — `by_caster` probe; this runs off every landed direct hit.
+    let hits: Vec<PendingCast> = pending.by_caster().filter(&caster_guid).collect();
+    for mut p in hits {
+        if !should_pushback(p.pushback_count) {
+            continue; // cap already reached: no further delay, no cancel — the cast completes untouched
+        }
+        let ScheduleAt::Time(fire_at) = p.scheduled_at else {
+            continue; // a cast-bar row is always a one-shot Time; defensive no-op on the Interval variant
+        };
+        let Some(new_fire_at) =
+            fire_at.checked_add(TimeDuration::from_micros(CAST_PUSHBACK_MS * 1000))
+        else {
+            continue; // timestamp overflow (practically unreachable) — leave the cast untouched
+        };
+        let spell_id = p.spell_id;
+        p.pushback_count += 1;
+        let new_count = p.pushback_count;
+        p.scheduled_at = ScheduleAt::Time(new_fire_at);
+        pending.scheduled_id().update(p);
+        // PUSHBACK signal: the gateway relays SMSG_SPELL_DELAYED so the caster's cast bar visibly shifts.
+        // All other cols default/zero (this is neither a START, a GO, nor an interrupt).
+        ctx.db.game_spell_cast_event().insert(SpellCastEvent {
+            delay_ms: CAST_PUSHBACK_MS as u32,
+            ..SpellCastEvent::signal(ctx, caster_guid, spell_id)
+        });
+        log::info!(
+            "cast pushed back: caster {caster_guid}'s spell {spell_id} delayed {CAST_PUSHBACK_MS}ms \
+             (pushback {new_count}/{CAST_PUSHBACK_MAX})"
+        );
+    }
+}
+
+/// Cancel `caster_guid`'s in-progress (timed) cast(s) — delete its `game_pending_cast` row(s), which also
+/// cancels the scheduled `fire_pending_cast`, so the spell never resolves (rank #118 CC interrupt).
+/// Reached through the `by_caster` index (perf catalog 1.18) — `break_channel` calls this on every
+/// moving heartbeat, so the old full scan sat on the hottest path. Returns whether anything was interrupted; a caster with no pending cast → `false` (no-op). The
+/// client-facing cast-bar cancel (an `SMSG_SPELL_FAILED`/interrupted wire push) is a gateway follow-up —
+/// the server-authoritative effect (the cast simply never lands) is complete here. [entity]
+pub(crate) fn interrupt_cast(ctx: &ReducerContext, caster_guid: u64) -> bool {
+    let pending = ctx.db.game_pending_cast();
+    // Capture (scheduled_id, spell_id) BEFORE deletion — the spell_id rides the interrupt signal row.
+    let hits: Vec<(u64, u32)> = pending
+        .by_caster()
+        .filter(&caster_guid)
+        .map(|p| (p.scheduled_id, p.spell_id))
+        .collect();
+    let interrupted = !hits.is_empty();
+    for (id, spell_id) in hits {
+        pending.scheduled_id().delete(id);
+        // INTERRUPT signal: one game_spell_cast_event row (is_interrupted=true) per cancelled cast → the
+        // gateway relays SMSG_SPELL_FAILURE{spell, Interrupted} to the caster. cast_time_ms 0 so it does NOT
+        // take the START branch; damage 0 so no damage log. All other cols default.
+        ctx.db.game_spell_cast_event().insert(SpellCastEvent {
+            is_interrupted: true,
+            ..SpellCastEvent::signal(ctx, caster_guid, spell_id)
+        });
+    }
+    if interrupted {
+        log::info!("cast interrupted: caster {caster_guid}'s in-progress cast cancelled");
+    }
+    interrupted
+}
+
+/// BREAK a channel on `caster_guid` — the ONE convergent break path for the four channel-interrupt triggers
+/// (the caster MOVES / starts a NEW cast / is CC'd / its channel target dies). Deletes the caster's
+/// `A_PERIODIC_TRIGGER` channel aura(s) so `tick_auras` stops firing the per-tick missile, AND cancels any
+/// in-progress timed cast via `interrupt_cast` (a channel and a cast-bar are mutually exclusive in practice,
+/// but covering both keeps every call site a single tear-down). Collect-then-delete (never mutate while
+/// iterating), modeled on `break_stealth`. Returns whether anything was broken. NO-OP for a caster with no
+/// channel/cast (the common path) — every call site can fire it unconditionally. Generic over the kind,
+/// never a spell id. [entity]
+pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
+    let auras = ctx.db.game_aura();
+    let spells = ctx.db.game_spell();
+    // A channel is a SELF-aura → it sits on the caster's own `target_guid`; scope by `by_target` then
+    // filter the channel kind (the same idiom as break_stealth's A_STEALTH scope). A_PERIODIC_TRIGGER is
+    // ALWAYS a channel tick (Arcane Missiles). A_PERIODIC_ENERGIZE is channel-borne ONLY when its parent
+    // spell carries the CHANNELED flag (Evocation) — a NON-channeled periodic energize (Bloodrage's rage
+    // trickle) must survive, so it is gated on a header join to `cast_flags & SPELL_ATTR_CHANNELED`.
+    let ids: Vec<u64> = auras
+        .by_target()
+        .filter(&caster_guid)
+        .filter(|a| {
+            a.eff_kind == A_PERIODIC_TRIGGER
+                || (a.eff_kind == A_PERIODIC_ENERGIZE
+                    && spells
+                        .spell_id()
+                        .find(a.spell_id)
+                        .map(|s| s.cast_flags & SPELL_ATTR_CHANNELED != 0)
+                        .unwrap_or(false))
+        })
+        .map(|a| a.id)
+        .collect();
+    let broke_channel = !ids.is_empty();
+    for id in ids {
+        auras.id().delete(id);
+    }
+    // Also tear down a timed cast bar (no-op if none). `interrupt_cast` logs its own cancel.
+    let broke_cast = interrupt_cast(ctx, caster_guid);
+    if broke_channel {
+        log::info!("channel broken: caster {caster_guid}'s channel cancelled");
+    }
+    broke_channel || broke_cast
+}
+
+/// KICK: cancel `target_guid`'s in-progress cast (via `interrupt_cast`) AND lock the interrupted cast's
+/// SCHOOL for `lockout_ms` milliseconds — the Kick "silence". Reads each pending cast's `spell_id` BEFORE
+/// deletion to resolve its `game_spell.school_mask`, then writes/refreshes a `game_school_lockout` row
+/// keyed `(target, school)` so the `resolve_cast_at` gate refuses that school until the lock expires.
+/// Distinct from the plain `interrupt_cast` (the CC-interrupt path stays a pure cancel — no school lock
+/// when a stun/poly/fear happens to interrupt a cast). The `lockout_ms` value is read from the
+/// interrupting spell's `duration_ms` at the call site (Kick=5000, Counterspell=8000, Pummel=4000).
+/// No-op when the target isn't mid-cast. Generic — never a spell id. [entity]
+pub(crate) fn interrupt_cast_and_lock(
+    ctx: &ReducerContext,
+    target_guid: u64,
+    lockout_ms: i64,
+) -> bool {
+    let pending = ctx.db.game_pending_cast();
+    // Capture the interrupted spell ids BEFORE deletion — they drive the school lockout below.
+    let spell_ids: Vec<u32> = pending
+        .by_caster()
+        .filter(&target_guid)
+        .map(|p| p.spell_id)
+        .collect();
+    let interrupted = interrupt_cast(ctx, target_guid);
+    if interrupted {
+        let until = ctx
+            .timestamp
+            .checked_add(TimeDuration::from_micros(lockout_ms * 1000))
+            .unwrap_or(ctx.timestamp);
+        let locks = ctx.db.game_school_lockout();
+        for spell_id in spell_ids {
+            let Some(school) = ctx
+                .db
+                .game_spell()
+                .spell_id()
+                .find(spell_id)
+                .map(|h| h.school_mask)
+            else {
+                continue; // unknown spell row → nothing to lock (defensive; should not happen)
+            };
+            // Refresh in place if this caster already has a lock for the school, else insert.
+            if let Some(mut row) = locks
+                .by_caster()
+                .filter(&target_guid)
+                .find(|r| r.school == school)
+            {
+                row.until = until;
+                locks.id().update(row);
+            } else {
+                locks.insert(SchoolLockout {
+                    id: 0,
+                    caster_guid: target_guid,
+                    school,
+                    until,
+                });
+            }
+        }
+        log::info!(
+            "kick: caster {target_guid}'s cast cancelled + school locked for {lockout_ms}ms"
+        );
+    }
+    interrupted
+}
+
 #[cfg(test)]
 mod tests {
-    use super::cc_blocks;
+    use super::{cc_blocks, should_pushback, CAST_PUSHBACK_MAX, CAST_PUSHBACK_MS};
 
     /// The un-CC'd baseline: no stun/root/fear/poly → nothing is blocked on any axis.
     #[test]
@@ -375,6 +585,35 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Cast pushback (work-item 039): the per-hit slide is cmangos's fixed 500ms, and the cap is 2
+    /// pushbacks per cast (the vanilla cap) — so a 3rd+ direct hit is a documented no-op.
+    #[test]
+    fn pushback_constants_match_the_cmangos_convention() {
+        assert_eq!(CAST_PUSHBACK_MS, 500);
+        assert_eq!(CAST_PUSHBACK_MAX, 2);
+    }
+
+    /// The pure cap decision: pushback is allowed strictly BELOW the cap (0 and 1 pushbacks-so-far both
+    /// still allow one more), and refused AT or ABOVE it (2, 3, and beyond all refuse — the 3rd+ hit
+    /// neither delays nor cancels the cast).
+    #[test]
+    fn should_pushback_allows_up_to_the_cap_then_refuses() {
+        assert!(should_pushback(0));
+        assert!(should_pushback(1));
+        assert!(!should_pushback(2));
+        assert!(!should_pushback(3));
+        assert!(!should_pushback(u8::MAX));
+    }
+
+    /// Closed-form sweep: `should_pushback(n)` is exactly `n < CAST_PUSHBACK_MAX` for every count in a
+    /// wide range — a single source of truth check that the cap boundary can't drift silently.
+    #[test]
+    fn should_pushback_matches_the_closed_form_across_a_range() {
+        for n in 0u8..=20 {
+            assert_eq!(should_pushback(n), n < CAST_PUSHBACK_MAX, "n={n}");
         }
     }
 }

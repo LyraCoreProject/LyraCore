@@ -48,8 +48,6 @@
 
 use spacetimedb::ReducerContext;
 
-use crate::game_world_entity;
-
 // ---- combat ----
 
 // A `debug_only!` verb's sole consumer today is the feature-gated harness; a default build
@@ -100,12 +98,7 @@ pub(crate) fn cast_at(
     spell_id: u32,
     target_guid: u64,
 ) -> Result<(), String> {
-    let e = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(actor_guid)
-        .ok_or_else(|| format!("no live entity for guid {actor_guid}"))?;
+    let e = crate::helpers::live_entity(ctx, actor_guid)?;
     crate::spell::resolve_cast_at(
         ctx,
         actor_guid,

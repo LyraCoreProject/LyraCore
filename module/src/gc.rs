@@ -5,11 +5,14 @@ use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table};
 
 use crate::{
     game_addon_message, game_bot_invite_intent, game_channel_event, game_chat_event,
-    game_combat_event, game_corpse, game_emote_event, game_group_event, game_group_invite,
-    game_levelup_event, game_movement_violation, game_roll_event, game_spell_cast_event,
-    game_spell_impact_event, game_teleport_event, game_whisper_event, game_xp_event,
-    EVENT_TTL_MICROS, INVITE_TTL_MICROS,
+    game_combat_event, game_emote_event, game_group_event, game_group_invite, game_levelup_event,
+    game_movement_violation, game_roll_event, game_spell_cast_event, game_spell_impact_event,
+    game_teleport_event, game_whisper_event, game_xp_event, EVENT_TTL_MICROS, INVITE_TTL_MICROS,
 };
+// `rest` isn't re-exported at crate scope (`mod rest;`, no `pub use rest::*;` in lib.rs) — every
+// other event table's accessor trait rides that glob, so this is the one accessor here needing its
+// own import.
+use crate::rest::game_rest_state_event;
 // `game_movement_event` / `game_creature_move_event` are deliberately NOT imported: nothing writes
 // either table any more, so the reaper no longer touches them (see the notes in `reap_events`).
 
@@ -80,6 +83,12 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_group_event); // group invite/roster notifications (RLS-scoped)
     reap!(game_bot_invite_intent); // bot-decided invites awaiting gateway pickup (issue #54)
     reap!(game_movement_violation); // recent anti-cheat diagnostics (issue #211)
+                                    // Rest-area zzz/blue-bar relay rows (196). Caught missing by the #379 gc_reap_tripwire: this
+                                    // table carries the same `id: u64` + `created_at: Timestamp` TTL shape as every table above but
+                                    // had no reap line — every inn threshold crossing for the lifetime of a character left one more
+                                    // row behind. The durable rest state (`Character.resting`/`rested_xp`) lives elsewhere; this row
+                                    // is only the one-shot PLAYER_BYTES_2 relay.
+    reap!(game_rest_state_event);
 
     // Never-answered pending invites. Same id+created_at shape as the event tables, but on
     // the longer INVITE_TTL (a human is looking at the invite dialog). After that the row is dead
@@ -120,47 +129,9 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
         }
     }
 
-    // Player corpses: an unreclaimed body decays to bones (cosmetic remains, no longer a reclaim
-    // target — `reclaim_corpse` rejects `is_bones` rows) after `CORPSE_DECAY_MICROS`, then the bones
-    // themselves despawn after `BONES_DECAY_MICROS` more. Keyed off the corpse's OWN `created_at` —
-    // independent of the ghost's reclaim-escalation deadline (`WorldEntity::death_expire_micros`),
-    // which only governs how long the NEXT death's delay is, not this body's decay. The state flip
-    // is an in-place UPDATE (coords/appearance kept) so the gateway's `on_update` relay can re-emit
-    // the CREATE with the bones flag; the despawn is a plain delete (→ SMSG_DESTROY_OBJECT), same as
-    // reclaim.
-    // Full scan is safe: the corpse table holds at most one row per RECENTLY-dead player (reclaim
-    // deletes; this pass despawns the rest) — it stays tiny by construction.
-    {
-        let t = ctx.db.game_corpse();
-        let now = ctx.timestamp.to_micros_since_unix_epoch();
-        let to_bones: Vec<u64> = t
-            .iter()
-            .filter(|c| {
-                !c.is_bones
-                    && now - c.created_at.to_micros_since_unix_epoch()
-                        >= crate::corpse::CORPSE_DECAY_MICROS
-            })
-            .map(|c| c.guid)
-            .collect();
-        for guid in to_bones {
-            if let Some(mut c) = t.guid().find(guid) {
-                c.is_bones = true;
-                t.guid().update(c);
-            }
-        }
-        let bones_gone_micros =
-            crate::corpse::CORPSE_DECAY_MICROS + crate::corpse::BONES_DECAY_MICROS;
-        let to_despawn: Vec<u64> = t
-            .iter()
-            .filter(|c| {
-                c.is_bones && now - c.created_at.to_micros_since_unix_epoch() >= bones_gone_micros
-            })
-            .map(|c| c.guid)
-            .collect();
-        for guid in to_despawn {
-            t.guid().delete(guid);
-        }
-    }
+    // Player corpses: unreclaimed body → bones → despawn, on its own decay policy (own the bones,
+    // not this reaper). See `corpse::sweep_corpse_decay`'s doc for the timers and the relay shape.
+    crate::corpse::sweep_corpse_decay(ctx);
 }
 
 #[cfg(test)]

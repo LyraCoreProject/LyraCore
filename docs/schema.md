@@ -74,7 +74,7 @@ compiled into the same module. **103 public, 56 private.**
 | Loot | 9 | 6 | `loot.rs` |
 | Group / party | 5 | 3 | `group.rs` |
 | Instance / encounter | 7 | 0 | `instance.rs`, `encounter.rs` |
-| Region / sharding / transfer / load | 7 | 0 | `region.rs`, `load.rs`, `transfer.rs` |
+| Region / sharding / transfer / load | 7 | 0 | `region.rs`, `load.rs`, `transfer/` |
 | Realm-core | 2 | 0 | `realm_core.rs` |
 | Config / static data / diagnostics | 20 | 19 | `config.rs`, `gm.rs`, `faction.rs`, `skilldata.rs`, `stats.rs`, `action_bar.rs`, `import_meta.rs`, `debug.rs` |
 | GC | 1 | 0 | `gc.rs` |
@@ -132,7 +132,7 @@ Three indexes, each earning its keep:
 `game_dynamic_object`). Use `helpers::entities_near` / `helpers::in_same_partition`. A whole-table
 scan on a sharded realm silently returns a subset rather than erroring, and every feature built on
 "I can see the whole world" quietly goes wrong. Enforced by
-`module/src/lib.rs::partition_discipline_tripwire` against a whitelist that only ever shrinks.
+`module/src/tripwires.rs::partition_discipline_tripwire` against a whitelist that only ever shrinks.
 
 Six sibling tables carry the **identical** `(map_id, instance_id, grid_x, grid_y)` key so they can
 ride the same AOI box: `game_entity_motion`, `game_creature_spline`, `game_combat_event`,
@@ -171,7 +171,7 @@ region 0 is reserved for "the rest of the map". An assignment names a **database
 monotonic `epoch`, and is authoritative on realm-core only. `shard` is the one column in the schema
 that a module file outside `region.rs`/`load.rs` may not touch — the build fails if it does.
 
-### `game_transfer_out` / `game_transfer_in` (`module/src/transfer.rs:307,:345`)
+### `game_transfer_out` / `game_transfer_in` (`module/src/transfer/mod.rs`)
 
 Both private. The two halves of a cross-database character move. While either row exists the
 character is **in transit**, and four chokepoints refuse to act on it. The escrow row on disk is the
@@ -255,7 +255,7 @@ timer decides gameplay.
 | `game_ground_area_schedule` | `tick_ground_areas` | 500 ms | `spell/tables.rs:458` |
 | `game_aura_schedule` | `tick_auras` | 1 s | `spell/tables.rs:402` |
 | `game_event_reaper_schedule` | `reap_movement_events` | 1 s | `gc.rs:15` |
-| `game_transfer_reaper_schedule` | `reap_transfers` | 5 s | `transfer.rs:356` |
+| `game_transfer_reaper_schedule` | `reap_transfers` | 5 s | `transfer/mod.rs` |
 | `game_instance_reaper_schedule` | `reap_instances` | 60 s | `instance.rs:276` |
 | `game_pending_cast` | `fire_pending_cast` | one-shot at cast completion | `spell/tables.rs:468` |
 | `game_pending_spell_impact` | `fire_spell_impact` | one-shot at projectile landing | `spell/tables.rs:515` |
@@ -265,8 +265,10 @@ The interval rows are inserted by `init` (`module/src/seed.rs:1358–1408`), exc
 which `begin_transfer` arms lazily and idempotently. Scheduled reducers self-gate on
 `ctx.sender() == ctx.database_identity()` so they cannot be driven externally.
 
-⚠ Re-arming after a schema change is a real operational step: `debug_rearm_creature_tick` and the
-aura/ground-area re-arms exist because a republish can leave a schedule row stale.
+⚠ Re-arming after a schema change is a real operational step: the schedule re-arms exist because a
+republish can leave a schedule row stale. `debug_repair_after_publish` (#378) runs all of them —
+creature tick, aura, ground-area, instance reaper — in one call, and `scripts/publish-module.sh`
+invokes it automatically after every publish.
 
 Packages get a periodic hook without a table of their own: `game_tick_pass!` runs at the end of
 every `tick_creatures` pass, after all core passes, and is expected to self-quantize for a slower

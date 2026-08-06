@@ -10,18 +10,24 @@
 //! typed `set_player_field_inv(ItemSlot, Guid)` (NOT walled like the aura array), so this needs no raw
 //! encoder.
 //!
-//! This file is a thin facade over four by-concern submodules — `tables` (the two table structs + RLS
+//! This file is a thin facade over six by-concern submodules — `tables` (the two table structs + RLS
 //! filter + guid/slot primitives), `rules` (the pure equip/economy taxonomy + arithmetic + their unit
-//! tests), `ops` (the `apply_*` mutation cores), and `reducers` (the thin `#[reducer]` entry points).
-//! The `pub use ...::*` re-exports keep every symbol reachable as `crate::items::<sym>` regardless of
-//! which submodule defines it.
+//! tests), `ops` (the grant/use/loot mutation cores), `economy` (the vendor sell/buy/buyback/repair
+//! cores + their shared NPC gate, #387), `inventory` (the move/split/equip/unequip cores + slot-space
+//! vocabulary, #387), and `reducers` (the thin `#[reducer]` entry points). The `pub use ...::*`
+//! re-exports keep every symbol reachable as `crate::items::<sym>` regardless of which submodule
+//! defines it.
 
+mod economy;
+mod inventory;
 mod ops;
 mod reducers;
 mod rules;
 mod tables;
 
-pub(crate) use ops::*; // the apply_* cores are pub(crate) (no pub items to re-export)
+pub(crate) use economy::*; // the apply_* cores are pub(crate) (no pub items to re-export)
+pub(crate) use inventory::*; // ditto
+pub(crate) use ops::*; // ditto
 pub use reducers::*;
 pub use rules::*;
 pub use tables::*;

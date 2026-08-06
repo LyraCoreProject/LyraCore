@@ -30,7 +30,7 @@ use crate::{
 };
 
 use super::spawn::{build_creature_entity, CreatureSpawn};
-use super::tick::game_creature_move_event;
+use super::tick::emit_move_spline;
 
 /// A pet that is FARTHER than this (yards, squared) from its owner walks toward the owner when idle —
 /// the "follow band". Tuned so the pet trails a few yards behind (vanilla pets hover near the owner) and
@@ -66,10 +66,7 @@ crate::character_owned!(delete, fn sweep_delete_game_pet_command(ctx, character_
 // the pet entity does not cross the boundary (it is a `game_world_entity`, not character-owned) —
 // it despawns with the owner and is re-summoned on the far side, which re-derives the default
 // Follow+Defensive the absent row already means. Not transported, by decision.
-crate::character_owned!(transfer, fn sweep_transfer_game_pet_command(ctx, character_guid, io) {
-    let _ = (ctx, character_guid);
-    crate::transfer::not_transported(io);
-});
+crate::character_owned!(not_transported, fn sweep_transfer_game_pet_command());
 
 // Wire numbering — gtker PetCommandState / mangos CommandStates. MUST match CMSG_PET_ACTION.data + the
 // SMSG_PET_SPELLS bar packing (build_pet_spells); do NOT reorder.
@@ -375,7 +372,6 @@ pub(crate) fn pass_pet(
     let mut visited = 0usize;
     let entities = ctx.db.game_world_entity();
     let melee = ctx.db.game_melee_attack();
-    let events = ctx.db.game_creature_move_event();
 
     // The owner's "combat target": the enemy the pet should engage. The owner is fighting when it has a
     // live `game_melee_attack` row (a player auto-attacking) — use that row's target; else fall back to the
@@ -573,20 +569,22 @@ pub(crate) fn pass_pet(
                 duration_ms,
             } => {
                 if duration_ms > 0 {
-                    events.insert(crate::creatures::CreatureMoveEvent {
-                        id: 0,
-                        mover_guid: pet_guid,
-                        start_x: sx,
-                        start_y: sy,
-                        start_z: sz,
-                        dest_x: nx,
-                        dest_y: ny,
-                        dest_z: nz,
+                    // ONE relay path (perf 2.3) — see `creatures::tick::emit_move_spline`. This arm
+                    // kept writing the unsubscribed `game_creature_move_event` table after the gateway
+                    // dropped its subscription, so a following pet's leg moved the server and nothing
+                    // else (#357) — every sense tick, forever, on a live shard.
+                    emit_move_spline(
+                        ctx,
+                        pet_guid,
+                        (sx, sy, sz),
+                        (nx, ny, nz),
                         duration_ms,
-                        spline_id: now_ms,
-                        created_at: ctx.timestamp,
-                        run: true, // a pet follows at a run
-                    });
+                        true, // a pet follows at a run
+                        now_ms,
+                        map_id,
+                        instance_id,
+                        spatial::grid_cell(sx, sy), // leg START cell, same convention as the chase pass
+                    );
                 }
                 if let Some(mut pet) = entities.guid().find(pet_guid) {
                     let (gx, gy) = spatial::grid_cell(nx, ny);

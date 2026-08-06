@@ -8,7 +8,7 @@
 
 use spacetimedb::{client_visibility_filter, table, Filter, Identity, ReducerContext, Table};
 
-use crate::game_spell; // racial-passive attribute lookup
+use crate::{game_aura, game_spell}; // racial-passive attribute lookup (game_spell); aura strip (game_aura)
 
 /// A spell a character has LEARNED (beyond the class baseline). Per-player, owner-scoped (RLS like
 /// `game_character`/`game_player_skill`). Logical key `(character_guid, spell_id)` via an `#[auto_inc]` PK
@@ -40,15 +40,9 @@ crate::character_owned!(delete, fn sweep_delete_game_player_spell(ctx, character
 // without it the login spellbook is empty and every cast fails "spell not known". `id` is a
 // surrogate PK, re-minted.
 crate::character_owned!(transfer, fn sweep_transfer_game_player_spell(ctx, character_guid, io) {
-    crate::transfer::move_rows(
-        ctx,
-        io,
-        || ctx.db.game_player_spell().by_character().filter(&character_guid).collect::<Vec<_>>(),
-        |ctx, mut r| {
-            r.id = 0;
-            ctx.db.game_player_spell().insert(r);
-        },
-    );
+    table = game_player_spell,
+    by = by_character,
+    remint = id,
 });
 crate::character_owned!(restamp, fn sweep_restamp_game_player_spell(ctx, character_guid, identity) {
     let spells = ctx.db.game_player_spell();
@@ -159,6 +153,48 @@ pub(crate) fn learn_spell(ctx: &ReducerContext, guid: u64, owner: Identity, spel
     // Pick Lock (119): learning it grants the Lockpicking (633) skill line, so the first pick_lock cast
     // reads a real skill row (a no-op for every other spell). Runs on the single grant seam.
     crate::skill::grant_lockpicking_on_learn(ctx, guid, owner, spell_id);
+}
+
+/// Forget `guid`'s `spell_id` — delete every `game_player_spell` row for it (collect-then-delete; never
+/// duplicates, so at most one row exists, but the pattern matches every other book sweep in this crate).
+/// The unlearn twin of [`learn_spell`]: talent supersede/respec are the current callers, and any future
+/// unlearn source (GM strip, a gossip respec option) should route through here rather than re-deriving
+/// the collect-then-delete dance. Does not touch auras — pair with [`strip_spell_auras`] when the spell
+/// also applied a passive. [entity]
+pub(crate) fn forget_spell(ctx: &ReducerContext, guid: u64, spell_id: u32) {
+    let spells = ctx.db.game_player_spell();
+    for row in spells
+        .by_character()
+        .filter(&guid)
+        .filter(|s| s.spell_id == spell_id)
+        .collect::<Vec<_>>()
+    {
+        spells.id().delete(row.id);
+    }
+}
+
+/// Strip every `game_aura` row `guid` has from `spell_id` (collect-then-delete — never mutate mid-scan,
+/// matches `scheduler::cancel_aura`'s pattern). Returns whether any removed aura moved vitals
+/// (`aura_moves_vitals`) — the caller's cue to run exactly ONE `recompute_vitals` after stripping a batch
+/// of spells, never per-spell (this function deliberately does NOT call `recompute_vitals` itself: a
+/// respec strips several passives per unlearn and folding the flag across all of them keeps that a single
+/// call, mirroring the pre-existing talent.rs call sites this replaces). A PASSIVE aura has no
+/// `cancel_aura` path (it refuses a passive spell by design), so this is the only way to remove one
+/// server-side. [entity]
+pub(crate) fn strip_spell_auras(ctx: &ReducerContext, guid: u64, spell_id: u32) -> bool {
+    let auras = ctx.db.game_aura();
+    let to_remove: Vec<(u64, bool)> = auras
+        .by_target()
+        .filter(&guid)
+        .filter(|a| a.spell_id == spell_id)
+        .map(|a| (a.id, crate::spell::aura_moves_vitals(a.eff_kind, a.eff_p0)))
+        .collect();
+    let mut moved_vitals = false;
+    for (id, mv) in to_remove {
+        auras.id().delete(id);
+        moved_vitals |= mv;
+    }
+    moved_vitals
 }
 
 /// A spell's rank-chain link within a spell family (e.g. Fireball Rank 1→2→3): `prev_spell` is the

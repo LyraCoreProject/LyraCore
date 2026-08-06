@@ -2735,6 +2735,40 @@ fn build_items_and_loot(
     //    (Was a referenced-only subset.) entry 0 is skipped; `item_ids` (the referenced set built above)
     //    is now used only to flag a DANGLING reference — a loot/vendor/quest item with NO item_template
     //    row, which would break that loot/turn-in — so it surfaces rather than silently dropping.
+    // ON-USE SPELL OVERRIDE (#387, finishing the spellid_1 migration `module/src/items/rules.rs` named as
+    // the end state): the curated alpha consumables + the Hearthstone whose on-use cast is OUR synthetic
+    // spell (50110-50119, seeded in `module/src/seed.rs`), not whatever the real vanilla dump's
+    // SpellId_1/SpellTrigger_1 says — those real ids either name spells outside our curated `game_spell`
+    // set, or (Spiced Wolf Meat, a crafted Cooking product) don't exist in vanilla at all. Applied AFTER
+    // the raw dump read below so the curated id always wins; spelltrigger_1 is forced to 0 (on-use)
+    // alongside it. Moved here from the now-retired `items::ops::USE_EFFECTS` shadow-map, byte-for-byte,
+    // plus the two entries that map ONLY here: the Hearthstone (6948, whose recall used to be a hardcoded
+    // item-entry special case in `apply_item_use`) and Roasted Boar Meat (2681, a level-1 food —
+    // deliberately routed to the SAME plain HoT as Tough Jerky/Bread, no Well-Fed buff at level 1).
+    const USE_SPELL_OVERRIDE: &[(u64, u32)] = &[
+        (118, 50110),  // Minor Healing Potion -> Minor Healing (instant E_HEAL)
+        (1251, 50111), // Linen Bandage -> Linen Bandage (channeled A_PERIODIC_HEAL HoT)
+        (4360, 50096), // Rough Copper Bomb -> Rough Copper Bomb (E_DAMAGE AoE)
+        (2455, 50113), // Minor Mana Potion -> Minor Mana Potion (E_ENERGIZE, mana-class gated)
+        (159, 50114), // Refreshing Spring Water -> Refreshing Water (A_PERIODIC_ENERGIZE, mana-class gated)
+        (5350, 50114), // Conjured Water -> same drink spell
+        (4540, 50115), // Tough Hunk of Bread -> Eating (A_PERIODIC_HEAL food HoT)
+        (117, 50115), // Tough Jerky -> same food spell
+        (2681, 50115), // Roasted Boar Meat (level-1 food) -> same food spell, no Well-Fed buff
+        (2680, 50116), // Spiced Wolf Meat -> Well Fed (+Sta/+Spi buff)
+        (858, 50117), // Lesser Healing Potion -> Lesser Healing (E_HEAL, rank-2)
+        (2581, 50118), // Heavy Linen Bandage -> Heavy Linen Bandage (channeled HoT, rank-2)
+        (
+            lyracore_shared::constants::starter_item::HEARTHSTONE_ENTRY as u64,
+            50119,
+        ), // Hearthstone -> Call Stone (E_RECALL_HOME)
+    ];
+    let use_spell_override = |entry: u64| -> Option<u32> {
+        USE_SPELL_OVERRIDE
+            .iter()
+            .find_map(|&(item, spell)| (item == entry).then_some(spell))
+    };
+
     let mut item_rows: Vec<String> = Vec::new();
     let mut emitted: HashSet<u64> = HashSet::new();
     // Work-item 213 coverage counters: how many items carry a nonzero resistance (any of the 6
@@ -2811,6 +2845,17 @@ fn build_items_and_loot(
         let bag_family: u32 = field(&row, it::BAG_FAMILY).parse().unwrap_or(0);
         // BuyCount (080): floor at 1 — a 0 in the dump (or a parse miss) must not sell zero items.
         let buy_count: u32 = field(&row, it::BUY_COUNT).parse().unwrap_or(1).max(1);
+        // ON-USE SPELL OVERRIDE (#387): a curated entry's spellid_1/spelltrigger_1 is OUR synthetic
+        // on-use cast, forced trigger 0 — see `USE_SPELL_OVERRIDE`'s doc above. Every other item keeps
+        // its raw dump value untouched (baseline-safe: the vast majority of the vanilla item catalog is
+        // unaffected).
+        let (sp1, spt1): (u32, u8) = match use_spell_override(entry) {
+            Some(spell_id) => (spell_id, 0),
+            None => (
+                field(&row, it::SPELLID_1).parse().unwrap_or(0),
+                field(&row, it::SPELLTRIGGER_1).parse().unwrap_or(0),
+            ),
+        };
         // game_item_template column order — see module/src/items/tables.rs. stat_crit/stat_hit
         // are not in 1.12 item base stats, so 0,0 here. block_value is the shield's flat block (0 for
         // non-shields) — makes imported shields actually block (combat::effective_block_value reads it).
@@ -2818,8 +2863,6 @@ fn build_items_and_loot(
         item_rows.push(format!(
             "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count})",
             sheath = field(&row, it::SHEATH).parse::<u8>().unwrap_or(0),
-            sp1 = field(&row, it::SPELLID_1).parse::<u32>().unwrap_or(0),
-            spt1 = field(&row, it::SPELLTRIGGER_1).parse::<u8>().unwrap_or(0),
             sp2 = field(&row, it::SPELLID_2).parse::<u32>().unwrap_or(0),
             spt2 = field(&row, it::SPELLTRIGGER_2).parse::<u8>().unwrap_or(0),
             // ContainerSlots — how many bag slots this item provides (0 for non-bags); col 24 in

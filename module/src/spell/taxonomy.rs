@@ -105,6 +105,7 @@ pub(crate) const E_PERSISTENT_AREA: u8 = 0x1B; // GROUND-AoE (118, Consecration/
 pub(crate) const E_FISH: u8 = 0x1C; // Fishing (060): gateway-intercepted like E_ENCHANT_ITEM/E_DISENCHANT — CMSG_CAST_SPELL for a spell carrying this kind routes to the `fish` reducer (instant-resolve alpha catch; the bobber/channel flow is the deferred follow-up). Inert in-module (no resolve arm); exists so the gateway routes by DATA, never a spell-id list.
 pub(crate) const E_OPEN_LOCK: u8 = 0x1D; // Pick Lock (119): gateway-intercepted like E_FISH (0x1C) — CMSG_CAST_SPELL for a spell carrying this kind routes to the `pick_lock` reducer (unlock a locked GameObject, gated on the caster's Lockpicking 633 skill vs the game_lock required_skill). Inert in-module (NO resolve arm in cast.rs); exists so the gateway routes by DATA, never a spell-id list. 0x1E is reserved for a future E_SUMMON_PORTAL — do NOT reuse.
 pub(crate) const E_BLINK: u8 = 0x1A; // teleport the caster ~20yd FORWARD along its facing (Mage Blink, 116): a self-cast position change reusing the teleport core (like E_CHARGE), clamped to the furthest nav-LoS-clear point so it doesn't cross geometry. Root/snare removal rides a separate A_IMMUNITY effect. The importer name-rescues the dead SCRIPT teleport effect (raw 29) to this kind
+pub(crate) const E_RECALL_HOME: u8 = 0x1F; // teleport the caster to its bound HOME (Hearthstone, #387): a self-cast recall reusing the shared `world::recall_to_home` core, always to instance 0 regardless of the caster's current instance. Data-driven — a consumable's `spellid_1` naming a spell that carries this kind IS "a recall item"; `items::ops::apply_item_use` reads that (not a hardcoded item entry) to skip the normal stack-consumption a used-up consumable takes, since a recall trinket is never consumed. No cost/cooldown gate yet (the vanilla ~10s cast + 1hr CD is the same later follow-up E_BLINK's forward-teleport already defers)
 pub(crate) const E_POWER_BURN: u8 = 0x19; // drain N mana from the target and deal a fraction of it as damage (Mana Burn): MANA-power-type gate read off the target's `unit_bytes_0` byte 3 (same read as `is_rage_user`) — a rage/energy target is a silent no-op (power AND health untouched), matching vanilla's behaviour of skipping the effect entirely. drained = min(base_points, target.power) (floor-at-available; an empty/low pool just burns less, never fails the cast). damage = drained * p1 / 100 (p1 = the effect's ratio in basis-points — vanilla Mana Burn is EffectMultipleValue=0.5 -> p1=50 -> half the drained mana as Shadow damage); `p1<=0` (unauthored data) defaults to 100 (1:1), so a missing p1 never silently zeroes all burn damage. Dealt via the shared `apply_target_damage` (threat/kill/absorb reuse, no new wire work)
 
 // --- aura effects (high bit set) ---
@@ -338,12 +339,19 @@ pub(crate) const STAT_ALL: u8 = 0xFF; // an A_MOD_STAT effect that buffs every a
 // --- resistance schools (the value of `p0` for an A_MOD_RESISTANCE aura; a bitmask, armor = bit 0) ---
 pub(crate) const RESIST_ARMOR: u8 = 0x01; // physical armor (bit 0 of the school mask)
 
-/// Taxonomy scaffolding: the full kind/param/target/combat vocabulary the importer will emit, only
-/// SOME of which the spike wires to a handler. Referencing every constant here keeps the as-yet-unwired
-/// ones from tripping `dead_code` — they're the importer's vocabulary, activated as handlers land.
+/// Canonical, ordered list of every INSTANT (`E_*`) effect kind — the deduplicated effect taxonomy the
+/// importer maps mangos `Effect` ids onto. This is the SINGLE source of truth for "every instant kind
+/// that exists": `tests.rs`'s `instant_kind_wire_values_exhaustive` loops it (never a hand-copied
+/// duplicate) so a kind is exhaustively covered by construction, and referencing every `E_*` const here
+/// keeps an as-yet-unwired one from tripping `dead_code` (CI's clippy gate runs `-D warnings`, so a
+/// kind added to the taxonomy but left OFF this slice fails the build, not just a test). #367: this
+/// replaces the old `_TAXONOMY` scaffold + four separately hand-copied `E_*`/`A_*` lists in `tests.rs`,
+/// one of which had drifted (E_BLINK/E_PERSISTENT_AREA/E_FISH/E_OPEN_LOCK were missing from it).
+/// `#[allow(dead_code)]`: like `_TAXONOMY` before it, this binding is read only from `#[cfg(test)]`
+/// code (`tests.rs`), so the non-test `lib` build never itself "reads" `ALL_INSTANT_KINDS` — but every
+/// `E_*` const named INSIDE it is still counted as used, which is the array's actual job.
 #[allow(dead_code)]
-const _TAXONOMY: &[u8] = &[
-    KIND_AURA_BIT,
+pub(crate) const ALL_INSTANT_KINDS: &[u8] = &[
     E_DAMAGE,
     E_HEAL,
     E_ENERGIZE,
@@ -373,20 +381,20 @@ const _TAXONOMY: &[u8] = &[
     E_PERSISTENT_AREA,
     E_FISH,
     E_OPEN_LOCK,
-    STANCE_BATTLE,
-    STANCE_DEFENSIVE,
-    STANCE_BERSERKER,
-    STANCE_BEAR,
-    STANCE_CAT,
-    STANCE_DIRE_BEAR,
+    E_RECALL_HOME,
+];
+
+/// Canonical, ordered list of every AURA (`A_*`) kind — same rationale and same #367 fix as
+/// [`ALL_INSTANT_KINDS`] above (that older hand-copied list had drifted too, missing
+/// A_SPELLMOD_FLAT/A_SPELLMOD_PCT). Same `#[allow(dead_code)]` rationale as `ALL_INSTANT_KINDS` above.
+#[allow(dead_code)]
+pub(crate) const ALL_AURA_KINDS: &[u8] = &[
     A_PERIODIC_DAMAGE,
     A_PERIODIC_HEAL,
     A_PERIODIC_ENERGIZE,
     A_PERIODIC_TRIGGER,
     A_MOD_STAT,
     A_MOD_RESISTANCE,
-    A_SPELLMOD_FLAT,
-    A_SPELLMOD_PCT,
     A_ABSORB,
     A_MOD_COMBAT,
     A_MOD_SPEED,
@@ -395,17 +403,31 @@ const _TAXONOMY: &[u8] = &[
     A_SEAL,
     A_STEALTH,
     A_COMBAT_HEALTH_REGEN_PCT,
-    A_CONTROL,
-    A_IMMUNITY,
-    A_FLAG,
+    A_MOD_STAT_PCT,
     A_PROC_ON_HIT,
+    A_SPELLMOD_FLAT,
+    A_SPELLMOD_PCT,
     A_DISARM,
     A_RETALIATE,
+    A_CONTROL,
+    A_IMMUNITY,
     A_MOD_DETECT_RANGE,
+    A_FLAG,
+];
+
+// The rest of the taxonomy vocabulary (param tags, target kinds, combat fields, speed kinds, stances,
+// stats) is not KIND-shaped, already has its own hand-picked (non-"exhaustive") pin in tests.rs
+// (`param_tag_wire_values_exhaustive`, `mechanic_wire_values`, `kind_wire_values`, …), and has never
+// drifted the way the two lists above did — so it does not need a canonical, loop-tested slice of its
+// own. A subset of it has no OTHER production call site yet though (only a test-only reference, same as
+// every `E_*`/`A_*` kind before `ALL_INSTANT_KINDS`/`ALL_AURA_KINDS` existed), so it still needs SOME
+// scaffold to keep `dead_code` from tripping on the non-test `lib` build — this is that scaffold, sized
+// to just the residue (down from `_TAXONOMY`'s ~100 entries to these 16).
+#[allow(dead_code)]
+const _RESERVED_NON_KIND_TAXONOMY: &[u8] = &[
     P_NONE,
     P_STAT_ID,
     P_SCHOOL_MASK,
-    P_MECHANIC,
     P_POWER_TYPE,
     P_COMBAT_FIELD,
     P_SPEED_KIND,
@@ -413,36 +435,12 @@ const _TAXONOMY: &[u8] = &[
     P_ITEM_ENTRY,
     P_ENTRY,
     P_ENCHANT_ID,
-    P_PCT_MAX_POWER,
     P_RAW,
-    STAT_STR,
-    STAT_AGI,
-    STAT_STA,
-    STAT_INT,
-    STAT_SPI,
-    STAT_ALL,
-    T_SELF,
-    T_TARGET_ENEMY,
-    T_TARGET_ALLY,
-    T_TARGET_ANY,
-    T_AREA_ENEMY,
-    T_AREA_ALLY,
-    T_CHAIN_ENEMY,
     T_SCRIPTED,
-    COMBAT_ATTACK_POWER,
-    COMBAT_CRIT,
-    COMBAT_HIT,
-    COMBAT_DMG_DONE,
-    COMBAT_SPELL_POWER,
-    COMBAT_PARRY,
-    COMBAT_DODGE,
-    COMBAT_BLOCK,
-    COMBAT_DEFENSE,
-    COMBAT_THREAT,
-    SPEED_MOVE,
-    SPEED_SWING,
     SPEED_CAST,
     SPEED_MOUNTED,
+    STANCE_BATTLE,
+    STANCE_BERSERKER,
 ];
 
 // (No `_MECHANICS` dead-code scaffold needed: all four mechanics are wired into real gates — M_STUN and

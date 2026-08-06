@@ -1,20 +1,29 @@
-//! The `init` lifecycle reducer — the single entrypoint that populates a fresh database. Two
-//! layers, both written directly in this one function (not split into helpers, so a reader sees
-//! the whole seed in one pass):
+//! The `init` lifecycle reducer — the single entrypoint that populates a fresh database. `init`
+//! itself is a four-line dispatcher (#377) over four banner-stratum fns, each a straight
+//! extraction of what used to be one ~1,600-line function (a reader still sees the whole seed by
+//! reading top to bottom — the split is fn boundaries, not a reorder):
 //!
-//! 1. **Production seed** (from the top through the pre-seeded character's kit grant): realm,
-//!    server config, the human-warrior start position, the fallback graveyard/graveyard-zone rows
-//!    (work-item 209), the TEST account + pre-seeded character (with its starter spellbook/
-//!    action-bar kit), and the EventAI on-aggro barks. Every fresh database needs this regardless
-//!    of whether it will ever host a real import.
-//! 2. **Map-0 (Northshire) demo/fixture content** (the in-body `DECISION (issue #79)` comment has
-//!    the full reasoning): NPCs, a starter weapon, profession items, a skinning beast, a
-//!    profession trainer, gameobjects, gather nodes, a tier-variety demonstrator, a hand-authored
-//!    spell/item registry, crafted-consumable spells, and 1-10-alpha consumable breadth — in that
-//!    order, each under its own `// ---`/`// ===` banner. Every row here is wholesale-replaced the
-//!    moment a real `importer --apply` run lands for map 0 (or fenced off entirely for any other
-//!    continent). This is a DIFFERENT fixture family from `seed/fixtures.rs`'s synthetic
-//!    engine-mechanic fixtures (5xxxx ids, no map content) — see that file's header.
+//! 1. **`seed_production_core`**: realm, server config, the human-warrior start position, the
+//!    fallback graveyard/graveyard-zone rows (work-item 209), the TEST account + pre-seeded
+//!    character (with its starter spellbook/action-bar kit), and the EventAI on-aggro barks. Every
+//!    fresh database needs this regardless of whether it will ever host a real import.
+//! 2. **`seed_map0_demo_content`** (the in-body `DECISION (issue #79)` comment has the full
+//!    reasoning): NPCs, a starter weapon, profession items, a skinning beast, a profession trainer,
+//!    gameobjects, gather nodes, and a tier-variety demonstrator, each under its own `// ---` banner.
+//!    Every row here is wholesale-replaced the moment a real `importer --apply` run lands for map 0
+//!    (or fenced off entirely for any other continent). This is a DIFFERENT fixture family from
+//!    `seed/fixtures.rs`'s synthetic engine-mechanic fixtures (5xxxx ids, no map content) — see that
+//!    file's header.
+//! 3. **`seed_spell_registry`**: a hand-authored spell/item registry, crafted-consumable spells,
+//!    1-10-alpha consumable breadth, the mock-seed fixture kits (`seed/fixtures.rs`), enchant/
+//!    disenchant, talents, and the stacking-group starter set.
+//! 4. **`seed_scheduler_arming`**: the event reaper, instance reaper, creature movement/melee/aura/
+//!    ground-AoE ticks. Runs last so nothing fires against a half-seeded database.
+//!
+//! Base-row constructors (`base_spell`/`base_effect`/`base_item`, `seed/fixtures.rs`) plus the
+//! `spell`/`effect` closures below keep the ~700 lines of `Spell`/`SpellEffect`/`ItemTemplate`
+//! literals in strata 2-3 to their meaningful fields only — see `base_spell`'s doc for the
+//! discipline.
 //!
 //! Touches every domain, so it imports each table's accessor trait + row type from the crate root.
 
@@ -36,6 +45,22 @@ use crate::{
 
 #[reducer(init)]
 pub fn init(ctx: &ReducerContext) {
+    // Four banner strata (#377 split these out of what used to be one ~1,600-line fn — see this
+    // file's header for what each one seeds and why the split points fall where they do). Order
+    // matters: later strata reference nothing from earlier ones (each re-derives its own `hw`
+    // alias), but the production core must exist before anything reads `game_config`/`game_realm`,
+    // and the scheduler must arm last so nothing fires against a half-seeded database.
+    seed_production_core(ctx);
+    seed_map0_demo_content(ctx);
+    seed_spell_registry(ctx);
+    seed_scheduler_arming(ctx);
+}
+
+/// Stratum 1 — the production core every fresh database needs regardless of whether it will ever
+/// host a real import: realm, server config, the human-warrior start position, the fallback
+/// graveyard/graveyard-zone rows (work-item 209), the TEST account + pre-seeded character (with its
+/// starter spellbook/action-bar kit), and the EventAI on-aggro barks.
+fn seed_production_core(ctx: &ReducerContext) {
     use constants::start_human_warrior as hw;
 
     // Realm (points at the world gateway).
@@ -193,6 +218,16 @@ pub fn init(ctx: &ReducerContext) {
 
     // Creature EventAI (193): the fixture on-aggro barks (Kobold/Defias/Hogger).
     crate::creatures::seed_on_aggro_fixtures(ctx);
+}
+
+/// Stratum 2 — Map-0 (Northshire) demo/fixture content (the `DECISION (issue #79)` comment below
+/// has the full reasoning): NPCs, a starter weapon, profession items, a skinning beast, a
+/// profession trainer, gameobjects, gather nodes, and a tier-variety demonstrator. Every row here
+/// is wholesale-replaced the moment a real `importer --apply` run lands for map 0 (or fenced off
+/// entirely for any other continent). This is a DIFFERENT fixture family from `seed/fixtures.rs`'s
+/// synthetic engine-mechanic fixtures (5xxxx ids, no map content) — see that file's header.
+fn seed_map0_demo_content(ctx: &ReducerContext) {
+    use constants::start_human_warrior as hw;
 
     // DECISION (issue #79): everything from here down through the gather-pool block seeds MAP-0
     // (Northshire) spatial content — 3 creature spawns (Chicken 620, Test Wolf 51000, Profession
@@ -298,10 +333,8 @@ pub fn init(ctx: &ReducerContext) {
     {
         use constants::starter_item as si;
         ctx.db.game_item_template().insert(ItemTemplate {
-            entry: si::ENTRY,
             class: si::CLASS_WEAPON,
             subclass: si::SUBCLASS_SWORD_1H,
-            name: "Worn Shortsword".to_string(),
             display_id: si::DISPLAY_ID,
             quality: si::QUALITY_POOR,
             inventory_type: si::INVTYPE_WEAPON_MAINHAND,
@@ -314,47 +347,10 @@ pub fn init(ctx: &ReducerContext) {
             damage_min: si::DAMAGE_MIN,
             damage_max: si::DAMAGE_MAX,
             delay_ms: si::DELAY_MS,
-            stat_strength: 0,
-            stat_agility: 0,
-            stat_stamina: 0,
-            stat_intellect: 0,
-            stat_spirit: 0,
-            stat_crit: 0,
-            stat_hit: 0,
-            stat_armor: 0,
-            block_value: 0, // a weapon carries no block value
-            restores_power: false,
-            spellid_1: 0,
-            spelltrigger_1: 0,
-            spellid_2: 0,
-            spelltrigger_2: 0,
-            container_slots: 0,
-            sheath: 0,
             // The starter weapon is BoP — vanilla-authentic (class starting gear binds the instant
             // it's granted, at `grant_starter_item`).
             bonding: crate::items::bonding::BIND_ON_PICKUP,
-            holy_res: 0,
-            fire_res: 0,
-            nature_res: 0,
-            frost_res: 0,
-            shadow_res: 0,
-            arcane_res: 0,
-            spellid_3: 0,
-            spelltrigger_3: 0,
-            spellid_4: 0,
-            spelltrigger_4: 0,
-            spellid_5: 0,
-            spelltrigger_5: 0,
-            required_skill: 0,
-            required_skill_rank: 0,
-            required_reputation_faction: 0,
-            required_reputation_rank: 0,
-            max_count: 0,
-            item_flags: 0,
-            page_text: 0,
-            start_quest: 0,
-            bag_family: 0,
-            buy_count: 1,
+            ..base_item(si::ENTRY, "Worn Shortsword")
         });
     }
 
@@ -362,73 +358,18 @@ pub fn init(ctx: &ReducerContext) {
     // is demonstrable: its 8–12 / 2.6s profile is clearly above the Worn Shortsword's 1–3, so equipping
     // it visibly raises the swing readout. Hand-authored reference data (licensing firewall: never
     // bulk-imported), display 1542 ships in 5875. inventory_type 21 = main-hand, quality 2 = Uncommon.
-    ctx.db.game_item_template().insert(ItemTemplate {
-        entry: 50,
-        class: 2,    // Weapon
-        subclass: 7, // Sword (one-hand)
-        name: "Tempered Blade".to_string(),
-        display_id: 1542,
-        quality: 2, // Uncommon (green)
-        inventory_type: 21,
-        item_level: 12,
-        required_level: 1,
-        max_durability: 70,
-        buy_price: 1200,
-        sell_price: 240,
-        max_stack: 1,
-        damage_min: 8.0,
-        damage_max: 12.0,
-        delay_ms: 2600,
-        stat_strength: 0,
-        stat_agility: 0,
-        stat_stamina: 0,
-        stat_intellect: 0,
-        stat_spirit: 0,
-        stat_crit: 0,
-        stat_hit: 0,
-        stat_armor: 0,
-        block_value: 0,
-        restores_power: false,
-        spellid_1: 0,
-        spelltrigger_1: 0,
-        spellid_2: 0,
-        spelltrigger_2: 0,
-        container_slots: 0,
-        sheath: 0,
-        // Uncommon (green) gear binds on equip — vanilla's "greens are BoE" rule.
-        bonding: crate::items::bonding::BIND_ON_EQUIP,
-        holy_res: 0,
-        fire_res: 0,
-        nature_res: 0,
-        frost_res: 0,
-        shadow_res: 0,
-        arcane_res: 0,
-        spellid_3: 0,
-        spelltrigger_3: 0,
-        spellid_4: 0,
-        spelltrigger_4: 0,
-        spellid_5: 0,
-        spelltrigger_5: 0,
-        required_skill: 0,
-        required_skill_rank: 0,
-        required_reputation_faction: 0,
-        required_reputation_rank: 0,
-        max_count: 0,
-        item_flags: 0,
-        page_text: 0,
-        start_quest: 0,
-        bag_family: 0,
-        buy_count: 1,
-    });
+    // Canonical constructor shared with the fixture-restore path (`tempered_blade_template`, #363) —
+    // the reserved-id copy under FIXTURE_BLADE stays in sync with this one by construction now.
+    ctx.db
+        .game_item_template()
+        .insert(tempered_blade_template(50));
 
     // Multi-item starter loadout (items::grant_starter_item) + chicken loot content. Two more
     // hand-authored templates the login grant drops into the backpack: a cloth chest (51) and a food
     // stack (52). display 1542 ships in 5875 (placeholder icon). class 4 = Armor, 0 = Consumable.
     ctx.db.game_item_template().insert(ItemTemplate {
-        entry: 51,
         class: 4,    // Armor
         subclass: 1, // Cloth
-        name: "Recruit's Tunic".to_string(),
         display_id: 1542,
         quality: 1,        // Common (white)
         inventory_type: 5, // INVTYPE_CHEST
@@ -438,106 +379,11 @@ pub fn init(ctx: &ReducerContext) {
         buy_price: 200,
         sell_price: 40,
         max_stack: 1,
-        damage_min: 0.0,
-        damage_max: 0.0,
-        delay_ms: 0,
-        stat_strength: 0,
-        stat_agility: 0,
-        stat_stamina: 0,
-        stat_intellect: 0,
-        stat_spirit: 0,
-        stat_crit: 0,
-        stat_hit: 0,
-        stat_armor: 0,
-        block_value: 0,
-        restores_power: false,
-        spellid_1: 0,
-        spelltrigger_1: 0,
-        spellid_2: 0,
-        spelltrigger_2: 0,
-        container_slots: 0,
-        sheath: 0,
         bonding: crate::items::bonding::NONE, // plain common gear — unbound/tradeable
-        holy_res: 0,
-        fire_res: 0,
-        nature_res: 0,
-        frost_res: 0,
-        shadow_res: 0,
-        arcane_res: 0,
-        spellid_3: 0,
-        spelltrigger_3: 0,
-        spellid_4: 0,
-        spelltrigger_4: 0,
-        spellid_5: 0,
-        spelltrigger_5: 0,
-        required_skill: 0,
-        required_skill_rank: 0,
-        required_reputation_faction: 0,
-        required_reputation_rank: 0,
-        max_count: 0,
-        item_flags: 0,
-        page_text: 0,
-        start_quest: 0,
-        bag_family: 0,
-        buy_count: 1,
+        ..base_item(51, "Recruit's Tunic")
     });
-    ctx.db.game_item_template().insert(ItemTemplate {
-        entry: 52,
-        class: 0,    // Consumable
-        subclass: 0, // Food & Drink
-        name: "Tough Jerky".to_string(),
-        display_id: 1542,
-        quality: 0,        // Poor
-        inventory_type: 0, // not equippable
-        item_level: 1,
-        required_level: 1,
-        max_durability: 0,
-        buy_price: 10,
-        sell_price: 2,
-        max_stack: 20,
-        damage_min: 0.0,
-        damage_max: 0.0,
-        delay_ms: 0,
-        stat_strength: 0,
-        stat_agility: 0,
-        stat_stamina: 0,
-        stat_intellect: 0,
-        stat_spirit: 0,
-        stat_crit: 0,
-        stat_hit: 0,
-        stat_armor: 0,
-        block_value: 0,
-        restores_power: false,
-        spellid_1: 0,
-        spelltrigger_1: 0,
-        spellid_2: 0,
-        spelltrigger_2: 0,
-        container_slots: 0,
-        sheath: 0,
-        bonding: crate::items::bonding::NONE, // plain food — unbound/tradeable
-        holy_res: 0,
-        fire_res: 0,
-        nature_res: 0,
-        frost_res: 0,
-        shadow_res: 0,
-        arcane_res: 0,
-        spellid_3: 0,
-        spelltrigger_3: 0,
-        spellid_4: 0,
-        spelltrigger_4: 0,
-        spellid_5: 0,
-        spelltrigger_5: 0,
-        required_skill: 0,
-        required_skill_rank: 0,
-        required_reputation_faction: 0,
-        required_reputation_rank: 0,
-        max_count: 0,
-        item_flags: 0,
-        page_text: 0,
-        start_quest: 0,
-        bag_family: 0,
-        buy_count: 1,
-    });
+    // Canonical constructor shared with the fixture-restore path (`tough_jerky_template`, #363).
+    ctx.db.game_item_template().insert(tough_jerky_template(52));
 
     // --- PROFESSION ITEMS: every profession reagent/product/yield points at a REAL vanilla
     // item, so the crafts/gathers/consumables render real names+icons+stats in the 5875 client:
@@ -568,36 +414,10 @@ pub fn init(ctx: &ReducerContext) {
     // are Timestamps) — the parent re-imports OR `debug_spawn_at_feet(guid, 51000)` materializes a live
     // wolf. type_flags 0x100 = SKINNABLE (the skin gate keys on creature_type==1 alone; the flag is
     // carried for data parity).
-    const TEST_WOLF_ENTRY: u32 = 51000;
-    let wolf_tmpl = ctx.db.game_creature_template().insert(CreatureTemplate {
-        entry: TEST_WOLF_ENTRY,
-        name: "Test Wolf".to_string(),
-        subname: String::new(),
-        display_id: 720, // a wolf model that ships in 5875
-        level: 1,
-        health: 60,
-        faction_template: 14, // Monster (hostile → a usable kill target, like the demo chicken)
-        npc_flags: 0,
-        unit_flags: 0,
-        creature_type: 1, // BEAST (the skinnable gate — cmangos CREATURE_TYPE_BEAST)
-        creature_family: 1, // Wolf (cmangos CreatureFamily)
-        type_flags: 0x100, // SKINNABLE (cmangos CreatureTypeFlags bit; the creature_type==1 gate is sufficient)
-        rank: 0,
-        scale: 1.0,
-        base_attack_time_ms: 2000,
-        money_min: 0,
-        money_max: 0,
-        max_level: 0,
-        max_level_health: 0,
-        aggro_range: 0, // PASSIVE (engages only when attacked) so the test wolf doesn't maul the login demo
-        damage_min: 0,
-        damage_max: 0,
-        armor: 0,              // set via `spacetime sql` on this row to mock-test mitigation
-        pickpocket_loot_id: 0, // not imported — the test wolf has no pickpocket table
-        // 0 ⇒ `skin_corpse` falls back to the flat Light Leather — the pre-210 verify flow
-        // (debug_skin_nearest → 1x Light Leather) stays byte-identical without a seeded skin table.
-        skin_loot_id: 0,
-    });
+    // Canonical constructor shared with the fixture-restore path (`test_wolf_template`, #363) —
+    // the post-import restore reducer builds the same row from the same fn, so a shard restored
+    // after an ETL wipe can never drift from a freshly-published one again.
+    let wolf_tmpl = ctx.db.game_creature_template().insert(test_wolf_template());
     let wolf_guid: u64 = (0xF130_u64 << 48) | ((TEST_WOLF_ENTRY as u64) << 24) | 1;
     let wolf_spawn = ctx.db.game_creature_spawn().insert(CreatureSpawn {
         guid: wolf_guid,
@@ -628,35 +448,12 @@ pub fn init(ctx: &ReducerContext) {
     // 50085→171 Alchemy, 50086→129 First Aid, 50087→197 Tailoring, 50088→164 Blacksmithing —
     // Smelting rides Mining, NO offering) are NOT seeded here — `game_trainer_spell` is populated for
     // this entry by the world-import ETL instead.
-    const PROFESSION_TRAINER_ENTRY: u32 = 51001;
-    let trainer_tmpl = ctx.db.game_creature_template().insert(CreatureTemplate {
-        entry: PROFESSION_TRAINER_ENTRY,
-        name: "Profession Trainer".to_string(),
-        subname: "Cooking & Skinning".to_string(),
-        display_id: 3167, // a generic humanoid model that ships in 5875
-        level: 30,
-        health: 1500,
-        faction_template: 35, // FRIENDLY (a trainer, not a kill target)
-        npc_flags: lyracore_shared::constants::npc_flags::GOSSIP
-            | lyracore_shared::constants::npc_flags::TRAINER, // 0x11 — gossip-eye + trainer window
-        unit_flags: 0,
-        creature_type: 7, // Humanoid
-        creature_family: 0,
-        type_flags: 0,
-        rank: 0,
-        scale: 1.0,
-        base_attack_time_ms: 2000,
-        money_min: 0,
-        money_max: 0,
-        max_level: 0,
-        max_level_health: 0,
-        aggro_range: 0, // never aggros (friendly trainer)
-        damage_min: 0,
-        damage_max: 0,
-        armor: 0,              // a trainer never takes damage anyway
-        pickpocket_loot_id: 0, // not imported — a friendly trainer is never pickpocketed
-        skin_loot_id: 0,       // not imported — a Humanoid trainer isn't skinnable anyway
-    });
+    // Canonical constructor shared with the fixture-restore path (`profession_trainer_template`,
+    // #363) — same drift-proofing as the Test Wolf above.
+    let trainer_tmpl = ctx
+        .db
+        .game_creature_template()
+        .insert(profession_trainer_template());
     let trainer_guid: u64 = (0xF130_u64 << 48) | ((PROFESSION_TRAINER_ENTRY as u64) << 24) | 1;
     let trainer_spawn = ctx.db.game_creature_spawn().insert(CreatureSpawn {
         guid: trainer_guid,
@@ -679,63 +476,22 @@ pub fn init(ctx: &ReducerContext) {
     // The Hearthstone (entry 6948) — every character starts with one (granted in `grant_starter_item`);
     // using it recalls to the bound home (`Character::home_*`). Real vanilla values: class 15 (Misc),
     // display 6418 (the hearthstone icon, ships in 5875), unsellable, non-stacking, no stats.
+    // spellid_1/spelltrigger_1 (#387) name its on-use spell — "Call Stone" (50119, seeded in
+    // `seed_spell_registry` below), trigger 0 (on-use). `apply_item_use` now reads spellid_1 as the
+    // single on-use authority for EVERY item, so this is what makes the Hearthstone usable at all;
+    // the old hardcoded entry-id special case in items::ops is retired.
     ctx.db.game_item_template().insert(ItemTemplate {
-        entry: constants::starter_item::HEARTHSTONE_ENTRY,
         class: 15, // Miscellaneous
-        subclass: 0,
-        name: "Hearthstone".to_string(),
         display_id: 6418,
-        quality: 1,        // Common
-        inventory_type: 0, // not equippable
+        quality: 1, // Common
         item_level: 1,
         required_level: 1,
-        max_durability: 0,
-        buy_price: 0,
-        sell_price: 0,
         max_stack: 1,
-        damage_min: 0.0,
-        damage_max: 0.0,
-        delay_ms: 0,
-        stat_strength: 0,
-        stat_agility: 0,
-        stat_stamina: 0,
-        stat_intellect: 0,
-        stat_spirit: 0,
-        stat_crit: 0,
-        stat_hit: 0,
-        stat_armor: 0,
-        block_value: 0,
-        restores_power: false,
-        spellid_1: 0,
-        spelltrigger_1: 0,
-        spellid_2: 0,
-        spelltrigger_2: 0,
-        container_slots: 0,
-        sheath: 0,
+        spellid_1: 50119,  // "Call Stone" — E_RECALL_HOME, seeded below
+        spelltrigger_1: 0, // on-use
         // Real vanilla Hearthstone: unique + BoP the instant it's granted (starter kit source).
         bonding: crate::items::bonding::BIND_ON_PICKUP,
-        holy_res: 0,
-        fire_res: 0,
-        nature_res: 0,
-        frost_res: 0,
-        shadow_res: 0,
-        arcane_res: 0,
-        spellid_3: 0,
-        spelltrigger_3: 0,
-        spellid_4: 0,
-        spelltrigger_4: 0,
-        spellid_5: 0,
-        spelltrigger_5: 0,
-        required_skill: 0,
-        required_skill_rank: 0,
-        required_reputation_faction: 0,
-        required_reputation_rank: 0,
-        max_count: 0,
-        item_flags: 0,
-        page_text: 0,
-        start_quest: 0,
-        bag_family: 0,
-        buy_count: 1,
+        ..base_item(constants::starter_item::HEARTHSTONE_ENTRY, "Hearthstone")
     });
 
     // A hand-authored SHIELD ("Battered Buckler") so shield-block is reachable on a NO-IMPORT dev DB
@@ -746,10 +502,8 @@ pub fn init(ctx: &ReducerContext) {
     // creature swing (1–3), making a blocked hit's 0-damage "full block" clearly demonstrable. class 4 =
     // Armor, subclass 6 = Shield, inventory_type 14 = INVTYPE_SHIELD → equips into the OFF-HAND (16).
     ctx.db.game_item_template().insert(ItemTemplate {
-        entry: 50053,
-        class: 4,    // Armor
-        subclass: 6, // Shield
-        name: "Battered Buckler".to_string(),
+        class: 4,           // Armor
+        subclass: 6,        // Shield
         display_id: 1542,   // placeholder icon (ships in 5875)
         quality: 1,         // Common (white)
         inventory_type: 14, // INVTYPE_SHIELD → off-hand
@@ -759,48 +513,9 @@ pub fn init(ctx: &ReducerContext) {
         buy_price: 300,
         sell_price: 60,
         max_stack: 1,
-        damage_min: 0.0,
-        damage_max: 0.0,
-        delay_ms: 0,
-        stat_strength: 0,
-        stat_agility: 0,
-        stat_stamina: 0,
-        stat_intellect: 0,
-        stat_spirit: 0,
-        stat_crit: 0,
-        stat_hit: 0,
-        stat_armor: 0,
         block_value: 25, // flat block: fully absorbs a normal creature swing → a clean "full block"
-        restores_power: false, // a shield, not a drink
-        spellid_1: 0,
-        spelltrigger_1: 0,
-        spellid_2: 0,
-        spelltrigger_2: 0,
-        container_slots: 0,
-        sheath: 0,
         bonding: crate::items::bonding::NONE, // plain common gear — unbound/tradeable
-        holy_res: 0,
-        fire_res: 0,
-        nature_res: 0,
-        frost_res: 0,
-        shadow_res: 0,
-        arcane_res: 0,
-        spellid_3: 0,
-        spelltrigger_3: 0,
-        spellid_4: 0,
-        spelltrigger_4: 0,
-        spellid_5: 0,
-        spelltrigger_5: 0,
-        required_skill: 0,
-        required_skill_rank: 0,
-        required_reputation_faction: 0,
-        required_reputation_rank: 0,
-        max_count: 0,
-        item_flags: 0,
-        page_text: 0,
-        start_quest: 0,
-        bag_family: 0,
-        buy_count: 1,
+        ..base_item(50053, "Battered Buckler")
     });
 
     // Chicken (620) loot table: always drops Tough Jerky (52), and 50% of the time a Recruit's
@@ -1026,7 +741,12 @@ pub fn init(ctx: &ReducerContext) {
     }
     // ARM: insert exactly max_active (1) weighted-distinct live rows → a rolled tier is live from init.
     crate::gameobject::arm_pool(ctx, TIER_POOL_ID);
+}
 
+/// Stratum 3 — the hand-authored spell/item registry: `game_spell`/`game_spell_effect` rows, the
+/// crafted-consumable on-use spells, 1-10-alpha consumable breadth, the mock-seed fixture kits
+/// (`seed/fixtures.rs`), enchant/disenchant, talents, and the stacking-group starter set.
+fn seed_spell_registry(ctx: &ReducerContext) {
     // --- Spell registry: hand-authored `game_spell` headers + `game_spell_effect` rows (the
     // data-driven effect-row engine). Each spell = a header + 1..3 effect rows; effect.id is the
     // DETERMINISTIC (spell_id<<2)|effect_index. Source of truth for fresh installs; an auto-migrate
@@ -1304,13 +1024,14 @@ pub fn init(ctx: &ReducerContext) {
     // (1) Minor Healing (50110) — real item 118's on-use: an INSTANT (cast_time 0) self E_HEAL clamped to
     // max by healed_value. school 2 (holy/neutral). base 80 = the vanilla Minor Healing midpoint (70-90;
     // no die-roll plumbing on E_HEAL here, so a fixed 80).
-    spell(50110, "Minor Healing", 0, 0, 0, 0, 0, 2, 0, false, 0);
-    // item-triggered → NO spell GCD. The `spell` closure hardcodes gcd_ms=1500; potions/food must not trip
-    // the spell-bar GCD (the SQL seed already uses 0 — this keeps a fresh `-c` DB consistent with it).
-    if let Some(mut s) = ctx.db.game_spell().spell_id().find(50110u32) {
-        s.gcd_ms = 0;
-        ctx.db.game_spell().spell_id().update(s);
-    }
+    // item-triggered → NO spell GCD (gcd_ms: 0 overrides base_spell's 1500; potions/food must not
+    // trip the spell-bar GCD — the SQL seed already uses 0, this keeps a fresh `-c` DB consistent
+    // with it).
+    ctx.db.game_spell().insert(Spell {
+        school_mask: 2,
+        gcd_ms: 0,
+        ..base_spell(50110, "Minor Healing")
+    });
     effect(50110, 0, 0x02, 80, 0, 0, 0, 0); // E_HEAL 80, T_SELF (id 200440)
 
     // (2) Linen Bandage (50111) — real item 1251's on-use: a CHANNELED (SPELL_ATTR_CHANNELED 0x0080) HoT
@@ -1319,51 +1040,23 @@ pub fn init(ctx: &ReducerContext) {
     // Bandaged" (11196) 60s debuff so the re-bandage gate (has_aura 11196) can block spam. The `spell`/
     // `effect` closures can't set cast_flags/aura_interrupt/trigger_spell, so this one is a raw literal.
     ctx.db.game_spell().insert(Spell {
-        spell_id: 50111,
-        family_name: 0,
-        family_flags: 0,
-        name: "Linen Bandage".to_string(),
-        power_type: 0,
-        cost: 0,
         cast_time_ms: 0, // channeled: begin_cast resolves now on the CHANNELED bit, not a cast bar
         gcd_ms: 0,       // item-triggered: no GCD
-        cooldown_ms: 0,
-        range_yd: 0,       // self
+        range_yd: 0,     // self
         duration_ms: 8000, // 8s channel (vanilla Linen Bandage) → 8 ticks at 1s
-        school_mask: 2,    // holy/neutral
-        dispel_type: 0,
-        mechanic: 0,
-        max_stacks: 0,
+        school_mask: 2,  // holy/neutral
         aura_interrupt: 1, // bit0 BREAK_ON_DAMAGE → the HoT drops when the bandaged unit takes damage
-        attributes: 0,
-        spell_level: 0,
-        max_level: 0,
-        is_negative: false,
         cast_flags: crate::spell::SPELL_ATTR_CHANNELED, // 0x0080 — begin_cast routes the channel branch
-        stances: 0,
+        ..base_spell(50111, "Linen Bandage")
     });
     effect(50111, 0, 0x91, 8, 1000, 0, 0, 0); // A_PERIODIC_HEAL 8/1s ×8 = 64 total, T_SELF (id 200444)
-                                              // eff1: E_TRIGGER (0x05) the Recently-Bandaged debuff (11196) on SELF — the closure can't set
-                                              // trigger_spell, so a raw literal. id = (50111<<2)|1 = 200445.
+                                              // eff1: E_TRIGGER (0x05) the Recently-Bandaged debuff (11196) on SELF — base_effect (the
+                                              // closure can't set trigger_spell). id = (50111<<2)|1 = 200445.
     ctx.db.game_spell_effect().insert(SpellEffect {
-        id: ((50111u64) << 2) | 1,
-        spell_id: 50111,
-        effect_index: 1,
-        kind: 0x05, // E_TRIGGER
-        base_points: 0,
-        die_sides: 0,
-        per_level: 0.0,
-        period_ms: 0,
-        target: 0, // T_SELF (the trigger re-casts at the same — self — target)
-        radius_yd: 0.0,
-        chain_targets: 0,
+        kind: 0x05,           // E_TRIGGER
+        target: 0,            // T_SELF (the trigger re-casts at the same — self — target)
         trigger_spell: 11196, // existing "Recently Bandaged" 60s A_FLAG debuff (re-bandage gate keys on it)
-        effect_mechanic: 0,
-        p0: 0,
-        p0_kind: 0,
-        p1: 0,
-        script_id: 0,
-        enters_combat: false,
+        ..base_effect(50111, 1)
     });
 
     // (3) Roasted Boar Meat (real item 2681) is a level-1 food: it EATS to heal (the vital-restore
@@ -1385,29 +1078,28 @@ pub fn init(ctx: &ReducerContext) {
 
     // (1) Minor Mana Potion 50113 — instant self mana restore (real item 2455). E_ENERGIZE 160 (Restore
     // Mana 437 = 140-180, midpoint). p0=0 MANA, p0_kind 4 P_POWER_TYPE. MANA-class-gated in apply_item_use.
-    spell(50113, "Minor Mana Potion", 0, 0, 0, 0, 0, 0, 0, false, 0);
-    if let Some(mut s) = ctx.db.game_spell().spell_id().find(50113u32) {
-        s.gcd_ms = 0;
-        ctx.db.game_spell().spell_id().update(s);
-    }
+    ctx.db.game_spell().insert(Spell {
+        gcd_ms: 0, // item-triggered: no GCD
+        ..base_spell(50113, "Minor Mana Potion")
+    });
     effect(50113, 0, 0x03, 160, 0, 0, 0, 4); // E_ENERGIZE 160 (p0=0 MANA, p0_kind 4 P_POWER_TYPE), T_SELF (id 200452)
 
     // (2) Refreshing Water 50114 — 30s mana-over-time DRINK (real items 159/5350). A_PERIODIC_ENERGIZE 41
     // mana/5s ×6 = 246 over 30s (Drink 430 base 41). MANA-class-gated. p0=0 MANA, p0_kind 4 P_POWER_TYPE.
-    spell(50114, "Refreshing Water", 0, 0, 0, 0, 30000, 0, 0, false, 0);
-    if let Some(mut s) = ctx.db.game_spell().spell_id().find(50114u32) {
-        s.gcd_ms = 0;
-        ctx.db.game_spell().spell_id().update(s);
-    }
+    ctx.db.game_spell().insert(Spell {
+        duration_ms: 30000,
+        gcd_ms: 0, // item-triggered: no GCD
+        ..base_spell(50114, "Refreshing Water")
+    });
     effect(50114, 0, 0x92, 41, 5000, 0, 0, 4); // A_PERIODIC_ENERGIZE 41 mana/5s ×6 = 246 (p0=0 MANA), T_SELF (id 200456)
 
     // (3) Eating 50115 — 30s health-over-time FOOD (real items 4540/117). A_PERIODIC_HEAL 16/5s ×6 = 96 over
     // 30s (Food 433 base 16). Clamped to max_health each tick. (KEEP legacy 2681 eat-heal untouched.)
-    spell(50115, "Eating", 0, 0, 0, 0, 30000, 0, 0, false, 0);
-    if let Some(mut s) = ctx.db.game_spell().spell_id().find(50115u32) {
-        s.gcd_ms = 0;
-        ctx.db.game_spell().spell_id().update(s);
-    }
+    ctx.db.game_spell().insert(Spell {
+        duration_ms: 30000,
+        gcd_ms: 0, // item-triggered: no GCD
+        ..base_spell(50115, "Eating")
+    });
     effect(50115, 0, 0x91, 16, 5000, 0, 0, 0); // A_PERIODIC_HEAL 16/5s ×6 = 96 over 30s, T_SELF (id 200460)
 
     // (4) Well Fed 50116 — the Cooking payoff buff on Spiced Wolf Meat (real item 2680, product of recipe
@@ -1415,21 +1107,22 @@ pub fn init(ctx: &ReducerContext) {
     // MOD_STAT +2 Stamina + +2 Spirit, 15-min (DurationIndex 347 = 900000 ms). We apply the +2/+2 directly as
     // the 15-min aura (skipping the periodic-trigger indirection — same net buff). +STA grows max HP (live via
     // recompute_vitals on apply); +SPI is summed by stat_bonus but inert (no Spirit consumer yet).
-    spell(50116, "Well Fed", 0, 0, 0, 0, 900000, 0, 0, false, 1);
-    if let Some(mut s) = ctx.db.game_spell().spell_id().find(50116u32) {
-        s.gcd_ms = 0;
-        ctx.db.game_spell().spell_id().update(s);
-    }
+    ctx.db.game_spell().insert(Spell {
+        duration_ms: 900000,
+        max_stacks: 1,
+        gcd_ms: 0, // item-triggered: no GCD
+        ..base_spell(50116, "Well Fed")
+    });
     effect(50116, 0, 0xA0, 2, 0, 0, 2, 1); // +2 Stamina (STAT_STA), T_SELF (id 200464)
     effect(50116, 1, 0xA0, 2, 0, 0, 4, 1); // +2 Spirit  (STAT_SPI), T_SELF (id 200465)
 
     // (5a) Lesser Healing 50117 — instant rank-2 health potion (real item 858). E_HEAL 160 (Healing Potion
     // 440 = 140-180, midpoint), clamped to max by healed_value. Rank-2 of the existing 118/50110.
-    spell(50117, "Lesser Healing", 0, 0, 0, 0, 0, 2, 0, false, 0);
-    if let Some(mut s) = ctx.db.game_spell().spell_id().find(50117u32) {
-        s.gcd_ms = 0;
-        ctx.db.game_spell().spell_id().update(s);
-    }
+    ctx.db.game_spell().insert(Spell {
+        school_mask: 2,
+        gcd_ms: 0, // item-triggered: no GCD
+        ..base_spell(50117, "Lesser Healing")
+    });
     effect(50117, 0, 0x02, 160, 0, 0, 0, 0); // E_HEAL 160, T_SELF (id 200468)
 
     // (5b) Heavy Linen Bandage 50118 — channeled rank-2 bandage (real item 2581); raw literal (channeled +
@@ -1437,50 +1130,33 @@ pub fn init(ctx: &ReducerContext) {
     // early on damage (aura_interrupt bit0). eff1 E_TRIGGERs the SHARED 11196 "Recently Bandaged" cooldown
     // (Gate B widens bandage_cooldown_blocks to 1251|2581 so both bandages share the lockout).
     ctx.db.game_spell().insert(Spell {
-        spell_id: 50118,
-        name: "Heavy Linen Bandage".to_string(),
-        power_type: 0,
-        cost: 0,
-        family_name: 0,
-        family_flags: 0,
-        cast_time_ms: 0,
         gcd_ms: 0,
-        cooldown_ms: 0,
-        range_yd: 0,
         duration_ms: 8000,
         school_mask: 2,
-        dispel_type: 0,
-        mechanic: 0,
-        max_stacks: 0,
         aura_interrupt: 1,
-        attributes: 0,
-        spell_level: 0,
-        max_level: 0,
-        is_negative: false,
         cast_flags: crate::spell::SPELL_ATTR_CHANNELED,
-        stances: 0,
+        ..base_spell(50118, "Heavy Linen Bandage")
     });
     effect(50118, 0, 0x91, 18, 1000, 0, 0, 0); // A_PERIODIC_HEAL 18/1s ×8 = 144 over 8s, T_SELF (id 200472)
     ctx.db.game_spell_effect().insert(SpellEffect {
-        id: ((50118u64) << 2) | 1,
-        spell_id: 50118,
-        effect_index: 1,
         kind: 0x05, // E_TRIGGER
-        base_points: 0,
-        die_sides: 0,
-        per_level: 0.0,
-        period_ms: 0,
-        target: 0,
-        radius_yd: 0.0,
-        chain_targets: 0,
         trigger_spell: 11196,
-        effect_mechanic: 0,
-        p0: 0,
-        p0_kind: 0,
-        p1: 0,
-        script_id: 0,
-        enters_combat: false,
+        ..base_effect(50118, 1)
     }); // id 200473
+
+    // (6) Call Stone 50119 (#387) — the Hearthstone's on-use spell: ONE E_RECALL_HOME (0x1F) instant
+    // effect, T_SELF, that teleports the caster to its bound home via `world::recall_to_home`. No
+    // cost/cooldown/cast-time (matches the pre-#387 hardcoded path's IMMEDIATE-teleport behavior — the
+    // vanilla ~10s cast + 1hr CD is a later follow-up, same as Blink's forward-teleport). Wired onto the
+    // Hearthstone template's spellid_1 below (bonding BIND_ON_PICKUP) — `apply_item_use` reads it as
+    // ANY other on-use spell now, with ONE data-driven exception: `spell_is_recall_home` (keyed on THIS
+    // effect kind, not the item's entry id) skips the stack-consumption every other on-use spell takes,
+    // since a recall trinket is never used up.
+    ctx.db.game_spell().insert(Spell {
+        gcd_ms: 0, // item-triggered: no GCD
+        ..base_spell(50119, "Call Stone")
+    });
+    effect(50119, 0, crate::spell::E_RECALL_HOME, 0, 0, 0, 0, 0); // E_RECALL_HOME, T_SELF (id 200476)
 
     // Test Stun (50020) — the STUN crowd-control: ONE A_CONTROL (0xB0) effect whose p0 names the
     // MECHANIC M_STUN (1, p0_kind 3 P_MECHANIC), targeting an ENEMY (target 1 T_TARGET_ENEMY). A unit
@@ -1582,7 +1258,12 @@ pub fn init(ctx: &ReducerContext) {
     // Stacking-group starter set (work-item 192) — hand-authored until 102's cmangos `spell_group` SQL
     // dump lands wholesale. Idempotent + shared with `debug_seed_spell_groups`.
     seed_spell_groups(ctx);
+}
 
+/// Stratum 4 — scheduler arming: the event reaper, instance reaper, creature movement tick, melee
+/// swing tick, aura-expiry tick, and ground-AoE damage tick. Runs last so nothing fires against a
+/// half-seeded database.
+fn seed_scheduler_arming(ctx: &ReducerContext) {
     // Schedule the event reaper every 1s.
     ctx.db
         .game_event_reaper_schedule()
@@ -1970,7 +1651,7 @@ mod tests {
     fn every_fixture_seeder_is_reachable_from_init_or_from_a_debug_reducer() {
         let fixtures_src = include_str!("seed/fixtures.rs");
         let init_src = include_str!("seed.rs");
-        let debug_src = include_str!("debug.rs");
+        let debug_src = crate::test_scan::debug_dir_src();
 
         let seeders: Vec<&str> = fixtures_src
             .lines()
@@ -1997,6 +1678,89 @@ mod tests {
                 "`{name}` is never called: not from `init` (so it never lands on a fresh shard) \
                  and not from a `debug_*` reducer (so it can never be applied to an existing one). \
                  A fixture nobody seeds is a test that silently stops testing anything."
+            );
+        }
+    }
+
+    /// DRIFT REGRESSION (#363). The post-import fixture-restore path
+    /// (`seed_scenario_fixtures`/`seed_fixture_items`, run via `debug_seed_scenario_fixtures`
+    /// after a world-ETL re-import truncates `game_creature_template`/`game_item_template`) used
+    /// to re-author full `CreatureTemplate`/`ItemTemplate` literals as hand-copies of `init`'s —
+    /// and they drifted: the Profession Trainer was level 30/1500hp/"Cooking & Skinning" in
+    /// `init` but level 10/100hp/"Fixture" in the restore copy, and the Test Wolf's
+    /// money_min/max disagreed too. A shard restored after an ETL wipe therefore carried
+    /// different fixtures than a fresh one — the exact cross-shard divergence class #85 was
+    /// filed to kill, reintroduced by copy-paste.
+    ///
+    /// The fix collapses both paths onto ONE canonical constructor per fixture
+    /// (`test_wolf_template`, `profession_trainer_template`, `tempered_blade_template`,
+    /// `tough_jerky_template`, all in `seed/fixtures.rs`). This pins that both `init` (via
+    /// `seed_map0_demo_content`, #377's stratum-2 split-out — see this file's header) and the
+    /// restore path call the SAME constructors — a hand-copied struct literal reintroduced in
+    /// either one fails this test loudly instead of silently drifting again.
+    #[test]
+    fn init_and_the_restore_path_build_shared_fixtures_from_the_same_constructor() {
+        let seed_src = include_str!("seed.rs");
+        let fixtures_src = include_str!("seed/fixtures.rs");
+
+        let init_body = crate::test_scan::code_of(
+            seed_src,
+            "fn seed_map0_demo_content(ctx: &ReducerContext) {",
+        );
+        let restore_body = crate::test_scan::code_of(
+            fixtures_src,
+            "pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {",
+        );
+        let fixture_items_body = crate::test_scan::code_of(
+            fixtures_src,
+            "fn seed_fixture_items(ctx: &ReducerContext) {",
+        );
+
+        for ctor in ["test_wolf_template()", "profession_trainer_template()"] {
+            assert!(
+                init_body.contains(ctor),
+                "`init` no longer calls `{ctor}` — did a hand-authored CreatureTemplate literal \
+                 come back?"
+            );
+            assert!(
+                restore_body.contains(ctor),
+                "`seed_scenario_fixtures` (the post-import fixture-restore path) no longer calls \
+                 `{ctor}` — a hand-copied literal here is exactly the #363 drift bug."
+            );
+        }
+
+        for ctor in ["tempered_blade_template(", "tough_jerky_template("] {
+            assert!(
+                init_body.contains(ctor),
+                "`init` no longer calls `{ctor}` — did a hand-authored ItemTemplate literal come \
+                 back?"
+            );
+            assert!(
+                fixture_items_body.contains(ctor),
+                "`seed_fixture_items` (feeds the restore path's reserved-id fixture catalogue) no \
+                 longer calls `{ctor}` — a hand-copied literal here is exactly the #363 drift bug."
+            );
+        }
+
+        // Belt-and-suspenders, scoped to the fixture the constructor replaced (this function also
+        // hand-authors OTHER, non-duplicated fixtures — Scenario Questgiver/Vendor/Weapon Master —
+        // which is fine; only a WOLF/PROFESSION_TRAINER-entry literal here would be the drift bug
+        // back). Whitespace-collapsed word-pair match, NOT `.contains()` — `target_entry: WOLF`
+        // (the quest objective, which is legitimate) would otherwise false-positive on a plain
+        // substring search for "entry: WOLF".
+        let restore_shape = crate::test_scan::shape_of(
+            fixtures_src,
+            "pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {",
+        );
+        let words: Vec<&str> = restore_shape.split(' ').collect();
+        for needle in [["entry:", "WOLF,"], ["entry:", "PROFESSION_TRAINER,"]] {
+            assert!(
+                !words.windows(2).any(|w| w == needle),
+                "`seed_scenario_fixtures` hand-authors a `CreatureTemplate {{ {} {} ... }}` \
+                 literal again instead of calling the shared constructor — this is how #363 \
+                 happened.",
+                needle[0],
+                needle[1]
             );
         }
     }

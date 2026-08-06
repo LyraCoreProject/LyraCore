@@ -57,15 +57,9 @@ crate::character_owned!(delete, fn sweep_delete_game_character_explored(ctx, cha
 // CROSS-DATABASE transport (issue #19): the fog-of-war map is durable progression — losing it at a
 // shard boundary would re-fog zones and re-pay discovery XP. `id` is a surrogate PK, re-minted.
 crate::character_owned!(transfer, fn sweep_transfer_game_character_explored(ctx, character_guid, io) {
-    crate::transfer::move_rows(
-        ctx,
-        io,
-        || ctx.db.game_character_explored().by_character().filter(&character_guid).collect::<Vec<_>>(),
-        |ctx, mut r| {
-            r.id = 0;
-            ctx.db.game_character_explored().insert(r);
-        },
-    );
+    table = game_character_explored,
+    by = by_character,
+    remint = id,
 });
 
 /// On a grid-cell crossing (called from `movement_update`), award discovery XP if `mover` just entered
@@ -157,12 +151,7 @@ pub fn debug_explore_at(
     x: f32,
     y: f32,
 ) -> Result<(), String> {
-    let mut e = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(guid)
-        .ok_or_else(|| format!("no live entity for guid {guid}"))?;
+    let mut e = crate::helpers::live_entity(ctx, guid)?;
     e.map_id = map_id;
     e.x = x;
     e.y = y;

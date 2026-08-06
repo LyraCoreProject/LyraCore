@@ -204,147 +204,6 @@ pub(crate) fn cell_is_active(
     gx0 <= gx && gx <= gx1 && gy0 <= gy && gy <= gy1
 }
 
-/// The pure specification of ACTIVE CELLS: given every player's `(map_id, instance_id, x, y)` and a
-/// flat candidate list of `(guid, map_id, instance_id, gx, gy)` creature rows, the deduped set of
-/// creature guids that are active this tick (in radius of AT LEAST ONE player). Exists so the
-/// union/dedup/radius math is unit-tested without a `ReducerContext` (the module crate has no ctx test
-/// harness by design). The production path (`tick::active_cell_creatures`)
-/// never actually builds the full candidate list this fn's signature implies — it queries `by_grid`
-/// per player per cell (the work item's "invert the loop, iterate players' neighborhoods"), which by
-/// construction returns exactly this fn's per-player subset; this is the provable spec that querying
-/// is equivalent to. Never called from production for that reason (`#[allow(dead_code)]` documents
-/// that as deliberate, matching `spell/stacking.rs`'s precedent for a spec-only helper — not a bug).
-/// Pure — unit-tested. [pure]
-#[allow(dead_code)]
-pub(crate) fn union_active_guids(
-    players: &[(u32, u64, f32, f32)],
-    candidates: &[(u64, u32, u64, i32, i32)],
-    radius: f32,
-) -> std::collections::HashSet<u64> {
-    let mut out = std::collections::HashSet::new();
-    for &(guid, map_id, instance_id, gx, gy) in candidates {
-        let active = players.iter().any(|&(p_map_id, p_instance_id, px, py)| {
-            cell_is_active(
-                map_id,
-                instance_id,
-                gx,
-                gy,
-                p_map_id,
-                p_instance_id,
-                px,
-                py,
-                radius,
-            )
-        });
-        if active {
-            out.insert(guid);
-        }
-    }
-    out
-}
-
-// ===========================================================================================
-//  Narrowed-pass candidate equivalence (work-item 233 — route pass_cast/pass_flee/pass_fear_flee
-//  through their small tables instead of a full entity scan) [pure]
-// ===========================================================================================
-
-/// The `pass_cast`/`pass_flee` candidate creature-guid set, computed the OLD way: scan every entity and
-/// keep only the ALIVE, non-player ones that ALSO appear in `melee_attackers` (the "is this creature
-/// currently the attacker in a melee row" gate both passes already applied, inline, before this item).
-/// `entities` is `(guid, is_player, dead)`. Exists to PROVE, on a synthetic population, that the OLD
-/// full-scan-then-filter shape and the NEW melee-table-outer-loop shape below visit the identical set —
-/// the module crate has no `ReducerContext` test harness, so this pure pair is
-/// how the narrowing is verified without one. Mirrors `union_active_guids`'s role for work-item 230: a
-/// provable spec, not itself called from production (which takes the NEW route directly for real row
-/// data, not just guids). Pure — unit-tested. [pure]
-#[allow(dead_code)]
-pub(crate) fn engaged_candidates_via_entity_scan(
-    entities: &[(u64, bool, bool)],
-    melee_attackers: &std::collections::HashSet<u64>,
-) -> std::collections::BTreeSet<u64> {
-    entities
-        .iter()
-        .filter(|&&(guid, is_player, dead)| !is_player && !dead && melee_attackers.contains(&guid))
-        .map(|&(guid, _, _)| guid)
-        .collect()
-}
-
-/// The SAME candidate set as `engaged_candidates_via_entity_scan`, computed the NEW way — exactly what
-/// `pass_cast`/`pass_flee` now do: outer-loop the small `melee_attackers` set instead of every entity,
-/// then apply the identical alive/non-player filter per candidate (a guid in `melee_attackers` with no
-/// matching entity — e.g. despawned mid-tick — is skipped, matching `entities.guid().find(..)` returning
-/// `None` in production). Pure — unit-tested against its OLD-way twin above. [pure]
-#[allow(dead_code)]
-pub(crate) fn engaged_candidates_via_melee_scan(
-    entities: &[(u64, bool, bool)],
-    melee_attackers: &std::collections::HashSet<u64>,
-) -> std::collections::BTreeSet<u64> {
-    melee_attackers
-        .iter()
-        .copied()
-        .filter(|guid| {
-            entities
-                .iter()
-                .find(|&&(g, _, _)| g == *guid)
-                .map(|&(_, is_player, dead)| !is_player && !dead)
-                .unwrap_or(false)
-        })
-        .collect()
-}
-
-/// The `pass_fear_flee` candidate set, computed the OLD way: every ALIVE, non-player entity that carries
-/// a matching `(kind, mechanic)` aura — `auras` is `(target_guid, eff_kind, eff_p0)`, mirroring
-/// `game_aura`'s columns. `kind`/`mechanic` are passed in (rather than hardcoded) so the test can use
-/// plain small integers without importing the `spell` module's `pub(crate)` taxonomy constants across
-/// the module boundary. Pure — unit-tested against its NEW-way twin below. [pure]
-#[allow(dead_code)]
-pub(crate) fn fear_candidates_via_entity_scan(
-    entities: &[(u64, bool, bool)],
-    auras: &[(u64, u8, i32)],
-    kind: u8,
-    mechanic: i32,
-) -> std::collections::BTreeSet<u64> {
-    entities
-        .iter()
-        .filter(|&&(guid, is_player, dead)| {
-            !is_player
-                && !dead
-                && auras
-                    .iter()
-                    .any(|&(t, k, p)| t == guid && k == kind && p == mechanic)
-        })
-        .map(|&(guid, _, _)| guid)
-        .collect()
-}
-
-/// The SAME candidate set as `fear_candidates_via_entity_scan`, computed the NEW way — exactly what
-/// `pass_fear_flee` now does: outer-loop the (small) aura table filtered to matching `(kind, mechanic)`
-/// rows, DEDUP the target guids (a target with two live fear auras — e.g. two different casters — must
-/// still be visited exactly once), THEN apply the identical alive/non-player filter. Pure — unit-tested
-/// against its OLD-way twin above. [pure]
-#[allow(dead_code)]
-pub(crate) fn fear_candidates_via_aura_scan(
-    entities: &[(u64, bool, bool)],
-    auras: &[(u64, u8, i32)],
-    kind: u8,
-    mechanic: i32,
-) -> std::collections::BTreeSet<u64> {
-    auras
-        .iter()
-        .filter(|&&(_, k, p)| k == kind && p == mechanic)
-        .map(|&(t, _, _)| t)
-        .collect::<std::collections::HashSet<u64>>()
-        .into_iter()
-        .filter(|guid| {
-            entities
-                .iter()
-                .find(|&&(g, _, _)| g == *guid)
-                .map(|&(_, is_player, dead)| !is_player && !dead)
-                .unwrap_or(false)
-        })
-        .collect()
-}
-
 // ===========================================================================================
 //  Stealth detection radius (graded, level-scaled detect range vs. a stealthed target) [pure]
 // ===========================================================================================
@@ -421,16 +280,16 @@ pub fn feared_flee_step(cx: f32, cy: f32, sx: f32, sy: f32, dist: f32, rand: u32
 // ===========================================================================================
 
 /// Squared melee reach — a creature this close (or closer) is in range to swing and must NOT chase.
-/// Mirrors combat's `MELEE_RANGE_SQ` ((5 yd)²); redefined locally (combat's copy is private) so this
-/// pass and the swing pass agree on the boundary without coupling to a private const.
-pub(crate) const CHASE_MELEE_SQ: f32 = 25.0;
+/// Aliases combat's `MELEE_RANGE_SQ` ((5 yd)²) directly — a single source of truth, so this pass and
+/// the swing pass agree on the boundary by construction (no lockstep-by-comment).
+pub(crate) const CHASE_MELEE_SQ: f32 = crate::combat::MELEE_RANGE_SQ;
 
 /// Squared leash radius — a target beyond this is too far to chase (combat's leash pass disengages
-/// the creature). Mirrors combat's `LEASH_RADIUS_SQ` ((45 yd)²); redefined locally for the same
-/// no-private-coupling reason as `CHASE_MELEE_SQ`. MUST stay in lockstep with the combat const:
-/// chase-skip > leash would strand a mob that neither chases nor evades — a 31-35 yd Auto Shot
-/// pull would stand still and die without ever closing (097 review find).
-pub(crate) const CHASE_LEASH_SQ: f32 = 2025.0;
+/// the creature). Aliases combat's `LEASH_RADIUS_SQ` ((45 yd)²) directly, for the same single-source
+/// reason as `CHASE_MELEE_SQ`. Lockstep with the combat const is now structural: chase-skip > leash
+/// would strand a mob that neither chases nor evades — a 31-35 yd Auto Shot pull would stand still and
+/// die without ever closing (097 review find).
+pub(crate) const CHASE_LEASH_SQ: f32 = crate::combat::LEASH_RADIUS_SQ;
 
 /// SPLINE chase: how recently the target must have moved (ms) for the chaser to treat it as MOVING. A
 /// mob only plants into attack stance (stops chasing to swing) when its target is STATIONARY — while the
@@ -439,7 +298,7 @@ pub(crate) const CHASE_LEASH_SQ: f32 = 2025.0;
 /// freezes when the player stops, so the mob plants ~this long after they halt (~1.5 ticks).
 pub(crate) const CHASE_TARGET_MOVING_MS: u32 = 700;
 
-/// SPLINE chase LEAD (yд): a chaser aims this far PAST a moving target along the chase line, so the leg
+/// SPLINE chase LEAD (yd): a chaser aims this far PAST a moving target along the chase line, so the leg
 /// is long and the mob RIDES it for several ticks instead of re-throwing a tiny leg every 500ms tick
 /// (which made the client visibly re-compute its heading each tick — the jitter). A straight-running
 /// kiter keeps the mob on one committed heading. Overshoot on an abrupt stop is bounded by this lead and
@@ -452,7 +311,7 @@ pub(crate) const CHASE_LEAD_YD: f32 = 8.0;
 /// on turns; higher = hold the heading longer.
 pub(crate) const CHASE_REPATH_COS: f32 = 0.9;
 
-/// SPLINE flee LEG length (yд): a fleeing mob COMMITS to one leg this far directly away from the threat
+/// SPLINE flee LEG length (yd): a fleeing mob COMMITS to one leg this far directly away from the threat
 /// and re-rolls only once it finishes — instead of re-picking an away-direction every 500ms tick (which
 /// snap-rotated the client's facing = the "flee spin"). Vanilla flee legs sit in a 28-38yd
 /// quiet band; a single committed leg gives one stable travel tangent (one gentle turn per leg).
@@ -545,16 +404,6 @@ pub(crate) const MOVE_TICK_MICROS: i64 = 500_000;
 /// respawn timers) keep their original ~4s cadence while movement runs every 0.5s. 8 × 0.5s = 4s.
 pub(crate) const SENSE_EVERY_N_TICKS: i64 = 8;
 
-/// Is this tick a "sensing" tick (run the ~4s passes)? Pure fn of the scheduler timestamp in micros, so
-/// it needs no stored counter and survives across reducer invocations. Unit-tested.
-/// NOTE (work-item 229): this is the ORIGINAL, default-cadence formula, kept verbatim so
-/// `is_sense_tick_for_interval` below can be equivalence-tested AGAINST it (not a tautological
-/// delegation) — the production tick now calls the `_for_interval` variant with the firing row's own
-/// interval, which reduces to exactly this at the seeded 0.5s cadence.
-pub fn is_sense_tick(now_micros: i64) -> bool {
-    (now_micros / MOVE_TICK_MICROS) % SENSE_EVERY_N_TICKS == 0
-}
-
 /// The target SENSE period in micros (~4s) — `MOVE_TICK_MICROS × SENSE_EVERY_N_TICKS`. A tick row of
 /// ANY cadence quantizes its sensing passes to roughly this period (see
 /// `is_sense_tick_for_interval`), so a tight per-instance tick (work-item 229) smooths MOVEMENT
@@ -562,14 +411,15 @@ pub fn is_sense_tick(now_micros: i64) -> bool {
 /// (wander hop chance, aggro re-checks) that assume the ~4s cadence.
 pub(crate) const SENSE_PERIOD_MICROS: i64 = MOVE_TICK_MICROS * SENSE_EVERY_N_TICKS;
 
-/// `is_sense_tick`, generalized to a tick row of ANY interval (work-item 229 — per-instance tick
-/// rows carry their own `ScheduleAt::Interval`): one firing in every
-/// `SENSE_PERIOD_MICROS / interval` firings is a sense tick, so the sensing cadence stays ~4s no
+/// Is this tick a "sensing" tick (run the ~4s passes)? Generalized to a tick row of ANY interval
+/// (work-item 229 — per-instance tick rows carry their own `ScheduleAt::Interval`): one firing in
+/// every `SENSE_PERIOD_MICROS / interval` firings is a sense tick, so the sensing cadence stays ~4s no
 /// matter how fast the row fires. At the seeded default (`interval == MOVE_TICK_MICROS`) the divisor
-/// is exactly `SENSE_EVERY_N_TICKS` and this is BYTE-IDENTICAL to `is_sense_tick` (equivalence-tested
-/// against it, the work-item 233 spec-pair pattern). An interval LONGER than the sense period makes
-/// every firing a sense tick (divisor floors at 1); a non-positive interval (a `ScheduleAt::Time`
-/// row, or garbage) is clamped to the default so the math never divides by zero. Pure — unit-tested.
+/// is exactly `SENSE_EVERY_N_TICKS` (one sense tick in 8). An interval LONGER than the sense period
+/// makes every firing a sense tick (divisor floors at 1); a non-positive interval (a `ScheduleAt::Time`
+/// row, or garbage) is clamped to the default so the math never divides by zero. Pure fn of the
+/// scheduler timestamp in micros, so it needs no stored counter and survives across reducer
+/// invocations. Pure — unit-tested.
 pub fn is_sense_tick_for_interval(now_micros: i64, interval_micros: i64) -> bool {
     let interval = if interval_micros > 0 {
         interval_micros
@@ -707,7 +557,7 @@ impl TickScope {
     /// item forbids. They cover ALL instances (including dedicated-row ones) from the catch-all row,
     /// at the unchanged global cadence — so a dedicated row is a movement/AI smoothing knob only, and
     /// deleting it can never strand an instance's timers. COROLLARY: the catch-all row is
-    /// load-bearing — never delete it (`debug_rearm_creature_tick` restores it).
+    /// load-bearing — never delete it (`debug_repair_after_publish`, #378, restores it).
     pub(crate) fn runs_global_passes(&self) -> bool {
         matches!(self, TickScope::CatchAll { .. })
     }
@@ -864,32 +714,6 @@ mod tests {
         // A cell WELL beyond the radius (many cells over) is excluded.
         let (fgx, fgy) = lyracore_shared::spatial::grid_cell(0.0 - radius - 500.0, 0.0);
         assert!(!cell_is_active(1, 0, fgx, fgy, 1, 0, 0.0, 0.0, radius));
-    }
-
-    #[test]
-    fn union_active_guids_unions_dedups_and_excludes_out_of_radius() {
-        let radius = combat_active_radius(0.0);
-        let players = [
-            (1u32, 0u64, 0.0f32, 0.0f32),
-            (1u32, 0u64, 500.0f32, 500.0f32),
-        ];
-        let (near_a_gx, near_a_gy) = lyracore_shared::spatial::grid_cell(5.0, 5.0);
-        let (near_b_gx, near_b_gy) = lyracore_shared::spatial::grid_cell(505.0, 505.0);
-        let (far_gx, far_gy) = lyracore_shared::spatial::grid_cell(9000.0, 9000.0);
-        let candidates = [
-            (100u64, 1u32, 0u64, near_a_gx, near_a_gy), // in range of player A only
-            (200u64, 1u32, 0u64, near_b_gx, near_b_gy), // in range of player B only
-            (300u64, 1u32, 0u64, near_a_gx, near_a_gy), // SAME cell as guid 100 — union must not drop it
-            (400u64, 1u32, 0u64, far_gx, far_gy),       // in range of NEITHER — dormant
-        ];
-        let active = union_active_guids(&players, &candidates, radius);
-        assert_eq!(
-            active,
-            [100u64, 200, 300]
-                .into_iter()
-                .collect::<std::collections::HashSet<_>>()
-        );
-        assert!(!active.contains(&400));
     }
 
     /// Work-item 230's engaged-creature-never-dormant rule ("a player could drag one far away") only
@@ -1427,17 +1251,18 @@ mod tests {
         );
     }
 
-    /// Equivalence spec: at the DEFAULT interval the generalized sense gate reproduces the original
-    /// `is_sense_tick` bit-for-bit (compared against the ORIGINAL formula, kept verbatim — not a
-    /// delegation, so this is a real cross-check, not a tautology). Swept across aligned AND
-    /// unaligned timestamps.
+    /// At the DEFAULT interval, the generalized sense gate must fire on exactly the documented boundary
+    /// — `(now / MOVE_TICK_MICROS) % SENSE_EVERY_N_TICKS == 0` — the "one movement tick in every N is a
+    /// sense tick" contract this fn exists to provide, asserted directly (not via a second, parallel
+    /// implementation) across aligned AND unaligned timestamps.
     #[test]
-    fn sense_tick_for_interval_matches_legacy_at_the_default_cadence() {
+    fn sense_tick_for_interval_fires_on_the_documented_boundary_at_default_cadence() {
         for step in 0..200i64 {
             let now = step * 137_777; // deliberately NOT a multiple of the tick interval
+            let expected = (now / MOVE_TICK_MICROS) % SENSE_EVERY_N_TICKS == 0;
             assert_eq!(
                 is_sense_tick_for_interval(now, MOVE_TICK_MICROS),
-                is_sense_tick(now),
+                expected,
                 "divergence at now={now}"
             );
         }
@@ -1453,11 +1278,15 @@ mod tests {
         // A row SLOWER than the sense period (10s): every firing senses (divisor floors at 1).
         assert!(is_sense_tick_for_interval(10_000_000, 10_000_000));
         assert!(is_sense_tick_for_interval(20_000_000, 10_000_000));
-        // A ScheduleAt::Time row / garbage interval clamps to the default cadence (never div-by-zero).
-        assert_eq!(is_sense_tick_for_interval(0, 0), is_sense_tick(0));
+        // A ScheduleAt::Time row / garbage interval clamps to the default cadence (never div-by-zero) —
+        // asserted by comparing against the SAME fn given the default interval explicitly.
+        assert_eq!(
+            is_sense_tick_for_interval(0, 0),
+            is_sense_tick_for_interval(0, MOVE_TICK_MICROS)
+        );
         assert_eq!(
             is_sense_tick_for_interval(4_000_000, -5),
-            is_sense_tick(4_000_000)
+            is_sense_tick_for_interval(4_000_000, MOVE_TICK_MICROS)
         );
     }
 
@@ -1527,7 +1356,7 @@ mod tests {
     #[test]
     fn sense_tick_is_one_in_eight() {
         let hits: Vec<bool> = (0..16)
-            .map(|t| is_sense_tick(t * MOVE_TICK_MICROS))
+            .map(|t| is_sense_tick_for_interval(t * MOVE_TICK_MICROS, MOVE_TICK_MICROS))
             .collect();
         assert_eq!(
             hits.iter().filter(|&&h| h).count(),
@@ -1566,123 +1395,4 @@ mod tests {
         assert_eq!(seen.len(), 4, "ordered traversal visits all waypoints");
     }
 
-    // =========================================================================================
-    //  Work-item 233 — narrowed-pass candidate equivalence (synthetic-population vectors)
-    // =========================================================================================
-
-    /// A synthetic population exercising every edge case the item calls out: a normal engaged creature
-    /// (0), a player who also happens to hold a melee row (1 — must be excluded from both sides via
-    /// `is_player`), a DEAD creature with a stale melee row (2 — combat's own reap should have cleared
-    /// this, but the pass must still exclude it defensively), a creature guid that appears in the melee
-    /// table but has NO matching entity at all (3 — despawned same-tick; present only in
-    /// `melee_attackers`, absent from `entities`), and a live, eligible creature with NO melee row at all
-    /// (4 — must never appear in either candidate set).
-    fn engaged_synthetic_population() -> (Vec<(u64, bool, bool)>, std::collections::HashSet<u64>) {
-        let entities = vec![
-            (0u64, false, false), // engaged creature, alive — the common case
-            (1u64, true, false),  // a PLAYER'S own melee row (player auto-attacks too)
-            (2u64, false, true),  // dead creature, stale melee row
-            (4u64, false, false), // alive creature, but NOT in the melee table at all
-        ];
-        let melee_attackers: std::collections::HashSet<u64> = [0u64, 1, 2, 3].into_iter().collect();
-        (entities, melee_attackers)
-    }
-
-    #[test]
-    fn engaged_candidates_entity_scan_and_melee_scan_agree_on_the_synthetic_population() {
-        let (entities, melee_attackers) = engaged_synthetic_population();
-        let old_way = engaged_candidates_via_entity_scan(&entities, &melee_attackers);
-        let new_way = engaged_candidates_via_melee_scan(&entities, &melee_attackers);
-        assert_eq!(
-            old_way, new_way,
-            "pass_cast/pass_flee narrowing must visit the identical candidate set"
-        );
-        // The only guid that should survive is 0: 1 is a player, 2 is dead, 3 has no entity, 4 has no
-        // melee row (invisible to both sides by construction — never even a candidate).
-        assert_eq!(old_way, [0u64].into_iter().collect());
-    }
-
-    #[test]
-    fn engaged_candidates_agree_on_an_empty_melee_table() {
-        // No engagements at all this tick — both ways must agree on the empty set (the overwhelmingly
-        // common per-tick case outside of active combat).
-        let entities = vec![(10u64, false, false), (11u64, false, true)];
-        let melee_attackers = std::collections::HashSet::new();
-        assert_eq!(
-            engaged_candidates_via_entity_scan(&entities, &melee_attackers),
-            engaged_candidates_via_melee_scan(&entities, &melee_attackers)
-        );
-        assert!(engaged_candidates_via_melee_scan(&entities, &melee_attackers).is_empty());
-    }
-
-    #[test]
-    fn engaged_candidates_agree_when_every_creature_is_engaged() {
-        // The dense case: every creature is a melee attacker — proves the narrowing isn't accidentally
-        // dropping members when the "small" table isn't actually small relative to the entity table.
-        let entities: Vec<(u64, bool, bool)> = (0..20).map(|g| (g, false, false)).collect();
-        let melee_attackers: std::collections::HashSet<u64> = (0..20).collect();
-        let old_way = engaged_candidates_via_entity_scan(&entities, &melee_attackers);
-        let new_way = engaged_candidates_via_melee_scan(&entities, &melee_attackers);
-        assert_eq!(old_way, new_way);
-        assert_eq!(old_way.len(), 20);
-    }
-
-    /// The `pass_fear_flee` synthetic population: a feared creature (0), a PLAYER carrying a (hypothetical)
-    /// matching aura (1 — must be excluded), a dead feared creature (2 — stale aura, combat/expiry should
-    /// have cleared it, but the pass must still exclude it defensively), a fear-aura target guid with NO
-    /// matching entity (3 — despawned same-tick), a live creature with an aura of the WRONG kind (5 — a
-    /// stun, not a fear — must never be a candidate), and a live creature with TWO live fear auras from
-    /// two different casters (6 — must be visited exactly once, not twice).
-    // Test vector: each tuple is one fixture ROW of the pass's two inputs (entities, auras), in the
-    // same column order the pass reads them.
-    #[allow(clippy::type_complexity)]
-    fn fear_synthetic_population() -> (Vec<(u64, bool, bool)>, Vec<(u64, u8, i32)>) {
-        const A_CONTROL: u8 = 0xB0;
-        const M_FEAR: i32 = 3;
-        const M_STUN: i32 = 0;
-        let entities = vec![
-            (0u64, false, false), // feared creature, alive
-            (1u64, true, false),  // a PLAYER somehow carrying a matching aura
-            (2u64, false, true),  // dead creature, stale fear aura
-            (5u64, false, false), // alive creature with a non-fear control aura
-            (6u64, false, false), // alive creature feared by TWO different casters
-        ];
-        let auras = vec![
-            (0u64, A_CONTROL, M_FEAR),
-            (1u64, A_CONTROL, M_FEAR),
-            (2u64, A_CONTROL, M_FEAR),
-            (3u64, A_CONTROL, M_FEAR), // no matching entity at all
-            (5u64, A_CONTROL, M_STUN), // wrong mechanic — must not count as feared
-            (6u64, A_CONTROL, M_FEAR), // caster A
-            (6u64, A_CONTROL, M_FEAR), // caster B — duplicate target, must dedup to one visit
-        ];
-        (entities, auras)
-    }
-
-    #[test]
-    fn fear_candidates_entity_scan_and_aura_scan_agree_on_the_synthetic_population() {
-        const A_CONTROL: u8 = 0xB0;
-        const M_FEAR: i32 = 3;
-        let (entities, auras) = fear_synthetic_population();
-        let old_way = fear_candidates_via_entity_scan(&entities, &auras, A_CONTROL, M_FEAR);
-        let new_way = fear_candidates_via_aura_scan(&entities, &auras, A_CONTROL, M_FEAR);
-        assert_eq!(
-            old_way, new_way,
-            "pass_fear_flee narrowing must visit the identical candidate set"
-        );
-        // Only 0 and 6 should survive: 1 is a player, 2 is dead, 3 has no entity, 5 has the wrong
-        // mechanic, and 6 (double-feared) must appear exactly once (a BTreeSet already guarantees that,
-        // but the equality above additionally proves the aura-scan side didn't silently drop it either).
-        assert_eq!(old_way, [0u64, 6].into_iter().collect());
-    }
-
-    #[test]
-    fn fear_candidates_agree_when_no_creature_is_feared() {
-        let entities = vec![(10u64, false, false), (11u64, false, false)];
-        let auras: Vec<(u64, u8, i32)> = vec![];
-        const A_CONTROL: u8 = 0xB0;
-        const M_FEAR: i32 = 3;
-        assert!(fear_candidates_via_entity_scan(&entities, &auras, A_CONTROL, M_FEAR).is_empty());
-        assert!(fear_candidates_via_aura_scan(&entities, &auras, A_CONTROL, M_FEAR).is_empty());
-    }
 }

@@ -346,15 +346,9 @@ crate::character_owned!(delete, fn sweep_delete_game_player_skill(ctx, character
 // CROSS-DATABASE transport (issue #19), HOT: weapon/defense/profession skill values gate every
 // swing the character makes on arrival. `id` is a surrogate PK, re-minted.
 crate::character_owned!(transfer, fn sweep_transfer_game_player_skill(ctx, character_guid, io) {
-    crate::transfer::move_rows(
-        ctx,
-        io,
-        || ctx.db.game_player_skill().by_character().filter(&character_guid).collect::<Vec<_>>(),
-        |ctx, mut r| {
-            r.id = 0;
-            ctx.db.game_player_skill().insert(r);
-        },
-    );
+    table = game_player_skill,
+    by = by_character,
+    remint = id,
 });
 crate::character_owned!(restamp, fn sweep_restamp_game_player_skill(ctx, character_guid, identity) {
     let skills = ctx.db.game_player_skill();
@@ -437,19 +431,22 @@ pub fn skill_diff_ctx(ctx: &ReducerContext, attacker: &WorldEntity, target: &Wor
 /// >`level*5` cap from a +weapon-skill racial/item. The visible climb window is `raise_combat_caps` lifting
 /// > `max_rank` above `current` on a ding — without that, every combat line would be born and stay at cap,
 /// > making this a permanent no-op.
-fn raise_skill(ctx: &ReducerContext, guid: u64, line: u32) {
+///
+/// Returns the row's `current` AFTER the call (whether or not it actually climbed), or `None` if
+/// the row is ABSENT — callers that need the post-raise value (`gain_profession_skill`'s autolearn
+/// check) use this instead of re-reading the row they just wrote.
+fn raise_skill(ctx: &ReducerContext, guid: u64, line: u32) -> Option<u32> {
     let skills = ctx.db.game_player_skill();
-    if let Some(mut row) = skills
+    let mut row = skills
         .by_character()
         .filter(&guid)
-        .find(|s| s.skill_line == line)
-    {
-        let next = next_skill(row.current as u32, row.max_rank as u32) as u16;
-        if next != row.current {
-            row.current = next;
-            skills.id().update(row);
-        }
+        .find(|s| s.skill_line == line)?;
+    let next = next_skill(row.current as u32, row.max_rank as u32) as u16;
+    if next != row.current {
+        row.current = next;
+        skills.id().update(row);
     }
+    Some(next as u32)
 }
 
 /// Roll `combat_skillup_chance_bp` for `guid`'s EXISTING `(line)` row and, on success, step it via
@@ -584,25 +581,23 @@ pub(crate) fn gain_profession_skill(
         .map(|s| s.current as u32)
         .unwrap_or(0);
     if ctx.random::<u32>() % 10_000 < skillup_chance_bp(current, orange, gray) {
-        raise_skill(ctx, guid, line);
+        let Some(new_current) = raise_skill(ctx, guid, line) else {
+            return;
+        };
         // AUTOLEARN at threshold (282): climbing may have unlocked acquire_method=2 abilities whose
         // min_skill the new rank now meets. Idempotent; owner from the live caster entity (a skill-up
-        // only ever fires for an in-world crafter).
-        let owner = ctx
+        // only ever fires for an in-world crafter). Requires a REAL live entity — the "always
+        // in-world" invariant broke once already, and minting a `game_player_spell` row under
+        // `Identity::ZERO` would be invisible to its owner under RLS forever, not just skipped.
+        let Some(owner) = ctx
             .db
             .game_world_entity()
             .guid()
             .find(guid)
             .map(|e| e.owner_identity)
-            .unwrap_or(spacetimedb::Identity::ZERO);
-        let new_current = ctx
-            .db
-            .game_player_skill()
-            .by_character()
-            .filter(&guid)
-            .find(|s| s.skill_line == line)
-            .map(|s| s.current as u32)
-            .unwrap_or(current);
+        else {
+            return;
+        };
         grant_autolearn_abilities(ctx, guid, owner, line, new_current);
     }
 }
@@ -746,12 +741,7 @@ pub fn debug_learn_profession(
     skill_line: u32,
     cap: u32,
 ) -> Result<(), String> {
-    let entity = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| format!("no live entity for guid {character_guid}"))?;
+    let entity = crate::helpers::live_entity(ctx, character_guid)?;
     learn_profession(
         ctx,
         character_guid,
@@ -821,31 +811,16 @@ pub fn debug_learn_profession_from_trainer(
             ))
         }
     };
-    let player = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| format!("learner {character_guid} not in world"))?;
-    // Nearest live TRAINER creature on the learner's map (the big trainer guid resolved here, not by the CLI).
-    let mut best: Option<(WorldEntity, f32)> = None;
-    for e in ctx.db.game_world_entity().iter() {
-        if e.is_player()
-            || e.dead
-            || e.map_id != player.map_id
-            || e.instance_id != player.instance_id
-            || e.npc_flags & lyracore_shared::constants::npc_flags::TRAINER == 0
-        {
-            continue;
-        }
-        let d = (e.x - player.x).powi(2) + (e.y - player.y).powi(2);
-        if best.as_ref().is_none_or(|(_, bd)| d < *bd) {
-            best = Some((e, d));
-        }
-    }
-    let trainer = best
-        .ok_or_else(|| "no live trainer near learner".to_string())?
-        .0;
+    let player = crate::helpers::live_entity(ctx, character_guid)
+        .map_err(|_| format!("learner {character_guid} not in world"))?;
+    // Nearest live TRAINER creature in the learner's OWN (map, instance) partition — same-partition
+    // scan via `crate::helpers::nearest_entity` (the big trainer guid resolved here, not by the CLI).
+    let trainer = crate::helpers::nearest_entity(ctx, &player, |e| {
+        !e.is_player()
+            && !e.dead
+            && e.npc_flags & lyracore_shared::constants::npc_flags::TRAINER != 0
+    })
+    .ok_or_else(|| "no live trainer near learner".to_string())?;
     crate::trainer::apply_trainer_buy(ctx, character_guid, trainer.guid, spell_id)
 }
 
@@ -885,31 +860,16 @@ pub fn debug_learn_weapon_from_trainer(
             ))
         }
     };
-    let player = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| format!("learner {character_guid} not in world"))?;
-    // Nearest live TRAINER creature on the learner's map (the big trainer guid resolved here, not by the CLI).
-    let mut best: Option<(WorldEntity, f32)> = None;
-    for e in ctx.db.game_world_entity().iter() {
-        if e.is_player()
-            || e.dead
-            || e.map_id != player.map_id
-            || e.instance_id != player.instance_id
-            || e.npc_flags & lyracore_shared::constants::npc_flags::TRAINER == 0
-        {
-            continue;
-        }
-        let d = (e.x - player.x).powi(2) + (e.y - player.y).powi(2);
-        if best.as_ref().is_none_or(|(_, bd)| d < *bd) {
-            best = Some((e, d));
-        }
-    }
-    let trainer = best
-        .ok_or_else(|| "no live trainer near learner".to_string())?
-        .0;
+    let player = crate::helpers::live_entity(ctx, character_guid)
+        .map_err(|_| format!("learner {character_guid} not in world"))?;
+    // Nearest live TRAINER creature in the learner's OWN (map, instance) partition — same-partition
+    // scan via `crate::helpers::nearest_entity` (the big trainer guid resolved here, not by the CLI).
+    let trainer = crate::helpers::nearest_entity(ctx, &player, |e| {
+        !e.is_player()
+            && !e.dead
+            && e.npc_flags & lyracore_shared::constants::npc_flags::TRAINER != 0
+    })
+    .ok_or_else(|| "no live trainer near learner".to_string())?;
     crate::trainer::apply_trainer_buy(ctx, character_guid, trainer.guid, spell_id)
 }
 
@@ -1050,12 +1010,7 @@ pub fn debug_set_skill(
     skill_line: u32,
     value: u32,
 ) -> Result<(), String> {
-    let entity = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| format!("no live entity for guid {character_guid}"))?;
+    let entity = crate::helpers::live_entity(ctx, character_guid)?;
     let cap = skill_cap_for_level(entity.level);
     let current = value.min(cap) as u16;
     let max_rank = cap as u16;
@@ -1093,8 +1048,8 @@ pub fn debug_set_skill(
 pub fn debug_reseed_skills(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
     // REFUSE verdict (issue #30): `game_player_skill` is a HOT manifest table, so a post-begin
     // reseed is a lost write cross-database.
-    let ch = crate::helpers::character_by_guid(ctx, character_guid)
-        .ok_or_else(|| format!("no game_character row for guid {character_guid}"))?;
+    let ch = crate::helpers::require_character(ctx, character_guid)
+        .map_err(|_| format!("no game_character row for guid {character_guid}"))?;
     ensure_player_skills(ctx, ch.guid, ctx.sender(), ch.level as u32, ch.class);
     spacetimedb::log::info!(
         "debug_reseed_skills: guid={character_guid} class={} level={}",

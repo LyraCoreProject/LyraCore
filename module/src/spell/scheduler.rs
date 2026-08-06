@@ -52,32 +52,8 @@ pub fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
         // No SMSG_SPELL_GO will come, so the client's filled cast bar would hang ("stuck on full"). Emit an
         // is_interrupted signal → the gateway relays SMSG_SPELL_FAILURE to the caster, tearing the bar down.
         ctx.db.game_spell_cast_event().insert(SpellCastEvent {
-            id: 0,
-            caster_guid: sched.caster_guid,
-            spell_id: sched.spell_id,
-            created_at: ctx.timestamp,
-            target_guid: 0,
-            cast_time_ms: 0,
-            is_completion: false,
-            damage: 0,
-            school: 0,
-            is_crit: false,
-            resisted: 0,
-            absorbed: 0,
             is_interrupted: true,
-            cooldown_ms: 0,
-            delay_ms: 0, // completion-failure is an interrupt signal, not a pushback
-            healed: 0,
-            is_proc_log: false,
-            swing_hit_info: 0,
-            client_initiated: false,
-
-            // perf catalog 2.3: AOI address of the actor, so this row is delivered to the
-            // observers whose box contains them instead of to every connected session.
-            map_id: crate::helpers::grid_of(ctx, sched.caster_guid).0,
-            instance_id: crate::helpers::grid_of(ctx, sched.caster_guid).1,
-            grid_x: crate::helpers::grid_of(ctx, sched.caster_guid).2,
-            grid_y: crate::helpers::grid_of(ctx, sched.caster_guid).3,
+            ..SpellCastEvent::signal(ctx, sched.caster_guid, sched.spell_id)
         });
     }
 }
@@ -101,6 +77,9 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
         sched.caster_guid,
         sched.after_resist,
     );
+    // perf catalog 2.3: AOI address of the actor, so this row is delivered to the observers whose box
+    // contains them instead of to every connected session. ONE grid_of lookup (was 4 — one per field).
+    let (map_id, instance_id, grid_x, grid_y) = crate::helpers::grid_of(ctx, sched.caster_guid);
     ctx.db.game_spell_impact_event().insert(SpellImpactEvent {
         id: 0,
         caster_guid: sched.caster_guid,
@@ -112,13 +91,10 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
         is_crit: sched.is_crit,
         resisted: sched.resisted,
         absorbed,
-
-        // perf catalog 2.3: AOI address of the actor, so this row is delivered to the
-        // observers whose box contains them instead of to every connected session.
-        map_id: crate::helpers::grid_of(ctx, sched.caster_guid).0,
-        instance_id: crate::helpers::grid_of(ctx, sched.caster_guid).1,
-        grid_x: crate::helpers::grid_of(ctx, sched.caster_guid).2,
-        grid_y: crate::helpers::grid_of(ctx, sched.caster_guid).3,
+        map_id,
+        instance_id,
+        grid_x,
+        grid_y,
     });
 }
 
@@ -614,7 +590,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         }
     }
     // CC diminishing returns (work-item 192): a NATURAL EXPIRY is one of the two REMOVAL events that starts
-    // the 15s DR window (the other is a dispel — `math::dispel_target`). `dr_category_for_effect` is a
+    // the 15s DR window (the other is a dispel — `effects::dispel_target`). `dr_category_for_effect` is a
     // no-op for a non-CC aura / a creature target, so this only touches the handful of player CC rows.
     // Runs BEFORE the delete loop below (order doesn't matter — `game_dr_state` is a separate table — but
     // reads the still-live `expired` snapshot either way).
@@ -758,37 +734,18 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 ctx.db
                     .game_spell_cast_event()
                     .insert(crate::spell::SpellCastEvent {
-                        id: 0,
-                        caster_guid: a.caster_guid,
-                        spell_id: a.spell_id,
-                        created_at: ctx.timestamp,
                         target_guid: t,
-                        cast_time_ms: 0,
-                        is_completion: false,
                         damage: dealt,
-                        healed: 0,
                         // The mask→index rule from resolve_cast_at (mask 0 = physical index 0).
                         school: if a.school_mask == 0 {
                             0
                         } else {
                             a.school_mask.trailing_zeros() as u8
                         },
-                        is_crit: false,
                         resisted: (a.amount.max(0) as u32).saturating_sub(resisted.max(0) as u32),
                         absorbed,
-                        is_interrupted: false,
-                        cooldown_ms: 0,
-                        delay_ms: 0,
                         is_proc_log: true,
-                        swing_hit_info: 0,
-                        client_initiated: false,
-
-                        // perf catalog 2.3: AOI address of the actor, so this row is delivered to the
-                        // observers whose box contains them instead of to every connected session.
-                        map_id: crate::helpers::grid_of(ctx, a.caster_guid).0,
-                        instance_id: crate::helpers::grid_of(ctx, a.caster_guid).1,
-                        grid_x: crate::helpers::grid_of(ctx, a.caster_guid).2,
-                        grid_y: crate::helpers::grid_of(ctx, a.caster_guid).3,
+                        ..crate::spell::SpellCastEvent::signal(ctx, a.caster_guid, a.spell_id)
                     });
             }
         }
@@ -820,7 +777,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
 /// Ensure the 500ms `tick_ground_areas` schedule row exists — called wherever a `game_ground_area`
 /// row is BORN (perf catalog 1.20's disarm deletes it whenever the area table drains). Idempotent and
 /// cheap: the table holds 0 or 1 rows. Must stay in lockstep with the interval in `seed::init` /
-/// `debug_ensure_ground_area_schedule`.
+/// `debug_repair_after_publish` (#378, formerly the standalone `debug_ensure_ground_area_schedule`).
 pub(crate) fn arm_ground_area_tick(ctx: &ReducerContext) {
     if ctx.db.game_ground_area_schedule().count() > 0 {
         return;

@@ -22,6 +22,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::test_scan::repo_root;
+
 /// The literal we treat as "this line names a publish invocation".
 ///
 /// Ceiling: a line that reaches the CLI some other way (`$SPACETIME publish`, `spacetime` with two
@@ -149,10 +151,6 @@ fn shell_shape(src: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn repo_root() -> PathBuf {
-    crate::partition_discipline_tripwire::repo_root()
 }
 
 /// The scan roots, each with its own file FLOOR: `(dir, minimum *.sh/*.py files)`.

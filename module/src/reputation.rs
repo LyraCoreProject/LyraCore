@@ -58,15 +58,9 @@ crate::character_owned!(delete, fn sweep_delete_game_player_reputation(ctx, char
 // SMSG_INITIALIZE_FACTIONS is built from them — a character arriving without them shows every
 // faction at neutral. `id` is a surrogate PK, re-minted.
 crate::character_owned!(transfer, fn sweep_transfer_game_player_reputation(ctx, character_guid, io) {
-    crate::transfer::move_rows(
-        ctx,
-        io,
-        || ctx.db.game_player_reputation().by_character().filter(&character_guid).collect::<Vec<_>>(),
-        |ctx, mut r| {
-            r.id = 0;
-            ctx.db.game_player_reputation().insert(r);
-        },
-    );
+    table = game_player_reputation,
+    by = by_character,
+    remint = id,
 });
 
 // Restamp sweep: reputation carries `owner_identity` + an RLS filter like items/spells/skills/

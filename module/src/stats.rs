@@ -13,7 +13,7 @@
 use lyracore_shared::packing::power_type;
 use spacetimedb::{table, ReducerContext};
 
-use crate::{game_character, game_world_entity};
+use crate::{game_character, game_world_entity, WorldEntity};
 
 // ===========================================================================================
 //  Stat-curve tables [static] — loaded from cmangos by the importer (no Timestamp → SQL-loadable)
@@ -161,10 +161,65 @@ pub fn base_attributes_for(
     }
 }
 
-/// Set `character_guid`'s level and recompute `max_health`/`max_power`/the five base attributes from
-/// the real stat curve (the SAME `max_health_for`/`max_power_for`/`base_attributes_for` helpers
-/// `player_login` uses — not reimplemented). Health/power are refilled to the new max. Persists the
-/// level to the durable `game_character` row too, so a relog keeps it. Shared by `debug::debug_set_level`
+/// Old (pre-recompute) stat-curve values `apply_level_stats` returns alongside its write, so a caller
+/// that needs a per-stat popup delta (the ding loop) can diff against the freshly-written `new`
+/// side without a second curve lookup. Callers that only want the write (login, a bare level-set)
+/// ignore the return value.
+pub(crate) struct LevelStatsDelta {
+    pub old_max_health: u32,
+    pub old_max_power: u32,
+    pub old_strength: u32,
+    pub old_agility: u32,
+    pub old_stamina: u32,
+    pub old_intellect: u32,
+    pub old_spirit: u32,
+}
+
+/// Write the level-derived stat block onto `e` for `(race, class, level)`: the five base attributes,
+/// armor (`agility * 2`, classic base armor), and max health/power — from the SAME
+/// `base_attributes_for`/`max_health_for`/`max_power_for` curve lookups every call site used to inline
+/// separately. Does **not** touch the CURRENT `health`/`power` pool (a ding always fully heals; a
+/// level-set refills fully; login instead resumes from the persisted value) or anything outside the
+/// stat block (display, faction, position, …) — those stay each caller's own concern.
+///
+/// This was three hand-mirrored copies (`build_player_entity` at login, `grant_xp`'s ding loop, and
+/// `set_character_level`) held in sync only by a comment ("mirrors build_player_entity"). The third
+/// one drifted and dropped the armor line, so a level-SET character kept stale armor until its next
+/// relog (#362). One function now, called from all three sites — the drift class is gone structurally,
+/// not just patched at the one site that happened to be caught.
+pub(crate) fn apply_level_stats(
+    ctx: &ReducerContext,
+    e: &mut WorldEntity,
+    race: u8,
+    class: u8,
+    level: u32,
+) -> LevelStatsDelta {
+    let old = LevelStatsDelta {
+        old_max_health: e.max_health,
+        old_max_power: e.max_power,
+        old_strength: e.strength,
+        old_agility: e.agility,
+        old_stamina: e.stamina,
+        old_intellect: e.intellect,
+        old_spirit: e.spirit,
+    };
+    let (strength, agility, stamina, intellect, spirit) =
+        base_attributes_for(ctx, race, class, level);
+    e.strength = strength;
+    e.agility = agility;
+    e.stamina = stamina;
+    e.intellect = intellect;
+    e.spirit = spirit;
+    e.armor = agility * 2; // classic base armor from agility (2/point); item armor folds in later
+    e.max_health = max_health_for(ctx, race, class, level);
+    e.max_power = max_power_for(ctx, race, class, level);
+    old
+}
+
+/// Set `character_guid`'s level and recompute `max_health`/`max_power`/the five base attributes/armor
+/// from the real stat curve, via `apply_level_stats` (the SAME writer `player_login` and the ding loop
+/// use — not reimplemented). Health/power are refilled to the new max. Persists the level to the
+/// durable `game_character` row too, so a relog keeps it. Shared by `debug::debug_set_level`
 /// (the test-harness lever) and `gm::gm_command`'s `.level` (work-item 223's playtest kit) so the two
 /// paths can never drift. Works for an OFFLINE character too (266): the old live-entity requirement
 /// silently no-opped every fixture that set a logged-out character's level (exploration set Ginger to 5
@@ -200,17 +255,9 @@ pub(crate) fn set_character_level(
                   // that stages a level. Same defect family as the xp reset above (266) — that fixed the banked
                   // side and left the bar where it was.
         e.next_level_xp = crate::xp::xp_to_next_level(level);
-        e.max_health = max_health_for(ctx, race, class, level);
-        e.max_power = max_power_for(ctx, race, class, level);
+        apply_level_stats(ctx, &mut e, race, class, level); // attributes + armor + max health/power
         e.health = e.max_health;
         e.power = e.max_power; // refill power to the new max
-        let (strength, agility, stamina, intellect, spirit) =
-            base_attributes_for(ctx, race, class, level);
-        e.strength = strength;
-        e.agility = agility;
-        e.stamina = stamina;
-        e.intellect = intellect;
-        e.spirit = spirit;
         entities.guid().update(e);
     }
 
@@ -266,6 +313,54 @@ mod tests {
         // The threshold it writes must actually GROW with the level — a constant would satisfy the
         // scan above while leaving the bar at level 1's value.
         assert!(crate::xp::xp_to_next_level(10) > crate::xp::xp_to_next_level(1));
+    }
+
+    /// #362: the level-derived stat block (attributes, armor, max health/power) used to be
+    /// hand-mirrored at three call sites — `build_player_entity` (login), `grant_xp`'s ding loop, and
+    /// `set_character_level` — kept in sync only by a comment ("mirrors build_player_entity"). The
+    /// third one drifted and dropped the armor recompute, so a level-SET character kept stale armor
+    /// until its next relog. The fix extracts ONE `apply_level_stats` writer; this pins that (a) the
+    /// writer still recomputes armor, and (b) all three sites still route through it rather than
+    /// re-inlining the curve lookups — a fresh hand-rolled copy at any of them reintroduces the exact
+    /// drift class #362 was filed for.
+    #[test]
+    fn the_level_recompute_writer_and_all_three_call_sites_stay_wired_together() {
+        let writer_body =
+            crate::test_scan::code_of(include_str!("stats.rs"), "pub(crate) fn apply_level_stats(");
+        assert!(
+            writer_body.contains("e.armor = agility * 2"),
+            "`apply_level_stats` no longer recomputes armor — every caller relies on this ONE writer \
+             for it, so dropping it here breaks all three sites at once, silently. Body was:\n{writer_body}"
+        );
+
+        let set_level_body = crate::test_scan::code_of(
+            include_str!("stats.rs"),
+            "pub(crate) fn set_character_level(",
+        );
+        assert!(
+            set_level_body.contains("apply_level_stats(ctx, &mut e, race, class, level)"),
+            "`set_character_level` must route the stat recompute through `apply_level_stats` rather \
+             than re-inlining the curve lookups — a hand-rolled copy is exactly how #362 dropped \
+             armor the first time. Body was:\n{set_level_body}"
+        );
+
+        let login_body = crate::test_scan::code_of(
+            include_str!("creatures/spawn.rs"),
+            "pub fn build_player_entity(",
+        );
+        assert!(
+            login_body.contains(
+                "apply_level_stats(ctx, &mut entity, character.race, character.class, level)"
+            ),
+            "`build_player_entity` (login) must route through `apply_level_stats` too — this is the \
+             site the other two are supposed to mirror. Body was:\n{login_body}"
+        );
+
+        let ding_body = crate::test_scan::code_of(include_str!("xp.rs"), "pub(crate) fn grant_xp(");
+        assert!(
+            ding_body.contains("apply_level_stats(ctx, p, race, class, p.level)"),
+            "`grant_xp`'s ding loop must route through `apply_level_stats` too. Body was:\n{ding_body}"
+        );
     }
 
     #[test]

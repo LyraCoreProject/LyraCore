@@ -1334,7 +1334,7 @@ mod routing_call_site_tests {
     }
 
     /// The two `WorldStore` methods whose whole body is a delegation into `crate::realm_core` —
-    /// pinned by EXACT SHAPE, the same instrument `module/src/transfer.rs` uses for `CtxImportSink`.
+    /// pinned by EXACT SHAPE, the same instrument `module/src/transfer/mod.rs` uses for `CtxShard`.
     ///
     /// This is the seam's own blind spot, and it was measured, not assumed. `realm_core.rs`'s tests
     /// substitute `fake::Handle` for `Coordinator`, and `world::tests`' mocks substitute

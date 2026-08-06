@@ -47,17 +47,17 @@ pub fn account_by_identity(ctx: &ReducerContext, identity: Identity) -> Option<A
 /// name go through [`character_by_guid`] / [`character_by_name`] instead (issue #30) — see the
 /// verdict table in `transfer.rs`'s module doc for the paths that are deliberately NOT gated.
 ///
-/// The candidate is collapsed to AT MOST one row with `.next()` FIRST, then separately checked —
-/// never `Iterator::filter` ahead of `.next()`, which would SKIP an in-transit row and hand back
-/// the next matching entity instead of none, silently defeating the fence rather than closing it.
-/// The sense of the check itself (in-transit ⇒ refuse) lives in [`gate_in_transit`], not here — see
-/// its doc for why (issue #64).
+/// The candidate is collapsed to AT MOST one row with `.next()` FIRST, then handed to
+/// [`gate_by_guid`] — never `Iterator::filter` ahead of `.next()`, which would SKIP an in-transit
+/// row and hand back the next matching entity instead of none, silently defeating the fence rather
+/// than closing it. The sense of the check itself (in-transit ⇒ refuse) lives in
+/// [`gate_in_transit`], not here — see its doc for why (issue #64).
 pub fn entity_by_owner(ctx: &ReducerContext, owner: Identity) -> Option<WorldEntity> {
-    let candidate = ctx.db.game_world_entity().by_owner().filter(&owner).next();
-    let in_transit = candidate
-        .as_ref()
-        .is_some_and(|e| crate::transfer::is_in_transit(ctx, e.guid));
-    gate_in_transit(candidate, in_transit)
+    gate_by_guid(
+        ctx,
+        ctx.db.game_world_entity().by_owner().filter(&owner).next(),
+        |e| e.guid,
+    )
 }
 
 /// THE by-guid chokepoint (issue #30) — `entity_by_owner`'s twin for every reducer that reaches a
@@ -80,27 +80,46 @@ pub fn entity_by_owner(ctx: &ReducerContext, owner: Identity) -> Option<WorldEnt
 ///     membership on realm-core, settled by issue #22.
 ///
 /// Same `.find()`-then-check ordering as `entity_by_owner` above, and the same shared
-/// [`gate_in_transit`] for the sense of the check.
+/// [`gate_by_guid`] for the check itself.
 pub fn character_by_guid(ctx: &ReducerContext, guid: u64) -> Option<Character> {
-    let candidate = ctx.db.game_character().guid().find(guid);
-    let in_transit = candidate
-        .as_ref()
-        .is_some_and(|c| crate::transfer::is_in_transit(ctx, c.guid));
-    gate_in_transit(candidate, in_transit)
+    gate_by_guid(ctx, ctx.db.game_character().guid().find(guid), |c| c.guid)
 }
 
 /// [`character_by_guid`], name-keyed. Case-insensitive ASCII fold — the operator/whisper convention
 /// (`/w bob` reaches "Bob"), which the `#[unique]` exact-match name index cannot do, so this is a
 /// scan by construction. Same fence, same read-as-absent semantics.
 pub fn character_by_name(ctx: &ReducerContext, name: &str) -> Option<Character> {
-    let candidate = ctx
-        .db
-        .game_character()
-        .iter()
-        .find(|c| c.name.eq_ignore_ascii_case(name));
+    gate_by_guid(
+        ctx,
+        ctx.db
+            .game_character()
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(name)),
+        |c| c.guid,
+    )
+}
+
+/// The ONE place in the tree that asks "is this row's character mid-transfer?" and acts on the
+/// answer. All three chokepoints above route through it; `guid_of` is the only thing they differ in.
+///
+/// It exists because of the shape of the mutation it is defending against (#64/#380). Each
+/// chokepoint used to compute its own `in_transit` boolean inline, and a `!` glued anywhere into
+/// that expression — onto `is_in_transit`, or onto the `candidate.as_ref().is_some_and(..)` around
+/// it — inverts the fence with the same identifiers in the same order, which no `.contains()` scan
+/// can see. The answer used to be pinning all three bodies verbatim as strings inside a test, so
+/// every legitimate edit had to be made twice. Collapsing them to one call site is the structural
+/// version of that pin: there is now a single two-line expression to get wrong, and it is inside
+/// `.cargo/mutants.toml`'s cargo-mutants scope — where `replace gate_by_guid -> None` is CAUGHT.
+///
+/// The DECISION itself stays in [`gate_in_transit`], which is pure and pinned by a direct assertion.
+fn gate_by_guid<T>(
+    ctx: &ReducerContext,
+    candidate: Option<T>,
+    guid_of: impl Fn(&T) -> u64,
+) -> Option<T> {
     let in_transit = candidate
         .as_ref()
-        .is_some_and(|c| crate::transfer::is_in_transit(ctx, c.guid));
+        .is_some_and(|row| crate::transfer::is_in_transit(ctx, guid_of(row)));
     gate_in_transit(candidate, in_transit)
 }
 
@@ -113,8 +132,8 @@ pub fn character_by_name(ctx: &ReducerContext, name: &str) -> Option<Character> 
 /// identifiers, same order, opposite meaning. Dropping that one `!` made `entity_by_owner` return
 /// ONLY in-transit entities and `None` for everyone else, and all 533 module tests stayed green.
 ///
-/// Now there is no `!` left at any call site for a mutation to flip: each one computes `in_transit`
-/// as a plain (unnegated) boolean and hands it here, where this file's
+/// Now there is no `!` left at any call site for a mutation to flip: [`gate_by_guid`] computes
+/// `in_transit` as a plain (unnegated) boolean and hands it here, where this file's
 /// `gate_in_transit_refuses_an_in_transit_candidate_and_returns_a_normal_one` test pins the branch
 /// directly with concrete values — swap the branches and that test fails by name.
 pub(crate) fn gate_in_transit<T>(candidate: Option<T>, in_transit: bool) -> Option<T> {
@@ -167,6 +186,87 @@ pub(crate) fn in_same_partition(e: &WorldEntity, map_id: u32, instance_id: u64) 
     e.map_id == map_id && e.instance_id == instance_id
 }
 
+/// The nearest live entity to `origin` matching `pred`, restricted to `origin`'s OWN `(map_id,
+/// instance_id)` partition via [`in_same_partition`] — a raw squared distance compared ACROSS maps
+/// or instances is meaningless (two guids can be numerically close while standing on different
+/// continents), so every "nearest X" scan must apply this same partition filter before comparing
+/// distances. Candidates come off the `by_map` index (map-scoped, not a raw `.iter()` — the
+/// partition-discipline tripwire), narrowed to the instance in-code; callers with a natural search
+/// radius should prefer `entities_near` instead (grid-indexed, cheaper at scale). Used by the debug
+/// "nearest" test levers (`debug_kill_nearest`, `debug_ranged_attack_nearest`, `debug_skin_nearest`)
+/// and the nearest-trainer scans in `skill.rs`, which used to duplicate this loop byte-for-byte.
+///
+/// Every one of those callers is a `debug_reducers` lever ("nearest X" is a test-harness affordance —
+/// the real client always names its target), so the whole helper is gated with them: a production
+/// build has no caller, and an ungated definition is dead code the cold-clone build gate rejects.
+#[cfg(feature = "debug_reducers")]
+pub(crate) fn nearest_entity(
+    ctx: &ReducerContext,
+    origin: &WorldEntity,
+    mut pred: impl FnMut(&WorldEntity) -> bool,
+) -> Option<WorldEntity> {
+    let mut best: Option<(WorldEntity, f32)> = None;
+    // `by_map` (not a raw `.iter()`, partition-discipline tripwire) scopes candidates to the
+    // origin's own map before `in_same_partition` narrows to its instance too.
+    for e in ctx.db.game_world_entity().by_map().filter(&origin.map_id) {
+        if !in_same_partition(&e, origin.map_id, origin.instance_id) || !pred(&e) {
+            continue;
+        }
+        let d = (e.x - origin.x).powi(2) + (e.y - origin.y).powi(2);
+        if best.as_ref().is_none_or(|(_, bd)| d < *bd) {
+            best = Some((e, d));
+        }
+    }
+    best.map(|(e, _)| e)
+}
+
+/// Address a `game_group_event` / `game_whisper_event` row: the recipient's bound identity when this
+/// database HAS the character (every world shard), [`Identity::ZERO`] when it does not (realm-core,
+/// whose only characters are guids in the directory tables). ZERO matches no client — the per-player
+/// RLS filter on both tables is `recipient_identity = :sender` and a client's sender is never ZERO —
+/// so a ZERO-addressed row is visible to the owner-token coordinator alone, which is exactly who
+/// reads realm-core's events. Pure, so the fallback is pinned by a test rather than by a live node.
+///
+/// Moved here from `group.rs` (issue #371): work-item 187's roll/master-loot notifications
+/// (`loot.rs`) and `chat.rs`'s whisper relay (`push_whisper`) both reuse this SAME address rule, so
+/// it lives with the other cross-module lookups rather than under the module it happened to be
+/// written for first.
+pub(crate) fn event_recipient_identity(bound: Option<Identity>) -> Identity {
+    bound.unwrap_or(Identity::ZERO)
+}
+
+/// The live `game_world_entity` row for `guid`, the canonical "must be in world" fetch (issue #371)
+/// that replaces the 38 hand-rolled `ctx.db.game_world_entity().guid().find(guid).ok_or_else(||
+/// format!(...))?` call sites scattered across the reducer modules (debug.rs alone had 14). Most of
+/// those sites already spelled their error text exactly as this helper's default below; callers whose
+/// wording differs and is wire/user-visible (the gateway's `is_desync_error` substring classifier
+/// keys on "not in world" / "no live entity", and `combat::validate_attack_target`'s target-lookup
+/// error is explicitly load-bearing — see its doc) keep their own string via `.map_err(...)` on top of
+/// this helper instead of adopting the default, so the migration is a pure lookup consolidation with
+/// zero change to any error string a caller relies on.
+pub fn live_entity(ctx: &ReducerContext, guid: u64) -> Result<WorldEntity, String> {
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(guid)
+        .ok_or_else(|| format!("no live entity for guid {guid}"))
+}
+
+/// [`character_by_guid`], REFUSING (`Err`) instead of `Option::None` — the durable-row twin of
+/// [`live_entity`] for the issue-#30 REFUSE character fence, hand-rolled as `character_by_guid(ctx,
+/// guid).ok_or_else(|| format!("no character ..."))?` at half a dozen call sites (issue #371). Same
+/// zero-behavior-change discipline as `live_entity`: the default message below is what most callers
+/// already spelled verbatim; a caller with different wording keeps it via `.map_err(...)`.
+///
+/// Gated like [`nearest_entity`]: every surviving call site is a `debug_reducers` lever (the
+/// production REFUSE fences take the `Option` shape from `character_by_guid` directly), so without
+/// the feature this is dead code the cold-clone build gate rejects. If a non-debug caller ever wants
+/// the `Result` shape, drop the gate rather than re-hand-rolling the `ok_or_else`.
+#[cfg(feature = "debug_reducers")]
+pub fn require_character(ctx: &ReducerContext, guid: u64) -> Result<Character, String> {
+    character_by_guid(ctx, guid).ok_or_else(|| format!("no character {guid}"))
+}
+
 /// The grid address of `guid`'s live entity, for stamping a broadcast event row (perf catalog 2.3).
 ///
 /// The event tables — spell casts/impacts, combat swings, emotes, rolls — carried no spatial
@@ -189,6 +289,18 @@ pub(crate) fn grid_of(ctx: &ReducerContext, guid: u64) -> (u32, u64, i32, i32) {
         .find(guid)
         .map(|e| (e.map_id, e.instance_id, e.grid_x, e.grid_y))
         .unwrap_or((0, 0, 0, 0))
+}
+
+/// The same `(map_id, instance_id, grid_x, grid_y)` shape [`grid_of`] returns, read straight off an
+/// already-fetched `WorldEntity` — zero `game_world_entity` lookup. The event-constructor `signal_at`
+/// variants (`SpellCastEvent`/`CombatEvent`, perf catalog 2.3) and the chat broadcast reducers whose
+/// sender/roller entity is fetched up front (`send_emote`/`send_roll`) all use this instead of
+/// `grid_of` when the entity is in hand — a landed swing with a seal proc + a queued strike used to
+/// pay the `grid_of` PK lookup up to twelve times over for what is, in every case, the SAME row.
+/// Pulled out pure (module crate convention — no `ReducerContext` test harness) so the field order
+/// can't quietly drift from `grid_of`'s: [`tests::entity_addr_matches_grid_of_field_order`] pins it.
+pub(crate) fn entity_addr(e: &WorldEntity) -> (u32, u64, i32, i32) {
+    (e.map_id, e.instance_id, e.grid_x, e.grid_y)
 }
 
 #[cfg(test)]
@@ -308,6 +420,22 @@ mod tests {
         }
     }
 
+    /// The event addressing #22 rests on: a recipient this database knows gets their bound identity
+    /// (so the per-player RLS still scopes the row on a world shard), and one it does not gets ZERO
+    /// — which no client's `:sender` can ever equal, so a realm-core event row is visible to the
+    /// owner-token coordinator alone. Moved from `group.rs` with the function itself (issue #371).
+    #[test]
+    fn a_recipient_without_a_character_row_addresses_the_event_to_nobody() {
+        let bound = Identity::from_byte_array([7u8; 32]);
+        assert_eq!(event_recipient_identity(Some(bound)), bound);
+        assert_eq!(event_recipient_identity(None), Identity::ZERO);
+        assert_ne!(
+            Identity::ZERO,
+            bound,
+            "ZERO must not be a reachable client identity"
+        );
+    }
+
     /// THE fix for issue #64. `entity_by_owner` / `character_by_guid` / `character_by_name` all
     /// reduce to this one pure decision, so pinning it here pins the sense of all three chokepoints
     /// at once — no `ReducerContext` needed, unlike the reducers that call it.
@@ -332,5 +460,18 @@ mod tests {
         // Nothing found in the first place — in-transit-ness is moot either way.
         assert_eq!(gate_in_transit(None::<&str>, false), None);
         assert_eq!(gate_in_transit(None::<&str>, true), None);
+    }
+
+    /// `entity_addr` exists ONLY so the event-constructor `signal_at` variants (`SpellCastEvent`/
+    /// `CombatEvent`, issue #369) and the chat broadcast reducers can stamp a row's AOI address off an
+    /// already-fetched entity without a redundant `grid_of` lookup. Its whole contract is "same four
+    /// fields, same order, as `grid_of`'s `(map_id, instance_id, grid_x, grid_y)` tuple" — a swapped
+    /// `grid_x`/`grid_y` here would compile clean (both are `i32`) yet silently mis-place every
+    /// affected broadcast in the AOI grid. Four distinct field values (never a repeated 0/1/2/3) so a
+    /// transposition can't accidentally read back correct.
+    #[test]
+    fn entity_addr_matches_grid_of_field_order() {
+        let e = entity(1, 7, 42, -3, 11);
+        assert_eq!(entity_addr(&e), (7, 42, -3, 11));
     }
 }

@@ -67,10 +67,7 @@ crate::character_owned!(delete, fn sweep_delete_game_character_shard(ctx, charac
 // realm-core, which is the authoritative copy — driven as a required step of
 // `world::transfer::run_transfer` immediately after `finish_transfer` commits (issue #34), and
 // re-driven by the login self-heal probe whenever the two disagree.
-crate::character_owned!(transfer, fn sweep_transfer_game_character_shard(ctx, character_guid, io) {
-    let _ = (ctx, character_guid);
-    crate::transfer::not_transported(io);
-});
+crate::character_owned!(not_transported, fn sweep_transfer_game_character_shard());
 
 /// Upsert the index entry for `character_guid`. Shared by [`set_character_shard`] (the gateway's
 /// write, on realm-core) and by `transfer::do_finish` (the module's write, in the SAME transaction
@@ -126,7 +123,7 @@ pub fn set_character_shard(
 /// How many guids a slot owns. Slot *n* is `[n · GUID_RANGE_SIZE, (n+1) · GUID_RANGE_SIZE)`, which
 /// makes #105's hand-applied floors (core 0, world-1 1e9, instances 2e9, realm-core 3e9) slots
 /// 0/1/2/3 exactly — so the live databases migrate into this registry by being *recorded*, with no
-/// guid changing. Decimal and small on purpose (`set_guid_floor`'s doc): readable in logs and SQL,
+/// guid changing. Decimal and small on purpose (`GuidRange`'s doc, `auth.rs`): readable in logs and SQL,
 /// a billion characters per shard, and far below `2^53`, above which `spacetime call` mangles a u64
 /// argument (danger-zones).
 pub const GUID_RANGE_SIZE: u64 = 1_000_000_000;

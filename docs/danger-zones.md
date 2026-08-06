@@ -87,9 +87,10 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
    does not error, it quietly returns a subset, and every feature built on "I can see the whole world"
    silently goes wrong. Going through the helpers means the read already asks the partition question,
    so the split is a no-op. This is also the performance story: a scan is O(world), the helpers are
-   O(neighborhood). **Enforced** by `module/src/lib.rs::partition_discipline_tripwire` — a source scan
-   over `module/src/**` (and the in-tree extension packages) with a per-file whitelist of today's
-   legitimate scans. See `WHITELIST` in that file for the current set; it is a ratchet that only ever
+   O(neighborhood). **Enforced** by `module/src/tripwires.rs::partition_discipline_tripwire` (#379
+   moved this out of `lib.rs`) — a source scan over `module/src/**` (and the in-tree extension
+   packages) with a per-file whitelist of today's legitimate scans. See `WHITELIST` in that file for
+   the current set; it is a ratchet that only ever
    shrinks, so any number quoted here would be stale by design.
    A new scan fails `cargo test -p lyracore-module --lib`. Raise a budget only for a genuinely
    realm-wide or partition-managing read, with a one-line justification, and delete budget as scans
@@ -273,7 +274,10 @@ grep -c "coordinator connected to shard" /tmp/gw.log   # MUST be 5 — see the c
 # RUST_LOG=info deliberately, not info,gateway::world=debug: since the raw-bytes relay, every packet
 # logs a line, which floods at scale.
 
-# If you changed the creature-tick schema: spacetime call lyracore debug_rearm_creature_tick
+# `scripts/publish-module.sh` already calls `debug_repair_after_publish` after every publish above
+# (#378) — it re-arms the creature tick + aura/ground-area/instance-reaper schedules and re-seeds
+# every fixture family `init` seeds but a plain republish doesn't re-run. No manual call needed here
+# unless you bypassed the script.
 # If you changed world DATA (spawns/quests/items): re-run the content import.
 
 # After EVERY shard is published or re-imported, prove the replicated catalogues (spells, items, the

@@ -40,14 +40,16 @@ fn spell_crit_is_one_and_a_half() {
 }
 
 /// Incoming-damage modifier (A_MOD_DAMAGE_TAKEN): signed percent, 0 = no-op, ≥100% reduction = immunity.
+/// `apply_damage_pct` is direction-neutral (also folds the OUTGOING percent — see its doc comment); this
+/// test exercises it through the incoming-damage framing its name used to (wrongly) assert alone.
 #[test]
 fn damage_taken_modifier_scales_and_clamps() {
-    assert_eq!(apply_damage_taken(100, 0), 100); // no aura → unchanged (baseline-safe)
-    assert_eq!(apply_damage_taken(100, -75), 25); // Shield Wall: 75% reduction → 25% taken
-    assert_eq!(apply_damage_taken(100, 50), 150); // a +50% vulnerability debuff
-    assert_eq!(apply_damage_taken(100, -100), 0); // 100% reduction → full immunity (0)
-    assert_eq!(apply_damage_taken(100, -250), 0); // over-reduction clamps at 0, never negative
-    assert_eq!(apply_damage_taken(7, -75), 1); // integer math on a small hit (7*25/100 = 1)
+    assert_eq!(apply_damage_pct(100, 0), 100); // no aura → unchanged (baseline-safe)
+    assert_eq!(apply_damage_pct(100, -75), 25); // Shield Wall: 75% reduction → 25% taken
+    assert_eq!(apply_damage_pct(100, 50), 150); // a +50% vulnerability debuff
+    assert_eq!(apply_damage_pct(100, -100), 0); // 100% reduction → full immunity (0)
+    assert_eq!(apply_damage_pct(100, -250), 0); // over-reduction clamps at 0, never negative
+    assert_eq!(apply_damage_pct(7, -75), 1); // integer math on a small hit (7*25/100 = 1)
 }
 
 /// Stance usability gate: a 0 mask permits ANY stance (baseline-safe); a non-zero mask permits only the
@@ -188,16 +190,16 @@ fn stance_folds_only_defensive_contributes() {
     assert_eq!(stance_threat_pct(STANCE_BERSERKER), 0);
     // The folds compose through the existing signed-percent math: a 100-damage hit in Defensive takes/deals 90.
     assert_eq!(
-        apply_damage_taken(100, stance_damage_taken_pct(STANCE_DEFENSIVE)),
+        apply_damage_pct(100, stance_damage_taken_pct(STANCE_DEFENSIVE)),
         90
     );
     assert_eq!(
-        apply_damage_taken(100, stance_damage_done_pct(STANCE_DEFENSIVE)),
+        apply_damage_pct(100, stance_damage_done_pct(STANCE_DEFENSIVE)),
         90
     );
     // In Battle/Berserker the fold is a no-op (byte-identical to today).
     assert_eq!(
-        apply_damage_taken(100, stance_damage_taken_pct(STANCE_BATTLE)),
+        apply_damage_pct(100, stance_damage_taken_pct(STANCE_BATTLE)),
         100
     );
 }
@@ -483,276 +485,97 @@ fn kind_wire_values() {
 
 /// Pin EVERY instant `E_*` kind wire value (the deduplicated effect taxonomy the importer maps mangos
 /// `Effect` ids onto): a drift here would silently re-route the importer's dispatch and desync it from
-/// the seed data / the SDK binding. All 25 are DISTINCT and none carries the aura high bit.
+/// the seed data / the SDK binding. Loops [`ALL_INSTANT_KINDS`] — taxonomy.rs's single canonical list —
+/// rather than a second hand-copied array, so a kind is covered here purely by being IN that slice
+/// (exhaustive by construction: #367 found this test's own hand-copied predecessor missing
+/// E_BLINK/E_PERSISTENT_AREA/E_FISH/E_OPEN_LOCK, and a kind left off `ALL_INSTANT_KINDS` itself now
+/// fails CI's `-D warnings` clippy gate via `dead_code` instead of silently passing every test). Also
+/// doubles as the #90 passive-filter regression pin: `passive_applies_effect_kind` is exactly `kind &
+/// KIND_AURA_BIT != 0`, so asserting every instant kind clears the bit is asserting every instant kind
+/// is rejected by the passive-apply path (the old, separately hand-copied
+/// `apply_spell_auras_rejects_instant_effects` test — now redundant with this loop and retired).
 #[test]
 fn instant_kind_wire_values_exhaustive() {
-    assert_eq!(E_DAMAGE, 0x01);
-    assert_eq!(E_HEAL, 0x02);
-    assert_eq!(E_ENERGIZE, 0x03);
-    assert_eq!(E_DISPEL, 0x04);
-    assert_eq!(E_TRIGGER, 0x05);
-    assert_eq!(E_TAUNT, 0x06);
-    assert_eq!(E_CREATE_ITEM, 0x07);
-    assert_eq!(E_WEAPON_STRIKE, 0x08);
-    assert_eq!(E_CHARGE, 0x09);
-    assert_eq!(E_CONVERT_RESOURCE, 0x0A);
-    assert_eq!(E_JUDGEMENT, 0x0B);
-    assert_eq!(E_ADD_COMBO, 0x0C);
-    assert_eq!(E_FINISHER_DAMAGE, 0x0D);
-    assert_eq!(E_RESURRECT, 0x0E);
-    assert_eq!(E_SCRIPTED, 0x0F);
-    assert_eq!(E_PICKPOCKET, 0x10);
-    assert_eq!(E_INTERRUPT, 0x11);
-    assert_eq!(E_REDUCE_THREAT, 0x12);
-    assert_eq!(E_NEXT_SWING, 0x13);
-    assert_eq!(E_SET_STANCE, 0x14);
-    assert_eq!(E_SUMMON_PET, 0x15);
-    assert_eq!(E_HEAL_MAX_HEALTH, 0x16);
-    assert_eq!(E_ENCHANT_ITEM, 0x17);
-    assert_eq!(E_DISENCHANT, 0x18);
-    assert_eq!(E_POWER_BURN, 0x19);
-    let all = [
-        E_DAMAGE,
-        E_HEAL,
-        E_ENERGIZE,
-        E_DISPEL,
-        E_TRIGGER,
-        E_TAUNT,
-        E_CREATE_ITEM,
-        E_WEAPON_STRIKE,
-        E_CHARGE,
-        E_CONVERT_RESOURCE,
-        E_JUDGEMENT,
-        E_ADD_COMBO,
-        E_FINISHER_DAMAGE,
-        E_RESURRECT,
-        E_SCRIPTED,
-        E_PICKPOCKET,
-        E_INTERRUPT,
-        E_REDUCE_THREAT,
-        E_NEXT_SWING,
-        E_SET_STANCE,
-        E_SUMMON_PET,
-        E_HEAL_MAX_HEALTH,
-        E_ENCHANT_ITEM,
-        E_DISENCHANT,
-        E_POWER_BURN,
-    ];
-    for (i, a) in all.iter().enumerate() {
+    assert_eq!(
+        ALL_INSTANT_KINDS.len(),
+        30,
+        "an instant kind was added to (or removed from) taxonomy.rs without a matching, deliberate \
+         change to ALL_INSTANT_KINDS — bump this count only when the taxonomy really changed"
+    );
+    for (i, k) in ALL_INSTANT_KINDS.iter().enumerate() {
         assert_eq!(
-            a & KIND_AURA_BIT,
+            k & KIND_AURA_BIT,
             0,
-            "instant kind 0x{a:02x} must not set the aura bit"
+            "instant kind 0x{k:02x} must not set the aura bit"
         );
-        for b in &all[i + 1..] {
+        assert!(
+            !passive_applies_effect_kind(*k),
+            "instant kind 0x{k:02x} must not reach the passive-apply path (#90: Consecration's \
+             E_PERSISTENT_AREA-only shape must never mint a spurious login/world-change buff)"
+        );
+        for other in &ALL_INSTANT_KINDS[i + 1..] {
             assert_ne!(
-                a, b,
-                "instant kinds must be distinct: 0x{a:02x} vs 0x{b:02x}"
+                k, other,
+                "instant kinds must be distinct: 0x{k:02x} vs 0x{other:02x}"
             );
         }
     }
 }
 
-/// Pin EVERY `A_*` aura kind wire value: same rationale as the instant kinds — the seed data, `aura_apply`'s
-/// dispatch, and the SDK binding all key off these bytes. All 22 are DISTINCT and every one carries the
-/// aura high bit.
+/// Pin EVERY `A_*` aura kind wire value: same rationale, same [`ALL_AURA_KINDS`]-loop construction, and
+/// same #90-filter double duty as [`instant_kind_wire_values_exhaustive`] above (that test's old sibling
+/// hand-copied list was missing A_SPELLMOD_FLAT/A_SPELLMOD_PCT). This is the control: a genuinely
+/// passive talent/racial (an `A_*` aura-kind effect) must keep applying through `apply_spell_auras` — an
+/// over-eager filter that rejected real auras too would silently disable every passive talent in the
+/// game, worse than the cosmetic bug #90 fixes (the old, separately hand-copied
+/// `apply_spell_auras_still_applies_aura_effects` test — now redundant with this loop and retired).
 #[test]
 fn aura_kind_wire_values_exhaustive() {
-    assert_eq!(A_PERIODIC_DAMAGE, 0x90);
-    assert_eq!(A_PERIODIC_HEAL, 0x91);
-    assert_eq!(A_PERIODIC_ENERGIZE, 0x92);
-    assert_eq!(A_PERIODIC_TRIGGER, 0x93);
-    assert_eq!(A_MOD_STAT, 0xA0);
-    assert_eq!(A_MOD_RESISTANCE, 0xA1);
-    assert_eq!(A_ABSORB, 0xA2);
-    assert_eq!(A_MOD_COMBAT, 0xA3);
-    assert_eq!(A_MOD_SPEED, 0xA4);
-    assert_eq!(A_MOD_HEALTH_POWER, 0xA5);
-    assert_eq!(A_MOD_DAMAGE_TAKEN, 0xA6);
-    assert_eq!(A_SEAL, 0xA7);
-    assert_eq!(A_STEALTH, 0xA8);
-    assert_eq!(A_COMBAT_HEALTH_REGEN_PCT, 0xA9);
-    assert_eq!(A_MOD_STAT_PCT, 0xAA);
-    assert_eq!(A_PROC_ON_HIT, 0xAB);
-    assert_eq!(A_DISARM, 0xAE);
-    assert_eq!(A_RETALIATE, 0xAF);
-    assert_eq!(A_CONTROL, 0xB0);
-    assert_eq!(A_IMMUNITY, 0xB1);
-    assert_eq!(A_MOD_DETECT_RANGE, 0xB2);
-    assert_eq!(A_FLAG, 0xBE);
-    let all = [
-        A_PERIODIC_DAMAGE,
-        A_PERIODIC_HEAL,
-        A_PERIODIC_ENERGIZE,
-        A_PERIODIC_TRIGGER,
-        A_MOD_STAT,
-        A_MOD_RESISTANCE,
-        A_ABSORB,
-        A_MOD_COMBAT,
-        A_MOD_SPEED,
-        A_MOD_HEALTH_POWER,
-        A_MOD_DAMAGE_TAKEN,
-        A_SEAL,
-        A_STEALTH,
-        A_COMBAT_HEALTH_REGEN_PCT,
-        A_MOD_STAT_PCT,
-        A_PROC_ON_HIT,
-        A_DISARM,
-        A_RETALIATE,
-        A_CONTROL,
-        A_IMMUNITY,
-        A_MOD_DETECT_RANGE,
-        A_FLAG,
-    ];
-    for (i, a) in all.iter().enumerate() {
-        assert_ne!(
-            a & KIND_AURA_BIT,
-            0,
-            "aura kind 0x{a:02x} must set the aura bit"
-        );
-        for b in &all[i + 1..] {
-            assert_ne!(a, b, "aura kinds must be distinct: 0x{a:02x} vs 0x{b:02x}");
-        }
-    }
-}
-
-/// #90: `apply_spell_auras` (the passive/login/talent path) must REJECT every instant-kind effect —
-/// Consecration 26573's actual shape is a single `E_PERSISTENT_AREA` effect and nothing else, so without
-/// this filter every talent-granted ACTIVE mints a spurious `game_aura` row (buff-bar/floating-combat-text
-/// feedback) on every login and world-change. Mutate `passive_applies_effect_kind` to always return `true`
-/// (or drop the `.filter(...)` call in `apply_spell_auras`) and this goes red.
-#[test]
-fn apply_spell_auras_rejects_instant_effects() {
-    assert!(
-        !passive_applies_effect_kind(E_PERSISTENT_AREA),
-        "Consecration's actual effect kind (#90)"
+    assert_eq!(
+        ALL_AURA_KINDS.len(),
+        24,
+        "an aura kind was added to (or removed from) taxonomy.rs without a matching, deliberate \
+         change to ALL_AURA_KINDS — bump this count only when the taxonomy really changed"
     );
-    for k in [
-        E_DAMAGE,
-        E_HEAL,
-        E_ENERGIZE,
-        E_DISPEL,
-        E_TRIGGER,
-        E_TAUNT,
-        E_CREATE_ITEM,
-        E_WEAPON_STRIKE,
-        E_CHARGE,
-        E_CONVERT_RESOURCE,
-        E_JUDGEMENT,
-        E_ADD_COMBO,
-        E_FINISHER_DAMAGE,
-        E_RESURRECT,
-        E_SCRIPTED,
-        E_PICKPOCKET,
-        E_INTERRUPT,
-        E_REDUCE_THREAT,
-        E_NEXT_SWING,
-        E_SET_STANCE,
-        E_SUMMON_PET,
-        E_HEAL_MAX_HEALTH,
-        E_ENCHANT_ITEM,
-        E_DISENCHANT,
-        E_POWER_BURN,
-    ] {
-        assert!(
-            !passive_applies_effect_kind(k),
-            "instant kind 0x{k:02x} must not reach the passive-apply path"
+    for (i, k) in ALL_AURA_KINDS.iter().enumerate() {
+        assert_ne!(
+            k & KIND_AURA_BIT,
+            0,
+            "aura kind 0x{k:02x} must set the aura bit"
         );
-    }
-}
-
-/// The control for the test above: a genuinely passive talent/racial (a `A_*` aura-kind effect) must keep
-/// applying through `apply_spell_auras` — an over-eager filter that rejects real auras would silently
-/// disable every passive talent in the game, which is worse than the cosmetic bug #90 fixes. Mutate
-/// `passive_applies_effect_kind` to always return `false` and this goes red.
-#[test]
-fn apply_spell_auras_still_applies_aura_effects() {
-    // The full 22-member `A_*` set from `aura_kind_wire_values_exhaustive` above — every aura kind the
-    // taxonomy defines, not a hand-picked subset (review round 2: this list originally dropped
-    // A_SPELLMOD_FLAT/A_SPELLMOD_PCT, so a bug that rejected ONLY those two would have stayed green).
-    for k in [
-        A_PERIODIC_DAMAGE,
-        A_PERIODIC_HEAL,
-        A_PERIODIC_ENERGIZE,
-        A_PERIODIC_TRIGGER,
-        A_MOD_STAT,
-        A_MOD_RESISTANCE,
-        A_ABSORB,
-        A_MOD_COMBAT,
-        A_MOD_SPEED,
-        A_MOD_HEALTH_POWER,
-        A_MOD_DAMAGE_TAKEN,
-        A_SEAL,
-        A_STEALTH,
-        A_COMBAT_HEALTH_REGEN_PCT,
-        A_MOD_STAT_PCT,
-        A_PROC_ON_HIT,
-        A_SPELLMOD_FLAT,
-        A_SPELLMOD_PCT,
-        A_DISARM,
-        A_RETALIATE,
-        A_CONTROL,
-        A_IMMUNITY,
-        A_MOD_DETECT_RANGE,
-        A_FLAG,
-    ] {
         assert!(
-            passive_applies_effect_kind(k),
-            "aura kind 0x{k:02x} must still reach the passive-apply path"
+            passive_applies_effect_kind(*k),
+            "aura kind 0x{k:02x} must still reach the passive-apply path (#90 control)"
         );
-    }
-}
-
-/// Isolate a fn's body by brace-matching (same technique as `auth.rs`/`transfer.rs`/`world.rs`/`group.rs`'s
-/// own local copies — this file's copy, not shared, per the established convention).
-fn body_of(src: &str, signature: &str) -> String {
-    let start = src
-        .find(signature)
-        .unwrap_or_else(|| panic!("`{signature}` no longer exists"));
-    let rest = &src[start..];
-    let open = rest.find('{').expect("fn has a body");
-    let mut depth = 0i32;
-    for (i, c) in rest[open..].char_indices() {
-        match c {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return rest[open..=open + i].to_string();
-                }
-            }
-            _ => {}
+        for other in &ALL_AURA_KINDS[i + 1..] {
+            assert_ne!(
+                k, other,
+                "aura kinds must be distinct: 0x{k:02x} vs 0x{other:02x}"
+            );
         }
     }
-    panic!("unterminated body for `{signature}`");
 }
 
-/// [`body_of`] with every comment gone — whole comment-only lines dropped, and a TRAILING comment on an
-/// otherwise-live line truncated at the first `//` (so a needle surviving only in a comment doesn't
-/// satisfy a `.contains()` check below).
-fn code_of(src: &str, signature: &str) -> String {
-    body_of(src, signature)
-        .lines()
-        .map(|l| l.split("//").next().unwrap_or("").trim_end())
-        .filter(|l| !l.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Review round 2's actual finding: `apply_spell_auras_rejects_instant_effects` and
-/// `apply_spell_auras_still_applies_aura_effects` above both call `passive_applies_effect_kind` DIRECTLY
-/// — they pin the predicate's logic but never touch `apply_spell_auras` itself. A reviewer deleted the
-/// `.filter(|e| passive_applies_effect_kind(e.kind))` call from `apply_spell_auras`'s effect query (the
-/// #90 fix's actual production wiring) and the full 535-test suite stayed green, because nothing exercises
-/// the call site. This is a source-scan tripwire on that WIRING: it catches the filter call being
-/// DELETED (the shape this defect took, confirmed by mutating it and watching this test go red) or the
-/// query losing the `.filter(` step entirely. It does NOT catch the filter being wired to a DIFFERENT,
-/// wrong predicate at the same call site (`.filter(|e| some_other_fn(e.kind))` still reads as "filtered"
-/// to a scan) — the two predicate tests above are what pin the LOGIC; this one only pins that SOME call
-/// to `passive_applies_effect_kind` still gates the query.
+/// Review round 2's actual finding: the (now-retired) `apply_spell_auras_rejects_instant_effects` and
+/// `apply_spell_auras_still_applies_aura_effects` tests both called `passive_applies_effect_kind`
+/// DIRECTLY — they pinned the predicate's logic but never touched `apply_spell_auras` itself. A
+/// reviewer deleted the `.filter(|e| passive_applies_effect_kind(e.kind))` call from
+/// `apply_spell_auras`'s effect query (the #90 fix's actual production wiring) and the full test suite
+/// stayed green, because nothing exercised the call site. This is a source-scan tripwire on that WIRING:
+/// it catches the filter call being DELETED (the shape this defect took, confirmed by mutating it and
+/// watching this test go red) or the query losing the `.filter(` step entirely. It does NOT catch the
+/// filter being wired to a DIFFERENT, wrong predicate at the same call site (`.filter(|e|
+/// some_other_fn(e.kind))` still reads as "filtered" to a scan) — the two kind-exhaustive tests above
+/// are what pin the LOGIC; this one only pins that SOME call to `passive_applies_effect_kind` still
+/// gates the query. Uses the crate-shared scan primitives (`crate::test_scan`, #64) rather than a local
+/// copy — #367 found this file's own copy was the seventh, and it carried the weaker (non-string-
+/// literal-aware) trailing-comment stripper the canonical one was hardened against.
 #[test]
 fn apply_spell_auras_still_calls_the_passive_effect_filter() {
-    let body = code_of(include_str!("cast.rs"), "pub(crate) fn apply_spell_auras(");
+    let body = crate::test_scan::code_of(
+        include_str!("cast/resolve.rs"),
+        "pub(crate) fn apply_spell_auras(",
+    );
     let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
         normalized.contains(".filter(|e| passive_applies_effect_kind(e.kind))"),
@@ -933,4 +756,65 @@ fn is_due_for_expiry_permanent_sentinel_never_reaped() {
     let far_future_now = Timestamp::from_micros_since_unix_epoch(9_999_999_999_999);
     assert!(!is_due_for_expiry(A_MOD_STAT, permanent, far_future_now));
     assert!(!is_due_for_expiry(A_STEALTH, permanent, far_future_now));
+}
+
+// --- Consumable on-use magnitudes (moved from items::ops, #387 "smalls": these exercise ONLY
+// crate::spell functions against hand-copied seed magnitudes, not anything item-specific) --------------
+
+/// Potion heal CLAMPS to max health — the potion routes through `E_HEAL`→`apply_heal`→`healed_value`,
+/// so a heal that would overflow max is capped (no over-heal past the pool) and a heal below max lands
+/// in full. Drives the SAME `healed_value` the live cast uses with the seeded potion magnitude (100),
+/// so the clamp the verify recipe checks (health rises by ~100, never above max) is proven here.
+#[test]
+fn potion_heal_clamps_to_max_health() {
+    const POTION_HEAL: i32 = 80; // game_spell_effect 200440 base_points (vanilla Minor Healing ~70-90, fixed 80)
+                                 // From 1 HP with plenty of headroom: full +80 lands.
+    assert_eq!(healed_value(1, 500, POTION_HEAL), 81);
+    // Near max: the heal is CLAMPED to max (no overheal past the pool).
+    assert_eq!(healed_value(450, 500, POTION_HEAL), 500);
+    // Already at max: stays at max.
+    assert_eq!(healed_value(500, 500, POTION_HEAL), 500);
+}
+
+/// CONSUMABLE BREADTH — the MANA POTION (2455→50113) ENERGIZES, clamped to max power. The potion routes
+/// through `E_ENERGIZE`→`energized_value` with the seeded magnitude (160 = vanilla Restore Mana midpoint
+/// 140-180). Drives the SAME `energized_value` the live cast uses, so the verify recipe's "power rises by
+/// 160, never above max_power" is proven here: full restore with headroom, clamp at max, no overflow.
+#[test]
+fn mana_potion_energizes_and_clamps_to_max_power() {
+    const POTION_MANA: i32 = 160; // game_spell_effect 200452 base_points (Restore Mana 140-180, midpoint 160)
+                                  // From near-empty with plenty of headroom: the full +160 lands.
+    assert_eq!(energized_value(40, 500, POTION_MANA), 200);
+    // Near max: the restore is CLAMPED to max_power (no overflow past the pool).
+    assert_eq!(energized_value(400, 500, POTION_MANA), 500);
+    // Already at max: stays at max.
+    assert_eq!(energized_value(500, 500, POTION_MANA), 500);
+}
+
+/// CONSUMABLE BREADTH — the WELL-FED buff (Spiced Wolf Meat 2680→50116) is an `A_MOD_STAT` whose +Stamina
+/// effect MOVES the max-health pool: `aura_moves_vitals(A_MOD_STAT, STAT_STA)` is true, so applying the
+/// buff re-derives max HP (the Cooking payoff is mechanically live). The +Spirit effect is summed by
+/// `stat_bonus` but does NOT move vitals (no max-pool consumer for SPI) — staged/inert, like Mark of the
+/// Wild's non-STA stats. This guards the kind/p0 the Well-Fed seed must carry to be a real HP buff.
+#[test]
+fn well_fed_stamina_moves_max_health_spirit_is_inert() {
+    assert!(aura_moves_vitals(A_MOD_STAT, STAT_STA as i32)); // +Sta grows max HP on apply
+    assert!(!aura_moves_vitals(A_MOD_STAT, STAT_SPI as i32)); // +Spi is summed but moves no pool (inert)
+}
+
+/// CONSUMABLE BREADTH — the DRINK (water 159/5350→50114) SCHEDULES a periodic energize: an
+/// `A_PERIODIC_ENERGIZE` aura that the scheduler folds `energized_value` into `power` each tick. Modeling
+/// the 6 ticks (40 mana / 5s × 6 = 240 over 30s), power climbs +40 per tick and CLAMPS at max — exactly
+/// the over-time restore the verify recipe polls. Proves the per-tick fold + the clamp without a ctx.
+#[test]
+fn drink_periodic_energize_climbs_per_tick_and_clamps() {
+    const DRINK_PER_TICK: i32 = 41; // game_spell_effect 200456 base_points (Drink 430 base 41, mana / 5s)
+                                    // Six ticks from empty with headroom → +246 total (41 × 6), each tick a clean +41.
+    let mut power = 0u32;
+    for _ in 0..6 {
+        power = energized_value(power, 500, DRINK_PER_TICK);
+    }
+    assert_eq!(power, 246);
+    // A tick near the cap clamps to max_power (no overflow on the last tick of a near-full drinker).
+    assert_eq!(energized_value(480, 500, DRINK_PER_TICK), 500);
 }

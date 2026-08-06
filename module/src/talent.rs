@@ -38,10 +38,7 @@ use spacetimedb::{
 };
 
 use crate::helpers::entity_by_owner;
-use crate::{
-    game_aura, game_character, game_player_spell, game_spell, game_spell_effect, game_world_entity,
-    Spell, SpellEffect,
-};
+use crate::{game_character, game_spell, game_spell_effect, game_world_entity, Spell, SpellEffect};
 
 // ===========================================================================================
 //  Tables
@@ -151,15 +148,9 @@ crate::character_owned!(delete, fn sweep_delete_game_character_talent(ctx, chara
 // CROSS-DATABASE transport (issue #19): spent talent ranks are durable progression — a character
 // arriving without them is a respec nobody asked for. `id` is a surrogate PK, re-minted.
 crate::character_owned!(transfer, fn sweep_transfer_game_character_talent(ctx, character_guid, io) {
-    crate::transfer::move_rows(
-        ctx,
-        io,
-        || ctx.db.game_character_talent().by_character().filter(&character_guid).collect::<Vec<_>>(),
-        |ctx, mut r| {
-            r.id = 0;
-            ctx.db.game_character_talent().insert(r);
-        },
-    );
+    table = game_character_talent,
+    by = by_character,
+    remint = id,
 });
 crate::character_owned!(restamp, fn sweep_restamp_game_character_talent(ctx, character_guid, identity) {
     let talents = ctx.db.game_character_talent();
@@ -297,12 +288,8 @@ pub(crate) fn do_learn_talent(
         .talent_id()
         .find(talent_id)
         .ok_or_else(|| format!("unknown talent {talent_id}"))?;
-    let entity = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(guid)
-        .ok_or_else(|| format!("no live entity for guid {guid} (must be in world to learn)"))?;
+    let entity = crate::helpers::live_entity(ctx, guid)
+        .map_err(|_| format!("no live entity for guid {guid} (must be in world to learn)"))?;
     let level = entity.level;
 
     let available = talent_points_available(level, total_spent(ctx, guid));
@@ -420,28 +407,10 @@ fn apply_talent_rank(
                 if prev == 0 || prev == rank_spell {
                     continue;
                 }
-                let spells = ctx.db.game_player_spell();
-                for row in spells
-                    .by_character()
-                    .filter(&guid)
-                    .filter(|s| s.spell_id == prev)
-                    .collect::<Vec<_>>()
-                {
-                    spells.id().delete(row.id);
-                }
-                // Mirror do_reset_talents' aura strip: by_target + the moves-vitals check, ONE
+                // Canonical unlearn primitive (spellbook::forget_spell + strip_spell_auras) — ONE
                 // recompute after the sweep (a stat passive removed without it leaves stale vitals).
-                let auras = ctx.db.game_aura();
-                let to_remove: Vec<(u64, bool)> = auras
-                    .by_target()
-                    .filter(&guid)
-                    .filter(|a| a.spell_id == prev)
-                    .map(|a| (a.id, crate::spell::aura_moves_vitals(a.eff_kind, a.eff_p0)))
-                    .collect();
-                for (id, moves_vitals) in to_remove {
-                    auras.id().delete(id);
-                    revitalize |= moves_vitals;
-                }
+                crate::spell::forget_spell(ctx, guid, prev);
+                revitalize |= crate::spell::strip_spell_auras(ctx, guid, prev);
             }
             if revitalize {
                 crate::spell::recompute_vitals(ctx, guid);
@@ -531,25 +500,9 @@ pub(crate) fn do_reset_talents(
         .guid()
         .find(character_guid)
         .ok_or_else(|| format!("no live entity for guid {character_guid}"))?;
-    let trainer = entities
-        .guid()
-        .find(trainer_guid)
-        .ok_or_else(|| "no such trainer".to_string())?;
-    // Same gates as `apply_trainer_buy`: a real TRAINER, on the caller's map, within interaction range.
-    if trainer.npc_flags & lyracore_shared::constants::npc_flags::TRAINER == 0 {
-        return Err("target is not a trainer".to_string());
-    }
-    if trainer.map_id != entity.map_id || trainer.instance_id != entity.instance_id {
-        return Err("trainer on another map".to_string());
-    }
-    let (dx, dy, dz) = (
-        trainer.x - entity.x,
-        trainer.y - entity.y,
-        trainer.z - entity.z,
-    );
-    if dx * dx + dy * dy + dz * dz > crate::trainer::TRAINER_RANGE_SQ {
-        return Err("trainer out of range".to_string());
-    }
+    // Same gates as `apply_trainer_buy` (issue #372's shared validate_trainer_interaction): a real
+    // TRAINER, on the caller's map, within interaction range.
+    crate::trainer::validate_trainer_interaction(ctx, &entity, trainer_guid)?;
 
     let chars = ctx.db.game_character();
     let mut character = chars
@@ -596,21 +549,11 @@ pub(crate) fn do_reset_talents(
     }
 
     // Strip each talent's PASSIVE aura directly: `cancel_aura` refuses a PASSIVE spell (by design, so a
-    // player can't right-click one off), so a respec must delete the `game_aura` row itself. Mirrors
-    // `scheduler::cancel_aura`'s collect-then-delete + single `recompute_vitals` call.
-    let auras = ctx.db.game_aura();
+    // player can't right-click one off), so a respec must delete the `game_aura` row itself. Canonical
+    // unlearn primitive (`spellbook::strip_spell_auras`), single `recompute_vitals` call for the batch.
     let mut revitalize = false;
     for spell_id in &passives {
-        let to_remove: Vec<(u64, bool)> = auras
-            .by_target()
-            .filter(&character_guid)
-            .filter(|a| a.spell_id == *spell_id)
-            .map(|a| (a.id, crate::spell::aura_moves_vitals(a.eff_kind, a.eff_p0)))
-            .collect();
-        for (id, moves_vitals) in to_remove {
-            auras.id().delete(id);
-            revitalize |= moves_vitals;
-        }
+        revitalize |= crate::spell::strip_spell_auras(ctx, character_guid, *spell_id);
     }
     if revitalize {
         crate::spell::recompute_vitals(ctx, character_guid);
@@ -619,16 +562,8 @@ pub(crate) fn do_reset_talents(
     // Forget every spell the reset talents had put in the book: granted ABILITIES and (031 residual
     // fix) the passive RANK-SPELLS themselves — the book previously kept every passive through a
     // respec, so the client re-rendered the talents as still learned after relog.
-    let spells = ctx.db.game_player_spell();
     for spell_id in granted.iter().chain(passives.iter()) {
-        for row in spells
-            .by_character()
-            .filter(&character_guid)
-            .filter(|s| s.spell_id == *spell_id)
-            .collect::<Vec<_>>()
-        {
-            spells.id().delete(row.id);
-        }
+        crate::spell::forget_spell(ctx, character_guid, *spell_id);
     }
 
     // Charge the cost (ONE chokepoint) and bump the escalation counter.

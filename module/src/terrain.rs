@@ -7,6 +7,7 @@
 //! the content slice; `ground_z` returns `None` off-slice and every caller keeps its current
 //! Z there, so unimported areas behave exactly as before this table existed.
 
+use crate::game_area; // zone_id_at's one-hop parent walk (accessor trait)
 use lyracore_shared::terrain::{cell_index, cell_key};
 use spacetimedb::{reducer, table, ReducerContext, Table};
 
@@ -57,9 +58,7 @@ pub fn snap_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32, fallback: f32) 
 /// The imported `AreaTable.dbc` area id (MCNK header field) for the cell at `(x, y)`, or `None` when
 /// no terrain chunk is imported there OR the chunk's `area_id` is 0 (unset — some cells never got a
 /// real client-side AreaTable assignment). Same single indexed lookup as `ground_z` — cheap enough
-/// for the release-time graveyard-zone resolution it feeds (work-item 209:
-/// `world::graveyard::resolve_zone_id` chases this up to the enclosing zone via
-/// `game_area.parent_area_id`).
+/// for the release-time graveyard-zone resolution it feeds (work-item 209, now `zone_id_at` below).
 pub fn area_id_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<u32> {
     let (cx, cy) = (cell_index(x)?, cell_index(y)?);
     let chunk = ctx
@@ -68,6 +67,29 @@ pub fn area_id_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<u
         .key()
         .find(cell_key(map_id, cx, cy))?;
     (chunk.area_id != 0).then_some(chunk.area_id)
+}
+
+/// Chase the position's MCNK `area_id` (`area_id_at` above) ONE hop up `game_area.parent_area_id` to
+/// its enclosing zone — e.g. a Goldshire subzone area resolves to zone 12 (Elwynn). NOT a full
+/// recursive area-hierarchy walk (a subzone-of-a-subzone would need more than one hop; deferred to
+/// work-item 200, which needs full area resolution for exploration XP anyway). Returns `None` when
+/// `game_area` is empty (unimported) or the position's terrain cell has no recorded/imported area, so
+/// callers skip zone-scoping entirely rather than guessing wrong — a wrong guess would silently narrow
+/// a candidate set (graveyards, fishing loot) to the WRONG zone.
+///
+/// The single canonical zone resolver (#375, work-item 209 idiom): `world::graveyard`'s release pick
+/// and `loot::apply_fish`'s catch roll both call this instead of each keeping its own one-hop walk.
+pub fn zone_id_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<u32> {
+    if ctx.db.game_area().count() == 0 {
+        return None;
+    }
+    let area_id = area_id_at(ctx, map_id, x, y)?;
+    let area = ctx.db.game_area().id().find(area_id)?;
+    Some(if area.parent_area_id != 0 {
+        area.parent_area_id
+    } else {
+        area.id
+    })
 }
 
 // ===========================================================================================

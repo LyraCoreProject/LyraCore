@@ -13,10 +13,16 @@
 //!   tree follows it), so the manifest can never drift from the sweep registry — there is exactly
 //!   ONE list, and a table that gets a sweep gets a manifest entry in the same edit. A `delete`
 //!   marker whose fn is not named `sweep_delete_<table_accessor>` panics below: the transfer
-//!   manifest would silently name a non-existent table. The `transfer` marker kind adds
-//!   `CHARACTER_OWNED_TRANSFERS: &[(&str, fn(..))]` (issue #19) — the cross-DATABASE row transport,
-//!   keyed by the same table-accessor name so a mover can never be paired with the wrong manifest
-//!   entry (`sweep_transfer_<table_accessor>`, same prefix-strip rule).
+//!   manifest would silently name a non-existent table. The `transfer` and `not_transported` marker
+//!   kinds add `CHARACTER_OWNED_TRANSFERS: &[(&str, fn(..))]` (issue #19) — the cross-DATABASE row
+//!   transport, keyed by the same table-accessor name so a mover can never be paired with the wrong
+//!   manifest entry (`sweep_transfer_<table_accessor>`, same prefix-strip rule) — plus two
+//!   plain-string views of it (#380): `CHARACTER_OWNED_TRANSFER_NAMES` (every transported table, so
+//!   a NATIVE test binary can read the registry without materializing fn pointers it cannot link)
+//!   and `CHARACTER_OWNED_NOT_TRANSPORTED` (the subset registered through the `not_transported`
+//!   kind, cross-checked against `transfer::NOT_TRANSPORTED`'s written reasons). A declining arm is
+//!   still a transport arm — it lands in `CHARACTER_OWNED_TRANSFERS` too — so "this table has an
+//!   arm" and "this table's rows actually cross" stay two separate, separately-ratcheted facts.
 //! - `package_mods.rs` — one `#[path = ...] pub mod pkg_<name>;` per discovered package, so a
 //!   folder dropped into `packages/` compiles into the module wasm with ZERO core-file edits.
 //!   A package = `packages/<name>/src/mod.rs` (+ sibling submodule files).
@@ -225,19 +231,41 @@ fn main() {
          pub const CHARACTER_OWNED_TRANSFERS: &[(&str, fn(&spacetimedb::ReducerContext, u64, &mut crate::transfer::RowIo<'_>))] = &[\n",
     );
     for path in &registries.transfer {
-        let fn_name = path
-            .rsplit("::")
-            .next()
-            .expect("rsplit yields at least one segment");
-        let table = fn_name.strip_prefix("sweep_transfer_").unwrap_or_else(|| {
-            panic!(
-                "build.rs: `character_owned!(transfer, fn {fn_name}(..))` must be named \
-                 `sweep_transfer_<table_accessor>` — the transfer payload pairs each mover with its \
-                 manifest entry by stripping that prefix, so any other spelling would ship rows \
-                 under a table name that does not exist."
-            )
-        });
-        out.push_str(&format!("    (\"{table}\", {path}),\n"));
+        out.push_str(&format!(
+            "    (\"{}\", {path}),\n",
+            transfer_table_name(path)
+        ));
+    }
+    out.push_str("];\n");
+    // The SAME names again, as plain strings (#380). `CHARACTER_OWNED_TRANSFERS` above cannot be
+    // named from a NATIVE test binary — referencing it materializes every registered fn's POINTER,
+    // which drags the SpacetimeDB host imports (`datastore_insert_bsatn`, …) in and they cannot
+    // link outside wasm. The transfer ratchet used to work around that by string-parsing this very
+    // generated file at test time; it reads this array instead.
+    out.push_str("// The transported-table names, in `CHARACTER_OWNED_TRANSFERS` order.\n");
+    out.push_str("pub const CHARACTER_OWNED_TRANSFER_NAMES: &[&str] = &[\n");
+    for path in &registries.transfer {
+        out.push_str(&format!("    \"{}\",\n", transfer_table_name(path)));
+    }
+    out.push_str("];\n");
+    // The DECLINING subset — the arms written with the `not_transported` marker kind. This is the
+    // mechanical half of the decision; the reasoned half is `transfer::NOT_TRANSPORTED`, and
+    // `the_not_transported_allowlist_matches_the_arms_that_decline` fails if they disagree in
+    // either direction (#380). Sorted by TABLE name so the assertion compares two stable lists.
+    registries.not_transported.sort();
+    let mut declines: Vec<String> = registries
+        .not_transported
+        .iter()
+        .map(|p| transfer_table_name(p).to_string())
+        .collect();
+    declines.sort();
+    out.push_str(
+        "// Tables whose transport arm deliberately carries NOTHING (the `not_transported` marker\n\
+         // kind), sorted by table name. Cross-checked against `transfer::NOT_TRANSPORTED`.\n",
+    );
+    out.push_str("pub const CHARACTER_OWNED_NOT_TRANSPORTED: &[&str] = &[\n");
+    for table in &declines {
+        out.push_str(&format!("    \"{table}\",\n"));
     }
     out.push_str("];\n");
     write_out(&out_dir, "character_sweeps.rs", &out);
@@ -322,8 +350,29 @@ struct Registries {
     delete: Vec<String>,
     restamp: Vec<String>,
     transfer: Vec<String>,
+    /// The subset of `transfer` registered through the `not_transported` marker kind — the arms
+    /// that deliberately carry nothing. Emitted as `CHARACTER_OWNED_NOT_TRANSPORTED` (#380).
+    not_transported: Vec<String>,
     tick_passes: Vec<String>,
     hooks: Vec<(String, String)>, // (event, fully-qualified fn path)
+}
+
+/// The table accessor a transport arm's fully-qualified fn path names: the same
+/// `sweep_transfer_<table_accessor>` prefix-strip rule the delete sweeps use, so a mover can never
+/// be paired with the wrong manifest entry.
+fn transfer_table_name(path: &str) -> &str {
+    let fn_name = path
+        .rsplit("::")
+        .next()
+        .expect("rsplit yields at least one segment");
+    fn_name.strip_prefix("sweep_transfer_").unwrap_or_else(|| {
+        panic!(
+            "build.rs: `character_owned!(transfer, fn {fn_name}(..))` must be named \
+             `sweep_transfer_<table_accessor>` — the transfer payload pairs each mover with its \
+             manifest entry by stripping that prefix, so any other spelling would ship rows \
+             under a table name that does not exist."
+        )
+    })
 }
 
 fn write_out(out_dir: &str, name: &str, content: &str) {
@@ -642,7 +691,7 @@ fn check_facade_reexport(file: &Path, scan_root: &Path, in_package: bool, name: 
 /// `src/lib.rs`). A `(kind, name)` match is only recorded for input matching ONE of these; any other
 /// occurrence of the literal substring in the file is treated as malformed and panics below.
 fn try_match_character_owned(head: &str) -> Option<(&'static str, String)> {
-    for kind in ["delete", "restamp", "transfer"] {
+    for kind in ["delete", "restamp", "transfer", "not_transported"] {
         let prefix = format!("({kind},");
         let Some(rest) = head.strip_prefix(prefix.as_str()) else {
             continue;
@@ -715,14 +764,25 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
                     "delete" => reg.delete.push(path),
                     "restamp" => reg.restamp.push(path),
                     "transfer" => reg.transfer.push(path),
+                    // A DECLINING arm is still a transport arm — it is registered in the same
+                    // registry, so `every_manifest_table_can_cross_a_database_boundary` keeps
+                    // seeing an arm for the table — but it is ALSO recorded separately, because
+                    // "these rows deliberately do not cross" is a decision that must be
+                    // cross-checkable against `transfer::NOT_TRANSPORTED`'s written reasons
+                    // instead of being read back out of the arm's source text (#380).
+                    "not_transported" => {
+                        reg.transfer.push(path.clone());
+                        reg.not_transported.push(path);
+                    }
                     _ => unreachable!(),
                 }
             }
             None => panic!(
                 "build.rs: malformed `character_owned!` marker in {}:{line} — expected exactly \
-                 `character_owned!(delete, fn NAME(ctx, character_guid) {{ .. }})` or the 3-arg \
-                 `restamp` form (see the macro doc in src/lib.rs). A marker must never be silently \
-                 skipped.",
+                 `character_owned!(delete, fn NAME(ctx, character_guid) {{ .. }})`, the 3-arg \
+                 `restamp` form, the declarative `transfer` form, or \
+                 `character_owned!(not_transported, fn NAME())` (see the macro doc in src/lib.rs). \
+                 A marker must never be silently skipped.",
                 file.display()
             ),
         },

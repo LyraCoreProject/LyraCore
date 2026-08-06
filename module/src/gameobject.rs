@@ -17,7 +17,6 @@ use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 use crate::game_corpse_loot;
 use crate::game_gameobject_loot; // CHEST data-driven loot table (work-item 210)
 use crate::game_player_skill; // GATHER skill-gate reads the gather skill row (accessor trait)
-use crate::game_world_entity;
 use crate::helpers::entity_by_owner;
 use crate::loot::CorpseLoot;
 use crate::nav::game_nav_chunk; // arm_pool's map-fence (issue #79) — neither is wildcard-exported at the crate root
@@ -487,7 +486,7 @@ pub(crate) fn arm_pool(ctx: &ReducerContext, pool_id: u32) {
 /// re-run on a plain (auto-migrate) publish, and the importer writes the pool HEADER + MEMBER rows via
 /// SQL but no live `game_gameobject` rows (those carry a Timestamp), so something must turn members into
 /// active spawns once the SQL load lands. The ETL calls this after the load (importer/scripts/import-world.sh),
-/// exactly like `debug_rearm_creature_tick`. Idempotent: `arm_pool` clears each pool's prior live rows
+/// exactly like the creature-tick rearm folded into `debug_repair_after_publish` (#378). Idempotent: `arm_pool` clears each pool's prior live rows
 /// first, so re-running it never drifts the count. Operator-gated (a world-open privileged reducer).
 /// Collect the ids first (house style — though `arm_pool` mutates `game_gameobject`, not the pool header).
 #[reducer]
@@ -559,31 +558,23 @@ fn locked_shut(ctx: &ReducerContext, go_guid: u64, lock_id: u32) -> bool {
             .is_none()
 }
 
-/// Pick the lock on a locked GameObject (work-item 119 — Pick Lock 1804, gateway-intercepted by the
-/// E_OPEN_LOCK effect kind). Gated same-map/instance + range like [`apply_use_gameobject`] (the caster
-/// walked up to click it). Reads the GO template's `lock_id`, then scans `game_lock` for a SATISFIABLE
-/// real opener — a SKILL row (kind 2, `property != 0`) the caster's `game_player_skill(property)` meets,
-/// or an ITEM row (kind 1) whose key item the caster holds. On success: record the GO unlocked (the
-/// use-gate then admits it) + climb the satisfied skill line one step (`gain_profession_skill` — a
-/// Lockpicking lock skills up on use). Emits NO game_spell_cast_event — the gateway sends the
-/// START/OK/GO handshake itself (the enchant/fish precedent). [entity]
-pub(crate) fn apply_pick_lock(
+/// The GO target-acquisition gate shared by [`apply_pick_lock`] and [`apply_use_gameobject`] (issue
+/// #372): resolve the GameObject + its template, resolve the caster's live entity, and confirm they
+/// share a map+instance and are within [`USE_RANGE_SQ`]. Every error string below is preserved verbatim
+/// from both call sites (the two ~30-line blocks were byte-identical before this extraction).
+fn usable_go(
     ctx: &ReducerContext,
     caster_guid: u64,
     go_guid: u64,
-) -> Result<(), String> {
+) -> Result<(GameObject, GameObjectTemplate), String> {
     let go = ctx
         .db
         .game_gameobject()
         .guid()
         .find(go_guid)
         .ok_or_else(|| "no such gameobject".to_string())?;
-    let player = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(caster_guid)
-        .ok_or_else(|| "user not in world".to_string())?;
+    let player = crate::helpers::live_entity(ctx, caster_guid)
+        .map_err(|_| "user not in world".to_string())?;
     if player.map_id != go.map_id {
         return Err("gameobject on another map".to_string());
     }
@@ -600,6 +591,23 @@ pub(crate) fn apply_pick_lock(
         .entry()
         .find(go.template_entry)
         .ok_or_else(|| format!("no gameobject template {}", go.template_entry))?;
+    Ok((go, tmpl))
+}
+
+/// Pick the lock on a locked GameObject (work-item 119 — Pick Lock 1804, gateway-intercepted by the
+/// E_OPEN_LOCK effect kind). Gated same-map/instance + range like [`apply_use_gameobject`] (the caster
+/// walked up to click it). Reads the GO template's `lock_id`, then scans `game_lock` for a SATISFIABLE
+/// real opener — a SKILL row (kind 2, `property != 0`) the caster's `game_player_skill(property)` meets,
+/// or an ITEM row (kind 1) whose key item the caster holds. On success: record the GO unlocked (the
+/// use-gate then admits it) + climb the satisfied skill line one step (`gain_profession_skill` — a
+/// Lockpicking lock skills up on use). Emits NO game_spell_cast_event — the gateway sends the
+/// START/OK/GO handshake itself (the enchant/fish precedent). [entity]
+pub(crate) fn apply_pick_lock(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    go_guid: u64,
+) -> Result<(), String> {
+    let (_go, tmpl) = usable_go(ctx, caster_guid, go_guid)?;
     if tmpl.lock_id == 0 {
         return Err("it is not locked".to_string());
     }
@@ -666,37 +674,10 @@ pub(crate) fn apply_use_gameobject(
     caster_guid: u64,
     go_guid: u64,
 ) -> Result<(), String> {
-    let mut go = ctx
-        .db
-        .game_gameobject()
-        .guid()
-        .find(go_guid)
-        .ok_or_else(|| "no such gameobject".to_string())?;
-    let player = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(caster_guid)
-        .ok_or_else(|| "user not in world".to_string())?;
     // Map + instance gated (190 slice 2 — GO rows carry `instance_id` now): a player may only use
     // a GO in THEIR OWN instance (dungeon doors/chests are per-instance copies; the static
     // instance-0 originals on a dungeon map are the copy SOURCES, unreachable from inside a run).
-    if player.map_id != go.map_id {
-        return Err("gameobject on another map".to_string());
-    }
-    if player.instance_id != go.instance_id {
-        return Err("gameobject in another instance".to_string());
-    }
-    let (dx, dy, dz) = (go.x - player.x, go.y - player.y, go.z - player.z);
-    if dx * dx + dy * dy + dz * dz > USE_RANGE_SQ {
-        return Err("gameobject out of range".to_string());
-    }
-    let tmpl = ctx
-        .db
-        .game_gameobject_template()
-        .entry()
-        .find(go.template_entry)
-        .ok_or_else(|| format!("no gameobject template {}", go.template_entry))?;
+    let (mut go, tmpl) = usable_go(ctx, caster_guid, go_guid)?;
     // Snapshot for the on_go_used notify hook fired at the success exit below — `go` is moved into
     // an update (or deleted by a pool reroll) inside the dispatch arms. The instance is the GO
     // ROW'S OWN (190 slice 2, per 228's documented splice note; equal to the user's after the gate

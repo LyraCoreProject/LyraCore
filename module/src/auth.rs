@@ -238,11 +238,9 @@ pub fn establish_session(
     accounts.id().update(acc);
 
     // Bind owner_identity on this account's characters so per-owner RLS lets the player see them.
+    // Routed through the `by_account` index (issue #390) — this used to be a full-table scan.
     let chars = ctx.db.game_character();
-    let to_bind: Vec<Character> = chars
-        .iter()
-        .filter(|c| c.account_id == account_id)
-        .collect();
+    let to_bind: Vec<Character> = chars.by_account().filter(&account_id).collect();
     for mut c in to_bind {
         c.owner_identity = bound_identity;
         chars.guid().update(c);
@@ -321,28 +319,28 @@ fn legacy_guid_seed(
         .max(owned_guids.max().unwrap_or(0))
 }
 
-/// The whole decision behind `next_character_guid`, pure: seed if never written, then advance by
-/// exactly one. Mutation target: this is where a `next_character_guid` that stops allocating (e.g.
-/// swapping `seed + 1` for `seed`) would live if it weren't pulled out here — pulling it out is
-/// what lets a ctx-free test catch that mutation at all (playbook §7).
+/// The whole decision behind `next_character_guid`, pure: advance the seed by exactly one — no
+/// ratchet needed here, since the seed IS the current mark (or the legacy scan's max), so "advance"
+/// can never be a floor call in disguise. Mutation target: this is where a `next_character_guid`
+/// that stops allocating (e.g. swapping `seed + 1` for `seed`) would live if it weren't pulled out
+/// here — pulling it out is what lets a ctx-free test catch that mutation at all (playbook §7).
 fn allocate_next_guid(seed: u64) -> u64 {
-    ratchet_high_water(seed, seed + 1)
+    seed + 1
 }
 
-/// Read the singleton row's raw mark. `None` means "never written" — every caller here treats that
-/// as "run the legacy seed", never as "the mark is 0".
-fn read_high_water(ctx: &ReducerContext) -> (Option<GuidAllocator>, Option<u64>) {
-    let existing = ctx.db.game_guid_allocator().id().find(0);
-    let current = existing.as_ref().map(|r| r.high_water);
-    (existing, current)
+/// Read the singleton row, whole. `None` means "never written" — every caller here treats that as
+/// "run the legacy seed", never as "the mark is 0". Callers that need just the mark derive it with
+/// `.map(|r| r.high_water)` rather than this function returning a second, redundant `Option<u64>`.
+fn read_high_water(ctx: &ReducerContext) -> Option<GuidAllocator> {
+    ctx.db.game_guid_allocator().id().find(0)
 }
 
 /// The ONLY raw `game_character`/`game_item_instance` scan site in this file (both
 /// `next_character_guid` and `bump_guid_high_water` below route through it via
 /// `Option::unwrap_or_else`, so it only actually runs on a mark's first-ever touch) — deliberately
 /// factored out so it stays ONE occurrence rather than two, which is what
-/// `character_fence_tripwire`'s per-file raw-lookup budget (module/src/lib.rs's auth.rs WHITELIST
-/// entry) counts.
+/// `character_fence_tripwire`'s per-file raw-lookup budget (module/src/tripwires.rs's auth.rs
+/// WHITELIST entry) counts.
 fn legacy_guid_seed_now(ctx: &ReducerContext) -> u64 {
     legacy_guid_seed(
         ctx.db.game_character().iter().map(|c| c.guid),
@@ -372,8 +370,11 @@ fn write_high_water(ctx: &ReducerContext, existing: Option<GuidAllocator>, mark:
 /// wrapper is just the read/compute/write around it. Pinned by [`guid_allocator_tests::next_character_guid_routes_through_allocate_next_guid`]
 /// (ctx glue can't be unit-tested directly — playbook §7).
 pub(crate) fn next_character_guid(ctx: &ReducerContext) -> u64 {
-    let (existing, current) = read_high_water(ctx);
-    let seed = current.unwrap_or_else(|| legacy_guid_seed_now(ctx));
+    let existing = read_high_water(ctx);
+    let seed = existing
+        .as_ref()
+        .map(|r| r.high_water)
+        .unwrap_or_else(|| legacy_guid_seed_now(ctx));
     let next = allocate_next_guid(seed);
     write_high_water(ctx, existing, next);
     next
@@ -387,8 +388,11 @@ pub(crate) fn next_character_guid(ctx: &ReducerContext) -> u64 {
 /// miss it). A no-op once the mark is already seeded and ahead. Pinned by
 /// [`guid_allocator_tests::bump_guid_high_water_routes_through_ratchet_high_water`].
 pub(crate) fn bump_guid_high_water(ctx: &ReducerContext, guid: u64) {
-    let (existing, current) = read_high_water(ctx);
-    let seed = current.unwrap_or_else(|| legacy_guid_seed_now(ctx));
+    let existing = read_high_water(ctx);
+    let seed = existing
+        .as_ref()
+        .map(|r| r.high_water)
+        .unwrap_or_else(|| legacy_guid_seed_now(ctx));
     let mark = ratchet_high_water(seed, guid);
     if mark == seed && existing.is_some() {
         return; // already seeded, already ahead — avoid a no-op write
@@ -396,51 +400,28 @@ pub(crate) fn bump_guid_high_water(ctx: &ReducerContext, guid: u64) {
     write_high_water(ctx, existing, mark);
 }
 
-/// **Issue #103 — give this database a guid range of its own.**
+/// **Issue #108 — the guid range THIS database was assigned, and its licence to mint.**
 ///
 /// `game_character.guid` is a per-database `#[auto_inc]`-style mark, so two databases that both
 /// MINT characters mint colliding guids — and `transfer_id` **is** the character guid, so a
 /// collision means two characters sharing an escrow ledger row. It was demonstrated live: guid 59
 /// was one character on `lyracore` and a different one on `lyracore-world-1`, and routing
-/// sent the second player to the first's shard.
-///
-/// #59 already built the receiving half (`apply_import_blob` and `cascade_delete_character` ratchet
-/// the mark), so a shard can never re-issue a guid it was *given*. This is the other half: a shard
-/// that mints its own starts from a floor nobody else will reach. Give each database a distinct
-/// floor once, at provisioning time, and collisions become impossible **regardless of how many
-/// gateways exist or how they are configured** — which is why this is preferred over refusing
-/// creation on "the wrong" database: no gateway can reliably know which database that is (each one's
-/// `default_db` is its own `LYRACORE_DATABASE`, so a second gateway happily believes it is the right one).
-///
-/// Monotonic by construction: it routes through the same `ratchet_high_water` every other caller
-/// uses, so a floor can only ever move the mark UP. Calling it with a lower value than the current
-/// mark is a no-op, and re-running it is safe — it can never re-issue a live guid.
+/// sent the second player to the first's shard. #59 already built the receiving half
+/// (`apply_import_blob` and `cascade_delete_character` ratchet the mark), so a shard can never
+/// re-issue a guid it was *given*; this table is the other half: a shard that mints its own starts
+/// from a floor nobody else will reach.
 ///
 /// Convention (`docs/design/`): shard *n* gets floor `n * 1_000_000_000`. Decimal and small on
 /// purpose — it stays readable in logs and SQL, leaves a billion characters per shard, and stays far
 /// below both `2^53` (above which `spacetime call` mangles u64 arguments — danger-zones) and the
 /// high-bit type markers real entity guids carry.
-#[cfg(feature = "debug_reducers")]
-#[reducer]
-pub fn set_guid_floor(ctx: &ReducerContext, floor: u64) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let (_, before) = read_high_water(ctx);
-    bump_guid_high_water(ctx, floor);
-    let (_, after) = read_high_water(ctx);
-    spacetimedb::log::info!(
-        "set_guid_floor: mark {:?} -> {:?} (requested floor {floor}); a floor only ever ratchets UP",
-        before,
-        after
-    );
-    Ok(())
-}
-
-/// **Issue #108 — the guid range THIS database was assigned, and its licence to mint.**
 ///
-/// `set_guid_floor` above made a collision *impossible* but left the guarantee resting on an
-/// operator remembering to run it on every new shard; a shard provisioned without it minted from
-/// zero into `lyracore`'s range, silently at creation, and surfaced later as a mis-routed
-/// login or two characters sharing an escrow row (`transfer_id` IS the character guid).
+/// #103's first cut (since deleted, issue #390) gave each database its floor by hand through a
+/// standalone reducer that only ratcheted `game_guid_allocator.high_water` — a collision became
+/// *impossible*, but the guarantee rested on an operator remembering to run it on every new shard;
+/// a shard provisioned without it minted from zero into `lyracore`'s range, silently at creation,
+/// and surfaced later as a mis-routed login or two characters sharing an escrow row (`transfer_id`
+/// IS the character guid).
 ///
 /// So the floor is no longer something a database can lack: the presence of this row is what
 /// permits [`next_character_guid`] to run at all, and only [`install_guid_range`] writes it, from a
@@ -479,7 +460,7 @@ pub(crate) fn require_guid_range(ctx: &ReducerContext) -> Result<(), String> {
         .id()
         .find(0)
         .map(|r| (r.base, r.size));
-    let (_, mark) = read_high_water(ctx);
+    let mark = read_high_water(ctx).map(|r| r.high_water);
     may_mint(range, mark.unwrap_or(0))
 }
 
@@ -533,8 +514,9 @@ pub fn install_guid_range(ctx: &ReducerContext, base: u64) -> Result<(), String>
             base.saturating_add(size)
         ));
     }
-    let (_, mark) = read_high_water(ctx);
-    let mark = mark.unwrap_or_else(|| legacy_guid_seed_now(ctx));
+    let mark = read_high_water(ctx)
+        .map(|r| r.high_water)
+        .unwrap_or_else(|| legacy_guid_seed_now(ctx));
     if mark >= base.saturating_add(size) {
         return Err(format!(
             "install_guid_range: this database has already minted up to {mark}, which is outside \
@@ -558,11 +540,12 @@ mod guid_allocator_tests {
     /// **Issue #103.** Two shards that both mint characters must never mint the same guid, and the
     /// mechanism is a per-shard floor. The property that makes a floor SAFE to apply to a live
     /// database — and safe to re-apply — is that it can only ratchet UP: a floor below the current
-    /// mark must not rewind the allocator onto guids that are already issued.
-    ///
-    /// `set_guid_floor` is ctx glue and cannot be unit-tested (playbook §7), so this pins the pure
-    /// decision it delegates to. Mutation target: swapping `ratchet_high_water(seed, floor)` for a
-    /// plain assignment inside `bump_guid_high_water` makes the second assertion re-issue guid 40.
+    /// mark must not rewind the allocator onto guids that are already issued. `install_guid_range`
+    /// (below) is the only caller left that applies one (issue #390 deleted the standalone
+    /// `set_guid_floor` reducer — dead since #108 gave every shard's floor a licensed, non-optional
+    /// path instead), and it reaches the mark through this same function, so this pin still covers
+    /// it. Mutation target: swapping `ratchet_high_water(seed, floor)` for a plain assignment inside
+    /// `bump_guid_high_water` makes the second assertion re-issue guid 40.
     #[test]
     fn a_guid_floor_only_ever_ratchets_upwards() {
         // A fresh shard given a floor: the mark jumps to it, so the next guid is above it.
@@ -574,34 +557,6 @@ mod guid_allocator_tests {
             ratchet_high_water(2_000_000_050, 1_000_000_000),
             2_000_000_050,
             "a floor below the current mark rewound the allocator onto live guids"
-        );
-    }
-
-    /// …and the WIRING, which the test above does not cover: `set_guid_floor` must reach the mark
-    /// through `bump_guid_high_water` (hence through the ratchet), not by writing it directly.
-    ///
-    /// This matters because the direct route is the obvious way to write this reducer —
-    /// `write_high_water(ctx, existing, floor)` reads as "set the floor" and is one line shorter. It
-    /// would also be **destructive**: applying a floor to a shard that has already issued guids past
-    /// it would rewind the allocator and re-issue live guids, which is a worse bug than the
-    /// collision #103 is about. A behavioural test cannot reach this (it needs a `ReducerContext`),
-    /// so it is pinned by shape, exactly like `bump_guid_high_water_is_exactly_the_pinned_shape`.
-    #[test]
-    fn set_guid_floor_ratchets_rather_than_assigns() {
-        let body = crate::test_scan::code_of(
-            include_str!("auth.rs"),
-            "pub fn set_guid_floor(ctx: &ReducerContext, floor: u64) -> Result<(), String> {",
-        );
-        assert!(
-            body.contains("bump_guid_high_water(ctx, floor)"),
-            "`set_guid_floor` no longer routes through `bump_guid_high_water`. If it writes the \
-             mark directly, a floor BELOW the current mark rewinds the allocator and re-issues \
-             guids that are already alive. Body was:\n{body}"
-        );
-        assert!(
-            !body.contains("write_high_water"),
-            "`set_guid_floor` writes the allocator mark directly, bypassing the ratchet that makes \
-             a floor monotonic. Body was:\n{body}"
         );
     }
 
@@ -774,8 +729,11 @@ mod guid_allocator_tests {
         );
         let want = norm(
             "{
-                let (existing, current) = read_high_water(ctx);
-                let seed = current.unwrap_or_else(|| legacy_guid_seed_now(ctx));
+                let existing = read_high_water(ctx);
+                let seed = existing
+                    .as_ref()
+                    .map(|r| r.high_water)
+                    .unwrap_or_else(|| legacy_guid_seed_now(ctx));
                 let next = allocate_next_guid(seed);
                 write_high_water(ctx, existing, next);
                 next
@@ -800,8 +758,11 @@ mod guid_allocator_tests {
         );
         let want = norm(
             "{
-                let (existing, current) = read_high_water(ctx);
-                let seed = current.unwrap_or_else(|| legacy_guid_seed_now(ctx));
+                let existing = read_high_water(ctx);
+                let seed = existing
+                    .as_ref()
+                    .map(|r| r.high_water)
+                    .unwrap_or_else(|| legacy_guid_seed_now(ctx));
                 let mark = ratchet_high_water(seed, guid);
                 if mark == seed && existing.is_some() {
                     return;
@@ -857,7 +818,8 @@ pub fn create_character(
     // Per-realm character cap (vanilla: 10). The 5875 client can't render a char list with >10 entries
     // (it rejects SMSG_CHAR_ENUM → "Error retrieving character list"), so refuse the 11th here with a
     // distinguished error the gateway maps to CHAR_CREATE_SERVER_LIMIT ("cannot create any more").
-    if chars.iter().filter(|c| c.account_id == account_id).count() >= 10 {
+    // Routed through the `by_account` index (issue #390) — this used to be a full-table scan.
+    if chars.by_account().filter(&account_id).count() >= 10 {
         return Err("SERVER_LIMIT".to_string());
     }
     // Reject an illegal (race, class) (e.g. Human Shaman) — server-side defense-in-depth from the

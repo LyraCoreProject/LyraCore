@@ -126,8 +126,8 @@ pub struct CharBaseInfo {
 /// like Elwynn/Westfall; nonzero = a subzone whose value points at another `game_area.id`, its
 /// enclosing zone). Loaded from the client `AreaTable.dbc` by the importer's `--dbc` mode (work-item
 /// 209; see `importer/src/dbc.rs::area_sql`). Consumers: rest-state zone naming (196), exploration
-/// XP's zone/subzone resolution (200), and `world::graveyard::resolve_zone_id`'s one-hop
-/// subzone→zone chase for graveyard resolution (209). `flags`/`faction_group` are the raw
+/// XP's zone/subzone resolution (200), and `terrain::zone_id_at`'s one-hop subzone→zone chase for
+/// graveyard + fishing zone resolution (209/375). `flags`/`faction_group` are the raw
 /// `AreaTable.dbc` bitmasks (city/rest-state, PvP sanctuary) — undecoded here; a consumer decodes
 /// what it needs. No Timestamp → plain SQL. [static]
 #[table(accessor = game_area, public)]

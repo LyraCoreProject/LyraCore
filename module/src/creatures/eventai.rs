@@ -216,9 +216,9 @@ pub(crate) fn seed_on_aggro_fixtures(ctx: &ReducerContext) {
     }
     // (creature_entry, action, line). Real Elwynn entries so a live pull actually speaks.
     let barks: &[(u32, u8, &str)] = &[
-        (6, AI_ACTION_SAY, "Grrr!"),          // Kobold Vermin
-        (116, AI_ACTION_YELL, "Intruder!"),   // Defias Bandit
-        (448, AI_ACTION_YELL, "Roar!"),       // Hogger (Elwynn named elite)
+        (6, AI_ACTION_SAY, "Grrr!"),        // Kobold Vermin
+        (116, AI_ACTION_YELL, "Intruder!"), // Defias Bandit
+        (448, AI_ACTION_YELL, "Roar!"),     // Hogger (Elwynn named elite)
     ];
     for &(entry, action, text) in barks {
         t.insert(CreatureAiEvent {

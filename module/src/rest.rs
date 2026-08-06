@@ -76,10 +76,7 @@ crate::character_owned!(delete, fn sweep_delete_game_rest_state_event(ctx, chara
 // it would replay a stale zzz-icon flip at the destination. Exports NOTHING, deliberately: the arm
 // exists so the "every manifest table has a transport" ratchet stays a ratchet, and so this decision
 // is written down at the table instead of being an omission nobody notices.
-crate::character_owned!(transfer, fn sweep_transfer_game_rest_state_event(ctx, character_guid, io) {
-    let _ = (ctx, character_guid);
-    crate::transfer::not_transported(io);
-});
+crate::character_owned!(not_transported, fn sweep_transfer_game_rest_state_event());
 
 /// Called every movement heartbeat (NOT grid-gated — an inn is smaller than a 50yd grid cell, so a
 /// coarse crossing check would miss it). HOT PATH: a cheap `in_rest_area` test vs the already-loaded
@@ -151,12 +148,7 @@ pub fn debug_check_rest_at(
     x: f32,
     y: f32,
 ) -> Result<(), String> {
-    let mut e = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(guid)
-        .ok_or_else(|| format!("no live entity for guid {guid}"))?;
+    let mut e = crate::helpers::live_entity(ctx, guid)?;
     e.map_id = map_id;
     e.x = x;
     e.y = y;

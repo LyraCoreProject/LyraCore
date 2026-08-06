@@ -4,12 +4,13 @@
 //! path resolves.
 
 use spacetimedb::{
-    client_visibility_filter, table, Filter, Identity, ScheduleAt, Table, Timestamp,
+    client_visibility_filter, table, Filter, Identity, ReducerContext, ScheduleAt, Table, Timestamp,
 };
 
 // The `scheduled(..)` table macros below reference the reducer callbacks by name; those reducers live in
 // `scheduler.rs` and are re-exported by `mod.rs`, so pull them into scope for the macro to resolve.
 use super::{fire_pending_cast, fire_spell_impact, tick_auras, tick_ground_areas};
+use crate::WorldEntity;
 
 // ===========================================================================================
 //  Spell definition tables [static] — hand-authored OR importer-filled from Spell.dbc. Public
@@ -194,7 +195,7 @@ pub struct Aura {
 
 // UNIT-keyed character-owned sweep (issue #72, the warm-handoff hot-state audit). `Aura`'s columns
 // name ANY unit (`target_guid`/`caster_guid` — creatures have auras too), never `character_guid`/
-// `player_guid`/`owner_guid`, so `lib.rs`'s `character_owned_tripwire` never flags this table and no
+// `player_guid`/`owner_guid`, so `tripwires.rs`'s `character_owned_tripwire` never flags this table and no
 // marker was mandatory. That silence is exactly why the TRANSFER half went missing while the DELETE
 // half got hand-rolled straight into `world::cascade_delete_character` (see that fn's own comment,
 // "auras ON the character... the character_owned tripwire exempts the tables"): a warm handoff carried
@@ -219,15 +220,9 @@ crate::character_owned!(delete, fn sweep_delete_game_aura(ctx, character_guid) {
 // (the caster stayed behind); nothing on the read path panics on that — it is the same "unit vanished"
 // case the periodic/expiry ticks already tolerate for a caster who simply logged out.
 crate::character_owned!(transfer, fn sweep_transfer_game_aura(ctx, character_guid, io) {
-    crate::transfer::move_rows(
-        ctx,
-        io,
-        || ctx.db.game_aura().by_target().filter(&character_guid).collect::<Vec<_>>(),
-        |ctx, mut row: Aura| {
-            row.id = 0;
-            ctx.db.game_aura().insert(row);
-        },
-    );
+    table = game_aura,
+    by = by_target,
+    remint = id,
 });
 
 /// A spell cast (the visual). Separate from the aura row so a re-cast always replays the cast
@@ -350,6 +345,83 @@ pub struct SpellCastEvent {
     pub grid_x: i32,
     #[default(0i32)]
     pub grid_y: i32,
+}
+
+impl SpellCastEvent {
+    /// A baseline `SpellCastEvent` row for `caster_guid`/`spell_id`: `id`=0, `created_at`=`ctx.timestamp`,
+    /// and the AOI address (`map_id`/`instance_id`/`grid_x`/`grid_y`) stamped from ONE
+    /// [`crate::helpers::grid_of`] lookup — every other field at its neutral zero/false. Replaces the
+    /// ~20-field literal + 4× `grid_of` copy-paste this used to require at every call site (perf catalog
+    /// audit, 2026-08-06): a call site now overrides only the 2-4 fields that carry real signal, via
+    /// struct-update syntax, e.g.
+    /// `SpellCastEvent { is_interrupted: true, ..SpellCastEvent::signal(ctx, caster_guid, spell_id) }`.
+    ///
+    /// Use [`Self::signal_at`] instead when the caster's live [`WorldEntity`] is already in hand — it
+    /// skips this lookup entirely (a landed swing carrying a seal proc + a queued strike used to pay the
+    /// `game_world_entity` PK lookup up to twelve times over for what is, in every case, the SAME row).
+    pub(crate) fn signal(ctx: &ReducerContext, caster_guid: u64, spell_id: u32) -> Self {
+        let (map_id, instance_id, grid_x, grid_y) = crate::helpers::grid_of(ctx, caster_guid);
+        Self::signal_addr(
+            ctx,
+            caster_guid,
+            spell_id,
+            map_id,
+            instance_id,
+            grid_x,
+            grid_y,
+        )
+    }
+
+    /// Same baseline as [`Self::signal`], stamped from an already-fetched `caster` entity — zero
+    /// `game_world_entity` lookups.
+    pub(crate) fn signal_at(ctx: &ReducerContext, caster: &WorldEntity, spell_id: u32) -> Self {
+        let (map_id, instance_id, grid_x, grid_y) = crate::helpers::entity_addr(caster);
+        Self::signal_addr(
+            ctx,
+            caster.guid,
+            spell_id,
+            map_id,
+            instance_id,
+            grid_x,
+            grid_y,
+        )
+    }
+
+    fn signal_addr(
+        ctx: &ReducerContext,
+        caster_guid: u64,
+        spell_id: u32,
+        map_id: u32,
+        instance_id: u64,
+        grid_x: i32,
+        grid_y: i32,
+    ) -> Self {
+        Self {
+            id: 0,
+            caster_guid,
+            spell_id,
+            created_at: ctx.timestamp,
+            target_guid: 0,
+            cast_time_ms: 0,
+            is_completion: false,
+            damage: 0,
+            school: 0,
+            is_crit: false,
+            resisted: 0,
+            absorbed: 0,
+            is_interrupted: false,
+            cooldown_ms: 0,
+            delay_ms: 0,
+            healed: 0,
+            is_proc_log: false,
+            swing_hit_info: 0,
+            client_initiated: false,
+            map_id,
+            instance_id,
+            grid_x,
+            grid_y,
+        }
+    }
 }
 
 /// Per-caster global-cooldown gate: after a successful cast the caster can't cast again until `ready_at`.

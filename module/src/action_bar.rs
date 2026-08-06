@@ -75,15 +75,9 @@ crate::character_owned!(delete, fn sweep_delete_game_player_action(ctx, characte
 // (character, button) — so it is re-minted at the destination rather than carried; carrying it would
 // insert explicit ids without advancing the destination's sequence (danger-zones §2).
 crate::character_owned!(transfer, fn sweep_transfer_game_player_action(ctx, character_guid, io) {
-    crate::transfer::move_rows(
-        ctx,
-        io,
-        || ctx.db.game_player_action().by_character().filter(&character_guid).collect::<Vec<_>>(),
-        |ctx, mut r| {
-            r.id = 0;
-            ctx.db.game_player_action().insert(r);
-        },
-    );
+    table = game_player_action,
+    by = by_character,
+    remint = id,
 });
 crate::character_owned!(restamp, fn sweep_restamp_game_player_action(ctx, character_guid, identity) {
     let actions = ctx.db.game_player_action();

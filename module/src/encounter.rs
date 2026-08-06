@@ -35,9 +35,8 @@ use spacetimedb::{table, ReducerContext, Table};
 use lyracore_shared::{constants, spatial};
 
 use crate::{
-    game_corpse_loot, game_creature_move_event, game_creature_spawn, game_creature_spline,
-    game_creature_template, game_entity_motion, game_gameobject, game_gameobject_template,
-    game_world_entity,
+    game_creature_spawn, game_creature_spline, game_creature_template, game_gameobject,
+    game_gameobject_template, game_world_entity,
 };
 
 // ===========================================================================================
@@ -544,12 +543,8 @@ pub fn equip_swap(
     off_hand: u32,
     ranged: u32,
 ) -> Result<(), String> {
-    let e = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(creature_guid)
-        .ok_or_else(|| format!("no live entity {creature_guid}"))?;
+    let e = crate::helpers::live_entity(ctx, creature_guid)
+        .map_err(|_| format!("no live entity {creature_guid}"))?;
     if e.is_player() {
         return Err("equip_swap targets creatures only".to_string());
     }
@@ -687,30 +682,20 @@ pub fn encounter_reset_full(
     }
 }
 
-/// Tear down tracked wave spawns: free engagements/threat (`disengage`, the pet-despawn teardown),
-/// drop pending move legs, reap corpse-loot rows (a dead add may sit lootable), delete the live
-/// entity (relays `SMSG_DESTROY_OBJECT`; may already be decay-deleted — fine), the spawn row (the
-/// row that would otherwise respawn into instance 0 — see [`EncounterSpawn`]), any equip row, and
-/// the tracking row itself.
+/// Tear down tracked wave spawns: the canonical creature-despawn checklist
+/// ([`crate::creatures::despawn_creature_entity`] — engagement/threat/taunt lock, spline + motion
+/// rows, the whole loot family, then the live entity, whose delete relays `SMSG_DESTROY_OBJECT`;
+/// it may already be decay-deleted, which is fine), plus this path's OWN extras: the spawn row (the
+/// row that would otherwise respawn into instance 0 — see [`EncounterSpawn`]), any equip row, and the
+/// tracking row itself.
+///
+/// Issue #359: this used to carry a private copy of the checklist, and that copy deleted every
+/// `game_corpse_loot` row on the guid with NO `!withheld` filter — the #50 invariant, which the other
+/// two teardown paths honour. Wave adds are ordinary group-killable creatures and `encounter_reset` is
+/// the wipe handler, so a mid-roll wipe hit exactly this delete and silently ate the winner's item.
 fn despawn_tracked(ctx: &ReducerContext, tracked: &[EncounterSpawn]) {
     for t in tracked {
-        crate::combat::disengage(ctx, t.guid);
-        let events = ctx.db.game_creature_move_event();
-        let legs: Vec<u64> = events
-            .iter()
-            .filter(|m| m.mover_guid == t.guid)
-            .map(|m| m.id)
-            .collect();
-        for id in legs {
-            events.id().delete(id);
-        }
-        let loot = ctx.db.game_corpse_loot();
-        let stale: Vec<u64> = loot.by_corpse().filter(&t.guid).map(|l| l.id).collect();
-        for id in stale {
-            loot.id().delete(id);
-        }
-        ctx.db.game_entity_motion().guid().delete(t.guid); // motion row dies with the entity (2.1)
-        ctx.db.game_world_entity().guid().delete(t.guid);
+        crate::creatures::despawn_creature_entity(ctx, t.guid);
         ctx.db.game_creature_spawn().guid().delete(t.guid);
         ctx.db.game_encounter_equip().creature_guid().delete(t.guid);
         ctx.db.game_encounter_spawn().id().delete(t.id);

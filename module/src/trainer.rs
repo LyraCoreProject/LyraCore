@@ -16,7 +16,9 @@
 use spacetimedb::{reducer, table, ReducerContext};
 
 use crate::helpers::entity_by_owner;
-use crate::{game_player_skill, game_spell_chain, game_spell_effect, game_world_entity};
+use crate::{
+    game_player_skill, game_spell_chain, game_spell_effect, game_world_entity, WorldEntity,
+};
 
 /// Max distance to train at a trainer: (10 yd)² — same as the vendor/quest/loot interaction range. The
 /// client walks into range before sending `CMSG_TRAINER_BUY_SPELL`, so this only rejects out-of-range abuse.
@@ -60,28 +62,21 @@ pub struct TrainerSpell {
     pub learn_skill_cap: u32,
 }
 
-/// What a successful trainer purchase GRANTS (professions slice 3) — the pure decision the buy path acts on,
-/// split out so the spell-vs-profession routing is unit-testable without a `ReducerContext`. A
-/// `learn_skill_line > 0` offering teaches a profession SKILL (never a spell); a `0` offering learns a spell.
-#[derive(Debug, PartialEq, Eq)]
+/// What a successful trainer purchase GRANTS (professions slice 3) — `crate::skill::learn_profession` for
+/// a flagged profession/weapon offering, `crate::spell::learn_spell_with_dependents` for a plain class
+/// spell. Each `apply_trainer_buy` arm constructs its OWN variant directly at the point it already knows
+/// which one applies (issue #372) — there is no longer a separate `grant_for` routing function: the old
+/// shape threaded a `(to_learn, known, cap)` tuple with a `0u32` dead-sentinel `to_learn` on the two
+/// profession/weapon arms (never read on those arms — only `grant_for` re-derived, from `profession_line`
+/// ALONE, the exact branch each tuple was already built in) through to a `grant_for` call that just
+/// re-decided the same fork the caller had already taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BuyGrant {
     /// Teach a profession `(skill_line, cap)` (Cooking=185 / Skinning=393 at cap 75/150/…) →
     /// `crate::skill::learn_profession`. The cap is the rank ceiling the buy lifts the skill to.
     Profession(u32, u32),
     /// Learn the resolved spell id (the LearnSpell wrapper's rank, or the spell itself) → `crate::spell::learn_spell`.
     Spell(u32),
-}
-
-/// Route an offering to its grant: a flagged profession offering (`learn_skill_line > 0`) teaches that skill
-/// line at `cap` (the rank ceiling); an unflagged one (`0`) learns the resolved spell `to_learn`. Pure →
-/// unit-tested (the "learn-from-trainer adds the skill" assertion: a profession offering yields `Profession`,
-/// never `Spell`).
-pub(crate) fn grant_for(learn_skill_line: u32, cap: u32, to_learn: u32) -> BuyGrant {
-    if learn_skill_line != 0 {
-        BuyGrant::Profession(learn_skill_line, cap)
-    } else {
-        BuyGrant::Spell(to_learn)
-    }
 }
 
 /// Whether a profession offering at `cap` is ALREADY covered by the character's stored `max_rank` for
@@ -158,6 +153,42 @@ pub(crate) fn resolve_learn_target(ctx: &ReducerContext, spell_id: u32) -> u32 {
         .unwrap_or(spell_id)
 }
 
+/// Resolve + validate a trainer interaction: `trainer_guid` must be a real in-range TRAINER on `caster`'s
+/// own map+instance. Shared by [`apply_trainer_buy`] and `talent::do_reset_talents` (the respec path,
+/// which is trainer-gated identically — its own comment used to read "Same gates as apply_trainer_buy")
+/// (issue #372). Returns the resolved trainer entity.
+///
+/// Bare error strings (no gtker `[N]` tag): `apply_trainer_buy` prefixes its own `"[0] "` tag on top so
+/// its wire-visible `SMSG_TRAINER_BUY_FAILED` text is unchanged; `do_reset_talents` is untagged (its
+/// respec path isn't wired to a gtker failure-reason opcode), also unchanged.
+pub(crate) fn validate_trainer_interaction(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    trainer_guid: u64,
+) -> Result<WorldEntity, String> {
+    let trainer = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(trainer_guid)
+        .ok_or_else(|| "no such trainer".to_string())?;
+    if trainer.npc_flags & lyracore_shared::constants::npc_flags::TRAINER == 0 {
+        return Err("target is not a trainer".to_string());
+    }
+    if trainer.map_id != caster.map_id || trainer.instance_id != caster.instance_id {
+        return Err("trainer on another map".to_string());
+    }
+    let (dx, dy, dz) = (
+        trainer.x - caster.x,
+        trainer.y - caster.y,
+        trainer.z - caster.z,
+    );
+    if dx * dx + dy * dy + dz * dz > TRAINER_RANGE_SQ {
+        return Err("trainer out of range".to_string());
+    }
+    Ok(trainer)
+}
+
 /// Shared buy logic for the player + debug paths: validate `trainer` is a real in-range trainer, that it
 /// teaches `spell_id`, run [`trainer_buy_check`], then charge copper + learn the spell. `Err(String)` names
 /// the reason; the leading "[N] " tag is the gtker failure code the gateway forwards into
@@ -174,24 +205,8 @@ pub(crate) fn apply_trainer_buy(
         .guid()
         .find(caster_guid)
         .ok_or_else(|| "[0] buyer not in world".to_string())?;
-    let trainer = entities
-        .guid()
-        .find(trainer_guid)
-        .ok_or_else(|| "[0] no such trainer".to_string())?;
-    if trainer.npc_flags & lyracore_shared::constants::npc_flags::TRAINER == 0 {
-        return Err("[0] target is not a trainer".to_string());
-    }
-    if trainer.map_id != caster.map_id || trainer.instance_id != caster.instance_id {
-        return Err("[0] trainer on another map".to_string());
-    }
-    let (dx, dy, dz) = (
-        trainer.x - caster.x,
-        trainer.y - caster.y,
-        trainer.z - caster.z,
-    );
-    if dx * dx + dy * dy + dz * dz > TRAINER_RANGE_SQ {
-        return Err("[0] trainer out of range".to_string());
-    }
+    let trainer =
+        validate_trainer_interaction(ctx, &caster, trainer_guid).map_err(|e| format!("[0] {e}"))?;
     // The trainer must actually teach this spell (its template's list). The spawned trainer carries its
     // creature-template `entry`; the list is keyed by that.
     let offered = ctx
@@ -224,7 +239,7 @@ pub(crate) fn apply_trainer_buy(
     let profession_line = offered.learn_skill_line;
     let is_weapon_learn =
         profession_line != 0 && crate::skill::is_combat_skill_line(profession_line);
-    let (to_learn, known, profession_cap) = if is_weapon_learn {
+    let (grant, known): (BuyGrant, bool) = if is_weapon_learn {
         let cap = crate::skill::skill_cap_for_level(caster.level);
         let present = ctx
             .db
@@ -232,13 +247,13 @@ pub(crate) fn apply_trainer_buy(
             .by_character()
             .filter(&caster_guid)
             .any(|s| s.skill_line == profession_line);
-        (0u32, present, cap)
+        (BuyGrant::Profession(profession_line, cap), present)
     } else if profession_line != 0 {
         // Already-known keys on the CAP, not mere row presence (rank/cap scaling): "known" iff a row exists
         // whose `max_rank` already meets-or-exceeds THIS offering's cap. So an Apprentice re-buy (cap 75 vs
         // stored 75) is rejected for the default cap, but buying Journeyman (cap 150) while at
         // apprentice-75 PASSES the gate and lifts the ceiling, and a 2nd Journeyman buy (150 >= 150) is
-        // then rejected. `to_learn` is unused on this arm.
+        // then rejected.
         let stored_max_rank = ctx
             .db
             .game_player_skill()
@@ -247,9 +262,8 @@ pub(crate) fn apply_trainer_buy(
             .find(|s| s.skill_line == profession_line)
             .map(|r| r.max_rank);
         (
-            0u32,
+            BuyGrant::Profession(profession_line, offered.learn_skill_cap),
             profession_already_capped(stored_max_rank, offered.learn_skill_cap),
-            offered.learn_skill_cap,
         )
     } else {
         // The castable RANK behind the offering — extracted to `resolve_learn_target` (see its doc) so
@@ -258,27 +272,29 @@ pub(crate) fn apply_trainer_buy(
         // re-charged).
         let to_learn = resolve_learn_target(ctx, spell_id);
         (
-            to_learn,
+            BuyGrant::Spell(to_learn),
             crate::spell::knows_spell(ctx, caster_guid, to_learn),
-            offered.learn_skill_cap,
         )
     };
-    // RANK-PREREQ GATE (work-item 102, reduced scope): a plain class-spell offering (profession_line ==
-    // 0 — professions/weapons have no chain concept) whose resolved rank carries a `game_spell_chain`
-    // row must have the PREVIOUS rank already known (vanilla refuses training "Fireball Rank 3" while
-    // only Rank 1 is known). NO chain row (an un-imported spell, or a rank with nothing before it) →
-    // the gate passes, BYTE-IDENTICAL to before this work item (the 178/212 precedent: missing imported
-    // data never blocks a purchase that used to succeed). Reuses FAIL_LEVEL_TOO_LOW — there is no
-    // dedicated "prerequisite not met" code in gtker's 3-value `TrainingFailureReason`, and its own doc
-    // already calls it the closest "req not met" fit (see the const above). Skipped when the spell is
-    // ALREADY KNOWN so `trainer_buy_check`'s "already-known first" message-priority contract (see its
-    // doc) holds even for a rank granted out of order by a debug lever or bot kit — the buy is rejected
-    // either way; only the message differs (102 review finding).
-    if profession_line == 0 && !known {
-        if let Some(chain) = ctx.db.game_spell_chain().spell_id().find(to_learn) {
-            let knows_prev = crate::spell::knows_spell(ctx, caster_guid, chain.prev_spell);
-            if !rank_prereq_met(chain.prev_spell, knows_prev) {
-                return Err(format!("[{FAIL_LEVEL_TOO_LOW}] requires the previous rank"));
+    // RANK-PREREQ GATE (work-item 102, reduced scope): a plain class-spell offering (`grant` is
+    // `BuyGrant::Spell` — professions/weapons have no chain concept) whose resolved rank carries a
+    // `game_spell_chain` row must have the PREVIOUS rank already known (vanilla refuses training
+    // "Fireball Rank 3" while only Rank 1 is known). NO chain row (an un-imported spell, or a rank with
+    // nothing before it) → the gate passes, BYTE-IDENTICAL to before this work item (the 178/212
+    // precedent: missing imported data never blocks a purchase that used to succeed). Reuses
+    // FAIL_LEVEL_TOO_LOW — there is no dedicated "prerequisite not met" code in gtker's 3-value
+    // `TrainingFailureReason`, and its own doc already calls it the closest "req not met" fit (see the
+    // const above). Skipped when the spell is ALREADY KNOWN so `trainer_buy_check`'s "already-known
+    // first" message-priority contract (see its doc) holds even for a rank granted out of order by a
+    // debug lever or bot kit — the buy is rejected either way; only the message differs (102 review
+    // finding).
+    if !known {
+        if let BuyGrant::Spell(to_learn) = grant {
+            if let Some(chain) = ctx.db.game_spell_chain().spell_id().find(to_learn) {
+                let knows_prev = crate::spell::knows_spell(ctx, caster_guid, chain.prev_spell);
+                if !rank_prereq_met(chain.prev_spell, knows_prev) {
+                    return Err(format!("[{FAIL_LEVEL_TOO_LOW}] requires the previous rank"));
+                }
             }
         }
     }
@@ -293,8 +309,7 @@ pub(crate) fn apply_trainer_buy(
             caster.money = caster.money.saturating_sub(offered.cost);
             let owner = caster.owner_identity;
             entities.guid().update(caster);
-            // One shared routing decision for the runtime path + the unit test (grant_for).
-            match grant_for(profession_line, profession_cap, to_learn) {
+            match grant {
                 BuyGrant::Profession(line, cap) => {
                     crate::skill::learn_profession(ctx, caster_guid, owner, line, cap as u16)
                 }
@@ -383,38 +398,6 @@ mod tests {
         assert_eq!(trainer_buy_check(false, 6, 6, 10, 10), Ok(()));
     }
 
-    /// LEARN-FROM-TRAINER ADDS THE SKILL (professions slice 3): a `learn_skill_line > 0` offering routes to
-    /// a Profession grant (→ `skill::learn_profession`, a `game_player_skill` row), NEVER a Spell grant
-    /// (→ `game_player_spell`). An unflagged (`0`) offering stays on the spell path with its resolved id —
-    /// so a class-spell offering is unaffected (no regression). `to_learn` is ignored on the profession arm.
-    #[test]
-    fn profession_offering_grants_a_skill_not_a_spell() {
-        use crate::skill::{skill_line, APPRENTICE_CAP};
-        let cap = APPRENTICE_CAP as u32; // 75 — the default Apprentice ceiling
-                                         // Cooking offering (marker spell 50080, learn_skill_line=185) → grant the Cooking SKILL at the cap.
-        assert_eq!(
-            grant_for(skill_line::COOKING, cap, 50080),
-            BuyGrant::Profession(skill_line::COOKING, 75)
-        );
-        // Skinning offering (marker 50081, line 393) → grant the Skinning skill.
-        assert_eq!(
-            grant_for(skill_line::SKINNING, cap, 50081),
-            BuyGrant::Profession(skill_line::SKINNING, 75)
-        );
-        // A Journeyman marker (cap 150) routes to a Profession grant carrying the LIFTED ceiling.
-        assert_eq!(
-            grant_for(skill_line::COOKING, 150, 50090),
-            BuyGrant::Profession(skill_line::COOKING, 150)
-        );
-        // A normal class-spell offering (line 0) learns the resolved spell id — the unchanged path (cap ignored).
-        assert_eq!(grant_for(0, cap, 133), BuyGrant::Spell(133)); // Fireball rank 1
-                                                                  // The profession arm ignores `to_learn` entirely (a stray id never leaks into a spell learn).
-        assert_eq!(
-            grant_for(skill_line::COOKING, cap, 9999),
-            BuyGrant::Profession(skill_line::COOKING, 75)
-        );
-    }
-
     /// PROFESSION REBUY CAP: the already-known gate for a profession offering compares the character's
     /// STORED max_rank against THIS offering's cap. Exactly meeting the cap is already-known (rejected,
     /// no re-charge); one rank below it is not (the buy proceeds and lifts the ceiling); never having
@@ -440,23 +423,6 @@ mod tests {
         assert!(
             !profession_already_capped(Some(74), 75),
             "one rank below the cap is not yet capped"
-        );
-    }
-
-    /// WEAPON-MASTER FORK ROUTING (work-item 202): a weapon-learn offering (`learn_skill_line` set to a
-    /// COMBAT line like DAGGER) routes through the exact same `grant_for` → `BuyGrant::Profession` arm a
-    /// profession offering does (`learn_profession` handles the plain insert-if-absent case identically
-    /// whether the cap came from a static tier column or `skill_cap_for_level`) — but the CAP fed in is
-    /// LEVEL-derived, not a stored tier. This is the "grant_for(DAGGER, skill_cap_for_level(40), _)" shape
-    /// `apply_trainer_buy`'s weapon arm produces at level 40 (cap 200).
-    #[test]
-    fn weapon_learn_offering_routes_to_profession_grant_with_a_level_derived_cap() {
-        use crate::skill::{skill_cap_for_level, skill_line};
-        let cap = skill_cap_for_level(40); // 40 * 5 = 200
-        assert_eq!(cap, 200);
-        assert_eq!(
-            grant_for(skill_line::DAGGER, cap, 0),
-            BuyGrant::Profession(skill_line::DAGGER, 200)
         );
     }
 

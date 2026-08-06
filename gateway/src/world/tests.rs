@@ -551,7 +551,7 @@ impl WorldStore for InMemoryStore {
     /// escrow for the same character, otherwise freeze + serialize.
     ///
     /// The `escrowed_guid` lookup is the OUT-row with the IN-row as a fallback, exactly as
-    /// `module/src/transfer.rs`'s `begin_transfer` computes it — and that fallback is load-bearing
+    /// `module/src/transfer/mod.rs`'s `begin_transfer` computes it — and that fallback is load-bearing
     /// now the transfer id IS the character guid: a database holding an unreleased ARRIVAL in-row
     /// for this character answers `BeginPlan::Replay` to a genuine new transfer, i.e. reports
     /// success while freezing nothing. A mock that only looked at `out_rows` could not see it.
@@ -7554,7 +7554,7 @@ fn a_freshly_created_characters_first_login_transfers_off_the_default_shard() {
 //  Cross-database transfer (#19) — Phase A of the elastic-sharding spec (#12).
 //
 //  `FakeShardDb` is a faithful re-implementation of the MODULE's escrow guards
-//  (`module/src/transfer.rs`'s `plan_begin`/`plan_import`/`plan_finish` + `release_transfer`'s
+//  (`module/src/transfer/mod.rs`'s `plan_begin`/`plan_import`/`plan_finish` + `release_transfer`'s
 //  source check), so these tests exercise the one thing the module cannot check for itself: the
 //  ORDER the gateway drives two databases in, because each database can only see its own ledger.
 //  Two `FakeShardDb`s stand for two SpacetimeDB databases — the same shape #17's `sharded_stores`

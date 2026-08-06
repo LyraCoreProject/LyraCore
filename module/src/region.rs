@@ -14,7 +14,7 @@
 //! # Why the module never reads a shard id
 //!
 //! `shard` is a database name: a GATEWAY routing fact. The moment a reducer branches on it, the
-//! module stops being relocatable and the world stops being shardable — so `lib.rs`'s
+//! module stops being relocatable and the world stops being shardable — so `tripwires.rs`'s
 //! `partition_discipline_tripwire` fails the build if the accessor or the `.shard` field is touched
 //! anywhere but this file. The reducer below writes it; nothing reads it.
 //!

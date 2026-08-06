@@ -140,13 +140,10 @@ crate::character_owned!(restamp, fn sweep_restamp_game_group_member(ctx, charact
 // strictly better than the snapshot — a party SPLIT across the boundary re-syncs both sides, where
 // the snapshot could only carry what the character had when it stepped into the portal.
 //
-// This also settles the three OPEN entries on the in-transit exception list (`transfer.rs`, issue
+// This also settles the three OPEN entries on the in-transit exception list (`transfer/mod.rs`, issue
 // #30): a third party's accept/kick/leave for an in-transit character is now a REALM-CORE write, so
 // there is no source-copy write left to lose.
-crate::character_owned!(transfer, fn sweep_transfer_game_group_member(ctx, character_guid, io) {
-    let _ = (ctx, character_guid);
-    crate::transfer::not_transported(io);
-});
+crate::character_owned!(not_transported, fn sweep_transfer_game_group_member());
 
 /// Drop a character's MIRROR row on the shard it is leaving, without the leave/disband semantics
 /// (issue #19, re-scoped by #22).
@@ -208,10 +205,7 @@ crate::character_owned!(delete, fn sweep_delete_game_group_invite(ctx, character
 // the inviter is by definition NOT transferring with the target (they are still standing in the
 // open world). Carrying it would pop an invite dialog for a party the arriving character cannot see.
 // Not transported, by decision — the invite dies with the source copy, exactly as a decline would.
-crate::character_owned!(transfer, fn sweep_transfer_game_group_invite(ctx, character_guid, io) {
-    let _ = (ctx, character_guid);
-    crate::transfer::not_transported(io);
-});
+crate::character_owned!(not_transported, fn sweep_transfer_game_group_invite());
 
 /// A bot-initiated invite the MODULE has DECIDED but cannot execute (issue #54, closing the gap
 /// #22's group slice opened): `game_group`/`game_group_member` are authoritative on realm-core, and
@@ -309,19 +303,6 @@ pub struct GroupEvent {
 const GROUP_EVENT_RLS: Filter =
     Filter::Sql("SELECT * FROM game_group_event WHERE recipient_identity = :sender");
 
-/// `pub(crate)` (was private): work-item 187's roll/master-loot notifications (`loot.rs`) reuse this
-/// SAME push — see `lyracore_shared::loot_roll`'s module doc for why the roll relay rides
-/// `game_group_event` instead of standing up a parallel table.
-/// Address the event row: the recipient's bound identity when this database HAS the character
-/// (every world shard), [`Identity::ZERO`] when it does not (realm-core, whose only characters are
-/// guids in the directory tables). ZERO matches no client — the RLS filter above is
-/// `recipient_identity = :sender` and a client's sender is never ZERO — so a ZERO-addressed row is
-/// visible to the owner-token coordinator alone, which is exactly who reads realm-core's events.
-/// Pure, so the fallback is pinned by a test rather than by a live node.
-pub(crate) fn event_recipient_identity(bound: Option<Identity>) -> Identity {
-    bound.unwrap_or(Identity::ZERO)
-}
-
 pub(crate) fn push_event(
     ctx: &ReducerContext,
     recipient_guid: u64,
@@ -348,7 +329,7 @@ pub(crate) fn push_event(
         .unwrap_or_default();
     ctx.db.game_group_event().insert(GroupEvent {
         id: 0,
-        recipient_identity: event_recipient_identity(bound),
+        recipient_identity: crate::helpers::event_recipient_identity(bound),
         kind,
         other_guid,
         other_name,
@@ -363,15 +344,13 @@ pub(crate) fn push_event(
 /// counts). Carries the group's CURRENT loot method/threshold/master (work-item 187) alongside the
 /// roster, so a `CMSG_LOOT_METHOD` change re-renders the party frame's loot block through this same
 /// relay — no separate gateway round trip needed.
-fn roster_payload(ctx: &ReducerContext, group_id: u64) -> String {
-    let group = ctx.db.game_group().group_id().find(group_id);
-    let leader = group.as_ref().map(|g| g.leader_guid).unwrap_or(0);
-    let loot_method = group
-        .as_ref()
-        .map(|g| g.loot_method)
-        .unwrap_or(loot_method::GROUP);
-    let loot_threshold = group.as_ref().map(|g| g.loot_threshold).unwrap_or(2);
-    let master_looter_guid = group.as_ref().map(|g| g.master_looter_guid).unwrap_or(0);
+/// `None` means the `game_group` row is MISSING — every caller treats that as a hard invariant
+/// violation (they've either just inserted the row or already `.ok_or("group row missing")?`'d
+/// their own read of it), so there is no plausible roster to fabricate here. Previously this
+/// synthesized a fake one (leader 0, GROUP method, threshold 2, no master) that looked like a
+/// real, empty party.
+fn roster_payload(ctx: &ReducerContext, group_id: u64) -> Option<String> {
+    let group = ctx.db.game_group().group_id().find(group_id)?;
     let members: Vec<(u64, String, bool)> = members_of(ctx, group_id)
         .into_iter()
         .map(|m| {
@@ -391,13 +370,13 @@ fn roster_payload(ctx: &ReducerContext, group_id: u64) -> String {
             (m.character_guid, name, online)
         })
         .collect();
-    lyracore_shared::group::encode_roster(
-        leader,
-        loot_method,
-        loot_threshold,
-        master_looter_guid,
+    Some(lyracore_shared::group::encode_roster(
+        group.leader_guid,
+        group.loot_method,
+        group.loot_threshold,
+        group.master_looter_guid,
         &members,
-    )
+    ))
 }
 
 /// The group a character belongs to, if any.
@@ -407,6 +386,31 @@ pub(crate) fn group_of(ctx: &ReducerContext, character_guid: u64) -> Option<Grou
         .by_character()
         .filter(&character_guid)
         .next()
+}
+
+/// The leader-authorization sequence shared by `invite_core_on` / `uninvite_from_group` /
+/// `set_loot_method_for` (issue #372): resolve `guid`'s group membership, its `Group` row, and confirm
+/// `guid` actually IS that group's leader. `Err(group_err::NOT_IN_GROUP)` if `guid` has no group at
+/// all; `Err(group_err::NOT_LEADER)` if it does but isn't the leader. Both are the shared error CODE
+/// constants (not ad-hoc strings), so `gateway/src/world/social.rs`'s `party_result_for` substring-match
+/// keeps mapping them to the same `PartyResult`s unchanged. `invite_core_on` treats a `NOT_IN_GROUP`
+/// result as an ALLOWED case rather than propagating it — starting a brand-new group (where the
+/// inviter becomes leader) is fine; see its call site.
+pub(crate) fn led_group_of(
+    ctx: &ReducerContext,
+    guid: u64,
+) -> Result<(GroupMember, Group), String> {
+    let m = group_of(ctx, guid).ok_or_else(|| group_err::NOT_IN_GROUP.to_string())?;
+    let group = ctx
+        .db
+        .game_group()
+        .group_id()
+        .find(m.group_id)
+        .ok_or("group row missing")?;
+    if group.leader_guid != guid {
+        return Err(group_err::NOT_LEADER.to_string());
+    }
+    Ok((m, group))
 }
 
 /// `pub(crate)` (was private): work-item 187's kill-time loot stamping (`combat/mod.rs` →
@@ -420,7 +424,12 @@ pub(crate) fn members_of(ctx: &ReducerContext, group_id: u64) -> Vec<GroupMember
 }
 
 fn push_list_to_all(ctx: &ReducerContext, group_id: u64) {
-    let payload = roster_payload(ctx, group_id);
+    let Some(payload) = roster_payload(ctx, group_id) else {
+        spacetimedb::log::warn!(
+            "push_list_to_all: group {group_id} row missing — skipping roster push (broken invariant, not a fabricated empty roster)"
+        );
+        return;
+    };
     for m in members_of(ctx, group_id) {
         push_event(
             ctx,
@@ -492,19 +501,17 @@ fn invite_core_on(
     if group_of(ctx, target_guid).is_some() {
         return Err(group_err::ALREADY_IN_GROUP.to_string());
     }
-    if let Some(m) = group_of(ctx, inviter_guid) {
-        let group = ctx
-            .db
-            .game_group()
-            .group_id()
-            .find(m.group_id)
-            .ok_or("group row missing")?;
-        if group.leader_guid != inviter_guid {
-            return Err(group_err::NOT_LEADER.to_string());
+    // The inviter having NO group yet is fine (they'll lead a brand-new one) — only propagate
+    // NOT_LEADER (inviter is in a group but isn't its leader); a led group additionally enforces the
+    // member cap.
+    match led_group_of(ctx, inviter_guid) {
+        Ok((m, _group)) => {
+            if members_of(ctx, m.group_id).len() >= GROUP_MAX_MEMBERS {
+                return Err(group_err::GROUP_FULL.to_string());
+            }
         }
-        if members_of(ctx, m.group_id).len() >= GROUP_MAX_MEMBERS {
-            return Err(group_err::GROUP_FULL.to_string());
-        }
+        Err(e) if e == group_err::NOT_IN_GROUP => {}
+        Err(e) => return Err(e),
     }
     let invites = ctx.db.game_group_invite();
     for stale in invites.by_target().filter(&target_guid).collect::<Vec<_>>() {
@@ -623,7 +630,7 @@ fn accept_invite_on(ctx: &ReducerContext, plane: Plane, acceptor_guid: u64) -> R
                 id: 0,
                 group_id: group.group_id,
                 character_guid: inviter_guid,
-                owner_identity: event_recipient_identity(inviter_identity),
+                owner_identity: crate::helpers::event_recipient_identity(inviter_identity),
             });
             group.group_id
         }
@@ -704,16 +711,7 @@ pub(crate) fn uninvite_from_group(
     leader_guid: u64,
     target_guid: u64,
 ) -> Result<(), String> {
-    let m = group_of(ctx, leader_guid).ok_or_else(|| group_err::NOT_IN_GROUP.to_string())?;
-    let group = ctx
-        .db
-        .game_group()
-        .group_id()
-        .find(m.group_id)
-        .ok_or("group row missing")?;
-    if group.leader_guid != leader_guid {
-        return Err(group_err::NOT_LEADER.to_string());
-    }
+    let (m, _group) = led_group_of(ctx, leader_guid)?;
     let target =
         group_of(ctx, target_guid).ok_or_else(|| group_err::TARGET_NOT_IN_GROUP.to_string())?;
     if target.group_id != m.group_id {
@@ -754,16 +752,7 @@ pub(crate) fn set_loot_method_for(
     master_guid: u64,
     loot_threshold: u8,
 ) -> Result<(), String> {
-    let m = group_of(ctx, leader_guid).ok_or_else(|| group_err::NOT_IN_GROUP.to_string())?;
-    let mut group = ctx
-        .db
-        .game_group()
-        .group_id()
-        .find(m.group_id)
-        .ok_or("group row missing")?;
-    if group.leader_guid != leader_guid {
-        return Err(group_err::NOT_LEADER.to_string());
-    }
+    let (m, mut group) = led_group_of(ctx, leader_guid)?;
     if !valid_loot_method(loot_setting) {
         return Err("invalid loot method".to_string());
     }
@@ -1038,7 +1027,7 @@ pub fn sync_group_mirror(
         // every other character-owned row. A member who has never logged in HERE — or who is mid-hop,
         // which is why this reads through the in-transit chokepoint rather than raw — has no
         // readable character row and mirrors as ZERO; their own login restamps it.
-        let owner_identity = event_recipient_identity(
+        let owner_identity = crate::helpers::event_recipient_identity(
             crate::helpers::character_by_guid(ctx, guid).map(|c| c.owner_identity),
         );
         member_tbl.insert(GroupMember {
@@ -1235,21 +1224,7 @@ mod tests {
         assert_eq!(mirror_plan(&[], &[100, 200]), (vec![], vec![100, 200]));
     }
 
-    /// The event addressing #22 rests on: a recipient this database knows gets their bound identity
-    /// (so the per-player RLS still scopes the row on a world shard), and one it does not gets ZERO
-    /// — which no client's `:sender` can ever equal, so a realm-core event row is visible to the
-    /// owner-token coordinator alone.
-    #[test]
-    fn a_recipient_without_a_character_row_addresses_the_event_to_nobody() {
-        let bound = Identity::from_byte_array([7u8; 32]);
-        assert_eq!(event_recipient_identity(Some(bound)), bound);
-        assert_eq!(event_recipient_identity(None), Identity::ZERO);
-        assert_ne!(
-            Identity::ZERO,
-            bound,
-            "ZERO must not be a reachable client identity"
-        );
-    }
+    // event_recipient_identity's pinned test moved to helpers.rs with the function itself (issue #371).
 
     // ---- The realm-core reducers' two unreachable decisions (issue #22, review of PR #49) ----
     //

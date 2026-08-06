@@ -617,9 +617,10 @@ pub fn build_creature_entity(
 /// single source of truth shared by `world::player_login` and `debug::debug_spawn_player_entity`
 /// (the player counterpart to `build_creature_entity`). Resolves the power type, the gender-correct
 /// per-race display + faction from the imported ChrRaces data (falling back to the Human-Male values
-/// — display 49 / faction 1 — when the table isn't loaded), and the full stat curve
-/// (`base_attributes_for`/`max_health_for`/`max_power_for`); health == max_health on a fresh build,
-/// mana classes start full while rage/energy start empty (`stats::starting_power`).
+/// — display 49 / faction 1 — when the table isn't loaded), and the full stat curve via
+/// `stats::apply_level_stats` (the same writer the ding loop and a GM level-set use, #362); health ==
+/// max_health on a fresh build, mana classes start full while rage/energy start empty
+/// (`stats::starting_power`).
 ///
 /// `owner_identity` is the ONLY genuine difference between the two call sites: login passes
 /// `ctx.sender()` (the connection's bound identity), while the debug materialize passes the
@@ -646,35 +647,11 @@ pub fn build_player_entity(
         .as_ref()
         .map(|ri| ri.faction_template)
         .unwrap_or(1);
-    // The five base attributes for the character sheet, from the same curve that sets HP/mana
-    // (falls back to zeros when the curve isn't loaded — display-only).
-    let (strength, agility, stamina, intellect, spirit) =
-        crate::stats::base_attributes_for(ctx, character.race, character.class, level);
-    // Vitals from the real class/level curve (importer P3): compute each once (health == max_health on
-    // a fresh build; mana classes start full, rage/energy empty). Falls back to the flat placeholder
-    // when the curve isn't loaded, so an L1 character is 60 HP either way.
-    let max_health = crate::stats::max_health_for(ctx, character.race, character.class, level);
-    let max_power = crate::stats::max_power_for(ctx, character.race, character.class, level);
-    // Resume at the persisted vitals rather than always healing to full.
-    // `character.health == 0` is the sentinel for "nothing persisted yet" (a fresh character, or an
-    // existing row that predates this column) — spawn at full health/starting power in that case.
-    // A real persisted health is clamped into `1..=max_health` in case the level's
-    // max_health curve changed (e.g. a stat/curve reimport) since the last logout. Power only persists
-    // for MANA — ENERGY and RAGE are non-persisted in vanilla (energy always 100/100, rage always 0 at
-    // login; see `starting_power`'s doc comment), so every relog still routes those through
-    // `starting_power` regardless of the health sentinel.
-    let health = if character.health == 0 {
-        max_health
-    } else {
-        character.health.clamp(1, max_health)
-    };
-    let power = if character.health != 0 && power_type == packing::power_type::MANA {
-        character.power.min(max_power)
-    } else {
-        crate::stats::starting_power(power_type, max_power)
-    };
     let (grid_x, grid_y) = spatial::grid_cell(character.x, character.y);
-    WorldEntity {
+    // Stat-block fields (strength..spirit, armor, max_health, max_power) are placeholders here —
+    // `apply_level_stats` fills them right after construction (below). health/power are then
+    // resolved from the persisted value against the freshly-written max.
+    let mut entity = WorldEntity {
         guid: character.guid,
         owner_identity,
         account_id: character.account_id,
@@ -689,10 +666,10 @@ pub fn build_player_entity(
         type_mask: constants::type_mask::PLAYER,
         entry: 0,
         scale_x: 1.0,
-        health,
-        max_health,
-        power,
-        max_power,
+        health: 0,
+        max_health: 0,
+        power: 0,
+        max_power: 0,
         level,
         faction_template: faction, // per-race from ChrRaces (importer P1); fallback 1 (Human)
         unit_bytes_0: packing::unit_bytes_0(
@@ -729,13 +706,13 @@ pub fn build_player_entity(
         } else {
             0
         },
-        strength,
-        agility,
-        stamina,
-        intellect,
-        spirit,
-        npc_flags: 0,       // a player is not an NPC (no gossip/vendor flags)
-        armor: agility * 2, // classic base armor from agility (2/point); item armor folds in later
+        strength: 0,
+        agility: 0,
+        stamina: 0,
+        intellect: 0,
+        spirit: 0,
+        npc_flags: 0,   // a player is not an NPC (no gossip/vendor flags)
+        armor: 0,       // item armor folds in later
         leg_ends_ms: 0, // players don't run the creature movement passes; the columns are inert for them
         wp_target: 0,
         movement_flags: 0, // set live by movement_update on the player's first move
@@ -764,7 +741,31 @@ pub fn build_player_entity(
         run_speed_mult_bp: character.pending_run_speed_mult_bp,
         godmode: character.pending_godmode,
         resting: character.resting, // 196: restore the live rest flag (relog into an inn shows rested)
-    }
+    };
+    // The level-derived stat block — the five base attributes, armor, and max health/power — from the
+    // real class/level curve (importer P3), via the ONE shared writer also used by the ding loop and a
+    // GM level-set (#362). Falls back to the flat placeholder/zeros when the curve isn't loaded, so an
+    // L1 character is 60 HP either way.
+    crate::stats::apply_level_stats(ctx, &mut entity, character.race, character.class, level);
+    // Resume at the persisted vitals rather than always healing to full.
+    // `character.health == 0` is the sentinel for "nothing persisted yet" (a fresh character, or an
+    // existing row that predates this column) — spawn at full health/starting power in that case.
+    // A real persisted health is clamped into `1..=max_health` in case the level's
+    // max_health curve changed (e.g. a stat/curve reimport) since the last logout. Power only persists
+    // for MANA — ENERGY and RAGE are non-persisted in vanilla (energy always 100/100, rage always 0 at
+    // login; see `starting_power`'s doc comment), so every relog still routes those through
+    // `starting_power` regardless of the health sentinel.
+    entity.health = if character.health == 0 {
+        entity.max_health
+    } else {
+        character.health.clamp(1, entity.max_health)
+    };
+    entity.power = if character.health != 0 && power_type == packing::power_type::MANA {
+        character.power.min(entity.max_power)
+    } else {
+        crate::stats::starting_power(power_type, entity.max_power)
+    };
+    entity
 }
 
 // ===========================================================================================

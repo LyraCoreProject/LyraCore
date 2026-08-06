@@ -14,9 +14,17 @@
 //! Submodules:
 //!   - `tables`    — the spell/aura/cooldown/cast/schedule table structs (+ their generated accessors).
 //!   - `taxonomy`  — the KIND/MECHANIC/param/target/combat-field/stat/resistance consts + tuning.
-//!   - `control`   — the crowd-control model (the 7 CC predicates + immunity + break-on-damage).
-//!   - `math`      — the pure helpers + aura-read folds + damage/resist/dispel/vitals/absorb helpers.
-//!   - `cast`      — targeting + effect dispatch + the cast core (`resolve_cast_at` / `begin_cast`).
+//!   - `control`   — the crowd-control model (the 7 CC predicates + immunity + break-on-damage) PLUS
+//!                   (381) the cast-bar teardown family (`pushback_cast` / `interrupt_cast` /
+//!                   `break_channel` / `interrupt_cast_and_lock`).
+//!   - `math`      — pure helpers + aura-read folds only (388: no ctx-bound orchestration — see `effects`).
+//!   - `effects`   — (388) the ctx-bound orchestration `math` used to carry: `arm_spell_retaliation` /
+//!                   `apply_target_damage` / `dispel_target` / `recompute_vitals` / `absorb_incoming` —
+//!                   every one of which WRITES to a live table, split out so `math`'s own charter is true.
+//!   - `cast`      — a directory module (381 split): `targeting` (`select_targets` / `aura_apply` /
+//!                   `apply_effect` + per-kind handlers) and `resolve` (the cast core —
+//!                   `resolve_cast_at` + its extracted `check_cast_gates` gate sweep / `resolve_cast` /
+//!                   `begin_cast` / the passive-apply path).
 //!   - `scheduler` — the `#[reducer]`s (`tick_auras` / `fire_pending_cast` / `cast_spell`).
 //!
 //! Everything is re-exported below so every `crate::spell::<sym>` path resolves regardless of which
@@ -24,6 +32,7 @@
 
 mod cast;
 mod control;
+mod effects;
 mod math;
 mod scheduler;
 pub(crate) mod spellbook;
@@ -39,6 +48,7 @@ mod tests;
 // warning).
 pub(crate) use cast::*;
 pub use control::*;
+pub(crate) use effects::*;
 pub use math::*;
 pub use scheduler::*;
 pub use spellbook::*;
@@ -47,5 +57,5 @@ pub(crate) use taxonomy::*;
 // `stacking` is reached explicitly via `crate::spell::stacking::<sym>` (its tables' generated
 // accessor traits — `game_spell_group`/`game_spell_group_rule`/`game_dr_state` — collide-free but its
 // pure types (`ApplyDecision`, `AuraSummary`, ...) are deliberately NOT globbed into this module's flat
-// namespace, since `cast.rs`/`scheduler.rs`/`math.rs` reference them qualified for readability at each
-// of the few call sites).
+// namespace, since `cast/targeting.rs`/`scheduler.rs`/`math.rs` reference them qualified for
+// readability at each of the few call sites).

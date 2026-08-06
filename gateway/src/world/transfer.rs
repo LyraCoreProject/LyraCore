@@ -1,6 +1,6 @@
 //! The gateway's half of the escrowed cross-database transfer (issue #19, spec #12 Phase A).
 //!
-//! The module owns the state machine (`module/src/transfer.rs`); this file owns the ORDER the two
+//! The module owns the state machine (`module/src/transfer/`); this file owns the ORDER the two
 //! databases are driven in, because that ordering is the one safety property neither database can
 //! check for itself — each can only see its own ledger row.
 //!

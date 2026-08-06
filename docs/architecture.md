@@ -62,7 +62,7 @@ Five databases, one gateway tier, one wasm.
 
 The same wasm is published to **every** database. A shard is a database *name*, which is a gateway
 routing fact; module game logic never reads one, and a tripwire test fails the build if it starts to
-(`no_module_game_logic_reads_a_shard_id` in `module/src/lib.rs`).
+(`no_module_game_logic_reads_a_shard_id` in `module/src/tripwires.rs`).
 
 ---
 
@@ -382,20 +382,20 @@ combat, and honours a 5 s per-session cooldown. When it fires, `run_transfer`
 
 | # | Gateway | Module reducer (`module/src/`) |
 |---|---|---|
-| 1 | `src.begin_transfer(plan)` — writes the escrow row, deletes the live entity | `transfer.rs` (`begin_transfer`) |
+| 1 | `src.begin_transfer(plan)` — writes the escrow row, deletes the live entity | `transfer/mod.rs` (`begin_transfer`) |
 | 2 | `dst.ensure_instance(...)` (only when the destination is an instance) | `instance.rs` (`ensure_instance`) |
-| 3 | `dst.import_character_blob(id, blob)` | `transfer.rs` (`import_character_blob`) |
-| 4 | `src.confirm_import(id)` | `transfer.rs` (`confirm_import`) |
-| 5 | `src.finish_transfer(id)` — **delete last** | `transfer.rs` (`finish_transfer`) |
+| 3 | `dst.import_character_blob(id, blob)` | `transfer/mod.rs` (`import_character_blob`) |
+| 4 | `src.confirm_import(id)` | `transfer/mod.rs` (`confirm_import`) |
+| 5 | `src.finish_transfer(id)` — **delete last** | `transfer/mod.rs` (`finish_transfer`) |
 | 5b | publish the character→shard index to realm-core | `realm_core.rs` |
-| 6 | `dst.release_transfer(id)` — the arrival fence drops | `transfer.rs` (`release_transfer`) |
+| 6 | `dst.release_transfer(id)` — the arrival fence drops | `transfer/mod.rs` (`release_transfer`) |
 | 7 | `src.evict_instance_population(...)` — best effort, never fails the hop | `instance.rs` (`evict_instance_population`) |
 
 **The escrow row on disk is the authority**, and the transfer id **is** the character guid
 (`transfer_id_for` in `gateway/src/world/transfer.rs`) so recovery needs nothing from gateway RAM.
 While either escrow row exists the character is *in transit*, and four chokepoints refuse to act on
 it: `helpers::entity_by_owner`, `world::player_login`, `begin_transfer`'s own target-side delete, and
-`helpers::character_by_guid`/`character_by_name` (checked in `module/src/transfer.rs`). A scheduled
+`helpers::character_by_guid`/`character_by_name` (checked in `module/src/transfer/tests.rs`). A scheduled
 reaper sweeps abandoned escrows every 5 s. `LYRACORE_TRANSFER_ABORT_AFTER=<step>` injects a crash
 after any named step for testing.
 
@@ -480,15 +480,17 @@ The ladder, and the rule that no rung substitutes for another:
 are unrestricted.
 
 The build carries source-scan tripwire tests that fail on architectural drift rather than on
-behaviour, all in `module/src/lib.rs`: no module code outside `region.rs`/`load.rs` may read a shard
-id (`:760`); no whole-table `.iter()` over a spatial table outside a shrinking whitelist (`:617`);
-every character-keyed table must carry `character_owned!` markers (`:386`); character lookups must
-go through the two chokepoint helpers (`:945`). Each has a companion ratchet test that fails when
-its whitelist names something that no longer needs to be there.
+behaviour, all in `module/src/tripwires.rs` (#379 pulled them out of `lib.rs`): no module code
+outside `region.rs`/`load.rs` may read a shard id (`:478`); no whole-table `.iter()` over a spatial
+table outside a shrinking whitelist (`:323`); every character-keyed table must carry
+`character_owned!` markers (`:162`); character lookups must go through the two chokepoint helpers
+(`:632`). Each has a companion ratchet test that fails when its whitelist names something that no
+longer needs to be there.
 
 **Debug reducers are compiled out by default.** `module/Cargo.toml` declares
-`debug_reducers = []` with no `default`, and `module/src/debug.rs` is `#![cfg(feature =
-"debug_reducers")]` in its entirety. A debug build adds 124 reducers (109 in `debug.rs`, 15 more
+`debug_reducers = []` with no `default`, and `module/src/debug/` (#386 split the former single
+`debug.rs` into a directory along its section banners) is `#![cfg(feature =
+"debug_reducers")]` in its entirety. A debug build adds 124 reducers (109 in `debug/`, 15 more
 gated individually elsewhere — one `#[cfg(feature = "debug_reducers")]` per function — across ten
 other files, including the not-obviously-named `set_guid_floor` in `auth.rs`; `grep -rn
 'cfg(feature = "debug_reducers")' module/src` finds every one of them. A production build must be a

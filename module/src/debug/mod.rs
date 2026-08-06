@@ -21,79 +21,47 @@
 //! reducer here takes an **explicit `character_guid`/`guid`** and operates on that row directly — it
 //! MUST NOT use `entity_by_owner(ctx, ctx.sender())` (that only resolves the gateway's per-player
 //! connection identity). This is the single most important difference from the player reducers.
+//!
+//! # LAYOUT (#386)
+//! Split along the section banners after the #378 reseed/rearm collapse: this file (`mod`) holds the
+//! world/combat/item levers + the shared `equip_into` helper; `readout` is the `DebugReadout` table +
+//! its two writers; `audit` is the class-kit/quest-chain content audits; `repair` is the consolidated
+//! post-publish repair pass; `encounter`/`instance` are the work-item 228/190 operator levers; and
+//! `fingerprint` is the catalogue-parity content hash (#82). `lib.rs`'s single `#[cfg(feature =
+//! "debug_reducers")] mod debug;` gates the whole directory unchanged — a directory module resolves
+//! identically to a single file as far as that `cfg` and the crate-root `pub use debug::*;` are
+//! concerned.
 // NOTE: no `#![cfg(feature = "debug_reducers")]` here — `lib.rs` already gates `mod debug;` on that
 // exact feature, so repeating it inside the file is a duplicated `cfg` (clippy::duplicated_attributes)
 // that reads as a second, independent gate while adding nothing. lib.rs:175 is THE gate; if it ever
-// loses its `#[cfg]`, this whole file compiles into production — that is what preflight check 1
+// loses its `#[cfg]`, this whole directory compiles into production — that is what preflight check 1
 // (`cargo check --features=debug_reducers`) and the prod-safety note above lib.rs's `mod debug;` guard.
 
+mod audit;
+mod encounter;
+mod fingerprint;
+mod instance;
+mod readout;
+mod repair;
+
+pub use audit::*;
+pub use encounter::*;
+pub use fingerprint::*;
+pub use instance::*;
+pub use readout::*;
+pub use repair::*;
+
 use lyracore_shared::{constants, spatial};
-use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration};
+use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use crate::{
-    build_creature_entity,
-    // Catalogue-fingerprint families only (issue #82) — see `debug_catalogue_fingerprint` below.
-    // (`game_catalogue_fingerprint` itself is defined further down in THIS file, so it needs no import.)
-    game_area,
-    game_area_trigger,
-    game_areatrigger_teleport,
-    game_aura_schedule,
-    // `game_faction` is deliberately absent here: #85 added it to the accessor import above, and
-    // naming it twice compiles clean on each branch alone but not once both land (E0252).
-    game_char_base_info,
-    game_character,
-    game_class_level_stats,
-    game_config,
-    game_createinfo_action,
-    game_createinfo_spell,
-    game_creature_family,
-    game_creature_move_event,
-    game_creature_move_schedule,
-    game_creature_spawn,
-    game_creature_template,
-    game_faction,
-    game_faction_template,
-    game_gameobject,
-    game_gameobject_pool,
-    game_gameobject_pool_member,
-    game_gameobject_template,
-    game_gameobject_unlocked,
-    game_graveyard,
-    game_graveyard_zone,
-    game_ground_area,
-    game_ground_area_schedule,
-    game_instance,
-    game_instance_reaper_schedule,
-    game_item_instance,
-    game_item_template,
-    game_level_stats,
-    game_lock,
-    game_melee_attack,
-    game_quest_template,
-    game_race_info,
-    game_skill_ability,
-    game_skill_availability,
-    game_skill_line,
-    game_spell,
-    game_spell_chain,
-    game_spell_effect,
-    game_spell_learn,
-    game_spell_reagent,
-    game_start_item,
-    game_start_position,
-    game_talent,
-    game_talent_tab,
-    game_world_entity,
-    AuraSchedule,
-    CreatureMoveSchedule,
-    CreatureSpawn,
-    GroundArea,
-    GroundAreaSchedule,
-    ItemInstance,
-    ServerConfig,
+    build_creature_entity, game_character, game_config, game_creature_move_schedule,
+    game_creature_spawn, game_creature_template, game_gameobject, game_gameobject_pool,
+    game_gameobject_pool_member, game_gameobject_template, game_gameobject_unlocked,
+    game_ground_area, game_item_instance, game_item_template, game_melee_attack,
+    game_quest_template, game_spell, game_spell_effect, game_world_entity, CreatureMoveSchedule,
+    CreatureSpawn, GroundArea, ItemInstance, ServerConfig,
 };
-// `game_spell_group`/`game_spell_group_rule` live in `spell::stacking`, not re-exported at crate root.
-use crate::spell::stacking::{game_spell_group, game_spell_group_rule};
 
 /// Teleport `character_guid` to `(map_id, x, y, z, o)` via the shared `world::teleport_player` core: it
 /// updates the LIVE entity (position + grid cell) AND the durable `game_character` AND emits the
@@ -122,15 +90,6 @@ pub fn debug_teleport(
     Ok(())
 }
 
-/// Set `guid`'s live health (clamped to `max_health`). `health == 0` drives the SAME death path the
-/// combat killing blow uses (`combat::tick_melee`): a PLAYER enters the release/ghost path
-/// (`health = 0` + `dead = true`, then the client shows Release Spirit — vanilla 1.12 has no death
-/// opcode, `UNIT_FIELD_HEALTH == 0` is the sole signal); a CREATURE becomes a corpse (`dead = true`,
-/// disengaged, decay timer armed, loot rolled onto the corpse).
-///
-/// NOTE: the combat module has no reusable kill `fn` — the kill logic is inline in `tick_melee` over local
-/// swing state. This is the minimal faithful re-expression of that path (drop combat via `disengage`,
-/// set the same fields, arm the corpse decay timer like the kill does), NOT a copy of the swing loop.
 /// Deal `amount` DIRECT damage to a live entity through the REAL damage side-effect path
 /// (`break_auras_on_damage`: pushback, CC break, on-damage hooks) — the deterministic damage
 /// source for harness tests (testing-hardening: cast_interrupt's pushback used to depend on a mob
@@ -160,6 +119,17 @@ pub fn debug_apply_damage(
     Ok(())
 }
 
+/// Set `guid`'s live health (clamped to `max_health`). `health == 0` drives the SAME death path the
+/// combat killing blow uses (`combat::tick_melee`): a PLAYER enters the release/ghost path
+/// (`health = 0` + `dead = true`, then the client shows Release Spirit — vanilla 1.12 has no death
+/// opcode, `UNIT_FIELD_HEALTH == 0` is the sole signal); a CREATURE becomes a corpse (`dead = true`,
+/// disengaged, decay timer armed, loot rolled onto the corpse).
+///
+/// Routes through the SAME shared kill path combat uses (`combat::kill_player` / `combat::kill_creature`)
+/// so a debug kill is byte-identical to a real killing blow, including channel teardown and combat-
+/// deadline zeroing — not a re-expression of the swing-loop kill logic (#386: this doc used to sit,
+/// misattached, above `debug_apply_damage`, and claimed "the combat module has no reusable kill fn",
+/// which the body below has not been true of since `combat::kill_player`/`kill_creature` landed).
 #[reducer]
 pub fn debug_set_health(ctx: &ReducerContext, guid: u64, health: u32) -> Result<(), String> {
     let entities = ctx.db.game_world_entity();
@@ -345,8 +315,8 @@ pub fn debug_spawn_player_entity(ctx: &ReducerContext, character_guid: u64) -> R
     // hat: it builds a live entity straight off the durable row, so without the fence it is a second
     // way to put a live copy back on a shard the character has left — the dual-liveness dupe the
     // escrow exists to prevent. `player_login` fences it; so must this.
-    let character = crate::helpers::character_by_guid(ctx, character_guid)
-        .ok_or_else(|| format!("no such character: {character_guid}"))?;
+    let character = crate::helpers::require_character(ctx, character_guid)
+        .map_err(|_| format!("no such character: {character_guid}"))?;
 
     // Build the live entity from the durable character row — the SAME construction
     // `world::player_login` runs, factored into the shared `build_player_entity`. The ONLY difference:
@@ -373,12 +343,7 @@ pub fn debug_force_cast(
     character_guid: u64,
     spell_id: u32,
 ) -> Result<(), String> {
-    let e = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| format!("no live entity for guid {character_guid}"))?;
+    let e = crate::helpers::live_entity(ctx, character_guid)?;
     // Route through the SAME resolved-cast path the player reducer uses, so the debug cast enforces
     // the spell's mana cost and runs its effect dispatch (self-aura vs heal-self) — not just the aura.
     crate::spell::resolve_cast(ctx, character_guid, spell_id, e.level as u8)
@@ -417,8 +382,7 @@ pub fn debug_set_level(
     // by-guid it reaches an escrowed character. Fenced here, not in `stats`: `gm_command`'s caller
     // resolves through `entity_by_owner` already, and the core also serves guids with no character
     // row at all.
-    crate::helpers::character_by_guid(ctx, character_guid)
-        .ok_or_else(|| format!("no character {character_guid}"))?;
+    crate::helpers::require_character(ctx, character_guid)?;
     crate::stats::set_character_level(ctx, character_guid, level)
 }
 
@@ -444,26 +408,6 @@ pub fn debug_clear_creatures(ctx: &ReducerContext, map_id: u32) -> Result<(), St
     Ok(())
 }
 
-/// Seed the aura-expiry schedule row if it is MISSING (idempotent). A DB provisioned
-/// before the `game_aura_schedule` insert was added to `seed::init` never gets it — `init` runs only
-/// on first publish, NOT on an auto-migrate republish — so `tick_auras` never fires and expired auras
-/// never clear (the "buff clears after ~30s" behavior silently breaks while apply still works). The
-/// reaper logic itself is correct; only the schedule was absent. This patches such a live DB without a
-/// destructive `-c` re-provision. (The proper project fix is migration-safe schedule seeding; a fresh
-/// `publish -c` already seeds it.) Matches the interval in `seed::init` (1s).
-#[reducer]
-pub fn debug_ensure_aura_schedule(ctx: &ReducerContext) -> Result<(), String> {
-    if ctx.db.game_aura_schedule().iter().next().is_some() {
-        return Ok(()); // already scheduled — no-op
-    }
-    ctx.db.game_aura_schedule().insert(AuraSchedule {
-        scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(1_000_000)),
-    });
-    log::info!("debug_ensure_aura_schedule: seeded the missing aura-expiry schedule (1s)");
-    Ok(())
-}
-
 /// Stamp a `game_ground_area` at `caster_guid`'s position from `spell_id`'s area effect (118 test hook):
 /// looks up the spell header + its periodic-area effect (the one with a radius + period) and inserts the
 /// zone, exactly as an `E_PERSISTENT_AREA` cast would — so the tick engine can be verified server-side
@@ -474,12 +418,8 @@ pub fn debug_spawn_ground_area(
     caster_guid: u64,
     spell_id: u32,
 ) -> Result<(), String> {
-    let caster = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(caster_guid)
-        .ok_or("caster not in world")?;
+    let caster =
+        crate::helpers::live_entity(ctx, caster_guid).map_err(|_| "caster not in world")?;
     let hdr = ctx
         .db
         .game_spell()
@@ -526,260 +466,6 @@ pub fn debug_spawn_ground_area(
         hdr.duration_ms
     );
     Ok(())
-}
-
-/// Seed the ground-AoE tick schedule row if MISSING (idempotent) — the 118 twin of
-/// `debug_ensure_aura_schedule`. A DB provisioned before `game_ground_area_schedule` was added to
-/// `seed::init` never gets it on a plain (auto-migrate) publish, so `tick_ground_areas` never fires and
-/// Consecration/Blizzard patches sit inert. Call once after publishing 118 to a live DB. Matches the
-/// 500ms interval in `seed::init`.
-#[reducer]
-pub fn debug_ensure_ground_area_schedule(ctx: &ReducerContext) -> Result<(), String> {
-    if ctx.db.game_ground_area_schedule().iter().next().is_some() {
-        return Ok(()); // already scheduled — no-op
-    }
-    ctx.db
-        .game_ground_area_schedule()
-        .insert(GroundAreaSchedule {
-            scheduled_id: 0,
-            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(500_000)),
-        });
-    log::info!(
-        "debug_ensure_ground_area_schedule: seeded the missing ground-AoE tick schedule (500ms)"
-    );
-    Ok(())
-}
-
-/// A read-only scratchpad the combat-readback harness reads via SQL (the keystone that flips
-/// combat-stat features from "needs a finicky live kill" to machine-solo). `debug_compute_swing`
-/// writes the deterministic swing profile here; the harness asserts on it without a fight. Public so
-/// `spacetime sql` can read it; debug-only (the whole module is behind `debug_reducers`). [server]
-#[table(accessor = game_debug_readout, public)]
-pub struct DebugReadout {
-    #[primary_key]
-    pub key: String, // a single "swing" slot today; keyed so future readouts can coexist
-    pub base_min: u32,
-    pub base_max: u32,
-    pub mitigation_pct: u32,
-    pub final_min: u32,
-    pub final_max: u32,
-    pub note: String,
-    /// The target's chance (basis points) to dodge the attacker's swing, from its EFFECTIVE agility
-    /// (base + any A_MOD_STAT(AGI) buff) — the avoidance readback. END-appended + defaulted so adding
-    /// it auto-migrates the existing row.
-    #[default(0)]
-    pub dodge_bp: u32,
-    /// The attacker's EFFECTIVE crit chance (basis points): `CRIT_BP` + any A_MOD_COMBAT(CRIT) aura —
-    /// the crit-rating readback. END-appended + defaulted so adding it auto-migrates the existing row.
-    #[default(0)]
-    pub crit_bp: u32,
-    /// The attacker's EFFECTIVE miss chance (basis points) vs the target: level-derived `miss_chance_bp`
-    /// MINUS any A_MOD_COMBAT(HIT) aura (hit rating reduces miss) — the hit-rating readback. END-appended
-    /// + defaulted so adding it auto-migrates the existing row.
-    #[default(0)]
-    pub hit_miss_bp: u32,
-    /// The target's chance (basis points) to PARRY the attacker's swing: `PARRY_BP` floor plus the
-    /// defense-vs-weapon-skill term (a higher-level defender parries more), agility-independent — the
-    /// parry-scaling readback. END-appended + defaulted so adding it auto-migrates the existing row.
-    #[default(0)]
-    pub parry_bp: u32,
-    /// The attacker's EFFECTIVE swing interval (ms): `base_attack_time_ms` adjusted by any
-    /// `A_MOD_SPEED(SPEED_SWING)` aura (haste shortens, an attack-speed slow lengthens) — the swing-speed
-    /// readback. END-appended + defaulted.
-    #[default(0)]
-    pub attack_time_ms: u32,
-    /// SPELL crit readbacks (written by `debug_compute_spell` to the "spell" row). The caster's spell
-    /// crit chance (bp) = `SPELL_CRIT_BP` + any A_MOD_COMBAT(CRIT) aura. END-appended + defaulted.
-    #[default(0)]
-    pub spell_crit_bp: u32,
-    /// The spell's NON-crit damage (post spell-power scaling + magic resistance) — the baseline hit.
-    /// END-appended + defaulted.
-    #[default(0)]
-    pub spell_hit_normal: u32,
-    /// The spell's CRIT damage (×1.5 of the scaled base, then magic resistance) — proves the crit fold.
-    /// END-appended + defaulted.
-    #[default(0)]
-    pub spell_hit_crit: u32,
-    /// The TARGET's incoming-damage modifier (signed %, A_MOD_DAMAGE_TAKEN) folded into the swing's
-    /// final_min/final_max — so a defensive cooldown like Shield Wall (−75) shows the swing landing for
-    /// 25% here, with no fight. 0 = no such aura (final_min/max are armor-only). END-appended + defaulted.
-    #[default(0)]
-    pub damage_taken_pct: i32,
-    /// The TARGET's chance (basis points) to BLOCK the attacker's swing: 0 unless it has a shield
-    /// equipped, else `block_chance_bp` (the defense-vs-weapon-skill band). The block-chance readback,
-    /// the avoidance/mitigation twin of `parry_bp`. END-appended + defaulted (auto-migrates). [server]
-    #[default(0)]
-    pub block_bp: u32,
-    /// The TARGET's flat shield BLOCK VALUE (the damage a blocked swing absorbs): the shield's base
-    /// `block_value` + Str/20, or 0 if unshielded — so a shield's effect is verifiable with no fight.
-    /// END-appended + defaulted (auto-migrates). [server]
-    #[default(0)]
-    pub block_value: u32,
-    /// The ATTACKER's effective weapon skill (equipped weapon's line, else level*5) and the TARGET's
-    /// effective defense skill (else level*5). Their difference drives the miss/dodge/parry/block bands —
-    /// the skill readback, so a below-cap skill set via `debug_set_skill` is verifiable with no fight.
-    /// END-appended + defaulted (auto-migrates). [server]
-    #[default(0)]
-    pub attacker_weapon_skill: u32,
-    #[default(0)]
-    pub defender_defense_skill: u32,
-}
-
-/// Compute the SERVER's swing profile for `attacker` vs `target` (the exact `swing_range_ctx` +
-/// `armor_mitigation_pct` live combat uses) and write it to `game_debug_readout` — so combat-stat
-/// features (functional armor, weapon damage, …) are verifiable via SQL, with NO live kill. Keyed by
-/// "swing" (each call overwrites). No-op if either guid is absent.
-#[reducer]
-pub fn debug_compute_swing(ctx: &ReducerContext, attacker_guid: u64, target_guid: u64) {
-    let entities = ctx.db.game_world_entity();
-    let (Some(attacker), Some(target)) = (
-        entities.guid().find(attacker_guid),
-        entities.guid().find(target_guid),
-    ) else {
-        return;
-    };
-    let (bmin, bmax) = crate::combat::swing_range_ctx(ctx, &attacker);
-    // EFFECTIVE armor (base + any A_MOD_RESISTANCE(armor) aura) — the exact value live combat mitigates
-    // against, so an armor buff shows up in mitigation_pct here without a fight.
-    let eff_armor = crate::combat::effective_armor(ctx, &target);
-    let p = crate::combat::swing_profile(bmin, bmax, eff_armor, attacker.level);
-    // EFFECTIVE crit/miss (base + any A_MOD_COMBAT(CRIT)/(HIT) aura on the attacker) — the exact bands
-    // roll_swing builds the attack table from, so a crit/hit-rating buff shows up here without a fight.
-    let crit_bp = crate::combat::effective_crit_bp(ctx, &attacker);
-    // The skill difference (defender defense skill − attacker weapon skill) feeding the skill-based bands,
-    // exactly as roll_swing computes it; plus the raw weapon/defense skill values for the readback. The
-    // defense skill now folds A_MOD_COMBAT(COMBAT_DEFENSE) auras (Anticipation), so it shifts sd here.
-    let sd = crate::skill::skill_diff_ctx(ctx, &attacker, &target);
-    let attacker_weapon_skill = crate::skill::effective_weapon_skill(ctx, &attacker);
-    let defender_defense_skill = crate::skill::effective_defense_skill(ctx, &target);
-    let hit_miss_bp = crate::combat::effective_miss_bp(ctx, &attacker, sd);
-    // Defender dodge/parry/block bands — the EXACT effective bands roll_swing uses (the agility/skill base
-    // PLUS any A_MOD_COMBAT(DODGE/PARRY/BLOCK) talent aura), so a Deflection/Shield-Spec buff shows up here
-    // without a fight. Block is shielded-only.
-    let dodge_bp = crate::combat::effective_dodge_bp(ctx, &target, sd);
-    let parry_bp = crate::combat::effective_parry_bp(ctx, &target, sd);
-    let block_value = crate::combat::effective_block_value(ctx, &target);
-    let block_bp = crate::combat::effective_block_bp(ctx, &target, sd, block_value);
-    // Effective swing interval (ms): base attack time shortened by any melee-haste aura on the attacker.
-    let attack_time_ms = crate::combat::effective_swing_time(ctx, &attacker);
-    // Outgoing-damage modifier on the ATTACKER (stance + A_MOD_COMBAT(COMBAT_DMG_DONE) — e.g. Curse of
-    // Weakness) folded into the armor-mitigated range FIRST, exactly as resolve_swing/apply_target_damage
-    // apply it, so a cursed attacker's swing readout shows the reduced hit — server-verifiable with no fight.
-    let damage_done_pct = crate::spell::stance_damage_done_pct(attacker.stance)
-        + crate::spell::combat_field_bonus(ctx, attacker_guid, crate::spell::COMBAT_DMG_DONE);
-    let outgoing_min = crate::spell::apply_damage_taken(p.final_min, damage_done_pct);
-    let outgoing_max = crate::spell::apply_damage_taken(p.final_max, damage_done_pct);
-    // Incoming-damage modifier on the TARGET (A_MOD_DAMAGE_TAKEN — e.g. Shield Wall −75%) folded in NEXT,
-    // exactly as live combat applies it after armor (combat tick_melee). So a shielded target's swing
-    // readout shows the reduced hit — server-verifiable with no fight.
-    let damage_taken_pct = crate::spell::damage_taken_bonus(ctx, target_guid);
-    let final_min = crate::spell::apply_damage_taken(outgoing_min, damage_taken_pct);
-    let final_max = crate::spell::apply_damage_taken(outgoing_max, damage_taken_pct);
-    let readouts = ctx.db.game_debug_readout();
-    let key = "swing".to_string();
-    readouts.key().delete(&key); // upsert
-    readouts.insert(DebugReadout {
-        key,
-        base_min: p.base_min,
-        base_max: p.base_max,
-        mitigation_pct: p.mitigation_pct,
-        final_min,
-        final_max,
-        note: format!(
-            "atk={attacker_guid}(lvl {}) tgt={target_guid}(armor {eff_armor}, dmg_taken {damage_taken_pct}%)",
-            attacker.level
-        ),
-        dodge_bp,
-        crit_bp,
-        hit_miss_bp,
-        parry_bp,
-        attack_time_ms,
-        damage_taken_pct,
-        spell_crit_bp: 0, // melee row — spell fields unused
-        spell_hit_normal: 0,
-        spell_hit_crit: 0,
-        block_bp,
-        block_value,
-        attacker_weapon_skill,
-        defender_defense_skill,
-    });
-}
-
-/// Compute the SERVER's SPELL hit profile for `caster` casting `spell_id` at `target` and write it to
-/// `game_debug_readout` (key "spell") — so spell crit is verifiable via SQL with NO live cast/RNG. Reports
-/// the caster's spell crit chance + the NORMAL and CRIT (×1.5) damage, both through the exact
-/// spell-power-scale + magic-resistance path `apply_effect`'s E_DAMAGE arm uses (die variance excluded —
-/// the readout uses the effect's authored `base_points` so the crit ratio is exact). Uses the spell's
-/// FIRST E_DAMAGE effect. No-op if a guid / the spell / a damage effect is absent. Each call overwrites.
-#[reducer]
-pub fn debug_compute_spell(
-    ctx: &ReducerContext,
-    caster_guid: u64,
-    target_guid: u64,
-    spell_id: u32,
-) {
-    let entities = ctx.db.game_world_entity();
-    let (Some(caster), Some(target)) = (
-        entities.guid().find(caster_guid),
-        entities.guid().find(target_guid),
-    ) else {
-        return;
-    };
-    let Some(hdr) = ctx.db.game_spell().spell_id().find(spell_id) else {
-        return;
-    };
-    // Binary spell-miss chance for this caster→target level pair — surfaced in the note so it's
-    // server-verifiable via SQL with no live cast (no readout column needed).
-    let spell_miss_bp = crate::spell::spell_miss_chance_bp(caster.level, target.level);
-    // The spell's first direct-damage (E_DAMAGE) effect — the one the crit fold applies to.
-    let Some(eff) = ctx
-        .db
-        .game_spell_effect()
-        .by_spell()
-        .filter(&spell_id)
-        .find(|e| e.kind == crate::spell::E_DAMAGE)
-    else {
-        return;
-    };
-    // The SAME scale → crit → resist pipeline as the live E_DAMAGE arm, minus the random die + crit roll:
-    // use the authored base_points so NORMAL vs CRIT is an exact ×1.5 readback.
-    let sp = crate::spell::spell_power(ctx, caster_guid, hdr.school_mask);
-    let scaled =
-        crate::spell::compose_magnitude(eff.base_points, sp, crate::spell::SPELL_POWER_COEFF_PCT);
-    let normal =
-        crate::spell::apply_resistance(ctx, target_guid, caster_guid, hdr.school_mask, scaled);
-    let crit_raw = crate::spell::apply_spell_crit(scaled, true);
-    let crit =
-        crate::spell::apply_resistance(ctx, target_guid, caster_guid, hdr.school_mask, crit_raw);
-    let spell_crit_bp = crate::spell::spell_crit_bp(ctx, caster_guid);
-    let readouts = ctx.db.game_debug_readout();
-    let key = "spell".to_string();
-    readouts.key().delete(&key); // upsert
-    readouts.insert(DebugReadout {
-        key,
-        base_min: 0,
-        base_max: 0,
-        mitigation_pct: 0,
-        final_min: 0,
-        final_max: 0,
-        note: format!(
-            "caster={caster_guid}(lvl {}) spell={spell_id} '{}' tgt={target_guid}(lvl {}) miss={spell_miss_bp}bp",
-            caster.level, hdr.name, target.level
-        ),
-        dodge_bp: 0,
-        crit_bp: 0,
-        hit_miss_bp: 0,
-        parry_bp: 0,
-        attack_time_ms: 0,
-        damage_taken_pct: 0, // spell row — the swing-row field
-        spell_crit_bp,
-        spell_hit_normal: normal.max(0) as u32,
-        spell_hit_crit: crit.max(0) as u32,
-        block_bp: 0, // spell row — the swing-row fields
-        block_value: 0,
-        attacker_weapon_skill: 0,
-        defender_defense_skill: 0,
-    });
 }
 
 /// Use (consume) the item in `character_guid`'s inventory `slot` — drives the player `use_item` path
@@ -1230,229 +916,6 @@ pub fn debug_cast_at(
     crate::actor::cast_at(ctx, caster_guid, spell_id, target_guid)
 }
 
-/// 1-20 leveling audit (2026-07-17): for each of the 6 human-class trainers, resolve EVERY offering
-/// through the server's own `resolve_learn_target` (wrapper → rank) and classify the rank spell's
-/// effects — LIVE (has a real handler), HOLLOW (all effects are unmapped E_SCRIPTED no-ops, script_id
-/// 0 — the spell "exists" but does nothing), or NO-EFFECT (learn-only/passive, no effect rows). Logs a
-/// per-class band summary (L1-9 / L10-19 / L20) + the concrete HOLLOW list (class · req_level · id ·
-/// name) — the actionable "which class abilities don't work through 1-20" wall list. Read the module
-/// log after calling. Pure read, no state change.
-#[reducer]
-pub fn debug_audit_class_kits(ctx: &ReducerContext) {
-    use crate::game_trainer_spell;
-    use crate::spell::{A_FLAG, E_SCRIPTED};
-    // (class label, trainer creature entry) — the stable CLASS_TRAINERS map (playerbots mod.rs).
-    const TRAINERS: &[(&str, u32)] = &[
-        ("Warrior", 913),
-        ("Paladin", 927),
-        ("Rogue", 917),
-        ("Priest", 377),
-        ("Mage", 328),
-        ("Warlock", 906),
-    ];
-    // PASSIVE combat skills whose mechanic lives in the COMBAT ENGINE, not as a spell effect
-    // (verified 2026-07-17: combat/tables.rs parry/block in the attack table, combat/mod.rs off-hand
-    // swings). Their spell has no live effect but the ability WORKS — so they are NOT hollow. Matched
-    // by name (rank-suffix stripped by the resolver). Keeps the HOLLOW list actionable.
-    const ENGINE_PASSIVES: &[&str] = &[
-        "Parry",
-        "Dodge",
-        "Block",
-        "Shield Block",
-        "Dual Wield",
-        "Defense",
-        "Two-Handed Swords",
-        "Detect Magic",
-        "Slow Fall",
-        "Unending Breath",
-    ];
-    // Classify a resolved rank spell: Some(true)=LIVE, Some(false)=HOLLOW (unmapped no-op), None=no
-    // effects, or the passive-engine bucket via the returned name check at the call site.
-    let classify = |rank: u32| -> Option<bool> {
-        let effects: Vec<_> = ctx
-            .db
-            .game_spell_effect()
-            .by_spell()
-            .filter(&rank)
-            .collect();
-        if effects.is_empty() {
-            return None;
-        }
-        // A_FLAG passive markers don't count as "does something"; an E_SCRIPTED with script_id 0 is
-        // the unmapped no-op. Any other effect kind (or a scripted handler with a real id) is live.
-        let live = effects
-            .iter()
-            .any(|e| e.kind != A_FLAG && !(e.kind == E_SCRIPTED && e.script_id == 0));
-        Some(live)
-    };
-    let band = |lvl: u8| -> usize {
-        if lvl >= 20 {
-            2
-        } else if lvl >= 10 {
-            1
-        } else {
-            0
-        }
-    };
-    log::info!("=== CLASS-KIT AUDIT (1-20 leveling) — LIVE / HOLLOW / NO-EFFECT per band ===");
-    for (label, trainer) in TRAINERS {
-        // [band][0]=live [1]=hollow [2]=no-effect
-        let mut counts = [[0u32; 3]; 3];
-        let mut hollow: Vec<(u8, u32, String)> = Vec::new();
-        for off in ctx
-            .db
-            .game_trainer_spell()
-            .iter()
-            .filter(|t| t.trainer_entry == *trainer)
-        {
-            if off.required_level > 20 {
-                continue;
-            }
-            let rank = crate::trainer::resolve_learn_target(ctx, off.spell_id);
-            let b = band(off.required_level);
-            let name = ctx
-                .db
-                .game_spell()
-                .spell_id()
-                .find(rank)
-                .map(|s| s.name)
-                .unwrap_or_default();
-            match classify(rank) {
-                Some(true) => counts[b][0] += 1,
-                // An engine-implemented passive counts as LIVE (the mechanic works), not hollow.
-                _ if ENGINE_PASSIVES.contains(&name.as_str()) => counts[b][0] += 1,
-                Some(false) => {
-                    counts[b][1] += 1;
-                    hollow.push((off.required_level, rank, name));
-                }
-                None => counts[b][2] += 1,
-            }
-        }
-        log::info!(
-            "{label:8}  L1-9: {}L/{}H/{}N   L10-19: {}L/{}H/{}N   L20: {}L/{}H/{}N",
-            counts[0][0],
-            counts[0][1],
-            counts[0][2],
-            counts[1][0],
-            counts[1][1],
-            counts[1][2],
-            counts[2][0],
-            counts[2][1],
-            counts[2][2],
-        );
-        hollow.sort_by_key(|(lvl, _, _)| *lvl);
-        for (lvl, id, name) in hollow {
-            log::info!("    HOLLOW {label} L{lvl:<2} {id:>6} {name}");
-        }
-    }
-    log::info!("=== END CLASS-KIT AUDIT ===");
-}
-
-/// 1-20 quest-chain integrity audit (2026-07-17): for every quest with `quest_level` in 1..=20,
-/// check the four things a leveling player needs to actually COMPLETE it, and log the broken ones —
-/// the "which quests would stall a 1-20 playthrough" wall list. Checks: (1) a START giver exists (a
-/// creature or GO offers it — else the quest is unreachable), (2) an END giver exists (else it can't
-/// be turned in), (3) `prev_quest_id`, if set, resolves to a real quest (else a dangling chain), (4)
-/// every KILL/COLLECT objective target + every reward item references an existing template. Pure read.
-#[reducer]
-pub fn debug_audit_quest_chains(ctx: &ReducerContext) {
-    use crate::quest::quest_role;
-    use crate::{
-        game_creature_quest, game_gameobject_quest, game_quest_objective, game_quest_reward_item,
-    };
-    let cq = ctx.db.game_creature_quest();
-    let goq = ctx.db.game_gameobject_quest();
-    let has_giver = |quest: u32, role: u8| -> bool {
-        cq.iter().any(|r| r.quest_entry == quest && r.role == role)
-            || goq.iter().any(|r| r.quest_entry == quest && r.role == role)
-    };
-    let band = |lvl: u32| -> usize {
-        if lvl >= 20 {
-            2
-        } else if lvl >= 10 {
-            1
-        } else {
-            0
-        }
-    };
-    let mut ok = [0u32; 3];
-    let mut broken: Vec<(u32, u32, String, String)> = Vec::new(); // (level, entry, title, reasons)
-    log::info!("=== QUEST-CHAIN AUDIT (1-20) — completability per band ===");
-    for q in ctx.db.game_quest_template().iter() {
-        if q.quest_level == 0 || q.quest_level > 20 {
-            continue;
-        }
-        let mut reasons: Vec<&str> = Vec::new();
-        if !has_giver(q.entry, quest_role::START) {
-            reasons.push("no START giver");
-        }
-        if !has_giver(q.entry, quest_role::END) {
-            reasons.push("no END giver");
-        }
-        if q.prev_quest_id != 0
-            && ctx
-                .db
-                .game_quest_template()
-                .entry()
-                .find(q.prev_quest_id)
-                .is_none()
-        {
-            reasons.push("dangling prev_quest");
-        }
-        for o in ctx.db.game_quest_objective().by_quest().filter(&q.entry) {
-            use crate::quest::objective_kind;
-            let missing = match o.kind {
-                objective_kind::KILL_CREATURE => ctx
-                    .db
-                    .game_creature_template()
-                    .entry()
-                    .find(o.target_entry)
-                    .is_none(),
-                objective_kind::COLLECT_ITEM => ctx
-                    .db
-                    .game_item_template()
-                    .entry()
-                    .find(o.target_entry)
-                    .is_none(),
-                _ => false, // USE_GAMEOBJECT / EXPLORE: target validated elsewhere
-            };
-            if missing {
-                reasons.push("bad objective target");
-                break;
-            }
-        }
-        for r in ctx.db.game_quest_reward_item().by_quest().filter(&q.entry) {
-            if ctx
-                .db
-                .game_item_template()
-                .entry()
-                .find(r.item_entry)
-                .is_none()
-            {
-                reasons.push("bad reward item");
-                break;
-            }
-        }
-        if reasons.is_empty() {
-            ok[band(q.quest_level)] += 1;
-        } else {
-            broken.push((q.quest_level, q.entry, q.title.clone(), reasons.join(", ")));
-        }
-    }
-    log::info!(
-        "OK quests — L1-9: {}   L10-19: {}   L20: {}   (broken: {})",
-        ok[0],
-        ok[1],
-        ok[2],
-        broken.len()
-    );
-    broken.sort_by_key(|(lvl, _, _, _)| *lvl);
-    for (lvl, entry, title, reasons) in broken {
-        log::info!("    BROKEN L{lvl:<2} q{entry:<5} [{reasons}] {title}");
-    }
-    log::info!("=== END QUEST-CHAIN AUDIT ===");
-}
-
 /// Begin a (possibly cast-timed) cast from `caster_guid` AT `target_guid` — drives `begin_cast` so a
 /// spell with `cast_time_ms > 0` schedules a `PendingCast` that resolves when the cast finishes (the
 /// effect lands AFTER the bar, not instantly). Sources the caster level from its entity.
@@ -1463,12 +926,7 @@ pub fn debug_begin_cast(
     spell_id: u32,
     target_guid: u64,
 ) -> Result<(), String> {
-    let e = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(caster_guid)
-        .ok_or_else(|| format!("no live entity for guid {caster_guid}"))?;
+    let e = crate::helpers::live_entity(ctx, caster_guid)?;
     crate::spell::begin_cast(
         ctx,
         caster_guid,
@@ -1493,12 +951,7 @@ pub fn debug_cast_spell_at(
     y: f32,
     z: f32,
 ) -> Result<(), String> {
-    let e = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(caster_guid)
-        .ok_or_else(|| format!("no live entity for guid {caster_guid}"))?;
+    let e = crate::helpers::live_entity(ctx, caster_guid)?;
     let target = if target_guid == 0 {
         caster_guid
     } else {
@@ -1550,13 +1003,16 @@ pub fn debug_score_movement(
     crate::world::score_and_log_movement(
         ctx,
         guid,
-        old_x,
-        old_y,
-        x,
-        y,
-        z,
-        old_move_ms,
-        move_time_ms,
+        &crate::world::MovementDelta {
+            old_x,
+            old_y,
+            old_z: 0.0, // unused here: `score_and_log_movement` reads only x/y; `.moved()` is movement_update-only
+            x,
+            y,
+            z,
+            old_move_ms,
+            move_time_ms,
+        },
     );
     Ok(())
 }
@@ -1622,12 +1078,7 @@ fn equip_into(
     item_entry: u32,
     slot: u8,
 ) -> Result<(), String> {
-    let e = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| format!("no live entity for guid {character_guid}"))?;
+    let e = crate::helpers::live_entity(ctx, character_guid)?;
     let guid = crate::items::item_guid_for(character_guid, slot);
     let tmpl = ctx.db.game_item_template().entry().find(item_entry);
     let durability = tmpl.as_ref().map(|t| t.max_durability).unwrap_or(0);
@@ -1673,12 +1124,17 @@ pub fn debug_accept_quest(
     crate::actor::accept_quest(ctx, character_guid, giver_guid, quest_entry)
 }
 
-/// 279 relay-stress: ONE transaction shaped like the 277 killer — `junk_rows` rows the target's
-/// subscriptions don't match (creature-move legs for nonexistent movers, reaped by the 1s event
-/// TTL) PLUS the relay-carried rows (a quest kill credit for `victim_entry` and an item grant).
-/// The wire test asserts the client still receives SMSG_QUESTUPDATE_ADD_KILL and
-/// SMSG_ITEM_PUSH_RESULT out of this fat transaction — the delivery guarantee the coordinator
-/// relay migration exists to provide.
+/// 279 relay-stress: ONE transaction shaped like the 277 killer — the relay-carried rows (a quest
+/// kill credit for `victim_entry` and an item grant). The wire test asserts the client still
+/// receives SMSG_QUESTUPDATE_ADD_KILL and SMSG_ITEM_PUSH_RESULT out of this fat transaction — the
+/// delivery guarantee the coordinator relay migration exists to provide.
+///
+/// `junk_rows` used to pad the transaction with `game_creature_move_event` inserts (rows no
+/// subscription matched, reaped by the old 1s event TTL) as ballast for the fat-transaction/AOI-churn
+/// relay-drop class. That table has had no gateway subscriber since perf 2.3 (`gc.rs`), so those
+/// inserts stopped being ballast and became a pure leak (#357) — deleted here, not rerouted. Kept as
+/// an accepted-but-ignored arg so an existing caller passing a nonzero value doesn't hit an arity
+/// error; it just no longer does anything.
 #[reducer]
 pub fn debug_stress_relay(
     ctx: &ReducerContext,
@@ -1687,22 +1143,11 @@ pub fn debug_stress_relay(
     item_entry: u32,
     junk_rows: u32,
 ) -> Result<(), String> {
-    let moves = ctx.db.game_creature_move_event();
-    for i in 0..junk_rows {
-        moves.insert(crate::CreatureMoveEvent {
-            id: 0,
-            mover_guid: u64::MAX - 100_000 - i as u64, // no such entities — pure txn ballast
-            start_x: 20_000.0,
-            start_y: 20_000.0,
-            start_z: 0.0,
-            dest_x: 20_001.0,
-            dest_y: 20_001.0,
-            dest_z: 0.0,
-            duration_ms: 100,
-            spline_id: i,
-            created_at: ctx.timestamp,
-            run: false,
-        });
+    if junk_rows > 0 {
+        spacetimedb::log::warn!(
+            "debug_stress_relay: ignoring junk_rows={junk_rows} — the game_creature_move_event \
+             ballast it padded was retired as a dead-table leak (#357); pass 0"
+        );
     }
     crate::quest::on_creature_killed(ctx, character_guid, victim_entry);
     crate::items::grant_item(ctx, character_guid, item_entry, 1)?;
@@ -1733,8 +1178,7 @@ pub fn debug_expire_quest(
 ) -> Result<(), String> {
     // REFUSE verdict (issue #30): the write lands in `game_character_quest`, a MANIFEST table — the
     // export blob's own enumeration — so post-begin it is a lost write cross-database.
-    crate::helpers::character_by_guid(ctx, character_guid)
-        .ok_or_else(|| format!("no character {character_guid}"))?;
+    crate::helpers::require_character(ctx, character_guid)?;
     crate::quest::debug_force_expire(ctx, character_guid, quest_entry)
 }
 
@@ -1815,25 +1259,15 @@ pub fn debug_kill_nearest(
     killer_guid: u64,
     creature_entry: u32,
 ) -> Result<(), String> {
-    let killer = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(killer_guid)
-        .ok_or_else(|| format!("killer {killer_guid} not in world"))?;
-    let mut best: Option<(u64, f32)> = None;
-    for e in ctx.db.game_world_entity().iter() {
-        if e.entry != creature_entry || e.guid == killer_guid || e.dead {
-            continue;
-        }
-        let d = (e.x - killer.x).powi(2) + (e.y - killer.y).powi(2);
-        if best.is_none_or(|(_, bd)| d < bd) {
-            best = Some((e.guid, d));
-        }
-    }
-    let target_guid = best
-        .ok_or_else(|| format!("no live creature entry {creature_entry} near killer"))?
-        .0;
+    let killer = crate::helpers::live_entity(ctx, killer_guid)
+        .map_err(|_| format!("killer {killer_guid} not in world"))?;
+    // Same-partition scan (crate::helpers::nearest_entity) — a raw squared distance across
+    // maps/instances is meaningless, "nearest" could otherwise resolve to another continent.
+    let target_guid = crate::helpers::nearest_entity(ctx, &killer, |e| {
+        e.entry == creature_entry && e.guid != killer_guid && !e.dead
+    })
+    .ok_or_else(|| format!("no live creature entry {creature_entry} near killer"))?
+    .guid;
     if crate::combat::kill_creature(ctx, target_guid, Some(killer_guid)) {
         Ok(())
     } else {
@@ -1849,34 +1283,17 @@ pub fn debug_kill_nearest(
 /// climb Skinning → mark skinned). A future `CMSG`-routed skin over the open corpse will share that core.
 #[reducer]
 pub fn debug_skin_nearest(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    let looter = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| format!("skinner {character_guid} not in world"))?;
-    let mut best: Option<(u64, f32)> = None;
-    for e in ctx.db.game_world_entity().iter() {
-        // A skinnable target: a dead non-player BEAST corpse not yet skinned, on the looter's map
-        // AND in the looter's instance (190 slice 2 — mirrors `loot::can_skin`'s live gate, so the
-        // debug lever can never find a corpse the real skin path would refuse).
-        if !e.dead
-            || e.is_player()
-            || e.skinned
-            || e.map_id != looter.map_id
-            || e.instance_id != looter.instance_id
-            || !crate::loot::entry_is_beast(ctx, e.entry)
-        {
-            continue;
-        }
-        let d = (e.x - looter.x).powi(2) + (e.y - looter.y).powi(2);
-        if best.is_none_or(|(_, bd)| d < bd) {
-            best = Some((e.guid, d));
-        }
-    }
-    let corpse_guid = best
-        .ok_or_else(|| "no skinnable beast corpse near".to_string())?
-        .0;
+    let looter = crate::helpers::live_entity(ctx, character_guid)
+        .map_err(|_| format!("skinner {character_guid} not in world"))?;
+    // A skinnable target: a dead non-player BEAST corpse not yet skinned, in the looter's OWN
+    // (map, instance) partition (190 slice 2 — mirrors `loot::can_skin`'s live gate, so the
+    // debug lever can never find a corpse the real skin path would refuse). Same-partition scan
+    // via `crate::helpers::nearest_entity`.
+    let corpse_guid = crate::helpers::nearest_entity(ctx, &looter, |e| {
+        e.dead && !e.is_player() && !e.skinned && crate::loot::entry_is_beast(ctx, e.entry)
+    })
+    .ok_or_else(|| "no skinnable beast corpse near".to_string())?
+    .guid;
     crate::loot::skin_corpse(ctx, character_guid, corpse_guid)
 }
 
@@ -1923,25 +1340,14 @@ pub fn debug_ranged_attack_nearest(
     attacker_guid: u64,
     spell_id: u32,
 ) -> Result<(), String> {
-    let attacker = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(attacker_guid)
-        .ok_or_else(|| format!("attacker {attacker_guid} not in world"))?;
-    let mut best: Option<(u64, f32)> = None;
-    for e in ctx.db.game_world_entity().iter() {
-        if e.guid == attacker_guid || e.dead || e.is_player() {
-            continue;
-        }
-        let d = (e.x - attacker.x).powi(2) + (e.y - attacker.y).powi(2);
-        if best.is_none_or(|(_, bd)| d < bd) {
-            best = Some((e.guid, d));
-        }
-    }
-    let target_guid = best
-        .ok_or_else(|| "no live creature near attacker".to_string())?
-        .0;
+    let attacker = crate::helpers::live_entity(ctx, attacker_guid)
+        .map_err(|_| format!("attacker {attacker_guid} not in world"))?;
+    // Same-partition scan (crate::helpers::nearest_entity) — see debug_kill_nearest.
+    let target_guid = crate::helpers::nearest_entity(ctx, &attacker, |e| {
+        e.guid != attacker_guid && !e.dead && !e.is_player()
+    })
+    .ok_or_else(|| "no live creature near attacker".to_string())?
+    .guid;
     crate::actor::ranged_attack(ctx, attacker_guid, target_guid, spell_id)
 }
 
@@ -1955,12 +1361,7 @@ pub fn debug_learn_spell(
     character_guid: u64,
     spell_id: u32,
 ) -> Result<(), String> {
-    let e = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| format!("no live entity for guid {character_guid}"))?;
+    let e = crate::helpers::live_entity(ctx, character_guid)?;
     crate::spell::learn_spell(ctx, character_guid, e.owner_identity, spell_id);
     Ok(())
 }
@@ -2028,8 +1429,7 @@ pub fn debug_grant_reputation(
 ) -> Result<(), String> {
     // REFUSE verdict (issue #30): `game_player_reputation` is a MANIFEST table — see
     // `debug_expire_quest` for the same reasoning.
-    crate::helpers::character_by_guid(ctx, character_guid)
-        .ok_or_else(|| format!("no character {character_guid}"))?;
+    crate::helpers::require_character(ctx, character_guid)?;
     crate::reputation::grant_reputation(ctx, character_guid, faction_id, amount);
     Ok(())
 }
@@ -2066,12 +1466,7 @@ pub fn debug_learn_talent(
     character_guid: u64,
     talent_id: u32,
 ) -> Result<(), String> {
-    let e = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| format!("no live entity for guid {character_guid}"))?;
+    let e = crate::helpers::live_entity(ctx, character_guid)?;
     crate::talent::do_learn_talent(ctx, character_guid, e.owner_identity, talent_id).map(|_| ())
 }
 
@@ -2087,240 +1482,6 @@ pub fn debug_reset_talents(
     trainer_guid: u64,
 ) -> Result<(), String> {
     crate::talent::do_reset_talents(ctx, character_guid, trainer_guid).map(|_| ())
-}
-
-/// (Re)seed the talent metadata + the 51xxx passive talent spells — needed on an already-migrated dev DB
-/// where `seed::init` did NOT re-run after an auto-migrate publish (the two talent tables are created empty,
-/// but the rows aren't). Idempotent (`talent::seed_talents` inserts only absent rows).
-#[reducer]
-pub fn debug_seed_talents(ctx: &ReducerContext) {
-    crate::talent::seed_talents(ctx);
-    // row_count: total seeded talent rows present after this call (work-item 216 provenance stamp).
-    crate::import_meta::stamp(
-        ctx,
-        "debug_seed_talents",
-        "",
-        "",
-        ctx.db.game_talent().count(),
-    );
-}
-
-/// (Re)grant the seeded Tester (guid 1) `gm_level` 3 — needed on an already-migrated dev DB where
-/// `seed::init` did NOT re-run after an auto-migrate publish (work-item 223: the `gm_level` column
-/// auto-migrates existing rows to 0, so a pre-223 Tester needs this to regain GM playtest access).
-/// Idempotent (always re-sets to 3); no-op if the Tester character row is gone.
-#[reducer]
-pub fn debug_seed_gm_tester(ctx: &ReducerContext) {
-    let chars = ctx.db.game_character();
-    if let Some(mut c) = chars.guid().find(1) {
-        c.gm_level = 3;
-        chars.guid().update(c);
-        log::info!("debug_seed_gm_tester: Tester (guid 1) -> gm_level 3");
-    }
-}
-
-/// (Re)seed the createinfo starting-kit rows (`game_createinfo_spell`) — needed on an
-/// already-migrated dev DB where `seed::init` did NOT re-run after an auto-migrate publish (the
-/// table is created EMPTY there, so character creation would grant no kit and racial passives
-/// would skip). Idempotent only-if-empty; run once after publishing onto a pre-178 DB, BEFORE
-/// creating characters. Characters created while it was empty have no kit rows (alpha: re-create
-/// them). Same precedent as `debug_seed_talents`.
-#[reducer]
-pub fn debug_seed_createinfo_spells(ctx: &ReducerContext) {
-    crate::seed::seed_createinfo_spells(ctx);
-    // row_count: total createinfo-kit rows present after this call (work-item 216 provenance stamp).
-    crate::import_meta::stamp(
-        ctx,
-        "debug_seed_createinfo_spells",
-        "",
-        "",
-        ctx.db.game_createinfo_spell().count(),
-    );
-}
-
-/// (Re)seed the stacking-group starter set (`game_spell_group` + `game_spell_group_rule`, work-item 192)
-/// — needed on an already-migrated dev DB where `seed::init` did NOT re-run after an auto-migrate publish
-/// (both tables are created EMPTY there, so every stacking-group check is a silent no-op until this runs).
-/// Idempotent (`seed::seed_spell_groups` only-if-empty); same precedent as `debug_seed_createinfo_spells`.
-#[reducer]
-pub fn debug_seed_spell_groups(ctx: &ReducerContext) {
-    use crate::spell::stacking::game_spell_group;
-    crate::seed::seed_spell_groups(ctx);
-    // row_count: total `game_spell_group` membership rows present after this call (work-item 216
-    // provenance stamp).
-    crate::import_meta::stamp(
-        ctx,
-        "debug_seed_spell_groups",
-        "",
-        "",
-        ctx.db.game_spell_group().count(),
-    );
-}
-
-/// (Re)seed Weakened Soul (6788) + the Test PW:Shield fixture (50072) — needed on an
-/// already-migrated dev DB where `seed::init` did NOT re-run after an auto-migrate publish. Idempotent
-/// (`seed::seed_pw_shield_fixture` inserts only absent rows); same precedent as `debug_seed_talents`.
-#[reducer]
-pub fn debug_seed_pw_shield_fixture(ctx: &ReducerContext) {
-    crate::seed::seed_pw_shield_fixture(ctx);
-    // row_count: how many of this fixture's 2 spell ids (Weakened Soul 6788, Test PW:Shield 50072)
-    // are present after this call (work-item 216 provenance stamp).
-    let n = [6788u32, 50072u32]
-        .iter()
-        .filter(|id| ctx.db.game_spell().spell_id().find(**id).is_some())
-        .count() as u64;
-    crate::import_meta::stamp(ctx, "debug_seed_pw_shield_fixture", "", "", n);
-}
-
-/// (Re)seed the scenario-fixture CATALOGUE rows (Tempered Blade 5090050 + Tough Jerky 5090052 +
-/// fixture faction 50900) — needed on an already-migrated dev DB where `seed::init` did NOT re-run
-/// after an auto-migrate publish (issue #85: without this, such a shard's `items`/`dbc_reference`
-/// catalogue fingerprints permanently disagree with a freshly-published sibling). Idempotent
-/// (`seed::seed_fixture_catalogue` inserts only absent rows); same precedent as
-/// `debug_seed_pw_shield_fixture`.
-#[reducer]
-pub fn debug_seed_fixture_catalogue(ctx: &ReducerContext) {
-    crate::seed::seed_fixture_catalogue(ctx);
-    // row_count: how many of the 3 fixture rows (2 items + 1 faction) are present after this call
-    // (work-item 216 provenance stamp).
-    let items = [crate::seed::FIXTURE_BLADE, crate::seed::FIXTURE_JERKY]
-        .iter()
-        .filter(|e| ctx.db.game_item_template().entry().find(**e).is_some())
-        .count() as u64;
-    let faction = ctx
-        .db
-        .game_faction()
-        .faction_id()
-        .find(crate::seed::FIXTURE_FACTION)
-        .is_some() as u64;
-    crate::import_meta::stamp(ctx, "debug_seed_fixture_catalogue", "", "", items + faction);
-}
-
-/// (Re)seed the Soul Shard item template (6265) — needed on an already-migrated dev DB
-/// where `seed::init` did NOT re-run after an auto-migrate publish. Idempotent
-/// (`seed::seed_soul_shard_item` inserts only if absent); same precedent as `debug_seed_pw_shield_fixture`.
-#[reducer]
-pub fn debug_seed_soul_shard_item(ctx: &ReducerContext) {
-    crate::seed::seed_soul_shard_item(ctx);
-    // row_count: 1 if the Soul Shard item template is present after this call, else 0
-    // (work-item 216 provenance stamp).
-    let n = ctx
-        .db
-        .game_item_template()
-        .entry()
-        .find(crate::combat::SOUL_SHARD_ENTRY)
-        .is_some() as u64;
-    crate::import_meta::stamp(ctx, "debug_seed_soul_shard_item", "", "", n);
-}
-
-/// (Re)seed the Drain Soul (1120) channel fixture — needed on an already-migrated dev DB
-/// where `seed::init` did NOT re-run after an auto-migrate publish. Idempotent
-/// (`seed::seed_drain_soul_fixture` inserts only if absent); same precedent as `debug_seed_pw_shield_fixture`.
-#[reducer]
-pub fn debug_seed_drain_soul_fixture(ctx: &ReducerContext) {
-    crate::seed::seed_drain_soul_fixture(ctx);
-    // row_count: 1 if the Drain Soul spell header is present after this call, else 0
-    // (work-item 216 provenance stamp).
-    let n = ctx
-        .db
-        .game_spell()
-        .spell_id()
-        .find(crate::combat::DRAIN_SOUL_SPELL_ID)
-        .is_some() as u64;
-    crate::import_meta::stamp(ctx, "debug_seed_drain_soul_fixture", "", "", n);
-}
-
-/// (Re)seed the Mana Burn (real 8129) E_POWER_BURN fixture — needed on an
-/// already-migrated dev DB where `seed::init` did NOT re-run after an auto-migrate publish. Idempotent
-/// (`seed::seed_mana_burn_fixture` inserts only if absent); same precedent as `debug_seed_drain_soul_fixture`.
-#[reducer]
-pub fn debug_seed_mana_burn_fixture(ctx: &ReducerContext) {
-    crate::seed::seed_mana_burn_fixture(ctx);
-    // row_count: 1 if the Mana Burn (8129) spell header is present after this call, else 0
-    // (work-item 216 provenance stamp).
-    let n = ctx.db.game_spell().spell_id().find(8129u32).is_some() as u64;
-    crate::import_meta::stamp(ctx, "debug_seed_mana_burn_fixture", "", "", n);
-}
-
-/// (Re)seed the Stealth (real 1784) presence fixture — needed on an already-migrated
-/// dev DB where `seed::init` did NOT re-run after an auto-migrate publish. Idempotent
-/// (`seed::seed_stealth_fixture` inserts only if absent); same precedent as `debug_seed_pw_shield_fixture`.
-#[reducer]
-pub fn debug_seed_stealth_fixture(ctx: &ReducerContext) {
-    crate::seed::seed_stealth_fixture(ctx);
-    // row_count: 1 if the Stealth (1784) spell header is present after this call, else 0
-    // (work-item 216 provenance stamp).
-    let n = ctx.db.game_spell().spell_id().find(1784u32).is_some() as u64;
-    crate::import_meta::stamp(ctx, "debug_seed_stealth_fixture", "", "", n);
-}
-
-/// (Re)seed Chilled (6136) + Frost Armor (168) — needed on an already-migrated dev DB
-/// where `seed::init` did NOT re-run after an auto-migrate publish. Idempotent
-/// (`seed::seed_frost_armor_fixture` inserts only if absent); same precedent as `debug_seed_pw_shield_fixture`.
-#[reducer]
-pub fn debug_seed_frost_armor_fixture(ctx: &ReducerContext) {
-    crate::seed::seed_frost_armor_fixture(ctx);
-    // row_count: how many of this fixture's 2 spell ids (Chilled 6136, Frost Armor 168) are present
-    // after this call (work-item 216 provenance stamp).
-    let n = [6136u32, 168u32]
-        .iter()
-        .filter(|id| ctx.db.game_spell().spell_id().find(**id).is_some())
-        .count() as u64;
-    crate::import_meta::stamp(ctx, "debug_seed_frost_armor_fixture", "", "", n);
-}
-
-/// (Re)seed Demon Skin (696) — needed on an already-migrated dev DB where `seed::init`
-/// did NOT re-run after an auto-migrate publish. Idempotent (`seed::seed_demon_skin_fixture` inserts only
-/// if absent); same precedent as `debug_seed_frost_armor_fixture`.
-#[reducer]
-pub fn debug_seed_demon_skin_fixture(ctx: &ReducerContext) {
-    crate::seed::seed_demon_skin_fixture(ctx);
-    // row_count: 1 if the Demon Skin (696) spell header is present after this call, else 0
-    // (work-item 216 provenance stamp).
-    let n = ctx.db.game_spell().spell_id().find(696u32).is_some() as u64;
-    crate::import_meta::stamp(ctx, "debug_seed_demon_skin_fixture", "", "", n);
-}
-
-/// (Re)seed Test Regeneration (50137, the combat-regen probe's kind-169
-/// `A_COMBAT_HEALTH_REGEN_PCT` source) — needed on an already-migrated dev DB where `seed::init`
-/// did NOT re-run after an auto-migrate publish (work-item 152: without this twin, an
-/// already-migrated node never gains the fixture and `wire-suite.sh`'s `HAS_COMBAT_REGEN_EFFECT`
-/// gate stays closed forever, exactly like the other seed kits before their twins existed).
-/// Idempotent (`seed::seed_regen_fixture` inserts only if absent); same precedent as
-/// `debug_seed_demon_skin_fixture`.
-#[reducer]
-pub fn debug_seed_regen_fixture(ctx: &ReducerContext) {
-    crate::seed::seed_regen_fixture(ctx);
-    // row_count: 1 if the Test Regeneration (50137) spell header is present after this call, else 0
-    // (work-item 216 provenance stamp).
-    let n = ctx.db.game_spell().spell_id().find(50137u32).is_some() as u64;
-    crate::import_meta::stamp(ctx, "debug_seed_regen_fixture", "", "", n);
-}
-
-/// Re-arm the GLOBAL creature movement tick to 0.5s on a LIVE database. `seed::init` does NOT re-run
-/// on an auto-migrate publish, so the existing `game_creature_move_schedule` row keeps its old 4s
-/// interval — this deletes the CATCH-ALL row(s) and re-inserts one at 500ms. Idempotent; owner-called
-/// once after a publish (same precedent as `debug_seed_talents`). Work-item 229: DEDICATED
-/// per-instance rows are deliberately left alone (they're someone's live tuning; use
-/// `debug_disarm_instance_tick` to remove one) — and this reducer doubles as the recovery path if the
-/// load-bearing catch-all row was ever deleted (without it, every instance lacking a dedicated row
-/// stops ticking entirely, including the open world).
-#[reducer]
-pub fn debug_rearm_creature_tick(ctx: &ReducerContext) {
-    let sched = ctx.db.game_creature_move_schedule();
-    let ids: Vec<u64> = sched
-        .iter()
-        .filter(|r| r.instance_id == crate::creatures::GLOBAL_TICK_INSTANCE)
-        .map(|r| r.scheduled_id)
-        .collect();
-    for id in ids {
-        sched.scheduled_id().delete(id);
-    }
-    sched.insert(CreatureMoveSchedule {
-        scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(500_000)),
-        instance_id: crate::creatures::GLOBAL_TICK_INSTANCE,
-    });
 }
 
 /// Floor for a dedicated per-instance tick interval (work-item 229's honesty addendum: every firing
@@ -2422,12 +1583,7 @@ pub fn debug_disarm_instance_tick(ctx: &ReducerContext, instance_id: u64) -> Res
 /// The logs show: `pct=10 full_tick=71 partial=7 health=950 max=1000 → would_heal=957`
 #[reducer]
 pub fn debug_verify_combat_regen(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    let e = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| format!("no live entity for guid {character_guid}"))?;
+    let e = crate::helpers::live_entity(ctx, character_guid)?;
     let pct = crate::spell::combat_health_regen_pct(ctx, character_guid);
     let pct_u32 = pct.max(0) as u32;
     let would_heal =
@@ -2462,12 +1618,7 @@ pub fn debug_cast_spell(
     spell_id: u32,
     target_guid: u64,
 ) -> Result<(), String> {
-    let e = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| format!("no live entity for guid {character_guid}"))?;
+    let e = crate::helpers::live_entity(ctx, character_guid)?;
     if !crate::spell::knows_spell(ctx, character_guid, spell_id) {
         return Err(format!("spell {spell_id} is not in the caster's spellbook"));
     }
@@ -2548,8 +1699,7 @@ pub fn debug_set_money(
 ) -> Result<(), String> {
     let chars = ctx.db.game_character();
     // REFUSE verdict (issue #30) — harness writers get the same fence as production ones.
-    let mut c = crate::helpers::character_by_guid(ctx, character_guid)
-        .ok_or_else(|| format!("no character {character_guid}"))?;
+    let mut c = crate::helpers::require_character(ctx, character_guid)?;
     c.money = copper;
     chars.guid().update(c);
     let entities = ctx.db.game_world_entity();
@@ -2577,678 +1727,4 @@ pub fn debug_set_power(ctx: &ReducerContext, guid: u64, power: u32) -> Result<()
     e.power = power;
     entities.guid().update(e);
     Ok(())
-}
-
-// ===========================================================================================
-//  Encounter kernel levers (work-item 228) — operator stand-ins until 227's Deadmines package
-//  consumes the primitives for real. Each is a thin `?`-wrapper over the `crate::encounter` fn it
-//  names, so the runbook can exercise every primitive on a live node without an encounter package.
-// ===========================================================================================
-
-/// Register an HP-threshold watch (`encounter::watch_hp_threshold`). NOTE: a watch alone fires
-/// nothing — `on_hp_threshold` handlers are compile-time registrations (`game_hook!` markers), so
-/// without one anywhere in the build the kernel's damage probe stays on its zero-cost early-out.
-#[reducer]
-pub fn debug_encounter_watch_hp(ctx: &ReducerContext, entry: u32, pct: u8) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    crate::encounter::watch_hp_threshold(ctx, entry, pct)
-}
-
-/// Set one encounter's state + payload (`encounter::set_encounter_state`/`set_encounter_data`) —
-/// readable back via `spacetime sql "select * from game_encounter_state"`.
-#[reducer]
-pub fn debug_encounter_set_state(
-    ctx: &ReducerContext,
-    instance_id: u64,
-    encounter_id: u32,
-    state: u8,
-    data: u32,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    crate::encounter::set_encounter_state(ctx, instance_id, encounter_id, state)?;
-    crate::encounter::set_encounter_data(ctx, instance_id, encounter_id, data)?;
-    Ok(())
-}
-
-/// Flip every DOOR/BUTTON of `go_entry` open (`encounter::open_door`); logs the flip count.
-#[reducer]
-pub fn debug_encounter_open_door(
-    ctx: &ReducerContext,
-    go_entry: u32,
-    instance_id: u64,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let opened = crate::encounter::open_door(ctx, go_entry, instance_id)?;
-    log::info!("debug_encounter_open_door: opened {opened} gameobject(s) of entry {go_entry}");
-    Ok(())
-}
-
-/// Spawn `count` adds of `entry` as one tracked wave (`encounter::spawn_wave`); logs the guids.
-#[allow(clippy::too_many_arguments)] // a debug lever mirrors the primitive's full signature
-#[reducer]
-pub fn debug_encounter_spawn_wave(
-    ctx: &ReducerContext,
-    instance_id: u64,
-    encounter_id: u32,
-    map_id: u32,
-    entry: u32,
-    count: u32,
-    x: f32,
-    y: f32,
-    z: f32,
-    orientation: f32,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let entries = vec![entry; count as usize];
-    let guids = crate::encounter::spawn_wave(
-        ctx,
-        instance_id,
-        encounter_id,
-        map_id,
-        &entries,
-        x,
-        y,
-        z,
-        orientation,
-    );
-    if guids.is_empty() {
-        return Err(format!(
-            "spawn_wave spawned nothing (no template for entry {entry}?)"
-        ));
-    }
-    log::info!("debug_encounter_spawn_wave: spawned {guids:?} for encounter {encounter_id} in instance {instance_id}");
-    Ok(())
-}
-
-/// Write a creature's virtual-item slots (`encounter::equip_swap`) — module-side row only; the
-/// client-visible UNIT_VIRTUAL_ITEM_SLOT_DISPLAY relay is [V]-deferred (see game_encounter_equip).
-#[reducer]
-pub fn debug_encounter_equip(
-    ctx: &ReducerContext,
-    creature_guid: u64,
-    main_hand: u32,
-    off_hand: u32,
-    ranged: u32,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    crate::encounter::equip_swap(ctx, creature_guid, main_hand, off_hand, ranged)
-}
-
-/// Send a creature on one move leg (`encounter::move_to_point`) — the Smite rack-run motion.
-#[reducer]
-pub fn debug_encounter_move(
-    ctx: &ReducerContext,
-    creature_guid: u64,
-    x: f32,
-    y: f32,
-    z: f32,
-    run: bool,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    crate::encounter::move_to_point(ctx, creature_guid, x, y, z, run)
-}
-
-/// Reset one encounter (`encounter::encounter_reset`): state → NotStarted, tracked wave despawned.
-/// HP fired-marks are entry-keyed, so clear them separately: `debug_encounter_reset_hp_fired`.
-#[reducer]
-pub fn debug_encounter_reset(
-    ctx: &ReducerContext,
-    instance_id: u64,
-    encounter_id: u32,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    crate::encounter::encounter_reset(ctx, instance_id, encounter_id);
-    Ok(())
-}
-
-/// Clear the per-instance HP fired-marks for `entry` (`encounter::reset_hp_fired`).
-#[reducer]
-pub fn debug_encounter_reset_hp_fired(
-    ctx: &ReducerContext,
-    instance_id: u64,
-    entry: u32,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    crate::encounter::reset_hp_fired(ctx, instance_id, entry);
-    Ok(())
-}
-
-/// Sweep EVERY kernel row for an instance (`encounter::sweep_encounter_state`) — kept as the
-/// narrow kernel-only lever; the FULL instance reap (which calls this sweep as its 228 splice)
-/// is `debug_reap_instance` below (190 slice 3 landed).
-#[reducer]
-pub fn debug_sweep_encounter_state(ctx: &ReducerContext, instance_id: u64) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    crate::encounter::sweep_encounter_state(ctx, instance_id);
-    Ok(())
-}
-
-// ===========================================================================================
-//  Dungeon-instancing fixture + operator levers (work-item 190 slices 2+3)
-// ===========================================================================================
-
-/// THE FIXTURE DUNGEON (190's done-when, headless, zero imports): resolve-or-create an instance of
-/// the character's CURRENT map through the REAL production path (`resolve_or_create_instance`:
-/// own binding → party's live instance → create, 5-cap enforced) and same-map-teleport them into
-/// it in place. On the dev map this instances the SEEDED world — the chicken/wolf/trainer roster
-/// copies in as the per-instance population, so two ungrouped characters get DISJOINT populations
-/// (distinct instance ids, distinct creature guids) and two GROUPED characters land in the SAME
-/// one. Call it twice for one character → the second call RESOLVES the binding (same id back).
-/// Verify: `spacetime sql "SELECT * FROM game_instance"` / `"... FROM game_instance_binding"`,
-/// and the log line below carries the id.
-///
-/// CLIENT-VIEW CAVEAT (dev-only, inherent to the same-map hop): a same-map instance switch is a
-/// MSG_MOVE_TELEPORT_ACK teleport — the gateway's per-viewer `created` dedup set only resets on a
-/// CROSS-map transfer (the enter_world resubscribe), so a live 1.12 client keeps rendering the
-/// instance-0 objects it already saw (frozen — their relays are now instance-gated) until relog.
-/// SERVER-side isolation is full either way (module gates + relay gates); wire assertions about
-/// "sees only its own population" should therefore be made on a FRESH login after the switch
-/// (login rebuilds into `pending_instance_id` with a fresh created set + initial-apply sweep).
-/// The real dungeon flow (areatrigger portal) is cross-map and has no such caveat.
-///
-/// COST NOTE: the population copy covers EVERY spawn template on the character's map — on the
-/// bare seeded dev node that's a handful of creatures; on a node with the full Elwynn/Westfall
-/// import it's the whole ~2k-spawn map-0 roster per instance. Fixture-scale testing belongs on
-/// the seeded node (or accept the copy cost knowingly).
-#[reducer]
-pub fn debug_create_fixture_instance(
-    ctx: &ReducerContext,
-    character_guid: u64,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let player = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| format!("no live entity for guid {character_guid}"))?;
-    let map_id = player.map_id;
-    let instance_id = crate::instance::resolve_or_create_instance(ctx, character_guid, map_id)?;
-    // Same-map teleport in place: the in-place branch stamps entity + Character with the instance.
-    crate::world::teleport_player(
-        ctx,
-        character_guid,
-        map_id,
-        instance_id,
-        player.x,
-        player.y,
-        player.z,
-        player.orientation,
-    );
-    log::info!("debug_create_fixture_instance: character {character_guid} → instance {instance_id} on map {map_id}");
-    Ok(())
-}
-
-/// Place a character into an EXISTING instance on their current map (bypasses binding/resolve —
-/// the raw placement lever for cap/isolation experiments). Same-map only: a cross-map placement
-/// would land them at their current coords on a foreign map (garbage) — use the areatrigger path
-/// or `debug_teleport` + `debug_enter_instance` in two steps for cross-map trips.
-#[reducer]
-pub fn debug_enter_instance(
-    ctx: &ReducerContext,
-    character_guid: u64,
-    instance_id: u64,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let player = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| format!("no live entity for guid {character_guid}"))?;
-    if instance_id != 0 {
-        let inst = ctx
-            .db
-            .game_instance()
-            .instance_id()
-            .find(instance_id)
-            .ok_or_else(|| format!("no such instance {instance_id}"))?;
-        if inst.map_id != player.map_id {
-            return Err(format!(
-                "instance {instance_id} is on map {} but the character is on map {} (same-map only)",
-                inst.map_id, player.map_id
-            ));
-        }
-    }
-    crate::world::teleport_player(
-        ctx,
-        character_guid,
-        player.map_id,
-        instance_id,
-        player.x,
-        player.y,
-        player.z,
-        player.orientation,
-    );
-    Ok(())
-}
-
-/// Force-reap an instance NOW (the full slice-3 teardown: population → encounter sweep → tick row
-/// → bindings → row) without waiting out the 30min empty window — refuses if players are inside
-/// (the teardown's own belt re-checks). The headless reap-verification lever.
-#[reducer]
-pub fn debug_reap_instance(ctx: &ReducerContext, instance_id: u64) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    if instance_id == 0 {
-        return Err("instance 0 is the open world".to_string());
-    }
-    if ctx
-        .db
-        .game_instance()
-        .instance_id()
-        .find(instance_id)
-        .is_none()
-    {
-        return Err(format!("no such instance {instance_id}"));
-    }
-    if ctx
-        .db
-        .game_world_entity()
-        .iter()
-        .any(|e| e.instance_id == instance_id && e.is_player())
-    {
-        return Err(format!(
-            "instance {instance_id} has live players — reap refused"
-        ));
-    }
-    crate::instance::teardown_instance(ctx, instance_id);
-    Ok(())
-}
-
-/// Drive the player-facing `reset_instance` core by explicit guid (the CLI identity owns no
-/// entity): flags every UNOCCUPIED instance the character may reset; the reaper (60s) tears each
-/// down on its next firing. Returns Err when nothing was eligible, mirroring the player reducer.
-#[reducer]
-pub fn debug_reset_instance(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    crate::instance::apply_reset_instances(ctx, character_guid).map(|n| {
-        log::info!("debug_reset_instance: {n} instance(s) flagged for reset by {character_guid}");
-    })
-}
-
-/// Re-seed the instance-reaper schedule row (60s) — the auto-migrate publish path: `init` only
-/// runs on a FRESH publish, so a live node that migrated the new `game_instance_reaper_schedule`
-/// table in has no row and the reap never fires until this is called once
-/// (the `debug_rearm_creature_tick` precedent). Idempotent (replaces any existing rows).
-#[reducer]
-pub fn debug_rearm_instance_reaper(ctx: &ReducerContext) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let sched = ctx.db.game_instance_reaper_schedule();
-    let stale: Vec<u64> = sched.iter().map(|r| r.scheduled_id).collect();
-    for id in stale {
-        sched.scheduled_id().delete(id);
-    }
-    sched.insert(crate::instance::InstanceReaperSchedule {
-        scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
-            crate::instance::INSTANCE_REAPER_INTERVAL_MICROS,
-        )),
-    });
-    Ok(())
-}
-
-/// 241 spot-probe: log walkability + obstruction at (x, y) on `map`. The rasterizer's
-/// server-side verification hook (nav has no client-visible readback until 243 wires it).
-#[reducer]
-pub fn debug_nav_probe(ctx: &ReducerContext, map: u32, x: f32, y: f32) {
-    let walk = crate::nav::walkable(ctx, map, x, y);
-    let obs = crate::nav::obstruction_top(ctx, map, x, y);
-    let ground = crate::terrain::ground_z(ctx, map, x, y);
-    log::info!(
-        "nav probe ({x:.1},{y:.1}) map {map}: walkable={walk:?} obstruction_top={obs:?} ground_z={ground:?}"
-    );
-}
-
-/// Toggle nav-grid consumption (`game_config.nav_enabled`, work-item 243) — upserts row 0 like
-/// `debug_set_xp_rate`. OFF = pre-243 straight-line movement + wall-blind aggro/casts.
-#[reducer]
-pub fn debug_set_nav_enabled(ctx: &ReducerContext, enabled: bool) -> Result<(), String> {
-    let cfg = ctx.db.game_config();
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.nav_enabled = enabled;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: 1.0,
-                nav_enabled: enabled,
-                hosts_instances: true,
-                bots_idle: false,
-            });
-        }
-    }
-    Ok(())
-}
-
-/// 243 spot-probe: log the nav-aware leg from (x0,y0) to (x1,y1) — the exact query
-/// `nav_step` runs. Shows the string-pulled waypoints (detour) or the fast/fallback shape.
-#[reducer]
-pub fn debug_nav_leg(ctx: &ReducerContext, map: u32, x0: f32, y0: f32, x1: f32, y1: f32) {
-    let enabled = crate::nav::nav_enabled(ctx);
-    let step = crate::nav::nav_step(ctx, map, (x0, y0), (x1, y1), 4.0, 0.0);
-    // LoS endpoints stand on the ground like real units (falls back to z=0 off-slice).
-    let z0 = crate::terrain::ground_z(ctx, map, x0, y0).unwrap_or(0.0);
-    let z1 = crate::terrain::ground_z(ctx, map, x1, y1).unwrap_or(0.0);
-    let los = crate::nav::has_los(ctx, map, (x0, y0, z0), (x1, y1, z1));
-    let raw = crate::nav::debug_find_leg(ctx, map, (x0, y0), (x1, y1));
-    log::info!(
-        "nav leg ({x0:.1},{y0:.1})->({x1:.1},{y1:.1}) map {map}: nav_enabled={enabled} first_step=({:.2},{:.2}) has_los={los} raw={raw}",
-        step.0, step.1
-    );
-}
-
-/// Backfill the imported default action bar (work-items 110/212) onto an EXISTING character —
-/// chars created before the `game_createinfo_action` import have no `game_player_action` rows and
-/// fall back to the gateway's known-spells synth (which slots passives and misses the stance
-/// pages). Idempotent per button (the grant skips occupied ones). Takes effect next login.
-#[reducer]
-pub fn debug_grant_default_actions(
-    ctx: &ReducerContext,
-    character_name: String,
-) -> Result<(), String> {
-    // REFUSE verdict (issue #30) — harness writers get the same fence as production ones.
-    let c = crate::helpers::character_by_name(ctx, &character_name)
-        .ok_or_else(|| format!("no character named {character_name}"))?;
-    crate::action_bar::grant_createinfo_actions(ctx, c.guid, c.owner_identity, c.race, c.class);
-    log::info!("debug_grant_default_actions: {} (guid {})", c.name, c.guid);
-    Ok(())
-}
-
-/// One-time backfill (246): stamp grid_x/grid_y on every existing gameobject row from its (x, y)
-/// — imported/seeded rows predate the columns. Idempotent.
-#[reducer]
-pub fn debug_backfill_go_grid(ctx: &ReducerContext) {
-    let gos = ctx.db.game_gameobject();
-    let all: Vec<u64> = gos.iter().map(|g| g.guid).collect();
-    let mut n = 0u32;
-    for guid in all {
-        if let Some(mut g) = gos.guid().find(guid) {
-            let (gx, gy) = lyracore_shared::spatial::grid_cell(g.x, g.y);
-            if g.grid_x != gx || g.grid_y != gy {
-                g.grid_x = gx;
-                g.grid_y = gy;
-                gos.guid().update(g);
-                n += 1;
-            }
-        }
-    }
-    log::info!("debug_backfill_go_grid: {n} rows stamped");
-}
-
-// ===========================================================================================
-//  Catalogue parity fingerprint (issue #82) — content-hash the tables that are supposed to be
-//  IDENTICAL on every shard (spells, items, DBC-derived reference tables), so a partial or stale
-//  re-import shows up as a loud mismatch instead of "this spell behaves differently in Durotar".
-//  Row counts alone are not enough (a count matches trivially while contents differ): every row is
-//  BSATN-encoded — the same canonical byte encoding SpacetimeDB already uses to store/diff rows
-//  (`spacetimedb::sats::bsatn`), so this needs no hand-written per-table serializer — and the SORTED
-//  set of encodings for a table is folded into one hash with `DefaultHasher` (stdlib, no new
-//  dependency; deterministic for identical input on the SAME compiled wasm, which is exactly the
-//  "did every shard run the same import?" question that the internal cross-database parity check
-//  uses this table to answer).
-// ===========================================================================================
-
-/// A family's content fingerprint, recomputed wholesale by [`debug_catalogue_fingerprint`]. Public so
-/// `spacetime sql` (or an equivalent cross-database parity check) can read it per database. [reference]
-#[table(accessor = game_catalogue_fingerprint, public)]
-pub struct CatalogueFingerprint {
-    #[primary_key]
-    pub family: String,
-    pub row_count: u64,
-    pub fingerprint: u64,
-    /// Comma-separated table list actually hashed — so a family definition drifting between two
-    /// module versions (a table added/renamed here but not there) shows up as a visible diff
-    /// instead of a silent apples-to-oranges compare.
-    pub tables: String,
-}
-
-/// Fold one table's rows into `hasher`/`count`: BSATN-encode every row, SORT the encodings (content
-/// order, not iteration order — SpacetimeDB does not guarantee `.iter()` order is stable across
-/// deployments/inserts), then hash the table name followed by the sorted encodings. The table name is
-/// hashed first so two families with the same total content but a table added/renamed still differ.
-fn fold_table<Row: spacetimedb::Serialize>(
-    hasher: &mut std::collections::hash_map::DefaultHasher,
-    count: &mut u64,
-    table_name: &str,
-    rows: impl Iterator<Item = Row>,
-) {
-    use std::hash::Hash;
-    table_name.hash(hasher);
-    let mut encoded: Vec<Vec<u8>> = rows
-        .map(|r| {
-            spacetimedb::sats::bsatn::to_vec(&r)
-                .expect("row must BSATN-encode (already required for SpacetimeDB row storage)")
-        })
-        .collect();
-    encoded.sort();
-    *count += encoded.len() as u64;
-    encoded.hash(hasher);
-}
-
-/// Recompute all catalogue fingerprints (clear+reinsert — idempotent, call any time). Driven once per
-/// connected shard as part of the deploy/verify path by an internal cross-database parity check. The
-/// family list below is deliberately curated — see the per-family comments in the body for why each
-/// table is (or, for the excluded ones, is not) included.
-#[reducer]
-pub fn debug_catalogue_fingerprint(ctx: &ReducerContext) {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::Hasher;
-
-    let out = ctx.db.game_catalogue_fingerprint();
-    for row in out.iter().collect::<Vec<_>>() {
-        out.family().delete(&row.family);
-    }
-
-    // SPELLS — Spell.dbc (`importer/src/spell.rs::run_spells`) plus its box-INDEPENDENT dump
-    // companions (spell_chain/spell_learn_spell/createinfo_spell — none of their `build_*_sql`
-    // functions in `importer/src/main.rs` take a box/local-entry argument), plus the hand-seeded
-    // stacking-group starter set (`module/src/seed.rs`), which can independently skew if
-    // `debug_reseed_stacking_groups` was run on one shard's auto-migration and not another's.
-    {
-        let mut h = DefaultHasher::new();
-        let mut n = 0u64;
-        fold_table(&mut h, &mut n, "game_spell", ctx.db.game_spell().iter());
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_spell_effect",
-            ctx.db.game_spell_effect().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_spell_reagent",
-            ctx.db.game_spell_reagent().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_spell_chain",
-            ctx.db.game_spell_chain().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_spell_learn",
-            ctx.db.game_spell_learn().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_spell_group",
-            ctx.db.game_spell_group().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_spell_group_rule",
-            ctx.db.game_spell_group_rule().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_createinfo_spell",
-            ctx.db.game_createinfo_spell().iter(),
-        );
-        out.insert(CatalogueFingerprint {
-            family: "spells".into(),
-            row_count: n,
-            fingerprint: h.finish(),
-            tables:
-                "game_spell,game_spell_effect,game_spell_reagent,game_spell_chain,game_spell_learn,\
-                     game_spell_group,game_spell_group_rule,game_createinfo_spell"
-                    .into(),
-        });
-    }
-
-    // ITEMS — item_template is imported WHOLE regardless of box (`importer/src/main.rs`: "3)
-    // item_template rows — the FULL vanilla item set"); every shard should carry the identical set.
-    {
-        let mut h = DefaultHasher::new();
-        let mut n = 0u64;
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_item_template",
-            ctx.db.game_item_template().iter(),
-        );
-        out.insert(CatalogueFingerprint {
-            family: "items".into(),
-            row_count: n,
-            fingerprint: h.finish(),
-            tables: "game_item_template".into(),
-        });
-    }
-
-    // DBC_REFERENCE — every table the client-DBC importer (`importer/src/dbc.rs`) produces, plus the
-    // handful of cmangos-dump tables that are ALSO box-independent (`build_start_position_sql` /
-    // `build_graveyard_zone_sql` / `build_areatrigger_teleport_sql` / `build_createinfo_action_sql`,
-    // none of which take a box/local-entry argument) — world-wide reference data with no geographic
-    // scoping, so every shard should carry the identical set.
-    {
-        let mut h = DefaultHasher::new();
-        let mut n = 0u64;
-        fold_table(&mut h, &mut n, "game_area", ctx.db.game_area().iter());
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_area_trigger",
-            ctx.db.game_area_trigger().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_areatrigger_teleport",
-            ctx.db.game_areatrigger_teleport().iter(),
-        );
-        fold_table(&mut h, &mut n, "game_faction", ctx.db.game_faction().iter());
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_faction_template",
-            ctx.db.game_faction_template().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_graveyard",
-            ctx.db.game_graveyard().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_graveyard_zone",
-            ctx.db.game_graveyard_zone().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_creature_family",
-            ctx.db.game_creature_family().iter(),
-        );
-        fold_table(&mut h, &mut n, "game_lock", ctx.db.game_lock().iter());
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_skill_line",
-            ctx.db.game_skill_line().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_skill_ability",
-            ctx.db.game_skill_ability().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_skill_availability",
-            ctx.db.game_skill_availability().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_race_info",
-            ctx.db.game_race_info().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_char_base_info",
-            ctx.db.game_char_base_info().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_start_item",
-            ctx.db.game_start_item().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_start_position",
-            ctx.db.game_start_position().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_createinfo_action",
-            ctx.db.game_createinfo_action().iter(),
-        );
-        fold_table(&mut h, &mut n, "game_talent", ctx.db.game_talent().iter());
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_talent_tab",
-            ctx.db.game_talent_tab().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_class_level_stats",
-            ctx.db.game_class_level_stats().iter(),
-        );
-        fold_table(
-            &mut h,
-            &mut n,
-            "game_level_stats",
-            ctx.db.game_level_stats().iter(),
-        );
-        out.insert(CatalogueFingerprint {
-            family: "dbc_reference".into(),
-            row_count: n,
-            fingerprint: h.finish(),
-            tables: "game_area,game_area_trigger,game_areatrigger_teleport,game_faction,\
-                     game_faction_template,game_graveyard,game_graveyard_zone,game_creature_family,\
-                     game_lock,game_skill_line,game_skill_ability,game_skill_availability,\
-                     game_race_info,game_char_base_info,game_start_item,game_start_position,\
-                     game_createinfo_action,game_talent,game_talent_tab,game_class_level_stats,\
-                     game_level_stats"
-                .into(),
-        });
-    }
-
-    log::info!("debug_catalogue_fingerprint: recomputed 3 families (spells, items, dbc_reference)");
 }

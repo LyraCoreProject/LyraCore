@@ -33,8 +33,8 @@ use crate::game_xp_event; // quest XP "+N experience" relay (non-kill SMSG_LOG_X
 use crate::helpers::entity_by_owner;
 
 /// Objective kinds (`QuestObjective.kind`). Only KILL ships today; the others are the documented
-/// extension points the schema already accommodates (a new kind needs only a new arm in
-/// [`on_creature_killed`]'s sibling hooks, no migration).
+/// extension points the schema already accommodates (a new kind needs only a new call site into
+/// [`credit_objective`], no migration).
 pub mod objective_kind {
     /// Kill `required_count` of creature `target_entry`. [kill]
     pub const KILL_CREATURE: u8 = 0;
@@ -318,15 +318,9 @@ crate::character_owned!(delete, fn sweep_delete_game_character_quest(ctx, charac
 // CROSS-DATABASE transport (issue #19): the quest log IS the run — a Deadmines party arriving with
 // an empty log could not turn anything in. `id` is a surrogate PK, re-minted.
 crate::character_owned!(transfer, fn sweep_transfer_game_character_quest(ctx, character_guid, io) {
-    crate::transfer::move_rows(
-        ctx,
-        io,
-        || ctx.db.game_character_quest().by_character().filter(&character_guid).collect::<Vec<_>>(),
-        |ctx, mut r| {
-            r.id = 0;
-            ctx.db.game_character_quest().insert(r);
-        },
-    );
+    table = game_character_quest,
+    by = by_character,
+    remint = id,
 });
 crate::character_owned!(restamp, fn sweep_restamp_game_character_quest(ctx, character_guid, identity) {
     let quests = ctx.db.game_character_quest();
@@ -583,12 +577,8 @@ pub(crate) fn apply_accept_quest(
     giver_guid: u64,
     quest_entry: u32,
 ) -> Result<(), String> {
-    let player = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(player_guid)
-        .ok_or_else(|| "player not in world".to_string())?;
+    let player = crate::helpers::live_entity(ctx, player_guid)
+        .map_err(|_| "player not in world".to_string())?;
     if player.dead {
         return Err("dead players cannot accept quests".to_string());
     }
@@ -632,23 +622,52 @@ pub(crate) fn apply_accept_quest(
     // exactly like a repeatable-rewarded one — reset in place, never a hard duplicate. This is
     // independent of `repeatable`: ANY timed quest can be retried after it fails, not just repeatable
     // ones (vanilla: a failed escort/timed quest can always be picked up again).
-    if let Some(existing) = character_quest_row(ctx, player_guid, quest_entry) {
-        if !(existing.failed || (tmpl.repeatable && existing.rewarded)) {
+    // Bound ONCE — `apply_accept_effects` reuses this same `Option` for the reset-in-place-vs-insert
+    // decision, rather than a second point-scan of the same row.
+    let existing = character_quest_row(ctx, player_guid, quest_entry);
+    if let Some(ref row) = existing {
+        if !(row.failed || (tmpl.repeatable && row.rewarded)) {
             return Err("already on or completed that quest".to_string());
         }
     }
-    // Size the progress vector to the quest's objective count (capped) so each objective's obj_index
-    // is a valid slot; a quest with no objectives gets an empty vector (trivially complete).
-    // Provided "source" item (cmangos SrcItemId): handed to the player on accept. For a DELIVERY quest
-    // (SrcItemId == ReqItemId) this is what makes the COLLECT objective satisfiable — the item is now in
-    // bags, so quest_is_complete's live item_count picks it up. Granted on every accept the duplicate guard
-    // above lets through: once for a first-time accept, and once more on each repeatable re-accept (the
-    // repeatable-turn-in path consumes/keeps the item like any other reward, so re-supplying it on re-accept
-    // is correct — the same rule vanilla applies). `?` rolls the whole accept back on a full backpack — the quest is NOT
-    // accepted if its item can't be delivered (you can't carry the letter). count 0 means 1; grant_item
-    // already floors at 1.
+    // Timed quests (work-item 194): a `limit_time > 0` template stamps a deadline (accept-time
+    // ctx.timestamp micros + limit_time seconds, as micros); 0 = untimed (the vast majority).
+    let deadline_micros = if tmpl.limit_time > 0 {
+        ctx.timestamp.to_micros_since_unix_epoch() + (tmpl.limit_time as i64) * 1_000_000
+    } else {
+        0
+    };
+    apply_accept_effects(
+        ctx,
+        player_guid,
+        player.owner_identity,
+        quest_entry,
+        &tmpl,
+        existing,
+        deadline_micros,
+    )
+}
+
+/// The accept EFFECTS shared by [`apply_accept_quest`] and [`grant_quest_unchecked`] (the debug twin) —
+/// once every accept GATE has been checked (by the real accept) or deliberately skipped (by the harness
+/// grant), both paths do the identical work: grant the quest's provided "source" item (cmangos
+/// SrcItemId — the item HANDED to the player on accept, satisfying a COLLECT objective whose ReqItemId
+/// == SrcItemId; `?` rolls the whole accept back on a full backpack), size a zeroed progress vector to
+/// the quest's objective count (capped at [`MAX_OBJECTIVES`]), write the [`CharacterQuest`] row —
+/// UPDATED in place if `existing` names one (the repeatable/failed reset path, id kept — see
+/// `apply_accept_quest`'s duplicate guard), else a fresh insert — and fire the accept hook. The debug
+/// twin must never reimplement these effects itself; this is the one place they live.
+fn apply_accept_effects(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    owner_identity: Identity,
+    quest_entry: u32,
+    tmpl: &QuestTemplate,
+    existing: Option<CharacterQuest>,
+    deadline_micros: i64,
+) -> Result<(), String> {
     if tmpl.src_item != 0 {
-        crate::items::grant_item(ctx, player_guid, tmpl.src_item, tmpl.src_item_count)?;
+        crate::items::grant_item(ctx, character_guid, tmpl.src_item, tmpl.src_item_count)?;
     }
     let num_objectives = ctx
         .db
@@ -658,30 +677,22 @@ pub(crate) fn apply_accept_quest(
         .count()
         .min(MAX_OBJECTIVES);
     let counts = vec![0u32; num_objectives];
-    // Timed quests (work-item 194): a `limit_time > 0` template stamps a deadline (accept-time
-    // ctx.timestamp micros + limit_time seconds, as micros); 0 = untimed (the vast majority).
-    let deadline_micros = if tmpl.limit_time > 0 {
-        ctx.timestamp.to_micros_since_unix_epoch() + (tmpl.limit_time as i64) * 1_000_000
-    } else {
-        0
-    };
-    match character_quest_row(ctx, player_guid, quest_entry) {
+    match existing {
         // Re-accepting a repeatable-rewarded OR failed quest: reset the SAME row (id kept) rather than
-        // inserting a second one — this is what the duplicate guard above allows through, and keeping
-        // one row per (character, quest) is what `character_quest_row`'s point-scan-by-quest_entry
-        // assumes everywhere else.
-        Some(mut existing) => {
-            existing.counts = counts;
-            existing.rewarded = false;
-            existing.failed = false;
-            existing.deadline_micros = deadline_micros;
-            ctx.db.game_character_quest().id().update(existing);
+        // inserting a second one, and keeping one row per (character, quest) is what
+        // `character_quest_row`'s point-scan-by-quest_entry assumes everywhere else.
+        Some(mut row) => {
+            row.counts = counts;
+            row.rewarded = false;
+            row.failed = false;
+            row.deadline_micros = deadline_micros;
+            ctx.db.game_character_quest().id().update(row);
         }
         None => {
             ctx.db.game_character_quest().insert(CharacterQuest {
                 id: 0,
-                character_guid: player_guid,
-                owner_identity: player.owner_identity,
+                character_guid,
+                owner_identity,
                 quest_entry,
                 counts,
                 rewarded: false,
@@ -690,11 +701,12 @@ pub(crate) fn apply_accept_quest(
             });
         }
     }
-    // Notify-hook: the quest landed in the log (real accept — all gates passed).
+    // Notify-hook: the quest landed in the log — the real accept (all gates passed) or the harness
+    // grant (gates skipped); a consumer sees one "quest in the log" signal regardless of which path.
     crate::hooks::fire_on_quest_accept(
         ctx,
         &crate::hooks::QuestAcceptPayload {
-            character_guid: player_guid,
+            character_guid,
             quest_entry,
         },
     );
@@ -702,11 +714,12 @@ pub(crate) fn apply_accept_quest(
 }
 
 /// Grant `quest_entry` to `character_guid` WITHOUT a giver — the test path behind [`debug_grant_quest`].
-/// Inserts the SAME CharacterQuest row `apply_accept_quest` does (counts sized to the objective count,
-/// rewarded=false) but SKIPS every accept gate (giver range/role, level, race/class, prereq) so a harness
-/// can stage a quest by guid alone — the real accept needs the giver's creature guid, which the CLI
-/// `spacetime call` mangles (u64 > 2^53). Keeps the duplicate guard. owner_identity comes from the live
-/// entity (the player is in-world when staging). [entity]
+/// SKIPS every accept GATE (giver range/role, level, race/class, prereq) so a harness can stage a quest
+/// by guid alone — the real accept needs the giver's creature guid, which the CLI `spacetime call`
+/// mangles (u64 > 2^53) — but shares [`apply_accept_effects`] with [`apply_accept_quest`] for the
+/// EFFECTS (row shape, source item, hook), so the two can never drift. Keeps the duplicate guard (no
+/// reset exception here — a harness re-grant is always a fresh accept, never a repeatable/failed
+/// reset). owner_identity comes from the live entity (the player is in-world when staging). [entity]
 // Sole consumer today is the feature-gated harness (via `actor::stage_quest`); a default build
 // compiles debug.rs out, so the lint is silenced ONLY there — a debug_reducers build still flags
 // this dead if the harness stops staging quests.
@@ -725,11 +738,6 @@ pub(crate) fn grant_quest_unchecked(
     if character_quest_row(ctx, character_guid, quest_entry).is_some() {
         return Err("already on or completed that quest".to_string());
     }
-    // Provided source item, same as apply_accept_quest — granted once (duplicate guard above gates
-    // re-accept/relog), so the harness can stage a delivery quest with its item already in bags.
-    if tmpl.src_item != 0 {
-        crate::items::grant_item(ctx, character_guid, tmpl.src_item, tmpl.src_item_count)?;
-    }
     let owner_identity = ctx
         .db
         .game_world_entity()
@@ -737,33 +745,17 @@ pub(crate) fn grant_quest_unchecked(
         .find(character_guid)
         .map(|e| e.owner_identity)
         .ok_or_else(|| format!("character {character_guid} not in world"))?;
-    let num_objectives = ctx
-        .db
-        .game_quest_objective()
-        .by_quest()
-        .filter(&quest_entry)
-        .count()
-        .min(MAX_OBJECTIVES);
-    ctx.db.game_character_quest().insert(CharacterQuest {
-        id: 0,
+    // No existing row (the duplicate guard above already rejected one) and no deadline (harness
+    // staging skips the timer — same as an untimed accept).
+    apply_accept_effects(
+        ctx,
         character_guid,
         owner_identity,
         quest_entry,
-        counts: vec![0u32; num_objectives],
-        rewarded: false,
-        deadline_micros: 0, // harness staging skips the timer — same as an untimed accept
-        failed: false,
-    });
-    // Notify-hook: same event as the real accept — a consumer sees one "quest in the log"
-    // signal regardless of which path staged it (the row shapes are identical).
-    crate::hooks::fire_on_quest_accept(
-        ctx,
-        &crate::hooks::QuestAcceptPayload {
-            character_guid,
-            quest_entry,
-        },
-    );
-    Ok(())
+        &tmpl,
+        None,
+        0,
+    )
 }
 
 /// Pure choice-reward pick (testable without a live `ReducerContext`): given a quest's choice rows as
@@ -949,17 +941,19 @@ pub(crate) fn apply_turn_in_quest(
     Ok(())
 }
 
-/// Quest progress hook — called from the combat killing-blow path ([`crate::combat::kill_creature`])
-/// when a PLAYER `killer_guid` kills a creature of `creature_entry`. Bumps every active (un-rewarded)
-/// quest of the killer that has an incomplete KILL objective for this creature, capping each count at
-/// its `required_count`. A non-player killer (or one with no matching quests) finds no rows → no-op.
-/// Only writes back a quest row whose counts actually changed. Additive — touches only quest-log rows.
-pub(crate) fn on_creature_killed(ctx: &ReducerContext, killer_guid: u64, creature_entry: u32) {
+/// Quest objective-credit engine — the ONE loop shared by [`on_creature_killed`],
+/// [`on_gameobject_used`], and [`on_areatrigger_entered`] (previously copy-pasted three times).
+/// Snapshots `character_guid`'s active (un-rewarded) quests, then for each one bumps every incomplete
+/// objective whose `(kind, target_entry)` matches the given `(kind, target_entry)`, capping each count
+/// at its `required_count`. No matching quest (or a non-quest-holding actor) → no-op. Only writes back a
+/// quest row whose counts actually changed. Additive — touches only quest-log rows. A fourth objective
+/// kind (SPEAK_TO, CAST_ON, …) costs a new call site into this fn, not a fourth pasted loop.
+fn credit_objective(ctx: &ReducerContext, character_guid: u64, kind: u8, target_entry: u32) {
     let log = ctx.db.game_character_quest();
-    // Snapshot the killer's active quests first (we mutate rows in the loop).
+    // Snapshot the actor's active quests first (we mutate rows in the loop).
     let active: Vec<CharacterQuest> = log
         .by_character()
-        .filter(&killer_guid)
+        .filter(&character_guid)
         .filter(|q| !q.rewarded)
         .collect();
     for mut cq in active {
@@ -970,7 +964,7 @@ pub(crate) fn on_creature_killed(ctx: &ReducerContext, killer_guid: u64, creatur
             .by_quest()
             .filter(&cq.quest_entry)
         {
-            if obj.kind != objective_kind::KILL_CREATURE || obj.target_entry != creature_entry {
+            if obj.kind != kind || obj.target_entry != target_entry {
                 continue;
             }
             let idx = obj.obj_index as usize;
@@ -988,76 +982,33 @@ pub(crate) fn on_creature_killed(ctx: &ReducerContext, killer_guid: u64, creatur
     }
 }
 
-/// Quest credit for using a gameobject (the GOOBER path from CMSG_GAMEOBJ_USE) — the gameobject twin of
-/// [`on_creature_killed`]. Bumps each incomplete USE_GAMEOBJECT objective whose `target_entry` matches
-/// the used gameobject's template entry, capped at `required_count`. No matching quest → no-op. Additive.
-pub(crate) fn on_gameobject_used(ctx: &ReducerContext, player_guid: u64, go_entry: u32) {
-    let log = ctx.db.game_character_quest();
-    let active: Vec<CharacterQuest> = log
-        .by_character()
-        .filter(&player_guid)
-        .filter(|q| !q.rewarded)
-        .collect();
-    for mut cq in active {
-        let mut changed = false;
-        for obj in ctx
-            .db
-            .game_quest_objective()
-            .by_quest()
-            .filter(&cq.quest_entry)
-        {
-            if obj.kind != objective_kind::USE_GAMEOBJECT || obj.target_entry != go_entry {
-                continue;
-            }
-            let idx = obj.obj_index as usize;
-            let Some(have) = cq.counts.get(idx).copied() else {
-                continue;
-            };
-            if have < obj.required_count {
-                cq.counts[idx] = have + 1;
-                changed = true;
-            }
-        }
-        if changed {
-            log.id().update(cq);
-        }
-    }
+/// Quest progress hook — called from the combat killing-blow path ([`crate::combat::kill_creature`])
+/// when a PLAYER `killer_guid` kills a creature of `creature_entry`. [`credit_objective`] for
+/// [`objective_kind::KILL_CREATURE`].
+pub(crate) fn on_creature_killed(ctx: &ReducerContext, killer_guid: u64, creature_entry: u32) {
+    credit_objective(
+        ctx,
+        killer_guid,
+        objective_kind::KILL_CREATURE,
+        creature_entry,
+    );
 }
 
-/// Quest credit for entering an area trigger (the CMSG_AREATRIGGER path) — the explore twin of
-/// [`on_gameobject_used`]. Bumps each incomplete EXPLORE_AREATRIGGER objective whose `target_entry`
-/// matches `trigger_id`, capped at `required_count`. No matching quest → no-op. Additive.
+/// Quest credit for using a gameobject (the GOOBER path from CMSG_GAMEOBJ_USE). [`credit_objective`]
+/// for [`objective_kind::USE_GAMEOBJECT`].
+pub(crate) fn on_gameobject_used(ctx: &ReducerContext, player_guid: u64, go_entry: u32) {
+    credit_objective(ctx, player_guid, objective_kind::USE_GAMEOBJECT, go_entry);
+}
+
+/// Quest credit for entering an area trigger (the CMSG_AREATRIGGER path). [`credit_objective`] for
+/// [`objective_kind::EXPLORE_AREATRIGGER`].
 pub(crate) fn on_areatrigger_entered(ctx: &ReducerContext, player_guid: u64, trigger_id: u32) {
-    let log = ctx.db.game_character_quest();
-    let active: Vec<CharacterQuest> = log
-        .by_character()
-        .filter(&player_guid)
-        .filter(|q| !q.rewarded)
-        .collect();
-    for mut cq in active {
-        let mut changed = false;
-        for obj in ctx
-            .db
-            .game_quest_objective()
-            .by_quest()
-            .filter(&cq.quest_entry)
-        {
-            if obj.kind != objective_kind::EXPLORE_AREATRIGGER || obj.target_entry != trigger_id {
-                continue;
-            }
-            let idx = obj.obj_index as usize;
-            let Some(have) = cq.counts.get(idx).copied() else {
-                continue;
-            };
-            if have < obj.required_count {
-                cq.counts[idx] = have + 1;
-                changed = true;
-            }
-        }
-        if changed {
-            log.id().update(cq);
-        }
-    }
+    credit_objective(
+        ctx,
+        player_guid,
+        objective_kind::EXPLORE_AREATRIGGER,
+        trigger_id,
+    );
 }
 
 /// One cmangos `areatrigger_teleport` row — a dungeon entrance/exit portal (work-item 225).
@@ -1081,34 +1032,12 @@ pub struct AreatriggerTeleport {
     pub name: String,
 }
 
-/// The two ARMS [`apply_enter_areatrigger`] can fire, and their fixed order (quest credit is always
-/// evaluated; teleport only when a target row exists) — pure and unit-testable without a
-/// `ReducerContext` (per the repo's "extract pure functions" test convention — the module crate has no
-/// ctx test harness by design). `teleport_target` is the `(target_map, x, y, z, o)` tuple read from a
-/// `game_areatrigger_teleport` row, or `None` if `trigger_id` has no such row.
-pub(crate) fn plan_areatrigger_entry(
-    teleport_target: Option<(u32, f32, f32, f32, f32)>,
-) -> AreatriggerPlan {
-    AreatriggerPlan {
-        credit: true,
-        teleport: teleport_target,
-    }
-}
-
-/// See [`plan_areatrigger_entry`]. `credit` is always `true` today (kept as an explicit field, not a
-/// bare `Option`, so a future gate on the credit arm — e.g. a one-shot trigger — has somewhere to live
-/// without reshaping the type); `teleport` is the routed destination, if any.
-pub(crate) struct AreatriggerPlan {
-    pub credit: bool,
-    pub teleport: Option<(u32, f32, f32, f32, f32)>,
-}
-
 /// The shared core behind [`enter_areatrigger`] and `debug_enter_areatrigger` (work-item 225). Quest
-/// credit fires FIRST (unchanged from pre-225 behavior), then — iff `trigger_id` has an imported
-/// `game_areatrigger_teleport` row — the player is routed through 224's cross-map teleport. A trigger
-/// can be BOTH a quest-explore objective AND a teleport (Deadmines' Moonbrook entrance/exit triggers,
-/// `[V]` ids ~1447/~1448 per the design doc) — this is deliberate, not a bug: the two arms are
-/// independent and both fire on the same `CMSG_AREATRIGGER`.
+/// credit fires FIRST and UNCONDITIONALLY (unchanged from pre-225 behavior), then — iff `trigger_id`
+/// has an imported `game_areatrigger_teleport` row — the player is routed through 224's cross-map
+/// teleport. A trigger can be BOTH a quest-explore objective AND a teleport (Deadmines' Moonbrook
+/// entrance/exit triggers, `[V]` ids ~1447/~1448 per the design doc) — this is deliberate, not a bug:
+/// the two arms are independent and both fire on the same `CMSG_AREATRIGGER`.
 ///
 /// 190 slice 2 (the former "HOOK POINT"): a teleport whose `target_map` is a DUNGEON
 /// (`instance::is_dungeon_map` — Deadmines = map 36 today) resolves-or-creates the caller's
@@ -1124,11 +1053,8 @@ pub(crate) fn apply_enter_areatrigger(ctx: &ReducerContext, player_guid: u64, tr
         .trigger_id()
         .find(trigger_id)
         .map(|t| (t.target_map, t.x, t.y, t.z, t.o));
-    let plan = plan_areatrigger_entry(teleport_target);
-    if plan.credit {
-        on_areatrigger_entered(ctx, player_guid, trigger_id);
-    }
-    if let Some((target_map, x, y, z, o)) = plan.teleport {
+    on_areatrigger_entered(ctx, player_guid, trigger_id);
+    if let Some((target_map, x, y, z, o)) = teleport_target {
         let instance_id = if crate::instance::is_dungeon_map(target_map) {
             match crate::instance::resolve_or_create_instance(ctx, player_guid, target_map) {
                 Ok(id) => id,
@@ -1242,12 +1168,8 @@ pub(crate) fn apply_push_quest_to_party(
     {
         return Err("you are not on that quest".to_string());
     }
-    let sender_entity = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(sender_guid)
-        .ok_or_else(|| "player not in world".to_string())?;
+    let sender_entity = crate::helpers::live_entity(ctx, sender_guid)
+        .map_err(|_| "player not in world".to_string())?;
     let m = crate::group::group_of(ctx, sender_guid).ok_or_else(|| "not in a group".to_string())?;
     let tmpl = ctx
         .db
@@ -1406,7 +1328,7 @@ pub fn abandon_quest(ctx: &ReducerContext, quest_entry: u32) -> Result<(), Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{is_expired, pick_choice_reward, plan_areatrigger_entry, QUEST_MAX_LEVEL_PAYOUT};
+    use super::{is_expired, pick_choice_reward, QUEST_MAX_LEVEL_PAYOUT};
 
     /// The pure choice-pick grants choice[k], NOT choice[j]: a 3-row pick-list returns the item whose
     /// `choice_index` equals the requested `reward_index`, never a neighbor's.
@@ -1471,45 +1393,5 @@ mod tests {
     #[test]
     fn quest_max_level_payout_matches_the_vanilla_cap() {
         assert_eq!(QUEST_MAX_LEVEL_PAYOUT, 60);
-    }
-
-    // ---- AreaTrigger teleport arm (work-item 225): plan_areatrigger_entry ----
-
-    /// No `game_areatrigger_teleport` row for this trigger → quest-credit-only plan (byte-identical to
-    /// pre-225 `enter_areatrigger` behavior): `credit` still true, `teleport` is `None`.
-    #[test]
-    fn plan_areatrigger_entry_without_a_teleport_row_is_credit_only() {
-        let plan = plan_areatrigger_entry(None);
-        assert!(plan.credit);
-        assert_eq!(plan.teleport, None);
-    }
-
-    /// A `game_areatrigger_teleport` row present → BOTH arms plan to fire: `credit` is still true
-    /// (unconditional — a trigger can be both a quest-explore objective and a portal, e.g. Deadmines'
-    /// Moonbrook entrance), and `teleport` carries the exact target tuple through untouched.
-    #[test]
-    // The trailing `3.14` is an arbitrary FACING (radians, 0..2π), not an approximation of π — the
-    // test only asserts the tuple passes through untouched, so any value does.
-    #[allow(clippy::approx_constant)]
-    fn plan_areatrigger_entry_with_a_teleport_row_plans_both_arms() {
-        let target = (36u32, 100.5f32, -200.25f32, 10.0f32, 3.14f32);
-        let plan = plan_areatrigger_entry(Some(target));
-        assert!(
-            plan.credit,
-            "credit must still fire even when the trigger is also a portal"
-        );
-        assert_eq!(plan.teleport, Some(target));
-    }
-
-    /// `apply_enter_areatrigger`'s own source order calls `on_areatrigger_entered` (credit) BEFORE
-    /// `crate::world::teleport_player` (the teleport arm) — this test can't observe that ordering
-    /// without a `ReducerContext` (no ctx harness by design), so it instead pins the CONTRACT the
-    /// ordering depends on: `AreatriggerPlan.credit` is `true` in every case a `teleport` target
-    /// exists, so the "credit always happens" invariant can never be silently dropped by a future edit
-    /// that makes `credit` conditional on the teleport arm.
-    #[test]
-    fn plan_areatrigger_entry_credit_is_never_gated_by_teleport_presence() {
-        assert!(plan_areatrigger_entry(None).credit);
-        assert!(plan_areatrigger_entry(Some((36, 0.0, 0.0, 0.0, 0.0))).credit);
     }
 }

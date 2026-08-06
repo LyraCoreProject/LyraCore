@@ -16,6 +16,262 @@ use crate::{
     CreatureTemplate, Faction, ItemTemplate, Spell, SpellEffect,
 };
 
+/// Canonical fixture-NPC/item constructors — the single source of truth for the synthetic rows
+/// that BOTH `seed::init` (fresh publish) and the post-import fixture-restore path
+/// (`seed_scenario_fixtures`, invoked by `debug_seed_scenario_fixtures` after a world-ETL
+/// re-import truncates `game_creature_template`/`game_item_template`) insert. Before this (#363)
+/// the restore path re-authored these as hand-copied literals that drifted from `init`'s own
+/// (Profession Trainer: level 30/1500hp/"Cooking & Skinning" vs level 10/100hp/"Fixture"; Test
+/// Wolf: money_min/max 0/0 vs 25/50) — the exact cross-shard divergence class #85 was filed to
+/// kill, reintroduced by copy-paste. Both callers now build from these fns so there is nothing
+/// left to hand-copy out of sync. `init`'s values are treated as authoritative (they carry the
+/// original design rationale, preserved below).
+pub(crate) const TEST_WOLF_ENTRY: u32 = 51000;
+pub(crate) const PROFESSION_TRAINER_ENTRY: u32 = 51001;
+
+/// "Test Wolf": a dedicated SKINNABLE beast so the skin verify is IMPORT-INDEPENDENT (the demo
+/// Chicken is creature_type 8 = Critter → not skinnable). LEVEL 1 is intentional: the skill gate
+/// is (creature_level - 1) * 10, so a level-1 beast requires skill 0 — a freshly-trained skinner
+/// (skill=1) can skin it immediately without needing debug_set_skill.
+pub(crate) fn test_wolf_template() -> CreatureTemplate {
+    CreatureTemplate {
+        entry: TEST_WOLF_ENTRY,
+        name: "Test Wolf".to_string(),
+        subname: String::new(),
+        display_id: 720, // a wolf model that ships in 5875
+        level: 1,
+        health: 60,
+        faction_template: 14, // Monster (hostile → a usable kill target, like the demo chicken)
+        npc_flags: 0,
+        unit_flags: 0,
+        creature_type: 1, // BEAST (the skinnable gate — cmangos CREATURE_TYPE_BEAST)
+        creature_family: 1, // Wolf (cmangos CreatureFamily)
+        type_flags: 0x100, // SKINNABLE (cmangos CreatureTypeFlags bit; the creature_type==1 gate is sufficient)
+        rank: 0,
+        scale: 1.0,
+        base_attack_time_ms: 2000,
+        money_min: 0,
+        money_max: 0,
+        max_level: 0,
+        max_level_health: 0,
+        aggro_range: 0, // PASSIVE (engages only when attacked) so the test wolf doesn't maul the login demo
+        damage_min: 0,
+        damage_max: 0,
+        armor: 0,              // set via `spacetime sql` on this row to mock-test mitigation
+        pickpocket_loot_id: 0, // not imported — the test wolf has no pickpocket table
+        // 0 ⇒ `skin_corpse` falls back to the flat Light Leather — the pre-210 verify flow
+        // (debug_skin_nearest → 1x Light Leather) stays byte-identical without a seeded skin table.
+        skin_loot_id: 0,
+    }
+}
+
+/// "Profession Trainer": a dedicated trainer NPC so LEARN-A-PROFESSION is verifiable on a
+/// NO-IMPORT dev DB. npc_flags = GOSSIP|TRAINER (0x11) so the trainer window opens, faction 35
+/// (FRIENDLY — a trainer you walk up to, NOT a combat target).
+pub(crate) fn profession_trainer_template() -> CreatureTemplate {
+    CreatureTemplate {
+        entry: PROFESSION_TRAINER_ENTRY,
+        name: "Profession Trainer".to_string(),
+        subname: "Cooking & Skinning".to_string(),
+        display_id: 3167, // a generic humanoid model that ships in 5875
+        level: 30,
+        health: 1500,
+        faction_template: 35, // FRIENDLY (a trainer, not a kill target)
+        npc_flags: lyracore_shared::constants::npc_flags::GOSSIP
+            | lyracore_shared::constants::npc_flags::TRAINER, // 0x11 — gossip-eye + trainer window
+        unit_flags: 0,
+        creature_type: 7, // Humanoid
+        creature_family: 0,
+        type_flags: 0,
+        rank: 0,
+        scale: 1.0,
+        base_attack_time_ms: 2000,
+        money_min: 0,
+        money_max: 0,
+        max_level: 0,
+        max_level_health: 0,
+        aggro_range: 0, // never aggros (friendly trainer)
+        damage_min: 0,
+        damage_max: 0,
+        armor: 0,              // a trainer never takes damage anyway
+        pickpocket_loot_id: 0, // not imported — a friendly trainer is never pickpocketed
+        skin_loot_id: 0,       // not imported — a Humanoid trainer isn't skinnable anyway
+    }
+}
+
+/// "Tempered Blade" — hand-authored reference weapon (licensing firewall: never bulk-imported;
+/// display 1542 ships in 5875). `entry` is parameterized: `seed::init` uses the real id 50, the
+/// fixture-restore path uses the reserved id `FIXTURE_BLADE` (5090050) so a world-ETL re-import
+/// can never collide with it.
+pub(crate) fn tempered_blade_template(entry: u32) -> ItemTemplate {
+    ItemTemplate {
+        class: 2,    // Weapon
+        subclass: 7, // Sword (one-hand)
+        display_id: 1542,
+        quality: 2,         // Uncommon (green)
+        inventory_type: 21, // main-hand
+        item_level: 12,
+        required_level: 1,
+        max_durability: 70,
+        buy_price: 1200,
+        sell_price: 240,
+        max_stack: 1,
+        damage_min: 8.0,
+        damage_max: 12.0,
+        delay_ms: 2600,
+        // Uncommon (green) gear binds on equip — vanilla's "greens are BoE" rule.
+        bonding: crate::items::bonding::BIND_ON_EQUIP,
+        ..base_item(entry, "Tempered Blade")
+    }
+}
+
+/// "Tough Jerky" — hand-authored reference food (licensing firewall: never bulk-imported;
+/// display 1542 ships in 5875, placeholder icon). `entry` parameterized the same way as
+/// `tempered_blade_template`. spellid_1 (#387) points at "Eating" (50115) — the same food HoT the
+/// real Tough Jerky (117) / Tough Hunk of Bread (4540) items use — so this NO-IMPORT fixture stays
+/// usable now that `apply_item_use` reads spellid_1 as the single on-use authority.
+pub(crate) fn tough_jerky_template(entry: u32) -> ItemTemplate {
+    ItemTemplate {
+        class: 0,    // Consumable
+        subclass: 0, // Food & Drink
+        display_id: 1542,
+        quality: 0,        // Poor
+        inventory_type: 0, // not equippable
+        item_level: 1,
+        required_level: 1,
+        buy_price: 10,
+        sell_price: 2,
+        max_stack: 20,
+        spellid_1: 50115,                     // "Eating" — A_PERIODIC_HEAL food HoT
+        spelltrigger_1: 0,                    // on-use
+        bonding: crate::items::bonding::NONE, // plain food — unbound/tradeable
+        ..base_item(entry, "Tough Jerky")
+    }
+}
+
+/// Base-row constructors (#377) — every meaningful field of a fixture `Spell`/`SpellEffect`/
+/// `ItemTemplate` is a struct-update override at the call site; every OTHER field (the ~80% that
+/// are 0/false/empty on a synthetic fixture row) comes from one of these three fns. Mirrors the
+/// `seed.rs` `spell`/`effect` closures' own implicit defaults exactly (so a fixture built this way
+/// and one built through the closure agree byte-for-byte), just spelled as a real fn so
+/// struct-update syntax can reach it, plus a matching `base_item`. `base_spell`'s `gcd_ms: 1500` is
+/// the one non-zero default — it is the vanilla global cooldown, and every fixture spell wants it
+/// except the handful that are proc-applied or item-triggered, which override it to 0 at the call
+/// site (the override IS the data point, not a workaround). `base_item`'s `buy_count: 1` mirrors
+/// `ItemTemplate`'s own `#[default(1u32)]` migration default for the same reason.
+pub(crate) fn base_spell(spell_id: u32, name: &str) -> Spell {
+    Spell {
+        spell_id,
+        name: name.to_string(),
+        power_type: 0,
+        cost: 0,
+        cast_time_ms: 0,
+        gcd_ms: 1500,
+        family_name: 0,
+        family_flags: 0,
+        cooldown_ms: 0,
+        range_yd: 0,
+        duration_ms: 0,
+        school_mask: 0,
+        dispel_type: 0,
+        mechanic: 0,
+        max_stacks: 0,
+        aura_interrupt: 0,
+        attributes: 0,
+        spell_level: 0,
+        max_level: 0,
+        is_negative: false,
+        cast_flags: 0,
+        stances: 0,
+    }
+}
+
+/// See `base_spell`'s doc. `id` is the deterministic `(spell_id<<2)|effect_index` PK every
+/// hand-authored effect row in this crate uses.
+pub(crate) fn base_effect(spell_id: u32, effect_index: u8) -> SpellEffect {
+    SpellEffect {
+        id: ((spell_id as u64) << 2) | effect_index as u64,
+        spell_id,
+        effect_index,
+        kind: 0,
+        base_points: 0,
+        die_sides: 0,
+        per_level: 0.0,
+        period_ms: 0,
+        target: 0,
+        radius_yd: 0.0,
+        chain_targets: 0,
+        trigger_spell: 0,
+        effect_mechanic: 0,
+        p0: 0,
+        p0_kind: 0,
+        p1: 0,
+        script_id: 0,
+        enters_combat: false,
+    }
+}
+
+/// See `base_spell`'s doc.
+pub(crate) fn base_item(entry: u32, name: &str) -> ItemTemplate {
+    ItemTemplate {
+        entry,
+        class: 0,
+        subclass: 0,
+        name: name.to_string(),
+        display_id: 0,
+        quality: 0,
+        inventory_type: 0,
+        item_level: 0,
+        required_level: 0,
+        max_durability: 0,
+        buy_price: 0,
+        sell_price: 0,
+        max_stack: 0,
+        damage_min: 0.0,
+        damage_max: 0.0,
+        delay_ms: 0,
+        stat_strength: 0,
+        stat_agility: 0,
+        stat_stamina: 0,
+        stat_intellect: 0,
+        stat_spirit: 0,
+        stat_crit: 0,
+        stat_hit: 0,
+        stat_armor: 0,
+        block_value: 0,
+        restores_power: false,
+        spellid_1: 0,
+        spelltrigger_1: 0,
+        spellid_2: 0,
+        spelltrigger_2: 0,
+        container_slots: 0,
+        sheath: 0,
+        bonding: 0,
+        holy_res: 0,
+        fire_res: 0,
+        nature_res: 0,
+        frost_res: 0,
+        shadow_res: 0,
+        arcane_res: 0,
+        spellid_3: 0,
+        spelltrigger_3: 0,
+        spellid_4: 0,
+        spelltrigger_4: 0,
+        spellid_5: 0,
+        spelltrigger_5: 0,
+        required_skill: 0,
+        required_skill_rank: 0,
+        required_reputation_faction: 0,
+        required_reputation_rank: 0,
+        max_count: 0,
+        item_flags: 0,
+        page_text: 0,
+        start_quest: 0,
+        bag_family: 0,
+        buy_count: 1,
+    }
+}
+
 /// Seed Weakened Soul (6788) + the Test PW:Shield fixture (50072) — the generic linked-debuff mechanic.
 /// IDEMPOTENT (inserts only rows that are absent), mirroring `talent::seed_talents`, so
 /// it is safe to call from `init` (fresh install) AND from `debug_seed_pw_shield_fixture` on an
@@ -50,28 +306,9 @@ pub(crate) fn seed_pw_shield_fixture(ctx: &ReducerContext) {
     // safe because these are TEST fixture ids (6788 is real-but-otherwise-unused; 50072 is a reserved
     // synthetic id), never touched by player state.
     let ws_hdr = Spell {
-        spell_id: 6788,
-        name: "Weakened Soul".to_string(),
-        power_type: 0,
-        cost: 0,
-        family_name: 0,
-        family_flags: 0,
-        cast_time_ms: 0,
-        gcd_ms: 1500,
-        cooldown_ms: 0,
-        range_yd: 0,
         duration_ms: 15000,
         school_mask: 2,
-        dispel_type: 0,
-        mechanic: 0,
-        max_stacks: 0,
-        aura_interrupt: 0,
-        attributes: 0,
-        spell_level: 0,
-        max_level: 0,
-        is_negative: false,
-        cast_flags: 0,
-        stances: 0,
+        ..base_spell(6788, "Weakened Soul")
     };
     if ctx.db.game_spell().spell_id().find(6788u32).is_some() {
         ctx.db.game_spell().spell_id().update(ws_hdr);
@@ -86,24 +323,12 @@ pub(crate) fn seed_pw_shield_fixture(ctx: &ReducerContext) {
     upsert_effect(
         ctx,
         SpellEffect {
-            id: (6788u64 << 2) | 1,
-            spell_id: 6788,
-            effect_index: 1,
             kind: 0xB1, // A_IMMUNITY
             base_points: 1,
-            die_sides: 0,
-            per_level: 0.0,
-            period_ms: 0,
             target: 2, // T_TARGET_ENEMY (DBC target 2)
-            radius_yd: 0.0,
-            chain_targets: 0,
-            trigger_spell: 0,
-            effect_mechanic: 0,
             p0: 19,
             p0_kind: 3, // MECHANIC_SHIELD, P_MECHANIC
-            p1: 0,
-            script_id: 0,
-            enters_combat: false,
+            ..base_effect(6788, 1)
         },
     );
     if let Some(mut s) = ctx.db.game_spell().spell_id().find(50072u32) {
@@ -111,61 +336,26 @@ pub(crate) fn seed_pw_shield_fixture(ctx: &ReducerContext) {
         ctx.db.game_spell().spell_id().update(s);
     } else {
         ctx.db.game_spell().insert(Spell {
-            spell_id: 50072,
-            name: "Test Power Word: Shield".to_string(),
-            power_type: 0,
-            cost: 0,
-            family_name: 0,
-            family_flags: 0,
-            cast_time_ms: 0,
-            gcd_ms: 1500,
-            cooldown_ms: 0,
             range_yd: 30,
             duration_ms: 30000, // 30s shield (vanilla R1 is longer; a real duration is required — A_ABSORB is an aura, 0ms would reap it instantly)
             school_mask: 2,
-            dispel_type: 0,
-            mechanic: 0,
-            max_stacks: 0,
-            aura_interrupt: 0,
-            attributes: 0,
-            spell_level: 0,
-            max_level: 0,
-            is_negative: false,
-            cast_flags: 0,
-            stances: 0,
+            ..base_spell(50072, "Test Power Word: Shield")
         });
     }
-    if ctx
-        .db
-        .game_spell_effect()
-        .id()
-        .find(50072u64 << 2)
-        .is_none()
-    {
-        upsert_effect(
-            ctx,
-            SpellEffect {
-                id: (50072u64 << 2),
-                spell_id: 50072,
-                effect_index: 0,
-                kind: 0xA2, // A_ABSORB
-                base_points: 50,
-                die_sides: 0,
-                per_level: 0.0,
-                period_ms: 0,
-                target: 2, // T_TARGET_ALLY
-                radius_yd: 0.0,
-                chain_targets: 0,
-                trigger_spell: 0,
-                effect_mechanic: 0,
-                p0: 2,
-                p0_kind: 2, // holy school mask, P_SCHOOL_MASK
-                p1: 6788,   // links Weakened Soul — the linked-debuff mechanic under test
-                script_id: 0,
-                enters_combat: false,
-            },
-        );
-    }
+    // upsert_effect is delete-then-insert, so this is self-correcting on every call — no
+    // insert-if-absent guard needed (see upsert_effect's doc).
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: 0xA2, // A_ABSORB
+            base_points: 50,
+            target: 2, // T_TARGET_ALLY
+            p0: 2,
+            p0_kind: 2, // holy school mask, P_SCHOOL_MASK
+            p1: 6788,   // links Weakened Soul — the linked-debuff mechanic under test
+            ..base_effect(50072, 0)
+        },
+    );
 }
 
 /// Hand-seed the Soul Shard item template (real vanilla item 6265). The .import ETL
@@ -187,61 +377,16 @@ pub(crate) fn seed_soul_shard_item(ctx: &ReducerContext) {
         return;
     }
     ctx.db.game_item_template().insert(ItemTemplate {
-        entry: SOUL_SHARD,
-        class: 7,    // Trade Goods
-        subclass: 0, // Trade Goods (generic)
-        name: "Soul Shard".to_string(),
+        class: 7,         // Trade Goods
+        subclass: 0,      // Trade Goods (generic)
         display_id: 1542, // placeholder icon (5875 fixture, like the other hand-authored items above)
         quality: 1,       // Common (white)
-        inventory_type: 0, // not equippable
         item_level: 1,
         required_level: 1,
-        max_durability: 0,
-        buy_price: 0,
         sell_price: 0, // vendors refuse Soul Shards in real vanilla
         max_stack: 20,
-        damage_min: 0.0,
-        damage_max: 0.0,
-        delay_ms: 0,
-        stat_strength: 0,
-        stat_agility: 0,
-        stat_stamina: 0,
-        stat_intellect: 0,
-        stat_spirit: 0,
-        stat_crit: 0,
-        stat_hit: 0,
-        stat_armor: 0,
-        block_value: 0,
-        restores_power: false,
-        spellid_1: 0,
-        spelltrigger_1: 0,
-        spellid_2: 0,
-        spelltrigger_2: 0,
-        container_slots: 0,
-        sheath: 0,
         bonding: crate::items::bonding::BIND_ON_PICKUP, // real vanilla Soul Shard: unsellable + BoP
-        holy_res: 0,
-        fire_res: 0,
-        nature_res: 0,
-        frost_res: 0,
-        shadow_res: 0,
-        arcane_res: 0,
-        spellid_3: 0,
-        spelltrigger_3: 0,
-        spellid_4: 0,
-        spelltrigger_4: 0,
-        spellid_5: 0,
-        spelltrigger_5: 0,
-        required_skill: 0,
-        required_skill_rank: 0,
-        required_reputation_faction: 0,
-        required_reputation_rank: 0,
-        max_count: 0,
-        item_flags: 0,
-        page_text: 0,
-        start_quest: 0,
-        bag_family: 0,
-        buy_count: 1,
+        ..base_item(SOUL_SHARD, "Soul Shard")
     });
 }
 
@@ -256,61 +401,27 @@ pub(crate) fn seed_drain_soul_fixture(ctx: &ReducerContext) {
     const DRAIN_SOUL: u32 = crate::combat::DRAIN_SOUL_SPELL_ID;
     if ctx.db.game_spell().spell_id().find(DRAIN_SOUL).is_none() {
         ctx.db.game_spell().insert(Spell {
-            spell_id: DRAIN_SOUL,
-            name: "Drain Soul".to_string(),
-            power_type: 0,
-            cost: 0,
-            family_name: 0,
-            family_flags: 0,
-            cast_time_ms: 0,
-            gcd_ms: 1500,
-            cooldown_ms: 0,
             range_yd: 30,
             duration_ms: 15000,
             school_mask: 32,
-            dispel_type: 0,
-            mechanic: 0,
-            max_stacks: 0,
-            aura_interrupt: 0,
-            attributes: 0,
-            spell_level: 0,
-            max_level: 0,
             is_negative: true,
-            cast_flags: 0,
-            stances: 0,
+            ..base_spell(DRAIN_SOUL, "Drain Soul")
         });
     }
-    if ctx
-        .db
-        .game_spell_effect()
-        .id()
-        .find((DRAIN_SOUL as u64) << 2)
-        .is_none()
-    {
-        upsert_effect(
-            ctx,
-            SpellEffect {
-                id: (DRAIN_SOUL as u64) << 2,
-                spell_id: DRAIN_SOUL,
-                effect_index: 0,
-                kind: 0x90, // A_PERIODIC_DAMAGE
-                base_points: 45,
-                die_sides: 0,
-                per_level: 0.0,
-                period_ms: 3000,
-                target: 1, // T_TARGET_ENEMY
-                radius_yd: 0.0,
-                chain_targets: 0,
-                trigger_spell: 0,
-                effect_mechanic: 0,
-                p0: 32,
-                p0_kind: 2, // shadow school mask, P_SCHOOL_MASK
-                p1: 0,
-                script_id: 0,
-                enters_combat: false,
-            },
-        );
-    }
+    // upsert_effect is delete-then-insert, so this is self-correcting on every call — no
+    // insert-if-absent guard needed (see upsert_effect's doc).
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: 0x90, // A_PERIODIC_DAMAGE
+            base_points: 45,
+            period_ms: 3000,
+            target: 1, // T_TARGET_ENEMY
+            p0: 32,
+            p0_kind: 2, // shadow school mask, P_SCHOOL_MASK
+            ..base_effect(DRAIN_SOUL, 0)
+        },
+    );
 }
 
 /// Mock-seed Mana Burn (real vanilla spell 8129) as a single `E_POWER_BURN` effect,
@@ -325,61 +436,26 @@ pub(crate) fn seed_mana_burn_fixture(ctx: &ReducerContext) {
     const MANA_BURN: u32 = 8129;
     if ctx.db.game_spell().spell_id().find(MANA_BURN).is_none() {
         ctx.db.game_spell().insert(Spell {
-            spell_id: MANA_BURN,
-            name: "Mana Burn".to_string(),
-            power_type: 0,
-            cost: 0,
-            family_name: 0,
-            family_flags: 0,
             cast_time_ms: 1500,
-            gcd_ms: 1500,
-            cooldown_ms: 0,
             range_yd: 30,
-            duration_ms: 0,
             school_mask: 32,
-            dispel_type: 0,
-            mechanic: 0,
-            max_stacks: 0,
-            aura_interrupt: 0,
-            attributes: 0,
-            spell_level: 0,
-            max_level: 0,
             is_negative: true,
-            cast_flags: 0,
-            stances: 0,
+            ..base_spell(MANA_BURN, "Mana Burn")
         });
     }
-    if ctx
-        .db
-        .game_spell_effect()
-        .id()
-        .find((MANA_BURN as u64) << 2)
-        .is_none()
-    {
-        upsert_effect(
-            ctx,
-            SpellEffect {
-                id: (MANA_BURN as u64) << 2,
-                spell_id: MANA_BURN,
-                effect_index: 0,
-                kind: 0x19, // E_POWER_BURN
-                base_points: 100,
-                die_sides: 0,
-                per_level: 0.0,
-                period_ms: 0,
-                target: 1, // T_TARGET_ENEMY
-                radius_yd: 0.0,
-                chain_targets: 0,
-                trigger_spell: 0,
-                effect_mechanic: 0,
-                p0: 0,
-                p0_kind: 4, // MANA, P_POWER_TYPE (documentation only — the handler reads unit_bytes_0)
-                p1: 50,
-                script_id: 0,
-                enters_combat: false, // 50bp = vanilla EffectMultipleValue 0.5
-            },
-        );
-    }
+    // upsert_effect is delete-then-insert, so this is self-correcting on every call — no
+    // insert-if-absent guard needed (see upsert_effect's doc).
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: 0x19, // E_POWER_BURN
+            base_points: 100,
+            target: 1,  // T_TARGET_ENEMY
+            p0_kind: 4, // MANA, P_POWER_TYPE (documentation only — the handler reads unit_bytes_0)
+            p1: 50,     // 50bp = vanilla EffectMultipleValue 0.5
+            ..base_effect(MANA_BURN, 0)
+        },
+    );
 }
 
 /// Mock-seed Stealth (real vanilla spell 1784) as a self-targeted `A_STEALTH` presence
@@ -402,61 +478,22 @@ pub(crate) fn seed_stealth_fixture(ctx: &ReducerContext) {
     const STEALTH: u32 = 1784;
     if ctx.db.game_spell().spell_id().find(STEALTH).is_none() {
         ctx.db.game_spell().insert(Spell {
-            spell_id: STEALTH,
-            name: "Stealth".to_string(),
             power_type: 3,
-            cost: 0,
-            family_name: 0,
-            family_flags: 0,
-            cast_time_ms: 0,
-            gcd_ms: 1500,
-            cooldown_ms: 0,
-            range_yd: 0,
-            duration_ms: 0,
             school_mask: 1,
-            dispel_type: 0,
-            mechanic: 0,
-            max_stacks: 0,
-            aura_interrupt: 0,
-            attributes: 0,
-            spell_level: 0,
-            max_level: 0,
-            is_negative: false,
-            cast_flags: 0,
-            stances: 0,
+            ..base_spell(STEALTH, "Stealth")
         });
     }
-    if ctx
-        .db
-        .game_spell_effect()
-        .id()
-        .find((STEALTH as u64) << 2)
-        .is_none()
-    {
-        upsert_effect(
-            ctx,
-            SpellEffect {
-                id: (STEALTH as u64) << 2,
-                spell_id: STEALTH,
-                effect_index: 0,
-                kind: crate::spell::A_STEALTH,
-                base_points: 0,
-                die_sides: 0,
-                per_level: 0.0,
-                period_ms: 0,
-                target: 0, // T_SELF
-                radius_yd: 0.0,
-                chain_targets: 0,
-                trigger_spell: 0,
-                effect_mechanic: 0,
-                p0: 0,
-                p0_kind: 7, // P_FLAG
-                p1: 0,
-                script_id: 0,
-                enters_combat: false,
-            },
-        );
-    }
+    // upsert_effect is delete-then-insert, so this is self-correcting on every call — no
+    // insert-if-absent guard needed (see upsert_effect's doc).
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: crate::spell::A_STEALTH,
+            target: 0,  // T_SELF
+            p0_kind: 7, // P_FLAG
+            ..base_effect(STEALTH, 0)
+        },
+    );
 }
 
 /// Mock-seed Chilled (real vanilla spell 6136) + Frost Armor (real vanilla spell 168) —
@@ -481,149 +518,52 @@ pub(crate) fn seed_frost_armor_fixture(ctx: &ReducerContext) {
     const FROST_ARMOR: u32 = 168;
     if ctx.db.game_spell().spell_id().find(CHILLED).is_none() {
         ctx.db.game_spell().insert(Spell {
-            spell_id: CHILLED,
-            name: "Chilled".to_string(),
-            power_type: 0,
-            cost: 0,
-            family_name: 0,
-            family_flags: 0,
-            cast_time_ms: 0,
             gcd_ms: 0,
-            cooldown_ms: 0,
-            range_yd: 0,
             duration_ms: 5000,
             school_mask: 16,
-            dispel_type: 0,
-            mechanic: 0,
-            max_stacks: 0,
-            aura_interrupt: 0,
-            attributes: 0,
-            spell_level: 0,
-            max_level: 0,
             is_negative: true,
-            cast_flags: 0,
-            stances: 0,
+            ..base_spell(CHILLED, "Chilled")
         });
     }
-    if ctx
-        .db
-        .game_spell_effect()
-        .id()
-        .find((CHILLED as u64) << 2)
-        .is_none()
-    {
-        upsert_effect(
-            ctx,
-            SpellEffect {
-                id: (CHILLED as u64) << 2,
-                spell_id: CHILLED,
-                effect_index: 0,
-                kind: crate::spell::A_MOD_SPEED,
-                base_points: -30,
-                die_sides: 0,
-                per_level: 0.0,
-                period_ms: 0,
-                target: 1, // T_TARGET_ENEMY
-                radius_yd: 0.0,
-                chain_targets: 0,
-                trigger_spell: 0,
-                effect_mechanic: 0,
-                p0: 0,
-                p0_kind: 6, // SPEED_MOVE, P_SPEED_KIND
-                p1: 0,
-                script_id: 0,
-                enters_combat: false,
-            },
-        );
-    }
+    // upsert_effect is delete-then-insert, so this is self-correcting on every call — no
+    // insert-if-absent guard needed (see upsert_effect's doc).
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: crate::spell::A_MOD_SPEED,
+            base_points: -30,
+            target: 1,  // T_TARGET_ENEMY
+            p0_kind: 6, // SPEED_MOVE, P_SPEED_KIND
+            ..base_effect(CHILLED, 0)
+        },
+    );
     if ctx.db.game_spell().spell_id().find(FROST_ARMOR).is_none() {
         ctx.db.game_spell().insert(Spell {
-            spell_id: FROST_ARMOR,
-            name: "Frost Armor".to_string(),
-            power_type: 0,
-            cost: 0,
-            family_name: 0,
-            family_flags: 0,
-            cast_time_ms: 0,
-            gcd_ms: 1500,
-            cooldown_ms: 0,
-            range_yd: 0,
             duration_ms: u32::MAX, // permanent until replaced/dispelled
             school_mask: 16,
-            dispel_type: 0,
-            mechanic: 0,
-            max_stacks: 0,
-            aura_interrupt: 0,
-            attributes: 0,
-            spell_level: 0,
-            max_level: 0,
-            is_negative: false,
-            cast_flags: 0,
-            stances: 0,
+            ..base_spell(FROST_ARMOR, "Frost Armor")
         });
     }
-    if ctx
-        .db
-        .game_spell_effect()
-        .id()
-        .find((FROST_ARMOR as u64) << 2)
-        .is_none()
-    {
-        upsert_effect(
-            ctx,
-            SpellEffect {
-                id: (FROST_ARMOR as u64) << 2,
-                spell_id: FROST_ARMOR,
-                effect_index: 0,
-                kind: crate::spell::A_MOD_RESISTANCE,
-                base_points: 150,
-                die_sides: 0,
-                per_level: 0.0,
-                period_ms: 0,
-                target: 0, // T_SELF
-                radius_yd: 0.0,
-                chain_targets: 0,
-                trigger_spell: 0,
-                effect_mechanic: 0,
-                p0: 1,
-                p0_kind: 2, // RESIST_ARMOR bit, P_SCHOOL_MASK
-                p1: 0,
-                script_id: 0,
-                enters_combat: false,
-            },
-        );
-    }
-    if ctx
-        .db
-        .game_spell_effect()
-        .id()
-        .find(((FROST_ARMOR as u64) << 2) | 1)
-        .is_none()
-    {
-        upsert_effect(
-            ctx,
-            SpellEffect {
-                id: ((FROST_ARMOR as u64) << 2) | 1,
-                spell_id: FROST_ARMOR,
-                effect_index: 1,
-                kind: crate::spell::A_PROC_ON_HIT,
-                base_points: 0,
-                die_sides: 0,
-                per_level: 0.0,
-                period_ms: 0,
-                target: 0, // T_SELF
-                radius_yd: 0.0,
-                chain_targets: 0,
-                trigger_spell: CHILLED,
-                effect_mechanic: 0,
-                p0: 0,
-                p0_kind: 0, // P_NONE
-                p1: 0,
-                script_id: 0,
-                enters_combat: false,
-            },
-        );
-    }
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: crate::spell::A_MOD_RESISTANCE,
+            base_points: 150,
+            target: 0, // T_SELF
+            p0: 1,
+            p0_kind: 2, // RESIST_ARMOR bit, P_SCHOOL_MASK
+            ..base_effect(FROST_ARMOR, 0)
+        },
+    );
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: crate::spell::A_PROC_ON_HIT,
+            target: 0, // T_SELF
+            trigger_spell: CHILLED,
+            ..base_effect(FROST_ARMOR, 1)
+        },
+    );
 }
 
 /// Mock-seed Demon Skin (real vanilla spell 696, rank 2) — the COMBAT-INDEPENDENT
@@ -647,92 +587,34 @@ pub(crate) fn seed_demon_skin_fixture(ctx: &ReducerContext) {
     const DEMON_SKIN: u32 = 696;
     if ctx.db.game_spell().spell_id().find(DEMON_SKIN).is_none() {
         ctx.db.game_spell().insert(Spell {
-            spell_id: DEMON_SKIN,
-            name: "Demon Skin".to_string(),
-            power_type: 0,
-            cost: 0,
-            family_name: 0,
-            family_flags: 0,
-            cast_time_ms: 0,
-            gcd_ms: 1500,
-            cooldown_ms: 0,
-            range_yd: 0,
             duration_ms: 1_800_000, // 30 min
             school_mask: 1,
-            dispel_type: 0,
-            mechanic: 0,
-            max_stacks: 0,
-            aura_interrupt: 0,
-            attributes: 0,
-            spell_level: 0,
-            max_level: 0,
-            is_negative: false,
-            cast_flags: 0,
-            stances: 0,
+            ..base_spell(DEMON_SKIN, "Demon Skin")
         });
     }
-    if ctx
-        .db
-        .game_spell_effect()
-        .id()
-        .find((DEMON_SKIN as u64) << 2)
-        .is_none()
-    {
-        upsert_effect(
-            ctx,
-            SpellEffect {
-                id: (DEMON_SKIN as u64) << 2,
-                spell_id: DEMON_SKIN,
-                effect_index: 0,
-                kind: crate::spell::A_MOD_RESISTANCE,
-                base_points: 120,
-                die_sides: 0,
-                per_level: 0.0,
-                period_ms: 0,
-                target: 0, // T_SELF
-                radius_yd: 0.0,
-                chain_targets: 0,
-                trigger_spell: 0,
-                effect_mechanic: 0,
-                p0: 1,
-                p0_kind: 2, // RESIST_ARMOR bit, P_SCHOOL_MASK
-                p1: 0,
-                script_id: 0,
-                enters_combat: false,
-            },
-        );
-    }
-    if ctx
-        .db
-        .game_spell_effect()
-        .id()
-        .find(((DEMON_SKIN as u64) << 2) | 1)
-        .is_none()
-    {
-        upsert_effect(
-            ctx,
-            SpellEffect {
-                id: ((DEMON_SKIN as u64) << 2) | 1,
-                spell_id: DEMON_SKIN,
-                effect_index: 1,
-                kind: crate::spell::A_PERIODIC_HEAL,
-                base_points: 5,
-                die_sides: 0,
-                per_level: 0.0,
-                period_ms: 5000,
-                target: 0, // T_SELF
-                radius_yd: 0.0,
-                chain_targets: 0,
-                trigger_spell: 0,
-                effect_mechanic: 0,
-                p0: 0,
-                p0_kind: 0, // P_NONE
-                p1: 0,
-                script_id: 0,
-                enters_combat: false,
-            },
-        );
-    }
+    // upsert_effect is delete-then-insert, so this is self-correcting on every call — no
+    // insert-if-absent guard needed (see upsert_effect's doc).
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: crate::spell::A_MOD_RESISTANCE,
+            base_points: 120,
+            target: 0, // T_SELF
+            p0: 1,
+            p0_kind: 2, // RESIST_ARMOR bit, P_SCHOOL_MASK
+            ..base_effect(DEMON_SKIN, 0)
+        },
+    );
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: crate::spell::A_PERIODIC_HEAL,
+            base_points: 5,
+            period_ms: 5000,
+            target: 0, // T_SELF
+            ..base_effect(DEMON_SKIN, 1)
+        },
+    );
 }
 
 /// Mock-seed COMBAT-REGEN fixture: Test Regeneration (50137) — the one
@@ -746,209 +628,46 @@ pub(crate) fn seed_demon_skin_fixture(ctx: &ReducerContext) {
 pub(crate) fn seed_regen_fixture(ctx: &ReducerContext) {
     if ctx.db.game_spell().spell_id().find(50137u32).is_none() {
         ctx.db.game_spell().insert(Spell {
-            spell_id: 50137,
-            name: "Test Regeneration".to_string(),
-            power_type: 0,
-            cost: 0,
-            family_name: 0,
-            family_flags: 0,
-            cast_time_ms: 0,
-            gcd_ms: 1500,
-            cooldown_ms: 0,
-            range_yd: 0,
             duration_ms: 300_000,
             school_mask: 8,
-            dispel_type: 0,
-            mechanic: 0,
-            max_stacks: 0,
-            aura_interrupt: 0,
-            attributes: 0,
-            spell_level: 0,
-            max_level: 0,
-            is_negative: false,
-            cast_flags: 0,
-            stances: 0,
+            ..base_spell(50137, "Test Regeneration")
         });
     }
-    let eff_id = (50137u64) << 2;
-    if ctx.db.game_spell_effect().id().find(eff_id).is_none() {
-        upsert_effect(
-            ctx,
-            SpellEffect {
-                id: eff_id,
-                spell_id: 50137,
-                effect_index: 0,
-                kind: 0xA9, // A_COMBAT_HEALTH_REGEN_PCT
-                base_points: 5,
-                die_sides: 0,
-                per_level: 0.0,
-                period_ms: 0,
-                target: 0, // self
-                radius_yd: 0.0,
-                chain_targets: 0,
-                trigger_spell: 0,
-                effect_mechanic: 0,
-                p0: 0,
-                p0_kind: 0,
-                p1: 0,
-                script_id: 0,
-                enters_combat: false,
-            },
-        );
-    }
+    // upsert_effect is delete-then-insert, so this is self-correcting on every call — no
+    // insert-if-absent guard needed (see upsert_effect's doc).
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: 0xA9, // A_COMBAT_HEALTH_REGEN_PCT
+            base_points: 5,
+            target: 0, // self
+            ..base_effect(50137, 0)
+        },
+    );
 }
 
-/// Scenario-runner mock-seed: everything the four wire scenarios need on a
-/// no-import sandbox, insert-if-absent like every other fixture here. Same precedent as
-/// `seed_pw_shield_fixture` — call via `debug_seed_scenario_fixtures` post-publish.
-///
-/// - faction 79 with a real reputation bar (rep index 5) so a quest rep reward lands in
-///   `game_player_reputation` (grant_reputation skips bar-less factions).
-/// - quest 50900 "Wolf Cull": kill 2x Test Wolf (51000), rewards 150c + 90 XP + 2x Tough Jerky (52)
-///   + 250 rep with faction 79. REPEATABLE so suite runs stay green without deleting the log row.
-/// - questgiver NPC template 51003 (starts + ends 50900).
-/// - vendor/repairer NPC template 51004 selling Tempered Blade (50) + Tough Jerky (52).
-/// - trainer offering on the seeded Profession Trainer (51001): Lesser Heal (2050, a seeded 1.5s
-///   heal) for 100c at level 1 — the train-and-cast scenario's purchase.
-/// - Weapon Master NPC template 51005 ("Woo Ping", work-item 202): a second GOSSIP|TRAINER creature
-///   (mirrors the 51004 vendor block) offering 1H Axe (skill line 44, marker 50130, required_level 1,
-///   100c) and Polearm (skill line 229, marker 50131, required_level 60, 100c — the level-refusal
-///   fixture). Both rows carry `learn_skill_line` set to a COMBAT line, so `apply_trainer_buy` routes
-///   them onto the weapon fork (level-derived cap, presence-known) instead of the profession fork;
-///   `learn_skill_cap` is irrelevant/ignored on that fork (kept at 0, never read).
-// Sole consumer today is the feature-gated harness reducer; see `grant_quest_unchecked` for the
-// lint convention (silenced ONLY in default builds).
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
-///
 /// Reserved fixture ITEM entries (2026-07-16): the scenarios used the mock-seed items 50 (Tempered
 /// Blade) and 52 (Tough Jerky), but the world ETL replaces those low entries with whatever real
 /// imported items happen to occupy them — the vendor scenario bought a few-copper item where it
 /// asserted a 1200c sword, and the quest rewarded something else entirely. Same reserved-id fix as
-/// the 509xxxx quest/vendor rows: fixture entries the import never touches.
+/// the 509xxxx quest/vendor rows: fixture entries the import never touches. Unlike
+/// `seed_scenario_fixtures` below, these consts are read unconditionally from `init` (via
+/// `seed_fixture_catalogue`), so they carry no `debug_reducers` `cfg_attr` — they are never dead in
+/// a production build.
 pub(crate) const FIXTURE_BLADE: u32 = 5090050;
 pub(crate) const FIXTURE_JERKY: u32 = 5090052;
 
-/// Insert the two reserved fixture item templates (insert-if-absent) — byte-copies of the
-/// mock-seed's Tempered Blade (50) / Tough Jerky (52) under the reserved entries above.
+/// Insert the two reserved fixture item templates (insert-if-absent) — built from the same
+/// `tempered_blade_template`/`tough_jerky_template` constructors the mock-seed's Tempered Blade
+/// (50) / Tough Jerky (52) use, under the reserved entries above (#363: this used to be a
+/// hand-copied literal that could drift from the mock-seed's).
 fn seed_fixture_items(ctx: &ReducerContext) {
     let items = ctx.db.game_item_template();
     if items.entry().find(FIXTURE_BLADE).is_none() {
-        items.insert(crate::items::ItemTemplate {
-            entry: FIXTURE_BLADE,
-            class: 2,    // Weapon
-            subclass: 7, // Sword (one-hand)
-            name: "Tempered Blade".to_string(),
-            display_id: 1542,
-            quality: 2,         // Uncommon (green)
-            inventory_type: 21, // main-hand
-            item_level: 12,
-            required_level: 1,
-            max_durability: 70,
-            buy_price: 1200,
-            sell_price: 240,
-            max_stack: 1,
-            damage_min: 8.0,
-            damage_max: 12.0,
-            delay_ms: 2600,
-            bonding: crate::items::bonding::BIND_ON_EQUIP,
-            stat_strength: 0,
-            stat_agility: 0,
-            stat_stamina: 0,
-            stat_intellect: 0,
-            stat_spirit: 0,
-            stat_crit: 0,
-            stat_hit: 0,
-            stat_armor: 0,
-            block_value: 0,
-            restores_power: false,
-            spellid_1: 0,
-            spelltrigger_1: 0,
-            spellid_2: 0,
-            spelltrigger_2: 0,
-            container_slots: 0,
-            sheath: 0,
-            holy_res: 0,
-            fire_res: 0,
-            nature_res: 0,
-            frost_res: 0,
-            shadow_res: 0,
-            arcane_res: 0,
-            spellid_3: 0,
-            spelltrigger_3: 0,
-            spellid_4: 0,
-            spelltrigger_4: 0,
-            spellid_5: 0,
-            spelltrigger_5: 0,
-            required_skill: 0,
-            required_skill_rank: 0,
-            required_reputation_faction: 0,
-            required_reputation_rank: 0,
-            max_count: 0,
-            item_flags: 0,
-            page_text: 0,
-            start_quest: 0,
-            bag_family: 0,
-            buy_count: 1,
-        });
+        items.insert(tempered_blade_template(FIXTURE_BLADE));
     }
     if items.entry().find(FIXTURE_JERKY).is_none() {
-        items.insert(crate::items::ItemTemplate {
-            entry: FIXTURE_JERKY,
-            class: 0,    // Consumable
-            subclass: 0, // Food & Drink
-            name: "Tough Jerky".to_string(),
-            display_id: 1542,
-            quality: 0,
-            inventory_type: 0,
-            item_level: 1,
-            required_level: 1,
-            max_durability: 0,
-            buy_price: 10,
-            sell_price: 2,
-            max_stack: 20,
-            damage_min: 0.0,
-            damage_max: 0.0,
-            delay_ms: 0,
-            bonding: crate::items::bonding::NONE,
-            stat_strength: 0,
-            stat_agility: 0,
-            stat_stamina: 0,
-            stat_intellect: 0,
-            stat_spirit: 0,
-            stat_crit: 0,
-            stat_hit: 0,
-            stat_armor: 0,
-            block_value: 0,
-            restores_power: false,
-            spellid_1: 0,
-            spelltrigger_1: 0,
-            spellid_2: 0,
-            spelltrigger_2: 0,
-            container_slots: 0,
-            sheath: 0,
-            holy_res: 0,
-            fire_res: 0,
-            nature_res: 0,
-            frost_res: 0,
-            shadow_res: 0,
-            arcane_res: 0,
-            spellid_3: 0,
-            spelltrigger_3: 0,
-            spellid_4: 0,
-            spelltrigger_4: 0,
-            spellid_5: 0,
-            spelltrigger_5: 0,
-            required_skill: 0,
-            required_skill_rank: 0,
-            required_reputation_faction: 0,
-            required_reputation_rank: 0,
-            max_count: 0,
-            item_flags: 0,
-            page_text: 0,
-            start_quest: 0,
-            bag_family: 0,
-            buy_count: 1,
-        });
+        items.insert(tough_jerky_template(FIXTURE_JERKY));
     }
 }
 
@@ -989,10 +708,30 @@ pub(crate) fn seed_fixture_catalogue(ctx: &ReducerContext) {
     }
 }
 
-// Sole consumer is `debug::debug_seed_scenario_fixtures`, so a build WITHOUT `debug_reducers` (a
-// production publish, or a `cargo clippy` that does not unify the module's features) sees this as
-// dead. Same convention as `FIXTURE_BLADE` above: silenced ONLY in the builds where it really is
-// unreachable, never unconditionally.
+/// Scenario-runner mock-seed: everything the four wire scenarios need on a
+/// no-import sandbox, insert-if-absent like every other fixture here. Same precedent as
+/// `seed_pw_shield_fixture` — call via `debug_seed_scenario_fixtures` post-publish.
+///
+/// - faction 79 with a real reputation bar (rep index 5) so a quest rep reward lands in
+///   `game_player_reputation` (grant_reputation skips bar-less factions).
+/// - quest 50900 "Wolf Cull": kill 2x Test Wolf (51000), rewards 150c + 90 XP + 2x Tough Jerky (52)
+///   + 250 rep with faction 79. REPEATABLE so suite runs stay green without deleting the log row.
+/// - questgiver NPC template 51003 (starts + ends 50900).
+/// - vendor/repairer NPC template 51004 selling Tempered Blade (50) + Tough Jerky (52).
+/// - trainer offering on the seeded Profession Trainer (51001): Lesser Heal (2050, a seeded 1.5s
+///   heal) for 100c at level 1 — the train-and-cast scenario's purchase.
+/// - Weapon Master NPC template 51005 ("Woo Ping", work-item 202): a second GOSSIP|TRAINER creature
+///   (mirrors the 51004 vendor block) offering 1H Axe (skill line 44, marker 50130, required_level 1,
+///   100c) and Polearm (skill line 229, marker 50131, required_level 60, 100c — the level-refusal
+///   fixture). Both rows carry `learn_skill_line` set to a COMBAT line, so `apply_trainer_buy` routes
+///   them onto the weapon fork (level-derived cap, presence-known) instead of the profession fork;
+///   `learn_skill_cap` is irrelevant/ignored on that fork (kept at 0, never read).
+///
+/// Sole consumer today is the feature-gated harness reducer (`debug::debug_seed_scenario_fixtures`),
+/// so a build WITHOUT `debug_reducers` (a production publish, or a `cargo clippy` that does not
+/// unify the module's features) sees this fn itself as dead — silenced ONLY here, never
+/// unconditionally (contrast `FIXTURE_BLADE`/`FIXTURE_JERKY` above, which stay reachable from `init`
+/// in every build and so carry no such attribute).
 #[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
     use crate::quest::quest_role;
@@ -1080,9 +819,21 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
         });
     }
 
-    // The quest-loop's LOOT step needs a coin window: give the init-seeded Test Wolf pocket change
-    // if it has none yet (converges to the same values; kill-time money rolls read the template).
+    // 060/187 recurring trap: the world ETL truncates game_creature_template and reloads from the
+    // dump — the INIT-seeded fixture templates (Test Wolf 51000, Profession Trainer 51001) vanish
+    // on every re-import, breaking the wire scenarios until someone reseeds by hand. Re-seed them
+    // HERE (this reducer is the operator's idempotent post-import fixture restore) from the SAME
+    // canonical constructors `seed::init` uses (#363: this used to be a hand-copied literal that
+    // drifted — Profession Trainer was level 10/100hp/"Fixture" here vs level 30/1500hp/"Cooking &
+    // Skinning" in init, and Test Wolf's money_min/max disagreed too).
     let templates = ctx.db.game_creature_template();
+    if templates.entry().find(WOLF).is_none() {
+        templates.insert(test_wolf_template());
+    }
+    // The quest-loop's LOOT step needs a coin window: give the Test Wolf pocket change if it has
+    // none yet (runs AFTER the insert-if-absent above so it converges to the same values whether
+    // the wolf was just (re)inserted by this reducer or already existed from `init`; kill-time
+    // money rolls read the template either way).
     if let Some(mut wolf) = templates.entry().find(WOLF) {
         if wolf.money_max == 0 {
             wolf.money_min = 25;
@@ -1090,69 +841,8 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
             templates.entry().update(wolf);
         }
     }
-    // 060/187 recurring trap: the world ETL truncates game_creature_template and reloads from the
-    // dump — the INIT-seeded fixture templates (Test Wolf 51000, Profession Trainer 51001) vanish
-    // on every re-import, breaking the wire scenarios until someone reseeds by hand. Re-seed them
-    // HERE (this reducer is the operator's idempotent post-import fixture restore).
-    if templates.entry().find(WOLF).is_none() {
-        templates.insert(CreatureTemplate {
-            entry: WOLF,
-            name: "Test Wolf".to_string(),
-            subname: String::new(),
-            display_id: 720,
-            level: 1,
-            health: 60,
-            faction_template: 14, // Monster (hostile - a usable kill target)
-            npc_flags: 0,
-            unit_flags: 0,
-            creature_type: 1,   // BEAST (skinnable)
-            creature_family: 1, // Wolf
-            type_flags: 0x100,  // SKINNABLE
-            rank: 0,
-            scale: 1.0,
-            base_attack_time_ms: 2000,
-            money_min: 25,
-            money_max: 50,
-            max_level: 0,
-            max_level_health: 0,
-            aggro_range: 0, // passive: engages only when attacked
-            damage_min: 0,
-            damage_max: 0,
-            armor: 0,
-            pickpocket_loot_id: 0,
-            skin_loot_id: 0,
-        });
-    }
-    const PROFESSION_TRAINER: u32 = 51001;
-    if templates.entry().find(PROFESSION_TRAINER).is_none() {
-        templates.insert(CreatureTemplate {
-            entry: PROFESSION_TRAINER,
-            name: "Profession Trainer".to_string(),
-            subname: "Fixture".to_string(),
-            display_id: 3167,
-            level: 10,
-            health: 100,
-            faction_template: 35, // FRIENDLY trainer
-            npc_flags: lyracore_shared::constants::npc_flags::GOSSIP
-                | lyracore_shared::constants::npc_flags::TRAINER,
-            unit_flags: 0,
-            creature_type: 7, // Humanoid
-            creature_family: 0,
-            type_flags: 0,
-            rank: 0,
-            scale: 1.0,
-            base_attack_time_ms: 2000,
-            money_min: 0,
-            money_max: 0,
-            max_level: 0,
-            max_level_health: 0,
-            aggro_range: 0,
-            damage_min: 0,
-            damage_max: 0,
-            armor: 0,
-            pickpocket_loot_id: 0,
-            skin_loot_id: 0,
-        });
+    if templates.entry().find(PROFESSION_TRAINER_ENTRY).is_none() {
+        templates.insert(profession_trainer_template());
     }
     // "Test Wolf Elder" (51002) — the BOT-SUITE fight fixture (266). The playerbots tests level
     // their bots to clear the cast level-gate (Taunt 355 = spell_level 10), which greys the L1
@@ -1383,6 +1073,16 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
 /// unique-exists) whenever the curated importer has already written the same effect row — a
 /// re-imported kit + a fixture re-seed collided live 2026-07-15. Delete-then-insert keeps the
 /// fixture authoritative for its own rows without tripping the constraint.
+///
+/// THE DISCIPLINE (#377): delete-then-insert is idempotent BY CONSTRUCTION — calling it twice with
+/// the same row is a no-op, and calling it with a changed shape self-corrects the row in place. So
+/// every call site below calls this UNCONDITIONALLY, with no `if find(id).is_none() { ... }` guard
+/// around it. A guard doesn't just add noise: it makes the delete dead code (the branch that would
+/// run it never fires when the row already exists), which silently turns "re-seed self-corrects"
+/// back into "re-seed only fills gaps" — exactly the bug class this fn exists to prevent. If a
+/// future fixture effect ever needs to preserve an operator's hand-edit instead of overwriting it,
+/// that is a genuinely different policy and needs a differently-named helper, not a guard bolted
+/// onto this one.
 fn upsert_effect(ctx: &spacetimedb::ReducerContext, row: SpellEffect) {
     ctx.db.game_spell_effect().id().delete(row.id);
     ctx.db.game_spell_effect().insert(row);

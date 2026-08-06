@@ -264,6 +264,9 @@ pub fn send_emote(
     if sender.dead {
         return Err("dead players cannot emote".to_string());
     }
+    // perf catalog 2.3: AOI address of the actor — `sender` is already the live entity in hand, so
+    // this stamps directly off it (`entity_addr`) instead of paying a redundant `grid_of` PK lookup.
+    let (map_id, instance_id, grid_x, grid_y) = crate::helpers::entity_addr(&sender);
     ctx.db.game_emote_event().insert(EmoteEvent {
         id: 0,
         sender_guid: sender.guid,
@@ -271,13 +274,10 @@ pub fn send_emote(
         emote_anim,
         created_at: ctx.timestamp,
         target_guid,
-
-        // perf catalog 2.3: AOI address of the actor, so this row is delivered to the
-        // observers whose box contains them instead of to every connected session.
-        map_id: crate::helpers::grid_of(ctx, sender.guid).0,
-        instance_id: crate::helpers::grid_of(ctx, sender.guid).1,
-        grid_x: crate::helpers::grid_of(ctx, sender.guid).2,
-        grid_y: crate::helpers::grid_of(ctx, sender.guid).3,
+        map_id,
+        instance_id,
+        grid_x,
+        grid_y,
     });
     Ok(())
 }
@@ -468,7 +468,7 @@ fn push_whisper(
         .map(|c| c.owner_identity);
     ctx.db.game_whisper_event().insert(WhisperEvent {
         id: 0,
-        recipient_identity: crate::group::event_recipient_identity(bound),
+        recipient_identity: crate::helpers::event_recipient_identity(bound),
         other_guid,
         is_inform,
         message,
@@ -592,15 +592,9 @@ crate::character_owned!(delete, fn sweep_delete_game_character_contact(ctx, char
 // their owner is, which is why only `by_owner` is exported: a friend list is per-owner state, and
 // copying someone else's row would fork it.
 crate::character_owned!(transfer, fn sweep_transfer_game_character_contact(ctx, character_guid, io) {
-    crate::transfer::move_rows(
-        ctx,
-        io,
-        || ctx.db.game_character_contact().by_owner().filter(&character_guid).collect::<Vec<_>>(),
-        |ctx, mut r| {
-            r.id = 0;
-            ctx.db.game_character_contact().insert(r);
-        },
-    );
+    table = game_character_contact,
+    by = by_owner,
+    remint = id,
 });
 crate::character_owned!(restamp, fn sweep_restamp_game_character_contact(ctx, character_guid, identity) {
     let contacts = ctx.db.game_character_contact();
@@ -728,14 +722,15 @@ pub fn send_roll(ctx: &ReducerContext, min_roll: u32, max_roll: u32) -> Result<(
     let roller =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "roller not in world".to_string())?;
     let (lo, hi) = normalized_roll_range(min_roll, max_roll);
-    // Server-side pseudo-random using the timestamp nanoseconds as a seed (sufficient for /roll).
-    let range = (hi - lo) as u64 + 1;
-    let seed = ctx.timestamp.to_micros_since_unix_epoch() as u64;
-    // Simple LCG step so every call with the same microsecond still varies by roller guid.
-    let shuffled = seed
-        .wrapping_mul(6364136223846793005)
-        .wrapping_add(roller.guid);
-    let result = lo + (shuffled % range) as u32;
+    // Server-side RNG via ctx.random (like combat::roll_money) — NOT a timestamp-seeded LCG:
+    // two rolls landing in the same microsecond used to be affinely related regardless of
+    // roller guid, which matters because /roll is the primitive players use to settle loot
+    // disputes.
+    let range = hi - lo + 1;
+    let result = lo + ctx.random::<u32>() % range;
+    // perf catalog 2.3: AOI address of the actor — `roller` is already the live entity in hand, so
+    // this stamps directly off it (`entity_addr`) instead of paying a redundant `grid_of` PK lookup.
+    let (map_id, instance_id, grid_x, grid_y) = crate::helpers::entity_addr(&roller);
     ctx.db.game_roll_event().insert(RollEvent {
         id: 0,
         roller_guid: roller.guid,
@@ -743,13 +738,10 @@ pub fn send_roll(ctx: &ReducerContext, min_roll: u32, max_roll: u32) -> Result<(
         max_roll: hi,
         result,
         created_at: ctx.timestamp,
-
-        // perf catalog 2.3: AOI address of the actor, so this row is delivered to the
-        // observers whose box contains them instead of to every connected session.
-        map_id: crate::helpers::grid_of(ctx, roller.guid).0,
-        instance_id: crate::helpers::grid_of(ctx, roller.guid).1,
-        grid_x: crate::helpers::grid_of(ctx, roller.guid).2,
-        grid_y: crate::helpers::grid_of(ctx, roller.guid).3,
+        map_id,
+        instance_id,
+        grid_x,
+        grid_y,
     });
     Ok(())
 }
@@ -940,7 +932,7 @@ mod tests {
              connection. Body was:\n{body}"
         );
         assert!(
-            n.contains("recipient_identity: crate::group::event_recipient_identity(bound),"),
+            n.contains("recipient_identity: crate::helpers::event_recipient_identity(bound),"),
             "`push_whisper` no longer addresses the row to the recipient's bound identity via the \
              shared ZERO-fallback helper. A constant there makes every whisper on a single-database \
              gateway invisible to its recipient (the RLS filter is `recipient_identity = :sender`). \

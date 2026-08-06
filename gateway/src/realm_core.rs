@@ -23,10 +23,13 @@
 //! this ticket is about.
 //!
 //! What is NOT modelled here is the transport: `Coordinator`'s own one-line bodies (the websocket
-//! read, the `call_reducer!`) are substituted wholesale by the fake. That layer is pinned the way
-//! `module/src/transfer.rs` pins its equivalent — by exact-shape equality on the forwarding impl
-//! (`the_coordinator_forwards_are_views_not_logic`), because a `contains` scan is defeated by
-//! leaving the text in a dead branch.
+//! read, the `call_reducer!`) are substituted wholesale by the fake. That layer is pinned by
+//! exact-shape equality on the forwarding impl (`the_coordinator_forwards_are_views_not_logic`),
+//! because a `contains` scan is defeated by leaving the text in a dead branch. The module pins its
+//! own equivalent (`CtxShard`) exactly the same way, and #380 measured why that is still the right
+//! instrument: a cargo-mutants run over that surface MISSED every mutation in the adapter, because a
+//! mutation tool can only ask whether a test fails and no headless test can drive the real
+//! connection. The same holds here.
 
 use anyhow::Result;
 
@@ -1647,9 +1650,9 @@ mod tests {
     /// `impl RealmDb for Coordinator` is the ONE layer the fake substitutes for wholesale, and
     /// every method in it is a one-line forward whose damage would be total and silent — pointing
     /// `realm_core()` at `self`, or `session_key` at the wrong table, is invisible to every test
-    /// above. So it is compared for EXACT SHAPE, the same way `module/src/transfer.rs` pins
-    /// `CtxImportSink`: a `contains` scan is defeated by leaving the old text in a dead branch,
-    /// equality is not. If a change here is deliberate, re-bless it with the same care.
+    /// above. So it is compared for EXACT SHAPE, the same way `module/src/transfer/mod.rs` pins
+    /// `CtxShard`: a `contains` scan is defeated by leaving the old text in a dead branch, equality
+    /// is not. If a change here is deliberate, re-bless it with the same care.
     ///
     /// `has_escrow` is the one method whose forward is not BARE — it narrows `escrow_row`'s
     /// `Option<TransferOut>` to a bool — and it is spelled out below for the same reason: the

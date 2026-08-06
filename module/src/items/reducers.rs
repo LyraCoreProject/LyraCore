@@ -6,10 +6,9 @@ use spacetimedb::{reducer, ReducerContext};
 
 use crate::helpers::entity_by_owner;
 
-use super::ops::{
-    apply_buy_item, apply_buyback_item, apply_equip_item, apply_item_move, apply_item_sell,
-    apply_item_split, apply_item_use, apply_player_repair, apply_take_loot, apply_unequip_item,
-};
+use super::economy::{apply_buy_item, apply_buyback_item, apply_item_sell, apply_player_repair};
+use super::inventory::{apply_equip_item, apply_item_move, apply_item_split, apply_unequip_item};
+use super::ops::{apply_item_use, apply_take_loot};
 
 /// Use (consume) the item in inventory `slot` — e.g. eat food to restore health. Player-authorized
 /// via `ctx.sender` like every other player action; the debug `debug_use_item` drives the same
@@ -104,7 +103,7 @@ pub fn take_loot(ctx: &ReducerContext, corpse_guid: u64, loot_slot: u8) -> Resul
 }
 
 /// Repair the item in inventory `slot` at a REPAIR-flagged NPC for copper (`CMSG_REPAIR_ITEM`).
-/// Player-authorized via `ctx.sender`; `slot == ops::REPAIR_ALL` repairs the whole body (the client
+/// Player-authorized via `ctx.sender`; `slot == economy::REPAIR_ALL` repairs the whole body (the client
 /// sends one CMSG_REPAIR_ITEM per damaged item, but we also accept a repair-all for the gateway/harness).
 /// `debug_repair_item` keeps driving the un-gated `apply_repair_item` by guid for the harness.
 #[reducer]

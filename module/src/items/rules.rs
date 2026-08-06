@@ -1,16 +1,14 @@
 //! Pure equip/economy taxonomy + arithmetic — the ctx-free item rules. Equip-slot/invtype vocabulary,
-//! the type→slot resolver and equip predicates, the level gate, the consumable-heal + vendor/merge
-//! arithmetic, and the `EquipStat` projection. All unit-testable on plain values without a live module;
-//! the pure taxonomy/arithmetic tests live at the bottom of this file.
+//! the type→slot resolver and equip predicates, the level gate, the vendor/merge arithmetic, and the
+//! `EquipStat` projection. All unit-testable on plain values without a live module; the pure
+//! taxonomy/arithmetic tests live at the bottom of this file.
+//!
+//! `consumable_heal` — the flat-plus-item-level HP formula that stood in for a real on-use effect id —
+//! is RETIRED (#387): every on-use item now carries a real `spellid_1` cast through `begin_cast`
+//! (`items::ops::apply_item_use`), so the magnitude lives in `game_spell_effect.base_points` like any
+//! other spell, not in a second, item-only formula.
 
 use super::tables::ItemTemplate;
-
-/// HP a consumable restores when used: a flat base plus a per-item-level bonus (so a higher-level food
-/// heals more). Pure — unit-tested. The minimal stand-in for vanilla's per-item "restores N health"
-/// spell effect until consumables carry a real on-use effect id.
-pub fn consumable_heal(item_level: u8) -> u32 {
-    30 + (item_level as u32) * 10
-}
 
 /// Gold a vendor pays for a stack: the per-unit `sell_price` times the stack count (cmangos sells a
 /// whole stack at once). Pure — unit-tested. Saturating so a pathological count never wraps the copper
@@ -504,13 +502,6 @@ pub(crate) fn resolve_equip_slot(
 mod tests {
     use super::*;
     use crate::items::tables::ItemTemplate;
-
-    #[test]
-    fn consumable_heal_scales_with_item_level() {
-        assert_eq!(consumable_heal(1), 40); // Tough Jerky (item_level 1) restores 40
-        assert_eq!(consumable_heal(0), 30); // flat base
-        assert!(consumable_heal(5) > consumable_heal(1)); // higher-level food heals more
-    }
 
     #[test]
     fn sell_value_multiplies_by_stack_count() {

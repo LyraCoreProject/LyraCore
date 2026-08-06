@@ -371,46 +371,37 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
         // `current` is untouched: the lag between the raised cap and the still-lower `current` IS the
         // skill-up window `raise_skill`/`gain_weapon_skill`/`gain_defense_skill` climb into.
         crate::skill::raise_combat_caps(ctx, p.guid, p.level);
-        // Base attributes + armor for the new level (same curve + derivation as `build_player_entity`
-        // at login) — without this the ding loop leaves STR/AGI/STA/INT/SPI/armor frozen at their
+        // Attributes + armor + max health/power for the new level, via the ONE shared writer
+        // (`stats::apply_level_stats` — also used by login and a GM level-set, #362) so this can never
+        // drift from either. `delta` carries the pre-recompute values for the popup math below —
+        // without this the ding loop would otherwise leave STR/AGI/STA/INT/SPI/armor frozen at their
         // pre-ding values until the next relog, even though combat reads these STORED fields directly
         // (effective_strength -> AP, agility -> dodge, armor -> mitigation, spirit -> regen).
-        let (strength, agility, stamina, intellect, spirit) =
-            crate::stats::base_attributes_for(ctx, race, class, p.level);
+        let delta = crate::stats::apply_level_stats(ctx, p, race, class, p.level);
         // Per-stat popup deltas: new-level curve value minus the pre-ding STORED value. saturating
         // because the stored value can exceed the pure curve (e.g. a +stat aura folded in elsewhere) —
         // the popup then just shows 0 for that stat rather than underflowing.
-        let strength_gained = strength.saturating_sub(p.strength);
-        let agility_gained = agility.saturating_sub(p.agility);
-        let stamina_gained = stamina.saturating_sub(p.stamina);
-        let intellect_gained = intellect.saturating_sub(p.intellect);
-        let spirit_gained = spirit.saturating_sub(p.spirit);
-        p.strength = strength;
-        p.agility = agility;
-        p.stamina = stamina;
-        p.intellect = intellect;
-        p.spirit = spirit;
-        p.armor = agility * 2; // classic base armor from agility (2/point) — mirrors build_player_entity
-        let new_max = crate::stats::max_health_for(ctx, race, class, p.level);
-        let gained = new_max.saturating_sub(p.max_health);
-        p.max_health = new_max;
-        p.health = new_max; // full heal on ding — flows to the client via the on_update health relay
-                            // Grow the power pool too (mana scales with level); mana classes refill on ding like health.
-        let new_max_power = crate::stats::max_power_for(ctx, race, class, p.level);
-        // Mana popup delta: only a MANA class's pool grows per level (rage/focus/energy are flat
-        // in vanilla), so non-mana classes report 0 rather than a meaningless max_power diff.
+        let strength_gained = p.strength.saturating_sub(delta.old_strength);
+        let agility_gained = p.agility.saturating_sub(delta.old_agility);
+        let stamina_gained = p.stamina.saturating_sub(delta.old_stamina);
+        let intellect_gained = p.intellect.saturating_sub(delta.old_intellect);
+        let spirit_gained = p.spirit.saturating_sub(delta.old_spirit);
+        let gained = p.max_health.saturating_sub(delta.old_max_health);
+        p.health = p.max_health; // full heal on ding — flows to the client via the on_update health relay
+                                 // Grow the power pool too (mana scales with level); mana classes refill on ding like health.
+                                 // Mana popup delta: only a MANA class's pool grows per level (rage/focus/energy are flat
+                                 // in vanilla), so non-mana classes report 0 rather than a meaningless max_power diff.
         let mana_gained = if lyracore_shared::packing::power_type::for_class(class)
             == lyracore_shared::packing::power_type::MANA
         {
-            new_max_power.saturating_sub(p.max_power)
+            p.max_power.saturating_sub(delta.old_max_power)
         } else {
             0
         };
-        p.max_power = new_max_power;
         if lyracore_shared::packing::power_type::for_class(class)
             == lyracore_shared::packing::power_type::MANA
         {
-            p.power = new_max_power;
+            p.power = p.max_power;
         }
         p.next_level_xp = xp_to_next_level(p.level);
         ctx.db.game_levelup_event().insert(LevelupEvent {
