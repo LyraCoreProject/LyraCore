@@ -1,0 +1,282 @@
+//! Game/protocol constants the slice relies on.
+
+/// Object `TypeId` values (1.12). Used as the `object_type_id` byte in update blocks.
+pub mod type_id {
+    pub const OBJECT: u8 = 0;
+    pub const ITEM: u8 = 1;
+    pub const CONTAINER: u8 = 2;
+    pub const UNIT: u8 = 3;
+    pub const PLAYER: u8 = 4;
+    pub const GAMEOBJECT: u8 = 5;
+    pub const DYNAMICOBJECT: u8 = 6;
+    pub const CORPSE: u8 = 7;
+}
+
+/// `OBJECT_FIELD_TYPE` is a *mask* of (1 << TypeId) for every type the object is.
+/// A player is OBJECT | UNIT | PLAYER.
+pub mod type_mask {
+    use super::type_id;
+    pub const OBJECT: u32 = 1 << type_id::OBJECT;
+    pub const UNIT: u32 = 1 << type_id::UNIT;
+    pub const PLAYER_BIT: u32 = 1 << type_id::PLAYER;
+    /// Value to store in `game_world_entity.type_mask` for a player: 0x19.
+    pub const PLAYER: u32 = OBJECT | UNIT | PLAYER_BIT;
+    /// Value to store in `game_world_entity.type_mask` for a creature (no PLAYER bit): 0x9.
+    /// The codec branches on the PLAYER bit to build a Unit vs Player CREATE_OBJECT.
+    pub const CREATURE: u32 = OBJECT | UNIT;
+}
+
+/// `UNIT_DYNAMIC_FLAGS` bits (vanilla 1.12.1). These drive client-side render/interaction state that
+/// is independent of `UNIT_FIELD_FLAGS`. Stored in `game_world_entity.dynamic_flags` and emitted by
+/// the codec at CREATE and via a VALUES relay on change.
+pub mod unit_dynamic_flags {
+    /// `UNIT_DYNFLAG_LOOTABLE` (0x1). Set on a corpse that has loot for the viewer → the client
+    /// shows the loot cursor. A real corpse with no loot carries no dynamic flag at all.
+    pub const LOOTABLE: u32 = 0x0001;
+    /// `UNIT_DYNFLAG_DEAD` (0x20). **NOT a corpse marker.** In vanilla this is *feign death*: the
+    /// client renders the unit lying down but treats it as ALIVE and still attackable (used for
+    /// fake-dead ambush mobs and a feigning hunter). A genuinely dead creature is signalled to the
+    /// client by `UNIT_FIELD_HEALTH = 0` alone — do NOT set this on a kill (it re-enables the attack
+    /// cursor on the corpse). Kept here only to document the bit and prevent its misuse.
+    pub const DEAD: u32 = 0x0020;
+}
+
+/// `PLAYER_FLAGS` bits (vanilla 1.12, descriptor idx 190). Stored in `game_world_entity.player_flags`.
+pub mod player_flags {
+    /// `PLAYER_FLAGS_GHOST` (0x10). The gameplay GHOST state set on Release Spirit: the
+    /// player is dead-but-walking (can move/run to the corpse, can't act). Distinct from the ghost
+    /// *render* — that's `unit_vis_flags::GHOST` in `UNIT_FIELD_BYTES_1`.
+    pub const GHOST: u32 = 0x0010;
+}
+
+/// `UNIT_NPC_FLAGS` (vanilla 1.12) — what interactions a creature offers; stored in
+/// `game_world_entity.npc_flags` and surfaced to the client (gossip-eye / vendor cursor / `!`).
+pub mod npc_flags {
+    /// `UNIT_NPC_FLAG_GOSSIP` (0x1) — right-click opens a gossip menu.
+    pub const GOSSIP: u32 = 0x0000_0001;
+    /// `UNIT_NPC_FLAG_VENDOR` (0x4) — sells items (`CMSG_LIST_INVENTORY` → the vendor window). NOTE:
+    /// vanilla 1.12 / cmangos-classic numbering — VENDOR is 0x4, not the 0x80 of later cores (where 0x80
+    /// is INNKEEPER). Confirmed against the cmangos creature_template (every npc_vendor creature has 0x4).
+    pub const VENDOR: u32 = 0x0000_0004;
+    /// `UNIT_NPC_FLAG_TRAINER` (0x10) — teaches spells (`CMSG_TRAINER_LIST` → the trainer window). vanilla
+    /// 1.12 / cmangos-classic numbering; class trainers (Llane Beshere, Priestess Anetta, …) carry this.
+    pub const TRAINER: u32 = 0x0000_0010;
+    /// `UNIT_NPC_FLAG_SPIRITHEALER` (0x20, vanilla 1.12 / cmangos-classic) — the graveyard Spirit
+    /// Healer that resurrects a GHOST in place at reduced vitals (`CMSG_SPIRIT_HEALER_ACTIVATE`).
+    /// Spirit Healer (entry 6491) ships `npc_flags=0x21 = GOSSIP|SPIRITHEALER`; the 5875 client renders
+    /// the spirit-healer dialog on a ghost's right-click directly from this replicated flag. NOTE:
+    /// DISTINCT from REPAIR (0x4000) — armorers carry that flag, not SPIRITHEALER.
+    pub const SPIRITHEALER: u32 = 0x0000_0020;
+    /// `UNIT_NPC_FLAG_INNKEEPER` (0x80, vanilla 1.12 / cmangos-classic) — binds the player's hearthstone
+    /// home. cmangos 1.12 numbers INNKEEPER 0x80 (NOT the 0x10000 of later TBC+ cores); proven by the
+    /// dump's bit histogram (54 innkeepers carry 0x80) and by the 5875 client rendering the inn icon from
+    /// the raw flag. Innkeeper Farley(295) ships `npc_flags=135 = GOSSIP|QUESTGIVER|VENDOR|INNKEEPER`. The
+    /// Northshire/Goldshire innkeepers carry this; the gossip "Make this inn your home" → `bind_home`.
+    pub const INNKEEPER: u32 = 0x0000_0080;
+    /// `UNIT_NPC_FLAG_REPAIR` (0x4000, vanilla 1.12 / cmangos-classic) — repairs item durability
+    /// (`CMSG_REPAIR_ITEM`). Armorers (Corina Steele 54, Quartermaster Hudson 1249, Hicks 1645, …)
+    /// carry 0x4000|0x4 (REPAIR+VENDOR). NOTE: 0x1000 (4096) is AUCTIONEER in this numbering, NOT repair.
+    pub const REPAIR: u32 = 0x0000_4000;
+}
+
+/// GameObject `type_id` values (cmangos `GAMEOBJECT_TYPE_*`). `module/src/gameobject.rs`'s `go_type`
+/// module owns the full LIVE dispatch set (CHEST/GOOBER/GATHER/DOOR/BUTTON + docs) and re-exports its
+/// `QUESTGIVER` constant from here so it can never drift from the gateway's copy — the gateway (which
+/// does not depend on the module crate) needs to recognize a QUESTGIVER GO independently, to route
+/// `CMSG_GAMEOBJ_USE` on one to the quest window instead of the loot/toggle reducer path (work-item 041).
+pub mod go_type {
+    /// `GAMEOBJECT_TYPE_QUESTGIVER` (2) — a GO whose `use` (right-click) opens the quest window
+    /// (Wanted Poster GO 68 starts q176; the Lost Guards corpses GO 55/56 drive the q37/q45/q71 END
+    /// chain) rather than rolling loot or toggling state.
+    pub const QUESTGIVER: u8 = 2;
+}
+
+/// `UNIT_FIELD_BYTES_1` byte-3 visibility flags (vanilla 1.12). Drives client render state, stored in
+/// `game_world_entity.unit_bytes_1`. The byte-3 position is 1.12-specific (it moved in WotLK).
+pub mod unit_vis_flags {
+    /// `UNIT_VIS_FLAG_GHOST` — bit value 0x01 in BYTE 3 of `UNIT_FIELD_BYTES_1`, i.e. `0x0100_0000` in
+    /// the packed u32. The semi-transparent ghost render. OR this into `unit_bytes_1`; the
+    /// codec's `unpack4` → `set_unit_bytes_1(a,b,c,d)` then places it in byte 3 (`d`).
+    pub const GHOST: u32 = 0x0100_0000;
+}
+
+/// `UNIT_FIELD_FLAGS` bits (vanilla 1.12), stored in `game_world_entity.unit_flags`, sent in the CREATE
+/// and relayed as a VALUES change.
+pub mod unit_flags {
+    /// `UNIT_FLAG_IN_COMBAT` (0x00080000) — the unit is fighting. Observers render the in-combat state;
+    /// set at any hostile action (`combat::enter_combat`), cleared ~`COMBAT_DROP_MS` after the last one
+    /// (the tick's combat-drop pass). Covers a pure caster, whom the auto-attack stance can't show.
+    pub const IN_COMBAT: u32 = 0x0008_0000;
+}
+
+/// Aura+spell tracer — a minimal ADDITIVE spell pipeline to live-test the spell-tier wire format
+/// (one castable self-buff). Battle Shout: a real spell every L1 Human Warrior owns, so the client
+/// resolves its icon/SFX from its own `Spell.dbc`. The aura renders in slot 0 — the only gtker-public
+/// aura slot (slots 1..47 need the deferred hand-rolled update-mask encoder).
+pub mod tracer_spell {
+    pub const SPELL_ID: u32 = 6673; // Battle Shout (Rank 1)
+    pub const AURA_SLOT: u8 = 0; // default first slot; a new distinct aura takes the lowest free slot
+    pub const AURA_SLOTS: u8 = 48; // total UNIT_FIELD_AURA slots (the raw-send path reaches them all)
+    /// The 1.12 client sections `UNIT_FIELD_AURA` by SLOT INDEX, not by an aura flag: slots `0..32` render
+    /// as the buff frame, `32..48` as the debuff frame. `pick_aura_slot` must keep buffs below this and
+    /// debuffs at/above it, or a debuff shows in the buff row (and can starve buff slots).
+    pub const BUFF_SLOT_COUNT: u8 = 32;
+    pub const AURA_FLAGS: u8 = 0x09; // positive + effect-index-0 (cmangos AFLAG); try 0x1F if invisible
+    pub const AURA_DURATION_MICROS: i64 = 30_000_000; // server-side expiry (client shows the DBC timer)
+}
+
+/// The hand-authored starter weapon a fresh character carries in its first backpack
+/// slot. Entry 25 is the real vanilla L1-Warrior "Worn Shortsword", so the client resolves its icon
+/// from its own data once we answer `CMSG_ITEM_QUERY_SINGLE`. Values are hand-authored (licensing
+/// firewall: derived, not bulk-imported).
+pub mod starter_item {
+    pub const ENTRY: u32 = 25; // "Worn Shortsword"
+    /// `HIGHGUID_ITEM` — tag in bits 48..63 of an item GUID so the client routes it as an item
+    /// (cmangos `HIGHGUID_ITEM = 0x4000`).
+    pub const HIGHGUID_ITEM: u64 = 0x4000;
+    /// `INVENTORY_SLOT_ITEM_START` (23) — the first backpack slot. Vanilla inventory layout:
+    /// equipment 0..18, equipped-bag slots 19..22, backpack item slots 23..38. Stored as the
+    /// instance's `slot` and passed to gtker's typed `set_player_field_inv(ItemSlot, Guid)`.
+    pub const BACKPACK_SLOT_0: u8 = 23;
+    /// `EQUIPMENT_SLOT_MAINHAND` (15) — the main-hand weapon slot. A L1 Warrior starts with
+    /// the Worn Shortsword EQUIPPED here (vanilla-authentic), so the client renders it on the 3D model
+    /// via `PLAYER_VISIBLE_ITEM` (set for equipment slots 0..18 in addition to the inv-slot guid).
+    pub const MAINHAND_SLOT: u8 = 15;
+    pub const CLASS_WEAPON: u8 = 2;
+    pub const SUBCLASS_SWORD_1H: u8 = 7;
+    pub const QUALITY_POOR: u8 = 0;
+    pub const INVTYPE_WEAPON_MAINHAND: u8 = 21;
+    pub const ITEM_LEVEL: u8 = 2;
+    pub const REQUIRED_LEVEL: u8 = 1;
+    pub const MAX_DURABILITY: u32 = 20;
+    pub const BUY_PRICE: u32 = 35; // copper
+    pub const SELL_PRICE: u32 = 7; // copper
+    pub const DISPLAY_ID: u32 = 1542; // a basic one-hand-sword inventory model in the 5875 client
+    pub const DAMAGE_MIN: f32 = 1.0;
+    pub const DAMAGE_MAX: f32 = 3.0;
+    pub const DELAY_MS: u32 = 1900;
+
+    /// Hearthstone (item entry 6948) — every character starts with one; using it recalls to the bound
+    /// home (`Character::home_*`). Granted into the backpack by `grant_starter_item`.
+    pub const HEARTHSTONE_ENTRY: u32 = 6948;
+    /// Backpack slot the starter Hearthstone lands in — the LAST backpack slot, so it never collides with
+    /// the per-class outfit which stows from `BACKPACK_SLOT_0` (23) upward.
+    pub const HEARTHSTONE_SLOT: u8 = 38;
+}
+
+/// Dual Wield (spell 674, `IDS_ROGUE`) — the talent/ability that lets a character equip a second
+/// one-hand weapon into the off-hand slot and swing it as a reduced second attack stream. A L10 Rogue
+/// can learn it in vanilla; Warrior Dual Wield (level 20) is out of scope for this constant's consumer
+/// (`combat::equipped_offhand_weapon_damage` / `items::rules::resolve_equip_slot`/`can_equip_into`).
+pub mod dual_wield {
+    pub const SPELL_ID: u32 = 674;
+}
+
+/// The 6 vanilla movement speeds emitted in a CREATE block's movement section.
+/// (Flight speeds were added in TBC and are absent here.)
+pub mod speeds {
+    pub const WALK: f32 = 2.5;
+    pub const RUN: f32 = 7.0;
+    /// Warrior Charge rush speed — the caster spline-rushes far faster than a normal run (mangos
+    /// `MoveCharge` uses ~25 yd/s). Tuning knob for the charge feel; not a movement-cap for anything else.
+    pub const CHARGE: f32 = 25.0;
+    pub const RUN_BACK: f32 = 4.5;
+    pub const SWIM: f32 = 4.722_222;
+    pub const SWIM_BACK: f32 = 2.5;
+    pub const TURN_RATE: f32 = std::f32::consts::PI;
+}
+
+/// Canonical Human/Warrior starting fixture (Elwynn Forest). Confirm the exact float Z
+/// against a 1.12 `playercreateinfo` when seeding — a wrong Z drops the character.
+pub mod start_human_warrior {
+    pub const RACE: u8 = 1; // Human
+    pub const CLASS: u8 = 1; // Warrior
+    pub const MAP_ID: u32 = 0; // Eastern Kingdoms
+    pub const ZONE_ID: u32 = 12; // Elwynn Forest
+    pub const X: f32 = -8949.95;
+    pub const Y: f32 = -132.493;
+    pub const Z: f32 = 83.5312;
+    pub const ORIENTATION: f32 = 0.0;
+}
+
+/// Gossip menu OPTION (work-item 217): `game_gossip_option.action` codes as they land verbatim from
+/// the cmangos dump's `gossip_menu_option.OptionType`/`option_id` column (the importer copies it
+/// through unchanged — this module documents what the values MEAN so the gateway dispatch and the
+/// importer agree without duplicating magic numbers). `[V]` — confirm against your own dump; only
+/// GOSSIP/BANKER/VENDOR/TAXI/TRAINER/INNKEEPER are read by the dispatcher today, the rest are
+/// inert (submenu/banker/taxi systems aren't wired up — work-item 217 scope note).
+pub mod gossip_option {
+    pub const GOSSIP: u32 = 1; // plain text / submenu link (submenu navigation deferred, work-item 217)
+    pub const BANKER: u32 = 2; // opens the bank (system 133, not wired — inert)
+    pub const VENDOR: u32 = 3; // opens the vendor window (routes to build_list_inventory_raw)
+    pub const TAXI: u32 = 4; // flight master (system 136, not wired — inert)
+    pub const TRAINER: u32 = 5; // opens SMSG_TRAINER_LIST
+    pub const INNKEEPER: u32 = 8; // binds the caller's hearthstone home (bind_home)
+}
+
+/// `game_gossip_option.cond_type` — the MINIMAL condition set work-item 217 enforces (quest-status
+/// gates, the common case in the dump). Anything the importer can't map to one of these folds to
+/// `NONE` (fail-open + logged), so an unsupported condition never wrongly HIDES an option.
+pub mod gossip_condition {
+    /// Always show the option (no gate, or an unsupported/unmapped condition — fail-open).
+    pub const NONE: u32 = 0;
+    /// Show only while `cond_value1` (a quest id) is in the player's quest log (accepted, whether or
+    /// not yet turned in) — `quest_status(guid, quest_id).0`.
+    pub const QUEST_TAKEN: u32 = 1;
+    /// Show only once `cond_value1` (a quest id) has been turned in — `quest_status(guid, quest_id).1`.
+    pub const QUEST_REWARDED: u32 = 2;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn player_type_mask_is_0x19() {
+        assert_eq!(type_mask::PLAYER, 0x19);
+    }
+
+    #[test]
+    fn creature_type_mask_is_0x9() {
+        // OBJECT | UNIT, no PLAYER bit — the codec branches on the PLAYER bit to pick Unit vs Player.
+        assert_eq!(type_mask::CREATURE, 0x9);
+    }
+
+    /// Work-item 041: pin the shared GameObject QUESTGIVER type id against cmangos — this is the
+    /// SINGLE source both `module/src/gameobject.rs::go_type::QUESTGIVER` and the gateway's
+    /// `CMSG_GAMEOBJ_USE` dispatch read, so a silent edit here would desync both sides at once.
+    #[test]
+    fn go_type_questgiver_is_cmangos_type_2() {
+        assert_eq!(go_type::QUESTGIVER, 2);
+    }
+
+    /// Work-item 217: the gossip option action codes the dispatcher matches on must be pairwise
+    /// distinct — a collision here would silently misroute one action to another's handler.
+    #[test]
+    fn gossip_option_actions_are_distinct() {
+        use gossip_option::*;
+        let mut codes = [GOSSIP, BANKER, VENDOR, TAXI, TRAINER, INNKEEPER];
+        codes.sort_unstable();
+        assert_eq!(
+            codes.windows(2).filter(|w| w[0] == w[1]).count(),
+            0,
+            "gossip_option action codes must not collide"
+        );
+        // Pin the values the plan verified against the dump (217 premise fix).
+        assert_eq!(
+            (GOSSIP, BANKER, VENDOR, TAXI, TRAINER, INNKEEPER),
+            (1, 2, 3, 4, 5, 8)
+        );
+    }
+
+    #[test]
+    fn gossip_condition_none_is_the_fail_open_zero_value() {
+        // `NONE == 0` is load-bearing: the importer's fail-open path for an unmapped condition writes
+        // `cond_type = 0` and relies on it meaning "always show" (never a wrongly-hidden option).
+        assert_eq!(gossip_condition::NONE, 0);
+        assert_ne!(
+            gossip_condition::QUEST_TAKEN,
+            gossip_condition::QUEST_REWARDED
+        );
+    }
+}

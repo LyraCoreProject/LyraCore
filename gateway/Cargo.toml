@@ -1,0 +1,62 @@
+[package]
+name = "lyracore-gateway"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+description = "LyraCore edge/protocol tier: terminates the WoW client protocol, translates to/from SpacetimeDB. Holds NO game state."
+
+# ⚠ 16 characters. `pkill -x` / `pgrep -x` match /proc/<pid>/comm, which the kernel truncates to
+# TASK_COMM_LEN-1 = 15 — so `pkill -x lyracore-gateway` matches NOTHING and `pkill -x
+# lyracore-gatewa` (no trailing `y`) is the correct incantation. See docs/danger-zones.md §3.
+[[bin]]
+name = "lyracore-gateway"
+path = "src/main.rs"
+
+[dependencies]
+lyracore-shared.workspace = true
+
+# Protocol/auth/runtime crates the gateway is built around. Pinned to the versions verified
+# available; the slice wires these in incrementally (see src/ module docs).
+wow_srp = "0.7"
+wow_login_messages = { version = "0.5", features = ["sync"] }
+wow_world_messages = { version = "0.3", features = ["vanilla", "sync"] }
+# Only needed to name `FriendResult` (SMSG_FRIEND_STATUS's result field) — wow_world_messages
+# doesn't re-export it, but it's already a transitive dep (pinned to match via Cargo.lock).
+wow_world_base = "0.3"
+# Pinned exactly to match the module's spacetimedb pin and the `spacetime` CLI version this repo is
+# verified against (see module/Cargo.toml and scripts/preflight.sh's CLI-version check).
+spacetimedb-sdk = "=2.7.1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "io-util", "sync", "time"] }
+anyhow = "1"
+zeroize = "=1.8.1"
+log = "0.4"
+env_logger = "0.11"
+dhat = { version = "0.3", optional = true }
+
+[dev-dependencies]
+# Work-item 220 (binding schema-parity test, gateway/tests/schema_parity.rs): the module crate
+# compiles natively (its own test suite proves it — no wasm-only dep), so a dev-only dependency
+# lets the test compare module `#[table]` structs against the hand-maintained gateway bindings
+# structurally instead of only at live-decode time. `spacetimedb-lib` gives the same
+# `SpacetimeType`/`AlgebraicType`/`RawModuleDefV9Builder` machinery the real `spacetime` CLI's
+# schema extraction uses; pinned exactly so the workspace lockfile resolves it to the SAME
+# `spacetimedb-sats`/`spacetimedb-lib` 2.7.1 that `spacetimedb-sdk` (the gateway's normal, non-dev
+# dependency) and `spacetimedb` (the module's dependency) already unify on. Pinned exactly for the
+# same reason those two are.
+spacetimedb-lib = "=2.7.1"
+
+[features]
+dhat-heap = ["dep:dhat"]
+
+# The module crate is wasm32-only in production. Its NATIVE build references SpacetimeDB wasm-host
+# intrinsics (bytes_sink_write, table_id_from_name, ...) that no native library provides; ELF
+# linkers dead-strip the unreferenced paths so `cargo test` links on Linux, but Mach-O ld refuses
+# outright. The armor mirror tests that need the real module curves are therefore Linux-only
+# (matching #[cfg(target_os = "linux")] gates in src/stdb/armor.rs) — one platform is enough for a
+# drift tripwire.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+lyracore-module = { path = "../module" }

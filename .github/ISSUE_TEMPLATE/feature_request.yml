@@ -1,0 +1,69 @@
+name: Feature request
+description: Propose a change to the server, the CLI, or the tooling.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If you are not sure yet whether this is a good idea, **GitHub Discussions** is the cheaper
+        place to find out. An issue is for a proposal you can state as a change.
+
+        Out of scope for this alpha, and closed as such: public/VPS hosting as a supported product,
+        Windows/WSL support, clients other than build 5875, and anything requiring redistributed
+        game data (`SUPPORT.md` has the full list).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and what makes it hard or impossible today. Describe the situation, not the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you are proposing
+      description: The change itself. If it touches the module, say whether it needs new tables or columns — schema changes carry migration rules (`docs/danger-zones.md` §1.2) that shape the design.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      options:
+        - Module (SpacetimeDB tables/reducers — game state and logic)
+        - Gateway (the 1.12.1 wire protocol tier)
+        - Importer / world data
+        - "`./lyracore` development CLI"
+        - Packages (`packages/<name>`, the extension point)
+        - Documentation
+        - Tooling / CI
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including doing nothing, or doing it in a package instead of the core. `packages/` compiles into the module with no core edits, and is often the right home for gameplay content.
+    validations:
+      required: false
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: How would this be verified
+      description: "Which rung of the ladder proves it: a unit test, `spacetime sql` server state, a wire-harness assertion, or a human on a real client (`needs-live-eyeball`)? A feature that can only be confirmed by eye costs a scarce resource here — say so up front."
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: willing
+    attributes:
+      label: Would you be willing to implement it
+      options:
+        - label: I would like to open a pull request for this
+          required: false

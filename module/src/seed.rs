@@ -1,0 +1,2003 @@
+//! The `init` lifecycle reducer — the single entrypoint that populates a fresh database. Two
+//! layers, both written directly in this one function (not split into helpers, so a reader sees
+//! the whole seed in one pass):
+//!
+//! 1. **Production seed** (from the top through the pre-seeded character's kit grant): realm,
+//!    server config, the human-warrior start position, the fallback graveyard/graveyard-zone rows
+//!    (work-item 209), the TEST account + pre-seeded character (with its starter spellbook/
+//!    action-bar kit), and the EventAI on-aggro barks. Every fresh database needs this regardless
+//!    of whether it will ever host a real import.
+//! 2. **Map-0 (Northshire) demo/fixture content** (the in-body `DECISION (issue #79)` comment has
+//!    the full reasoning): NPCs, a starter weapon, profession items, a skinning beast, a
+//!    profession trainer, gameobjects, gather nodes, a tier-variety demonstrator, a hand-authored
+//!    spell/item registry, crafted-consumable spells, and 1-10-alpha consumable breadth — in that
+//!    order, each under its own `// ---`/`// ===` banner. Every row here is wholesale-replaced the
+//!    moment a real `importer --apply` run lands for map 0 (or fenced off entirely for any other
+//!    continent). This is a DIFFERENT fixture family from `seed/fixtures.rs`'s synthetic
+//!    engine-mechanic fixtures (5xxxx ids, no map content) — see that file's header.
+//!
+//! Touches every domain, so it imports each table's accessor trait + row type from the crate root.
+
+use lyracore_shared::constants;
+use spacetimedb::{reducer, Identity, ReducerContext, ScheduleAt, Table, TimeDuration};
+
+use crate::{
+    build_creature_entity, game_account, game_aura_schedule, game_character, game_config,
+    game_creature_loot, game_creature_move_schedule, game_creature_spawn, game_creature_template,
+    game_creature_waypoint, game_event_reaper_schedule, game_gameobject, game_gameobject_pool,
+    game_gameobject_pool_member, game_gameobject_template, game_graveyard, game_graveyard_zone,
+    game_ground_area_schedule, game_instance_reaper_schedule, game_item_template,
+    game_melee_schedule, game_realm, game_spell, game_spell_effect, game_start_position, Account,
+    AuraSchedule, Character, CreatureLoot, CreatureMoveSchedule, CreatureSpawn, CreatureTemplate,
+    CreatureWaypoint, EventReaperSchedule, GameObject, GameObjectPool, GameObjectPoolMember,
+    GameObjectTemplate, GraveyardLoc, GraveyardZone, GroundAreaSchedule, ItemTemplate,
+    MeleeSchedule, Realm, ServerConfig, Spell, SpellEffect, StartPosition, EVENT_TTL_MICROS,
+};
+
+#[reducer(init)]
+pub fn init(ctx: &ReducerContext) {
+    use constants::start_human_warrior as hw;
+
+    // Realm (points at the world gateway).
+    ctx.db.game_realm().insert(Realm {
+        id: 1,
+        name: "LyraCore".to_string(),
+        address: "127.0.0.1:8085".to_string(),
+        realm_type: 0,
+        flags: 0,
+        population: 0.0,
+        timezone: 1,
+    });
+
+    // Server tunables: the xp_rate singleton starts Blizzlike (1.0×). Admins tune it via SQL
+    // (`UPDATE game_config SET xp_rate = N WHERE id = 0`) or the `debug_set_xp_rate` reducer.
+    // `hosts_instances` starts TRUE — a fresh single-database realm spawns dungeon populations
+    // itself, exactly as before #39. A multi-database deployment turns it off on the world shard.
+    ctx.db.game_config().insert(ServerConfig {
+        id: 0,
+        xp_rate: 1.0,
+        nav_enabled: true,
+        hosts_instances: true,
+        bots_idle: false, // bots think by default; the load-test lever freezes them
+    });
+
+    // Human Warrior start position (display 49 = human male native model).
+    ctx.db.game_start_position().insert(StartPosition {
+        race_class: ((hw::RACE as u16) << 8) | hw::CLASS as u16,
+        race: hw::RACE,
+        class: hw::CLASS,
+        map_id: hw::MAP_ID,
+        zone_id: hw::ZONE_ID,
+        x: hw::X,
+        y: hw::Y,
+        z: hw::Z,
+        orientation: hw::ORIENTATION,
+        display_id: 49,
+    });
+
+    // Graveyard fallback seed (work-item 209): the SAME five Elwynn/Westfall graveyards
+    // `world::graveyard`'s hardcoded consts carry, ALSO row-seeded into `game_graveyard` +
+    // `game_graveyard_zone` so a fresh unimported DB and the live `graveyard::resolve_graveyard`
+    // path agree exactly — mirrors the `game_start_position` precedent (init seeds; the importer's
+    // `--dbc`/`--dump` clear+reload overwrite both tables with the real WorldSafeLocs.dbc /
+    // game_graveyard_zone data once run). `faction: 469` (Alliance) on every row — Elwynn/Westfall
+    // are Alliance-only leveling content in this sandbox.
+    const ALLIANCE_FACTION: u32 = 469;
+    for (id, name, x, y, z, o, zone_id) in [
+        // Orientations carry the consts' values (Northshire's 2.72271 is the verified facing) —
+        // the DBC import writes 0.0 here, so the seed is the only source of a real facing today.
+        (
+            105u32,
+            "Northshire Abbey",
+            -8935.33f32,
+            -188.646f32,
+            80.4165f32,
+            2.72271f32,
+            12u32,
+        ),
+        (106, "Goldshire", -9339.59, 171.73, 63.5258, 0.0, 12),
+        (
+            854,
+            "Eastvale Logging Camp",
+            -9552.73,
+            -1374.84,
+            57.0867,
+            0.0,
+            12,
+        ),
+        (80, "Sentinel Hill", -10650.0, 1180.0, 34.0, 0.0, 40), // [V] id/coords unverified — see world::graveyard
+        (81, "Westfall Coast", -11390.0, 1590.0, 6.0, 0.0, 40), // [V] id/coords unverified — see world::graveyard
+    ] {
+        ctx.db.game_graveyard().insert(GraveyardLoc {
+            id,
+            map_id: hw::MAP_ID,
+            x,
+            y,
+            z,
+            o,
+            name: name.to_string(),
+        });
+        ctx.db.game_graveyard_zone().insert(GraveyardZone {
+            row_id: 0, // auto_inc
+            safe_loc_id: id,
+            zone_id,
+            faction: ALLIANCE_FACTION,
+        });
+    }
+
+    // Test account (credentials provisioned later by the gateway via `provision_account`).
+    let account = ctx.db.game_account().insert(Account {
+        id: 0, // auto_inc
+        username: "TEST".to_string(),
+        salt: vec![0u8; 32],
+        verifier: vec![0u8; 32],
+        identity: None,
+        banned: false,
+    });
+
+    seed_createinfo_spells(ctx);
+
+    // Pre-seeded character (owner bound at establish_session; ZERO hides it until then).
+    ctx.db.game_character().insert(Character {
+        guid: 1,
+        account_id: account.id,
+        owner_identity: Identity::ZERO,
+        name: "Tester".to_string(),
+        race: hw::RACE,
+        class: hw::CLASS,
+        gender: 0,
+        skin: 0,
+        face: 0,
+        hair_style: 0,
+        hair_color: 0,
+        facial_hair: 0,
+        level: 1,
+        xp: 0,
+        next_level_xp: crate::xp::xp_to_next_level(1),
+        map_id: hw::MAP_ID,
+        zone_id: hw::ZONE_ID,
+        x: hw::X,
+        y: hw::Y,
+        z: hw::Z,
+        orientation: hw::ORIENTATION,
+        first_login: true,
+        online: false,
+        money: 0, // starts broke; loot fills the purse
+        rested_xp: 0,
+        last_logout_micros: 0,
+        // Hearthstone home = the seeded start position.
+        home_map: hw::MAP_ID,
+        home_zone: hw::ZONE_ID,
+        home_x: hw::X,
+        home_y: hw::Y,
+        home_z: hw::Z,
+        played_total_secs: 0,
+        session_start_micros: 0,
+        health: 0, // sentinel: spawn at full health
+        power: 0,  // sentinel: spawn at starting power
+        respec_count: 0,
+        death_expire_micros: 0,                                   // never died
+        pending_instance_id: 0,                                   // open world
+        gm_level: 3, // work-item 223: the seeded Tester is playtest-GM by default
+        pending_ghost: false, // alive (work-item 226)
+        resting: false, // 196
+        rested_since_micros: 0, // 196
+        pending_godmode: false, // 289: GM playtest carry — off until `.god` + a map change
+        pending_run_speed_mult_bp: crate::world::RUN_SPEED_BP_1X, // 289: 1×
+    });
+    // The seeded character goes through the same creation-time kit grant as `create_character`
+    // (rows restamp to the real owner identity at establish_session, like its other owned rows).
+    crate::spell::spellbook::grant_createinfo_spells(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
+    // Action-bar rows (work-item 212) — same no-op-pre-import grant `create_character` calls.
+    crate::action_bar::grant_createinfo_actions(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
+
+    // Creature EventAI (193): the fixture on-aggro barks (Kobold/Defias/Hogger).
+    crate::creatures::seed_on_aggro_fixtures(ctx);
+
+    // DECISION (issue #79): everything from here down through the gather-pool block seeds MAP-0
+    // (Northshire) spatial content — 3 creature spawns (Chicken 620, Test Wolf 51000, Profession
+    // Trainer 51001) and up to 5 live `game_gameobject` rows (the chest/goober/2 standalone gather
+    // nodes + the tier-pool's one armed point) — into EVERY freshly published database, even one that
+    // will only ever host a different continent. `init` KEEPS seeding them: they are the local
+    // test-harness/module-test fixtures a bare `spacetime publish` needs (a combat target, a skinnable
+    // beast, a profession trainer, a chest/goober/gather-node to exercise `use_gameobject`) — used by
+    // the manual verify recipes and `debug_*` reducers throughout this file and `debug.rs`, on ANY
+    // database that has not yet been pointed at a real world import. The moment a real
+    // `importer --apply` run lands (for map 0 OR any other continent), the four spatial families'
+    // wholesale clears permanently replace these rows with real content, and `game_gameobject`'s pool
+    // arming (`arm_pool`, gameobject.rs) map-fences itself against `game_terrain_chunk`/
+    // `game_nav_chunk` so it can never re-plant the map-0 tier point on a database that has since
+    // imported a different continent. So: no database that has ever received a real import needs
+    // these fixtures again, and no database needs `init` to STOP seeding them, because the one-
+    // continent-per-database guard (`importer/scripts/import-world.sh`) now recognizes them as fixtures, not
+    // content, precisely because they never survive a real import.
+    // --- NPCs: seed a Chicken (entry 620) near the player spawn so it is in view. ---
+    // Real vanilla values; display 304 ships in the base 5875 client. Faction 14
+    // ("Monster") is HOSTILE to players (red nameplate + sword cursor + right-click auto-attack) so
+    // it is a usable combat target. Real chickens are neutral critters (faction 31), but a neutral
+    // unit shows no sword cursor and can't be right-click-attacked — only `/startattack` works — so
+    // the demo combat target is made hostile. It never fights back (no creature AI yet).
+    const CHICKEN_ENTRY: u32 = 620;
+    let chicken_tmpl = ctx.db.game_creature_template().insert(CreatureTemplate {
+        entry: CHICKEN_ENTRY,
+        name: "Chicken".to_string(),
+        subname: String::new(),
+        display_id: 304,
+        level: 1,
+        health: 42,
+        faction_template: 14,
+        npc_flags: 0,
+        unit_flags: 0,
+        creature_type: 8, // Critter
+        creature_family: 0,
+        type_flags: 0,
+        rank: 0,
+        scale: 1.0,
+        base_attack_time_ms: 1500, // a quick pecker — visibly faster than the player's 2.0s
+        money_min: 5, // a visible copper drop so loot is testable (real chickens drop ~0)
+        money_max: 20,
+        max_level: 0, // no level range for the demo chicken (stays L1)
+        max_level_health: 0,
+        // Proximity aggro: 8 yards. A creature debug-spawned ~3 yd from the player self-engages,
+        // while the seeded chicken at +15 yd stays PASSIVE at login (>8 yd from the start position)
+        // — so the login demo stays calm. 0 on every other seeded template.
+        aggro_range: 8,
+        // The demo chicken never fights back; 0/0 → swing_range_ctx uses the flat fallback (moot, it
+        // never swings). Imported creatures carry their real imported melee range.
+        damage_min: 0,
+        damage_max: 0,
+        armor: 0,              // unmitigated — a demo critter needs no armor
+        pickpocket_loot_id: 0, // not imported — the demo chicken has no pickpocket table
+        skin_loot_id: 0,       // not imported — the demo chicken isn't a beast anyway
+    });
+
+    // The live creature is a game_world_entity row of type Unit. Its GUID must carry HIGHGUID_UNIT
+    // (0xF130) in the high bits — and, like cmangos, the entry in bits 24..47 — so the vanilla
+    // client treats it as a creature (not a player) and queries it correctly.
+    let chicken_guid: u64 = (0xF130_u64 << 48) | ((CHICKEN_ENTRY as u64) << 24) | 1;
+
+    // Persistent spawn record: the source of truth that survives death. The live entity is
+    // built from spawn + template via the shared helper, so a respawn is identical to this seed.
+    let chicken_spawn = ctx.db.game_creature_spawn().insert(CreatureSpawn {
+        guid: chicken_guid,
+        entry: CHICKEN_ENTRY,
+        map_id: hw::MAP_ID,
+        x: hw::X + 15.0,
+        y: hw::Y,
+        z: hw::Z,
+        orientation: 0.0,
+        // NOT-ARMED (see `creatures::timer_never`): this fixture inserts its live entity directly
+        // below, so nothing here depends on an armed timer, and a past stamp would make every
+        // due-time range scan visit this row forever.
+        respawn_at: crate::creatures::timer_never(ctx),
+        despawn_at: crate::creatures::timer_never(ctx),
+        movement_type: crate::creatures::MOVEMENT_RANDOM, // the demo chicken loiters near its post (critter)
+        respawn_secs: 0,                                  // 0 ⇒ the flat fallback respawn timer
+    });
+    crate::creatures::insert_creature_entity(
+        ctx,
+        build_creature_entity(&chicken_spawn, &chicken_tmpl, 0, 0),
+    ); // fixed roll → the demo chicken stays L1
+
+    // Two patrol waypoints ~8 yards apart: the chicken walks back and forth. The tick picks
+    // the farther waypoint each leg, so two points alone give an oscillation with no extra state.
+    for (wx, wy) in [(hw::X + 15.0, hw::Y), (hw::X + 15.0, hw::Y + 8.0)] {
+        ctx.db.game_creature_waypoint().insert(CreatureWaypoint {
+            id: 0,
+            creature_guid: chicken_guid,
+            x: wx,
+            y: wy,
+            z: hw::Z,
+        });
+    }
+
+    // --- Hand-author the starter weapon definition (entry 25 "Worn Shortsword"). ---
+    // The instance (the owned copy) is born per-character at CREATION in `items::grant_starter_item` (first login re-runs it as an idempotent safety net) —
+    // it can't be seeded here because its `owner_identity` is unknown until a player binds (the RLS
+    // filter on `owner_identity = :sender` would hide an Identity::ZERO row). Static definition only.
+    {
+        use constants::starter_item as si;
+        ctx.db.game_item_template().insert(ItemTemplate {
+            entry: si::ENTRY,
+            class: si::CLASS_WEAPON,
+            subclass: si::SUBCLASS_SWORD_1H,
+            name: "Worn Shortsword".to_string(),
+            display_id: si::DISPLAY_ID,
+            quality: si::QUALITY_POOR,
+            inventory_type: si::INVTYPE_WEAPON_MAINHAND,
+            item_level: si::ITEM_LEVEL,
+            required_level: si::REQUIRED_LEVEL,
+            max_durability: si::MAX_DURABILITY,
+            buy_price: si::BUY_PRICE,
+            sell_price: si::SELL_PRICE,
+            max_stack: 1,
+            damage_min: si::DAMAGE_MIN,
+            damage_max: si::DAMAGE_MAX,
+            delay_ms: si::DELAY_MS,
+            stat_strength: 0,
+            stat_agility: 0,
+            stat_stamina: 0,
+            stat_intellect: 0,
+            stat_spirit: 0,
+            stat_crit: 0,
+            stat_hit: 0,
+            stat_armor: 0,
+            block_value: 0, // a weapon carries no block value
+            restores_power: false,
+            spellid_1: 0,
+            spelltrigger_1: 0,
+            spellid_2: 0,
+            spelltrigger_2: 0,
+            container_slots: 0,
+            sheath: 0,
+            // The starter weapon is BoP — vanilla-authentic (class starting gear binds the instant
+            // it's granted, at `grant_starter_item`).
+            bonding: crate::items::bonding::BIND_ON_PICKUP,
+            holy_res: 0,
+            fire_res: 0,
+            nature_res: 0,
+            frost_res: 0,
+            shadow_res: 0,
+            arcane_res: 0,
+            spellid_3: 0,
+            spelltrigger_3: 0,
+            spellid_4: 0,
+            spelltrigger_4: 0,
+            spellid_5: 0,
+            spelltrigger_5: 0,
+            required_skill: 0,
+            required_skill_rank: 0,
+            required_reputation_faction: 0,
+            required_reputation_rank: 0,
+            max_count: 0,
+            item_flags: 0,
+            page_text: 0,
+            start_quest: 0,
+            bag_family: 0,
+            buy_count: 1,
+        });
+    }
+
+    // A second, stronger hand-authored weapon (entry 50 "Tempered Blade") so weapon-damage-in-swing
+    // is demonstrable: its 8–12 / 2.6s profile is clearly above the Worn Shortsword's 1–3, so equipping
+    // it visibly raises the swing readout. Hand-authored reference data (licensing firewall: never
+    // bulk-imported), display 1542 ships in 5875. inventory_type 21 = main-hand, quality 2 = Uncommon.
+    ctx.db.game_item_template().insert(ItemTemplate {
+        entry: 50,
+        class: 2,    // Weapon
+        subclass: 7, // Sword (one-hand)
+        name: "Tempered Blade".to_string(),
+        display_id: 1542,
+        quality: 2, // Uncommon (green)
+        inventory_type: 21,
+        item_level: 12,
+        required_level: 1,
+        max_durability: 70,
+        buy_price: 1200,
+        sell_price: 240,
+        max_stack: 1,
+        damage_min: 8.0,
+        damage_max: 12.0,
+        delay_ms: 2600,
+        stat_strength: 0,
+        stat_agility: 0,
+        stat_stamina: 0,
+        stat_intellect: 0,
+        stat_spirit: 0,
+        stat_crit: 0,
+        stat_hit: 0,
+        stat_armor: 0,
+        block_value: 0,
+        restores_power: false,
+        spellid_1: 0,
+        spelltrigger_1: 0,
+        spellid_2: 0,
+        spelltrigger_2: 0,
+        container_slots: 0,
+        sheath: 0,
+        // Uncommon (green) gear binds on equip — vanilla's "greens are BoE" rule.
+        bonding: crate::items::bonding::BIND_ON_EQUIP,
+        holy_res: 0,
+        fire_res: 0,
+        nature_res: 0,
+        frost_res: 0,
+        shadow_res: 0,
+        arcane_res: 0,
+        spellid_3: 0,
+        spelltrigger_3: 0,
+        spellid_4: 0,
+        spelltrigger_4: 0,
+        spellid_5: 0,
+        spelltrigger_5: 0,
+        required_skill: 0,
+        required_skill_rank: 0,
+        required_reputation_faction: 0,
+        required_reputation_rank: 0,
+        max_count: 0,
+        item_flags: 0,
+        page_text: 0,
+        start_quest: 0,
+        bag_family: 0,
+        buy_count: 1,
+    });
+
+    // Multi-item starter loadout (items::grant_starter_item) + chicken loot content. Two more
+    // hand-authored templates the login grant drops into the backpack: a cloth chest (51) and a food
+    // stack (52). display 1542 ships in 5875 (placeholder icon). class 4 = Armor, 0 = Consumable.
+    ctx.db.game_item_template().insert(ItemTemplate {
+        entry: 51,
+        class: 4,    // Armor
+        subclass: 1, // Cloth
+        name: "Recruit's Tunic".to_string(),
+        display_id: 1542,
+        quality: 1,        // Common (white)
+        inventory_type: 5, // INVTYPE_CHEST
+        item_level: 5,
+        required_level: 1,
+        max_durability: 40,
+        buy_price: 200,
+        sell_price: 40,
+        max_stack: 1,
+        damage_min: 0.0,
+        damage_max: 0.0,
+        delay_ms: 0,
+        stat_strength: 0,
+        stat_agility: 0,
+        stat_stamina: 0,
+        stat_intellect: 0,
+        stat_spirit: 0,
+        stat_crit: 0,
+        stat_hit: 0,
+        stat_armor: 0,
+        block_value: 0,
+        restores_power: false,
+        spellid_1: 0,
+        spelltrigger_1: 0,
+        spellid_2: 0,
+        spelltrigger_2: 0,
+        container_slots: 0,
+        sheath: 0,
+        bonding: crate::items::bonding::NONE, // plain common gear — unbound/tradeable
+        holy_res: 0,
+        fire_res: 0,
+        nature_res: 0,
+        frost_res: 0,
+        shadow_res: 0,
+        arcane_res: 0,
+        spellid_3: 0,
+        spelltrigger_3: 0,
+        spellid_4: 0,
+        spelltrigger_4: 0,
+        spellid_5: 0,
+        spelltrigger_5: 0,
+        required_skill: 0,
+        required_skill_rank: 0,
+        required_reputation_faction: 0,
+        required_reputation_rank: 0,
+        max_count: 0,
+        item_flags: 0,
+        page_text: 0,
+        start_quest: 0,
+        bag_family: 0,
+        buy_count: 1,
+    });
+    ctx.db.game_item_template().insert(ItemTemplate {
+        entry: 52,
+        class: 0,    // Consumable
+        subclass: 0, // Food & Drink
+        name: "Tough Jerky".to_string(),
+        display_id: 1542,
+        quality: 0,        // Poor
+        inventory_type: 0, // not equippable
+        item_level: 1,
+        required_level: 1,
+        max_durability: 0,
+        buy_price: 10,
+        sell_price: 2,
+        max_stack: 20,
+        damage_min: 0.0,
+        damage_max: 0.0,
+        delay_ms: 0,
+        stat_strength: 0,
+        stat_agility: 0,
+        stat_stamina: 0,
+        stat_intellect: 0,
+        stat_spirit: 0,
+        stat_crit: 0,
+        stat_hit: 0,
+        stat_armor: 0,
+        block_value: 0,
+        restores_power: false,
+        spellid_1: 0,
+        spelltrigger_1: 0,
+        spellid_2: 0,
+        spelltrigger_2: 0,
+        container_slots: 0,
+        sheath: 0,
+        bonding: crate::items::bonding::NONE, // plain food — unbound/tradeable
+        holy_res: 0,
+        fire_res: 0,
+        nature_res: 0,
+        frost_res: 0,
+        shadow_res: 0,
+        arcane_res: 0,
+        spellid_3: 0,
+        spelltrigger_3: 0,
+        spellid_4: 0,
+        spelltrigger_4: 0,
+        spellid_5: 0,
+        spelltrigger_5: 0,
+        required_skill: 0,
+        required_skill_rank: 0,
+        required_reputation_faction: 0,
+        required_reputation_rank: 0,
+        max_count: 0,
+        item_flags: 0,
+        page_text: 0,
+        start_quest: 0,
+        bag_family: 0,
+        buy_count: 1,
+    });
+
+    // --- PROFESSION ITEMS: every profession reagent/product/yield points at a REAL vanilla
+    // item, so the crafts/gathers/consumables render real names+icons+stats in the 5875 client:
+    //   769  Chunk of Boar Meat (cooking reagent; Chicken loot)
+    //   2681 Roasted Boar Meat  (cooked product; level-1 eat-food)
+    //   2318 Light Leather      (skinning yield + LW reagent — loot::LEATHER_ENTRY)
+    //   7277 Handstitched Leather Bracers (LW product)
+    //   2770 Copper Ore         (mining yield + smelt reagent)
+    //   2447 Peacebloom         (herbalism yield + alchemy reagent)
+    //   118  Minor Healing Potion (alchemy product + consumable)
+    //   2589 Linen Cloth        (first-aid + tailoring reagent)
+    //   1251 Linen Bandage      (first-aid product + consumable)
+    //   2996 Bolt of Linen Cloth (tailoring product)
+    //   2840 Copper Bar         (smelt product + blacksmith reagent)
+    //   2862 Rough Sharpening Stone (blacksmith product)
+    // All 12 exist in game_item_template from the import, so NO item_template seed/INSERT is needed here.
+    // (Linen Cloth/Copper Ore have no loot source yet — granted via debug_grant_item or the gather node for
+    // the verify; relocating reagents onto real loot/vendor sources is a separate node-placement pass.)
+
+    // --- SKINNING: a dedicated SKINNABLE BEAST so the skin verify is IMPORT-INDEPENDENT (the demo Chicken
+    // is creature_type 8 = Critter → not skinnable). "Test Wolf" (entry 51000): creature_type 1 (BEAST),
+    // creature_family 1 (Wolf), faction 14 (Monster, hostile — a usable kill target like the chicken),
+    // spawned near the player start. `debug_kill_nearest(killer, 51000)` makes a beast corpse, then
+    // `debug_skin_nearest(killer)` skins it → 1× Light Leather + Skinning 1→2.
+    // LEVEL 1 is intentional: the skill gate is (creature_level - 1) * 10, so a level-1 beast requires
+    // skill 0 — a freshly-trained skinner (skill=1) can skin it immediately without needing debug_set_skill.
+    // INIT-ONLY: the template is SQL-seedable post-publish; the spawn is NOT (its respawn_at/despawn_at
+    // are Timestamps) — the parent re-imports OR `debug_spawn_at_feet(guid, 51000)` materializes a live
+    // wolf. type_flags 0x100 = SKINNABLE (the skin gate keys on creature_type==1 alone; the flag is
+    // carried for data parity).
+    const TEST_WOLF_ENTRY: u32 = 51000;
+    let wolf_tmpl = ctx.db.game_creature_template().insert(CreatureTemplate {
+        entry: TEST_WOLF_ENTRY,
+        name: "Test Wolf".to_string(),
+        subname: String::new(),
+        display_id: 720, // a wolf model that ships in 5875
+        level: 1,
+        health: 60,
+        faction_template: 14, // Monster (hostile → a usable kill target, like the demo chicken)
+        npc_flags: 0,
+        unit_flags: 0,
+        creature_type: 1, // BEAST (the skinnable gate — cmangos CREATURE_TYPE_BEAST)
+        creature_family: 1, // Wolf (cmangos CreatureFamily)
+        type_flags: 0x100, // SKINNABLE (cmangos CreatureTypeFlags bit; the creature_type==1 gate is sufficient)
+        rank: 0,
+        scale: 1.0,
+        base_attack_time_ms: 2000,
+        money_min: 0,
+        money_max: 0,
+        max_level: 0,
+        max_level_health: 0,
+        aggro_range: 0, // PASSIVE (engages only when attacked) so the test wolf doesn't maul the login demo
+        damage_min: 0,
+        damage_max: 0,
+        armor: 0,              // set via `spacetime sql` on this row to mock-test mitigation
+        pickpocket_loot_id: 0, // not imported — the test wolf has no pickpocket table
+        // 0 ⇒ `skin_corpse` falls back to the flat Light Leather — the pre-210 verify flow
+        // (debug_skin_nearest → 1x Light Leather) stays byte-identical without a seeded skin table.
+        skin_loot_id: 0,
+    });
+    let wolf_guid: u64 = (0xF130_u64 << 48) | ((TEST_WOLF_ENTRY as u64) << 24) | 1;
+    let wolf_spawn = ctx.db.game_creature_spawn().insert(CreatureSpawn {
+        guid: wolf_guid,
+        entry: TEST_WOLF_ENTRY,
+        map_id: hw::MAP_ID,
+        x: hw::X + 10.0,
+        y: hw::Y + 5.0,
+        z: hw::Z,
+        orientation: 0.0,
+        respawn_at: crate::creatures::timer_never(ctx), // not armed — the live entity is inserted directly below
+        despawn_at: crate::creatures::timer_never(ctx),
+        movement_type: crate::creatures::MOVEMENT_RANDOM,
+        respawn_secs: 0, // 0 ⇒ the flat fallback respawn timer
+    });
+    crate::creatures::insert_creature_entity(
+        ctx,
+        build_creature_entity(&wolf_spawn, &wolf_tmpl, 0, 0),
+    );
+
+    // --- PROFESSION TRAINER: a dedicated trainer NPC so LEARN-A-PROFESSION is verifiable on a
+    // NO-IMPORT dev DB (no cmangos cooking/skinning trainer is reliably seeded — the importer's
+    // npc_trainer path is class-only + doesn't tag professions). "Profession Trainer" (entry
+    // 51001): npc_flags = GOSSIP|TRAINER (0x11) so the trainer-window opens, faction 35 (FRIENDLY — a
+    // trainer you walk up to, NOT a combat target), spawned near the player start so it's in interaction
+    // range. INIT-ONLY: the template is SQL-seedable post-publish; the SPAWN is NOT (Timestamps) — the
+    // parent re-imports OR `debug_spawn_at_feet(guid, 51001)` materializes a live trainer. The
+    // profession-learn OFFERINGS (50080→185 Cooking, 50081→393 Skinning, 50082→165 Leatherworking,
+    // 50085→171 Alchemy, 50086→129 First Aid, 50087→197 Tailoring, 50088→164 Blacksmithing —
+    // Smelting rides Mining, NO offering) are NOT seeded here — `game_trainer_spell` is populated for
+    // this entry by the world-import ETL instead.
+    const PROFESSION_TRAINER_ENTRY: u32 = 51001;
+    let trainer_tmpl = ctx.db.game_creature_template().insert(CreatureTemplate {
+        entry: PROFESSION_TRAINER_ENTRY,
+        name: "Profession Trainer".to_string(),
+        subname: "Cooking & Skinning".to_string(),
+        display_id: 3167, // a generic humanoid model that ships in 5875
+        level: 30,
+        health: 1500,
+        faction_template: 35, // FRIENDLY (a trainer, not a kill target)
+        npc_flags: lyracore_shared::constants::npc_flags::GOSSIP
+            | lyracore_shared::constants::npc_flags::TRAINER, // 0x11 — gossip-eye + trainer window
+        unit_flags: 0,
+        creature_type: 7, // Humanoid
+        creature_family: 0,
+        type_flags: 0,
+        rank: 0,
+        scale: 1.0,
+        base_attack_time_ms: 2000,
+        money_min: 0,
+        money_max: 0,
+        max_level: 0,
+        max_level_health: 0,
+        aggro_range: 0, // never aggros (friendly trainer)
+        damage_min: 0,
+        damage_max: 0,
+        armor: 0,              // a trainer never takes damage anyway
+        pickpocket_loot_id: 0, // not imported — a friendly trainer is never pickpocketed
+        skin_loot_id: 0,       // not imported — a Humanoid trainer isn't skinnable anyway
+    });
+    let trainer_guid: u64 = (0xF130_u64 << 48) | ((PROFESSION_TRAINER_ENTRY as u64) << 24) | 1;
+    let trainer_spawn = ctx.db.game_creature_spawn().insert(CreatureSpawn {
+        guid: trainer_guid,
+        entry: PROFESSION_TRAINER_ENTRY,
+        map_id: hw::MAP_ID,
+        x: hw::X - 5.0,
+        y: hw::Y + 5.0,
+        z: hw::Z,
+        orientation: 0.0,
+        respawn_at: crate::creatures::timer_never(ctx), // not armed — the live entity is inserted directly below
+        despawn_at: crate::creatures::timer_never(ctx),
+        movement_type: crate::creatures::MOVEMENT_IDLE, // a trainer stands at its post
+        respawn_secs: 0,                                // 0 ⇒ the flat fallback respawn timer
+    });
+    crate::creatures::insert_creature_entity(
+        ctx,
+        build_creature_entity(&trainer_spawn, &trainer_tmpl, 0, 0),
+    );
+
+    // The Hearthstone (entry 6948) — every character starts with one (granted in `grant_starter_item`);
+    // using it recalls to the bound home (`Character::home_*`). Real vanilla values: class 15 (Misc),
+    // display 6418 (the hearthstone icon, ships in 5875), unsellable, non-stacking, no stats.
+    ctx.db.game_item_template().insert(ItemTemplate {
+        entry: constants::starter_item::HEARTHSTONE_ENTRY,
+        class: 15, // Miscellaneous
+        subclass: 0,
+        name: "Hearthstone".to_string(),
+        display_id: 6418,
+        quality: 1,        // Common
+        inventory_type: 0, // not equippable
+        item_level: 1,
+        required_level: 1,
+        max_durability: 0,
+        buy_price: 0,
+        sell_price: 0,
+        max_stack: 1,
+        damage_min: 0.0,
+        damage_max: 0.0,
+        delay_ms: 0,
+        stat_strength: 0,
+        stat_agility: 0,
+        stat_stamina: 0,
+        stat_intellect: 0,
+        stat_spirit: 0,
+        stat_crit: 0,
+        stat_hit: 0,
+        stat_armor: 0,
+        block_value: 0,
+        restores_power: false,
+        spellid_1: 0,
+        spelltrigger_1: 0,
+        spellid_2: 0,
+        spelltrigger_2: 0,
+        container_slots: 0,
+        sheath: 0,
+        // Real vanilla Hearthstone: unique + BoP the instant it's granted (starter kit source).
+        bonding: crate::items::bonding::BIND_ON_PICKUP,
+        holy_res: 0,
+        fire_res: 0,
+        nature_res: 0,
+        frost_res: 0,
+        shadow_res: 0,
+        arcane_res: 0,
+        spellid_3: 0,
+        spelltrigger_3: 0,
+        spellid_4: 0,
+        spelltrigger_4: 0,
+        spellid_5: 0,
+        spelltrigger_5: 0,
+        required_skill: 0,
+        required_skill_rank: 0,
+        required_reputation_faction: 0,
+        required_reputation_rank: 0,
+        max_count: 0,
+        item_flags: 0,
+        page_text: 0,
+        start_quest: 0,
+        bag_family: 0,
+        buy_count: 1,
+    });
+
+    // A hand-authored SHIELD ("Battered Buckler") so shield-block is reachable on a NO-IMPORT dev DB
+    // (in production the importer maps real `block_value` for every vanilla shield). Entry 50053 is a
+    // synthetic fixture ID above the vanilla item range (max ~24k) so it never collides with an imported
+    // item — unlike the low entries 25/50/51/52, which the importer's `DELETE WHERE entry>0` + reload
+    // shadow with the real vanilla items at those IDs. Its 25 base block_value fully covers a normal
+    // creature swing (1–3), making a blocked hit's 0-damage "full block" clearly demonstrable. class 4 =
+    // Armor, subclass 6 = Shield, inventory_type 14 = INVTYPE_SHIELD → equips into the OFF-HAND (16).
+    ctx.db.game_item_template().insert(ItemTemplate {
+        entry: 50053,
+        class: 4,    // Armor
+        subclass: 6, // Shield
+        name: "Battered Buckler".to_string(),
+        display_id: 1542,   // placeholder icon (ships in 5875)
+        quality: 1,         // Common (white)
+        inventory_type: 14, // INVTYPE_SHIELD → off-hand
+        item_level: 5,
+        required_level: 1,
+        max_durability: 60,
+        buy_price: 300,
+        sell_price: 60,
+        max_stack: 1,
+        damage_min: 0.0,
+        damage_max: 0.0,
+        delay_ms: 0,
+        stat_strength: 0,
+        stat_agility: 0,
+        stat_stamina: 0,
+        stat_intellect: 0,
+        stat_spirit: 0,
+        stat_crit: 0,
+        stat_hit: 0,
+        stat_armor: 0,
+        block_value: 25, // flat block: fully absorbs a normal creature swing → a clean "full block"
+        restores_power: false, // a shield, not a drink
+        spellid_1: 0,
+        spelltrigger_1: 0,
+        spellid_2: 0,
+        spelltrigger_2: 0,
+        container_slots: 0,
+        sheath: 0,
+        bonding: crate::items::bonding::NONE, // plain common gear — unbound/tradeable
+        holy_res: 0,
+        fire_res: 0,
+        nature_res: 0,
+        frost_res: 0,
+        shadow_res: 0,
+        arcane_res: 0,
+        spellid_3: 0,
+        spelltrigger_3: 0,
+        spellid_4: 0,
+        spelltrigger_4: 0,
+        spellid_5: 0,
+        spelltrigger_5: 0,
+        required_skill: 0,
+        required_skill_rank: 0,
+        required_reputation_faction: 0,
+        required_reputation_rank: 0,
+        max_count: 0,
+        item_flags: 0,
+        page_text: 0,
+        start_quest: 0,
+        bag_family: 0,
+        buy_count: 1,
+    });
+
+    // Chicken (620) loot table: always drops Tough Jerky (52), and 50% of the time a Recruit's
+    // Tunic (51). A creature with no game_creature_loot rows drops no items.
+    ctx.db.game_creature_loot().insert(CreatureLoot {
+        id: 0,
+        creature_entry: CHICKEN_ENTRY,
+        item_entry: 52,
+        chance_bp: 10000, // always (100%)
+        count: 1,
+        group_id: 0, // independent roll
+        quest_only: false,
+    });
+    ctx.db.game_creature_loot().insert(CreatureLoot {
+        id: 0,
+        creature_entry: CHICKEN_ENTRY,
+        item_entry: 51,
+        chance_bp: 5000, // 50%
+        count: 1,
+        group_id: 0,
+        quest_only: false,
+    });
+    // COOKING reagent drop: the Chicken always drops 1× Chunk of Boar Meat (real item 769) so the cooking
+    // loop's reagent is obtainable via the existing loot path (kill → take_loot → reagent in the backpack).
+    // Independent roll, always (the reagent must be reliably available for the verify recipe). The chicken
+    // is a PLACEHOLDER source; relocating the meat onto a real boar is a separate node-placement pass.
+    ctx.db.game_creature_loot().insert(CreatureLoot {
+        id: 0,
+        creature_entry: CHICKEN_ENTRY,
+        item_entry: 769, // Chunk of Boar Meat (the cooking reagent, real imported item)
+        chance_bp: 10000, // always (100%)
+        count: 1,
+        group_id: 0, // independent roll
+        quest_only: false,
+    });
+
+    // --- Gameobjects: a CHEST (loot) + a GOOBER (quest-use) by the player spawn so they're in view and
+    // the harness can exercise use_gameobject. Synthetic entries above the vanilla GO range so they can
+    // never collide with imported GOs. Deliberate simplification: the chest drops a single item
+    // (Tough Jerky 52); display ids are 5875 placeholders. GO guids carry HIGHGUID_GAMEOBJECT (0xF110 in
+    // bits 48..63 — like the corpse 0xF101 / item 0x4000 scheme) so they never collide with other guids.
+    const GO_HIGH: u64 = 0xF110 << 48;
+    ctx.db
+        .game_gameobject_template()
+        .insert(GameObjectTemplate {
+            entry: 50100,
+            type_id: crate::gameobject::go_type::CHEST,
+            display_id: 259, // placeholder chest model (ships in 5875)
+            name: "Battered Chest".to_string(),
+            data0: 52, // drops Tough Jerky (52), a seeded item template
+            data1: 0,
+            gather_skill_line: 0, // not a gather node
+            respawn_secs: 0, // n/a (a CHEST has no respawn timer); 0 ⇒ the 3-min fallback if ever used
+            gather_gray: 0,  // n/a (not a gather node) — the always-skill sentinel
+            lock_id: 0,      // work-item 211: unlocked (seed/demo chest)
+        });
+    ctx.db.game_gameobject().insert(GameObject {
+        guid: GO_HIGH | 1,
+        template_entry: 50100,
+        map_id: hw::MAP_ID,
+        x: hw::X + 5.0,
+        y: hw::Y,
+        z: hw::Z,
+        orientation: 0.0,
+        state: 0,
+        created_at: ctx.timestamp,
+        respawn_at_micros: 0, // a freshly-seeded node is ready (no pending respawn)
+        instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
+        grid_x: lyracore_shared::spatial::grid_cell(hw::X + 5.0, hw::Y).0,
+        grid_y: lyracore_shared::spatial::grid_cell(hw::X + 5.0, hw::Y).1,
+    });
+    ctx.db
+        .game_gameobject_template()
+        .insert(GameObjectTemplate {
+            entry: 50101,
+            type_id: crate::gameobject::go_type::GOOBER,
+            display_id: 259, // placeholder
+            name: "Suspicious Lever".to_string(),
+            data0: 0,
+            data1: 0,
+            gather_skill_line: 0, // not a gather node
+            respawn_secs: 0,      // n/a (a GOOBER has no respawn timer)
+            gather_gray: 0,       // n/a (not a gather node)
+            lock_id: 0,           // work-item 211: unlocked (seed/demo goober)
+        });
+    ctx.db.game_gameobject().insert(GameObject {
+        guid: GO_HIGH | 2,
+        template_entry: 50101,
+        map_id: hw::MAP_ID,
+        x: hw::X + 8.0,
+        y: hw::Y,
+        z: hw::Z,
+        orientation: 0.0,
+        state: 0,
+        created_at: ctx.timestamp,
+        respawn_at_micros: 0, // a freshly-seeded node is ready (no pending respawn)
+        instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
+        grid_x: lyracore_shared::spatial::grid_cell(hw::X + 8.0, hw::Y).0,
+        grid_y: lyracore_shared::spatial::grid_cell(hw::X + 8.0, hw::Y).1,
+    });
+
+    // --- GATHER nodes: a Copper Vein (MINING) + a Peacebloom (HERBALISM) by the player spawn so the
+    // harness can exercise the gather path. `type_id: GATHER`, `data0`: the granted item entry, `data1`: the
+    // required skill level (1 → a just-learned 1/75 skill passes immediately), `gather_skill_line`: which skill
+    // the use requires. INIT-ONLY: `game_gameobject` carries a Timestamp so a spawn can NOT be SQL-inserted —
+    // after a `-c` reprovision the parent uses `debug_spawn_gameobject` (with the data1/skill_line args) instead.
+    ctx.db
+        .game_gameobject_template()
+        .insert(GameObjectTemplate {
+            entry: 50102,
+            type_id: crate::gameobject::go_type::GATHER,
+            display_id: 259, // placeholder model (ships in 5875)
+            name: "Copper Vein".to_string(),
+            data0: 2770, // grants Copper Ore (real imported item)
+            data1: 1,    // required Mining skill level (also the "orange" skill-up floor)
+            gather_skill_line: crate::skill::skill_line::MINING, // 186
+            respawn_secs: 0, // 0 ⇒ the 3-min RESPAWN_WINDOW_MICROS fallback
+            gather_gray: 0, // 0 ⇒ the always-skill sentinel (deterministic +1 every gather)
+            lock_id: 0,  // work-item 211: gather nodes don't source a lockId this slice
+        });
+    ctx.db.game_gameobject().insert(GameObject {
+        guid: GO_HIGH | 3,
+        template_entry: 50102,
+        map_id: hw::MAP_ID,
+        x: hw::X + 6.0,
+        y: hw::Y,
+        z: hw::Z,
+        orientation: 0.0,
+        state: 0,
+        created_at: ctx.timestamp,
+        respawn_at_micros: 0, // a freshly-seeded node is ready (no pending respawn)
+        instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
+        grid_x: lyracore_shared::spatial::grid_cell(hw::X + 6.0, hw::Y).0,
+        grid_y: lyracore_shared::spatial::grid_cell(hw::X + 6.0, hw::Y).1,
+    });
+    ctx.db
+        .game_gameobject_template()
+        .insert(GameObjectTemplate {
+            entry: 50103,
+            type_id: crate::gameobject::go_type::GATHER,
+            display_id: 259, // placeholder model
+            name: "Peacebloom".to_string(),
+            data0: 2447, // grants Peacebloom (real imported herb)
+            data1: 1,    // required Herbalism skill level (also the "orange" skill-up floor)
+            gather_skill_line: crate::skill::skill_line::HERBALISM, // 182
+            respawn_secs: 0, // 0 ⇒ the 3-min RESPAWN_WINDOW_MICROS fallback
+            gather_gray: 0, // 0 ⇒ the always-skill sentinel (deterministic +1 every gather)
+            lock_id: 0,  // work-item 211: gather nodes don't source a lockId this slice
+        });
+    ctx.db.game_gameobject().insert(GameObject {
+        guid: GO_HIGH | 4,
+        template_entry: 50103,
+        map_id: hw::MAP_ID,
+        x: hw::X + 7.0,
+        y: hw::Y,
+        z: hw::Z,
+        orientation: 0.0,
+        state: 0,
+        created_at: ctx.timestamp,
+        respawn_at_micros: 0, // a freshly-seeded node is ready (no pending respawn)
+        instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
+        grid_x: lyracore_shared::spatial::grid_cell(hw::X + 7.0, hw::Y).0,
+        grid_y: lyracore_shared::spatial::grid_cell(hw::X + 7.0, hw::Y).1,
+    });
+
+    // --- TIER-VARIETY DEMONSTRATOR (gather multinodes): an IN-PLACE Copper point that ~15% of the time
+    // presents Tin instead — the authentic cmangos "multinodes subzone" pattern ("a node might spawn a
+    // higher tier"). ONE pool, max_active 1, with TWO CO-LOCATED members (identical x,y,z) of
+    // differing TIERS: Copper Vein (1731, item Copper Ore 2770, Mining req 1, weight 85) and Tin Vein
+    // (1732, item Tin Ore 2771, Mining req 65, weight 15). `arm_pool` weighted-picks one → spawns that tier
+    // here; on gather the point flips+arms its timer and pass_gameobject_respawn weighted-RE-ROLLS the tier
+    // IN PLACE (co-located ⇒ no wander, repeats allowed ⇒ Copper recurs). A low char (Mining < 65) is
+    // skill-gated off a rolled Tin by the existing `can_gather` — the "richer node you can't tap yet" tease.
+    // REAL entries 1731/1732 (NOT the synthetic 50102 Copper Vein above): both type 25 GATHER, line 186
+    // MINING. INIT-ONLY (the live pool/member rows are made here + arm); a re-import (`DELETE FROM
+    // game_gameobject_pool WHERE pool_id > 0`) wipes this pool, so on the live/imported DB it is re-seeded
+    // post-import via `debug_setup_gather_pool 2 1 true ...`. pool_id 2
+    // is distinct from the debug pool (1) and the importer's roaming base (1000). Ensure the two tier
+    // templates exist first (idempotent — the bare seed lacks them; the ETL also loads them).
+    for (e, name, item, req) in [
+        (1731u32, "Copper Vein", 2770u32, 1u32),
+        (1732u32, "Tin Vein", 2771u32, 65u32),
+    ] {
+        if ctx.db.game_gameobject_template().entry().find(e).is_none() {
+            ctx.db
+                .game_gameobject_template()
+                .insert(GameObjectTemplate {
+                    entry: e,
+                    type_id: crate::gameobject::go_type::GATHER,
+                    display_id: 259, // placeholder model (ships in 5875); the importer carries the real one
+                    name: name.to_string(),
+                    data0: item, // the granted ore (real imported item)
+                    data1: req, // required Mining level (Copper 1 / Tin 65 — the skill-gate teaser)
+                    gather_skill_line: crate::skill::skill_line::MINING, // 186
+                    respawn_secs: 300, // real vanilla mining-node window (5 min); reroll fires at timer-fire
+                    gather_gray: 0,    // always-skill sentinel (deterministic +1 every gather)
+                    lock_id: 0, // work-item 211: gather nodes don't source a lockId this slice
+                });
+        }
+    }
+    const TIER_POOL_ID: u32 = 2;
+    ctx.db.game_gameobject_pool().insert(GameObjectPool {
+        pool_id: TIER_POOL_ID,
+        max_active: 1,  // one live node at the point at a time
+        in_place: true, // IN-PLACE tier re-roll (NOT a roaming pool) — gather re-rolls the tier here
+    });
+    // Two CO-LOCATED members (identical x,y,z,o) — they differ ONLY in template_entry/weight, so the
+    // weighted roll changes the TIER, never the position. Real Goldshire-area Copper coord, hand-placed.
+    for (entry, weight) in [(1731u32, 85u32), (1732u32, 15u32)] {
+        ctx.db
+            .game_gameobject_pool_member()
+            .insert(GameObjectPoolMember {
+                point_id: 0, // auto_inc
+                pool_id: TIER_POOL_ID,
+                template_entry: entry,
+                map_id: hw::MAP_ID,
+                x: -9620.11,
+                y: -46.3336,
+                z: 47.3641,
+                orientation: 2.04204,
+                weight,
+            });
+    }
+    // ARM: insert exactly max_active (1) weighted-distinct live rows → a rolled tier is live from init.
+    crate::gameobject::arm_pool(ctx, TIER_POOL_ID);
+
+    // --- Spell registry: hand-authored `game_spell` headers + `game_spell_effect` rows (the
+    // data-driven effect-row engine). Each spell = a header + 1..3 effect rows; effect.id is the
+    // DETERMINISTIC (spell_id<<2)|effect_index. Source of truth for fresh installs; an auto-migrate
+    // publish keeps the tables, so the main thread SQL-seeds these rows. (Licensing firewall: curated,
+    // never bulk-imported; the Spell.dbc importer is a later workstream.) Two local closures keep the
+    // 18/17-field literals from drowning the seed — most columns are defaults (0/false/0.0).
+    let spell = |spell_id: u32,
+                 name: &str,
+                 power_type: u8,
+                 cost: u32,
+                 cast_time_ms: u32,
+                 range_yd: u32,
+                 duration_ms: u32,
+                 school_mask: u8,
+                 dispel_type: u8,
+                 is_negative: bool,
+                 max_stacks: u8| {
+        ctx.db.game_spell().insert(Spell {
+            spell_id,
+            name: name.to_string(),
+            power_type,
+            cost,
+            cast_time_ms,
+            gcd_ms: 1500,
+            family_name: 0,
+            family_flags: 0,
+            cooldown_ms: 0,
+            range_yd,
+            duration_ms,
+            school_mask,
+            dispel_type,
+            mechanic: 0,
+            max_stacks,
+            aura_interrupt: 0,
+            attributes: 0,
+            spell_level: 0,
+            max_level: 0,
+            is_negative,
+            cast_flags: 0,
+            stances: 0, // seeded spells have no stance requirement (usable in any stance)
+        });
+    };
+    let effect = |spell_id: u32,
+                  idx: u8,
+                  kind: u8,
+                  base_points: i32,
+                  period_ms: u32,
+                  target: u8,
+                  p0: i32,
+                  p0_kind: u8| {
+        ctx.db.game_spell_effect().insert(SpellEffect {
+            id: ((spell_id as u64) << 2) | idx as u64,
+            spell_id,
+            effect_index: idx,
+            kind,
+            base_points,
+            die_sides: 0,
+            per_level: 0.0,
+            period_ms,
+            target,
+            radius_yd: 0.0,
+            chain_targets: 0,
+            trigger_spell: 0,
+            effect_mechanic: 0,
+            p0,
+            p0_kind,
+            p1: 0,
+            script_id: 0,
+            enters_combat: false,
+        });
+    };
+    // kind: 0x01 E_DAMAGE, 0x02 E_HEAL, 0x04 E_DISPEL; 0x90 A_PERIODIC_DAMAGE, 0x91 A_PERIODIC_HEAL,
+    // 0xA3 A_MOD_COMBAT, 0xBE A_FLAG. target: 0 T_SELF, 1 T_TARGET_ENEMY, 2 T_TARGET_ALLY, 3 T_TARGET_ANY.
+    // p0_kind: 5 P_COMBAT_FIELD, 7 P_FLAG. p0 for A_MOD_COMBAT = 0 COMBAT_ATTACK_POWER.
+    spell(
+        constants::tracer_spell::SPELL_ID,
+        "Battle Shout",
+        1,
+        0,
+        0,
+        0,
+        30000,
+        1,
+        0,
+        false,
+        1,
+    );
+    effect(constants::tracer_spell::SPELL_ID, 0, 0xA3, 30, 0, 0, 0, 5); // +30 AP self-buff
+                                                                        // Rend (Warrior rank 1, spell 772) — a physical BLEED: costs 10 RAGE (exercises the cost gate)
+                                                                        // and applies a 21s DoT (7 dmg / 3s) to an enemy via the A_PERIODIC_DAMAGE engine. Physical
+                                                                        // school (1) → no magic resist, so the bleed ignores armor, exactly like vanilla. Melee range
+                                                                        // (5yd), instant, non-dispellable (bleeds).
+    spell(772, "Rend", 1, 10, 0, 5, 21000, 1, 0, true, 0);
+    effect(772, 0, 0x90, 7, 3000, 1, 0, 0); // bleed 7 dmg / 3s on the target enemy (T_TARGET_ENEMY)
+    spell(2050, "Lesser Heal", 0, 30, 1500, 40, 0, 2, 0, false, 0);
+    effect(2050, 0, 0x02, 50, 0, 0, 0, 0); // heal self 50
+    spell(133, "Fireball", 0, 0, 0, 30, 0, 4, 0, false, 0);
+    effect(133, 0, 0x01, 20, 0, 1, 0, 0); // 20 fire dmg to an enemy (lethal -> kill_creature)
+    spell(
+        11196,
+        "Recently Bandaged",
+        0,
+        0,
+        0,
+        30,
+        60000,
+        0,
+        0,
+        true,
+        0,
+    );
+    effect(11196, 0, 0xBE, 0, 0, 3, 0, 7); // a flag debuff aura on the target
+    spell(980, "Curse of Agony", 0, 0, 0, 30, 24000, 32, 2, true, 0);
+    effect(980, 0, 0x90, 5, 1000, 1, 0, 0); // DoT 5/1s on an enemy
+    spell(139, "Renew", 0, 0, 0, 40, 15000, 2, 1, false, 0);
+    effect(139, 0, 0x91, 8, 1000, 2, 0, 0); // HoT 8/1s on an ally
+    spell(527, "Dispel Magic", 0, 0, 0, 30, 0, 1, 0, false, 0);
+    effect(527, 0, 0x04, 0, 0, 3, 0, 0); // strip debuffs off the target
+                                         // Mark of the Wild (1126) — a MULTI-EFFECT buff: ONE spell, THREE ordered A_MOD_STAT (0xA0) effects
+                                         // (one cast → three typed aura snapshots, exercising the one→many effect list). Only the
+                                         // STR effect is CONSUMED today: it folds into effective Strength (combat::swing_range_ctx → a higher
+                                         // swing, server-verifiable via debug_compute_swing). The +AGI/+STA effects are typed aura rows STAGED
+                                         // for derive hooks that don't exist yet (AGI→dodge, STA→max-health) — present in data, inert in
+                                         // gameplay. Magnitudes are illustrative spike values (real rank-1 MotW is +3 to all five
+                                         // attributes); the importer supersedes these. p0_kind 1 = P_STAT_ID.
+    spell(
+        1126,
+        "Mark of the Wild",
+        0,
+        40,
+        0,
+        30,
+        3600000,
+        8,
+        1,
+        false,
+        1,
+    );
+    effect(1126, 0, 0xA0, 5, 0, 0, 0, 1); // +5 Strength (STAT_STR), self
+    effect(1126, 1, 0xA0, 5, 0, 0, 1, 1); // +5 Agility  (STAT_AGI), self
+    effect(1126, 2, 0xA0, 5, 0, 0, 2, 1); // +5 Stamina  (STAT_STA), self
+                                          // Inner Fire (588) — an ARMOR buff: a single A_MOD_RESISTANCE (0xA1) effect whose p0 is the school
+                                          // MASK with the armor bit (RESIST_ARMOR 0x01) set. Folds into effective armor (combat::effective_armor)
+                                          // so the buffed unit mitigates more physical damage — server-verifiable via debug_compute_swing's
+                                          // mitigation_pct. Amount is an illustrative spike value (real Inner Fire is small); p0_kind 2 = P_SCHOOL_MASK.
+    spell(588, "Inner Fire", 0, 30, 0, 0, 600000, 2, 1, false, 1);
+    effect(588, 0, 0xA1, 2000, 0, 0, 1, 2); // +2000 armor (RESIST_ARMOR mask), self
+
+    // Test Fire Ward (50030) — a MAGIC-resistance buff: a single A_MOD_RESISTANCE (0xA1) effect whose p0
+    // is the FIRE school MASK (4, p0_kind 2 P_SCHOOL_MASK), so it folds into fire-school resistance (NOT
+    // armor — bit 0 is masked out in apply_resistance). A fire-school E_DAMAGE spell (e.g. Fireball 133,
+    // school 4) reads it via resistance_bonus(.., 4) and reduces the hit by combat::resist_mitigation_pct.
+    // target 2 (T_TARGET_ALLY) so a debug cast can place it on any chosen unit; is_negative false (a ward).
+    spell(50030, "Test Fire Ward", 0, 0, 0, 30, 600000, 4, 0, false, 1);
+    effect(50030, 0, 0xA1, 6, 0, 2, 4, 2); // +6 fire resistance (FIRE mask 4), ally; p0_kind 2 = P_SCHOOL_MASK
+
+    // Combat Insight (50000) — a synthetic CRIT/HIT-rating buff: ONE spell, TWO ordered A_MOD_COMBAT
+    // (0xA3) effects whose p0 names the combat FIELD (COMBAT_CRIT 1 / COMBAT_HIT 2, p0_kind 5
+    // P_COMBAT_FIELD — the same shape as Battle Shout's COMBAT_ATTACK_POWER effect, just a different
+    // field). Both fold into the melee attack table (combat::effective_crit_bp/effective_miss_bp): the
+    // CRIT effect RAISES the crit band, the HIT effect REDUCES the miss band — server-verifiable via
+    // debug_compute_swing's crit_bp/hit_miss_bp. Magnitudes are illustrative spike values (+10% crit,
+    // +5% hit, in basis points). Unused spell id reserved for this combat-stat test buff.
+    spell(50000, "Combat Insight", 0, 0, 0, 0, 600000, 1, 0, false, 1);
+    effect(50000, 0, 0xA3, 1000, 0, 0, 1, 5); // +1000 crit (COMBAT_CRIT), self → +10% crit
+    effect(50000, 1, 0xA3, 500, 0, 0, 2, 5); // +500 hit (COMBAT_HIT), self → -5% miss
+
+    // Quickening (50010) — a synthetic melee-HASTE buff: ONE A_MOD_SPEED(0xA4) effect whose p0 names
+    // SPEED_SWING (1, p0_kind 6 P_SPEED_KIND); amount is the signed speed PERCENT. Folds into the swing
+    // timer (combat::effective_swing_time) so the unit attacks faster — server-verifiable via
+    // debug_compute_swing's attack_time_ms. +50% → a 2.0s swing becomes ~1.33s. A_MOD_SPEED is the ONE
+    // swing-speed model (the same convention the importer emits).
+    spell(50010, "Quickening", 0, 0, 0, 0, 600000, 1, 0, false, 1);
+    effect(50010, 0, 0xA4, 50, 0, 0, 1, 6); // +50% melee haste (A_MOD_SPEED, SPEED_SWING), self
+
+    // Test Snare (50011) — a synthetic move-SNARE debuff (Hamstring-shaped): ONE A_MOD_SPEED(0xA4) effect
+    // whose p0 names SPEED_MOVE (0, p0_kind 6 P_SPEED_KIND); amount is the signed speed PERCENT (negative =
+    // slower). Folds into combat::effective_move_speed so a snared CREATURE chases/returns/wanders slower
+    // (server-verifiable via its per-tick position delta). −40% → effective RUN 7.0→4.2 yd/s. target 1
+    // (T_TARGET_ENEMY) so a debug cast lands it on a mob; is_negative true. (Player snares additionally
+    // need a SMSG_FORCE_RUN_SPEED_CHANGE wire push — deferred; this governs server-driven movement.)
+    spell(50011, "Test Snare", 0, 0, 0, 30, 600000, 1, 0, true, 1);
+    effect(50011, 0, 0xA4, -40, 0, 1, 0, 6); // −40% move speed (A_MOD_SPEED, SPEED_MOVE), enemy
+
+    // Test Conjure (50050) — a CreateItem (conjure) fixture: ONE E_CREATE_ITEM (0x07) instant effect that
+    // mints `base_points` of item p0 into the CASTER's backpack (the same items::grant_item a quest reward
+    // uses). Self-target (0); p0 = 5349 "Conjured Muffin" (a REAL vanilla conjure item from the full
+    // item_template import), p0_kind = 8 P_ITEM_ENTRY, count = 2. Real Mage conjure /
+    // quest CreateItem spells import to this same kind and mint their real items the same way.
+    spell(50050, "Test Conjure", 0, 0, 0, 0, 0, 1, 0, false, 0);
+    effect(50050, 0, 0x07, 2, 0, 0, 5349, 8); // E_CREATE_ITEM: 2× item 5349 (Conjured Muffin), self
+
+    // Craft RECIPES are no longer seeded (work-item 282): they import from the real Spell.dbc with real
+    // reagents (game_spell_reagent) + skill-up bands (game_skill_ability), offered by the real in-box
+    // trainers. The old synthetic recipe spells here (2538 — which was even FABRICATED as "Roasted Boar
+    // Meat" when the real 2538 is "Charred Wolf Meat"; 50071; 50090-50097) are gone. Crafted-item ON-USE
+    // effects (50110-50118 below) stay — those are our alpha on-use behaviour for the real items the real
+    // recipes produce, with no DBC replacement yet.
+
+    // Mock-seed fixture kits (see seed/fixtures.rs for each kit's full rationale). Every kit is
+    // idempotent and shared with its `debug_seed_*` reducer twin: init does NOT re-run on an
+    // auto-migrate publish, so an already-migrated dev DB re-seeds via the debug reducer (same
+    // precedent as `talent::seed_talents`/`debug_seed_talents`).
+    seed_pw_shield_fixture(ctx); // Weakened Soul (6788) + Test PW:Shield (50072) — linked-debuff mechanic
+                                 // issue #85: the scenario-fixture items (Tempered Blade/Tough Jerky) + fixture faction 50900 land
+                                 // in fingerprinted catalogue tables (game_item_template/game_faction) — seed them here too, not
+                                 // only from debug_seed_scenario_fixtures, so every fresh shard agrees regardless of whether the
+                                 // wire-suite harness ever ran against it (see seed::fixtures::seed_fixture_catalogue's doc).
+    seed_fixture_catalogue(ctx);
+    seed_soul_shard_item(ctx); // Soul Shard item template (6265)
+    seed_drain_soul_fixture(ctx); // Drain Soul (1120) channel — soul-shard generation
+    seed_frost_armor_fixture(ctx); // Chilled (6136) + Frost Armor (168) — proc-on-being-hit-in-melee
+    seed_mana_burn_fixture(ctx); // Mana Burn (8129) — E_POWER_BURN drain-mana-into-damage
+    seed_demon_skin_fixture(ctx); // Demon Skin (696 rank 2) — combat-independent health-per-5 tick
+    seed_regen_fixture(ctx); // Test Regeneration (50137) — the combat-regen probe's kind-169 source
+                             // issue #85 audit: this one was previously reachable ONLY via `debug_seed_stealth_fixture` (never
+                             // from init), the same divergence-hazard shape #85 fixed for items/faction — see
+                             // `seed::fixtures::seed_stealth_fixture`'s doc.
+    seed_stealth_fixture(ctx); // Stealth (1784) — A_STEALTH presence marker
+
+    // Enchant / Disenchant — the ITEM-target enchanting spells. These never run through
+    // resolve_cast (they target an item GUID, not a unit); the GATEWAY intercepts CMSG_CAST_SPELL, reads
+    // these effect rows, resolves the item GUID→bag slot, and calls enchant_item_on_slot / disenchant_item.
+    // The effect row is the ROUTING CLASSIFIER: kind 0x17 E_ENCHANT_ITEM (p0 = enchant_id, p0_kind 10
+    // P_ENCHANT_ID — the gateway reads enchant_id off p0) / kind 0x18 E_DISENCHANT (no params). The enchant
+    // stat overlay (enchant_id→stat) lives in the module ENCHANTS table; disenchant reagents/skill in the
+    // disenchant reducer. A NEW enchant is a data row here (a new id + p0), ZERO gateway code. target 0 is
+    // inert (the gateway resolves the item from the cast packet, not the effect target).
+    spell(
+        50201,
+        "Enchant: Minor Strength",
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        false,
+        0,
+    );
+    effect(50201, 0, 0x17, 0, 0, 0, 7745, 10); // E_ENCHANT_ITEM: enchant_id 7745 (+3 STR), p0_kind P_ENCHANT_ID
+    spell(
+        50202,
+        "Enchant: Minor Stamina",
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        false,
+        0,
+    );
+    effect(50202, 0, 0x17, 0, 0, 0, 7748, 10); // E_ENCHANT_ITEM: enchant_id 7748 (+3 STA), p0_kind P_ENCHANT_ID
+    spell(13262, "Disenchant", 0, 0, 0, 0, 0, 0, 0, false, 0);
+    effect(13262, 0, 0x18, 0, 0, 0, 0, 0); // E_DISENCHANT: no params (module validates + yields dust by item)
+
+    // The BOMB'S ON-USE AoE (50096) — the crafted Rough Copper Bomb (real item 4360, made by the REAL
+    // engineering recipe now) casts this on use via USE_EFFECTS. A single E_DAMAGE effect with target
+    // T_AREA_ENEMY (4) → the cast engine fans the hit out to every in-radius hostile (aoe_keep /
+    // AOE_MAX_TARGETS); radius_yd 0 → the 8yd MELEE_PBAOE_RADIUS_YD splash. is_negative true, school 4.
+    // (Synthetic 50096 rather than the dump's real 4064 — 4064 isn't in our curated game_spell; swap the
+    // USE_EFFECTS mapping once it imports.) Note: the spell() closure defaults gcd_ms=1500 and the
+    // bomb KEEPS it (a thrown bomb shares the global cooldown, vanilla-correct) — do NOT "fix" this to 0.
+    spell(50096, "Rough Copper Bomb", 0, 0, 0, 0, 0, 4, 0, true, 0);
+    effect(50096, 0, 0x01, 15, 0, 4, 0, 0); // E_DAMAGE 15, T_AREA_ENEMY (4) → 8yd PBAoE fan-out
+
+    // --- CRAFTED-CONSUMABLE ON-USE SPELLS (the items::ops USE_EFFECTS map fires these via begin_cast when
+    // the matching consumable is USED — potion/bandage/food). All cost 0 / SELF / item-triggered (gcd_ms 0
+    // so an item use shares no GCD with the spell bar), INIT-ONLY (no Timestamp → SQL-seedable
+    // post-publish). Magnitudes are DATA placeholders (tune later). ---
+
+    // (1) Minor Healing (50110) — real item 118's on-use: an INSTANT (cast_time 0) self E_HEAL clamped to
+    // max by healed_value. school 2 (holy/neutral). base 80 = the vanilla Minor Healing midpoint (70-90;
+    // no die-roll plumbing on E_HEAL here, so a fixed 80).
+    spell(50110, "Minor Healing", 0, 0, 0, 0, 0, 2, 0, false, 0);
+    // item-triggered → NO spell GCD. The `spell` closure hardcodes gcd_ms=1500; potions/food must not trip
+    // the spell-bar GCD (the SQL seed already uses 0 — this keeps a fresh `-c` DB consistent with it).
+    if let Some(mut s) = ctx.db.game_spell().spell_id().find(50110u32) {
+        s.gcd_ms = 0;
+        ctx.db.game_spell().spell_id().update(s);
+    }
+    effect(50110, 0, 0x02, 80, 0, 0, 0, 0); // E_HEAL 80, T_SELF (id 200440)
+
+    // (2) Linen Bandage (50111) — real item 1251's on-use: a CHANNELED (SPELL_ATTR_CHANNELED 0x0080) HoT
+    // that ticks A_PERIODIC_HEAL 8/1s for 8s (= 64 ≈ vanilla's 66 total), breaking early on damage via
+    // aura_interrupt bit0 (break_auras_on_damage). A SECOND effect E_TRIGGERs the existing "Recently
+    // Bandaged" (11196) 60s debuff so the re-bandage gate (has_aura 11196) can block spam. The `spell`/
+    // `effect` closures can't set cast_flags/aura_interrupt/trigger_spell, so this one is a raw literal.
+    ctx.db.game_spell().insert(Spell {
+        spell_id: 50111,
+        family_name: 0,
+        family_flags: 0,
+        name: "Linen Bandage".to_string(),
+        power_type: 0,
+        cost: 0,
+        cast_time_ms: 0, // channeled: begin_cast resolves now on the CHANNELED bit, not a cast bar
+        gcd_ms: 0,       // item-triggered: no GCD
+        cooldown_ms: 0,
+        range_yd: 0,       // self
+        duration_ms: 8000, // 8s channel (vanilla Linen Bandage) → 8 ticks at 1s
+        school_mask: 2,    // holy/neutral
+        dispel_type: 0,
+        mechanic: 0,
+        max_stacks: 0,
+        aura_interrupt: 1, // bit0 BREAK_ON_DAMAGE → the HoT drops when the bandaged unit takes damage
+        attributes: 0,
+        spell_level: 0,
+        max_level: 0,
+        is_negative: false,
+        cast_flags: crate::spell::SPELL_ATTR_CHANNELED, // 0x0080 — begin_cast routes the channel branch
+        stances: 0,
+    });
+    effect(50111, 0, 0x91, 8, 1000, 0, 0, 0); // A_PERIODIC_HEAL 8/1s ×8 = 64 total, T_SELF (id 200444)
+                                              // eff1: E_TRIGGER (0x05) the Recently-Bandaged debuff (11196) on SELF — the closure can't set
+                                              // trigger_spell, so a raw literal. id = (50111<<2)|1 = 200445.
+    ctx.db.game_spell_effect().insert(SpellEffect {
+        id: ((50111u64) << 2) | 1,
+        spell_id: 50111,
+        effect_index: 1,
+        kind: 0x05, // E_TRIGGER
+        base_points: 0,
+        die_sides: 0,
+        per_level: 0.0,
+        period_ms: 0,
+        target: 0, // T_SELF (the trigger re-casts at the same — self — target)
+        radius_yd: 0.0,
+        chain_targets: 0,
+        trigger_spell: 11196, // existing "Recently Bandaged" 60s A_FLAG debuff (re-bandage gate keys on it)
+        effect_mechanic: 0,
+        p0: 0,
+        p0_kind: 0,
+        p1: 0,
+        script_id: 0,
+        enters_combat: false,
+    });
+
+    // (3) Roasted Boar Meat (real item 2681) is a level-1 food: it EATS to heal (the vital-restore
+    // branch), with deliberately NO on-use spell — the Well-Fed stat buff is a higher-level-food
+    // mechanic, and granting it on a level-1 food would be non-vanilla (the 5875 client would show
+    // an aura the real item never grants).
+
+    // === CONSUMABLE BREADTH (1-10 alpha) — mana potion / drink / over-time food / Well-Fed Cooking buff +
+    // the cheap rank-2 potion/bandage. ALL data-only on the existing effect engine (no new engine code).
+    // Real vanilla items (USE_EFFECTS in items::ops) cast these via begin_cast; real restore/heal/buff
+    // magnitudes, hand-authored to match. The 50113-50118 on-use block + the Well-Fed
+    // Cooking recipe 50097. All on-use spells CLEAR gcd_ms to 0 (item use must not lock the spell bar);
+    // the 50097 CRAFT keeps the closure's 1500 (a craft shares the GCD, like 2538). Do NOT reuse spell id
+    // 50112 — it is a retired id, previously actively deleted by a since-removed seed script; still
+    // reserved. ---
+
+    // (The Spiced Wolf Meat recipe 50097 was removed with the other synthetic recipes, 282 — its product
+    // item 2680 now comes from the real cooking recipe; its Well-Fed on-use 50116 stays below.)
+
+    // (1) Minor Mana Potion 50113 — instant self mana restore (real item 2455). E_ENERGIZE 160 (Restore
+    // Mana 437 = 140-180, midpoint). p0=0 MANA, p0_kind 4 P_POWER_TYPE. MANA-class-gated in apply_item_use.
+    spell(50113, "Minor Mana Potion", 0, 0, 0, 0, 0, 0, 0, false, 0);
+    if let Some(mut s) = ctx.db.game_spell().spell_id().find(50113u32) {
+        s.gcd_ms = 0;
+        ctx.db.game_spell().spell_id().update(s);
+    }
+    effect(50113, 0, 0x03, 160, 0, 0, 0, 4); // E_ENERGIZE 160 (p0=0 MANA, p0_kind 4 P_POWER_TYPE), T_SELF (id 200452)
+
+    // (2) Refreshing Water 50114 — 30s mana-over-time DRINK (real items 159/5350). A_PERIODIC_ENERGIZE 41
+    // mana/5s ×6 = 246 over 30s (Drink 430 base 41). MANA-class-gated. p0=0 MANA, p0_kind 4 P_POWER_TYPE.
+    spell(50114, "Refreshing Water", 0, 0, 0, 0, 30000, 0, 0, false, 0);
+    if let Some(mut s) = ctx.db.game_spell().spell_id().find(50114u32) {
+        s.gcd_ms = 0;
+        ctx.db.game_spell().spell_id().update(s);
+    }
+    effect(50114, 0, 0x92, 41, 5000, 0, 0, 4); // A_PERIODIC_ENERGIZE 41 mana/5s ×6 = 246 (p0=0 MANA), T_SELF (id 200456)
+
+    // (3) Eating 50115 — 30s health-over-time FOOD (real items 4540/117). A_PERIODIC_HEAL 16/5s ×6 = 96 over
+    // 30s (Food 433 base 16). Clamped to max_health each tick. (KEEP legacy 2681 eat-heal untouched.)
+    spell(50115, "Eating", 0, 0, 0, 0, 30000, 0, 0, false, 0);
+    if let Some(mut s) = ctx.db.game_spell().spell_id().find(50115u32) {
+        s.gcd_ms = 0;
+        ctx.db.game_spell().spell_id().update(s);
+    }
+    effect(50115, 0, 0x91, 16, 5000, 0, 0, 0); // A_PERIODIC_HEAL 16/5s ×6 = 96 over 30s, T_SELF (id 200460)
+
+    // (4) Well Fed 50116 — the Cooking payoff buff on Spiced Wolf Meat (real item 2680, product of recipe
+    // 50097). REAL value: 2680's on-use is spell 5004, which periodic-triggers 19705 "Well Fed" =
+    // MOD_STAT +2 Stamina + +2 Spirit, 15-min (DurationIndex 347 = 900000 ms). We apply the +2/+2 directly as
+    // the 15-min aura (skipping the periodic-trigger indirection — same net buff). +STA grows max HP (live via
+    // recompute_vitals on apply); +SPI is summed by stat_bonus but inert (no Spirit consumer yet).
+    spell(50116, "Well Fed", 0, 0, 0, 0, 900000, 0, 0, false, 1);
+    if let Some(mut s) = ctx.db.game_spell().spell_id().find(50116u32) {
+        s.gcd_ms = 0;
+        ctx.db.game_spell().spell_id().update(s);
+    }
+    effect(50116, 0, 0xA0, 2, 0, 0, 2, 1); // +2 Stamina (STAT_STA), T_SELF (id 200464)
+    effect(50116, 1, 0xA0, 2, 0, 0, 4, 1); // +2 Spirit  (STAT_SPI), T_SELF (id 200465)
+
+    // (5a) Lesser Healing 50117 — instant rank-2 health potion (real item 858). E_HEAL 160 (Healing Potion
+    // 440 = 140-180, midpoint), clamped to max by healed_value. Rank-2 of the existing 118/50110.
+    spell(50117, "Lesser Healing", 0, 0, 0, 0, 0, 2, 0, false, 0);
+    if let Some(mut s) = ctx.db.game_spell().spell_id().find(50117u32) {
+        s.gcd_ms = 0;
+        ctx.db.game_spell().spell_id().update(s);
+    }
+    effect(50117, 0, 0x02, 160, 0, 0, 0, 0); // E_HEAL 160, T_SELF (id 200468)
+
+    // (5b) Heavy Linen Bandage 50118 — channeled rank-2 bandage (real item 2581); raw literal (channeled +
+    // E_TRIGGER), mirroring 50111. A_PERIODIC_HEAL 18/1s ×8 = 144 over 8s (First Aid 1159 base 18), breaking
+    // early on damage (aura_interrupt bit0). eff1 E_TRIGGERs the SHARED 11196 "Recently Bandaged" cooldown
+    // (Gate B widens bandage_cooldown_blocks to 1251|2581 so both bandages share the lockout).
+    ctx.db.game_spell().insert(Spell {
+        spell_id: 50118,
+        name: "Heavy Linen Bandage".to_string(),
+        power_type: 0,
+        cost: 0,
+        family_name: 0,
+        family_flags: 0,
+        cast_time_ms: 0,
+        gcd_ms: 0,
+        cooldown_ms: 0,
+        range_yd: 0,
+        duration_ms: 8000,
+        school_mask: 2,
+        dispel_type: 0,
+        mechanic: 0,
+        max_stacks: 0,
+        aura_interrupt: 1,
+        attributes: 0,
+        spell_level: 0,
+        max_level: 0,
+        is_negative: false,
+        cast_flags: crate::spell::SPELL_ATTR_CHANNELED,
+        stances: 0,
+    });
+    effect(50118, 0, 0x91, 18, 1000, 0, 0, 0); // A_PERIODIC_HEAL 18/1s ×8 = 144 over 8s, T_SELF (id 200472)
+    ctx.db.game_spell_effect().insert(SpellEffect {
+        id: ((50118u64) << 2) | 1,
+        spell_id: 50118,
+        effect_index: 1,
+        kind: 0x05, // E_TRIGGER
+        base_points: 0,
+        die_sides: 0,
+        per_level: 0.0,
+        period_ms: 0,
+        target: 0,
+        radius_yd: 0.0,
+        chain_targets: 0,
+        trigger_spell: 11196,
+        effect_mechanic: 0,
+        p0: 0,
+        p0_kind: 0,
+        p1: 0,
+        script_id: 0,
+        enters_combat: false,
+    }); // id 200473
+
+    // Test Stun (50020) — the STUN crowd-control: ONE A_CONTROL (0xB0) effect whose p0 names the
+    // MECHANIC M_STUN (1, p0_kind 3 P_MECHANIC), targeting an ENEMY (target 1 T_TARGET_ENEMY). A unit
+    // carrying this aura can neither SWING (combat::tick_melee's swing gate) nor ACT/MOVE in creature
+    // AI (every tick_creatures pass gates on `is_stunned`/`is_movement_blocked`). duration 600000 (10
+    // min) so a forced cast holds long enough to observe across many ticks. is_negative true (a
+    // debuff). Magnitude (base_points) is unused by A_CONTROL — the mechanic lives in p0; kept 0.
+    spell(50020, "Test Stun", 0, 0, 0, 30, 600000, 1, 0, true, 1);
+    effect(50020, 0, 0xB0, 0, 0, 1, 1, 3); // A_CONTROL, p0 = M_STUN (1), p0_kind = P_MECHANIC (3), enemy
+
+    // Test Root (50021) — the ROOT crowd-control: ONE A_CONTROL (0xB0) effect whose p0 names the
+    // MECHANIC M_ROOT (2, p0_kind 3 P_MECHANIC), targeting an ENEMY. A unit carrying this aura cannot
+    // MOVE (the creature MOVEMENT passes gate on `is_movement_blocked`) but CAN still act — it keeps
+    // SWINGING (the swing gate is `is_stunned` only, which root does not trip) and a rooted creature
+    // still aggroes/casts. duration 600000; is_negative true. p0 carries the mechanic; base_points 0.
+    spell(50021, "Test Root", 0, 0, 0, 30, 600000, 1, 0, true, 1);
+    effect(50021, 0, 0xB0, 0, 0, 1, 2, 3); // A_CONTROL, p0 = M_ROOT (2), p0_kind = P_MECHANIC (3), enemy
+
+    // Test Fear (50022) — the FEAR crowd-control: ONE A_CONTROL (0xB0) effect whose p0 names the MECHANIC
+    // M_FEAR (3, p0_kind 3 P_MECHANIC), targeting an ENEMY. A feared unit cannot ACT (no swing/cast — the
+    // ACTION gates fold fear in) and is force-walked AWAY from the caster by the fear-flee pass each tick
+    // ("flees in terror"); it stays engaged so it resumes attacking when the aura ends. SHORT 8s duration
+    // (≈2 ticks, like Warlock Fear) — bounded so the test subject doesn't run off the map. aura_interrupt
+    // stays 0: base fear does NOT break on damage (unlike polymorph). is_negative true.
+    spell(50022, "Test Fear", 0, 0, 0, 30, 8000, 1, 0, true, 1);
+    effect(50022, 0, 0xB0, 0, 0, 1, 3, 3); // A_CONTROL, p0 = M_FEAR (3), p0_kind = P_MECHANIC (3), enemy
+
+    // Test Poly (50023, work-item 192) — the POLYMORPH crowd-control: ONE A_CONTROL (0xB0) effect whose p0
+    // names the MECHANIC M_POLY (4, p0_kind 3 P_MECHANIC), targeting an ENEMY. `is_incapacitated` gates
+    // stun/poly identically (no act, no move) — this fixture exists so CC DIMINISHING RETURNS has a real,
+    // debug-castable spell to drive the live-probe runbook (two poly casts on a player target 15s apart or
+    // less land at 100/50/25/0%; the same double-cast on a CREATURE target is always full duration — see
+    // `spell::stacking`'s DR resolver + the work-item's completion note). 10s duration matches the
+    // pure-fn DR test vector's base duration exactly (10s → 5s → 2.5s at levels 1/2/3). is_negative true.
+    spell(50023, "Test Poly", 0, 0, 0, 30, 10000, 1, 0, true, 1);
+    effect(50023, 0, 0xB0, 0, 0, 1, 4, 3); // A_CONTROL, p0 = M_POLY (4), p0_kind = P_MECHANIC (3), enemy
+
+    // (Break-on-damage test fixture — a stun spell with aura_interrupt bit 0 — is SQL-inserted in the
+    // live test, not seeded here: the `spell(...)` closure hard-codes aura_interrupt 0 and the break path
+    // works for ANY spell carrying the flag, so no permanent fixture is needed.)
+
+    // Test Stun Immunity (50040) — CC IMMUNITY: ONE A_IMMUNITY (0xB1) aura whose p0 names the MECHANIC
+    // M_STUN (1, p0_kind 3 P_MECHANIC). While a unit carries this aura, an incoming A_CONTROL(M_STUN)
+    // effect is REFUSED in apply_effect (no stun aura is placed → `is_stunned` stays false). target 2
+    // (T_TARGET_ALLY) so a debug cast can place it on any chosen unit; duration 600000; is_negative false
+    // (a protective buff). base_points unused (immunity carries no magnitude). Mirrors the Inner Fire /
+    // Fire Ward A_* aura-seed shape; verifies the CC-immunity gate.
+    spell(
+        50040,
+        "Test Stun Immunity",
+        0,
+        0,
+        0,
+        30,
+        600000,
+        1,
+        0,
+        false,
+        1,
+    );
+    effect(50040, 0, 0xB1, 0, 0, 2, 1, 3); // A_IMMUNITY, p0 = M_STUN (1), p0_kind = P_MECHANIC (3), ally
+
+    // Taunt (355) — the THREAT-yank: ONE E_TAUNT (0x06) instant effect targeting an ENEMY. It tops the
+    // caster's threat on the target creature to one above the table max, so the next threat-retarget pass
+    // (tick_creatures) switches the creature onto the taunter regardless of who out-damaged whom — the
+    // classic tank tool. No duration/aura (the topped threat persists in the table); is_negative true.
+    // base_points 0 (E_TAUNT ignores magnitude — the effect is "set threat to top"). 30 yd so a debug
+    // cast from the player reaches a nearby creature; 0 cost for frictionless verification.
+    spell(355, "Taunt", 1, 0, 0, 30, 0, 1, 0, true, 0);
+    effect(355, 0, 0x06, 0, 0, 1, 0, 0); // E_TAUNT, target 1 (T_TARGET_ENEMY)
+
+    // Resurrection Sickness (15007) — the Spirit-Healer res penalty: a 10-min (600000 ms) all-stats
+    // debuff applied by `spirit_healer_res` (the graveyard res, vs the corpse run which has no penalty).
+    // ONE A_MOD_STAT (0xA0) effect, p0 = STAT_ALL (0xFF, p0_kind P_STAT_ID 1), negative amount → −10 to
+    // every attribute (the same one→all shape Mark of the Wild's three A_MOD_STAT effects use, folded
+    // through the existing stat path). is_negative true; self-target (0). (Vanilla also reduces
+    // damage/speed and scales with level; a flat −10 to all stats is the current approximation — the
+    // importer can supersede it with the real DBC effect later.)
+    spell(
+        15007,
+        "Resurrection Sickness",
+        0,
+        0,
+        0,
+        0,
+        600000,
+        0,
+        0,
+        true,
+        1,
+    );
+    effect(15007, 0, 0xA0, -10, 0, 0, 0xFF, 1); // −10 to ALL stats (STAT_ALL), self; p0_kind 1 P_STAT_ID
+
+    // Talents — the starter Warrior talent metadata + passive talent spells (reserved 51xxx
+    // ids, above the importer's vanilla range, never in a createinfo kit). Idempotent + shared with
+    // `debug_seed_talents` (init does NOT re-run on an auto-migrate publish, so the live DB re-seeds via that).
+    crate::talent::seed_talents(ctx);
+
+    // Stacking-group starter set (work-item 192) — hand-authored until 102's cmangos `spell_group` SQL
+    // dump lands wholesale. Idempotent + shared with `debug_seed_spell_groups`.
+    seed_spell_groups(ctx);
+
+    // Schedule the event reaper every 1s.
+    ctx.db
+        .game_event_reaper_schedule()
+        .insert(EventReaperSchedule {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(EVENT_TTL_MICROS)),
+        });
+
+    // Schedule the instance reaper (work-item 190 slice 3) every 60s — minutes-scale occupancy
+    // stamping + the 30min-empty / reset-requested reap. A live DB (auto-migrate publish) never
+    // re-runs init, so re-arm there via `debug_rearm_instance_reaper` (the
+    // `debug_rearm_creature_tick` precedent).
+    ctx.db
+        .game_instance_reaper_schedule()
+        .insert(crate::instance::InstanceReaperSchedule {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
+                crate::instance::INSTANCE_REAPER_INTERVAL_MICROS,
+            )),
+        });
+
+    // Schedule the creature movement tick every 0.5s (= ai::MOVE_TICK_MICROS). The movement passes run
+    // every tick (smooth, mangos-cadence motion); the O(N) sensing passes only every 8th tick (~4s) —
+    // see `tick_creatures`. A live DB (auto-migrate publish) keeps its old interval, so re-arm via the
+    // `debug_rearm_creature_tick` reducer (init does NOT re-run on a plain publish).
+    // Work-item 229: this seeded row is the GLOBAL/CATCH-ALL ticker (`GLOBAL_TICK_INSTANCE`) — it
+    // covers instance 0 AND every instance without a dedicated row of its own (load-bearing; never
+    // delete it). Dedicated per-instance rows are inserted by 190 slice 2's create_instance (or, until
+    // then, `debug_arm_instance_tick`).
+    ctx.db
+        .game_creature_move_schedule()
+        .insert(CreatureMoveSchedule {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(500_000)),
+            instance_id: crate::creatures::GLOBAL_TICK_INSTANCE,
+        });
+
+    // Schedule the melee swing tick every 100ms. The tick is the timing RESOLUTION for per-unit
+    // attack speeds: swings land on a 100ms boundary, so any 0.1s-granular weapon speed is
+    // exact. (Scaling note: a global 100ms poll over all engagements is fine at this scale; the
+    // event-driven alternative is a one-shot ScheduleAt::Time per swing.)
+    ctx.db.game_melee_schedule().insert(MeleeSchedule {
+        scheduled_id: 0,
+        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(100_000)),
+    });
+
+    // Aura-expiry tick every 1s (tracer): drops auras whose timer elapsed (mirrors the melee tick).
+    ctx.db.game_aura_schedule().insert(AuraSchedule {
+        scheduled_id: 0,
+        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(1_000_000)),
+    });
+
+    // Ground-AoE damage tick every 500ms (118): drives game_ground_area (Consecration/…). 500ms so a
+    // 1s/2s area period fires within ~½ tick of due. Areas gate on their own next_tick_micros.
+    ctx.db
+        .game_ground_area_schedule()
+        .insert(GroundAreaSchedule {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(500_000)),
+        });
+}
+
+// Test/mock-seed fixture kits (Test PW:Shield, scenario quest/vendor/trainer, …) live in their
+// own file; `init` and the `debug_seed_*` reducers reach them through this re-export, so callers
+// keep the `seed::seed_*_fixture` paths.
+mod fixtures;
+pub(crate) use fixtures::*;
+
+/// The createinfo starting kits — the spells a fresh character knows before any training, copied
+/// into `game_player_spell` at creation (`grant_createinfo_spells`). `race == 0` rows are class kits
+/// (any race), `class == 0` rows are racials (any class). Only-if-empty: operator edits and deletes
+/// stick across restarts. Values are the per-race/class vanilla starting-spell basics — spell ids
+/// are interop facts, covered by `docs/data-ingestion.md`'s "What the seeded fixture knowingly
+/// contains" carve-out. An id with no `game_spell` row shows in the client book (the client
+/// renders it from its own Spell.dbc) and casts as a graceful "unknown spell" Err until imported.
+pub(crate) fn seed_createinfo_spells(ctx: &ReducerContext) {
+    use crate::spell::spellbook::game_createinfo_spell;
+    let table = ctx.db.game_createinfo_spell();
+    if table.count() > 0 {
+        return;
+    }
+    for &(race, class, spell_id) in CREATEINFO_KIT {
+        table.insert(crate::spell::spellbook::CreateinfoSpell {
+            id: 0,
+            race,
+            class,
+            spell_id,
+        });
+    }
+}
+
+/// The stacking-group starter set (work-item 192) — hand-authored ahead of 102's cmangos `spell_group`/
+/// `spell_group_stack_rules` SQL dump, which will fill `game_spell_group`/`game_spell_group_rule`
+/// wholesale and supersede this. Idempotent (only-if-empty, mirroring `seed_createinfo_spells`); shared by
+/// `init` and `debug_seed_spell_groups` (init does NOT re-run on an auto-migrate publish).
+///
+/// Every spell id below is a REAL vanilla id (derived from public spell-rank knowledge, licensing
+/// firewall — no bulk DBC data, same posture as `CREATEINFO_KIT`). `game_spell_group` carries NO foreign
+/// key to `game_spell` (SpacetimeDB has none to enforce, and the group/rule tables are deliberately
+/// reference-only), so seeding an id this sandbox doesn't have a `game_spell` header for yet is HARMLESS —
+/// it simply never matches any live aura until the spell itself is imported (`aura_apply`'s
+/// `apply_group_conflict` looks members up by spell_id off the live `game_aura` rows, not the reverse).
+/// Only Mark of the Wild (1126), Battle Shout (`tracer_spell::SPELL_ID` = 6673), and the synthetic Well
+/// Fed (50116) are in today's curated kit; every other id here is dark until 102 lands real spell data —
+/// exactly the "seed ONLY ids that exist in our curated kit or are harmless if absent" rule.
+///
+/// Rule choice `[V]` (unverified against a live cmangos `spell_group_stack_rules` dump — flagged per the
+/// import-discipline convention): EVERY family below is EXCLUSIVE_STRONGER (rank/magnitude-gated, ANY
+/// caster) except Blessings, which is EXCLUSIVE_PER_CASTER (matches real vanilla: a paladin's own
+/// Blessing replaces their prior one; a DIFFERENT paladin's Blessing stands separately). This satisfies
+/// every verbatim test vector in the work item (Fortitude rank-vs-rank, Blessings per-caster, Sunder/
+/// Expose 5-stack) — see `spell::stacking`'s test module. Re-verify + relabel once 102's dump lands.
+pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {
+    use crate::spell::stacking::{
+        game_spell_group, game_spell_group_rule, SpellGroup, SpellGroupRule,
+        RULE_EXCLUSIVE_PER_CASTER, RULE_EXCLUSIVE_STRONGER,
+    };
+    let groups = ctx.db.game_spell_group();
+    if groups.count() > 0 {
+        return;
+    }
+    let rules = ctx.db.game_spell_group_rule();
+
+    // (group_id, rule, &[member spell_id, ...])
+    const GROUPS: &[(u32, u8, &[u32])] = &[
+        // 1: Mark of the Wild / Gift of the Wild (Druid stat buff family).
+        (
+            1,
+            RULE_EXCLUSIVE_STRONGER,
+            &[1126, 5232, 6756, 8907, 9884, 9885, 21849, 21850],
+        ),
+        // 2: Power Word: Fortitude / Prayer of Fortitude (Priest stamina buff family).
+        (
+            2,
+            RULE_EXCLUSIVE_STRONGER,
+            &[1243, 1244, 1245, 2791, 10937, 10938, 21562, 21564],
+        ),
+        // 3: Paladin Blessings — per-caster exclusive (a paladin's OWN blessing replaces their prior
+        // one; another paladin's stands separately). Might/Wisdom/Kings/Salvation/Sanctuary/Light.
+        (
+            3,
+            RULE_EXCLUSIVE_PER_CASTER,
+            &[19740, 19742, 20217, 1038, 20911, 19977],
+        ),
+        // 4: Battle Shout family (rank 1 = `tracer_spell::SPELL_ID`, IN the curated kit).
+        (
+            4,
+            RULE_EXCLUSIVE_STRONGER,
+            &[6673, 5242, 6192, 11549, 11550, 11551, 25289],
+        ),
+        // 5: Armor-debuff family (Sunder Armor / Expose Armor / Faerie Fire) — cross-spell, any caster.
+        (
+            5,
+            RULE_EXCLUSIVE_STRONGER,
+            &[
+                7386, 7405, 8380, 11596, 11597, 8647, 8649, 8650, 11197, 11198, 770, 778, 9749,
+                9907,
+            ],
+        ),
+        // 6: Intellect (Arcane Intellect / Arcane Brilliance).
+        (
+            6,
+            RULE_EXCLUSIVE_STRONGER,
+            &[1459, 1460, 1461, 10156, 10157, 23028],
+        ),
+        // 7: Spirit (Divine Spirit / Prayer of Spirit).
+        (
+            7,
+            RULE_EXCLUSIVE_STRONGER,
+            &[14752, 14818, 14819, 27841, 27681],
+        ),
+        // 8: Shadow Protection (single + Prayer of).
+        (8, RULE_EXCLUSIVE_STRONGER, &[976, 10957, 10958, 27683]),
+        // 9: Well Fed (food buff family) — only the synthetic 50116 exists in this sandbox today; the
+        // group exists so future real "well fed" tiers (Well Rested food buffs) join it without a schema
+        // change.
+        (9, RULE_EXCLUSIVE_STRONGER, &[50116]),
+    ];
+
+    for &(group_id, rule, members) in GROUPS {
+        rules.insert(SpellGroupRule { group_id, rule });
+        for &spell_id in members {
+            groups.insert(SpellGroup {
+                id: 0,
+                group_id,
+                spell_id,
+            });
+        }
+    }
+}
+
+/// `(race, class, spell_id)` rows; 0 = wildcard. Kits verified against classic-db
+/// `playercreateinfo_spell` (race=1); everything else a class owns is trainer-taught.
+pub(crate) const CREATEINFO_KIT: &[(u8, u8, u32)] = &[
+    // Warrior: Heroic Strike + Battle Stance.
+    (0, 1, 78),
+    (0, 1, 2457),
+    // Paladin: Holy Light + Seal of Righteousness (Devotion Aura/Judgement are trainer-taught).
+    (0, 2, 635),
+    (0, 2, 20154),
+    // Hunter: Auto Shot (ranged auto-attack) + Raptor Strike + Serpent Sting.
+    (0, 3, 75),
+    (0, 3, 2973),
+    (0, 3, 1978),
+    // Rogue: Sinister Strike + Eviscerate (Stealth is trainer-taught).
+    (0, 4, 1752),
+    (0, 4, 2098),
+    // Priest: Smite + Lesser Heal (PW:Fortitude/Inner Fire/Dispel Magic are trainer-taught).
+    (0, 5, 585),
+    (0, 5, 2050),
+    // Shaman: Lightning Bolt + Healing Wave + Earth Shock.
+    (0, 7, 403),
+    (0, 7, 331),
+    (0, 7, 8042),
+    // Mage: Fireball + Frost Armor (Frostbolt/Fire Blast are trainer-taught).
+    (0, 8, 133),
+    (0, 8, 168),
+    // Warlock: Shadow Bolt + Demon Skin (Immolate/Summon Imp are trainer-taught at L1).
+    (0, 9, 686),
+    (0, 9, 687),
+    // Druid: Mark of the Wild + Wrath + Moonfire + Healing Touch + Rejuvenation.
+    (0, 11, 1126),
+    (0, 11, 5176),
+    (0, 11, 8921),
+    (0, 11, 5185),
+    (0, 11, 774),
+    // Human racials: Sword Spec, The Human Spirit, Diplomacy, Perception, Mace Spec
+    // (non-Human racials land when those races do).
+    (1, 0, 20597),
+    (1, 0, 20598),
+    (1, 0, 20599),
+    (1, 0, 20600),
+    (1, 0, 20864),
+];
+
+// ===========================================================================================
+//  #223 — seed idempotence + fixture completeness.
+//
+//  `init` is a `#[reducer(init)]`: it runs ONCE per database and does NOT re-run on an
+//  auto-migrate publish. Everything it seeds is therefore either only-if-empty or an upsert, and
+//  is additionally reachable from a feature-gated `debug_seed_*` twin so a long-lived shard can be
+//  brought forward without a re-provision. Neither property is checkable at runtime here (no
+//  `ReducerContext` harness exists by design), so the DATA
+//  invariants are asserted directly and the two structural ones are pinned by a source scan
+//  through `test_scan::code_of`, which strips comments (a bare `.contains()` on an unstripped body
+//  is exactly what a trailing-comment needle defeats — issue #64).
+// ===========================================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The playable classes of vanilla 1.12.1. 6 (Death Knight) and 10 do not exist in this
+    /// expansion, which is why `CREATEINFO_KIT`'s class column skips them.
+    const VANILLA_CLASSES: &[u8] = &[1, 2, 3, 4, 5, 7, 8, 9, 11];
+
+    /// FIXTURE COMPLETENESS. A character created for a class with no kit arrives in the world with
+    /// an empty spellbook: no attack, no heal, nothing on the action bar, and no error anywhere —
+    /// the class is simply unplayable, and only a live login reveals it.
+    ///
+    /// This is the assertion that fires when a class becomes creatable before its kit is written.
+    #[test]
+    fn every_playable_vanilla_class_has_a_starting_kit() {
+        for &class in VANILLA_CLASSES {
+            let kit: Vec<u32> = CREATEINFO_KIT
+                .iter()
+                .filter(|(_, c, _)| *c == class)
+                .map(|(_, _, spell)| *spell)
+                .collect();
+            assert!(
+                kit.len() >= 2,
+                "class {class} starts with {} spell(s) {kit:?}. Every vanilla class begins with at \
+                 least an attack and one more ability; a class whose kit is missing or truncated \
+                 logs in with an empty spellbook and no error to say why",
+                kit.len()
+            );
+        }
+
+        // The other direction: no kit for a class this expansion does not have. Such rows are dead
+        // weight that nothing can ever grant, and they hide a typo in the class column.
+        for (race, class, spell) in CREATEINFO_KIT {
+            assert!(
+                *class == 0 || VANILLA_CLASSES.contains(class),
+                "kit row (race {race}, class {class}, spell {spell}) names a class that does not \
+                 exist in 1.12.1 — nothing can ever be granted from it"
+            );
+        }
+    }
+
+    /// The wildcard convention is `race == 0` = any race (a class kit) and `class == 0` = any class
+    /// (a racial). A row with BOTH zero would be granted to every character ever created, which is
+    /// never what a kit row means — and it is a plausible typo, because both columns are `u8` and
+    /// the two zeros look like the other's wildcard.
+    ///
+    /// Duplicates matter for the same reason: the seeder inserts every row unconditionally, so a
+    /// repeated triple puts the same spell in the book twice.
+    #[test]
+    fn the_starting_kit_rows_are_unique_and_never_wildcard_on_both_columns() {
+        let mut seen = std::collections::BTreeSet::new();
+        for row in CREATEINFO_KIT {
+            let (race, class, spell) = row;
+            assert!(
+                !(*race == 0 && *class == 0),
+                "kit row {row:?} is a wildcard on BOTH columns — it would be granted to every \
+                 character of every race and class"
+            );
+            assert_ne!(
+                *spell, 0,
+                "kit row {row:?} grants spell id 0, which is not a spell"
+            );
+            assert!(
+                seen.insert(*row),
+                "kit row {row:?} appears twice; the seeder inserts unconditionally, so the spell \
+                 lands in the starting spellbook twice"
+            );
+        }
+
+        // Human (race 1) is the only implemented race, so its racials must be present — the kit is
+        // otherwise silently all-class-and-no-race.
+        assert!(
+            CREATEINFO_KIT.iter().any(|(race, _, _)| *race == 1),
+            "no Human racials in the kit; every new character would be missing them with no error"
+        );
+    }
+
+    /// IDEMPOTENCE. Both spell seeders are only-if-empty: they return early when their table
+    /// already has rows, so re-running them (via the `debug_seed_*` twins, on a shard where `init`
+    /// long since ran) neither duplicates rows nor resurrects ones an operator deliberately
+    /// deleted. That second half is the one that has already gone wrong here once — a seeder that
+    /// unconditionally re-inserts silently undoes a live edit.
+    ///
+    /// The guard must come BEFORE the first write, which is the part a `.contains()` alone cannot
+    /// establish: a guard moved after the insert loop still contains the same text and protects
+    /// nothing. Positions are compared for exactly that reason.
+    #[test]
+    fn both_spell_seeders_still_return_early_before_writing_anything() {
+        let src = include_str!("seed.rs");
+        for (what, signature, table) in [
+            (
+                "the class/racial starting kit",
+                "pub(crate) fn seed_createinfo_spells(ctx: &ReducerContext) {",
+                "table",
+            ),
+            (
+                "the aura stacking groups",
+                "pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {",
+                "groups",
+            ),
+        ] {
+            let body = crate::test_scan::code_of(src, signature);
+            let guard = format!("if {table}.count() > 0 {{");
+            let guard_at = body.find(&guard).unwrap_or_else(|| {
+                panic!(
+                    "{what}'s only-if-empty guard `{guard}` is gone. Without it the seeder \
+                     re-inserts on every `debug_seed_*` re-run: rows are duplicated, and any row \
+                     an operator deleted on purpose comes back. Body was:\n{body}"
+                )
+            });
+            let return_at = body[guard_at..].find("return;").unwrap_or_else(|| {
+                panic!("{what}'s guard no longer returns early. Body was:\n{body}")
+            });
+            let insert_at = body.find(".insert(").unwrap_or_else(|| {
+                panic!(
+                    "{what} no longer inserts anything — this scan has lost its target rather \
+                     than passed it. Body was:\n{body}"
+                )
+            });
+            assert!(
+                guard_at + return_at < insert_at,
+                "{what}'s only-if-empty guard no longer precedes its first write, so it guards \
+                 nothing. Body was:\n{body}"
+            );
+        }
+    }
+
+    /// REACHABILITY, which is idempotence's other half. `init` does not re-run on an auto-migrate
+    /// publish, so a fixture reachable ONLY from `init` never lands on an already-provisioned
+    /// shard, and one reachable only from a `debug_seed_*` reducer never lands on a fresh one
+    /// unless a harness happens to call it. Both halves have gone wrong here: the comments in
+    /// `init` record `seed_stealth_fixture` having been debug-only (issue #85's audit) and
+    /// `seed_fixture_catalogue` being moved into `init` for exactly this reason.
+    ///
+    /// So: every fixture seeder must be called from at least one of the two, and the failure names
+    /// which one is stranded.
+    #[test]
+    fn every_fixture_seeder_is_reachable_from_init_or_from_a_debug_reducer() {
+        let fixtures_src = include_str!("seed/fixtures.rs");
+        let init_src = include_str!("seed.rs");
+        let debug_src = include_str!("debug.rs");
+
+        let seeders: Vec<&str> = fixtures_src
+            .lines()
+            .filter_map(|line| {
+                let rest = line.trim().strip_prefix("pub(crate) fn ")?;
+                let name = rest.split('(').next()?;
+                name.starts_with("seed_").then_some(name)
+            })
+            .collect();
+
+        assert!(
+            seeders.len() >= 8,
+            "found only {} fixture seeders in seed/fixtures.rs — the extraction scan has stopped \
+             matching and would pass vacuously. Did the declaration style change?",
+            seeders.len()
+        );
+
+        for name in seeders {
+            let call = format!("{name}(ctx)");
+            let from_init = init_src.contains(&call);
+            let from_debug = debug_src.contains(&call);
+            assert!(
+                from_init || from_debug,
+                "`{name}` is never called: not from `init` (so it never lands on a fresh shard) \
+                 and not from a `debug_*` reducer (so it can never be applied to an existing one). \
+                 A fixture nobody seeds is a test that silently stops testing anything."
+            );
+        }
+    }
+}

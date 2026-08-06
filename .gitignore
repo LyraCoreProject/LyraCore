@@ -1,0 +1,29 @@
+/target
+**/*.rs.bk
+
+# Local lifecycle state, logs, process ownership locks, and the pinned-tool caches: the `lyracore`
+# CLI (.lyracore/cli/<rev>/) and the wire harness (.lyracore/wire-harness/<sha>/, #246 — a checkout
+# of LyraCoreProject/wire-harness plus its own target/, which is why this must stay ignored).
+/.lyracore/
+
+# Operator-pulled third-party data (cmangos classic-db) + generated bundles — NEVER committed (licensing firewall)
+/.import/
+
+# Blizzard client data — extracted DBCs / MPQ archives are COPYRIGHTED and MUST NEVER be committed.
+# The importer parses the operator's own client MPQs IN MEMORY and emits only derived game_* values;
+# this is a backstop in case a stray extract is ever written to the tree (the code never writes one).
+**/*.dbc
+**/*.MPQ
+**/*.mpq
+DBFilesClient/
+
+# Runtime logs (gateway/wine stderr captured by the wow-mcp harness) — never committed.
+gateway/gateway-stderr.log
+*-stderr.log
+
+# Stray `cargo doc` output at repo root.
+/doc/
+
+# Heap-profiling output from the `dhat-heap` feature (work-item 292, Runbook C).
+dhat-heap.json
+__pycache__/

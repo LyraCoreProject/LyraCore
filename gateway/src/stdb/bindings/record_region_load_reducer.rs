@@ -1,0 +1,83 @@
+// HAND-AUTHORED (issue #78) — NOT a `spacetime generate` output. See the sibling
+// `record_shard_load_reducer.rs` header for why (`docs/danger-zones.md` §1.2's documented
+// exception). A future `spacetime generate` overwrites this file with byte-identical content;
+// nothing needs undoing.
+#![allow(unused, clippy::all)]
+use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
+
+#[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
+#[sats(crate = __lib)]
+pub(super) struct RecordRegionLoadArgs {
+    pub map_id: u32,
+    pub region_id: u32,
+    pub players: u32,
+}
+
+impl From<RecordRegionLoadArgs> for super::Reducer {
+    fn from(args: RecordRegionLoadArgs) -> Self {
+        Self::RecordRegionLoad {
+            map_id: args.map_id,
+            region_id: args.region_id,
+            players: args.players,
+        }
+    }
+}
+
+impl __sdk::InModule for RecordRegionLoadArgs {
+    type Module = super::RemoteModule;
+}
+
+#[allow(non_camel_case_types)]
+/// Extension trait for access to the reducer `record_region_load`.
+///
+/// Implemented for [`super::RemoteReducers`].
+pub trait record_region_load {
+    /// Request that the remote module invoke the reducer `record_region_load` to run as soon as possible.
+    ///
+    /// This method returns immediately, and errors only if we are unable to send the request.
+    /// The reducer will run asynchronously in the future,
+    ///  and this method provides no way to listen for its completion status.
+    /// /// Use [`record_region_load:record_region_load_then`] to run a callback after the reducer completes.
+    fn record_region_load(&self, map_id: u32, region_id: u32, players: u32) -> __sdk::Result<()> {
+        self.record_region_load_then(map_id, region_id, players, |_, _| {})
+    }
+
+    /// Request that the remote module invoke the reducer `record_region_load` to run as soon as possible,
+    /// registering `callback` to run when we are notified that the reducer completed.
+    ///
+    /// This method returns immediately, and errors only if we are unable to send the request.
+    /// The reducer will run asynchronously in the future,
+    ///  and its status can be observed with the `callback`.
+    fn record_region_load_then(
+        &self,
+        map_id: u32,
+        region_id: u32,
+        players: u32,
+
+        callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
+            + Send
+            + 'static,
+    ) -> __sdk::Result<()>;
+}
+
+impl record_region_load for super::RemoteReducers {
+    fn record_region_load_then(
+        &self,
+        map_id: u32,
+        region_id: u32,
+        players: u32,
+
+        callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
+            + Send
+            + 'static,
+    ) -> __sdk::Result<()> {
+        self.imp.invoke_reducer_with_callback(
+            RecordRegionLoadArgs {
+                map_id,
+                region_id,
+                players,
+            },
+            callback,
+        )
+    }
+}

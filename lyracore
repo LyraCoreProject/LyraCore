@@ -1,0 +1,50 @@
+#!/bin/sh
+# Entrypoint for the LyraCore development CLI, which lives in its own repository
+# (LyraCoreProject/lyracore-cli). This installs the exact revision pinned by this checkout in
+# .lyracore-cli-rev and runs it, so the CLI version is a property of the checkout rather than of
+# whatever happens to be on your PATH.
+#
+# To bump the CLI: put the new commit SHA in .lyracore-cli-rev and commit it.
+#
+# Deliberate simplification: the cache is a plain per-revision directory and the only concurrency
+# control is the lock `cargo install` already takes on its --root. Ceiling: two simultaneous
+# first-runs of the same new revision will both build it, wasting one build but not corrupting
+# anything. Upgrade path: a mkdir-based lock around the install, if that ever actually bites.
+set -eu
+
+fail() {
+    printf 'lyracore: %s\n' "$*" >&2
+    exit 1
+}
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P) || fail "cannot resolve the project root"
+pin=$root/.lyracore-cli-rev
+
+[ -f "$pin" ] || fail "missing $pin"
+IFS= read -r revision <"$pin" || fail "cannot read $pin"
+case $revision in
+    *[!0-9a-f]* | "") fail "$pin must hold one 40-character lowercase hex commit SHA" ;;
+esac
+[ "${#revision}" -eq 40 ] || fail "$pin must hold one 40-character lowercase hex commit SHA"
+
+command -v cargo >/dev/null 2>&1 || fail "cargo is required — install Rust from https://rustup.rs/"
+
+install_root=$root/.lyracore/cli/$revision
+binary=$install_root/bin/lyracore
+
+if [ ! -x "$binary" ]; then
+    printf 'lyracore: installing CLI %s (first run for this revision)\n' "$revision" >&2
+    # Anonymous HTTPS, because the CLI repository is public: cargo's own git fetcher needs no
+    # credentials, no SSH key and no CARGO_NET_GIT_FETCH_WITH_CLI escape hatch for a public https
+    # dependency. This URL was `ssh://git@github.com/...` while the repository was private — which a
+    # stranger who has just cloned has no key for, so the very first command after `git clone` failed
+    # on the fetch. Do not put it back (#302).
+    cargo install \
+        --git https://github.com/LyraCoreProject/lyracore-cli.git \
+        --rev "$revision" \
+        --locked \
+        --root "$install_root" \
+        || fail "could not install CLI revision $revision"
+fi
+
+exec "$binary" "$@"

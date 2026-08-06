@@ -1,0 +1,134 @@
+name: Bug report
+description: Something in the local development fixture does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, two things save everyone a round trip:
+
+        - **`docs/quickstart.md` §8** has one troubleshooting entry per known failure mode, keyed to
+          the exact message each one prints. Version mismatches, busy ports, `UNREACHABLE`
+          databases, "Unable to connect", and wrong-build clients are all in there.
+        - **Security problems do not go here.** Use the "Report a vulnerability" link in this repo's
+          Security tab (private advisory) — do not open a public issue.
+
+        Public/VPS hosting, Windows/WSL, non-5875 clients, and requests for game data are out of
+        scope for this alpha and will be closed as such (`SUPPORT.md` has the full list).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead. Paste the exact error text rather than paraphrasing it.
+      placeholder: |
+        `./lyracore dev up` reports the gateway healthy, but the client sits on "Connecting" and
+        gateway.log ends with ...
+    validations:
+      required: true
+
+  - type: input
+    id: step
+    attributes:
+      label: Which quickstart step were you on
+      description: The section of `docs/quickstart.md` you had reached, or the exact command you ran.
+      placeholder: "§3 Start the stack — ./lyracore dev up"
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`./lyracore doctor` output"
+      description: Run it from the checkout and paste the whole block. This is the single most useful thing in the report — it settles toolchain versions and port conflicts in one shot.
+      render: text
+      placeholder: |
+        $ ./lyracore doctor
+          ✓ project layout   /home/you/lyracore
+          ✓ Rust             1.93.0 (requires 1.93.0)
+          ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: status
+    attributes:
+      label: "`./lyracore dev status` output"
+      description: If the failure involves a running stack. It distinguishes a healthy-but-unpublished node, a foreign process on one of the ports, and your own stack.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: "`./lyracore dev logs gateway` or `./lyracore dev logs spacetime` (`.lyracore/logs/`). The last 20–30 lines around the failure, not the whole file."
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: From a fresh checkout if you can. A `dev down --forget` → `dev up` clean-retry result is worth a paragraph of description.
+      placeholder: |
+        1. git clone ... && cd lyracore
+        2. ./lyracore dev up
+        3. ./lyracore account create TEST
+        4. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Other (unsupported)
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: "`git rev-parse --short HEAD`, plus the tag or release if you are on one."
+      placeholder: "0403c73 (main)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: world
+    attributes:
+      label: Which world were you running
+      description: The seeded fixture is what CI and the maintainers run. A failure that only appears after your own import is a different, still-worth-filing, class of bug.
+      options:
+        - The seeded fixture (no import — the default)
+        - After running my own content import
+        - Not applicable
+    validations:
+      required: true
+
+  - type: dropdown
+    id: reach
+    attributes:
+      label: How was the stack reachable
+      options:
+        - Loopback (`./lyracore dev up`)
+        - Private LAN (`./lyracore dev up --lan <ip>`)
+        - Something else
+    validations:
+      required: true
+
+  - type: input
+    id: client
+    attributes:
+      label: Game client build, if a client was involved
+      description: The login screen shows it. It must read 5875 — other builds are unsupported and fail in protocol-shaped ways.
+      placeholder: "5875, unmodified"
+    validations:
+      required: false

@@ -1,0 +1,50 @@
+name: Documentation issue
+description: A document is wrong, stale, incomplete, or missing.
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Documentation defects are real defects here — a command that no longer works or a claim that
+        is no longer true costs a newcomer an evening. Small corrections are very welcome as a
+        direct pull request; you do not need to file this first.
+
+  - type: input
+    id: file
+    attributes:
+      label: Which document
+      description: Path and, if you can, the heading or line.
+      placeholder: "docs/quickstart.md §6 — Playing from another machine on your LAN"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of problem
+      options:
+        - A command or code sample does not work
+        - A statement is factually wrong about the current code
+        - Stale — it describes how things used to be
+        - Missing or unclear — I could not work out what to do
+        - A broken link or a wrong file path
+        - Typo / formatting
+    validations:
+      required: true
+
+  - type: textarea
+    id: detail
+    attributes:
+      label: What is wrong, and what would be right
+      description: If a command failed, paste what you ran and what it printed. If a claim is stale, point at the code or document that contradicts it — this project's docs cite file paths for their claims, so a correction can too.
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: "`git rev-parse --short HEAD`. Documentation moves; this pins what you read."
+      placeholder: "0403c73 (main)"
+    validations:
+      required: false

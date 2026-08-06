@@ -1,0 +1,14 @@
+# Blank issues stay enabled on purpose: the maintainers file most of the queue themselves, in a
+# fixed goal/scope/deliverables/acceptance-criteria shape that no form captures, and the forms above
+# are aimed at people reporting from the outside.
+blank_issues_enabled: true
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/LyraCoreProject/LyraCore/discussions
+    about: Setup help, "is this supposed to work like that", and ideas worth sanity-checking before code. Faster than an issue for anything you are not yet sure is a bug.
+  - name: Troubleshooting guide
+    url: https://github.com/LyraCoreProject/LyraCore/blob/main/docs/quickstart.md#8-troubleshooting
+    about: One entry per known failure mode, keyed to the exact message it prints. Check here first.
+  - name: Report a security vulnerability
+    url: https://github.com/LyraCoreProject/LyraCore/security/advisories/new
+    about: Private advisory thread. Do not report security problems in a public issue — several weaknesses are already known and accepted for this alpha's local-development-only posture, so check the advisory isn't a duplicate first.

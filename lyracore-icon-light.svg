@@ -1,0 +1,25 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LyraCore icon: the Lyra constellation with Vega as its core">
+  <defs>
+    <linearGradient id="line" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#0d9488"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="115" fill="#e9e4f8"/>
+  <g transform="translate(256 256) scale(1.18) translate(-256 -256)">
+    <g stroke="url(#line)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M 298 92 L 363 135 L 292 188 Z"/>
+      <path d="M 292 188 L 198 220 L 151 404 L 238 376 Z"/>
+    </g>
+    <g stroke="#e9e4f8" stroke-width="4">
+      <circle cx="298" cy="92"  r="7"  fill="#8b5cf6"/>
+      <circle cx="292" cy="188" r="9"  fill="#06b6d4"/>
+      <circle cx="198" cy="220" r="8"  fill="#8b5cf6"/>
+      <circle cx="151" cy="404" r="9"  fill="#14b8a6"/>
+      <circle cx="238" cy="376" r="10" fill="#06b6d4"/>
+    </g>
+  </g>
+  <circle cx="382" cy="113" r="52" fill="#1c1440"/>
+  <circle cx="382" cy="113" r="52" fill="none" stroke="#8b5cf6" stroke-width="3.5"/>
+  <path d="M 382 79 C 386 101 394 109 416 113 C 394 117 386 125 382 147 C 378 125 370 117 348 113 C 370 109 378 101 382 79 Z" fill="#f5f3ff"/>
+</svg>

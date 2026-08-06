@@ -1,0 +1,490 @@
+//! Class trainers — learn new spells/ranks while leveling (the leveling-spine system that lets the
+//! per-character spellbook GROW past the login class kit). Mirrors the vendor shape: a static
+//! `game_trainer_spell` list (trainer creature entry → teachable spells), a range/flag-gated buy that
+//! charges copper and calls [`crate::spell::learn_spell`], and a debug twin for server verification.
+//! The gateway turns `CMSG_TRAINER_LIST` into `SMSG_TRAINER_LIST` (each spell flagged Green/Red/Gray)
+//! and `CMSG_TRAINER_BUY_SPELL` into this reducer, then pushes `SMSG_LEARNED_SPELL` so the ability
+//! appears on the action bar live (no relog).
+//!
+//! Deliberate simplification: the `game_trainer_spell` row carries only spell_id/cost/required_level —
+//! class spells need no required_skill / prerequisite-spell chain (those are the profession/talent
+//! cases; add the columns when professions land). The SMSG_TRAINER_BUY_FAILED reason is best-effort:
+//! gtker vanilla's `TrainingFailureReason` has only Unavailable(0)/NotEnoughMoney(1)/NotEnoughSkill(2), so "already
+//! known" maps to Unavailable and "level too low" to NotEnoughSkill (cosmetic — the client pre-gates the
+//! Learn button on the Green state from the list). [entity]
+
+use spacetimedb::{reducer, table, ReducerContext};
+
+use crate::helpers::entity_by_owner;
+use crate::{game_player_skill, game_spell_chain, game_spell_effect, game_world_entity};
+
+/// Max distance to train at a trainer: (10 yd)² — same as the vendor/quest/loot interaction range. The
+/// client walks into range before sending `CMSG_TRAINER_BUY_SPELL`, so this only rejects out-of-range abuse.
+/// `pub(crate)` so `talent::do_reset_talents` (also a trainer-gated interaction) shares the ONE range
+/// constant rather than forking a second magic number that could drift from this one.
+pub(crate) const TRAINER_RANGE_SQ: f32 = 100.0;
+
+// Failure codes — chosen to equal gtker `TrainingFailureReason::as_int` so the gateway can forward them
+// verbatim into `SMSG_TRAINER_BUY_FAILED.error` (Unavailable=0, NotEnoughMoney=1, NotEnoughSkill=2).
+const FAIL_ALREADY_KNOWN: u32 = 0; // Unavailable — gtker has no AlreadyKnown variant
+const FAIL_NOT_ENOUGH_MONEY: u32 = 1;
+const FAIL_LEVEL_TOO_LOW: u32 = 2; // NotEnoughSkill — gtker has no LevelTooLow variant (closest "req not met")
+
+/// One spell a trainer teaches. Static, public, SQL-loadable (no Timestamp), keyed by the trainer's
+/// CREATURE TEMPLATE entry (every spawned trainer of that entry offers the same list — like vendors).
+/// Logical key `(trainer_entry, spell_id)` via the `#[auto_inc]` PK + `by_trainer` btree. [static]
+#[table(accessor = game_trainer_spell, public, index(accessor = by_trainer, btree(columns = [trainer_entry])))]
+pub struct TrainerSpell {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub trainer_entry: u32, // -> game_creature_template.entry (the trainer NPC's template)
+    pub spell_id: u32,      // the spell taught
+    pub cost: u32,          // copper charged on purchase
+    pub required_level: u8, // minimum character level to learn it
+    // END-APPENDED (professions slice 3), defaulted 0 → `publish` auto-migrates + every existing
+    // class-spell row reads 0 (the unchanged spell path). 0 = a normal spell offering; >0 = this
+    // offering TEACHES that skill_line as a profession (Cooking=185 / Skinning=393) — the buy branch
+    // grants the skill via `crate::skill::learn_profession` instead of casting/learning a spell. The
+    // `spell_id` of a profession offering is a synthetic marker id (50080/50081), never resolved.
+    // `#[default(0u32)]` (typed, not bare 0 — the last_logout_micros lesson) so the column-add
+    // auto-migrates the populated game_trainer_spell table instead of aborting the publish.
+    #[default(0u32)]
+    pub learn_skill_line: u32,
+    // END-APPENDED (professions slice — rank/cap scaling), defaulted **75** (Apprentice). An auto-migrated
+    // EXISTING profession offering learns at exactly the apprentice cap as before (byte-identical); a
+    // distinct higher-tier offering (Journeyman=150, Expert=225, Artisan=300) marker LIFTS the ceiling on
+    // buy. `#[default(75u32)]` (NOT 0 — a 0 cap would insert a 1/0 profession that can never climb). Only
+    // meaningful when `learn_skill_line > 0`; a class-spell row (line 0) ignores it.
+    #[default(75u32)]
+    pub learn_skill_cap: u32,
+}
+
+/// What a successful trainer purchase GRANTS (professions slice 3) — the pure decision the buy path acts on,
+/// split out so the spell-vs-profession routing is unit-testable without a `ReducerContext`. A
+/// `learn_skill_line > 0` offering teaches a profession SKILL (never a spell); a `0` offering learns a spell.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BuyGrant {
+    /// Teach a profession `(skill_line, cap)` (Cooking=185 / Skinning=393 at cap 75/150/…) →
+    /// `crate::skill::learn_profession`. The cap is the rank ceiling the buy lifts the skill to.
+    Profession(u32, u32),
+    /// Learn the resolved spell id (the LearnSpell wrapper's rank, or the spell itself) → `crate::spell::learn_spell`.
+    Spell(u32),
+}
+
+/// Route an offering to its grant: a flagged profession offering (`learn_skill_line > 0`) teaches that skill
+/// line at `cap` (the rank ceiling); an unflagged one (`0`) learns the resolved spell `to_learn`. Pure →
+/// unit-tested (the "learn-from-trainer adds the skill" assertion: a profession offering yields `Profession`,
+/// never `Spell`).
+pub(crate) fn grant_for(learn_skill_line: u32, cap: u32, to_learn: u32) -> BuyGrant {
+    if learn_skill_line != 0 {
+        BuyGrant::Profession(learn_skill_line, cap)
+    } else {
+        BuyGrant::Spell(to_learn)
+    }
+}
+
+/// Whether a profession offering at `cap` is ALREADY covered by the character's stored `max_rank` for
+/// that skill line (professions slice 3's rank/cap scaling) — the pure comparison the buy path's
+/// already-known gate keys on for a profession offering (a class-spell offering uses `knows_spell`
+/// instead). Extracted from `apply_trainer_buy` (pure code-motion). `None` (no `game_player_skill` row
+/// at all — never learned) is never capped. `stored_max_rank >= cap` is the boundary: exactly meeting
+/// the cap is already-known (rejected); one below it is not (the buy proceeds and lifts the ceiling).
+pub(crate) fn profession_already_capped(stored_max_rank: Option<u16>, cap: u32) -> bool {
+    stored_max_rank.is_some_and(|rank| rank as u32 >= cap)
+}
+
+/// Whether a rank purchase's `game_spell_chain` prerequisite is satisfied (work-item 102, reduced scope):
+/// `prev_spell == 0` — the family's first rank, or a spell with no chain concept at all — has no
+/// prerequisite, so it is ALWAYS allowed regardless of `knows_prev`. Otherwise the caster must already
+/// know `prev_spell` (vanilla refuses training "Fireball Rank 3" while only Rank 1 is known). Pure →
+/// unit-tested without a `ReducerContext`.
+pub(crate) fn rank_prereq_met(prev_spell: u32, knows_prev: bool) -> bool {
+    prev_spell == 0 || knows_prev
+}
+
+/// Pure purchase gate — decides whether `level`/`money` may learn a spell costing `cost` at `required_level`.
+/// `Ok(())` to allow; `Err(code)` with the gtker `TrainingFailureReason` int to reject. Checked in priority
+/// order (already-known first, then level, then money) so the player gets the most relevant message. Pure →
+/// unit-tested.
+pub(crate) fn trainer_buy_check(
+    known: bool,
+    level: u32,
+    required_level: u32,
+    money: u32,
+    cost: u32,
+) -> Result<(), u32> {
+    if known {
+        return Err(FAIL_ALREADY_KNOWN);
+    }
+    if level < required_level {
+        return Err(FAIL_LEVEL_TOO_LOW);
+    }
+    if money < cost {
+        return Err(FAIL_NOT_ENOUGH_MONEY);
+    }
+    Ok(())
+}
+
+/// The spell a trainer OFFERING actually teaches. A trainer offers a LearnSpell WRAPPER (Spell.dbc
+/// effect 36 → E_SCRIPTED with the real rank in `trigger_spell`); the castable RANK is that trigger —
+/// learn THAT so the spellbook + cast resolve a real game_spell row. A self-contained ability (no
+/// trigger) is learned as-is; falls back to `spell_id` when the wrapper's effect rows aren't imported
+/// (never worse than before). EXCEPTION — a CHANNELED spell (Arcane Missiles) is NOT a wrapper: its
+/// `trigger_spell` is the per-tick MISSILE (an A_PERIODIC_TRIGGER effect), not a rank to learn; skip
+/// that trigger so the learner gets the channel itself (5143), not the hidden bolt (7268). The same
+/// logic excludes every other reactive/at-cast trigger kind — A_FLAG, A_PROC_ON_HIT (Frost Armor's
+/// chill 6136), plain E_TRIGGER (Bloodrage's trickle 29131): those triggers are effect PAYLOADS, not
+/// ranks; treating them as wrappers taught the payload instead of the spell (156 review — a Frost
+/// Armor R2 buy charged for and learned "Chilled"). A genuine LearnSpell wrapper's effect imports as
+/// E_SCRIPTED (never one of the excluded kinds), so it still resolves. This exclusion list MUST stay
+/// in lockstep with the importer's `wrapper_to_rank` heuristic (importer/src/spell.rs) — the two are
+/// the same rule on the two sides of the wire. Generic over the kind. Shared by `apply_trainer_buy`
+/// (the player buy) and the playerbots trainer-kit pass (work-item 156) — ONE wrapper-resolution
+/// chokepoint, so a bot's spellbook and a trained player's can never drift. [entity]
+pub(crate) fn resolve_learn_target(ctx: &ReducerContext, spell_id: u32) -> u32 {
+    ctx.db
+        .game_spell_effect()
+        .by_spell()
+        .filter(&spell_id)
+        .find_map(|e| {
+            (e.trigger_spell != 0
+                && e.kind != crate::spell::A_PERIODIC_TRIGGER
+                && e.kind != crate::spell::A_FLAG
+                && e.kind != crate::spell::A_PROC_ON_HIT
+                && e.kind != crate::spell::E_TRIGGER)
+                .then_some(e.trigger_spell)
+        })
+        .unwrap_or(spell_id)
+}
+
+/// Shared buy logic for the player + debug paths: validate `trainer` is a real in-range trainer, that it
+/// teaches `spell_id`, run [`trainer_buy_check`], then charge copper + learn the spell. `Err(String)` names
+/// the reason; the leading "[N] " tag is the gtker failure code the gateway forwards into
+/// `SMSG_TRAINER_BUY_FAILED`. Range/flag failures are not a TrainerSpell-list state (the client wouldn't
+/// have shown the trainer), so they tag Unavailable(0). [entity]
+pub(crate) fn apply_trainer_buy(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    trainer_guid: u64,
+    spell_id: u32,
+) -> Result<(), String> {
+    let entities = ctx.db.game_world_entity();
+    let mut caster = entities
+        .guid()
+        .find(caster_guid)
+        .ok_or_else(|| "[0] buyer not in world".to_string())?;
+    let trainer = entities
+        .guid()
+        .find(trainer_guid)
+        .ok_or_else(|| "[0] no such trainer".to_string())?;
+    if trainer.npc_flags & lyracore_shared::constants::npc_flags::TRAINER == 0 {
+        return Err("[0] target is not a trainer".to_string());
+    }
+    if trainer.map_id != caster.map_id || trainer.instance_id != caster.instance_id {
+        return Err("[0] trainer on another map".to_string());
+    }
+    let (dx, dy, dz) = (
+        trainer.x - caster.x,
+        trainer.y - caster.y,
+        trainer.z - caster.z,
+    );
+    if dx * dx + dy * dy + dz * dz > TRAINER_RANGE_SQ {
+        return Err("[0] trainer out of range".to_string());
+    }
+    // The trainer must actually teach this spell (its template's list). The spawned trainer carries its
+    // creature-template `entry`; the list is keyed by that.
+    let offered = ctx
+        .db
+        .game_trainer_spell()
+        .by_trainer()
+        .filter(&trainer.entry)
+        .find(|s| s.spell_id == spell_id)
+        .ok_or_else(|| "[0] trainer does not teach that spell".to_string())?;
+
+    // PROFESSION-LEARN BRANCH (professions slice 3): a flagged offering teaches a SKILL, not a spell —
+    // it never resolves a wrapper/rank, never casts, never touches `game_player_spell`. `known` mirrors
+    // `learn_profession`'s presence check (a `game_player_skill` row for that line → a re-buy is the
+    // idempotent FAIL_ALREADY_KNOWN no-op), and on Ok it grants the skill at 1/75. The `learn_skill_line == 0`
+    // arm below is the EXISTING spell path verbatim (byte-identical → no class-spell regression).
+    //
+    // WEAPON-MASTER FORK (work-item 202): the SAME `learn_skill_line` column shape also carries weapon
+    // proficiency offerings (Daggers, Polearm, …) — no new row kind. `is_combat_skill_line` tells the two
+    // apart and the cap/known computation diverges for each:
+    //   - PROFESSION cap is the offering's STATIC tier column (`learn_skill_cap`: Apprentice 75, Journeyman
+    //     150, …), author-set and independent of level; "known" is a CAP comparison (`profession_already_capped`)
+    //     so a higher-tier re-buy still lifts the ceiling.
+    //   - WEAPON cap is LEVEL-DERIVED (`skill::skill_cap_for_level(caster.level)`), exactly like every other
+    //     combat line (`raise_combat_caps`) — the offering's `learn_skill_cap` column is ignored (seeded 0/don't-
+    //     care) for a weapon row, since a static column can never track a climbing level and a stored 0 would
+    //     be the struct comment's "1/0 stuck-row hazard" (a cap that can never be climbed) if read literally.
+    //     "known" is mere ROW PRESENCE (any `game_player_skill` row for that line at all): weapon proficiency
+    //     has no tiers to re-buy, so a class-seeded line (already present via `ensure_player_skills`) is fully
+    //     known and refuses, while a lacked line proceeds — matching vanilla's "already knows Swords" refusal.
+    let profession_line = offered.learn_skill_line;
+    let is_weapon_learn =
+        profession_line != 0 && crate::skill::is_combat_skill_line(profession_line);
+    let (to_learn, known, profession_cap) = if is_weapon_learn {
+        let cap = crate::skill::skill_cap_for_level(caster.level);
+        let present = ctx
+            .db
+            .game_player_skill()
+            .by_character()
+            .filter(&caster_guid)
+            .any(|s| s.skill_line == profession_line);
+        (0u32, present, cap)
+    } else if profession_line != 0 {
+        // Already-known keys on the CAP, not mere row presence (rank/cap scaling): "known" iff a row exists
+        // whose `max_rank` already meets-or-exceeds THIS offering's cap. So an Apprentice re-buy (cap 75 vs
+        // stored 75) is rejected for the default cap, but buying Journeyman (cap 150) while at
+        // apprentice-75 PASSES the gate and lifts the ceiling, and a 2nd Journeyman buy (150 >= 150) is
+        // then rejected. `to_learn` is unused on this arm.
+        let stored_max_rank = ctx
+            .db
+            .game_player_skill()
+            .by_character()
+            .filter(&caster_guid)
+            .find(|s| s.skill_line == profession_line)
+            .map(|r| r.max_rank);
+        (
+            0u32,
+            profession_already_capped(stored_max_rank, offered.learn_skill_cap),
+            offered.learn_skill_cap,
+        )
+    } else {
+        // The castable RANK behind the offering — extracted to `resolve_learn_target` (see its doc) so
+        // the playerbots trainer-kit pass (work-item 156) resolves wrappers IDENTICALLY to a real buy.
+        // The already-known gate keys on the RANK so a re-buy of a known rank is rejected (not silently
+        // re-charged).
+        let to_learn = resolve_learn_target(ctx, spell_id);
+        (
+            to_learn,
+            crate::spell::knows_spell(ctx, caster_guid, to_learn),
+            offered.learn_skill_cap,
+        )
+    };
+    // RANK-PREREQ GATE (work-item 102, reduced scope): a plain class-spell offering (profession_line ==
+    // 0 — professions/weapons have no chain concept) whose resolved rank carries a `game_spell_chain`
+    // row must have the PREVIOUS rank already known (vanilla refuses training "Fireball Rank 3" while
+    // only Rank 1 is known). NO chain row (an un-imported spell, or a rank with nothing before it) →
+    // the gate passes, BYTE-IDENTICAL to before this work item (the 178/212 precedent: missing imported
+    // data never blocks a purchase that used to succeed). Reuses FAIL_LEVEL_TOO_LOW — there is no
+    // dedicated "prerequisite not met" code in gtker's 3-value `TrainingFailureReason`, and its own doc
+    // already calls it the closest "req not met" fit (see the const above). Skipped when the spell is
+    // ALREADY KNOWN so `trainer_buy_check`'s "already-known first" message-priority contract (see its
+    // doc) holds even for a rank granted out of order by a debug lever or bot kit — the buy is rejected
+    // either way; only the message differs (102 review finding).
+    if profession_line == 0 && !known {
+        if let Some(chain) = ctx.db.game_spell_chain().spell_id().find(to_learn) {
+            let knows_prev = crate::spell::knows_spell(ctx, caster_guid, chain.prev_spell);
+            if !rank_prereq_met(chain.prev_spell, knows_prev) {
+                return Err(format!("[{FAIL_LEVEL_TOO_LOW}] requires the previous rank"));
+            }
+        }
+    }
+    match trainer_buy_check(
+        known,
+        caster.level,
+        offered.required_level as u32,
+        caster.money,
+        offered.cost,
+    ) {
+        Ok(()) => {
+            caster.money = caster.money.saturating_sub(offered.cost);
+            let owner = caster.owner_identity;
+            entities.guid().update(caster);
+            // One shared routing decision for the runtime path + the unit test (grant_for).
+            match grant_for(profession_line, profession_cap, to_learn) {
+                BuyGrant::Profession(line, cap) => {
+                    crate::skill::learn_profession(ctx, caster_guid, owner, line, cap as u16)
+                }
+                // Trainer-path only: `learn_spell_with_dependents` also auto-teaches this rank's
+                // ONE-LEVEL `game_spell_learn` dependents (see its doc for why NOT plain `learn_spell`
+                // universally — it would change createinfo's spell COUNT and break 212's provenance
+                // count-parity runbook).
+                BuyGrant::Spell(id) => {
+                    crate::spell::learn_spell_with_dependents(ctx, caster_guid, owner, id)
+                }
+            }
+            Ok(())
+        }
+        Err(FAIL_ALREADY_KNOWN) => Err(format!("[{FAIL_ALREADY_KNOWN}] already known")),
+        Err(FAIL_LEVEL_TOO_LOW) => Err(format!(
+            "[{FAIL_LEVEL_TOO_LOW}] requires level {}",
+            offered.required_level
+        )),
+        Err(code) => Err(format!("[{code}] not enough money (need {})", offered.cost)),
+    }
+}
+
+/// Learn `spell_id` from the trainer NPC `trainer_guid` (`CMSG_TRAINER_BUY_SPELL`). Player-authorized via
+/// `ctx.sender`; charges copper + teaches the spell. The gateway pushes `SMSG_LEARNED_SPELL` on success so
+/// the ability shows live. [entity]
+#[reducer]
+pub fn buy_trainer_spell(
+    ctx: &ReducerContext,
+    trainer_guid: u64,
+    spell_id: u32,
+) -> Result<(), String> {
+    let caster =
+        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "[0] buyer not in world".to_string())?;
+    apply_trainer_buy(ctx, caster.guid, trainer_guid, spell_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- work-item 102 (reduced scope): rank-prereq gate ---------------------------------------------
+
+    /// `rank_prereq_met` truth table: `prev_spell == 0` is ALWAYS allowed regardless of `knows_prev`
+    /// (the family's first rank, or a spell with no chain concept — the fn's own NO-ROW-FALLBACK
+    /// shape: `apply_trainer_buy` only calls this at all when a `game_spell_chain` row exists, and an
+    /// absent row is handled at that ctx-bound call site by skipping the gate entirely — see its doc —
+    /// which is behaviorally identical to this fn returning `true` for a `prev_spell == 0` row).
+    /// Otherwise the caster must already know `prev_spell`.
+    #[test]
+    fn rank_prereq_met_truth_table() {
+        assert!(
+            rank_prereq_met(0, false),
+            "no prerequisite (rank 1 / unchained) -> always allowed"
+        );
+        assert!(
+            rank_prereq_met(0, true),
+            "no prerequisite -> allowed even if knows_prev happens to be true"
+        );
+        assert!(rank_prereq_met(133, true), "prerequisite known -> allowed");
+        assert!(
+            !rank_prereq_met(133, false),
+            "prerequisite NOT known -> rejected"
+        );
+    }
+
+    #[test]
+    fn trainer_buy_check_gates_in_priority_order() {
+        // already known → Unavailable(0), even if everything else is fine
+        assert_eq!(
+            trainer_buy_check(true, 10, 1, 1000, 10),
+            Err(FAIL_ALREADY_KNOWN)
+        );
+        // level too low → NotEnoughSkill(2)
+        assert_eq!(
+            trainer_buy_check(false, 2, 6, 1000, 10),
+            Err(FAIL_LEVEL_TOO_LOW)
+        );
+        // not enough money → NotEnoughMoney(1)
+        assert_eq!(
+            trainer_buy_check(false, 10, 1, 5, 10),
+            Err(FAIL_NOT_ENOUGH_MONEY)
+        );
+        // all good → Ok
+        assert_eq!(trainer_buy_check(false, 10, 6, 100, 10), Ok(()));
+        // exact level + exact money → Ok (boundaries inclusive)
+        assert_eq!(trainer_buy_check(false, 6, 6, 10, 10), Ok(()));
+    }
+
+    /// LEARN-FROM-TRAINER ADDS THE SKILL (professions slice 3): a `learn_skill_line > 0` offering routes to
+    /// a Profession grant (→ `skill::learn_profession`, a `game_player_skill` row), NEVER a Spell grant
+    /// (→ `game_player_spell`). An unflagged (`0`) offering stays on the spell path with its resolved id —
+    /// so a class-spell offering is unaffected (no regression). `to_learn` is ignored on the profession arm.
+    #[test]
+    fn profession_offering_grants_a_skill_not_a_spell() {
+        use crate::skill::{skill_line, APPRENTICE_CAP};
+        let cap = APPRENTICE_CAP as u32; // 75 — the default Apprentice ceiling
+                                         // Cooking offering (marker spell 50080, learn_skill_line=185) → grant the Cooking SKILL at the cap.
+        assert_eq!(
+            grant_for(skill_line::COOKING, cap, 50080),
+            BuyGrant::Profession(skill_line::COOKING, 75)
+        );
+        // Skinning offering (marker 50081, line 393) → grant the Skinning skill.
+        assert_eq!(
+            grant_for(skill_line::SKINNING, cap, 50081),
+            BuyGrant::Profession(skill_line::SKINNING, 75)
+        );
+        // A Journeyman marker (cap 150) routes to a Profession grant carrying the LIFTED ceiling.
+        assert_eq!(
+            grant_for(skill_line::COOKING, 150, 50090),
+            BuyGrant::Profession(skill_line::COOKING, 150)
+        );
+        // A normal class-spell offering (line 0) learns the resolved spell id — the unchanged path (cap ignored).
+        assert_eq!(grant_for(0, cap, 133), BuyGrant::Spell(133)); // Fireball rank 1
+                                                                  // The profession arm ignores `to_learn` entirely (a stray id never leaks into a spell learn).
+        assert_eq!(
+            grant_for(skill_line::COOKING, cap, 9999),
+            BuyGrant::Profession(skill_line::COOKING, 75)
+        );
+    }
+
+    /// PROFESSION REBUY CAP: the already-known gate for a profession offering compares the character's
+    /// STORED max_rank against THIS offering's cap. Exactly meeting the cap is already-known (rejected,
+    /// no re-charge); one rank below it is not (the buy proceeds and lifts the ceiling); never having
+    /// trained the line at all (`None`) is never capped.
+    #[test]
+    fn profession_already_capped_compares_stored_max_rank_against_the_offering_cap() {
+        assert!(
+            !profession_already_capped(None, 75),
+            "never learned -> not capped"
+        );
+        assert!(
+            profession_already_capped(Some(75), 75),
+            "Apprentice re-buy at the same cap is rejected"
+        );
+        assert!(
+            !profession_already_capped(Some(75), 150),
+            "Apprentice-75 has NOT met the Journeyman-150 cap"
+        );
+        assert!(
+            profession_already_capped(Some(150), 150),
+            "a 2nd Journeyman buy (150 >= 150) is rejected"
+        );
+        assert!(
+            !profession_already_capped(Some(74), 75),
+            "one rank below the cap is not yet capped"
+        );
+    }
+
+    /// WEAPON-MASTER FORK ROUTING (work-item 202): a weapon-learn offering (`learn_skill_line` set to a
+    /// COMBAT line like DAGGER) routes through the exact same `grant_for` → `BuyGrant::Profession` arm a
+    /// profession offering does (`learn_profession` handles the plain insert-if-absent case identically
+    /// whether the cap came from a static tier column or `skill_cap_for_level`) — but the CAP fed in is
+    /// LEVEL-derived, not a stored tier. This is the "grant_for(DAGGER, skill_cap_for_level(40), _)" shape
+    /// `apply_trainer_buy`'s weapon arm produces at level 40 (cap 200).
+    #[test]
+    fn weapon_learn_offering_routes_to_profession_grant_with_a_level_derived_cap() {
+        use crate::skill::{skill_cap_for_level, skill_line};
+        let cap = skill_cap_for_level(40); // 40 * 5 = 200
+        assert_eq!(cap, 200);
+        assert_eq!(
+            grant_for(skill_line::DAGGER, cap, 0),
+            BuyGrant::Profession(skill_line::DAGGER, 200)
+        );
+    }
+
+    /// WEAPON-LEARN PRESENCE-KNOWN semantics (work-item 202): unlike a profession offering (known = a CAP
+    /// comparison), a weapon offering's "known" is mere ROW PRESENCE — feeding `trainer_buy_check` a bare
+    /// `known` bool either way, so the SAME gate enforces both: a class-seeded weapon line (row present,
+    /// regardless of its stored cap) refuses as already-known; a lacked line (no row at all) proceeds.
+    #[test]
+    fn weapon_learn_known_is_row_presence_not_a_cap_comparison() {
+        // Present (seeded by ensure_player_skills at character creation) -> already-known, rejected.
+        assert_eq!(
+            trainer_buy_check(true, 40, 1, 1000, 100),
+            Err(FAIL_ALREADY_KNOWN)
+        );
+        // Absent (never seeded/learned) -> proceeds regardless of what a stale cap column might say.
+        assert_eq!(trainer_buy_check(false, 40, 1, 1000, 100), Ok(()));
+    }
+
+    /// THE IDEMPOTENT RE-LEARN (professions slice 3): the profession buy keys its already-known gate on the
+    /// PRESENCE of a `game_player_skill` row for the line (the `known` flag the buy path derives), and feeds
+    /// it through the SAME `trainer_buy_check`. So a re-buy of an already-learned profession is rejected with
+    /// FAIL_ALREADY_KNOWN (no re-charge, no duplicate/reset row) — identical to a re-bought known spell.
+    #[test]
+    fn profession_rebuy_is_rejected_as_already_known() {
+        // First learn: no skill row yet (known=false), cost 0, level 1 → the gate ALLOWS the grant.
+        assert_eq!(trainer_buy_check(false, 1, 1, 0, 0), Ok(()));
+        // Re-buy: the skill row now exists (known=true) → rejected as already-known, even though cost is 0
+        // and the level is fine (the idempotent no-op — the row is never reset or duplicated).
+        assert_eq!(trainer_buy_check(true, 1, 1, 0, 0), Err(FAIL_ALREADY_KNOWN));
+    }
+}

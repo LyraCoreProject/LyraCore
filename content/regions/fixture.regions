@@ -1,0 +1,95 @@
+# LyraCore fixture seam menu — the out-of-the-box sharded realm (issue #327).
+#
+# This is the seam menu `lyracore dev up` imports by default, so the first thing a new contributor
+# walks across is a live shard seam. Format, rules and the activation runbook:
+# `docs/region-sharding.md` §"The seam menu (content data)".
+#
+#   <map_id>:<region_id> = <gx_min>..<gx_max>, <gy_min>..<gy_max>
+#
+# Both ranges are INCLUSIVE cell rectangles in grid_x/grid_y cell indices, one region per line (or
+# per `;`), `#` starts a comment. `,` separates the x-range from the y-range and is NOT a row
+# separator. Parsed by `lyracore_shared::region::RegionMap::parse`
+# (crates/lyracore-shared/src/region.rs) and imported with the operator-gated module reducer
+# `import_map_regions` (module/src/region.rs) — see the ACTIVATION note at the bottom.
+#
+# ---------------------------------------------------------------------------------------------
+# THE CELL MATH
+# ---------------------------------------------------------------------------------------------
+# `lyracore_shared::spatial::grid_cell` (crates/lyracore-shared/src/spatial.rs:33-38):
+#
+#     gx = floor((17066.666 - x) / 50.0)
+#     gy = floor((17066.666 - y) / 50.0)
+#
+# ⚠ Cell indices grow as the world coordinate SHRINKS. A rectangle's gx_min is its EAST edge in
+# world x, and gy_min is its NORTH edge in world y. Getting this backwards draws the box in the
+# wrong quadrant of the map, and the menu still parses.
+#
+# ---------------------------------------------------------------------------------------------
+# THE SPLIT: Northshire Valley | the rest of Elwynn
+# ---------------------------------------------------------------------------------------------
+# Every landmark below is a coordinate committed in THIS repository, run through grid_cell(). No
+# rectangle here is estimated from outside knowledge — that was the fault in the first draft of this
+# file, which drew a Stormwind City box the repo holds no data for (see issue #327's comments).
+#
+#   Northshire start        (-8949.95, -132.493)  -> cell (520, 343)   REGION 1
+#                           crates/lyracore-shared/src/constants.rs:196-197
+#   Northshire graveyard    (-8935.33, -188.646)  -> cell (520, 345)   REGION 1
+#                           module/src/world.rs:1598-1604  (world_safe_locs 105)
+#   Goldshire graveyard     (-9339.59,  171.73)   -> cell (528, 337)   REGION 2
+#                           module/src/world.rs:1607-1613  (world_safe_locs 106)
+#   Goldshire class trainers      x = -9461.85    -> gx 530            REGION 2
+#                           importer/scripts/import-world.sh:23
+#   Eastvale Logging Camp   (-9552.73, -1374.84)  -> cell (532, 368)   REGION 2
+#                           module/src/world.rs:1616-1622  (world_safe_locs 854)
+#
+# REGION 1 — Northshire Valley. 512..524 × 336..350 is world x (-9183, -8533], y (-483, 267]: the
+# valley, the abbey and its approach. This is where `init` seeds the fixture's entire spatial
+# content (3 creatures, <=5 gameobjects, all within ~15yd of cell (520,343) — module/src/seed.rs)
+# and where a new character spawns. It stays on the DEFAULT database, so a fresh login never begins
+# with a handoff.
+#
+# REGION 2 — the rest of Elwynn. 525..549 × 330..369 is the Goldshire basin, Crystal Lake, the
+# Eastvale road and the southern approaches. It moves to a second database, so walking the road out
+# of the valley is a real shard crossing.
+#
+# ---------------------------------------------------------------------------------------------
+# THE SEAM ITSELF
+# ---------------------------------------------------------------------------------------------
+# Region 1 ends at gx 524 and region 2 starts at gx 525, so the rectangles are disjoint along a
+# single line of constant x (world x ≈ -9183.3) and touch without overlapping. `RegionMap::build`
+# rejects overlap outright, so a successful parse is itself the proof.
+#
+# Leaving Northshire Valley for Goldshire lowers world x, raises gx, and crosses 524 -> 525: that is
+# the crossing, and it is the one every new character makes. Both sides are inside the levelling
+# corridor, which is deliberate — the seam is meant to be met, not avoided. The cost is that a group
+# straddling it hits the gaps we have not built: buffing, healing, melee and trade do not work across
+# a seam (#75, #76) and AoE clips at it by spec.
+#
+# ⚠ The fixture has NO content in region 2 until the contributor runs `./lyracore import` (which
+# needs a cmangos dump and their own client MPQs). Out of the box the crossing is real and announces
+# itself; the far side is empty ground.
+
+0:1 = 512..524, 336..350
+0:2 = 525..549, 330..369
+
+# ---------------------------------------------------------------------------------------------
+# ACTIVATION — the menu alone is INERT
+# ---------------------------------------------------------------------------------------------
+# Importing this file draws the seams; it does not activate them. With no `game_region_assignment`
+# row (or with both regions on the same database) routing is byte-identical to a single-database
+# gateway. Two steps make the seam live:
+#
+#   # 1. the menu, on EVERY world shard (definitions are read from the default world shard, but
+#   #    every world shard bakes grid_x/grid_y against the same geometry):
+#   spacetime call lyracore         import_map_regions "$(cat content/regions/fixture.regions)"
+#   spacetime call lyracore-elwynn  import_map_regions "$(cat content/regions/fixture.regions)"
+#
+#   # 2. the assignment, on realm-core (region 1 stays on the default; only region 2 moves):
+#   spacetime call lyracore-realm set_region_assignment 0 2 lyracore-elwynn 1
+#
+# and the gateway needs `LYRACORE_REGION_SHARDS=lyracore-elwynn` — an assignment naming a database
+# the gateway never connected to falls through to the shard map, silently.
+#
+# ⚠ Activation must also retire the non-owner's creature population inside the moved region, or
+# both databases hold live copies of the same guids: `docs/region-sharding.md` §"The assignment
+# table (ops data)", `debug_retire_region_creatures`.

@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/lyracore-shared",
+    "module",
+    "gateway",
+    "importer",
+]
+# NOT a member any more (#246): the headless build-5875 wire client lives in its own repository,
+# LyraCoreProject/wire-harness, and is consumed as a PINNED RELEASE — see `.wire-harness-rev`,
+# `scripts/wire-harness.sh` and `adapters/lyracore/run-suite.sh`. It was never a server crate: it
+# is a server-AGNOSTIC protocol tool, and a workspace membership is exactly the coupling that made
+# "does this run against any other 5875 core?" unanswerable.
+
+# The SpacetimeDB module compiles to wasm and pulls its own (large) dependency tree;
+# keep workspace-wide settings minimal so the module and the native gateway can diverge.
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+# Amended twice, both by empirical build attempts rather than by rule:
+#  - #231 moved this from 1.80 to 1.85: SpacetimeDB 2.5.0's crates declare `edition = "2024"`,
+#    which needs Cargo >=1.85 just to PARSE their manifests, so 1.80 was never buildable.
+#  - #229's CI work found 1.85 *itself* still isn't buildable: `spacetimedb`/`spacetimedb-sdk`
+#    2.5.0 (and several of their own transitive deps — icu_*, darling, image, wow-mpq/-adt/-blp/
+#    -m2/-wmo) each declare a `rust-version` field of their own, and the highest of those is
+#    `spacetimedb`/`spacetimedb-sdk`'s **1.93.0** — `cargo +1.85.0 check --workspace` fails
+#    outright with "rustc 1.85.0 is not supported" for exactly that reason, before a single line
+#    of this repo's own code is even considered.
+#  - re-checked at the 2.5.0 -> 2.7.1 bump: every `spacetimedb-*` crate still declares
+#    `rust-version = "1.93.0"` and `edition = "2024"`, so the floor below did not move.
+# Net result: today's REAL floor is 1.93.0, identical to the pinned dev toolchain below — there is
+# no daylight between "MSRV" and "the toolchain everyone already builds with" to test separately.
+# CI's `msrv-consistency` job (#229) asserts these two numbers stay equal instead of pretending a
+# lower, unbuildable one is real; if a future SpacetimeDB release relaxes its own `rust-version`,
+# lowering this one again needs the same empirical check, not an assumption.
+rust-version = "1.93.0"
+repository = "https://github.com/LyraCoreProject/LyraCore"
+homepage = "https://github.com/LyraCoreProject/LyraCore"
+# Every crate in this workspace is INTERNAL to the LyraCore server. None of them is a library
+# anyone is meant to depend on from crates.io, and #239's alpha explicitly does not publish
+# either repository — so the whole workspace is publish-gated here rather than crate by crate.
+publish = false
+
+[workspace.dependencies]
+lyracore-shared = { path = "crates/lyracore-shared" }
