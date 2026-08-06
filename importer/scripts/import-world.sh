@@ -121,6 +121,17 @@ INCLUDE_CREATURES="${INCLUDE_CREATURES-}"
 # from map-36 `game_creature_spawn` rows, so it needs its own copy of them —
 # `DB=lyracore-instances bash importer/scripts/import-world.sh`. Defaults to the world/realm database.
 DB="${DB:-lyracore}"
+# The spacetime server alias EVERY `spacetime sql`/`spacetime call` below is pinned to.
+#
+# Not cosmetic, and not optional. `spacetime sql` has no environment variable for the server and no
+# per-project config: with no `-s` it silently follows `default_server` in the machine-wide
+# ~/.config/spacetime/cli.toml, which belongs to whichever OTHER SpacetimeDB project last ran
+# `spacetime server set-default`. The importer binary always passed `-s local`, so the ETL wrote to
+# the right node while every verification query below read a different one — the run then ends in a
+# wall of FAILs for content that imported perfectly well, and the low-floor assertions PASS on the
+# connection error's own output, so it reads as a partial regression rather than a broken connection.
+# Threading it here makes this script independent of a setting it does not own.
+SERVER="${SERVER:-local}"
 # Whole extra maps folded into the SAME clear+reload run (--include-map). Map 0's canonical run carries
 # the Deadmines interior (36); another continent gets none by default — its own instanced maps belong
 # to the instances database, not to a continent shard.
@@ -193,9 +204,12 @@ EXPECTED_MAPS="$(printf '%s\n' "$MAP" ${INCLUDE_MAPS//,/ } | sort -u)"
 # One probe, two consumers, three lines of splitting — cheaper than a second query pass.
 # GUARD HELPERS BEGIN — extracted verbatim (marker-delimited) by importer/scripts/import-manifest-smoke.sh's
 # offline pin; keep every guard function between these two markers.
+# `${SERVER:-local}` deliberately, not `$SERVER` — same reason `chk0` reads `${SLICE:-0}`: that smoke
+# pin `eval`s this block under `set -u` with only DB/EXPECTED_MAPS set, so a bare $SERVER aborts the
+# whole check. The default matches the one the script itself takes.
 db_spatial_probe() {
   for t in game_creature_spawn game_gameobject game_terrain_chunk game_nav_chunk; do
-    out="$(spacetime sql "$DB" "SELECT map_id FROM $t" 2>&1)" || { echo "!$t"; continue; }
+    out="$(spacetime sql -s "${SERVER:-local}" "$DB" "SELECT map_id FROM $t" 2>&1)" || { echo "!$t"; continue; }
     printf '%s\n' "$out"
   done | grep -oE '^ *[0-9]+ *$|^!.+' | tr -d ' ' | sort -u
 }
@@ -213,7 +227,7 @@ foreign_spatial_maps() { comm -23 <(probe_maps "$1") <(printf '%s\n' "$EXPECTED_
 # really imported here, so ANY foreign map `db_spatial_probe` reports can only be `init`'s own fixtures.
 db_imported_probe() {
   for t in game_terrain_chunk game_nav_chunk; do
-    out="$(spacetime sql "$DB" "SELECT map_id FROM $t" 2>&1)" || { echo "!$t"; continue; }
+    out="$(spacetime sql -s "${SERVER:-local}" "$DB" "SELECT map_id FROM $t" 2>&1)" || { echo "!$t"; continue; }
     printf '%s\n' "$out"
   done | grep -oE '^ *[0-9]+ *$|^!.+' | tr -d ' ' | sort -u
 }
@@ -229,7 +243,7 @@ db_imported_probe() {
 INIT_MAX_CREATURE_FIXTURES=3
 INIT_MAX_GAMEOBJECT_FIXTURES=5
 db_row_count() { # table
-  out="$(spacetime sql "$DB" "SELECT COUNT(*) AS n FROM $1" 2>&1)" || return 1
+  out="$(spacetime sql -s "${SERVER:-local}" "$DB" "SELECT COUNT(*) AS n FROM $1" 2>&1)" || return 1
   printf '%s\n' "$out" | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | tail -1
 }
 # True iff $DB has NEVER received a real import. An unreadable terrain/nav table, or an unreadable/
@@ -277,7 +291,7 @@ if [ -n "${PRE_FOREIGN// /}" ]; then
   echo "        that continent's terrain/nav/spawns with this one's — not merge them. One continent per"
   echo "        database is the one-continent-per-database invariant; publish a separate database for this map:"
   echo "          spacetime publish -s local -p module --build-options='--features=debug_reducers' <db>"
-  echo "          spacetime call \"$DB\" claim_operator"
+  echo "          spacetime call -s \"$SERVER\" \"$DB\" claim_operator"
   echo "        Deliberately overwriting this database anyway: re-run with ALLOW_MAP_SWITCH=1."
   [ "${ALLOW_MAP_SWITCH:-0}" = 1 ] || exit 1
   echo "[world] ALLOW_MAP_SWITCH=1 — overwriting '$DB' with map(s) $(echo "$EXPECTED_MAPS" | tr '\n' ' ') anyway"
@@ -377,7 +391,7 @@ echo "[world] caster-mob spell-import (Elwynn+Westfall 1-20)"
   --only "53,133,143,1776,145,744,745,3149,3150,3238,3248,5416,5708,6016,6268,6524,6660,6730,7159,7357,8014,8260,8646,8873,9080,10101,10277,12023,12024,12170,12544,13322,13342,13375,13443,14030,15572,15652,15657,15661,16144,16244,20712,20714,20720,20746,20793,20808,23114,23260,23504,28265" \
   2>&1 | grep -iE "imported [0-9]|WARNING|error" | tail -1
 echo "[world] re-arm creature tick"
-spacetime call "$DB" debug_rearm_creature_tick >/dev/null 2>&1
+spacetime call -s "$SERVER" "$DB" debug_rearm_creature_tick >/dev/null 2>&1
 # ARM the synthesized gather pools → max_active live game_gameobject rows per pool (init does NOT re-run
 # on an auto-migrate publish, and the importer writes pool members via SQL but no live rows). Idempotent.
 # This call is UNCONDITIONAL (every MAP) on purpose — `arm_pool` itself map-fences each
@@ -385,12 +399,27 @@ spacetime call "$DB" debug_rearm_creature_tick >/dev/null 2>&1
 # `imported_terrain_maps`), so a map-1 run can no longer resurrect `init`'s map-0 Northshire tier pool;
 # it simply arms 0 rows for a pool none of whose members' map this database actually hosts.
 echo "[world] arm gather pools"
-spacetime call "$DB" arm_all_pools >/dev/null 2>&1
+spacetime call -s "$SERVER" "$DB" arm_all_pools >/dev/null 2>&1
 
 # ---- ASSERT the 1-20 blockers landed (a box/ETL regression must fail here, not in play) ----
 fail=0
+# The count `n` reports when the QUERY ITSELF failed — node down, wrong `-s` server, renamed table —
+# as opposed to a query that ran and matched no rows. Those two are not the same fact and must never
+# print the same way. It is a NUMBER because `chk` compares with `-lt`, and it is negative so that it
+# is below every floor: a broken connection can only ever read as FAIL, never as a pass.
+#
+# This exists because the old `n` piped a FAILED query's own error text into `grep -c` and reported
+# the line count as if it were a row count. A connection refused prints three lines starting with a
+# digit (`0: client error`, `1: tcp connect error`, `2: Connection refused`), so every check whose
+# floor was 1 or 2 PASSED on a dead connection, and the rest failed with a plausible-looking "got 3".
+# A whole import read as a partial content regression when nothing was wrong with the content.
+QUERY_FAILED=-1
 chk() { # label  expected-min  actual
-  if [ "${3:-0}" -lt "$2" ]; then echo "  FAIL  $1: got ${3:-0}, want >= $2"; fail=1; else echo "  ok    $1: $3"; fi
+  if [ "${3:-0}" = "$QUERY_FAILED" ]; then
+    echo "  FAIL  $1: the QUERY failed — no count was read. This is NOT 'zero rows': the node was"
+    echo "                unreachable, \`-s $SERVER\` names the wrong server, or the table was renamed."
+    fail=1
+  elif [ "${3:-0}" -lt "$2" ]; then echo "  FAIL  $1: got ${3:-0}, want >= $2"; fail=1; else echo "  ok    $1: $3"; fi
 }
 # MAP-FENCED assertions. Most floors below are box-dependent COUNTS and stay live for any
 # continent (the manifest re-points them for MAP!=0); these two wrappers fence the checks that name a
@@ -411,7 +440,15 @@ chk() { # label  expected-min  actual
 # manifest uses.
 chk0() { [ "$MAP" = 0 ] && [ "${SLICE:-0}" = 0 ] && chk "$@"; return 0; }
 chk36() { case " ${INCLUDE_MAPS//,/ } " in *" 36 "*) chk "$@" ;; esac; return 0; }
-n() { spacetime sql "$DB" "$1" 2>&1 | grep -cE "${2:-^ *[0-9]}"; }
+# n QUERY [ROW-PATTERN] — rows matching ROW-PATTERN, or $QUERY_FAILED if the query did not run.
+# The exit status is checked BEFORE the output is counted; `grep -c` on a failed query's stderr is
+# what made a dead connection look like content (see $QUERY_FAILED above). stderr still rides into
+# the count on SUCCESS, exactly as before, so no floor shifts under this change.
+n() {
+  local out
+  out="$(spacetime sql -s "$SERVER" "$DB" "$1" 2>&1)" || { echo "$QUERY_FAILED"; return 0; }
+  printf '%s\n' "$out" | grep -cE "${2:-^ *[0-9]}"
+}
 echo "[world] assertions (map $MAP → $DB):"
 [ "$SLICE" = 0 ] || echo "  ..    map-0 corridor fixture checks (Goldshire trainers / Farley / Sentinel Hill / Elwynn caster cast+rotation rows / Deadmines) SKIPPED — not this continent's content"
 chk0 "Goldshire anchor trainers spawned {328,377,906,913,917,927} (NOT total coverage — see the service-coverage audit below)" "$FLOOR_CLASS_TRAINERS" \
@@ -437,18 +474,18 @@ chk "spawn rows on this run's map ($MAP)" "$FLOOR_CONTINENT_SPAWNS" "$(n "SELECT
 # Deadmines chain's overworld half on top of the Elwynn 1-10 relations. 450 is an unverified estimate
 # — tighten or widen it against your real dump's count.
 chk "quest-giver relations"              "$FLOOR_QUEST_GIVER_RELATIONS" "$(n "SELECT quest_entry FROM game_creature_quest")"
-chk "L6-10 quests (quest_level band)"    "$FLOOR_QUESTS_L6_10" "$(spacetime sql "$DB" "SELECT quest_level FROM game_quest_template" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | awk '$1>=6 && $1<=10' | wc -l)"
+chk "L6-10 quests (quest_level band)"    "$FLOOR_QUESTS_L6_10" "$(spacetime sql -s "$SERVER" "$DB" "SELECT quest_level FROM game_quest_template" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | awk '$1>=6 && $1<=10' | wc -l)"
 # ≥1 Westfall-band quest present (quest_level 10-20) — no entry id needed, just the level band; a
 # widened box with zero quests in this band means Westfall's quest_template rows never landed.
-chk "L10-20 quests (Westfall quest_level band)" "$FLOOR_QUESTS_L10_20" "$(spacetime sql "$DB" "SELECT quest_level FROM game_quest_template" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | awk '$1>=10 && $1<=20' | wc -l)"
+chk "L10-20 quests (Westfall quest_level band)" "$FLOOR_QUESTS_L10_20" "$(spacetime sql -s "$SERVER" "$DB" "SELECT quest_level FROM game_quest_template" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | awk '$1>=10 && $1<=20' | wc -l)"
 # Chained quests: McBride's 783->7->15->21->54 chain should populate next_quest_id symmetrically to
 # the already-working prev_quest_id side. A single-column inequality filter in SQL is itself the
 # "can return 0 rows wrongly" trap (docs/danger-zones.md §2) — select the raw column and filter in the
 # shell instead, like the quest_level bands above.
-chk "chained quests (next_quest_id>0) [V]" "$FLOOR_QUESTS_CHAINED" "$(spacetime sql "$DB" "SELECT next_quest_id FROM game_quest_template" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | awk '$1>0' | wc -l)"
+chk "chained quests (next_quest_id>0) [V]" "$FLOOR_QUESTS_CHAINED" "$(spacetime sql -s "$SERVER" "$DB" "SELECT next_quest_id FROM game_quest_template" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | awk '$1>0' | wc -l)"
 # Timed quests (limit_time>0): coverage-printed only, no floor — see FLOOR_QUESTS_CHAINED's comment in
 # import-manifest.sh for why (plausibly zero in this Elwynn/Westfall slice).
-echo "  ..  timed quests (limit_time>0) [V]: $(spacetime sql "$DB" "SELECT limit_time FROM game_quest_template" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | awk '$1>0' | wc -l)"
+echo "  ..  timed quests (limit_time>0) [V]: $(spacetime sql -s "$SERVER" "$DB" "SELECT limit_time FROM game_quest_template" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | awk '$1>0' | wc -l)"
 # [V] tune-to-dump: raised 1500→2500 — Westfall's own creature density added to Elwynn's. 2500 is an
 # unverified estimate — tighten or widen it against your real dump's count.
 chk "live creature entities"           "$FLOOR_LIVE_CREATURES" "$(n "SELECT guid FROM game_world_entity WHERE entry>0 AND owner_guid=0" '[0-9]{6,}')"
@@ -518,7 +555,7 @@ chk0 "Sentinel Hill vendor spawned (Quartermaster Lewis 491)" "$FLOOR_SENTINEL_H
 # run leaves game_start_item empty and non-Warrior classes silently inherit the Warrior kit. Count DISTINCT
 # present race_class values (the WHERE caps it at 6) — want all 6.
 chk "Human start-items (all 6 classes)"   "$FLOOR_START_ITEMS_CLASSES" \
-    "$(spacetime sql "$DB" "SELECT race_class FROM game_start_item WHERE race_class=257 OR race_class=258 OR race_class=260 OR race_class=261 OR race_class=264 OR race_class=265" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | sort -u | wc -l)"
+    "$(spacetime sql -s "$SERVER" "$DB" "SELECT race_class FROM game_start_item WHERE race_class=257 OR race_class=258 OR race_class=260 OR race_class=261 OR race_class=264 OR race_class=265" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | sort -u | wc -l)"
 # [V] tune-to-dump: raised 40→60 — Westfall's Defias casters (Pillager/Conjurer, see the EXTEND-HERE
 # block above) add to Elwynn's caster count. 60 is an unverified estimate — tighten or widen it
 # against your real dump's count.
@@ -569,10 +606,10 @@ chk "graveyards imported (game_graveyard) [V]"         "$FLOOR_GRAVEYARDS" "$(n 
 # failed: an unset zone would search zone 0 and report a bogus FAIL.
 if [ -n "$GRAVEYARD_ZONE" ]; then
   echo "[world] zone-$GRAVEYARD_ZONE graveyard_zone→game_graveyard resolve check (shell-side, no SQL JOIN):"
-  zone_ids="$(spacetime sql "$DB" "SELECT safe_loc_id FROM game_graveyard_zone WHERE zone_id = $GRAVEYARD_ZONE" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ')"
+  zone_ids="$(spacetime sql -s "$SERVER" "$DB" "SELECT safe_loc_id FROM game_graveyard_zone WHERE zone_id = $GRAVEYARD_ZONE" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ')"
   zone_resolved=0
   for id in $zone_ids; do
-    hit="$(spacetime sql "$DB" "SELECT id FROM game_graveyard WHERE id = $id" 2>&1 | grep -cE '^ *'"$id"' *$')"
+    hit="$(spacetime sql -s "$SERVER" "$DB" "SELECT id FROM game_graveyard WHERE id = $id" 2>&1 | grep -cE '^ *'"$id"' *$')"
     if [ "${hit:-0}" -gt 0 ]; then zone_resolved=$((zone_resolved + 1)); fi
   done
   chk "zone-$GRAVEYARD_ZONE graveyard_zone links resolve to a real game_graveyard row" "$FLOOR_GRAVEYARD_ZONE_RESOLVE" "$zone_resolved"
@@ -609,11 +646,11 @@ chk36 "Deadmines gameobjects (doors/cannon/chests, map 36) [V]" "$FLOOR_DEADMINE
 # for him), and a dump that does place him reads 7 and still passes. A wrong [V] entry id FAILS
 # LOUD here; correct the id against your dump (the SENTINEL_HILL_VENDOR precedent), don't loosen.
 chk36 "Deadmines bosses spawned (>=6 distinct placed entries) [V]" "$FLOOR_DEADMINES_BOSSES" \
-    "$(spacetime sql "$DB" "SELECT entry FROM game_creature_spawn WHERE map_id = 36 AND (entry=644 OR entry=643 OR entry=642 OR entry=1763 OR entry=646 OR entry=647 OR entry=639)" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | sort -u | wc -l)"
+    "$(spacetime sql -s "$SERVER" "$DB" "SELECT entry FROM game_creature_spawn WHERE map_id = 36 AND (entry=644 OR entry=643 OR entry=642 OR entry=1763 OR entry=646 OR entry=647 OR entry=639)" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | sort -u | wc -l)"
 # BOTH named drops in the loot pools: Cruel Barb ~5191 (VanCleef) + Smite's Mighty
 # Hammer ~5196 (Smite). DISTINCT item ids so two rows of one item can't pass vacuously.
 chk36 "Deadmines named drops (Cruel Barb ~5191 + Smite's Mighty Hammer ~5196) [V]" "$FLOOR_DEADMINES_NAMED_LOOT" \
-    "$(spacetime sql "$DB" "SELECT item_entry FROM game_creature_loot WHERE item_entry=5191 OR item_entry=5196" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | sort -u | wc -l)"
+    "$(spacetime sql -s "$SERVER" "$DB" "SELECT item_entry FROM game_creature_loot WHERE item_entry=5191 OR item_entry=5196" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | sort -u | wc -l)"
 # The Defias Brotherhood chain (the next_quest_id machinery, ending on VanCleef's head) is covered by
 # the FLOOR_QUESTS_CHAINED check above. Its in-instance kill/collect credit is NOT asserted here —
 # that needs a character actually inside the instance, so it is a live check, not an import one.

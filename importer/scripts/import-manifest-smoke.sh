@@ -144,8 +144,13 @@ guard_out="$(
     # Fresh shard: creature_spawn/gameobject carry initʼs map-0 fixtures (chicken/wolf/trainer +
     # chest/goober/gather-node/pool-armed rows); terrain/nav are EMPTY — exactly a brand-new shard
     # about to import map 1 for the first time, before this issue was fixed.
-    spacetime() { # sql <db> "SELECT map_id FROM <table>"
-      case "$3" in
+    # Matched against "$*" — the WHOLE argument line — not against a fixed position. The helpers
+    # call `spacetime sql -s <server> <db> <query>`, and pinning the query to $3 (as this did) made
+    # the stub silently stop matching the moment `-s` was threaded through: every case fell to the
+    # default, every probe read empty, and both arms of a guard that exists to refuse a destructive
+    # overwrite would have gone green on nothing.
+    spacetime() { # sql -s <server> <db> "SELECT map_id FROM <table>"
+      case "$*" in
         *game_creature_spawn*|*game_gameobject*) echo " 0" ;;
         *game_terrain_chunk*|*game_nav_chunk*) : ;; # never imported — no rows at all
       esac
@@ -156,7 +161,7 @@ guard_out="$(
     # Populated foreign-continent shard: a database that already went through a REAL map-0 import, so
     # terrain/nav genuinely carry map-0 rows too — the case the guard must keep refusing.
     spacetime() {
-      case "$3" in
+      case "$*" in
         *game_creature_spawn*|*game_gameobject*|*game_terrain_chunk*|*game_nav_chunk*) echo " 0" ;;
       esac
     }
@@ -169,8 +174,8 @@ guard_out="$(
     # single family into a dev node — so terrain/nav STILL read empty (the never-imported
     # signal alone says "fresh") even though this database plainly holds real, deliberately-imported
     # content. The row-count fallback in db_never_imported must catch this.
-    spacetime() { # sql <db> "<query>"
-      case "$3" in
+    spacetime() { # sql -s <server> <db> "<query>"
+      case "$*" in
         *"COUNT(*)"*game_creature_spawn*) echo " 113" ;; # far past initʼs 3-row fixture ceiling
         *"COUNT(*)"*game_gameobject*) echo " 0" ;;
         *game_creature_spawn*|*game_gameobject*) echo " 0" ;; # map_id probe: still reads as map 0 only
