@@ -1,11 +1,11 @@
-<p align="center"><img src="./lyracore-icon-light.svg" alt="LyraCore" width="140"><h1 align="center">Lyracore</h1><h3 align="center">A vanilla server built for change
+<p align="center"><img src="./lyracore-icon-light.svg" alt="LyraCore" width="140"><h1 align="center">LyraCore</h1><h3 align="center">A vanilla server built for change
 </h3></p>
 
 
 LyraCore is a Vanilla 1.12.1 game server built on top of [SpacetimeDB](https://spacetimedb.com/), focused on providing developers with the best possible experience.
 
 > **Not ready for deployment** 
-> LyraCore is a project in an extremely early phase of development. It is not recommended that you use it for any public facing project. 
+> LyraCore is a project in an extremely early phase of development and is not considered secure. It is not recommended that you use it for any public facing project. 
 
 ## Quickstart
 
@@ -23,16 +23,22 @@ Installs the LyraCore folder in your current directory alongside a launcher for 
 
 ```bash
 lyracore doctor                                                     # is this machine ready?
-lyracore config set client-data [path-to-client-Data-folder]        # tell LyraCore where your client data is 
 lyracore dev up                                                     # start the local realm
 lyracore account create admin                                       # a login for your client
 ```
-
 Point your client's `realmlist.wtf` at `127.0.0.1` and play.
 
-### Importing data
+## Can I use my existing client?
+
+A client never speaks to SpacetimeDB — it speaks SRP6 and WoW opcodes — so the gateway is translator and every mutation the world can undergo is a reducer call. The
+realm is sharded across several databases running the *same* wasm; `dev up` brings up a sharded
+fixture with a live seam you can walk across mid-session.
+
+
+## Importing data
 
 ```bash
+lyracore config set client-data [path-to-client-Data-folder] # tell LyraCore where your client data is 
 lyracore import
 ```
 The import tool pulls game data *you* supply: cmangos' public
@@ -60,12 +66,6 @@ The import tool pulls game data *you* supply: cmangos' public
    └────────────────────────────────────────┘
 ```
 
-## Can I use my existing client?
-
-A client never speaks to SpacetimeDB — it speaks SRP6 and WoW opcodes — so the gateway is translator and every mutation the world can undergo is a reducer call. The
-realm is sharded across several databases running the *same* wasm; `dev up` brings up a sharded
-fixture with a live seam you can walk across mid-session.
-
 ## Documentation
 
 [`docs/architecture.md`](./docs/architecture.md) is the technical entrypoint, built mostly to inform agentic tools.
@@ -77,7 +77,6 @@ fixture with a live seam you can walk across mid-session.
 | [`docs/danger-zones.md`](./docs/danger-zones.md) | **Authoritative** over every other doc: traps and the exact deploy procedure. Read before any engine change. |
 
 
-LyraCore is an independent implementation — **not** a fork or port of any existing emulator. It heavily relies on *knowledge* and data rather than code from other projects:
-[wowdev.wiki](https://wowdev.wiki) for wire formats, the gtker crates as real dependencies under
-their own licenses, and vMaNGOS/cMaNGOS/mangoszero as *behavioural* references for which packets
+LyraCore is an independent implementation — **not** a fork or port of any existing emulator. It heavily relies on knowledge and data rather than code from other projects:
+[wowdev.wiki](https://wowdev.wiki) for wire formats, the gtker crates as dependencies, and vMaNGOS/cMaNGOS/mangoszero as *behavioural* references for which packets
 a client needs and in what order. Without these projects, none of this would be possible.
