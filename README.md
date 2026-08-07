@@ -10,7 +10,7 @@ LyraCore is a Vanilla 1.12.1 game server built on top of [SpacetimeDB](https://s
 ## Quickstart
 
 ### Requirements
-- A World of Warcraft 1.12.1 client. Not distributed here.
+- A World of Warcraft 1.12.1 client. None is distributed here.
 - [Rust](https://rust-lang.org/tools/install/) installed
 - A Linux or macOS machine/container. WSL is untested, but might work.
 
@@ -30,8 +30,9 @@ Point your client's `realmlist.wtf` at `127.0.0.1` and play.
 
 ## Can I use my existing client?
 
-Yes! A client never speaks to SpacetimeDB — it speaks SRP6 and WoW opcodes — so the client never knows the diffference. The gateway is translator and every mutation the world can undergo is a reducer call. The
-realm is sharded across several databases.
+A client never speaks to SpacetimeDB — it speaks SRP6 and WoW opcodes — so the gateway is translator and every mutation the world can undergo is a reducer call. The
+realm is sharded across several databases running the *same* wasm; `dev up` brings up a sharded
+fixture with a live seam you can walk across mid-session.
 
 
 ## Importing data

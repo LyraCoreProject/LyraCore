@@ -898,6 +898,7 @@ mod recv_reducer_tests {
     }
 }
 
+
 /// Fire a reducer over `$reducers` and block (≤10s) on its completion, mapping the outcome to
 /// `anyhow` (evaluates to `Result<()>`). Collapses the channel + status-flatten callback +
 /// `recv_reducer` that every reducer wrapper otherwise repeats verbatim; the trailing completion
@@ -967,7 +968,34 @@ impl Coordinator {
     }
 
     pub(crate) fn player_conn(&self, account_id: u64) -> Result<Arc<PlayerConn>> {
-        if let Some(p) = self.0.players.lock().unwrap().get(&account_id).cloned() {
+        // ⚠ The cache read is a STATEMENT of its own, and it must stay one (#447).
+        //
+        // Written as `if let Some(p) = self.0.players.lock().unwrap()…`, the `MutexGuard` temporary
+        // from the scrutinee lives until the END of the `if let` body — the edition-2021
+        // temporary-scope rule (edition 2024 changed it; this workspace is 2021, see
+        // `[workspace.package] edition` in the root `Cargo.toml`). Under that shape the two lines
+        // below each took the whole realm down, and both are reachable ONLY when a cached
+        // connection is unhealthy — i.e. exactly during the mass-session churn of #447:
+        //
+        //  1. the `remove` re-locks `players` while the scrutinee guard is still held.
+        //     `std::sync::Mutex` is not reentrant, so the session thread DEADLOCKS holding the
+        //     process-wide `players` lock, and every other session's `player_conn` /
+        //     `session_count` queues behind it forever. Each one also strands a tokio
+        //     blocking-pool thread (default cap: 512) permanently. This is the #278 "evict and
+        //     rebuild a dead conn" path, so that repair has never actually been able to run.
+        //  2. `is_active()` is `send_chan.lock().unwrap()` *inside the SDK*. Once a per-player
+        //     connection's pump thread has panicked at
+        //     `spacetimedb-sdk-2.7.1/src/db_connection.rs:413` ("Unable to send unsubscribe
+        //     message…" — the #447 log signature, thrown while that very mutex is held) the mutex
+        //     is POISONED and `is_active()` panics. Under the old shape it panicked while holding
+        //     the `players` guard, poisoning `players` too — after which every `.lock().unwrap()`
+        //     on it panics, for every account on this shard.
+        //
+        // Binding the clone first makes the guard's life one statement long: a panic out of
+        // `is_active()` unwinds one session and leaves the cache usable, and the eviction below
+        // can no longer self-deadlock.
+        let cached = self.0.players.lock().unwrap().get(&account_id).cloned();
+        if let Some(p) = cached {
             // Liveness check on checkout (278): a module republish closes every websocket
             // ("module exited") — the coordinator self-heals, but a cached player conn died
             // silently and its reducer calls go NOWHERE (player_login "timed out after 10s"
@@ -1755,5 +1783,86 @@ mod runtime_share {
         for (q, mb) in &results {
             println!("COST {mb:>7.2} MB/conn   {q}");
         }
+    }
+}
+
+/// #447: the process-wide `players` lock must never be held across the liveness check.
+///
+/// `player_conn` is the one place a `MutexGuard` on `Coordinator`'s shared `players` map could
+/// outlive its own statement, and under edition 2021 the `if let ... = mutex.lock().unwrap()...`
+/// shape makes it do exactly that. The consequences are two different realm-wide outages (a
+/// self-deadlock on the eviction `remove`, and poisoning `players` when the SDK's `is_active()`
+/// panics on its own poisoned mutex) — both reachable only when a cached player connection is
+/// unhealthy, which is the mass-session-churn state #447 is about. Neither can be reproduced in a
+/// unit test: both need a live SpacetimeDB node and a per-player connection whose pump thread has
+/// already panicked.
+///
+/// So it is pinned the way this crate pins its other live-only invariants — a behavioural test of
+/// the LANGUAGE RULE (so the scan below is not lexical superstition), plus a source scan of the one
+/// function. `deadlocks` is asserted with `try_lock`, never `lock`: a test that actually deadlocked
+/// would hang the suite rather than fail it.
+#[cfg(test)]
+mod player_conn_lock_scope {
+    use crate::test_scan::code_of;
+
+    /// The hazard itself, on a plain `Mutex<HashMap>` — the exact shape `player_conn` used to have.
+    /// If a future edition bump makes this pass, the scan below becomes optional rather than wrong,
+    /// and this test is where that shows up.
+    #[test]
+    fn an_if_let_scrutinee_guard_is_still_held_inside_the_body() {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+
+        let players: Mutex<HashMap<u64, u64>> = Mutex::new(HashMap::from([(1u64, 7u64)]));
+        if let Some(_p) = players.lock().unwrap().get(&1).cloned() {
+            assert!(
+                players.try_lock().is_err(),
+                "the scrutinee `MutexGuard` was dropped before the `if let` body — the edition-2021 \
+                 temporary-scope rule this module guards against no longer applies. Re-read \
+                 `player_conn`'s comment before relaxing anything."
+            );
+        } else {
+            panic!("fixture is wrong: the key must be present");
+        }
+        // Control: bound to a `let` first, the guard is gone by the time the body runs — which is
+        // precisely the fix `player_conn` applies.
+        let cached = players.lock().unwrap().get(&1).cloned();
+        if let Some(_p) = cached {
+            assert!(
+                players.try_lock().is_ok(),
+                "binding the clone to its own `let` must end the guard's life at that statement"
+            );
+        }
+    }
+
+    #[test]
+    fn player_conn_never_locks_players_in_an_if_let_scrutinee() {
+        let src = include_str!("connection.rs");
+        let body = code_of(
+            src,
+            "pub(crate) fn player_conn(&self, account_id: u64) -> Result<Arc<PlayerConn>> {",
+        );
+        for line in body.lines() {
+            let t = line.trim();
+            let scrutinee_lock = (t.starts_with("if let ")
+                || t.starts_with("while let ")
+                || t.starts_with("match "))
+                && t.contains("players")
+                && t.contains(".lock()");
+            assert!(
+                !scrutinee_lock,
+                "`player_conn` locks `players` in a `{t}` scrutinee. Under edition 2021 that guard \
+                 lives to the end of the body, which (a) self-deadlocks on the eviction `remove` \
+                 and (b) poisons the process-wide `players` map if the SDK's `is_active()` panics \
+                 on its own poisoned mutex — the two realm-wide outages #447 traced. Bind the \
+                 cloned value to its own `let` first."
+            );
+        }
+        assert!(
+            body.contains("let cached = self.0.players.lock().unwrap().get(&account_id).cloned();"),
+            "`player_conn` no longer takes the cached connection out of the map in a statement of \
+             its own — the one thing that keeps the `players` guard from outliving the liveness \
+             check (#447). Body was:\n{body}"
+        );
     }
 }
