@@ -33,13 +33,19 @@ install_root=$root/.lyracore/cli/$revision
 binary=$install_root/bin/lyracore
 
 if [ ! -x "$binary" ]; then
-    printf 'lyracore: installing CLI %s (first run for this revision)\n' "$revision" >&2
+    # First contact for most people: whatever they typed, THIS runs before it. It used to print the
+    # 40-character revision and then ~20 lines of cargo build chatter — including a cargo `warning:`
+    # about PATH that is not a problem — so a newcomer's first command looked like it had failed.
+    # `--quiet` silences the progress log; cargo still prints errors, so a genuinely broken build is
+    # still diagnosable, and `fail` below still names the revision when it matters.
+    printf 'lyracore: preparing the CLI (first run — this takes a minute)...\n' >&2
     # Anonymous HTTPS, because the CLI repository is public: cargo's own git fetcher needs no
     # credentials, no SSH key and no CARGO_NET_GIT_FETCH_WITH_CLI escape hatch for a public https
     # dependency. This URL was `ssh://git@github.com/...` while the repository was private — which a
     # stranger who has just cloned has no key for, so the very first command after `git clone` failed
     # on the fetch. Do not put it back (#302).
     cargo install \
+        --quiet \
         --git https://github.com/LyraCoreProject/lyracore-cli.git \
         --rev "$revision" \
         --locked \
