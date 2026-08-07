@@ -1,5 +1,5 @@
 <p align="center"><img src="./lyracore-icon-light.svg" alt="LyraCore" width="140"><h1 align="center">LyraCore</h1><h3 align="center">A vanilla server built for change
-</h3></p>
+</h3></p>[![Join our Discord server!](https://invidget.switchblade.xyz/pB9Dyj3E3)](http://discord.gg/pB9Dyj3E3)
 
 
 LyraCore is a Vanilla 1.12.1 game server built on top of [SpacetimeDB](https://spacetimedb.com/), focused on providing developers with the best possible experience.
