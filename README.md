@@ -1,8 +1,8 @@
-<p align="center"><img src="./lyracore-icon.svg" alt="LyraCore" width="140"><h1 align="center">Lyracore</h1><h3 align="center">A vanilla WoW server built for change
+<p align="center"><img src="./lyracore-icon.svg" alt="LyraCore" width="140"><h1 align="center">Lyracore</h1><h3 align="center">A vanilla server built for change
 </h3></p>
 
 
-LyraCore is a 1.12.1 game server built on top of [SpacetimeDB](https://spacetimedb.com/), focused on providing developers with the best possible experience.
+LyraCore is a Vanilla 1.12.1 game server built on top of [SpacetimeDB](https://spacetimedb.com/), focused on providing developers with the best possible experience.
 
 > **Not ready for deployment** 
 > LyraCore is a project in an extremely early phase of development. It is not recommended that you use it for any public facing project. 
@@ -17,17 +17,16 @@ LyraCore is a 1.12.1 game server built on top of [SpacetimeDB](https://spacetime
 ### Installing
 ```bash
 curl -sSfL https://raw.githubusercontent.com/LyraCoreProject/LyraCore/main/install.sh | sh
+cd LyraCore
 ```
-Installs the LyraCore folder in your current directory alongside the lyracore cli tool. 
+Installs the LyraCore folder in your current directory alongside a launcher for the [lyracore cli tool](https://github.com/LyraCoreProject/lyracore-cli).
 
 ```bash
-cd LyraCore
 lyracore doctor                                                     # is this machine ready?
 lyracore config set client-data [path-to-client-Data-folder]        # tell LyraCore where your client data is 
 lyracore dev up                                                     # start the local realm
 lyracore account create admin                                       # a login for your client
 ```
-
 
 Point your client's `realmlist.wtf` at `127.0.0.1` and play.
 
