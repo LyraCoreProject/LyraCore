@@ -20,6 +20,7 @@
 //! separately proven against a synthetic fixture that contains a known-bad line — so this module
 //! can never go green by matching nothing.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::test_scan::repo_root;
@@ -195,7 +196,8 @@ fn scanned_roots() -> Vec<(&'static str, Vec<PathBuf>)> {
                  test would pass by looking at nothing while a `spacetime publish -c` sat in the \
                  repo waiting to wipe every account and character row"
             );
-            println!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "note: skipping the destructive-publish scan of {dir}/ — it is not present in this \
                  checkout (the public mirror filters it out)"
             );
@@ -395,7 +397,8 @@ spacetime publish -cy lyracore
         // When scripts/ IS here so is every other root (only the mirror filter removes them), so the
         // publish-site floor below still spans all four exactly as it did before.
         if !roots.iter().any(|(d, _)| *d == "scripts") {
-            println!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "note: skipping the publish-site floor — scripts/ is not present in this checkout"
             );
             return;

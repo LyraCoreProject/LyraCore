@@ -3,12 +3,13 @@
 //! that doc comment stays true. `#[cfg(test)] mod tripwires;` is `lib.rs`'s only mention of this
 //! file; every mod below is unchanged in what it enforces, only in where it lives.
 //!
-//! Four tripwires, in file order:
+//! Five tripwires, in file order:
 //! - [`character_owned_tripwire`] — every character-keyed table has a `character_owned` sweep marker.
 //! - [`build_scan_strip_tripwire`] — a commented-out marker invocation never registers.
 //! - [`partition_discipline_tripwire`] — no raw whole-table scan of a spatial table outside the
 //!   partition-scoped helpers, plus its #23 extension (no module game logic reads a shard id).
 //! - [`character_fence_tripwire`] — no raw `game_character` lookup outside the by-guid chokepoint.
+//! - [`print_macro_tripwire`] — no print-family macro anywhere under `module/src` (new with #432).
 //! - [`gc_reap_tripwire`] — every TTL-shaped event table is named in `gc.rs` (new with #379).
 //!
 //! `partition_discipline_tripwire::raw_scans` and `character_fence_tripwire::raw_lookups` used to
@@ -707,6 +708,66 @@ mod character_fence_tripwire {
             stale.is_empty(),
             "WHITELIST budget(s) larger than the lookups that actually exist — lower them:\n  {}",
             stale.join("\n  ")
+        );
+    }
+}
+
+/// ENFORCEMENT tripwire (issue #432): SpacetimeDB's own CLI (2.7.1) source-scans this whole crate
+/// for the print family — four macro names, each followed by a `!` — and aborts the build the
+/// instant one appears ANYWHERE under `module/src`, including behind `#[cfg(test)]`: the scan is
+/// source-level and does not know what `cfg` means. #432 was three diagnostic notes in test-only
+/// code (`publish_safety.rs` ×2, `test_scan.rs` ×1) that never compile into the wasm at all, yet
+/// still failed every fresh clone's first `preflight` — the alpha's own start command, blocked for
+/// everyone before a single reducer ever ran. Fixed there by swapping each to
+/// `writeln!(std::io::stderr(), ...)`, which the CLI's list does not name, wrapped in `let _ = ...;`
+/// so the ignored `Result` raises no warning.
+///
+/// This pins that fix from coming apart again: no file under `module/src` (or a drop-in
+/// `packages/*/src`) may spell one of those four names immediately followed by `!`. The needles
+/// are assembled from two literal halves at RUN time — the same self-exclusion
+/// `creatures::tick::relay_tripwire`'s move-event needle already uses (see its doc comment) — so
+/// the forbidden spelling never sits contiguously in this file's own source. That matters twice
+/// over: contiguous text here would (a) match itself in the scan below, and (b) trip the very
+/// SpacetimeDB build scan this test exists to keep quiet, since that scan cannot tell a
+/// `#[cfg(test)]` tripwire body apart from live reducer code either.
+#[cfg(test)]
+pub(crate) mod print_macro_tripwire {
+    /// The four forbidden spellings, each built from two halves so neither ever appears whole in
+    /// this source file.
+    fn needles() -> [String; 4] {
+        [
+            format!("{}{}", "println", "!"),
+            format!("{}{}", "print", "!"),
+            format!("{}{}", "eprintln", "!"),
+            format!("{}{}", "eprint", "!"),
+        ]
+    }
+
+    #[test]
+    fn no_print_family_macro_under_module_src() {
+        let mut violations = Vec::new();
+        for file in super::character_owned_tripwire::scanned_files() {
+            let content = std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
+            for needle in needles() {
+                for (idx, _) in content.match_indices(needle.as_str()) {
+                    violations.push(format!(
+                        "{}:{} contains `{needle}`",
+                        file.display(),
+                        crate::test_scan::line_of(&content, idx)
+                    ));
+                }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "print-family macro found under module/src or a drop-in package (issue #432):\n  {}\n\n\
+             SpacetimeDB's CLI source-scans this whole crate and aborts the build on any of these — \
+             even behind #[cfg(test)], because the scan is source-level and does not understand cfg. \
+             For a test-only diagnostic, use `writeln!(std::io::stderr(), ...)` (needs \
+             `use std::io::Write;`) instead, wrapped in `let _ = ...;` so the ignored Result does \
+             not warn.",
+            violations.join("\n  ")
         );
     }
 }

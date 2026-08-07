@@ -11,6 +11,8 @@
 //! to be here`) satisfied every `.contains()` scan built on the weak four, while doing nothing. One
 //! implementation, hardened, used everywhere in this crate.
 
+use std::io::Write;
+
 /// Isolate a fn (or struct/const/etc.) body by brace-matching from the first byte offset where
 /// `signature` appears. Panics loudly — never silently matches nothing — if the signature or a
 /// balanced `{...}` cannot be found, because a scan that can't find its target has lost its
@@ -282,7 +284,10 @@ pub(crate) fn read_scanned(rel: &str) -> Option<String> {
         Ok(src) => Some(src),
         Err(_) if !is_installed(rel) => {
             let dir = optional_owner(rel).unwrap_or_default();
-            println!("note: skipping the scan of {rel} — {dir}/ is not installed in this checkout");
+            let _ = writeln!(
+                std::io::stderr(),
+                "note: skipping the scan of {rel} — {dir}/ is not installed in this checkout"
+            );
             None
         }
         Err(e) => panic!(

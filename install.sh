@@ -176,10 +176,15 @@ note "✓ system packages"
 # ---------------------------------------------------------------------------
 # rustup reads the checkout's rust-toolchain.toml and fetches the pinned toolchain itself on the
 # first cargo command, so there is deliberately no version check or `rustup update` here.
+# Tracks whether THIS shell only sees cargo because we just sourced ~/.cargo/env for our own use —
+# rustup's PATH line applies to shells started after the install, so the shell that ran this script
+# needs the same reminder in step 8 below, whether cargo was already there or installed just now.
+cargo_needs_reload=0
 if ! have cargo && [ -f "$HOME/.cargo/env" ]; then
     # Installed already, just not exported into this non-login shell.
     # shellcheck disable=SC1091
     . "$HOME/.cargo/env"
+    cargo_needs_reload=1
 fi
 if have cargo; then
     note "✓ Rust ($(cargo --version 2>/dev/null || echo cargo))"
@@ -195,6 +200,7 @@ else
     if [ -f "$HOME/.cargo/env" ]; then
         # shellcheck disable=SC1091
         . "$HOME/.cargo/env"
+        cargo_needs_reload=1
     fi
     have cargo || fail "rustup installed, but cargo is still not on PATH — open a new shell and re-run"
     note "✓ Rust ($(cargo --version 2>/dev/null || echo cargo))"
@@ -334,6 +340,13 @@ esac
 say ""
 say "✓ LyraCore is installed in $(pwd)/$TARGET_DIR"
 say ""
+if [ "$cargo_needs_reload" -eq 1 ]; then
+    # rustup's PATH line only applies to shells started after it ran, so this one — the one running
+    # `lyracore doctor` next — still can't see cargo even though Rust is installed. Same fix either way.
+    say 'This shell doesn'"'"'t have cargo on PATH yet (rustup only wires up new shells) — run: . "$HOME/.cargo/env"'
+    say "(or start a new shell, which picks this up too)"
+    say ""
+fi
 if [ "$path_ready" -eq 1 ]; then
     case ":$original_path:" in
         *":$BIN_DIR:"*) ;;
