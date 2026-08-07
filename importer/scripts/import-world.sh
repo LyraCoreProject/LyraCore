@@ -121,6 +121,23 @@ INCLUDE_CREATURES="${INCLUDE_CREATURES-}"
 # from map-36 `game_creature_spawn` rows, so it needs its own copy of them —
 # `DB=lyracore-instances bash importer/scripts/import-world.sh`. Defaults to the world/realm database.
 DB="${DB:-lyracore}"
+# Which SpacetimeDB node every `spacetime sql`/`spacetime call` below targets. Bare `spacetime sql`
+# (no --server) inherits the CLI's AMBIENT default server, which on a fresh machine is maincloud —
+# not the local node `lyracore dev up` actually starts, on loopback:3000 (true even under `--lan`,
+# where SpacetimeDB deliberately keeps the node on loopback). That mismatch is invisible to a
+# maintainer whose `~/.config/spacetime/cli.toml` has had `local` as its default for years, and fatal
+# to a fresh user: every query below would hit the wrong server, fail to connect, and — before this
+# was fixed — silently read as "this table has zero rows" for ~50 tables at once (#440). Override for
+# the by-hand advanced path (a remote node, a non-default port).
+SPACETIME_SERVER="${SPACETIME_SERVER:-http://127.0.0.1:3000}"
+# The ONE `spacetime sql`/`spacetime call` chokepoint every non-guard-helper call in this file routes
+# through, so none of them can silently drift back to the ambient default (#440). Exit status is
+# spacetime's own — callers (n()/q_list() below) decide how to read a failure. The one exception is
+# the marker-delimited GUARD HELPERS block further down: import-manifest-smoke.sh extracts it
+# VERBATIM and evals it in isolation, so those three calls inline the same --server flag directly
+# rather than depending on q(), which wouldn't exist in that extracted context.
+q() { spacetime sql --server "$SPACETIME_SERVER" "$DB" "$1"; }
+call_q() { spacetime call --server "$SPACETIME_SERVER" "$DB" "$@"; }
 # Whole extra maps folded into the SAME clear+reload run (--include-map). Map 0's canonical run carries
 # the Deadmines interior (36); another continent gets none by default — its own instanced maps belong
 # to the instances database, not to a continent shard.
@@ -195,7 +212,10 @@ EXPECTED_MAPS="$(printf '%s\n' "$MAP" ${INCLUDE_MAPS//,/ } | sort -u)"
 # offline pin; keep every guard function between these two markers.
 db_spatial_probe() {
   for t in game_creature_spawn game_gameobject game_terrain_chunk game_nav_chunk; do
-    out="$(spacetime sql "$DB" "SELECT map_id FROM $t" 2>&1)" || { echo "!$t"; continue; }
+    # --server inlined with its own default (not $SPACETIME_SERVER / q()) — this function is
+    # extracted VERBATIM by import-manifest-smoke.sh's marker-delimited eval, which never sources
+    # the rest of this file, so it must stay self-contained under `set -u` in that context too.
+    out="$(spacetime sql "$DB" "SELECT map_id FROM $t" --server "${SPACETIME_SERVER:-http://127.0.0.1:3000}" 2>&1)" || { echo "!$t"; continue; }
     printf '%s\n' "$out"
   done | grep -oE '^ *[0-9]+ *$|^!.+' | tr -d ' ' | sort -u
 }
@@ -213,7 +233,8 @@ foreign_spatial_maps() { comm -23 <(probe_maps "$1") <(printf '%s\n' "$EXPECTED_
 # really imported here, so ANY foreign map `db_spatial_probe` reports can only be `init`'s own fixtures.
 db_imported_probe() {
   for t in game_terrain_chunk game_nav_chunk; do
-    out="$(spacetime sql "$DB" "SELECT map_id FROM $t" 2>&1)" || { echo "!$t"; continue; }
+    # Self-contained inline --server default — see db_spatial_probe's comment above.
+    out="$(spacetime sql "$DB" "SELECT map_id FROM $t" --server "${SPACETIME_SERVER:-http://127.0.0.1:3000}" 2>&1)" || { echo "!$t"; continue; }
     printf '%s\n' "$out"
   done | grep -oE '^ *[0-9]+ *$|^!.+' | tr -d ' ' | sort -u
 }
@@ -229,7 +250,8 @@ db_imported_probe() {
 INIT_MAX_CREATURE_FIXTURES=3
 INIT_MAX_GAMEOBJECT_FIXTURES=5
 db_row_count() { # table
-  out="$(spacetime sql "$DB" "SELECT COUNT(*) AS n FROM $1" 2>&1)" || return 1
+  # Self-contained inline --server default — see db_spatial_probe's comment above.
+  out="$(spacetime sql "$DB" "SELECT COUNT(*) AS n FROM $1" --server "${SPACETIME_SERVER:-http://127.0.0.1:3000}" 2>&1)" || return 1
   printf '%s\n' "$out" | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | tail -1
 }
 # True iff $DB has NEVER received a real import. An unreadable terrain/nav table, or an unreadable/
@@ -277,7 +299,7 @@ if [ -n "${PRE_FOREIGN// /}" ]; then
   echo "        that continent's terrain/nav/spawns with this one's — not merge them. One continent per"
   echo "        database is the one-continent-per-database invariant; publish a separate database for this map:"
   echo "          spacetime publish -s local -p module --build-options='--features=debug_reducers' <db>"
-  echo "          spacetime call \"$DB\" claim_operator"
+  echo "          spacetime call --server \"$SPACETIME_SERVER\" \"$DB\" claim_operator"
   echo "        Deliberately overwriting this database anyway: re-run with ALLOW_MAP_SWITCH=1."
   [ "${ALLOW_MAP_SWITCH:-0}" = 1 ] || exit 1
   echo "[world] ALLOW_MAP_SWITCH=1 — overwriting '$DB' with map(s) $(echo "$EXPECTED_MAPS" | tr '\n' ' ') anyway"
@@ -382,7 +404,7 @@ echo "[world] repair (re-arm creature tick + re-seed fixtures/schedules)"
 # families the ETL truncates/leaves untouched (this precedent is why debug_seed_scenario_fixtures
 # used to bolt extra seeders onto itself, per #378's history). Preconditions above (this database is
 # already published + claimed) satisfy debug_repair_after_publish's `require_operator` gate.
-spacetime call "$DB" debug_repair_after_publish >/dev/null 2>&1
+call_q debug_repair_after_publish >/dev/null 2>&1
 # ARM the synthesized gather pools → max_active live game_gameobject rows per pool (init does NOT re-run
 # on an auto-migrate publish, and the importer writes pool members via SQL but no live rows). Idempotent.
 # This call is UNCONDITIONAL (every MAP) on purpose — `arm_pool` itself map-fences each
@@ -390,11 +412,36 @@ spacetime call "$DB" debug_repair_after_publish >/dev/null 2>&1
 # `imported_terrain_maps`), so a map-1 run can no longer resurrect `init`'s map-0 Northshire tier pool;
 # it simply arms 0 rows for a pool none of whose members' map this database actually hosts.
 echo "[world] arm gather pools"
-spacetime call "$DB" arm_all_pools >/dev/null 2>&1
+call_q arm_all_pools >/dev/null 2>&1
 
 # ---- ASSERT the 1-20 blockers landed (a box/ETL regression must fail here, not in play) ----
 fail=0
+# ---- verification-stage SQL failure handling (#440) ----------------------------------------------
+# A query that fails to reach $DB (wrong/unreachable server, database not found, node down) is NOT
+# the same thing as a query that reached it and legitimately found zero rows — conflating the two is
+# exactly what turned one dead connection into ~50 fake "this table is empty" FAILs. n()/q_list()
+# below always run inside the subshell a `$(...)` command substitution creates (every call site is
+# `... "$(n ...)"`), so an `exit` INSIDE them would only kill that subshell, never this script. A
+# sentinel FILE is what actually crosses that boundary: n()/q_list() record a failure into it, and
+# chk() — which always runs as a normal top-level command, never inside `$(...)` — checks it first
+# and aborts for real, before printing anything about, or falling through to, the next assertion.
+SQL_ABORT_FLAG="$(mktemp "${TMPDIR:-/tmp}/lyracore-import-sql-abort.XXXXXX")"
+rm -f "$SQL_ABORT_FLAG"
+trap 'rm -f "$SQL_ABORT_FLAG"' EXIT
+sql_note_failure() { printf '%s\n' "$1" >>"$SQL_ABORT_FLAG"; }
+sql_check_abort() {
+  [ -s "$SQL_ABORT_FLAG" ] || return 0
+  echo "[world] ABORT — a verification query against '$DB' at $SPACETIME_SERVER failed:" >&2
+  head -1 "$SQL_ABORT_FLAG" >&2
+  echo "        A failed query is not the same as zero rows, and reporting it as one is how a single" >&2
+  echo "        dead connection turns into ~50 fake \"table is empty\" FAILs (#440) — refusing instead" >&2
+  echo "        of reporting any of the assertions below. Check the node is up and '$DB' is published" >&2
+  echo "        there (docs/danger-zones.md §3); set SPACETIME_SERVER=<url> if your node isn't on the" >&2
+  echo "        default loopback address." >&2
+  exit 1
+}
 chk() { # label  expected-min  actual
+  sql_check_abort
   if [ "${3:-0}" -lt "$2" ]; then echo "  FAIL  $1: got ${3:-0}, want >= $2"; fail=1; else echo "  ok    $1: $3"; fi
 }
 # MAP-FENCED assertions. Most floors below are box-dependent COUNTS and stay live for any
@@ -416,7 +463,23 @@ chk() { # label  expected-min  actual
 # manifest uses.
 chk0() { [ "$MAP" = 0 ] && [ "${SLICE:-0}" = 0 ] && chk "$@"; return 0; }
 chk36() { case " ${INCLUDE_MAPS//,/ } " in *" 36 "*) chk "$@" ;; esac; return 0; }
-n() { spacetime sql "$DB" "$1" 2>&1 | grep -cE "${2:-^ *[0-9]}"; }
+n() { # <query> [count-pattern] — the verification stage's row-COUNT chokepoint (#440): routes
+      # through $SPACETIME_SERVER via q(), and on a FAILED query records it via sql_note_failure
+      # rather than silently reading a connection fault as a count of 0. Only a query that actually
+      # succeeded gets its output counted.
+  local out status
+  out="$(q "$1" 2>&1)"; status=$?
+  if [ "$status" -ne 0 ]; then sql_note_failure "$out"; printf '0'; return 0; fi
+  printf '%s\n' "$out" | grep -cE "${2:-^ *[0-9]}"
+}
+q_list() { # <query> — like n() but returns the MATCHING NUMERIC LINES themselves (not a count); same
+           # failure handling. Backs the handful of checks that filter/aggregate raw rows in the
+           # shell (quest-level bands, sort -u dedup) instead of just counting them.
+  local out status
+  out="$(q "$1" 2>&1)"; status=$?
+  if [ "$status" -ne 0 ]; then sql_note_failure "$out"; return 0; fi
+  printf '%s\n' "$out" | grep -oE '^ *[0-9]+ *$' | tr -d ' '
+}
 echo "[world] assertions (map $MAP → $DB):"
 [ "$SLICE" = 0 ] || echo "  ..    map-0 corridor fixture checks (Goldshire trainers / Farley / Sentinel Hill / Elwynn caster cast+rotation rows / Deadmines) SKIPPED — not this continent's content"
 chk0 "Goldshire anchor trainers spawned {328,377,906,913,917,927} (NOT total coverage — see the service-coverage audit below)" "$FLOOR_CLASS_TRAINERS" \
@@ -442,18 +505,19 @@ chk "spawn rows on this run's map ($MAP)" "$FLOOR_CONTINENT_SPAWNS" "$(n "SELECT
 # Deadmines chain's overworld half on top of the Elwynn 1-10 relations. 450 is an unverified estimate
 # — tighten or widen it against your real dump's count.
 chk "quest-giver relations"              "$FLOOR_QUEST_GIVER_RELATIONS" "$(n "SELECT quest_entry FROM game_creature_quest")"
-chk "L6-10 quests (quest_level band)"    "$FLOOR_QUESTS_L6_10" "$(spacetime sql "$DB" "SELECT quest_level FROM game_quest_template" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | awk '$1>=6 && $1<=10' | wc -l)"
+chk "L6-10 quests (quest_level band)"    "$FLOOR_QUESTS_L6_10" "$(q_list "SELECT quest_level FROM game_quest_template" | awk '$1>=6 && $1<=10' | wc -l)"
 # ≥1 Westfall-band quest present (quest_level 10-20) — no entry id needed, just the level band; a
 # widened box with zero quests in this band means Westfall's quest_template rows never landed.
-chk "L10-20 quests (Westfall quest_level band)" "$FLOOR_QUESTS_L10_20" "$(spacetime sql "$DB" "SELECT quest_level FROM game_quest_template" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | awk '$1>=10 && $1<=20' | wc -l)"
+chk "L10-20 quests (Westfall quest_level band)" "$FLOOR_QUESTS_L10_20" "$(q_list "SELECT quest_level FROM game_quest_template" | awk '$1>=10 && $1<=20' | wc -l)"
 # Chained quests: McBride's 783->7->15->21->54 chain should populate next_quest_id symmetrically to
 # the already-working prev_quest_id side. A single-column inequality filter in SQL is itself the
 # "can return 0 rows wrongly" trap (docs/danger-zones.md §2) — select the raw column and filter in the
 # shell instead, like the quest_level bands above.
-chk "chained quests (next_quest_id>0) [V]" "$FLOOR_QUESTS_CHAINED" "$(spacetime sql "$DB" "SELECT next_quest_id FROM game_quest_template" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | awk '$1>0' | wc -l)"
+chk "chained quests (next_quest_id>0) [V]" "$FLOOR_QUESTS_CHAINED" "$(q_list "SELECT next_quest_id FROM game_quest_template" | awk '$1>0' | wc -l)"
 # Timed quests (limit_time>0): coverage-printed only, no floor — see FLOOR_QUESTS_CHAINED's comment in
 # import-manifest.sh for why (plausibly zero in this Elwynn/Westfall slice).
-echo "  ..  timed quests (limit_time>0) [V]: $(spacetime sql "$DB" "SELECT limit_time FROM game_quest_template" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | awk '$1>0' | wc -l)"
+echo "  ..  timed quests (limit_time>0) [V]: $(q_list "SELECT limit_time FROM game_quest_template" | awk '$1>0' | wc -l)"
+sql_check_abort   # no chk() follows this echo directly — check explicitly so a failed query here still aborts loud, not with a silently-wrong "0"
 # [V] tune-to-dump: raised 1500→2500 — Westfall's own creature density added to Elwynn's. 2500 is an
 # unverified estimate — tighten or widen it against your real dump's count.
 chk "live creature entities"           "$FLOOR_LIVE_CREATURES" "$(n "SELECT guid FROM game_world_entity WHERE entry>0 AND owner_guid=0" '[0-9]{6,}')"
@@ -466,11 +530,21 @@ chk "vendors (npc_vendor)"              "$FLOOR_VENDORS" "$(n "SELECT item_entry
 # shell-side (spacetime sql has no JOIN) and names the dead NPCs. Floors guard non-regression on
 # the COVERED counts; the DEAD lists are the honest gap ledger (fix = give them rows, not silence).
 echo "[world] service coverage (flagged NPCs that actually provide their service):"
-COV=$(python3 - "$DB" <<'PYEOF'
+# python3 is not a declared prerequisite (#440): on a minimal host `command -v` fails, and letting the
+# heredoc below run anyway would print a bare "python3: command not found" mid-output with COV left
+# unset — the three `chk` calls after it would then read as achieved-0 FAILs indistinguishable from a
+# real coverage regression. Degrade explicitly instead: this audit is a bonus check, not a gate (the
+# row-count floors above it already cover "did the family import at all"), so a missing python3 SKIPs
+# it rather than failing the import.
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "  SKIP: service-coverage audit needs python3 (not found on PATH) — install it and re-run this"
+  echo "        script to get trainer/vendor/questgiver dead-NPC coverage; this does not fail the import."
+else
+COV=$(python3 - "$DB" "$SPACETIME_SERVER" <<'PYEOF'
 import subprocess, sys
-db = sys.argv[1]
+db, server = sys.argv[1], sys.argv[2]
 def rows(q):
-    out = subprocess.run(["spacetime","sql",db,q],capture_output=True,text=True).stdout
+    out = subprocess.run(["spacetime","sql","--server",server,db,q],capture_output=True,text=True).stdout
     return [l.strip().strip('|').split('|') for l in out.splitlines() if l.startswith(' ')]
 tmpl = {}
 for r in rows("SELECT entry, npc_flags, name FROM game_creature_template"):
@@ -506,6 +580,7 @@ read -r COV_TRAINERS COV_VENDORS COV_QUESTGIVERS <<<"$(echo "$COV" | grep ^COUNT
 chk "trainer coverage (spawned trainers that teach)"    "$FLOOR_TRAINER_COVERAGE" "$COV_TRAINERS"
 chk "vendor coverage (spawned vendors that sell)"       "$FLOOR_VENDOR_COVERAGE" "$COV_VENDORS"
 chk "questgiver coverage (spawned givers with quests)"  "$FLOOR_QUESTGIVER_COVERAGE" "$COV_QUESTGIVERS"
+fi
 
 # [V] — set this to the real Sentinel Hill trainer/vendor creature_template.entry from YOUR dump if
 # the default below does not match it. An entry that matches nothing never matches a live spawn, so
@@ -523,7 +598,7 @@ chk0 "Sentinel Hill vendor spawned (Quartermaster Lewis 491)" "$FLOOR_SENTINEL_H
 # run leaves game_start_item empty and non-Warrior classes silently inherit the Warrior kit. Count DISTINCT
 # present race_class values (the WHERE caps it at 6) — want all 6.
 chk "Human start-items (all 6 classes)"   "$FLOOR_START_ITEMS_CLASSES" \
-    "$(spacetime sql "$DB" "SELECT race_class FROM game_start_item WHERE race_class=257 OR race_class=258 OR race_class=260 OR race_class=261 OR race_class=264 OR race_class=265" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | sort -u | wc -l)"
+    "$(q_list "SELECT race_class FROM game_start_item WHERE race_class=257 OR race_class=258 OR race_class=260 OR race_class=261 OR race_class=264 OR race_class=265" | sort -u | wc -l)"
 # [V] tune-to-dump: raised 40→60 — Westfall's Defias casters (Pillager/Conjurer, see the EXTEND-HERE
 # block above) add to Elwynn's caster count. 60 is an unverified estimate — tighten or widen it
 # against your real dump's count.
@@ -574,10 +649,10 @@ chk "graveyards imported (game_graveyard) [V]"         "$FLOOR_GRAVEYARDS" "$(n 
 # failed: an unset zone would search zone 0 and report a bogus FAIL.
 if [ -n "$GRAVEYARD_ZONE" ]; then
   echo "[world] zone-$GRAVEYARD_ZONE graveyard_zone→game_graveyard resolve check (shell-side, no SQL JOIN):"
-  zone_ids="$(spacetime sql "$DB" "SELECT safe_loc_id FROM game_graveyard_zone WHERE zone_id = $GRAVEYARD_ZONE" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ')"
+  zone_ids="$(q_list "SELECT safe_loc_id FROM game_graveyard_zone WHERE zone_id = $GRAVEYARD_ZONE")"
   zone_resolved=0
   for id in $zone_ids; do
-    hit="$(spacetime sql "$DB" "SELECT id FROM game_graveyard WHERE id = $id" 2>&1 | grep -cE '^ *'"$id"' *$')"
+    hit="$(n "SELECT id FROM game_graveyard WHERE id = $id" "^ *${id} *\$")"
     if [ "${hit:-0}" -gt 0 ]; then zone_resolved=$((zone_resolved + 1)); fi
   done
   chk "zone-$GRAVEYARD_ZONE graveyard_zone links resolve to a real game_graveyard row" "$FLOOR_GRAVEYARD_ZONE_RESOLVE" "$zone_resolved"
@@ -614,11 +689,11 @@ chk36 "Deadmines gameobjects (doors/cannon/chests, map 36) [V]" "$FLOOR_DEADMINE
 # for him), and a dump that does place him reads 7 and still passes. A wrong [V] entry id FAILS
 # LOUD here; correct the id against your dump (the SENTINEL_HILL_VENDOR precedent), don't loosen.
 chk36 "Deadmines bosses spawned (>=6 distinct placed entries) [V]" "$FLOOR_DEADMINES_BOSSES" \
-    "$(spacetime sql "$DB" "SELECT entry FROM game_creature_spawn WHERE map_id = 36 AND (entry=644 OR entry=643 OR entry=642 OR entry=1763 OR entry=646 OR entry=647 OR entry=639)" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | sort -u | wc -l)"
+    "$(q_list "SELECT entry FROM game_creature_spawn WHERE map_id = 36 AND (entry=644 OR entry=643 OR entry=642 OR entry=1763 OR entry=646 OR entry=647 OR entry=639)" | sort -u | wc -l)"
 # BOTH named drops in the loot pools: Cruel Barb ~5191 (VanCleef) + Smite's Mighty
 # Hammer ~5196 (Smite). DISTINCT item ids so two rows of one item can't pass vacuously.
 chk36 "Deadmines named drops (Cruel Barb ~5191 + Smite's Mighty Hammer ~5196) [V]" "$FLOOR_DEADMINES_NAMED_LOOT" \
-    "$(spacetime sql "$DB" "SELECT item_entry FROM game_creature_loot WHERE item_entry=5191 OR item_entry=5196" 2>&1 | grep -oE '^ *[0-9]+ *$' | tr -d ' ' | sort -u | wc -l)"
+    "$(q_list "SELECT item_entry FROM game_creature_loot WHERE item_entry=5191 OR item_entry=5196" | sort -u | wc -l)"
 # The Defias Brotherhood chain (the next_quest_id machinery, ending on VanCleef's head) is covered by
 # the FLOOR_QUESTS_CHAINED check above. Its in-instance kill/collect credit is NOT asserted here —
 # that needs a character actually inside the instance, so it is a live check, not an import one.

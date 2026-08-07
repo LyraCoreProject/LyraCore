@@ -769,8 +769,8 @@ name matches nothing and still exits 1 — indistinguishable from "already stopp
 ## Where to go next
 
 - [`docs/development-cli.md`](./development-cli.md) — the CLI's full command and safety contract.
-- The **Contributing** section of [`README.md`](../README.md#contributing) — the offline checks
-  (`cargo test` per crate) to run before proposing a change, and where the work queue lives.
+- [GitHub Issues](https://github.com/LyraCoreProject/LyraCore/issues) — the work queue. Run the
+  offline checks (`cargo test` per crate) before proposing a change.
 - [`docs/danger-zones.md`](./danger-zones.md) — authoritative traps, tooling gotchas, and the
   production (five-database) deploy procedure. `dev up` runs its own smaller four-database fixture
   topology, which is the deliberate exception to §3; do not use it to launch or repair a production
@@ -782,8 +782,9 @@ name matches nothing and still exits 1 — indistinguishable from "already stopp
 
 If you are here to contribute rather than to play:
 
-- The **Contributing** section of [`README.md`](../README.md#contributing) — the offline checks
-  that must be green, and where to start (`good first issue` / `help wanted` labels).
+- [GitHub Issues](https://github.com/LyraCoreProject/LyraCore/issues) — where work is tracked;
+  the `good first issue` and `help wanted` labels are where to start. Run `cargo test` before
+  proposing a change.
 - [`SUPPORT.md`](../SUPPORT.md) — where to ask a question, and what is in and out of scope.
 - **Security reports** go through GitHub's private
   [vulnerability reporting](https://github.com/LyraCoreProject/LyraCore/security/advisories/new),
