@@ -1,4 +1,4 @@
-<p align="center"><img src="./lyracore-icon.svg" alt="LyraCore" width="140"><h1 align="center">Lyracore</h1><h3 align="center">A vanilla server built for change
+<p align="center"><img src="./lyracore-icon-light.svg" alt="LyraCore" width="140"><h1 align="center">Lyracore</h1><h3 align="center">A vanilla server built for change
 </h3></p>
 
 
