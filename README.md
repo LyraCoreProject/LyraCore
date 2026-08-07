@@ -30,9 +30,8 @@ Point your client's `realmlist.wtf` at `127.0.0.1` and play.
 
 ## Can I use my existing client?
 
-A client never speaks to SpacetimeDB — it speaks SRP6 and WoW opcodes — so the gateway is translator and every mutation the world can undergo is a reducer call. The
-realm is sharded across several databases running the *same* wasm; `dev up` brings up a sharded
-fixture with a live seam you can walk across mid-session.
+Yes! A client never speaks to SpacetimeDB — it speaks SRP6 and WoW opcodes — so the client never knows the diffference. The gateway is translator and every mutation the world can undergo is a reducer call. The
+realm is sharded across several databases.
 
 
 ## Importing data
