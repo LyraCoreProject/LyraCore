@@ -1553,6 +1553,7 @@ fn charge_to_target(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
         c.z = nz;
         c.grid_x = gx;
         c.grid_y = gy;
+        c.cell = lyracore_shared::spatial::grid_cell_id(gx, gy);
         c.orientation = facing;
         c.last_move_ms = now_ms;
         entities.guid().update(c);

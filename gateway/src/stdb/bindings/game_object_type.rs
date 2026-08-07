@@ -20,6 +20,7 @@ pub struct GameObject {
     pub instance_id: u64,
     pub grid_x: i32,
     pub grid_y: i32,
+    pub cell: i64,
 }
 
 impl __sdk::InModule for GameObject {
@@ -43,6 +44,7 @@ pub struct GameObjectCols {
     pub instance_id: __sdk::__query_builder::Col<GameObject, u64>,
     pub grid_x: __sdk::__query_builder::Col<GameObject, i32>,
     pub grid_y: __sdk::__query_builder::Col<GameObject, i32>,
+    pub cell: __sdk::__query_builder::Col<GameObject, i64>,
 }
 
 impl __sdk::__query_builder::HasCols for GameObject {
@@ -62,6 +64,7 @@ impl __sdk::__query_builder::HasCols for GameObject {
             instance_id: __sdk::__query_builder::Col::new(table_name, "instance_id"),
             grid_x: __sdk::__query_builder::Col::new(table_name, "grid_x"),
             grid_y: __sdk::__query_builder::Col::new(table_name, "grid_y"),
+            cell: __sdk::__query_builder::Col::new(table_name, "cell"),
         }
     }
 }

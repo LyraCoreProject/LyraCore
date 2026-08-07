@@ -92,6 +92,7 @@ pub(crate) fn entity_view(e: WorldEntity, zone_id: u32) -> crate::codec::EntityV
     crate::codec::EntityView {
         guid: e.guid,
         map_id: e.map_id,
+        instance_id: e.instance_id,
         zone_id,
         x: e.x,
         y: e.y,

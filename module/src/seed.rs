@@ -586,6 +586,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 5.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 5.0, hw::Y).1,
+        cell: lyracore_shared::spatial::cell_id_at(hw::X + 5.0, hw::Y),
     });
     ctx.db
         .game_gameobject_template()
@@ -615,6 +616,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 8.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 8.0, hw::Y).1,
+        cell: lyracore_shared::spatial::cell_id_at(hw::X + 8.0, hw::Y),
     });
 
     // --- GATHER nodes: a Copper Vein (MINING) + a Peacebloom (HERBALISM) by the player spawn so the
@@ -650,6 +652,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 6.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 6.0, hw::Y).1,
+        cell: lyracore_shared::spatial::cell_id_at(hw::X + 6.0, hw::Y),
     });
     ctx.db
         .game_gameobject_template()
@@ -679,6 +682,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         instance_id: 0,       // seeded demo GOs live in the open world (190 slice 2),
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 7.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 7.0, hw::Y).1,
+        cell: lyracore_shared::spatial::cell_id_at(hw::X + 7.0, hw::Y),
     });
 
     // --- TIER-VARIETY DEMONSTRATOR (gather multinodes): an IN-PLACE Copper point that ~15% of the time

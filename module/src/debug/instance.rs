@@ -213,9 +213,11 @@ pub fn debug_backfill_go_grid(ctx: &ReducerContext) {
     for guid in all {
         if let Some(mut g) = gos.guid().find(guid) {
             let (gx, gy) = lyracore_shared::spatial::grid_cell(g.x, g.y);
-            if g.grid_x != gx || g.grid_y != gy {
+            // #456: `cell` too — see `debug_regrid`'s note; a migrated row's grid is already right.
+            if g.grid_x != gx || g.grid_y != gy || g.cell != lyracore_shared::spatial::grid_cell_id(gx, gy) {
                 g.grid_x = gx;
                 g.grid_y = gy;
+                g.cell = lyracore_shared::spatial::grid_cell_id(gx, gy);
                 gos.guid().update(g);
                 n += 1;
             }

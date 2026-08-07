@@ -15,6 +15,7 @@ pub struct EntityMotion {
     pub opcode: u16,
     pub movement_info: Vec<u8>,
     pub seq: u32,
+    pub cell: i64,
 }
 
 impl __sdk::InModule for EntityMotion {
@@ -33,6 +34,7 @@ pub struct EntityMotionCols {
     pub opcode: __sdk::__query_builder::Col<EntityMotion, u16>,
     pub movement_info: __sdk::__query_builder::Col<EntityMotion, Vec<u8>>,
     pub seq: __sdk::__query_builder::Col<EntityMotion, u32>,
+    pub cell: __sdk::__query_builder::Col<EntityMotion, i64>,
 }
 
 impl __sdk::__query_builder::HasCols for EntityMotion {
@@ -47,6 +49,7 @@ impl __sdk::__query_builder::HasCols for EntityMotion {
             opcode: __sdk::__query_builder::Col::new(table_name, "opcode"),
             movement_info: __sdk::__query_builder::Col::new(table_name, "movement_info"),
             seq: __sdk::__query_builder::Col::new(table_name, "seq"),
+            cell: __sdk::__query_builder::Col::new(table_name, "cell"),
         }
     }
 }

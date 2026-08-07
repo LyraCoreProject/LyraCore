@@ -25,6 +25,11 @@ use crate::{game_character, game_character_buyback, game_corpse, game_instance};
     public,
     index(accessor = by_map, btree(columns = [map_id])),
     index(accessor = by_grid, btree(columns = [map_id, instance_id, grid_x, grid_y])),
+    // #456: the AOI subscription's index. Exactly 3 columns, all matched by equality terms —
+    // the only shape SpacetimeDB 2.7.1's subscription planner can serve (see the `cell` column).
+    // `by_grid` stays: the MODULE reaches it through the generated index accessor, not SQL, so
+    // the 3-column planner limit does not apply to `helpers::entities_near`.
+    index(accessor = by_cell, btree(columns = [map_id, instance_id, cell])),
     // `entity_by_owner` is the auth prologue of ~77 player reducer call sites; without this it was a
     // full table scan per transaction (perf catalog 1.2). `owner_identity` never changes for a live
     // row, so maintenance is insert/delete-only.
@@ -256,6 +261,29 @@ pub struct WorldEntity {
     /// bool itself — the rest byte ships via PLAYER_BYTES_2 in `game_rest_state_event`).
     #[default(false)]
     pub resting: bool,
+    /// #456: `(grid_x, grid_y)` packed into ONE indexed value — the AOI subscription's cell key.
+    ///
+    /// SpacetimeDB 2.7.1's subscription planner can only serve a query from an index when EVERY
+    /// column of that index is matched by an equality term, and it skips any index with more than 3
+    /// columns outright (`MAX_EXACT_INDEX_COLS`); range predicates are never index-served at all
+    /// (`IndexProbe::Range` — "we currently never construct this variant") and an `OR` is evaluated
+    /// row-by-row. So the four-column `by_grid` index is unreachable from SQL, and a
+    /// `grid_x BETWEEN .. AND grid_y BETWEEN ..` box degrades to a full partition scan — 1.1 BILLION
+    /// rows examined on `game_world_entity` in a 445-player measurement, 53% of all writer time.
+    /// Folding the two grid columns into one makes `by_cell` a 3-column all-equality index, which the
+    /// planner CAN serve, and the AOI box becomes 25 point probes instead of a scan.
+    ///
+    /// ALWAYS written from `spatial::grid_cell_id(grid_x, grid_y)` in the SAME statement that writes
+    /// `grid_x`/`grid_y` — a stale value here does not merely slow a query down, it puts the row in
+    /// the wrong cell and shows players the wrong world. `module/src/tripwires.rs::grid_cell_tripwire`
+    /// is the enforcement.
+    ///
+    /// `#[default(0i64)]` (typed — an i64 column needs an explicitly-typed literal) + END-appended so
+    /// `publish` auto-migrates. **The default is cell (0, 0), not "unset"**, so every pre-existing row
+    /// is mis-addressed until `backfill_cell_ids` re-stamps it — see that reducer for the
+    /// post-publish step this migration REQUIRES.
+    #[default(0i64)]
+    pub cell: i64,
 }
 
 impl WorldEntity {
@@ -304,7 +332,9 @@ impl WorldEntity {
 #[table(
     accessor = game_entity_motion,
     public,
-    index(accessor = by_grid, btree(columns = [map_id, instance_id, grid_x, grid_y]))
+    index(accessor = by_grid, btree(columns = [map_id, instance_id, grid_x, grid_y])),
+    // #456: the AOI cell index — see the `cell` column's doc comment.
+    index(accessor = by_cell, btree(columns = [map_id, instance_id, cell]))
 )]
 pub struct EntityMotion {
     #[primary_key]
@@ -318,6 +348,29 @@ pub struct EntityMotion {
     pub opcode: u16,
     pub movement_info: Vec<u8>,
     pub seq: u32,
+    /// #456: `(grid_x, grid_y)` packed into ONE indexed value — the AOI subscription's cell key.
+    ///
+    /// SpacetimeDB 2.7.1's subscription planner can only serve a query from an index when EVERY
+    /// column of that index is matched by an equality term, and it skips any index with more than 3
+    /// columns outright (`MAX_EXACT_INDEX_COLS`); range predicates are never index-served at all
+    /// (`IndexProbe::Range` — "we currently never construct this variant") and an `OR` is evaluated
+    /// row-by-row. So the four-column `by_grid` index is unreachable from SQL, and a
+    /// `grid_x BETWEEN .. AND grid_y BETWEEN ..` box degrades to a full partition scan — 1.1 BILLION
+    /// rows examined on `game_world_entity` in a 445-player measurement, 53% of all writer time.
+    /// Folding the two grid columns into one makes `by_cell` a 3-column all-equality index, which the
+    /// planner CAN serve, and the AOI box becomes 25 point probes instead of a scan.
+    ///
+    /// ALWAYS written from `spatial::grid_cell_id(grid_x, grid_y)` in the SAME statement that writes
+    /// `grid_x`/`grid_y` — a stale value here does not merely slow a query down, it puts the row in
+    /// the wrong cell and shows players the wrong world. `module/src/tripwires.rs::grid_cell_tripwire`
+    /// is the enforcement.
+    ///
+    /// `#[default(0i64)]` (typed — an i64 column needs an explicitly-typed literal) + END-appended so
+    /// `publish` auto-migrates. **The default is cell (0, 0), not "unset"**, so every pre-existing row
+    /// is mis-addressed until `backfill_cell_ids` re-stamps it — see that reducer for the
+    /// post-publish step this migration REQUIRES.
+    #[default(0i64)]
+    pub cell: i64,
 }
 
 // ── Anti-cheat: movement plausibility (255, tier 1 — DETECT-AND-FLAG, never reject inline) ────────────
@@ -570,6 +623,7 @@ pub(crate) fn teleport_player(
         e.orientation = o;
         e.grid_x = grid_x;
         e.grid_y = grid_y;
+        e.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
         e.instance_id = instance_id;
         entities.guid().update(e);
     }
@@ -1192,6 +1246,7 @@ pub fn movement_update(
     mover.orientation = o;
     mover.grid_x = grid_x;
     mover.grid_y = grid_y;
+    mover.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
     mover.last_move_ms = move_time_ms;
     // Stamp the live movement flags (leading u32 of the MovementInfo wire layout, LE) so a peer's
     // CREATE encodes the current move state instead of idle (see WorldEntity::movement_flags).
@@ -1304,6 +1359,7 @@ pub fn movement_update(
                     instance_id,
                     grid_x,
                     grid_y,
+                    cell: lyracore_shared::spatial::grid_cell_id(grid_x, grid_y),
                     opcode,
                     movement_info: movement_info.clone(),
                     seq: prev.seq.wrapping_add(1),
@@ -1317,6 +1373,7 @@ pub fn movement_update(
                     instance_id,
                     grid_x,
                     grid_y,
+                    cell: lyracore_shared::spatial::grid_cell_id(grid_x, grid_y),
                     opcode,
                     movement_info: movement_info.clone(),
                     seq: 0,

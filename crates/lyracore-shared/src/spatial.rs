@@ -37,6 +37,51 @@ pub fn grid_cell(x: f32, y: f32) -> (i32, i32) {
     (gx, gy)
 }
 
+/// Pack a `(grid_x, grid_y)` cell address into ONE `i64` — the `cell` column every AOI-scoped table
+/// carries alongside its `grid_x`/`grid_y` pair (#456).
+///
+/// # Why a packed column exists at all
+///
+/// SpacetimeDB 2.7.1's subscription planner (`IxScanFromPredicates`) can only serve a query from an
+/// index when **every column of that index is matched by an equality term**, and it skips any index
+/// with more than 3 columns outright (`MAX_EXACT_INDEX_COLS = 3`). Range predicates are never
+/// index-served at all — `IndexProbe::Range` is documented in that release as "we currently never
+/// construct this variant" — and a disjunction (`OR`) is evaluated row-by-row, never turned into
+/// multiple probes. So the 4-column `by_grid` index `(map_id, instance_id, grid_x, grid_y)` is
+/// *unusable* from SQL, and a `grid_x BETWEEN .. AND grid_y BETWEEN ..` box is a residual filter over
+/// a full scan no matter how the columns are ordered. Folding the two grid columns into one turns the
+/// only shape the planner CAN serve — a 3-column all-equality probe on
+/// `(map_id, instance_id, cell)` — into an exact match for a single grid cell.
+///
+/// # Why this encoding cannot collide
+///
+/// It is a **bijection** on the whole `(i32, i32)` domain, not merely collision-free over the
+/// coordinate range in use. `gx as i64` sign-extends and the `<< 32` leaves the low 32 bits zero;
+/// `gy as u32 as i64` is `gy`'s exact 32 two's-complement bits zero-extended into those low 32 bits.
+/// The two operands therefore occupy **disjoint bit ranges**, so the `|` loses nothing and the high
+/// and low halves recover `gx` and `gy` exactly ([`grid_cell_of_id`]). Two distinct cells cannot
+/// share an id because that would require two distinct 64-bit patterns to be equal. No assumption is
+/// made about map extent, cell size, or sign — a negative cell index on either axis round-trips like
+/// any other, which matters because [`grid_cell`] inverts the axis and out-of-bounds coordinates
+/// legitimately produce negative indices.
+pub fn grid_cell_id(gx: i32, gy: i32) -> i64 {
+    ((gx as i64) << 32) | (gy as u32 as i64)
+}
+
+/// Inverse of [`grid_cell_id`] — recovers `(grid_x, grid_y)` from a packed cell id. Exists to make
+/// the bijection testable (and to keep the encoding honest: an encoding you cannot invert is one you
+/// cannot prove collision-free).
+pub fn grid_cell_of_id(id: i64) -> (i32, i32) {
+    ((id >> 32) as i32, (id as u32) as i32)
+}
+
+/// The packed [`grid_cell_id`] for a world position — the one-call form every row writer uses, so a
+/// `cell` column can never disagree with the `grid_x`/`grid_y` pair written beside it.
+pub fn cell_id_at(x: f32, y: f32) -> i64 {
+    let (gx, gy) = grid_cell(x, y);
+    grid_cell_id(gx, gy)
+}
+
 /// The inclusive grid-cell box `(gx0, gx1, gy0, gy1)` covering every point within `radius` yards
 /// of `(x, y)` — the query shape for a `by_grid`-indexed neighborhood read.
 /// `grid_cell` inverts the axis (`(MAP_COORD_MAX - v) / CELL`), so `+radius` yields the LOW cell
@@ -126,6 +171,13 @@ impl GridBox {
         (gx_min..=gx_max).flat_map(move |gx| (gy_min..=gy_max).map(move |gy| (gx, gy)))
     }
 
+    /// The box's cells as PACKED ids (#456) — [`GridBox::cells`] run through [`grid_cell_id`]. This is
+    /// what the AOI subscription enumerates: one equality query per cell is the only box-shaped read
+    /// SpacetimeDB 2.7.1's planner can serve entirely from an index (see [`grid_cell_id`]).
+    pub fn cell_ids(self) -> impl Iterator<Item = i64> {
+        self.cells().map(|(gx, gy)| grid_cell_id(gx, gy))
+    }
+
     /// Should the box RECENTER on `(map_id, x, y)`? True when the position is on a different map, or in a
     /// different cell than the anchor (the player crossed a cell boundary). The cell-change trigger keeps
     /// the player roughly centered; at 50yd a walking player crosses a boundary every ~7s, so the resubscribe
@@ -175,6 +227,15 @@ impl GridRect {
     /// can feed one query-builder.
     pub fn bounds(&self) -> (i32, i32, i32, i32) {
         (self.gx_min, self.gx_max, self.gy_min, self.gy_max)
+    }
+
+    /// Every cell in the rect as a PACKED id (#456) — the rect twin of [`GridBox::cell_ids`], and what
+    /// a per-shard AOI rect actually subscribes. A rect built from a whole box
+    /// ([`GridRect::from_box`]) emits the identical id sequence [`GridBox::cell_ids`] does, which is
+    /// what keeps a non-straddling recenter byte-identical to the login subscription.
+    pub fn cell_ids(self) -> impl Iterator<Item = i64> {
+        (self.gx_min..=self.gx_max)
+            .flat_map(move |gx| (self.gy_min..=self.gy_max).map(move |gy| grid_cell_id(gx, gy)))
     }
 }
 
@@ -250,6 +311,117 @@ mod tests {
             neg.cells().any(|c| c == (neg.gx, neg.gy)),
             "the anchor cell must be in its own box"
         );
+    }
+
+    /// #456: the packed `cell` id must be a BIJECTION over `(i32, i32)`. Every writer of `grid_x`/
+    /// `grid_y` also writes this value and the AOI subscription probes it with an equality, so a
+    /// collision would silently merge two cells — two players 500yd apart would see each other, and
+    /// the entities of one cell would be delivered to the wrong box. Round-tripping is the proof:
+    /// an invertible map cannot collide.
+    #[test]
+    fn grid_cell_id_round_trips_and_never_collides() {
+        // Round-trip the interesting corners of the i32 domain, not just the coordinate range in use:
+        // grid_cell inverts the axis, so out-of-bounds world coords legitimately go negative.
+        let interesting = [
+            0i32,
+            1,
+            -1,
+            2,
+            -2,
+            682,
+            -682,
+            0xFFFF,
+            -0xFFFF,
+            i32::MAX,
+            i32::MIN,
+            i32::MAX - 1,
+            i32::MIN + 1,
+        ];
+        let mut seen = std::collections::HashMap::new();
+        for gx in interesting {
+            for gy in interesting {
+                let id = grid_cell_id(gx, gy);
+                assert_eq!(
+                    grid_cell_of_id(id),
+                    (gx, gy),
+                    "({gx},{gy}) did not round-trip through {id}"
+                );
+                assert_eq!(
+                    seen.insert(id, (gx, gy)),
+                    None,
+                    "id {id} collided: ({gx},{gy}) and {:?}",
+                    seen.get(&id)
+                );
+            }
+        }
+        // The two halves are DISJOINT bit ranges: changing gy can never disturb the gx half and vice
+        // versa. This is the property the `|` relies on, and the one a `gx * K + gy` style pack
+        // (which overflows into its neighbour once gy exceeds K) would not have.
+        assert_eq!(grid_cell_id(0, -1), 0x0000_0000_FFFF_FFFFu64 as i64);
+        assert_eq!(grid_cell_id(-1, 0), -1i64 << 32);
+        assert_ne!(grid_cell_id(1, 0), grid_cell_id(0, 1));
+        // An exhaustive sweep over a realistic map's cell range (map extent / GRID_CELL_SIZE is ~683
+        // cells per axis) — no duplicate across the whole plane, which is the live-data guarantee.
+        let mut all = std::collections::HashSet::new();
+        for gx in -5..=690 {
+            for gy in -5..=690 {
+                assert!(all.insert(grid_cell_id(gx, gy)), "duplicate at ({gx},{gy})");
+            }
+        }
+        assert_eq!(all.len(), 696 * 696);
+    }
+
+    /// `cell_id_at` must agree with `grid_cell` + `grid_cell_id` composed by hand — it is the ONE
+    /// call every row writer makes, so a divergence here would stamp a `cell` that disagrees with the
+    /// `grid_x`/`grid_y` written beside it on the same row.
+    #[test]
+    fn cell_id_at_matches_grid_cell_composed_with_the_packer() {
+        for (x, y) in [
+            (-8949.95f32, -132.493f32),
+            (0.0, 0.0),
+            (MAP_COORD_MAX, MAP_COORD_MAX),
+            (MAP_COORD_MAX + 1000.0, -MAP_COORD_MAX - 1000.0),
+            (1600.0, -4400.0),
+        ] {
+            let (gx, gy) = grid_cell(x, y);
+            assert_eq!(cell_id_at(x, y), grid_cell_id(gx, gy), "at ({x},{y})");
+            assert_eq!(grid_cell_of_id(cell_id_at(x, y)), (gx, gy));
+        }
+    }
+
+    /// `cell_ids()` must be exactly `cells()` packed — the AOI subscription enumerates the former and
+    /// the module's movement-recipient probe enumerates the latter, so the two describing different
+    /// cell sets would spawn a peer the relay never animates (or vice versa), the exact class
+    /// `grid_box_cells_are_exactly_the_cells_bounds_accepts` guards for the unpacked form.
+    #[test]
+    fn box_and_rect_cell_ids_are_exactly_the_packed_cells() {
+        let b = GridBox::around(0, -8949.95, -132.493);
+        let want: Vec<i64> = b.cells().map(|(gx, gy)| grid_cell_id(gx, gy)).collect();
+        let got: Vec<i64> = b.cell_ids().collect();
+        assert_eq!(got, want, "the box's packed ids must track cells() exactly");
+        let side = (2 * BOX_HALF_SPAN + 1) as usize;
+        assert_eq!(got.len(), side * side);
+        assert_eq!(
+            got.iter().copied().collect::<std::collections::HashSet<_>>()
+                .len(),
+            got.len(),
+            "a duplicate id inside one box would double-deliver a cell"
+        );
+        // A rect built from the whole box emits the IDENTICAL sequence — the property that keeps a
+        // non-straddling recenter byte-identical to the login subscription (see GridRect::from_box).
+        assert_eq!(
+            GridRect::from_box(&b).cell_ids().collect::<Vec<_>>(),
+            got,
+            "rect-of-a-whole-box must equal the box's own id sequence"
+        );
+        // A negative-anchor box behaves identically (no sign-dependent shortcuts in the packer).
+        let neg = GridBox {
+            map_id: 0,
+            gx: -3,
+            gy: -7,
+        };
+        assert_eq!(neg.cell_ids().count(), side * side);
+        assert!(neg.cell_ids().any(|id| id == grid_cell_id(neg.gx, neg.gy)));
     }
 
     #[test]

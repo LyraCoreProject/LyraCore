@@ -864,6 +864,28 @@ pub fn view_merge_enabled() -> bool {
     std::env::var("LYRACORE_VIEW_MERGE").map_or(true, |v| v != "0")
 }
 
+/// #456 — AOI box shape (house pattern: [`aoi_enabled`]/[`view_merge_enabled`]). Default ON: the box
+/// subscribes ONE EQUALITY QUERY PER CELL against the packed `cell` column, which is the only shape
+/// SpacetimeDB 2.7.1's planner can serve from an index (it needs every column of a ≤3-column index
+/// matched by an equality term, never serves a range, and never turns an `OR` into probes). Off, the
+/// box falls back to the single `grid_x`/`grid_y` BETWEEN range query per table — the pre-#456 shape,
+/// correct but a full partition scan per evaluation.
+///
+/// **This exists because one number in this repo argues against the default.** #190 measured that a
+/// per-cell subscription "costs more to REGISTER than a whole box range costs to EVALUATE", and the
+/// per-cell shape multiplies a player's registered query count by 25 (4 → 100 per box). That
+/// measurement was taken when no per-cell query could be index-served either — every registration
+/// carried a full-scan initial evaluation, so its registration cost was never separable from its scan
+/// cost, and a point probe against `by_cell` is a different animal. But the concern is real and this
+/// gateway cannot settle it offline, so the shape is a flag: `LYRACORE_AOI_CELL=0` restores the range
+/// box for a same-build A/B under load, no republish and no schema change needed.
+///
+/// Captured per box build (not once at startup) so an operator can flip it between two runs of the
+/// same gateway process if they are driving the comparison from outside.
+pub fn aoi_cell_queries_enabled() -> bool {
+    std::env::var("LYRACORE_AOI_CELL").map_or(true, |v| v != "0")
+}
+
 /// The seam-crossing notice: each warm handoff's start/complete as a System chat line to the
 /// crossing player. Default ON since #326 (house pattern: [`aoi_enabled`]), where it stopped being
 /// #72's opt-in operator testing aid and became a player-facing status line for the alpha. The

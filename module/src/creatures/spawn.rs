@@ -558,6 +558,7 @@ pub fn build_creature_entity(
         orientation: spawn.orientation,
         grid_x,
         grid_y,
+        cell: lyracore_shared::spatial::grid_cell_id(grid_x, grid_y),
         last_move_ms: 0,
         type_mask: constants::type_mask::CREATURE, // 0x9 (no PLAYER bit)
         entry: spawn.entry,
@@ -662,6 +663,7 @@ pub fn build_player_entity(
         orientation: character.orientation,
         grid_x,
         grid_y,
+        cell: lyracore_shared::spatial::grid_cell_id(grid_x, grid_y),
         last_move_ms: 0,
         type_mask: constants::type_mask::PLAYER,
         entry: 0,

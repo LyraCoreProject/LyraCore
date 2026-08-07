@@ -595,6 +595,7 @@ pub(crate) fn pass_pet(
                     pet.z = nz;
                     pet.grid_x = gx;
                     pet.grid_y = gy;
+                    pet.cell = spatial::grid_cell_id(gx, gy);
                     pet.last_move_ms = now_ms;
                     entities.guid().update(pet);
                 }

@@ -458,7 +458,7 @@ parity_test!(parity_game_world_entity, "game_world_entity", lyracore_module::Wor
     stamina, intellect, spirit, npc_flags, armor, leg_ends_ms, wp_target, movement_flags,
     combat_until_ms, pickpocketed, next_swing_spell, overpower_until_ms, revenge_until_ms,
     stance, owner_guid, skinned, mana_regen_paused_until_ms, death_expire_micros, instance_id,
-    run_speed_mult_bp, godmode, resting,
+    run_speed_mult_bp, godmode, resting, cell,
 });
 // Issue #48: `game_config` became gateway-subscribed so the startup instance-hosting check can read
 // `hosts_instances` back instead of guessing. The generated binding was STALE when that subscription
@@ -580,7 +580,21 @@ parity_test!(parity_game_player_skill, "game_player_skill", lyracore_module::Pla
 });
 parity_test!(parity_game_gameobject, "game_gameobject", lyracore_module::GameObject, bindings::game_object_type::GameObject, {
     guid, template_entry, map_id, x, y, z, orientation, state, created_at, respawn_at_micros,
-    instance_id, grid_x, grid_y,
+    instance_id, grid_x, grid_y, cell,
+});
+// #456: `game_entity_motion` and `game_creature_spline` are gateway-subscribed too — just through the
+// per-player AOI box rather than the coordinator's `SELECT *` list, which is why the completeness
+// guard below (it scans `connection.rs`) never asked for them and they went unpinned. Their bindings
+// decode positionally exactly like every other subscribed table, so a column added module-side
+// without the matching binding edit corrupts every row the AOI delivers. Pinned here now, since #456
+// END-appends `cell` to both. They are deliberately NOT added to `MANIFEST_TABLES`: that list is
+// cross-checked against the coordinator subscription strings, and these two are not on it.
+parity_test!(parity_game_entity_motion, "game_entity_motion", lyracore_module::EntityMotion, bindings::entity_motion_type::EntityMotion, {
+    guid, map_id, instance_id, grid_x, grid_y, opcode, movement_info, seq, cell,
+});
+parity_test!(parity_game_creature_spline, "game_creature_spline", lyracore_module::CreatureSpline, bindings::creature_spline_type::CreatureSpline, {
+    guid, start_micros, dur_ms, sx, sy, sz, dx, dy, dz, map_id, instance_id, grid_x, grid_y,
+    spline_id, run, cell,
 });
 parity_test!(parity_game_character_buyback, "game_character_buyback", lyracore_module::BuybackEntry, bindings::buyback_entry_type::BuybackEntry, {
     id, player_guid, item_entry, stack_count, price, soulbound,

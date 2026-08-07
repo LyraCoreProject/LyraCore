@@ -1501,6 +1501,7 @@ impl Coordinator {
         &self,
         account_id: u64,
         self_guid: u64,
+        login_instance: u64,
         login_map: u32,
         login_x: f32,
         login_y: f32,
@@ -4393,6 +4394,7 @@ impl Coordinator {
                 viewer_gates.clone(),
                 chat_seen.clone(),
                 emote_seen.clone(),
+                login_instance,
                 login_map,
                 login_x,
                 login_y,
@@ -4881,6 +4883,7 @@ mod tests {
             run_speed_mult_bp: 10_000,
             godmode: false,
             resting: false,
+            cell: lyracore_shared::spatial::grid_cell_id(0, 0),
         }
     }
 
@@ -5859,7 +5862,7 @@ mod tests {
         let code = scanned_source();
         assert!(
             code.contains(
-                "created.clone(), viewer_gates.clone(), chat_seen.clone(), emote_seen.clone(), login_map, login_x, login_y,"
+                "created.clone(), viewer_gates.clone(), chat_seen.clone(), emote_seen.clone(), login_instance, login_map, login_x, login_y,"
             ),
             "AreaOfInterestTracker::new() is no longer handed `chat_seen`/`emote_seen` — the SAME \
              sets `subscribe_player_events`'s home `on_chat`/`on_emote` insert into. Without this the \
@@ -6174,6 +6177,7 @@ mod tests {
             instance_id: 0,
             grid_x: 0,
             grid_y: 0,
+            cell: lyracore_shared::spatial::grid_cell_id(0, 0),
             opcode,
             movement_info,
             seq: 0,
@@ -6343,6 +6347,7 @@ mod tests {
                 grid_y: 0,
                 spline_id: 1,
                 run: true,
+                cell: lyracore_shared::spatial::grid_cell_id(0, 0),
             },
         );
         assert_eq!(
@@ -6610,6 +6615,7 @@ mod tests {
             grid_y: 0,
             spline_id: 1,
             run: true,
+            cell: lyracore_shared::spatial::grid_cell_id(0, 0),
         };
 
         // A session AT the threshold still receives its packet (this half is what stops the test from

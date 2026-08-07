@@ -92,7 +92,10 @@ pub struct CreatureMoveEvent {
 #[table(
     accessor = game_creature_spline,
     public,
-    index(accessor = by_grid, btree(columns = [map_id, instance_id, grid_x, grid_y]))
+    index(accessor = by_grid, btree(columns = [map_id, instance_id, grid_x, grid_y])),
+    // #456: the AOI cell index — exactly 3 columns, all matched by equality terms, which is the
+    // only shape SpacetimeDB 2.7.1's subscription planner can serve (see the `cell` column).
+    index(accessor = by_cell, btree(columns = [map_id, instance_id, cell]))
 )]
 pub struct CreatureSpline {
     #[primary_key]
@@ -126,6 +129,28 @@ pub struct CreatureSpline {
     pub spline_id: u32,
     #[default(false)]
     pub run: bool,
+    /// #456: `(grid_x, grid_y)` packed into ONE indexed value — the AOI subscription's cell key.
+    ///
+    /// SpacetimeDB 2.7.1's subscription planner can only serve a query from an index when EVERY
+    /// column of that index is matched by an equality term, and it skips any index with more than 3
+    /// columns outright (`MAX_EXACT_INDEX_COLS`); range predicates are never index-served at all
+    /// (`IndexProbe::Range` — "we currently never construct this variant") and an `OR` is evaluated
+    /// row-by-row. So a `grid_x BETWEEN .. AND grid_y BETWEEN ..` box degrades to a full partition
+    /// scan — 1.1 BILLION rows examined on `game_gameobject` in a 445-player measurement. Folding the
+    /// two grid columns into one makes `by_cell` a 3-column all-equality index, which the planner CAN
+    /// serve, and the AOI box becomes 25 point probes instead of a scan.
+    ///
+    /// ALWAYS written from `spatial::grid_cell_id(grid_x, grid_y)` in the SAME statement that writes
+    /// `grid_x`/`grid_y` — a stale value here does not merely slow a query down, it puts the row in
+    /// the wrong cell and shows players the wrong world. `module/src/tripwires.rs::grid_cell_tripwire`
+    /// is the enforcement.
+    ///
+    /// `#[default(0i64)]` (typed — an i64 column needs an explicitly-typed literal) + END-appended so
+    /// `publish` auto-migrates. **The default is cell (0, 0), not "unset"**, so a pre-existing row is
+    /// mis-addressed until its next leg re-stamps it (sub-second for anything actually moving);
+    /// `backfill_cell_ids` covers it for completeness.
+    #[default(0i64)]
+    pub cell: i64,
 }
 
 // ===========================================================================================
@@ -741,6 +766,7 @@ pub(crate) fn emit_move_spline(
         instance_id,
         grid_x: grid.0,
         grid_y: grid.1,
+        cell: lyracore_shared::spatial::grid_cell_id(grid.0, grid.1),
         spline_id,
         run,
     };
@@ -951,6 +977,7 @@ fn pass_advance_splines(ctx: &ReducerContext, now_us: u64, now_ms: u32) -> usize
             e.z = pz;
             e.grid_x = gx;
             e.grid_y = gy;
+            e.cell = lyracore_shared::spatial::grid_cell_id(gx, gy);
             entities.guid().update(e);
             // 0-dur STOP at the render point (snap-and-hold), through the one relay path.
             emit_move_spline(
@@ -972,6 +999,7 @@ fn pass_advance_splines(ctx: &ReducerContext, now_us: u64, now_ms: u32) -> usize
         e.z = pz;
         e.grid_x = gx;
         e.grid_y = gy;
+        e.cell = lyracore_shared::spatial::grid_cell_id(gx, gy);
         e.last_move_ms = now_ms;
         entities.guid().update(e);
         if t >= 1.0 {

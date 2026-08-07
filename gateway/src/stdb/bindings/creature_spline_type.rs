@@ -22,6 +22,7 @@ pub struct CreatureSpline {
     pub grid_y: i32,
     pub spline_id: u32,
     pub run: bool,
+    pub cell: i64,
 }
 
 impl __sdk::InModule for CreatureSpline {
@@ -47,6 +48,7 @@ pub struct CreatureSplineCols {
     pub grid_y: __sdk::__query_builder::Col<CreatureSpline, i32>,
     pub spline_id: __sdk::__query_builder::Col<CreatureSpline, u32>,
     pub run: __sdk::__query_builder::Col<CreatureSpline, bool>,
+    pub cell: __sdk::__query_builder::Col<CreatureSpline, i64>,
 }
 
 impl __sdk::__query_builder::HasCols for CreatureSpline {
@@ -68,6 +70,7 @@ impl __sdk::__query_builder::HasCols for CreatureSpline {
             grid_y: __sdk::__query_builder::Col::new(table_name, "grid_y"),
             spline_id: __sdk::__query_builder::Col::new(table_name, "spline_id"),
             run: __sdk::__query_builder::Col::new(table_name, "run"),
+            cell: __sdk::__query_builder::Col::new(table_name, "cell"),
         }
     }
 }

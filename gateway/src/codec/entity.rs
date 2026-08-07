@@ -15,6 +15,11 @@ use super::*;
 pub struct EntityView {
     pub guid: u64,
     pub map_id: u32,
+    /// The partition half of the `(map_id, instance_id)` address (#456): 0 for the open world, the
+    /// live instance id inside a dungeon copy. Carried here because `enter_world` needs it to scope
+    /// the AOI subscription, and the raw `game_world_entity` row is not otherwise in scope there —
+    /// `player_login` hands back a view, not the row.
+    pub instance_id: u64,
     pub zone_id: u32,
     pub x: f32,
     pub y: f32,

@@ -67,6 +67,7 @@ pub struct WorldEntity {
     pub run_speed_mult_bp: u32,
     pub godmode: bool,
     pub resting: bool,
+    pub cell: i64,
 }
 
 impl __sdk::InModule for WorldEntity {
@@ -137,6 +138,7 @@ pub struct WorldEntityCols {
     pub run_speed_mult_bp: __sdk::__query_builder::Col<WorldEntity, u32>,
     pub godmode: __sdk::__query_builder::Col<WorldEntity, bool>,
     pub resting: __sdk::__query_builder::Col<WorldEntity, bool>,
+    pub cell: __sdk::__query_builder::Col<WorldEntity, i64>,
 }
 
 impl __sdk::__query_builder::HasCols for WorldEntity {
@@ -212,6 +214,7 @@ impl __sdk::__query_builder::HasCols for WorldEntity {
             run_speed_mult_bp: __sdk::__query_builder::Col::new(table_name, "run_speed_mult_bp"),
             godmode: __sdk::__query_builder::Col::new(table_name, "godmode"),
             resting: __sdk::__query_builder::Col::new(table_name, "resting"),
+            cell: __sdk::__query_builder::Col::new(table_name, "cell"),
         }
     }
 }

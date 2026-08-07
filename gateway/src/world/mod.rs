@@ -661,6 +661,7 @@ pub trait WorldStore: Send + Sync {
         &self,
         account_id: u64,
         self_guid: u64,
+        login_instance: u64,
         login_map: u32,
         login_x: f32,
         login_y: f32,
@@ -2602,7 +2603,15 @@ fn drive_warm_handoff_inner<St: WorldStore + ?Sized>(
     // for themself, the same property a world-port re-entry already relies on (see `enter_world`'s
     // doc: "so entities already in view... arrive after the client is in-world").
     let new_subs =
-        dst.subscribe_player_events(conn.account_id, self_guid, map_id, x, y, tx.clone())?;
+        dst.subscribe_player_events(
+            conn.account_id,
+            self_guid,
+            plan.dest_instance_id,
+            map_id,
+            x,
+            y,
+            tx.clone(),
+        )?;
     let WorldState::InWorld(iw) = &mut conn.state else {
         return Err(anyhow!("warm handoff: session left InWorld mid-drive"));
     };
@@ -2790,6 +2799,7 @@ fn enter_world<St: WorldStore + ?Sized>(
     let subs = store.subscribe_player_events(
         conn.account_id,
         character_guid,
+        entity.instance_id,
         entity.map_id,
         entity.x,
         entity.y,

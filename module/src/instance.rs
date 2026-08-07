@@ -737,6 +737,7 @@ pub(crate) fn create_instance_with_id(
             instance_id,
             grid_x: lyracore_shared::spatial::grid_cell(src.x, src.y).0,
             grid_y: lyracore_shared::spatial::grid_cell(src.x, src.y).1,
+            cell: lyracore_shared::spatial::cell_id_at(src.x, src.y),
         });
         next_go_seq += 1;
         copied += 1;

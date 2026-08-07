@@ -58,7 +58,8 @@ use crate::{
     build_creature_entity, game_character, game_config, game_creature_move_schedule,
     game_creature_spawn, game_creature_template, game_gameobject, game_gameobject_pool,
     game_gameobject_pool_member, game_gameobject_template, game_gameobject_unlocked,
-    game_ground_area, game_item_instance, game_item_template, game_melee_attack,
+    game_creature_spline, game_entity_motion, game_ground_area, game_item_instance,
+    game_item_template, game_melee_attack,
     game_quest_template, game_spell, game_spell_effect, game_world_entity, CreatureMoveSchedule,
     CreatureSpawn, GroundArea, ItemInstance, ServerConfig,
 };
@@ -681,6 +682,7 @@ pub fn debug_spawn_gameobject(
             instance_id: 0,       // debug spawns land in the open world (190 slice 2)
             grid_x: lyracore_shared::spatial::grid_cell(x, y).0,
             grid_y: lyracore_shared::spatial::grid_cell(x, y).1,
+            cell: lyracore_shared::spatial::cell_id_at(x, y),
         });
     Ok(())
 }
@@ -1390,6 +1392,88 @@ pub fn debug_set_xp_rate(ctx: &ReducerContext, rate: f32) -> Result<(), String> 
     Ok(())
 }
 
+/// #456 — the REQUIRED post-publish step for the `cell` column migration.
+///
+/// `cell` was END-appended to the four AOI-scoped tables with `#[default(0i64)]`, and 0 is not a
+/// sentinel: it is the legitimate id of cell (0, 0). So on the first publish after #456 EVERY
+/// pre-existing row claims to live in that one cell, and the AOI subscription — which now probes
+/// `cell` by equality — finds nothing where those rows actually are. Moving entities self-heal on
+/// their next heartbeat or spline leg (sub-second), but **gameobjects are static and never re-stamp
+/// themselves**: without this sweep, every imported GO in the world stays invisible forever.
+///
+/// Run once per shard immediately after publishing, on all five databases:
+/// `spacetime call <db> debug_backfill_cell_ids`
+///
+/// Idempotent and safe to re-run: it recomputes `cell` from each row's own already-correct
+/// `grid_x`/`grid_y` (NOT from `x`/`y` — re-deriving the grid here would silently double as a
+/// re-grid, which is `debug_regrid`'s job and a different decision) and writes only rows that differ.
+/// Collect-then-update so the table is not mutated mid-iteration.
+#[reducer]
+pub fn debug_backfill_cell_ids(ctx: &ReducerContext) -> Result<(), String> {
+    let mut totals: Vec<(&str, usize)> = Vec::new();
+
+    let entities = ctx.db.game_world_entity();
+    let stale: Vec<u64> = entities
+        .iter()
+        .filter(|e| e.cell != spatial::grid_cell_id(e.grid_x, e.grid_y))
+        .map(|e| e.guid)
+        .collect();
+    totals.push(("game_world_entity", stale.len()));
+    for guid in stale {
+        if let Some(mut e) = entities.guid().find(guid) {
+            e.cell = spatial::grid_cell_id(e.grid_x, e.grid_y);
+            entities.guid().update(e);
+        }
+    }
+
+    let gos = ctx.db.game_gameobject();
+    let stale: Vec<u64> = gos
+        .iter()
+        .filter(|g| g.cell != spatial::grid_cell_id(g.grid_x, g.grid_y))
+        .map(|g| g.guid)
+        .collect();
+    totals.push(("game_gameobject", stale.len()));
+    for guid in stale {
+        if let Some(mut g) = gos.guid().find(guid) {
+            g.cell = spatial::grid_cell_id(g.grid_x, g.grid_y);
+            gos.guid().update(g);
+        }
+    }
+
+    let motions = ctx.db.game_entity_motion();
+    let stale: Vec<u64> = motions
+        .iter()
+        .filter(|m| m.cell != spatial::grid_cell_id(m.grid_x, m.grid_y))
+        .map(|m| m.guid)
+        .collect();
+    totals.push(("game_entity_motion", stale.len()));
+    for guid in stale {
+        if let Some(mut m) = motions.guid().find(guid) {
+            m.cell = spatial::grid_cell_id(m.grid_x, m.grid_y);
+            motions.guid().update(m);
+        }
+    }
+
+    let splines = ctx.db.game_creature_spline();
+    let stale: Vec<u64> = splines
+        .iter()
+        .filter(|s| s.cell != spatial::grid_cell_id(s.grid_x, s.grid_y))
+        .map(|s| s.guid)
+        .collect();
+    totals.push(("game_creature_spline", stale.len()));
+    for guid in stale {
+        if let Some(mut s) = splines.guid().find(guid) {
+            s.cell = spatial::grid_cell_id(s.grid_x, s.grid_y);
+            splines.guid().update(s);
+        }
+    }
+
+    for (table, n) in totals {
+        log::info!("debug_backfill_cell_ids: {table} — {n} row(s) re-stamped");
+    }
+    Ok(())
+}
+
 /// Re-stamp `grid_x`/`grid_y` on every `game_world_entity` from its live `(x, y)` with the CURRENT
 /// `GRID_CELL_SIZE`. Run after changing the AOI cell size: the columns are baked, so a constant change
 /// alone leaves stationary entities at stale cells (moving ones self-correct on their next move).
@@ -1401,7 +1485,10 @@ pub fn debug_regrid(ctx: &ReducerContext) -> Result<(), String> {
         .iter()
         .filter_map(|e| {
             let (gx, gy) = spatial::grid_cell(e.x, e.y);
-            (e.grid_x != gx || e.grid_y != gy).then_some((e.guid, gx, gy))
+            // #456: `cell` too — a migrated row has the RIGHT grid_x/grid_y and a stale cell of 0,
+            // so comparing only the grid columns would skip every row this sweep exists to fix.
+            (e.grid_x != gx || e.grid_y != gy || e.cell != spatial::grid_cell_id(gx, gy))
+                .then_some((e.guid, gx, gy))
         })
         .collect();
     let n = updates.len();
@@ -1409,6 +1496,7 @@ pub fn debug_regrid(ctx: &ReducerContext) -> Result<(), String> {
         if let Some(mut e) = entities.guid().find(guid) {
             e.grid_x = gx;
             e.grid_y = gy;
+            e.cell = lyracore_shared::spatial::grid_cell_id(gx, gy);
             entities.guid().update(e);
         }
     }

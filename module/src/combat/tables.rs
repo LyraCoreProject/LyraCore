@@ -1072,6 +1072,7 @@ mod tests {
             orientation: 0.0,
             grid_x: 0,
             grid_y: 0,
+            cell: lyracore_shared::spatial::grid_cell_id(0, 0),
             last_move_ms: 0,
             type_mask: 0,
             entry: 0,

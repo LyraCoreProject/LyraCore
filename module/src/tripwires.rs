@@ -279,7 +279,7 @@ mod partition_discipline_tripwire {
         // Diagnostics and harness code — never on a gameplay path. #386 split the former single
         // `debug.rs` (budget 9, after #368 dropped it from 12) into a directory; the 9 raw scans
         // landed in two of the seven files — same total, just split along the new file boundary.
-        ("module/src/debug/mod.rs", 7, "`debug_reducers`-gated test harness; compiled out of production builds entirely"),
+        ("module/src/debug/mod.rs", 9, "`debug_reducers`-gated test harness; compiled out of production builds entirely (2 of these are #456's `debug_backfill_cell_ids`, a deliberately whole-shard migration sweep — each shard runs it once after the publish that adds the `cell` column)"),
         ("module/src/debug/instance.rs", 2, "`debug_reducers`-gated test harness; compiled out of production builds entirely"),
         // Importers — realm-wide by definition: they wipe and rebuild every partition at once.
         ("module/src/creatures/spawn.rs", 4, "`import_creature_spawns` drops every creature entity + spawn row before reloading the world; +1 for `debug_normalize_spawn_timers`, a one-shot operator migration that must visit this database's whole spawn table by definition; +1 for `debug_retire_region_creatures` (#194), which manages the partitioning itself — it scans spawn HOMES to hand a region's population to its owning shard"),
@@ -848,6 +848,125 @@ mod gc_reap_tripwire {
              dedicated block or sweep fn called from there (see `corpse::sweep_corpse_decay` for the \
              pattern: gc.rs calls it, it owns the policy). OR add the accessor to `EXEMPT_ACCESSORS` \
              above with a comment justifying why it is intentionally unreaped."
+        );
+    }
+}
+
+// =================================================================================================
+//  #456: every `grid_x` write is accompanied by the packed `cell` write
+// =================================================================================================
+
+/// The four AOI-scoped tables carry a `cell` column that packs `(grid_x, grid_y)` into one indexed
+/// value, because that is the only shape SpacetimeDB 2.7.1's subscription planner can serve from an
+/// index. It is therefore a DENORMALIZATION, and the usual denormalization hazard applies with an
+/// unusually nasty failure mode: a row whose `cell` disagrees with its `grid_x`/`grid_y` is not
+/// slow, it is in the WRONG PLACE. The AOI subscription probes `cell`, so such a row is invisible to
+/// every player standing on it and visible to whoever happens to occupy the cell it wrongly claims.
+///
+/// Nothing in the type system couples them: `grid_x`, `grid_y` and `cell` are three independent
+/// columns, and the census behind #456 found **24 independent write sites** across 8 files, with no
+/// shared constructor for `game_world_entity` re-stamps (7 hand-rolled `e.grid_x = ..` runs) or for
+/// `game_gameobject` (9 independent struct literals). Adding a 25th and forgetting the third line
+/// compiles clean, passes every existing test, and shows up live as entities that vanish.
+///
+/// So: this scan requires every `grid_x` WRITE — a `grid_x: ..` struct-literal field or a
+/// `<recv>.grid_x = ..` assignment — to have a `cell` write within the same short window of source
+/// text. It is deliberately textual and deliberately local: the point is to fail the build next to
+/// the line someone just wrote, not to prove a semantic property.
+#[cfg(test)]
+pub(crate) mod grid_cell_tripwire {
+    use crate::test_scan::{line_of, on_comment_line};
+
+    /// How far after a `grid_x` write the matching `cell` write may sit. Every real site writes the
+    /// three within a few adjacent lines; 400 characters is roomy enough for a doc comment between
+    /// them and far too tight to reach an unrelated statement.
+    const WINDOW: usize = 400;
+
+    /// Files whose `grid_x` mentions are reads, table DEFINITIONS, or fixtures for a table with no
+    /// `cell` column at all — assembled at run time so this list cannot match itself.
+    fn is_exempt(path: &str) -> bool {
+        // `helpers.rs` reads the grid off rows (`grid_of`, `entity_addr`) and its ONE fixture writer
+        // is covered; the exemptions below are files where `grid_x` appears only in a signature,
+        // a tuple destructure or a comment.
+        [
+            "module/src/tripwires.rs",
+            "module/src/region.rs",
+        ]
+        .iter()
+        .any(|p| path.ends_with(p) || path.replace('\\', "/").ends_with(p))
+    }
+
+    /// The AOI-scoped tables' own `#[table]` definitions declare `pub grid_x: i32` next to a `cell`
+    /// column further down the struct — further than WINDOW, and not a "write" in any case. Skip a
+    /// match that is a struct FIELD DECLARATION rather than an initializer or assignment.
+    fn is_field_declaration(code: &str, idx: usize) -> bool {
+        let line_start = code[..idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let line_end = code[idx..].find('\n').map(|i| idx + i).unwrap_or(code.len());
+        let line = code[line_start..line_end].trim();
+        line.starts_with("pub grid_x") || line.starts_with("grid_x: i32")
+    }
+
+    #[test]
+    fn every_grid_x_write_also_writes_the_packed_cell() {
+        // Assembled at run time — a contiguous literal would match this file's own text.
+        let field_init = format!("{}{}", "grid_x", ": ");
+        let assign = format!("{}{}", ".grid_x", " = ");
+        let cell_token = "cell";
+
+        let mut violations = Vec::new();
+        for file in super::character_owned_tripwire::scanned_files() {
+            let display = file.display().to_string();
+            if is_exempt(&display) {
+                continue;
+            }
+            let code = std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("cannot read {display}: {e}"));
+            for needle in [field_init.as_str(), assign.as_str()] {
+                for (idx, _) in code.match_indices(needle) {
+                    if on_comment_line(&code, idx) || is_field_declaration(&code, idx) {
+                        continue;
+                    }
+                    let end = (idx + WINDOW).min(code.len());
+                    if !code[idx..end].contains(cell_token) {
+                        violations.push(format!("{display}:{}", line_of(&code, idx)));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "a `grid_x` write with no `cell` write beside it (#456):\n  {}\n\n\
+             `cell` packs `(grid_x, grid_y)` into the one indexed value the AOI subscription probes \
+             by equality — it is what makes the box query index-served instead of a full partition \
+             scan. It is a plain column, so nothing updates it for you: write it in the SAME \
+             statement run that writes `grid_x`/`grid_y`, via \
+             `lyracore_shared::spatial::grid_cell_id(grid_x, grid_y)` (or `cell_id_at(x, y)` when \
+             you have the world position rather than the cell). A row whose `cell` disagrees with \
+             its grid columns is not merely slow — it is addressed to the WRONG CELL, so it is \
+             invisible to the players standing on it.",
+            violations.join("\n  ")
+        );
+    }
+
+    /// The tripwire is only worth anything if it would actually fire. Feed it the shape it hunts.
+    #[test]
+    fn the_scan_rejects_a_grid_write_with_no_cell_beside_it() {
+        let bad = "fn f(e: &mut E) {\n    e.grid_x = gx;\n    e.grid_y = gy;\n}\n";
+        let needle = format!("{}{}", ".grid_x", " = ");
+        let idx = bad.find(&needle).expect("fixture must contain the shape");
+        let end = (idx + WINDOW).min(bad.len());
+        assert!(
+            !bad[idx..end].contains("cell"),
+            "the fixture is supposed to be a VIOLATION"
+        );
+        let good = "fn f(e: &mut E) {\n    e.grid_x = gx;\n    e.grid_y = gy;\n    \
+                    e.cell = spatial::grid_cell_id(gx, gy);\n}\n";
+        let idx = good.find(&needle).unwrap();
+        let end = (idx + WINDOW).min(good.len());
+        assert!(
+            good[idx..end].contains("cell"),
+            "the accompanied form must PASS"
         );
     }
 }

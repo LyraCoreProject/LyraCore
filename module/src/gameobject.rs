@@ -174,7 +174,10 @@ pub struct GameObjectUnlocked {
     // full-world GO import) for a minutes-scale due check. `respawn_at_micros == 0` is the not-armed
     // sentinel on every live row, so a `1..=now` range visits only DUE nodes — the same trick
     // `game_aura.by_next_tick` uses.
-    index(accessor = by_respawn_at, btree(columns = [respawn_at_micros]))
+    index(accessor = by_respawn_at, btree(columns = [respawn_at_micros])),
+    // #456: the AOI cell index — exactly 3 columns, all matched by equality terms, which is the
+    // only shape SpacetimeDB 2.7.1's subscription planner can serve (see the `cell` column).
+    index(accessor = by_cell, btree(columns = [map_id, instance_id, cell]))
 )]
 pub struct GameObject {
     #[primary_key]
@@ -210,6 +213,28 @@ pub struct GameObject {
     pub grid_x: i32,
     #[default(0i32)]
     pub grid_y: i32,
+    /// #456: `(grid_x, grid_y)` packed into ONE indexed value — the AOI subscription's cell key.
+    ///
+    /// SpacetimeDB 2.7.1's subscription planner can only serve a query from an index when EVERY
+    /// column of that index is matched by an equality term, and it skips any index with more than 3
+    /// columns outright (`MAX_EXACT_INDEX_COLS`); range predicates are never index-served at all
+    /// (`IndexProbe::Range` — "we currently never construct this variant") and an `OR` is evaluated
+    /// row-by-row. So a `grid_x BETWEEN .. AND grid_y BETWEEN ..` box degrades to a full partition
+    /// scan — 1.1 BILLION rows examined on `game_gameobject` in a 445-player measurement. Folding the
+    /// two grid columns into one makes `by_cell` a 3-column all-equality index, which the planner CAN
+    /// serve, and the AOI box becomes 25 point probes instead of a scan.
+    ///
+    /// ALWAYS written from `spatial::grid_cell_id(grid_x, grid_y)` in the SAME statement that writes
+    /// `grid_x`/`grid_y` — a stale value here does not merely slow a query down, it puts the row in
+    /// the wrong cell and shows players the wrong world. `module/src/tripwires.rs::grid_cell_tripwire`
+    /// is the enforcement.
+    ///
+    /// `#[default(0i64)]` (typed — an i64 column needs an explicitly-typed literal) + END-appended so
+    /// `publish` auto-migrates. **The default is cell (0, 0), not "unset"**, so every pre-existing row
+    /// is mis-addressed until `backfill_cell_ids` re-stamps it — and gameobjects are STATIC, so
+    /// nothing ever re-stamps them on its own. That backfill is a REQUIRED post-publish step.
+    #[default(0i64)]
+    pub cell: i64,
 }
 
 // ===========================================================================================
@@ -386,6 +411,7 @@ fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
         instance_id: 0, // pools are open-world machinery (190 slice 2: never instanced),
         grid_x: lyracore_shared::spatial::grid_cell(m.x, m.y).0,
         grid_y: lyracore_shared::spatial::grid_cell(m.x, m.y).1,
+        cell: lyracore_shared::spatial::cell_id_at(m.x, m.y),
     });
 }
 
@@ -989,6 +1015,11 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
         let pu32 = |s: &str| s.parse::<u32>().map_err(|_| format!("bad u32: {s}"));
         let pf32 = |s: &str| s.parse::<f32>().map_err(|_| format!("bad f32: {s}"));
         let pu8 = |s: &str| s.parse::<u8>().map_err(|_| format!("bad u8 state: {s}"));
+        // Parse the position ONCE (#456): the grid columns used to re-parse `f[3]`/`f[4]` per
+        // component, and `cell` would have made that four parses of the same two fields. Hoisting
+        // also makes it structurally impossible for `grid_x`, `grid_y` and `cell` below to be
+        // derived from different coordinates.
+        let (gx_src, gy_src) = (pf32(f[3])?, pf32(f[4])?);
         gos.try_insert(GameObject {
             guid: pu64(f[0])?,
             template_entry: pu32(f[1])?,
@@ -1003,8 +1034,9 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
             instance_id: 0, // imported static rows are open-world (dungeon copies are runtime, 190 slice 2)
             // note: the new respawn_secs/gather_gray cols live on the TEMPLATE (GameObjectTemplate), not on
             // this SPAWN row — so this GameObject literal is otherwise unchanged this slice.,
-            grid_x: lyracore_shared::spatial::grid_cell(pf32(f[3])?, pf32(f[4])?).0,
-            grid_y: lyracore_shared::spatial::grid_cell(pf32(f[3])?, pf32(f[4])?).1,
+            grid_x: lyracore_shared::spatial::grid_cell(gx_src, gy_src).0,
+            grid_y: lyracore_shared::spatial::grid_cell(gx_src, gy_src).1,
+            cell: lyracore_shared::spatial::cell_id_at(gx_src, gy_src),
         })
         .map_err(|e| format!("gameobject insert failed (dup guid?): {e}"))?;
         loaded += 1;

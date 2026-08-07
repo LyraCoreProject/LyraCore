@@ -59,37 +59,77 @@ use crate::world::SessionTx;
 /// touching. This is a COUNT, not a rate — the 10s log line in `world/mod.rs` takes the delta.
 pub(crate) static AOI_RECENTERS: AtomicU64 = AtomicU64::new(0);
 
-/// One `SELECT * FROM <table> WHERE map_id = .. AND grid_x/grid_y BETWEEN ..` range query — the
-/// shared shape [`aoi_query`]/[`aoi_go_query`]/[`aoi_motion_query`]/[`aoi_spline_query`]/[`rect_queries`]
-/// all build from, so a box's query and its post-split rect's query can never drift apart in format.
+/// One `SELECT * FROM <table> WHERE map_id = .. AND instance_id = .. AND grid_x/grid_y BETWEEN ..`
+/// range query — the shared shape
+/// [`aoi_query`]/[`aoi_go_query`]/[`aoi_motion_query`]/[`aoi_spline_query`]/[`rect_queries`] all build
+/// from, so a box's query and its post-split rect's query can never drift apart in format.
+///
+/// **`instance_id` is not optional (#456).** Every one of these tables is partitioned by
+/// `(map_id, instance_id)`, and a per-instance dungeon COPY reuses the source map's coordinates — so
+/// a box query that omits `instance_id` matches the other copies' rows at the same grid address.
+/// That leaked instanced entities into an open-world viewer's box (and vice versa) and was only
+/// invisible because the gateway's own `instance_relay_gate` re-filtered the delivered rows before
+/// relaying them: the rows still crossed the wire and still had to be examined server-side.
 fn table_range_query(
     table: &str,
     map_id: u32,
+    instance_id: u64,
     gx_min: i32,
     gx_max: i32,
     gy_min: i32,
     gy_max: i32,
 ) -> String {
     format!(
-        "SELECT * FROM {table} WHERE map_id = {map_id} AND grid_x >= {gx_min} AND grid_x <= {gx_max} AND grid_y >= {gy_min} AND grid_y <= {gy_max}"
+        "SELECT * FROM {table} WHERE map_id = {map_id} AND instance_id = {instance_id} AND grid_x >= {gx_min} AND grid_x <= {gx_max} AND grid_y >= {gy_min} AND grid_y <= {gy_max}"
     )
 }
 
-/// The SQL the AOI subscription uses: `game_world_entity` rows whose cell falls in the 5×5 box — a range
-/// on the `by_grid` btree `(map_id, grid_x, grid_y)`, so the server query is index-friendly. Pure →
+/// The SQL the AOI subscription uses: `game_world_entity` rows whose cell falls in the 5×5 box.
+///
+/// **This query is NOT index-served, and the comment that used to claim it was is what let #456 hide
+/// for months.** It asserted "a range on the `by_grid` btree `(map_id, grid_x, grid_y)`, so the server
+/// query is index-friendly", and every clause of that was false: the index is the FOUR-column
+/// `(map_id, instance_id, grid_x, grid_y)` (`module/src/world.rs`), and SpacetimeDB 2.7.1's
+/// subscription planner cannot use it regardless. `IxScanFromPredicates` skips any index with more
+/// than `MAX_EXACT_INDEX_COLS = 3` columns outright, requires EVERY column of a candidate index to be
+/// matched by an *equality* term (a partial prefix is rejected, not partially used), and never
+/// constructs a range probe at all — `IndexProbe::Range` carries the upstream note "we currently
+/// never construct this variant". So all four `grid_*` bounds are residual row-by-row filters over an
+/// `IxScan` on the one-column `by_map` index, which is exactly what the measurement reported:
+/// `unindexed_columns="grid_x,grid_x,grid_y,grid_y"`, 1.1bn rows examined.
+///
+/// Adding `instance_id` here does **not** by itself make this indexed — no 3-column all-equality
+/// index matches it. It is here because it is a correctness fix (see [`table_range_query`]) and
+/// because it is the equality prefix the packed-cell index in [`aoi_cell_queries`] needs. Pure →
 /// unit-tested.
-pub(crate) fn aoi_query(map_id: u32, b: &GridBox) -> String {
+pub(crate) fn aoi_query(map_id: u32, instance_id: u64, b: &GridBox) -> String {
     let (gx_min, gx_max, gy_min, gy_max) = b.bounds();
-    table_range_query("game_world_entity", map_id, gx_min, gx_max, gy_min, gy_max)
+    table_range_query(
+        "game_world_entity",
+        map_id,
+        instance_id,
+        gx_min,
+        gx_max,
+        gy_min,
+        gy_max,
+    )
 }
 
 /// The gameobject twin of [`aoi_query`] (246): scope the GO subscription to the same grid box —
 /// the un-scoped table shipped ~4.6k zone-wide GOs to every client (the felt frame hitch + the
 /// login burst). Same enter/leave semantics: the union cache fires on_insert/on_delete only for
 /// true box transitions, and the existing on_go_* callbacks relay CREATE/DESTROY.
-pub(crate) fn aoi_go_query(map_id: u32, b: &GridBox) -> String {
+pub(crate) fn aoi_go_query(map_id: u32, instance_id: u64, b: &GridBox) -> String {
     let (gx_min, gx_max, gy_min, gy_max) = b.bounds();
-    table_range_query("game_gameobject", map_id, gx_min, gx_max, gy_min, gy_max)
+    table_range_query(
+        "game_gameobject",
+        map_id,
+        instance_id,
+        gx_min,
+        gx_max,
+        gy_min,
+        gy_max,
+    )
 }
 
 /// The MOTION twin of [`aoi_query`] (perf catalog 2.1): the same 5×5 box, over the per-mover
@@ -97,9 +137,17 @@ pub(crate) fn aoi_go_query(map_id: u32, b: &GridBox) -> String {
 /// the writer stops computing recipients (one indexed UPDATE per heartbeat instead of one INSERT per
 /// nearby player), and the subscription engine, which already evaluates this exact box for entities,
 /// does the fan-out instead.
-pub(crate) fn aoi_motion_query(map_id: u32, b: &GridBox) -> String {
+pub(crate) fn aoi_motion_query(map_id: u32, instance_id: u64, b: &GridBox) -> String {
     let (gx_min, gx_max, gy_min, gy_max) = b.bounds();
-    table_range_query("game_entity_motion", map_id, gx_min, gx_max, gy_min, gy_max)
+    table_range_query(
+        "game_entity_motion",
+        map_id,
+        instance_id,
+        gx_min,
+        gx_max,
+        gy_min,
+        gy_max,
+    )
 }
 
 /// The CREATURE-MOVEMENT twin of [`aoi_query`]: the same 5×5 box over `game_creature_spline`.
@@ -108,11 +156,12 @@ pub(crate) fn aoi_motion_query(map_id: u32, b: &GridBox) -> String {
 /// the world was delivered to every connected session, which the gateway then discarded for any guid
 /// not in `created`. Measured at 100 dispersed players: 121.7 legs/s fanned to all 100 sessions.
 /// Scoping it to the box the observer already subscribes makes the delivery match the interest.
-pub(crate) fn aoi_spline_query(map_id: u32, b: &GridBox) -> String {
+pub(crate) fn aoi_spline_query(map_id: u32, instance_id: u64, b: &GridBox) -> String {
     let (gx_min, gx_max, gy_min, gy_max) = b.bounds();
     table_range_query(
         "game_creature_spline",
         map_id,
+        instance_id,
         gx_min,
         gx_max,
         gy_min,
@@ -127,13 +176,48 @@ pub(crate) fn aoi_spline_query(map_id: u32, b: &GridBox) -> String {
 /// dropped the 4-query handle on apply, so the first cell crossing (~7 s at run speed) silently and
 /// permanently killed peer movement AND creature legs for that session. Both call sites take the
 /// list from here so the two can never drift again — adding a box-scoped table is one edit.
-pub(crate) fn box_queries(box_: &GridBox) -> Vec<String> {
+pub(crate) fn box_queries(instance_id: u64, box_: &GridBox) -> Vec<String> {
+    if crate::config::aoi_cell_queries_enabled() {
+        return cell_queries(box_.map_id, instance_id, box_.cell_ids());
+    }
     vec![
-        aoi_query(box_.map_id, box_),
-        aoi_go_query(box_.map_id, box_),
-        aoi_motion_query(box_.map_id, box_),
-        aoi_spline_query(box_.map_id, box_),
+        aoi_query(box_.map_id, instance_id, box_),
+        aoi_go_query(box_.map_id, instance_id, box_),
+        aoi_motion_query(box_.map_id, instance_id, box_),
+        aoi_spline_query(box_.map_id, instance_id, box_),
     ]
+}
+
+/// ONE point-probe query per (table, cell) — #456's actual fix, and the shape both [`box_queries`]
+/// and [`rect_queries`] build when `LYRACORE_AOI_CELL` is on.
+///
+/// `WHERE map_id = M AND instance_id = I AND cell = C` matches the `by_cell` btree
+/// `(map_id, instance_id, cell)` exactly: three columns, three equality terms, nothing residual. That
+/// is the ONLY shape SpacetimeDB 2.7.1's `IxScanFromPredicates` will turn into an index scan — it
+/// requires every column of a candidate index to be covered by an equality term (a partial prefix is
+/// rejected outright), skips indexes wider than `MAX_EXACT_INDEX_COLS = 3`, never constructs a range
+/// probe, and evaluates an `OR` row-by-row rather than as a union of probes.
+///
+/// **That last point is why this is 25 queries rather than one `IN (…)`.** The obvious formulation —
+/// `AND cell IN (c1, …, c25)` — does not parse: the subscription grammar has no `IN` at all
+/// (`SqlExpr` in `spacetimedb-sql-parser` is literal / var / field / binary-op / and-or, full stop).
+/// The next-obvious one, 25 `OR`-ed equalities, parses but is evaluated as a per-row `.any()` inside
+/// a `Filter`, which puts every row back on the scan path and defeats the whole exercise. A separate
+/// query per cell is what turns each cell into a real probe.
+///
+/// Emission order is table-major, cell-minor, and the cell order is [`GridBox::cell_ids`]'s own — so
+/// a rect built from a whole box emits byte-identical SQL to the box, exactly as the range form did.
+fn cell_queries(map_id: u32, instance_id: u64, cells: impl Iterator<Item = i64>) -> Vec<String> {
+    let cells: Vec<i64> = cells.collect();
+    let mut out = Vec::with_capacity(BOX_SCOPED_TABLES.len() * cells.len());
+    for table in BOX_SCOPED_TABLES {
+        for cell in &cells {
+            out.push(format!(
+                "SELECT * FROM {table} WHERE map_id = {map_id} AND instance_id = {instance_id} AND cell = {cell}"
+            ));
+        }
+    }
+    out
 }
 
 /// The RECT twin of [`box_queries`] (#73): the same 4 tables, same query shape, any rectangle — not
@@ -141,22 +225,45 @@ pub(crate) fn box_queries(box_: &GridBox) -> Vec<String> {
 /// from the SAME [`table_range_query`] the 4 `aoi_*_query` functions use, which is why a rect built
 /// from a whole box ([`GridRect::from_box`]) produces byte-identical SQL to [`box_queries`] — pinned
 /// by `rect_queries_of_a_whole_box_are_byte_identical_to_box_queries` below.
-pub(crate) fn rect_queries(rect: &GridRect) -> Vec<String> {
+pub(crate) fn rect_queries(instance_id: u64, rect: &GridRect) -> Vec<String> {
+    if crate::config::aoi_cell_queries_enabled() {
+        return cell_queries(rect.map_id, instance_id, rect.cell_ids());
+    }
     let (gx_min, gx_max, gy_min, gy_max) = rect.bounds();
-    [
-        "game_world_entity",
-        "game_gameobject",
-        "game_entity_motion",
-        "game_creature_spline",
-    ]
-    .into_iter()
-    .map(|table| table_range_query(table, rect.map_id, gx_min, gx_max, gy_min, gy_max))
-    .collect()
+    BOX_SCOPED_TABLES
+        .into_iter()
+        .map(|table| {
+            table_range_query(
+                table,
+                rect.map_id,
+                instance_id,
+                gx_min,
+                gx_max,
+                gy_min,
+                gy_max,
+            )
+        })
+        .collect()
 }
+
+/// The four tables a player's AOI box scopes, in one place — the list [`rect_queries`] iterates and
+/// the list every "did a table get dropped from the subscription?" test checks against. 109's class
+/// of bug (a subscription that silently covers fewer tables than the other call site) is why this is
+/// a named constant rather than an inline array.
+pub(crate) const BOX_SCOPED_TABLES: [&str; 4] = [
+    "game_world_entity",
+    "game_gameobject",
+    "game_entity_motion",
+    "game_creature_spline",
+];
 
 /// Build + apply a scoped `game_world_entity` subscription for `box_`, blocking until the server
 /// acknowledges it (`on_applied`) so the caller can safely drop a prior subscription afterward.
-fn subscribe_box(conn: &Arc<PlayerConn>, box_: &GridBox) -> Result<SubscriptionHandle> {
+fn subscribe_box(
+    conn: &Arc<PlayerConn>,
+    instance_id: u64,
+    box_: &GridBox,
+) -> Result<SubscriptionHandle> {
     let (atx, arx) = mpsc::channel::<std::result::Result<(), String>>();
     let atx_err = atx.clone();
     let sub = conn
@@ -168,7 +275,7 @@ fn subscribe_box(conn: &Arc<PlayerConn>, box_: &GridBox) -> Result<SubscriptionH
         .on_error(move |_ctx, err| {
             let _ = atx_err.send(Err(format!("{err}")));
         })
-        .subscribe(box_queries(box_));
+        .subscribe(box_queries(instance_id, box_));
     match arx.recv_timeout(Duration::from_secs(15)) {
         Ok(Ok(())) => Ok(sub),
         Ok(Err(e)) => Err(anyhow!("AOI subscription error: {e}")),
@@ -300,6 +407,7 @@ pub(crate) fn split_box_by_shard(
 fn resubscribe_rects(
     conn: &Arc<PlayerConn>,
     label: &str,
+    instance_id: u64,
     old: Vec<SubscriptionHandle>,
     new_rects: Vec<GridRect>,
     on_applied_rect: Arc<dyn Fn(GridRect) + Send + Sync>,
@@ -341,7 +449,7 @@ fn resubscribe_rects(
                      coverage for this shard — degraded, not broken; a later recenter retries): {err}"
                 );
             })
-            .subscribe(rect_queries(&rect));
+            .subscribe(rect_queries(instance_id, &rect));
         fresh.push(sub);
     }
     fresh
@@ -362,6 +470,7 @@ fn sweep_away_rect(
     created: &Arc<Mutex<HashSet<u64>>>,
     viewer_gates: &Arc<ViewerGates>,
     self_guid: u64,
+    instance_id: u64,
     rect: &GridRect,
 ) {
     let (gx_min, gx_max, gy_min, gy_max) = rect.bounds();
@@ -372,6 +481,9 @@ fn sweep_away_rect(
         .iter()
         .filter(|e| {
             e.map_id == rect.map_id
+                // #456: the resident filter must match the SUBSCRIPTION's own partition predicate,
+                // or the sweep re-offers rows the subscription would never have delivered.
+                && e.instance_id == instance_id
                 && e.grid_x >= gx_min
                 && e.grid_x <= gx_max
                 && e.grid_y >= gy_min
@@ -507,6 +619,19 @@ pub struct AreaOfInterestTracker {
     /// in `subscribe_player_events`) — a mid-session env change was never a supported shape for any
     /// gate in this file.
     view_merge: bool,
+    /// The partition this whole tracker is scoped to (#456) — 0 for the open world, the instance's
+    /// own id inside a dungeon copy. Supplied by the CALLER at construction, never read back from the
+    /// connection cache: with AOI on, `game_world_entity` rides THIS subscription, so the viewer's own
+    /// row is not resident until the very subscription we are about to build has applied. (That
+    /// chicken-and-egg is exactly why `subscribe_player_events`' corpse/GO sweeps are deferred until
+    /// after the tracker applies — see `viewer_instance`'s doc comment.) The login path reads it off
+    /// the entity row it already fetched through the coordinator; the warm-handoff path takes it from
+    /// the `TransferPlan` it just executed.
+    ///
+    /// Constant for the tracker's lifetime: every path that changes a character's instance
+    /// (cross-map teleport, portal entry, warm handoff) tears the subscriptions down and calls
+    /// `subscribe_player_events` again, which builds a fresh tracker.
+    instance_id: u64,
     box_: GridBox,
     /// The HOME shard's currently-applied rect subscriptions. Exactly one (the whole box) on a
     /// non-straddling session — the byte-identical-to-pre-#73 case — up to two on a corner straddle.
@@ -534,12 +659,13 @@ impl AreaOfInterestTracker {
         viewer_gates: Arc<ViewerGates>,
         chat_seen: Arc<Mutex<HashSet<u64>>>,
         emote_seen: Arc<Mutex<HashSet<u64>>>,
+        instance_id: u64,
         map_id: u32,
         x: f32,
         y: f32,
     ) -> Result<Self> {
         let box_ = GridBox::around(map_id, x, y);
-        let sub = subscribe_box(&conn, &box_)?;
+        let sub = subscribe_box(&conn, instance_id, &box_)?;
         // #74 seam-chat: seed the mirror at login, before any `update()` call ever runs — an away
         // shard's chat relay must never read the all-zeros default for a player who straddled a
         // seam on their very first recenter.
@@ -555,6 +681,7 @@ impl AreaOfInterestTracker {
             chat_seen,
             emote_seen,
             view_merge: crate::config::view_merge_enabled(),
+            instance_id,
             box_,
             home_rects: vec![sub],
             home_want: vec![GridRect::from_box(&box_)],
@@ -623,33 +750,21 @@ impl AreaOfInterestTracker {
         self.box_ = new_box;
     }
 
-    /// #73: resolve the new box's per-shard rectangle split, or the home-only identity split every
-    /// degenerate case (view-merge off, an unresolvable instance) takes. Reads the viewer's CURRENT
-    /// instance from the home connection's own cache (never a probe — the tracker is driven by a
-    /// movement `(x, y)`, not an identity lookup), because region routing never applies inside an
-    /// instance and an unknown instance must not be guessed at as "0".
+    /// #73: resolve the new box's per-shard rectangle split, or the home-only identity split
+    /// view-merge-off takes.
+    ///
+    /// #456 replaced a cache read here with [`Self::instance_id`]. It used to look the viewer's
+    /// instance up in the home connection's entity cache on every recenter and degrade to home-only
+    /// when the self row was missing — a defensible guess when the instance was NOT otherwise known,
+    /// but now the tracker is CONSTRUCTED with the authoritative value and its own subscription is
+    /// scoped to it. Reading a possibly-stale second copy would let the split disagree with the
+    /// subscription it is splitting, which is strictly worse than the transient it guarded against.
     fn resolve_split(&self, box_: &GridBox) -> Vec<(Option<String>, Vec<GridRect>)> {
         let home_only = || vec![(None, vec![GridRect::from_box(box_)])];
         if !self.view_merge {
             return home_only();
         }
-        let Some(instance_id) = self.current_instance_id() else {
-            return home_only();
-        };
-        self.coordinator.split_box_by_shard(box_, instance_id)
-    }
-
-    /// The viewer's own live `instance_id`, read from the HOME connection's cache — `None` when the
-    /// self row isn't resident there (mid-teardown, or a relay firing before the self CREATE lands).
-    /// `resolve_split` treats `None` as "skip view-merge this recenter", never as "assume instance 0".
-    fn current_instance_id(&self) -> Option<u64> {
-        self.conn
-            .conn
-            .db
-            .game_world_entity()
-            .guid()
-            .find(&self.self_guid)
-            .map(|v| v.instance_id)
+        self.coordinator.split_box_by_shard(box_, self.instance_id)
     }
 
     /// Resubscribe the HOME bucket to `new_rects` — one call, whether the box is straddling or not.
@@ -665,6 +780,7 @@ impl AreaOfInterestTracker {
         self.home_rects = resubscribe_rects(
             &self.conn,
             "home",
+            self.instance_id,
             old,
             new_rects.clone(),
             Arc::new(|_rect| {}),
@@ -700,6 +816,7 @@ impl AreaOfInterestTracker {
         let created = self.created.clone();
         let viewer_gates = self.viewer_gates.clone();
         let self_guid = self.self_guid;
+        let instance_id = self.instance_id;
         let on_applied: Arc<dyn Fn(GridRect) + Send + Sync> = Arc::new(move |rect| {
             sweep_away_rect(
                 &conn,
@@ -708,10 +825,18 @@ impl AreaOfInterestTracker {
                 &created,
                 &viewer_gates,
                 self_guid,
+                instance_id,
                 &rect,
             );
         });
-        away.rects = resubscribe_rects(&away.conn.clone(), shard, old, want.clone(), on_applied);
+        away.rects = resubscribe_rects(
+            &away.conn.clone(),
+            shard,
+            instance_id,
+            old,
+            want.clone(),
+            on_applied,
+        );
         away.want = want;
     }
 
@@ -811,6 +936,7 @@ impl Drop for AreaOfInterestTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lyracore_shared::spatial::grid_cell_id;
 
     #[test]
     fn rects_match_is_order_independent_and_sensitive_to_every_field() {
@@ -860,9 +986,15 @@ mod tests {
             gx: 5,
             gy: 7,
         };
-        let q = aoi_query(0, &b);
+        let q = aoi_query(0, 7, &b);
         assert!(q.starts_with("SELECT * FROM game_world_entity WHERE"));
         assert!(q.contains("map_id = 0"));
+        // #456: the partition predicate is not optional — without it a dungeon COPY's rows (same map,
+        // same grid coords, different instance) match an open-world viewer's box.
+        assert!(
+            q.contains("instance_id = 7"),
+            "the AOI query must constrain instance_id: {q}"
+        );
         assert!(q.contains("grid_x >= 3") && q.contains("grid_x <= 7")); // anchor gx 5 ± BOX_HALF_SPAN(2)
         assert!(q.contains("grid_y >= 5") && q.contains("grid_y <= 9")); // anchor gy 7 ± BOX_HALF_SPAN(2)
     }
@@ -871,7 +1003,7 @@ mod tests {
     /// the session keeps running, just blind to that table forever.
     #[test]
     fn the_box_query_set_covers_every_box_scoped_table() {
-        let qs = box_queries(&GridBox {
+        let qs = box_queries(0, &GridBox {
             map_id: 0,
             gx: 5,
             gy: 7,
@@ -887,7 +1019,13 @@ mod tests {
                 "the box query set must scope {table}; it has {qs:#?}"
             );
         }
-        assert_eq!(qs.len(), 4, "a table was added without extending this test");
+        // #456: one point-probe query per (table, cell) — 4 tables x the 5x5 box.
+        let cells = (2 * lyracore_shared::spatial::BOX_HALF_SPAN + 1).pow(2) as usize;
+        assert_eq!(
+            qs.len(),
+            BOX_SCOPED_TABLES.len() * cells,
+            "a table was added without extending this test, or the box changed size"
+        );
     }
 
     /// #73's twin of the test above: `rect_queries` must scope the SAME four tables — a rect is the
@@ -902,7 +1040,7 @@ mod tests {
             gy_min: 5,
             gy_max: 9,
         };
-        let qs = rect_queries(&rect);
+        let qs = rect_queries(0, &rect);
         for table in [
             "game_world_entity",
             "game_gameobject",
@@ -911,7 +1049,8 @@ mod tests {
         ] {
             assert!(qs.iter().any(|q| q.contains(table)), "{qs:#?}");
         }
-        assert_eq!(qs.len(), 4);
+        // The fixture rect is the same 5x5 span a whole box covers.
+        assert_eq!(qs.len(), BOX_SCOPED_TABLES.len() * 25);
     }
 
     /// THE byte-identity property the module doc promises: a non-straddling recenter's home rect is
@@ -926,7 +1065,7 @@ mod tests {
             gy: 40,
         };
         let rect = GridRect::from_box(&b);
-        assert_eq!(rect_queries(&rect), box_queries(&b));
+        assert_eq!(rect_queries(9, &rect), box_queries(9, &b));
     }
 
     /// The WIRING, not the helper (playbook §8): 109 was a green suite with a correct
@@ -959,6 +1098,94 @@ mod tests {
                  starts `{}`",
                 &call[..call.len().min(60)]
             );
+        }
+    }
+
+    /// #456 — THE property the whole fix rests on: every emitted query must be a three-column
+    /// ALL-EQUALITY probe. SpacetimeDB 2.7.1 only turns a filter into an index scan when every column
+    /// of a candidate (<=3-column) index is matched by an equality term; a single range bound
+    /// anywhere in the predicate drops the whole thing to a residual row-by-row filter over a scan,
+    /// which is exactly the 1.1-billion-row behaviour this issue is about. A reintroduced `BETWEEN`,
+    /// `>=`, `<=` or `IN` here is silent — the queries still return the right rows, just via a full
+    /// partition scan — so this assertion is the only thing standing between a refactor and a
+    /// regression that only a load test would find.
+    #[test]
+    fn every_cell_query_is_a_three_column_equality_probe() {
+        let qs = cell_queries(3, 7, [grid_cell_id(4, 9), grid_cell_id(-2, -8)].into_iter());
+        assert_eq!(qs.len(), BOX_SCOPED_TABLES.len() * 2);
+        for q in &qs {
+            for forbidden in [">=", "<=", ">", "<", " IN ", "BETWEEN", " OR "] {
+                assert!(
+                    !q.contains(forbidden),
+                    "`{forbidden}` in an AOI cell query defeats the index: {q}"
+                );
+            }
+            assert_eq!(
+                q.matches(" = ").count(),
+                3,
+                "exactly three equality terms — map_id, instance_id, cell: {q}"
+            );
+            assert!(q.contains("map_id = 3"), "{q}");
+            assert!(q.contains("instance_id = 7"), "{q}");
+        }
+        // Both cells appear, for every table.
+        for table in BOX_SCOPED_TABLES {
+            for cell in [grid_cell_id(4, 9), grid_cell_id(-2, -8)] {
+                assert!(
+                    qs.iter()
+                        .any(|q| q.contains(table) && q.ends_with(&format!("cell = {cell}"))),
+                    "missing {table} / cell {cell}"
+                );
+            }
+        }
+    }
+
+    /// The box must probe EXACTLY its own 25 cells per table — no more (a peer spawned outside the
+    /// AOI box) and no fewer (a blind spot the player walks into). Ties the SQL back to the pure
+    /// `GridBox::cell_ids` the shared crate unit-tests against `bounds()`.
+    #[test]
+    fn the_box_probes_exactly_its_own_cells_for_every_table() {
+        let b = GridBox {
+            map_id: 0,
+            gx: 5,
+            gy: 7,
+        };
+        let qs = box_queries(0, &b);
+        let want: Vec<i64> = b.cell_ids().collect();
+        assert_eq!(want.len(), 25);
+        for table in BOX_SCOPED_TABLES {
+            let got: std::collections::HashSet<String> = qs
+                .iter()
+                .filter(|q| q.contains(table))
+                .map(|q| q[q.rfind("cell = ").expect("a cell term") + 7..].to_string())
+                .collect();
+            let expect: std::collections::HashSet<String> =
+                want.iter().map(|c| c.to_string()).collect();
+            assert_eq!(got, expect, "{table} probes the wrong cell set");
+        }
+    }
+
+    /// The escape hatch's shape (`LYRACORE_AOI_CELL=0`) still has to be CORRECT, even though it is
+    /// the slow path — it is what an operator falls back to if the per-cell registration cost bites
+    /// under load. Exercised through the range builders directly rather than by flipping the env var,
+    /// because the test binary runs these in parallel in one process and an env write would race.
+    #[test]
+    fn the_range_fallback_still_scopes_map_instance_and_both_grid_axes() {
+        let b = GridBox {
+            map_id: 1,
+            gx: 5,
+            gy: 7,
+        };
+        for q in [
+            aoi_query(b.map_id, 4, &b),
+            aoi_go_query(b.map_id, 4, &b),
+            aoi_motion_query(b.map_id, 4, &b),
+            aoi_spline_query(b.map_id, 4, &b),
+        ] {
+            assert!(q.contains("map_id = 1"), "{q}");
+            assert!(q.contains("instance_id = 4"), "{q}");
+            assert!(q.contains("grid_x >= 3") && q.contains("grid_x <= 7"), "{q}");
+            assert!(q.contains("grid_y >= 5") && q.contains("grid_y <= 9"), "{q}");
         }
     }
 

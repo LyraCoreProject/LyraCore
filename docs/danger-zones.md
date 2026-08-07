@@ -57,6 +57,18 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
      overwrites the reducer bindings with equivalent content; nothing needs undoing. This is also
      the case that establishes the general rule: **a table binding is only needed if the gateway
      subscribes to or reads that table.**
+
+   **A defaulted column's default can be a VALID VALUE, not a sentinel — plan the backfill (#456).**
+   `cell` was END-appended to the four AOI-scoped tables as `#[default(0i64)]`, and 0 is the legitimate
+   packed id of grid cell (0, 0), not "unset". Every pre-existing row therefore claims to live in that
+   one cell the instant the publish lands, and the AOI subscription probes `cell` by equality — so
+   moving entities self-heal on their next heartbeat, but **static `game_gameobject` rows never
+   re-stamp themselves and stay invisible world-wide until backfilled**. After publishing a change of
+   this shape, run the sweep on every shard:
+   `for db in lyracore lyracore-world-1 lyracore-world-2 lyracore-instances lyracore-realm; do spacetime call $db debug_backfill_cell_ids; done`
+   The general rule: when you END-append a defaulted column that something INDEXES or FILTERS on, ask
+   what the default means as a value before asking whether the migration applies cleanly. It will apply
+   cleanly and still be wrong.
 3. **The 5875 partial-VALUES crash trap** — any partial `UNIT_FIELD_*` update MUST route through the
    `dirty_reset` path so it **never carries `OBJECT_FIELD_TYPE`**. Re-sending TYPE crashes the client
    (null+0x110). Copy `build_health_values` / `build_resistance_values` exactly; there is a

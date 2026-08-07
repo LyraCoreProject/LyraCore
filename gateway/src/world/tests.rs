@@ -828,6 +828,7 @@ impl WorldStore for InMemoryStore {
         &self,
         _account_id: u64,
         self_guid: u64,
+        _login_instance: u64,
         login_map: u32,
         login_x: f32,
         login_y: f32,
@@ -2465,6 +2466,7 @@ fn warrior_entity() -> codec::EntityView {
     codec::EntityView {
         guid: 1,
         map_id: 0,
+        instance_id: 0, // the open world
         zone_id: 12,
         x: -8949.95,
         y: -132.493,

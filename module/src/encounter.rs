@@ -642,6 +642,7 @@ pub fn move_to_point(
     e.z = z;
     e.grid_x = gx;
     e.grid_y = gy;
+    e.cell = spatial::grid_cell_id(gx, gy);
     e.last_move_ms = now_ms;
     entities.guid().update(e);
     Ok(())
