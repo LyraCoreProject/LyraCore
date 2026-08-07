@@ -10,7 +10,7 @@ LyraCore is a Vanilla 1.12.1 game server built on top of [SpacetimeDB](https://s
 ## Quickstart
 
 ### Requirements
-- A World of Warcraft 1.12.1 client. None is distributed here.
+- A World of Warcraft 1.12.1 client. Not distributed here.
 - [Rust](https://rust-lang.org/tools/install/) installed
 - A Linux or macOS machine/container. WSL is untested, but might work.
 
