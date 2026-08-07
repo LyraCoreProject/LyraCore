@@ -65,7 +65,7 @@ Out of scope, and closed as such:
   distributes none of those and will not point you at somewhere that does.
 - **Problems that only appear after your own content import.** Say so in the report; it is still
   worth filing, but it is a different world from the seeded fixture the test suites run against.
-- Anything the [Code of Conduct](./CODE_OF_CONDUCT.md) covers.
+- Conduct problems — harassment, abuse, or bad-faith participation. Report those privately to the maintainers rather than in a public issue.
 
 ## Response expectations
 

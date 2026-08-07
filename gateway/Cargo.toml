@@ -32,6 +32,16 @@ wow_world_base = "0.3"
 spacetimedb-sdk = "=2.7.1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "io-util", "sync", "time"] }
 anyhow = "1"
+# #451: `getrlimit`/`setrlimit` (raise RLIMIT_NOFILE soft to hard at startup, `src/fd_limit.rs`) and
+# the `E*` errno constants the accept-loop policy classifies against (`src/accept.rs`). std exposes
+# neither — `io::ErrorKind` flattens EMFILE/ENFILE to `Uncategorized`, which is exactly the
+# distinction that policy turns on.
+#
+# NOT a new crate in the tree: libc 0.2.189 already resolves here transitively through tokio (and
+# through spacetimedb-sdk), so this promotes an existing, already-vetted dependency to a direct one
+# — zero new nodes in the graph, zero new licenses for cargo-deny to consider (MIT OR Apache-2.0,
+# both already on deny.toml's allow list).
+libc = "0.2"
 zeroize = "=1.8.1"
 log = "0.4"
 env_logger = "0.11"

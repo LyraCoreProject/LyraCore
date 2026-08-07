@@ -917,6 +917,97 @@ pub fn admit_concurrency() -> usize {
         .unwrap_or(0)
 }
 
+/// tokio's own default `max_blocking_threads`, restated here so an unset
+/// `LYRACORE_MAX_BLOCKING_THREADS` is today's behaviour byte for byte.
+///
+/// This constant is a *mirror* of a tokio internal (`runtime::Builder::new_multi_thread` seeds
+/// `max_blocking_threads: 512`), not a value tokio exposes — there is no accessor to read it back.
+/// If a tokio bump moves it, this mirror is what keeps "unset == before" true for THIS gateway,
+/// which is the property that matters; it is not trying to track tokio.
+pub const DEFAULT_MAX_BLOCKING_THREADS: usize = 512;
+
+/// #451: the ceiling on tokio's blocking pool, which is the real ceiling on concurrent players.
+///
+/// Both accept loops hand every accepted socket to `spawn_blocking` (the wire codecs in
+/// `wow_login_messages` / `wow_world_messages` are blocking `std::io`), and a world session holds
+/// its blocking thread for the session's entire life. So `max_blocking_threads` *is* the seat count
+/// — shared between live world sessions and in-flight logon handshakes.
+///
+/// It was previously tokio's inherited default of 512, configured by nothing and reported by
+/// nothing. That mattered because a full pool does not refuse: `spawn_blocking` **queues**, so the
+/// socket is accepted at TCP level and then never handshaked. From outside that is indistinguishable
+/// from "the server is full", which is how it read for months. Measured 2026-08-07 on an 8-core box:
+/// 600 clients offered seated **477** at 512 and **535** at 4096.
+///
+/// Default 512 = today's behaviour byte for byte. A malformed or zero value falls back to the
+/// default rather than guessing — the same posture as [`max_sessions`], except that zero cannot mean
+/// "unlimited" here: zero blocking threads is a gateway that accepts sockets and serves nobody.
+pub fn max_blocking_threads() -> usize {
+    max_blocking_threads_from_env(
+        std::env::var("LYRACORE_MAX_BLOCKING_THREADS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// The pure half of [`max_blocking_threads`] (house pattern: [`realm_address_override`]) — the
+/// variable is process-global, so the parse is exercised through this rather than by mutating the
+/// test process's own environment.
+pub fn max_blocking_threads_from_env(raw: Option<&str>) -> usize {
+    raw.map(str::trim)
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_MAX_BLOCKING_THREADS)
+}
+
+#[cfg(test)]
+mod max_blocking_threads_tests {
+    use super::*;
+
+    /// The safety property of #451's knob: **unset changes nothing**. Every existing deployment
+    /// keeps the exact 512-thread pool it has been running on.
+    #[test]
+    fn unset_is_tokios_own_default() {
+        assert_eq!(max_blocking_threads_from_env(None), 512);
+        assert_eq!(
+            max_blocking_threads_from_env(None),
+            DEFAULT_MAX_BLOCKING_THREADS
+        );
+    }
+
+    #[test]
+    fn a_plain_number_is_taken_as_written() {
+        assert_eq!(max_blocking_threads_from_env(Some("4096")), 4096);
+        assert_eq!(max_blocking_threads_from_env(Some("1")), 1);
+        assert_eq!(max_blocking_threads_from_env(Some(" 2048 ")), 2048);
+    }
+
+    /// Zero is not "unlimited" the way it is for `max_sessions` — a zero-thread blocking pool is a
+    /// gateway that accepts every socket and services none of them, silently, which is precisely
+    /// the failure shape #451 exists to make impossible. Fall back rather than obey.
+    #[test]
+    fn zero_falls_back_rather_than_seating_nobody() {
+        assert_eq!(
+            max_blocking_threads_from_env(Some("0")),
+            DEFAULT_MAX_BLOCKING_THREADS
+        );
+    }
+
+    /// A malformed value falls back to the default rather than guessing (`max_sessions`'s rule).
+    /// `-1` matters specifically: it is the shape an operator reaches for to mean "no limit", and
+    /// it does not parse as `usize`.
+    #[test]
+    fn a_malformed_value_falls_back_to_the_default() {
+        for junk in ["", "   ", "-1", "lots", "4096x", "4_096", "1e3", "512.0"] {
+            assert_eq!(
+                max_blocking_threads_from_env(Some(junk)),
+                DEFAULT_MAX_BLOCKING_THREADS,
+                "{junk:?} should have fallen back to the default"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod realm_address_tests {
     use super::*;

@@ -9,6 +9,7 @@
 //! The only state this touches is the `game_account` read (salt/verifier) and the session write
 //! (K) — both via `LogonStore`. Everything else is per-connection handshake scratch.
 
+use crate::accept::{classify_accept_error, AcceptBackoff, AcceptOutcome};
 use crate::{config::GatewayConfig, stdb::Coordinator};
 use anyhow::{anyhow, Result};
 use std::io::{Read, Write};
@@ -276,13 +277,53 @@ fn to_realm(r: &RealmInfo) -> Realm {
 pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
     let listener = TcpListener::bind(&cfg.logon_bind).await?;
     log::info!("logon listening on {}", cfg.logon_bind);
+    // #451: a transient accept errno must cost ONE connection, not the realm. See `crate::accept`
+    // for the policy and for the errno that actually killed the gateway on 2026-08-07.
+    let mut backoff = AcceptBackoff::new();
     loop {
-        let (sock, peer) = listener.accept().await?;
+        let (sock, peer) = match listener.accept().await {
+            Ok(pair) => {
+                backoff.record_success();
+                pair
+            }
+            Err(e) => match classify_accept_error(&e) {
+                AcceptOutcome::Fatal => {
+                    log::error!(
+                        "logon listener is unusable and cannot accept again: {e} — ending the \
+                         logon task"
+                    );
+                    return Err(e.into());
+                }
+                AcceptOutcome::Retry => {
+                    let delay = backoff.record_failure();
+                    log::warn!(
+                        "logon accept failed ({e}); skipping this connection (consecutive={}, \
+                         backing off {}ms)",
+                        backoff.consecutive(),
+                        delay.as_millis()
+                    );
+                    if !delay.is_zero() {
+                        tokio::time::sleep(delay).await;
+                    }
+                    continue;
+                }
+            },
+        };
         let coord = coordinator.clone();
         // wow_login_messages uses blocking std::io codecs, so run the per-connection state
         // machine on a blocking task with the socket in blocking mode.
-        let std_sock = sock.into_std()?;
-        std_sock.set_nonblocking(false)?;
+        // These two are per-SOCKET (a dup and an fcntl on the fd we just accepted), so they fail
+        // for the same reasons accept does — EMFILE above all. Drop the one connection.
+        let std_sock = match sock.into_std().and_then(|s| {
+            s.set_nonblocking(false)?;
+            Ok(s)
+        }) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("logon connection {peer} could not be handed to a blocking task: {e}");
+                continue;
+            }
+        };
         tokio::task::spawn_blocking(move || {
             let store = CoordinatorStore::new(coord);
             let mut s = std_sock;
@@ -319,11 +360,47 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
 /// `realm_core::tests` binds `D = fake::Handle` and runs THESE bodies, not a model of them.
 pub(crate) struct CoordinatorStore<D: crate::realm_core::RealmDb> {
     coordinator: D,
+    /// #269: the WORLD-shard account id this LOGON SOCKET holds a connection lease on, `None` until
+    /// its SRP6 proof resolves one.
+    ///
+    /// One `CoordinatorStore` is built per accepted logon socket (`run`, below) and dropped when
+    /// that socket's handler returns, so the store IS the socket's lifetime — which is why the
+    /// paired release is a `Drop` impl rather than a call at the end of `handle_logon`: a read
+    /// error, a protocol error and a panic all end the socket, and all three would skip an explicit
+    /// call. Leaking the lease is not a cosmetic miss; it pins the account's cached connection (a
+    /// websocket fd + an SDK pump thread) for the gateway's LIFETIME, which is the leak this fixes.
+    ///
+    /// World-shard, not realm-core's: `player_conn` caches under the world shard's `#[auto_inc]`
+    /// id, and #20's whole discipline is that the two are not interchangeable — attaching
+    /// realm-core's id would account a connection that does not exist while leaving the real one
+    /// unaccounted, i.e. leak on a split deployment while looking fixed on a single-database one.
+    leased: std::sync::Mutex<Option<u64>>,
 }
 
 impl<D: crate::realm_core::RealmDb> CoordinatorStore<D> {
     pub(crate) fn new(coordinator: D) -> Self {
-        Self { coordinator }
+        Self {
+            coordinator,
+            leased: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Take this socket's lease on `world_id`'s cached connection (#269), at most once per account.
+    ///
+    /// Idempotent because `handle_logon` loops: a client may re-run challenge+proof on the same
+    /// socket, and a second attach with only one `Drop` to pair it would leave the refcount above
+    /// zero forever — the connection would then never be released by anything. Re-authenticating as
+    /// a DIFFERENT account hands the previous one back first, so the abandoned account's connection
+    /// becomes reapable instead of being pinned by a socket that no longer uses it.
+    fn lease(&self, world_id: u64) {
+        let mut leased = self.leased.lock().unwrap_or_else(|e| e.into_inner());
+        if *leased == Some(world_id) {
+            return;
+        }
+        if let Some(prev) = leased.replace(world_id) {
+            self.coordinator.detach_account_session_deferred(prev);
+        }
+        self.coordinator.attach_account_session(world_id);
     }
 
     /// Translate the AUTHENTICATING database's account id into the WORLD shard's, by username.
@@ -346,6 +423,29 @@ impl<D: crate::realm_core::RealmDb> CoordinatorStore<D> {
                     .map(|a| a.id))
             },
         )
+    }
+}
+
+/// #269: the logon socket closed. Hand back the lease `bound_identity` took, on every exit path —
+/// clean disconnect, protocol error, and unwind alike.
+///
+/// This is a DEFERRED release, never an immediate one: the account's next socket is normally the
+/// world session, which reuses the very connection this logon opened and whose identity
+/// `establish_session` has already written into `game_session` and onto
+/// `game_character.owner_identity`. Releasing here would rebuild that connection on every single
+/// login — and the rebuilt one mints a different identity than the one just bound. See
+/// `stdb::AccountSessions` for the handover grace, and `Coordinator::spawn_account_session_reaper`
+/// for what actually reclaims a logon nobody followed up on.
+impl<D: crate::realm_core::RealmDb> Drop for CoordinatorStore<D> {
+    fn drop(&mut self) {
+        let leased = self
+            .leased
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(account_id) = leased {
+            self.coordinator.detach_account_session_deferred(account_id);
+        }
     }
 }
 
@@ -421,8 +521,13 @@ impl<D: crate::realm_core::RealmDb> LogonStore for CoordinatorStore<D> {
         // which is also the id the world phase later checks out with (`WorldSession::account_id`,
         // itself re-resolved by username in `world_store::lookup_session`). Handing realm-core's id
         // here would bind `game_character.owner_identity` to a connection nothing ever uses again.
-        self.coordinator
-            .bound_identity(self.world_account_id(account_id, username)?)
+        let world_id = self.world_account_id(account_id, username)?;
+        // #269: this call is what OPENS the account's cached connection, so it is where the logon
+        // socket takes its lease on it. BEFORE the open, not after: an open that fails part-way (a
+        // build that times out, #451) must still be paired, and an attach that never happened
+        // cannot be undone by `Drop`.
+        self.lease(world_id);
+        self.coordinator.bound_identity(world_id)
     }
 
     /// Two writes, in this order:

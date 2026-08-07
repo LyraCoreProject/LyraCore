@@ -170,6 +170,7 @@ gateway's environment. Omit one and you get a **working-looking single-database 
 | `LYRACORE_QUEST_LOG` | quest-log descriptor fields | **on** | — |
 | `LYRACORE_SEAM_NOTIFY` | a chat line per handoff | **on** (`=0` disables) | — |
 | `LYRACORE_MAX_SESSIONS` / `LYRACORE_ADMIT_CONCURRENCY` | login-queue seat ceiling / admissions per tick | `0` = unlimited | a malformed value silently unlimits |
+| `LYRACORE_MAX_BLOCKING_THREADS` | tokio blocking-pool cap — **the real ceiling on concurrent players** (see below) | `512` (tokio's own default) | malformed **or zero** falls back to `512`; the resolved value is logged at startup |
 | `LYRACORE_LOAD_SAMPLE_SECS` | shard/region load sampling cadence | `30` | — |
 | `LYRACORE_METRICS_DB_IDS` | `<shard>=<hex-identity-prefix>` map for `/v1/metrics` | `""` | warns loudly at startup; occupancy unmeasured |
 | `LYRACORE_WRITER_TRACE` | per-session writer black-box ring | off | — |
@@ -178,6 +179,49 @@ gateway's environment. Omit one and you get a **working-looking single-database 
 
 Two non-`LYRACORE_` variables matter: `RUST_LOG` (consumed by `env_logger` in `gateway/src/main.rs`)
 and `MALLOC_ARENA_MAX` (glibc, not the binary — worth ~4× RSS per connection).
+
+### `LYRACORE_MAX_BLOCKING_THREADS`, and the two limits above it (#451)
+
+Both listeners hand every accepted socket to `spawn_blocking` — the `wow_login_messages` /
+`wow_world_messages` codecs are blocking `std::io` — and a **world session holds its blocking thread
+for the session's entire life**. So the blocking-pool cap *is* the seat count, shared between live
+world sessions and in-flight logon handshakes. It was tokio's inherited default of 512 until #451,
+configured by nothing and reported by nothing.
+
+That mattered because a full pool does not refuse: `spawn_blocking` **queues**, so the socket is
+accepted at TCP level and then never handshaked — indistinguishable from "the server is full" and
+invisible in the log. Measured 2026-08-07 on an 8-core/15 GB container, 600 clients offered:
+
+| `max_blocking_threads` | seated | failed |
+|---|---|---|
+| 512 (tokio default) | 477 | 123 |
+| 4096 | 535 | 65 |
+
+477 rather than a clean 512 because logon handshakes draw from the same pool. Raising it is worth
+about 58 sessions on that host and is **not** sufficient by itself — the next ceiling is per-player
+connection setup (`player connect task did not answer within 20s`), which is #451's open item 2.
+
+Two related startup behaviours have no environment variable, because there is no case for turning
+them off:
+
+- **`RLIMIT_NOFILE` soft is raised to hard** before the runtime is built (`gateway/src/fd_limit.rs`).
+  A stock Docker container is soft 1024 / hard 524288, and #447 died at ~200 sessions with
+  `Too many open files (os error 24)` against 512× of unclaimed headroom. A live session costs 3–5
+  descriptors. Failure logs and continues — it never blocks startup.
+- **A transient `accept(2)` errno costs one connection, not the realm** (`gateway/src/accept.rs`).
+  `EMFILE`, `ENFILE`, `ECONNABORTED`, `EINTR`, `ENOBUFS`, `ENOMEM` and every unenumerated errno are
+  logged and skipped, with a backoff that settles at one attempt per second under sustained
+  pressure; only `EBADF` / `ENOTSOCK` / `EINVAL` / `EFAULT` — the listener itself being unusable —
+  end the task. Previously any non-`WouldBlock` errno propagated through `try_join!` and ended the
+  process.
+
+The three startup lines to look for, in order:
+
+```text
+INFO  fd limit: RLIMIT_NOFILE soft raised 1024 -> 524288 (hard 524288)
+INFO  tokio blocking pool: max_blocking_threads=512 (LYRACORE_MAX_BLOCKING_THREADS; default 512). ...
+INFO  gateway starting: logon=... world=... db=...@...
+```
 
 All of the above are parsed in `gateway/src/config.rs` (the topology section, then the feature-flag
 section) and `gateway/src/load_sample.rs`.

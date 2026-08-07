@@ -38,8 +38,8 @@ The first public alpha. The promise it makes, and nothing beyond it:
   operating systems, an MSRV-consistency gate, offline preflight, publish safety assertions,
   coverage floors, and `cargo-deny`/`cargo-audit` supply-chain auditing. This pipeline runs in the
   maintainers' working repository; there is no public CI in this alpha.
-- **Community-health documentation**: this changelog, [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md),
-  and [`SUPPORT.md`](./SUPPORT.md). Security reports go through GitHub's private
+- **Community-health documentation**: this changelog and [`SUPPORT.md`](./SUPPORT.md).
+  Security reports go through GitHub's private
   [vulnerability reporting](https://github.com/LyraCoreProject/LyraCore/security/advisories/new),
   not a standalone policy document.
 

@@ -9,7 +9,7 @@ use spacetimedb_sdk::{DbContext, Identity, SubscriptionHandle as _, Table as _};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::bindings::*;
 
@@ -38,6 +38,9 @@ pub(crate) struct ShardSet {
     /// an extra shard that failed to connect is ABSENT (routing then degrades to the default).
     conns: HashMap<String, Arc<CoordinatorInner>>,
     sessions: SessionEpochs,
+    /// How many live world SOCKETS each account currently has (#447). Separate from `sessions`
+    /// above on purpose — see [`AccountSessions`].
+    live_sessions: AccountSessions,
 }
 
 /// Per-account "current in-world session" tracking. The world gateway opens one TCP session per
@@ -71,6 +74,360 @@ impl SessionEpochs {
         } else {
             false
         }
+    }
+}
+
+/// Per-account live-SOCKET refcount — the arbitration behind releasing a cached `PlayerConn`
+/// (#447).
+///
+/// **Why this is not `SessionEpochs`.** The epoch above arbitrates who owns the *entity*: exactly
+/// one IN-WORLD session per account is current, and a superseded one must not delete the live
+/// player's row. That is a strictly narrower question than the one a connection release has to
+/// answer, because the cached `PlayerConn` is shared by every socket on the account — including a
+/// socket sitting at CHARACTER SELECT, which holds no epoch at all. Releasing on
+/// `release_session(..) == true` alone would therefore be wrong in a real (if narrow) case: socket A
+/// is in-world, socket B has authenticated and is at character select, A drops. A owns the epoch, so
+/// the epoch gate says "release" — but B is live and its next `player_conn` checkout would silently
+/// mint a NEW identity that `establish_session` has not bound, failing a char create/delete issued
+/// before B's `player_login` re-binds it.
+///
+/// So the release predicate is the strictly stronger one: **the last world socket for this account
+/// has gone away**. When the count reaches zero nobody can be holding the connection, in-world or
+/// not, and the epoch question does not need to be asked at all.
+///
+/// Not derivable from the `players` cache (`session_count`): that map is keyed by account and says
+/// nothing about how many sockets are using an entry.
+///
+/// # The logon tier and the handover grace (#269)
+///
+/// A LOGON socket is a live user of the same cached connection: `bound_identity` is what OPENS it,
+/// so a logon that authenticates and then walks away — an abandoned login, a client that reaches
+/// the realm list and quits — leaks exactly the fd + pump thread #447 was about, on a path #449
+/// never reached. So logon sockets attach here too.
+///
+/// Their detach is [`AccountSessions::detach_deferred`] rather than [`AccountSessions::detach`],
+/// because the account's NEXT socket is normally the world session, which reuses the connection the
+/// logon just opened and whose identity `establish_session` has already bound into `game_session`
+/// and onto `game_character.owner_identity`. Releasing on the logon socket's close would not merely
+/// cost a rebuild on every login (undoing #292's reuse): the rebuilt connection mints a DIFFERENT
+/// identity than the one that was bound moments earlier, so the world phase's
+/// `account_by_identity` lookups fail until the next `establish_session`.
+///
+/// And the two closes are not ordered. Whether the 1.12 client drops its logon socket before or
+/// after the world handshake is a CLIENT behaviour we neither control nor want to depend on, so
+/// the grace makes both orders safe: a deferred detach parks the account instead of releasing it,
+/// any `attach` inside the window cancels the park (that IS the handover), and only
+/// [`AccountSessions::reap_idle`] — driven by
+/// [`Coordinator::spawn_account_session_reaper`] — releases what nobody claimed.
+///
+/// The world tier keeps its IMMEDIATE detach: by the time a world socket ends, the handover
+/// question is settled, and delaying that release would slow the #447 reclaim the ramp measured.
+#[derive(Default)]
+pub(crate) struct AccountSessions {
+    live: Mutex<HashMap<u64, AccountEntry>>,
+}
+
+/// One account's row in [`AccountSessions`].
+#[derive(Default)]
+struct AccountEntry {
+    /// Live sockets on this account — world sessions and logon handshakes alike.
+    live: u32,
+    /// Set when the account's last socket detached DEFERRED (a logon close, see
+    /// [`AccountSessions::detach_deferred`]): the connection is kept, unreferenced, until either an
+    /// `attach` claims it or the grace elapses. Always `None` while `live > 0`.
+    idle_since: Option<Instant>,
+}
+
+impl AccountSessions {
+    /// A socket for `account_id` (world session or logon handshake) may now use the account's
+    /// cached connection. Cancels any pending idle release — this is the logon→world handover.
+    pub(crate) fn attach(&self, account_id: u64) {
+        let mut live = self.live.lock().unwrap();
+        let e = live.entry(account_id).or_default();
+        e.live += 1;
+        e.idle_since = None;
+    }
+
+    /// A WORLD socket for `account_id` has torn down. Returns true iff it was the LAST one — i.e.
+    /// the account has no live socket anywhere in the gateway and its cached connection is
+    /// unreachable, so releasing it cannot cut anybody's link.
+    pub(crate) fn detach(&self, account_id: u64) -> bool {
+        let mut live = self.live.lock().unwrap();
+        let Some(e) = live.get_mut(&account_id) else {
+            // Defensive: a detach with no matching attach must never claim the account is idle.
+            log::warn!("447: detach for account {account_id} with no live session recorded");
+            return false;
+        };
+        if e.live == 0 {
+            // Parked by a deferred detach and now detached again: the count is already zero, so
+            // this cannot be the last socket going away. Bailing rather than falling through to
+            // `-= 1`, because an unmatched detach must never underflow into "2^32 live sockets" —
+            // that would pin the connection for the process lifetime, i.e. the very leak.
+            log::warn!("269: detach for idle account {account_id} with no live session recorded");
+            return false;
+        }
+        e.live -= 1;
+        if e.live == 0 {
+            live.remove(&account_id);
+            return true;
+        }
+        false
+    }
+
+    /// A LOGON socket for `account_id` has closed. Never releases: if this was the account's last
+    /// socket the entry is PARKED at `now`, so a world session arriving inside the grace reuses the
+    /// connection the logon opened (see the type's doc), and [`AccountSessions::reap_idle`]
+    /// releases it only if none does.
+    pub(crate) fn detach_deferred(&self, account_id: u64, now: Instant) {
+        let mut live = self.live.lock().unwrap();
+        let Some(e) = live.get_mut(&account_id) else {
+            log::warn!("269: logon detach for account {account_id} with no live session recorded");
+            return;
+        };
+        if e.live == 0 {
+            log::warn!("269: logon detach for idle account {account_id} — already parked");
+            return;
+        }
+        e.live -= 1;
+        if e.live == 0 {
+            e.idle_since = Some(now);
+        }
+    }
+
+    /// Accounts parked by [`AccountSessions::detach_deferred`] at least `grace` ago and still
+    /// unclaimed: their entries are dropped and their ids returned for the caller to release.
+    ///
+    /// `idle_since` is the WHOLE predicate, and deliberately so. It is `Some` only while the
+    /// account has no socket at all — `detach_deferred` sets it exactly when the count reaches
+    /// zero, and [`AccountSessions::attach`] clears it, which is what makes a world session's
+    /// arrival cancel (not merely postpone) the release. Re-testing `live == 0` here would look
+    /// safer while making both halves redundant, so neither could be broken on its own and no test
+    /// could tell: the `debug_assert` below asserts the invariant instead of duplicating it.
+    pub(crate) fn reap_idle(&self, now: Instant, grace: Duration) -> Vec<u64> {
+        let mut live = self.live.lock().unwrap();
+        let due: Vec<u64> = live
+            .iter()
+            .filter(|(_, e)| {
+                let parked = e.idle_since.is_some_and(|t| now.duration_since(t) >= grace);
+                debug_assert!(
+                    !parked || e.live == 0,
+                    "an account with live sockets is parked for release — some path set \
+                     `idle_since` without the count reaching zero, or `attach` stopped clearing it"
+                );
+                parked
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &due {
+            live.remove(id);
+        }
+        due
+    }
+
+    /// Live sockets for `account_id` (tests + diagnostics).
+    #[cfg(test)]
+    pub(crate) fn live_count(&self, account_id: u64) -> u32 {
+        self.live
+            .lock()
+            .unwrap()
+            .get(&account_id)
+            .map(|e| e.live)
+            .unwrap_or(0)
+    }
+
+    /// Is `account_id` parked awaiting the handover grace? (tests)
+    #[cfg(test)]
+    pub(crate) fn is_parked(&self, account_id: u64) -> bool {
+        self.live
+            .lock()
+            .unwrap()
+            .get(&account_id)
+            .is_some_and(|e| e.idle_since.is_some())
+    }
+}
+
+#[cfg(test)]
+mod account_session_tests {
+    use super::AccountSessions;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn only_the_last_socket_releases_the_connection() {
+        let s = AccountSessions::default();
+        let acct = 42;
+        s.attach(acct); // socket A
+        s.attach(acct); // socket B re-logs on the same account while A is still up
+        assert!(
+            !s.detach(acct),
+            "A's teardown must NOT release the connection B is still using"
+        );
+        assert_eq!(s.live_count(acct), 1);
+        assert!(s.detach(acct), "B's teardown is the last one — release");
+        assert_eq!(s.live_count(acct), 0);
+    }
+
+    #[test]
+    fn a_single_socket_releases_on_its_own_teardown() {
+        let s = AccountSessions::default();
+        s.attach(7);
+        assert!(s.detach(7));
+    }
+
+    #[test]
+    fn accounts_are_independent() {
+        let s = AccountSessions::default();
+        s.attach(1);
+        s.attach(2);
+        assert!(s.detach(1));
+        assert!(s.detach(2));
+    }
+
+    #[test]
+    fn an_unmatched_detach_never_claims_the_account_is_idle() {
+        // A detach with no attach (a teardown path that skipped the attach) must be inert rather
+        // than release a connection some other socket could be holding.
+        let s = AccountSessions::default();
+        assert!(!s.detach(99));
+    }
+
+    // -------------------------------------------------------------------------------------
+    // #269: the logon tier. `detach_deferred` + `reap_idle` — the four danger cases.
+    // -------------------------------------------------------------------------------------
+
+    const GRACE: Duration = Duration::from_secs(120);
+
+    /// The leak this issue is about: a logon that authenticates (opening the account's cached
+    /// connection) and never proceeds to a world session. Nothing else will ever detach it, so the
+    /// reaper is the ONLY thing that can reclaim its fd + pump thread.
+    #[test]
+    fn a_logon_that_never_enters_the_world_is_reclaimed_after_the_grace() {
+        let s = AccountSessions::default();
+        let t0 = Instant::now();
+        s.attach(5); // logon socket, at `bound_identity`
+        s.detach_deferred(5, t0); // client quit at the realm list
+        assert!(s.is_parked(5), "the connection is parked, not yet released");
+        assert!(
+            s.reap_idle(t0 + GRACE - Duration::from_secs(1), GRACE)
+                .is_empty(),
+            "the grace has not elapsed — nothing may be released yet"
+        );
+        assert_eq!(s.reap_idle(t0 + GRACE, GRACE), vec![5]);
+        assert!(
+            s.reap_idle(t0 + GRACE * 2, GRACE).is_empty(),
+            "a reaped account is gone from the table — no double release"
+        );
+    }
+
+    /// DANGER CASE 1 (the handover). The client closes its logon socket the instant it opens the
+    /// world one, and the two closes are not ordered. If the logon close released, the world
+    /// session would rebuild a connection whose identity `establish_session` has NOT bound.
+    #[test]
+    fn a_world_session_inside_the_grace_takes_over_the_connection() {
+        let s = AccountSessions::default();
+        let t0 = Instant::now();
+        s.attach(5); // logon socket
+        s.detach_deferred(5, t0); // logon socket closes FIRST (client picked a realm)
+        s.attach(5); // the world session's handshake, milliseconds later
+        assert!(!s.is_parked(5), "the handover cancels the pending release");
+        assert!(
+            s.reap_idle(t0 + GRACE * 10, GRACE).is_empty(),
+            "the world session is LIVE on this connection — reaping it would cut the player's link"
+        );
+        // …and when the world session does end, the release is immediate, exactly as in #449.
+        assert!(s.detach(5));
+    }
+
+    /// The other order of the same handover: the world session attaches while the logon socket is
+    /// still open. The logon close then finds a live socket and parks nothing at all.
+    #[test]
+    fn a_logon_close_while_the_world_session_is_live_parks_nothing() {
+        let s = AccountSessions::default();
+        let t0 = Instant::now();
+        s.attach(5); // logon socket
+        s.attach(5); // world session opens before the client drops the logon socket
+        s.detach_deferred(5, t0); // logon socket closes
+        assert_eq!(s.live_count(5), 1);
+        assert!(!s.is_parked(5));
+        assert!(s.reap_idle(t0 + GRACE * 10, GRACE).is_empty());
+    }
+
+    /// DANGER CASE 2. A world session is ALREADY live when a fresh logon arrives for the same
+    /// account (a second client, or a re-auth while the first is playing). The logon's close must
+    /// not park — let alone release — the connection the seated player is using.
+    #[test]
+    fn a_fresh_logon_never_disturbs_a_live_world_session() {
+        let s = AccountSessions::default();
+        let t0 = Instant::now();
+        s.attach(7); // world session, in-world
+        s.attach(7); // a fresh logon for the same account
+        s.detach_deferred(7, t0); // the logon socket goes away
+        assert_eq!(s.live_count(7), 1);
+        assert!(
+            s.reap_idle(t0 + GRACE * 10, GRACE).is_empty(),
+            "the seated player's connection must never be reaped"
+        );
+        assert!(s.detach(7), "the world session's own teardown still releases");
+    }
+
+    /// DANGER CASE 3. Two concurrent logons on one account: the first close must not release the
+    /// connection the second is using, and the pair must release exactly once.
+    #[test]
+    fn two_concurrent_logons_release_once_and_only_at_the_last() {
+        let s = AccountSessions::default();
+        let t0 = Instant::now();
+        s.attach(9);
+        s.attach(9);
+        s.detach_deferred(9, t0);
+        assert!(!s.is_parked(9), "one logon socket is still using it");
+        assert!(s.reap_idle(t0 + GRACE * 10, GRACE).is_empty());
+        s.detach_deferred(9, t0 + Duration::from_secs(1));
+        // Parked at the SECOND close, so the grace runs from there, not from the first.
+        assert!(s
+            .reap_idle(t0 + Duration::from_secs(1) + GRACE - Duration::from_millis(1), GRACE)
+            .is_empty());
+        assert_eq!(s.reap_idle(t0 + Duration::from_secs(1) + GRACE, GRACE), vec![9]);
+    }
+
+    /// A parked account that is detached again (a teardown path that ran twice) must not underflow
+    /// the count — `0u32 - 1` is 4 billion live sockets, i.e. a connection pinned for the process
+    /// lifetime, which is the exact leak this whole issue is about.
+    #[test]
+    fn a_detach_on_a_parked_account_neither_underflows_nor_releases() {
+        let s = AccountSessions::default();
+        let t0 = Instant::now();
+        s.attach(3);
+        s.detach_deferred(3, t0);
+        assert!(!s.detach(3), "already parked — not a last-socket teardown");
+        s.detach_deferred(3, t0);
+        assert_eq!(s.live_count(3), 0);
+        assert_eq!(
+            s.reap_idle(t0 + GRACE, GRACE),
+            vec![3],
+            "still exactly one release"
+        );
+    }
+
+    /// A deferred detach with no attach at all is inert (mirrors the `detach` guard above).
+    #[test]
+    fn an_unmatched_deferred_detach_parks_nothing() {
+        let s = AccountSessions::default();
+        let t0 = Instant::now();
+        s.detach_deferred(99, t0);
+        assert!(s.reap_idle(t0 + GRACE, GRACE).is_empty());
+    }
+
+    #[test]
+    fn parked_accounts_are_independent() {
+        let s = AccountSessions::default();
+        let t0 = Instant::now();
+        s.attach(1);
+        s.attach(2);
+        s.detach_deferred(1, t0);
+        s.detach_deferred(2, t0 + GRACE);
+        let mut due = s.reap_idle(t0 + GRACE, GRACE);
+        due.sort_unstable();
+        assert_eq!(due, vec![1], "only account 1's grace has elapsed");
+        assert_eq!(s.reap_idle(t0 + GRACE * 2, GRACE), vec![2]);
     }
 }
 
@@ -207,8 +564,7 @@ pub(crate) struct PlayerConn {
     /// connection and its caches are freed only once this thread RETURNS — dropping the `PlayerConn`
     /// is not enough, somebody has to reap it. `LiveConn` above already does this on a reconnect.
     ///
-    /// Read ONLY by `release_player_conn`, which is itself unreachable today — see its note.
-    #[allow(dead_code)]
+    /// Read by `release_player_conn_on`, i.e. at the teardown of the account's last world socket.
     pump: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
@@ -1012,36 +1368,78 @@ impl Coordinator {
         }
         let uri = self.0.uri.clone();
         let db_name = self.0.db_name.clone();
-        // 292: build on a RUNTIME WORKER, not a bare `std::thread`, so the SDK's
-        // `enter_or_create_runtime()` takes its `Handle::try_current() == Ok` branch and REUSES this
-        // runtime instead of creating a private 1-worker runtime per connection. That private
-        // runtime was ~1-2 OS threads per distinct account, never released for the gateway's
-        // lifetime (work-item 292), and at 500 accounts it is what left the gateway unable to serve
-        // logons after #285's mass-disconnect run.
+        // 292: the build must see an ambient runtime, so the SDK's `enter_or_create_runtime()`
+        // takes its `Handle::try_current() == Ok` branch and REUSES this runtime instead of
+        // creating a private 1-worker runtime per connection. That private runtime was ~1-2 OS
+        // threads per distinct account, never released for the gateway's lifetime (work-item 292),
+        // and at 500 accounts it is what left the gateway unable to serve logons after #285's
+        // mass-disconnect run.
         //
-        // Measured with a probe before writing this: three connections built on a worker added
-        // ZERO `spacetimedb-background-connection` threads. The note on `connect_blocking` above
-        // says a tokio worker panics here; that half is WRONG — `block_in_place` exists precisely
-        // for multi-thread workers, and only panics on a current-thread runtime or a blocking-pool
-        // thread. The `spawn_blocking` half of that note is correct, which is why this hands the
-        // build to a spawned task rather than doing it inline (this fn is called FROM
-        // `spawn_blocking` handlers).
+        // ⚠ #451: "ambient runtime" must NOT mean "on a runtime worker". The previous shape
+        // (`handle.spawn(async { block_in_place(build) })`) starves under exactly the load this
+        // path exists for. `block_in_place` on a worker GIVES THE WORKER'S CORE AWAY and asks the
+        // blocking pool to run it — `runtime::spawn_blocking(move || run(worker))`,
+        // tokio-1.53.1 `runtime/scheduler/multi_thread/worker.rs:489`, whose own comment four
+        // lines up reads "If we heavily call `spawn_blocking`, there might be no available thread
+        // to run this core". This gateway heavily calls `spawn_blocking`: EVERY world session
+        // (`world::run`) and EVERY logon handshake (`logon::run`) holds one pool thread for its
+        // whole life. So at a few hundred sessions the pool is full, the handed-off core is never
+        // picked up, and the runtime loses a core PER IN-FLIGHT BUILD — taking down the SDK
+        // message pumps that every other session's reducer completions ride on. Measured offline
+        // (see `connect_build_does_not_starve_on_a_full_blocking_pool` below): 8 workers, pool
+        // full, 8 builds in flight ⇒ an unrelated task waits 1.7 s; the shape below waits 51 ms.
+        // That is the "player connect task did not answer within 20s" + bimodal p95 of #451.
+        //
+        // So: build on a THREAD THE RUNTIME DOES NOT OWN, with an `enter()` guard. The guard makes
+        // `Handle::try_current()` succeed (keeping 292's shared-runtime reuse and the SDK's message
+        // loops on this runtime), while the SDK's internal `block_in_place` takes its "outside of
+        // the tokio runtime, so blocking is fine" branch — no core handed away, no blocking-pool
+        // thread needed, nothing to queue behind.
         //
         // Nothing about the security model moves: the connection is still per-account with its own
         // minted identity, so `ctx.sender` authorisation and the module's RLS filters are untouched.
         let conn = match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 let (tx, rx) = std::sync::mpsc::channel();
-                handle.spawn(async move {
-                    let built =
-                        tokio::task::block_in_place(|| connect_player_blocking(uri, db_name));
-                    let _ = tx.send(built);
-                });
+                std::thread::Builder::new()
+                    .name(format!("stdb-player-{account_id}"))
+                    .spawn(move || {
+                        let _guard = handle.enter();
+                        let built = connect_player_blocking(uri, db_name);
+                        // The caller's `recv_timeout` below is a HARD deadline, but it cannot
+                        // cancel this build — so a connection that lands late must be cleaned up
+                        // HERE or it is orphaned (#451). It was never inserted into `players`, so
+                        // `release_player_conn_on` will never see it; the SDK's `DbContextImpl`
+                        // has no `Drop`, and the `run_threaded` pump holds a clone, so dropping it
+                        // leaves a live websocket + a live pump thread for the process lifetime.
+                        // That is the same fd/thread leak #447 fixed, on the failure path.
+                        if let Err(std::sync::mpsc::SendError(Ok(p))) = tx.send(built) {
+                            log::warn!(
+                                "player conn for account {account_id} arrived after the caller's \
+                                 deadline — disconnecting the orphan (#451)"
+                            );
+                            let _ = p.conn.disconnect();
+                            let pump = p.pump.lock().unwrap().take();
+                            if let Some(h) = pump {
+                                let _ = h.join();
+                            }
+                        }
+                    })
+                    .context("spawn player connect thread")?;
                 rx.recv_timeout(Duration::from_secs(20))
                     .map_err(|_| anyhow!("player connect task did not answer within 20s"))??
             }
-            // No ambient runtime (unit tests, and any future non-tokio caller): fall back to the
-            // original dedicated-thread build. Correct, just one private runtime per connection.
+            // No ambient runtime: fall back to the original dedicated-thread build. Correct, just
+            // one private runtime per connection.
+            //
+            // ⚠ This is NOT only unit tests (#451). `aoi.rs`'s view-merge opens each AWAY shard's
+            // player connection from a bare `std::thread` (`ensure_away`), which has no ambient
+            // runtime — so every away connection a dispersed player accumulates still pays 292's
+            // private 1-worker runtime, permanently. That is the likeliest reading of #451's
+            // "~3.6 threads/session co-located, ~5.2 dispersed". Fixing it means carrying a
+            // `Handle` on `CoordinatorInner` so this branch never triggers; deliberately NOT done
+            // here, because it also moves every away connection's SDK message loops onto the
+            // shared runtime's workers, and that redistribution needs a measured run to justify.
             Err(_) => std::thread::Builder::new()
                 .name(format!("stdb-player-{account_id}"))
                 .spawn(move || connect_player_blocking(uri, db_name))
@@ -1058,37 +1456,137 @@ impl Coordinator {
         Ok(arc)
     }
 
-    /// Release this account's cached connection at session teardown (292).
+    /// Register a live world socket for `account_id` (called once its handshake has resolved the
+    /// account). Pairs with [`Coordinator::detach_account_session`]. See [`AccountSessions`].
+    pub(crate) fn attach_account_session(&self, account_id: u64) {
+        self.1.live_sessions.attach(account_id);
+    }
+
+    /// Retire a live world socket for `account_id` at teardown and, iff it was the LAST one,
+    /// release the account's cached per-account connections on every shard (#447).
     ///
-    /// Only safe behind the `release_session` gate: a stale socket SHARES this connection with the
-    /// session that superseded it (#42), so releasing from a stale teardown would cut a live
-    /// player's link. Same arbitration as the entity delete.
+    /// This is the whole fd/thread reclaim: until it was wired up, each distinct account leaked one
+    /// websocket fd and one SDK pump OS thread **per shard it ever touched**, for the gateway's
+    /// lifetime. `accept(2)` returns `EMFILE` once the process runs out of fds, and both accept
+    /// loops propagate that straight into `main` — so the leak is what ends the process, at a
+    /// session count that is a pure function of `ulimit -n`.
     ///
-    /// Two earlier attempts at this reclaimed NOTHING, because each connection owned a private tokio
-    /// runtime that outlived it. With the build moved onto a shared runtime worker (see
-    /// `player_conn`) the only remaining per-connection thread is the pump, and joining it lets the
-    /// connection actually drop.
-    ///
-    /// ⚠ Unreachable today — nothing calls the `WorldStore::release_player_conn` this backs. See
-    /// that method's note in `world/mod.rs` for why the call site is a follow-up, not a lint fix.
-    #[allow(dead_code)]
-    pub(crate) fn release_player_conn(&self, account_id: u64) {
-        let Some(p) = self.0.players.lock().unwrap().remove(&account_id) else {
+    /// Safety is [`AccountSessions::detach`]'s postcondition, not this function's: it returns true
+    /// only when no socket for the account remains, so there is nobody left to cut off. Note this
+    /// is a STRONGER gate than the `release_session` epoch arbitration `leave_world` uses — see
+    /// [`AccountSessions`] for the character-select case the epoch gate would get wrong.
+    pub(crate) fn detach_account_session(&self, account_id: u64) {
+        if !self.1.live_sessions.detach(account_id) {
             return;
-        };
-        if let Err(e) = p.conn.disconnect() {
-            log::debug!("292: account {account_id} conn was already inactive ({e})");
         }
-        // Reap OFF this thread: the pump must be joined for its caches to be freed, but a teardown
-        // must never hang on a pump that refuses to exit.
-        let handle = p.pump.lock().unwrap().take();
-        if let Some(h) = handle {
-            let _ = std::thread::Builder::new()
-                .name(format!("stdb-reap-{account_id}"))
-                .spawn(move || {
-                    let _ = h.join();
-                });
+        self.release_account_conns(account_id);
+    }
+
+    /// Retire a live LOGON socket for `account_id` (#269). Never releases immediately: the account's
+    /// next socket is normally the world session that reuses this very connection, and the two
+    /// closes are not ordered. See [`AccountSessions`] for why releasing here would be worse than
+    /// slow, and [`Coordinator::spawn_account_session_reaper`] for what does release it.
+    pub(crate) fn detach_account_session_deferred(&self, account_id: u64) {
+        self.1
+            .live_sessions
+            .detach_deferred(account_id, Instant::now());
+    }
+
+    /// Release every account parked by a logon close at least `grace` ago that no world session
+    /// claimed (#269). Returns how many were released.
+    ///
+    /// Takes `now`/`grace` rather than reading the clock so the whole predicate is drivable from a
+    /// test without sleeping; [`Coordinator::spawn_account_session_reaper`] supplies the real ones.
+    pub(crate) fn reap_idle_account_sessions(&self, now: Instant, grace: Duration) -> usize {
+        let due = self.1.live_sessions.reap_idle(now, grace);
+        for account_id in &due {
+            self.release_account_conns(*account_id);
         }
+        due.len()
+    }
+
+    /// Sweep for logon connections nobody claimed (#269). Without this task nothing ever reclaims
+    /// them: `detach_account_session_deferred` deliberately only parks, so the reaper is the whole
+    /// release path for the logon tier.
+    pub fn spawn_account_session_reaper(&self) {
+        let coord = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(ACCOUNT_SESSION_REAP_INTERVAL);
+            loop {
+                tick.tick().await;
+                let n = coord.reap_idle_account_sessions(Instant::now(), LOGON_HANDOVER_GRACE);
+                if n > 0 {
+                    log::info!(
+                        "269: released {n} per-account connection(s) whose logon never entered the \
+                         world"
+                    );
+                }
+            }
+        });
+    }
+
+    /// Drop `account_id`'s cached per-account connection on every shard.
+    ///
+    /// EVERY shard, not just this handle's (#17/#19): the account's home shard can change
+    /// mid-session across a cross-database transfer, and `aoi.rs`'s view-merge opens a further
+    /// player connection on each AWAY shard a straddling box touches. Each of those is its own
+    /// cached `PlayerConn` in that shard's `players` map, and each leaks the same fd + thread.
+    /// `release_player_conn_on` is a `remove`, so covering a shard twice is inert.
+    fn release_account_conns(&self, account_id: u64) {
+        for inner in self.1.conns.values() {
+            release_player_conn_on(inner, account_id);
+        }
+        release_player_conn_on(&self.0, account_id);
+    }
+}
+
+/// How long a cached per-account connection outlives the logon socket that opened it when no world
+/// session has taken over (#269).
+///
+/// Sized for the handover, not for the leak: the gap it has to cover is "client closes its logon
+/// socket → client completes the world handshake", which is milliseconds in the normal case and
+/// bounded by #180's login queue in the worst one. Erring long is nearly free here — the leak this
+/// reclaims is one connection per DISTINCT account that authenticated and never played (the cache
+/// dedupes repeats), so it grows over a server's lifetime rather than in bursts, and two minutes of
+/// extra retention changes no ceiling. Erring short is not free: a session that rebuilds its
+/// connection gets a fresh identity, which `establish_session` has not bound.
+///
+/// ⚠ A client that sits in the #180 login queue for longer than this reaches
+/// `open_account_session` after its connection was already reaped, and its `player_login` then
+/// fails `account_by_identity` — recoverable by reconnecting (the next logon re-binds), and inert
+/// on the default topology, where `LYRACORE_MAX_SESSIONS` is unset and nothing ever queues.
+const LOGON_HANDOVER_GRACE: Duration = Duration::from_secs(120);
+
+/// How often [`Coordinator::spawn_account_session_reaper`] sweeps.
+const ACCOUNT_SESSION_REAP_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Release one shard's cached connection for `account_id`: drop it from the cache, disconnect the
+/// websocket, and reap the pump thread off-thread (292).
+///
+/// Two earlier attempts at this reclaimed NOTHING, because each connection owned a private tokio
+/// runtime that outlived it. With the build moved onto a shared runtime worker (see
+/// [`Coordinator::player_conn`]) the only remaining per-connection thread is the pump, and joining
+/// it lets the connection actually drop.
+///
+/// ⚠ Not safe on its own — a stale socket SHARES this connection with the session that superseded
+/// it (#42). Only [`Coordinator::detach_account_session`] may call it, and only once the account's
+/// last live socket is gone.
+fn release_player_conn_on(inner: &CoordinatorInner, account_id: u64) {
+    let Some(p) = inner.players.lock().unwrap().remove(&account_id) else {
+        return;
+    };
+    if let Err(e) = p.conn.disconnect() {
+        log::debug!("292: account {account_id} conn was already inactive ({e})");
+    }
+    // Reap OFF this thread: the pump must be joined for its caches to be freed, but a teardown
+    // must never hang on a pump that refuses to exit.
+    let handle = p.pump.lock().unwrap().take();
+    if let Some(h) = handle {
+        let _ = std::thread::Builder::new()
+            .name(format!("stdb-reap-{account_id}"))
+            .spawn(move || {
+                let _ = h.join();
+            });
     }
 }
 
@@ -1220,6 +1718,7 @@ impl Coordinator {
                 map,
                 conns,
                 sessions: SessionEpochs::default(),
+                live_sessions: AccountSessions::default(),
             }),
         );
         // Issue #50: promotes each world shard's staging loot rolls onto realm-core and settles
@@ -1864,5 +2363,174 @@ mod player_conn_lock_scope {
              its own — the one thing that keeps the `players` guard from outliving the liveness \
              check (#447). Body was:\n{body}"
         );
+    }
+}
+
+/// #451 — why `player_conn`'s build runs on a thread the runtime does NOT own.
+///
+/// The gateway spends one tokio blocking-pool thread per world session and per logon handshake, for
+/// that session's whole life (`world::run`, `logon::run`). `block_in_place` on a runtime worker gives
+/// the worker's core away and asks that same pool to run it (tokio `multi_thread/worker.rs`), so once
+/// the pool is full the core is never picked up — the runtime shrinks by one core per in-flight
+/// connection build, and every SDK message pump on it stalls with it. These tests pin the difference
+/// between the two shapes with no node and no network; they are the offline half of #451's evidence.
+#[cfg(test)]
+mod connect_build_shape {
+    use crate::test_scan::code_of;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::runtime::{Builder, Handle, Runtime};
+
+    /// A runtime shaped like the gateway's: `workers` cores and a blocking pool with EVERY slot held
+    /// by a task that does not return — the session-per-`spawn_blocking` shape at its ceiling.
+    /// Flip the returned flag before dropping the runtime, or the drop waits forever.
+    fn saturated(workers: usize, cap: usize) -> (Runtime, Arc<AtomicBool>) {
+        let rt = Builder::new_multi_thread()
+            .worker_threads(workers)
+            .max_blocking_threads(cap)
+            .enable_all()
+            .build()
+            .unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (ready_tx, ready_rx) = mpsc::channel();
+        for _ in 0..cap {
+            let stop = stop.clone();
+            let ready = ready_tx.clone();
+            rt.spawn_blocking(move || {
+                let _ = ready.send(());
+                while !stop.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            });
+        }
+        for _ in 0..cap {
+            ready_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the blocking pool never filled");
+        }
+        (rt, stop)
+    }
+
+    /// The failure mode itself. Four workers, pool full, four `block_in_place` calls in flight ⇒ the
+    /// runtime has NO core left, so a plain task cannot run at all. In the gateway those tasks are
+    /// the SDK's websocket message and parse loops, which is why one slow connect shows up as every
+    /// other session's reducer timing out and as #451's 12.6 s movement p95.
+    #[test]
+    fn block_in_place_on_a_worker_costs_a_core_when_the_blocking_pool_is_full() {
+        let (rt, stop) = saturated(4, 4);
+        let handle = rt.handle().clone();
+        for _ in 0..4 {
+            handle.spawn(async {
+                tokio::task::block_in_place(|| std::thread::sleep(Duration::from_secs(2)));
+            });
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        let (tx, rx) = mpsc::channel();
+        handle.spawn(async move {
+            let _ = tx.send(());
+        });
+        let ran = rx.recv_timeout(Duration::from_millis(500));
+        stop.store(true, Ordering::Relaxed);
+        drop(rt);
+        assert!(
+            ran.is_err(),
+            "a `block_in_place` build no longer strands the worker's core when the blocking pool is \
+             full — tokio changed the hand-off, so `player_conn`'s comment (and #451's diagnosis) \
+             needs re-reading before anything relaxes."
+        );
+    }
+
+    /// The shape `player_conn` uses instead: a thread the runtime does not own, with an `enter()`
+    /// guard. Same saturated runtime as the test above, and it does not care.
+    #[test]
+    fn connect_build_does_not_starve_on_a_full_blocking_pool() {
+        let (rt, stop) = saturated(4, 4);
+        let handle = rt.handle().clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _guard = handle.enter();
+            // Stands in for `DbConnection::build()`, which ends in
+            // `block_in_place(|| handle.block_on(WsConnection::connect(..)))` — i.e. it awaits
+            // something only this runtime's driver can complete.
+            tokio::task::block_in_place(|| {
+                handle.block_on(async {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                })
+            });
+            let _ = tx.send(());
+        });
+        let built = rx.recv_timeout(Duration::from_secs(5));
+        stop.store(true, Ordering::Relaxed);
+        drop(rt);
+        assert!(
+            built.is_ok(),
+            "a connection build on an entered non-runtime thread starved anyway — the whole point \
+             of that shape (#451) is that it needs neither a core nor a blocking-pool slot."
+        );
+    }
+
+    /// 292's half of the same line: the `enter()` guard is what keeps the SDK on the SHARED runtime.
+    /// Without it `Handle::try_current()` fails and `enter_or_create_runtime()` builds a private
+    /// 1-worker runtime per connection — ~1-2 OS threads per account, never released.
+    #[test]
+    fn an_enter_guard_is_what_makes_the_sdk_reuse_the_shared_runtime() {
+        let rt = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let handle = rt.handle().clone();
+        let seen = std::thread::spawn(move || {
+            let bare = Handle::try_current().is_ok();
+            let entered = {
+                let _guard = handle.enter();
+                Handle::try_current().is_ok()
+            };
+            (bare, entered)
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            seen,
+            (false, true),
+            "a bare thread must see no runtime (private-runtime path) and an entered one must see \
+             this runtime (292's shared-runtime path)"
+        );
+    }
+
+    /// Pin the shape in the source, the way `player_conn_lock_scope` pins #447's: the build must not
+    /// go back onto a runtime worker.
+    #[test]
+    fn player_conn_builds_off_the_runtime_workers() {
+        let src = include_str!("connection.rs");
+        let body = code_of(
+            src,
+            "pub(crate) fn player_conn(&self, account_id: u64) -> Result<Arc<PlayerConn>> {",
+        );
+        assert!(
+            body.contains("let _guard = handle.enter();"),
+            "`player_conn` no longer enters the ambient runtime on its build thread — without the \
+             guard the SDK builds a PRIVATE runtime per connection (292). Body was:\n{body}"
+        );
+        for line in body.lines() {
+            let t = line.trim();
+            // Comments in there NAME both shapes on purpose — it is the explanation of why the
+            // code below is written the way it is. Only code counts.
+            if t.starts_with("//") {
+                continue;
+            }
+            assert!(
+                !t.contains("block_in_place("),
+                "`player_conn` calls `block_in_place` again ({t}). On a runtime worker that hands \
+                 the core to the blocking pool, which every world session already holds a thread \
+                 of — the #451 starvation. Build on a thread the runtime does not own."
+            );
+            assert!(
+                !t.contains("handle.spawn("),
+                "`player_conn` spawns the build as a runtime task again ({t}) — see #451."
+            );
+        }
     }
 }

@@ -13,8 +13,10 @@
 //! rep/xp/level-up/teleport). See `docs/danger-zones.md` §3 for how to launch this against the
 //! real five-database realm — do not hand-roll the launch.
 
+mod accept;
 mod codec;
 mod config;
+mod fd_limit;
 mod load_sample;
 mod logon;
 mod provision_cli;
@@ -34,12 +36,48 @@ use provision_cli::{parse_gateway_mode, read_password_line, GatewayMode};
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Startup, in the order the three things have to happen (#451):
+///
+/// 1. **Logging first**, so everything below is visible.
+/// 2. **`RLIMIT_NOFILE` raised before anything opens a descriptor.** Best-effort; a failure logs and
+///    continues — see `fd_limit`.
+/// 3. **The runtime built by hand rather than by `#[tokio::main]`**, purely so
+///    `max_blocking_threads` is a configured, logged number instead of tokio's silently inherited
+///    512. Every other builder setting matches what `#[tokio::main]` does
+///    (`new_multi_thread().enable_all()`), so an unset `LYRACORE_MAX_BLOCKING_THREADS` is the
+///    previous behaviour byte for byte.
+///
+/// The `dhat` profiler guard is declared before the runtime so it drops *after* it — a profiler that
+/// stops recording while the runtime is still tearing down would under-report the shutdown path.
+fn main() -> Result<()> {
     #[cfg(feature = "dhat-heap")]
     let _dhat = dhat::Profiler::new_heap();
 
     env_logger::init();
+
+    // #451/#447: a stock container gives us soft 1024 against a hard limit of 524288, and the
+    // gateway dies at ~200 sessions with EMFILE while 512x of headroom sits unclaimed.
+    fd_limit::raise_nofile_soft_to_hard();
+
+    // #451: THE ceiling on concurrent players — every world session parks one blocking thread for
+    // its whole life, and the logon tier draws handshakes from the same pool. Logged because a full
+    // pool does not refuse, it queues: the symptom is silence, not an error.
+    let max_blocking_threads = config::max_blocking_threads();
+    log::info!(
+        "tokio blocking pool: max_blocking_threads={max_blocking_threads} \
+         (LYRACORE_MAX_BLOCKING_THREADS; default {}). One world session holds one thread for its \
+         entire life, shared with in-flight logon handshakes — this is the seat ceiling.",
+        config::DEFAULT_MAX_BLOCKING_THREADS
+    );
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .max_blocking_threads(max_blocking_threads)
+        .build()?;
+    runtime.block_on(run())
+}
+
+async fn run() -> Result<()> {
     let mode = parse_gateway_mode(std::env::args().skip(1))?;
     let cfg = GatewayConfig::from_env();
 
@@ -69,6 +107,13 @@ async fn main() -> Result<()> {
     // player connection to ride, so it is picked up here — on the coordinator, independent of any
     // session — rather than from a per-player relay.
     coordinator.spawn_bot_invite_relay();
+
+    // #269: reclaim the per-account SpacetimeDB connections opened by logons that never went on to
+    // a world session (an abandoned login, a client that reaches the realm list and quits). The
+    // world tier releases its own at socket teardown (#449), but a logon close only PARKS the
+    // connection — so without this sweep the logon half of the leak is never reclaimed at all, and
+    // each leaked connection costs a websocket fd + an SDK pump thread for the process lifetime.
+    coordinator.spawn_account_session_reaper();
 
     // Run both listeners concurrently. Each accepted socket gets its own task; in-world
     // sockets additionally open a per-player SpacetimeDB connection (identity = account).
@@ -288,6 +333,53 @@ mod bot_invite_relay_wiring_tripwire {
             "the `on_reconnect` hook is invoked BEFORE the connection swap. The hook re-reads \
              `coord()`, so it would re-arm on the dead connection — indistinguishable at runtime \
              from never re-arming, and just as silent."
+        );
+    }
+}
+
+/// #269: the logon tier's connection reclaim is a two-part wiring, and BOTH parts are the kind of
+/// call site that this very issue exists because nobody made. #269 was filed when `release_player_conn`
+/// turned up as `dead_code` — present, correct, and called by nothing — so the reclaim's call sites get
+/// the same tripwires the bot-invite relay's did.
+#[cfg(test)]
+mod logon_conn_reclaim_wiring_tripwire {
+    use crate::test_scan::code_of;
+
+    /// 1. The sweep. `detach_account_session_deferred` deliberately only PARKS the account (the
+    ///    logon→world handover must not rebuild the connection), so the reaper is the entire release
+    ///    path for the logon tier. Without this line every authenticated-but-never-played account
+    ///    holds its websocket fd and SDK pump thread for the gateway's lifetime — silently, and
+    ///    exactly as it did before this fix.
+    #[test]
+    fn main_spawns_the_account_session_reaper_at_startup() {
+        let src = include_str!("main.rs");
+        let body = code_of(src, "async fn run() -> Result<()> {");
+        assert!(
+            body.contains("coordinator.spawn_account_session_reaper();"),
+            "`main` no longer spawns the #269 reaper. Nothing else releases a parked logon \
+             connection, so the fd/thread leak that ended the gateway with `Too many open files` \
+             (#447) is back on the logon path, with no error and no log line. Body was:\n{body}"
+        );
+    }
+
+    /// 2. The lease. The reaper can only reclaim what was accounted in the first place, and the
+    ///    logon tier's attach lives in `CoordinatorStore::bound_identity` — the one call that OPENS
+    ///    the per-account connection. Dropping it makes every logon connection invisible to the
+    ///    refcount: nothing is ever parked, so nothing is ever reaped.
+    #[test]
+    fn the_logon_store_leases_the_connection_it_opens() {
+        let src = include_str!("logon/mod.rs");
+        // Anchored on the trailing `{` so this finds `CoordinatorStore`'s impl and not the
+        // identically-named (and `;`-terminated) `LogonStore` trait declaration above it.
+        let body = code_of(
+            src,
+            "fn bound_identity(&self, account_id: u64, username: &str) -> Result<[u8; 32]> {",
+        );
+        assert!(
+            body.contains("self.lease(world_id);"),
+            "`CoordinatorStore::bound_identity` no longer leases the account session it opens, so \
+             the logon connection is never counted and the #269 reaper never sees it. Body \
+             was:\n{body}"
         );
     }
 }

@@ -28,6 +28,14 @@ pub(crate) mod subscriptions;
 mod views;
 mod world_store; // impl WorldStore for Coordinator (replaces the former WorldCoordinatorStore newtype)
 
+/// The per-account live-socket refcount behind the #447 connection release. Re-exported so the
+/// world-session tests can drive the REAL arbitration through their fake store instead of a
+/// re-implementation of it (a fake that reimplements the gate only ever tests the fake).
+/// Test-only: production reaches it through `Coordinator::attach_account_session`,
+/// `detach_account_session` (the world tier's immediate release) and
+/// `detach_account_session_deferred` + `reap_idle_account_sessions` (the logon tier's, #269).
+#[cfg(test)]
+pub(crate) use connection::AccountSessions;
 pub use connection::Coordinator;
 pub use subscriptions::PlayerSubscriptions;
 // Re-exported so `crate::stdb::{RealmRow, AccountRow}` resolves (they are the return types of

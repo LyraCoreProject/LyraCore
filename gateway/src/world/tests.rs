@@ -233,6 +233,14 @@ struct InMemoryStore {
     /// When true, `release_session` reports the epoch superseded (stale socket) — the world-side
     /// half of #42: `leave_world` must then SKIP the `logout` reducer. [179]
     stale_session: bool,
+    /// #447: the REAL per-account live-socket arbitration (`crate::stdb::AccountSessions`), not a
+    /// re-implementation of it — a fake that reimplements the gate only ever tests the fake. The
+    /// production `Coordinator` impl runs this exact type behind the exact same predicate; the only
+    /// thing stubbed here is the release ACTION (recording instead of closing a websocket).
+    account_sessions: crate::stdb::AccountSessions,
+    /// Accounts whose cached per-account connection was released, in order (#447). Must stay empty
+    /// while ANY socket for the account is still live.
+    released_conns: std::sync::Mutex<Vec<u64>>,
     /// Imported gossip menu options `gossip_options` returns for ANY npc_guid (work-item 217) — empty
     /// by default (the pre-217 fallback path).
     gossip_opts: Vec<codec::GossipOptionView>,
@@ -1334,6 +1342,16 @@ impl WorldStore for InMemoryStore {
         // Default (false) = this session still owns the entity; `stale_session` simulates a newer
         // login having superseded it (the #42 arbitration), so teardown must skip `logout`.
         !self.stale_session
+    }
+    fn open_account_session(&self, account_id: u64) {
+        self.account_sessions.attach(account_id);
+    }
+    fn close_account_session(&self, account_id: u64) {
+        // Byte-for-byte the production predicate (`Coordinator::detach_account_session`): release
+        // ONLY when this was the account's last live socket.
+        if self.account_sessions.detach(account_id) {
+            self.released_conns.lock().unwrap().push(account_id);
+        }
     }
     fn reclaim_corpse(&self, _account_id: u64, _corpse_guid: u64) -> Result<()> {
         Ok(())
@@ -7066,6 +7084,112 @@ fn stale_epoch_logout_skips_the_logout_reducer() {
             .logout_called
             .load(std::sync::atomic::Ordering::SeqCst),
         "a superseded epoch must NOT delete the newer session's entity"
+    );
+}
+
+// ===========================================================================================
+//  #447 — the per-account connection release (the fd/thread leak that ends the process).
+//
+//  Every distinct account's `PlayerConn` costs a websocket fd + an SDK pump OS thread, and until
+//  now nothing ever released one: `accept(2)` returns EMFILE when the fd table runs out and both
+//  accept loops propagate it into `main`, so the gateway exits after N sessions where N is a pure
+//  function of `ulimit -n`. Releasing is only safe once NO socket for the account remains — these
+//  tests pin both halves of that (does release; does NOT release early).
+// ===========================================================================================
+
+/// Accounts whose cached per-account connection the store has released so far, in order.
+fn released(store: &std::sync::Arc<InMemoryStore>) -> Vec<u64> {
+    store.released_conns.lock().unwrap().clone()
+}
+
+#[test]
+fn the_last_socket_for_an_account_releases_its_cached_connection() {
+    // The leak itself: one session, opened and torn down, must reclaim the account's connection.
+    let store = std::sync::Arc::new(quest_store());
+    let (client, _enc, _dec, server) = enter_world(store.clone(), 1);
+    assert!(
+        released(&store).is_empty(),
+        "nothing may be released while the session is live"
+    );
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(
+        released(&store),
+        vec![7],
+        "the account's last socket must release its cached per-account connection"
+    );
+}
+
+#[test]
+fn a_reconnect_racing_a_teardown_keeps_the_new_sessions_connection() {
+    // THE danger case. Socket B re-logs on the same account while socket A is still tearing down;
+    // both share ONE cached `PlayerConn`. Releasing on A's teardown would cut the LIVE player's
+    // link — worse than the leak. A's teardown must therefore release nothing, and B must still be
+    // servable afterwards.
+    let store = std::sync::Arc::new(quest_store());
+    let (client_a, _a_enc, _a_dec, server_a) = enter_world(store.clone(), 1);
+    let (mut client_b, mut b_enc, mut b_dec, server_b) = enter_world(store.clone(), 1);
+
+    // A goes away (the client vanished / the socket reset).
+    drop(client_a);
+    server_a.join().unwrap();
+    assert!(
+        released(&store).is_empty(),
+        "A's teardown must NOT release the connection B is still using"
+    );
+
+    // B is genuinely still alive on the far side of A's teardown — served over the connection that
+    // would have been closed. (`leave_world` back to character select first, so the char enum is
+    // dispatched on the realm/default handle exactly as production does.)
+    CMSG_LOGOUT_REQUEST {}
+        .write_encrypted_client(&mut client_b, &mut b_enc)
+        .unwrap();
+    ServerOpcodeMessage::read_encrypted(&mut client_b, &mut b_dec).unwrap(); // SMSG_LOGOUT_RESPONSE
+    ServerOpcodeMessage::read_encrypted(&mut client_b, &mut b_dec).unwrap(); // SMSG_LOGOUT_COMPLETE
+    CMSG_CHAR_ENUM {}
+        .write_encrypted_client(&mut client_b, &mut b_enc)
+        .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client_b, &mut b_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_CHAR_ENUM(_) => {}
+        other => panic!("B must still be servable after A's teardown, got {other}"),
+    }
+    assert!(
+        released(&store).is_empty(),
+        "still nothing released while B is live"
+    );
+
+    // Only when B — the last socket — goes does the connection get reclaimed, exactly once.
+    drop(client_b);
+    server_b.join().unwrap();
+    assert_eq!(
+        released(&store),
+        vec![7],
+        "the LAST socket releases the connection, and only it"
+    );
+}
+
+#[test]
+fn a_stale_epoch_teardown_still_releases_when_it_is_the_last_socket() {
+    // The release gate is the SOCKET count, not the #42 entity epoch. A socket whose epoch was
+    // superseded (so `leave_world` correctly skips `logout`) is still the last socket here, and
+    // its connection must still be reclaimed — otherwise every superseded session leaks, which is
+    // precisely the mass-churn shape of #447.
+    let mut s = quest_store();
+    s.stale_session = true;
+    let store = std::sync::Arc::new(s);
+    let (client, _enc, _dec, server) = enter_world(store.clone(), 1);
+    drop(client);
+    server.join().unwrap();
+    assert!(
+        !store
+            .logout_called
+            .load(std::sync::atomic::Ordering::SeqCst),
+        "precondition: a superseded epoch must not delete the newer session's entity"
+    );
+    assert_eq!(
+        released(&store),
+        vec![7],
+        "a superseded session is still a socket, and its teardown is still a release"
     );
 }
 

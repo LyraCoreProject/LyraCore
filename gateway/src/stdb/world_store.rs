@@ -896,8 +896,12 @@ impl WorldStore for Coordinator {
         self.release_session(account_id, epoch)
     }
 
-    fn release_player_conn(&self, account_id: u64) {
-        self.release_player_conn(account_id)
+    fn open_account_session(&self, account_id: u64) {
+        self.attach_account_session(account_id)
+    }
+
+    fn close_account_session(&self, account_id: u64) {
+        self.detach_account_session(account_id)
     }
 
     fn reclaim_corpse(&self, account_id: u64, corpse_guid: u64) -> Result<()> {
@@ -1165,6 +1169,12 @@ impl crate::realm_core::RealmDb for Coordinator {
         bound_identity: [u8; 32],
     ) -> Result<()> {
         self.establish_session(account_id, session_key, bound_identity)
+    }
+    fn attach_account_session(&self, account_id: u64) {
+        self.attach_account_session(account_id)
+    }
+    fn detach_account_session_deferred(&self, account_id: u64) {
+        self.detach_account_session_deferred(account_id)
     }
     fn character_location(&self, guid: u64) -> Option<(u32, u64)> {
         self.character_location(guid)

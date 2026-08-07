@@ -11,6 +11,7 @@
 //! gateway restart costs only a client reconnect (acceptance criterion #5): K is read back
 //! from `game_session` and the same handshake re-runs.
 
+use crate::accept::{classify_accept_error, AcceptBackoff, AcceptOutcome};
 use crate::stdb::PlayerSubscriptions;
 use crate::{codec, config::GatewayConfig, stdb::Coordinator};
 use anyhow::{anyhow, Result};
@@ -1115,17 +1116,23 @@ pub trait WorldStore: Send + Sync {
     /// still owns the entity and may delete it. False means a newer login superseded this session.
     fn release_session(&self, account_id: u64, epoch: u64) -> bool;
 
-    /// Release this account's cached per-account SDK connection at teardown (292). Default no-op for
-    /// the mock stores. ⚠ ONLY safe behind `release_session` — see `Coordinator::release_player_conn`.
+    /// Register this world socket as a live user of the account's cached per-account SDK
+    /// connection (#447). Called exactly once per admitted session, as soon as the handshake has
+    /// resolved the account; paired with [`WorldStore::close_account_session`]. Default no-op for
+    /// the mock stores.
+    fn open_account_session(&self, _account_id: u64) {}
+
+    /// Retire this world socket at teardown and, iff it was the account's LAST one, release its
+    /// cached per-account SDK connections — a websocket fd plus an SDK pump OS thread per shard the
+    /// account touched, which before #447 leaked for the whole process lifetime and eventually
+    /// exhausted the fd table (`accept(2)` → `EMFILE` → `main` returns `Err`).
     ///
-    /// ⚠ NOT CALLED ANYWHERE TODAY. #292 landed the whole reclaim path (this method, the
-    /// `Coordinator` implementation, the joinable pump) but never added the call site, so the
-    /// per-account connection and its caches still outlive every session. Wiring it in is a
-    /// live-session lifetime change — it has to sit behind the same `release_session` arbitration
-    /// `leave_world` uses, and getting the placement wrong cuts a live player's link — so it is
-    /// deliberately left for a follow-up rather than done as part of a lint pass.
-    #[allow(dead_code)]
-    fn release_player_conn(&self, _account_id: u64) {}
+    /// ⚠ The last-socket test is the gate, and it is deliberately STRONGER than the
+    /// `release_session` epoch arbitration `leave_world` uses: the epoch says only that no
+    /// IN-WORLD session remains, while the cached connection is shared by every socket on the
+    /// account including one parked at character select. See `stdb::AccountSessions`.
+    /// Default no-op for the mock stores.
+    fn close_account_session(&self, _account_id: u64) {}
 
     /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`, slice 5): the module validates the caller
     /// is a ghost owning the corpse, in range, past the reclaim delay, then resurrects at 50%.
@@ -1931,6 +1938,13 @@ pub fn run_world_session_with_queue<S: DuplexStream, St: WorldStore + ?Sized>(
     let (tx, rx, depth) = session_channel();
     let writer = spawn_writer(wsock, encrypt, rx, depth, conn.account_id)?;
 
+    // #447: this socket is now a live user of the account's cached per-account SDK connection.
+    // Placed AFTER the last `?` above so every path from here reaches the paired
+    // `close_account_session` in the teardown block below (`result` is captured, not propagated,
+    // so no in-session error can skip it). Registering earlier would let a `try_clone`/`spawn_writer`
+    // failure pin the account's connection for the process lifetime — which is exactly the leak.
+    store.open_account_session(conn.account_id);
+
     let result = (|| -> Result<()> {
         // 184: frames are read RAW (header hand-decrypted) so an addon-language chat — which
         // gtker's `Language` enum cannot decode and which was session-FATAL — can be peeked and
@@ -2012,6 +2026,14 @@ pub fn run_world_session_with_queue<S: DuplexStream, St: WorldStore + ?Sized>(
     if let Err(e) = conn.leave_world(store) {
         log::warn!("logout for account {} failed: {e:#}", conn.account_id);
     }
+    // #447: retire this socket. When it is the account's LAST one, this releases the cached
+    // per-account SpacetimeDB connections (one websocket fd + one SDK pump thread per shard the
+    // account touched) that otherwise leak for the gateway's lifetime and eventually exhaust the
+    // fd table. Strictly AFTER `leave_world`: that is what drops the AOI tracker (unsubscribing the
+    // home rects and every away shard) and runs the `logout` reducer, all of which go THROUGH the
+    // connections released here. A reconnect that beat this teardown still holds a socket of its
+    // own, so the count is non-zero and nothing is released — see `stdb::AccountSessions`.
+    store.close_account_session(conn.account_id);
     // #180: release this connection's seat unconditionally — reaching this line at all means
     // `world_handshake_with_queue` returned `Ok(Some(..))`, which is exactly the one case where it
     // guarantees a seat is held and NOT already departed (its own internal failure path departs
@@ -5173,14 +5195,56 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
             (pc, ps, pd) = (c, s, d);
         }
     });
+    // #451: the loop that `Error: Too many open files (os error 24)` came out of on 2026-08-07,
+    // taking every session on the realm with it. A transient accept errno now costs ONE connection.
+    // See `crate::accept` for which errnos are fatal and why the list is shaped that way.
+    let mut backoff = AcceptBackoff::new();
     loop {
-        let (sock, peer) = listener.accept().await?;
+        let (sock, peer) = match listener.accept().await {
+            Ok(pair) => {
+                backoff.record_success();
+                pair
+            }
+            Err(e) => match classify_accept_error(&e) {
+                AcceptOutcome::Fatal => {
+                    log::error!(
+                        "world listener is unusable and cannot accept again: {e} — ending the \
+                         world task"
+                    );
+                    return Err(e.into());
+                }
+                AcceptOutcome::Retry => {
+                    let delay = backoff.record_failure();
+                    log::warn!(
+                        "world accept failed ({e}); skipping this connection (consecutive={}, \
+                         backing off {}ms). Players already in world are unaffected; if this is \
+                         EMFILE, the gateway is out of file descriptors — see #449.",
+                        backoff.consecutive(),
+                        delay.as_millis()
+                    );
+                    if !delay.is_zero() {
+                        tokio::time::sleep(delay).await;
+                    }
+                    continue;
+                }
+            },
+        };
         let coord = coordinator.clone();
         let queue = login_queue.clone();
         // wow_world_messages uses blocking std::io codecs, so run the per-connection state
         // machine on a blocking task with the socket in blocking mode (mirrors `logon`).
-        let std_sock = sock.into_std()?;
-        std_sock.set_nonblocking(false)?;
+        // Per-SOCKET calls (a dup and an fcntl on the fd we just accepted), so they fail for the
+        // same reasons accept does — EMFILE above all. Drop the one connection, keep the realm.
+        let std_sock = match sock.into_std().and_then(|s| {
+            s.set_nonblocking(false)?;
+            Ok(s)
+        }) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("world connection {peer} could not be handed to a blocking task: {e}");
+                continue;
+            }
+        };
         tokio::task::spawn_blocking(move || {
             // `Coordinator` implements `WorldStore` directly (see `stdb::world_store`) — no wrapper.
             // #180: `queue` gates admission INSIDE the handshake — a queued connection just blocks
