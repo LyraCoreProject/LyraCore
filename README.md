@@ -1,5 +1,6 @@
 <p align="center"><img src="./lyracore-icon-light.svg" alt="LyraCore" width="140"><h1 align="center">LyraCore</h1><h3 align="center">A vanilla server built for change
-</h3><img src="https://img.shields.io/discord/1534505414291357807?style=for-the-badge&logo=discord&logoColor=white&label=discord&color=5865F2" alt="Discord"></a></p>
+</h3></p>
+<img alt="Discord" src="https://img.shields.io/discord/1534505414291357807">
 
 
 LyraCore is a Vanilla 1.12.1 game server built on top of [SpacetimeDB](https://spacetimedb.com/), focused on providing developers with the best possible experience.
