@@ -13,7 +13,10 @@
 #   1. refuses immediately if ./LyraCore already exists — a re-run touches nothing;
 #   2. checks the prerequisites. It NEVER runs sudo: a missing system package prints the exact
 #      apt-get line for you to run yourself and stops;
-#   3. offers to install rustup and SpacetimeDB exactly 2.7.1 (both user-local, no root);
+#   3. offers to install rustup, SpacetimeDB exactly 2.7.1, and wasm-opt (Binaryen) — all user-local,
+#      no root. wasm-opt is optional: spacetime publish just warns and skips module optimisation
+#      without it, so a decline, a download failure, or an unsupported platform all fall through to
+#      an apt/brew hint rather than stopping anything;
 #   4. clones the repository into ./LyraCore;
 #   5. installs a ten-line checkout-resolving launcher at $HOME/.local/bin/lyracore, so the CLI is
 #      typed as bare `lyracore` from anywhere inside any checkout while EVERY checkout keeps the CLI
@@ -24,8 +27,9 @@
 # Flags: --yes (-y) assume yes to every prompt; --help.
 #
 # Everything it writes: ./LyraCore, $HOME/.local/bin/lyracore, the rustup and SpacetimeDB installers'
-# own roots (only if you consent to running them), and — only if you consent — one line in one shell
-# profile. It writes nothing else, and it never needs root.
+# own roots, a Binaryen release tree under $HOME/.local/share/lyracore/ plus a $HOME/.local/bin/wasm-opt
+# symlink to it (each only if you consent to running/downloading them), and — only if you consent —
+# one line in one shell profile. It writes nothing else, and it never needs root.
 #
 # POSIX sh, Linux and macOS, matching the ./lyracore shim's style: this runs before anything at all
 # is installed, so it may not assume bash.
@@ -35,6 +39,11 @@ REPO_URL=https://github.com/LyraCoreProject/LyraCore.git
 REPO_URL_RAW=https://raw.githubusercontent.com/LyraCoreProject/LyraCore/main/install.sh
 TARGET_DIR=LyraCore
 SPACETIME_VERSION=2.7.1
+# Binaryen (wasm-opt) pin — bump periodically. Verify the asset still exists at
+# https://github.com/WebAssembly/binaryen/releases/tag/version_$BINARYEN_VERSION before bumping;
+# release asset naming has changed across Binaryen versions before (aarch64-linux is a recent
+# addition, absent from older releases).
+BINARYEN_VERSION=131
 BIN_DIR=$HOME/.local/bin
 LAUNCHER=$BIN_DIR/lyracore
 # Both greppable and load-bearing: the profile line is only ever appended when this marker is absent,
@@ -47,6 +56,7 @@ assume_yes=0
 # PATH as the user's shell will have it — the checks below may prepend $BIN_DIR for their own use.
 original_path=${PATH:-}
 os=$(uname -s)
+arch=$(uname -m)
 
 say() { printf '%s\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
@@ -82,6 +92,26 @@ confirm() {
         fail "no terminal to prompt on (a piped \`curl | sh\` run) and --yes was not given.
   Re-run as: curl -sSfL $REPO_URL_RAW | sh -s -- --yes
   ...or download it first and run \`sh install.sh\`, which can prompt."
+    fi
+    printf '%s [y/N] ' "$1"
+    read -r reply </dev/tty || reply=n
+    case $reply in
+        [yY] | [yY][eE][sS]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Same shape as confirm(), for a prompt that gates something optional (wasm-opt): a missing
+# terminal is not fatal here — with nothing to ask on and no --yes, the safe default is to skip
+# the optional install and keep going, not to abort an otherwise-good run like confirm() does.
+confirm_optional() {
+    if [ "$assume_yes" -eq 1 ]; then
+        printf '%s [y/N] y (--yes)\n' "$1"
+        return 0
+    fi
+    if ! (exec </dev/tty) 2>/dev/null; then
+        printf '%s [y/N] n (no terminal to prompt on — skipping)\n' "$1"
+        return 1
     fi
     printf '%s [y/N] ' "$1"
     read -r reply </dev/tty || reply=n
@@ -130,6 +160,20 @@ want() {
     case " $apt_pkgs " in
         *" $2 "*) ;;
         *) apt_pkgs="$apt_pkgs $2" ;;
+    esac
+}
+
+# Same shape as want(), but for prerequisites that are soft: the stack works without them, so a
+# miss is reported and the install continues rather than aborting. wasm-opt is the one example
+# today — `spacetime publish` runs fine without it, it just skips module optimisation.
+recommended=''
+recommended_pkgs=''
+want_recommended() {
+    # want_recommended <human name> <package name>
+    recommended="$recommended $1"
+    case " $recommended_pkgs " in
+        *" $2 "*) ;;
+        *) recommended_pkgs="$recommended_pkgs $2" ;;
     esac
 }
 
@@ -246,14 +290,87 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Clone.
+# 5. wasm-opt (Binaryen) — user-local, no root.
+# ---------------------------------------------------------------------------
+# wasm-opt is a soft prerequisite (#436): `spacetime publish` runs it to optimise the compiled
+# module wasm and just warns if it's absent. Unlike rustup and SpacetimeDB, Binaryen ships no
+# installer script, so this fetches a release tarball straight from GitHub. The extracted tree
+# (not just bin/wasm-opt) is kept under $HOME/.local/share/lyracore/, because wasm-opt's own rpath
+# points at lib/ next to it in at least some Binaryen builds — copying the binary alone can leave
+# it unable to find its own library.
+if have wasm-opt; then
+    note "✓ wasm-opt ($(wasm-opt --version 2>/dev/null || echo wasm-opt))"
+else
+    binaryen_asset=''
+    case "$os-$arch" in
+        Linux-x86_64) binaryen_asset=x86_64-linux ;;
+        Linux-aarch64 | Linux-arm64) binaryen_asset=aarch64-linux ;;
+        Darwin-x86_64) binaryen_asset=x86_64-macos ;;
+        Darwin-arm64 | Darwin-aarch64) binaryen_asset=arm64-macos ;;
+    esac
+
+    if [ -z "$binaryen_asset" ]; then
+        say ""
+        say "wasm-opt: no prebuilt Binaryen $BINARYEN_VERSION release for $os/$arch — skipping the local install."
+        want_recommended wasm-opt binaryen
+    else
+        binaryen_url="https://github.com/WebAssembly/binaryen/releases/download/version_$BINARYEN_VERSION/binaryen-version_$BINARYEN_VERSION-$binaryen_asset.tar.gz"
+        binaryen_dir="$HOME/.local/share/lyracore/binaryen-version_$BINARYEN_VERSION"
+        say ""
+        say "wasm-opt is not installed. spacetime publish uses it to optimise the module wasm — it still"
+        say "works without it, just unoptimised. This would be downloaded and extracted, user-local:"
+        note "$binaryen_url"
+        note "-> $binaryen_dir  (symlinked as $BIN_DIR/wasm-opt)"
+        if confirm_optional "Install wasm-opt now?"; then
+            binaryen_tmp=$(mktemp -d "${TMPDIR:-/tmp}/lyracore-binaryen.XXXXXX") || binaryen_tmp=''
+            if [ -n "$binaryen_tmp" ] &&
+                curl -sSfL -o "$binaryen_tmp/binaryen.tar.gz" "$binaryen_url" &&
+                tar -xzf "$binaryen_tmp/binaryen.tar.gz" -C "$binaryen_tmp"; then
+                mkdir -p "$HOME/.local/share/lyracore" "$BIN_DIR"
+                rm -rf "$binaryen_dir"
+                mv "$binaryen_tmp/binaryen-version_$BINARYEN_VERSION" "$binaryen_dir"
+                ln -sf "$binaryen_dir/bin/wasm-opt" "$BIN_DIR/wasm-opt"
+                rm -rf "$binaryen_tmp"
+                if have wasm-opt; then
+                    note "✓ wasm-opt ($(wasm-opt --version 2>/dev/null || echo installed))"
+                else
+                    note "wasm-opt was extracted but is not runnable here — continuing without it"
+                    want_recommended wasm-opt binaryen
+                fi
+            else
+                [ -n "$binaryen_tmp" ] && rm -rf "$binaryen_tmp"
+                note "download or extract failed — continuing without wasm-opt"
+                want_recommended wasm-opt binaryen
+            fi
+        else
+            note "skipping — re-run this installer later, or install by hand from $binaryen_url"
+            want_recommended wasm-opt binaryen
+        fi
+    fi
+fi
+
+if [ -n "$recommended" ]; then
+    say ""
+    printf 'install.sh: recommended (optional) prerequisite(s) missing:%s\n' "$recommended"
+    printf 'install.sh: everything still works without them, just slower — install when convenient:\n'
+    if [ "$os" = Darwin ]; then
+        printf '\n  brew install%s\n\n' "$recommended_pkgs"
+    elif have apt-get; then
+        printf '\n  sudo apt-get install -y%s\n\n' "$recommended_pkgs"
+    else
+        printf '\n  (your package manager'\''s equivalent of:%s )\n\n' "$recommended_pkgs"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Clone.
 # ---------------------------------------------------------------------------
 say ""
 say "Cloning $REPO_URL into $(pwd)/$TARGET_DIR ..."
 git clone "$REPO_URL" "$TARGET_DIR" || fail "git clone failed"
 
 # ---------------------------------------------------------------------------
-# 6. The checkout-resolving launcher.
+# 7. The checkout-resolving launcher.
 # ---------------------------------------------------------------------------
 # Putting a checkout's own ./lyracore on PATH would defeat the shim: one global CLI would shadow
 # every checkout's pin and only one clone would work. This launcher instead resolves the checkout
@@ -295,7 +412,7 @@ say ""
 note "✓ launcher installed at $LAUNCHER"
 
 # ---------------------------------------------------------------------------
-# 7. PATH: append nothing if $HOME/.local/bin is already there.
+# 8. PATH: append nothing if $HOME/.local/bin is already there.
 # ---------------------------------------------------------------------------
 path_export='export PATH="$HOME/.local/bin:$PATH"'
 path_line="$path_export  $PROFILE_MARKER"
@@ -335,7 +452,7 @@ case ":$original_path:" in
 esac
 
 # ---------------------------------------------------------------------------
-# 8. What to do next.
+# 9. What to do next.
 # ---------------------------------------------------------------------------
 say ""
 say "✓ LyraCore is installed in $(pwd)/$TARGET_DIR"
