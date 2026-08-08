@@ -36,13 +36,11 @@ pub mod login_queue;
 pub mod loot;
 pub mod packet_lint;
 pub mod party;
-mod seam;
 mod social;
 pub mod transfer;
 pub mod whisper;
 use coalesce::CoalesceState;
 use login_queue::{Admission, LoginQueue};
-use seam::SeamTracker;
 use social::handle_social;
 use transfer::{EscrowedTransfer, TransferPlan};
 
@@ -94,7 +92,25 @@ pub enum Outbound {
         opcode: u16,
         body: Vec<u8>,
     },
+    /// DEFERRED relay work (#468). The shared AOI dispatch runs on ONE coordinator pump per shard
+    /// that every session now depends on, and the SDK forbids parallel `advance_one_message`
+    /// callers — so the pump must never encode. It pushes this instead: a closure that does the
+    /// per-viewer gating, cache reads and encoding LATER, on this session's own writer thread.
+    ///
+    /// Ordering is preserved because a job travels the same queue as everything else: whatever the
+    /// job produces is written exactly where the job was enqueued, so a CREATE queued before a
+    /// VALUES still reaches the wire first.
+    ///
+    /// The writer runs it inside `catch_unwind`, and it may produce zero packets (the common case
+    /// for a row a gate rejects — a job is enqueued per candidate viewer, and rejecting a candidate
+    /// costs one dequeue instead of pump time).
+    Job(RelayJob),
 }
+
+/// One unit of deferred relay work — see [`Outbound::Job`]. Returns the packets to write, in order;
+/// nested jobs are not expanded (nothing produces one, and honouring them would make the queue's
+/// ordering guarantee depend on recursion depth).
+pub type RelayJob = Box<dyn FnOnce() -> Vec<Outbound> + Send>;
 
 /// Queued-but-unwritten `Outbound` items past which the two N²-shaped relays stop enqueueing
 /// (see [`SessionTx`] and `subscriptions::shed_motion_at_depth`).
@@ -330,25 +346,6 @@ pub trait WorldStore: Send + Sync {
         ""
     }
 
-    /// #72 slice 1 (seam-crossing DETECTION only — see `world::seam`): the database that owns the
-    /// region containing `(map_id, x, y)`, resolved fresh off a just-arrived movement packet — the
-    /// movement-path twin of the login-time `region_db_for` (`config::resolve_region_shard`'s other
-    /// caller). `character_guid`/`home_db` exist only so the production override can confirm the
-    /// live entity's instance id without a second position read (a resident mid-dungeon must never
-    /// be region-routed by an open-world map's seam menu). `None` by default — every mock, and any
-    /// store that does not shard — which keeps the pre-#72 movement path byte-identical everywhere
-    /// but the live `Coordinator`; only it overrides this.
-    fn region_shard_for_point(
-        &self,
-        _character_guid: u64,
-        _home_db: &str,
-        _map_id: u32,
-        _x: f32,
-        _y: f32,
-    ) -> Option<String> {
-        None
-    }
-
     // --- Cross-database transfer (#19). Every one defaults to the single-database posture, so a
     // --- store that does not shard (and every mock that does not exercise transfers) is unchanged.
 
@@ -445,32 +442,6 @@ pub trait WorldStore: Send + Sync {
     /// already did it. Called at world entry whenever the session's home shard is not the realm.
     fn bind_shard_session(&self, _account_id: u64, _session_key: &[u8; 40]) -> Result<()> {
         Ok(())
-    }
-
-    /// #72 slice 2 — the handle for the CONNECTED shard named `db`, or `None` if it is not one
-    /// (unreachable at startup, misnamed, or realm-core). Used by the warm-handoff drive to resolve
-    /// a confirmed `SeamCrossing`'s `target_db` into something `transfer::run_transfer` can call —
-    /// the same mechanism `settle_home_shard`'s region overlay already resolves names through
-    /// (`Coordinator::shard_handle`), not a second one invented for this ticket. `None` by default:
-    /// every mock, and any store that does not shard, has nothing to hand back.
-    fn shard_by_name(&self, _db: &str) -> Option<std::sync::Arc<dyn WorldStore>> {
-        None
-    }
-
-    /// #72 slice 2 — drive the escrowed transfer for a WARM (mid-session, no-loading-screen)
-    /// handoff to `dst`. Same primitive `settle_home_shard`'s cold path drives
-    /// (`transfer::run_transfer`), reused verbatim: the difference is entirely in what the CALLER
-    /// already knows going in (both ends, and the arrival position off the wire rather than the
-    /// durable row, which `snapshot_needs_persist` may be lagging by up to
-    /// `PERSIST_MAX_DRIFT_YD`) — nothing here re-derives routing. `dst` must be dyn-dispatched
-    /// (never `Self`) because the caller (generic over `St: WorldStore + ?Sized`) cannot itself
-    /// obtain a `&dyn WorldStore` from a `?Sized` type parameter; only a CONCRETE impl (the
-    /// production `Coordinator`) can make that coercion, which is why this exists as a trait method
-    /// rather than a free function taking `&dyn WorldStore` on both sides.
-    fn run_warm_handoff(&self, _dst: &dyn WorldStore, _plan: &TransferPlan) -> Result<()> {
-        Err(anyhow!(
-            "this store does not implement cross-database transfers"
-        ))
     }
 
     // --- Realm-wide party state (#22, group slice). Every one defaults to the single-database
@@ -1271,43 +1242,7 @@ pub struct InWorld {
     /// `CMSG_ATTACKSTOP` is ignored — the ranged loop is stopped only by
     /// `CMSG_CANCEL_AUTO_REPEAT_SPELL` (work-item 097).
     pub ranged_repeat: bool,
-    /// The map this session entered the world on (`enter_world`'s `entity.map_id`), fixed for the
-    /// lifetime of this `InWorld` — a real map change tears this down and rebuilds it via a fresh
-    /// `enter_world` (world-port re-entry), exactly like the AOI tracker's own map anchor. Feeds the
-    /// #72 seam check, which is otherwise same-map (regions partition one map at a time).
-    pub map_id: u32,
-    /// #72 slice 1: seam-crossing DETECTION hysteresis (see `world::seam`). Fresh per world entry —
-    /// a resident's foreign-cell streak from the OLD map must never carry into the new one.
-    pub seam: SeamTracker,
-    /// #72 slice 2: a warm handoff is actively driving (between the confirmed crossing and the
-    /// destination's subs landing). While set, `forward_movement` queues instead of submitting —
-    /// see `pending_handoff_movement`. Cleared on the drive's success OR failure path (a failure
-    /// ends the session anyway, so nothing reads it again either way).
-    handoff_in_progress: bool,
-    /// #72 slice 2: inbound movement received while `handoff_in_progress` — bounded, drop-oldest
-    /// (a movement packet is a position snapshot; the newest one is what matters, same reasoning
-    /// as `MAX_IN_FLIGHT_MOVES`). Replayed through the normal path once the drive lands, against
-    /// whichever store `conn.home` names by then (client-authoritative absolute positions make
-    /// this safe regardless of which shard actually applies them).
-    pending_handoff_movement: std::collections::VecDeque<(u32, MovementInfo)>,
-    /// #72 slice 2: when the last handoff was ATTEMPTED (drive started, whether it succeeded or
-    /// was skipped by a guard) — the ~5s per-session cooldown that bounds seam-straddle thrash
-    /// independently of the tracker's own cell-based hysteresis. `None` until the first attempt.
-    last_handoff_attempt: Option<std::time::Instant>,
 }
-
-/// #72 slice 2: bound on [`InWorld::pending_handoff_movement`] — a moving client heartbeats a
-/// few times a second, and the drive is budgeted at ~1s, so this is generous headroom rather than
-/// a tuned figure (unlike [`MAX_IN_FLIGHT_MOVES`], which bounds a different, hotter queue).
-const MAX_PENDING_HANDOFF_MOVEMENT: usize = 32;
-
-/// #72 slice 2: the per-session cooldown between handoff ATTEMPTS (successful or not) — the bound
-/// against thrash the seam tracker's cell hysteresis does not cover by itself: hysteresis stops a
-/// STRADDLING player from re-confirming the same crossing every heartbeat, but says nothing about
-/// a player who fully crosses, is skipped (combat), crosses back, and crosses again in the same
-/// second. "Crossing back has to cost more than crossing did" (the spec's own wording) is enforced
-/// here in wall-clock terms, on top of the tracker's cell-based one.
-const WARM_HANDOFF_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Established per-connection protocol state after a successful handshake, owned by the reader
 /// thread. The `EncrypterHalf` is NOT here — it moves to the single writer thread, which is the
@@ -1378,8 +1313,7 @@ const MOVE_DESYNC_TOLERANCE: u32 = 32;
 /// unsize-coerced to `&dyn WorldStore`; only one arm ever runs.
 // Deliberate simplification: a macro instead of threading a routed handle through ~15 handler
 // signatures. Ceiling — it only works where `conn` is in scope. Upgrade path: if routing ever
-// needs to change MID-session (a seam crossing, #12 Phase C), fold the handle into a session
-// context struct instead.
+// needs to change MID-session, fold the handle into a session context struct instead.
 macro_rules! on_home_shard {
     ($conn:expr, $store:expr, |$s:ident| $body:expr) => {{
         let home = $conn.home.clone();
@@ -1738,6 +1672,10 @@ impl WriterTrace {
             Outbound::Raw { opcode, body } => {
                 self.push(*opcode, (2 + body.len()) as u16, fnv1a64(body));
             }
+            // Jobs are expanded before the trace sees them (`spawn_writer`), so this arm is
+            // unreachable for a real frame; it exists so a future caller cannot silently skip the
+            // ring by wrapping a packet in a job.
+            Outbound::Job(_) => {}
         }
     }
 
@@ -1826,6 +1764,27 @@ fn spawn_writer<S: DuplexStream>(
                 // BEFORE `tx.send`, so an item can only be received after it has been counted, and
                 // this thread is the only decrementer. `depth >= queued` therefore holds always.
                 depth.fetch_sub(1, Ordering::Relaxed);
+                // #468: a deferred relay job runs HERE, on this session's own writer thread, never
+                // on the shared coordinator pump that enqueued it. `catch_unwind` because a
+                // panicking relay body used to cost one session and must keep costing exactly one
+                // session: the writer stays alive and keeps draining the queue.
+                let batch: Vec<Outbound> = match out {
+                    Outbound::Job(job) => {
+                        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)) {
+                            Ok(items) => items,
+                            Err(_) => {
+                                log::error!(
+                                    "world writer: a deferred relay job PANICKED for account \
+                                     {account_id} — contained (this session keeps running), but \
+                                     the packet(s) it would have produced were lost"
+                                );
+                                Vec::new()
+                            }
+                        }
+                    }
+                    other => vec![other],
+                };
+                for out in batch {
                 if let Some(t) = trace.as_mut() {
                     t.record(&out);
                 }
@@ -1838,6 +1797,8 @@ fn spawn_writer<S: DuplexStream>(
                         log::debug!("OUT {m}");
                         m.write_encrypted_server(&mut wsock, &mut encrypt)
                     }),
+                    // Expanded above; a job can never reach here.
+                    Outbound::Job(_) => Ok(()),
                     Outbound::Raw { opcode, body } => {
                         log::debug!("OUT RAW opcode=0x{opcode:04X} ({} body bytes)", body.len());
                         // Packet lint (testing-hardening §3.2): every hand-rolled body is checked
@@ -1891,7 +1852,8 @@ fn spawn_writer<S: DuplexStream>(
                         t.dump(account_id, &e.to_string());
                     }
                     let _ = wsock.shutdown_both();
-                    break;
+                    return;
+                }
                 }
             }
         })
@@ -2163,7 +2125,7 @@ fn dispatch<St: WorldStore + ?Sized>(
     // of its own classification below, not here.
     if codec::relayed_move_opcode(&msg).is_none() {
         if let Some((opcode, info)) = conn.move_coalesce.flush_now() {
-            forward_movement(tx, store, conn, opcode, &info)?;
+            forward_movement(store, conn, opcode, &info)?;
         }
     }
 
@@ -2238,7 +2200,7 @@ fn dispatch<St: WorldStore + ?Sized>(
         }
         if let Some(info) = msg.movement_info() {
             for (fwd_opcode, fwd_info) in conn.move_coalesce.on_movement_now(opcode, info) {
-                forward_movement(tx, store, conn, fwd_opcode, &fwd_info)?;
+                forward_movement(store, conn, fwd_opcode, &fwd_info)?;
             }
         }
     } else {
@@ -2253,27 +2215,11 @@ fn dispatch<St: WorldStore + ?Sized>(
 /// coalesced heartbeat), so a forwarded packet's on-wire effect is unchanged; only its TIMING can
 /// differ (a pure heartbeat may forward later than it arrived; nothing else does).
 fn forward_movement<St: WorldStore + ?Sized>(
-    tx: &SessionTx,
     store: &St,
     conn: &mut WorldConn,
     opcode: u32,
     info: &MovementInfo,
 ) -> Result<()> {
-    // #72 slice 2: a warm handoff is mid-drive on THIS session's own thread (the drive is
-    // synchronous — see `drive_warm_handoff`'s doc). Queue rather than submit: `conn.home` is
-    // about to change out from under `store`, and the destination's subs are not registered yet,
-    // so there is no safe target for this packet until the drive lands. Bounded, drop-oldest —
-    // see `MAX_PENDING_HANDOFF_MOVEMENT`.
-    if let WorldState::InWorld(iw) = &mut conn.state {
-        if iw.handoff_in_progress {
-            if iw.pending_handoff_movement.len() >= MAX_PENDING_HANDOFF_MOVEMENT {
-                iw.pending_handoff_movement.pop_front();
-            }
-            iw.pending_handoff_movement
-                .push_back((opcode, info.clone()));
-            return Ok(());
-        }
-    }
     // A movement packet for an entity that is GONE is not a session-fatal desync — it is the normal
     // tail of a cross-map teleport (issue #39 defect 2). `teleport_player` despawns the live entity
     // the moment the portal's reducer commits, but the client only learns about it when
@@ -2342,336 +2288,7 @@ fn forward_movement<St: WorldStore + ?Sized>(
     if let WorldState::InWorld(iw) = &mut conn.state {
         iw.subs.aoi_update(info.position.x, info.position.y);
     }
-    // #72: seam-crossing detection, beside the AOI recenter above rather than inside it — this must
-    // run whether or not AOI is enabled, since region routing is a routing concern, not a view one.
-    // Slice 1 only logged the crossing; slice 2 acts on it (subject to the guards below), unless
-    // `LYRACORE_WARM_HANDOFF=0` asks for slice 1's log-only behavior.
-    if let Some(crossing) = seam_check(store, conn, info.position.x, info.position.y) {
-        if crate::config::warm_handoff_enabled() {
-            handle_seam_crossing(tx, store, conn, &crossing, info)?;
-        }
-    }
     Ok(())
-}
-
-/// #72 slice 2: act on a confirmed seam crossing — the guards, then the drive. Split out of
-/// `forward_movement` so each guard's reason for skipping (and the required re-arm) reads as one
-/// block instead of being interleaved with the movement-submit plumbing above.
-fn handle_seam_crossing<St: WorldStore + ?Sized>(
-    tx: &SessionTx,
-    store: &St,
-    conn: &mut WorldConn,
-    crossing: &seam::SeamCrossing,
-    info: &MovementInfo,
-) -> Result<()> {
-    let WorldState::InWorld(iw) = &mut conn.state else {
-        return Ok(());
-    };
-    // GUARD 1 — combat v1 (spec: skip while in combat). A handoff mid-swing would need to carry
-    // threat/combat state this slice does not (that is slice 3's hot-state-carry problem); skipping
-    // is always safe, but a skip must RE-ARM the tracker or a player who fights their way across a
-    // seam never gets a second chance at the confirmation (see `SeamTracker::rearm`'s doc).
-    if iw.attacking_target.is_some() || iw.ranged_repeat {
-        log::info!(
-            "seam: guid {} skipping handoff into {} — in combat (re-arming for the next foreign cell)",
-            iw.self_guid,
-            crossing.target_db
-        );
-        iw.seam.rearm();
-        return Ok(());
-    }
-    // GUARD 2 — the per-session cooldown (weave-thrash bound independent of the tracker's own
-    // cell-based hysteresis; see `WARM_HANDOFF_COOLDOWN`'s doc). Counts as an ATTEMPT either way —
-    // the cooldown clock starts here, not on success, so a shard that keeps refusing cannot be
-    // retried faster than a shard that keeps succeeding.
-    let now = std::time::Instant::now();
-    if let Some(last) = iw.last_handoff_attempt {
-        if now.duration_since(last) < WARM_HANDOFF_COOLDOWN {
-            log::info!(
-                "seam: guid {} skipping handoff into {} — cooldown ({:.1}s since the last attempt, \
-                 re-arming for the next foreign cell)",
-                iw.self_guid,
-                crossing.target_db,
-                now.duration_since(last).as_secs_f32()
-            );
-            iw.seam.rearm();
-            return Ok(());
-        }
-    }
-    iw.last_handoff_attempt = Some(now);
-    // instance_id == 0 only: slice 1's own detection already ensures this (`region_shard_for_point`
-    // — and the `resolve_region_shard` it calls — refuse a non-zero instance id, so a confirmed
-    // crossing can only ever name the OPEN WORLD). Nothing to check here; noted per the spec.
-    drive_warm_handoff(
-        tx,
-        store,
-        conn,
-        &crossing.target_db,
-        info.position.x,
-        info.position.y,
-        info.position.z,
-        info.orientation,
-    )
-}
-
-/// #72 slice 2: drive one confirmed seam crossing to completion — synchronous on the session's own
-/// (reader) thread, exactly like the cold escrowed transfer (`transfer::run_transfer`'s own doc:
-/// "the driver is SYNCHRONOUS", "~17ms live"). `x`/`y`/`z`/`o` are the CURRENT wire position (the
-/// packet that confirmed the crossing), not the durable row: `begin_transfer` freezes the row via
-/// `persist_entity` first, but the arrival coordinates it writes are the `dest_*` ARGUMENTS, so
-/// passing the wire position here is what makes arrival exact rather than up-to-`PERSIST_MAX_DRIFT_YD`
-/// stale.
-///
-/// On success: `conn.home` now names `target_db`, this session's identity is bound there, a live
-/// entity exists there (via `player_login` — no batch resend; the client's own view of itself never
-/// blinked), and fresh subs are registered there. On failure: logs loudly and returns `Err`, which
-/// (via the caller's `?`) ends the session — `settle_transfer` re-drives whatever is recoverable at
-/// the next login, the same recovery every OTHER crash point in the escrowed transfer already has.
-/// Never leaves the session live-on-source after a partial drive: every step below either lands
-/// `conn.home`/`iw.subs` on the destination or the whole function returns `Err` before touching
-/// either.
-#[allow(clippy::too_many_arguments)]
-fn drive_warm_handoff<St: WorldStore + ?Sized>(
-    tx: &SessionTx,
-    store: &St,
-    conn: &mut WorldConn,
-    target_db: &str,
-    x: f32,
-    y: f32,
-    z: f32,
-    o: f32,
-) -> Result<()> {
-    // The SOURCE shard's name, read before `conn.state` is mutably borrowed (`on_home_shard!`
-    // takes its own `conn.home` clone) — the "crossing the seam" notice below says where the player
-    // is moving FROM as well as to, which the target name alone could not.
-    let src_db = on_home_shard!(conn, store, |st| st.shard_name().to_string());
-    let WorldState::InWorld(iw) = &mut conn.state else {
-        return Ok(());
-    };
-    let self_guid = iw.self_guid;
-    let map_id = iw.map_id;
-    iw.handoff_in_progress = true;
-    // #72 live defect fix: mute every self-owned-row relay on the OLD (source) subs before the drive
-    // below reaches `run_transfer` — `finish_transfer`'s cascade delete runs while these subs are
-    // still registered, and without this every item/quest/skill/... row it deletes on the source
-    // would relay to the client as if the state were actually lost (it isn't — the destination's
-    // import already holds the byte-identical rows). Set ONCE, here, and never cleared: on success
-    // `drive_warm_handoff_inner` installs FRESH subs (a new instance, flag false by construction)
-    // and drops this one; on failure the session ends. Either way nothing needs this instance
-    // un-suppressed again.
-    iw.subs.set_self_relay_suppressed(true);
-    log::info!(
-        "seam: guid {self_guid} driving warm handoff to {target_db} at ({x:.1},{y:.1},{z:.1})"
-    );
-    // The seam notice (#326: LYRACORE_SEAM_NOTIFY, now default ON, `=0` opts out): surface the
-    // handoff as a System chat line. The crossing is otherwise invisible by construction — that is
-    // the handoff's whole point — so for the alpha the player is TOLD it happened rather than the
-    // moment passing unnoticed; an operator who wants silent seams exports the opt-out.
-    let notify = crate::config::seam_notify_enabled();
-    let started = std::time::Instant::now();
-    // The notice is cosmetic, so a dead writer here must NOT abort the handoff (the drive's own
-    // sends fail loudly a moment later and end the session through the normal path) — but it must
-    // not vanish either: a failure here means the client is already gone, which is worth a line in
-    // the log next to the "handoff starting" it explains the absence of.
-    if notify {
-        if let Err(e) = send(
-            tx,
-            Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-                codec::build_gm_system_message(format!(
-                    "Crossing the seam from {src_db} into {target_db}..."
-                )),
-            ))),
-        ) {
-            log::warn!(
-                "seam: guid {self_guid} could not be told the handoff to {target_db} started \
-                 (writer already gone): {e:#}"
-            );
-        }
-    }
-
-    let drive = drive_warm_handoff_inner(tx, store, conn, self_guid, map_id, target_db, x, y, z, o);
-
-    let WorldState::InWorld(iw) = &mut conn.state else {
-        // Only reachable if the drive itself somehow left CharSelect behind — nothing further to
-        // clean up, and the caller's `Ok`/`Err` still decides the session's fate.
-        return drive;
-    };
-    iw.handoff_in_progress = false;
-    match drive {
-        Ok(()) => {
-            log::info!("seam: guid {self_guid} landed on {target_db}");
-            // Same rule as the "crossing" notice above: cosmetic-only, so a gone writer is logged
-            // rather than propagated — the queued-movement replay below returns the real verdict.
-            if notify {
-                if let Err(e) = send(
-                    tx,
-                    Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-                        codec::build_gm_system_message(format!(
-                            "You are now on {target_db}. Seam crossed in {} ms — no loading screen.",
-                            started.elapsed().as_millis()
-                        )),
-                    ))),
-                ) {
-                    log::warn!(
-                        "seam: guid {self_guid} landed on {target_db} but could not be told \
-                         (writer already gone): {e:#}"
-                    );
-                }
-            }
-            let queued = std::mem::take(&mut iw.pending_handoff_movement);
-            // `on_home_shard!`, NOT the `store` this function was called with: a successful drive
-            // just pointed `conn.home` at the destination, and `forward_movement` submits against
-            // whatever handle IT is handed rather than re-resolving `conn.home` for itself (that
-            // re-resolution is `run_world_session`'s job, once per packet, for every OTHER call —
-            // replaying here is the one place inside a single `dispatch` call that crosses a home
-            // change, so it has to do that re-resolution by hand). Replaying against the stale
-            // `store` would submit every queued packet to the shard the player JUST LEFT — the
-            // exact "applied to the losing shard" outcome the spec calls out by name.
-            for (opcode, info) in queued {
-                on_home_shard!(conn, store, |st| forward_movement(
-                    tx, st, conn, opcode, &info
-                ))?;
-            }
-            Ok(())
-        }
-        Err(e) => {
-            // Drop whatever queued during the failed drive — the session is ending; nothing left
-            // to replay it against.
-            iw.pending_handoff_movement.clear();
-            log::error!(
-                "seam: guid {self_guid} handoff to {target_db} FAILED mid-drive — ending the \
-                 session so the client relogs and `settle_transfer` re-drives whatever is \
-                 recoverable at the next login: {e:#}"
-            );
-            Err(e)
-        }
-    }
-}
-
-/// The actual step sequence, split out of [`drive_warm_handoff`] so that function's job is only
-/// "set/clear the flag and replay the queue around this" — never returns early with the flag left
-/// set, since every path back through `drive_warm_handoff` clears it unconditionally.
-#[allow(clippy::too_many_arguments)]
-fn drive_warm_handoff_inner<St: WorldStore + ?Sized>(
-    tx: &SessionTx,
-    store: &St,
-    conn: &mut WorldConn,
-    self_guid: u64,
-    map_id: u32,
-    target_db: &str,
-    x: f32,
-    y: f32,
-    z: f32,
-    o: f32,
-) -> Result<()> {
-    let dst = on_home_shard!(conn, store, |st| st.shard_by_name(target_db)).ok_or_else(|| {
-        anyhow!(
-            "warm handoff: {target_db} named by a confirmed seam crossing is not a connected shard \
-             (or resolved back to the shard the session is already on) — refusing to drive"
-        )
-    })?;
-    let plan = TransferPlan {
-        transfer_id: transfer::transfer_id_for(self_guid),
-        character_guid: self_guid,
-        dest_map_id: map_id,
-        dest_instance_id: 0, // slice 1's detection guarantees the open world (see the call site)
-        dest_x: x,
-        dest_y: y,
-        dest_z: z,
-        dest_o: o,
-    };
-    on_home_shard!(conn, store, |st| st.run_warm_handoff(dst.as_ref(), &plan))?;
-
-    // From here the character is durable + live-fenced-open on `dst` (the transfer's own
-    // `release_transfer` step already dropped the fence) — re-pin the session exactly like
-    // `route_home` does for a cold entry, then spawn the live entity and re-subscribe.
-    conn.home = Some(dst.clone());
-    if let Some(key) = &conn.session_key {
-        dst.bind_shard_session(conn.account_id, key)?;
-    }
-    // Spawn the live `game_world_entity` on the destination from the now-durable row (the transfer
-    // wrote `dest_x/y/z/o` into it) — no login-sequence batch resend, unlike a cross-map
-    // `enter_world`: nothing about inventory/spells/quests changed, and the client's own view of
-    // itself was never torn down, so resending it would be pure waste (and risks a visible blink).
-    dst.player_login(conn.account_id, self_guid)?;
-
-    // Drop the OLD subs (this session's own callbacks; nothing to send on this side — the entity's
-    // deletion on the source, inside `begin_transfer`, already told every SOURCE-side peer's own
-    // subscription to DESTROY it) and register fresh ones on `dst`. `subscribe_player_events` seeds
-    // its `created` dedup set with `self_guid` itself, and `offer_peer_create` self-skips
-    // unconditionally before it ever consults that set — so this cannot double-CREATE the player
-    // for themself, the same property a world-port re-entry already relies on (see `enter_world`'s
-    // doc: "so entities already in view... arrive after the client is in-world").
-    let new_subs =
-        dst.subscribe_player_events(
-            conn.account_id,
-            self_guid,
-            plan.dest_instance_id,
-            map_id,
-            x,
-            y,
-            tx.clone(),
-        )?;
-    let WorldState::InWorld(iw) = &mut conn.state else {
-        return Err(anyhow!("warm handoff: session left InWorld mid-drive"));
-    };
-    iw.subs = new_subs; // old subs dropped here (RAII teardown: unregisters this session's callbacks)
-    iw.map_id = map_id; // same-map by construction, but keeps the invariant explicit for slice 3
-    Ok(())
-}
-
-/// Drive the #72 seam tracker from a just-arrived movement packet, logging (and returning) a
-/// confirmed crossing for the caller to act on. `None` outside `InWorld` (char-select movement
-/// doesn't exist) and, inside `SeamTracker::check`, whenever the player's cell hasn't changed —
-/// see that function's doc comment for the zero-cost property this preserves.
-///
-/// `home` is borrowed (never cloned) straight out of `conn.home` — a disjoint field access from
-/// the `&mut conn.state` borrow taken right after, so both can be live at once without an Arc
-/// clone. The home-db STRING is resolved only INSIDE the `resolve` closure now (slice 2's fold-in
-/// nit): `SeamTracker::check` calls that closure only on an ACTUAL cell change, so a same-cell
-/// heartbeat — the overwhelming majority of packets — no longer pays for a `to_string()` (or, as
-/// of this refactor, an Arc clone either) it never used to need calling for in the first place.
-fn seam_check<St: WorldStore + ?Sized>(
-    store: &St,
-    conn: &mut WorldConn,
-    x: f32,
-    y: f32,
-) -> Option<seam::SeamCrossing> {
-    let home = &conn.home;
-    let WorldState::InWorld(iw) = &mut conn.state else {
-        return None;
-    };
-    let self_guid = iw.self_guid;
-    let map_id = iw.map_id;
-    let crossing = iw.seam.check(x, y, |_gx, _gy| {
-        // `on_home_shard!`-equivalent by hand: asks whichever handle the session is actually
-        // pinned to, exactly like every other player-scoped call on the movement path.
-        let home_db = home
-            .as_deref()
-            .map_or_else(|| store.shard_name(), WorldStore::shard_name)
-            .to_string();
-        let owner = match home {
-            Some(h) => h.region_shard_for_point(self_guid, &home_db, map_id, x, y),
-            None => store.region_shard_for_point(self_guid, &home_db, map_id, x, y),
-        };
-        // Fold "resolves to the shard I'm already on" into "no opinion" here, in the wiring — not
-        // inside `resolve_region_shard`, which answers a database name and does not know what
-        // "home" means to THIS session. Only a genuinely FOREIGN answer can ever start or extend a
-        // seam streak.
-        owner.filter(|db| db != &home_db)
-    });
-    if let Some(c) = &crossing {
-        let home_db = home
-            .as_deref()
-            .map_or_else(|| store.shard_name(), WorldStore::shard_name);
-        log::info!(
-            "seam: guid {self_guid} confirmed crossing into region shard {} at cell ({},{}) (home {home_db})",
-            c.target_db,
-            c.gx,
-            c.gy
-        );
-    }
-    crossing
 }
 
 /// Rebuild + push the buyback-tab view (248): a synthesized ITEM object per ring entry (fabricated
@@ -2828,11 +2445,6 @@ fn enter_world<St: WorldStore + ?Sized>(
         attacking_target: None,
         looting_target: None,
         ranged_repeat: false,
-        map_id: entity.map_id,
-        seam: SeamTracker::new(),
-        handoff_in_progress: false,
-        pending_handoff_movement: std::collections::VecDeque::new(),
-        last_handoff_attempt: None,
     });
     // Phase 2: the quest-log window. Sent as a separate raw VALUES update AFTER the CREATE
     // (gtker's CREATE can't carry these walled fields), gated behind LYRACORE_QUEST_LOG until verified.
@@ -5166,9 +4778,11 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
                      last 10s but the relay callback fired only {} times — peers are almost \
                      certainly frozen for connected players. calls={c} sent={s} completed={comp}. \
                      #109's own cause (the AOI recenter resubscribing a SHORTER query set, so the \
-                     first cell crossing dropped game_entity_motion) is FIXED — this firing means a \
-                     NEW way to lose the subscription. Restart the gateway to recover play, then \
-                     check which queries `AreaOfInterestTracker` last subscribed.",
+                     first cell crossing dropped game_entity_motion) cannot recur — since #468 there \
+                     is no per-player AOI subscription to shorten. This firing now means the SHARED \
+                     coordinator dispatch is not running: check the log for a `shared AOI dispatch` \
+                     panic line, and that `coordinator connected to shard` was printed for every \
+                     database. Restart the gateway to recover play.",
                     c.saturating_sub(pc)
                 );
             }

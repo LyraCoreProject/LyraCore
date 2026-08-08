@@ -250,6 +250,7 @@ pub fn pet_of(ctx: &ReducerContext, owner_guid: u64) -> Option<WorldEntity> {
 pub fn despawn_pets(ctx: &ReducerContext, owner_guid: u64) {
     if let Some(pet) = pet_of(ctx, owner_guid) {
         crate::combat::disengage(ctx, pet.guid); // free its MeleeAttack row + threat
+        crate::motion::drop_pending(ctx, pet.guid); // #461: the staged payload dies with it too
         ctx.db.game_entity_motion().guid().delete(pet.guid); // motion row dies with the entity (2.1)
         ctx.db.game_world_entity().guid().delete(pet.guid);
     }

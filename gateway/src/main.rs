@@ -8,10 +8,9 @@
 //!
 //! Each connection is a state machine over `stdb::Coordinator` (module reads + reducer calls,
 //! `stdb/`) and the `codec` translators (`codec/`, one file per wire-message family); `world`
-//! additionally owns the per-player AOI subscription scoping (`stdb::aoi`), seam-crossing
-//! detection for region handoff (`world::seam`), and the stuck-state relay planes (quest/item/
-//! rep/xp/level-up/teleport). See `docs/danger-zones.md` §3 for how to launch this against the
-//! real five-database realm — do not hand-roll the launch.
+//! additionally owns the per-player AOI subscription scoping (`stdb::aoi`) and the stuck-state
+//! relay planes (quest/item/rep/xp/level-up/teleport). See `docs/danger-zones.md` §3 for how to
+//! launch this against the real five-database realm — do not hand-roll the launch.
 
 mod accept;
 mod codec;
@@ -196,7 +195,7 @@ async fn provision(cfg: &GatewayConfig, username: &str, password: &[u8]) -> Resu
 /// by a source scan, following `character_fence_tripwire`'s precedent and `test_scan::code_of`'s
 /// comment-stripping (a bare `.contains()` on an un-stripped body is exactly what a trailing-comment
 /// needle defeats — issue #64). Tests 4-5 additionally pin ORDER, not just presence — the
-/// `region_at < map_at` style already used in `world_store.rs`'s `routing_call_site_tests` — because
+/// find-offset ordering-tripwire style `world_store.rs`'s `routing_call_site_tests` use — because
 /// the reconnect hook only works if it runs after the connection swap it depends on.
 ///
 /// Confirmed by mutation: deleting each of the six independently turns exactly one of these red, with
@@ -316,7 +315,7 @@ mod bot_invite_relay_wiring_tripwire {
     /// 5. The other half of #4: the watchdog has to actually CALL the hook, and call it AFTER the
     ///    connection swap — the hook re-reads `coord()`, so invoking it before the swap would re-arm on
     ///    the dead connection and look identical to not re-arming at all. Position is asserted, not just
-    ///    presence, in the style of `world_store.rs`'s `region_at < map_at` ordering tripwires.
+    ///    presence, in the style of `world_store.rs`'s find-offset ordering tripwires.
     #[test]
     fn the_watchdog_invokes_the_reconnect_hook_after_the_swap() {
         let src = include_str!("stdb/connection.rs");
@@ -417,7 +416,7 @@ mod boundary_panic_tripwire {
         (
             "config.rs",
             include_str!("config.rs"),
-            "`LYRACORE_SHARD_MAP` / `LYRACORE_REGION_SHARDS` / `LYRACORE_REALM_CORE` parsing — a \
+            "`LYRACORE_SHARD_MAP` / `LYRACORE_REALM_CORE` parsing — a \
              typo in an operator's env must degrade, never abort the process at startup",
         ),
     ];
@@ -437,9 +436,9 @@ mod boundary_panic_tripwire {
     /// Drop every `#[cfg(test)]`-gated item, then every comment — so a doc comment that MENTIONS
     /// `panic!` and a test that legitimately unwraps both stay out of the scan.
     ///
-    /// Brace-matched rather than truncate-at-the-first-`#[cfg(test)]`: these files gate individual
-    /// functions on `test` (`ShardMap::region_shards`), not only a trailing `mod tests`, so a
-    /// truncating scan would silently stop reading most of `config.rs`.
+    /// Brace-matched rather than truncate-at-the-first-`#[cfg(test)]`: these files may gate
+    /// individual functions on `test` (config.rs historically did), not only a trailing
+    /// `mod tests`, so a truncating scan would silently stop reading most of such a file.
     fn release_code(src: &str) -> String {
         let lines: Vec<&str> = src.lines().collect();
         let mut out = String::new();

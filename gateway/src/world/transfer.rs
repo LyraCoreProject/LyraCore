@@ -29,8 +29,8 @@
 //! Deliberate simplification: the driver is SYNCHRONOUS and runs on the world session's own
 //! thread, inside the client's loading screen (the WORLDPORT_ACK handler). Ceiling: a slow or
 //! unreachable destination shard stalls that one session for the reducer timeout. Upgrade path: a
-//! driver task with a work queue, once transfers happen without a loading screen to hide in (spec
-//! #12 Phase C's warm handoff).
+//! driver task with a work queue, if transfers ever need to happen without a loading screen to
+//! hide in.
 
 use anyhow::{anyhow, Result};
 

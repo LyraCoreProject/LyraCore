@@ -78,21 +78,6 @@ pub struct ShardMap {
     /// `LYRACORE_REALM_CORE` (#20): the database that owns accounts, sessions, and the character→shard
     /// index. `None` = unconfigured, which is *exactly* today — auth lives on the default database.
     realm_core: Option<String>,
-    /// `LYRACORE_REGION_SHARDS` (#72): world shards a REGION assignment may name, connected but never
-    /// routed to by the shard map itself.
-    ///
-    /// Without this there is no way to express "connect to this database, but let the region overlay
-    /// decide who goes there". A world shard is only connected if it appears in [`shards`], and
-    /// before this that meant it had to be some rule's `db` — but every rule routes a whole map (or
-    /// a map+bucket) to it, which is precisely the decision regions exist to take instead. Naming a
-    /// region shard as `0:*=<db>` would hand it every map-0 location the seam menu does NOT cover,
-    /// i.e. all of Eastern Kingdoms outside the drawn regions, on a database holding none of it.
-    ///
-    /// These carry NO rules, so [`resolve`](Self::resolve) can never return one and
-    /// [`check_instance_hosting`](Self::check_instance_hosting) never considers one an instance
-    /// owner. The only thing that changes is that `connected(db)` in
-    /// [`resolve_region_shard`] can now succeed for them.
-    region_shards: Vec<String>,
 }
 
 impl ShardMap {
@@ -114,54 +99,6 @@ impl ShardMap {
         };
         Self::parse(default_db, &text)
             .with_realm_core(std::env::var("LYRACORE_REALM_CORE").ok().as_deref())
-            .with_region_shards(std::env::var("LYRACORE_REGION_SHARDS").ok().as_deref())
-    }
-
-    /// Declare the world shards a REGION assignment may name (`LYRACORE_REGION_SHARDS`, comma/semicolon/
-    /// newline separated, `#` comments) — see the field docs for why a shard-map rule cannot do this.
-    ///
-    /// Filtered so the degenerate configs collapse to "unconfigured" rather than opening a second
-    /// connection to somewhere already in the set, or a first one to somewhere that must not hold
-    /// characters:
-    /// - the **default** database and any database a rule already names are dropped (already
-    ///   connected, and `shards()` must not list one twice — it is what a character-location probe
-    ///   walks)
-    /// - **realm-core** is dropped: it owns no characters, so routing a player there would land them
-    ///   on a database with nothing of theirs in it. `resolve_region_shard` already refuses an
-    ///   assignment naming an unconnected shard; this keeps realm-core unconnectable *as a shard*
-    ///   even though the gateway does connect to it for auth.
-    ///
-    /// ⚠ Order matters: this runs AFTER `with_realm_core` in `from_env` so realm-core is known.
-    pub fn with_region_shards(mut self, names: Option<&str>) -> Self {
-        let mut out: Vec<String> = Vec::new();
-        for raw in names.unwrap_or("").split(['\n', ',', ';']) {
-            let name = raw.split('#').next().unwrap_or("").trim();
-            if name.is_empty() || name == self.default_db {
-                continue;
-            }
-            if self.realm_core.as_deref() == Some(name) {
-                log::error!(
-                    "LYRACORE_REGION_SHARDS names {name}, which is the realm-core database — it owns no \
-                     characters, so a region assigned there would route players onto a database \
-                     holding nothing of theirs. Ignoring it."
-                );
-                continue;
-            }
-            if self.rules.iter().any(|r| r.db == name) || out.iter().any(|d| d == name) {
-                continue; // already connected via a rule, or listed twice
-            }
-            out.push(name.to_string());
-        }
-        self.region_shards = out;
-        self
-    }
-
-    /// The databases declared connectable for region routing only (`LYRACORE_REGION_SHARDS`).
-    /// Test-only accessor: production reads the overlay through [`ShardMap::databases`] /
-    /// [`resolve_region_shard`], which fold it in already.
-    #[cfg(test)]
-    pub fn region_shards(&self) -> &[String] {
-        &self.region_shards
     }
 
     /// Point auth (accounts / sessions / the character→shard index) at a separate `realm-core`
@@ -216,7 +153,6 @@ impl ShardMap {
             default_db: default_db.to_string(),
             rules,
             realm_core: None,
-            region_shards: Vec::new(),
         }
     }
 
@@ -350,21 +286,13 @@ impl ShardMap {
     /// Every distinct WORLD SHARD this map can resolve to, default first. These are the databases
     /// that hold characters, so these — and only these — are what a character-location probe walks.
     /// Realm-core is deliberately not here: it holds no characters, so probing it is pure waste.
-    /// ⚠ **Default stays FIRST.** `Coordinator::region_db_for` reads the seam menu from
-    /// `world_shards().first()`, so anything appended here must go AFTER the default.
+    /// ⚠ **Default stays FIRST.** `resolve_home_shard`'s fallback probe walks the connected set in
+    /// this order and must try the default database before any rule shard.
     pub fn shards(&self) -> Vec<String> {
         let mut dbs = vec![self.default_db.clone()];
         for r in &self.rules {
             if !dbs.contains(&r.db) {
                 dbs.push(r.db.clone());
-            }
-        }
-        // Region shards (#72) hold characters and are probed like any other world shard, but no rule
-        // routes to them — the region overlay is their only way in. `with_region_shards` has already
-        // dropped the default, realm-core, and anything a rule names, so this cannot duplicate.
-        for d in &self.region_shards {
-            if !dbs.contains(d) {
-                dbs.push(d.clone());
             }
         }
         dbs
@@ -632,142 +560,6 @@ pub fn resolve_home_shard(
     connected.iter().find_map(|db| probe(db)).map(settle)
 }
 
-// ===============================================================================================
-//  Region assignment (#23 — the Phase C foundation of the elastic-sharding spec, #12)
-// ===============================================================================================
-
-/// One row of realm-core's `region_assignment { map_id, region_id, shard, epoch }`, as the gateway
-/// reads it. `shard` is a DATABASE NAME; `epoch` is monotonic per `(map_id, region_id)`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RegionAssignment {
-    pub map_id: u32,
-    pub region_id: u32,
-    pub shard: String,
-    pub epoch: u64,
-}
-
-/// **The whole of region routing.** Which database owns the region containing `(map_id, x, y)` —
-/// or `None`, meaning "no region owns this point; route it through the ordinary `(map, instance)`
-/// shard map", i.e. exactly as #17 did.
-///
-/// `None` is the answer in every degenerate case, and that is the ticket's safety property: no
-/// region definitions, no assignment row, an assignment naming an empty or unconnected shard, a
-/// point in `DEFAULT_REGION`, or anything inside an instance. **With every region of a map assigned
-/// to one shard the result is the same database the shard map would have produced anyway**, so the
-/// seams are drawn and dormant and nothing about the wire changes.
-///
-/// # Epoch semantics
-///
-/// An operator flip bumps `epoch`. The HIGHEST epoch for a `(map_id, region_id)` wins, so a stale
-/// row — a retried write, or a delete/insert pair delivered in either order by the subscription —
-/// can never resurrect a superseded assignment. A flip re-routes **new entrants only**: this
-/// function runs at world entry (`WorldStore::home_shard`) and nowhere else, and a session already
-/// in the world keeps the shard handle it pinned there. Moving residents is warm handoff, a later
-/// ticket; this one deliberately builds none of it.
-///
-/// # Instances are not region-routed
-///
-/// Regions partition the OPEN WORLD (`instance_id == 0`). An instance is already its own partition
-/// with its own owner (#19), and layering a region overlay on top of it would give one player two
-/// answers to "which database am I on".
-pub fn resolve_region_shard<'a>(
-    regions: &lyracore_shared::region::RegionMap,
-    assignments: &'a [RegionAssignment],
-    map_id: u32,
-    instance_id: u64,
-    x: f32,
-    y: f32,
-    connected: impl Fn(&str) -> bool,
-) -> Option<&'a str> {
-    if instance_id != 0 {
-        return None;
-    }
-    let region_id = regions.region_at(map_id, x, y);
-    if region_id == lyracore_shared::region::DEFAULT_REGION {
-        return None;
-    }
-    winning_region_shard(assignments, map_id, region_id, connected)
-}
-
-/// [`resolve_region_shard`]'s tail, factored out so the CELL-keyed resolver below (#73 view-merge)
-/// and the world-position resolver above share one "which shard won this region" decision instead of
-/// the epoch/connectivity rules drifting apart between them.
-fn winning_region_shard(
-    assignments: &[RegionAssignment],
-    map_id: u32,
-    region_id: u32,
-    connected: impl Fn(&str) -> bool,
-) -> Option<&str> {
-    let winner = assignments
-        .iter()
-        .filter(|a| a.map_id == map_id && a.region_id == region_id)
-        .max_by_key(|a| a.epoch)?;
-    let db = winner.shard.trim();
-    if db.is_empty() {
-        return None;
-    }
-    if !connected(db) {
-        // Same degradation rule as `ShardMap::resolve_connected`: a shard the assignment names but
-        // the gateway never reached routes NOBODY to it. Falling through to the shard map is the
-        // pre-region answer, which is always a database this gateway is actually talking to.
-        log::warn!(
-            "region {region_id} on map {map_id} is assigned to shard {db} (epoch {}), which is not \
-             connected — falling through to the (map, instance) shard map",
-            winner.epoch
-        );
-        return None;
-    }
-    Some(db)
-}
-
-/// The CELL-keyed twin of [`resolve_region_shard`] — issue #73's view-merge rebuild. Which database
-/// owns the region containing grid cell `(gx, gy)` on `map_id`, or `None` for "home" — the same
-/// degenerate cases `resolve_region_shard` collapses on (no definitions, no assignment, an
-/// unconnected/empty shard, or an instance).
-///
-/// This is the RESOLVER `aoi::split_box_by_shard` calls once per cell while it scans a box's rows —
-/// the boundary-line splitter, not a separately-materialized per-cell partition map (the shape #73's
-/// first attempt built and the rebuild's design note calls out as unnecessary complexity: the split
-/// and the resolve are one pass, not two). Both resolvers must answer the SAME shard for the cell a
-/// given `(x, y)` falls in — `resolve_region_shard_for_cell_agrees_with_resolve_region_shard` below
-/// pins that the two conversions cannot drift.
-pub fn resolve_region_shard_for_cell<'a>(
-    regions: &lyracore_shared::region::RegionMap,
-    assignments: &'a [RegionAssignment],
-    map_id: u32,
-    instance_id: u64,
-    gx: i32,
-    gy: i32,
-    connected: impl Fn(&str) -> bool,
-) -> Option<&'a str> {
-    if instance_id != 0 {
-        return None;
-    }
-    let region_id = regions.region_of(map_id, gx, gy);
-    if region_id == lyracore_shared::region::DEFAULT_REGION {
-        return None;
-    }
-    winning_region_shard(assignments, map_id, region_id, connected)
-}
-
-/// #73 view-merge (bug found LIVE 2026-08-04, `test-view-merge.sh` gate): a region explicitly
-/// assigned to the CALLER's OWN shard resolves to HOME, not to an away bucket named after itself.
-/// `resolve_region_shard_for_cell` (like `resolve_region_shard` before it) answers purely "which
-/// database does this assignment name", with no notion of who is asking — a caller that hands the
-/// name straight to `Coordinator::shard_handle` stays correct for free, because THAT method's own
-/// `db == self.shard_name()` guard folds "my own shard" back to "stay" before anything acts on it.
-/// `Coordinator::split_box_by_shard` cannot rely on that fold: it builds `(shard, rects)` buckets
-/// directly from the resolver's raw answer, one call per cell, before any `shard_handle` call ever
-/// runs — so a region drawn "for symmetry" onto the shard the viewer is ALREADY on (an entirely
-/// ordinary menu: one region per shard, e.g. "region 1 = the rest of Elwynn, pinned to
-/// lyracore" beside "region 2 = Goldshire, pinned to lyracore-world-2") lands its own HOME
-/// coverage in an away bucket that can never resolve — worse than a missed away leg, because
-/// `update()`'s home bucket only ever picks up a `None` entry, so a box that resolves ENTIRELY to
-/// "my own shard, by name" ends up subscribing NOTHING at all, home or away.
-pub fn fold_home_shard(resolved: Option<String>, my_shard: &str) -> Option<String> {
-    resolved.filter(|name| name != my_shard)
-}
-
 /// `<map_id|*>[:<bucket|*>]=<db>` → a rule, or `None` if it doesn't parse.
 fn parse_shard_rule(rule: &str) -> Option<ShardRule> {
     let (loc, db) = rule.split_once('=')?;
@@ -834,76 +626,13 @@ pub fn realm_address_override(raw: Option<String>) -> Option<String> {
 }
 
 /// Area-of-Interest gate (scaling): the per-player `game_world_entity` subscription is SCOPED to a
-/// grid-cell box that re-subscribes as the player crosses cells (an `AreaOfInterestTracker`), instead
+/// grid-cell box (pre-#468 a re-subscribing per-player subscription; now an in-process cell index
+/// — `stdb::world_index`), instead
 /// of the global `SELECT *`. Default ON since 2026-07-10 (operator live-verified the 2-client
 /// enter/leave-scope behavior; the 5×5 50-yd box ≈ vanilla view distance). `LYRACORE_AOI=0` is the
 /// escape hatch back to the proven global subscription.
 pub fn aoi_enabled() -> bool {
     std::env::var("LYRACORE_AOI").map_or(true, |v| v != "0")
-}
-
-/// #72 slice 2 — the warm mid-session handoff gate (house pattern: [`aoi_enabled`]). Default ON:
-/// a confirmed [`crate::world::seam::SeamCrossing`] drives the escrowed transfer and re-homes the
-/// session with no loading screen. `LYRACORE_WARM_HANDOFF=0` is the escape hatch back to slice 1's
-/// log-only behavior (detect + log, never move anyone) — useful if a live handoff misbehaves and
-/// the operator wants residents to keep draining onto their login shard instead.
-pub fn warm_handoff_enabled() -> bool {
-    std::env::var("LYRACORE_WARM_HANDOFF").map_or(true, |v| v != "0")
-}
-
-/// #73 — the cross-seam view-merge gate (house pattern: [`aoi_enabled`]/[`warm_handoff_enabled`]).
-/// Default ON: when a straddling player's box crosses a region boundary owned by another shard, the
-/// `AreaOfInterestTracker` splits the box into per-shard `GridRect`s (`aoi::split_box_by_shard`) and
-/// opens that shard's per-account connection to merge its deltas into the same view instead of only
-/// ever seeing its own shard. `LYRACORE_VIEW_MERGE=0` collapses to home-shard-only AOI (today's
-/// behavior) — the escape hatch if the away leg misbehaves live. Structurally a no-op on a
-/// single-database realm or an un-imported seam menu either way: `split_box_by_shard` already
-/// answers every cell "home" the instant no seam menu is imported, so this flag only ever matters
-/// when a seam menu AND a region assignment both exist.
-pub fn view_merge_enabled() -> bool {
-    std::env::var("LYRACORE_VIEW_MERGE").map_or(true, |v| v != "0")
-}
-
-/// #456 — AOI box shape (house pattern: [`aoi_enabled`]/[`view_merge_enabled`]). Default ON: the box
-/// subscribes ONE EQUALITY QUERY PER CELL against the packed `cell` column, which is the only shape
-/// SpacetimeDB 2.7.1's planner can serve from an index (it needs every column of a ≤3-column index
-/// matched by an equality term, never serves a range, and never turns an `OR` into probes). Off, the
-/// box falls back to the single `grid_x`/`grid_y` BETWEEN range query per table — the pre-#456 shape,
-/// correct but a full partition scan per evaluation.
-///
-/// **This exists because one number in this repo argues against the default.** #190 measured that a
-/// per-cell subscription "costs more to REGISTER than a whole box range costs to EVALUATE", and the
-/// per-cell shape multiplies a player's registered query count by 25 (4 → 100 per box). That
-/// measurement was taken when no per-cell query could be index-served either — every registration
-/// carried a full-scan initial evaluation, so its registration cost was never separable from its scan
-/// cost, and a point probe against `by_cell` is a different animal. But the concern is real and this
-/// gateway cannot settle it offline, so the shape is a flag: `LYRACORE_AOI_CELL=0` restores the range
-/// box for a same-build A/B under load, no republish and no schema change needed.
-///
-/// Captured per box build (not once at startup) so an operator can flip it between two runs of the
-/// same gateway process if they are driving the comparison from outside.
-pub fn aoi_cell_queries_enabled() -> bool {
-    std::env::var("LYRACORE_AOI_CELL").map_or(true, |v| v != "0")
-}
-
-/// The seam-crossing notice: each warm handoff's start/complete as a System chat line to the
-/// crossing player. Default ON since #326 (house pattern: [`aoi_enabled`]), where it stopped being
-/// #72's opt-in operator testing aid and became a player-facing status line for the alpha. The
-/// no-loading-screen crossing is the project's flagship differentiator and it is otherwise
-/// *invisible* — it works so quietly that nobody can tell it happened — so for the alpha every
-/// player sees it announced without an operator exporting anything. `LYRACORE_SEAM_NOTIFY=0` is
-/// the operator opt-out, for a realm that would rather its seams stay silent; flip the default
-/// back once seams are mature and boring (the follow-up #326 asks for).
-pub fn seam_notify_enabled() -> bool {
-    seam_notify_from_env(std::env::var("LYRACORE_SEAM_NOTIFY").ok().as_deref())
-}
-
-/// The pure half of [`seam_notify_enabled`] (house pattern: [`realm_address_override`]) — the
-/// variable is process-global, so the parse is exercised through this rather than by mutating the
-/// test process's own environment. Only an exact `0` disables — the same rule as [`aoi_enabled`]
-/// and friends, spelled as a comparison because clippy rejects `map_or(true, ..)` on a `&str`.
-pub fn seam_notify_from_env(raw: Option<&str>) -> bool {
-    raw != Some("0")
 }
 
 /// #209 probe: `LYRACORE_WRITER_TRACE=1` turns on a per-session black-box ring inside `spawn_writer` — the
@@ -1065,48 +794,6 @@ mod realm_address_tests {
             realm_address_override(Some("  192.168.1.50:8085\n".to_string())),
             Some("192.168.1.50:8085".to_string())
         );
-    }
-}
-
-#[cfg(test)]
-mod seam_notify_tests {
-    use super::*;
-
-    /// #326 inverted this gate: what was #72's `=1` opt-in is now on unless the operator opts out.
-    /// Driven through the pure half for the reason [`seam_notify_from_env`] documents — `std::env`
-    /// is process-global and the test binary is one process, so a `set_var` here would leak into
-    /// every other test running beside it.
-    #[test]
-    fn an_unset_variable_now_announces_the_crossing() {
-        assert!(
-            seam_notify_from_env(None),
-            "the alpha's flagship crossing must be visible with nothing exported"
-        );
-    }
-
-    #[test]
-    fn exactly_zero_is_the_operators_opt_out() {
-        assert!(!seam_notify_from_env(Some("0")));
-    }
-
-    #[test]
-    fn one_still_enables_so_an_old_launcher_does_not_invert() {
-        // #72-era recipes and scripts export `=1`. Under the old polarity that meant "on"; it must
-        // not now read as "the operator asked for something other than the default".
-        assert!(seam_notify_from_env(Some("1")));
-    }
-
-    #[test]
-    fn any_other_value_leaves_the_notice_on() {
-        // Deliberately including "false"/"off": this file's gates all test `!= "0"` and nothing
-        // else (see `aoi_enabled`), so a truthiness word is NOT an opt-out and must not silently
-        // read as one.
-        for other in ["", "  ", "1 ", "true", "false", "off", "no", "2"] {
-            assert!(
-                seam_notify_from_env(Some(other)),
-                "{other:?} is not the documented opt-out and must leave the notice on"
-            );
-        }
     }
 }
 
@@ -1964,303 +1651,6 @@ mod shard_map_tests {
     }
 
     // ==========================================================================================
-    //  Region assignment (#23): the cell→region→shard overlay, and its no-op guarantee.
-    // ==========================================================================================
-
-    use lyracore_shared::region::RegionMap;
-
-    /// The seam menu every region test below routes against: two 20×20-cell regions side by side on
-    /// map 0, drawn around the cells that contain `POINT_IN_1` / `POINT_IN_2`.
-    fn seam_menu() -> RegionMap {
-        let (gx, gy) = lyracore_shared::spatial::grid_cell(POINT_IN_1.0, POINT_IN_1.1);
-        let (m, rejected) = RegionMap::parse(&format!(
-            "0:1 = {}..{}, {}..{}\n0:2 = {}..{}, {}..{}",
-            gx,
-            gx + 19,
-            gy,
-            gy + 19,
-            gx + 20,
-            gx + 39,
-            gy,
-            gy + 19,
-        ));
-        assert!(rejected.is_empty(), "{rejected:?}");
-        m
-    }
-
-    /// A position inside region 1, and one inside region 2 (20 cells = 1000yd west, and the cell
-    /// axis is inverted, so a LOWER x is a HIGHER cell index).
-    const POINT_IN_1: (f32, f32) = (-8949.95, -132.493);
-    const POINT_IN_2: (f32, f32) = (
-        -8949.95 - 20.0 * lyracore_shared::spatial::GRID_CELL_SIZE,
-        -132.493,
-    );
-
-    fn assignment(region_id: u32, shard: &str, epoch: u64) -> RegionAssignment {
-        RegionAssignment {
-            map_id: 0,
-            region_id,
-            shard: shard.into(),
-            epoch,
-        }
-    }
-
-    #[test]
-    fn region_routing_with_no_definitions_or_no_assignments_is_a_strict_no_op() {
-        // THE backward-compatibility property (#23 AC#3), as a test: nothing imported, nothing
-        // assigned, nothing routes — every caller falls through to the `(map, instance)` shard map
-        // it used before regions existed. Byte-identical, because there is no other branch to take.
-        let empty = RegionMap::default();
-        let none: [RegionAssignment; 0] = [];
-        let (x, y) = POINT_IN_1;
-        assert_eq!(
-            resolve_region_shard(&empty, &none, 0, 0, x, y, |_| true),
-            None
-        );
-        // Definitions imported but nothing assigned → still nothing routes: the seams are DRAWN
-        // and DORMANT, which is exactly what "a seam between same-shard regions costs nothing"
-        // means operationally.
-        assert_eq!(
-            resolve_region_shard(&seam_menu(), &none, 0, 0, x, y, |_| true),
-            None
-        );
-        // Assignments exist but the point is outside every region (DEFAULT_REGION → the shard map).
-        let a = [assignment(1, "pool-a", 1)];
-        assert_eq!(
-            resolve_region_shard(&seam_menu(), &a, 0, 0, 5000.0, 5000.0, |_| true),
-            None
-        );
-        // Even an assignment row that NAMES region 0 must not route it. The module refuses to write
-        // one, but the gateway must not depend on that: region 0 is "the rest of the map", and
-        // routing it would hand the whole unmapped world to one database on a single bad row.
-        let claims_the_rest = [assignment(
-            lyracore_shared::region::DEFAULT_REGION,
-            "pool-a",
-            9,
-        )];
-        assert_eq!(
-            resolve_region_shard(&seam_menu(), &claims_the_rest, 0, 0, 5000.0, 5000.0, |_| {
-                true
-            }),
-            None
-        );
-        // A different map is untouched by map 0's menu.
-        assert_eq!(
-            resolve_region_shard(&seam_menu(), &a, 1, 0, x, y, |_| true),
-            None
-        );
-    }
-
-    #[test]
-    fn all_regions_of_a_map_on_one_shard_resolves_to_that_one_shard_for_every_point() {
-        // AC#3's premise, stated where it can be checked without a node: with every region assigned
-        // to the SAME database, the overlay is constant — every point in the zone answers the same
-        // shard, so no seam is ever crossed and the topology is indistinguishable from a single
-        // shard that happens to have a menu drawn on it.
-        let menu = seam_menu();
-        let all = [assignment(1, "world", 1), assignment(2, "world", 1)];
-        for (x, y) in [POINT_IN_1, POINT_IN_2] {
-            assert_eq!(
-                resolve_region_shard(&menu, &all, 0, 0, x, y, |_| true),
-                Some("world")
-            );
-        }
-    }
-
-    #[test]
-    fn an_assignment_flip_routes_the_next_entrant_and_flipping_back_restores() {
-        // AC#4, the tracer demo, minus the node: region 2 is empty, so flipping it moves nobody —
-        // the NEXT entrant to that region resolves to `pool-b`, and region 1 is untouched by the
-        // flip. Flipping back (a higher epoch, empty shard = unassign) restores the old answer.
-        let menu = seam_menu();
-        let before = [assignment(1, "world", 1)];
-        assert_eq!(
-            resolve_region_shard(&menu, &before, 0, 0, POINT_IN_2.0, POINT_IN_2.1, |_| true),
-            None
-        );
-
-        let flipped = [assignment(1, "world", 1), assignment(2, "pool-b", 1)];
-        assert_eq!(
-            resolve_region_shard(&menu, &flipped, 0, 0, POINT_IN_2.0, POINT_IN_2.1, |_| true),
-            Some("pool-b"),
-            "the next entrant to the flipped region lands on the second shard"
-        );
-        assert_eq!(
-            resolve_region_shard(&menu, &flipped, 0, 0, POINT_IN_1.0, POINT_IN_1.1, |_| true),
-            Some("world"),
-            "the region next door is untouched — a flip is per region, not per map"
-        );
-
-        // Flipping back: the module deletes the row on an empty-shard write, and an operator who
-        // instead re-assigns it to the original database gets the same answer. Both are tested
-        // because both are documented as "flip it back".
-        let unassigned = [assignment(1, "world", 1)];
-        assert_eq!(
-            resolve_region_shard(&menu, &unassigned, 0, 0, POINT_IN_2.0, POINT_IN_2.1, |_| {
-                true
-            }),
-            None
-        );
-        let reassigned = [assignment(1, "world", 1), assignment(2, "world", 3)];
-        assert_eq!(
-            resolve_region_shard(&menu, &reassigned, 0, 0, POINT_IN_2.0, POINT_IN_2.1, |_| {
-                true
-            }),
-            Some("world")
-        );
-    }
-
-    #[test]
-    fn the_highest_epoch_wins_so_a_stale_row_can_never_resurrect_an_old_assignment() {
-        // Epoch semantics. The rows arrive out of a live subscription, in whatever order the SDK
-        // applies a delete/insert pair; routing must not depend on that order. Both orderings of
-        // the same two epochs must answer the NEWER one.
-        let menu = seam_menu();
-        let (x, y) = POINT_IN_1;
-        let newer_last = [assignment(1, "pool-a", 1), assignment(1, "pool-b", 2)];
-        let newer_first = [assignment(1, "pool-b", 2), assignment(1, "pool-a", 1)];
-        assert_eq!(
-            resolve_region_shard(&menu, &newer_last, 0, 0, x, y, |_| true),
-            Some("pool-b")
-        );
-        assert_eq!(
-            resolve_region_shard(&menu, &newer_first, 0, 0, x, y, |_| true),
-            Some("pool-b")
-        );
-        // An UNASSIGN at a higher epoch beats an older assignment the same way.
-        let unassigned_later = [assignment(1, "pool-a", 1), assignment(1, "", 2)];
-        assert_eq!(
-            resolve_region_shard(&menu, &unassigned_later, 0, 0, x, y, |_| true),
-            None
-        );
-    }
-
-    #[test]
-    fn an_assignment_naming_an_unconnected_shard_falls_through_to_the_shard_map() {
-        // Same rule `resolve_connected` applies to the shard map: a database the gateway never
-        // reached can only ever collapse to the pre-region answer. Routing a login into a shard
-        // that isn't there would strand the player; routing them by map is always serviceable.
-        let menu = seam_menu();
-        let (x, y) = POINT_IN_1;
-        let a = [assignment(1, "pool-a", 1)];
-        assert_eq!(
-            resolve_region_shard(&menu, &a, 0, 0, x, y, |db| db != "pool-a"),
-            None
-        );
-        assert_eq!(
-            resolve_region_shard(&menu, &a, 0, 0, x, y, |_| true),
-            Some("pool-a")
-        );
-    }
-
-    #[test]
-    fn a_player_inside_an_instance_is_never_region_routed() {
-        // Regions partition the OPEN WORLD. An instance already has an owner (#19's shard pool),
-        // and a region overlay on top of it would give one player two answers to "which database".
-        let menu = seam_menu();
-        let (x, y) = POINT_IN_1;
-        let a = [assignment(1, "pool-a", 1)];
-        assert_eq!(
-            resolve_region_shard(&menu, &a, 0, 0, x, y, |_| true),
-            Some("pool-a")
-        );
-        assert_eq!(
-            resolve_region_shard(&menu, &a, 0, 42, x, y, |_| true),
-            None,
-            "the same coordinates inside instance 42 route by the shard map, not by region"
-        );
-    }
-
-    // ==========================================================================================
-    //  Cell-keyed region resolution (#73 view-merge rebuild): the boundary-line resolver
-    //  `aoi::split_box_by_shard` calls once per cell while it scans a box's rows.
-    // ==========================================================================================
-
-    fn cell_of(x: f32, y: f32) -> (i32, i32) {
-        lyracore_shared::spatial::grid_cell(x, y)
-    }
-
-    #[test]
-    fn resolve_region_shard_for_cell_agrees_with_resolve_region_shard() {
-        // The two resolvers must never disagree about the shard a given world position's cell
-        // belongs to — `resolve_region_shard` converts x/y internally (`RegionMap::region_at`); this
-        // one is handed the cell directly (the box splitter's native unit). Same menu, same
-        // assignment, same answer, for a point in EACH region and one point outside both.
-        let menu = seam_menu();
-        let a = [assignment(1, "pool-a", 1), assignment(2, "pool-b", 1)];
-        for (x, y) in [POINT_IN_1, POINT_IN_2, (5000.0, 5000.0)] {
-            let (gx, gy) = cell_of(x, y);
-            assert_eq!(
-                resolve_region_shard(&menu, &a, 0, 0, x, y, |_| true),
-                resolve_region_shard_for_cell(&menu, &a, 0, 0, gx, gy, |_| true),
-                "cell ({gx},{gy}) disagrees with the point resolver at ({x},{y})"
-            );
-        }
-    }
-
-    #[test]
-    fn resolve_region_shard_for_cell_refuses_inside_an_instance() {
-        let menu = seam_menu();
-        let a = [assignment(1, "pool-a", 1)];
-        let (gx, gy) = cell_of(POINT_IN_1.0, POINT_IN_1.1);
-        assert_eq!(
-            resolve_region_shard_for_cell(&menu, &a, 0, 0, gx, gy, |_| true),
-            Some("pool-a")
-        );
-        assert_eq!(
-            resolve_region_shard_for_cell(&menu, &a, 0, 42, gx, gy, |_| true),
-            None,
-            "the same cell inside instance 42 is never region-routed"
-        );
-    }
-
-    #[test]
-    fn resolve_region_shard_for_cell_region_zero_is_always_home() {
-        let menu = seam_menu();
-        let a = [assignment(1, "pool-a", 1), assignment(2, "pool-b", 1)];
-        assert_eq!(
-            resolve_region_shard_for_cell(&menu, &a, 0, 0, 0, 0, |_| true),
-            None,
-            "a cell outside every drawn region is DEFAULT_REGION, which never routes"
-        );
-    }
-
-    #[test]
-    fn resolve_region_shard_for_cell_falls_through_on_an_unconnected_target() {
-        let menu = seam_menu();
-        let a = [assignment(1, "pool-a", 1)];
-        let (gx, gy) = cell_of(POINT_IN_1.0, POINT_IN_1.1);
-        assert_eq!(
-            resolve_region_shard_for_cell(&menu, &a, 0, 0, gx, gy, |db| db != "pool-a"),
-            None,
-            "an unreachable target degrades to home, never to a wrong shard"
-        );
-    }
-
-    /// The exact bug caught live 2026-08-04: a region explicitly assigned to the CALLER's OWN shard
-    /// must fold to `None` (home) — never survive as `Some(my_own_name)`, which
-    /// `Coordinator::split_box_by_shard` would otherwise group into an away bucket that can never
-    /// resolve (`shard_handle("my own name")` legitimately answers "already home", which
-    /// `ensure_away` cannot tell apart from "unreachable" without this fold happening first).
-    #[test]
-    fn fold_home_shard_folds_the_callers_own_name_to_home() {
-        assert_eq!(
-            fold_home_shard(Some("lyracore".to_string()), "lyracore"),
-            None
-        );
-        assert_eq!(
-            fold_home_shard(Some("lyracore-world-2".to_string()), "lyracore"),
-            Some("lyracore-world-2".to_string()),
-            "a genuinely different shard must pass through unchanged"
-        );
-        assert_eq!(
-            fold_home_shard(None, "lyracore"),
-            None,
-            "already-home stays home"
-        );
-    }
-
-    // ==========================================================================================
     //  #223 — the SINGLE-DATABASE realm, and the parser's totality
     // ==========================================================================================
 
@@ -2272,20 +1662,17 @@ mod shard_map_tests {
     /// a five-database realm and is actually running one", or the reverse. Every routing question
     /// must answer with the one database, and no accessor may invent a second name.
     ///
-    /// It is also the contract every sharding feature is built against: each of #17/#21/#72's rules
+    /// It is also the contract every sharding feature is built against: each of #17/#21's rules
     /// is a no-op here, which is what makes them safe to ship default-off.
     #[test]
     fn the_unconfigured_realm_is_exactly_one_database_in_every_accessor() {
-        // Exactly what `from_env` produces when LYRACORE_SHARD_MAP / _REALM_CORE / _REGION_SHARDS
-        // are all unset: an empty rule text and neither overlay configured.
-        let m = ShardMap::parse("lyracore", "")
-            .with_realm_core(None)
-            .with_region_shards(None);
+        // Exactly what `from_env` produces when LYRACORE_SHARD_MAP / _REALM_CORE are unset: an
+        // empty rule text and no realm-core configured.
+        let m = ShardMap::parse("lyracore", "").with_realm_core(None);
 
         assert_eq!(m.default_db(), "lyracore");
         assert_eq!(m.shards(), vec!["lyracore".to_string()]);
         assert_eq!(m.databases(), vec!["lyracore".to_string()]);
-        assert_eq!(m.region_shards(), Vec::<String>::new());
         assert_eq!(
             m.auth_db(|_| true),
             Ok("lyracore"),
@@ -2329,24 +1716,11 @@ mod shard_map_tests {
             );
         }
 
-        // And the two overlays are inert rather than merely quiet.
+        // And the hosting check is inert rather than merely quiet.
         assert_eq!(
             m.check_instance_hosting(|_| Some(true), |_| true),
             InstanceHosting::Consistent,
             "a single-database realm hosting its own instances has nothing to report"
-        );
-        assert_eq!(
-            resolve_region_shard(
-                &lyracore_shared::region::RegionMap::default(),
-                &[],
-                0,
-                0,
-                -9000.0,
-                100.0,
-                |_| true
-            ),
-            None,
-            "with no regions defined and no assignments, region routing must be a strict no-op"
         );
     }
 
@@ -2532,159 +1906,5 @@ mod shard_map_tests {
         assert_eq!(m.resolve(0, 0), "world");
         assert_eq!(m.resolve(1, 0), "good", "the one VALID rule still applies");
         assert_eq!(m.databases(), vec!["world".to_string(), "good".to_string()]);
-    }
-
-    // ==========================================================================================
-    //  Region shards (#72): connected, but reachable ONLY through the region overlay.
-    // ==========================================================================================
-
-    #[test]
-    fn a_region_shard_is_connected_but_the_shard_map_never_routes_to_it() {
-        // The whole point. Before this, a database regions could name had to be some rule's `db`,
-        // and every rule routes a whole map to it — so a map-0 region shard had to be `0:*=<db>`,
-        // which hands it every map-0 location the seam menu does NOT cover (all of Eastern Kingdoms
-        // outside the drawn regions) on a database holding none of that content.
-        let m = ShardMap::parse("core", "1:*=world-1").with_region_shards(Some("world-2"));
-        assert_eq!(
-            m.shards(),
-            vec![
-                "core".to_string(),
-                "world-1".to_string(),
-                "world-2".to_string()
-            ],
-            "a region shard IS a world shard: it holds characters, so location probes must walk it"
-        );
-        // …and yet nothing routes there by map.
-        for map_id in [0u32, 1, 36, 389] {
-            assert_ne!(
-                m.resolve(map_id, 0),
-                "world-2",
-                "map {map_id} must not resolve to a region shard — regions are its only way in"
-            );
-        }
-        assert_eq!(
-            m.resolve(0, 0),
-            "core",
-            "unmatched map 0 still falls to the default"
-        );
-    }
-
-    #[test]
-    fn the_default_stays_first_so_the_seam_menu_is_still_read_from_it() {
-        // `Coordinator::region_db_for` reads the seam menu from `world_shards().first()`. If a
-        // region shard ever sorted ahead of the default, the menu would be read from a database that
-        // has none — and `resolve_region_shard` answers None on an empty menu, so region routing
-        // would silently switch itself off rather than fail.
-        let m = ShardMap::parse("core", "1:*=world-1").with_region_shards(Some("aaa-sorts-first"));
-        assert_eq!(m.shards().first().map(String::as_str), Some("core"));
-        assert_eq!(m.databases().first().map(String::as_str), Some("core"));
-    }
-
-    #[test]
-    fn region_shards_collapse_to_nothing_in_every_degenerate_config() {
-        // Unset / blank / comments-only — the ordinary realm names none of these, and must be
-        // byte-identical to before.
-        let base = ShardMap::parse("core", "1:*=world-1");
-        for input in [
-            None,
-            Some(""),
-            Some("   "),
-            Some("# just a comment"),
-            Some(",,;;"),
-        ] {
-            let m = base.clone().with_region_shards(input);
-            assert!(
-                m.region_shards().is_empty(),
-                "{input:?} must configure nothing"
-            );
-            assert_eq!(
-                m.shards(),
-                base.shards(),
-                "{input:?} must not change the connected set"
-            );
-        }
-        // Naming the DEFAULT, or a database a rule already routes to, is a no-op rather than a
-        // duplicate — `shards()` is what a character-location probe walks, so a repeat would make it
-        // probe the same database twice.
-        for dup in ["core", "world-1"] {
-            let m = base.clone().with_region_shards(Some(dup));
-            assert_eq!(m.shards(), base.shards(), "{dup} is already connected");
-        }
-        // Listed twice in one value.
-        let m = base.clone().with_region_shards(Some("world-2, world-2"));
-        assert_eq!(m.shards().iter().filter(|d| *d == "world-2").count(), 1);
-    }
-
-    #[test]
-    fn realm_core_is_refused_as_a_region_shard() {
-        // realm-core owns accounts, not characters. An assignment naming it would route a login onto
-        // a database with nothing of the player's in it — the exact hazard `region_db_for`'s
-        // "WORLD SHARDS only" comment calls out. Refuse it at config time, not at routing time.
-        let m = ShardMap::parse("core", "1:*=world-1")
-            .with_realm_core(Some("lyracore-realm"))
-            .with_region_shards(Some("lyracore-realm, world-2"));
-        assert_eq!(m.region_shards(), ["world-2".to_string()]);
-        assert!(
-            !m.shards().contains(&"lyracore-realm".to_string()),
-            "realm-core must never be walked as a world shard"
-        );
-        assert!(
-            m.databases().contains(&"lyracore-realm".to_string()),
-            "…but the gateway still CONNECTS to it, for auth"
-        );
-    }
-
-    #[test]
-    fn a_region_assignment_naming_a_region_shard_now_resolves() {
-        // The end-to-end reason this exists: `resolve_region_shard` refuses an assignment whose
-        // shard is not connected, and `region_db_for` supplies `world_shards()` as that set. So this
-        // assertion is the one that was previously impossible to satisfy without hijacking a map.
-        let m = ShardMap::parse("core", "1:*=world-1").with_region_shards(Some("world-2"));
-        let connected = |db: &str| m.shards().iter().any(|d| d == db);
-        let menu = lyracore_shared::region::RegionMap::parse("0:2=530..570,300..410").0;
-        let assigned = |shard: &str| {
-            vec![RegionAssignment {
-                map_id: 0,
-                region_id: 2,
-                shard: shard.to_string(),
-                epoch: 1,
-            }]
-        };
-        // A point inside region 2 — cell (533, 341)-ish, i.e. Goldshire.
-        let (x, y) = (-9583.0f32, 30.0f32);
-        assert_eq!(
-            menu.region_at(0, x, y),
-            2,
-            "the fixture point must be inside region 2"
-        );
-        assert_eq!(
-            resolve_region_shard(&menu, &assigned("world-2"), 0, 0, x, y, connected),
-            Some("world-2"),
-            "a region shard is a legal assignment target"
-        );
-        // Control: an unconnected name still degrades to the shard map, unchanged by this feature.
-        assert_eq!(
-            resolve_region_shard(&menu, &assigned("world-9"), 0, 0, x, y, connected),
-            None,
-            "an assignment naming a database the gateway never reached routes nobody"
-        );
-    }
-
-    #[test]
-    fn adding_a_region_shard_cannot_change_the_instance_hosting_verdict() {
-        // `check_instance_hosting` walks DUNGEON_MAPS through `resolve`, and no rule names a region
-        // shard — so adding one must not be able to turn a correct realm into a warning, which is
-        // the kind of startup regression that gets a real message filtered out.
-        let base = ShardMap::parse("core", "36:*=instances");
-        let with = base.clone().with_region_shards(Some("world-2"));
-        let hosts = |db: &str| Some(db == "instances");
-        assert_eq!(
-            base.check_instance_hosting(hosts, |_| true),
-            with.check_instance_hosting(hosts, |_| true)
-        );
-        assert_eq!(
-            with.check_instance_hosting(hosts, |_| true),
-            InstanceHosting::Consistent
-        );
     }
 }

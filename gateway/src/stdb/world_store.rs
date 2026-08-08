@@ -48,38 +48,18 @@ impl WorldStore for Coordinator {
         // node. It was unreachable by any test while it lived inline here, and #33's review left
         // two surviving mutations in it for exactly that reason.
         let resolved = crate::realm_core::settle_shard_index(self, character_guid)?;
-        // #23: the REGION overlay, applied to the location #20 just settled. A region is finer than
-        // a `(map, instance)` partition, so it gets first refusal on the routing decision — but only
-        // ever when a seam menu is imported AND a region containing the player is assigned to a
-        // connected world shard. Every other case (the default) answers `None` here and the shard
-        // map decides, exactly as in #17. This runs at world ENTRY only, which is precisely what "an
-        // epoch flip re-routes new entrants only" means: a session already in the world holds its
-        // pinned handle and is never asked again (see `WorldConn::route_home`).
-        //
-        // Both answers are DATABASE NAMES resolved through the same `shard_handle`, so "the region
-        // names the shard I am already on" means stay put rather than falling back to the map — a
-        // fall-back there would let the map override an explicit assignment for one asker and not
-        // another. `region_db_for` short-circuits before any read when no menu is imported.
-        let region_db = self.region_db_for(
-            character_guid,
-            &resolved.db,
-            resolved.location.0,
-            resolved.location.1,
-        );
-        let shard = match &region_db {
-            Some(db) => self.shard_handle(db),
-            // The handle still comes from #17's `shard_for`, unchanged: it resolves the same
-            // location through the same map and returns `None` when that is already this handle's
-            // shard. All #20 added in front of it is a better answer to "what IS the location".
-            None => self.shard_for(resolved.location.0, resolved.location.1),
-        };
+        // The handle comes from #17's `shard_for`, unchanged: it resolves the same location
+        // through the same map and returns `None` when that is already this handle's shard. All
+        // #20 added in front of it is a better answer to "what IS the location". This runs at
+        // world ENTRY only: a session already in the world holds its pinned handle and is never
+        // asked again (see `WorldConn::route_home`).
+        let shard = self.shard_for(resolved.location.0, resolved.location.1);
         debug_assert!(
-            region_db.is_some()
-                || resolved.db
-                    == shard.as_ref().map_or(
-                        crate::stdb::Coordinator::shard_name(self),
-                        Coordinator::shard_name
-                    ),
+            resolved.db
+                == shard.as_ref().map_or(
+                    crate::stdb::Coordinator::shard_name(self),
+                    Coordinator::shard_name
+                ),
             "resolve_home_shard and shard_for must agree — they resolve the same location"
         );
         Some(std::sync::Arc::new(shard?) as std::sync::Arc<dyn WorldStore>)
@@ -88,19 +68,6 @@ impl WorldStore for Coordinator {
     fn shard_name(&self) -> &str {
         // Inherent method (see the module note): this is a view, not recursion.
         self.shard_name()
-    }
-
-    /// #72 slice 1 (seam-crossing detection only): a thin forward, same shape as every other view
-    /// in this block — the real body is `Coordinator::region_shard_for_point`.
-    fn region_shard_for_point(
-        &self,
-        character_guid: u64,
-        home_db: &str,
-        map_id: u32,
-        x: f32,
-        y: f32,
-    ) -> Option<String> {
-        self.region_shard_for_point(character_guid, home_db, map_id, x, y)
     }
 
     // -------------------------------------------------------------------------------------
@@ -112,11 +79,9 @@ impl WorldStore for Coordinator {
     /// short-circuit, so the unconfigured gateway does not even read a row.
     ///
     /// **This, not `home_shard`, is the production world-entry resolver.** `world::route_home`
-    /// calls `settle_home_shard`, and this impl OVERRIDES it — so any routing overlay that is
+    /// calls `settle_home_shard`, and this impl OVERRIDES it — so any routing rule that is
     /// applied only in `home_shard` is dead code in production while every suite stays green (every
-    /// mock takes the trait default, which forwards to `home_shard`). The #19 × #23 merge is exactly
-    /// where that trap was set, which is why the owner-resolution step below re-applies #23's region
-    /// overlay in the same order `home_shard` does — region first, shard map otherwise — and why the
+    /// mock takes the trait default, which forwards to `home_shard`). That trap is why the
     /// tripwire at the bottom of this file scans THIS body.
     ///
     /// The HOLDER lookup below is `realm_core::locate_home_shard` (issue #47) — the realm-core
@@ -138,9 +103,8 @@ impl WorldStore for Coordinator {
             // module's own ownership check is what refuses the login.
             return Ok(None);
         };
-        // The ESCROW's destination outranks the durable row's location, and the order matters now
-        // that a second resolver (#23's overlay) can disagree with the shard map: `settle_transfer`
-        // RESUMES an existing escrow against the destination the escrow was opened for, so an owner
+        // The ESCROW's destination outranks the durable row's location: `settle_transfer` RESUMES
+        // an existing escrow against the destination the escrow was opened for, so an owner
         // resolved from anything else would hand `run_transfer` a `dst` that is not the database the
         // blob is already filed against — importing the character into a third shard and orphaning
         // the fenced copy. `run_transfer` cannot catch that for itself: a `&dyn WorldStore` cannot be
@@ -153,35 +117,25 @@ impl WorldStore for Coordinator {
             .map(|r| (r.dest_map_id, r.dest_instance_id))
             .or_else(|| holder.character_location(character_guid))
             .ok_or_else(|| anyhow::anyhow!("character {character_guid} vanished mid-routing"))?;
-        // OWNER RESOLUTION. #23's region overlay gets first refusal, the #17/#20 shard map answers
-        // otherwise — the same two-step, in the same order, as `home_shard`. Both halves answer in
-        // DATABASE NAMES resolved through `shard_handle`/`shard_for`, so "the answer names the shard
-        // I already am" decodes to `None` in both, and `self` is the handle that means "stay put".
-        // The NAME never depends on which handle asked (`region_db_for`, `shard_for` and
-        // `world_shards` all read the shared `ShardSet`), so this replaces #19's "resolve from the
-        // default handle" without reintroducing `realm_shard()`, which #20 deleted.
+        // OWNER RESOLUTION. The #17/#20 shard map answers, in DATABASE NAMES resolved through
+        // `shard_for`/`instance_shard_for`, so "the answer names the shard I already am" decodes to
+        // `None` in both, and `self` is the handle that means "stay put". The NAME never depends on
+        // which handle asked (`shard_for` and `world_shards` both read the shared `ShardSet`), so
+        // this replaces #19's "resolve from the default handle" without reintroducing
+        // `realm_shard()`, which #20 deleted.
         //
-        // Ceiling, deliberately not closed here: an assignment epoch that flips BETWEEN
-        // `import_character_blob` and a resumed `settle_home_shard` re-points the owner while a
-        // fenced copy sits on the previous destination. Regions partition the OPEN WORLD only
-        // (`region_db_for` passes the pending instance through, and `resolve_region_shard` declines
-        // any non-zero instance), so the instance transfers Phase A is about cannot hit it.
-        //
-        // #21's instance-pool stickiness rides the shard-map arm, and ONLY when there is no escrow
-        // in flight. With an escrow the destination is already fixed by the row (see the paragraph
-        // above): being sticky about the holder there would resolve an owner that differs from the
-        // database the blob is filed against, which is the third-shard hazard this comment block
-        // exists to prevent. Without one, the holder is the only durable evidence of which pool
-        // member a live run is on, and it is what stops a pool resize from forking a party.
-        let owner =
-            match self.region_db_for(character_guid, holder.shard_name(), map_id, instance_id) {
-                Some(db) => self.shard_handle(&db),
-                None if escrow.is_none() => {
-                    self.instance_shard_for(map_id, instance_id, holder.shard_name())
-                }
-                None => self.shard_for(map_id, instance_id),
-            }
-            .unwrap_or_else(|| self.clone());
+        // #21's instance-pool stickiness applies ONLY when there is no escrow in flight. With an
+        // escrow the destination is already fixed by the row (see the paragraph above): being
+        // sticky about the holder there would resolve an owner that differs from the database the
+        // blob is filed against, which is the third-shard hazard this comment block exists to
+        // prevent. Without one, the holder is the only durable evidence of which pool member a
+        // live run is on, and it is what stops a pool resize from forking a party.
+        let owner = if escrow.is_none() {
+            self.instance_shard_for(map_id, instance_id, holder.shard_name())
+        } else {
+            self.shard_for(map_id, instance_id)
+        }
+        .unwrap_or_else(|| self.clone());
         // The three facts that decide whether a resume is DRIVEN or silently skipped. Nothing logged
         // them, so every diagnosis of a stranded copy (#81, twice) had to infer the holder from what
         // did not happen — and `settle_transfer`'s `holder == owner` branch is silent by design.
@@ -263,27 +217,6 @@ impl WorldStore for Coordinator {
         // tier already wrote, re-asserted — idempotent, and cheap next to a login.
         let identity = self.bound_identity(account_id)?;
         self.establish_session(account_id, session_key, identity)
-    }
-
-    /// #72 slice 2: forwards to the inherent `shard_handle` (the SAME name resolution
-    /// `settle_home_shard`'s region overlay and `home_shard` both already use), boxed into the
-    /// trait's `Arc<dyn WorldStore>` shape. `self` is `&Coordinator` here — a concrete, `Sized`
-    /// type — so this is an ordinary trait-object coercion, not the generic `?Sized` one the
-    /// world-session call site cannot perform for itself (see the trait method's own doc).
-    fn shard_by_name(&self, db: &str) -> Option<std::sync::Arc<dyn WorldStore>> {
-        self.shard_handle(db)
-            .map(|c| std::sync::Arc::new(c) as std::sync::Arc<dyn WorldStore>)
-    }
-
-    /// #72 slice 2: `self` is `&Coordinator` (concrete, `Sized`), so — unlike the generic
-    /// world-session call site — this can coerce it to `&dyn WorldStore` directly and hand both
-    /// ends to the SAME driver `settle_transfer`'s cold path calls.
-    fn run_warm_handoff(
-        &self,
-        dst: &dyn WorldStore,
-        plan: &crate::world::transfer::TransferPlan,
-    ) -> Result<()> {
-        crate::world::transfer::run_transfer(self, dst, plan)
     }
 
     /// The world handshake's account→K lookup, split across the two databases that own the two
@@ -1200,9 +1133,6 @@ impl crate::realm_core::RealmDb for Coordinator {
     fn session_count(&self) -> usize {
         self.session_count()
     }
-    fn region_player_counts(&self) -> Vec<(u32, u32, u32)> {
-        self.region_player_counts()
-    }
     fn record_shard_load(
         &self,
         shard: &str,
@@ -1210,9 +1140,6 @@ impl crate::realm_core::RealmDb for Coordinator {
         sessions: u32,
     ) -> Result<()> {
         self.record_shard_load(shard, writer_occupancy_pct, sessions)
-    }
-    fn record_region_load(&self, map_id: u32, region_id: u32, players: u32) -> Result<()> {
-        self.record_region_load(map_id, region_id, players)
     }
 }
 
@@ -1438,50 +1365,28 @@ mod routing_call_site_tests {
         );
     }
 
-    /// THE tripwire for #23-after-#19. `world::route_home` calls `settle_home_shard`, and this file
-    /// overrides it — so the region overlay applied in `home_shard` alone is production-dead while
-    /// both suites stay green (the mocks take the trait default, which forwards to `home_shard`).
-    /// That is the merge defect this test exists to make impossible to reintroduce.
+    /// THE tripwire for the live world-entry path. `world::route_home` calls `settle_home_shard`,
+    /// and this file overrides it — so a rule applied in `home_shard` alone is production-dead
+    /// while both suites stay green (the mocks take the trait default, which forwards to
+    /// `home_shard`). That is the merge-defect class this test exists to make impossible to
+    /// reintroduce.
     #[test]
-    fn settle_home_shard_still_applies_the_region_overlay_on_the_live_world_entry_path() {
+    fn settle_home_shard_keeps_the_short_circuit_and_the_escrow_first_destination() {
         let code = code_of("settle_home_shard");
-        assert!(
-            code.contains("region_db_for("),
-            "settle_home_shard — the method `world::route_home` actually calls — no longer consults \
-             the #23 region overlay. The seam menu and the assignment table would be inert data in \
-             PRODUCTION while every suite stayed green, because the mocks resolve through the trait \
-             default (`home_shard`) and never reach this override. Restore the `region_db_for` call \
-             (its pure half is `config::resolve_region_shard`)."
-        );
-        // The region answer must be able to WIN: it is read before the shard map is consulted.
-        let region_at = code.find("region_db_for(").expect("checked above");
-        let map_at = code
-            .find("shard_for(map_id, instance_id)")
-            .unwrap_or(usize::MAX);
-        assert!(
-            region_at < map_at,
-            "the region overlay must get first refusal on the routing decision, not be a fallback \
-             after the (map, instance) shard map"
-        );
-        // #17/#20: and it must still short-circuit before any of it on a single-database gateway,
+        // #17/#20: it must short-circuit before anything else on a single-database gateway,
         // which is what "the env vars unset ⇒ today's gateway" means on the login hot path.
-        // Pin the NEGATED form and its position, not the bare substring: `code.contains("is_sharded()")`
+        // Pin the NEGATED form, not the bare substring: `code.contains("is_sharded()")`
         // still matched after the guard was inverted to `if self.is_sharded()`, which is the exact
         // source-scan defeat class playbook §8 catalogues (a scan that a mutation walks straight
         // through). This body is unreachable from the suite — `Coordinator` cannot be constructed
         // offline, so every mock takes the trait default — so this scan is the only guard there is,
         // and it has to be precise enough to fail when the guard flips.
-        let short_circuit_at = code.find("if !self.is_sharded() {").expect(
-            "settle_home_shard lost the single-shard short-circuit (or inverted it): an \
-                 unconfigured gateway would pay the shard scan, the escrow read and the region \
-                 overlay on every world entry",
-        );
         assert!(
-            short_circuit_at < region_at,
-            "the single-shard short-circuit must come BEFORE the region overlay and everything \
-             after it, or an unconfigured gateway still pays for routing it cannot use"
+            code.contains("if !self.is_sharded() {"),
+            "settle_home_shard lost the single-shard short-circuit (or inverted it): an \
+             unconfigured gateway would pay the shard scan and the escrow read on every world entry",
         );
-        // #19 × #23: the owner handed to `run_transfer` must be resolved from the ESCROW's stated
+        // #19: the owner handed to `run_transfer` must be resolved from the ESCROW's stated
         // destination, not from whatever the durable row says, or a resumed transfer imports the
         // blob into a database it was never filed against. `run_transfer` cannot check this itself.
         let escrow_at = code
@@ -1525,25 +1430,17 @@ mod routing_call_site_tests {
         // …and only on the no-escrow path. An in-flight escrow's destination is fixed by the row;
         // being sticky there hands `run_transfer` a `dst` the blob was never filed against.
         assert!(
-            code.contains("None if escrow.is_none() =>"),
+            code.contains("if escrow.is_none() {"),
             "the stickiness arm lost its escrow guard — a resumed transfer would resolve an owner \
              that differs from the destination its escrow was opened for, orphaning the fenced copy"
         );
     }
 
     #[test]
-    fn home_shard_still_applies_the_region_overlay_and_the_single_shard_short_circuit() {
+    fn home_shard_still_resolves_through_the_settle_shard_index() {
         let code = code_of("home_shard");
-        // #23: deleting this call site removes the ENTIRE feature — every suite stayed green when
-        // it was, which is how a routing overlay rots into decoration.
-        assert!(
-            code.contains("region_db_for("),
-            "home_shard no longer consults the #23 region overlay — the seam menu and the \
-             assignment table would be inert data. Restore the `region_db_for` call (its pure half \
-             is `config::resolve_region_shard`)."
-        );
         // #17/#20/#34: the single-shard short-circuit, the index hint, the probe and the self-heal
-        // now live in `realm_core::settle_shard_index` — where they are BEHAVIOURALLY tested
+        // live in `realm_core::settle_shard_index` — where they are BEHAVIOURALLY tested
         // (`a_single_database_gateway_resolves_the_home_shard_without_reading_anything`,
         // `a_deliberately_stale_index_entry_still_routes_correctly_and_is_healed_in_place`), which
         // they never were while they sat inline here. What this scan still has to pin is that
@@ -1555,16 +1452,6 @@ mod routing_call_site_tests {
              index hint, the confirming probe, the self-heal write-back and the single-database \
              short-circuit are all in it, so dropping the call drops #20 entirely (and makes an \
              unconfigured gateway pay for routing it does not do)"
-        );
-        // The region answer must be able to WIN: it is read before the shard map is consulted.
-        let region_at = code.find("region_db_for(").expect("checked above");
-        let map_at = code
-            .find("shard_for(resolved.location")
-            .unwrap_or(usize::MAX);
-        assert!(
-            region_at < map_at,
-            "the region overlay must get first refusal on the routing decision, not be a fallback \
-             after the (map, instance) shard map"
         );
     }
 
@@ -1615,17 +1502,4 @@ mod routing_call_site_tests {
         );
     }
 
-    /// The two resolvers must not drift apart again: whichever of them production calls, the same
-    /// overlay has to be in it. (`code_of("home_shard")` matches `fn home_shard(` — the first
-    /// occurrence in the file — and `settle_home_shard`'s own body is scanned separately above.)
-    #[test]
-    fn both_routing_resolvers_consult_the_same_region_overlay() {
-        for method in ["home_shard", "settle_home_shard"] {
-            assert!(
-                code_of(method).contains("region_db_for("),
-                "{method} does not apply the region overlay — two location resolvers that disagree \
-                 is how #23 became dead code the moment #19 re-pointed the world-entry call"
-            );
-        }
-    }
 }

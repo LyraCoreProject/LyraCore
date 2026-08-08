@@ -1045,9 +1045,7 @@ impl Coordinator {
     }
 
     /// `record_shard_load` (#78) — fired against THIS handle's connection. Callers hold the
-    /// **realm-core** handle: `game_shard_load` is only ever read from there
-    /// (`docs/region-sharding.md`), the same convention `record_region_load`/
-    /// `set_region_assignment` use for their own tables.
+    /// **realm-core** handle: `game_shard_load` is only ever read from there.
     pub fn record_shard_load(
         &self,
         shard: &str,
@@ -1058,15 +1056,6 @@ impl Coordinator {
             self.0.coord().conn.reducers,
             "record_shard_load",
             record_shard_load_then(shard.to_string(), writer_occupancy_pct, sessions)
-        )
-    }
-
-    /// `record_region_load` (#78) — same calling convention as [`Coordinator::record_shard_load`].
-    pub fn record_region_load(&self, map_id: u32, region_id: u32, players: u32) -> Result<()> {
-        call_reducer!(
-            self.0.coord().conn.reducers,
-            "record_region_load",
-            record_region_load_then(map_id, region_id, players)
         )
     }
 

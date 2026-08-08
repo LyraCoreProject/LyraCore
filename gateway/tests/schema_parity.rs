@@ -582,13 +582,9 @@ parity_test!(parity_game_gameobject, "game_gameobject", lyracore_module::GameObj
     guid, template_entry, map_id, x, y, z, orientation, state, created_at, respawn_at_micros,
     instance_id, grid_x, grid_y, cell,
 });
-// #456: `game_entity_motion` and `game_creature_spline` are gateway-subscribed too — just through the
-// per-player AOI box rather than the coordinator's `SELECT *` list, which is why the completeness
-// guard below (it scans `connection.rs`) never asked for them and they went unpinned. Their bindings
-// decode positionally exactly like every other subscribed table, so a column added module-side
-// without the matching binding edit corrupts every row the AOI delivers. Pinned here now, since #456
-// END-appends `cell` to both. They are deliberately NOT added to `MANIFEST_TABLES`: that list is
-// cross-checked against the coordinator subscription strings, and these two are not on it.
+// #456 pinned these two when they still rode the per-player AOI box; #468 moved them onto the
+// coordinator's `SELECT *` list, so they are now in `MANIFEST_TABLES` like every other
+// coordinator-subscribed table and the completeness guard asks for them by itself.
 parity_test!(parity_game_entity_motion, "game_entity_motion", lyracore_module::EntityMotion, bindings::entity_motion_type::EntityMotion, {
     guid, map_id, instance_id, grid_x, grid_y, opcode, movement_info, seq, cell,
 });
@@ -632,11 +628,26 @@ parity_test!(parity_game_faction_template, "game_faction_template", lyracore_mod
     id, faction, faction_group, friend_group, enemy_group,
     enemy_0, enemy_1, enemy_2, enemy_3, friend_0, friend_1, friend_2, friend_3,
 });
+// The per-player connections subscribe these two for the say/yell + emote relays, so they stay in
+// the manifest for the same reason every coordinator table is — a column added module-side without
+// the matching binding edit corrupts every row the relay decodes.
+parity_test!(parity_game_chat_event, "game_chat_event", lyracore_module::ChatEvent, bindings::chat_event_type::ChatEvent, {
+    id, sender_guid, chat_type, language, message, created_at,
+});
+parity_test!(parity_game_emote_event, "game_emote_event", lyracore_module::EmoteEvent, bindings::emote_event_type::EmoteEvent, {
+    id, sender_guid, text_emote, emote_anim, created_at, target_guid, map_id, instance_id,
+    grid_x, grid_y,
+});
 
 /// Every table name that has a `parity_test!` line above. The completeness guard cross-checks
 /// this against `stdb/connection.rs`'s real subscription list.
 const MANIFEST_TABLES: &[&str] = &[
     "game_realm",
+    // #468: moved from the per-player AOI box onto the coordinator's global subscription.
+    "game_entity_motion",
+    "game_creature_spline",
+    "game_chat_event",
+    "game_emote_event",
     "game_teleport_event",
     "game_xp_event",
     "game_levelup_event",

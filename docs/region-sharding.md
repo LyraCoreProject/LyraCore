@@ -1,9 +1,28 @@
 # Region sharding — the seam menu, the assignment table, and how routing uses them
 
-**Status:** current — reviewed 2026-08-04. This is the foundation of the elastic-world-sharding
+**Status: RETIRED 2026-08-08 —
+[#471](https://github.com/LyraCoreProject/LyraCore/issues/471) removed the region tier from the
+codebase for the alpha.** Everything below this banner is the historical design, kept for its
+reasoning; none of it describes the running system anymore.
+
+> **What was removed (#471):** `LYRACORE_REGION_SHARDS` and the gateway's region-shard connections,
+> the region overlay in routing (`resolve_region_shard`, `region_db_for`, the cell-keyed resolver,
+> and the region arms of `home_shard`/`settle_home_shard`), seam-crossing detection on the movement
+> path, the cross-shard seam chat/emote relay, the `game_map_region`/`game_region_assignment`
+> coordinator subscriptions, and per-region load sampling (the `regions=` gauge).
+>
+> **What the realm keeps** — the broad splits are unchanged: the continent shard map
+> (`LYRACORE_SHARD_MAP`), the instance pool, realm-core (`LYRACORE_REALM_CORE`), the escrowed
+> cross-database transfer (#16/#19, now driven by world ports rather than mid-walk seam crossings),
+> and the #468 shared AOI index.
+>
+> **The module schema is untouched:** `game_map_region` and `game_region_assignment` (and their
+> import reducers) stay in the module, unused — dropping a table is a destructive migration, which
+> is exactly what `docs/danger-zones.md` forbids.
+
+This was the foundation of the elastic-world-sharding
 design. This document is the **content-data format** for pre-drawn seams, the operating procedure for
 activating one, and the routing and visibility behaviour built on top.
-Start at [`architecture.md`](./architecture.md) §6 for the short version.
 
 > **Correction (2026-08-04).** This introduction previously said seam *mechanics* — view-merge,
 > warm handoff, live region migration — were "NOT built" and gated on a capacity benchmark. That was
@@ -14,7 +33,7 @@ Start at [`architecture.md`](./architecture.md) §6 for the short version.
 > | Cell / region / shard hierarchy as data | built |
 > | Region routing at world entry | built |
 > | **Warm handoff** (a resident crosses a live seam mid-session, no loading screen) | **built, default on** (`LYRACORE_WARM_HANDOFF`), verified by a maintainer on a real client |
-> | **View merge** (seeing peers across a seam) | **built, default on** (`LYRACORE_VIEW_MERGE`) — see the §"View-merge across a seam" section below |
+> | **View merge** (seeing peers across a seam) | **always on, and no longer a mechanism**: #468 replaced the per-player AOI subscriptions with ONE shared in-process cell index fed by every shard's coordinator stream, so a peer across a seam is just a peer. The §"View-merge across a seam" section below describes the RETIRED per-player implementation (`LYRACORE_VIEW_MERGE`, `split_box_by_shard`, the away-connection tier) and is kept for its reasoning. |
 > | Chat and emotes across a seam | **built** |
 > | Buffs / intents, melee & trade co-location | not built; AoE clips at the seam, by spec |
 > | Bulk live region migration | not built — activation still retires the non-owner's creature population by hand |
@@ -268,6 +287,11 @@ beside it).
 Everything above is *routing*: which ONE database a session's writes go to. It has nothing to say
 about what a player *sees* — that is `gateway/src/stdb/aoi.rs`'s `AreaOfInterestTracker`, which was
 made shard-aware, gated `config::view_merge_enabled` (env `LYRACORE_VIEW_MERGE`, default **on**).
+> **RETIRED by #468.** Everything in this section describes the per-player away-connection tier,
+> which is gone. Cross-seam visibility is now a property of the shared cell index, not a mechanism
+> of its own; the only surviving piece is the cross-shard chat/emote relay (`seam_chat_outbound` /
+> `seam_emote_outbound` in `gateway/src/stdb/subscriptions.rs`), which now rides the coordinator's
+> own `game_chat_event` / `game_emote_event` subscription instead of an away connection.
 
 **This is a rebuild.** The first attempt sat on top of an earlier per-cell AOI subscription scheme
 and resolved every one of a straddling box's up-to-25 cells individually, each a separate handle.

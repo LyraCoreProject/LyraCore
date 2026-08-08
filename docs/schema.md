@@ -166,7 +166,9 @@ never satisfy an SRP proof; it exists only to carry the identity binding.
 
 ### `game_map_region` / `game_region_assignment` (`module/src/region.rs:44,:67`)
 
-Both private. A region is an **inclusive cell rectangle** keyed `(map_id << 32) | region_id`, and
+Both private, and **unused since #471** removed the region tier from the gateway (2026-08-08) —
+nothing subscribes to or routes on them; they stay in the schema because dropping a table is a
+destructive migration. A region is an **inclusive cell rectangle** keyed `(map_id << 32) | region_id`, and
 region 0 is reserved for "the rest of the map". An assignment names a **database**, carries a
 monotonic `epoch`, and is authoritative on realm-core only. `shard` is the one column in the schema
 that a module file outside `region.rs`/`load.rs` may not touch — the build fails if it does.

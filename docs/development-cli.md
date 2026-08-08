@@ -4,8 +4,8 @@
 > is the clone → running realm → connected client path, with prerequisites and troubleshooting.
 > This page is the CLI's command and safety contract.
 
-`lyracore` runs the local developer fixture — since #327 a **sharded** one, four databases with two
-live seams (§"Sharded out of the box, on purpose"; `--single` collapses it back to one). It
+`lyracore` runs the local developer fixture — since #327 a **sharded** one, three databases split
+along the continental divide (§"Sharded out of the box, on purpose"; `--single` collapses it back to one). It
 deliberately does not manage production realms, backups, system services, or the installation of
 Rust and SpacetimeDB.
 
@@ -61,7 +61,7 @@ lyracore update
 | `doctor` | are the prerequisites for `dev up` present? |
 | `preflight` | the OFFLINE deploy gate — the same five checks the core repo's own pre-publish gate runs, natively |
 | `publish` | the ONE correct `spacetime publish`, with the two mandatory flags and no path to a wipe |
-| `dev up` | start (or reuse) the loopback fixture — four databases, two live seams (`--single` for one) |
+| `dev up` | start (or reuse) the loopback fixture — three databases, one continental split (`--single` for one) |
 | `dev status` | process identity, endpoint, and whether the database is actually published |
 | `dev logs` | tail the components this CLI started |
 | `dev smoke` | the pinned wire harness's generic login smoke against the running fixture |
@@ -297,33 +297,33 @@ address rather than loopback.
 and the fixture used to *unset* the topology variables so a contributor could not end up with a
 gateway pointed at databases the CLI never published. That was the right call for "get a client
 connected" and the wrong call for "show what this project is": a visitor who followed the quickstart
-never met a seam at all, and seams are the thing that makes LyraCore different.
+never met the sharded topology at all, and sharding is the thing that makes LyraCore different.
 
-`dev up` now brings up a **four-database** fixture, all of it published and health-checked by the
+> **The fixture shrank on 2026-08-08 (#471):** the region tier — and with it the `lyracore-elwynn`
+> region shard and the Northshire Valley | rest-of-Elwynn seam the quickstart used to walk — was
+> removed from the codebase. The fixture keeps the broad splits: the continental shard map and
+> realm-core. The seam design is preserved in `docs/region-sharding.md` (retired).
+
+`dev up` brings up a **three-database** fixture, all of it published and health-checked by the
 CLI itself:
 
 | Database | Role |
 | --- | --- |
-| `lyracore` | the default world shard — Eastern Kingdoms, and Northshire Valley (region `0:1`), where `init` seeds the fixture content and a new character spawns |
-| `lyracore-elwynn` | region shard — the rest of Elwynn (region `0:2`), reached via `LYRACORE_REGION_SHARDS` |
+| `lyracore` | the default world shard — Eastern Kingdoms, where `init` seeds the fixture content (Northshire Valley) and a new character spawns |
 | `lyracore-kalimdor` | world shard for map 1, reached via a `LYRACORE_SHARD_MAP` rule |
-| `lyracore-realm` | realm-core — `game_region_assignment`, the character→shard index, load samples |
+| `lyracore-realm` | realm-core — accounts and sessions, the character→shard index, load samples |
 
-So there are two live seams in a fresh clone: the **Northshire Valley | rest of Elwynn** seam on the
-road out of the valley toward Goldshire (a mid-session warm handoff with no loading screen, announced
-in chat by #326), and the **Eastern Kingdoms | Kalimdor** continental split. The geometry is content
-data — `content/regions/fixture.regions`, documented in `docs/region-sharding.md` §"The shipped
-fixture menu"; every rectangle in it is anchored on a coordinate committed in this repository.
+So a fresh clone has one live split: the **Eastern Kingdoms | Kalimdor** continental divide,
+crossed by the escrowed cross-database transfer rather than by walking.
 
-Two things the fixture does not give you. **Region 2 has no content** until you run
-`./lyracore import` (a cmangos dump plus your own client MPQs): the crossing is real and announces
-itself, but the far side is empty ground — Goldshire is not populated out of the box. And
-**`lyracore-kalimdor` is topology only** — map 1 has no content at all, so it is a routing
-demonstration and a `dev status` line, not a place to go.
+Two things the fixture does not give you. **Elwynn beyond Northshire has no content** until you run
+`./lyracore import` (a cmangos dump plus your own client MPQs) — Goldshire is not populated out of
+the box. And **`lyracore-kalimdor` is topology only** — map 1 has no content at all, so it is a
+routing demonstration and a `dev status` line, not a place to go.
 
 The CLI still *owns* the topology rather than inheriting it: the variables above are set to the
 fixture's own values for the child gateway, so a contributor with the production recipe exported in
-their shell gets the fixture, not a five-database gateway pointed at production database names. And
+their shell gets the fixture, not a four-database gateway pointed at production database names. And
 `dev status` / `doctor` report **every** fixture database, not just the default — a partial publish
 presents as an unrelated mid-session hang (`docs/danger-zones.md` §3), which is a brutal first
 experience to debug.
@@ -331,13 +331,13 @@ experience to debug.
 > ⚠ **A schema change now means republishing every fixture database, not one.** `./lyracore publish`
 > covers the set; the same rule the production realm has always had (`docs/danger-zones.md` §1.2)
 > now applies locally, because the local realm is now genuinely sharded. Republishing only
-> `lyracore` after a migration leaves the other three on the old schema.
+> `lyracore` after a migration leaves the other two on the old schema.
 
 **`dev up --single` is the escape hatch.** It publishes and runs `lyracore` alone, with
-`LYRACORE_SHARD_MAP`, `LYRACORE_SHARD_MAP_FILE`, `LYRACORE_REALM_CORE` and `LYRACORE_REGION_SHARDS`
+`LYRACORE_SHARD_MAP`, `LYRACORE_SHARD_MAP_FILE` and `LYRACORE_REALM_CORE`
 unset — per `gateway/src/config.rs`, an unconfigured shard map collapses every lookup to
 `LYRACORE_DATABASE`, so the result is byte-identical to a single-database build. Reach for it when
-you are debugging something that is not about sharding, when RAM is tight (four databases cost more
+you are debugging something that is not about sharding, when RAM is tight (three databases cost more
 than one), or to establish whether a bug is a sharding bug at all.
 
 ## `character gm` — grant or revoke GM commands

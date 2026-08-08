@@ -38,11 +38,10 @@ flowchart TB
     end
 
     subgraph stdb["SPACETIMEDB — authority (all state, all game logic)"]
-        W0[("lyracore<br/>default world shard<br/>+ the seam menu")]
+        W0[("lyracore<br/>default world shard")]
         W1[("lyracore-world-1<br/>world shard (map rule)")]
-        W2[("lyracore-world-2<br/>world shard (region only)")]
         INST[("lyracore-instances<br/>instance pool")]
-        RC[("lyracore-realm — realm-core<br/>accounts · sessions · groups ·<br/>whispers · loot rolls ·<br/>region assignment · load samples")]
+        RC[("lyracore-realm — realm-core<br/>accounts · sessions · groups ·<br/>whispers · loot rolls ·<br/>load samples")]
     end
 
     C1 -- "raw TCP · SRP6 · header-encrypted opcodes" --> LOGON
@@ -53,12 +52,11 @@ flowchart TB
     SUBS -- "reducer calls (per-player minted identity)" --> W0
     SUBS -- "subscription deltas (owner token, RLS bypass)" --> W0
     SUBS <--> W1
-    SUBS <--> W2
     SUBS <--> INST
     SUBS <--> RC
 ```
 
-Five databases, one gateway tier, one wasm.
+Four databases, one gateway tier, one wasm.
 
 The same wasm is published to **every** database. A shard is a database *name*, which is a gateway
 routing fact; module game logic never reads one, and a tripwire test fails the build if it starts to
@@ -118,33 +116,30 @@ deployment. The rationale is recorded in the maintainers' internal security anal
 
 ### 3.1 Today's topology
 
-The realm runs as **five SpacetimeDB databases** behind one gateway tier:
+The realm runs as **four SpacetimeDB databases** behind one gateway tier:
 
 | Database | Role |
 |---|---|
-| `lyracore` | default database + world shard (also the shard the seam menu is read from) |
+| `lyracore` | default database + world shard |
 | `lyracore-world-1` | world shard (map 1, Kalimdor) |
-| `lyracore-world-2` | world shard reached only through a **region assignment**, never a map rule |
 | `lyracore-instances` | instance pool (map 36 / Deadmines and friends) |
-| `lyracore-realm` | realm-core: accounts, sessions, groups, whispers, loot rolls, region assignments, load samples |
+| `lyracore-realm` | realm-core: accounts, sessions, groups, whispers, loot rolls, load samples |
 
-The **local developer fixture is its own, smaller topology** — since #327 four databases
-(`lyracore`, `lyracore-elwynn`, `lyracore-kalimdor`, `lyracore-realm`) with two live seams,
+The **local developer fixture is its own, smaller topology** — three databases
+(`lyracore`, `lyracore-kalimdor`, `lyracore-realm`) split along the same lines,
 brought up by `./lyracore dev up`; `dev up --single` collapses it to one. It is not a cut-down
-version of the five above and does not share their names — see
+version of the four above and does not share their names — see
 [`development-cli.md`](./development-cli.md) §"Sharded out of the box, on purpose".
 
-**Direction:** the alpha realm targets **at most one shard per zone**, with capital cities on their
-own shards, and the ops tooling generalized off the hard-coded five. The tooling generalization and
-the terrain-derived seam-menu *generation* (#248) are not built, and a capital-on-its-own-shard split
-is not yet statable — the repository holds no capital's extents, which is one of the things #248
-would supply. The *shape* has shipped as hand-drawn content data anchored on committed coordinates:
-`content/regions/fixture.regions`, the fixture realm's Northshire Valley | rest-of-Elwynn seam
-([`region-sharding.md`](./region-sharding.md) §"The shipped fixture menu").
+**Direction:** the **region tier** — sub-map seams, the seam menu, region→shard assignments, warm
+mid-walk handoff — was **removed 2026-08-08 (#471)**, an operator decision to keep the alpha on the
+broad splits above (continents, the instance pool, realm-core) and nothing finer. The design is
+preserved in [`region-sharding.md`](./region-sharding.md) (retired), and the two region tables stay
+in the module schema, unused, because dropping a table is a destructive migration.
 
-⚠ **All five databases run on one SpacetimeDB node, and that is a licensing constraint as well as a
+⚠ **All four databases run on one SpacetimeDB node, and that is a licensing constraint as well as a
 deployment fact.** Seven `spacetimedb-*` crates are BSL-1.1, whose Additional Use Grant permits
-production use with "no more than one SpacetimeDB instance". Five *databases* on one *instance* stays
+production use with "no more than one SpacetimeDB instance". Four *databases* on one *instance* stays
 inside it. Standing up additional SpacetimeDB instances to scale past one node — or running the
 module on behalf of third parties — falls outside that reading and needs a fresh licence review
 before it ships.
@@ -159,19 +154,15 @@ gateway's environment. Omit one and you get a **working-looking single-database 
 | `LYRACORE_SHARD_MAP` | `(map, bucket) → database` routing rules | `""` → one database | **Silent.** No Kalimdor, no instance pool. |
 | `LYRACORE_SHARD_MAP_FILE` | file fallback for the above (the env var wins) | unset | unreadable file logs an error, then single shard |
 | `LYRACORE_REALM_CORE` | the auth / session / character-index database | `None` | **Silent.** Auth, parties and whispers fall back to the world database. |
-| `LYRACORE_REGION_SHARDS` | extra connected world shards no rule routes to | `""` | **Silent.** Region routing switches itself off. |
 | `LYRACORE_COORDINATOR_TOKEN` | the owner token the coordinator connects with | `None` → anonymous | warns, then cannot read `game_account` / `game_session` |
 | `LYRACORE_DATABASE` | default / home database name | `lyracore` | **Silent.** A wrong name connects cleanly to the wrong place. |
 | `LYRACORE_SPACETIMEDB_URL` | node URI, also the base for `/v1/metrics` | `http://127.0.0.1:3000` | loud (connect fails) |
 | `LYRACORE_LOGON_BIND` / `LYRACORE_WORLD_BIND` | listener binds | `0.0.0.0:3724` / `0.0.0.0:8085` | loud |
 | `LYRACORE_AOI` | AOI-scoped subscriptions | **on** (`=0` disables) | — |
-| `LYRACORE_VIEW_MERGE` | cross-seam visibility | **on** | — |
-| `LYRACORE_WARM_HANDOFF` | mid-session seam handoff | **on** | — |
 | `LYRACORE_QUEST_LOG` | quest-log descriptor fields | **on** | — |
-| `LYRACORE_SEAM_NOTIFY` | a chat line per handoff | **on** (`=0` disables) | — |
 | `LYRACORE_MAX_SESSIONS` / `LYRACORE_ADMIT_CONCURRENCY` | login-queue seat ceiling / admissions per tick | `0` = unlimited | a malformed value silently unlimits |
 | `LYRACORE_MAX_BLOCKING_THREADS` | tokio blocking-pool cap — **the real ceiling on concurrent players** (see below) | `512` (tokio's own default) | malformed **or zero** falls back to `512`; the resolved value is logged at startup |
-| `LYRACORE_LOAD_SAMPLE_SECS` | shard/region load sampling cadence | `30` | — |
+| `LYRACORE_LOAD_SAMPLE_SECS` | shard load sampling cadence | `30` | — |
 | `LYRACORE_METRICS_DB_IDS` | `<shard>=<hex-identity-prefix>` map for `/v1/metrics` | `""` | warns loudly at startup; occupancy unmeasured |
 | `LYRACORE_WRITER_TRACE` | per-session writer black-box ring | off | — |
 | `LYRACORE_TRANSFER_ABORT_AFTER` | crash-injection harness (aborts a named transfer step) | unset | an unknown step name logs an error and nothing fires |
@@ -243,10 +234,6 @@ LYRACORE_SHARD_MAP="36:*=lyracore-instances, 1:*=lyracore-world-1"
 
 # a single database name; blank, absent, or equal to LYRACORE_DATABASE all mean "unconfigured"
 LYRACORE_REALM_CORE=lyracore-realm
-
-# bare database names. The default DB, anything a rule already names, duplicates,
-# and realm-core are all rejected with the reason logged.
-LYRACORE_REGION_SHARDS="lyracore-world-2"
 ```
 
 ### 3.4 Verifying the topology came up
@@ -377,26 +364,24 @@ nobody there.
 
 ---
 
-## 6. Sharding: regions, routing, and transfer
+## 6. Sharding: routing and transfer
 
-This is the sharding model in full: the hierarchy, routing, transfer, and cross-seam visibility.
+This is the sharding model in full: the hierarchy, routing, and transfer.
+
+> **The region tier was removed 2026-08-08 (#471).** Sub-map regions, the seam menu, region→shard
+> assignments, and mid-walk seam detection with its warm handoff are gone from the gateway, by
+> operator decision: the alpha runs on the broad splits alone — the static shard map (continents),
+> the instance pool, and realm-core. The full design is preserved, with its reasoning, in
+> [`region-sharding.md`](./region-sharding.md) (retired). `game_map_region` and
+> `game_region_assignment` stay in the module schema, unused — dropping a table is a destructive
+> migration.
 
 ### 6.1 The hierarchy
 
 | Rung | What it is | Where it lives | Who reads it |
 |---|---|---|---|
 | **Cell** | 50 yd square | baked into every spatial row as `grid_x`/`grid_y` | module + gateway |
-| **Region** | a contiguous inclusive cell rectangle, floor 10×10 cells | `game_map_region`, imported content data | gateway routing |
-| **Shard** | a SpacetimeDB database | `game_region_assignment` on realm-core | **gateway routing only** |
-
-Region definitions are **content data**, and one menu ships in this repository:
-`content/regions/fixture.regions` draws the developer fixture's Northshire Valley | rest-of-Elwynn
-seam (#327).
-
-`game_region_assignment` carries a monotonic `epoch` per `(map_id, region_id)`; a flip must carry a
-strictly higher epoch, and an un-assign is a tombstone (empty shard name) rather than a delete, so
-the high-water mark survives and a stale retry cannot resurrect a superseded assignment
-(`epoch_accepted` in `module/src/region.rs`).
+| **Shard** | a SpacetimeDB database | `LYRACORE_SHARD_MAP` rules (plus the instance pool's #21 stickiness) | **gateway routing only** |
 
 ### 6.2 Resolving "which database owns this position"
 
@@ -404,24 +389,16 @@ the high-water mark survives and a stale retry cannot resurrect a superseded ass
 world entry:  WorldStore::settle_home_shard   (gateway/src/stdb/world_store.rs)
    1. realm-core's character→shard index — a HINT, confirmed against the shard that
       actually holds the row, self-healing on disagreement
-   2. region overlay — config::resolve_region_shard (gateway/src/config.rs):
-      definitions from the default world shard + assignment from realm-core + position
-   3. fall-through — the (map_id, instance_id) shard map
-
-movement:     Coordinator::region_shard_for_point  (connection.rs)
-AOI split:    Coordinator::split_box_by_shard      (connection.rs)
+   2. the (map_id, instance_id) shard map — shard_for, with instance-pool routing
+      pinning a live instance to the shard that already hosts it (#21)
 ```
 
-Step 2 answers `None` — meaning "no region opinion, let the shard map decide" — for: any
-`instance_id != 0`, region 0 (the reserved "rest of the map"), no imported definitions, no
-assignment row, an empty or tombstoned shard name, and a shard the gateway never connected to.
+### 6.3 A cross-database transfer, end to end
 
-### 6.3 A seam crossing, end to end
-
-Every movement packet drives the AOI update and then a seam check (`seam_check`, called from
-`forward_movement` in `gateway/src/world/mod.rs`). The check confirms only on the **second
-consecutive** foreign cell (hysteresis, `gateway/src/world/seam.rs`), skips while the player is in
-combat, and honours a 5 s per-session cooldown. When it fires, `run_transfer`
+A transfer fires when a session's destination resolves to a different database — entering or
+leaving an instance, or a world port onto another continent's shard. (Mid-walk seam crossings,
+which used to drive this same machinery from the movement path, went with the region tier — #471.)
+When it fires, `run_transfer`
 (`gateway/src/world/transfer.rs`) drives seven steps:
 
 | # | Gateway | Module reducer (`module/src/`) |
@@ -445,40 +422,27 @@ after any named step for testing.
 
 Afterwards the gateway re-pins the session: new home handle, `bind_shard_session`, a fresh
 `player_login`, a fresh subscription set, then it replays the movement it queued during the hop.
-The player sees **no loading screen**.
 
-### 6.4 Cross-seam visibility — built, on by default
+### 6.4 Cross-shard visibility
 
-Seeing players on the far side of a seam is implemented and enabled (`LYRACORE_VIEW_MERGE`, default
-on). A straddling 5×5 box is decomposed by `aoi::split_box_by_shard` (`gateway/src/stdb/aoi.rs`)
-into the fewest rectangles that agree with the per-cell resolver — and because a region floors at
-10×10 cells while the box is 5 wide, a box straddles at most one boundary per axis, so no shard ever
-needs more than two rectangles. Each shard's share is one subscription handle carrying the same four
-range queries, on that shard's own per-account connection.
+Since #468 this is not a feature but a consequence of the shared AOI index: every shard's
+coordinator stream feeds ONE in-process cell index keyed by `(map_id, instance_id, cell)`, and
+guids are globally unique across databases (#103/#108), so a peer on any connected shard renders
+through the same dispatch. With the region tier gone (#471), no open-world map has two owners — the
+remaining splits are per-map and per-instance, whose populations never share an AOI box, so nothing
+straddles a database boundary mid-walk. The retired per-player view-merge mechanism
+(`LYRACORE_VIEW_MERGE`, `split_box_by_shard`, the seam chat/emote relay) is documented in
+[`region-sharding.md`](./region-sharding.md).
 
-The away shard's connection is opened on a **background thread**; until it resolves, that shard's
-rectangles are simply not subscribed this recenter. The degrade is "the far side pops in late",
-never a stall on the player's own packet processing.
+### 6.5 Load sampling
 
-The away leg registers a deliberately narrower relay set (entity create/destroy/values, gameobject,
-motion, creature splines, chat, emote — never self-owned state) sharing the home leg's dedup sets,
-so a peer crosses the socket exactly once. The stealth gate reads the candidate's own aura rows on
-the away shard's cache; the ghost gate mirrors the *viewer's* flag through a small atomic
-(`ViewerGates` in `aoi.rs`). Chat and emotes cross a seam. Buffs and intents, and melee and trade
-co-location, do not; AoE clips at the seam, by spec.
-
-> Historical note: the *first* attempt at this was built on per-cell subscriptions, and both were
-> reverted after measurement showed that a per-cell equality query costs more to register than a
-> whole-box range costs to evaluate. The current code is a rebuild on range sub-boxes.
-
-### 6.5 Deciding when to draw a seam
-
-A background task samples every connected shard's writer occupancy (from each node's `/v1/metrics`),
-its live session count, and per-region population every `LYRACORE_LOAD_SAMPLE_SECS` (default 30 s),
-and writes them to realm-core as `game_shard_load` / `game_region_load`. Both are ring buffers of
-the last 20 samples per key — about ten minutes of history, which is what distinguishes sustained
-load from a spike. Two `spacetime sql` queries against realm-core's `game_shard_load` and
-`game_region_load` tables answer "which shard is hot" and "which region is the busy part of it".
+A background task samples every connected shard's writer occupancy (from each node's `/v1/metrics`)
+and its live session count every `LYRACORE_LOAD_SAMPLE_SECS` (default 30 s),
+and writes them to realm-core as `game_shard_load` — a ring buffer of
+the last 20 samples per shard, about ten minutes of history, which is what distinguishes sustained
+load from a spike. One `spacetime sql` query against realm-core's `game_shard_load` answers "which
+shard is hot". (Per-region population sampling — `game_region_load`, the `regions=` gauge on the
+SHARDLOAD line — went with the region tier, #471; the table stays in the schema, unwritten.)
 
 ---
 
@@ -552,7 +516,7 @@ local test harness needs it.
 | **`architecture.md`** (this file) | The current system: tiers, topology, data model, read plane, sharding, packages. |
 | [`danger-zones.md`](./danger-zones.md) | **Authoritative.** Traps, tooling gotchas, and the exact deploy/verify procedure. Read before any engine change. |
 | [`schema.md`](./schema.md) | The table-level data model. |
-| [`region-sharding.md`](./region-sharding.md) | How the realm is split across databases and how a character crosses a seam. |
+| [`region-sharding.md`](./region-sharding.md) | Retired (#471): the removed region tier's design — seam menus, assignments, view merge — kept for reference. |
 
 ### Operating and building
 

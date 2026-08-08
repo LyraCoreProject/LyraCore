@@ -65,7 +65,7 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
    moving entities self-heal on their next heartbeat, but **static `game_gameobject` rows never
    re-stamp themselves and stay invisible world-wide until backfilled**. After publishing a change of
    this shape, run the sweep on every shard:
-   `for db in lyracore lyracore-world-1 lyracore-world-2 lyracore-instances lyracore-realm; do spacetime call $db debug_backfill_cell_ids; done`
+   `for db in lyracore lyracore-world-1 lyracore-instances lyracore-realm; do spacetime call $db debug_backfill_cell_ids; done`
    The general rule: when you END-append a defaulted column that something INDEXES or FILTERS on, ask
    what the default means as a value before asking whether the migration applies cleanly. It will apply
    cleanly and still be wrong.
@@ -94,7 +94,7 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
    later. Use the partition-scoped helpers instead:
    `helpers::entities_near(ctx, map_id, instance_id, x, y, radius)` for a radius search (grid-indexed,
    scoped to `(map_id, instance_id)`) and `helpers::in_same_partition(&e, map_id, instance_id)` for a
-   membership test. **Why:** the realm is cut into instance / continent / region shards, each its own
+   membership test. **Why:** the realm is cut into instance / continent shards, each its own
    SpacetimeDB writer. A whole-table scan then returns only the rows on the caller's own shard — it
    does not error, it quietly returns a subset, and every feature built on "I can see the whole world"
    silently goes wrong. Going through the helpers means the read already asks the partition question,
@@ -185,9 +185,9 @@ separate, resolvable convention and are unaffected by this.
 
 `lyracore dev up` is the one deliberate exception to the production topology below: it is a
 **single-database** contributor fixture, and it publishes only `lyracore`. It explicitly unsets the
-inherited topology variables (`LYRACORE_SHARD_MAP`, `LYRACORE_SHARD_MAP_FILE`, `LYRACORE_REALM_CORE`,
-`LYRACORE_REGION_SHARDS`) for the gateway it launches, so having the recipe below exported in your
-shell cannot turn the fixture into a five-database gateway pointed at databases it never published.
+inherited topology variables (`LYRACORE_SHARD_MAP`, `LYRACORE_SHARD_MAP_FILE`, `LYRACORE_REALM_CORE`)
+for the gateway it launches, so having the recipe below exported in your
+shell cannot turn the fixture into a four-database gateway pointed at databases it never published.
 It also never adopts or stops a SpacetimeDB node it did not start.
 
 Its listeners are loopback-only unless you ask otherwise: `lyracore dev up --lan <private IP>`
@@ -197,7 +197,7 @@ it, via `LYRACORE_REALM_ADDRESS`) so a client on your LAN can connect. Spacetime
 addresses are refused rather than bound.
 
 **Do not use it to launch or repair a production/sharded realm** — it has no notion of the other
-four databases, so it would leave them un-republished after a schema change, which is exactly the
+three databases, so it would leave them un-republished after a schema change, which is exactly the
 partial-publish failure §1.2 warns about. The multi-database recipe below stays authoritative there.
 
 ```bash
@@ -239,12 +239,12 @@ cargo build
 # refuses logons on the ones left behind — and a partial publish can present as an unrelated
 # mid-session hang rather than a loud "no such table", because the loud failure is on the
 # coordinator path, not the per-player one. Pass them all in one command:
-./lyracore publish lyracore lyracore-world-1 lyracore-world-2 lyracore-instances lyracore-realm
+./lyracore publish lyracore lyracore-world-1 lyracore-instances lyracore-realm
 
 # Rebuild + restart the GATEWAY (always, if the gateway changed)
 #
 # ⚠ THIS IS THE PRODUCTION TOPOLOGY. A recipe carrying only LYRACORE_AOI and the token starts a
-# SINGLE-DATABASE gateway — no Kalimdor, no instances, no realm-core, no regions — and every one of
+# SINGLE-DATABASE gateway — no Kalimdor, no instances, no realm-core — and every one of
 # those degrades SILENTLY rather than refusing to start. Anything that omits a variable below is the
 # single-database dev config, which is not what a sharded realm runs.
 cargo build -p lyracore-gateway
@@ -256,28 +256,23 @@ setsid nohup env \
   LYRACORE_COORDINATOR_TOKEN="$TOKEN" \
   LYRACORE_SHARD_MAP="36:*=lyracore-instances, 1:*=lyracore-world-1" \
   LYRACORE_REALM_CORE=lyracore-realm \
-  LYRACORE_REGION_SHARDS="lyracore-world-2" \
   MALLOC_ARENA_MAX=2 \
   RUST_LOG=info \
   ./target/debug/lyracore-gateway </dev/null >/tmp/gw.log 2>&1 &
 sleep 4
 grep -E "world listening" /tmp/gw.log             # healthy marker; also check decode-errors == 0
-grep -oE 'databases \[.*\]' /tmp/gw.log           # MUST list all FIVE, or something above was dropped
-grep -c "coordinator connected to shard" /tmp/gw.log   # MUST be 5 — see the caveat below
+grep -oE 'databases \[.*\]' /tmp/gw.log           # MUST list all FOUR, or something above was dropped
+grep -c "coordinator connected to shard" /tmp/gw.log   # MUST be 4 — see the caveat below
 
-# What each one buys, and how it fails if you leave it out — all four fail QUIETLY:
+# What each one buys, and how it fails if you leave it out — all three fail QUIETLY:
 #   LYRACORE_SHARD_MAP      one database. Kalimdor and the instance pool are simply not there.
 #                     ⚠ Keep the `36:*` rule — dropping it does not degrade, the gateway refuses to start.
 #   LYRACORE_REALM_CORE     auth/sessions/parties fall back to the world database instead of realm-core.
-#   LYRACORE_REGION_SHARDS  lyracore-world-2 never connects, so every region assigned to it falls back
-#                     through the map rule to lyracore. Region routing switches itself OFF and
-#                     says nothing. NEVER give a region shard a LYRACORE_SHARD_MAP rule instead — a
-#                     rule routes a whole map to it.
 #   MALLOC_ARENA_MAX  4x the RSS per connection (8.75 MB vs 2.16). Not baked into the binary.
 #
 # Optional, but the one whose absence you will notice later, not now:
 #   LYRACORE_METRICS_DB_IDS="<shard>=<hex-identity-prefix>,..."  — without it, writer occupancy is
-#     simply not sampled (sessions and region population still are), so `game_shard_load` has no
+#     simply not sampled (sessions still are), so `game_shard_load` has no
 #     rows for that shard and the "which shard is hot" query answers nothing. The gateway warns
 #     once at startup naming the gap.
 # The full environment-variable table, with every default and every silent-failure mode, is in

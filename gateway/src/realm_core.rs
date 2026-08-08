@@ -106,17 +106,13 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
 
     // --- #78: load sampling. The gateway is the one component that can see the whole realm (every
     // shard's metrics endpoint, every session, every live position), so it samples; realm-core just
-    // records what it is told (`module/src/load.rs`, ring-buffered per key). `session_count` and
-    // `region_player_counts` read THIS handle's own shard; `record_shard_load`/`record_region_load`
-    // are fired against whichever handle the CALLER holds — in production that is always the
-    // `realm_core()` handle, since that table is only ever read from there.
+    // records what it is told (`module/src/load.rs`, ring-buffered per key). `session_count` reads
+    // THIS handle's own shard; `record_shard_load` is fired against whichever handle the CALLER
+    // holds — in production that is always the `realm_core()` handle, since that table is only
+    // ever read from there.
     /// Live player sessions cached on THIS shard's coordinator connection — an approximate
-    /// per-shard population (`docs/region-sharding.md`'s staleness note applies).
+    /// per-shard population (a point-in-time snapshot, not a windowed average).
     fn session_count(&self) -> usize;
-    /// Open-world player population on THIS shard, bucketed by region
-    /// (`lyracore_shared::region::RegionMap::count_by_region`). Never includes [`DEFAULT_REGION`]
-    /// (`lyracore_shared::region::DEFAULT_REGION`) — see that function's doc.
-    fn region_player_counts(&self) -> Vec<(u32, u32, u32)>;
     /// Record `shard`'s occupancy + session sample.
     fn record_shard_load(
         &self,
@@ -124,8 +120,6 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
         writer_occupancy_pct: f32,
         sessions: u32,
     ) -> Result<()>;
-    /// Record one region's population sample.
-    fn record_region_load(&self, map_id: u32, region_id: u32, players: u32) -> Result<()>;
 }
 
 // ===============================================================================================
@@ -521,15 +515,8 @@ pub(crate) mod fake {
         /// #78: this shard's live player-SESSION count (`CoordinatorInner::players.len()`'s fake
         /// equivalent) — set directly by a test, not derived from `characters`/`identities`.
         pub open_sessions: Mutex<usize>,
-        /// #78: this shard's region-bucketed open-world population, as `region_player_counts` would
-        /// answer it — set directly by a test rather than derived from `characters` + a `RegionMap`,
-        /// since the fake models what the SPLIT touches, not the region-bucketing math itself (that
-        /// is `lyracore_shared::region::RegionMap::count_by_region`'s own, separately-tested job).
-        pub region_population: Mutex<Vec<(u32, u32, u32)>>,
         /// #78: every `record_shard_load` call this database RECEIVED, in order.
         pub recorded_shard_loads: Mutex<Vec<(String, f32, u32)>>,
-        /// #78: every `record_region_load` call this database RECEIVED, in order.
-        pub recorded_region_loads: Mutex<Vec<(u32, u32, u32)>>,
         /// Every `RealmDb` call served by this database, in order.
         pub log: Mutex<Vec<String>>,
     }
@@ -814,11 +801,6 @@ pub(crate) mod fake {
             db.note("session_count()");
             *db.open_sessions.lock().unwrap()
         }
-        fn region_player_counts(&self) -> Vec<(u32, u32, u32)> {
-            let db = self.store();
-            db.note("region_player_counts()");
-            db.region_population.lock().unwrap().clone()
-        }
         fn record_shard_load(
             &self,
             shard: &str,
@@ -832,15 +814,6 @@ pub(crate) mod fake {
                 writer_occupancy_pct,
                 sessions,
             ));
-            Ok(())
-        }
-        fn record_region_load(&self, map_id: u32, region_id: u32, players: u32) -> Result<()> {
-            let db = self.store();
-            db.note(&format!("record_region_load({map_id}/{region_id})"));
-            db.recorded_region_loads
-                .lock()
-                .unwrap()
-                .push((map_id, region_id, players));
             Ok(())
         }
     }
@@ -2014,11 +1987,8 @@ mod tests {
             self.set_character_shard(guid, map_id, instance_id) } \
             fn has_escrow(&self, guid: u64) -> bool { self.escrow_row(guid).is_some() } \
             fn session_count(&self) -> usize { self.session_count() } \
-            fn region_player_counts(&self) -> Vec<(u32, u32, u32)> { self.region_player_counts() } \
             fn record_shard_load( &self, shard: &str, writer_occupancy_pct: f32, sessions: u32, ) \
-            -> Result<()> { self.record_shard_load(shard, writer_occupancy_pct, sessions) } \
-            fn record_region_load(&self, map_id: u32, region_id: u32, players: u32) -> Result<()> { \
-            self.record_region_load(map_id, region_id, players) }"
+            -> Result<()> { self.record_shard_load(shard, writer_occupancy_pct, sessions) }"
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");

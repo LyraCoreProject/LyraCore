@@ -603,6 +603,11 @@ pub(crate) fn teleport_player(
     };
     let recipient_identity = e.owner_identity;
     let cross_map = is_cross_map_teleport(e.map_id, map_id);
+    // #461: a movement packet staged before the teleport describes the OLD position. Left queued, the
+    // next `publish_motion` firing would relay it up to a tick AFTER the teleport landed and snap
+    // every nearby peer's view of this player back to where they were. Drop it in both branches —
+    // the authoritative position is the destination, and the player's next heartbeat relays it.
+    crate::motion::drop_pending(ctx, player_guid);
 
     if cross_map {
         // Persist current progression (old position/vitals) BEFORE despawning — matches
@@ -1015,6 +1020,7 @@ pub(crate) fn cascade_delete_character(ctx: &ReducerContext, character_guid: u64
         .game_corpse()
         .guid()
         .delete(crate::corpse::corpse_guid_for(character_guid));
+    crate::motion::drop_pending(ctx, character_guid); // #461: staged-but-unpublished motion too
     ctx.db.game_entity_motion().guid().delete(character_guid); // see the despawn path
     ctx.db.game_world_entity().guid().delete(character_guid);
     ctx.db.game_character().guid().delete(character_guid);
@@ -1347,39 +1353,28 @@ pub fn movement_update(
     // gateway's AOI tracker already subscribes this exact 5×5 box, so recipient selection was being
     // computed twice — once here, once by the subscription engine. Only the second one remains.
     //
+    // #461: it no longer writes the PUBLIC `game_entity_motion` row inline. SpacetimeDB pays its
+    // subscription sweep per TRANSACTION, so one transaction per movement packet cost 7.8 ms/call at
+    // 500 players (98.5% of it subscription work, 1.5% our wasm). `queue_motion` stages the payload
+    // in the PRIVATE `game_entity_motion_pending` table — no subscribers, therefore no sweep — and
+    // `motion::publish_motion` republishes every staged mover into the public relay in ONE
+    // transaction at 20 Hz. Everything above this line, `persist_entity`/`snapshot_needs_persist`
+    // included, is unchanged.
+    //
     // `instance_id`/`map_id`/grid come from the mover we just persisted, so the motion row and the
     // entity row can never disagree about which box they belong to (that agreement is what stops the
     // "spawned-but-frozen" desync the old shared-GridBox comment described).
     if plan.relay_motion {
-        let motions = ctx.db.game_entity_motion();
-        match motions.guid().find(mover_guid) {
-            Some(prev) => {
-                motions.guid().update(EntityMotion {
-                    map_id,
-                    instance_id,
-                    grid_x,
-                    grid_y,
-                    cell: lyracore_shared::spatial::grid_cell_id(grid_x, grid_y),
-                    opcode,
-                    movement_info: movement_info.clone(),
-                    seq: prev.seq.wrapping_add(1),
-                    ..prev
-                });
-            }
-            None => {
-                motions.insert(EntityMotion {
-                    guid: mover_guid,
-                    map_id,
-                    instance_id,
-                    grid_x,
-                    grid_y,
-                    cell: lyracore_shared::spatial::grid_cell_id(grid_x, grid_y),
-                    opcode,
-                    movement_info: movement_info.clone(),
-                    seq: 0,
-                });
-            }
-        }
+        crate::motion::queue_motion(
+            ctx,
+            mover_guid,
+            map_id,
+            instance_id,
+            grid_x,
+            grid_y,
+            opcode,
+            movement_info,
+        );
     }
 
     Ok(())
@@ -1873,7 +1868,10 @@ fn remove_from_world(ctx: &ReducerContext, owner: Identity) {
 
     // The per-mover motion row dies with the entity (perf catalog 2.1's named lifecycle gap): a row
     // left behind never updates again, so it relays nothing, but it would leak one row per character
-    // that has ever moved and hand a fresh subscriber a stale motion on first sync.
+    // that has ever moved and hand a fresh subscriber a stale motion on first sync. #461: the
+    // STAGED payload goes with it, so the next `publish_motion` firing cannot re-create the row we
+    // are deleting here (the tick's own liveness gate is the second net, not the only one).
+    crate::motion::drop_pending(ctx, entity.guid);
     ctx.db.game_entity_motion().guid().delete(entity.guid);
     ctx.db.game_world_entity().guid().delete(entity.guid);
 }

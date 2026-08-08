@@ -271,6 +271,10 @@ mod instance;
 mod items;
 mod load;
 mod loot;
+/// Batched movement republish (#461): the PRIVATE `game_entity_motion_pending` staging table that
+/// `movement_update` writes, and the 20 Hz `publish_motion` tick that drains it into the public
+/// `game_entity_motion` relay in one transaction.
+mod motion;
 pub mod nav;
 mod professions;
 /// Deploy-safety tripwire (#223): source-scans `scripts/**` + `tools/**` for a destructive
@@ -327,6 +331,7 @@ pub use instance::*;
 pub use items::*;
 pub use load::*;
 pub use loot::*;
+pub use motion::*;
 pub use professions::*;
 pub use quest::*;
 pub use realm_core::*;

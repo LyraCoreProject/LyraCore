@@ -45,6 +45,7 @@ pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
     crate::combat::disengage(ctx, guid); // melee rows + threat (clear_for_unit) + stale selections
     crate::threat::clear_taunt_lock(ctx, guid);
     ctx.db.game_creature_spline().guid().delete(guid); // the LIVE leg row (perf 2.3)
+    crate::motion::drop_pending(ctx, guid); // #461: the staged, not-yet-republished payload too
     ctx.db.game_entity_motion().guid().delete(guid); // motion row dies with the entity (perf 2.1)
     crate::loot::reap_corpse_loot_family(ctx, guid); // item rows (withheld-safe) + eligibility + rolls + votes
     ctx.db.game_world_entity().guid().delete(guid); // last — the on_delete relay destroys the object
@@ -354,6 +355,11 @@ mod despawn_checklist_tripwire {
             (
                 "ctx.db.game_entity_motion().guid().delete(guid)",
                 "the per-mover motion row (perf 2.1)",
+            ),
+            (
+                "crate::motion::drop_pending(ctx, guid)",
+                "the STAGED motion payload (#461) — left behind, the next `publish_motion` firing \
+                 would re-create the motion row this fn just deleted",
             ),
             (
                 "crate::loot::reap_corpse_loot_family(ctx, guid)",

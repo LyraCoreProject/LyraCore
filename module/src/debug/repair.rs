@@ -8,7 +8,8 @@ use crate::spell::stacking::game_spell_group;
 use crate::{
     game_aura_schedule, game_character, game_createinfo_spell, game_creature_move_schedule,
     game_faction, game_ground_area_schedule, game_instance_reaper_schedule, game_item_template,
-    game_spell, game_talent, AuraSchedule, CreatureMoveSchedule, GroundAreaSchedule,
+    game_motion_publish_schedule, game_spell, game_talent, AuraSchedule, CreatureMoveSchedule,
+    GroundAreaSchedule,
 };
 
 /// Consolidated post-publish repair pass (#378). SpacetimeDB's `init` reducer runs ONLY on a
@@ -137,6 +138,30 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         1
     };
 
+    // #461: ensure — never REARM — the 20 Hz movement-republish schedule. Ensure, because
+    // `scheduled_at` IS the cadence knob (`set_motion_tick_ms`), and a publish must not silently
+    // undo an operator's retune. Absent, movement stages into the private table and never relays,
+    // so this is the row whose absence is loudest.
+    let motion_schedule = if ctx
+        .db
+        .game_motion_publish_schedule()
+        .iter()
+        .next()
+        .is_some()
+    {
+        0
+    } else {
+        ctx.db
+            .game_motion_publish_schedule()
+            .insert(crate::motion::MotionPublishSchedule {
+                scheduled_id: 0,
+                scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
+                    crate::motion::MOTION_TICK_MICROS,
+                )),
+            });
+        1
+    };
+
     // --- rearms (idempotent: always replace with the canonical row) ---
     // formerly `debug_rearm_creature_tick`: re-arm the GLOBAL creature movement tick to 0.5s. Work-item
     // 229: DEDICATED per-instance rows (armed via `debug_arm_instance_tick`) are deliberately left
@@ -190,8 +215,9 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         + regen
         + aura_schedule
         + ground_area_schedule
+        + motion_schedule
         + 2;
     crate::import_meta::stamp(ctx, "debug_repair_after_publish", "", "", total);
-    log::info!("debug_repair_after_publish: repaired {total} fixture/schedule row(s) across 16 seed families");
+    log::info!("debug_repair_after_publish: repaired {total} fixture/schedule row(s) across 17 seed families");
     Ok(())
 }

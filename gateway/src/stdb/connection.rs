@@ -5,7 +5,7 @@
 
 use crate::config::{GatewayConfig, ShardMap};
 use anyhow::{anyhow, Context, Result};
-use spacetimedb_sdk::{DbContext, Identity, SubscriptionHandle as _, Table as _};
+use spacetimedb_sdk::{DbContext, Identity, SubscriptionHandle as _};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -41,6 +41,11 @@ pub(crate) struct ShardSet {
     /// How many live world SOCKETS each account currently has (#447). Separate from `sessions`
     /// above on purpose — see [`AccountSessions`].
     live_sessions: AccountSessions,
+    /// #468: the gateway-wide shared area-of-interest view — the cell index plus the viewer
+    /// registry that every shard's coordinator dispatch routes through. Shard-INDEPENDENT for the
+    /// same reason `sessions` is: it answers a question about SESSIONS, and guids are globally
+    /// unique across databases (#103/#108), so one index spans the whole realm.
+    world: Arc<super::world_view::WorldView>,
 }
 
 /// Per-account "current in-world session" tracking. The world gateway opens one TCP session per
@@ -488,9 +493,9 @@ pub(crate) struct CoordinatorInner {
     /// Connection params for opening per-account player connections lazily.
     uri: String,
     db_name: String,
-    /// Whether this connection subscribes the multi-database tables (#20's `game_character_shard`,
-    /// #23's `game_map_region` + `game_region_assignment`) — kept so the watchdog rebuilds with the
-    /// SAME subscription set it was created with. See [`coordinator_queries`].
+    /// Whether this connection subscribes the multi-database tables (#20's `game_character_shard`)
+    /// — kept so the watchdog rebuilds with the SAME subscription set it was created with. See
+    /// [`coordinator_queries`].
     sharded_tables: bool,
     /// Per-account player connections (each with its own node-issued identity == the account's
     /// bound identity). Opened on first need (at logon, when `bound_identity` is read) and reused
@@ -509,16 +514,10 @@ pub(crate) struct CoordinatorInner {
     /// re-arm if that was never called); the watchdog invokes whatever is set, if anything, right
     /// after each successful reconnect swap — AFTER, because the hook re-reads `coord()`, which must
     /// already be the fresh connection.
-    pub(crate) on_reconnect: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
-    /// #72 slice 2's fold-in nit: memoized `game_map_region` decode. `Coordinator::map_regions` used
-    /// to rebuild + re-validate the WHOLE table (and re-log every rejected row) on every call; that
-    /// was fine at "once per world entry" but the warm-handoff seam check calls it on every cell
-    /// crossing a moving player makes. `Arc<Mutex<..>>` — not a plain field — because
-    /// [`connect_blocking`] needs a handle to register invalidating callbacks against BEFORE this
-    /// struct exists (the very first connect), and the watchdog's reconnect must hand the REBUILT
-    /// connection the SAME handle so its callbacks invalidate the one cache `map_regions` actually
-    /// reads; see `spawn_coordinator_watchdog`.
-    map_regions_cache: Arc<Mutex<Option<lyracore_shared::region::RegionMap>>>,
+    /// A LIST, not a slot (#468): there are now two one-shot coordinator relays per shard — issue
+    /// #54's bot-invite relay and the shared AOI dispatch — and a slot would silently let whichever
+    /// armed second overwrite the first's re-arm.
+    pub(crate) on_reconnect: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl CoordinatorInner {
@@ -533,25 +532,6 @@ impl CoordinatorInner {
             );
             p.into_inner()
         })
-    }
-
-    /// #72 slice 2: read the memoized `game_map_region` decode, building it (once) on a miss —
-    /// the first call after connect/reconnect, or after the invalidating `on_insert`/`on_delete`
-    /// callbacks `connect_blocking` registered have cleared it. `build` is never called on a hit,
-    /// which is the whole point: `Coordinator::map_regions` is now hot (the warm-handoff seam
-    /// check calls it on every cell crossing), and rebuilding decoded + re-validated the WHOLE
-    /// table plus re-logged every rejected row on every single call.
-    pub(crate) fn cached_map_regions(
-        &self,
-        build: impl FnOnce() -> lyracore_shared::region::RegionMap,
-    ) -> lyracore_shared::region::RegionMap {
-        let mut cache = self.map_regions_cache.lock().unwrap();
-        if let Some(cached) = cache.as_ref() {
-            return cached.clone();
-        }
-        let built = build();
-        *cache = Some(built.clone());
-        built
     }
 }
 
@@ -572,15 +552,15 @@ pub(crate) struct PlayerConn {
 /// matters can be asserted without a node (see the tests at the bottom of this file).
 ///
 /// `sharded_tables` adds the tables that only mean something on a MULTI-DATABASE deployment:
-/// `game_character_shard` (#20) and `game_map_region` / `game_region_assignment` (#23). It is OFF
+/// `game_character_shard` (#20). It is OFF
 /// for a single-database gateway, and that is load-bearing rather than an optimization: **a
 /// subscription to a table the deployed module does not have FAILS TO APPLY**, which fails
 /// `connect_blocking`, which — for the default database — fails `Coordinator::connect` and the
 /// whole gateway. Subscribing them unconditionally would therefore mean a gateway restarted
 /// before the module was republished never comes back, in a configuration (`LYRACORE_SHARD_MAP` and
-/// `LYRACORE_REALM_CORE` both unset) that #17, #20 and #23 all promise costs nothing. Nothing reads
+/// `LYRACORE_REALM_CORE` both unset) that #17 and #20 promise costs nothing. Nothing reads
 /// any of them on a single-database gateway anyway — `WorldStore::home_shard` short-circuits on
-/// `is_sharded()` before it looks at either the index or the region overlay.
+/// `is_sharded()` before it looks at the index.
 fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
     let mut queries = vec![
         "SELECT * FROM game_realm",
@@ -588,6 +568,25 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_session",
         "SELECT * FROM game_character",
         "SELECT * FROM game_world_entity",
+        // #468: the four box-scoped tables now ride THIS one global subscription per shard instead
+        // of ~600 per-player 5×5-box subscriptions, and the gateway's own cell index
+        // (`stdb::world_index`) decides who sees each row. `game_world_entity` and
+        // `game_gameobject` were already here (the coordinator has always read them RLS-bypassed);
+        // these two are the whole server-side delta the change needed.
+        //
+        // The point is NOT that these queries are cheaper to evaluate — a `SELECT *` is the
+        // cheapest possible query, but that was never the cost. The cost was that ~600 DISTINCT
+        // query strings can neither be shared nor pruned, so every committed transaction woke ~600
+        // SDK pumps to re-evaluate them: load average 11–14 on 8 cores at 34% CPU with 7 runnable
+        // threads (clockworklabs/SpacetimeDB#2783). One subscription wakes one pump.
+        //
+        // ⚠ These are the two HIGHEST-RATE tables in the module (one upsert per mover per movement
+        // heartbeat, one per creature leg). They are handled by `world_view`'s dispatch, which does
+        // index bookkeeping and an enqueue per recipient and NOTHING else on the pump — no
+        // encoding, no per-session locks held. Adding work to that path is adding it to a thread
+        // every session on the shard depends on.
+        "SELECT * FROM game_entity_motion",
+        "SELECT * FROM game_creature_spline",
         // The SOURCE-side escrow (#19). The ONE module→gateway data flow the cross-database
         // transfer adds: the export blob is written here by `begin_transfer` and the gateway
         // carries it to the other database's `import_character_blob`. Private table, read
@@ -597,7 +596,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         //
         // BASE list, not `sharded_tables`: the table is #16's escrow primitive, present on every
         // module since long before any of the sharding tickets, so subscribing it unconditionally
-        // cannot brick the restart of a gateway whose module predates #17/#20/#23. Nothing READS
+        // cannot brick the restart of a gateway whose module predates #17/#20. Nothing READS
         // it unsharded (`settle_home_shard` short-circuits on `is_sharded()`).
         "SELECT * FROM game_transfer_out",
         // Teleport events (277): the TRANSFER relay rides THIS stable connection — the
@@ -645,7 +644,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // BASE list, not `sharded_tables`, and that is load-bearing: #48's failure mode happens with
         // NO shard map at all, so a single-database gateway is exactly the one that must read the
         // flag. `game_config` is public and predates every sharding ticket, so subscribing it cannot
-        // brick the restart of a gateway whose module predates #17/#20/#23 (the hazard
+        // brick the restart of a gateway whose module predates #17/#20 (the hazard
         // `coordinator_queries`' doc comment describes). Its BINDING must stay in sync, though —
         // `hosts_instances` was END-appended by #39 and the generated `server_config_type.rs` had
         // not been regenerated since, which `gateway/tests/schema_parity.rs` now pins.
@@ -750,19 +749,11 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // own transaction. Private, like game_account/game_session — the owner token reads it, no
         // client ever sees it. Multi-database deployments only (see this function's doc comment).
         queries.push("SELECT * FROM game_character_shard");
-        // Region definitions + the epoch-versioned region→shard assignment (#23). The
-        // DEFINITIONS are content data baked by the world ETL onto the world shards; the
-        // ASSIGNMENT is authoritative on realm-core. Both are subscribed on every connection
-        // in the set because each handle reads its own database's copy and the gateway picks
-        // which copy is authoritative (`Coordinator::region_shard_for`), exactly as it does
-        // for accounts and sessions.
-        queries.push("SELECT * FROM game_map_region");
-        queries.push("SELECT * FROM game_region_assignment");
         // Party state (#22, group slice). On REALM-CORE these three are the authoritative party
         // tables the gateway drives and relays from; on a world shard they are that shard's mirror,
         // which the gateway also reads (a session's own roster at world entry, before it has pushed
-        // anything). Subscribed on every connection in the set for the same reason accounts and
-        // regions are: each handle reads its own database's copy, and the gateway decides which copy
+        // anything). Subscribed on every connection in the set for the same reason accounts are:
+        // each handle reads its own database's copy, and the gateway decides which copy
         // is authoritative.
         //
         // `game_group_event` is the RELAY: on a world shard the per-player connection subscribes it
@@ -803,21 +794,14 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
 /// tokio worker or a `spawn_blocking` thread panics. A plain `std::thread` has no ambient runtime,
 /// so the SDK builds and owns its own — the supported pattern for a native client.
 ///
-/// `sharded_tables` adds the MULTI-DATABASE tables (#20's `game_character_shard`, #23's
-/// `game_map_region` + `game_region_assignment`) to the subscription set — see
-/// [`coordinator_queries`] for why that flag exists and must stay off by default.
-///
-/// `map_regions_cache` is #72 slice 2's memoization handle (see [`CoordinatorInner`]'s field doc):
-/// registered here as `on_insert`/`on_delete` callbacks on `game_map_region` that invalidate it,
-/// so the first `map_regions()` read after THIS connection (initial connect, or a watchdog
-/// reconnect) always rebuilds, and every read in between is free. Gated on `sharded_tables` —
-/// unsharded, the table is never subscribed, so a row can never arrive to invalidate against.
+/// `sharded_tables` adds the MULTI-DATABASE tables (#20's `game_character_shard`) to the
+/// subscription set — see [`coordinator_queries`] for why that flag exists and must stay off by
+/// default.
 fn connect_blocking(
     uri: String,
     db_name: String,
     token: Option<String>,
     sharded_tables: bool,
-    map_regions_cache: Arc<Mutex<Option<lyracore_shared::region::RegionMap>>>,
 ) -> Result<LiveConn> {
     let conn = DbConnection::builder()
         .with_uri(&uri)
@@ -828,17 +812,6 @@ fn connect_blocking(
         .on_disconnect(|_ctx, err| log::warn!("coordinator connection closed: {err:?}"))
         .build()
         .map_err(|e| anyhow!("coordinator build/connect failed: {e}"))?;
-
-    if sharded_tables {
-        let cache = map_regions_cache.clone();
-        conn.db.game_map_region().on_insert(move |_ctx, _row| {
-            *cache.lock().unwrap() = None;
-        });
-        let cache = map_regions_cache.clone();
-        conn.db.game_map_region().on_delete(move |_ctx, _row| {
-            *cache.lock().unwrap() = None;
-        });
-    }
 
     let pump = conn.run_threaded();
 
@@ -908,7 +881,6 @@ fn spawn_coordinator_watchdog(inner: Arc<CoordinatorInner>) -> std::thread::Join
                 inner.db_name.clone(),
                 inner.token.clone(),
                 inner.sharded_tables,
-                inner.map_regions_cache.clone(),
             ) {
                 Ok(fresh) => {
                     // Swap in the fresh connection under the write lock (instant), capturing the OLD one;
@@ -925,8 +897,8 @@ fn spawn_coordinator_watchdog(inner: Arc<CoordinatorInner>) -> std::thread::Join
                     // after the swap above: the hook re-reads `inner.coord()`, which by now answers the
                     // fresh connection. Cloned out from under its own lock so the hook runs unlocked (it
                     // takes `live`'s read lock itself via `coord()`).
-                    let hook = inner.on_reconnect.lock().unwrap().clone();
-                    if let Some(hook) = hook {
+                    let hooks = inner.on_reconnect.lock().unwrap().clone();
+                    for hook in hooks {
                         hook();
                     }
                     // Deterministic teardown of the old connection: disconnect() winds down its pump (it's
@@ -969,7 +941,7 @@ fn spawn_loot_roll_relay(coordinator: Coordinator) -> std::thread::JoinHandle<()
 
 /// Background loop driving `load_sample::sample_and_record` (#78): every `LYRACORE_LOAD_SAMPLE_SECS`
 /// (default 30s), scrape the node's `/v1/metrics` for each configured shard's writer occupancy,
-/// read this gateway's own session + region-population counts, and record all of it onto
+/// read this gateway's own session counts, and record all of it onto
 /// realm-core — then log one SHARDLOAD line per shard, the same "visible without SQL" convention
 /// QUEUESTAT/AOISTAT use (`world/mod.rs`). Costs an unconfigured single-database gateway nothing
 /// but its own idle wakeups and one metrics scrape (occupancy still measurable there — realm-core
@@ -1155,8 +1127,6 @@ mod coordinator_query_tests {
     /// restart (`coordinator_queries`' doc comment) — so an unconfigured gateway must ask for none.
     const MULTI_DB_TABLES: &[&str] = &[
         "SELECT * FROM game_character_shard",
-        "SELECT * FROM game_map_region",
-        "SELECT * FROM game_region_assignment",
         // #22 (group slice). `game_group_event` is the one entry here that ALSO has a
         // single-database subscriber — the per-player connection, under RLS — so it is listed as a
         // multi-database table for the COORDINATOR only. Subscribing it on the coordinator of an
@@ -1184,8 +1154,8 @@ mod coordinator_query_tests {
     fn a_single_database_gateway_subscribes_no_multi_database_table() {
         // #33's review caught exactly this class of regression — a table subscribed on every
         // coordinator connection even when unconfigured, which bricks a gateway restarted before
-        // the module was republished. #23 adds two more tables to the same trap, so the guard
-        // gets a NAMED test rather than a comment.
+        // the module was republished. Each sharded-only table re-enters the same trap, so the
+        // guard gets a NAMED test rather than a comment.
         let single = coordinator_queries(false);
         for table in MULTI_DB_TABLES {
             assert!(
@@ -1318,7 +1288,7 @@ impl Coordinator {
     /// liveness check just below) still counts until its NEXT checkout evicts it, and an account
     /// that never called any reducer that opens a player connection is not counted at all even if
     /// its client socket is open (logon-phase connections only need the owner connection). Good
-    /// enough for an ops gauge; see `docs/region-sharding.md`'s staleness note.
+    /// enough for an ops gauge.
     pub(crate) fn session_count(&self) -> usize {
         self.0.players.lock().unwrap().len()
     }
@@ -1430,16 +1400,10 @@ impl Coordinator {
                     .map_err(|_| anyhow!("player connect task did not answer within 20s"))??
             }
             // No ambient runtime: fall back to the original dedicated-thread build. Correct, just
-            // one private runtime per connection.
-            //
-            // ⚠ This is NOT only unit tests (#451). `aoi.rs`'s view-merge opens each AWAY shard's
-            // player connection from a bare `std::thread` (`ensure_away`), which has no ambient
-            // runtime — so every away connection a dispersed player accumulates still pays 292's
-            // private 1-worker runtime, permanently. That is the likeliest reading of #451's
-            // "~3.6 threads/session co-located, ~5.2 dispersed". Fixing it means carrying a
-            // `Handle` on `CoordinatorInner` so this branch never triggers; deliberately NOT done
-            // here, because it also moves every away connection's SDK message loops onto the
-            // shared runtime's workers, and that redistribution needs a measured run to justify.
+            // one private runtime per connection. Unit-tests-only since #468 retired the seam
+            // view-merge (its `ensure_away` opened away-shard player connections from bare
+            // `std::thread`s, which was the one production path into this branch — see #451's
+            // "~3.6 threads/session co-located, ~5.2 dispersed" reading).
             Err(_) => std::thread::Builder::new()
                 .name(format!("stdb-player-{account_id}"))
                 .spawn(move || connect_player_blocking(uri, db_name))
@@ -1528,10 +1492,10 @@ impl Coordinator {
     /// Drop `account_id`'s cached per-account connection on every shard.
     ///
     /// EVERY shard, not just this handle's (#17/#19): the account's home shard can change
-    /// mid-session across a cross-database transfer, and `aoi.rs`'s view-merge opens a further
-    /// player connection on each AWAY shard a straddling box touches. Each of those is its own
-    /// cached `PlayerConn` in that shard's `players` map, and each leaks the same fd + thread.
-    /// `release_player_conn_on` is a `remove`, so covering a shard twice is inert.
+    /// mid-session across a cross-database transfer, and the logon tier opens its connection on
+    /// the DEFAULT shard regardless of where the world session lands — so an account can hold a
+    /// cached `PlayerConn` in more than one shard's `players` map, and each leaks the same fd +
+    /// thread. `release_player_conn_on` is a `remove`, so covering a shard twice is inert.
     fn release_account_conns(&self, account_id: u64) {
         for inner in self.1.conns.values() {
             release_player_conn_on(inner, account_id);
@@ -1602,15 +1566,10 @@ impl Coordinator {
         let uri = cfg.stdb_uri.clone();
         let db = db_name.to_string();
         let token = cfg.coordinator_token.clone();
-        // Created BEFORE the connection so `connect_blocking` has a handle to register its
-        // `game_map_region` invalidation callbacks against; stored on `CoordinatorInner` below so a
-        // later watchdog reconnect hands the rebuilt connection the SAME handle (see that field's doc).
-        let map_regions_cache = Arc::new(Mutex::new(None));
-        let cache_for_connect = map_regions_cache.clone();
         // Build on a dedicated OS thread (no tokio context), join it off the reactor.
         let build_thread = std::thread::Builder::new()
             .name("stdb-coordinator-connect".into())
-            .spawn(move || connect_blocking(uri, db, token, sharded_tables, cache_for_connect))
+            .spawn(move || connect_blocking(uri, db, token, sharded_tables))
             .context("spawn coordinator connect thread")?;
         let live = tokio::task::spawn_blocking(move || -> Result<LiveConn> {
             build_thread
@@ -1626,8 +1585,7 @@ impl Coordinator {
             db_name: db_name.to_string(),
             sharded_tables,
             players: Mutex::new(HashMap::new()),
-            on_reconnect: Mutex::new(None),
-            map_regions_cache,
+            on_reconnect: Mutex::new(Vec::new()),
         });
         spawn_coordinator_watchdog(inner.clone());
         Ok(inner)
@@ -1649,10 +1607,10 @@ impl Coordinator {
             );
         }
         let map = ShardMap::from_env(&cfg.module_name);
-        // The character→shard index (#20) and the region tables (#23) only exist to answer "which
-        // of several databases owns this". One database ⇒ nothing to answer, nothing subscribes
-        // them, and the subscription set is exactly the pre-#17/#20/#23 one — which is what makes
-        // "the env vars unset ⇒ today's gateway" true of the wire, not just of the routing logic.
+        // The character→shard index (#20) only exists to answer "which of several databases owns
+        // this". One database ⇒ nothing to answer, nothing subscribes it, and the subscription set
+        // is exactly the pre-#17/#20 one — which is what makes "the env vars unset ⇒ today's
+        // gateway" true of the wire, not just of the routing logic.
         let sharded_tables = map.databases().len() > 1;
         let mut conns: HashMap<String, Arc<CoordinatorInner>> = HashMap::new();
         for db in map.databases() {
@@ -1712,6 +1670,7 @@ impl Coordinator {
             .enforce()
             .map_err(|msg| anyhow!("{msg}"))?;
         ensure_guid_ranges(&conns, &map);
+        let world = Arc::new(super::world_view::WorldView::new(crate::config::aoi_enabled()));
         let coordinator = Self(
             home,
             Arc::new(ShardSet {
@@ -1719,19 +1678,59 @@ impl Coordinator {
                 conns,
                 sessions: SessionEpochs::default(),
                 live_sessions: AccountSessions::default(),
+                world,
             }),
         );
+        // #468: arm the SHARED area-of-interest dispatch — one registration per shard instead of
+        // one subscription per player. Must run before any session can log in, and must be re-armed
+        // after a coordinator reconnect (the watchdog treats a module republish as one), which is
+        // what the `on_reconnect` hook below is for: the callbacks are bound to a `LiveConn` that
+        // the swap replaces.
+        coordinator.arm_shared_world_view();
         // Issue #50: promotes each world shard's staging loot rolls onto realm-core and settles
         // resolved winners back down. A no-op loop on an unsharded gateway (`relay_tick` returns
         // immediately when `realm_store()` is `None`), so this costs a single-database deployment
         // nothing but one idle thread.
         spawn_loot_roll_relay(coordinator.clone());
-        // Issue #78: per-shard writer occupancy + session counts + per-region population, sampled
-        // on a timer and recorded onto realm-core so an operator can answer "which shard is hot,
-        // which region is crowded, should I activate a seam" with `spacetime sql` alone. See
-        // `docs/region-sharding.md`.
+        // Issue #78: per-shard writer occupancy + session counts, sampled on a timer and recorded
+        // onto realm-core so an operator can answer "which shard is hot" with `spacetime sql`
+        // alone.
         spawn_load_sampler(coordinator.clone(), cfg.stdb_uri.clone());
         Ok(coordinator)
+    }
+
+    /// The gateway-wide shared area-of-interest view (#468) — the cell index + viewer registry the
+    /// coordinator dispatch routes through. Shard-independent: every handle answers the same one.
+    pub(crate) fn world_view(&self) -> Arc<super::world_view::WorldView> {
+        self.1.world.clone()
+    }
+
+    /// Register the shared AOI relays on EVERY connected shard's coordinator connection, and install
+    /// the watchdog re-arm hook that keeps them alive across a reconnect.
+    ///
+    /// The shard ORDER fixes the `ShardId`s the index stores, so this runs once, before any session
+    /// exists, and the vector is never reordered afterwards. The re-arm re-registers on the fresh
+    /// `LiveConn` — the index itself survives untouched, which is deliberate: a reconnect must not
+    /// blank every player's view. It does re-seed, because a fresh subscription's apply repopulates
+    /// the cache without firing per-row `on_insert`.
+    fn arm_shared_world_view(&self) {
+        let view = self.world_view();
+        let shards = self.all_shards();
+        view.set_shards(shards.clone());
+        for (id, shard) in shards.iter().enumerate() {
+            super::world_view::arm_shard(view.clone(), shard.clone(), id);
+            let (hook_view, hook_shard) = (view.clone(), shard.clone());
+            shard
+                .0
+                .on_reconnect
+                .lock()
+                .unwrap()
+                .push(Arc::new(move || {
+                    super::world_view::arm_shard(hook_view.clone(), hook_shard.clone(), id);
+                    super::world_view::seed_from_caches(&hook_view);
+                }));
+        }
+        super::world_view::seed_from_caches(&view);
     }
 
     /// The database name this handle targets — the routing identity of every call made through it.
@@ -1787,13 +1786,12 @@ impl Coordinator {
     /// second routing overlay cannot grow a second opinion about what "stay put" means.
     ///
     /// `None` therefore means one of TWO different things, and a caller that treats it as a single
-    /// failure signal cannot tell them apart (a live #73 bug that read exactly this way: a region
-    /// explicitly assigned to the ASKER's own shard produced a "not connected" warning for a database
-    /// that was trivially connected — see `Coordinator::split_box_by_shard`'s doc comment for the fix,
-    /// which is to never call this with `db == self.shard_name()` in the first place, not to guess
-    /// here after the fact). The warning below only fires for the SECOND case — `db` genuinely absent
-    /// from the connected set — so it stays silent on every "already home" call, which is the common
-    /// case for `shard_for`/`instance_shard_for`/`settle_home_shard`.
+    /// failure signal cannot tell them apart (a live #73-era bug read exactly this way: a database
+    /// that was trivially connected produced a "not connected" warning because the caller asked for
+    /// its OWN shard — the fix is to never call this with `db == self.shard_name()` in the first
+    /// place, not to guess here after the fact). The warning below only fires for the SECOND case —
+    /// `db` genuinely absent from the connected set — so it stays silent on every "already home"
+    /// call, which is the common case for `shard_for`/`instance_shard_for`/`settle_home_shard`.
     pub(crate) fn shard_handle(&self, db: &str) -> Option<Coordinator> {
         if db == self.shard_name() {
             return None;
@@ -1829,193 +1827,6 @@ impl Coordinator {
             .into_iter()
             .map(|(_, coord)| coord)
             .collect()
-    }
-
-    /// The DATABASE that owns the REGION a character is standing in (#23), or `None` when regions
-    /// have nothing to say — which is every case except "a region containing this point is assigned
-    /// to a connected world shard".
-    ///
-    /// A NAME rather than a handle, because the answer has to be compared with the shard map's on
-    /// equal terms: an assignment that names the shard the asking handle is already on means *stay
-    /// here*, not *ask the shard map instead* — otherwise the same assignment would route two ways
-    /// depending on which handle the session happened to hold when it entered.
-    ///
-    /// The three inputs come from three places, and each is deliberate:
-    /// - the **definitions** from the DEFAULT world shard, because they are content data baked by
-    ///   the world ETL (realm-core never runs it, so its copy is empty);
-    /// - the **assignment** from realm-core, because that is the spec's authority for it;
-    /// - the **position** from `home_db` — the shard `resolve_home_shard` just settled on — because
-    ///   during a transfer window two shards can hold a row for one guid, and the *stale* one's
-    ///   coordinates must not be what a routing decision is taken on. The walk is only the fallback.
-    ///
-    /// Falls through to `None` on every failure — a missing realm-core, an empty menu, an
-    /// unassigned region, a target that is not a connected world shard — so the caller's existing
-    /// `shard_for` answer stands. That is the ticket's whole safety property: routing can only ever
-    /// collapse to #17's.
-    pub(crate) fn region_db_for(
-        &self,
-        character_guid: u64,
-        home_db: &str,
-        map_id: u32,
-        instance_id: u64,
-    ) -> Option<String> {
-        let shards = self.world_shards();
-        let (_, default_shard) = shards.first()?;
-        let regions = default_shard.map_regions();
-        if regions.is_empty() {
-            return None; // no seam menu imported: the overwhelmingly common case, and free
-        }
-        let assignments = self.realm_core().ok()?.region_assignments();
-        let (x, y, pending_instance) = shards
-            .iter()
-            .find(|(name, _)| name == home_db)
-            .into_iter()
-            .chain(shards.iter())
-            .find_map(|(_, coord)| coord.character_position(character_guid))?;
-        let db = crate::config::resolve_region_shard(
-            &regions,
-            &assignments,
-            map_id,
-            // A character mid-instance-entry has no live entity, so the partition read answers 0
-            // while the destination sits in `pending_instance_id`. Either one being non-zero means
-            // "not the open world", which is the only thing regions partition.
-            if instance_id == 0 {
-                pending_instance
-            } else {
-                instance_id
-            },
-            x,
-            y,
-            // WORLD SHARDS only, not every connected database: `conns` also holds realm-core, which
-            // owns no characters, so an assignment naming it would route a login into a database
-            // with nothing of the player's in it. The shard map can never name it either.
-            |d| shards.iter().any(|(name, _)| name == d),
-        )?;
-        log::info!(
-            "character {character_guid} at ({x:.1}, {y:.1}) on map {map_id} is in a region assigned \
-             to shard {db}"
-        );
-        Some(db.to_string())
-    }
-
-    /// The movement-path twin of [`region_db_for`](Self::region_db_for) (#72 slice 1 — detection
-    /// only, `world::seam`). The caller is driving off a JUST-ARRIVED movement packet, so it already
-    /// has `(x, y)` — this skips the position half of a `character_position` read and keeps only the
-    /// INSTANCE half of it: a resident mid-dungeon must never be region-routed by an open-world
-    /// map's seam menu (`resolve_region_shard` refuses on `instance_id != 0`, but only if it is
-    /// handed the real one). Same short-circuit order as `region_db_for` — the menu before the
-    /// assignment/instance reads — so a realm with no seam menu imported costs nothing here either.
-    ///
-    /// `None` on every failure `region_db_for` also falls through on, plus one it can't reach: the
-    /// character has no LIVE entity on any connected shard (a moving player always has one, but a
-    /// mock or a race is not this function's problem to adjudicate — `None` is always safe, it just
-    /// means "the shard map's answer stands").
-    pub(crate) fn region_shard_for_point(
-        &self,
-        character_guid: u64,
-        home_db: &str,
-        map_id: u32,
-        x: f32,
-        y: f32,
-    ) -> Option<String> {
-        let shards = self.world_shards();
-        let (_, default_shard) = shards.first()?;
-        let regions = default_shard.map_regions();
-        if regions.is_empty() {
-            return None; // no seam menu imported: the overwhelmingly common case, and free
-        }
-        let (_, _, instance_id) = shards
-            .iter()
-            .find(|(name, _)| name == home_db)
-            .into_iter()
-            .chain(shards.iter())
-            .find_map(|(_, coord)| coord.character_position(character_guid))?;
-        let assignments = self.realm_core().ok()?.region_assignments();
-        let db = crate::config::resolve_region_shard(
-            &regions,
-            &assignments,
-            map_id,
-            instance_id,
-            x,
-            y,
-            |d| shards.iter().any(|(name, _)| name == d),
-        )?;
-        Some(db.to_string())
-    }
-
-    /// The AOI tracker's twin of [`region_shard_for_point`](Self::region_shard_for_point) (#73
-    /// view-merge rebuild): split a WHOLE box's cells into per-shard [`lyracore_shared::spatial::GridRect`]s
-    /// in one pass, instead of resolving each cell into a materialized map and then diffing that
-    /// separately — [`crate::stdb::aoi::split_box_by_shard`]'s own doc comment is where the boundary-
-    /// line scan lives; this method only supplies the resolver it calls per cell, using the exact
-    /// same short-circuits [`region_shard_for_point`](Self::region_shard_for_point) does (no seam menu
-    /// imported, realm-core unreachable) so a straddling box and a straddling point can never
-    /// disagree about "is view-merge even relevant here".
-    ///
-    /// `instance_id` is the CALLER's, read from its own connection's cache (the AOI tracker's own
-    /// entity row) — never a probe, because unlike `region_db_for` there is no `character_guid` to
-    /// look up: the tracker is driven by a movement `(x, y)`, not an identity.
-    ///
-    /// `None` in the result (never a missing shard) means HOME. Every degenerate case collapses to
-    /// one entry: `(None, vec![GridRect::from_box(box_)])` — the whole box, as a rect — which is why
-    /// a non-straddling box's home coverage is byte-identical to the old whole-box subscription.
-    ///
-    /// # A region explicitly assigned to the CALLER's OWN shard is home, not away
-    ///
-    /// (Bug found live, 2026-08-04, `test-view-merge.sh` gate.) `resolve_region_shard_for_cell`
-    /// answers purely "which database does this region's assignment name", with no notion of who is
-    /// asking — the same contract `resolve_region_shard`/`region_shard_for_point` already have, and
-    /// their callers stay correct because they hand the name straight to
-    /// [`shard_handle`](Self::shard_handle), whose OWN `db == self.shard_name()` guard folds "my own
-    /// shard" back to "stay" before anything acts on it. This method builds `(shard, rects)` BUCKETS
-    /// directly from the resolver's raw answer, before any `shard_handle` call ever runs — so without
-    /// the `.filter` below, a region explicitly assigned to the shard the viewer is ALREADY on (a
-    /// perfectly ordinary menu — draw one region per shard for symmetry, e.g. "region 1 = the rest of
-    /// Elwynn, pinned to lyracore" right next to "region 2 = Goldshire, pinned to
-    /// lyracore-world-2") would land its own home coverage in an AWAY bucket named after itself.
-    /// `AreaOfInterestTracker::ensure_away` then asks `shard_handle` for that name, gets back the
-    /// SAME "None means stay" signal every other caller correctly reads as success, misreads it as
-    /// "shard unreachable", and — far worse than a missed away leg — the cells never end up in the
-    /// HOME bucket either: `update()`'s `new_home` only ever picks up `None` entries, so a box that
-    /// resolves ENTIRELY to "my own shard, by name" subscribes NOTHING at all, home or away. Filtering
-    /// the resolver's answer back to `None` here, once, is cheaper and more local than teaching every
-    /// consumer of this method's output to recognize its own name.
-    pub(crate) fn split_box_by_shard(
-        &self,
-        box_: &lyracore_shared::spatial::GridBox,
-        instance_id: u64,
-    ) -> Vec<(Option<String>, Vec<lyracore_shared::spatial::GridRect>)> {
-        let home_only = || {
-            vec![(
-                None,
-                vec![lyracore_shared::spatial::GridRect::from_box(box_)],
-            )]
-        };
-        let shards = self.world_shards();
-        let Some((_, default_shard)) = shards.first() else {
-            return home_only();
-        };
-        let regions = default_shard.map_regions();
-        if regions.is_empty() {
-            return home_only(); // no seam menu imported: the overwhelmingly common case, and free
-        }
-        let Ok(assignments) = self.realm_core().map(|rc| rc.region_assignments()) else {
-            return home_only(); // realm-core unreachable: degrade to home, same as every other resolver
-        };
-        let my_shard = self.shard_name().to_string();
-        super::aoi::split_box_by_shard(box_, move |gx, gy| {
-            let resolved = crate::config::resolve_region_shard_for_cell(
-                &regions,
-                &assignments,
-                box_.map_id,
-                instance_id,
-                gx,
-                gy,
-                |d| shards.iter().any(|(name, _)| name == d),
-            )
-            .map(str::to_string);
-            crate::config::fold_home_shard(resolved, &my_shard)
-        })
     }
 
     // #20 removed `realm_shard()` (#17's "the default shard is where accounts and characters live").

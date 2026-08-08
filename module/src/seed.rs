@@ -36,11 +36,12 @@ use crate::{
     game_creature_waypoint, game_event_reaper_schedule, game_gameobject, game_gameobject_pool,
     game_gameobject_pool_member, game_gameobject_template, game_graveyard, game_graveyard_zone,
     game_ground_area_schedule, game_instance_reaper_schedule, game_item_template,
-    game_melee_schedule, game_realm, game_spell, game_spell_effect, game_start_position, Account,
-    AuraSchedule, Character, CreatureLoot, CreatureMoveSchedule, CreatureSpawn, CreatureTemplate,
-    CreatureWaypoint, EventReaperSchedule, GameObject, GameObjectPool, GameObjectPoolMember,
-    GameObjectTemplate, GraveyardLoc, GraveyardZone, GroundAreaSchedule, ItemTemplate,
-    MeleeSchedule, Realm, ServerConfig, Spell, SpellEffect, StartPosition, EVENT_TTL_MICROS,
+    game_melee_schedule, game_motion_publish_schedule, game_realm, game_spell, game_spell_effect,
+    game_start_position, Account, AuraSchedule, Character, CreatureLoot, CreatureMoveSchedule,
+    CreatureSpawn, CreatureTemplate, CreatureWaypoint, EventReaperSchedule, GameObject,
+    GameObjectPool, GameObjectPoolMember, GameObjectTemplate, GraveyardLoc, GraveyardZone,
+    GroundAreaSchedule, ItemTemplate, MeleeSchedule, Realm, ServerConfig, Spell, SpellEffect,
+    StartPosition, EVENT_TTL_MICROS,
 };
 
 #[reducer(init)]
@@ -1327,6 +1328,22 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
         .insert(GroundAreaSchedule {
             scheduled_id: 0,
             scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(500_000)),
+        });
+
+    // Movement republish tick every 50ms = 20 Hz (#461): drains the PRIVATE
+    // `game_entity_motion_pending` staging table into the public `game_entity_motion` relay in ONE
+    // transaction, so SpacetimeDB's per-transaction subscription sweep runs 20×/s instead of once
+    // per movement packet. LOAD-BEARING — without this row peer movement stages and never relays.
+    // A live DB (auto-migrate publish) never re-runs init, so `debug_repair_after_publish` ensures
+    // it there, and `motion::ensure_schedule_armed` is the unconditional third net.
+    // Retune live with `set_motion_tick_ms`.
+    ctx.db
+        .game_motion_publish_schedule()
+        .insert(crate::motion::MotionPublishSchedule {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
+                crate::motion::MOTION_TICK_MICROS,
+            )),
         });
 }
 

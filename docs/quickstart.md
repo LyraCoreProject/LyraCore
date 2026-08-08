@@ -185,14 +185,14 @@ It prints its progress as it goes:
 ```text
 · starting SpacetimeDB on 127.0.0.1:3000...
 · building the gateway...
-· publishing lyracore, lyracore-elwynn, lyracore-kalimdor, lyracore-realm...
+· publishing lyracore, lyracore-kalimdor, lyracore-realm...
 · no SpacetimeDB login found — minting a local identity from http://127.0.0.1:3000 (no spacetimedb.com account needed)...
 · claiming the operator identity...
 · starting the gateway on 127.0.0.1:8085...
 ✓ dev stack is up.
   spacetime  healthy   (PID 12345, 127.0.0.1:3000)
   gateway    healthy   (PID 12346, 127.0.0.1:8085)
-  databases  lyracore, lyracore-elwynn, lyracore-kalimdor, lyracore-realm published on http://127.0.0.1:3000
+  databases  lyracore, lyracore-kalimdor, lyracore-realm published on http://127.0.0.1:3000
 ```
 
 (Illustrative — the exact wording is the CLI's, and it lives in
@@ -203,7 +203,7 @@ What that actually did:
 1. Started SpacetimeDB on `127.0.0.1:3000` — **or reused one already listening there.** A node this
    CLI did not start is never recorded and never stopped by `dev down`.
 2. Built the gateway (`cargo build -p lyracore-gateway`).
-3. Published the **four fixture databases** — `lyracore`, `lyracore-elwynn`, `lyracore-kalimdor`
+3. Published the **three fixture databases** — `lyracore`, `lyracore-kalimdor`
    and `lyracore-realm` — always through `./lyracore publish`. Nothing in this path runs a bare
    `spacetime publish`, and the command **refuses** to forward the destructive `-c` clear-publish.
    (`./lyracore dev up --single` publishes and runs `lyracore` alone; see below.)
@@ -223,45 +223,27 @@ The realm it brings up is **playable with no client-data import**: the module's 
 the realm row, the Human-Warrior start position in Elwynn Forest, the graveyards, a `TEST` account
 with a pre-made character (`Tester`, Human Warrior, level 1), and a small demo population.
 
-### Your local realm has a live seam — go and cross it
+### Your local realm is sharded
 
-This is the part worth doing before anything else. Your realm is **sharded**: Northshire Valley —
-where your character starts and where all the seeded content is — is on `lyracore`, the rest of
-Elwynn is on a second database (`lyracore-elwynn`), and map 1 (Kalimdor) is on a third. Those are
-separate SpacetimeDB databases with separate writers, not zones in one process.
-
-**Walk the road out of Northshire Valley, toward Goldshire.** Somewhere past the valley's mouth you
-cross the seam, and two System chat lines appear:
-
-```text
-Crossing the seam from lyracore into lyracore-elwynn...
-You are now on lyracore-elwynn. Seam crossed in 84 ms — no loading screen.
-```
-
-There is no loading screen, no character reload, and no reconnect — your session is handed over to
-the other database mid-walk. The messages are there because a correct handoff is *invisible* by
-construction, and for the alpha it is worth being told it happened; export `LYRACORE_SEAM_NOTIFY=0`
-for silent seams. The Kalimdor database is the *other* seam, but it is topology only — map 1 has no
+Your realm is not one database: all of Eastern Kingdoms — including Northshire Valley, where your
+character starts and where all the seeded content is — lives on `lyracore`, map 1 (Kalimdor) is on
+`lyracore-kalimdor`, and accounts and sessions are on `lyracore-realm`. Those are separate
+SpacetimeDB databases with separate writers, not zones in one process. Crossing between them is an
+escrowed character transfer, not a walk: the Kalimdor database is topology only — map 1 has no
 content at all, so it is a routing demonstration and a `dev status` line rather than a place to go.
 
-⚠ **Expect empty ground on the far side.** Everything the fixture seeds lives in Northshire Valley,
-on the near side of the seam; region 2 stays unpopulated until you run `./lyracore import` (which
-needs a cmangos world dump and your own client MPQs). Goldshire is not populated out of the box. The
-crossing itself is real and announces itself — that is what this walk is for.
+> The fixture used to carry a second Elwynn database and a **walkable seam** on the road to
+> Goldshire — a mid-session handoff between two databases serving one map. That region tier was
+> removed from the codebase on 2026-08-08 (#471, an operator decision to keep the alpha on the broad
+> splits alone); the design is preserved in
+> [`docs/region-sharding.md`](./region-sharding.md) (retired).
 
-The seam's geometry is plain content data you can edit:
-[`content/regions/fixture.regions`](../content/regions/fixture.regions), explained in
-[`docs/region-sharding.md`](./region-sharding.md). Every coordinate in it is committed in this
-repository, so the seam lands where the file says it does — a single line of constant world x
-(≈ -9183.3) between the valley and the Goldshire basin.
+⚠ **Expect empty ground beyond Northshire.** Everything the fixture seeds lives in Northshire
+Valley; the rest of Elwynn stays unpopulated until you run `./lyracore import` (which needs a
+cmangos world dump and your own client MPQs). Goldshire is not populated out of the box.
 
-> **What does not work across a seam yet.** Buffing, healing, melee and trade between two players on
-> opposite sides are **not built** (#75/#76), and an AoE clips at the boundary. You *can* see each
-> other, move, fight mobs, chat and emote across it. If you and a friend are grouping on the road out
-> of the valley and a heal will not land, this is why — stand on the same side.
-
-If you would rather not deal with four databases (debugging something unrelated, or RAM is tight),
-`./lyracore dev up --single` brings up `lyracore` alone with no seams at all.
+If you would rather not deal with three databases (debugging something unrelated, or RAM is tight),
+`./lyracore dev up --single` brings up `lyracore` alone.
 
 ⚠ Because the fixture is sharded, **a schema change means republishing every fixture database**, not
 just `lyracore` — `./lyracore publish` covers the set. A partial publish tends to present as an
@@ -772,11 +754,11 @@ name matches nothing and still exits 1 — indistinguishable from "already stopp
 - [GitHub Issues](https://github.com/LyraCoreProject/LyraCore/issues) — the work queue. Run the
   offline checks (`cargo test` per crate) before proposing a change.
 - [`docs/danger-zones.md`](./danger-zones.md) — authoritative traps, tooling gotchas, and the
-  production (five-database) deploy procedure. `dev up` runs its own smaller four-database fixture
+  production (four-database) deploy procedure. `dev up` runs its own smaller three-database fixture
   topology, which is the deliberate exception to §3; do not use it to launch or repair a production
   realm.
-- [`docs/region-sharding.md`](./region-sharding.md) — the seam you just crossed: the content-data
-  format, the shipped fixture menu, and how routing uses it.
+- [`docs/region-sharding.md`](./region-sharding.md) — retired (#471): the removed region tier's
+  design — seam menus, assignments, view merge — kept for reference.
 - [`docs/architecture.md`](./architecture.md) and [`docs/schema.md`](./schema.md) — how the module
   and gateway are put together, if you are here to write game logic.
 

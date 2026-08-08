@@ -1,14 +1,11 @@
-//! Periodic per-shard load sampling (issue #78) — the ops half of Phase C, and the substrate for
-//! the planned seam console (#199).
+//! Periodic per-shard load sampling (issue #78) — the ops half of Phase C.
 //!
 //! The gateway is the one component that can see the whole realm: every shard's own SpacetimeDB
 //! node exposes `/v1/metrics` (the same endpoint this project's internal capacity-benchmark harness
-//! reads for its writer-occupancy number), every shard's coordinator connection already caches its live
-//! player-session count, and every world shard's own subscription cache holds live positions. This
-//! module samples all three on a timer and writes them to realm-core via `record_shard_load` /
-//! `record_region_load` (`module/src/load.rs`), so "which shard is hot, which region is crowded,
-//! should I activate a seam" is answerable with `spacetime sql` — see `docs/region-sharding.md` for
-//! the two exact queries.
+//! reads for its writer-occupancy number), and every shard's coordinator connection already caches
+//! its live player-session count. This module samples both on a timer and writes them to
+//! realm-core via `record_shard_load` (`module/src/load.rs`), so "which shard is hot" is
+//! answerable with `spacetime sql`.
 //!
 //! # Split: impure I/O vs. the testable driver
 //!
@@ -36,7 +33,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use crate::realm_core::RealmDb;
 
 /// Default sampling cadence — matches the internal capacity-benchmark harness's own read of the same
-/// node metric, and is short enough that a `SHARD_LOAD_RING`/`REGION_LOAD_RING` of 20
+/// node metric, and is short enough that a `SHARD_LOAD_RING` of 20
 /// (`module/src/load.rs`) covers ~10 minutes of history.
 const DEFAULT_SAMPLE_SECS: u64 = 30;
 
@@ -52,7 +49,7 @@ pub(crate) fn sample_interval() -> Duration {
 }
 
 /// `<shard>=<hex-identity-prefix>` pairs, comma/semicolon/newline separated, `#` comments — the
-/// same separator convention `lyracore_shared::region::RegionMap::parse` uses for its seam menu.
+/// same separator convention `ShardMap::parse` uses for its rule text.
 ///
 /// This mapping exists because SpacetimeDB's `/v1/metrics` labels samples by database IDENTITY
 /// (`db="<hex>"`), not by the friendly name the gateway's own config uses
@@ -209,15 +206,15 @@ impl OccupancySampler {
     /// `stdb_base_url` is `LYRACORE_SPACETIMEDB_URL` (the same node every shard's coordinator connection
     /// targets) — `/v1/metrics` is appended here. Reads `LYRACORE_METRICS_DB_IDS` once; warns (loudly,
     /// once, at startup — the AC's "fails loudly when [manual config] disagrees with the topology")
-    /// if it names nothing, since every shard then samples sessions/regions but never occupancy.
+    /// if it names nothing, since every shard then samples sessions but never occupancy.
     pub(crate) fn from_env(stdb_base_url: &str) -> Self {
         let db_ids = parse_db_ids(&std::env::var("LYRACORE_METRICS_DB_IDS").unwrap_or_default());
         if db_ids.is_empty() {
             log::warn!(
-                "LYRACORE_METRICS_DB_IDS is unset — SHARDLOAD will sample session/region counts but report \
+                "LYRACORE_METRICS_DB_IDS is unset — SHARDLOAD will sample session counts but report \
                  writer occupancy as unmeasured for every shard (issue #78). Discover each shard's \
                  database identity with `\"$(bash scripts/wire-harness.sh --bin vanilla-wire-bench)\" --dry-run 1`, \
-                 then set LYRACORE_METRICS_DB_IDS=\"<shard>=<hex>,...\"; see docs/region-sharding.md."
+                 then set LYRACORE_METRICS_DB_IDS=\"<shard>=<hex>,...\"."
             );
         }
         Self {
@@ -274,7 +271,7 @@ impl OccupancySampler {
 // ===================================================================================================
 
 /// One sampling cycle: for every connected world shard, record its occupancy (if measured) +
-/// session count, and its region-bucketed population, onto realm-core. Returns one "SHARDLOAD ..."
+/// session count onto realm-core. Returns one "SHARDLOAD ..."
 /// line per shard for the caller to log at the sample cadence (the QUEUESTAT/AOISTAT convention,
 /// `gateway/src/world/mod.rs`) — visible without `spacetime sql`.
 ///
@@ -296,28 +293,20 @@ pub(crate) fn sample_and_record<D: RealmDb>(
     let mut lines = Vec::with_capacity(db.world_shards().len());
     for (name, shard) in db.world_shards() {
         let sessions = shard.session_count() as u32;
-        let regions = shard.region_player_counts();
         match occupancy_by_shard.get(&name) {
             Some(&pct) => {
                 if let Err(e) = rc.record_shard_load(&name, pct, sessions) {
                     log::warn!("SHARDLOAD: record_shard_load({name}) failed: {e:#}");
                 }
                 lines.push(format!(
-                    "SHARDLOAD shard={name} occupancy={pct:.1}% sessions={sessions} regions={}",
-                    regions.len()
+                    "SHARDLOAD shard={name} occupancy={pct:.1}% sessions={sessions}"
                 ));
             }
             None => {
                 lines.push(format!(
-                    "SHARDLOAD shard={name} occupancy=unmeasured sessions={sessions} regions={} \
-                     (set LYRACORE_METRICS_DB_IDS to enable occupancy)",
-                    regions.len()
+                    "SHARDLOAD shard={name} occupancy=unmeasured sessions={sessions} \
+                     (set LYRACORE_METRICS_DB_IDS to enable occupancy)"
                 ));
-            }
-        }
-        for (map_id, region_id, players) in regions {
-            if let Err(e) = rc.record_region_load(map_id, region_id, players) {
-                log::warn!("SHARDLOAD: record_region_load({map_id}/{region_id}) failed: {e:#}");
             }
         }
     }
@@ -475,17 +464,6 @@ spacetime_txn_cpu_time_sec_sum{db="zzz999",txn_type="Reducer"} 99.0
                 .any(|l| l.contains("occupancy=unmeasured") && l.contains("sessions=3")),
             "the line must say UNMEASURED, never a silent 0%: {lines:?}"
         );
-    }
-
-    #[test]
-    fn sample_and_record_forwards_every_bucketed_region_to_realm_core() {
-        let h = one_shard_realm();
-        *h.db_at(WORLD).region_population.lock().unwrap() = vec![(0, 1, 5), (0, 2, 3)];
-
-        sample_and_record(&h, &HashMap::new());
-
-        let recorded = h.db_at(CORE).recorded_region_loads.lock().unwrap().clone();
-        assert_eq!(recorded, vec![(0, 1, 5), (0, 2, 3)]);
     }
 
     #[test]
