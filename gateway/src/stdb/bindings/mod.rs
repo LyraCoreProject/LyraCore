@@ -414,6 +414,7 @@ pub mod gw_cancel_cast_reducer;
 pub mod gw_cast_at_reducer;
 pub mod gw_cast_spell_at_reducer;
 pub mod gw_cast_spell_reducer;
+pub mod gw_client_command_reducer;
 pub mod gw_del_friend_reducer;
 pub mod gw_del_ignore_reducer;
 pub mod gw_disenchant_reducer;
@@ -421,6 +422,7 @@ pub mod gw_enchant_item_reducer;
 pub mod gw_enter_areatrigger_reducer;
 pub mod gw_equip_item_reducer;
 pub mod gw_fish_reducer;
+pub mod gw_gm_command_reducer;
 pub mod gw_gossip_select_reducer;
 pub mod gw_group_decline_reducer;
 pub mod gw_group_invite_reducer;
@@ -1045,6 +1047,7 @@ pub use gw_cancel_cast_reducer::gw_cancel_cast;
 pub use gw_cast_at_reducer::gw_cast_at;
 pub use gw_cast_spell_at_reducer::gw_cast_spell_at;
 pub use gw_cast_spell_reducer::gw_cast_spell;
+pub use gw_client_command_reducer::gw_client_command;
 pub use gw_del_friend_reducer::gw_del_friend;
 pub use gw_del_ignore_reducer::gw_del_ignore;
 pub use gw_disenchant_reducer::gw_disenchant;
@@ -1052,6 +1055,7 @@ pub use gw_enchant_item_reducer::gw_enchant_item;
 pub use gw_enter_areatrigger_reducer::gw_enter_areatrigger;
 pub use gw_equip_item_reducer::gw_equip_item;
 pub use gw_fish_reducer::gw_fish;
+pub use gw_gm_command_reducer::gw_gm_command;
 pub use gw_gossip_select_reducer::gw_gossip_select;
 pub use gw_group_decline_reducer::gw_group_decline;
 pub use gw_group_invite_reducer::gw_group_invite;
@@ -1949,6 +1953,11 @@ pub enum Reducer {
         y: f32,
         z: f32,
     },
+    GwClientCommand {
+        actor_guid: u64,
+        cmd: String,
+        payload: String,
+    },
     GwDelFriend {
         actor_guid: u64,
         target_guid: u64,
@@ -1976,6 +1985,10 @@ pub enum Reducer {
     },
     GwFish {
         actor_guid: u64,
+    },
+    GwGmCommand {
+        actor_guid: u64,
+        text: String,
     },
     GwGossipSelect {
         actor_guid: u64,
@@ -2688,6 +2701,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwCastAt { .. } => "gw_cast_at",
             Reducer::GwCastSpell { .. } => "gw_cast_spell",
             Reducer::GwCastSpellAt { .. } => "gw_cast_spell_at",
+            Reducer::GwClientCommand { .. } => "gw_client_command",
             Reducer::GwDelFriend { .. } => "gw_del_friend",
             Reducer::GwDelIgnore { .. } => "gw_del_ignore",
             Reducer::GwDisenchant { .. } => "gw_disenchant",
@@ -2695,6 +2709,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwEnterAreatrigger { .. } => "gw_enter_areatrigger",
             Reducer::GwEquipItem { .. } => "gw_equip_item",
             Reducer::GwFish { .. } => "gw_fish",
+            Reducer::GwGmCommand { .. } => "gw_gm_command",
             Reducer::GwGossipSelect { .. } => "gw_gossip_select",
             Reducer::GwGroupDecline { .. } => "gw_group_decline",
             Reducer::GwGroupInvite { .. } => "gw_group_invite",
@@ -4056,6 +4071,15 @@ impl __sdk::Reducer for Reducer {
                 y: y.clone(),
                 z: z.clone(),
             }),
+            Reducer::GwClientCommand {
+                actor_guid,
+                cmd,
+                payload,
+            } => __sats::bsatn::to_vec(&gw_client_command_reducer::GwClientCommandArgs {
+                actor_guid: actor_guid.clone(),
+                cmd: cmd.clone(),
+                payload: payload.clone(),
+            }),
             Reducer::GwDelFriend {
                 actor_guid,
                 target_guid,
@@ -4102,6 +4126,12 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwFish { actor_guid } => __sats::bsatn::to_vec(&gw_fish_reducer::GwFishArgs {
                 actor_guid: actor_guid.clone(),
             }),
+            Reducer::GwGmCommand { actor_guid, text } => {
+                __sats::bsatn::to_vec(&gw_gm_command_reducer::GwGmCommandArgs {
+                    actor_guid: actor_guid.clone(),
+                    text: text.clone(),
+                })
+            }
             Reducer::GwGossipSelect {
                 actor_guid,
                 npc_guid,

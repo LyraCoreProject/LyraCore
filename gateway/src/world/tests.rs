@@ -827,7 +827,7 @@ impl WorldStore for InMemoryStore {
     fn use_gameobject(&self, _account_id: u64, _self_guid: u64, _go_guid: u64) -> Result<()> {
         Ok(())
     }
-    fn client_command(&self, _account_id: u64, _cmd: String, _payload: String) -> Result<()> {
+    fn client_command(&self, _account_id: u64, _self_guid: u64, _cmd: String, _payload: String) -> Result<()> {
         Ok(())
     }
 
@@ -1301,7 +1301,7 @@ impl WorldStore for InMemoryStore {
             }
         }
     }
-    fn gm_command(&self, _account_id: u64, text: String) -> Result<()> {
+    fn gm_command(&self, _account_id: u64, _self_guid: u64, text: String) -> Result<()> {
         match &self.gm_command_error {
             Some(e) => Err(anyhow!("{e}")),
             None => {

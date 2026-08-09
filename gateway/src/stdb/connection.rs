@@ -497,6 +497,15 @@ pub(crate) struct CoordinatorInner {
     /// — kept so the watchdog rebuilds with the SAME subscription set it was created with. See
     /// [`coordinator_queries`].
     sharded_tables: bool,
+    /// #481: the CALL-PIPE POOL — extra connections to the same database used exclusively for
+    /// reducer calls, round-robined by `call_pipe()`, so seated players' call traffic and login
+    /// calls stop serializing on one websocket (measured wall: ~1000 seats/pipe). Each pipe
+    /// carries one tiny liveness subscription (`game_config`, 1 row), never the coordinator set.
+    /// Empty when `LYRACORE_CALL_PIPES` <= 1 — calls then ride `coord()` exactly as before.
+    /// Deliberate simplification: dead pipes don't self-heal — `call_pipe()` skips inactive ones and falls back to
+    /// the watchdogged `coord()`; extending the watchdog to rebuild pipes is the upgrade path.
+    call_pipes: Vec<RwLock<LiveConn>>,
+    call_pipe_next: std::sync::atomic::AtomicUsize,
     /// Per-account player connections (each with its own node-issued identity == the account's
     /// bound identity). Opened on first need (at logon, when `bound_identity` is read) and reused
     /// for the world phase so `player_login`/`movement_update` run as the player, not the owner.
@@ -533,6 +542,65 @@ impl CoordinatorInner {
             p.into_inner()
         })
     }
+
+    /// The connection for the NEXT reducer call (#481): round-robin over the call-pipe pool,
+    /// skipping dead pipes; no pool (or every pipe dead) falls back to the watchdogged
+    /// coordinator connection, which is exactly the pre-#481 behavior.
+    pub(crate) fn call_pipe(&self) -> std::sync::RwLockReadGuard<'_, LiveConn> {
+        let n = self.call_pipes.len();
+        if n > 0 {
+            let start = self
+                .call_pipe_next
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            for k in 0..n {
+                let g = self.call_pipes[(start + k) % n]
+                    .read()
+                    .unwrap_or_else(|p| p.into_inner());
+                if g.conn.is_active() {
+                    return g;
+                }
+            }
+            log::warn!("call-pipe pool: every pipe inactive — falling back to the coordinator connection");
+        }
+        self.coord()
+    }
+}
+
+/// #481: build one CALL-ONLY pipe — same connect shape as [`connect_blocking`] but subscribing a
+/// single one-row table (`game_config`) purely so the `LiveConn` subscription handle exists and
+/// its liveness signal works. Reducer calls need no cache.
+fn connect_call_pipe(uri: String, db_name: String, token: Option<String>) -> Result<LiveConn> {
+    let conn = DbConnection::builder()
+        .with_uri(&uri)
+        .with_database_name(&db_name)
+        .with_token(token)
+        .on_connect(|_ctx, identity, _token| log::info!("call pipe connected as {identity}"))
+        .on_connect_error(|_ctx, err| log::error!("call pipe connect error: {err}"))
+        .on_disconnect(|_ctx, err| log::warn!("call pipe connection closed: {err:?}"))
+        .build()
+        .map_err(|e| anyhow!("call pipe build/connect failed: {e}"))?;
+    let pump = conn.run_threaded();
+    let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
+    let tx_err = tx.clone();
+    let sub = conn
+        .subscription_builder()
+        .on_applied(move |_ctx| {
+            let _ = tx.send(Ok(()));
+        })
+        .on_error(move |_ctx, err| {
+            let _ = tx_err.send(Err(format!("{err}")));
+        })
+        .subscribe(vec!["SELECT * FROM game_config"]);
+    match rx.recv_timeout(Duration::from_secs(15)) {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(anyhow!("call pipe subscription error: {e}")),
+        Err(_) => return Err(anyhow!("call pipe subscription not applied within 15s")),
+    }
+    Ok(LiveConn {
+        conn,
+        _pump: pump,
+        _sub: sub,
+    })
 }
 
 /// A per-account SpacetimeDB connection. Its node-issued `identity` is bound to the account by
@@ -1608,12 +1676,46 @@ impl Coordinator {
         })
         .await
         .context("join coordinator connect task")??;
+        // #481: the call-pipe pool. Total pipes = LYRACORE_CALL_PIPES (default 4); <=1 keeps
+        // the pre-#481 single-connection call path. A pipe that fails to build is logged and
+        // skipped — the pool degrades toward `coord()`, never fails the gateway.
+        let want_pipes = crate::config::call_pipes();
+        let mut call_pipes = Vec::new();
+        if want_pipes > 1 {
+            for i in 0..want_pipes {
+                let (u, d, t) = (
+                    cfg.stdb_uri.clone(),
+                    db_name.to_string(),
+                    cfg.coordinator_token.clone(),
+                );
+                let built = tokio::task::spawn_blocking(move || {
+                    std::thread::Builder::new()
+                        .name(format!("stdb-call-pipe-{i}"))
+                        .spawn(move || connect_call_pipe(u, d, t))
+                        .expect("spawn call pipe thread")
+                        .join()
+                        .map_err(|_| anyhow!("call pipe connect thread panicked"))?
+                })
+                .await;
+                match built {
+                    Ok(Ok(pipe)) => call_pipes.push(RwLock::new(pipe)),
+                    Ok(Err(e)) => log::warn!("call pipe {i} failed to build (skipped): {e:#}"),
+                    Err(e) => log::warn!("call pipe {i} join failed (skipped): {e:#}"),
+                }
+            }
+            log::info!(
+                "call-pipe pool: {} of {want_pipes} pipes up for {db_name} (#481)",
+                call_pipes.len()
+            );
+        }
         let inner = Arc::new(CoordinatorInner {
             live: RwLock::new(live),
             token: cfg.coordinator_token.clone(),
             uri: cfg.stdb_uri.clone(),
             db_name: db_name.to_string(),
             sharded_tables,
+            call_pipes,
+            call_pipe_next: std::sync::atomic::AtomicUsize::new(0),
             players: Mutex::new(HashMap::new()),
             on_reconnect: Mutex::new(Vec::new()),
         });

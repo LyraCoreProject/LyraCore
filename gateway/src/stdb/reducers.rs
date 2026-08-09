@@ -24,7 +24,7 @@ impl Coordinator {
         // bound identity as row owner, binds entity→lease, fail-closed on either missing) — and no
         // per-player connection is built here or anywhere else on the login path.
         if crate::config::shared_calls_enabled() {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             call_reducer!(
                 coord.conn.reducers,
                 "gw_player_login",
@@ -106,7 +106,7 @@ impl Coordinator {
         move_time_ms: u32,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_movement_update",
@@ -149,7 +149,7 @@ impl Coordinator {
         on_done: impl Fn(std::result::Result<(), String>) + Send + Sync + 'static,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer_nowait!(
                 coord.conn.reducers,
                 "gw_movement_update",
@@ -196,7 +196,7 @@ impl Coordinator {
     /// Provision SRP6 credentials computed by the gateway (Phase 0 bring-up).
     pub fn provision_account(&self, username: &str, salt: &[u8], verifier: &[u8]) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "provision_account",
             provision_account_then(username.to_string(), salt.to_vec(), verifier.to_vec())
         )
@@ -219,7 +219,7 @@ impl Coordinator {
         // The SpacetimeDB-generated reducer binding takes the five appearance bytes positionally;
         // unbundle `Appearance` here, at the single generated-boundary call.
         let result = call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "create_character",
             create_character_then(
                 account_id,
@@ -260,7 +260,7 @@ impl Coordinator {
     ) -> Result<crate::codec::CharDeleteOutcome> {
         use crate::codec::CharDeleteOutcome;
         let result = call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "delete_character",
             delete_character_then(account_id, character_guid)
         );
@@ -278,7 +278,7 @@ impl Coordinator {
         bound_identity: [u8; 32],
     ) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "establish_session",
             establish_session_then(
                 account_id,
@@ -298,7 +298,7 @@ impl Coordinator {
         instance_id: u64,
     ) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "set_character_shard",
             set_character_shard_then(character_guid, map_id, instance_id)
         )
@@ -308,7 +308,7 @@ impl Coordinator {
     /// connection so the module attributes it to the caller. `target_guid` 0 clears it.
     pub fn set_target(&self, account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_set_target",
@@ -329,7 +329,7 @@ impl Coordinator {
     pub fn inspect(&self, account_id: u64,
         actor_guid: u64, target_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_inspect",
@@ -345,7 +345,7 @@ impl Coordinator {
     /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_use_gameobject`.
     pub fn use_gameobject(&self, account_id: u64, actor_guid: u64, go_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_use_gameobject",
@@ -364,7 +364,7 @@ impl Coordinator {
     pub fn enter_areatrigger(&self, account_id: u64,
         actor_guid: u64, trigger_id: u32) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_enter_areatrigger",
@@ -380,7 +380,21 @@ impl Coordinator {
     }
 
     /// Forward an addon-bridge command (184) to the module's `client_command` dispatch.
-    pub fn client_command(&self, account_id: u64, cmd: String, payload: String) -> Result<()> {
+    pub fn client_command(
+        &self,
+        account_id: u64,
+        actor_guid: u64,
+        cmd: String,
+        payload: String,
+    ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.call_pipe();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_client_command",
+                gw_client_command_then(actor_guid, cmd, payload)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -393,7 +407,7 @@ impl Coordinator {
     /// the per-account connection so the module attributes the swing to the caller.
     pub fn start_attack(&self, account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_attack",
@@ -414,7 +428,7 @@ impl Coordinator {
     pub fn pet_command(&self, account_id: u64,
         actor_guid: u64, data: u32, target_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_pet_command",
@@ -440,7 +454,7 @@ impl Coordinator {
         spell_id: u32,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_ranged_attack",
@@ -458,7 +472,7 @@ impl Coordinator {
     /// Stop the player's melee auto-attack (`CMSG_ATTACKSTOP`, combat C1).
     pub fn stop_attack(&self, account_id: u64, actor_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_stop_attack",
@@ -475,7 +489,7 @@ impl Coordinator {
     pub fn cast_spell(&self, account_id: u64,
         actor_guid: u64, spell_id: u32, target_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_cast_spell",
@@ -504,7 +518,7 @@ impl Coordinator {
         z: f32,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_cast_spell_at",
@@ -524,7 +538,7 @@ impl Coordinator {
     pub fn cancel_aura(&self, account_id: u64,
         actor_guid: u64, spell_id: u32) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_cancel_aura",
@@ -543,7 +557,7 @@ impl Coordinator {
     /// module clears the caller's pending cast — no phantom completion GO. [083]
     pub fn cancel_cast(&self, account_id: u64, actor_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_cancel_cast",
@@ -563,7 +577,7 @@ impl Coordinator {
         message: String,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_send_chat",
@@ -582,7 +596,7 @@ impl Coordinator {
     pub fn join_channel(&self, account_id: u64,
         actor_guid: u64, channel: String) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_join_channel",
@@ -601,7 +615,7 @@ impl Coordinator {
     pub fn leave_channel(&self, account_id: u64,
         actor_guid: u64, channel: String) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_leave_channel",
@@ -625,7 +639,7 @@ impl Coordinator {
         message: String,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_send_channel_message",
@@ -649,7 +663,7 @@ impl Coordinator {
         target_guid: u64,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_send_emote",
@@ -667,7 +681,7 @@ impl Coordinator {
     pub fn send_roll(&self, account_id: u64,
         actor_guid: u64, min_roll: u32, max_roll: u32) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_send_roll",
@@ -690,7 +704,7 @@ impl Coordinator {
         message: String,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_send_whisper",
@@ -710,7 +724,7 @@ impl Coordinator {
     pub fn party_chat(&self, account_id: u64,
         actor_guid: u64, message: String) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_party_chat",
@@ -728,19 +742,35 @@ impl Coordinator {
     /// `NOT_IN_GROUP` check), but the Say handler relays this `Err`'s text VERBATIM to the sender as a
     /// system chat line — a raw `"permission denied"` / `"unknown command: .foo"` must reach the client
     /// with no wrapper prefix.
-    pub fn gm_command(&self, account_id: u64, text: String) -> Result<()> {
-        let player = self.player_conn(account_id)?;
+    pub fn gm_command(&self, account_id: u64, actor_guid: u64, text: String) -> Result<()> {
         let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
-        player
-            .conn
-            .reducers
-            .gm_command_then(text, move |_ctx, status| {
-                let _ = tx.send(match status {
-                    Ok(inner) => inner,
-                    Err(e) => Err(format!("{e:?}")),
-                });
-            })
-            .map_err(|e| anyhow!("send gm_command: {e}"))?;
+        // Same raw-module-message plumbing on both legs: the GM console renders the module's own
+        // rejection text ("permission denied", parse errors) verbatim, no "reducer failed" wrapper.
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.call_pipe();
+            coord
+                .conn
+                .reducers
+                .gw_gm_command_then(actor_guid, text, move |_ctx, status| {
+                    let _ = tx.send(match status {
+                        Ok(inner) => inner,
+                        Err(e) => Err(format!("{e:?}")),
+                    });
+                })
+                .map_err(|e| anyhow!("send gw_gm_command: {e}"))?;
+        } else {
+            let player = self.player_conn(account_id)?;
+            player
+                .conn
+                .reducers
+                .gm_command_then(text, move |_ctx, status| {
+                    let _ = tx.send(match status {
+                        Ok(inner) => inner,
+                        Err(e) => Err(format!("{e:?}")),
+                    });
+                })
+                .map_err(|e| anyhow!("send gm_command: {e}"))?;
+        }
         match rx.recv_timeout(Duration::from_secs(10)) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(anyhow!("{e}")), // the RAW module message, no "reducer failed" wrapper
@@ -752,7 +782,7 @@ impl Coordinator {
     /// attributes the sender + its grouped/on-quest gates to the caller.
     pub fn push_quest(&self, account_id: u64, actor_guid: u64, quest_id: u32) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_push_quest_to_party",
@@ -771,7 +801,7 @@ impl Coordinator {
     pub fn group_invite(&self, account_id: u64,
         actor_guid: u64, target_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_group_invite",
@@ -790,7 +820,7 @@ impl Coordinator {
     /// `gw_accept_group_invite`.
     pub fn group_accept(&self, account_id: u64, actor_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_accept_group_invite",
@@ -804,7 +834,7 @@ impl Coordinator {
     /// `CMSG_GROUP_DECLINE`.
     pub fn group_decline(&self, account_id: u64, actor_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_group_decline",
@@ -818,7 +848,7 @@ impl Coordinator {
     /// `CMSG_GROUP_DISBAND` — leave the caller's group.
     pub fn group_leave(&self, account_id: u64, actor_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_group_leave",
@@ -833,7 +863,7 @@ impl Coordinator {
     pub fn group_uninvite(&self, account_id: u64,
         actor_guid: u64, target_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_group_uninvite",
@@ -861,7 +891,7 @@ impl Coordinator {
         loot_threshold: u8,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_group_loot_method",
@@ -887,7 +917,7 @@ impl Coordinator {
         option_row_id: u32,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_gossip_select",
@@ -906,7 +936,7 @@ impl Coordinator {
     pub fn add_friend(&self, account_id: u64,
         actor_guid: u64, target_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_add_friend",
@@ -925,7 +955,7 @@ impl Coordinator {
     pub fn del_friend(&self, account_id: u64,
         actor_guid: u64, target_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_del_friend",
@@ -944,7 +974,7 @@ impl Coordinator {
     pub fn add_ignore(&self, account_id: u64,
         actor_guid: u64, target_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_add_ignore",
@@ -963,7 +993,7 @@ impl Coordinator {
     pub fn del_ignore(&self, account_id: u64,
         actor_guid: u64, target_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_del_ignore",
@@ -983,7 +1013,7 @@ impl Coordinator {
     /// coordinator connection as `gw_loot_money`.
     pub fn loot_money(&self, account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_loot_money",
@@ -1010,7 +1040,7 @@ impl Coordinator {
         loot_slot: u8,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_take_loot",
@@ -1027,7 +1057,7 @@ impl Coordinator {
 
     pub fn skin_corpse(&self, account_id: u64, actor_guid: u64, corpse_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_skin",
@@ -1050,7 +1080,7 @@ impl Coordinator {
         vote: u8,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_loot_roll",
@@ -1076,7 +1106,7 @@ impl Coordinator {
         target_guid: u64,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_loot_master_give",
@@ -1093,7 +1123,7 @@ impl Coordinator {
 
     pub fn disenchant_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_disenchant",
@@ -1112,7 +1142,7 @@ impl Coordinator {
         enchant_id: u32,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_enchant_item",
@@ -1140,7 +1170,7 @@ impl Coordinator {
         count: u32,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_buy_item",
@@ -1167,7 +1197,7 @@ impl Coordinator {
         spell_id: u32,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_trainer_buy",
@@ -1185,7 +1215,7 @@ impl Coordinator {
     pub fn learn_talent(&self, account_id: u64,
         actor_guid: u64, talent_id: u32) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_learn_talent",
@@ -1204,7 +1234,7 @@ impl Coordinator {
     /// skill and grants the fish straight to the bag. Caller resolved via ctx.sender.
     pub fn fish(&self, account_id: u64, actor_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_fish",
@@ -1221,7 +1251,7 @@ impl Coordinator {
     pub fn pick_lock(&self, account_id: u64,
         actor_guid: u64, go_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_pick_lock",
@@ -1243,7 +1273,7 @@ impl Coordinator {
         action_type: u8,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_set_action_button",
@@ -1269,7 +1299,7 @@ impl Coordinator {
         at_war: bool,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_set_faction_at_war",
@@ -1296,7 +1326,7 @@ impl Coordinator {
         slot: u8,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_sell_item",
@@ -1314,7 +1344,7 @@ impl Coordinator {
     pub fn buyback_item(&self, account_id: u64,
         actor_guid: u64, vendor_guid: u64, slot: u8) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_buyback_item",
@@ -1335,7 +1365,7 @@ impl Coordinator {
     pub fn repair_item(&self, account_id: u64,
         actor_guid: u64, npc_guid: u64, slot: u8) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_repair_item",
@@ -1355,7 +1385,7 @@ impl Coordinator {
     /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_equip_item`.
     pub fn equip_item(&self, account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_equip_item",
@@ -1375,7 +1405,7 @@ impl Coordinator {
     pub fn unequip_item(&self, account_id: u64,
         actor_guid: u64, from_slot: u8) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_unequip_item",
@@ -1396,7 +1426,7 @@ impl Coordinator {
     /// `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_use_item`.
     pub fn use_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_use_item",
@@ -1412,7 +1442,7 @@ impl Coordinator {
     /// it to the caller's entity. No args — `bind_home` resolves the caller via `ctx.sender`.
     pub fn bind_home(&self, account_id: u64, actor_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_bind_home",
@@ -1428,7 +1458,7 @@ impl Coordinator {
     pub fn move_item(&self, account_id: u64,
         actor_guid: u64, from_slot: u8, to_slot: u8) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_move_item",
@@ -1455,7 +1485,7 @@ impl Coordinator {
         quest_id: u32,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_accept_quest",
@@ -1483,7 +1513,7 @@ impl Coordinator {
         reward_index: u32,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_turn_in_quest",
@@ -1503,7 +1533,7 @@ impl Coordinator {
     pub fn abandon_quest(&self, account_id: u64,
         actor_guid: u64, quest_id: u32) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_abandon_quest",
@@ -1522,7 +1552,7 @@ impl Coordinator {
     /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_repop`.
     pub fn repop(&self, account_id: u64, actor_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(coord.conn.reducers, "gw_repop", gw_repop_then(actor_guid));
         }
         let player = self.player_conn(account_id)?;
@@ -1533,7 +1563,7 @@ impl Coordinator {
     pub fn reclaim_corpse(&self, account_id: u64,
         actor_guid: u64, corpse_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_reclaim_corpse",
@@ -1552,7 +1582,7 @@ impl Coordinator {
     /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_respond_resurrect`.
     pub fn resurrect_response(&self, account_id: u64, actor_guid: u64, accept: bool) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_respond_resurrect",
@@ -1578,7 +1608,7 @@ impl Coordinator {
         healer_guid: u64,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_spirit_res",
@@ -1600,7 +1630,7 @@ impl Coordinator {
     /// socket closes (so the module's `on_disconnect` would not otherwise fire).
     pub fn logout(&self, account_id: u64, actor_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.coord();
+            let coord = self.0.call_pipe();
             return call_reducer!(
                 coord.conn.reducers,
                 "gw_leave_world",
@@ -1622,7 +1652,7 @@ impl Coordinator {
     /// and delete its live entity, in ONE transaction. Idempotent on `transfer_id`.
     pub fn begin_transfer(&self, plan: &crate::world::transfer::TransferPlan) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "begin_transfer",
             begin_transfer_then(
                 plan.transfer_id,
@@ -1642,7 +1672,7 @@ impl Coordinator {
     /// gateway carried. Idempotent on `transfer_id`.
     pub fn import_character_blob(&self, transfer_id: u64, blob: &[u8]) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "import_character_blob",
             import_character_blob_then(transfer_id, blob.to_vec())
         )
@@ -1652,7 +1682,7 @@ impl Coordinator {
     /// after `import_character_blob` returned Ok; see `world::transfer::run_transfer`.
     pub fn confirm_import(&self, transfer_id: u64) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "confirm_import",
             confirm_import_then(transfer_id)
         )
@@ -1661,7 +1691,7 @@ impl Coordinator {
     /// `finish_transfer` — delete-last: destroy the source copy and clear the escrow.
     pub fn finish_transfer(&self, transfer_id: u64) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "finish_transfer",
             finish_transfer_then(transfer_id)
         )
@@ -1670,7 +1700,7 @@ impl Coordinator {
     /// `release_transfer` — drop the arrival copy's fence at the destination.
     pub fn release_transfer(&self, transfer_id: u64) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "release_transfer",
             release_transfer_then(transfer_id)
         )
@@ -1680,7 +1710,7 @@ impl Coordinator {
     /// population the first time.
     pub fn ensure_instance(&self, instance_id: u64, map_id: u32, party_id: u64) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "ensure_instance",
             ensure_instance_then(instance_id, map_id, party_id)
         )
@@ -1689,7 +1719,7 @@ impl Coordinator {
     /// `evict_instance_population` — stop this shard ticking an instance whose run moved elsewhere.
     pub fn evict_instance_population(&self, instance_id: u64) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "evict_instance_population",
             evict_instance_population_then(instance_id)
         )
@@ -1704,7 +1734,7 @@ impl Coordinator {
         sessions: u32,
     ) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "record_shard_load",
             record_shard_load_then(shard.to_string(), writer_occupancy_pct, sessions)
         )
@@ -1726,7 +1756,7 @@ impl Coordinator {
         arg_b: u8,
     ) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "realm_group_op",
             realm_group_op_then(op, actor_guid, target_guid, arg_a, arg_b)
         )
@@ -1749,7 +1779,7 @@ impl Coordinator {
         sender_is_ignored: bool,
     ) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "realm_whisper",
             realm_whisper_then(sender_guid, target_guid, message, sender_is_ignored)
         )
@@ -1760,7 +1790,7 @@ impl Coordinator {
     /// on each WORLD shard after a party op and at world entry.
     pub fn sync_group_mirror(&self, roster: &crate::world::party::GroupRoster) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "sync_group_mirror",
             sync_group_mirror_then(
                 roster.group_id,
@@ -1795,7 +1825,7 @@ impl Coordinator {
         recipients: Vec<u64>,
     ) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "realm_loot_op",
             realm_loot_op_then(
                 op,
@@ -1816,7 +1846,7 @@ impl Coordinator {
     /// module's own `withheld` guard makes a wrong-shard call a harmless no-op.
     pub fn settle_loot_roll(&self, corpse_guid: u64, slot: u8, winner_guid: u64) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "settle_loot_roll",
             settle_loot_roll_then(corpse_guid, slot, winner_guid)
         )
@@ -1826,7 +1856,7 @@ impl Coordinator {
     /// loot-roll relay has promoted it onto realm-core (#50). Operator-gated, coordinator connection.
     pub fn clear_promoted_loot_roll(&self, roll_id: u64) -> Result<()> {
         call_reducer!(
-            self.0.coord().conn.reducers,
+            self.0.call_pipe().conn.reducers,
             "clear_promoted_loot_roll",
             clear_promoted_loot_roll_then(roll_id)
         )

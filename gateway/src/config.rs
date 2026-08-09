@@ -640,8 +640,23 @@ pub fn aoi_enabled() -> bool {
 /// the per-account player connection. Default OFF — the per-player path is the proven one; this
 /// flag exists so the shared path can be soaked and benched per verb family before it becomes the
 /// only path (stage 4d). Requires a module carrying the `gw_*` reducers (PR #475) on every shard.
+/// #481: total reducer-call connections per shard (the call-pipe pool). Default 4 — sized from
+/// the measured ~1000-seats-per-pipe wall; `LYRACORE_CALL_PIPES=1` restores the single-connection
+/// call path. Values are clamped to [1, 16].
+pub fn call_pipes() -> usize {
+    std::env::var("LYRACORE_CALL_PIPES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(4)
+        .clamp(1, 16)
+}
+
 pub fn shared_calls_enabled() -> bool {
-    std::env::var("LYRACORE_SHARED_CALLS").is_ok_and(|v| v == "1")
+    // #478 Phase 0 (operator-approved 2026-08-09): the shared pipe IS how LyraCore works — the
+    // flag defaults ON and the env var is the opt-OUT escape hatch (`LYRACORE_SHARED_CALLS=0`
+    // restores the per-player path byte-for-byte for the bake period; the legacy path is deleted
+    // outright once the bake holds, #478 Phases 1+).
+    std::env::var("LYRACORE_SHARED_CALLS").map_or(true, |v| v != "0")
 }
 
 /// #468 stage 4d (unblocked by #479): the per-account OWNER identity bound by `establish_session`

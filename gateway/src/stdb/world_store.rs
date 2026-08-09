@@ -459,8 +459,8 @@ impl WorldStore for Coordinator {
         self.enter_areatrigger(account_id, self_guid, trigger_id)
     }
 
-    fn client_command(&self, account_id: u64, cmd: String, payload: String) -> Result<()> {
-        self.client_command(account_id, cmd, payload)
+    fn client_command(&self, account_id: u64, self_guid: u64, cmd: String, payload: String) -> Result<()> {
+        self.client_command(account_id, self_guid, cmd, payload)
     }
 
     fn player_items(&self, owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
@@ -841,8 +841,8 @@ impl WorldStore for Coordinator {
         self.party_chat(account_id, self_guid, message)
     }
 
-    fn gm_command(&self, account_id: u64, text: String) -> Result<()> {
-        self.gm_command(account_id, text)
+    fn gm_command(&self, account_id: u64, self_guid: u64, text: String) -> Result<()> {
+        self.gm_command(account_id, self_guid, text)
     }
 
     fn loot_target_money(&self, target_guid: u64) -> Result<u32> {

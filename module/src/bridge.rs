@@ -65,7 +65,18 @@ pub(crate) fn send(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload
 #[reducer]
 pub fn client_command(ctx: &ReducerContext, cmd: String, payload: String) -> Result<(), String> {
     let e = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
-    dispatch(ctx, e.guid, &cmd, &payload);
+    apply_client_command(ctx, e.guid, &cmd, &payload)
+}
+
+/// The shared core behind [`client_command`] and its gateway twin `gw_client_command` (#479):
+/// dispatch with the sender already resolved to a guid.
+pub(crate) fn apply_client_command(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    cmd: &str,
+    payload: &str,
+) -> Result<(), String> {
+    dispatch(ctx, character_guid, cmd, payload);
     Ok(())
 }
 

@@ -987,6 +987,30 @@ pub fn gw_pet_command(
 
 
 
+/// [`crate::bridge::apply_client_command`] with the sender named by guid (#479, operator call:
+/// the GM/bridge surface rides the gateway path like every other verb; authorization was never
+/// the connection identity).
+#[reducer]
+pub fn gw_client_command(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    cmd: String,
+    payload: String,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    actor(ctx, actor_guid)?;
+    crate::bridge::apply_client_command(ctx, actor_guid, &cmd, &payload)
+}
+
+/// [`crate::gm::apply_gm_command`] with the caller named by guid (#479). The gm_level check on
+/// the CALLER'S CHARACTER row — the real gate — is inside the core, unchanged.
+#[reducer]
+pub fn gw_gm_command(ctx: &ReducerContext, actor_guid: u64, text: String) -> Result<(), String> {
+    require_operator(ctx)?;
+    let caller = actor(ctx, actor_guid)?;
+    crate::gm::apply_gm_command(ctx, caller, text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{lease_expired, LEASE_REAP_MICROS, LEASE_TTL_MICROS};

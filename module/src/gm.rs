@@ -253,9 +253,21 @@ pub fn set_gm_level(ctx: &ReducerContext, character_name: String, level: u8) -> 
 /// gateway relays it back to the SENDER ONLY as a system chat line.
 #[reducer]
 pub fn gm_command(ctx: &ReducerContext, text: String) -> Result<(), String> {
-    let entities = ctx.db.game_world_entity();
-    let mut caller =
+    let caller =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
+    apply_gm_command(ctx, caller, text)
+}
+
+/// The shared core behind [`gm_command`] and its gateway twin `gw_gm_command` (#479). The REAL
+/// authorization is unchanged and lives here: `gm_level` read off the CALLER'S CHARACTER row —
+/// the connection identity never was the gate.
+pub(crate) fn apply_gm_command(
+    ctx: &ReducerContext,
+    caller: crate::WorldEntity,
+    text: String,
+) -> Result<(), String> {
+    let entities = ctx.db.game_world_entity();
+    let mut caller = caller;
     let gm_level = ctx
         .db
         .game_character()

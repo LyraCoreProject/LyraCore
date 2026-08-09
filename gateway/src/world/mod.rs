@@ -682,7 +682,7 @@ pub trait WorldStore: Send + Sync {
 
     /// Forward a parsed addon-bridge command (184) to the module's `client_command` reducer ON
     /// THE PLAYER'S CONNECTION — the handler runs with exactly the player's reducer authority.
-    fn client_command(&self, account_id: u64, cmd: String, payload: String) -> Result<()>;
+    fn client_command(&self, account_id: u64, self_guid: u64, cmd: String, payload: String) -> Result<()>;
 
     /// Read every item a character owns, for the login item spawns + inventory slots (items slice-1).
     fn player_items(&self, owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>>;
@@ -1090,7 +1090,7 @@ pub trait WorldStore: Send + Sync {
     /// leading `.` — the Say handler intercepts it BEFORE any chat relay/insert and forwards it here
     /// verbatim (module-side parsing keeps the command set data-free). `Err`'s message is relayed back
     /// to the SENDER ONLY as a system chat line (never broadcast, never a `game_chat_event` row).
-    fn gm_command(&self, account_id: u64, text: String) -> Result<()>;
+    fn gm_command(&self, account_id: u64, self_guid: u64, text: String) -> Result<()>;
 
     /// Read a corpse's lootable copper for `SMSG_LOOT_RESPONSE` (slice 3). 0 if the target is gone
     /// or not a corpse. Read-only — the actual take is `loot_money`.
@@ -2053,7 +2053,7 @@ fn handle_addon_message<St: WorldStore + ?Sized>(store: &St, conn: &WorldConn, t
         log::debug!("addon bridge: non-STC or malformed frame dropped: {text:?}");
         return;
     };
-    if let Err(e) = store.client_command(conn.account_id, cmd.clone(), payload) {
+    if let Err(e) = store.client_command(conn.account_id, social::self_guid(conn).unwrap_or(0), cmd.clone(), payload) {
         log::info!(
             "addon bridge: command {cmd:?} from account {} failed: {e:#}",
             conn.account_id
@@ -4632,7 +4632,7 @@ fn handle_query<St: WorldStore + ?Sized>(
             let lang = language.as_int() as u8;
             match chat_type {
                 CMSG_MESSAGECHAT_ChatType::Say if message.starts_with('.') => {
-                    if let Err(e) = store.gm_command(conn.account_id, message) {
+                    if let Err(e) = store.gm_command(conn.account_id, self_guid, message) {
                         send(
                             tx,
                             Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
