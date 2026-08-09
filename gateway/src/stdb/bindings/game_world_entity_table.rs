@@ -18,6 +18,18 @@ pub struct GameWorldEntityTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_world_entity`.
+pub struct GameWorldEntityTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameWorldEntityTableAccessor {
+    type Row = WorldEntity;
+    type Handle<'db> = GameWorldEntityTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_world_entity()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_world_entity`.
 ///
@@ -39,6 +51,18 @@ impl GameWorldEntityTableAccess for super::RemoteTables {
 
 pub struct GameWorldEntityInsertCallbackId(__sdk::CallbackId);
 pub struct GameWorldEntityDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameWorldEntityTableHandle<'ctx> {
+    type Row = WorldEntity;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = WorldEntity> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameWorldEntityTableHandle<'ctx> {
     type Row = WorldEntity;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameWorldEntityTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameWorldEntityTableHandle<'ctx> {
+    type InsertCallbackId = GameWorldEntityInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameWorldEntityInsertCallbackId {
+        GameWorldEntityInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameWorldEntityInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameWorldEntityTableHandle<'ctx> {
+    type DeleteCallbackId = GameWorldEntityDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameWorldEntityDeleteCallbackId {
+        GameWorldEntityDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameWorldEntityDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameWorldEntityUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameWorldEntityTableHandle<'ctx> {
+    type UpdateCallbackId = GameWorldEntityUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameWorldEntityUpdateCallbackId {
+        GameWorldEntityUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameWorldEntityUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameWorldEntityTableHandle<'ctx> {
     type UpdateCallbackId = GameWorldEntityUpdateCallbackId;
 
     fn on_update(

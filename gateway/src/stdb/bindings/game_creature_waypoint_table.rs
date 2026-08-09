@@ -18,6 +18,18 @@ pub struct GameCreatureWaypointTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_creature_waypoint`.
+pub struct GameCreatureWaypointTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameCreatureWaypointTableAccessor {
+    type Row = CreatureWaypoint;
+    type Handle<'db> = GameCreatureWaypointTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_creature_waypoint()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_creature_waypoint`.
 ///
@@ -41,6 +53,18 @@ impl GameCreatureWaypointTableAccess for super::RemoteTables {
 
 pub struct GameCreatureWaypointInsertCallbackId(__sdk::CallbackId);
 pub struct GameCreatureWaypointDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameCreatureWaypointTableHandle<'ctx> {
+    type Row = CreatureWaypoint;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = CreatureWaypoint> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameCreatureWaypointTableHandle<'ctx> {
     type Row = CreatureWaypoint;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GameCreatureWaypointTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameCreatureWaypointTableHandle<'ctx> {
+    type InsertCallbackId = GameCreatureWaypointInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCreatureWaypointInsertCallbackId {
+        GameCreatureWaypointInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameCreatureWaypointInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameCreatureWaypointTableHandle<'ctx> {
+    type DeleteCallbackId = GameCreatureWaypointDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCreatureWaypointDeleteCallbackId {
+        GameCreatureWaypointDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameCreatureWaypointDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameCreatureWaypointUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameCreatureWaypointTableHandle<'ctx> {
+    type UpdateCallbackId = GameCreatureWaypointUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameCreatureWaypointUpdateCallbackId {
+        GameCreatureWaypointUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameCreatureWaypointUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameCreatureWaypointTableHandle<'ctx> {
     type UpdateCallbackId = GameCreatureWaypointUpdateCallbackId;
 
     fn on_update(

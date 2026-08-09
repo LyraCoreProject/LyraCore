@@ -18,6 +18,18 @@ pub struct GameCorpseLootEligibleTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_corpse_loot_eligible`.
+pub struct GameCorpseLootEligibleTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameCorpseLootEligibleTableAccessor {
+    type Row = CorpseLootEligible;
+    type Handle<'db> = GameCorpseLootEligibleTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_corpse_loot_eligible()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_corpse_loot_eligible`.
 ///
@@ -41,6 +53,18 @@ impl GameCorpseLootEligibleTableAccess for super::RemoteTables {
 
 pub struct GameCorpseLootEligibleInsertCallbackId(__sdk::CallbackId);
 pub struct GameCorpseLootEligibleDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameCorpseLootEligibleTableHandle<'ctx> {
+    type Row = CorpseLootEligible;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = CorpseLootEligible> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameCorpseLootEligibleTableHandle<'ctx> {
     type Row = CorpseLootEligible;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GameCorpseLootEligibleTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameCorpseLootEligibleTableHandle<'ctx> {
+    type InsertCallbackId = GameCorpseLootEligibleInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCorpseLootEligibleInsertCallbackId {
+        GameCorpseLootEligibleInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameCorpseLootEligibleInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameCorpseLootEligibleTableHandle<'ctx> {
+    type DeleteCallbackId = GameCorpseLootEligibleDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCorpseLootEligibleDeleteCallbackId {
+        GameCorpseLootEligibleDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameCorpseLootEligibleDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameCorpseLootEligibleUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameCorpseLootEligibleTableHandle<'ctx> {
+    type UpdateCallbackId = GameCorpseLootEligibleUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameCorpseLootEligibleUpdateCallbackId {
+        GameCorpseLootEligibleUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameCorpseLootEligibleUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameCorpseLootEligibleTableHandle<'ctx> {
     type UpdateCallbackId = GameCorpseLootEligibleUpdateCallbackId;
 
     fn on_update(

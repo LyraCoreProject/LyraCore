@@ -18,6 +18,18 @@ pub struct GameEncounterEquipTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_encounter_equip`.
+pub struct GameEncounterEquipTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameEncounterEquipTableAccessor {
+    type Row = EncounterEquip;
+    type Handle<'db> = GameEncounterEquipTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_encounter_equip()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_encounter_equip`.
 ///
@@ -39,6 +51,18 @@ impl GameEncounterEquipTableAccess for super::RemoteTables {
 
 pub struct GameEncounterEquipInsertCallbackId(__sdk::CallbackId);
 pub struct GameEncounterEquipDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameEncounterEquipTableHandle<'ctx> {
+    type Row = EncounterEquip;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = EncounterEquip> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameEncounterEquipTableHandle<'ctx> {
     type Row = EncounterEquip;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameEncounterEquipTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameEncounterEquipTableHandle<'ctx> {
+    type InsertCallbackId = GameEncounterEquipInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameEncounterEquipInsertCallbackId {
+        GameEncounterEquipInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameEncounterEquipInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameEncounterEquipTableHandle<'ctx> {
+    type DeleteCallbackId = GameEncounterEquipDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameEncounterEquipDeleteCallbackId {
+        GameEncounterEquipDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameEncounterEquipDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameEncounterEquipUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameEncounterEquipTableHandle<'ctx> {
+    type UpdateCallbackId = GameEncounterEquipUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameEncounterEquipUpdateCallbackId {
+        GameEncounterEquipUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameEncounterEquipUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameEncounterEquipTableHandle<'ctx> {
     type UpdateCallbackId = GameEncounterEquipUpdateCallbackId;
 
     fn on_update(

@@ -105,6 +105,19 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
 pub fn cast_spell(ctx: &ReducerContext, spell_id: u32, target_guid: u64) -> Result<(), String> {
     let caster =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caster not in world".to_string())?;
+    do_cast_spell(ctx, caster, spell_id, target_guid)
+}
+
+/// The spellbook-gated cast core, actor-explicit (#479): everything [`cast_spell`] does after
+/// resolving WHO is casting — the sender reducer above and `gw::gw_cast_spell` both delegate here.
+/// Distinct from [`crate::actor::cast_at`], which drives `resolve_cast_at` and skips the spellbook
+/// gate; this is the player-shaped entry (cast-time aware, self-cast on `target_guid == 0`).
+pub(crate) fn do_cast_spell(
+    ctx: &ReducerContext,
+    caster: crate::WorldEntity,
+    spell_id: u32,
+    target_guid: u64,
+) -> Result<(), String> {
     // Spellbook gate: a player may only cast a spell in its game_player_spell rows (creation grants
     // the createinfo kit; talents/trainers/quests append). Without this a modified client could cast
     // ANY seeded spell (e.g. a Warrior casting Fireball, or another class's ability).
@@ -143,6 +156,20 @@ pub fn cast_spell_at(
 ) -> Result<(), String> {
     let caster =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caster not in world".to_string())?;
+    apply_cast_spell_at(ctx, &caster, spell_id, target_guid, x, y, z)
+}
+
+/// The shared core behind [`cast_spell_at`] and its gateway twin `gw_cast_at` (#479) — the
+/// ground-target cast with the spellbook, NaN and self-target-default gates.
+pub(crate) fn apply_cast_spell_at(
+    ctx: &ReducerContext,
+    caster: &crate::WorldEntity,
+    spell_id: u32,
+    target_guid: u64,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> Result<(), String> {
     if !knows_spell(ctx, caster.guid, spell_id) {
         return Err(format!("spell {spell_id} is not in the caster's spellbook"));
     }
@@ -226,6 +253,14 @@ pub fn resurrect_response(ctx: &ReducerContext, accept: bool) -> Result<(), Stri
 pub fn cancel_cast(ctx: &ReducerContext) -> Result<(), String> {
     let caster =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caster not in world".to_string())?;
+    do_cancel_cast(ctx, caster)
+}
+
+/// The cancel-cast core, actor-explicit (#479) — same split as [`do_cast_spell`].
+pub(crate) fn do_cancel_cast(
+    ctx: &ReducerContext,
+    caster: crate::WorldEntity,
+) -> Result<(), String> {
     interrupt_cast(ctx, caster.guid);
     break_channel(ctx, caster.guid);
     // Un-queue a pending on-next-swing strike too (114): the vanilla client cancels a queued Heroic
@@ -249,6 +284,16 @@ pub fn cancel_cast(ctx: &ReducerContext) -> Result<(), String> {
 pub fn cancel_aura(ctx: &ReducerContext, spell_id: u32) -> Result<(), String> {
     let player =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caster not in world".to_string())?;
+    do_cancel_aura(ctx, player.guid, spell_id)
+}
+
+/// The cancel-aura core, actor-explicit (#479) — same split as [`do_cast_spell`], keyed by guid
+/// (the body never reads another column off the row).
+pub(crate) fn do_cancel_aura(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    spell_id: u32,
+) -> Result<(), String> {
     // PASSIVE spells (talent passives) are server-enforced and NOT player-cancelable — refuse to strip
     // them even if a modified client sends CMSG_CANCEL_AURA, so a player can't right-click off a talent
     // bonus. NEGATIVE auras (debuffs, CC) are likewise refused: the vanilla client never offers
@@ -273,7 +318,7 @@ pub fn cancel_aura(ctx: &ReducerContext, spell_id: u32) -> Result<(), String> {
     // mutate the table mid-iteration.
     let to_remove: Vec<(u64, bool)> = auras
         .by_target()
-        .filter(&player.guid)
+        .filter(&player_guid)
         .filter(|a| a.spell_id == spell_id)
         .map(|a| (a.id, aura_moves_vitals(a.eff_kind, a.eff_p0)))
         .collect();
@@ -286,7 +331,7 @@ pub fn cancel_aura(ctx: &ReducerContext, spell_id: u32) -> Result<(), String> {
         revitalize |= moves_vitals;
     }
     if revitalize {
-        recompute_vitals(ctx, player.guid);
+        recompute_vitals(ctx, player_guid);
     }
     Ok(())
 }

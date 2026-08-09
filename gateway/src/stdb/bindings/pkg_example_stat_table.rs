@@ -18,6 +18,18 @@ pub struct PkgExampleStatTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `pkg_example_stat`.
+pub struct PkgExampleStatTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for PkgExampleStatTableAccessor {
+    type Row = PkgExampleStat;
+    type Handle<'db> = PkgExampleStatTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.pkg_example_stat()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `pkg_example_stat`.
 ///
@@ -39,6 +51,18 @@ impl PkgExampleStatTableAccess for super::RemoteTables {
 
 pub struct PkgExampleStatInsertCallbackId(__sdk::CallbackId);
 pub struct PkgExampleStatDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for PkgExampleStatTableHandle<'ctx> {
+    type Row = PkgExampleStat;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = PkgExampleStat> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for PkgExampleStatTableHandle<'ctx> {
     type Row = PkgExampleStat;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for PkgExampleStatTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for PkgExampleStatTableHandle<'ctx> {
+    type InsertCallbackId = PkgExampleStatInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> PkgExampleStatInsertCallbackId {
+        PkgExampleStatInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: PkgExampleStatInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for PkgExampleStatTableHandle<'ctx> {
+    type DeleteCallbackId = PkgExampleStatDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> PkgExampleStatDeleteCallbackId {
+        PkgExampleStatDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: PkgExampleStatDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct PkgExampleStatUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for PkgExampleStatTableHandle<'ctx> {
+    type UpdateCallbackId = PkgExampleStatUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> PkgExampleStatUpdateCallbackId {
+        PkgExampleStatUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: PkgExampleStatUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for PkgExampleStatTableHandle<'ctx> {
     type UpdateCallbackId = PkgExampleStatUpdateCallbackId;
 
     fn on_update(

@@ -635,6 +635,34 @@ pub fn aoi_enabled() -> bool {
     std::env::var("LYRACORE_AOI").map_or(true, |v| v != "0")
 }
 
+/// #468 stage 4b: `LYRACORE_SHARED_CALLS=1` routes hot-path reducer calls over the COORDINATOR
+/// connection via the module's operator-gated `gw_*` verb surface (actor named by guid) instead of
+/// the per-account player connection. Default OFF — the per-player path is the proven one; this
+/// flag exists so the shared path can be soaked and benched per verb family before it becomes the
+/// only path (stage 4d). Requires a module carrying the `gw_*` reducers (PR #475) on every shard.
+pub fn shared_calls_enabled() -> bool {
+    std::env::var("LYRACORE_SHARED_CALLS").is_ok_and(|v| v == "1")
+}
+
+/// #468 stage 4d (unblocked by #479): the per-account OWNER identity bound by `establish_session`
+/// under `LYRACORE_SHARED_CALLS` — deterministic and derived, so logins build NO per-player
+/// connection just to mint one. Never node-issued (real identities carry the node's c200 prefix;
+/// this is a tagged literal), unique per account. The module stamps it as row owner exactly like a
+/// real bound identity (`gw_player_login`'s fail-closed check is satisfied); no client connection
+/// ever presents it, so per-owner RLS admits nobody to those rows — on the shared pipe the GATEWAY
+/// predicates are the visibility layer (4c). Safe now because EVERY player verb forks onto its
+/// gw_* twin under the flag (#479) — the two GM verbs (client_command/gm_command) are the sole
+/// per-player holdouts and are non-functional flag-on until their operator decision lands.
+/// Flag-off logons re-bind the real connection identity on their next `establish_session`, so the
+/// modes can alternate.
+pub fn synthetic_owner_identity(account_id: u64) -> [u8; 32] {
+    let mut id = [0u8; 32];
+    id[..8].copy_from_slice(b"LYRAGWID");
+    id[24..].copy_from_slice(&account_id.to_le_bytes());
+    id
+}
+
+
 /// #209 probe: `LYRACORE_WRITER_TRACE=1` turns on a per-session black-box ring inside `spawn_writer` — the
 /// last 32 (opcode, declared size, rolling checksum) triples for the exact bytes handed to the
 /// socket, dumped to `/tmp/gw-writer-crash/<account>.txt` when a session's writer loop ends on a

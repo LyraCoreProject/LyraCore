@@ -18,6 +18,18 @@ pub struct GameCreatureMoveScheduleTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_creature_move_schedule`.
+pub struct GameCreatureMoveScheduleTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameCreatureMoveScheduleTableAccessor {
+    type Row = CreatureMoveSchedule;
+    type Handle<'db> = GameCreatureMoveScheduleTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_creature_move_schedule()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_creature_move_schedule`.
 ///
@@ -41,6 +53,18 @@ impl GameCreatureMoveScheduleTableAccess for super::RemoteTables {
 
 pub struct GameCreatureMoveScheduleInsertCallbackId(__sdk::CallbackId);
 pub struct GameCreatureMoveScheduleDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameCreatureMoveScheduleTableHandle<'ctx> {
+    type Row = CreatureMoveSchedule;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = CreatureMoveSchedule> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameCreatureMoveScheduleTableHandle<'ctx> {
     type Row = CreatureMoveSchedule;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GameCreatureMoveScheduleTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameCreatureMoveScheduleTableHandle<'ctx> {
+    type InsertCallbackId = GameCreatureMoveScheduleInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCreatureMoveScheduleInsertCallbackId {
+        GameCreatureMoveScheduleInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameCreatureMoveScheduleInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameCreatureMoveScheduleTableHandle<'ctx> {
+    type DeleteCallbackId = GameCreatureMoveScheduleDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCreatureMoveScheduleDeleteCallbackId {
+        GameCreatureMoveScheduleDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameCreatureMoveScheduleDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameCreatureMoveScheduleUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameCreatureMoveScheduleTableHandle<'ctx> {
+    type UpdateCallbackId = GameCreatureMoveScheduleUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameCreatureMoveScheduleUpdateCallbackId {
+        GameCreatureMoveScheduleUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameCreatureMoveScheduleUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameCreatureMoveScheduleTableHandle<'ctx> {
     type UpdateCallbackId = GameCreatureMoveScheduleUpdateCallbackId;
 
     fn on_update(

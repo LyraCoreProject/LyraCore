@@ -18,6 +18,18 @@ pub struct GameRegionAssignmentTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_region_assignment`.
+pub struct GameRegionAssignmentTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameRegionAssignmentTableAccessor {
+    type Row = RegionAssignment;
+    type Handle<'db> = GameRegionAssignmentTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_region_assignment()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_region_assignment`.
 ///
@@ -41,6 +53,18 @@ impl GameRegionAssignmentTableAccess for super::RemoteTables {
 
 pub struct GameRegionAssignmentInsertCallbackId(__sdk::CallbackId);
 pub struct GameRegionAssignmentDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameRegionAssignmentTableHandle<'ctx> {
+    type Row = RegionAssignment;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = RegionAssignment> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameRegionAssignmentTableHandle<'ctx> {
     type Row = RegionAssignment;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GameRegionAssignmentTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameRegionAssignmentTableHandle<'ctx> {
+    type InsertCallbackId = GameRegionAssignmentInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameRegionAssignmentInsertCallbackId {
+        GameRegionAssignmentInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameRegionAssignmentInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameRegionAssignmentTableHandle<'ctx> {
+    type DeleteCallbackId = GameRegionAssignmentDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameRegionAssignmentDeleteCallbackId {
+        GameRegionAssignmentDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameRegionAssignmentDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameRegionAssignmentUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameRegionAssignmentTableHandle<'ctx> {
+    type UpdateCallbackId = GameRegionAssignmentUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameRegionAssignmentUpdateCallbackId {
+        GameRegionAssignmentUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameRegionAssignmentUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameRegionAssignmentTableHandle<'ctx> {
     type UpdateCallbackId = GameRegionAssignmentUpdateCallbackId;
 
     fn on_update(

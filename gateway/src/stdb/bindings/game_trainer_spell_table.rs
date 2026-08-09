@@ -18,6 +18,18 @@ pub struct GameTrainerSpellTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_trainer_spell`.
+pub struct GameTrainerSpellTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameTrainerSpellTableAccessor {
+    type Row = TrainerSpell;
+    type Handle<'db> = GameTrainerSpellTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_trainer_spell()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_trainer_spell`.
 ///
@@ -39,6 +51,18 @@ impl GameTrainerSpellTableAccess for super::RemoteTables {
 
 pub struct GameTrainerSpellInsertCallbackId(__sdk::CallbackId);
 pub struct GameTrainerSpellDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameTrainerSpellTableHandle<'ctx> {
+    type Row = TrainerSpell;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = TrainerSpell> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameTrainerSpellTableHandle<'ctx> {
     type Row = TrainerSpell;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameTrainerSpellTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameTrainerSpellTableHandle<'ctx> {
+    type InsertCallbackId = GameTrainerSpellInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameTrainerSpellInsertCallbackId {
+        GameTrainerSpellInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameTrainerSpellInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameTrainerSpellTableHandle<'ctx> {
+    type DeleteCallbackId = GameTrainerSpellDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameTrainerSpellDeleteCallbackId {
+        GameTrainerSpellDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameTrainerSpellDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameTrainerSpellUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameTrainerSpellTableHandle<'ctx> {
+    type UpdateCallbackId = GameTrainerSpellUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameTrainerSpellUpdateCallbackId {
+        GameTrainerSpellUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameTrainerSpellUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameTrainerSpellTableHandle<'ctx> {
     type UpdateCallbackId = GameTrainerSpellUpdateCallbackId;
 
     fn on_update(

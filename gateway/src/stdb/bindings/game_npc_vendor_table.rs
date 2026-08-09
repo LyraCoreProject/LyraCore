@@ -18,6 +18,18 @@ pub struct GameNpcVendorTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_npc_vendor`.
+pub struct GameNpcVendorTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameNpcVendorTableAccessor {
+    type Row = NpcVendor;
+    type Handle<'db> = GameNpcVendorTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_npc_vendor()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_npc_vendor`.
 ///
@@ -39,6 +51,18 @@ impl GameNpcVendorTableAccess for super::RemoteTables {
 
 pub struct GameNpcVendorInsertCallbackId(__sdk::CallbackId);
 pub struct GameNpcVendorDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameNpcVendorTableHandle<'ctx> {
+    type Row = NpcVendor;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = NpcVendor> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameNpcVendorTableHandle<'ctx> {
     type Row = NpcVendor;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameNpcVendorTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameNpcVendorTableHandle<'ctx> {
+    type InsertCallbackId = GameNpcVendorInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameNpcVendorInsertCallbackId {
+        GameNpcVendorInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameNpcVendorInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameNpcVendorTableHandle<'ctx> {
+    type DeleteCallbackId = GameNpcVendorDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameNpcVendorDeleteCallbackId {
+        GameNpcVendorDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameNpcVendorDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameNpcVendorUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameNpcVendorTableHandle<'ctx> {
+    type UpdateCallbackId = GameNpcVendorUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameNpcVendorUpdateCallbackId {
+        GameNpcVendorUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameNpcVendorUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameNpcVendorTableHandle<'ctx> {
     type UpdateCallbackId = GameNpcVendorUpdateCallbackId;
 
     fn on_update(

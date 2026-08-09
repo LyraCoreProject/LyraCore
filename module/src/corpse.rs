@@ -179,12 +179,21 @@ pub struct Corpse {
 /// client comes alive), and deletes the corpse (→ SMSG_DESTROY_OBJECT). Authorized via `ctx.sender`.
 #[reducer]
 pub fn reclaim_corpse(ctx: &ReducerContext, _corpse_guid: u64) -> Result<(), String> {
+    let player =
+        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caller not in world".to_string())?;
+    apply_reclaim_corpse(ctx, player)
+}
+
+/// The corpse-reclaim core, actor-explicit (#479): everything [`reclaim_corpse`] does after
+/// resolving WHOSE ghost is reclaiming. Takes the row because the reclaim mutates it in place.
+pub(crate) fn apply_reclaim_corpse(
+    ctx: &ReducerContext,
+    mut player: crate::WorldEntity,
+) -> Result<(), String> {
     use lyracore_shared::constants::{player_flags, unit_vis_flags};
     let entities = ctx.db.game_world_entity();
     let corpses = ctx.db.game_corpse();
 
-    let mut player =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caller not in world".to_string())?;
     if !player.dead || player.player_flags & player_flags::GHOST == 0 {
         return Err("caller is not a ghost".to_string());
     }

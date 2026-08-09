@@ -18,6 +18,18 @@ pub struct GameCatalogueFingerprintTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_catalogue_fingerprint`.
+pub struct GameCatalogueFingerprintTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameCatalogueFingerprintTableAccessor {
+    type Row = CatalogueFingerprint;
+    type Handle<'db> = GameCatalogueFingerprintTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_catalogue_fingerprint()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_catalogue_fingerprint`.
 ///
@@ -41,6 +53,18 @@ impl GameCatalogueFingerprintTableAccess for super::RemoteTables {
 
 pub struct GameCatalogueFingerprintInsertCallbackId(__sdk::CallbackId);
 pub struct GameCatalogueFingerprintDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameCatalogueFingerprintTableHandle<'ctx> {
+    type Row = CatalogueFingerprint;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = CatalogueFingerprint> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameCatalogueFingerprintTableHandle<'ctx> {
     type Row = CatalogueFingerprint;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GameCatalogueFingerprintTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameCatalogueFingerprintTableHandle<'ctx> {
+    type InsertCallbackId = GameCatalogueFingerprintInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCatalogueFingerprintInsertCallbackId {
+        GameCatalogueFingerprintInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameCatalogueFingerprintInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameCatalogueFingerprintTableHandle<'ctx> {
+    type DeleteCallbackId = GameCatalogueFingerprintDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCatalogueFingerprintDeleteCallbackId {
+        GameCatalogueFingerprintDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameCatalogueFingerprintDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameCatalogueFingerprintUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameCatalogueFingerprintTableHandle<'ctx> {
+    type UpdateCallbackId = GameCatalogueFingerprintUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameCatalogueFingerprintUpdateCallbackId {
+        GameCatalogueFingerprintUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameCatalogueFingerprintUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameCatalogueFingerprintTableHandle<'ctx> {
     type UpdateCallbackId = GameCatalogueFingerprintUpdateCallbackId;
 
     fn on_update(

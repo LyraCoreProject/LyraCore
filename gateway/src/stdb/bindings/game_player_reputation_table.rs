@@ -18,6 +18,18 @@ pub struct GamePlayerReputationTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_player_reputation`.
+pub struct GamePlayerReputationTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GamePlayerReputationTableAccessor {
+    type Row = PlayerReputation;
+    type Handle<'db> = GamePlayerReputationTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_player_reputation()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_player_reputation`.
 ///
@@ -41,6 +53,18 @@ impl GamePlayerReputationTableAccess for super::RemoteTables {
 
 pub struct GamePlayerReputationInsertCallbackId(__sdk::CallbackId);
 pub struct GamePlayerReputationDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GamePlayerReputationTableHandle<'ctx> {
+    type Row = PlayerReputation;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = PlayerReputation> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GamePlayerReputationTableHandle<'ctx> {
     type Row = PlayerReputation;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GamePlayerReputationTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GamePlayerReputationTableHandle<'ctx> {
+    type InsertCallbackId = GamePlayerReputationInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GamePlayerReputationInsertCallbackId {
+        GamePlayerReputationInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GamePlayerReputationInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GamePlayerReputationTableHandle<'ctx> {
+    type DeleteCallbackId = GamePlayerReputationDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GamePlayerReputationDeleteCallbackId {
+        GamePlayerReputationDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GamePlayerReputationDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GamePlayerReputationUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GamePlayerReputationTableHandle<'ctx> {
+    type UpdateCallbackId = GamePlayerReputationUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GamePlayerReputationUpdateCallbackId {
+        GamePlayerReputationUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GamePlayerReputationUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GamePlayerReputationTableHandle<'ctx> {
     type UpdateCallbackId = GamePlayerReputationUpdateCallbackId;
 
     fn on_update(

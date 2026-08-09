@@ -18,6 +18,18 @@ pub struct GameTransferInTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_transfer_in`.
+pub struct GameTransferInTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameTransferInTableAccessor {
+    type Row = TransferIn;
+    type Handle<'db> = GameTransferInTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_transfer_in()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_transfer_in`.
 ///
@@ -39,6 +51,18 @@ impl GameTransferInTableAccess for super::RemoteTables {
 
 pub struct GameTransferInInsertCallbackId(__sdk::CallbackId);
 pub struct GameTransferInDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameTransferInTableHandle<'ctx> {
+    type Row = TransferIn;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = TransferIn> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameTransferInTableHandle<'ctx> {
     type Row = TransferIn;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameTransferInTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameTransferInTableHandle<'ctx> {
+    type InsertCallbackId = GameTransferInInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameTransferInInsertCallbackId {
+        GameTransferInInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameTransferInInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameTransferInTableHandle<'ctx> {
+    type DeleteCallbackId = GameTransferInDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameTransferInDeleteCallbackId {
+        GameTransferInDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameTransferInDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameTransferInUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameTransferInTableHandle<'ctx> {
+    type UpdateCallbackId = GameTransferInUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameTransferInUpdateCallbackId {
+        GameTransferInUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameTransferInUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameTransferInTableHandle<'ctx> {
     type UpdateCallbackId = GameTransferInUpdateCallbackId;
 
     fn on_update(

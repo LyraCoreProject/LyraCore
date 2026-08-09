@@ -18,6 +18,18 @@ pub struct GameCreatureMoveEventTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_creature_move_event`.
+pub struct GameCreatureMoveEventTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameCreatureMoveEventTableAccessor {
+    type Row = CreatureMoveEvent;
+    type Handle<'db> = GameCreatureMoveEventTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_creature_move_event()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_creature_move_event`.
 ///
@@ -41,6 +53,18 @@ impl GameCreatureMoveEventTableAccess for super::RemoteTables {
 
 pub struct GameCreatureMoveEventInsertCallbackId(__sdk::CallbackId);
 pub struct GameCreatureMoveEventDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameCreatureMoveEventTableHandle<'ctx> {
+    type Row = CreatureMoveEvent;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = CreatureMoveEvent> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameCreatureMoveEventTableHandle<'ctx> {
     type Row = CreatureMoveEvent;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GameCreatureMoveEventTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameCreatureMoveEventTableHandle<'ctx> {
+    type InsertCallbackId = GameCreatureMoveEventInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCreatureMoveEventInsertCallbackId {
+        GameCreatureMoveEventInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameCreatureMoveEventInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameCreatureMoveEventTableHandle<'ctx> {
+    type DeleteCallbackId = GameCreatureMoveEventDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCreatureMoveEventDeleteCallbackId {
+        GameCreatureMoveEventDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameCreatureMoveEventDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameCreatureMoveEventUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameCreatureMoveEventTableHandle<'ctx> {
+    type UpdateCallbackId = GameCreatureMoveEventUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameCreatureMoveEventUpdateCallbackId {
+        GameCreatureMoveEventUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameCreatureMoveEventUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameCreatureMoveEventTableHandle<'ctx> {
     type UpdateCallbackId = GameCreatureMoveEventUpdateCallbackId;
 
     fn on_update(

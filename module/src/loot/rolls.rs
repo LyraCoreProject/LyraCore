@@ -446,7 +446,7 @@ pub fn loot_roll(
 /// differs by which database it runs on, only which one `game_loot_roll`'s `ctx.db` resolves to — the
 /// caller already picked that by calling this on the right connection, so (issue #384 smalls) there is
 /// no `plane` parameter to thread through.
-fn cast_vote_on(
+pub(crate) fn cast_vote_on(
     ctx: &ReducerContext,
     corpse_guid: u64,
     slot: u8,
@@ -849,13 +849,26 @@ pub fn loot_master_give(
     target_guid: u64,
 ) -> Result<(), String> {
     let master = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
+    apply_master_give(ctx, master.guid, corpse_guid, loot_slot, target_guid)
+}
+
+/// The identity-free master-give core (#479, the `cast_vote_on` shape): everything
+/// [`loot_master_give`] does after resolving WHO the master looter is. `gw::gw_loot_master_give` is
+/// the other entry.
+pub(crate) fn apply_master_give(
+    ctx: &ReducerContext,
+    master_guid: u64,
+    corpse_guid: u64,
+    loot_slot: u8,
+    target_guid: u64,
+) -> Result<(), String> {
     let loot = ctx.db.game_corpse_loot();
     let row = loot
         .by_corpse()
         .filter(&corpse_guid)
         .find(|l| l.slot == loot_slot)
         .ok_or_else(|| "no loot in that slot".to_string())?;
-    if !row.master_only || row.designated_looter_guid != master.guid {
+    if !row.master_only || row.designated_looter_guid != master_guid {
         return Err("you are not the master looter for that item".to_string());
     }
     let is_eligible = ctx

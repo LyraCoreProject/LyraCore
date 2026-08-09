@@ -18,6 +18,18 @@ pub struct PkgPlayerbotsRotationTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `pkg_playerbots_rotation`.
+pub struct PkgPlayerbotsRotationTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for PkgPlayerbotsRotationTableAccessor {
+    type Row = BotRotation;
+    type Handle<'db> = PkgPlayerbotsRotationTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.pkg_playerbots_rotation()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `pkg_playerbots_rotation`.
 ///
@@ -39,6 +51,18 @@ impl PkgPlayerbotsRotationTableAccess for super::RemoteTables {
 
 pub struct PkgPlayerbotsRotationInsertCallbackId(__sdk::CallbackId);
 pub struct PkgPlayerbotsRotationDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for PkgPlayerbotsRotationTableHandle<'ctx> {
+    type Row = BotRotation;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = BotRotation> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for PkgPlayerbotsRotationTableHandle<'ctx> {
     type Row = BotRotation;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for PkgPlayerbotsRotationTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for PkgPlayerbotsRotationTableHandle<'ctx> {
+    type InsertCallbackId = PkgPlayerbotsRotationInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> PkgPlayerbotsRotationInsertCallbackId {
+        PkgPlayerbotsRotationInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: PkgPlayerbotsRotationInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for PkgPlayerbotsRotationTableHandle<'ctx> {
+    type DeleteCallbackId = PkgPlayerbotsRotationDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> PkgPlayerbotsRotationDeleteCallbackId {
+        PkgPlayerbotsRotationDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: PkgPlayerbotsRotationDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct PkgPlayerbotsRotationUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for PkgPlayerbotsRotationTableHandle<'ctx> {
+    type UpdateCallbackId = PkgPlayerbotsRotationUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> PkgPlayerbotsRotationUpdateCallbackId {
+        PkgPlayerbotsRotationUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: PkgPlayerbotsRotationUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for PkgPlayerbotsRotationTableHandle<'ctx> {
     type UpdateCallbackId = PkgPlayerbotsRotationUpdateCallbackId;
 
     fn on_update(

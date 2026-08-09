@@ -36,7 +36,8 @@ use crate::{
     game_creature_waypoint, game_event_reaper_schedule, game_gameobject, game_gameobject_pool,
     game_gameobject_pool_member, game_gameobject_template, game_graveyard, game_graveyard_zone,
     game_ground_area_schedule, game_instance_reaper_schedule, game_item_template,
-    game_melee_schedule, game_motion_publish_schedule, game_realm, game_spell, game_spell_effect,
+    game_gateway_lease_reaper_schedule, game_melee_schedule, game_motion_publish_schedule,
+    game_realm, game_spell, game_spell_effect,
     game_start_position, Account, AuraSchedule, Character, CreatureLoot, CreatureMoveSchedule,
     CreatureSpawn, CreatureTemplate, CreatureWaypoint, EventReaperSchedule, GameObject,
     GameObjectPool, GameObjectPoolMember, GameObjectTemplate, GraveyardLoc, GraveyardZone,
@@ -1343,6 +1344,20 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
             scheduled_id: 0,
             scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
                 crate::motion::MOTION_TICK_MICROS,
+            )),
+        });
+
+    // Gateway lease reaper (#468 stage 4a): despawns the players of a gateway that stopped
+    // heartbeating (the shared-connection crash case). Inert while `game_gateway_session` is
+    // empty — nothing binds sessions to leases until stage 4d — but armed from day one so the
+    // ghost bound exists the moment the first leased session appears. Same three-net story as
+    // the motion tick above: `debug_repair_after_publish` ensures it on a live DB.
+    ctx.db
+        .game_gateway_lease_reaper_schedule()
+        .insert(crate::gw::GatewayLeaseReaperSchedule {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
+                crate::gw::LEASE_REAP_MICROS,
             )),
         });
 }

@@ -18,6 +18,18 @@ pub struct GameClassLevelStatsTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_class_level_stats`.
+pub struct GameClassLevelStatsTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameClassLevelStatsTableAccessor {
+    type Row = ClassLevelStats;
+    type Handle<'db> = GameClassLevelStatsTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_class_level_stats()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_class_level_stats`.
 ///
@@ -41,6 +53,18 @@ impl GameClassLevelStatsTableAccess for super::RemoteTables {
 
 pub struct GameClassLevelStatsInsertCallbackId(__sdk::CallbackId);
 pub struct GameClassLevelStatsDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameClassLevelStatsTableHandle<'ctx> {
+    type Row = ClassLevelStats;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = ClassLevelStats> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameClassLevelStatsTableHandle<'ctx> {
     type Row = ClassLevelStats;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GameClassLevelStatsTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameClassLevelStatsTableHandle<'ctx> {
+    type InsertCallbackId = GameClassLevelStatsInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameClassLevelStatsInsertCallbackId {
+        GameClassLevelStatsInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameClassLevelStatsInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameClassLevelStatsTableHandle<'ctx> {
+    type DeleteCallbackId = GameClassLevelStatsDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameClassLevelStatsDeleteCallbackId {
+        GameClassLevelStatsDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameClassLevelStatsDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameClassLevelStatsUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameClassLevelStatsTableHandle<'ctx> {
+    type UpdateCallbackId = GameClassLevelStatsUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameClassLevelStatsUpdateCallbackId {
+        GameClassLevelStatsUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameClassLevelStatsUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameClassLevelStatsTableHandle<'ctx> {
     type UpdateCallbackId = GameClassLevelStatsUpdateCallbackId;
 
     fn on_update(

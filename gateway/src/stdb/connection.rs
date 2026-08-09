@@ -634,6 +634,48 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // Explored areas (200/279 live find): the fog-word relay's coordinator leg — a fresh
         // login's first-movement discovery lands exactly in the per-player AOI-churn window.
         "SELECT * FROM game_character_explored",
+        // /roll events (#468 stage 4c, family 1): under LYRACORE_SHARED_CALLS the shared dispatch
+        // (`world_view::roll_appeared`) relays these from this cache instead of ~N per-player
+        // subscriptions. Tiny TTL-reaped event table; subscribed unconditionally so the flag
+        // never changes what this connection holds.
+        "SELECT * FROM game_roll_event",
+        // Rest-state flips (#468 stage 4c, family 2): same shape — `world_view::
+        // rest_state_appeared` relays each row to its owner's session only. TTL-reaped.
+        "SELECT * FROM game_rest_state_event",
+        // Ground-area spell visuals (#468 stage 4c, family 5): `world_view::dynobj_appeared`
+        // relays instance-gated CREATE/DESTROY. Short-lived rows (the area's duration).
+        "SELECT * FROM game_dynamic_object",
+        // Swing log + combat stance (#468 stage 4c, families 7/8): `world_view::
+        // combat_event_appeared` / `melee_engaged` / `melee_disengaged` run the shared
+        // per-viewer bodies. Both TTL-reaped/ephemeral combat tables.
+        "SELECT * FROM game_combat_event",
+        "SELECT * FROM game_melee_attack",
+        // The social tier (#468 stage 4c, families 9–11): emote broadcast, range-gated say/yell,
+        // membership-gated channel lines — `world_view::emote_appeared`/`chat_appeared`/
+        // `channel_appeared`. The member table is the audience source for channel lines.
+        "SELECT * FROM game_chat_event",
+        "SELECT * FROM game_channel_event",
+        "SELECT * FROM game_channel_member",
+        "SELECT * FROM game_emote_event",
+        // Cast visuals + projectile impact (#468 stage 4c, families 12/13): `world_view::
+        // cast_event_appeared` runs the full cast-lock contract per viewer; `impact_appeared`
+        // the deferred damage number. Both TTL-reaped event tables.
+        "SELECT * FROM game_spell_cast_event",
+        "SELECT * FROM game_spell_impact_event",
+        // Pet bar spells (023 / #476): tiny static table `offer_peer_create_for` joins for the
+        // viewer's own pet CREATE (SMSG_PET_SPELLS slots 3–6) — read HERE since the stage-1
+        // shared-dispatch move, but never subscribed here until #476 (the per-player copy nothing
+        // read any more was the only subscription; the pet bar came up empty).
+        "SELECT * FROM game_creature_cast",
+        // The PRIVATE tier (#468 stage 4c, families 15–17): recipient-addressed rows the shared
+        // dispatch delivers through the owner-session lookup + private_recipient_audience. The
+        // owner token bypasses each row's per-recipient RLS — the gateway predicate IS the
+        // privacy guarantee on this path. In the BASE list (not the sharded block) so a
+        // single-database gateway's shared path works too; on realm-core the same subscription
+        // additionally feeds the per-session cross-shard twins (#22), unchanged.
+        "SELECT * FROM game_resurrect_request",
+        "SELECT * FROM game_whisper_event",
+        "SELECT * FROM game_group_event",
         // Server-wide tunables (issue #48). The gateway reads ONE column: `hosts_instances`, at
         // startup, to answer "when this realm creates a dungeon instance, will anything actually
         // spawn its population" (`ShardMap::check_instance_hosting`). Before this subscription the
@@ -756,20 +798,14 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // each handle reads its own database's copy, and the gateway decides which copy
         // is authoritative.
         //
-        // `game_group_event` is the RELAY: on a world shard the per-player connection subscribes it
-        // under RLS (unchanged, that is the pre-#22 path), and on realm-core the owner-token
-        // coordinator reads every player's rows and each session self-filters by `recipient_guid` —
-        // the coordinator-relay law from 277/279. A single-database gateway subscribes NONE of the
-        // three here and keeps exactly its old relay.
+        // `game_group_event` is the RELAY: flag-off on a world shard the per-player connection
+        // subscribes it under RLS (the pre-#22 path), and on realm-core the owner-token
+        // coordinator reads every player's rows and each session self-filters by `recipient_guid`
+        // — the coordinator-relay law from 277/279. (#468 4c moved the event table itself to the
+        // BASE list below so the shared dispatch works on a single-database gateway too; the two
+        // party-STATE tables stay multi-database-only.)
         queries.push("SELECT * FROM game_group");
         queries.push("SELECT * FROM game_group_member");
-        queries.push("SELECT * FROM game_group_event");
-        // Whispers (#22, whisper slice) — the same relay shape one table over. On REALM-CORE this is
-        // where a whisper between two players on DIFFERENT shards is written (a guid is the only
-        // realm-wide name a recipient has), read here through the owner token and self-filtered per
-        // session by `recipient_guid`. On a world shard the per-player connection keeps subscribing it
-        // under RLS, which is the pre-#22 path and the only one a single-database gateway has.
-        queries.push("SELECT * FROM game_whisper_event");
         // Loot rolls (#50) — a DIFFERENT reason than every table above: nothing here is a CLIENT
         // relay (`game_group_event` still carries every wire-visible roll transition, unchanged). The
         // gateway's own loot-roll relay (`world::loot::relay_tick`) needs these two PRIVATE tables to
@@ -1127,19 +1163,13 @@ mod coordinator_query_tests {
     /// restart (`coordinator_queries`' doc comment) — so an unconfigured gateway must ask for none.
     const MULTI_DB_TABLES: &[&str] = &[
         "SELECT * FROM game_character_shard",
-        // #22 (group slice). `game_group_event` is the one entry here that ALSO has a
-        // single-database subscriber — the per-player connection, under RLS — so it is listed as a
-        // multi-database table for the COORDINATOR only. Subscribing it on the coordinator of an
-        // unconfigured gateway would be a second delivery of every group event (the relay would fire
-        // twice per row) on top of the restart hazard this list exists for.
+        // #22 (group slice): the party-STATE tables. `game_group_event` and `game_whisper_event`
+        // moved OUT of this list to the base set (#468 4c) — both predate sharding, so the
+        // restart hazard this list exists for cannot bite them, and the shared dispatch needs
+        // them on every coordinator (a cache-only subscription with the flag off: the realm
+        // relay registers only on multi-database gateways, so there is no double delivery).
         "SELECT * FROM game_group",
         "SELECT * FROM game_group_member",
-        "SELECT * FROM game_group_event",
-        // #22 (whisper slice), listed for the same reason as `game_group_event` above: the table
-        // predates sharding and has a per-player RLS subscriber, so it is a multi-database table for
-        // the COORDINATOR only. Subscribing it on an unconfigured gateway's coordinator would be a
-        // second delivery of every whisper the moment the realm relay is registered.
-        "SELECT * FROM game_whisper_event",
         // #50: both PRIVATE, no per-player subscriber to duplicate — the restart hazard alone is why
         // they belong on this list (a module published before they exist refuses the subscription).
         "SELECT * FROM game_loot_roll",

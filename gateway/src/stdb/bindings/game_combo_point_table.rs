@@ -18,6 +18,18 @@ pub struct GameComboPointTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_combo_point`.
+pub struct GameComboPointTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameComboPointTableAccessor {
+    type Row = ComboPoint;
+    type Handle<'db> = GameComboPointTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_combo_point()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_combo_point`.
 ///
@@ -39,6 +51,18 @@ impl GameComboPointTableAccess for super::RemoteTables {
 
 pub struct GameComboPointInsertCallbackId(__sdk::CallbackId);
 pub struct GameComboPointDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameComboPointTableHandle<'ctx> {
+    type Row = ComboPoint;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = ComboPoint> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameComboPointTableHandle<'ctx> {
     type Row = ComboPoint;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameComboPointTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameComboPointTableHandle<'ctx> {
+    type InsertCallbackId = GameComboPointInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameComboPointInsertCallbackId {
+        GameComboPointInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameComboPointInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameComboPointTableHandle<'ctx> {
+    type DeleteCallbackId = GameComboPointDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameComboPointDeleteCallbackId {
+        GameComboPointDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameComboPointDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameComboPointUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameComboPointTableHandle<'ctx> {
+    type UpdateCallbackId = GameComboPointUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameComboPointUpdateCallbackId {
+        GameComboPointUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameComboPointUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameComboPointTableHandle<'ctx> {
     type UpdateCallbackId = GameComboPointUpdateCallbackId;
 
     fn on_update(

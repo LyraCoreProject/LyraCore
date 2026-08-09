@@ -18,6 +18,18 @@ pub struct GameCharacterShardTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_character_shard`.
+pub struct GameCharacterShardTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameCharacterShardTableAccessor {
+    type Row = CharacterShard;
+    type Handle<'db> = GameCharacterShardTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_character_shard()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_character_shard`.
 ///
@@ -39,6 +51,18 @@ impl GameCharacterShardTableAccess for super::RemoteTables {
 
 pub struct GameCharacterShardInsertCallbackId(__sdk::CallbackId);
 pub struct GameCharacterShardDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameCharacterShardTableHandle<'ctx> {
+    type Row = CharacterShard;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = CharacterShard> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameCharacterShardTableHandle<'ctx> {
     type Row = CharacterShard;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameCharacterShardTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameCharacterShardTableHandle<'ctx> {
+    type InsertCallbackId = GameCharacterShardInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCharacterShardInsertCallbackId {
+        GameCharacterShardInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameCharacterShardInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameCharacterShardTableHandle<'ctx> {
+    type DeleteCallbackId = GameCharacterShardDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCharacterShardDeleteCallbackId {
+        GameCharacterShardDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameCharacterShardDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameCharacterShardUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameCharacterShardTableHandle<'ctx> {
+    type UpdateCallbackId = GameCharacterShardUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameCharacterShardUpdateCallbackId {
+        GameCharacterShardUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameCharacterShardUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameCharacterShardTableHandle<'ctx> {
     type UpdateCallbackId = GameCharacterShardUpdateCallbackId;
 
     fn on_update(

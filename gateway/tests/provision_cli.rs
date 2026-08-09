@@ -6,12 +6,14 @@ fn run_gateway(args: &[&str], stdin: &[u8]) -> Output {
         .args(args)
         // Keep the functional test isolated from any production/sharded environment inherited by
         // the test runner. Individual tests can add the loopback-only values they need below.
-        .env_remove("GW_COORDINATOR_TOKEN")
-        .env_remove("GW_MODULE")
-        .env_remove("GW_STDB_URI")
-        .env_remove("GW_SHARD_MAP")
-        .env_remove("GW_SHARD_MAP_FILE")
-        .env_remove("GW_REALM_CORE")
+        // (These were `GW_*` until the rebrand — the stale names made every removal a no-op, so a
+        // runner with a sharded environment exported leaked it into the child unnoticed.)
+        .env_remove("LYRACORE_COORDINATOR_TOKEN")
+        .env_remove("LYRACORE_DATABASE")
+        .env_remove("LYRACORE_SPACETIMEDB_URL")
+        .env_remove("LYRACORE_SHARD_MAP")
+        .env_remove("LYRACORE_SHARD_MAP_FILE")
+        .env_remove("LYRACORE_REALM_CORE")
         .env_remove("RUST_LOG")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -25,12 +27,15 @@ fn run_gateway(args: &[&str], stdin: &[u8]) -> Output {
 fn run_gateway_against_unreachable_loopback(args: &[&str], stdin: &[u8]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_lyracore-gateway"))
         .args(args)
-        .env("GW_COORDINATOR_TOKEN", "functional-test-token")
-        .env("GW_MODULE", "spacetime-core")
-        .env("GW_STDB_URI", "http://127.0.0.1:0")
-        .env_remove("GW_SHARD_MAP")
-        .env_remove("GW_SHARD_MAP_FILE")
-        .env_remove("GW_REALM_CORE")
+        // Rebrand fix: these were `GW_*`, which the gateway stopped reading — the URI override was
+        // dead, the child fell back to the DEFAULT http://127.0.0.1:3000, and the "unreachable"
+        // premise held only while nothing listened there (a live local dev node broke it).
+        .env("LYRACORE_COORDINATOR_TOKEN", "functional-test-token")
+        .env("LYRACORE_DATABASE", "spacetime-core")
+        .env("LYRACORE_SPACETIMEDB_URL", "http://127.0.0.1:0")
+        .env_remove("LYRACORE_SHARD_MAP")
+        .env_remove("LYRACORE_SHARD_MAP_FILE")
+        .env_remove("LYRACORE_REALM_CORE")
         .env_remove("RUST_LOG")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -18,6 +18,18 @@ pub struct GameXpEventTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_xp_event`.
+pub struct GameXpEventTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameXpEventTableAccessor {
+    type Row = XpEvent;
+    type Handle<'db> = GameXpEventTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_xp_event()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_xp_event`.
 ///
@@ -39,6 +51,18 @@ impl GameXpEventTableAccess for super::RemoteTables {
 
 pub struct GameXpEventInsertCallbackId(__sdk::CallbackId);
 pub struct GameXpEventDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameXpEventTableHandle<'ctx> {
+    type Row = XpEvent;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = XpEvent> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameXpEventTableHandle<'ctx> {
     type Row = XpEvent;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameXpEventTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameXpEventTableHandle<'ctx> {
+    type InsertCallbackId = GameXpEventInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameXpEventInsertCallbackId {
+        GameXpEventInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameXpEventInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameXpEventTableHandle<'ctx> {
+    type DeleteCallbackId = GameXpEventDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameXpEventDeleteCallbackId {
+        GameXpEventDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameXpEventDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameXpEventUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameXpEventTableHandle<'ctx> {
+    type UpdateCallbackId = GameXpEventUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameXpEventUpdateCallbackId {
+        GameXpEventUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameXpEventUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameXpEventTableHandle<'ctx> {
     type UpdateCallbackId = GameXpEventUpdateCallbackId;
 
     fn on_update(

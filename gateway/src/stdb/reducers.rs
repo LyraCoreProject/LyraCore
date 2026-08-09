@@ -19,12 +19,25 @@ impl Coordinator {
         account_id: u64,
         character_guid: u64,
     ) -> Result<crate::codec::EntityView> {
-        let player = self.player_conn(account_id)?;
-        call_reducer!(
-            player.conn.reducers,
-            "player_login",
-            player_login_then(character_guid)
-        )?;
+        // #468 stage 4d: under LYRACORE_SHARED_CALLS the login rides `gw_player_login` on the
+        // COORDINATOR connection (module half: delegates to apply_player_login with the account's
+        // bound identity as row owner, binds entity→lease, fail-closed on either missing) — and no
+        // per-player connection is built here or anywhere else on the login path.
+        if crate::config::shared_calls_enabled() {
+            let coord = self.0.coord();
+            call_reducer!(
+                coord.conn.reducers,
+                "gw_player_login",
+                gw_player_login_then(account_id, character_guid)
+            )?;
+        } else {
+            let player = self.player_conn(account_id)?;
+            call_reducer!(
+                player.conn.reducers,
+                "player_login",
+                player_login_then(character_guid)
+            )?;
+        }
 
         // The reducer committed; the row propagates to the owner cache asynchronously. Poll
         // briefly until it appears (zone_id and home_* ride along from the game_character row).
@@ -42,7 +55,11 @@ impl Coordinator {
         let home_x = char_row.as_ref().map(|c| c.home_x).unwrap_or(0.0);
         let home_y = char_row.as_ref().map(|c| c.home_y).unwrap_or(0.0);
         let home_z = char_row.as_ref().map(|c| c.home_z).unwrap_or(0.0);
-        for _ in 0..200 {
+        // 15 s cap, 15 ms steps. Was 3 s — the cold-1000 measurement (#468) showed the reducer
+        // COMMITTING while the coordinator stream lagged the login-burst tail past 3 s (writer at
+        // 34.5%, so pure propagation, not CPU): 67/1000 logins died here with the entity already
+        // live. The poll exits on first sight, so the longer cap costs nothing outside a burst.
+        for _ in 0..1000 {
             if let Some(e) = self
                 .0
                 .coord()
@@ -64,18 +81,22 @@ impl Coordinator {
         }
         Err(anyhow!(
             "player_login committed but game_world_entity {character_guid} not visible in the \
-             coordinator cache within 3s"
+             coordinator cache within 15s"
         ))
     }
 
     /// Persist + relay an inbound movement (Phases 5-6): call the `movement_update` reducer on the
-    /// per-account connection so the module attributes it to the right `game_world_entity`.
+    /// per-account connection so the module attributes it to the right `game_world_entity` — or,
+    /// under `LYRACORE_SHARED_CALLS` (#468 stage 4b), the operator-gated `gw_movement_update` on
+    /// the COORDINATOR connection with the mover named by `actor_guid`. `actor_guid == 0` means
+    /// the caller doesn't know the guid (never true in-world); it forces the per-player path.
     /// `movement_info` is the raw body to relay verbatim to observers (empty until the inbound
     /// raw bytes are threaded through — harmless while no peers are in range).
     #[allow(clippy::too_many_arguments)]
     pub fn movement_update(
         &self,
         account_id: u64,
+        actor_guid: u64,
         opcode: u16,
         movement_info: &[u8],
         x: f32,
@@ -84,6 +105,23 @@ impl Coordinator {
         o: f32,
         move_time_ms: u32,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_movement_update",
+                gw_movement_update_then(
+                    actor_guid,
+                    opcode,
+                    movement_info.to_vec(),
+                    x,
+                    y,
+                    z,
+                    o,
+                    move_time_ms
+                )
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -94,11 +132,13 @@ impl Coordinator {
 
     /// [`movement_update`](Self::movement_update) without waiting on the completion channel
     /// (perf catalog 1.13, #110). `on_done` receives the module's outcome on the SDK callback
-    /// thread. See `call_reducer_nowait!` for why movement specifically must not block.
+    /// thread. See `call_reducer_nowait!` for why movement specifically must not block. Same
+    /// `LYRACORE_SHARED_CALLS` routing as the blocking form.
     #[allow(clippy::too_many_arguments)]
     pub fn movement_update_nowait(
         &self,
         account_id: u64,
+        actor_guid: u64,
         opcode: u16,
         movement_info: &[u8],
         x: f32,
@@ -108,6 +148,24 @@ impl Coordinator {
         move_time_ms: u32,
         on_done: impl Fn(std::result::Result<(), String>) + Send + Sync + 'static,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer_nowait!(
+                coord.conn.reducers,
+                "gw_movement_update",
+                gw_movement_update_then(
+                    actor_guid,
+                    opcode,
+                    movement_info.to_vec(),
+                    x,
+                    y,
+                    z,
+                    o,
+                    move_time_ms
+                ),
+                on_done
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer_nowait!(
             player.conn.reducers,
@@ -115,6 +173,24 @@ impl Coordinator {
             movement_update_then(opcode, movement_info.to_vec(), x, y, z, o, move_time_ms),
             on_done
         )
+    }
+
+    /// #468 stage 4b: heartbeat this gateway's `game_gateway_lease` row every 15 s on the default
+    /// shard's coordinator connection, forever. Fire-and-forget per beat — a missed beat is
+    /// harmless (the TTL tolerates several) and the loop must never stall on a slow call. Spawned
+    /// from `main` only when `LYRACORE_SHARED_CALLS` is on.
+    pub fn spawn_gateway_heartbeat(&self) {
+        let coord = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(15));
+            loop {
+                tick.tick().await;
+                let guard = coord.0.coord();
+                if let Err(e) = guard.conn.reducers.gw_heartbeat() {
+                    log::warn!("gateway heartbeat send failed (will retry next beat): {e}");
+                }
+            }
+        });
     }
 
     /// Provision SRP6 credentials computed by the gateway (Phase 0 bring-up).
@@ -230,7 +306,15 @@ impl Coordinator {
 
     /// Set the player's current target (`CMSG_SET_SELECTION`, Tier 2 / N3) over the per-account
     /// connection so the module attributes it to the caller. `target_guid` 0 clears it.
-    pub fn set_target(&self, account_id: u64, target_guid: u64) -> Result<()> {
+    pub fn set_target(&self, account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_set_target",
+                gw_set_target_then(actor_guid, target_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -242,14 +326,32 @@ impl Coordinator {
     /// Validate a `CMSG_INSPECT` request (target is a real in-world player, on the caller's map, in
     /// range, friendly) over the per-account connection so the module resolves the caller from
     /// `ctx.sender`. `Err` (out of range / hostile / no such target) → the caller ignores it.
-    pub fn inspect(&self, account_id: u64, target_guid: u64) -> Result<()> {
+    pub fn inspect(&self, account_id: u64,
+        actor_guid: u64, target_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_inspect",
+                gw_inspect_then(actor_guid, target_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(player.conn.reducers, "inspect", inspect_then(target_guid))
     }
 
     /// Use a gameobject (`CMSG_GAMEOBJ_USE`) — a chest rolls its loot into the corpse-loot table keyed
     /// on the GO guid, a quest-use object grants quest credit. The module gates range + type.
-    pub fn use_gameobject(&self, account_id: u64, go_guid: u64) -> Result<()> {
+    /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_use_gameobject`.
+    pub fn use_gameobject(&self, account_id: u64, actor_guid: u64, go_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_use_gameobject",
+                gw_use_gameobject_then(actor_guid, go_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -259,7 +361,16 @@ impl Coordinator {
     }
 
     /// Enter an area trigger (`CMSG_AREATRIGGER`) — credit any active explore quest tied to `trigger_id`.
-    pub fn enter_areatrigger(&self, account_id: u64, trigger_id: u32) -> Result<()> {
+    pub fn enter_areatrigger(&self, account_id: u64,
+        actor_guid: u64, trigger_id: u32) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_enter_areatrigger",
+                gw_enter_areatrigger_then(actor_guid, trigger_id)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -280,7 +391,15 @@ impl Coordinator {
 
     /// Start the player's melee auto-attack on `target_guid` (`CMSG_ATTACKSWING`, combat C1) over
     /// the per-account connection so the module attributes the swing to the caller.
-    pub fn start_attack(&self, account_id: u64, target_guid: u64) -> Result<()> {
+    pub fn start_attack(&self, account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_attack",
+                gw_attack_then(actor_guid, target_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -292,7 +411,16 @@ impl Coordinator {
     /// Relay a pet command-bar action (`CMSG_PET_ACTION`) over the per-account connection so the module
     /// attributes it to the pet's owner. `data` is the raw packed action (flag<<24 | id); the module
     /// decodes stay/follow/attack/dismiss + passive/defensive/aggressive.
-    pub fn pet_command(&self, account_id: u64, data: u32, target_guid: u64) -> Result<()> {
+    pub fn pet_command(&self, account_id: u64,
+        actor_guid: u64, data: u32, target_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_pet_command",
+                gw_pet_command_then(actor_guid, data, target_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -303,12 +431,22 @@ impl Coordinator {
 
     /// Start the player's RANGED auto-attack on `target_guid` with `spell_id` (75 Auto Shot / 5019 Shoot,
     /// #10) over the per-account connection so the module attributes the shot to the caller.
+    /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_ranged_attack`.
     pub fn start_ranged_attack(
         &self,
         account_id: u64,
+        actor_guid: u64,
         target_guid: u64,
         spell_id: u32,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_ranged_attack",
+                gw_ranged_attack_then(actor_guid, target_guid, spell_id)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -318,7 +456,15 @@ impl Coordinator {
     }
 
     /// Stop the player's melee auto-attack (`CMSG_ATTACKSTOP`, combat C1).
-    pub fn stop_attack(&self, account_id: u64) -> Result<()> {
+    pub fn stop_attack(&self, account_id: u64, actor_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_stop_attack",
+                gw_stop_attack_then(actor_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(player.conn.reducers, "stop_attack", stop_attack_then())
     }
@@ -326,7 +472,16 @@ impl Coordinator {
     /// Cast a spell (`CMSG_CAST_SPELL`, aura tracer) over the per-account connection so the module
     /// attributes the cast to the caller. `target_guid` is the client's selected unit (0 = none/self →
     /// the module substitutes the caster), threaded so target-keyed effects see the real target.
-    pub fn cast_spell(&self, account_id: u64, spell_id: u32, target_guid: u64) -> Result<()> {
+    pub fn cast_spell(&self, account_id: u64,
+        actor_guid: u64, spell_id: u32, target_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_cast_spell",
+                gw_cast_spell_then(actor_guid, spell_id, target_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -341,12 +496,21 @@ impl Coordinator {
     pub fn cast_spell_at(
         &self,
         account_id: u64,
+        actor_guid: u64,
         spell_id: u32,
         target_guid: u64,
         x: f32,
         y: f32,
         z: f32,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_cast_spell_at",
+                gw_cast_spell_at_then(actor_guid, spell_id, target_guid, x, y, z)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -357,7 +521,16 @@ impl Coordinator {
 
     /// Cancel one of the caller's own auras by spell id (`CMSG_CANCEL_AURA`) over the per-account
     /// connection so the module attributes the removal to the caller.
-    pub fn cancel_aura(&self, account_id: u64, spell_id: u32) -> Result<()> {
+    pub fn cancel_aura(&self, account_id: u64,
+        actor_guid: u64, spell_id: u32) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_cancel_aura",
+                gw_cancel_aura_then(actor_guid, spell_id)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -368,7 +541,15 @@ impl Coordinator {
 
     /// Cancel the caller's in-progress cast (`CMSG_CANCEL_CAST`) over the per-account connection so the
     /// module clears the caller's pending cast — no phantom completion GO. [083]
-    pub fn cancel_cast(&self, account_id: u64) -> Result<()> {
+    pub fn cancel_cast(&self, account_id: u64, actor_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_cancel_cast",
+                gw_cancel_cast_then(actor_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(player.conn.reducers, "cancel_cast", cancel_cast_then())
     }
@@ -376,10 +557,19 @@ impl Coordinator {
     pub fn send_chat(
         &self,
         account_id: u64,
+        actor_guid: u64,
         chat_type: u8,
         language: u8,
         message: String,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_send_chat",
+                gw_send_chat_then(actor_guid, chat_type, language, message)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -389,7 +579,16 @@ impl Coordinator {
     }
 
     /// Join a chat channel (065, CMSG_JOIN_CHANNEL — the client auto-sends on zone-in).
-    pub fn join_channel(&self, account_id: u64, channel: String) -> Result<()> {
+    pub fn join_channel(&self, account_id: u64,
+        actor_guid: u64, channel: String) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_join_channel",
+                gw_join_channel_then(actor_guid, channel)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -399,7 +598,16 @@ impl Coordinator {
     }
 
     /// Leave a chat channel (065, CMSG_LEAVE_CHANNEL).
-    pub fn leave_channel(&self, account_id: u64, channel: String) -> Result<()> {
+    pub fn leave_channel(&self, account_id: u64,
+        actor_guid: u64, channel: String) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_leave_channel",
+                gw_leave_channel_then(actor_guid, channel)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -412,9 +620,18 @@ impl Coordinator {
     pub fn send_channel_message(
         &self,
         account_id: u64,
+        actor_guid: u64,
         channel: String,
         message: String,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_send_channel_message",
+                gw_send_channel_message_then(actor_guid, channel, message)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -426,10 +643,19 @@ impl Coordinator {
     pub fn send_emote(
         &self,
         account_id: u64,
+        actor_guid: u64,
         text_emote: u32,
         emote_anim: u32,
         target_guid: u64,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_send_emote",
+                gw_send_emote_then(actor_guid, text_emote, emote_anim, target_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -438,7 +664,16 @@ impl Coordinator {
         )
     }
 
-    pub fn send_roll(&self, account_id: u64, min_roll: u32, max_roll: u32) -> Result<()> {
+    pub fn send_roll(&self, account_id: u64,
+        actor_guid: u64, min_roll: u32, max_roll: u32) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_send_roll",
+                gw_send_roll_then(actor_guid, min_roll, max_roll)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -450,9 +685,18 @@ impl Coordinator {
     pub fn send_whisper(
         &self,
         account_id: u64,
+        actor_guid: u64,
         target_player: String,
         message: String,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_send_whisper",
+                gw_send_whisper_then(actor_guid, target_player, message)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -463,7 +707,16 @@ impl Coordinator {
 
     /// `CMSG_MESSAGECHAT` Party (`/p`, work-item 199) — over the per-account connection so the module
     /// attributes the line (and its group-membership check) to the caller.
-    pub fn party_chat(&self, account_id: u64, message: String) -> Result<()> {
+    pub fn party_chat(&self, account_id: u64,
+        actor_guid: u64, message: String) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_party_chat",
+                gw_party_chat_then(actor_guid, message)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(player.conn.reducers, "party_chat", party_chat_then(message))
     }
@@ -497,7 +750,15 @@ impl Coordinator {
 
     /// `CMSG_PUSHQUESTTOPARTY` (work-item 194) — over the per-account connection so the module
     /// attributes the sender + its grouped/on-quest gates to the caller.
-    pub fn push_quest(&self, account_id: u64, quest_id: u32) -> Result<()> {
+    pub fn push_quest(&self, account_id: u64, actor_guid: u64, quest_id: u32) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_push_quest_to_party",
+                gw_push_quest_to_party_then(actor_guid, quest_id)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -507,7 +768,16 @@ impl Coordinator {
     }
 
     /// `CMSG_GROUP_INVITE` (work-item 066) — `target_guid` is already resolved by the gateway.
-    pub fn group_invite(&self, account_id: u64, target_guid: u64) -> Result<()> {
+    pub fn group_invite(&self, account_id: u64,
+        actor_guid: u64, target_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_group_invite",
+                gw_group_invite_then(actor_guid, target_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -516,26 +786,60 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_GROUP_ACCEPT`.
-    pub fn group_accept(&self, account_id: u64) -> Result<()> {
+    /// `CMSG_GROUP_ACCEPT`. Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as
+    /// `gw_accept_group_invite`.
+    pub fn group_accept(&self, account_id: u64, actor_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_accept_group_invite",
+                gw_accept_group_invite_then(actor_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(player.conn.reducers, "group_accept", group_accept_then())
     }
 
     /// `CMSG_GROUP_DECLINE`.
-    pub fn group_decline(&self, account_id: u64) -> Result<()> {
+    pub fn group_decline(&self, account_id: u64, actor_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_group_decline",
+                gw_group_decline_then(actor_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(player.conn.reducers, "group_decline", group_decline_then())
     }
 
     /// `CMSG_GROUP_DISBAND` — leave the caller's group.
-    pub fn group_leave(&self, account_id: u64) -> Result<()> {
+    pub fn group_leave(&self, account_id: u64, actor_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_group_leave",
+                gw_group_leave_then(actor_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(player.conn.reducers, "group_leave", group_leave_then())
     }
 
     /// `CMSG_GROUP_UNINVITE` — the leader kicks `target_guid`.
-    pub fn group_uninvite(&self, account_id: u64, target_guid: u64) -> Result<()> {
+    pub fn group_uninvite(&self, account_id: u64,
+        actor_guid: u64, target_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_group_uninvite",
+                gw_group_uninvite_then(actor_guid, target_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -551,10 +855,19 @@ impl Coordinator {
     pub fn group_loot_method(
         &self,
         account_id: u64,
+        actor_guid: u64,
         loot_setting: u8,
         master_guid: u64,
         loot_threshold: u8,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_group_loot_method",
+                gw_group_loot_method_then(actor_guid, loot_setting, master_guid, loot_threshold)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -568,10 +881,19 @@ impl Coordinator {
     pub fn gossip_select(
         &self,
         account_id: u64,
+        actor_guid: u64,
         npc_guid: u64,
         option_id: u32,
         option_row_id: u32,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_gossip_select",
+                gw_gossip_select_then(actor_guid, npc_guid, option_id, option_row_id)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -581,7 +903,16 @@ impl Coordinator {
     }
 
     /// `CMSG_ADD_FRIEND` (work-item 130) — `target_guid` is already resolved by the gateway.
-    pub fn add_friend(&self, account_id: u64, target_guid: u64) -> Result<()> {
+    pub fn add_friend(&self, account_id: u64,
+        actor_guid: u64, target_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_add_friend",
+                gw_add_friend_then(actor_guid, target_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -591,7 +922,16 @@ impl Coordinator {
     }
 
     /// `CMSG_DEL_FRIEND`.
-    pub fn del_friend(&self, account_id: u64, target_guid: u64) -> Result<()> {
+    pub fn del_friend(&self, account_id: u64,
+        actor_guid: u64, target_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_del_friend",
+                gw_del_friend_then(actor_guid, target_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -601,7 +941,16 @@ impl Coordinator {
     }
 
     /// `CMSG_ADD_IGNORE` — `target_guid` is already resolved by the gateway.
-    pub fn add_ignore(&self, account_id: u64, target_guid: u64) -> Result<()> {
+    pub fn add_ignore(&self, account_id: u64,
+        actor_guid: u64, target_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_add_ignore",
+                gw_add_ignore_then(actor_guid, target_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -611,7 +960,16 @@ impl Coordinator {
     }
 
     /// `CMSG_DEL_IGNORE`.
-    pub fn del_ignore(&self, account_id: u64, target_guid: u64) -> Result<()> {
+    pub fn del_ignore(&self, account_id: u64,
+        actor_guid: u64, target_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_del_ignore",
+                gw_del_ignore_then(actor_guid, target_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -621,8 +979,17 @@ impl Coordinator {
     }
 
     /// Take the money from a corpse (`CMSG_LOOT_MONEY`, slice 3) over the per-account connection so
-    /// the module attributes the loot to the caller.
-    pub fn loot_money(&self, account_id: u64, target_guid: u64) -> Result<()> {
+    /// the module attributes the loot to the caller. Under `LYRACORE_SHARED_CALLS` this rides the
+    /// coordinator connection as `gw_loot_money`.
+    pub fn loot_money(&self, account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_loot_money",
+                gw_loot_money_then(actor_guid, target_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -634,7 +1001,22 @@ impl Coordinator {
     /// Take one item from the open corpse into the backpack (`CMSG_AUTOSTORE_LOOT_ITEM`, slice 4) over
     /// the per-account connection so the module attributes the loot to the caller. The module moves the
     /// item into a free slot + deletes the corpse-loot row (the inventory relay then shows it in the bag).
-    pub fn take_loot(&self, account_id: u64, corpse_guid: u64, loot_slot: u8) -> Result<()> {
+    /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_take_loot`.
+    pub fn take_loot(
+        &self,
+        account_id: u64,
+        actor_guid: u64,
+        corpse_guid: u64,
+        loot_slot: u8,
+    ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_take_loot",
+                gw_take_loot_then(actor_guid, corpse_guid, loot_slot)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -643,7 +1025,15 @@ impl Coordinator {
         )
     }
 
-    pub fn skin_corpse(&self, account_id: u64, corpse_guid: u64) -> Result<()> {
+    pub fn skin_corpse(&self, account_id: u64, actor_guid: u64, corpse_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_skin",
+                gw_skin_then(actor_guid, corpse_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(player.conn.reducers, "skin", skin_then(corpse_guid))
     }
@@ -654,10 +1044,19 @@ impl Coordinator {
     pub fn loot_roll(
         &self,
         account_id: u64,
+        actor_guid: u64,
         corpse_guid: u64,
         loot_slot: u32,
         vote: u8,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_loot_roll",
+                gw_loot_roll_then(actor_guid, corpse_guid, loot_slot, vote)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -671,10 +1070,19 @@ impl Coordinator {
     pub fn loot_master_give(
         &self,
         account_id: u64,
+        actor_guid: u64,
         corpse_guid: u64,
         loot_slot: u8,
         target_guid: u64,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_loot_master_give",
+                gw_loot_master_give_then(actor_guid, corpse_guid, loot_slot, target_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -683,12 +1091,34 @@ impl Coordinator {
         )
     }
 
-    pub fn disenchant_item(&self, account_id: u64, slot: u8) -> Result<()> {
+    pub fn disenchant_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_disenchant",
+                gw_disenchant_then(actor_guid, slot)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(player.conn.reducers, "disenchant", disenchant_then(slot))
     }
 
-    pub fn enchant_item_on_slot(&self, account_id: u64, slot: u8, enchant_id: u32) -> Result<()> {
+    pub fn enchant_item_on_slot(
+        &self,
+        account_id: u64,
+        actor_guid: u64,
+        slot: u8,
+        enchant_id: u32,
+    ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_enchant_item",
+                gw_enchant_item_then(actor_guid, slot, enchant_id)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -699,14 +1129,24 @@ impl Coordinator {
 
     /// Buy `count` of `item_entry` from the vendor `vendor_guid` (`CMSG_BUY_ITEM`, Tier 2) over the
     /// per-account connection so the module attributes the purchase to the caller. The module gates
-    /// it on the vendor (stock + NPC flags + range) and debits the buyer's copper.
+    /// it on the vendor (stock + NPC flags + range) and debits the buyer's copper. Under
+    /// `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_buy_item`.
     pub fn buy_item(
         &self,
         account_id: u64,
+        actor_guid: u64,
         vendor_guid: u64,
         item_entry: u32,
         count: u32,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_buy_item",
+                gw_buy_item_then(actor_guid, vendor_guid, item_entry, count)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -718,12 +1158,22 @@ impl Coordinator {
     /// Learn `spell_id` from trainer `trainer_guid` (`CMSG_TRAINER_BUY_SPELL`) over the per-account
     /// connection. The module gates it (range / level / cost / not-already-known) and charges copper;
     /// the `Err` message carries the module's `[N]` gtker failure-reason tag for the dispatch to forward.
+    /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_trainer_buy`.
     pub fn buy_trainer_spell(
         &self,
         account_id: u64,
+        actor_guid: u64,
         trainer_guid: u64,
         spell_id: u32,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_trainer_buy",
+                gw_trainer_buy_then(actor_guid, trainer_guid, spell_id)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -732,7 +1182,16 @@ impl Coordinator {
         )
     }
 
-    pub fn learn_talent(&self, account_id: u64, talent_id: u32) -> Result<()> {
+    pub fn learn_talent(&self, account_id: u64,
+        actor_guid: u64, talent_id: u32) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_learn_talent",
+                gw_learn_talent_then(actor_guid, talent_id)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -743,7 +1202,15 @@ impl Coordinator {
 
     /// Fishing cast (060): instant-resolve catch — the module's lenient alpha gate auto-learns the
     /// skill and grants the fish straight to the bag. Caller resolved via ctx.sender.
-    pub fn fish(&self, account_id: u64) -> Result<()> {
+    pub fn fish(&self, account_id: u64, actor_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_fish",
+                gw_fish_then(actor_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(player.conn.reducers, "fish", fish_then())
     }
@@ -751,7 +1218,16 @@ impl Coordinator {
     /// Pick Lock (119): unlock the locked GameObject `go_guid` over the per-account connection (so the
     /// module attributes the pick to the caller via ctx.sender). The module gates range / lock
     /// requirement / Lockpicking skill; on success it records the GO unlocked + climbs the skill.
-    pub fn pick_lock(&self, account_id: u64, go_guid: u64) -> Result<()> {
+    pub fn pick_lock(&self, account_id: u64,
+        actor_guid: u64, go_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_pick_lock",
+                gw_pick_lock_then(actor_guid, go_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(player.conn.reducers, "pick_lock", pick_lock_then(go_guid))
     }
@@ -761,10 +1237,19 @@ impl Coordinator {
     pub fn set_action_button(
         &self,
         account_id: u64,
+        actor_guid: u64,
         button: u8,
         action: u32,
         action_type: u8,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_set_action_button",
+                gw_set_action_button_then(actor_guid, button, action, action_type)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -779,9 +1264,18 @@ impl Coordinator {
     pub fn set_faction_at_war(
         &self,
         account_id: u64,
+        actor_guid: u64,
         reputation_index: u32,
         at_war: bool,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_set_faction_at_war",
+                gw_set_faction_at_war_then(actor_guid, reputation_index, at_war)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -793,7 +1287,22 @@ impl Coordinator {
     /// Sell the item in inventory `slot` back to a vendor (`CMSG_SELL_ITEM`, Tier 2) over the
     /// per-account connection. The gateway resolves the client's item-INSTANCE guid to the owning
     /// slot before calling (the reducer takes the slot); the module credits the seller's copper.
-    pub fn sell_item(&self, account_id: u64, vendor_guid: u64, slot: u8) -> Result<()> {
+    /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_sell_item`.
+    pub fn sell_item(
+        &self,
+        account_id: u64,
+        actor_guid: u64,
+        vendor_guid: u64,
+        slot: u8,
+    ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_sell_item",
+                gw_sell_item_then(actor_guid, vendor_guid, slot)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -802,7 +1311,16 @@ impl Coordinator {
         )
     }
 
-    pub fn buyback_item(&self, account_id: u64, vendor_guid: u64, slot: u8) -> Result<()> {
+    pub fn buyback_item(&self, account_id: u64,
+        actor_guid: u64, vendor_guid: u64, slot: u8) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_buyback_item",
+                gw_buyback_item_then(actor_guid, vendor_guid, slot)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -814,7 +1332,16 @@ impl Coordinator {
     /// Repair the item in inventory `slot` at REPAIR-NPC `npc_guid` (`CMSG_REPAIR_ITEM`) over the
     /// per-account connection. The module gates the NPC + charges copper; the player's item +
     /// purse replicate back via subscription.
-    pub fn repair_item(&self, account_id: u64, npc_guid: u64, slot: u8) -> Result<()> {
+    pub fn repair_item(&self, account_id: u64,
+        actor_guid: u64, npc_guid: u64, slot: u8) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_repair_item",
+                gw_repair_item_then(actor_guid, npc_guid, slot)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -825,7 +1352,16 @@ impl Coordinator {
 
     /// Equip the item in main-inventory `from_slot` (`CMSG_AUTOEQUIP_ITEM`) over the per-account
     /// connection. The module resolves the matching equipment slot and gates the required level.
-    pub fn equip_item(&self, account_id: u64, from_slot: u8) -> Result<()> {
+    /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_equip_item`.
+    pub fn equip_item(&self, account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_equip_item",
+                gw_equip_item_then(actor_guid, from_slot)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -836,7 +1372,16 @@ impl Coordinator {
 
     /// Unequip the item in equipment `from_slot` to a free backpack slot (`CMSG_AUTOSTORE_BAG_ITEM`)
     /// over the per-account connection. The module gates "is equipped" + "backpack has room".
-    pub fn unequip_item(&self, account_id: u64, from_slot: u8) -> Result<()> {
+    pub fn unequip_item(&self, account_id: u64,
+        actor_guid: u64, from_slot: u8) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_unequip_item",
+                gw_unequip_item_then(actor_guid, from_slot)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -847,8 +1392,17 @@ impl Coordinator {
 
     /// Use the consumable in main-inventory `slot` (`CMSG_USE_ITEM`) over the per-account connection —
     /// eat/drink/potion/bandage. The module applies the on-use effect (flat heal for slice food) and
-    /// decrements the stack; a gameplay `Err` (no item / not usable) is per-action.
-    pub fn use_item(&self, account_id: u64, slot: u8) -> Result<()> {
+    /// decrements the stack; a gameplay `Err` (no item / not usable) is per-action. Under
+    /// `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_use_item`.
+    pub fn use_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_use_item",
+                gw_use_item_then(actor_guid, slot)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(player.conn.reducers, "use_item", use_item_then(slot))
     }
@@ -856,14 +1410,31 @@ impl Coordinator {
     /// Bind the caller's hearthstone home to their current position (`CMSG_GOSSIP_SELECT_OPTION` on an
     /// innkeeper's "Make this inn your home.") over the per-account connection so the module attributes
     /// it to the caller's entity. No args — `bind_home` resolves the caller via `ctx.sender`.
-    pub fn bind_home(&self, account_id: u64) -> Result<()> {
+    pub fn bind_home(&self, account_id: u64, actor_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_bind_home",
+                gw_bind_home_then(actor_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(player.conn.reducers, "bind_home", bind_home_then())
     }
 
     /// Move (or swap) main-inventory `from_slot` → `to_slot` (`CMSG_SWAP_INV_ITEM`/`CMSG_SWAP_ITEM`)
     /// over the per-account connection. The module's move primitive validates equip-slot transitions.
-    pub fn move_item(&self, account_id: u64, from_slot: u8, to_slot: u8) -> Result<()> {
+    pub fn move_item(&self, account_id: u64,
+        actor_guid: u64, from_slot: u8, to_slot: u8) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_move_item",
+                gw_move_item_then(actor_guid, from_slot, to_slot)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -875,7 +1446,22 @@ impl Coordinator {
     /// Accept quest `quest_id` from giver `giver_guid` (`CMSG_QUESTGIVER_ACCEPT_QUEST`) over the
     /// per-account connection so the module attributes it to the caller. The module gates the accept
     /// (giver relation + range + level + not-already-held); a gameplay `Err` is per-action, not fatal.
-    pub fn accept_quest(&self, account_id: u64, giver_guid: u64, quest_id: u32) -> Result<()> {
+    /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_accept_quest`.
+    pub fn accept_quest(
+        &self,
+        account_id: u64,
+        actor_guid: u64,
+        giver_guid: u64,
+        quest_id: u32,
+    ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_accept_quest",
+                gw_accept_quest_then(actor_guid, giver_guid, quest_id)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -887,13 +1473,23 @@ impl Coordinator {
     /// Turn quest `quest_id` in to giver `giver_guid` (`CMSG_QUESTGIVER_CHOOSE_REWARD`) over the
     /// per-account connection. The module validates completion + grants the rewards (money/XP/items).
     /// `reward_index` is the player's pick-1-of-N choice slot; ignored when the quest has no choices.
+    /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_turn_in_quest`.
     pub fn turn_in_quest(
         &self,
         account_id: u64,
+        actor_guid: u64,
         giver_guid: u64,
         quest_id: u32,
         reward_index: u32,
     ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_turn_in_quest",
+                gw_turn_in_quest_then(actor_guid, giver_guid, quest_id, reward_index)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -904,7 +1500,16 @@ impl Coordinator {
 
     /// Abandon quest `quest_id` (`CMSG_QUESTLOG_REMOVE_QUEST`) over the per-account connection. The
     /// module deletes the player's quest-log row; the quest-log relay then clears the slot.
-    pub fn abandon_quest(&self, account_id: u64, quest_id: u32) -> Result<()> {
+    pub fn abandon_quest(&self, account_id: u64,
+        actor_guid: u64, quest_id: u32) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_abandon_quest",
+                gw_abandon_quest_then(actor_guid, quest_id)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -914,13 +1519,27 @@ impl Coordinator {
     }
 
     /// Revive the caller after death (`CMSG_REPOP_REQUEST`, slice 4) over the per-account connection.
-    pub fn repop(&self, account_id: u64) -> Result<()> {
+    /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_repop`.
+    pub fn repop(&self, account_id: u64, actor_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(coord.conn.reducers, "gw_repop", gw_repop_then(actor_guid));
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(player.conn.reducers, "repop", repop_then())
     }
 
     /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`, slice 5) over the per-account connection.
-    pub fn reclaim_corpse(&self, account_id: u64, corpse_guid: u64) -> Result<()> {
+    pub fn reclaim_corpse(&self, account_id: u64,
+        actor_guid: u64, corpse_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_reclaim_corpse",
+                gw_reclaim_corpse_then(actor_guid, corpse_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -930,7 +1549,16 @@ impl Coordinator {
     }
 
     /// Answer a pending resurrect offer (`CMSG_RESURRECT_RESPONSE`, #014) over the per-account connection.
-    pub fn resurrect_response(&self, account_id: u64, accept: bool) -> Result<()> {
+    /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_respond_resurrect`.
+    pub fn resurrect_response(&self, account_id: u64, actor_guid: u64, accept: bool) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_respond_resurrect",
+                gw_respond_resurrect_then(actor_guid, accept)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -940,8 +1568,23 @@ impl Coordinator {
     }
 
     /// Spirit-Healer resurrect (`CMSG_SPIRIT_HEALER_ACTIVATE`) over the per-account connection: the
-    /// module res's the caller in place at 50% + applies Resurrection Sickness if it's a ghost.
-    pub fn spirit_healer_res(&self, account_id: u64, healer_guid: u64) -> Result<()> {
+    /// module res's the caller in place at 50% + applies Resurrection Sickness if it's a ghost. Under
+    /// `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_spirit_res` (which takes no
+    /// `healer_guid` — the per-player reducer ignores it too).
+    pub fn spirit_healer_res(
+        &self,
+        account_id: u64,
+        actor_guid: u64,
+        healer_guid: u64,
+    ) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_spirit_res",
+                gw_spirit_res_then(actor_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(
             player.conn.reducers,
@@ -955,7 +1598,15 @@ impl Coordinator {
     /// `game_world_entity` on_delete → `SMSG_DESTROY_OBJECT`, so the peer vanishes. Required because
     /// the player's SDK connection is cached/reused and does NOT drop when the game client's TCP
     /// socket closes (so the module's `on_disconnect` would not otherwise fire).
-    pub fn logout(&self, account_id: u64) -> Result<()> {
+    pub fn logout(&self, account_id: u64, actor_guid: u64) -> Result<()> {
+        if crate::config::shared_calls_enabled() && actor_guid != 0 {
+            let coord = self.0.coord();
+            return call_reducer!(
+                coord.conn.reducers,
+                "gw_leave_world",
+                gw_leave_world_then(actor_guid)
+            );
+        }
         let player = self.player_conn(account_id)?;
         call_reducer!(player.conn.reducers, "logout", logout_then())
     }

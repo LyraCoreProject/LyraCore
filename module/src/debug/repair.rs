@@ -8,7 +8,8 @@ use crate::spell::stacking::game_spell_group;
 use crate::{
     game_aura_schedule, game_character, game_createinfo_spell, game_creature_move_schedule,
     game_faction, game_ground_area_schedule, game_instance_reaper_schedule, game_item_template,
-    game_motion_publish_schedule, game_spell, game_talent, AuraSchedule, CreatureMoveSchedule,
+    game_gateway_lease_reaper_schedule, game_motion_publish_schedule, game_spell, game_talent,
+    AuraSchedule, CreatureMoveSchedule,
     GroundAreaSchedule,
 };
 
@@ -194,6 +195,19 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
             crate::instance::INSTANCE_REAPER_INTERVAL_MICROS,
         )),
+    });
+
+    // #468 stage 4a: re-arm the gateway lease reaper (bounded ghost lifetime for sessions riding
+    // the shared connection). Rearm-not-ensure is safe here — unlike the motion tick there is no
+    // operator tuning knob to preserve; the canonical interval is the only interval.
+    let lease_sched = ctx.db.game_gateway_lease_reaper_schedule();
+    let stale_lease: Vec<u64> = lease_sched.iter().map(|r| r.scheduled_id).collect();
+    for id in stale_lease {
+        lease_sched.scheduled_id().delete(id);
+    }
+    lease_sched.insert(crate::gw::GatewayLeaseReaperSchedule {
+        scheduled_id: 0,
+        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(crate::gw::LEASE_REAP_MICROS)),
     });
 
     // row_count: total rows/rearms across every family this pass touched (work-item 216 provenance

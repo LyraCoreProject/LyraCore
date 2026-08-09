@@ -55,7 +55,7 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
         // insensitive), then the module re-validates self/duplicate/cap server-side. Either way the
         // client gets an SMSG_FRIEND_STATUS its system message reads the result code off.
         ClientOpcodeMessage::CMSG_ADD_FRIEND(c) => {
-            let (result, guid) = resolve_add_contact(store, conn.account_id, &c.name, false)?;
+            let (result, guid) = resolve_add_contact(store, conn.account_id, self_guid(conn).unwrap_or(0), &c.name, false)?;
             send(
                 tx,
                 Outbound::One(ServerOpcodeMessage::SMSG_FRIEND_STATUS(Box::new(
@@ -64,7 +64,7 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
             )?;
         }
         ClientOpcodeMessage::CMSG_ADD_IGNORE(c) => {
-            let (result, guid) = resolve_add_contact(store, conn.account_id, &c.name, true)?;
+            let (result, guid) = resolve_add_contact(store, conn.account_id, self_guid(conn).unwrap_or(0), &c.name, true)?;
             send(
                 tx,
                 Outbound::One(ServerOpcodeMessage::SMSG_FRIEND_STATUS(Box::new(
@@ -74,7 +74,7 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
         }
         // Remove a friend/ignore by guid (the client already has it from the list row).
         ClientOpcodeMessage::CMSG_DEL_FRIEND(c) => {
-            let (result, guid) = resolve_del_contact(store, conn.account_id, c.guid.guid(), false)?;
+            let (result, guid) = resolve_del_contact(store, conn.account_id, self_guid(conn).unwrap_or(0), c.guid.guid(), false)?;
             send(
                 tx,
                 Outbound::One(ServerOpcodeMessage::SMSG_FRIEND_STATUS(Box::new(
@@ -83,7 +83,7 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
             )?;
         }
         ClientOpcodeMessage::CMSG_DEL_IGNORE(c) => {
-            let (result, guid) = resolve_del_contact(store, conn.account_id, c.guid.guid(), true)?;
+            let (result, guid) = resolve_del_contact(store, conn.account_id, self_guid(conn).unwrap_or(0), c.guid.guid(), true)?;
             send(
                 tx,
                 Outbound::One(ServerOpcodeMessage::SMSG_FRIEND_STATUS(Box::new(
@@ -247,6 +247,7 @@ fn party_result_for(e: &str) -> PartyResult {
 fn resolve_add_contact<St: WorldStore + ?Sized>(
     store: &St,
     account_id: u64,
+    actor_guid: u64,
     name: &str,
     is_ignore: bool,
 ) -> Result<(FriendResult, u64)> {
@@ -254,9 +255,9 @@ fn resolve_add_contact<St: WorldStore + ?Sized>(
         return Ok((FriendResult::NotFound, 0));
     };
     let outcome = if is_ignore {
-        store.add_ignore(account_id, target_guid)
+        store.add_ignore(account_id, actor_guid, target_guid)
     } else {
-        store.add_friend(account_id, target_guid)
+        store.add_friend(account_id, actor_guid, target_guid)
     };
     let result = match outcome {
         Ok(()) if is_ignore => FriendResult::IgnoreAdded,
@@ -300,13 +301,14 @@ fn resolve_add_contact<St: WorldStore + ?Sized>(
 fn resolve_del_contact<St: WorldStore + ?Sized>(
     store: &St,
     account_id: u64,
+    actor_guid: u64,
     target_guid: u64,
     is_ignore: bool,
 ) -> Result<(FriendResult, u64)> {
     let outcome = if is_ignore {
-        store.del_ignore(account_id, target_guid)
+        store.del_ignore(account_id, actor_guid, target_guid)
     } else {
-        store.del_friend(account_id, target_guid)
+        store.del_friend(account_id, actor_guid, target_guid)
     };
     let result = match outcome {
         Ok(()) if is_ignore => FriendResult::IgnoreRemoved,

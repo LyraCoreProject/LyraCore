@@ -71,6 +71,18 @@ pub fn send_chat(
 ) -> Result<(), String> {
     let sender =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "speaker not in world".to_string())?;
+    apply_send_chat(ctx, sender, chat_type, language, message)
+}
+
+/// The say/yell core, actor-explicit (#468 stage 4a): everything `send_chat` does after resolving
+/// WHO spoke — the sender reducer above and `gw::gw_send_chat` both delegate here.
+pub(crate) fn apply_send_chat(
+    ctx: &ReducerContext,
+    sender: crate::WorldEntity,
+    chat_type: u8,
+    language: u8,
+    message: String,
+) -> Result<(), String> {
     // Vanilla: a dead/ghost player can't be heard via Say/Yell (proximity chat). Whisper + party/guild
     // are NOT gated by death (and aren't routed here anyway — this reducer only handles SAY/YELL).
     if sender.dead {
@@ -136,6 +148,15 @@ pub fn normalize_channel(name: &str) -> String {
 pub fn join_channel(ctx: &ReducerContext, channel: String) -> Result<(), String> {
     let sender =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "joiner not in world".to_string())?;
+    apply_join_channel(ctx, sender, channel)
+}
+
+/// The channel-join core, actor-explicit (#479) — same split as [`apply_send_chat`].
+pub(crate) fn apply_join_channel(
+    ctx: &ReducerContext,
+    sender: crate::WorldEntity,
+    channel: String,
+) -> Result<(), String> {
     let key = normalize_channel(&channel);
     if key.is_empty() {
         return Err("empty channel name".to_string());
@@ -150,7 +171,10 @@ pub fn join_channel(ctx: &ReducerContext, channel: String) -> Result<(), String>
             id: 0,
             channel: key,
             character_guid: sender.guid,
-            owner_identity: ctx.sender(),
+            // The MEMBER's own binding, not `ctx.sender()` — identical on the sender path (the
+            // entity was resolved BY that identity) and correct on the gateway path, where
+            // `ctx.sender()` is the shared connection's operator identity.
+            owner_identity: sender.owner_identity,
         });
     }
     Ok(())
@@ -161,6 +185,15 @@ pub fn join_channel(ctx: &ReducerContext, channel: String) -> Result<(), String>
 pub fn leave_channel(ctx: &ReducerContext, channel: String) -> Result<(), String> {
     let sender =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "leaver not in world".to_string())?;
+    apply_leave_channel(ctx, sender, channel)
+}
+
+/// The channel-leave core, actor-explicit (#479) — same split as [`apply_send_chat`].
+pub(crate) fn apply_leave_channel(
+    ctx: &ReducerContext,
+    sender: crate::WorldEntity,
+    channel: String,
+) -> Result<(), String> {
     let key = normalize_channel(&channel);
     let members = ctx.db.game_channel_member();
     let ids: Vec<u64> = members
@@ -186,6 +219,16 @@ pub fn send_channel_message(
 ) -> Result<(), String> {
     let sender =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "speaker not in world".to_string())?;
+    apply_send_channel_message(ctx, sender, channel, message)
+}
+
+/// The channel-speak core, actor-explicit (#479) — same split as [`apply_send_chat`].
+pub(crate) fn apply_send_channel_message(
+    ctx: &ReducerContext,
+    sender: crate::WorldEntity,
+    channel: String,
+    message: String,
+) -> Result<(), String> {
     if sender.dead {
         return Err("dead players cannot speak".to_string());
     }
@@ -260,6 +303,17 @@ pub fn send_emote(
 ) -> Result<(), String> {
     let sender =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "emoter not in world".to_string())?;
+    apply_send_emote(ctx, sender, text_emote, emote_anim, target_guid)
+}
+
+/// The text-emote core, actor-explicit (#468 stage 4a) — same split as [`apply_send_chat`].
+pub(crate) fn apply_send_emote(
+    ctx: &ReducerContext,
+    sender: crate::WorldEntity,
+    text_emote: u32,
+    emote_anim: u32,
+    target_guid: u64,
+) -> Result<(), String> {
     // Vanilla: a dead/ghost player can't perform a (proximity) social emote.
     if sender.dead {
         return Err("dead players cannot emote".to_string());
@@ -345,6 +399,17 @@ pub fn send_whisper(
 ) -> Result<(), String> {
     let sender = entity_by_owner(ctx, ctx.sender())
         .ok_or_else(|| lyracore_shared::whisper::NOT_IN_WORLD.to_string())?;
+    apply_send_whisper(ctx, sender, target_name, message)
+}
+
+/// The shard-plane whisper core, actor-explicit (#479) — everything [`send_whisper`] does after
+/// resolving WHO spoke. Same split as [`apply_send_chat`]; `gw::gw_send_whisper` is the other entry.
+pub(crate) fn apply_send_whisper(
+    ctx: &ReducerContext,
+    sender: crate::WorldEntity,
+    target_name: String,
+    message: String,
+) -> Result<(), String> {
     let text = normalized_message(&message).ok_or_else(|| "empty message".to_string())?;
     // Case-insensitive name match (vanilla `/w bob` reaches "Bob"). REFUSE verdict (issue #30): the
     // fenced `character_by_name` reads an in-transit character as ABSENT, so a whisper aimed at a
@@ -501,6 +566,15 @@ fn push_whisper(
 pub fn party_chat(ctx: &ReducerContext, text: String) -> Result<(), String> {
     let sender =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "speaker not in world".to_string())?;
+    apply_party_chat(ctx, sender, text)
+}
+
+/// The party-chat core, actor-explicit (#479) — same split as [`apply_send_chat`].
+pub(crate) fn apply_party_chat(
+    ctx: &ReducerContext,
+    sender: crate::WorldEntity,
+    text: String,
+) -> Result<(), String> {
     let message = normalized_message(&text).ok_or_else(|| "empty message".to_string())?;
     let membership = crate::group::group_of(ctx, sender.guid)
         .ok_or_else(|| group_err::NOT_IN_GROUP.to_string())?;
@@ -609,8 +683,12 @@ crate::character_owned!(restamp, fn sweep_restamp_game_character_contact(ctx, ch
 /// Shared add path for `add_friend`/`add_ignore`: `target_guid` is resolved by the GATEWAY (name →
 /// guid, same lookup `/who` uses) before the reducer is called, so this only re-validates
 /// server-side (never trusts the caller) — reject self, an unknown guid, a duplicate, or a full list.
-fn add_contact(ctx: &ReducerContext, target_guid: u64, is_ignore: bool) -> Result<(), String> {
-    let sender = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
+pub(crate) fn add_contact(
+    ctx: &ReducerContext,
+    sender: crate::WorldEntity,
+    target_guid: u64,
+    is_ignore: bool,
+) -> Result<(), String> {
     if target_guid == sender.guid {
         return Err("cannot add yourself".to_string());
     }
@@ -632,7 +710,9 @@ fn add_contact(ctx: &ReducerContext, target_guid: u64, is_ignore: bool) -> Resul
     contacts.insert(ContactEntry {
         id: 0,
         owner_guid: sender.guid,
-        owner_identity: ctx.sender(),
+        // The OWNER's own binding, not `ctx.sender()` — identical on the sender path, and correct
+        // on the gateway path where `ctx.sender()` is the shared connection's operator identity.
+        owner_identity: sender.owner_identity,
         target_guid,
         is_ignore,
     });
@@ -641,8 +721,12 @@ fn add_contact(ctx: &ReducerContext, target_guid: u64, is_ignore: bool) -> Resul
 
 /// Shared remove path for `del_friend`/`del_ignore`: deletes the caller's own row for `target_guid`
 /// in the given list, or a clean `Err` if it isn't there (idempotent double-remove from the client).
-fn remove_contact(ctx: &ReducerContext, target_guid: u64, is_ignore: bool) -> Result<(), String> {
-    let sender = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
+pub(crate) fn remove_contact(
+    ctx: &ReducerContext,
+    sender: crate::WorldEntity,
+    target_guid: u64,
+    is_ignore: bool,
+) -> Result<(), String> {
     let contacts = ctx.db.game_character_contact();
     let row = contacts
         .by_owner()
@@ -657,26 +741,30 @@ fn remove_contact(ctx: &ReducerContext, target_guid: u64, is_ignore: bool) -> Re
 /// friend list.
 #[reducer]
 pub fn add_friend(ctx: &ReducerContext, target_guid: u64) -> Result<(), String> {
-    add_contact(ctx, target_guid, false)
+    let sender = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
+    add_contact(ctx, sender, target_guid, false)
 }
 
 /// `CMSG_DEL_FRIEND`: remove `target_guid` from the caller's friend list.
 #[reducer]
 pub fn del_friend(ctx: &ReducerContext, target_guid: u64) -> Result<(), String> {
-    remove_contact(ctx, target_guid, false)
+    let sender = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
+    remove_contact(ctx, sender, target_guid, false)
 }
 
 /// `CMSG_ADD_IGNORE`: add `target_guid` (gateway-resolved from the typed name) to the caller's
 /// ignore list.
 #[reducer]
 pub fn add_ignore(ctx: &ReducerContext, target_guid: u64) -> Result<(), String> {
-    add_contact(ctx, target_guid, true)
+    let sender = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
+    add_contact(ctx, sender, target_guid, true)
 }
 
 /// `CMSG_DEL_IGNORE`: remove `target_guid` from the caller's ignore list.
 #[reducer]
 pub fn del_ignore(ctx: &ReducerContext, target_guid: u64) -> Result<(), String> {
-    remove_contact(ctx, target_guid, true)
+    let sender = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
+    remove_contact(ctx, sender, target_guid, true)
 }
 
 // ===========================================================================================
@@ -721,6 +809,16 @@ pub struct RollEvent {
 pub fn send_roll(ctx: &ReducerContext, min_roll: u32, max_roll: u32) -> Result<(), String> {
     let roller =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "roller not in world".to_string())?;
+    apply_send_roll(ctx, roller, min_roll, max_roll)
+}
+
+/// The `/roll` core, actor-explicit (#479) — same split as [`apply_send_chat`].
+pub(crate) fn apply_send_roll(
+    ctx: &ReducerContext,
+    roller: crate::WorldEntity,
+    min_roll: u32,
+    max_roll: u32,
+) -> Result<(), String> {
     let (lo, hi) = normalized_roll_range(min_roll, max_roll);
     // Server-side RNG via ctx.random (like combat::roll_money) — NOT a timestamp-seeded LCG:
     // two rolls landing in the same microsecond used to be affinely related regardless of
@@ -979,8 +1077,11 @@ mod tests {
                 "whisper_rows(sender_guid, target_guid, sender_is_ignored)",
             ),
             (
+                // #479 factored the shard plane's body out of the `send_whisper` reducer into the
+                // actor-explicit core both entries (sender + `gw_send_whisper`) delegate to — the
+                // pin follows the body, which is where the delivery rule actually lives.
                 "the SHARD plane",
-                "pub fn send_whisper(",
+                "pub(crate) fn apply_send_whisper(",
                 "whisper_rows(sender.guid, target.guid, sender_is_ignored)",
             ),
         ] {

@@ -610,6 +610,44 @@ parity_test!(parity_game_talent, "game_talent", lyracore_module::Talent, binding
 parity_test!(parity_game_character_talent, "game_character_talent", lyracore_module::CharacterTalent, bindings::character_talent_type::CharacterTalent, {
     id, character_guid, owner_identity, talent_id, rank,
 });
+parity_test!(parity_game_roll_event, "game_roll_event", lyracore_module::RollEvent, bindings::roll_event_type::RollEvent, {
+    id, roller_guid, min_roll, max_roll, result, created_at, map_id, instance_id, grid_x, grid_y,
+});
+parity_test!(parity_game_rest_state_event, "game_rest_state_event", lyracore_module::RestStateEvent, bindings::rest_state_event_type::RestStateEvent, {
+    id, character_guid, player_bytes_2, created_at,
+});
+parity_test!(parity_game_dynamic_object, "game_dynamic_object", lyracore_module::DynamicObject, bindings::dynamic_object_type::DynamicObject, {
+    guid, caster_guid, spell_id, map_id, instance_id, x, y, z, radius_yd,
+});
+parity_test!(parity_game_combat_event, "game_combat_event", lyracore_module::CombatEvent, bindings::combat_event_type::CombatEvent, {
+    id, attacker_guid, target_guid, damage, hit_info, killing_blow, created_at, blocked_amount,
+    ranged_spell_id, ammo_display_id, spell_swing, impact_delay_ms, map_id, instance_id, grid_x,
+    grid_y,
+});
+parity_test!(parity_game_melee_attack, "game_melee_attack", lyracore_module::MeleeAttack, bindings::melee_attack_type::MeleeAttack, {
+    attacker_guid, target_guid, last_swing_ms, ranged_spell_id, last_offhand_swing_ms,
+});
+parity_test!(parity_game_spell_cast_event, "game_spell_cast_event", lyracore_module::SpellCastEvent, bindings::spell_cast_event_type::SpellCastEvent, {
+    id, caster_guid, spell_id, created_at, target_guid, cast_time_ms, is_completion, damage,
+    school, is_crit, resisted, absorbed, is_interrupted, cooldown_ms, delay_ms, healed,
+    is_proc_log, swing_hit_info, client_initiated, map_id, instance_id, grid_x, grid_y,
+});
+parity_test!(parity_game_spell_impact_event, "game_spell_impact_event", lyracore_module::SpellImpactEvent, bindings::spell_impact_event_type::SpellImpactEvent, {
+    id, caster_guid, target_guid, spell_id, created_at, damage, school, is_crit, resisted,
+    absorbed, map_id, instance_id, grid_x, grid_y,
+});
+parity_test!(parity_game_creature_cast, "game_creature_cast", lyracore_module::CreatureCast, bindings::creature_cast_type::CreatureCast, {
+    creature_entry, spell_id,
+});
+parity_test!(parity_game_resurrect_request, "game_resurrect_request", lyracore_module::ResurrectRequest, bindings::resurrect_request_type::ResurrectRequest, {
+    target_guid, target_identity, caster_guid, caster_name, points, created_at,
+});
+parity_test!(parity_game_channel_event, "game_channel_event", lyracore_module::ChannelEvent, bindings::channel_event_type::ChannelEvent, {
+    id, channel, channel_display, sender_guid, message, created_at,
+});
+parity_test!(parity_game_channel_member, "game_channel_member", lyracore_module::ChannelMember, bindings::channel_member_type::ChannelMember, {
+    id, channel, character_guid, owner_identity,
+});
 parity_test!(parity_game_aura, "game_aura", lyracore_module::Aura, bindings::aura_type::Aura, {
     id, target_guid, caster_guid, spell_id, slot, level, flags, applied_at, expires_at, effect_id,
     eff_kind, amount, eff_p0, eff_p0_kind, eff_p1, period_ms, amount_remaining, stacks,
@@ -703,6 +741,17 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_spell_chain",
     "game_talent",
     "game_character_talent",
+    "game_roll_event",
+    "game_rest_state_event",
+    "game_dynamic_object",
+    "game_combat_event",
+    "game_melee_attack",
+    "game_channel_event",
+    "game_channel_member",
+    "game_spell_cast_event",
+    "game_spell_impact_event",
+    "game_creature_cast",
+    "game_resurrect_request",
     "game_aura",
     "game_player_reputation",
     "game_character_contact",

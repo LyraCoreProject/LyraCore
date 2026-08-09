@@ -80,7 +80,7 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     message: String,
 ) -> Result<()> {
     let Some(realm) = store.realm_store() else {
-        return store.send_whisper(account_id, target_name.to_string(), message);
+        return store.send_whisper(account_id, self_guid.unwrap_or(0), target_name.to_string(), message);
     };
     let Some(sender_guid) = self_guid.filter(|&g| party::live_anywhere(store, g)) else {
         anyhow::bail!(lyracore_shared::whisper::NOT_IN_WORLD);

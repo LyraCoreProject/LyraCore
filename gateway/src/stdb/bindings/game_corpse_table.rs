@@ -18,6 +18,18 @@ pub struct GameCorpseTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_corpse`.
+pub struct GameCorpseTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameCorpseTableAccessor {
+    type Row = Corpse;
+    type Handle<'db> = GameCorpseTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_corpse()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_corpse`.
 ///
@@ -39,6 +51,18 @@ impl GameCorpseTableAccess for super::RemoteTables {
 
 pub struct GameCorpseInsertCallbackId(__sdk::CallbackId);
 pub struct GameCorpseDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameCorpseTableHandle<'ctx> {
+    type Row = Corpse;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = Corpse> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameCorpseTableHandle<'ctx> {
     type Row = Corpse;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameCorpseTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameCorpseTableHandle<'ctx> {
+    type InsertCallbackId = GameCorpseInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCorpseInsertCallbackId {
+        GameCorpseInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameCorpseInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameCorpseTableHandle<'ctx> {
+    type DeleteCallbackId = GameCorpseDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCorpseDeleteCallbackId {
+        GameCorpseDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameCorpseDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameCorpseUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameCorpseTableHandle<'ctx> {
+    type UpdateCallbackId = GameCorpseUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameCorpseUpdateCallbackId {
+        GameCorpseUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameCorpseUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameCorpseTableHandle<'ctx> {
     type UpdateCallbackId = GameCorpseUpdateCallbackId;
 
     fn on_update(

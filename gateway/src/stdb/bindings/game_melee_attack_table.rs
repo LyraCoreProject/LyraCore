@@ -18,6 +18,18 @@ pub struct GameMeleeAttackTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_melee_attack`.
+pub struct GameMeleeAttackTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameMeleeAttackTableAccessor {
+    type Row = MeleeAttack;
+    type Handle<'db> = GameMeleeAttackTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_melee_attack()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_melee_attack`.
 ///
@@ -39,6 +51,18 @@ impl GameMeleeAttackTableAccess for super::RemoteTables {
 
 pub struct GameMeleeAttackInsertCallbackId(__sdk::CallbackId);
 pub struct GameMeleeAttackDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameMeleeAttackTableHandle<'ctx> {
+    type Row = MeleeAttack;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = MeleeAttack> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameMeleeAttackTableHandle<'ctx> {
     type Row = MeleeAttack;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameMeleeAttackTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameMeleeAttackTableHandle<'ctx> {
+    type InsertCallbackId = GameMeleeAttackInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameMeleeAttackInsertCallbackId {
+        GameMeleeAttackInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameMeleeAttackInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameMeleeAttackTableHandle<'ctx> {
+    type DeleteCallbackId = GameMeleeAttackDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameMeleeAttackDeleteCallbackId {
+        GameMeleeAttackDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameMeleeAttackDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameMeleeAttackUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameMeleeAttackTableHandle<'ctx> {
+    type UpdateCallbackId = GameMeleeAttackUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameMeleeAttackUpdateCallbackId {
+        GameMeleeAttackUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameMeleeAttackUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameMeleeAttackTableHandle<'ctx> {
     type UpdateCallbackId = GameMeleeAttackUpdateCallbackId;
 
     fn on_update(

@@ -18,6 +18,18 @@ pub struct GameSchoolLockoutTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_school_lockout`.
+pub struct GameSchoolLockoutTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameSchoolLockoutTableAccessor {
+    type Row = SchoolLockout;
+    type Handle<'db> = GameSchoolLockoutTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_school_lockout()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_school_lockout`.
 ///
@@ -39,6 +51,18 @@ impl GameSchoolLockoutTableAccess for super::RemoteTables {
 
 pub struct GameSchoolLockoutInsertCallbackId(__sdk::CallbackId);
 pub struct GameSchoolLockoutDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameSchoolLockoutTableHandle<'ctx> {
+    type Row = SchoolLockout;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = SchoolLockout> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameSchoolLockoutTableHandle<'ctx> {
     type Row = SchoolLockout;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameSchoolLockoutTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameSchoolLockoutTableHandle<'ctx> {
+    type InsertCallbackId = GameSchoolLockoutInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameSchoolLockoutInsertCallbackId {
+        GameSchoolLockoutInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameSchoolLockoutInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameSchoolLockoutTableHandle<'ctx> {
+    type DeleteCallbackId = GameSchoolLockoutDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameSchoolLockoutDeleteCallbackId {
+        GameSchoolLockoutDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameSchoolLockoutDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameSchoolLockoutUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameSchoolLockoutTableHandle<'ctx> {
+    type UpdateCallbackId = GameSchoolLockoutUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameSchoolLockoutUpdateCallbackId {
+        GameSchoolLockoutUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameSchoolLockoutUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameSchoolLockoutTableHandle<'ctx> {
     type UpdateCallbackId = GameSchoolLockoutUpdateCallbackId;
 
     fn on_update(

@@ -955,7 +955,9 @@ fn the_shared_gate_consults_the_ledger_and_defers_to_the_pure_decision() {
 
 #[test]
 fn player_login_still_refuses_an_in_transit_character() {
-    let body = body_of(include_str!("../world.rs"), "pub fn player_login(");
+    // #468 stage 4d: the fence lives in the shared login core — both the sender reducer and
+    // gw_player_login delegate there, so pinning the core covers both entries.
+    let body = body_of(include_str!("../world.rs"), "pub(crate) fn apply_player_login(");
     assert!(
         body.contains("is_in_transit"),
         "world::player_login no longer fences in-transit characters. Login is the one path that \
@@ -1031,8 +1033,9 @@ fn every_refuse_verdict_call_site_still_routes_through_the_by_guid_chokepoint() 
         (
             "chat.rs",
             include_str!("../chat.rs"),
-            "pub fn send_whisper(",
-            "send_whisper reaches an in-transit character by NAME because begin_transfer \
+            // #479 moved the body into the actor-explicit core; the fence travelled with it.
+            "pub(crate) fn apply_send_whisper(",
+            "apply_send_whisper reaches an in-transit character by NAME because begin_transfer \
                  persists with `set_offline: false`",
         ),
         (
@@ -1273,7 +1276,9 @@ fn owner_identity_is_regenerated_at_the_destination_never_carried() {
              `player_login`, so a carried copy arrives stale and is immediately overwritten — the \
              REGENERATE verdict in this file's table (issue #30). Blob was:\n{blob}"
     );
-    let login = code_of(include_str!("../world.rs"), "pub fn player_login(");
+    // #468 stage 4d: restamp lives in the shared login core (owner = ctx.sender() on the sender
+    // path, the account's bound identity on the gateway path — same regenerate semantics).
+    let login = code_of(include_str!("../world.rs"), "pub(crate) fn apply_player_login(");
     assert!(
         login.contains("restamp_owned_data"),
         "world::player_login no longer restamps the owned rows from ctx.sender(), which is the \

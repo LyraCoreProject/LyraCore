@@ -732,7 +732,21 @@ pub fn bind_home(ctx: &ReducerContext) -> Result<(), String> {
 pub fn player_login(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
     let account = account_by_identity(ctx, ctx.sender())
         .ok_or_else(|| "caller identity not bound to an account".to_string())?;
+    apply_player_login(ctx, &account, character_guid, ctx.sender())
+}
 
+/// The login core, actor-explicit (#468 stage 4d): everything `player_login` does after resolving
+/// WHOSE login this is. `owner` is the identity stamped onto the live entity and the character's
+/// owner-RLS rows — the per-player connection's own identity on the sender path; on the gateway
+/// path (`gw::gw_player_login`) the account's BOUND identity, so the rows a per-player connection
+/// would see stay owned by the identity that connection would present. Both entries share this one
+/// body, so the two login paths cannot drift.
+pub(crate) fn apply_player_login(
+    ctx: &ReducerContext,
+    account: &crate::Account,
+    character_guid: u64,
+    owner: spacetimedb::Identity,
+) -> Result<(), String> {
     let chars = ctx.db.game_character();
     let mut character = chars
         .guid()
@@ -760,7 +774,7 @@ pub fn player_login(ctx: &ReducerContext, character_guid: u64) -> Result<(), Str
     // (`owner_identity = :sender`) hides them from the new connection: the player logs in to an empty bag,
     // no learned talents/spells, default skills. Mirrors how the live entity + character row below are
     // rebuilt under `ctx.sender()`. Idempotent — only rewrites rows whose identity already differs.
-    restamp_owned_data(ctx, character_guid, ctx.sender());
+    restamp_owned_data(ctx, character_guid, owner);
 
     let entities = ctx.db.game_world_entity();
     // Ghost relog: a stale live entity for this guid (the previous session's logout/disconnect
@@ -847,7 +861,7 @@ pub fn player_login(ctx: &ReducerContext, character_guid: u64) -> Result<(), Str
     // `debug_spawn_player_entity` runs, factored into `build_player_entity`. `owner_identity` is the
     // connection's bound identity (`ctx.sender()`); `account.id` is identical to `character.account_id`
     // (gated above), so the builder reads `account_id` from the character row.
-    let mut entity = crate::build_player_entity(ctx, &character, ctx.sender());
+    let mut entity = crate::build_player_entity(ctx, &character, owner);
     // Work-item 226: a preserved ghost rebuilds AS a ghost — `build_player_entity` always builds
     // alive (it's the shared player construction, creature-side code), so the released-ghost state
     // `persist_entity` stamped is re-applied here, the one player-owned call site. Health 1 matches
@@ -866,7 +880,7 @@ pub fn player_login(ctx: &ReducerContext, character_guid: u64) -> Result<(), Str
     // this idempotent call (no-op if the character owns ANY item) covers characters created
     // before that change. It also re-scopes nothing — owner_identity here is the live connection,
     // matching what the restamp sweep would set anyway.
-    crate::items::grant_starter_item(ctx, character.guid, ctx.sender());
+    crate::items::grant_starter_item(ctx, character.guid, owner);
 
     // Weapon skill (rank 14): lazily seed this character's skill lines (Defense + Unarmed + the now-equipped
     // weapon's line) at the level cap, owner-scoped for the RLS. AFTER grant_starter_item so the starter
@@ -875,14 +889,14 @@ pub fn player_login(ctx: &ReducerContext, character_guid: u64) -> Result<(), Str
     crate::skill::ensure_player_skills(
         ctx,
         character.guid,
-        ctx.sender(),
+        owner,
         character.level as u32,
         character.class,
     );
 
     // Talents (rank 27): re-apply every learned passive talent's aura at login (idempotent — refreshes by
     // effect_id, never stacks). A character with no learned talents applies nothing (baseline-safe).
-    crate::talent::apply_learned_talents(ctx, character.guid, ctx.sender(), character.level as u32);
+    crate::talent::apply_learned_talents(ctx, character.guid, owner, character.level as u32);
 
     // Racial passives (per-race createinfo): apply the always-on racial auras (Human → The Human Spirit
     // +Spirit, weapon specs, Diplomacy). Reads SPELL_ATTR_PASSIVE from the imported spell, so an unimported
@@ -1194,7 +1208,29 @@ pub fn movement_update(
     o: f32,
     move_time_ms: u32,
 ) -> Result<(), String> {
-    // #110 ground truth — see MOVEMENT_ENTRIES.
+    let mover =
+        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "mover not in world".to_string())?;
+    apply_movement_update(ctx, mover, opcode, movement_info, x, y, z, o, move_time_ms)
+}
+
+/// The movement core, actor-explicit (#468 stage 4): everything `movement_update` does after
+/// resolving WHO moved. The sender reducer above and the trusted gateway path
+/// (`gw::gw_movement_update`) both delegate here, so the two entries cannot drift — same shape as
+/// every `actor.rs` verb, factored out per that file's own rule for still-inlined cores.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_movement_update(
+    ctx: &ReducerContext,
+    mut mover: WorldEntity,
+    opcode: u16,
+    movement_info: Vec<u8>,
+    x: f32,
+    y: f32,
+    z: f32,
+    o: f32,
+    move_time_ms: u32,
+) -> Result<(), String> {
+    // #110 ground truth — see MOVEMENT_ENTRIES. Counted in the CORE, not the sender reducer, so
+    // the gateway path's heartbeats land in the same total.
     {
         let n = MOVEMENT_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         if n.is_multiple_of(2000) {
@@ -1202,8 +1238,6 @@ pub fn movement_update(
         }
     }
     let entities = ctx.db.game_world_entity();
-    let mut mover =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "mover not in world".to_string())?;
 
     // A dead player on the Release Spirit screen can't move — drop the heartbeat so the
     // body's authoritative position doesn't walk and peers don't see a 0-HP unit glide. EXCEPTION:
@@ -1389,11 +1423,20 @@ pub fn movement_update(
 /// target"). `target_guid` 0 clears the target. Authorized via `ctx.sender` like all player ops.
 #[reducer]
 pub fn set_target(ctx: &ReducerContext, target_guid: u64) -> Result<(), String> {
-    let entities = ctx.db.game_world_entity();
-    let mut player =
+    let player =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caller not in world".to_string())?;
+    apply_set_target(ctx, player, target_guid)
+}
+
+/// The target-write core, actor-explicit (#468 stage 4a) — `set_target` and `gw::gw_set_target`
+/// both delegate here.
+pub(crate) fn apply_set_target(
+    ctx: &ReducerContext,
+    mut player: WorldEntity,
+    target_guid: u64,
+) -> Result<(), String> {
     player.target_guid = target_guid;
-    entities.guid().update(player);
+    ctx.db.game_world_entity().guid().update(player);
     Ok(())
 }
 
@@ -1439,6 +1482,15 @@ pub(crate) fn can_inspect(
 pub fn inspect(ctx: &ReducerContext, target_guid: u64) -> Result<(), String> {
     let inspector =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caller not in world".to_string())?;
+    apply_inspect(ctx, inspector, target_guid)
+}
+
+/// The inspect core, actor-explicit (#479) — same split as [`apply_set_target`].
+pub(crate) fn apply_inspect(
+    ctx: &ReducerContext,
+    inspector: crate::WorldEntity,
+    target_guid: u64,
+) -> Result<(), String> {
     let target = crate::helpers::live_entity(ctx, target_guid)
         .map_err(|_| "no such inspect target".to_string())?;
     let (dx, dy, dz) = (
@@ -1808,7 +1860,7 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
     }
 }
 
-fn remove_from_world(ctx: &ReducerContext, owner: Identity) {
+pub(crate) fn remove_from_world(ctx: &ReducerContext, owner: Identity) {
     let Some(entity) = entity_by_owner(ctx, owner) else {
         return;
     };
@@ -1897,10 +1949,22 @@ pub fn gossip_select(
 ) -> Result<(), String> {
     let player =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "user not in world".to_string())?;
+    apply_gossip_select(ctx, player.guid, npc_guid, option_id, option_row_id)
+}
+
+/// The gossip-notify core, actor-explicit (#479) — same split as [`apply_set_target`], keyed by
+/// guid (the hook payload is the only thing the body reads off the actor).
+pub(crate) fn apply_gossip_select(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    npc_guid: u64,
+    option_id: u32,
+    option_row_id: u32,
+) -> Result<(), String> {
     crate::hooks::fire_on_gossip_select(
         ctx,
         &crate::hooks::GossipSelectPayload {
-            character_guid: player.guid,
+            character_guid,
             npc_guid,
             option_id,
             option_row_id,
@@ -2098,7 +2162,8 @@ mod tests {
 
     #[test]
     fn movement_update_applies_the_plan_and_never_re_derives_the_persist_gate() {
-        let body = crate::test_scan::code_of(include_str!("world.rs"), "pub fn movement_update(");
+        let body =
+            crate::test_scan::code_of(include_str!("world.rs"), "pub(crate) fn apply_movement_update(");
         // The persist/relay/channel/score decisions must route through `plan_movement` — not a
         // second, hand-rolled `snapshot_needs_persist` call inline (that decision, and the "relay is
         // never gated on it" invariant, are pinned directly by the tests above instead).

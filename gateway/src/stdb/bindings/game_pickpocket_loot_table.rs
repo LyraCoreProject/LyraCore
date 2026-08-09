@@ -18,6 +18,18 @@ pub struct GamePickpocketLootTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_pickpocket_loot`.
+pub struct GamePickpocketLootTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GamePickpocketLootTableAccessor {
+    type Row = GamePickpocketLoot;
+    type Handle<'db> = GamePickpocketLootTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_pickpocket_loot()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_pickpocket_loot`.
 ///
@@ -41,6 +53,18 @@ impl GamePickpocketLootTableAccess for super::RemoteTables {
 
 pub struct GamePickpocketLootInsertCallbackId(__sdk::CallbackId);
 pub struct GamePickpocketLootDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GamePickpocketLootTableHandle<'ctx> {
+    type Row = GamePickpocketLoot;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = GamePickpocketLoot> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GamePickpocketLootTableHandle<'ctx> {
     type Row = GamePickpocketLoot;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GamePickpocketLootTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GamePickpocketLootTableHandle<'ctx> {
+    type InsertCallbackId = GamePickpocketLootInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GamePickpocketLootInsertCallbackId {
+        GamePickpocketLootInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GamePickpocketLootInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GamePickpocketLootTableHandle<'ctx> {
+    type DeleteCallbackId = GamePickpocketLootDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GamePickpocketLootDeleteCallbackId {
+        GamePickpocketLootDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GamePickpocketLootDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GamePickpocketLootUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GamePickpocketLootTableHandle<'ctx> {
+    type UpdateCallbackId = GamePickpocketLootUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GamePickpocketLootUpdateCallbackId {
+        GamePickpocketLootUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GamePickpocketLootUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GamePickpocketLootTableHandle<'ctx> {
     type UpdateCallbackId = GamePickpocketLootUpdateCallbackId;
 
     fn on_update(

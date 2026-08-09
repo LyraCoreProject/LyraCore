@@ -18,6 +18,18 @@ pub struct GameGuidRangeTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_guid_range`.
+pub struct GameGuidRangeTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameGuidRangeTableAccessor {
+    type Row = GuidRange;
+    type Handle<'db> = GameGuidRangeTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_guid_range()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_guid_range`.
 ///
@@ -39,6 +51,18 @@ impl GameGuidRangeTableAccess for super::RemoteTables {
 
 pub struct GameGuidRangeInsertCallbackId(__sdk::CallbackId);
 pub struct GameGuidRangeDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameGuidRangeTableHandle<'ctx> {
+    type Row = GuidRange;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = GuidRange> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameGuidRangeTableHandle<'ctx> {
     type Row = GuidRange;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameGuidRangeTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameGuidRangeTableHandle<'ctx> {
+    type InsertCallbackId = GameGuidRangeInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameGuidRangeInsertCallbackId {
+        GameGuidRangeInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameGuidRangeInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameGuidRangeTableHandle<'ctx> {
+    type DeleteCallbackId = GameGuidRangeDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameGuidRangeDeleteCallbackId {
+        GameGuidRangeDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameGuidRangeDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameGuidRangeUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameGuidRangeTableHandle<'ctx> {
+    type UpdateCallbackId = GameGuidRangeUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameGuidRangeUpdateCallbackId {
+        GameGuidRangeUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameGuidRangeUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameGuidRangeTableHandle<'ctx> {
     type UpdateCallbackId = GameGuidRangeUpdateCallbackId;
 
     fn on_update(

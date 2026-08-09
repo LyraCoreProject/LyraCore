@@ -18,6 +18,18 @@ pub struct GameTeleportEventTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_teleport_event`.
+pub struct GameTeleportEventTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameTeleportEventTableAccessor {
+    type Row = TeleportEvent;
+    type Handle<'db> = GameTeleportEventTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_teleport_event()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_teleport_event`.
 ///
@@ -39,6 +51,18 @@ impl GameTeleportEventTableAccess for super::RemoteTables {
 
 pub struct GameTeleportEventInsertCallbackId(__sdk::CallbackId);
 pub struct GameTeleportEventDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameTeleportEventTableHandle<'ctx> {
+    type Row = TeleportEvent;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = TeleportEvent> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameTeleportEventTableHandle<'ctx> {
     type Row = TeleportEvent;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameTeleportEventTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameTeleportEventTableHandle<'ctx> {
+    type InsertCallbackId = GameTeleportEventInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameTeleportEventInsertCallbackId {
+        GameTeleportEventInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameTeleportEventInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameTeleportEventTableHandle<'ctx> {
+    type DeleteCallbackId = GameTeleportEventDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameTeleportEventDeleteCallbackId {
+        GameTeleportEventDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameTeleportEventDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameTeleportEventUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameTeleportEventTableHandle<'ctx> {
+    type UpdateCallbackId = GameTeleportEventUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameTeleportEventUpdateCallbackId {
+        GameTeleportEventUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameTeleportEventUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameTeleportEventTableHandle<'ctx> {
     type UpdateCallbackId = GameTeleportEventUpdateCallbackId;
 
     fn on_update(

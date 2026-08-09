@@ -767,7 +767,13 @@ impl WorldStore for InMemoryStore {
             .clone()
             .ok_or_else(|| anyhow!("no login entity configured"))
     }
-    fn movement_update(&self, _account_id: u64, opcode: u32, info: &MovementInfo) -> Result<()> {
+    fn movement_update(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        opcode: u32,
+        info: &MovementInfo,
+    ) -> Result<()> {
         self.rec("movement_update");
         if let Some(e) = &self.movement_error {
             return Err(anyhow!("movement_update reducer failed: {e}"));
@@ -800,7 +806,7 @@ impl WorldStore for InMemoryStore {
         *self.session_depth.lock().unwrap() = Some(tx.depth_handle());
         Ok(PlayerSubscriptions::empty())
     }
-    fn logout(&self, _account_id: u64) -> Result<()> {
+    fn logout(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
         self.rec("logout");
         self.logout_called
             .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -818,14 +824,14 @@ impl WorldStore for InMemoryStore {
     fn gameobject_template(&self, _entry: u32) -> Result<Option<codec::GameObjectTemplateView>> {
         Ok(None)
     }
-    fn use_gameobject(&self, _account_id: u64, _go_guid: u64) -> Result<()> {
+    fn use_gameobject(&self, _account_id: u64, _self_guid: u64, _go_guid: u64) -> Result<()> {
         Ok(())
     }
     fn client_command(&self, _account_id: u64, _cmd: String, _payload: String) -> Result<()> {
         Ok(())
     }
 
-    fn enter_areatrigger(&self, _account_id: u64, _trigger_id: u32) -> Result<()> {
+    fn enter_areatrigger(&self, _account_id: u64, _self_guid: u64, _trigger_id: u32) -> Result<()> {
         Ok(())
     }
     fn player_items(&self, _owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
@@ -857,6 +863,7 @@ impl WorldStore for InMemoryStore {
     fn buy_item(
         &self,
         _account_id: u64,
+        _self_guid: u64,
         _vendor_guid: u64,
         _item_entry: u32,
         _count: u32,
@@ -866,20 +873,26 @@ impl WorldStore for InMemoryStore {
             None => Ok(()),
         }
     }
-    fn sell_item(&self, _account_id: u64, _vendor_guid: u64, _slot: u8) -> Result<()> {
+    fn sell_item(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _vendor_guid: u64,
+        _slot: u8,
+    ) -> Result<()> {
         match &self.trade_error {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
         }
     }
-    fn buyback_item(&self, _account_id: u64, vendor_guid: u64, slot: u8) -> Result<()> {
+    fn buyback_item(&self, _account_id: u64, _self_guid: u64, vendor_guid: u64, slot: u8) -> Result<()> {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
         }
         self.bought_back.lock().unwrap().push((vendor_guid, slot));
         Ok(())
     }
-    fn repair_item(&self, _account_id: u64, _npc_guid: u64, _slot: u8) -> Result<()> {
+    fn repair_item(&self, _account_id: u64, _self_guid: u64, _npc_guid: u64, _slot: u8) -> Result<()> {
         match &self.trade_error {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
@@ -895,6 +908,7 @@ impl WorldStore for InMemoryStore {
     fn buy_trainer_spell(
         &self,
         _account_id: u64,
+        _self_guid: u64,
         _trainer_guid: u64,
         _spell_id: u32,
     ) -> Result<()> {
@@ -903,7 +917,7 @@ impl WorldStore for InMemoryStore {
             None => Ok(()),
         }
     }
-    fn skin_corpse(&self, _account_id: u64, corpse_guid: u64) -> Result<()> {
+    fn skin_corpse(&self, _account_id: u64, _self_guid: u64, corpse_guid: u64) -> Result<()> {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
         }
@@ -916,11 +930,11 @@ impl WorldStore for InMemoryStore {
             .find(|(g, _)| *g == item_guid)
             .map(|&(_, s)| s)
     }
-    fn disenchant_item(&self, _account_id: u64, slot: u8) -> Result<()> {
+    fn disenchant_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
         self.disenchanted.lock().unwrap().push(slot);
         Ok(())
     }
-    fn enchant_item_on_slot(&self, _account_id: u64, slot: u8, enchant_id: u32) -> Result<()> {
+    fn enchant_item_on_slot(&self, _account_id: u64, _self_guid: u64, slot: u8, enchant_id: u32) -> Result<()> {
         self.enchanted.lock().unwrap().push((slot, enchant_id));
         Ok(())
     }
@@ -933,7 +947,7 @@ impl WorldStore for InMemoryStore {
     fn spell_is_fishing(&self, spell_id: u32) -> bool {
         self.fishing_spells.contains(&spell_id)
     }
-    fn fish(&self, _account_id: u64) -> Result<()> {
+    fn fish(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
         self.fish_casts
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         match &self.trade_error {
@@ -944,7 +958,7 @@ impl WorldStore for InMemoryStore {
     fn spell_is_open_lock(&self, spell_id: u32) -> bool {
         self.open_lock_spells.contains(&spell_id)
     }
-    fn pick_lock(&self, _account_id: u64, go_guid: u64) -> Result<()> {
+    fn pick_lock(&self, _account_id: u64, _self_guid: u64, go_guid: u64) -> Result<()> {
         self.pick_lock_casts.lock().unwrap().push(go_guid);
         match &self.trade_error {
             Some(e) => Err(anyhow!("{e}")),
@@ -953,7 +967,7 @@ impl WorldStore for InMemoryStore {
     }
     fn set_faction_at_war(
         &self,
-        _account_id: u64,
+        _account_id: u64, _self_guid: u64,
         _reputation_index: u32,
         _at_war: bool,
     ) -> Result<()> {
@@ -961,7 +975,7 @@ impl WorldStore for InMemoryStore {
     }
     fn set_action_button(
         &self,
-        _account_id: u64,
+        _account_id: u64, _self_guid: u64,
         _button: u8,
         _action: u32,
         _action_type: u8,
@@ -977,25 +991,25 @@ impl WorldStore for InMemoryStore {
     fn spell_modifiers(&self, _character_guid: u64) -> Vec<(u32, u8, i32, bool)> {
         Vec::new() // no modifier packets in the harness (login stays byte-identical)
     }
-    fn learn_talent(&self, _account_id: u64, _talent_id: u32) -> Result<()> {
+    fn learn_talent(&self, _account_id: u64, _self_guid: u64, _talent_id: u32) -> Result<()> {
         match &self.trade_error {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
         }
     }
-    fn equip_item(&self, _account_id: u64, _from_slot: u8) -> Result<()> {
+    fn equip_item(&self, _account_id: u64, _self_guid: u64, _from_slot: u8) -> Result<()> {
         match &self.trade_error {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
         }
     }
-    fn unequip_item(&self, _account_id: u64, _from_slot: u8) -> Result<()> {
+    fn unequip_item(&self, _account_id: u64, _self_guid: u64, _from_slot: u8) -> Result<()> {
         match &self.trade_error {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
         }
     }
-    fn use_item(&self, _account_id: u64, slot: u8) -> Result<()> {
+    fn use_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
         self.used_items.lock().unwrap().push(slot);
         match &self.trade_error {
             Some(e) => Err(anyhow!("{e}")),
@@ -1005,7 +1019,7 @@ impl WorldStore for InMemoryStore {
     fn item_start_quest(&self, _owner_guid: u64, _slot: u8) -> Option<(u64, u32)> {
         self.item_start_quest_fixture
     }
-    fn push_quest(&self, account_id: u64, quest_id: u32) -> Result<()> {
+    fn push_quest(&self, account_id: u64, _self_guid: u64, quest_id: u32) -> Result<()> {
         if let Some(e) = &self.push_quest_error {
             return Err(anyhow!("{e}"));
         }
@@ -1015,7 +1029,7 @@ impl WorldStore for InMemoryStore {
             .push((account_id, quest_id));
         Ok(())
     }
-    fn bind_home(&self, _account_id: u64) -> Result<()> {
+    fn bind_home(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
         self.home_bound
             .store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
@@ -1038,7 +1052,7 @@ impl WorldStore for InMemoryStore {
             None => (false, false),
         }
     }
-    fn move_item(&self, _account_id: u64, _from_slot: u8, _to_slot: u8) -> Result<()> {
+    fn move_item(&self, _account_id: u64, _self_guid: u64, _from_slot: u8, _to_slot: u8) -> Result<()> {
         match &self.trade_error {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
@@ -1058,7 +1072,13 @@ impl WorldStore for InMemoryStore {
             .find(|d| d.quest_id == quest_id)
             .cloned())
     }
-    fn accept_quest(&self, account_id: u64, giver_guid: u64, quest_id: u32) -> Result<()> {
+    fn accept_quest(
+        &self,
+        account_id: u64,
+        _self_guid: u64,
+        giver_guid: u64,
+        quest_id: u32,
+    ) -> Result<()> {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
         }
@@ -1071,6 +1091,7 @@ impl WorldStore for InMemoryStore {
     fn turn_in_quest(
         &self,
         account_id: u64,
+        _self_guid: u64,
         giver_guid: u64,
         quest_id: u32,
         reward_index: u32,
@@ -1108,18 +1129,18 @@ impl WorldStore for InMemoryStore {
         // pre-#22 test set.
         self.entity_in_world || self.live_guids.contains(&guid)
     }
-    fn abandon_quest(&self, account_id: u64, quest_id: u32) -> Result<()> {
+    fn abandon_quest(&self, account_id: u64, _self_guid: u64, quest_id: u32) -> Result<()> {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
         }
         self.abandoned.lock().unwrap().push((account_id, quest_id));
         Ok(())
     }
-    fn set_target(&self, _account_id: u64, _target_guid: u64) -> Result<()> {
+    fn set_target(&self, _account_id: u64, _self_guid: u64, _target_guid: u64) -> Result<()> {
         self.rec("set_target");
         Ok(())
     }
-    fn inspect(&self, _account_id: u64, target_guid: u64) -> Result<()> {
+    fn inspect(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
         }
@@ -1131,17 +1152,23 @@ impl WorldStore for InMemoryStore {
         }
         Ok(())
     }
-    fn start_attack(&self, _account_id: u64, _target_guid: u64) -> Result<()> {
+    fn start_attack(&self, _account_id: u64, _self_guid: u64, _target_guid: u64) -> Result<()> {
         self.rec("start_attack");
         match &self.start_attack_error {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
         }
     }
-    fn pet_command(&self, _account_id: u64, _data: u32, _target_guid: u64) -> Result<()> {
+    fn pet_command(&self, _account_id: u64, _self_guid: u64, _data: u32, _target_guid: u64) -> Result<()> {
         Ok(())
     }
-    fn start_ranged_attack(&self, _account_id: u64, target_guid: u64, spell_id: u32) -> Result<()> {
+    fn start_ranged_attack(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        target_guid: u64,
+        spell_id: u32,
+    ) -> Result<()> {
         if let Some(e) = &self.start_ranged_attack_error {
             return Err(anyhow!("{e}"));
         }
@@ -1151,10 +1178,10 @@ impl WorldStore for InMemoryStore {
             .push((target_guid, spell_id));
         Ok(())
     }
-    fn stop_attack(&self, _account_id: u64) -> Result<()> {
+    fn stop_attack(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
         Ok(())
     }
-    fn cast_spell(&self, _account_id: u64, spell_id: u32, target_guid: u64) -> Result<()> {
+    fn cast_spell(&self, _account_id: u64, _self_guid: u64, spell_id: u32, target_guid: u64) -> Result<()> {
         if let Some(e) = &self.cast_spell_error {
             return Err(anyhow!("{e}"));
         }
@@ -1163,7 +1190,7 @@ impl WorldStore for InMemoryStore {
     }
     fn cast_spell_at(
         &self,
-        _account_id: u64,
+        _account_id: u64, _self_guid: u64,
         spell_id: u32,
         target_guid: u64,
         x: f32,
@@ -1179,10 +1206,10 @@ impl WorldStore for InMemoryStore {
             .push((spell_id, target_guid, x, y, z));
         Ok(())
     }
-    fn cancel_aura(&self, _account_id: u64, _spell_id: u32) -> Result<()> {
+    fn cancel_aura(&self, _account_id: u64, _self_guid: u64, _spell_id: u32) -> Result<()> {
         Ok(())
     }
-    fn cancel_cast(&self, _account_id: u64) -> Result<()> {
+    fn cancel_cast(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
         Ok(())
     }
     fn spell_cast_time(&self, _spell_id: u32) -> Option<u32> {
@@ -1198,16 +1225,16 @@ impl WorldStore for InMemoryStore {
     fn entity_max_health(&self, _guid: u64) -> u32 {
         100
     }
-    fn join_channel(&self, _account_id: u64, channel: String) -> Result<()> {
+    fn join_channel(&self, _account_id: u64, _self_guid: u64, channel: String) -> Result<()> {
         self.channel_joins.lock().unwrap().push(channel);
         Ok(())
     }
-    fn leave_channel(&self, _account_id: u64, _channel: String) -> Result<()> {
+    fn leave_channel(&self, _account_id: u64, _self_guid: u64, _channel: String) -> Result<()> {
         Ok(())
     }
     fn send_channel_message(
         &self,
-        _account_id: u64,
+        _account_id: u64, _self_guid: u64,
         channel: String,
         message: String,
     ) -> Result<()> {
@@ -1226,6 +1253,7 @@ impl WorldStore for InMemoryStore {
     fn send_chat(
         &self,
         _account_id: u64,
+        _self_guid: u64,
         chat_type: u8,
         language: u8,
         message: String,
@@ -1242,6 +1270,7 @@ impl WorldStore for InMemoryStore {
     fn send_emote(
         &self,
         _account_id: u64,
+        _self_guid: u64,
         _text_emote: u32,
         _emote_anim: u32,
         _target_guid: u64,
@@ -1249,10 +1278,10 @@ impl WorldStore for InMemoryStore {
         self.rec("send_emote");
         Ok(())
     }
-    fn send_roll(&self, _account_id: u64, _min_roll: u32, _max_roll: u32) -> Result<()> {
+    fn send_roll(&self, _account_id: u64, _self_guid: u64, _min_roll: u32, _max_roll: u32) -> Result<()> {
         Ok(())
     }
-    fn send_whisper(&self, _account_id: u64, target_player: String, message: String) -> Result<()> {
+    fn send_whisper(&self, _account_id: u64, _self_guid: u64, target_player: String, message: String) -> Result<()> {
         // #22 (whisper slice): recorded per SHARD, so a test can tell the pre-#22 path (the
         // player-facing reducer on the player's own database, with the TYPED NAME still unresolved)
         // from the realm-core one (`realm_whispers`, by guid).
@@ -1263,7 +1292,7 @@ impl WorldStore for InMemoryStore {
             None => Ok(()),
         }
     }
-    fn party_chat(&self, _account_id: u64, message: String) -> Result<()> {
+    fn party_chat(&self, _account_id: u64, _self_guid: u64, message: String) -> Result<()> {
         match &self.party_chat_error {
             Some(e) => Err(anyhow!("{e}")),
             None => {
@@ -1284,14 +1313,20 @@ impl WorldStore for InMemoryStore {
     fn loot_target_money(&self, _target_guid: u64) -> Result<u32> {
         Ok(self.corpse_money)
     }
-    fn loot_money(&self, _account_id: u64, target_guid: u64) -> Result<()> {
+    fn loot_money(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
         self.money_looted.lock().unwrap().push(target_guid);
         Ok(())
     }
-    fn take_loot(&self, _account_id: u64, _corpse_guid: u64, _loot_slot: u8) -> Result<()> {
+    fn take_loot(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _corpse_guid: u64,
+        _loot_slot: u8,
+    ) -> Result<()> {
         Ok(())
     }
-    fn repop(&self, _account_id: u64) -> Result<()> {
+    fn repop(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
         Ok(())
     }
     fn claim_session(&self, _account_id: u64) -> u64 {
@@ -1312,13 +1347,18 @@ impl WorldStore for InMemoryStore {
             self.released_conns.lock().unwrap().push(account_id);
         }
     }
-    fn reclaim_corpse(&self, _account_id: u64, _corpse_guid: u64) -> Result<()> {
+    fn reclaim_corpse(&self, _account_id: u64, _self_guid: u64, _corpse_guid: u64) -> Result<()> {
         Ok(())
     }
-    fn resurrect_response(&self, _account_id: u64, _accept: bool) -> Result<()> {
+    fn resurrect_response(&self, _account_id: u64, _self_guid: u64, _accept: bool) -> Result<()> {
         Ok(())
     }
-    fn spirit_healer_res(&self, _account_id: u64, _healer_guid: u64) -> Result<()> {
+    fn spirit_healer_res(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _healer_guid: u64,
+    ) -> Result<()> {
         Ok(())
     }
     fn corpse_location(&self, _owner_guid: u64) -> Result<Option<(u32, f32, f32, f32)>> {
@@ -1619,7 +1659,7 @@ impl WorldStore for InMemoryStore {
     }
     fn loot_roll(
         &self,
-        _account_id: u64,
+        _account_id: u64, _self_guid: u64,
         corpse_guid: u64,
         loot_slot: u32,
         vote: u8,
@@ -1635,7 +1675,7 @@ impl WorldStore for InMemoryStore {
     }
     fn loot_master_give(
         &self,
-        _account_id: u64,
+        _account_id: u64, _self_guid: u64,
         corpse_guid: u64,
         loot_slot: u8,
         target_guid: u64,
@@ -1721,14 +1761,14 @@ impl WorldStore for InMemoryStore {
     }
     fn gossip_select(
         &self,
-        _account_id: u64,
+        _account_id: u64, _self_guid: u64,
         _npc_guid: u64,
         _option_id: u32,
         _option_row_id: u32,
     ) -> Result<()> {
         Ok(())
     }
-    fn add_friend(&self, _account_id: u64, target_guid: u64) -> Result<()> {
+    fn add_friend(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
         }
@@ -1739,7 +1779,7 @@ impl WorldStore for InMemoryStore {
             .push((owner, target_guid, false));
         Ok(())
     }
-    fn del_friend(&self, _account_id: u64, target_guid: u64) -> Result<()> {
+    fn del_friend(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
         let owner = self.login_entity.as_ref().map(|e| e.guid).unwrap_or(0);
         let mut contacts = self.contacts.lock().unwrap();
         let before = contacts.len();
@@ -1749,7 +1789,7 @@ impl WorldStore for InMemoryStore {
         }
         Ok(())
     }
-    fn add_ignore(&self, _account_id: u64, target_guid: u64) -> Result<()> {
+    fn add_ignore(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
         }
@@ -1760,7 +1800,7 @@ impl WorldStore for InMemoryStore {
             .push((owner, target_guid, true));
         Ok(())
     }
-    fn del_ignore(&self, _account_id: u64, target_guid: u64) -> Result<()> {
+    fn del_ignore(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
         let owner = self.login_entity.as_ref().map(|e| e.guid).unwrap_or(0);
         let mut contacts = self.contacts.lock().unwrap();
         let before = contacts.len();

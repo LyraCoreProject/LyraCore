@@ -18,6 +18,18 @@ pub struct GameGraveyardTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_graveyard`.
+pub struct GameGraveyardTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameGraveyardTableAccessor {
+    type Row = GraveyardLoc;
+    type Handle<'db> = GameGraveyardTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_graveyard()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_graveyard`.
 ///
@@ -39,6 +51,18 @@ impl GameGraveyardTableAccess for super::RemoteTables {
 
 pub struct GameGraveyardInsertCallbackId(__sdk::CallbackId);
 pub struct GameGraveyardDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameGraveyardTableHandle<'ctx> {
+    type Row = GraveyardLoc;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = GraveyardLoc> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameGraveyardTableHandle<'ctx> {
     type Row = GraveyardLoc;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameGraveyardTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameGraveyardTableHandle<'ctx> {
+    type InsertCallbackId = GameGraveyardInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameGraveyardInsertCallbackId {
+        GameGraveyardInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameGraveyardInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameGraveyardTableHandle<'ctx> {
+    type DeleteCallbackId = GameGraveyardDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameGraveyardDeleteCallbackId {
+        GameGraveyardDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameGraveyardDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameGraveyardUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameGraveyardTableHandle<'ctx> {
+    type UpdateCallbackId = GameGraveyardUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameGraveyardUpdateCallbackId {
+        GameGraveyardUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameGraveyardUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameGraveyardTableHandle<'ctx> {
     type UpdateCallbackId = GameGraveyardUpdateCallbackId;
 
     fn on_update(

@@ -343,7 +343,13 @@ impl WorldStore for Coordinator {
         self.player_login(account_id, character_guid)
     }
 
-    fn movement_update(&self, account_id: u64, opcode: u32, info: &MovementInfo) -> Result<()> {
+    fn movement_update(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        opcode: u32,
+        info: &MovementInfo,
+    ) -> Result<()> {
         // Carry the MovementInfo verbatim so the module can relay it to in-range observers, who
         // re-emit it under the same opcode (animation intent, not just position). The inherent
         // `movement_update` takes the pre-serialized body + a u16 opcode (different arity → visibly
@@ -351,6 +357,7 @@ impl WorldStore for Coordinator {
         let body = codec::movement_info_to_bytes(info)?;
         self.movement_update(
             account_id,
+            self_guid,
             opcode as u16,
             &body,
             info.position.x,
@@ -366,6 +373,7 @@ impl WorldStore for Coordinator {
     fn movement_update_nowait(
         &self,
         account_id: u64,
+        self_guid: u64,
         opcode: u32,
         info: &MovementInfo,
         feedback: &std::sync::Arc<crate::world::MovementFeedback>,
@@ -375,6 +383,7 @@ impl WorldStore for Coordinator {
         let fb = feedback.clone();
         let r = self.movement_update_nowait(
             account_id,
+            self_guid,
             opcode as u16,
             &body,
             info.position.x,
@@ -418,8 +427,8 @@ impl WorldStore for Coordinator {
         )
     }
 
-    fn logout(&self, account_id: u64) -> Result<()> {
-        self.logout(account_id)
+    fn logout(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        self.logout(account_id, self_guid)
     }
 
     fn character_by_guid(&self, guid: u64) -> Result<Option<codec::CharacterView>> {
@@ -442,12 +451,12 @@ impl WorldStore for Coordinator {
         self.gameobject_type(go_guid)
     }
 
-    fn use_gameobject(&self, account_id: u64, go_guid: u64) -> Result<()> {
-        self.use_gameobject(account_id, go_guid)
+    fn use_gameobject(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()> {
+        self.use_gameobject(account_id, self_guid, go_guid)
     }
 
-    fn enter_areatrigger(&self, account_id: u64, trigger_id: u32) -> Result<()> {
-        self.enter_areatrigger(account_id, trigger_id)
+    fn enter_areatrigger(&self, account_id: u64, self_guid: u64, trigger_id: u32) -> Result<()> {
+        self.enter_areatrigger(account_id, self_guid, trigger_id)
     }
 
     fn client_command(&self, account_id: u64, cmd: String, payload: String) -> Result<()> {
@@ -481,23 +490,24 @@ impl WorldStore for Coordinator {
     fn buy_item(
         &self,
         account_id: u64,
+        self_guid: u64,
         vendor_guid: u64,
         item_entry: u32,
         count: u32,
     ) -> Result<()> {
-        self.buy_item(account_id, vendor_guid, item_entry, count)
+        self.buy_item(account_id, self_guid, vendor_guid, item_entry, count)
     }
 
-    fn sell_item(&self, account_id: u64, vendor_guid: u64, slot: u8) -> Result<()> {
-        self.sell_item(account_id, vendor_guid, slot)
+    fn sell_item(&self, account_id: u64, self_guid: u64, vendor_guid: u64, slot: u8) -> Result<()> {
+        self.sell_item(account_id, self_guid, vendor_guid, slot)
     }
 
-    fn buyback_item(&self, account_id: u64, vendor_guid: u64, slot: u8) -> Result<()> {
-        self.buyback_item(account_id, vendor_guid, slot)
+    fn buyback_item(&self, account_id: u64, self_guid: u64, vendor_guid: u64, slot: u8) -> Result<()> {
+        self.buyback_item(account_id, self_guid, vendor_guid, slot)
     }
 
-    fn repair_item(&self, account_id: u64, npc_guid: u64, slot: u8) -> Result<()> {
-        self.repair_item(account_id, npc_guid, slot)
+    fn repair_item(&self, account_id: u64, self_guid: u64, npc_guid: u64, slot: u8) -> Result<()> {
+        self.repair_item(account_id, self_guid, npc_guid, slot)
     }
 
     fn trainer_list(
@@ -508,24 +518,30 @@ impl WorldStore for Coordinator {
         self.trainer_list(player_guid, trainer_guid)
     }
 
-    fn buy_trainer_spell(&self, account_id: u64, trainer_guid: u64, spell_id: u32) -> Result<()> {
-        self.buy_trainer_spell(account_id, trainer_guid, spell_id)
+    fn buy_trainer_spell(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        trainer_guid: u64,
+        spell_id: u32,
+    ) -> Result<()> {
+        self.buy_trainer_spell(account_id, self_guid, trainer_guid, spell_id)
     }
 
-    fn skin_corpse(&self, account_id: u64, corpse_guid: u64) -> Result<()> {
-        self.skin_corpse(account_id, corpse_guid)
+    fn skin_corpse(&self, account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()> {
+        self.skin_corpse(account_id, self_guid, corpse_guid)
     }
 
     fn item_slot_by_guid(&self, account_id: u64, item_guid: u64) -> Option<u8> {
         self.item_slot_by_guid(account_id, item_guid)
     }
 
-    fn disenchant_item(&self, account_id: u64, slot: u8) -> Result<()> {
-        self.disenchant_item(account_id, slot)
+    fn disenchant_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()> {
+        self.disenchant_item(account_id, self_guid, slot)
     }
 
-    fn enchant_item_on_slot(&self, account_id: u64, slot: u8, enchant_id: u32) -> Result<()> {
-        self.enchant_item_on_slot(account_id, slot, enchant_id)
+    fn enchant_item_on_slot(&self, account_id: u64, self_guid: u64, slot: u8, enchant_id: u32) -> Result<()> {
+        self.enchant_item_on_slot(account_id, self_guid, slot, enchant_id)
     }
 
     fn talent_grant_spell(&self, talent_id: u32) -> u32 {
@@ -542,35 +558,35 @@ impl WorldStore for Coordinator {
         self.spell_is_fishing(spell_id)
     }
 
-    fn fish(&self, account_id: u64) -> Result<()> {
-        self.fish(account_id)
+    fn fish(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        self.fish(account_id, self_guid)
     }
 
     fn spell_is_open_lock(&self, spell_id: u32) -> bool {
         self.spell_is_open_lock(spell_id)
     }
 
-    fn pick_lock(&self, account_id: u64, go_guid: u64) -> Result<()> {
-        self.pick_lock(account_id, go_guid)
+    fn pick_lock(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()> {
+        self.pick_lock(account_id, self_guid, go_guid)
     }
 
     fn set_faction_at_war(
         &self,
-        account_id: u64,
+        account_id: u64, self_guid: u64,
         reputation_index: u32,
         at_war: bool,
     ) -> Result<()> {
-        self.set_faction_at_war(account_id, reputation_index, at_war)
+        self.set_faction_at_war(account_id, self_guid, reputation_index, at_war)
     }
 
     fn set_action_button(
         &self,
-        account_id: u64,
+        account_id: u64, self_guid: u64,
         button: u8,
         action: u32,
         action_type: u8,
     ) -> Result<()> {
-        self.set_action_button(account_id, button, action, action_type)
+        self.set_action_button(account_id, self_guid, button, action, action_type)
     }
 
     fn talent_pane_sync(&self, character_guid: u64, talent_id: u32) -> (u32, u32, u32) {
@@ -585,24 +601,24 @@ impl WorldStore for Coordinator {
         self.spell_modifiers(character_guid)
     }
 
-    fn learn_talent(&self, account_id: u64, talent_id: u32) -> Result<()> {
-        self.learn_talent(account_id, talent_id)
+    fn learn_talent(&self, account_id: u64, self_guid: u64, talent_id: u32) -> Result<()> {
+        self.learn_talent(account_id, self_guid, talent_id)
     }
 
-    fn equip_item(&self, account_id: u64, from_slot: u8) -> Result<()> {
-        self.equip_item(account_id, from_slot)
+    fn equip_item(&self, account_id: u64, self_guid: u64, from_slot: u8) -> Result<()> {
+        self.equip_item(account_id, self_guid, from_slot)
     }
 
-    fn unequip_item(&self, account_id: u64, from_slot: u8) -> Result<()> {
-        self.unequip_item(account_id, from_slot)
+    fn unequip_item(&self, account_id: u64, self_guid: u64, from_slot: u8) -> Result<()> {
+        self.unequip_item(account_id, self_guid, from_slot)
     }
 
-    fn use_item(&self, account_id: u64, slot: u8) -> Result<()> {
-        self.use_item(account_id, slot)
+    fn use_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()> {
+        self.use_item(account_id, self_guid, slot)
     }
 
-    fn bind_home(&self, account_id: u64) -> Result<()> {
-        self.bind_home(account_id)
+    fn bind_home(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        self.bind_home(account_id, self_guid)
     }
 
     fn npc_is_innkeeper(&self, guid: u64) -> Result<bool> {
@@ -625,8 +641,8 @@ impl WorldStore for Coordinator {
         self.quest_status(guid, quest_id)
     }
 
-    fn move_item(&self, account_id: u64, from_slot: u8, to_slot: u8) -> Result<()> {
-        self.move_item(account_id, from_slot, to_slot)
+    fn move_item(&self, account_id: u64, self_guid: u64, from_slot: u8, to_slot: u8) -> Result<()> {
+        self.move_item(account_id, self_guid, from_slot, to_slot)
     }
 
     fn quest_giver_evals(
@@ -641,30 +657,37 @@ impl WorldStore for Coordinator {
         self.quest_detail(quest_id)
     }
 
-    fn accept_quest(&self, account_id: u64, giver_guid: u64, quest_id: u32) -> Result<()> {
-        self.accept_quest(account_id, giver_guid, quest_id)
+    fn accept_quest(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        giver_guid: u64,
+        quest_id: u32,
+    ) -> Result<()> {
+        self.accept_quest(account_id, self_guid, giver_guid, quest_id)
     }
 
     fn turn_in_quest(
         &self,
         account_id: u64,
+        self_guid: u64,
         giver_guid: u64,
         quest_id: u32,
         reward_index: u32,
     ) -> Result<()> {
-        self.turn_in_quest(account_id, giver_guid, quest_id, reward_index)
+        self.turn_in_quest(account_id, self_guid, giver_guid, quest_id, reward_index)
     }
 
-    fn abandon_quest(&self, account_id: u64, quest_id: u32) -> Result<()> {
-        self.abandon_quest(account_id, quest_id)
+    fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
+        self.abandon_quest(account_id, self_guid, quest_id)
     }
 
     fn item_start_quest(&self, owner_guid: u64, slot: u8) -> Option<(u64, u32)> {
         self.item_start_quest(owner_guid, slot)
     }
 
-    fn push_quest(&self, account_id: u64, quest_id: u32) -> Result<()> {
-        self.push_quest(account_id, quest_id)
+    fn push_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
+        self.push_quest(account_id, self_guid, quest_id)
     }
 
     fn player_quest_log(&self, player_guid: u64) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
@@ -691,50 +714,56 @@ impl WorldStore for Coordinator {
         self.entity_in_world(guid)
     }
 
-    fn set_target(&self, account_id: u64, target_guid: u64) -> Result<()> {
-        self.set_target(account_id, target_guid)
+    fn set_target(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+        self.set_target(account_id, self_guid, target_guid)
     }
 
-    fn inspect(&self, account_id: u64, target_guid: u64) -> Result<()> {
-        self.inspect(account_id, target_guid)
+    fn inspect(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+        self.inspect(account_id, self_guid, target_guid)
     }
 
-    fn start_attack(&self, account_id: u64, target_guid: u64) -> Result<()> {
-        self.start_attack(account_id, target_guid)
+    fn start_attack(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+        self.start_attack(account_id, self_guid, target_guid)
     }
-    fn pet_command(&self, account_id: u64, data: u32, target_guid: u64) -> Result<()> {
-        self.pet_command(account_id, data, target_guid)
+    fn pet_command(&self, account_id: u64, self_guid: u64, data: u32, target_guid: u64) -> Result<()> {
+        self.pet_command(account_id, self_guid, data, target_guid)
     }
-    fn start_ranged_attack(&self, account_id: u64, target_guid: u64, spell_id: u32) -> Result<()> {
-        self.start_ranged_attack(account_id, target_guid, spell_id)
+    fn start_ranged_attack(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+        spell_id: u32,
+    ) -> Result<()> {
+        self.start_ranged_attack(account_id, self_guid, target_guid, spell_id)
     }
 
-    fn stop_attack(&self, account_id: u64) -> Result<()> {
-        self.stop_attack(account_id)
+    fn stop_attack(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        self.stop_attack(account_id, self_guid)
     }
 
-    fn cast_spell(&self, account_id: u64, spell_id: u32, target_guid: u64) -> Result<()> {
-        self.cast_spell(account_id, spell_id, target_guid)
+    fn cast_spell(&self, account_id: u64, self_guid: u64, spell_id: u32, target_guid: u64) -> Result<()> {
+        self.cast_spell(account_id, self_guid, spell_id, target_guid)
     }
 
     fn cast_spell_at(
         &self,
-        account_id: u64,
+        account_id: u64, self_guid: u64,
         spell_id: u32,
         target_guid: u64,
         x: f32,
         y: f32,
         z: f32,
     ) -> Result<()> {
-        self.cast_spell_at(account_id, spell_id, target_guid, x, y, z)
+        self.cast_spell_at(account_id, self_guid, spell_id, target_guid, x, y, z)
     }
 
-    fn cancel_aura(&self, account_id: u64, spell_id: u32) -> Result<()> {
-        self.cancel_aura(account_id, spell_id)
+    fn cancel_aura(&self, account_id: u64, self_guid: u64, spell_id: u32) -> Result<()> {
+        self.cancel_aura(account_id, self_guid, spell_id)
     }
 
-    fn cancel_cast(&self, account_id: u64) -> Result<()> {
-        self.cancel_cast(account_id)
+    fn cancel_cast(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        self.cancel_cast(account_id, self_guid)
     }
 
     fn spell_cast_time(&self, spell_id: u32) -> Option<u32> {
@@ -753,21 +782,21 @@ impl WorldStore for Coordinator {
         self.entity_max_health(guid)
     }
 
-    fn join_channel(&self, account_id: u64, channel: String) -> Result<()> {
-        self.join_channel(account_id, channel)
+    fn join_channel(&self, account_id: u64, self_guid: u64, channel: String) -> Result<()> {
+        self.join_channel(account_id, self_guid, channel)
     }
 
-    fn leave_channel(&self, account_id: u64, channel: String) -> Result<()> {
-        self.leave_channel(account_id, channel)
+    fn leave_channel(&self, account_id: u64, self_guid: u64, channel: String) -> Result<()> {
+        self.leave_channel(account_id, self_guid, channel)
     }
 
     fn send_channel_message(
         &self,
-        account_id: u64,
+        account_id: u64, self_guid: u64,
         channel: String,
         message: String,
     ) -> Result<()> {
-        self.send_channel_message(account_id, channel, message)
+        self.send_channel_message(account_id, self_guid, channel, message)
     }
 
     fn superseded_old_rank(&self, new_spell: u32, player_guid: u64) -> Option<u32> {
@@ -781,33 +810,35 @@ impl WorldStore for Coordinator {
     fn send_chat(
         &self,
         account_id: u64,
+        self_guid: u64,
         chat_type: u8,
         language: u8,
         message: String,
     ) -> Result<()> {
-        self.send_chat(account_id, chat_type, language, message)
+        self.send_chat(account_id, self_guid, chat_type, language, message)
     }
 
     fn send_emote(
         &self,
         account_id: u64,
+        self_guid: u64,
         text_emote: u32,
         emote_anim: u32,
         target_guid: u64,
     ) -> Result<()> {
-        self.send_emote(account_id, text_emote, emote_anim, target_guid)
+        self.send_emote(account_id, self_guid, text_emote, emote_anim, target_guid)
     }
 
-    fn send_roll(&self, account_id: u64, min_roll: u32, max_roll: u32) -> Result<()> {
-        self.send_roll(account_id, min_roll, max_roll)
+    fn send_roll(&self, account_id: u64, self_guid: u64, min_roll: u32, max_roll: u32) -> Result<()> {
+        self.send_roll(account_id, self_guid, min_roll, max_roll)
     }
 
-    fn send_whisper(&self, account_id: u64, target_player: String, message: String) -> Result<()> {
-        self.send_whisper(account_id, target_player, message)
+    fn send_whisper(&self, account_id: u64, self_guid: u64, target_player: String, message: String) -> Result<()> {
+        self.send_whisper(account_id, self_guid, target_player, message)
     }
 
-    fn party_chat(&self, account_id: u64, message: String) -> Result<()> {
-        self.party_chat(account_id, message)
+    fn party_chat(&self, account_id: u64, self_guid: u64, message: String) -> Result<()> {
+        self.party_chat(account_id, self_guid, message)
     }
 
     fn gm_command(&self, account_id: u64, text: String) -> Result<()> {
@@ -818,16 +849,22 @@ impl WorldStore for Coordinator {
         self.loot_target_money(target_guid)
     }
 
-    fn loot_money(&self, account_id: u64, target_guid: u64) -> Result<()> {
-        self.loot_money(account_id, target_guid)
+    fn loot_money(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+        self.loot_money(account_id, self_guid, target_guid)
     }
 
-    fn take_loot(&self, account_id: u64, corpse_guid: u64, loot_slot: u8) -> Result<()> {
-        self.take_loot(account_id, corpse_guid, loot_slot)
+    fn take_loot(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        corpse_guid: u64,
+        loot_slot: u8,
+    ) -> Result<()> {
+        self.take_loot(account_id, self_guid, corpse_guid, loot_slot)
     }
 
-    fn repop(&self, account_id: u64) -> Result<()> {
-        self.repop(account_id)
+    fn repop(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        self.repop(account_id, self_guid)
     }
 
     fn claim_session(&self, account_id: u64) -> u64 {
@@ -846,16 +883,16 @@ impl WorldStore for Coordinator {
         self.detach_account_session(account_id)
     }
 
-    fn reclaim_corpse(&self, account_id: u64, corpse_guid: u64) -> Result<()> {
-        self.reclaim_corpse(account_id, corpse_guid)
+    fn reclaim_corpse(&self, account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()> {
+        self.reclaim_corpse(account_id, self_guid, corpse_guid)
     }
 
-    fn resurrect_response(&self, account_id: u64, accept: bool) -> Result<()> {
-        self.resurrect_response(account_id, accept)
+    fn resurrect_response(&self, account_id: u64, self_guid: u64, accept: bool) -> Result<()> {
+        self.resurrect_response(account_id, self_guid, accept)
     }
 
-    fn spirit_healer_res(&self, account_id: u64, healer_guid: u64) -> Result<()> {
-        self.spirit_healer_res(account_id, healer_guid)
+    fn spirit_healer_res(&self, account_id: u64, self_guid: u64, healer_guid: u64) -> Result<()> {
+        self.spirit_healer_res(account_id, self_guid, healer_guid)
     }
 
     fn corpse_location(&self, owner_guid: u64) -> Result<Option<(u32, f32, f32, f32)>> {
@@ -886,30 +923,30 @@ impl WorldStore for Coordinator {
     // `self_guid` is unused here on purpose — the module resolves the actor from `ctx.sender()`'s
     // live entity, which is the whole reason this arm needs no operator gate. `world::party` is what
     // chooses between this and the realm-core arm below.
-    fn group_invite(&self, account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
-        self.group_invite(account_id, target_guid)
+    fn group_invite(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+        self.group_invite(account_id, self_guid, target_guid)
     }
-    fn group_accept(&self, account_id: u64, _self_guid: u64) -> Result<()> {
-        self.group_accept(account_id)
+    fn group_accept(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        self.group_accept(account_id, self_guid)
     }
-    fn group_decline(&self, account_id: u64, _self_guid: u64) -> Result<()> {
-        self.group_decline(account_id)
+    fn group_decline(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        self.group_decline(account_id, self_guid)
     }
-    fn group_leave(&self, account_id: u64, _self_guid: u64) -> Result<()> {
-        self.group_leave(account_id)
+    fn group_leave(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        self.group_leave(account_id, self_guid)
     }
-    fn group_uninvite(&self, account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
-        self.group_uninvite(account_id, target_guid)
+    fn group_uninvite(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+        self.group_uninvite(account_id, self_guid, target_guid)
     }
     fn group_loot_method(
         &self,
         account_id: u64,
-        _self_guid: u64,
+        self_guid: u64,
         loot_setting: u8,
         master_guid: u64,
         loot_threshold: u8,
     ) -> Result<()> {
-        self.group_loot_method(account_id, loot_setting, master_guid, loot_threshold)
+        self.group_loot_method(account_id, self_guid, loot_setting, master_guid, loot_threshold)
     }
 
     // --- Realm-wide party state (#22, group slice) ---
@@ -985,8 +1022,8 @@ impl WorldStore for Coordinator {
     ) -> Result<()> {
         self.realm_whisper(sender_guid, target_guid, message, sender_is_ignored)
     }
-    fn loot_roll(&self, account_id: u64, corpse_guid: u64, loot_slot: u32, vote: u8) -> Result<()> {
-        self.loot_roll(account_id, corpse_guid, loot_slot, vote)
+    fn loot_roll(&self, account_id: u64, self_guid: u64, corpse_guid: u64, loot_slot: u32, vote: u8) -> Result<()> {
+        self.loot_roll(account_id, self_guid, corpse_guid, loot_slot, vote)
     }
 
     // --- Realm-wide loot rolls (#50) ---
@@ -1031,36 +1068,36 @@ impl WorldStore for Coordinator {
     }
     fn loot_master_give(
         &self,
-        account_id: u64,
+        account_id: u64, self_guid: u64,
         corpse_guid: u64,
         loot_slot: u8,
         target_guid: u64,
     ) -> Result<()> {
-        self.loot_master_give(account_id, corpse_guid, loot_slot, target_guid)
+        self.loot_master_give(account_id, self_guid, corpse_guid, loot_slot, target_guid)
     }
     fn gossip_select(
         &self,
-        account_id: u64,
+        account_id: u64, self_guid: u64,
         npc_guid: u64,
         option_id: u32,
         option_row_id: u32,
     ) -> Result<()> {
-        self.gossip_select(account_id, npc_guid, option_id, option_row_id)
+        self.gossip_select(account_id, self_guid, npc_guid, option_id, option_row_id)
     }
-    fn add_friend(&self, account_id: u64, target_guid: u64) -> Result<()> {
-        self.add_friend(account_id, target_guid)
-    }
-
-    fn del_friend(&self, account_id: u64, target_guid: u64) -> Result<()> {
-        self.del_friend(account_id, target_guid)
+    fn add_friend(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+        self.add_friend(account_id, self_guid, target_guid)
     }
 
-    fn add_ignore(&self, account_id: u64, target_guid: u64) -> Result<()> {
-        self.add_ignore(account_id, target_guid)
+    fn del_friend(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+        self.del_friend(account_id, self_guid, target_guid)
     }
 
-    fn del_ignore(&self, account_id: u64, target_guid: u64) -> Result<()> {
-        self.del_ignore(account_id, target_guid)
+    fn add_ignore(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+        self.add_ignore(account_id, self_guid, target_guid)
+    }
+
+    fn del_ignore(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+        self.del_ignore(account_id, self_guid, target_guid)
     }
 }
 

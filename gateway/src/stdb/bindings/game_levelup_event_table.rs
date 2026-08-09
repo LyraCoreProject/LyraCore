@@ -18,6 +18,18 @@ pub struct GameLevelupEventTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_levelup_event`.
+pub struct GameLevelupEventTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameLevelupEventTableAccessor {
+    type Row = LevelupEvent;
+    type Handle<'db> = GameLevelupEventTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_levelup_event()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_levelup_event`.
 ///
@@ -39,6 +51,18 @@ impl GameLevelupEventTableAccess for super::RemoteTables {
 
 pub struct GameLevelupEventInsertCallbackId(__sdk::CallbackId);
 pub struct GameLevelupEventDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameLevelupEventTableHandle<'ctx> {
+    type Row = LevelupEvent;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = LevelupEvent> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameLevelupEventTableHandle<'ctx> {
     type Row = LevelupEvent;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameLevelupEventTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameLevelupEventTableHandle<'ctx> {
+    type InsertCallbackId = GameLevelupEventInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameLevelupEventInsertCallbackId {
+        GameLevelupEventInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameLevelupEventInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameLevelupEventTableHandle<'ctx> {
+    type DeleteCallbackId = GameLevelupEventDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameLevelupEventDeleteCallbackId {
+        GameLevelupEventDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameLevelupEventDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameLevelupEventUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameLevelupEventTableHandle<'ctx> {
+    type UpdateCallbackId = GameLevelupEventUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameLevelupEventUpdateCallbackId {
+        GameLevelupEventUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameLevelupEventUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameLevelupEventTableHandle<'ctx> {
     type UpdateCallbackId = GameLevelupEventUpdateCallbackId;
 
     fn on_update(

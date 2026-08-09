@@ -1315,7 +1315,17 @@ pub fn turn_in_quest(
 pub fn abandon_quest(ctx: &ReducerContext, quest_entry: u32) -> Result<(), String> {
     let player =
         entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "player not in world".to_string())?;
-    let cq = character_quest_row(ctx, player.guid, quest_entry)
+    apply_abandon_quest(ctx, player.guid, quest_entry)
+}
+
+/// The abandon core, actor-explicit (#479) — the body [`abandon_quest`] used to inline, shared with
+/// `gw::gw_abandon_quest`.
+pub(crate) fn apply_abandon_quest(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    quest_entry: u32,
+) -> Result<(), String> {
+    let cq = character_quest_row(ctx, player_guid, quest_entry)
         .ok_or_else(|| "you are not on that quest".to_string())?;
     if cq.rewarded {
         return Err("cannot abandon a completed quest".to_string());

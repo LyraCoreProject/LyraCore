@@ -18,6 +18,18 @@ pub struct PkgPlayerbotsWaypointTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `pkg_playerbots_waypoint`.
+pub struct PkgPlayerbotsWaypointTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for PkgPlayerbotsWaypointTableAccessor {
+    type Row = BotWaypoint;
+    type Handle<'db> = PkgPlayerbotsWaypointTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.pkg_playerbots_waypoint()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `pkg_playerbots_waypoint`.
 ///
@@ -39,6 +51,18 @@ impl PkgPlayerbotsWaypointTableAccess for super::RemoteTables {
 
 pub struct PkgPlayerbotsWaypointInsertCallbackId(__sdk::CallbackId);
 pub struct PkgPlayerbotsWaypointDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for PkgPlayerbotsWaypointTableHandle<'ctx> {
+    type Row = BotWaypoint;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = BotWaypoint> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for PkgPlayerbotsWaypointTableHandle<'ctx> {
     type Row = BotWaypoint;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for PkgPlayerbotsWaypointTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for PkgPlayerbotsWaypointTableHandle<'ctx> {
+    type InsertCallbackId = PkgPlayerbotsWaypointInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> PkgPlayerbotsWaypointInsertCallbackId {
+        PkgPlayerbotsWaypointInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: PkgPlayerbotsWaypointInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for PkgPlayerbotsWaypointTableHandle<'ctx> {
+    type DeleteCallbackId = PkgPlayerbotsWaypointDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> PkgPlayerbotsWaypointDeleteCallbackId {
+        PkgPlayerbotsWaypointDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: PkgPlayerbotsWaypointDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct PkgPlayerbotsWaypointUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for PkgPlayerbotsWaypointTableHandle<'ctx> {
+    type UpdateCallbackId = PkgPlayerbotsWaypointUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> PkgPlayerbotsWaypointUpdateCallbackId {
+        PkgPlayerbotsWaypointUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: PkgPlayerbotsWaypointUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for PkgPlayerbotsWaypointTableHandle<'ctx> {
     type UpdateCallbackId = PkgPlayerbotsWaypointUpdateCallbackId;
 
     fn on_update(

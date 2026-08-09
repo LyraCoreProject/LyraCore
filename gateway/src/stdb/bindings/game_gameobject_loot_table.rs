@@ -18,6 +18,18 @@ pub struct GameGameobjectLootTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_gameobject_loot`.
+pub struct GameGameobjectLootTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameGameobjectLootTableAccessor {
+    type Row = GameObjectLoot;
+    type Handle<'db> = GameGameobjectLootTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_gameobject_loot()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_gameobject_loot`.
 ///
@@ -39,6 +51,18 @@ impl GameGameobjectLootTableAccess for super::RemoteTables {
 
 pub struct GameGameobjectLootInsertCallbackId(__sdk::CallbackId);
 pub struct GameGameobjectLootDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameGameobjectLootTableHandle<'ctx> {
+    type Row = GameObjectLoot;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = GameObjectLoot> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameGameobjectLootTableHandle<'ctx> {
     type Row = GameObjectLoot;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameGameobjectLootTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameGameobjectLootTableHandle<'ctx> {
+    type InsertCallbackId = GameGameobjectLootInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameGameobjectLootInsertCallbackId {
+        GameGameobjectLootInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameGameobjectLootInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameGameobjectLootTableHandle<'ctx> {
+    type DeleteCallbackId = GameGameobjectLootDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameGameobjectLootDeleteCallbackId {
+        GameGameobjectLootDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameGameobjectLootDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameGameobjectLootUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameGameobjectLootTableHandle<'ctx> {
+    type UpdateCallbackId = GameGameobjectLootUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameGameobjectLootUpdateCallbackId {
+        GameGameobjectLootUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameGameobjectLootUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameGameobjectLootTableHandle<'ctx> {
     type UpdateCallbackId = GameGameobjectLootUpdateCallbackId;
 
     fn on_update(

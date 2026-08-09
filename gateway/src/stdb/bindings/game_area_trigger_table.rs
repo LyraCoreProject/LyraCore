@@ -18,6 +18,18 @@ pub struct GameAreaTriggerTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_area_trigger`.
+pub struct GameAreaTriggerTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameAreaTriggerTableAccessor {
+    type Row = GameAreaTrigger;
+    type Handle<'db> = GameAreaTriggerTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_area_trigger()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_area_trigger`.
 ///
@@ -39,6 +51,18 @@ impl GameAreaTriggerTableAccess for super::RemoteTables {
 
 pub struct GameAreaTriggerInsertCallbackId(__sdk::CallbackId);
 pub struct GameAreaTriggerDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameAreaTriggerTableHandle<'ctx> {
+    type Row = GameAreaTrigger;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = GameAreaTrigger> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameAreaTriggerTableHandle<'ctx> {
     type Row = GameAreaTrigger;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameAreaTriggerTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameAreaTriggerTableHandle<'ctx> {
+    type InsertCallbackId = GameAreaTriggerInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameAreaTriggerInsertCallbackId {
+        GameAreaTriggerInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameAreaTriggerInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameAreaTriggerTableHandle<'ctx> {
+    type DeleteCallbackId = GameAreaTriggerDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameAreaTriggerDeleteCallbackId {
+        GameAreaTriggerDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameAreaTriggerDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameAreaTriggerUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameAreaTriggerTableHandle<'ctx> {
+    type UpdateCallbackId = GameAreaTriggerUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameAreaTriggerUpdateCallbackId {
+        GameAreaTriggerUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameAreaTriggerUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameAreaTriggerTableHandle<'ctx> {
     type UpdateCallbackId = GameAreaTriggerUpdateCallbackId;
 
     fn on_update(

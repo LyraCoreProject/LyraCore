@@ -130,7 +130,7 @@ pub(crate) fn run_vote<St: WorldStore + ?Sized>(
     vote: u8,
 ) -> Result<()> {
     let Some(realm) = store.realm_store() else {
-        return store.loot_roll(account_id, corpse_guid, slot, vote);
+        return store.loot_roll(account_id, self_guid, corpse_guid, slot, vote);
     };
     realm.realm_loot_op(
         loot_op::VOTE,

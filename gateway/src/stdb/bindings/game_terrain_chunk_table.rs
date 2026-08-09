@@ -18,6 +18,18 @@ pub struct GameTerrainChunkTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_terrain_chunk`.
+pub struct GameTerrainChunkTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameTerrainChunkTableAccessor {
+    type Row = TerrainChunk;
+    type Handle<'db> = GameTerrainChunkTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_terrain_chunk()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_terrain_chunk`.
 ///
@@ -39,6 +51,18 @@ impl GameTerrainChunkTableAccess for super::RemoteTables {
 
 pub struct GameTerrainChunkInsertCallbackId(__sdk::CallbackId);
 pub struct GameTerrainChunkDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameTerrainChunkTableHandle<'ctx> {
+    type Row = TerrainChunk;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = TerrainChunk> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameTerrainChunkTableHandle<'ctx> {
     type Row = TerrainChunk;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameTerrainChunkTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameTerrainChunkTableHandle<'ctx> {
+    type InsertCallbackId = GameTerrainChunkInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameTerrainChunkInsertCallbackId {
+        GameTerrainChunkInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameTerrainChunkInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameTerrainChunkTableHandle<'ctx> {
+    type DeleteCallbackId = GameTerrainChunkDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameTerrainChunkDeleteCallbackId {
+        GameTerrainChunkDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameTerrainChunkDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameTerrainChunkUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameTerrainChunkTableHandle<'ctx> {
+    type UpdateCallbackId = GameTerrainChunkUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameTerrainChunkUpdateCallbackId {
+        GameTerrainChunkUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameTerrainChunkUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameTerrainChunkTableHandle<'ctx> {
     type UpdateCallbackId = GameTerrainChunkUpdateCallbackId;
 
     fn on_update(

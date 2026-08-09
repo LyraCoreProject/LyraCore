@@ -18,6 +18,18 @@ pub struct GameEventReaperScheduleTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_event_reaper_schedule`.
+pub struct GameEventReaperScheduleTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameEventReaperScheduleTableAccessor {
+    type Row = EventReaperSchedule;
+    type Handle<'db> = GameEventReaperScheduleTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_event_reaper_schedule()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_event_reaper_schedule`.
 ///
@@ -41,6 +53,18 @@ impl GameEventReaperScheduleTableAccess for super::RemoteTables {
 
 pub struct GameEventReaperScheduleInsertCallbackId(__sdk::CallbackId);
 pub struct GameEventReaperScheduleDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameEventReaperScheduleTableHandle<'ctx> {
+    type Row = EventReaperSchedule;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = EventReaperSchedule> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameEventReaperScheduleTableHandle<'ctx> {
     type Row = EventReaperSchedule;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GameEventReaperScheduleTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameEventReaperScheduleTableHandle<'ctx> {
+    type InsertCallbackId = GameEventReaperScheduleInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameEventReaperScheduleInsertCallbackId {
+        GameEventReaperScheduleInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameEventReaperScheduleInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameEventReaperScheduleTableHandle<'ctx> {
+    type DeleteCallbackId = GameEventReaperScheduleDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameEventReaperScheduleDeleteCallbackId {
+        GameEventReaperScheduleDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameEventReaperScheduleDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameEventReaperScheduleUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameEventReaperScheduleTableHandle<'ctx> {
+    type UpdateCallbackId = GameEventReaperScheduleUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameEventReaperScheduleUpdateCallbackId {
+        GameEventReaperScheduleUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameEventReaperScheduleUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameEventReaperScheduleTableHandle<'ctx> {
     type UpdateCallbackId = GameEventReaperScheduleUpdateCallbackId;
 
     fn on_update(

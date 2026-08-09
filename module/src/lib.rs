@@ -261,6 +261,7 @@ mod gm;
 // pick where a ghost teleports. Extracted from `world.rs` (issue #385).
 mod graveyard;
 mod group;
+mod gw;
 mod helpers;
 pub mod hooks;
 mod import_meta;
@@ -321,8 +322,10 @@ pub use creatures::*;
 pub use debug::*;
 pub use encounter::*;
 pub use exploration::CharacterExplored; // re-exported for the gateway schema-parity test (282)
+pub use rest::RestStateEvent; // re-exported for the gateway schema-parity test (#468 4c)
 pub use faction::*;
 pub use gameobject::*;
+pub use gw::*;
 pub use gc::*;
 pub use gm::*;
 pub use graveyard::*;

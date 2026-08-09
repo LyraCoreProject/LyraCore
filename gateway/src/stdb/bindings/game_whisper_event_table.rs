@@ -18,6 +18,18 @@ pub struct GameWhisperEventTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_whisper_event`.
+pub struct GameWhisperEventTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameWhisperEventTableAccessor {
+    type Row = WhisperEvent;
+    type Handle<'db> = GameWhisperEventTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_whisper_event()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_whisper_event`.
 ///
@@ -39,6 +51,18 @@ impl GameWhisperEventTableAccess for super::RemoteTables {
 
 pub struct GameWhisperEventInsertCallbackId(__sdk::CallbackId);
 pub struct GameWhisperEventDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameWhisperEventTableHandle<'ctx> {
+    type Row = WhisperEvent;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = WhisperEvent> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameWhisperEventTableHandle<'ctx> {
     type Row = WhisperEvent;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameWhisperEventTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameWhisperEventTableHandle<'ctx> {
+    type InsertCallbackId = GameWhisperEventInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameWhisperEventInsertCallbackId {
+        GameWhisperEventInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameWhisperEventInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameWhisperEventTableHandle<'ctx> {
+    type DeleteCallbackId = GameWhisperEventDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameWhisperEventDeleteCallbackId {
+        GameWhisperEventDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameWhisperEventDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameWhisperEventUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameWhisperEventTableHandle<'ctx> {
+    type UpdateCallbackId = GameWhisperEventUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameWhisperEventUpdateCallbackId {
+        GameWhisperEventUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameWhisperEventUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameWhisperEventTableHandle<'ctx> {
     type UpdateCallbackId = GameWhisperEventUpdateCallbackId;
 
     fn on_update(

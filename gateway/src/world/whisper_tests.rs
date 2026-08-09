@@ -288,7 +288,7 @@ fn an_unsharded_gateway_whispers_through_the_players_own_reducer() {
     // whisper, a name nothing resolves, and a caller the gateway has no guid for. All three go to the
     // module verbatim — every gate on this plane is the module's, exactly as before #22.
     store
-        .send_whisper(7, "Vim".into(), "hi".into())
+        .send_whisper(7, 0, "Vim".into(), "hi".into())
         .expect("baseline: the mock accepts a direct call");
     store.whispers.lock().unwrap().clear();
     calls.lock().unwrap().clear();
@@ -412,10 +412,10 @@ fn say_yell_and_emotes_stay_on_the_players_own_shard_when_sharded() {
     let (realm, world, _instances, calls) = party_topology();
 
     world
-        .send_chat(7, 0, 0, "hello Elwynn".into())
+        .send_chat(7, 0, 0, 0, "hello Elwynn".into())
         .expect("say");
-    world.send_chat(7, 1, 0, "HELP".into()).expect("yell");
-    world.send_emote(7, 4, 4, TRIN).expect("targeted emote");
+    world.send_chat(7, 0, 1, 0, "HELP".into()).expect("yell");
+    world.send_emote(7, 0, 4, 4, TRIN).expect("targeted emote");
 
     assert_eq!(
         world.chats.lock().unwrap().clone(),

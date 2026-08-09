@@ -162,6 +162,19 @@ pub fn set_action_button(
 ) -> Result<(), String> {
     let character = crate::helpers::entity_by_owner(ctx, ctx.sender())
         .ok_or_else(|| "not in world".to_string())?;
+    apply_set_action_button(ctx, character, button, action, action_type)
+}
+
+/// The action-bar write core, actor-explicit (#479): everything [`set_action_button`] does after
+/// resolving WHOSE bar this is. Takes the row — the insert arm stamps the owner's RLS identity
+/// off it.
+pub(crate) fn apply_set_action_button(
+    ctx: &ReducerContext,
+    character: crate::WorldEntity,
+    button: u8,
+    action: u32,
+    action_type: u8,
+) -> Result<(), String> {
     let actions = ctx.db.game_player_action();
     let existing = actions
         .by_character()
@@ -183,7 +196,10 @@ pub fn set_action_button(
             actions.insert(PlayerAction {
                 id: 0,
                 character_guid: character.guid,
-                owner_identity: ctx.sender(),
+                // The BAR OWNER's own binding, not `ctx.sender()` — identical on the sender path
+                // (the entity was resolved BY that identity) and correct on the gateway path,
+                // where `ctx.sender()` is the shared connection's operator identity.
+                owner_identity: character.owner_identity,
                 button,
                 action,
                 action_type,

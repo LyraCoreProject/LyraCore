@@ -18,6 +18,18 @@ pub struct GameThreatTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_threat`.
+pub struct GameThreatTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameThreatTableAccessor {
+    type Row = ThreatEntry;
+    type Handle<'db> = GameThreatTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_threat()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_threat`.
 ///
@@ -39,6 +51,18 @@ impl GameThreatTableAccess for super::RemoteTables {
 
 pub struct GameThreatInsertCallbackId(__sdk::CallbackId);
 pub struct GameThreatDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameThreatTableHandle<'ctx> {
+    type Row = ThreatEntry;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = ThreatEntry> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameThreatTableHandle<'ctx> {
     type Row = ThreatEntry;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameThreatTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameThreatTableHandle<'ctx> {
+    type InsertCallbackId = GameThreatInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameThreatInsertCallbackId {
+        GameThreatInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameThreatInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameThreatTableHandle<'ctx> {
+    type DeleteCallbackId = GameThreatDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameThreatDeleteCallbackId {
+        GameThreatDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameThreatDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameThreatUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameThreatTableHandle<'ctx> {
+    type UpdateCallbackId = GameThreatUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameThreatUpdateCallbackId {
+        GameThreatUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameThreatUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameThreatTableHandle<'ctx> {
     type UpdateCallbackId = GameThreatUpdateCallbackId;
 
     fn on_update(

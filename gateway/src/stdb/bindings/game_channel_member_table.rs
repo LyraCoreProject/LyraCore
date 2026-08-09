@@ -18,6 +18,18 @@ pub struct GameChannelMemberTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_channel_member`.
+pub struct GameChannelMemberTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameChannelMemberTableAccessor {
+    type Row = ChannelMember;
+    type Handle<'db> = GameChannelMemberTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_channel_member()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_channel_member`.
 ///
@@ -39,6 +51,18 @@ impl GameChannelMemberTableAccess for super::RemoteTables {
 
 pub struct GameChannelMemberInsertCallbackId(__sdk::CallbackId);
 pub struct GameChannelMemberDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameChannelMemberTableHandle<'ctx> {
+    type Row = ChannelMember;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = ChannelMember> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameChannelMemberTableHandle<'ctx> {
     type Row = ChannelMember;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameChannelMemberTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameChannelMemberTableHandle<'ctx> {
+    type InsertCallbackId = GameChannelMemberInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameChannelMemberInsertCallbackId {
+        GameChannelMemberInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameChannelMemberInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameChannelMemberTableHandle<'ctx> {
+    type DeleteCallbackId = GameChannelMemberDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameChannelMemberDeleteCallbackId {
+        GameChannelMemberDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameChannelMemberDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameChannelMemberUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameChannelMemberTableHandle<'ctx> {
+    type UpdateCallbackId = GameChannelMemberUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameChannelMemberUpdateCallbackId {
+        GameChannelMemberUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameChannelMemberUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameChannelMemberTableHandle<'ctx> {
     type UpdateCallbackId = GameChannelMemberUpdateCallbackId;
 
     fn on_update(

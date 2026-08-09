@@ -18,6 +18,18 @@ pub struct PkgPlayerbotsBotTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `pkg_playerbots_bot`.
+pub struct PkgPlayerbotsBotTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for PkgPlayerbotsBotTableAccessor {
+    type Row = PlayerBot;
+    type Handle<'db> = PkgPlayerbotsBotTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.pkg_playerbots_bot()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `pkg_playerbots_bot`.
 ///
@@ -39,6 +51,18 @@ impl PkgPlayerbotsBotTableAccess for super::RemoteTables {
 
 pub struct PkgPlayerbotsBotInsertCallbackId(__sdk::CallbackId);
 pub struct PkgPlayerbotsBotDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for PkgPlayerbotsBotTableHandle<'ctx> {
+    type Row = PlayerBot;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = PlayerBot> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for PkgPlayerbotsBotTableHandle<'ctx> {
     type Row = PlayerBot;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for PkgPlayerbotsBotTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for PkgPlayerbotsBotTableHandle<'ctx> {
+    type InsertCallbackId = PkgPlayerbotsBotInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> PkgPlayerbotsBotInsertCallbackId {
+        PkgPlayerbotsBotInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: PkgPlayerbotsBotInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for PkgPlayerbotsBotTableHandle<'ctx> {
+    type DeleteCallbackId = PkgPlayerbotsBotDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> PkgPlayerbotsBotDeleteCallbackId {
+        PkgPlayerbotsBotDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: PkgPlayerbotsBotDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct PkgPlayerbotsBotUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for PkgPlayerbotsBotTableHandle<'ctx> {
+    type UpdateCallbackId = PkgPlayerbotsBotUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> PkgPlayerbotsBotUpdateCallbackId {
+        PkgPlayerbotsBotUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: PkgPlayerbotsBotUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for PkgPlayerbotsBotTableHandle<'ctx> {
     type UpdateCallbackId = PkgPlayerbotsBotUpdateCallbackId;
 
     fn on_update(

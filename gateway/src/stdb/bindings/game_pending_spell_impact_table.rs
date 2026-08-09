@@ -18,6 +18,18 @@ pub struct GamePendingSpellImpactTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_pending_spell_impact`.
+pub struct GamePendingSpellImpactTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GamePendingSpellImpactTableAccessor {
+    type Row = PendingSpellImpact;
+    type Handle<'db> = GamePendingSpellImpactTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_pending_spell_impact()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_pending_spell_impact`.
 ///
@@ -41,6 +53,18 @@ impl GamePendingSpellImpactTableAccess for super::RemoteTables {
 
 pub struct GamePendingSpellImpactInsertCallbackId(__sdk::CallbackId);
 pub struct GamePendingSpellImpactDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GamePendingSpellImpactTableHandle<'ctx> {
+    type Row = PendingSpellImpact;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = PendingSpellImpact> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GamePendingSpellImpactTableHandle<'ctx> {
     type Row = PendingSpellImpact;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GamePendingSpellImpactTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GamePendingSpellImpactTableHandle<'ctx> {
+    type InsertCallbackId = GamePendingSpellImpactInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GamePendingSpellImpactInsertCallbackId {
+        GamePendingSpellImpactInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GamePendingSpellImpactInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GamePendingSpellImpactTableHandle<'ctx> {
+    type DeleteCallbackId = GamePendingSpellImpactDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GamePendingSpellImpactDeleteCallbackId {
+        GamePendingSpellImpactDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GamePendingSpellImpactDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GamePendingSpellImpactUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GamePendingSpellImpactTableHandle<'ctx> {
+    type UpdateCallbackId = GamePendingSpellImpactUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GamePendingSpellImpactUpdateCallbackId {
+        GamePendingSpellImpactUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GamePendingSpellImpactUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GamePendingSpellImpactTableHandle<'ctx> {
     type UpdateCallbackId = GamePendingSpellImpactUpdateCallbackId;
 
     fn on_update(

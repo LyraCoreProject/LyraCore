@@ -18,6 +18,18 @@ pub struct GameCharacterBuybackTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_character_buyback`.
+pub struct GameCharacterBuybackTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameCharacterBuybackTableAccessor {
+    type Row = BuybackEntry;
+    type Handle<'db> = GameCharacterBuybackTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_character_buyback()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_character_buyback`.
 ///
@@ -39,6 +51,18 @@ impl GameCharacterBuybackTableAccess for super::RemoteTables {
 
 pub struct GameCharacterBuybackInsertCallbackId(__sdk::CallbackId);
 pub struct GameCharacterBuybackDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameCharacterBuybackTableHandle<'ctx> {
+    type Row = BuybackEntry;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = BuybackEntry> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameCharacterBuybackTableHandle<'ctx> {
     type Row = BuybackEntry;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameCharacterBuybackTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameCharacterBuybackTableHandle<'ctx> {
+    type InsertCallbackId = GameCharacterBuybackInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCharacterBuybackInsertCallbackId {
+        GameCharacterBuybackInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameCharacterBuybackInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameCharacterBuybackTableHandle<'ctx> {
+    type DeleteCallbackId = GameCharacterBuybackDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCharacterBuybackDeleteCallbackId {
+        GameCharacterBuybackDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameCharacterBuybackDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameCharacterBuybackUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameCharacterBuybackTableHandle<'ctx> {
+    type UpdateCallbackId = GameCharacterBuybackUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameCharacterBuybackUpdateCallbackId {
+        GameCharacterBuybackUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameCharacterBuybackUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameCharacterBuybackTableHandle<'ctx> {
     type UpdateCallbackId = GameCharacterBuybackUpdateCallbackId;
 
     fn on_update(

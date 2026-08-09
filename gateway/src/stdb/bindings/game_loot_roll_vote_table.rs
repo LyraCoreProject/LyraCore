@@ -18,6 +18,18 @@ pub struct GameLootRollVoteTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_loot_roll_vote`.
+pub struct GameLootRollVoteTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameLootRollVoteTableAccessor {
+    type Row = LootRollVote;
+    type Handle<'db> = GameLootRollVoteTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_loot_roll_vote()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_loot_roll_vote`.
 ///
@@ -39,6 +51,18 @@ impl GameLootRollVoteTableAccess for super::RemoteTables {
 
 pub struct GameLootRollVoteInsertCallbackId(__sdk::CallbackId);
 pub struct GameLootRollVoteDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameLootRollVoteTableHandle<'ctx> {
+    type Row = LootRollVote;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = LootRollVote> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameLootRollVoteTableHandle<'ctx> {
     type Row = LootRollVote;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameLootRollVoteTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameLootRollVoteTableHandle<'ctx> {
+    type InsertCallbackId = GameLootRollVoteInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameLootRollVoteInsertCallbackId {
+        GameLootRollVoteInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameLootRollVoteInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameLootRollVoteTableHandle<'ctx> {
+    type DeleteCallbackId = GameLootRollVoteDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameLootRollVoteDeleteCallbackId {
+        GameLootRollVoteDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameLootRollVoteDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameLootRollVoteUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameLootRollVoteTableHandle<'ctx> {
+    type UpdateCallbackId = GameLootRollVoteUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameLootRollVoteUpdateCallbackId {
+        GameLootRollVoteUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameLootRollVoteUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameLootRollVoteTableHandle<'ctx> {
     type UpdateCallbackId = GameLootRollVoteUpdateCallbackId;
 
     fn on_update(

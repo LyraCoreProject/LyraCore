@@ -18,6 +18,18 @@ pub struct GamePetCommandTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_pet_command`.
+pub struct GamePetCommandTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GamePetCommandTableAccessor {
+    type Row = PetCommand;
+    type Handle<'db> = GamePetCommandTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_pet_command()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_pet_command`.
 ///
@@ -39,6 +51,18 @@ impl GamePetCommandTableAccess for super::RemoteTables {
 
 pub struct GamePetCommandInsertCallbackId(__sdk::CallbackId);
 pub struct GamePetCommandDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GamePetCommandTableHandle<'ctx> {
+    type Row = PetCommand;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = PetCommand> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GamePetCommandTableHandle<'ctx> {
     type Row = PetCommand;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GamePetCommandTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GamePetCommandTableHandle<'ctx> {
+    type InsertCallbackId = GamePetCommandInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GamePetCommandInsertCallbackId {
+        GamePetCommandInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GamePetCommandInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GamePetCommandTableHandle<'ctx> {
+    type DeleteCallbackId = GamePetCommandDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GamePetCommandDeleteCallbackId {
+        GamePetCommandDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GamePetCommandDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GamePetCommandUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GamePetCommandTableHandle<'ctx> {
+    type UpdateCallbackId = GamePetCommandUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GamePetCommandUpdateCallbackId {
+        GamePetCommandUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GamePetCommandUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GamePetCommandTableHandle<'ctx> {
     type UpdateCallbackId = GamePetCommandUpdateCallbackId;
 
     fn on_update(

@@ -114,6 +114,15 @@ async fn run() -> Result<()> {
     // each leaked connection costs a websocket fd + an SDK pump thread for the process lifetime.
     coordinator.spawn_account_session_reaper();
 
+    // #468 stage 4b: keep this gateway's lease alive while the shared-calls path is on. The
+    // module's lease reaper despawns every session bound to a lease that stops heartbeating, so
+    // the heartbeat is what bounds ghost lifetime after a gateway crash — and its ABSENCE while
+    // sessions are bound is what would despawn a healthy gateway's players, which is why it spawns
+    // whenever the flag that can bind sessions is set, not lazily on first use.
+    if crate::config::shared_calls_enabled() {
+        coordinator.spawn_gateway_heartbeat();
+    }
+
     // Run both listeners concurrently. Each accepted socket gets its own task; in-world
     // sockets additionally open a per-player SpacetimeDB connection (identity = account).
     let logon = tokio::spawn(logon::run(cfg.clone(), coordinator.clone()));

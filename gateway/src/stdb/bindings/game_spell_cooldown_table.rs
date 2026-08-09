@@ -18,6 +18,18 @@ pub struct GameSpellCooldownTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_spell_cooldown`.
+pub struct GameSpellCooldownTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameSpellCooldownTableAccessor {
+    type Row = SpellCooldown;
+    type Handle<'db> = GameSpellCooldownTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_spell_cooldown()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_spell_cooldown`.
 ///
@@ -39,6 +51,18 @@ impl GameSpellCooldownTableAccess for super::RemoteTables {
 
 pub struct GameSpellCooldownInsertCallbackId(__sdk::CallbackId);
 pub struct GameSpellCooldownDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameSpellCooldownTableHandle<'ctx> {
+    type Row = SpellCooldown;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = SpellCooldown> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameSpellCooldownTableHandle<'ctx> {
     type Row = SpellCooldown;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameSpellCooldownTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameSpellCooldownTableHandle<'ctx> {
+    type InsertCallbackId = GameSpellCooldownInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameSpellCooldownInsertCallbackId {
+        GameSpellCooldownInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameSpellCooldownInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameSpellCooldownTableHandle<'ctx> {
+    type DeleteCallbackId = GameSpellCooldownDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameSpellCooldownDeleteCallbackId {
+        GameSpellCooldownDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameSpellCooldownDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameSpellCooldownUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameSpellCooldownTableHandle<'ctx> {
+    type UpdateCallbackId = GameSpellCooldownUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameSpellCooldownUpdateCallbackId {
+        GameSpellCooldownUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameSpellCooldownUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameSpellCooldownTableHandle<'ctx> {
     type UpdateCallbackId = GameSpellCooldownUpdateCallbackId;
 
     fn on_update(

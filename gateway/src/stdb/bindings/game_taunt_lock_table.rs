@@ -18,6 +18,18 @@ pub struct GameTauntLockTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_taunt_lock`.
+pub struct GameTauntLockTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameTauntLockTableAccessor {
+    type Row = TauntLock;
+    type Handle<'db> = GameTauntLockTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_taunt_lock()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_taunt_lock`.
 ///
@@ -39,6 +51,18 @@ impl GameTauntLockTableAccess for super::RemoteTables {
 
 pub struct GameTauntLockInsertCallbackId(__sdk::CallbackId);
 pub struct GameTauntLockDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameTauntLockTableHandle<'ctx> {
+    type Row = TauntLock;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = TauntLock> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameTauntLockTableHandle<'ctx> {
     type Row = TauntLock;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameTauntLockTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameTauntLockTableHandle<'ctx> {
+    type InsertCallbackId = GameTauntLockInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameTauntLockInsertCallbackId {
+        GameTauntLockInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameTauntLockInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameTauntLockTableHandle<'ctx> {
+    type DeleteCallbackId = GameTauntLockDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameTauntLockDeleteCallbackId {
+        GameTauntLockDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameTauntLockDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameTauntLockUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameTauntLockTableHandle<'ctx> {
+    type UpdateCallbackId = GameTauntLockUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameTauntLockUpdateCallbackId {
+        GameTauntLockUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameTauntLockUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameTauntLockTableHandle<'ctx> {
     type UpdateCallbackId = GameTauntLockUpdateCallbackId;
 
     fn on_update(

@@ -18,6 +18,18 @@ pub struct GamePendingCastTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_pending_cast`.
+pub struct GamePendingCastTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GamePendingCastTableAccessor {
+    type Row = PendingCast;
+    type Handle<'db> = GamePendingCastTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_pending_cast()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_pending_cast`.
 ///
@@ -39,6 +51,18 @@ impl GamePendingCastTableAccess for super::RemoteTables {
 
 pub struct GamePendingCastInsertCallbackId(__sdk::CallbackId);
 pub struct GamePendingCastDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GamePendingCastTableHandle<'ctx> {
+    type Row = PendingCast;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = PendingCast> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GamePendingCastTableHandle<'ctx> {
     type Row = PendingCast;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GamePendingCastTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GamePendingCastTableHandle<'ctx> {
+    type InsertCallbackId = GamePendingCastInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GamePendingCastInsertCallbackId {
+        GamePendingCastInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GamePendingCastInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GamePendingCastTableHandle<'ctx> {
+    type DeleteCallbackId = GamePendingCastDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GamePendingCastDeleteCallbackId {
+        GamePendingCastDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GamePendingCastDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GamePendingCastUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GamePendingCastTableHandle<'ctx> {
+    type UpdateCallbackId = GamePendingCastUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GamePendingCastUpdateCallbackId {
+        GamePendingCastUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GamePendingCastUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GamePendingCastTableHandle<'ctx> {
     type UpdateCallbackId = GamePendingCastUpdateCallbackId;
 
     fn on_update(

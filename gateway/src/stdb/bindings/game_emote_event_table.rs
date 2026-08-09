@@ -18,6 +18,18 @@ pub struct GameEmoteEventTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_emote_event`.
+pub struct GameEmoteEventTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameEmoteEventTableAccessor {
+    type Row = EmoteEvent;
+    type Handle<'db> = GameEmoteEventTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_emote_event()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_emote_event`.
 ///
@@ -39,6 +51,18 @@ impl GameEmoteEventTableAccess for super::RemoteTables {
 
 pub struct GameEmoteEventInsertCallbackId(__sdk::CallbackId);
 pub struct GameEmoteEventDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameEmoteEventTableHandle<'ctx> {
+    type Row = EmoteEvent;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = EmoteEvent> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameEmoteEventTableHandle<'ctx> {
     type Row = EmoteEvent;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameEmoteEventTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameEmoteEventTableHandle<'ctx> {
+    type InsertCallbackId = GameEmoteEventInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameEmoteEventInsertCallbackId {
+        GameEmoteEventInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameEmoteEventInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameEmoteEventTableHandle<'ctx> {
+    type DeleteCallbackId = GameEmoteEventDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameEmoteEventDeleteCallbackId {
+        GameEmoteEventDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameEmoteEventDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameEmoteEventUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameEmoteEventTableHandle<'ctx> {
+    type UpdateCallbackId = GameEmoteEventUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameEmoteEventUpdateCallbackId {
+        GameEmoteEventUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameEmoteEventUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameEmoteEventTableHandle<'ctx> {
     type UpdateCallbackId = GameEmoteEventUpdateCallbackId;
 
     fn on_update(

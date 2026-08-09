@@ -215,6 +215,17 @@ pub fn set_faction_at_war(
 ) -> Result<(), String> {
     let player = crate::helpers::entity_by_owner(ctx, ctx.sender())
         .ok_or_else(|| "caller not in world".to_string())?;
+    apply_set_faction_at_war(ctx, player, reputation_index, at_war)
+}
+
+/// The At-War core, actor-explicit (#479): everything [`set_faction_at_war`] does after resolving
+/// WHOSE rep pane this is. Takes the row — the seed arm stamps `owner_identity` off it.
+pub(crate) fn apply_set_faction_at_war(
+    ctx: &ReducerContext,
+    player: crate::WorldEntity,
+    reputation_index: u32,
+    at_war: bool,
+) -> Result<(), String> {
     // Reverse map: rep-array slot → faction. The import claims each used slot exactly once.
     let Some(faction) = ctx
         .db

@@ -18,6 +18,18 @@ pub struct GameAuraScheduleTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_aura_schedule`.
+pub struct GameAuraScheduleTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameAuraScheduleTableAccessor {
+    type Row = AuraSchedule;
+    type Handle<'db> = GameAuraScheduleTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_aura_schedule()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_aura_schedule`.
 ///
@@ -39,6 +51,18 @@ impl GameAuraScheduleTableAccess for super::RemoteTables {
 
 pub struct GameAuraScheduleInsertCallbackId(__sdk::CallbackId);
 pub struct GameAuraScheduleDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameAuraScheduleTableHandle<'ctx> {
+    type Row = AuraSchedule;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = AuraSchedule> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameAuraScheduleTableHandle<'ctx> {
     type Row = AuraSchedule;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameAuraScheduleTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameAuraScheduleTableHandle<'ctx> {
+    type InsertCallbackId = GameAuraScheduleInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameAuraScheduleInsertCallbackId {
+        GameAuraScheduleInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameAuraScheduleInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameAuraScheduleTableHandle<'ctx> {
+    type DeleteCallbackId = GameAuraScheduleDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameAuraScheduleDeleteCallbackId {
+        GameAuraScheduleDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameAuraScheduleDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameAuraScheduleUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameAuraScheduleTableHandle<'ctx> {
+    type UpdateCallbackId = GameAuraScheduleUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameAuraScheduleUpdateCallbackId {
+        GameAuraScheduleUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameAuraScheduleUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameAuraScheduleTableHandle<'ctx> {
     type UpdateCallbackId = GameAuraScheduleUpdateCallbackId;
 
     fn on_update(

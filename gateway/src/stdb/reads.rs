@@ -706,6 +706,14 @@ impl Coordinator {
     /// `ctx.sender == owner` checks. Opening the connection here (at logon) caches it for reuse in
     /// the world phase.
     pub fn bound_identity(&self, account_id: u64) -> Result<[u8; 32]> {
+        // #468 stage 4d: under LYRACORE_SHARED_CALLS the bound identity is DERIVED, not minted by
+        // a connection — this call was what opened the per-account connection at logon, i.e. the
+        // exact build the ~850/process wall lives in. Viable since #479 completed the gw verb
+        // surface (the first attempt broke the then-unmigrated cold verbs and was reverted —
+        // see a6ce00b2). See `synthetic_owner_identity`'s contract for the full story.
+        if crate::config::shared_calls_enabled() {
+            return Ok(crate::config::synthetic_owner_identity(account_id));
+        }
         Ok(self.player_conn(account_id)?.identity.to_byte_array())
     }
 

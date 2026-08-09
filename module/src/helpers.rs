@@ -60,6 +60,15 @@ pub fn entity_by_owner(ctx: &ReducerContext, owner: Identity) -> Option<WorldEnt
     )
 }
 
+/// The ACTING entity resolved by guid — `entity_by_owner`'s guid-keyed twin for the trusted
+/// gateway verb surface (#468 stage 4), where the actor arrives as an explicit `actor_guid` on a
+/// `require_operator`-gated reducer instead of via `ctx.sender()`. Same in-transit fence, same
+/// shared [`gate_by_guid`]: a mid-transfer character reads "not in world" on the `gw_*` path
+/// exactly as it does on the sender path. NOT [`live_entity`], which deliberately skips the fence.
+pub fn acting_entity_by_guid(ctx: &ReducerContext, guid: u64) -> Option<WorldEntity> {
+    gate_by_guid(ctx, ctx.db.game_world_entity().guid().find(guid), |e| e.guid)
+}
+
 /// THE by-guid chokepoint (issue #30) — `entity_by_owner`'s twin for every reducer that reaches a
 /// character by `character_guid` instead of through the acting entity. Returns the durable
 /// `game_character` row unless the character is mid-transfer, in which case it reads as ABSENT and

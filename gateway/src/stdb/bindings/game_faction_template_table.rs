@@ -18,6 +18,18 @@ pub struct GameFactionTemplateTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_faction_template`.
+pub struct GameFactionTemplateTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameFactionTemplateTableAccessor {
+    type Row = FactionTemplate;
+    type Handle<'db> = GameFactionTemplateTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_faction_template()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_faction_template`.
 ///
@@ -41,6 +53,18 @@ impl GameFactionTemplateTableAccess for super::RemoteTables {
 
 pub struct GameFactionTemplateInsertCallbackId(__sdk::CallbackId);
 pub struct GameFactionTemplateDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameFactionTemplateTableHandle<'ctx> {
+    type Row = FactionTemplate;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = FactionTemplate> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameFactionTemplateTableHandle<'ctx> {
     type Row = FactionTemplate;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GameFactionTemplateTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameFactionTemplateTableHandle<'ctx> {
+    type InsertCallbackId = GameFactionTemplateInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameFactionTemplateInsertCallbackId {
+        GameFactionTemplateInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameFactionTemplateInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameFactionTemplateTableHandle<'ctx> {
+    type DeleteCallbackId = GameFactionTemplateDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameFactionTemplateDeleteCallbackId {
+        GameFactionTemplateDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameFactionTemplateDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameFactionTemplateUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameFactionTemplateTableHandle<'ctx> {
+    type UpdateCallbackId = GameFactionTemplateUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameFactionTemplateUpdateCallbackId {
+        GameFactionTemplateUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameFactionTemplateUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameFactionTemplateTableHandle<'ctx> {
     type UpdateCallbackId = GameFactionTemplateUpdateCallbackId;
 
     fn on_update(

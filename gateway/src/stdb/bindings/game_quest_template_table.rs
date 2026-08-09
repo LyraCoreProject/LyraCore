@@ -18,6 +18,18 @@ pub struct GameQuestTemplateTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_quest_template`.
+pub struct GameQuestTemplateTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameQuestTemplateTableAccessor {
+    type Row = QuestTemplate;
+    type Handle<'db> = GameQuestTemplateTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_quest_template()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_quest_template`.
 ///
@@ -39,6 +51,18 @@ impl GameQuestTemplateTableAccess for super::RemoteTables {
 
 pub struct GameQuestTemplateInsertCallbackId(__sdk::CallbackId);
 pub struct GameQuestTemplateDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameQuestTemplateTableHandle<'ctx> {
+    type Row = QuestTemplate;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = QuestTemplate> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameQuestTemplateTableHandle<'ctx> {
     type Row = QuestTemplate;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameQuestTemplateTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameQuestTemplateTableHandle<'ctx> {
+    type InsertCallbackId = GameQuestTemplateInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameQuestTemplateInsertCallbackId {
+        GameQuestTemplateInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameQuestTemplateInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameQuestTemplateTableHandle<'ctx> {
+    type DeleteCallbackId = GameQuestTemplateDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameQuestTemplateDeleteCallbackId {
+        GameQuestTemplateDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameQuestTemplateDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameQuestTemplateUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameQuestTemplateTableHandle<'ctx> {
+    type UpdateCallbackId = GameQuestTemplateUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameQuestTemplateUpdateCallbackId {
+        GameQuestTemplateUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameQuestTemplateUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameQuestTemplateTableHandle<'ctx> {
     type UpdateCallbackId = GameQuestTemplateUpdateCallbackId;
 
     fn on_update(

@@ -18,6 +18,18 @@ pub struct GameGroundAreaScheduleTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_ground_area_schedule`.
+pub struct GameGroundAreaScheduleTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameGroundAreaScheduleTableAccessor {
+    type Row = GroundAreaSchedule;
+    type Handle<'db> = GameGroundAreaScheduleTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_ground_area_schedule()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_ground_area_schedule`.
 ///
@@ -41,6 +53,18 @@ impl GameGroundAreaScheduleTableAccess for super::RemoteTables {
 
 pub struct GameGroundAreaScheduleInsertCallbackId(__sdk::CallbackId);
 pub struct GameGroundAreaScheduleDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameGroundAreaScheduleTableHandle<'ctx> {
+    type Row = GroundAreaSchedule;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = GroundAreaSchedule> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameGroundAreaScheduleTableHandle<'ctx> {
     type Row = GroundAreaSchedule;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GameGroundAreaScheduleTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameGroundAreaScheduleTableHandle<'ctx> {
+    type InsertCallbackId = GameGroundAreaScheduleInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameGroundAreaScheduleInsertCallbackId {
+        GameGroundAreaScheduleInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameGroundAreaScheduleInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameGroundAreaScheduleTableHandle<'ctx> {
+    type DeleteCallbackId = GameGroundAreaScheduleDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameGroundAreaScheduleDeleteCallbackId {
+        GameGroundAreaScheduleDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameGroundAreaScheduleDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameGroundAreaScheduleUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameGroundAreaScheduleTableHandle<'ctx> {
+    type UpdateCallbackId = GameGroundAreaScheduleUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameGroundAreaScheduleUpdateCallbackId {
+        GameGroundAreaScheduleUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameGroundAreaScheduleUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameGroundAreaScheduleTableHandle<'ctx> {
     type UpdateCallbackId = GameGroundAreaScheduleUpdateCallbackId;
 
     fn on_update(

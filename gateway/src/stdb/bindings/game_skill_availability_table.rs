@@ -18,6 +18,18 @@ pub struct GameSkillAvailabilityTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_skill_availability`.
+pub struct GameSkillAvailabilityTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameSkillAvailabilityTableAccessor {
+    type Row = SkillAvailability;
+    type Handle<'db> = GameSkillAvailabilityTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_skill_availability()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_skill_availability`.
 ///
@@ -41,6 +53,18 @@ impl GameSkillAvailabilityTableAccess for super::RemoteTables {
 
 pub struct GameSkillAvailabilityInsertCallbackId(__sdk::CallbackId);
 pub struct GameSkillAvailabilityDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameSkillAvailabilityTableHandle<'ctx> {
+    type Row = SkillAvailability;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = SkillAvailability> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameSkillAvailabilityTableHandle<'ctx> {
     type Row = SkillAvailability;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GameSkillAvailabilityTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameSkillAvailabilityTableHandle<'ctx> {
+    type InsertCallbackId = GameSkillAvailabilityInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameSkillAvailabilityInsertCallbackId {
+        GameSkillAvailabilityInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameSkillAvailabilityInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameSkillAvailabilityTableHandle<'ctx> {
+    type DeleteCallbackId = GameSkillAvailabilityDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameSkillAvailabilityDeleteCallbackId {
+        GameSkillAvailabilityDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameSkillAvailabilityDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameSkillAvailabilityUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameSkillAvailabilityTableHandle<'ctx> {
+    type UpdateCallbackId = GameSkillAvailabilityUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameSkillAvailabilityUpdateCallbackId {
+        GameSkillAvailabilityUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameSkillAvailabilityUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameSkillAvailabilityTableHandle<'ctx> {
     type UpdateCallbackId = GameSkillAvailabilityUpdateCallbackId;
 
     fn on_update(

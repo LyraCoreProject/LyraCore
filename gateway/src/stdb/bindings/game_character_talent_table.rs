@@ -18,6 +18,18 @@ pub struct GameCharacterTalentTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_character_talent`.
+pub struct GameCharacterTalentTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameCharacterTalentTableAccessor {
+    type Row = CharacterTalent;
+    type Handle<'db> = GameCharacterTalentTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_character_talent()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_character_talent`.
 ///
@@ -41,6 +53,18 @@ impl GameCharacterTalentTableAccess for super::RemoteTables {
 
 pub struct GameCharacterTalentInsertCallbackId(__sdk::CallbackId);
 pub struct GameCharacterTalentDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameCharacterTalentTableHandle<'ctx> {
+    type Row = CharacterTalent;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = CharacterTalent> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameCharacterTalentTableHandle<'ctx> {
     type Row = CharacterTalent;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GameCharacterTalentTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameCharacterTalentTableHandle<'ctx> {
+    type InsertCallbackId = GameCharacterTalentInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCharacterTalentInsertCallbackId {
+        GameCharacterTalentInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameCharacterTalentInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameCharacterTalentTableHandle<'ctx> {
+    type DeleteCallbackId = GameCharacterTalentDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCharacterTalentDeleteCallbackId {
+        GameCharacterTalentDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameCharacterTalentDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameCharacterTalentUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameCharacterTalentTableHandle<'ctx> {
+    type UpdateCallbackId = GameCharacterTalentUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameCharacterTalentUpdateCallbackId {
+        GameCharacterTalentUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameCharacterTalentUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameCharacterTalentTableHandle<'ctx> {
     type UpdateCallbackId = GameCharacterTalentUpdateCallbackId;
 
     fn on_update(

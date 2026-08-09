@@ -221,7 +221,7 @@ fn build_peer_create(coord: &Coordinator, row: &WorldEntity) -> Option<ServerOpc
 /// ONLY viewers inside that instance. DELETE relays stay ungated (the `on_melee_delete` precedent —
 /// SMSG_DESTROY_OBJECT for a never-created guid is a client no-op, and gating deletes risks
 /// leaking a stale object on an instance transition). Pure — unit-tested below.
-fn instance_relay_gate(row_instance_id: u64, viewer_instance_id: Option<u64>) -> bool {
+pub(crate) fn instance_relay_gate(row_instance_id: u64, viewer_instance_id: Option<u64>) -> bool {
     viewer_instance_id == Some(row_instance_id)
 }
 
@@ -457,12 +457,21 @@ pub(crate) fn shed_motion_at_depth(depth: usize) -> bool {
 }
 
 fn relay_corpse_create(tx: &SessionTx, self_guid: u64, row: &Corpse) {
+    for o in corpse_create_outbound(self_guid, row) {
+        let _ = tx.send(o);
+    }
+}
+
+/// The corpse CREATE body as outbound packets — shared by the per-player relay, the login
+/// resident sweep, and the shared-dispatch twin (#468 4c family 6). The owner's reclaim-delay
+/// packet (work-item 201) rides inside, keyed on the VIEWER's guid.
+pub(crate) fn corpse_create_outbound(self_guid: u64, row: &Corpse) -> Vec<Outbound> {
     let m = codec::build_corpse_create_object(&corpse_view(row.clone()));
-    let _ = tx.send(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+    let mut out = vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
         Box::new(m),
-    )));
+    ))];
     if row.owner_guid == self_guid {
-        let _ = tx.send(Outbound::One(
+        out.push(Outbound::One(
             ServerOpcodeMessage::SMSG_CORPSE_RECLAIM_DELAY(
                 wow_world_messages::vanilla::SMSG_CORPSE_RECLAIM_DELAY {
                     delay: Duration::from_micros(row.reclaim_delay_micros as u64),
@@ -470,6 +479,16 @@ fn relay_corpse_create(tx: &SessionTx, self_guid: u64, row: &Corpse) {
             ),
         ));
     }
+    out
+}
+
+/// #468 stage 4c, family 6 (corpses): the body→bones re-CREATE — the per-player `on_corpse_update`
+/// relay's twin. The instance gate already ran in `world_view::corpse_changed`.
+pub(crate) fn relay_corpse_update(row: &Corpse) -> Vec<Outbound> {
+    let m = codec::build_corpse_create_object(&corpse_view(row.clone()));
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        Box::new(m),
+    ))]
 }
 
 /// The pre-dedup visibility gate `offer_peer_create` runs before it ever touches the `created` set —
@@ -741,6 +760,997 @@ pub(crate) fn relay_gameobject_destroy(_viewer: &Viewer, guid: u64) -> Vec<Outbo
 #[must_use = "these relay bodies RETURN the packets to send — the caller enqueues them; \
               dropping the result is a silently invisible peer, which is the exact class #468's \
               differential test exists to prevent"]
+/// #468 stage 4c, family 1 (/roll): the shared-dispatch twin of the per-player `on_roll` relay in
+/// `subscribe_player_events`. Same packet, byte for byte; the audience decision (shard identity)
+/// already happened in `world_view::roll_appeared`, and rolls are public, so there is no
+/// per-viewer state to consult here.
+pub(crate) fn relay_roll(row: &RollEvent) -> Vec<Outbound> {
+    let m = codec::build_random_roll(row.roller_guid, row.min_roll, row.max_roll, row.result);
+    vec![Outbound::One(ServerOpcodeMessage::MSG_RANDOM_ROLL(
+        Box::new(m),
+    ))]
+}
+
+/// #468 stage 4c, family 2 (rest state): the shared-dispatch twin of the per-player
+/// `on_rest_insert` relay. Same raw PLAYER_BYTES_2 VALUES packet; the audience (owner only) was
+/// already resolved by the owner-session lookup in `world_view::rest_state_appeared`.
+pub(crate) fn relay_rest_state(self_guid: u64, player_bytes_2: u32) -> Vec<Outbound> {
+    let (opcode, body) = codec::build_rest_state_values(self_guid, player_bytes_2);
+    vec![Outbound::Raw { opcode, body }]
+}
+
+/// #468 stage 4c, family 7 (swing log): the ONE body both legs run — the per-player `on_combat`
+/// callback sends what this returns; the shared dispatch enqueues it per viewer. Gated on the
+/// viewer's `created` set (no point animating an invisible attacker's swing — the victim's health
+/// still moves via the entity VALUES relay if the victim is in scope).
+///
+/// `tx` is used ONLY for the delayed ranged-impact damage log (097: the number arrives WITH the
+/// arrow, via a thread per landed shot — a shared timer wheel if archer armies happen); every
+/// immediate packet is RETURNED so the shared path writes it at the job's queue position.
+pub(crate) fn combat_event_outbound(
+    tx: &SessionTx,
+    created: &Mutex<HashSet<u64>>,
+    row: &CombatEvent,
+) -> Vec<Outbound> {
+    if !created.lock().unwrap().contains(&row.attacker_guid) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    // #10/097 vanilla shot shape: a RANGED shot is a SPELL on the wire — SMSG_SPELL_GO (a HIT
+    // carries the target in `hits`; a MISS in `misses` — the client renders the white "Miss"
+    // from that list) followed by SMSG_SPELLNONMELEEDAMAGELOG for a landed hit ("Your Auto
+    // Shot hits X for N"). NEVER SMSG_ATTACKERSTATEUPDATE — that is the MELEE swing packet,
+    // and sending it per shot animated a melee swing over the ranged pose (the "idle between
+    // shots" bug). Melee (ranged_spell_id 0) keeps the ATTACKERSTATEUPDATE path unchanged.
+    if row.ranged_spell_id != 0 {
+        // Auto Shot stamps an ammo display id → the AMMO flag fires the arrow graphic (24 =
+        // INVTYPE_AMMO). Wand Shoot (ammo_display_id 0) → no flag → the bolt. Deliberate
+        // simplification: inv-type 24 is hardcoded.
+        let ammo = if row.ammo_display_id != 0 {
+            Some((row.ammo_display_id, 24))
+        } else {
+            None
+        };
+        let miss = row.hit_info == 2; // module HIT_MISS
+        let go = codec::build_spell_go_outcome(
+            row.attacker_guid,
+            row.ranged_spell_id,
+            row.target_guid,
+            ammo,
+            miss,
+        );
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(Box::new(
+            go,
+        ))));
+        if !miss && row.damage > 0 {
+            let log = codec::build_spell_non_melee_damage_log(
+                row.target_guid,
+                row.attacker_guid,
+                row.ranged_spell_id,
+                row.damage,
+                0,                 // physical
+                row.hit_info == 1, // module HIT_CRIT
+                0,
+                0,
+            );
+            let msg = Outbound::One(ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(
+                log,
+            )));
+            // (097) The shot's damage lands at fire + travel (module ranged_impact applies
+            // the health there) — hold the LOG to the same moment so the number arrives
+            // WITH the arrow, not at the muzzle.
+            if row.impact_delay_ms > 0 {
+                let tx_late = tx.clone();
+                let delay = std::time::Duration::from_millis(row.impact_delay_ms as u64);
+                std::thread::spawn(move || {
+                    std::thread::sleep(delay);
+                    let _ = tx_late.send(msg);
+                });
+            } else {
+                out.push(msg);
+            }
+        }
+    } else if !row.spell_swing {
+        // 114: a fired on-next-swing spell (Heroic Strike/Cleave) REPLACES the white hit — the
+        // whole swing rides the spell's cast-event row (GO + yellow named damage log), so this
+        // event sends NO white ATTACKERSTATEUPDATE. killing_blow/ATTACKSTOP below still applies.
+        let m = codec::build_attacker_state_update(
+            row.attacker_guid,
+            row.target_guid,
+            row.damage,
+            row.hit_info,
+            row.blocked_amount,
+            0,
+        );
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(
+            Box::new(m),
+        )));
+    }
+    // C2: on a MELEE killing blow, tell the attacker to leave combat stance. The target itself
+    // vanishes via the game_world_entity on_delete → SMSG_DESTROY_OBJECT relay. A RANGED kill
+    // sends no ATTACKSTOP (the client was never in melee-attack state; vanilla sends none) —
+    // its stop signal is the SMSG_CANCEL_AUTO_REPEAT from the engagement-row delete relay
+    // (kill_creature's disengage frees the attacker's row).
+    if row.killing_blow && row.ranged_spell_id == 0 {
+        let stop = codec::build_attack_stop(row.attacker_guid, row.target_guid);
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTOP(
+            Box::new(stop),
+        )));
+    }
+    out
+}
+
+/// #468 stage 4c, family 8 (combat stance, engage leg): SMSG_ATTACKSTART for a melee engagement —
+/// the one body both legs run. Ranged rows are NOT melee combat (097: ATTACKSTART would animate a
+/// melee swing between shots); the `created` gate skips an out-of-scope attacker like the swing
+/// relay.
+pub(crate) fn melee_engage_outbound(
+    created: &Mutex<HashSet<u64>>,
+    row: &MeleeAttack,
+) -> Vec<Outbound> {
+    if row.ranged_spell_id != 0 {
+        return Vec::new();
+    }
+    if !created.lock().unwrap().contains(&row.attacker_guid) {
+        return Vec::new();
+    }
+    let m = codec::build_attack_start(row.attacker_guid, row.target_guid);
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTART(
+        Box::new(m),
+    ))]
+}
+
+/// #468 stage 4c, family 8 (combat stance, disengage leg). A RANGED row's delete is the ONE
+/// server-initiated auto-repeat teardown choke point: the OWNING player (and only them) gets the
+/// 0-byte SMSG_CANCEL_AUTO_REPEAT so its toggle drops in lockstep (097); a melee row's delete is
+/// SMSG_ATTACKSTOP for everyone (a non-kill disengage leaves stance too).
+pub(crate) fn melee_disengage_outbound(self_guid: u64, row: &MeleeAttack) -> Vec<Outbound> {
+    if row.ranged_spell_id != 0 {
+        if row.attacker_guid == self_guid {
+            return vec![Outbound::One(ServerOpcodeMessage::SMSG_CANCEL_AUTO_REPEAT)];
+        }
+        return Vec::new();
+    }
+    let m = codec::build_attack_stop(row.attacker_guid, row.target_guid);
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTOP(
+        Box::new(m),
+    ))]
+}
+
+/// #468 stage 4c, family 12 (spell cast visuals): the ONE body both legs run — the full cast-lock
+/// contract (START/GO sequencing, interrupt teardown, pushback, proc log, damage/heal logs,
+/// cooldown), pure over the row + the viewer's own guid. Every caster-private branch keys on
+/// `self_guid` exactly as the per-player closure did.
+pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<Outbound> {
+    let mut out = Vec::new();
+    // INTERRUPT signal (cast-interrupt-on-damage): the victim's mid-cast timed spell was cancelled.
+    // Relay SMSG_SPELL_FAILURE{spell, Interrupted} to the caster so the client tears down its cast
+    // bar (no SMSG_SPELL_GO follows — the cast never resolved). This row carries ONLY caster/spell,
+    // so it must be handled before the START/GO/COOLDOWN sequence below (it has cast_time_ms 0).
+    if row.is_interrupted {
+        // SELF-ONLY for a PLAYER caster: game_spell_cast_event is a global public subscription,
+        // so this closure fires for EVERY player. SMSG_SPELL_FAILURE is a caster-private cast-bar
+        // teardown (unlike the START/GO broadcast visuals), so relay it ONLY to the caster — else
+        // bystanders get stray "Interrupted" feedback and a bystander mid-casting the same spell
+        // risks a spurious teardown.
+        // 171: a CREATURE caster (0xF130 high-guid) has no self — broadcast so every observer's
+        // mob cast bar tears down on a Kick/Counterspell (the packet carries the mob's guid, so
+        // a bystander's own bar is untouched; mirrors the START broadcast that drew the bar).
+        let is_creature = row.caster_guid >> 48 == 0xF130;
+        if is_creature || row.caster_guid == self_guid {
+            let m = codec::build_spell_failure(row.caster_guid, row.spell_id);
+            out.push(Outbound::One(
+                ServerOpcodeMessage::SMSG_SPELL_FAILURE(Box::new(m)),
+            ));
+        }
+        return out;
+    }
+    // PUSHBACK signal (work-item 039): a direct hit slid the caster's in-progress timed cast's
+    // fire time. Broadcast (NOT self-only) — SMSG_SPELL_DELAYED is a caster-visible cast-bar
+    // shift, like SMSG_SPELL_START/GO below, so anyone watching the caster's cast bar sees it
+    // slide (unlike SMSG_SPELL_FAILURE above, which is a private cast-bar-teardown message). This
+    // row carries ONLY caster/spell/delay_ms, so it must be handled before the START/GO/COOLDOWN
+    // sequence below (it has cast_time_ms 0 and is_completion false, so it does NOT take either
+    // of those branches, but returning explicitly keeps this a single-purpose row like the
+    // is_interrupted branch above it).
+    if row.delay_ms > 0 {
+        let m = codec::build_spell_delayed(row.caster_guid, row.delay_ms);
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_DELAYED(
+            Box::new(m),
+        )));
+        return out;
+    }
+    // PROC-LOG row (114): a swing-proc damage line (Seal of Righteousness holy riding a landed
+    // melee swing). ONLY the named yellow combat-log/floating number — never START/GO/cooldown
+    // (nothing casts; the seal aura is already up). Broadcast like the damage log below.
+    if row.is_proc_log {
+        if row.damage > 0 {
+            let log = codec::build_spell_non_melee_damage_log(
+                row.target_guid,
+                row.caster_guid,
+                row.spell_id,
+                row.damage,
+                row.school,
+                row.is_crit,
+                row.resisted,
+                row.absorbed,
+            );
+            out.push(Outbound::One(
+                ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(log)),
+            ));
+        }
+        return out;
+    }
+    if row.cast_time_ms > 0 {
+        // Cast-START (a timed spell): SMSG_SPELL_START with the cast-bar duration so observers
+        // see the bar FILL. The GO/COOLDOWN follow on the cast-GO COMPLETION event.
+        let start = codec::build_spell_start(
+            row.caster_guid,
+            row.spell_id,
+            row.cast_time_ms,
+            0,
+            None,
+        );
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(
+            Box::new(start),
+        )));
+        return out;
+    }
+    // [083] Cast-GO (cast_time_ms == 0). Mangos-faithful sequence:
+    //   - GENUINE INSTANT (is_completion=false): START(0)+GO — SendSpellStart fires for EVERY
+    //     non-triggered cast (timer 0 for an instant) to register the pending cast, then cast() →
+    //     SendSpellGo finalizes it. START flags = 0x02, GO flags = 0x0100 (set in the builders).
+    //   - TIMED COMPLETION (is_completion=true): GO ALONE — the begin already sent START(cast_time);
+    //     a 2nd START(0) reset the bar to zero-length ("stuck on full"). The SMSG_SPELL_GO is the
+    //     client's cast finalizer (it matches by caster guid + spell id to release the pending cast).
+    // [083] The CASTER's OWN instant cast (cast_time 0 → this GO branch, !is_completion) already got
+    // START+GO SYNCHRONOUSLY from the CMSG_CAST_SPELL handler (so they precede the aura effects the
+    // SDK's alphabetical callback order would otherwise send first). Skip the duplicate to the caster
+    // — but still relay it to OBSERVERS (caster != self) and for TIMED COMPLETIONS (is_completion,
+    // which the gateway did NOT sync-send). NOTE: a player's TRIGGERED instant cast (channel-tick
+    // missile / on-hit trigger) also matches !is_completion && caster==self and is suppressed here —
+    // it did not get a synchronous send, so it loses its caster-side visual until the client_initiated
+    // flag lands (tracked follow-up). Acceptable for the slice; observers still see it.
+    // 088: suppress ONLY what the CMSG handler actually sent synchronously — the row says so
+    // (client_initiated rides from the cast_spell reducer path alone). The old shape
+    // (!is_completion && self) also swallowed the caster's TRIGGERED instants — channel-tick
+    // missiles (Arcane Missiles/Drain Life), on-hit trigger_spell procs — which never had a
+    // synchronous send, so their caster saw no visual while observers did.
+    let caster_synced_instant = row.client_initiated && row.caster_guid == self_guid;
+    if !caster_synced_instant {
+        if !row.is_completion {
+            let start =
+                codec::build_spell_start(row.caster_guid, row.spell_id, 0, 0, None);
+            out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(
+                Box::new(start),
+            )));
+        }
+        // CAST_RESULT(OK) is caster-only: clears the pending spell state so the subsequent
+        // GO can release m_currentSpells. Only for timed completions — the instant-cast
+        // caster got it synchronously from the CMSG_CAST_SPELL handler. [083]
+        if row.is_completion && row.caster_guid == self_guid {
+            out.push(Outbound::Raw {
+                opcode: 0x0130,
+                body: codec::build_cast_result_ok(row.spell_id),
+            });
+        }
+        let mut go =
+            codec::build_spell_go(row.caster_guid, row.spell_id, row.target_guid, None);
+        // 114: a 0-damage on-next-swing FIRE that rode a missed/dodged/parried swing reports
+        // the outcome in the GO's miss list — the client prints the yellow "Your Heroic
+        // Strike missed/was dodged/was parried" line (the white MISS was suppressed via
+        // spell_swing). swing_hit_info uses the CombatEvent codes (2 miss, 3 dodge, 4 parry);
+        // every non-swing row carries 0, keeping this branch dead for ordinary casts.
+        if row.is_completion && row.damage == 0 {
+            use wow_world_messages::vanilla::{SpellMiss, SpellMissInfo};
+            let miss_info = match row.swing_hit_info {
+                2 => Some(SpellMissInfo::Miss),
+                3 => Some(SpellMissInfo::Dodge),
+                4 => Some(SpellMissInfo::Parry),
+                _ => None,
+            };
+            if let Some(mi) = miss_info {
+                go.hits.clear();
+                go.misses = vec![SpellMiss {
+                    target: wow_world_messages::Guid::new(row.target_guid),
+                    miss_info: mi,
+                }];
+            }
+        }
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(
+            Box::new(go),
+        )));
+    }
+    // FIX 2: the floating spell damage number — relay SMSG_SPELLNONMELEEDAMAGELOG when this cast
+    // dealt damage (the module summed it onto the row + stored the school INDEX). 0 damage (heals /
+    // buffs / a begin-START) → no log. Sent after the GO so the number floats over the hit. The
+    // crit flag + resisted/absorbed breakdown ride from the row → CriticalHit hit_info + the
+    // (N resisted)/(N absorbed) suffixes. NOTE: a FULLY-absorbed hit has damage==0 (no health
+    // write) but absorbed>0; this slice keeps the `damage > 0` gate, so a 0-damage full-absorb is
+    // intentionally NOT logged (vanilla's absorb-only "Absorb" text is a separate log variant —
+    // out of scope). Widen the gate to `|| row.absorbed > 0 || row.resisted > 0` to add it later.
+    if row.damage > 0 {
+        let log = codec::build_spell_non_melee_damage_log(
+            row.target_guid,
+            row.caster_guid,
+            row.spell_id,
+            row.damage,
+            row.school,
+            row.is_crit,
+            row.resisted,
+            row.absorbed,
+        );
+        out.push(Outbound::One(
+            ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(log)),
+        ));
+    }
+    // 251: the green floating heal number + combat-log line — SMSG_SPELLHEALLOG whenever
+    // this cast restored health (module sums EFFECTIVE heal onto the row; overheal-only
+    // casts carry 0 and stay silent, matching the damage gate's shape).
+    if row.healed > 0 {
+        use wow_world_messages::vanilla::SMSG_SPELLHEALLOG;
+        use wow_world_messages::Guid;
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELLHEALLOG(
+            Box::new(SMSG_SPELLHEALLOG {
+                victim: Guid::new(row.target_guid),
+                caster: Guid::new(row.caster_guid),
+                id: row.spell_id,
+                damage: row.healed,
+                critical: row.is_crit,
+            }),
+        )));
+    }
+    // SMSG_SPELL_COOLDOWN — ONLY for a spell that actually HAS a cooldown (Mortal Strike, Judgement),
+    // with the REAL value. mangos does NOT send a cooldown packet per cast; we used to send one
+    // (cooldown=0) after EVERY cast, which STUCK the client's action button ("yellow casting outline" +
+    // "Another action is in progress" — could only cast each spell once). The SMSG_SPELL_GO above is
+    // what releases the client's pending-cast state (as in mangos); a 0-cooldown cast sends nothing.
+    if row.cooldown_ms > 0 {
+        let cd =
+            codec::build_spell_cooldown(row.caster_guid, row.spell_id, row.cooldown_ms);
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_COOLDOWN(
+            Box::new(cd),
+        )));
+    }
+    out
+}
+
+pub(crate) fn aura_sync(
+    auras: impl Iterator<Item = crate::stdb::bindings::Aura>,
+    target_guid: u64,
+) -> Outbound {
+    let slots: Vec<codec::update_mask::AuraSlot> = auras
+        .filter(|a| a.target_guid == target_guid)
+        .map(|a| codec::update_mask::AuraSlot {
+            slot: a.slot,
+            spell_id: a.spell_id,
+            flags: a.flags,
+            level: a.level,
+        })
+        .collect();
+    let mask = codec::update_mask::full_aura_mask(&slots);
+    let (opcode, body) = codec::build_values_update_raw(target_guid, &mask);
+    Outbound::Raw { opcode, body }
+}
+// Live ARMOR on the character sheet (the operator's Demon Skin bug): a player's own
+// `A_MOD_RESISTANCE(armor)` aura applying or expiring must push `UNIT_FIELD_RESISTANCES[0]` — the
+// module keeps `e.armor` at BASE (combat folds the effective value on demand), so the sheet never
+// moves without this relay. Recompute the EFFECTIVE armor from this connection's CURRENT cache
+// (base + armor auras + gear — `effective_armor` reads the post-change set, so apply AND expire
+// both land the right value, exactly like `run_speed_packet`). Returns `None` unless `changed` is a
+// self armor aura, so ordinary buffs/debuffs don't spam the opcode. Self-scoped: the sheet shows
+// only your own armor, so no peer relay is needed.
+pub(crate) fn armor_packet(coord: &Coordinator, changed: &Aura, self_guid: u64) -> Option<Outbound> {
+    const A_MOD_RESISTANCE: u8 = 0xA1; // taxonomy A_MOD_RESISTANCE
+    const RESIST_ARMOR_MASK: u32 = 0x01; // taxonomy RESIST_ARMOR bit (eff_p0 is a school MASK)
+    if changed.target_guid != self_guid
+        || changed.eff_kind != A_MOD_RESISTANCE
+        || (changed.eff_p0 as u32 & RESIST_ARMOR_MASK) == 0
+    {
+        return None;
+    }
+    // #468: the entity row (the BASE armor term) lives only on the coordinator now — the
+    // per-player connection no longer subscribes `game_world_entity` at all. The
+    // coordinator's cache also carries the auras, the item instances and the item
+    // templates, so this fold is complete there in a way it never was on the player
+    // connection (which lost `game_item_template` to #292).
+    let guard = coord.0.coord();
+    let db = &guard.conn.db;
+    let eff = super::armor::effective_armor(db, self_guid);
+    // 082: carry the positive AURA portion alongside the total so the paperdoll renders the
+    // green "(+N)" (Devotion Aura showed as plain white armor). Raw path — the positive
+    // field has no gtker setter. Login self-corrects through this same relay (the SDK
+    // replays aura rows after subscription-apply).
+    let pos = super::armor::aura_armor_positive(db, self_guid);
+    Some(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        Box::new(codec::build_armor_values(self_guid, eff, pos)),
+    )))
+}
+// Stealth peer-visibility: when a NON-self peer's A_STEALTH presence crosses the 0↔1 boundary,
+// HIDE it from this viewer (SMSG_DESTROY_OBJECT + evict from `created`) on the gain, REVEAL it
+// (re-CREATE + re-insert into `created`) on the loss. The recipient set is implicit — every
+// viewer's own connection drains the broadcast `game_aura` table and runs THIS closure, so each
+// in-scope client hides/reveals on its own `tx`. Self is excluded (`changed.target_guid !=
+// self_guid`) so a stealther never hides from itself. Idempotency is the `created` set: HIDE only
+// fires (and DESTROYs) if the guid was created; REVEAL only fires (and CREATEs) if it wasn't —
+// re-hiding a hidden peer or re-revealing a visible one is a no-op. The stealther's entity row is
+// read from the firing connection's cache (`ctx.db`); a guid the viewer can't see in scope has no
+// row → REVEAL self-skips. `coord` reads the peer's gear RLS-bypassed on reveal (same as insert).
+// One argument per piece of per-viewer state the decision needs; they are not grouped
+// because the caller has them as separate captures.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn stealth_visibility(
+    post_change_stealth_count: usize,
+    view: &WorldView,
+    session: u64,
+    coord: &Coordinator,
+    created: &Arc<Mutex<HashSet<u64>>>,
+    changed: &Aura,
+    self_guid: u64,
+    is_insert: bool,
+) -> Vec<Outbound> {
+    if changed.eff_kind != A_STEALTH || changed.target_guid == self_guid {
+        return Vec::new();
+    }
+    match stealth_action(is_insert, post_change_stealth_count) {
+        StealthAction::Hide => {
+            // Evict so a later REVEAL (and ordinary AOI re-entry) re-CREATEs; only DESTROY if the
+            // viewer actually had it (idempotent — a never-created peer needs no DESTROY).
+            if created.lock().unwrap().remove(&changed.target_guid) {
+                vec![Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
+                    codec::build_destroy_object(changed.target_guid),
+                ))]
+            } else {
+                Vec::new()
+            }
+        }
+        StealthAction::Reveal => {
+            // Re-CREATE only if not currently shown (idempotent) AND the peer is in this viewer's
+            // scope (its row is in the cache). Insert into `created` BEFORE building so the dedup
+            // is consistent; if the row is gone (out of scope), undo the insert and emit nothing.
+            if !created.lock().unwrap().insert(changed.target_guid) {
+                return Vec::new();
+            }
+            // #468: "is the peer in this viewer's scope" used to be "is its row in this
+            // connection's cache", which the per-player box subscription made equivalent.
+            // The shared connection's cache holds the whole world, so the question has to be
+            // put to the cell index instead — otherwise a stealther unstealthing on the far
+            // side of the zone would CREATE for everyone.
+            if !view.entities.can_see(session, changed.target_guid) {
+                created.lock().unwrap().remove(&changed.target_guid);
+                return Vec::new();
+            }
+            match coord
+                .0
+                .coord()
+                .conn
+                .db
+                .game_world_entity()
+                .guid()
+                .find(&changed.target_guid)
+            {
+                Some(row) => match build_peer_create(coord, &row) {
+                    Some(m) => vec![Outbound::One(m)],
+                    None => {
+                        // Encode failure: roll the dedup entry back like `offer_peer_create`
+                        // does, else this guid is permanently suppressed (marked created with
+                        // no CREATE ever sent) — the same latent bug 144 fixed on the
+                        // insert/update path.
+                        created.lock().unwrap().remove(&changed.target_guid);
+                        Vec::new()
+                    }
+                },
+                None => {
+                    created.lock().unwrap().remove(&changed.target_guid);
+                    Vec::new()
+                }
+            }
+        }
+        StealthAction::None => Vec::new(),
+    }
+}
+
+/// #468 stage 4c, family 14 (aura), insert leg — the shared-dispatch twin of the per-player
+/// `on_aura_insert` closure. Same helper stack (`aura_sync`/`aura_duration_packet`/
+/// `run_speed_packet`/`armor_packet`/`stealth_visibility`); the aura iterators read the
+/// COORDINATOR cache (identical rows — both subscriptions were `SELECT *`), and
+/// `stealth_count` was computed on the coordinator pump, where that cache is exactly post-change.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn aura_insert_outbound(
+    coord: &Coordinator,
+    view: &WorldView,
+    session: u64,
+    created: &Arc<Mutex<HashSet<u64>>>,
+    self_guid: u64,
+    row: &Aura,
+    stealth_count: usize,
+) -> Vec<Outbound> {
+    let mut out = Vec::new();
+    // See the per-player twin: a stealth-hidden peer (not in `created`) must get NO per-peer
+    // relay — a partial VALUES on a DESTROYed object is a client crash/desync vector.
+    let visible = row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
+    if visible {
+        let guard = coord.0.coord();
+        out.push(aura_sync(guard.conn.db.game_aura().iter(), row.target_guid));
+    }
+    if let Some(o) = aura_duration_packet(row, self_guid) {
+        out.push(o);
+    }
+    if visible {
+        {
+            let guard = coord.0.coord();
+            if let Some(o) = run_speed_packet(guard.conn.db.game_aura().iter(), row, self_guid) {
+                out.push(o);
+            }
+        }
+        if let Some(o) = armor_packet(coord, row, self_guid) {
+            out.push(o);
+        }
+    }
+    out.extend(stealth_visibility(
+        stealth_count,
+        view,
+        session,
+        coord,
+        created,
+        row,
+        self_guid,
+        true,
+    ));
+    out
+}
+
+/// Family 14, update leg — twin of `on_aura_update` (no stealth transition on an update).
+pub(crate) fn aura_update_outbound(
+    coord: &Coordinator,
+    created: &Arc<Mutex<HashSet<u64>>>,
+    self_guid: u64,
+    row: &Aura,
+    expires_changed: bool,
+) -> Vec<Outbound> {
+    let mut out = Vec::new();
+    let visible = row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
+    if visible {
+        let guard = coord.0.coord();
+        out.push(aura_sync(guard.conn.db.game_aura().iter(), row.target_guid));
+    }
+    // Re-send the timer only when the duration window actually changed (a refresh).
+    if expires_changed {
+        if let Some(o) = aura_duration_packet(row, self_guid) {
+            out.push(o);
+        }
+    }
+    if visible {
+        {
+            let guard = coord.0.coord();
+            if let Some(o) = run_speed_packet(guard.conn.db.game_aura().iter(), row, self_guid) {
+                out.push(o);
+            }
+        }
+        if let Some(o) = armor_packet(coord, row, self_guid) {
+            out.push(o);
+        }
+    }
+    out
+}
+
+/// Family 14, delete leg — twin of `on_aura_delete` (the REVEAL half of stealth). The coordinator
+/// cache is post-delete by callback contract, so the sync/speed/armor folds read the remaining set.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn aura_delete_outbound(
+    coord: &Coordinator,
+    view: &WorldView,
+    session: u64,
+    created: &Arc<Mutex<HashSet<u64>>>,
+    self_guid: u64,
+    row: &Aura,
+    stealth_count: usize,
+) -> Vec<Outbound> {
+    let mut out = Vec::new();
+    let visible = row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
+    if visible {
+        {
+            let guard = coord.0.coord();
+            out.push(aura_sync(guard.conn.db.game_aura().iter(), row.target_guid));
+            if let Some(o) = run_speed_packet(guard.conn.db.game_aura().iter(), row, self_guid) {
+                out.push(o);
+            }
+        }
+        if let Some(o) = armor_packet(coord, row, self_guid) {
+            out.push(o);
+        }
+    }
+    out.extend(stealth_visibility(
+        stealth_count,
+        view,
+        session,
+        coord,
+        created,
+        row,
+        self_guid,
+        false,
+    ));
+    out
+}
+
+/// #468 stage 4c, family 17 (group / loot-roll / quest-share): the ONE kind-decode body both legs
+/// run. PRIVATE data — the audience (the row's recipient, and nobody else) is resolved by the
+/// caller (RLS on the per-player leg; the owner-session lookup + `private_recipient_audience` on
+/// the shared leg). `coord` is the privileged handle the QUEST_SHARE detail JOIN needs.
+pub(crate) fn group_event_outbound(
+    coord: &Coordinator,
+    self_guid: u64,
+    row: &GroupEvent,
+) -> Vec<Outbound> {
+    use lyracore_shared::group::event_kind as group_kind;
+    use lyracore_shared::loot_roll::event_kind as roll_kind;
+    use lyracore_shared::quest::share_event_kind as quest_share_kind;
+    let msg = match row.kind {
+        group_kind::INVITE => Some(ServerOpcodeMessage::SMSG_GROUP_INVITE(Box::new(
+            codec::build_group_invite(row.other_name.clone()),
+        ))),
+        group_kind::LIST => match lyracore_shared::group::decode_roster(&row.payload) {
+            Some((leader, loot_method, loot_threshold, master_looter_guid, members)) => {
+                Some(ServerOpcodeMessage::SMSG_GROUP_LIST(Box::new(codec::build_group_list(
+                    self_guid, leader, loot_method, loot_threshold, master_looter_guid, &members,
+                ))))
+            }
+            None => {
+                log::warn!(
+                    "group LIST relay: unparseable roster payload {:?} (event {})",
+                    row.payload, row.id
+                );
+                None
+            }
+        },
+        group_kind::DECLINE => Some(ServerOpcodeMessage::SMSG_GROUP_DECLINE(Box::new(
+            codec::build_group_decline(row.other_name.clone()),
+        ))),
+        group_kind::DESTROYED => Some(ServerOpcodeMessage::SMSG_GROUP_DESTROYED),
+        // Work-item 199: a party (`/p`) chat line, one row per recipient (every OTHER member
+        // + an echo to the sender — both pushed by `module/src/chat.rs::party_chat`).
+        // `row.other_guid` is the SPEAKER (resolved/pushed by `group::push_event`, same
+        // convention the roll kinds below use); `row.payload` is the raw message text
+        // (`encode_party_chat` is a pass-through — nothing else to decode).
+        group_kind::PARTY_CHAT => match lyracore_shared::group::decode_party_chat(&row.payload) {
+            Some(message) => Some(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                codec::build_party_chat(row.other_guid, message),
+            ))),
+            None => {
+                log::warn!("party PARTY_CHAT relay: unparseable payload {:?} (event {})", row.payload, row.id);
+                None
+            }
+        },
+        roll_kind::ROLL_START => match lyracore_shared::loot_roll::decode_start(&row.payload) {
+            Some((corpse_guid, slot, item_entry, countdown_ms)) => {
+                Some(ServerOpcodeMessage::SMSG_LOOT_START_ROLL(Box::new(codec::build_loot_start_roll(
+                    corpse_guid, slot, item_entry, countdown_ms,
+                ))))
+            }
+            None => {
+                log::warn!("loot ROLL_START relay: unparseable payload {:?} (event {})", row.payload, row.id);
+                None
+            }
+        },
+        roll_kind::ROLL_VOTE => match lyracore_shared::loot_roll::decode_vote(&row.payload) {
+            Some((corpse_guid, slot, item_entry, roll_number, vote, auto_pass)) => {
+                Some(ServerOpcodeMessage::SMSG_LOOT_ROLL(Box::new(codec::build_loot_roll(
+                    corpse_guid, slot, row.other_guid, item_entry, roll_number, vote, auto_pass,
+                ))))
+            }
+            None => {
+                log::warn!("loot ROLL_VOTE relay: unparseable payload {:?} (event {})", row.payload, row.id);
+                None
+            }
+        },
+        roll_kind::ROLL_WON => match lyracore_shared::loot_roll::decode_won(&row.payload) {
+            Some((corpse_guid, slot, item_entry, winning_roll, winning_vote)) => {
+                Some(ServerOpcodeMessage::SMSG_LOOT_ROLL_WON(Box::new(codec::build_loot_roll_won(
+                    corpse_guid, slot, item_entry, row.other_guid, winning_roll, winning_vote,
+                ))))
+            }
+            None => {
+                log::warn!("loot ROLL_WON relay: unparseable payload {:?} (event {})", row.payload, row.id);
+                None
+            }
+        },
+        roll_kind::MASTER_LIST => match lyracore_shared::loot_roll::decode_master_list(&row.payload) {
+            Some((_corpse_guid, eligible)) => Some(ServerOpcodeMessage::SMSG_LOOT_MASTER_LIST(Box::new(
+                codec::build_loot_master_list(&eligible),
+            ))),
+            None => {
+                log::warn!("loot MASTER_LIST relay: unparseable payload {:?} (event {})", row.payload, row.id);
+                None
+            }
+        },
+        // Work-item 221: a grouped money-loot split's per-recipient share → the SAME
+        // `SMSG_LOOT_MONEY_NOTIFY` the (now-removed) unconditional gateway send used to build,
+        // just per-recipient and carrying the SHARE instead of the total (`amount` here IS the
+        // wire field, matching `codec::build_loot_money_notify`'s single `amount: u32`).
+        roll_kind::MONEY_SHARE => match lyracore_shared::loot_roll::decode_money_share(&row.payload) {
+            Some(share) => Some(ServerOpcodeMessage::SMSG_LOOT_MONEY_NOTIFY(codec::build_loot_money_notify(share))),
+            None => {
+                log::warn!("loot MONEY_SHARE relay: unparseable payload {:?} (event {})", row.payload, row.id);
+                None
+            }
+        },
+        // Work-item 194 (sharing): an eligible party member receives the shared quest —
+        // `row.other_guid` is the SHARER (resolved/pushed by `group::push_event`), `row.payload`
+        // is the quest entry. Opens the DETAILS screen with the SHARER as "giver" (the
+        // recipient's own `CMSG_QUESTGIVER_ACCEPT_QUEST` then re-validates fresh via the
+        // module's `GiverKind::Party` — this relay never authorizes anything by itself).
+        quest_share_kind::QUEST_SHARE => match row.payload.parse::<u32>() {
+            Ok(quest_id) => match coord.quest_detail(quest_id) {
+                Ok(Some(detail)) => Some(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(Box::new(
+                    codec::build_quest_details(row.other_guid, &detail),
+                ))),
+                Ok(None) => {
+                    log::warn!("quest QUEST_SHARE relay: quest {quest_id} not loaded (event {})", row.id);
+                    None
+                }
+                Err(e) => {
+                    log::warn!("quest QUEST_SHARE relay: quest_detail lookup failed (event {}): {e}", row.id);
+                    None
+                }
+            },
+            Err(_) => {
+                log::warn!("quest QUEST_SHARE relay: unparseable payload {:?} (event {})", row.payload, row.id);
+                None
+            }
+        },
+        // Work-item 194 (sharing): the SENDER's per-member feedback line, one row per member,
+        // always (whether or not the share actually landed) — `row.other_guid` is that member,
+        // `row.payload` is the `share_result` wire byte (mirrors gtker's `QuestPartyMessage` 1:1).
+        quest_share_kind::QUEST_PUSH_RESULT => match row.payload.parse::<u8>() {
+            Ok(code) => Some(ServerOpcodeMessage::MSG_QUEST_PUSH_RESULT(Box::new(
+                codec::build_quest_push_result(row.other_guid, code),
+            ))),
+            Err(_) => {
+                log::warn!("quest QUEST_PUSH_RESULT relay: unparseable payload {:?} (event {})", row.payload, row.id);
+                None
+            }
+        },
+        other => {
+            log::warn!("group event relay: unknown kind {other} (id {})", row.id);
+            None
+        }
+    };
+    match msg {
+        Some(m) => vec![Outbound::One(m)],
+        None => Vec::new(),
+    }
+}
+
+/// The 4c "who may see this row" predicate for the PRIVATE recipient-addressed families (whisper,
+/// group/loot-roll/quest-share, resurrect prompt): the row's addressee and nobody else. On the
+/// shared feed this — together with the owner-session lookup that enforces it structurally — is
+/// the entire privacy guarantee RLS used to provide.
+pub(crate) fn private_recipient_audience(row_recipient_guid: u64, viewer_guid: u64) -> bool {
+    // 0 is "unaddressed"/"uninitialized", never a real character — an equality alone would let an
+    // unaddressed row match a half-initialized viewer (0 == 0), so zero denies on either side.
+    row_recipient_guid != 0 && row_recipient_guid == viewer_guid
+}
+
+/// #468 stage 4c, family 16 (whisper): the packet body both legs run. Audience resolved by the
+/// caller — RLS per-player, the recipient owner-session lookup on the shared leg.
+pub(crate) fn whisper_event_outbound(row: &WhisperEvent) -> Vec<Outbound> {
+    let m = codec::build_whisper(row.other_guid, row.is_inform, row.message.clone());
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(
+        Box::new(m),
+    ))]
+}
+
+/// #468 stage 4c, family 15 (resurrect prompt): the packet body both legs run. Audience: the
+/// offer's target, resolved by the caller.
+pub(crate) fn resurrect_request_outbound(row: &ResurrectRequest) -> Vec<Outbound> {
+    let m = codec::build_resurrect_request(row.caster_guid, row.caster_name.clone());
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_RESURRECT_REQUEST(
+        Box::new(m),
+    ))]
+}
+
+/// #468 stage 4c, family 13 (projectile impact): the floating damage number for a projectile that
+/// finished its travel (#084) — never a START/GO. Pure over the row; broadcast.
+pub(crate) fn impact_event_outbound(row: &SpellImpactEvent) -> Vec<Outbound> {
+    if row.damage == 0 {
+        return Vec::new(); // a fully-absorbed impact (or a vanished target) logs nothing
+    }
+    let log = codec::build_spell_non_melee_damage_log(
+        row.target_guid,
+        row.caster_guid,
+        row.spell_id,
+        row.damage,
+        row.school,
+        row.is_crit,
+        row.resisted,
+        row.absorbed,
+    );
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(log)))]
+}
+
+/// #468 stage 4c, family 10 (say/yell chat): the one body both legs run. The speaker always hears
+/// their own line (vanilla); everyone else is `chat_in_range`-gated (SAY ~25yd, YELL ~300yd, map +
+/// instance fenced), with both endpoints read from the COORDINATOR's global cache — the AOI-scoped
+/// per-player cache could not see a 100–300yd YELL speaker. Missing endpoint → drop (safer than
+/// flooding).
+pub(crate) fn chat_event_outbound(
+    coord: &Coordinator,
+    self_guid: u64,
+    row: &ChatEvent,
+) -> Vec<Outbound> {
+    if row.sender_guid != self_guid {
+        let range_sq = if row.chat_type == CHAT_YELL {
+            YELL_RANGE_SQ
+        } else {
+            SAY_RANGE_SQ // SAY and any future proximity type default to SAY range
+        };
+        let guard = coord.0.coord();
+        let speaker = match guard
+            .conn
+            .db
+            .game_world_entity()
+            .guid()
+            .find(&row.sender_guid)
+        {
+            Some(e) => e,
+            None => return Vec::new(),
+        };
+        let listener = match guard.conn.db.game_world_entity().guid().find(&self_guid) {
+            Some(e) => e,
+            None => return Vec::new(),
+        };
+        if !chat_in_range(
+            speaker.map_id,
+            speaker.instance_id,
+            speaker.x,
+            speaker.y,
+            listener.map_id,
+            listener.instance_id,
+            listener.x,
+            listener.y,
+            range_sq,
+        ) {
+            return Vec::new();
+        }
+    }
+    let m = codec::build_chat_message(
+        row.sender_guid,
+        row.chat_type,
+        row.language,
+        row.message.clone(),
+    );
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(
+        Box::new(m),
+    ))]
+}
+
+/// #468 stage 4c, family 11 (chat channels): membership IS the audience (no proximity — General
+/// spans the zone), checked against the coordinator's `game_channel_member` cache per viewer. The
+/// sender hears their echo through the same path (they're a member too).
+pub(crate) fn channel_event_outbound(
+    coord: &Coordinator,
+    self_guid: u64,
+    row: &ChannelEvent,
+) -> Vec<Outbound> {
+    let member = {
+        // Edition-2021 MutexGuard temporary-scope trap (danger-zones): single statement, bound.
+        let guard = coord.0.coord();
+        let is_member = guard
+            .conn
+            .db
+            .game_channel_member()
+            .iter()
+            .any(|m| m.character_guid == self_guid && m.channel == row.channel);
+        is_member
+    };
+    if !member {
+        return Vec::new();
+    }
+    let m = codec::build_channel_message(
+        row.sender_guid,
+        row.channel_display.clone(),
+        row.message.clone(),
+    );
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(
+        Box::new(m),
+    ))]
+}
+
+/// #468 stage 4c, family 9 (emotes): SMSG_TEXT_EMOTE + SMSG_EMOTE, broadcast (no range gate today
+/// — preserved as-is for A/B equality). The target name resolves through the coordinator cache
+/// (player, else creature template); unknown ids degrade gracefully so the rest still relays.
+pub(crate) fn emote_event_outbound(coord: &Coordinator, row: &EmoteEvent) -> Vec<Outbound> {
+    // target_guid == 0 → untargeted emote (the client sends 0 when nothing is selected).
+    let target_name = if row.target_guid != 0 {
+        let guard = coord.0.coord();
+        let db = &guard.conn.db;
+        db.game_character()
+            .guid()
+            .find(&row.target_guid)
+            .map(|c| c.name)
+            .or_else(|| {
+                db.game_world_entity()
+                    .guid()
+                    .find(&row.target_guid)
+                    .and_then(|e| {
+                        db.game_creature_template()
+                            .entry()
+                            .find(&e.entry)
+                            .map(|c| c.name)
+                    })
+            })
+    } else {
+        None
+    };
+    let mut out = Vec::new();
+    if let Some(m) = codec::build_text_emote(
+        row.sender_guid,
+        row.text_emote,
+        row.emote_anim,
+        target_name,
+    ) {
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_TEXT_EMOTE(
+            Box::new(m),
+        )));
+    }
+    if let Some(a) = codec::build_emote_anim(row.sender_guid, row.emote_anim) {
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_EMOTE(Box::new(a))));
+    }
+    out
+}
+
+/// #468 stage 4c, family 5 (dynamic objects): the shared-dispatch twin of the per-player
+/// `on_dynobj_insert` relay. The instance gate already ran in `world_view::dynobj_appeared`.
+pub(crate) fn relay_dynobj_create(row: &DynamicObject) -> Vec<Outbound> {
+    let m = codec::build_dynamicobject_create_object(
+        row.guid,
+        row.caster_guid,
+        row.spell_id,
+        row.x,
+        row.y,
+        row.z,
+        row.radius_yd,
+    );
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        Box::new(m),
+    ))]
+}
+
+/// A bare SMSG_DESTROY_OBJECT — the delete leg of the dynobj/corpse families, shared because the
+/// packet is nothing but the guid.
+pub(crate) fn relay_destroy_object(guid: u64) -> Vec<Outbound> {
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
+        codec::build_destroy_object(guid),
+    ))]
+}
+
+/// #468 stage 4c, family 3 (skill pane): the shared-dispatch twin of the per-player skill relays
+/// (insert and update ran the same body there too). Audience (owner only) resolved by the
+/// owner-session lookup in `world_view::skill_changed`; the slot allocation writes the viewer's
+/// OWN `skill_slots` — the same map the per-player leg captures, seeded from the login layout.
+pub(crate) fn relay_skill(
+    viewer: &Viewer,
+    skill_line: u32,
+    current: u16,
+    max_rank: u16,
+) -> Vec<Outbound> {
+    let mut guard = viewer.skill_slots.lock().unwrap();
+    let (map, next_free) = &mut *guard;
+    let slot = *map.entry(skill_line).or_insert_with(|| {
+        let s = *next_free;
+        *next_free += 1;
+        s
+    });
+    if let Ok(sk) = wow_world_messages::vanilla::Skill::try_from(skill_line) {
+        if let Some(m) = codec::build_skill_values(viewer.self_guid, slot, sk, current, max_rank) {
+            return vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(m),
+            ))];
+        }
+    }
+    Vec::new()
+}
+
 pub(crate) fn motion_outbound(
     created: &Mutex<HashSet<u64>>,
     self_guid: u64,
@@ -1160,7 +2170,20 @@ impl Coordinator {
         // The wrong constant (a) failed to ghost-gate the real Spirit Healer (npc_flags 0x21) and
         // (b) wrongly ghost-gated the 39 armorers/quartermasters that carry REPAIR (0x4000), hiding
         // them from living players.
-        let player = self.player_conn(account_id)?;
+        // #468 stage 4c: with shared calls on, migrated families register on the shared
+        // coordinator dispatch (`world_view::arm_shard`) instead of this connection, and their
+        // per-player base queries are dropped — each family forks on this ONE flag so an A/B run
+        // compares whole configurations, never a mix.
+        let shared_calls = crate::config::shared_calls_enabled();
+        // #468 stage 4d: under LYRACORE_SHARED_CALLS no per-player connection exists — every
+        // remaining `pp()` use below sits inside a `(!shared_calls)` branch, which is what the
+        // expect asserts.
+        let player = if shared_calls {
+            None
+        } else {
+            Some(self.player_conn(account_id)?)
+        };
+        let pp = || player.as_ref().expect("per-player leg is flag-off only");
         let created = Arc::new(Mutex::new(HashSet::from([self_guid])));
         // #73 view-merge / #207 fast-follow 2: the one piece of viewer-owned state the away leg's
         // peer-visibility gate needs but cannot read off an away connection. Written by the ghost-flag
@@ -1184,104 +2207,23 @@ impl Coordinator {
         // ======================================================================================
         // Melee swing log (broadcast; no RLS) → SMSG_ATTACKERSTATEUPDATE (swing animation + damage
         // text). The victim's health bar is moved separately by the on_update VALUES relay above.
+        //
+        // 4c family 7: registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the SAME
+        // `combat_event_outbound` body; flag-on it is enqueued per viewer by
+        // `world_view::combat_event_appeared` and the base query is dropped below.
         let cb_tx = tx.clone();
         let cb_created = created.clone();
-        let on_combat = player
-            .conn
-            .db
-            .game_combat_event()
-            .on_insert(move |_ctx, row| {
-                // With AOI on, skip a swing whose ATTACKER is out of the player's scope (not created) — no
-                // point animating an invisible attacker's swing (the victim's health still moves via the
-                // entity on_update VALUES relay if the victim is in scope). Off → `created` holds all → no-op.
-                if !cb_created.lock().unwrap().contains(&row.attacker_guid) {
-                    return;
-                }
-                // #10/097 vanilla shot shape: a RANGED shot is a SPELL on the wire — SMSG_SPELL_GO (a HIT
-                // carries the target in `hits`; a MISS in `misses` — the client renders the white "Miss"
-                // from that list) followed by SMSG_SPELLNONMELEEDAMAGELOG for a landed hit ("Your Auto
-                // Shot hits X for N"). NEVER SMSG_ATTACKERSTATEUPDATE — that is the MELEE swing packet,
-                // and sending it per shot animated a melee swing over the ranged pose (the "idle between
-                // shots" bug). Melee (ranged_spell_id 0) keeps the ATTACKERSTATEUPDATE path unchanged.
-                if row.ranged_spell_id != 0 {
-                    // Auto Shot stamps an ammo display id → the AMMO flag fires the arrow graphic (24 =
-                    // INVTYPE_AMMO). Wand Shoot (ammo_display_id 0) → no flag → the bolt. Deliberate
-                    // simplification: inv-type 24 is hardcoded.
-                    let ammo = if row.ammo_display_id != 0 {
-                        Some((row.ammo_display_id, 24))
-                    } else {
-                        None
-                    };
-                    let miss = row.hit_info == 2; // module HIT_MISS
-                    let go = codec::build_spell_go_outcome(
-                        row.attacker_guid,
-                        row.ranged_spell_id,
-                        row.target_guid,
-                        ammo,
-                        miss,
-                    );
-                    let _ = cb_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(
-                        Box::new(go),
-                    )));
-                    if !miss && row.damage > 0 {
-                        let log = codec::build_spell_non_melee_damage_log(
-                            row.target_guid,
-                            row.attacker_guid,
-                            row.ranged_spell_id,
-                            row.damage,
-                            0,                 // physical
-                            row.hit_info == 1, // module HIT_CRIT
-                            0,
-                            0,
-                        );
-                        let msg = Outbound::One(ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(
-                            Box::new(log),
-                        ));
-                        // (097) The shot's damage lands at fire + travel (module ranged_impact applies
-                        // the health there) — hold the LOG to the same moment so the number arrives
-                        // WITH the arrow, not at the muzzle. Deliberate simplification: a thread per
-                        // landed shot (~1 per 2.3s per shooter); move to a shared timer wheel if
-                        // archer armies happen.
-                        if row.impact_delay_ms > 0 {
-                            let tx_late = cb_tx.clone();
-                            let delay =
-                                std::time::Duration::from_millis(row.impact_delay_ms as u64);
-                            std::thread::spawn(move || {
-                                std::thread::sleep(delay);
-                                let _ = tx_late.send(msg);
-                            });
-                        } else {
-                            let _ = cb_tx.send(msg);
-                        }
+        let on_combat = (!shared_calls).then(|| {
+            pp()
+                .conn
+                .db
+                .game_combat_event()
+                .on_insert(move |_ctx, row| {
+                    for o in combat_event_outbound(&cb_tx, &cb_created, row) {
+                        let _ = cb_tx.send(o);
                     }
-                } else if !row.spell_swing {
-                    // 114: a fired on-next-swing spell (Heroic Strike/Cleave) REPLACES the white hit — the
-                    // whole swing rides the spell's cast-event row (GO + yellow named damage log), so this
-                    // event sends NO white ATTACKERSTATEUPDATE. killing_blow/ATTACKSTOP below still applies.
-                    let m = codec::build_attacker_state_update(
-                        row.attacker_guid,
-                        row.target_guid,
-                        row.damage,
-                        row.hit_info,
-                        row.blocked_amount,
-                        0,
-                    );
-                    let _ = cb_tx.send(Outbound::One(
-                        ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(Box::new(m)),
-                    ));
-                }
-                // C2: on a MELEE killing blow, tell the attacker to leave combat stance. The target itself
-                // vanishes via the game_world_entity on_delete → SMSG_DESTROY_OBJECT relay. A RANGED kill
-                // sends no ATTACKSTOP (the client was never in melee-attack state; vanilla sends none) —
-                // its stop signal is the SMSG_CANCEL_AUTO_REPEAT from the engagement-row delete relay
-                // below (kill_creature's disengage frees the attacker's row).
-                if row.killing_blow && row.ranged_spell_id == 0 {
-                    let stop = codec::build_attack_stop(row.attacker_guid, row.target_guid);
-                    let _ = cb_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTOP(
-                        Box::new(stop),
-                    )));
-                }
-            });
+                })
+        });
 
         // ======================================================================================
         //  COMBAT STANCE — game_melee_attack (insert/delete)
@@ -1294,54 +2236,35 @@ impl Coordinator {
         // (so a non-kill disengage leaves stance too — not just the killing blow above). Covers
         // AUTO-ATTACK combat; a pure-caster engagement has no melee row, so UNIT_FLAG_IN_COMBAT for that
         // case is a follow-up. AOI-guard the start like the swing relay (skip an out-of-scope attacker).
+        // 4c family 8: registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the same
+        // `melee_engage_outbound`/`melee_disengage_outbound` bodies (the 097 ranged-vs-melee fork
+        // and the owner-only CANCEL_AUTO_REPEAT live there); flag-on
+        // `world_view::melee_engaged`/`melee_disengaged` enqueues them per viewer.
         let atk_tx = tx.clone();
         let atk_created = created.clone();
-        let on_melee_insert = player
-            .conn
-            .db
-            .game_melee_attack()
-            .on_insert(move |_ctx, row| {
-                // A RANGED auto-repeat (Auto Shot / wand Shoot, ranged_spell_id != 0) is NOT melee combat:
-                // SMSG_ATTACKSTART would put the client in MELEE stance and animate a melee swing between
-                // shots (user: "we swap to melee in between ranged"). The shot is shown by SPELL_START/GO
-                // relay above — skip the stance packet. Melee rows (incl. the creature's retaliation) relay
-                // ATTACKSTART as before. [097]
-                if row.ranged_spell_id != 0 {
-                    return;
-                }
-                if !atk_created.lock().unwrap().contains(&row.attacker_guid) {
-                    return;
-                }
-                let m = codec::build_attack_start(row.attacker_guid, row.target_guid);
-                let _ = atk_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTART(
-                    Box::new(m),
-                )));
-            });
-        let atk_stop_tx = tx.clone();
-        let on_melee_delete = player
-            .conn
-            .db
-            .game_melee_attack()
-            .on_delete(move |_ctx, row| {
-                // A RANGED row's delete is the ONE server-initiated auto-repeat teardown choke point
-                // (vanilla likewise announces the cancel from the server side): whatever killed the
-                // loop — the target died, leash evade, out of ammo, a per-shot hard fail (range/LoS/
-                // facing/too-close), the client's own cancel — the OWNING player gets the 0-byte
-                // SMSG_CANCEL_AUTO_REPEAT so its toggle drops in lockstep. Without it the client stayed
-                // toggled ON over a dead loop and the next press cancelled instead of casting (097).
-                // No ATTACKSTOP for ranged (we never sent its ATTACKSTART). Other viewers: no packet.
-                if row.ranged_spell_id != 0 {
-                    if row.attacker_guid == self_guid {
-                        let _ = atk_stop_tx
-                            .send(Outbound::One(ServerOpcodeMessage::SMSG_CANCEL_AUTO_REPEAT));
+        let on_melee_insert = (!shared_calls).then(|| {
+            pp()
+                .conn
+                .db
+                .game_melee_attack()
+                .on_insert(move |_ctx, row| {
+                    for o in melee_engage_outbound(&atk_created, row) {
+                        let _ = atk_tx.send(o);
                     }
-                    return;
-                }
-                let m = codec::build_attack_stop(row.attacker_guid, row.target_guid);
-                let _ = atk_stop_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTOP(
-                    Box::new(m),
-                )));
-            });
+                })
+        });
+        let atk_stop_tx = tx.clone();
+        let on_melee_delete = (!shared_calls).then(|| {
+            pp()
+                .conn
+                .db
+                .game_melee_attack()
+                .on_delete(move |_ctx, row| {
+                    for o in melee_disengage_outbound(self_guid, row) {
+                        let _ = atk_stop_tx.send(o);
+                    }
+                })
+        });
 
         // ======================================================================================
         //  SKILL-UP — game_player_skill (insert/update)
@@ -1378,9 +2301,13 @@ impl Coordinator {
             let next_free = layout.len() as u8;
             std::sync::Arc::new(std::sync::Mutex::new((map, next_free)))
         };
+        // 4c family 3: registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the shared
+        // dispatch (`world_view::skill_changed` → `relay_skill`) runs the same body against the
+        // SAME `skill_slots` map (it rides the Viewer), and the base query is dropped below.
         let skill_tx = tx.clone();
         let skill_slots_ins = skill_slots.clone();
-        let on_skill_insert = player
+        let on_skill_insert = (!shared_calls).then(|| {
+            pp()
             .conn
             .db
             .game_player_skill()
@@ -1404,11 +2331,12 @@ impl Coordinator {
                         ));
                     }
                 }
-            });
+            })
+        });
         let skill_upd_tx = tx.clone();
         let skill_slots_upd = skill_slots.clone();
-        let on_skill_update =
-            player
+        let on_skill_update = (!shared_calls).then(|| {
+            pp()
                 .conn
                 .db
                 .game_player_skill()
@@ -1436,7 +2364,8 @@ impl Coordinator {
                             ));
                         }
                     }
-                });
+                })
+        });
 
         // ======================================================================================
         //  EXPLORATION FOG, per-player leg — game_character_explored (insert)
@@ -1453,11 +2382,16 @@ impl Coordinator {
         // VALUES still fires for all). See `ReplayGate` — it is CLOSED until the snapshot below is
         // taken, and keys on `area_bit` so a transfer's re-minted row ids cannot read as discoveries
         // (issue #41).
+        // 4c family 4: registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the coordinator
+        // twin below carries BOTH halves (fog VALUES for live discoveries + the gated "Discovered"
+        // toast), the login fog restore becomes an explicit sweep at world entry (no per-session
+        // subscription apply means no initial-sync replay to ride), and the per-player
+        // `explored_query` is dropped from the base set.
         let explored_replay: Arc<Mutex<ReplayGate>> = Arc::new(Mutex::new(ReplayGate::default()));
         let explored_tx = tx.clone();
         let explored_gate = explored_replay.clone();
-        let on_explored_insert =
-            player
+        let on_explored_insert = (!shared_calls).then(|| {
+            pp()
                 .conn
                 .db
                 .game_character_explored()
@@ -1484,7 +2418,8 @@ impl Coordinator {
                     if let Some(out) = discovery_packet(&explored_gate, row) {
                         let _ = explored_tx.send(out);
                     }
-                });
+                })
+        });
 
         // ======================================================================================
         //  REST STATE — game_rest_state_event (insert)
@@ -1502,20 +2437,29 @@ impl Coordinator {
         // callbacks, which could relay a HISTORICAL event's `player_bytes_2` over the correct login
         // byte — so it moves onto the same gate, which needs no key at all: nothing before the gate
         // opens is a live inn crossing.
+        //
+        // 4c family 2: registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the shared
+        // dispatch (`world_view::rest_state_appeared` → `relay_rest_state`, same packet, audience
+        // resolved by the owner-session lookup) delivers, and the base query is dropped below;
+        // no ReplayGate is needed on that path — nothing re-subscribes per session, so only live
+        // flips arrive.
         let rest_replay: Arc<Mutex<ReplayGate>> = Arc::new(Mutex::new(ReplayGate::default()));
         let rest_tx = tx.clone();
         let rest_gate = rest_replay.clone();
-        let on_rest_insert = player
-            .conn
-            .db
-            .game_rest_state_event()
-            .on_insert(move |_ctx, row| {
-                if row.character_guid != self_guid || !rest_gate.lock().unwrap().admit() {
-                    return; // filter to self; skip the login initial-sync replay
-                }
-                let (opcode, body) = codec::build_rest_state_values(self_guid, row.player_bytes_2);
-                let _ = rest_tx.send(Outbound::Raw { opcode, body });
-            });
+        let on_rest_insert = (!shared_calls).then(|| {
+            pp()
+                .conn
+                .db
+                .game_rest_state_event()
+                .on_insert(move |_ctx, row| {
+                    if row.character_guid != self_guid || !rest_gate.lock().unwrap().admit() {
+                        return; // filter to self; skip the login initial-sync replay
+                    }
+                    let (opcode, body) =
+                        codec::build_rest_state_values(self_guid, row.player_bytes_2);
+                    let _ = rest_tx.send(Outbound::Raw { opcode, body });
+                })
+        });
 
         // ======================================================================================
         //  XP + LEVEL-UP, coordinator-registered — game_xp_event / game_levelup_event (insert)
@@ -1528,7 +2472,11 @@ impl Coordinator {
         // per-player conn) — a lost SMSG_LEVELUP_INFO was observed as the levelup_info suite
         // flake. The coordinator bypasses the recipient RLS, so the closure now self-filters
         // on recipient_identity (the session's bound player identity).
-        let self_identity = player.identity;
+        // 4d: the bound identity WITHOUT touching a per-player connection — synthetic under the
+        // flag (what establish_session bound and the module stamps on event rows), the cached
+        // connection's real identity otherwise. Identical values to the old `player.identity` read.
+        let self_identity =
+            spacetimedb_sdk::Identity::from_byte_array(self.bound_identity(account_id)?);
         let xp_tx = tx.clone();
         let on_xp = self
             .0
@@ -1583,11 +2531,15 @@ impl Coordinator {
         // first-movement discovery is exactly the AOI-churn window where the per-player callback
         // drops — a new character discovered Northshire server-side and the map never cleared. The
         // coordinator re-sends the same idempotent full-word VALUES for every fresh insert (double
-        // fog with the per-player relay is harmless); the "Discovered" popup deliberately stays on
-        // the per-player path only, so it never toasts twice. Login restore is untouched (the
-        // per-player initial-sync below owns it — the coordinator's long-lived sub sees no insert
-        // at a player's login).
+        // fog with the per-player relay is harmless); flag-off the "Discovered" popup deliberately
+        // stays on the per-player path only, so it never toasts twice — flag-on (4c family 4) the
+        // per-player leg is gone, so THIS callback carries the toast, behind the same #41
+        // `ReplayGate` (a coordinator reconnect re-applies the subscription and replays every
+        // cached row; the gate's area_bit key is what keeps that from toasting the whole map).
+        // Login restore: flag-off rides the per-player initial-sync; flag-on it is the explicit
+        // fog sweep at world entry below.
         let explored_coord_tx = tx.clone();
+        let explored_coord_gate = explored_replay.clone();
         let on_explored_coord =
             self.0
                 .coord()
@@ -1610,6 +2562,11 @@ impl Coordinator {
                     let (opcode, body) =
                         codec::build_explored_zones_values(self_guid, word_idx, word);
                     let _ = explored_coord_tx.send(Outbound::Raw { opcode, body });
+                    if shared_calls {
+                        if let Some(out) = discovery_packet(&explored_coord_gate, row) {
+                            let _ = explored_coord_tx.send(out);
+                        }
+                    }
                 });
 
         // ======================================================================================
@@ -1622,38 +2579,47 @@ impl Coordinator {
         // DYNAMICOBJECT_SPELLID's SpellVisual — the cast packets alone draw nothing (live find).
         // Instance-gated like corpses; the 0xF100… guid space never collides. Short-lived (≤ the
         // area's duration), so no login/AOI resident sweep — a mid-area login misses the visual.
+        // 4c family 5: registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the shared
+        // dispatch (`world_view::dynobj_appeared`/`dynobj_vanished`, same packets + same instance
+        // gate) delivers, and the base query is dropped below.
         let dynobj_ins_tx = tx.clone();
-        let on_dynobj_insert = player
-            .conn
-            .db
-            .game_dynamic_object()
-            .on_insert(move |_ctx, row| {
-                if !instance_relay_gate(row.instance_id, Some(login_instance)) {
-                    return;
-                }
-                let m = codec::build_dynamicobject_create_object(
-                    row.guid,
-                    row.caster_guid,
-                    row.spell_id,
-                    row.x,
-                    row.y,
-                    row.z,
-                    row.radius_yd,
-                );
-                let _ = dynobj_ins_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
-                    Box::new(m),
-                )));
-            });
+        let on_dynobj_insert = (!shared_calls).then(|| {
+            pp()
+                .conn
+                .db
+                .game_dynamic_object()
+                .on_insert(move |_ctx, row| {
+                    if !instance_relay_gate(row.instance_id, Some(login_instance)) {
+                        return;
+                    }
+                    let m = codec::build_dynamicobject_create_object(
+                        row.guid,
+                        row.caster_guid,
+                        row.spell_id,
+                        row.x,
+                        row.y,
+                        row.z,
+                        row.radius_yd,
+                    );
+                    let _ = dynobj_ins_tx.send(Outbound::One(
+                        ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)),
+                    ));
+                })
+        });
         let dynobj_del_tx = tx.clone();
-        let on_dynobj_delete = player
-            .conn
-            .db
-            .game_dynamic_object()
-            .on_delete(move |_ctx, row| {
-                let _ = dynobj_del_tx.send(Outbound::One(
-                    ServerOpcodeMessage::SMSG_DESTROY_OBJECT(codec::build_destroy_object(row.guid)),
-                ));
-            });
+        let on_dynobj_delete = (!shared_calls).then(|| {
+            pp()
+                .conn
+                .db
+                .game_dynamic_object()
+                .on_delete(move |_ctx, row| {
+                    let _ = dynobj_del_tx.send(Outbound::One(
+                        ServerOpcodeMessage::SMSG_DESTROY_OBJECT(codec::build_destroy_object(
+                            row.guid,
+                        )),
+                    ));
+                })
+        });
 
         // ======================================================================================
         //  CORPSES — game_corpse (insert/delete/update)
@@ -1663,43 +2629,52 @@ impl Coordinator {
         // Player corpses (slice 5; broadcast, no RLS) → CORPSE CREATE_OBJECT on insert (a body left at
         // a death location), SMSG_DESTROY_OBJECT on delete (reclaim/decay). The corpse guid (0xF101…)
         // never collides with a player/creature guid, so no self-skip/dedup is needed.
+        // 4c family 6: registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the shared
+        // dispatch (`world_view::corpse_appeared`/`corpse_changed`/`corpse_vanished`, same
+        // packets + same instance gate) delivers, and the base query is dropped below.
         let corpse_ins_tx = tx.clone();
-        let on_corpse_insert = player.conn.db.game_corpse().on_insert(move |_ctx, row| {
-            // 190 slice 2: corpse rows are instance-tagged — CREATE only for same-instance viewers
-            // (instance-0 corpses relay exactly as before; a Deadmines corpse stays inside its run).
-            if !instance_relay_gate(row.instance_id, Some(login_instance)) {
-                return;
-            }
-            // Shared body with the post-AOI resident sweep — see `relay_corpse_create` (the
-            // owner's reclaim-delay packet, work-item 201, rides inside it).
-            relay_corpse_create(&corpse_ins_tx, self_guid, row);
+        let on_corpse_insert = (!shared_calls).then(|| {
+            pp().conn.db.game_corpse().on_insert(move |_ctx, row| {
+                // 190 slice 2: corpse rows are instance-tagged — CREATE only for same-instance viewers
+                // (instance-0 corpses relay exactly as before; a Deadmines corpse stays inside its run).
+                if !instance_relay_gate(row.instance_id, Some(login_instance)) {
+                    return;
+                }
+                // Shared body with the post-AOI resident sweep — see `relay_corpse_create` (the
+                // owner's reclaim-delay packet, work-item 201, rides inside it).
+                relay_corpse_create(&corpse_ins_tx, self_guid, row);
+            })
         });
         let corpse_del_tx = tx.clone();
-        let on_corpse_delete = player.conn.db.game_corpse().on_delete(move |_ctx, row| {
-            let _ = corpse_del_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
-                codec::build_destroy_object(row.guid),
-            )));
+        let on_corpse_delete = (!shared_calls).then(|| {
+            pp().conn.db.game_corpse().on_delete(move |_ctx, row| {
+                let _ = corpse_del_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
+                    codec::build_destroy_object(row.guid),
+                )));
+            })
         });
         // Corpse state changes (work-item 201: body → bones decay, `gc.rs`'s reaper) → re-emit the
         // CREATE_OBJECT so a viewer's client re-renders it with the current bones flag. Mirrors the
         // insert relay above (same builder); UNVERIFIED-until-observed whether the 5875 client actually
         // re-renders a CORPSE object on a repeat CREATE for the same guid rather than no-op'ing it.
         let corpse_upd_tx = tx.clone();
-        let on_corpse_update = player
-            .conn
-            .db
-            .game_corpse()
-            .on_update(move |_ctx, _old, row| {
-                // 190 slice 2: same instance gate as the insert relay (the body→bones re-emit must not
-                // leak a cross-instance corpse either).
-                if !instance_relay_gate(row.instance_id, Some(login_instance)) {
-                    return;
-                }
-                let m = codec::build_corpse_create_object(&corpse_view(row.clone()));
-                let _ = corpse_upd_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
-                    Box::new(m),
-                )));
-            });
+        let on_corpse_update = (!shared_calls).then(|| {
+            pp()
+                .conn
+                .db
+                .game_corpse()
+                .on_update(move |_ctx, _old, row| {
+                    // 190 slice 2: same instance gate as the insert relay (the body→bones re-emit must not
+                    // leak a cross-instance corpse either).
+                    if !instance_relay_gate(row.instance_id, Some(login_instance)) {
+                        return;
+                    }
+                    let m = codec::build_corpse_create_object(&corpse_view(row.clone()));
+                    let _ = corpse_upd_tx.send(Outbound::One(
+                        ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)),
+                    ));
+                })
+        });
 
         // ======================================================================================
         //  RESURRECT PROMPT — game_resurrect_request (insert)
@@ -1712,18 +2687,21 @@ impl Coordinator {
         // needed (the 5875 client's resurrect prompt has no server-driven dismiss opcode — it times out or
         // is dismissed by the player's own accept/decline, which this same CMSG round-trip already resolves).
         let rez_tx = tx.clone();
-        let on_resurrect_insert =
-            player
+        // 4c family 15: registered ONLY with LYRACORE_SHARED_CALLS off. RLS-addressed (this
+        // subscription only sees offers addressed to this player); flag-on the guarantee moves to
+        // `world_view::resurrect_offered` (owner-session lookup on the row's target_guid +
+        // `private_recipient_audience`).
+        let on_resurrect_insert = (!shared_calls).then(|| {
+            pp()
                 .conn
                 .db
                 .game_resurrect_request()
                 .on_insert(move |_ctx, row| {
-                    let m =
-                        codec::build_resurrect_request(row.caster_guid, row.caster_name.clone());
-                    let _ = rez_tx.send(Outbound::One(
-                        ServerOpcodeMessage::SMSG_RESURRECT_REQUEST(Box::new(m)),
-                    ));
-                });
+                    for o in resurrect_request_outbound(row) {
+                        let _ = rez_tx.send(o);
+                    }
+                })
+        });
 
         // ======================================================================================
         //  SPELL CAST VISUALS — game_spell_cast_event (insert)
@@ -1733,202 +2711,22 @@ impl Coordinator {
         // Aura+spell tracer (broadcast, no RLS — buffs are visible unit state). A cast emits the
         // visual (SMSG_SPELL_GO) on every cast; an aura insert/refresh writes the slot-0 buff icon via
         // a partial UNIT_FIELD_AURA VALUES update, and its delete (expiry) clears the slot (zeros).
+        //
+        // 4c family 12: registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the same
+        // `cast_event_outbound` body (the whole cast-lock contract lives there); flag-on
+        // `world_view::cast_event_appeared` enqueues it per viewer.
         let cast_tx = tx.clone();
-        let on_cast = player
-            .conn
-            .db
-            .game_spell_cast_event()
-            .on_insert(move |_ctx, row| {
-                // INTERRUPT signal (cast-interrupt-on-damage): the victim's mid-cast timed spell was cancelled.
-                // Relay SMSG_SPELL_FAILURE{spell, Interrupted} to the caster so the client tears down its cast
-                // bar (no SMSG_SPELL_GO follows — the cast never resolved). This row carries ONLY caster/spell,
-                // so it must be handled before the START/GO/COOLDOWN sequence below (it has cast_time_ms 0).
-                if row.is_interrupted {
-                    // SELF-ONLY for a PLAYER caster: game_spell_cast_event is a global public subscription,
-                    // so this closure fires for EVERY player. SMSG_SPELL_FAILURE is a caster-private cast-bar
-                    // teardown (unlike the START/GO broadcast visuals), so relay it ONLY to the caster — else
-                    // bystanders get stray "Interrupted" feedback and a bystander mid-casting the same spell
-                    // risks a spurious teardown.
-                    // 171: a CREATURE caster (0xF130 high-guid) has no self — broadcast so every observer's
-                    // mob cast bar tears down on a Kick/Counterspell (the packet carries the mob's guid, so
-                    // a bystander's own bar is untouched; mirrors the START broadcast that drew the bar).
-                    let is_creature = row.caster_guid >> 48 == 0xF130;
-                    if is_creature || row.caster_guid == self_guid {
-                        let m = codec::build_spell_failure(row.caster_guid, row.spell_id);
-                        let _ = cast_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_SPELL_FAILURE(Box::new(m)),
-                        ));
+        let on_cast = (!shared_calls).then(|| {
+            pp()
+                .conn
+                .db
+                .game_spell_cast_event()
+                .on_insert(move |_ctx, row| {
+                    for o in cast_event_outbound(self_guid, row) {
+                        let _ = cast_tx.send(o);
                     }
-                    return;
-                }
-                // PUSHBACK signal (work-item 039): a direct hit slid the caster's in-progress timed cast's
-                // fire time. Broadcast (NOT self-only) — SMSG_SPELL_DELAYED is a caster-visible cast-bar
-                // shift, like SMSG_SPELL_START/GO below, so anyone watching the caster's cast bar sees it
-                // slide (unlike SMSG_SPELL_FAILURE above, which is a private cast-bar-teardown message). This
-                // row carries ONLY caster/spell/delay_ms, so it must be handled before the START/GO/COOLDOWN
-                // sequence below (it has cast_time_ms 0 and is_completion false, so it does NOT take either
-                // of those branches, but returning explicitly keeps this a single-purpose row like the
-                // is_interrupted branch above it).
-                if row.delay_ms > 0 {
-                    let m = codec::build_spell_delayed(row.caster_guid, row.delay_ms);
-                    let _ = cast_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_DELAYED(
-                        Box::new(m),
-                    )));
-                    return;
-                }
-                // PROC-LOG row (114): a swing-proc damage line (Seal of Righteousness holy riding a landed
-                // melee swing). ONLY the named yellow combat-log/floating number — never START/GO/cooldown
-                // (nothing casts; the seal aura is already up). Broadcast like the damage log below.
-                if row.is_proc_log {
-                    if row.damage > 0 {
-                        let log = codec::build_spell_non_melee_damage_log(
-                            row.target_guid,
-                            row.caster_guid,
-                            row.spell_id,
-                            row.damage,
-                            row.school,
-                            row.is_crit,
-                            row.resisted,
-                            row.absorbed,
-                        );
-                        let _ = cast_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(log)),
-                        ));
-                    }
-                    return;
-                }
-                if row.cast_time_ms > 0 {
-                    // Cast-START (a timed spell): SMSG_SPELL_START with the cast-bar duration so observers
-                    // see the bar FILL. The GO/COOLDOWN follow on the cast-GO COMPLETION event.
-                    let start = codec::build_spell_start(
-                        row.caster_guid,
-                        row.spell_id,
-                        row.cast_time_ms,
-                        0,
-                        None,
-                    );
-                    let _ = cast_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(
-                        Box::new(start),
-                    )));
-                    return;
-                }
-                // [083] Cast-GO (cast_time_ms == 0). Mangos-faithful sequence:
-                //   - GENUINE INSTANT (is_completion=false): START(0)+GO — SendSpellStart fires for EVERY
-                //     non-triggered cast (timer 0 for an instant) to register the pending cast, then cast() →
-                //     SendSpellGo finalizes it. START flags = 0x02, GO flags = 0x0100 (set in the builders).
-                //   - TIMED COMPLETION (is_completion=true): GO ALONE — the begin already sent START(cast_time);
-                //     a 2nd START(0) reset the bar to zero-length ("stuck on full"). The SMSG_SPELL_GO is the
-                //     client's cast finalizer (it matches by caster guid + spell id to release the pending cast).
-                // [083] The CASTER's OWN instant cast (cast_time 0 → this GO branch, !is_completion) already got
-                // START+GO SYNCHRONOUSLY from the CMSG_CAST_SPELL handler (so they precede the aura effects the
-                // SDK's alphabetical callback order would otherwise send first). Skip the duplicate to the caster
-                // — but still relay it to OBSERVERS (caster != self) and for TIMED COMPLETIONS (is_completion,
-                // which the gateway did NOT sync-send). NOTE: a player's TRIGGERED instant cast (channel-tick
-                // missile / on-hit trigger) also matches !is_completion && caster==self and is suppressed here —
-                // it did not get a synchronous send, so it loses its caster-side visual until the client_initiated
-                // flag lands (tracked follow-up). Acceptable for the slice; observers still see it.
-                // 088: suppress ONLY what the CMSG handler actually sent synchronously — the row says so
-                // (client_initiated rides from the cast_spell reducer path alone). The old shape
-                // (!is_completion && self) also swallowed the caster's TRIGGERED instants — channel-tick
-                // missiles (Arcane Missiles/Drain Life), on-hit trigger_spell procs — which never had a
-                // synchronous send, so their caster saw no visual while observers did.
-                let caster_synced_instant = row.client_initiated && row.caster_guid == self_guid;
-                if !caster_synced_instant {
-                    if !row.is_completion {
-                        let start =
-                            codec::build_spell_start(row.caster_guid, row.spell_id, 0, 0, None);
-                        let _ = cast_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(
-                            Box::new(start),
-                        )));
-                    }
-                    // CAST_RESULT(OK) is caster-only: clears the pending spell state so the subsequent
-                    // GO can release m_currentSpells. Only for timed completions — the instant-cast
-                    // caster got it synchronously from the CMSG_CAST_SPELL handler. [083]
-                    if row.is_completion && row.caster_guid == self_guid {
-                        let _ = cast_tx.send(Outbound::Raw {
-                            opcode: 0x0130,
-                            body: codec::build_cast_result_ok(row.spell_id),
-                        });
-                    }
-                    let mut go =
-                        codec::build_spell_go(row.caster_guid, row.spell_id, row.target_guid, None);
-                    // 114: a 0-damage on-next-swing FIRE that rode a missed/dodged/parried swing reports
-                    // the outcome in the GO's miss list — the client prints the yellow "Your Heroic
-                    // Strike missed/was dodged/was parried" line (the white MISS was suppressed via
-                    // spell_swing). swing_hit_info uses the CombatEvent codes (2 miss, 3 dodge, 4 parry);
-                    // every non-swing row carries 0, keeping this branch dead for ordinary casts.
-                    if row.is_completion && row.damage == 0 {
-                        use wow_world_messages::vanilla::{SpellMiss, SpellMissInfo};
-                        let miss_info = match row.swing_hit_info {
-                            2 => Some(SpellMissInfo::Miss),
-                            3 => Some(SpellMissInfo::Dodge),
-                            4 => Some(SpellMissInfo::Parry),
-                            _ => None,
-                        };
-                        if let Some(mi) = miss_info {
-                            go.hits.clear();
-                            go.misses = vec![SpellMiss {
-                                target: wow_world_messages::Guid::new(row.target_guid),
-                                miss_info: mi,
-                            }];
-                        }
-                    }
-                    let _ = cast_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(
-                        Box::new(go),
-                    )));
-                }
-                // FIX 2: the floating spell damage number — relay SMSG_SPELLNONMELEEDAMAGELOG when this cast
-                // dealt damage (the module summed it onto the row + stored the school INDEX). 0 damage (heals /
-                // buffs / a begin-START) → no log. Sent after the GO so the number floats over the hit. The
-                // crit flag + resisted/absorbed breakdown ride from the row → CriticalHit hit_info + the
-                // (N resisted)/(N absorbed) suffixes. NOTE: a FULLY-absorbed hit has damage==0 (no health
-                // write) but absorbed>0; this slice keeps the `damage > 0` gate, so a 0-damage full-absorb is
-                // intentionally NOT logged (vanilla's absorb-only "Absorb" text is a separate log variant —
-                // out of scope). Widen the gate to `|| row.absorbed > 0 || row.resisted > 0` to add it later.
-                if row.damage > 0 {
-                    let log = codec::build_spell_non_melee_damage_log(
-                        row.target_guid,
-                        row.caster_guid,
-                        row.spell_id,
-                        row.damage,
-                        row.school,
-                        row.is_crit,
-                        row.resisted,
-                        row.absorbed,
-                    );
-                    let _ = cast_tx.send(Outbound::One(
-                        ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(log)),
-                    ));
-                }
-                // 251: the green floating heal number + combat-log line — SMSG_SPELLHEALLOG whenever
-                // this cast restored health (module sums EFFECTIVE heal onto the row; overheal-only
-                // casts carry 0 and stay silent, matching the damage gate's shape).
-                if row.healed > 0 {
-                    use wow_world_messages::vanilla::SMSG_SPELLHEALLOG;
-                    use wow_world_messages::Guid;
-                    let _ = cast_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_SPELLHEALLOG(
-                        Box::new(SMSG_SPELLHEALLOG {
-                            victim: Guid::new(row.target_guid),
-                            caster: Guid::new(row.caster_guid),
-                            id: row.spell_id,
-                            damage: row.healed,
-                            critical: row.is_crit,
-                        }),
-                    )));
-                }
-                // SMSG_SPELL_COOLDOWN — ONLY for a spell that actually HAS a cooldown (Mortal Strike, Judgement),
-                // with the REAL value. mangos does NOT send a cooldown packet per cast; we used to send one
-                // (cooldown=0) after EVERY cast, which STUCK the client's action button ("yellow casting outline" +
-                // "Another action is in progress" — could only cast each spell once). The SMSG_SPELL_GO above is
-                // what releases the client's pending-cast state (as in mangos); a 0-cooldown cast sends nothing.
-                if row.cooldown_ms > 0 {
-                    let cd =
-                        codec::build_spell_cooldown(row.caster_guid, row.spell_id, row.cooldown_ms);
-                    let _ = cast_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_COOLDOWN(
-                        Box::new(cd),
-                    )));
-                }
-            });
+                })
+        });
         // ======================================================================================
         //  SPELL IMPACT DAMAGE — game_spell_impact_event (insert)
         //  The floating damage number for a projectile that has finished its travel time (#084);
@@ -1941,29 +2739,21 @@ impl Coordinator {
         // `SMSG_SPELL_GO` (the trajectory) already fired synchronously at cast time via `on_cast` /
         // the CMSG_CAST_SPELL handler (world/mod.rs) — this relay sends NOTHING but the floating damage
         // number, so it can never replay a duplicate START/GO for a cast that already visually resolved.
+        //
+        // 4c family 13: registered ONLY with LYRACORE_SHARED_CALLS off; the shared twin is
+        // `world_view::impact_appeared` → `impact_event_outbound`.
         let impact_tx = tx.clone();
-        let on_impact = player
-            .conn
-            .db
-            .game_spell_impact_event()
-            .on_insert(move |_ctx, row| {
-                if row.damage == 0 {
-                    return; // a fully-absorbed impact (or a target that vanished before landing) logs nothing
-                }
-                let log = codec::build_spell_non_melee_damage_log(
-                    row.target_guid,
-                    row.caster_guid,
-                    row.spell_id,
-                    row.damage,
-                    row.school,
-                    row.is_crit,
-                    row.resisted,
-                    row.absorbed,
-                );
-                let _ = impact_tx.send(Outbound::One(
-                    ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(log)),
-                ));
-            });
+        let on_impact = (!shared_calls).then(|| {
+            pp()
+                .conn
+                .db
+                .game_spell_impact_event()
+                .on_insert(move |_ctx, row| {
+                    for o in impact_event_outbound(row) {
+                        let _ = impact_tx.send(o);
+                    }
+                })
+        });
         // ======================================================================================
         //  CHAT — game_chat_event (insert)
         //  SMSG_MESSAGECHAT for a range-gated Say/Yell.
@@ -1973,64 +2763,23 @@ impl Coordinator {
         // line (self_guid == sender_guid short-circuits the distance check, matching vanilla).
         // Both endpoints are looked up from game_world_entity; if either is missing (edge-case
         // during login / logout) the message is dropped — safer than flooding all clients.
+        //
+        // 4c family 10: registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the same
+        // `chat_event_outbound` body (speaker echo + range gate + coordinator-cache endpoint
+        // lookups); flag-on `world_view::chat_appeared` enqueues it per viewer.
         let chat_tx = tx.clone();
         let chat_coord = self.clone(); // global db handle — bypasses AOI-scoped ctx.db for YELL range lookups
-        let on_chat = player
-            .conn
-            .db
-            .game_chat_event()
-            .on_insert(move |_ctx, row| {
-                // Speaker always hears their own message (vanilla behaviour).
-                if row.sender_guid != self_guid {
-                    let range_sq = if row.chat_type == CHAT_YELL {
-                        YELL_RANGE_SQ
-                    } else {
-                        SAY_RANGE_SQ // SAY and any future proximity type default to SAY range
-                    };
-                    // Look up positions through the coordinator's global db (not ctx.db, which is
-                    // AOI-scoped when LYRACORE_AOI is enabled). Under AOI the per-player
-                    // game_world_entity subscription only covers a ~250yd span; a YELL speaker at
-                    // 100–300yd would return None from ctx.db → message silently dropped. The
-                    // coordinator's conn has SELECT * and always finds both endpoints.
-                    let coord = chat_coord.0.coord();
-                    let speaker = match coord
-                        .conn
-                        .db
-                        .game_world_entity()
-                        .guid()
-                        .find(&row.sender_guid)
-                    {
-                        Some(e) => e,
-                        None => return,
-                    };
-                    let listener = match coord.conn.db.game_world_entity().guid().find(&self_guid) {
-                        Some(e) => e,
-                        None => return,
-                    };
-                    if !chat_in_range(
-                        speaker.map_id,
-                        speaker.instance_id,
-                        speaker.x,
-                        speaker.y,
-                        listener.map_id,
-                        listener.instance_id,
-                        listener.x,
-                        listener.y,
-                        range_sq,
-                    ) {
-                        return;
+        let on_chat = (!shared_calls).then(|| {
+            pp()
+                .conn
+                .db
+                .game_chat_event()
+                .on_insert(move |_ctx, row| {
+                    for o in chat_event_outbound(&chat_coord, self_guid, row) {
+                        let _ = chat_tx.send(o);
                     }
-                }
-                let m = codec::build_chat_message(
-                    row.sender_guid,
-                    row.chat_type,
-                    row.language,
-                    row.message.clone(),
-                );
-                let _ = chat_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(
-                    Box::new(m),
-                )));
-            });
+                })
+        });
         // ======================================================================================
         //  CHAT CHANNELS — game_channel_event (insert)
         //  SMSG_MESSAGECHAT for a line on a channel this connection is a member of
@@ -2040,29 +2789,24 @@ impl Coordinator {
         // General spans the zone; membership IS the audience). Each connection filters on its OWN
         // membership row (game_channel_member is in this player's subscription); the sender hears
         // their echo through the same path (they're a member too — vanilla echoes channel lines).
+        //
+        // 4c family 11: registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the same
+        // `channel_event_outbound` body — the membership check reads the COORDINATOR's
+        // game_channel_member cache in both flag states (same rows: the per-player query was an
+        // unscoped SELECT *), which is what lets the per-player member query drop under the flag.
         let channel_tx = tx.clone();
-        let on_channel = player
-            .conn
-            .db
-            .game_channel_event()
-            .on_insert(move |ctx, row| {
-                let member = ctx
-                    .db
-                    .game_channel_member()
-                    .iter()
-                    .any(|m| m.character_guid == self_guid && m.channel == row.channel);
-                if !member {
-                    return;
-                }
-                let m = codec::build_channel_message(
-                    row.sender_guid,
-                    row.channel_display.clone(),
-                    row.message.clone(),
-                );
-                let _ = channel_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(
-                    Box::new(m),
-                )));
-            });
+        let channel_coord = self.clone();
+        let on_channel = (!shared_calls).then(|| {
+            pp()
+                .conn
+                .db
+                .game_channel_event()
+                .on_insert(move |_ctx, row| {
+                    for o in channel_event_outbound(&channel_coord, self_guid, row) {
+                        let _ = channel_tx.send(o);
+                    }
+                })
+        });
         // ======================================================================================
         //  EMOTES — game_emote_event (insert)
         //  SMSG_TEXT_EMOTE + SMSG_EMOTE for a text/targeted emote.
@@ -2070,51 +2814,23 @@ impl Coordinator {
         // Emote broadcast (social tier; public, no RLS) → SMSG_TEXT_EMOTE (the "X dances." line) + the
         // SMSG_EMOTE animation. Both degrade gracefully: an unknown text-emote / animation id is simply
         // skipped so the rest still relays.
+        //
+        // 4c family 9: registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the same
+        // `emote_event_outbound` body (target-name resolve through the coordinator cache, the
+        // same join as reads.rs's synthesized_objectives).
         let emote_tx = tx.clone();
         let emote_coord = self.clone(); // global db handle — resolves the target guid's name across owners
-        let on_emote = player
-            .conn
-            .db
-            .game_emote_event()
-            .on_insert(move |_ctx, row| {
-                // target_guid == 0 → untargeted emote (the client sends 0 when nothing is selected).
-                // Target may be a player (game_character) or an NPC/creature (game_world_entity ->
-                // game_creature_template), same join as reads.rs's synthesized_objectives.
-                let target_name = if row.target_guid != 0 {
-                    let db = &emote_coord.0.coord().conn.db;
-                    db.game_character()
-                        .guid()
-                        .find(&row.target_guid)
-                        .map(|c| c.name)
-                        .or_else(|| {
-                            db.game_world_entity()
-                                .guid()
-                                .find(&row.target_guid)
-                                .and_then(|e| {
-                                    db.game_creature_template()
-                                        .entry()
-                                        .find(&e.entry)
-                                        .map(|c| c.name)
-                                })
-                        })
-                } else {
-                    None
-                };
-                if let Some(m) = codec::build_text_emote(
-                    row.sender_guid,
-                    row.text_emote,
-                    row.emote_anim,
-                    target_name,
-                ) {
-                    let _ = emote_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_TEXT_EMOTE(
-                        Box::new(m),
-                    )));
-                }
-                if let Some(a) = codec::build_emote_anim(row.sender_guid, row.emote_anim) {
-                    let _ =
-                        emote_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_EMOTE(Box::new(a))));
-                }
-            });
+        let on_emote = (!shared_calls).then(|| {
+            pp()
+                .conn
+                .db
+                .game_emote_event()
+                .on_insert(move |_ctx, row| {
+                    for o in emote_event_outbound(&emote_coord, row) {
+                        let _ = emote_tx.send(o);
+                    }
+                })
+        });
         // ======================================================================================
         //  WHISPER, per-player leg — game_whisper_event (insert)
         //  SMSG_MESSAGECHAT (Whisper/WhisperInform) for a row RLS-addressed to this player. See the
@@ -2122,17 +2838,23 @@ impl Coordinator {
         // ======================================================================================
         // Whisper (social tier; RLS-scoped — this subscription only sees rows addressed to this
         // player) → SMSG_MESSAGECHAT (Whisper "X whispers:" or WhisperInform "To X:").
+        //
+        // 4c family 16: registered ONLY with LYRACORE_SHARED_CALLS off. PRIVATE data — on the
+        // per-player leg RLS is the entire filter (this subscription only sees rows addressed to
+        // this player); flag-on the same guarantee moves to `world_view::whisper_appeared`
+        // (owner-session lookup + `private_recipient_audience`), running `whisper_event_outbound`.
         let whisper_tx = tx.clone();
-        let on_whisper = player
-            .conn
-            .db
-            .game_whisper_event()
-            .on_insert(move |_ctx, row| {
-                let m = codec::build_whisper(row.other_guid, row.is_inform, row.message.clone());
-                let _ = whisper_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(
-                    Box::new(m),
-                )));
-            });
+        let on_whisper = (!shared_calls).then(|| {
+            pp()
+                .conn
+                .db
+                .game_whisper_event()
+                .on_insert(move |_ctx, row| {
+                    for o in whisper_event_outbound(row) {
+                        let _ = whisper_tx.send(o);
+                    }
+                })
+        });
 
         // ======================================================================================
         //  GROUP / LOOT ROLL / QUEST SHARE, per-player leg — game_group_event (insert)
@@ -2158,144 +2880,19 @@ impl Coordinator {
         // subscription set (NOT ONE of the four is, since 292 dropped game_quest_objective from that
         // list — see the base_queries DO-NOT-RE-ADD note below), so it
         // goes through a CLONED privileged coordinator handle (the SAME `quest_detail` inherent method
-        // `world/mod.rs`'s CMSG_QUEST_QUERY handler uses), not `ctx.db`.
-        use lyracore_shared::quest::share_event_kind as quest_share_kind;
+        // `world/mod.rs`'s CMSG_QUEST_QUERY handler uses — `group_event_outbound` carries it), not `ctx.db`.
         let quest_share_coord = self.clone();
         let group_tx = tx.clone();
-        let on_group_event = player.conn.db.game_group_event().on_insert(move |_ctx, row| {
-            let msg = match row.kind {
-                group_kind::INVITE => Some(ServerOpcodeMessage::SMSG_GROUP_INVITE(Box::new(
-                    codec::build_group_invite(row.other_name.clone()),
-                ))),
-                group_kind::LIST => match lyracore_shared::group::decode_roster(&row.payload) {
-                    Some((leader, loot_method, loot_threshold, master_looter_guid, members)) => {
-                        Some(ServerOpcodeMessage::SMSG_GROUP_LIST(Box::new(codec::build_group_list(
-                            self_guid, leader, loot_method, loot_threshold, master_looter_guid, &members,
-                        ))))
-                    }
-                    None => {
-                        log::warn!(
-                            "group LIST relay: unparseable roster payload {:?} (event {})",
-                            row.payload, row.id
-                        );
-                        None
-                    }
-                },
-                group_kind::DECLINE => Some(ServerOpcodeMessage::SMSG_GROUP_DECLINE(Box::new(
-                    codec::build_group_decline(row.other_name.clone()),
-                ))),
-                group_kind::DESTROYED => Some(ServerOpcodeMessage::SMSG_GROUP_DESTROYED),
-                // Work-item 199: a party (`/p`) chat line, one row per recipient (every OTHER member
-                // + an echo to the sender — both pushed by `module/src/chat.rs::party_chat`).
-                // `row.other_guid` is the SPEAKER (resolved/pushed by `group::push_event`, same
-                // convention the roll kinds below use); `row.payload` is the raw message text
-                // (`encode_party_chat` is a pass-through — nothing else to decode).
-                group_kind::PARTY_CHAT => match lyracore_shared::group::decode_party_chat(&row.payload) {
-                    Some(message) => Some(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-                        codec::build_party_chat(row.other_guid, message),
-                    ))),
-                    None => {
-                        log::warn!("party PARTY_CHAT relay: unparseable payload {:?} (event {})", row.payload, row.id);
-                        None
-                    }
-                },
-                roll_kind::ROLL_START => match lyracore_shared::loot_roll::decode_start(&row.payload) {
-                    Some((corpse_guid, slot, item_entry, countdown_ms)) => {
-                        Some(ServerOpcodeMessage::SMSG_LOOT_START_ROLL(Box::new(codec::build_loot_start_roll(
-                            corpse_guid, slot, item_entry, countdown_ms,
-                        ))))
-                    }
-                    None => {
-                        log::warn!("loot ROLL_START relay: unparseable payload {:?} (event {})", row.payload, row.id);
-                        None
-                    }
-                },
-                roll_kind::ROLL_VOTE => match lyracore_shared::loot_roll::decode_vote(&row.payload) {
-                    Some((corpse_guid, slot, item_entry, roll_number, vote, auto_pass)) => {
-                        Some(ServerOpcodeMessage::SMSG_LOOT_ROLL(Box::new(codec::build_loot_roll(
-                            corpse_guid, slot, row.other_guid, item_entry, roll_number, vote, auto_pass,
-                        ))))
-                    }
-                    None => {
-                        log::warn!("loot ROLL_VOTE relay: unparseable payload {:?} (event {})", row.payload, row.id);
-                        None
-                    }
-                },
-                roll_kind::ROLL_WON => match lyracore_shared::loot_roll::decode_won(&row.payload) {
-                    Some((corpse_guid, slot, item_entry, winning_roll, winning_vote)) => {
-                        Some(ServerOpcodeMessage::SMSG_LOOT_ROLL_WON(Box::new(codec::build_loot_roll_won(
-                            corpse_guid, slot, item_entry, row.other_guid, winning_roll, winning_vote,
-                        ))))
-                    }
-                    None => {
-                        log::warn!("loot ROLL_WON relay: unparseable payload {:?} (event {})", row.payload, row.id);
-                        None
-                    }
-                },
-                roll_kind::MASTER_LIST => match lyracore_shared::loot_roll::decode_master_list(&row.payload) {
-                    Some((_corpse_guid, eligible)) => Some(ServerOpcodeMessage::SMSG_LOOT_MASTER_LIST(Box::new(
-                        codec::build_loot_master_list(&eligible),
-                    ))),
-                    None => {
-                        log::warn!("loot MASTER_LIST relay: unparseable payload {:?} (event {})", row.payload, row.id);
-                        None
-                    }
-                },
-                // Work-item 221: a grouped money-loot split's per-recipient share → the SAME
-                // `SMSG_LOOT_MONEY_NOTIFY` the (now-removed) unconditional gateway send used to build,
-                // just per-recipient and carrying the SHARE instead of the total (`amount` here IS the
-                // wire field, matching `codec::build_loot_money_notify`'s single `amount: u32`).
-                roll_kind::MONEY_SHARE => match lyracore_shared::loot_roll::decode_money_share(&row.payload) {
-                    Some(share) => Some(ServerOpcodeMessage::SMSG_LOOT_MONEY_NOTIFY(codec::build_loot_money_notify(share))),
-                    None => {
-                        log::warn!("loot MONEY_SHARE relay: unparseable payload {:?} (event {})", row.payload, row.id);
-                        None
-                    }
-                },
-                // Work-item 194 (sharing): an eligible party member receives the shared quest —
-                // `row.other_guid` is the SHARER (resolved/pushed by `group::push_event`), `row.payload`
-                // is the quest entry. Opens the DETAILS screen with the SHARER as "giver" (the
-                // recipient's own `CMSG_QUESTGIVER_ACCEPT_QUEST` then re-validates fresh via the
-                // module's `GiverKind::Party` — this relay never authorizes anything by itself).
-                quest_share_kind::QUEST_SHARE => match row.payload.parse::<u32>() {
-                    Ok(quest_id) => match quest_share_coord.quest_detail(quest_id) {
-                        Ok(Some(detail)) => Some(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(Box::new(
-                            codec::build_quest_details(row.other_guid, &detail),
-                        ))),
-                        Ok(None) => {
-                            log::warn!("quest QUEST_SHARE relay: quest {quest_id} not loaded (event {})", row.id);
-                            None
-                        }
-                        Err(e) => {
-                            log::warn!("quest QUEST_SHARE relay: quest_detail lookup failed (event {}): {e}", row.id);
-                            None
-                        }
-                    },
-                    Err(_) => {
-                        log::warn!("quest QUEST_SHARE relay: unparseable payload {:?} (event {})", row.payload, row.id);
-                        None
-                    }
-                },
-                // Work-item 194 (sharing): the SENDER's per-member feedback line, one row per member,
-                // always (whether or not the share actually landed) — `row.other_guid` is that member,
-                // `row.payload` is the `share_result` wire byte (mirrors gtker's `QuestPartyMessage` 1:1).
-                quest_share_kind::QUEST_PUSH_RESULT => match row.payload.parse::<u8>() {
-                    Ok(code) => Some(ServerOpcodeMessage::MSG_QUEST_PUSH_RESULT(Box::new(
-                        codec::build_quest_push_result(row.other_guid, code),
-                    ))),
-                    Err(_) => {
-                        log::warn!("quest QUEST_PUSH_RESULT relay: unparseable payload {:?} (event {})", row.payload, row.id);
-                        None
-                    }
-                },
-                other => {
-                    log::warn!("group event relay: unknown kind {other} (id {})", row.id);
-                    None
+        // 4c family 17: registered ONLY with LYRACORE_SHARED_CALLS off. This is PRIVATE data
+        // (party membership, loot rolls, quest shares) — flag-on, delivery goes recipient-keyed
+        // through `world_view::group_event_appeared` (owner-session lookup + the explicit
+        // `private_recipient_audience` predicate), running the same `group_event_outbound` body.
+        let on_group_event = (!shared_calls).then(|| {
+            pp().conn.db.game_group_event().on_insert(move |_ctx, row| {
+                for o in group_event_outbound(&quest_share_coord, self_guid, row) {
+                    let _ = group_tx.send(o);
                 }
-            };
-            if let Some(m) = msg {
-                let _ = group_tx.send(Outbound::One(m));
-            }
+            })
         });
         // ======================================================================================
         //  GROUP, realm-core twin — game_group_event (insert, on the realm-core coordinator
@@ -2473,22 +3070,29 @@ impl Coordinator {
         // /roll broadcast (social tier; public, no RLS) → MSG_RANDOM_ROLL_Server. Every connection
         // fans each roll row, so the roller sees their own result too (as vanilla does). The result is
         // server-computed server-side in the module's send_roll reducer.
+        //
+        // 4c family 1: registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the shared
+        // coordinator dispatch (`world_view::roll_appeared` → `relay_roll`, the same packet) is the
+        // delivery path, and this per-player leg would double-send; its base query is dropped below
+        // for the same reason.
         let roll_tx = tx.clone();
-        let on_roll = player
-            .conn
-            .db
-            .game_roll_event()
-            .on_insert(move |_ctx, row| {
-                let m = codec::build_random_roll(
-                    row.roller_guid,
-                    row.min_roll,
-                    row.max_roll,
-                    row.result,
-                );
-                let _ = roll_tx.send(Outbound::One(ServerOpcodeMessage::MSG_RANDOM_ROLL(
-                    Box::new(m),
-                )));
-            });
+        let on_roll = (!shared_calls).then(|| {
+            pp()
+                .conn
+                .db
+                .game_roll_event()
+                .on_insert(move |_ctx, row| {
+                    let m = codec::build_random_roll(
+                        row.roller_guid,
+                        row.min_roll,
+                        row.max_roll,
+                        row.result,
+                    );
+                    let _ = roll_tx.send(Outbound::One(ServerOpcodeMessage::MSG_RANDOM_ROLL(
+                        Box::new(m),
+                    )));
+                })
+        });
         // ======================================================================================
         //  AURA — game_aura (insert/update/delete)
         //  Full-array UNIT_FIELD_AURA re-sync on any change; the self-only armor-sheet relay; and
@@ -2500,254 +3104,135 @@ impl Coordinator {
         // is written at its authoritative module-assigned `row.slot`. Routed through Outbound::Raw
         // because gtker's typed builder exposes only slot 0. on_delete fires AFTER the SDK cache drops
         // the row, so iterating the cache yields the post-delete set → the removed slot self-clears.
-        fn aura_sync(
-            auras: impl Iterator<Item = crate::stdb::bindings::Aura>,
-            target_guid: u64,
-        ) -> Outbound {
-            let slots: Vec<codec::update_mask::AuraSlot> = auras
-                .filter(|a| a.target_guid == target_guid)
-                .map(|a| codec::update_mask::AuraSlot {
-                    slot: a.slot,
-                    spell_id: a.spell_id,
-                    flags: a.flags,
-                    level: a.level,
-                })
-                .collect();
-            let mask = codec::update_mask::full_aura_mask(&slots);
-            let (opcode, body) = codec::build_values_update_raw(target_guid, &mask);
-            Outbound::Raw { opcode, body }
-        }
-        // Live ARMOR on the character sheet (the operator's Demon Skin bug): a player's own
-        // `A_MOD_RESISTANCE(armor)` aura applying or expiring must push `UNIT_FIELD_RESISTANCES[0]` — the
-        // module keeps `e.armor` at BASE (combat folds the effective value on demand), so the sheet never
-        // moves without this relay. Recompute the EFFECTIVE armor from this connection's CURRENT cache
-        // (base + armor auras + gear — `effective_armor` reads the post-change set, so apply AND expire
-        // both land the right value, exactly like `run_speed_packet`). Returns `None` unless `changed` is a
-        // self armor aura, so ordinary buffs/debuffs don't spam the opcode. Self-scoped: the sheet shows
-        // only your own armor, so no peer relay is needed.
-        fn armor_packet(coord: &Coordinator, changed: &Aura, self_guid: u64) -> Option<Outbound> {
-            const A_MOD_RESISTANCE: u8 = 0xA1; // taxonomy A_MOD_RESISTANCE
-            const RESIST_ARMOR_MASK: u32 = 0x01; // taxonomy RESIST_ARMOR bit (eff_p0 is a school MASK)
-            if changed.target_guid != self_guid
-                || changed.eff_kind != A_MOD_RESISTANCE
-                || (changed.eff_p0 as u32 & RESIST_ARMOR_MASK) == 0
-            {
-                return None;
-            }
-            // #468: the entity row (the BASE armor term) lives only on the coordinator now — the
-            // per-player connection no longer subscribes `game_world_entity` at all. The
-            // coordinator's cache also carries the auras, the item instances and the item
-            // templates, so this fold is complete there in a way it never was on the player
-            // connection (which lost `game_item_template` to #292).
-            let guard = coord.0.coord();
-            let db = &guard.conn.db;
-            let eff = super::armor::effective_armor(db, self_guid);
-            // 082: carry the positive AURA portion alongside the total so the paperdoll renders the
-            // green "(+N)" (Devotion Aura showed as plain white armor). Raw path — the positive
-            // field has no gtker setter. Login self-corrects through this same relay (the SDK
-            // replays aura rows after subscription-apply).
-            let pos = super::armor::aura_armor_positive(db, self_guid);
-            Some(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
-                Box::new(codec::build_armor_values(self_guid, eff, pos)),
-            )))
-        }
-        // Stealth peer-visibility: when a NON-self peer's A_STEALTH presence crosses the 0↔1 boundary,
-        // HIDE it from this viewer (SMSG_DESTROY_OBJECT + evict from `created`) on the gain, REVEAL it
-        // (re-CREATE + re-insert into `created`) on the loss. The recipient set is implicit — every
-        // viewer's own connection drains the broadcast `game_aura` table and runs THIS closure, so each
-        // in-scope client hides/reveals on its own `tx`. Self is excluded (`changed.target_guid !=
-        // self_guid`) so a stealther never hides from itself. Idempotency is the `created` set: HIDE only
-        // fires (and DESTROYs) if the guid was created; REVEAL only fires (and CREATEs) if it wasn't —
-        // re-hiding a hidden peer or re-revealing a visible one is a no-op. The stealther's entity row is
-        // read from the firing connection's cache (`ctx.db`); a guid the viewer can't see in scope has no
-        // row → REVEAL self-skips. `coord` reads the peer's gear RLS-bypassed on reveal (same as insert).
-        // One argument per piece of per-viewer state the decision needs; they are not grouped
-        // because the caller has them as separate captures.
-        #[allow(clippy::too_many_arguments)]
-        fn stealth_visibility(
-            ctx: &EventContext,
-            view: &WorldView,
-            session: u64,
-            coord: &Coordinator,
-            created: &Arc<Mutex<HashSet<u64>>>,
-            changed: &Aura,
-            self_guid: u64,
-            is_insert: bool,
-        ) -> Vec<Outbound> {
-            if changed.eff_kind != A_STEALTH || changed.target_guid == self_guid {
-                return Vec::new();
-            }
-            let count = ctx
-                .db
-                .game_aura()
-                .iter()
-                .filter(|a| a.target_guid == changed.target_guid && a.eff_kind == A_STEALTH)
-                .count();
-            match stealth_action(is_insert, count) {
-                StealthAction::Hide => {
-                    // Evict so a later REVEAL (and ordinary AOI re-entry) re-CREATEs; only DESTROY if the
-                    // viewer actually had it (idempotent — a never-created peer needs no DESTROY).
-                    if created.lock().unwrap().remove(&changed.target_guid) {
-                        vec![Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
-                            codec::build_destroy_object(changed.target_guid),
-                        ))]
-                    } else {
-                        Vec::new()
-                    }
-                }
-                StealthAction::Reveal => {
-                    // Re-CREATE only if not currently shown (idempotent) AND the peer is in this viewer's
-                    // scope (its row is in the cache). Insert into `created` BEFORE building so the dedup
-                    // is consistent; if the row is gone (out of scope), undo the insert and emit nothing.
-                    if !created.lock().unwrap().insert(changed.target_guid) {
-                        return Vec::new();
-                    }
-                    // #468: "is the peer in this viewer's scope" used to be "is its row in this
-                    // connection's cache", which the per-player box subscription made equivalent.
-                    // The shared connection's cache holds the whole world, so the question has to be
-                    // put to the cell index instead — otherwise a stealther unstealthing on the far
-                    // side of the zone would CREATE for everyone.
-                    if !view.entities.can_see(session, changed.target_guid) {
-                        created.lock().unwrap().remove(&changed.target_guid);
-                        return Vec::new();
-                    }
-                    match coord
-                        .0
-                        .coord()
-                        .conn
-                        .db
-                        .game_world_entity()
-                        .guid()
-                        .find(&changed.target_guid)
-                    {
-                        Some(row) => match build_peer_create(coord, &row) {
-                            Some(m) => vec![Outbound::One(m)],
-                            None => {
-                                // Encode failure: roll the dedup entry back like `offer_peer_create`
-                                // does, else this guid is permanently suppressed (marked created with
-                                // no CREATE ever sent) — the same latent bug 144 fixed on the
-                                // insert/update path.
-                                created.lock().unwrap().remove(&changed.target_guid);
-                                Vec::new()
-                            }
-                        },
-                        None => {
-                            created.lock().unwrap().remove(&changed.target_guid);
-                            Vec::new()
-                        }
-                    }
-                }
-                StealthAction::None => Vec::new(),
-            }
-        }
         let stealth_ins_coord = self.clone();
         let stealth_ins_view = view.clone();
         let armor_coord_ins = self.clone();
         let stealth_ins_created = created.clone();
         let aura_ins_tx = tx.clone();
-        let on_aura_insert = player.conn.db.game_aura().on_insert(move |ctx, row| {
-            // A peer hidden by stealth is evicted from `created`; it must receive NO further per-peer
-            // relays for that guid — a partial-VALUES aura_sync (or run-speed) on a DESTROYed object is a
-            // client crash/desync vector. Checked BEFORE stealth_visibility's HIDE below. Self always visible.
-            let visible = row.target_guid == self_guid
-                || stealth_ins_created
-                    .lock()
-                    .unwrap()
-                    .contains(&row.target_guid);
-            if visible {
-                let _ = aura_ins_tx.send(aura_sync(ctx.db.game_aura().iter(), row.target_guid));
-            }
-            if let Some(o) = aura_duration_packet(row, self_guid) {
-                let _ = aura_ins_tx.send(o);
-            }
-            if visible {
-                if let Some(o) = run_speed_packet(ctx.db.game_aura().iter(), row, self_guid) {
+        // 4c family 14: registered ONLY with LYRACORE_SHARED_CALLS off; the shared twins are
+        // `world_view::aura_applied`/`aura_updated`/`aura_removed` (the stealth count is computed
+        // on the coordinator pump, where that connection's cache is exactly post-change).
+        let on_aura_insert = (!shared_calls).then(|| {
+            pp().conn.db.game_aura().on_insert(move |ctx, row| {
+                // A peer hidden by stealth is evicted from `created`; it must receive NO further per-peer
+                // relays for that guid — a partial-VALUES aura_sync (or run-speed) on a DESTROYed object is a
+                // client crash/desync vector. Checked BEFORE stealth_visibility's HIDE below. Self always visible.
+                let visible = row.target_guid == self_guid
+                    || stealth_ins_created
+                        .lock()
+                        .unwrap()
+                        .contains(&row.target_guid);
+                if visible {
+                    let _ = aura_ins_tx.send(aura_sync(ctx.db.game_aura().iter(), row.target_guid));
+                }
+                if let Some(o) = aura_duration_packet(row, self_guid) {
                     let _ = aura_ins_tx.send(o);
                 }
-                // Live armor (Demon Skin): a self armor aura insert re-pushes UNIT_FIELD_RESISTANCES[0].
-                if let Some(o) = armor_packet(&armor_coord_ins, row, self_guid) {
+                if visible {
+                    if let Some(o) = run_speed_packet(ctx.db.game_aura().iter(), row, self_guid) {
+                        let _ = aura_ins_tx.send(o);
+                    }
+                    // Live armor (Demon Skin): a self armor aura insert re-pushes UNIT_FIELD_RESISTANCES[0].
+                    if let Some(o) = armor_packet(&armor_coord_ins, row, self_guid) {
+                        let _ = aura_ins_tx.send(o);
+                    }
+                }
+                let stealth_count = ctx
+                    .db
+                    .game_aura()
+                    .iter()
+                    .filter(|a| a.target_guid == row.target_guid && a.eff_kind == A_STEALTH)
+                    .count();
+                for o in stealth_visibility(
+                    stealth_count,
+                    &stealth_ins_view,
+                    stealth_session,
+                    &stealth_ins_coord,
+                    &stealth_ins_created,
+                    row,
+                    self_guid,
+                    true,
+                ) {
                     let _ = aura_ins_tx.send(o);
                 }
-            }
-            for o in stealth_visibility(
-                ctx,
-                &stealth_ins_view,
-                stealth_session,
-                &stealth_ins_coord,
-                &stealth_ins_created,
-                row,
-                self_guid,
-                true,
-            ) {
-                let _ = aura_ins_tx.send(o);
-            }
+            })
         });
         let aura_upd_tx = tx.clone();
         let stealth_upd_created = created.clone();
         let armor_coord_upd = self.clone();
-        let on_aura_update = player.conn.db.game_aura().on_update(move |ctx, old, row| {
-            // A stealth-hidden peer (not in `created`) gets no VALUES/speed relay (see on_aura_insert).
-            let visible = row.target_guid == self_guid
-                || stealth_upd_created
-                    .lock()
-                    .unwrap()
-                    .contains(&row.target_guid);
-            if visible {
-                let _ = aura_upd_tx.send(aura_sync(ctx.db.game_aura().iter(), row.target_guid));
-            }
-            // Re-send the timer only when the duration window actually changed (a refresh) — not on
-            // unrelated flag/level updates, which would jitter the client's countdown back to full.
-            if old.expires_at != row.expires_at {
-                if let Some(o) = aura_duration_packet(row, self_guid) {
-                    let _ = aura_upd_tx.send(o);
+        let on_aura_update = (!shared_calls).then(|| {
+            pp().conn.db.game_aura().on_update(move |ctx, old, row| {
+                // A stealth-hidden peer (not in `created`) gets no VALUES/speed relay (see on_aura_insert).
+                let visible = row.target_guid == self_guid
+                    || stealth_upd_created
+                        .lock()
+                        .unwrap()
+                        .contains(&row.target_guid);
+                if visible {
+                    let _ = aura_upd_tx.send(aura_sync(ctx.db.game_aura().iter(), row.target_guid));
                 }
-            }
-            if visible {
-                if let Some(o) = run_speed_packet(ctx.db.game_aura().iter(), row, self_guid) {
-                    let _ = aura_upd_tx.send(o);
+                // Re-send the timer only when the duration window actually changed (a refresh) — not on
+                // unrelated flag/level updates, which would jitter the client's countdown back to full.
+                if old.expires_at != row.expires_at {
+                    if let Some(o) = aura_duration_packet(row, self_guid) {
+                        let _ = aura_upd_tx.send(o);
+                    }
                 }
-                // Live armor: a self armor aura whose fields changed (e.g. stacks) re-pushes the sheet.
-                if let Some(o) = armor_packet(&armor_coord_upd, row, self_guid) {
-                    let _ = aura_upd_tx.send(o);
+                if visible {
+                    if let Some(o) = run_speed_packet(ctx.db.game_aura().iter(), row, self_guid) {
+                        let _ = aura_upd_tx.send(o);
+                    }
+                    // Live armor: a self armor aura whose fields changed (e.g. stacks) re-pushes the sheet.
+                    if let Some(o) = armor_packet(&armor_coord_upd, row, self_guid) {
+                        let _ = aura_upd_tx.send(o);
+                    }
                 }
-            }
+            })
         });
         let stealth_del_coord = self.clone();
         let stealth_del_view = view.clone();
         let armor_coord_del = self.clone();
         let stealth_del_created = created.clone();
         let aura_del_tx = tx.clone();
-        let on_aura_delete = player.conn.db.game_aura().on_delete(move |ctx, row| {
-            // Checked BEFORE stealth_visibility's REVEAL below: a still-hidden peer (the first of two
-            // A_STEALTH deletes) gets no relay; once REVEAL re-adds it to `created`, the next delete sends.
-            let visible = row.target_guid == self_guid
-                || stealth_del_created
-                    .lock()
-                    .unwrap()
-                    .contains(&row.target_guid);
-            if visible {
-                let _ = aura_del_tx.send(aura_sync(ctx.db.game_aura().iter(), row.target_guid));
-                if let Some(o) = run_speed_packet(ctx.db.game_aura().iter(), row, self_guid) {
+        let on_aura_delete = (!shared_calls).then(|| {
+            pp().conn.db.game_aura().on_delete(move |ctx, row| {
+                // Checked BEFORE stealth_visibility's REVEAL below: a still-hidden peer (the first of two
+                // A_STEALTH deletes) gets no relay; once REVEAL re-adds it to `created`, the next delete sends.
+                let visible = row.target_guid == self_guid
+                    || stealth_del_created
+                        .lock()
+                        .unwrap()
+                        .contains(&row.target_guid);
+                if visible {
+                    let _ = aura_del_tx.send(aura_sync(ctx.db.game_aura().iter(), row.target_guid));
+                    if let Some(o) = run_speed_packet(ctx.db.game_aura().iter(), row, self_guid) {
+                        let _ = aura_del_tx.send(o);
+                    }
+                    // Live armor (Demon Skin expiry): on_delete fires AFTER the row is gone, so the fold reads
+                    // the remaining auras → the sheet drops back to base + gear.
+                    if let Some(o) = armor_packet(&armor_coord_del, row, self_guid) {
+                        let _ = aura_del_tx.send(o);
+                    }
+                }
+                let stealth_count = ctx
+                    .db
+                    .game_aura()
+                    .iter()
+                    .filter(|a| a.target_guid == row.target_guid && a.eff_kind == A_STEALTH)
+                    .count();
+                for o in stealth_visibility(
+                    stealth_count,
+                    &stealth_del_view,
+                    stealth_session,
+                    &stealth_del_coord,
+                    &stealth_del_created,
+                    row,
+                    self_guid,
+                    false,
+                ) {
                     let _ = aura_del_tx.send(o);
                 }
-                // Live armor (Demon Skin expiry): on_delete fires AFTER the row is gone, so the fold reads
-                // the remaining auras → the sheet drops back to base + gear.
-                if let Some(o) = armor_packet(&armor_coord_del, row, self_guid) {
-                    let _ = aura_del_tx.send(o);
-                }
-            }
-            for o in stealth_visibility(
-                ctx,
-                &stealth_del_view,
-                stealth_session,
-                &stealth_del_coord,
-                &stealth_del_created,
-                row,
-                self_guid,
-                false,
-            ) {
-                let _ = aura_del_tx.send(o);
-            }
+            })
         });
 
         // ======================================================================================
@@ -3305,7 +3790,7 @@ impl Coordinator {
         // this is the custom-UI state stream — a dropped frame is a stuck progress bar), so the
         // closure self-filters on the session's bound identity.
         let addon_tx = tx.clone();
-        let addon_identity = player.identity;
+        let addon_identity = self_identity;
         let on_addon = self
             .0
             .coord()
@@ -3416,97 +3901,73 @@ impl Coordinator {
         // The per-player subscription set. `game_world_entity` is the ONLY spatial one: when AOI is on it
         // rides a SEPARATE grid-scoped subscription (the tracker, created below) and is OMITTED here; when
         // off it's a global SELECT * in this base set (the proven path). Everything else is unchanged.
-        let base_queries: Vec<&str> = vec![
-            // game_movement_event is gone (perf catalog 2.1) — peer movement rides the AOI-scoped
-            // game_entity_motion box subscription instead. Nothing writes the table any more.
-            // game_creature_move_event is gone — creature legs ride the AOI-scoped
-            // game_creature_spline box subscription. Nothing writes the table any more.
-            "SELECT * FROM game_combat_event",
-            "SELECT * FROM game_dynamic_object",
-            // Engagement rows (broadcast) → SMSG_ATTACKSTART/STOP combat-stance relay.
-            "SELECT * FROM game_melee_attack",
-            "SELECT * FROM game_xp_event",
-            "SELECT * FROM game_levelup_event",
-            // Explored areas (200) → the on_insert above sets the PLAYER_EXPLORED_ZONES fog word.
-            // Own rows ONLY — see `explored_query` above; never re-widen this to a bare
-            // `SELECT * FROM game_character_explored`.
-            &explored_query,
-            // Rest-state flips (196) → the on_insert below relays PLAYER_BYTES_2 (zzz + blue bar).
-            "SELECT * FROM game_rest_state_event",
-            "SELECT * FROM game_corpse",
-            // Gameobject TEMPLATES (static, small — the insert/update relays join per-conn).
-            // The GO INSTANCE table is grid-scoped through the AOI tracker when AOI is on
-            // (246 — the global sub shipped ~4.6k zone GOs to every client: the login burst
-            // AND the felt frame hitch); AOI-off keeps the proven global query below.
-            // ⚠ DO NOT re-add the select-star subscription for `game_gameobject_template` (292).
-            // 1,411 rows of static display data that the COORDINATOR already subscribes once for
-            // the whole gateway; all three consumers (the GO create/update relays and the
-            // resident sweep) read it from there now. Templates are display fields, never a
-            // visibility gate, so no instance/stealth scoping rides on this.
-            //
-            // No measurable RSS saving was observed (see the note at `go_ins_coord`) — this is
-            // duplicate-cache hygiene, not the fix for the per-connection memory problem.
-            "SELECT * FROM game_aura",
-            "SELECT * FROM game_player_skill",
-            // Pet bar spells (023): tiny static table joined when the viewer's own pet CREATE
-            // relays (the Imp's Firebolt in SMSG_PET_SPELLS slots 3–6).
-            "SELECT * FROM game_creature_cast",
-            // Resurrection accept-prompt (#014): the player's own pending offer (RLS-scoped).
-            "SELECT * FROM game_resurrect_request",
+        // 4c cleanup rung: with LYRACORE_SHARED_CALLS on this list is EMPTY — every family rides
+        // the coordinator, the login snapshots below read the coordinator cache, and NO per-player
+        // subscription is applied at all. Flag-off keeps the proven set byte-for-byte.
+        //
+        // `game_creature_cast` is GONE in BOTH modes (#476): its only reader —
+        // `offer_peer_create_for`'s pet-bar join — runs against the coordinator cache, which now
+        // subscribes the table; the per-player copy had been dead weight since the stage-1 move.
+        //
+        // (game_movement_event / game_creature_move_event are gone entirely — perf catalog 2.1;
+        // the ⚠ DO-NOT-RE-ADD notes for game_item_template (292, MEASURED ~48MB/conn),
+        // game_quest_objective (292) and game_gameobject_template (292) still bind: every one of
+        // their readers resolves to the coordinator's cache.)
+        let mut base_queries: Vec<&str> = Vec::new();
+        if !shared_calls {
+            base_queries.push("SELECT * FROM game_xp_event");
+            base_queries.push("SELECT * FROM game_levelup_event");
             // Own items (RLS-scoped) so vendor buy/sell + loot reflect in the bag without a relog.
-            "SELECT * FROM game_item_instance",
-            // ⚠ DO NOT re-add `SELECT * FROM game_item_template` here (work-item 292). It was in
-            // this list until 2026-07-30 with the note "it's the same small table the coordinator
-            // already holds". The coordinator half is true — it is one of the 61 coordinator
-            // queries — but the table is 17,720 rows x 32 columns, and this list runs on EVERY
-            // player connection, so each session materialised its own copy of the whole item
-            // catalogue. MEASURED, 20 connections, same fixture: 283MB -> 1236MB with it
-            // (~48MB/connection), 283MB -> 503MB without (~11MB/connection). At 500 players that
-            // is ~24GB versus ~5.5GB, on a 31GB box — see 292 and #285.
-            //
-            // Nothing on the player connection read it: every consumer — reads.rs (char-select
-            // gear), the durability/container-slot lookup below, and armor::effective_armor /
-            // sheet_stats via the item-instance callback — runs on the COORDINATOR's db, which
-            // subscribes the catalogue once for the whole gateway.
-            "SELECT * FROM game_spell_cast_event",
-            // Deferred projectile-impact damage log (#084) — a SEPARATE table from game_spell_cast_event
-            // (never touches the on_cast cast-visual relay above).
-            "SELECT * FROM game_spell_impact_event",
-            "SELECT * FROM game_chat_event",
-            "SELECT * FROM game_channel_event",
-            "SELECT * FROM game_channel_member",
-            "SELECT * FROM game_emote_event",
-            "SELECT * FROM game_roll_event",
-            "SELECT * FROM game_whisper_event",
-            // Group notifications (066): the player's own invite/roster/decline/destroy events
-            // (RLS-scoped, the whisper pattern).
-            "SELECT * FROM game_group_event",
+            base_queries.push("SELECT * FROM game_item_instance");
             // Quest-log relay (Phase 2): the player's own quest rows (RLS-scoped). The public
             // objective rows the `complete` state is computed from are read on the COORDINATOR.
-            "SELECT * FROM game_character_quest",
-            // ⚠ DO NOT re-add `SELECT * FROM game_quest_objective` here (work-item 292, second
-            // pass). 396 rows x 6 narrow columns — a SMALL win (tens of KB per session, not the
-            // MBs #124's item catalogue was worth), taken because it is provably dead weight on
-            // this connection, not because it moves RSS much.
-            // Every reader resolves to the coordinator's cache, which subscribes this table for
-            // the whole gateway at `connection.rs:290`:
-            //   - `reads.rs::quest_objectives_complete` / `viewer_needs_quest_item` /
-            //     `quest_detail_view` / `synthesized_objectives` / `build_quest_log_slots` — all
-            //     take `&RemoteTables` and every caller passes `self.0.coord()`'s db
-            //     (`corpse_loot`, `quest_detail`, `player_quest_log`).
-            //   - `quest_log_sync` + the kill-progress diff in THIS file read `ctx.db` inside
-            //     callbacks registered on `self.0.coord().conn.db.game_character_quest()`, and
-            //     `item_gain_feedback`'s COLLECT_ITEM toast likewise runs from the coordinator's
-            //     `game_item_instance` callbacks (both moved there by 279).
-            // Nothing registers a row callback on `player.conn.db.game_quest_objective()`, so
-            // dropping the query cannot silence a relay — unlike `game_aura`,
-            // `game_player_skill` and `game_gameobject_template`, which MUST stay (their
-            // callbacks/`entry().find()` reads live on the player connection).
+            base_queries.push("SELECT * FROM game_character_quest");
             // Teleport relay (#11): the player's own pending teleports (RLS-scoped) → MSG_MOVE_TELEPORT_ACK.
-            "SELECT * FROM game_teleport_event",
+            base_queries.push("SELECT * FROM game_teleport_event");
             // Reputation relay (#13): the player's own standings (RLS-scoped) → SMSG_SET_FACTION_STANDING.
-            "SELECT * FROM game_player_reputation",
-        ];
+            base_queries.push("SELECT * FROM game_player_reputation");
+            // 4c family 1 (/roll): flag-off feeds the per-player `on_roll` relay above.
+            base_queries.push("SELECT * FROM game_roll_event");
+            // Rest-state flips (196) → the per-player on_insert relays PLAYER_BYTES_2 (zzz + blue
+            // bar); flag-on the rows arrive on the coordinator's global subscription instead.
+            base_queries.push("SELECT * FROM game_rest_state_event");
+            // Skill pane (234) → the per-player insert/update relays; the seeding reads and every
+            // other consumer already resolve to the coordinator's cache (`reads.rs::player_skills`).
+            base_queries.push("SELECT * FROM game_player_skill");
+            // Explored areas (200) → the per-player fog/toast relay AND the login fog restore
+            // (its initial-sync replay). Own rows ONLY — see `explored_query` above; never
+            // re-widen this. Flag-on, the coordinator twin + the explicit fog sweep own both.
+            base_queries.push(&explored_query);
+            // Ground-area spell visuals (118) → the per-player CREATE/DESTROY relays.
+            base_queries.push("SELECT * FROM game_dynamic_object");
+            // Player corpses → the per-player CREATE/DESTROY/re-CREATE relays. (The login
+            // resident sweep reads the COORDINATOR cache in both flag states.)
+            base_queries.push("SELECT * FROM game_corpse");
+            // Swing log → the per-player combat_event_outbound relay.
+            base_queries.push("SELECT * FROM game_combat_event");
+            // Engagement rows (broadcast) → SMSG_ATTACKSTART/STOP combat-stance relay.
+            base_queries.push("SELECT * FROM game_melee_attack");
+            // The social tier → the per-player chat/channel/emote relays. (The channel
+            // MEMBERSHIP check reads the coordinator cache in both flag states.)
+            base_queries.push("SELECT * FROM game_chat_event");
+            base_queries.push("SELECT * FROM game_channel_event");
+            base_queries.push("SELECT * FROM game_channel_member");
+            base_queries.push("SELECT * FROM game_emote_event");
+            // Cast visuals + the deferred projectile-impact damage log (#084) — two SEPARATE
+            // tables, two per-player relays.
+            base_queries.push("SELECT * FROM game_spell_cast_event");
+            base_queries.push("SELECT * FROM game_spell_impact_event");
+            // The aura composite → the three per-player aura closures (their ctx.db iterators
+            // are this cache; the shared twins read the coordinator's identical copy).
+            base_queries.push("SELECT * FROM game_aura");
+            // The PRIVATE tier (RLS-scoped: each subscription sees only rows addressed to this
+            // player). Flag-on, the recipient-keyed shared dispatch owns the guarantee.
+            // Resurrection accept-prompt (#014):
+            base_queries.push("SELECT * FROM game_resurrect_request");
+            base_queries.push("SELECT * FROM game_whisper_event");
+            // Group notifications (066): invite/roster/decline/destroy + loot rolls + quest share.
+            base_queries.push("SELECT * FROM game_group_event");
+        }
         // #468: the four box-scoped tables (`game_world_entity`, `game_gameobject`,
         // `game_entity_motion`, `game_creature_spline`) are deliberately ABSENT from this list in
         // BOTH modes. They ride ONE global subscription per shard on the coordinator connection and
@@ -3514,42 +3975,75 @@ impl Coordinator {
         // them here would put ~600 copies of the largest table in the gateway back on the heap and
         // restore the per-connection wakeup this issue removed.
         //
-        // Apply the base subscription and block.
-        let (atx, arx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
-        let atx_err = atx.clone();
-        let sub = player
-            .conn
-            .subscription_builder()
-            .on_applied(move |_ctx| {
-                let _ = atx.send(Ok(()));
-            })
-            .on_error(move |_ctx, err| {
-                let _ = atx_err.send(Err(format!("{err}")));
-            })
-            .subscribe(base_queries);
-        match arx.recv_timeout(Duration::from_secs(15)) {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(anyhow!("player subscription error: {e}")),
-            Err(_) => return Err(anyhow!("player subscriptions not applied within 15s")),
-        }
+        // Apply the base subscription and block. 4c cleanup rung: flag-on the list is EMPTY and
+        // nothing is subscribed — the per-player connection carries calls only (and 4d deletes it).
+        let sub = if base_queries.is_empty() {
+            None
+        } else {
+            let (atx, arx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
+            let atx_err = atx.clone();
+            let sub = pp()
+                .conn
+                .subscription_builder()
+                .on_applied(move |_ctx| {
+                    let _ = atx.send(Ok(()));
+                })
+                .on_error(move |_ctx, err| {
+                    let _ = atx_err.send(Err(format!("{err}")));
+                })
+                .subscribe(base_queries);
+            match arx.recv_timeout(Duration::from_secs(15)) {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(anyhow!("player subscription error: {e}")),
+                Err(_) => return Err(anyhow!("player subscriptions not applied within 15s")),
+            }
+            Some(sub)
+        };
 
-        // Freeze the login-apply item snapshot (the cache is fully applied once the ack lands
-        // above; the row callbacks that replay these guids arrive after and get suppressed).
+        // Freeze the login-apply item snapshot (flag-off: the per-player cache is fully applied
+        // once the ack lands above; the row callbacks that replay these guids arrive after and get
+        // suppressed. Flag-on: the coordinator's cache is the only copy — filter to this owner).
         {
             let mut set = initial_item_guids.lock().unwrap();
-            set.extend(player.conn.db.game_item_instance().iter().map(|i| i.guid));
+            if shared_calls {
+                let guard = self.0.coord();
+                set.extend(
+                    guard
+                        .conn
+                        .db
+                        .game_item_instance()
+                        .iter()
+                        .filter(|i| i.owner_guid == self_guid)
+                        .map(|i| i.guid),
+                );
+            } else {
+                set.extend(pp().conn.db.game_item_instance().iter().map(|i| i.guid));
+            }
         }
         {
             let mut set = initial_rep_factions.lock().unwrap();
-            set.extend(
-                player
-                    .conn
-                    .db
-                    .game_player_reputation()
-                    .iter()
-                    .filter(|r| r.character_guid == self_guid)
-                    .map(|r| r.faction_id),
-            );
+            if shared_calls {
+                let guard = self.0.coord();
+                set.extend(
+                    guard
+                        .conn
+                        .db
+                        .game_player_reputation()
+                        .iter()
+                        .filter(|r| r.character_guid == self_guid)
+                        .map(|r| r.faction_id),
+                );
+            } else {
+                set.extend(
+                    pp()
+                        .conn
+                        .db
+                        .game_player_reputation()
+                        .iter()
+                        .filter(|r| r.character_guid == self_guid)
+                        .map(|r| r.faction_id),
+                );
+            }
         }
         {
             // Exploration (200/#41): OPEN the discovery gate, seeded with the area_bits the character
@@ -3557,8 +4051,14 @@ impl Coordinator {
             // cache is written before the replay callbacks run, so both are in here). Their on_insert
             // replay therefore skips the "Discovered" popup while the fog VALUES still fires for all.
             // Only a genuinely new area_bit, discovered after this point, toasts.
+            //
+            // Seeded from the COORDINATOR cache (4c family 4): it predates this session and holds
+            // the same rows for this character in both flag states, while the per-player cache
+            // stops carrying the explored query under the flag. The gate now also guards the
+            // coordinator twin's toast branch, so the seed source must not depend on the flag.
+            let guard = self.0.coord();
             explored_replay.lock().unwrap().open(
-                player
+                guard
                     .conn
                     .db
                     .game_character_explored()
@@ -3606,6 +4106,8 @@ impl Coordinator {
             tx: tx.clone(),
             created: created.clone(),
             gates: viewer_gates.clone(),
+            skill_slots: skill_slots.clone(),
+            motion_pending: Arc::new(world_view::MotionPending::default()),
         });
         view.add_viewer(
             viewer.clone(),
@@ -3618,7 +4120,13 @@ impl Coordinator {
         // the same instance gate — idempotent for the client (a repeat CREATE for the same corpse
         // guid re-renders it), and the gate is now the session's authoritative `login_instance`
         // rather than a cache lookup that could answer `None`.
-        let resident_corpses: Vec<Corpse> = player.conn.db.game_corpse().iter().collect();
+        //
+        // Read from the COORDINATOR cache (4c family 6): same global rows in both flag states,
+        // while the per-player cache stops carrying the corpse query under the flag.
+        let resident_corpses: Vec<Corpse> = {
+            let guard = self.0.coord();
+            guard.conn.db.game_corpse().iter().collect()
+        };
         for row in &resident_corpses {
             if instance_relay_gate(row.instance_id, Some(login_instance)) {
                 relay_corpse_create(&tx, self_guid, row);
@@ -3647,6 +4155,25 @@ impl Coordinator {
                 )));
             }
         }
+        // Login fog restore, shared-path leg (4c family 4): with no per-player subscription there
+        // is no initial-sync replay to re-send the fog words, so sweep them explicitly from the
+        // coordinator cache — one idempotent full-word PLAYER_EXPLORED_ZONES VALUES per explored
+        // 32-bit bucket of THIS character. Flag-off keeps the proven replay path and skips this.
+        if shared_calls {
+            let guard = self.0.coord();
+            let mut words: std::collections::HashMap<u16, u32> = std::collections::HashMap::new();
+            for r in guard.conn.db.game_character_explored().iter() {
+                if r.character_guid != self_guid || r.area_bit < 0 {
+                    continue;
+                }
+                *words.entry((r.area_bit / 32) as u16).or_default() |= 1u32 << (r.area_bit % 32);
+            }
+            drop(guard);
+            for (word_idx, word) in words {
+                let (opcode, body) = codec::build_explored_zones_values(self_guid, word_idx, word);
+                let _ = tx.send(Outbound::Raw { opcode, body });
+            }
+        }
 
         // One teardown per callback registered above. Adding a relay = register it + push its
         // teardown here; the struct/empty()/Drop stay untouched.
@@ -3668,19 +4195,25 @@ impl Coordinator {
         );
         let teardowns: Vec<Box<dyn FnOnce(&PlayerConn) + Send>> = vec![
             Box::new(move |c: &PlayerConn| {
-                c.conn.db.game_combat_event().remove_on_insert(on_combat);
+                if let Some(on_combat) = on_combat {
+                    c.conn.db.game_combat_event().remove_on_insert(on_combat);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn
-                    .db
-                    .game_melee_attack()
-                    .remove_on_insert(on_melee_insert);
+                if let Some(on_melee_insert) = on_melee_insert {
+                    c.conn
+                        .db
+                        .game_melee_attack()
+                        .remove_on_insert(on_melee_insert);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn
-                    .db
-                    .game_melee_attack()
-                    .remove_on_delete(on_melee_delete);
+                if let Some(on_melee_delete) = on_melee_delete {
+                    c.conn
+                        .db
+                        .game_melee_attack()
+                        .remove_on_delete(on_melee_delete);
+                }
             }),
             Box::new(move |_c: &PlayerConn| {
                 let l = td_xp.0.coord();
@@ -3691,16 +4224,20 @@ impl Coordinator {
                 l.conn.db.game_levelup_event().remove_on_insert(on_levelup);
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn
-                    .db
-                    .game_player_skill()
-                    .remove_on_insert(on_skill_insert);
+                if let Some(on_skill_insert) = on_skill_insert {
+                    c.conn
+                        .db
+                        .game_player_skill()
+                        .remove_on_insert(on_skill_insert);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn
-                    .db
-                    .game_player_skill()
-                    .remove_on_update(on_skill_update);
+                if let Some(on_skill_update) = on_skill_update {
+                    c.conn
+                        .db
+                        .game_player_skill()
+                        .remove_on_update(on_skill_update);
+                }
             }),
             // Issue #89: this one was missing. Every world entry registered ANOTHER copy of
             // on_explored_insert on the same table without ever removing the last one, so a single
@@ -3708,76 +4245,112 @@ impl Coordinator {
             // (the coordinator-side sibling below, on_explored_coord, was already torn down — this
             // was the one exception in the whole file).
             Box::new(move |c: &PlayerConn| {
-                c.conn
-                    .db
-                    .game_character_explored()
-                    .remove_on_insert(on_explored_insert);
+                if let Some(on_explored_insert) = on_explored_insert {
+                    c.conn
+                        .db
+                        .game_character_explored()
+                        .remove_on_insert(on_explored_insert);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn
-                    .db
-                    .game_dynamic_object()
-                    .remove_on_insert(on_dynobj_insert);
+                if let Some(on_dynobj_insert) = on_dynobj_insert {
+                    c.conn
+                        .db
+                        .game_dynamic_object()
+                        .remove_on_insert(on_dynobj_insert);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn
-                    .db
-                    .game_dynamic_object()
-                    .remove_on_delete(on_dynobj_delete);
+                if let Some(on_dynobj_delete) = on_dynobj_delete {
+                    c.conn
+                        .db
+                        .game_dynamic_object()
+                        .remove_on_delete(on_dynobj_delete);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn.db.game_corpse().remove_on_insert(on_corpse_insert);
+                if let Some(on_corpse_insert) = on_corpse_insert {
+                    c.conn.db.game_corpse().remove_on_insert(on_corpse_insert);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn.db.game_corpse().remove_on_delete(on_corpse_delete);
+                if let Some(on_corpse_delete) = on_corpse_delete {
+                    c.conn.db.game_corpse().remove_on_delete(on_corpse_delete);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn.db.game_corpse().remove_on_update(on_corpse_update);
+                if let Some(on_corpse_update) = on_corpse_update {
+                    c.conn.db.game_corpse().remove_on_update(on_corpse_update);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn
-                    .db
-                    .game_resurrect_request()
-                    .remove_on_insert(on_resurrect_insert);
+                if let Some(on_resurrect_insert) = on_resurrect_insert {
+                    c.conn
+                        .db
+                        .game_resurrect_request()
+                        .remove_on_insert(on_resurrect_insert);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn.db.game_spell_cast_event().remove_on_insert(on_cast);
+                if let Some(on_cast) = on_cast {
+                    c.conn.db.game_spell_cast_event().remove_on_insert(on_cast);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn
-                    .db
-                    .game_spell_impact_event()
-                    .remove_on_insert(on_impact);
+                if let Some(on_impact) = on_impact {
+                    c.conn
+                        .db
+                        .game_spell_impact_event()
+                        .remove_on_insert(on_impact);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn.db.game_chat_event().remove_on_insert(on_chat);
+                if let Some(on_chat) = on_chat {
+                    c.conn.db.game_chat_event().remove_on_insert(on_chat);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn.db.game_channel_event().remove_on_insert(on_channel);
+                if let Some(on_channel) = on_channel {
+                    c.conn.db.game_channel_event().remove_on_insert(on_channel);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn.db.game_emote_event().remove_on_insert(on_emote);
+                if let Some(on_emote) = on_emote {
+                    c.conn.db.game_emote_event().remove_on_insert(on_emote);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn.db.game_roll_event().remove_on_insert(on_roll);
+                if let Some(on_roll) = on_roll {
+                    c.conn.db.game_roll_event().remove_on_insert(on_roll);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn.db.game_whisper_event().remove_on_insert(on_whisper);
+                if let Some(on_whisper) = on_whisper {
+                    c.conn.db.game_whisper_event().remove_on_insert(on_whisper);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn
-                    .db
-                    .game_group_event()
-                    .remove_on_insert(on_group_event);
+                if let Some(on_group_event) = on_group_event {
+                    c.conn
+                        .db
+                        .game_group_event()
+                        .remove_on_insert(on_group_event);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn.db.game_aura().remove_on_insert(on_aura_insert);
+                if let Some(on_aura_insert) = on_aura_insert {
+                    c.conn.db.game_aura().remove_on_insert(on_aura_insert);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn.db.game_aura().remove_on_update(on_aura_update);
+                if let Some(on_aura_update) = on_aura_update {
+                    c.conn.db.game_aura().remove_on_update(on_aura_update);
+                }
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn.db.game_aura().remove_on_delete(on_aura_delete);
+                if let Some(on_aura_delete) = on_aura_delete {
+                    c.conn.db.game_aura().remove_on_delete(on_aura_delete);
+                }
             }),
             Box::new(move |_c: &PlayerConn| {
                 let l = td_ii.0.coord();
@@ -3858,10 +4431,12 @@ impl Coordinator {
                     .remove_on_insert(on_explored_coord);
             }),
             Box::new(move |c: &PlayerConn| {
-                c.conn
-                    .db
-                    .game_rest_state_event()
-                    .remove_on_insert(on_rest_insert);
+                if let Some(on_rest_insert) = on_rest_insert {
+                    c.conn
+                        .db
+                        .game_rest_state_event()
+                        .remove_on_insert(on_rest_insert);
+                }
             }),
         ];
         // #22: the realm-core group callback lives on ANOTHER DATABASE's coordinator connection, so
@@ -3901,8 +4476,8 @@ impl Coordinator {
         }
 
         Ok(PlayerSubscriptions {
-            conn: Some(player),
-            sub: Some(sub),
+            conn: player,
+            sub,
             teardowns,
             viewer: Some(viewer),
             view: Some(view),
@@ -4938,6 +5513,7 @@ mod tests {
         for field in [
             "created: created.clone(),",
             "gates: viewer_gates.clone(),",
+            "skill_slots: skill_slots.clone(),",
         ] {
             assert!(
                 code.contains(field),

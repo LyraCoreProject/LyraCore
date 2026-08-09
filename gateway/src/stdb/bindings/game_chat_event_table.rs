@@ -18,6 +18,18 @@ pub struct GameChatEventTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_chat_event`.
+pub struct GameChatEventTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameChatEventTableAccessor {
+    type Row = ChatEvent;
+    type Handle<'db> = GameChatEventTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_chat_event()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_chat_event`.
 ///
@@ -39,6 +51,18 @@ impl GameChatEventTableAccess for super::RemoteTables {
 
 pub struct GameChatEventInsertCallbackId(__sdk::CallbackId);
 pub struct GameChatEventDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameChatEventTableHandle<'ctx> {
+    type Row = ChatEvent;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = ChatEvent> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameChatEventTableHandle<'ctx> {
     type Row = ChatEvent;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameChatEventTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameChatEventTableHandle<'ctx> {
+    type InsertCallbackId = GameChatEventInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameChatEventInsertCallbackId {
+        GameChatEventInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameChatEventInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameChatEventTableHandle<'ctx> {
+    type DeleteCallbackId = GameChatEventDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameChatEventDeleteCallbackId {
+        GameChatEventDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameChatEventDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameChatEventUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameChatEventTableHandle<'ctx> {
+    type UpdateCallbackId = GameChatEventUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameChatEventUpdateCallbackId {
+        GameChatEventUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameChatEventUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameChatEventTableHandle<'ctx> {
     type UpdateCallbackId = GameChatEventUpdateCallbackId;
 
     fn on_update(

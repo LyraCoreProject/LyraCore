@@ -213,6 +213,22 @@ impl WorldIndex {
         previous
     }
 
+    /// Which shard's coordinator cache holds this entity's row — `None` for a guid the index has
+    /// never seen. The 4c non-spatial dispatch uses it as the "same database as the row" half of a
+    /// family's audience predicate (a viewer's per-player subscription only ever saw rows from the
+    /// shard their own connection was on).
+    pub fn shard_of(&self, guid: u64) -> Option<ShardId> {
+        self.lock().entity_cell.get(&guid).map(|(_, s)| *s)
+    }
+
+    /// The session whose OWN character is `guid` — `None` if that character has no live session on
+    /// this gateway. The self-only 4c families (rest state, skill pane, …) resolve their audience
+    /// through this: the row names its owner and the owner is the only lawful recipient, so the
+    /// lookup IS the visibility predicate — there is no candidate set to filter.
+    pub fn session_of_owner(&self, guid: u64) -> Option<SessionId> {
+        self.lock().self_guids.get(&guid).copied()
+    }
+
     /// Forget an entity (its row was deleted). Returns the cell it was in, if it was known.
     pub fn remove_entity(&self, guid: u64) -> Option<CellKey> {
         let mut inner = self.lock();
@@ -824,5 +840,22 @@ mod tests {
         index.upsert_entity(3, CellKey::at(0, 0, 1, 0), 0);
         index.add_viewer(1, 999, CellKey::at(0, 0, 0, 0));
         assert_eq!(index.stats(), (3, 1, 2));
+    }
+
+    /// `session_of_owner` is a 4c VISIBILITY predicate (the self-only families deliver through it
+    /// and nothing else), so its whole contract is pinned: resolves the owner while the session is
+    /// live, never anyone else, and stops resolving the moment the viewer is removed.
+    #[test]
+    fn session_of_owner_resolves_only_the_live_owner_session() {
+        let index = WorldIndex::new(true);
+        index.add_viewer(7, 999, CellKey::at(0, 0, 0, 0));
+        assert_eq!(index.session_of_owner(999), Some(7));
+        assert_eq!(index.session_of_owner(998), None, "an unknown guid resolves nobody");
+        index.remove_viewer(7, 999);
+        assert_eq!(
+            index.session_of_owner(999),
+            None,
+            "a logged-out owner must stop receiving self-only relays immediately"
+        );
     }
 }

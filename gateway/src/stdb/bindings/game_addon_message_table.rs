@@ -18,6 +18,18 @@ pub struct GameAddonMessageTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_addon_message`.
+pub struct GameAddonMessageTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameAddonMessageTableAccessor {
+    type Row = AddonMessage;
+    type Handle<'db> = GameAddonMessageTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_addon_message()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_addon_message`.
 ///
@@ -39,6 +51,18 @@ impl GameAddonMessageTableAccess for super::RemoteTables {
 
 pub struct GameAddonMessageInsertCallbackId(__sdk::CallbackId);
 pub struct GameAddonMessageDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameAddonMessageTableHandle<'ctx> {
+    type Row = AddonMessage;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = AddonMessage> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameAddonMessageTableHandle<'ctx> {
     type Row = AddonMessage;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameAddonMessageTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameAddonMessageTableHandle<'ctx> {
+    type InsertCallbackId = GameAddonMessageInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameAddonMessageInsertCallbackId {
+        GameAddonMessageInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameAddonMessageInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameAddonMessageTableHandle<'ctx> {
+    type DeleteCallbackId = GameAddonMessageDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameAddonMessageDeleteCallbackId {
+        GameAddonMessageDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameAddonMessageDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameAddonMessageUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameAddonMessageTableHandle<'ctx> {
+    type UpdateCallbackId = GameAddonMessageUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameAddonMessageUpdateCallbackId {
+        GameAddonMessageUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameAddonMessageUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameAddonMessageTableHandle<'ctx> {
     type UpdateCallbackId = GameAddonMessageUpdateCallbackId;
 
     fn on_update(

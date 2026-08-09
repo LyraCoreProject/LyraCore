@@ -18,6 +18,18 @@ pub struct GameCreatureSpawnTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_creature_spawn`.
+pub struct GameCreatureSpawnTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameCreatureSpawnTableAccessor {
+    type Row = CreatureSpawn;
+    type Handle<'db> = GameCreatureSpawnTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_creature_spawn()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_creature_spawn`.
 ///
@@ -39,6 +51,18 @@ impl GameCreatureSpawnTableAccess for super::RemoteTables {
 
 pub struct GameCreatureSpawnInsertCallbackId(__sdk::CallbackId);
 pub struct GameCreatureSpawnDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameCreatureSpawnTableHandle<'ctx> {
+    type Row = CreatureSpawn;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = CreatureSpawn> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameCreatureSpawnTableHandle<'ctx> {
     type Row = CreatureSpawn;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameCreatureSpawnTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameCreatureSpawnTableHandle<'ctx> {
+    type InsertCallbackId = GameCreatureSpawnInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCreatureSpawnInsertCallbackId {
+        GameCreatureSpawnInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameCreatureSpawnInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameCreatureSpawnTableHandle<'ctx> {
+    type DeleteCallbackId = GameCreatureSpawnDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameCreatureSpawnDeleteCallbackId {
+        GameCreatureSpawnDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameCreatureSpawnDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameCreatureSpawnUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameCreatureSpawnTableHandle<'ctx> {
+    type UpdateCallbackId = GameCreatureSpawnUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameCreatureSpawnUpdateCallbackId {
+        GameCreatureSpawnUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameCreatureSpawnUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameCreatureSpawnTableHandle<'ctx> {
     type UpdateCallbackId = GameCreatureSpawnUpdateCallbackId;
 
     fn on_update(

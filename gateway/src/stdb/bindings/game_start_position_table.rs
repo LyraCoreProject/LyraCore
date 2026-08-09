@@ -18,6 +18,18 @@ pub struct GameStartPositionTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_start_position`.
+pub struct GameStartPositionTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameStartPositionTableAccessor {
+    type Row = StartPosition;
+    type Handle<'db> = GameStartPositionTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_start_position()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_start_position`.
 ///
@@ -39,6 +51,18 @@ impl GameStartPositionTableAccess for super::RemoteTables {
 
 pub struct GameStartPositionInsertCallbackId(__sdk::CallbackId);
 pub struct GameStartPositionDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameStartPositionTableHandle<'ctx> {
+    type Row = StartPosition;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = StartPosition> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameStartPositionTableHandle<'ctx> {
     type Row = StartPosition;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameStartPositionTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameStartPositionTableHandle<'ctx> {
+    type InsertCallbackId = GameStartPositionInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameStartPositionInsertCallbackId {
+        GameStartPositionInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameStartPositionInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameStartPositionTableHandle<'ctx> {
+    type DeleteCallbackId = GameStartPositionDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameStartPositionDeleteCallbackId {
+        GameStartPositionDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameStartPositionDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameStartPositionUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameStartPositionTableHandle<'ctx> {
+    type UpdateCallbackId = GameStartPositionUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameStartPositionUpdateCallbackId {
+        GameStartPositionUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameStartPositionUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameStartPositionTableHandle<'ctx> {
     type UpdateCallbackId = GameStartPositionUpdateCallbackId;
 
     fn on_update(

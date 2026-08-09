@@ -18,6 +18,18 @@ pub struct GameRestStateEventTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_rest_state_event`.
+pub struct GameRestStateEventTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameRestStateEventTableAccessor {
+    type Row = RestStateEvent;
+    type Handle<'db> = GameRestStateEventTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_rest_state_event()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_rest_state_event`.
 ///
@@ -41,6 +53,18 @@ impl GameRestStateEventTableAccess for super::RemoteTables {
 
 pub struct GameRestStateEventInsertCallbackId(__sdk::CallbackId);
 pub struct GameRestStateEventDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameRestStateEventTableHandle<'ctx> {
+    type Row = RestStateEvent;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = RestStateEvent> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameRestStateEventTableHandle<'ctx> {
     type Row = RestStateEvent;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GameRestStateEventTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameRestStateEventTableHandle<'ctx> {
+    type InsertCallbackId = GameRestStateEventInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameRestStateEventInsertCallbackId {
+        GameRestStateEventInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameRestStateEventInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameRestStateEventTableHandle<'ctx> {
+    type DeleteCallbackId = GameRestStateEventDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameRestStateEventDeleteCallbackId {
+        GameRestStateEventDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameRestStateEventDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameRestStateEventUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameRestStateEventTableHandle<'ctx> {
+    type UpdateCallbackId = GameRestStateEventUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameRestStateEventUpdateCallbackId {
+        GameRestStateEventUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameRestStateEventUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameRestStateEventTableHandle<'ctx> {
     type UpdateCallbackId = GameRestStateEventUpdateCallbackId;
 
     fn on_update(

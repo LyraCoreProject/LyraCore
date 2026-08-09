@@ -18,6 +18,18 @@ pub struct GameWorldConfigTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_world_config`.
+pub struct GameWorldConfigTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameWorldConfigTableAccessor {
+    type Row = GmWorldConfig;
+    type Handle<'db> = GameWorldConfigTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_world_config()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_world_config`.
 ///
@@ -39,6 +51,18 @@ impl GameWorldConfigTableAccess for super::RemoteTables {
 
 pub struct GameWorldConfigInsertCallbackId(__sdk::CallbackId);
 pub struct GameWorldConfigDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameWorldConfigTableHandle<'ctx> {
+    type Row = GmWorldConfig;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = GmWorldConfig> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameWorldConfigTableHandle<'ctx> {
     type Row = GmWorldConfig;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for GameWorldConfigTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameWorldConfigTableHandle<'ctx> {
+    type InsertCallbackId = GameWorldConfigInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameWorldConfigInsertCallbackId {
+        GameWorldConfigInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameWorldConfigInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameWorldConfigTableHandle<'ctx> {
+    type DeleteCallbackId = GameWorldConfigDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameWorldConfigDeleteCallbackId {
+        GameWorldConfigDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameWorldConfigDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameWorldConfigUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameWorldConfigTableHandle<'ctx> {
+    type UpdateCallbackId = GameWorldConfigUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameWorldConfigUpdateCallbackId {
+        GameWorldConfigUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameWorldConfigUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameWorldConfigTableHandle<'ctx> {
     type UpdateCallbackId = GameWorldConfigUpdateCallbackId;
 
     fn on_update(

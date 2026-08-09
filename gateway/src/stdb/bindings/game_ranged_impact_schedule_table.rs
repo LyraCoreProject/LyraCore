@@ -18,6 +18,18 @@ pub struct GameRangedImpactScheduleTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_ranged_impact_schedule`.
+pub struct GameRangedImpactScheduleTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameRangedImpactScheduleTableAccessor {
+    type Row = RangedImpactSchedule;
+    type Handle<'db> = GameRangedImpactScheduleTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_ranged_impact_schedule()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_ranged_impact_schedule`.
 ///
@@ -41,6 +53,18 @@ impl GameRangedImpactScheduleTableAccess for super::RemoteTables {
 
 pub struct GameRangedImpactScheduleInsertCallbackId(__sdk::CallbackId);
 pub struct GameRangedImpactScheduleDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameRangedImpactScheduleTableHandle<'ctx> {
+    type Row = RangedImpactSchedule;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = RangedImpactSchedule> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameRangedImpactScheduleTableHandle<'ctx> {
     type Row = RangedImpactSchedule;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GameRangedImpactScheduleTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameRangedImpactScheduleTableHandle<'ctx> {
+    type InsertCallbackId = GameRangedImpactScheduleInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameRangedImpactScheduleInsertCallbackId {
+        GameRangedImpactScheduleInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameRangedImpactScheduleInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameRangedImpactScheduleTableHandle<'ctx> {
+    type DeleteCallbackId = GameRangedImpactScheduleDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameRangedImpactScheduleDeleteCallbackId {
+        GameRangedImpactScheduleDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameRangedImpactScheduleDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameRangedImpactScheduleUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameRangedImpactScheduleTableHandle<'ctx> {
+    type UpdateCallbackId = GameRangedImpactScheduleUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameRangedImpactScheduleUpdateCallbackId {
+        GameRangedImpactScheduleUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameRangedImpactScheduleUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameRangedImpactScheduleTableHandle<'ctx> {
     type UpdateCallbackId = GameRangedImpactScheduleUpdateCallbackId;
 
     fn on_update(

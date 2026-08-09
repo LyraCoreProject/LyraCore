@@ -18,6 +18,18 @@ pub struct GameGuidRangeRegistryTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `game_guid_range_registry`.
+pub struct GameGuidRangeRegistryTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameGuidRangeRegistryTableAccessor {
+    type Row = GuidRangeAssignment;
+    type Handle<'db> = GameGuidRangeRegistryTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_guid_range_registry()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `game_guid_range_registry`.
 ///
@@ -41,6 +53,18 @@ impl GameGuidRangeRegistryTableAccess for super::RemoteTables {
 
 pub struct GameGuidRangeRegistryInsertCallbackId(__sdk::CallbackId);
 pub struct GameGuidRangeRegistryDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameGuidRangeRegistryTableHandle<'ctx> {
+    type Row = GuidRangeAssignment;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = GuidRangeAssignment> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for GameGuidRangeRegistryTableHandle<'ctx> {
     type Row = GuidRangeAssignment;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for GameGuidRangeRegistryTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for GameGuidRangeRegistryTableHandle<'ctx> {
+    type InsertCallbackId = GameGuidRangeRegistryInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameGuidRangeRegistryInsertCallbackId {
+        GameGuidRangeRegistryInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameGuidRangeRegistryInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameGuidRangeRegistryTableHandle<'ctx> {
+    type DeleteCallbackId = GameGuidRangeRegistryDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameGuidRangeRegistryDeleteCallbackId {
+        GameGuidRangeRegistryDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameGuidRangeRegistryDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct GameGuidRangeRegistryUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for GameGuidRangeRegistryTableHandle<'ctx> {
+    type UpdateCallbackId = GameGuidRangeRegistryUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameGuidRangeRegistryUpdateCallbackId {
+        GameGuidRangeRegistryUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameGuidRangeRegistryUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameGuidRangeRegistryTableHandle<'ctx> {
     type UpdateCallbackId = GameGuidRangeRegistryUpdateCallbackId;
 
     fn on_update(
