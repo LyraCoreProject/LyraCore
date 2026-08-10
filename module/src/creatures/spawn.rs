@@ -611,6 +611,16 @@ pub fn build_creature_entity(
         run_speed_mult_bp: 10_000, // 1× — GM `.speed` targets players only
         godmode: false,         // GM `.god` targets players only
         resting: false,         // creatures never rest (196)
+        // A creature never calls `recompute_sheet` (no character sheet) — all nine sheet fields stay 0.
+        sheet_str_bonus: 0,
+        sheet_agi_bonus: 0,
+        sheet_sta_bonus: 0,
+        sheet_int_bonus: 0,
+        sheet_spi_bonus: 0,
+        sheet_ap_base: 0,
+        sheet_ap_mods: 0,
+        sheet_dmg_min: 0,
+        sheet_dmg_max: 0,
     }
 }
 
@@ -743,6 +753,17 @@ pub fn build_player_entity(
         run_speed_mult_bp: character.pending_run_speed_mult_bp,
         godmode: character.pending_godmode,
         resting: character.resting, // 196: restore the live rest flag (relog into an inn shows rested)
+        // Placeholder — `spell::recompute_sheet` (called right after login, alongside `recompute_vitals`)
+        // fills these in from the real base stats `apply_level_stats` writes below.
+        sheet_str_bonus: 0,
+        sheet_agi_bonus: 0,
+        sheet_sta_bonus: 0,
+        sheet_int_bonus: 0,
+        sheet_spi_bonus: 0,
+        sheet_ap_base: 0,
+        sheet_ap_mods: 0,
+        sheet_dmg_min: 0,
+        sheet_dmg_max: 0,
     };
     // The level-derived stat block — the five base attributes, armor, and max health/power — from the
     // real class/level curve (importer P3), via the ONE shared writer also used by the ding loop and a

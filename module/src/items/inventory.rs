@@ -197,6 +197,7 @@ pub(crate) fn apply_item_move(
     // is a no-op for non-players + when the derived max is unchanged.)
     if from_slot <= equip_slot::END || to_slot <= equip_slot::END {
         crate::spell::recompute_vitals(ctx, player_guid);
+        crate::spell::recompute_sheet(ctx, player_guid);
     }
     Ok(())
 }

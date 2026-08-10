@@ -750,6 +750,22 @@ pub(crate) fn aura_moves_vitals(kind: u8, p0: i32) -> bool {
     kind == A_MOD_STAT && (p0 == STAT_STA as i32 || p0 == STAT_INT as i32 || p0 == STAT_ALL as i32)
 }
 
+/// True iff `effect` is an aura that moves a character-sheet number `recompute_sheet` derives: any
+/// `A_MOD_STAT` (all five attributes, including `STAT_ALL`) or an `A_MOD_COMBAT(COMBAT_ATTACK_POWER)`
+/// aura (Battle Shout). Strictly wider than [`aura_moves_vitals`] (which only cares about the two stats
+/// that move a pool) — a +STR/+AGI/+SPI buff or an AP buff moves the sheet even though it's inert for
+/// vitals. Pure → unit-tested (mirrors `aura_moves_vitals`'s test shape).
+pub(crate) fn aura_moves_sheet(kind: u8, p0: i32) -> bool {
+    (kind == A_MOD_STAT
+        && (p0 == STAT_STR as i32
+            || p0 == STAT_AGI as i32
+            || p0 == STAT_STA as i32
+            || p0 == STAT_INT as i32
+            || p0 == STAT_SPI as i32
+            || p0 == STAT_ALL as i32))
+        || (kind == A_MOD_COMBAT && p0 == COMBAT_ATTACK_POWER as i32)
+}
+
 /// One shield's draw against `incoming` damage from a pool of `remaining`: returns
 /// `(absorbed, pool_left, leftover)`. The shield soaks up to its pool — `absorbed = min(remaining,
 /// incoming)`; `pool_left = remaining - absorbed` (0 ⇒ the shield is spent and the caller deletes it);

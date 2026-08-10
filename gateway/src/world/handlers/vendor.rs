@@ -118,9 +118,20 @@ pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
         // Repair an item at an armorer. CMSG_REPAIR_ITEM carries the NPC guid + the item INSTANCE guid;
         // the module's repair_item takes the inventory SLOT, so resolve guid → slot from the player's
         // own items (like CMSG_SELL_ITEM). An unmatched guid is logged + ignored; a gameplay Err
-        // (out of range / too poor) is per-action, never session-fatal. The client's per-item clicks
-        // carry the item guid; the REPAIR-ALL button sends guid 0 (a live-verified finding — the
-        // earlier "no repair-all bit" claim here was wrong) → the module's whole-body slot u8::MAX.
+        // (out of range / too poor / NPC can't repair) is per-action, never session-fatal — but unlike
+        // the earlier debug-log-and-swallow, it's ALSO relayed to the player as a self-only system chat
+        // line (`SMSG_MESSAGECHAT` System, like the GM dot-command error path) so a rejected repair
+        // isn't indistinguishable from a client that never sent the packet (#514). This does NOT by
+        // itself close #514: it only turns 3 of the issue's 4 candidate causes (NPC-gate rejection,
+        // a cost that exceeds the player's purse, the module's own error paths) from a silent no-op
+        // into a diagnosable, visible one — a real "not enough money" now reads as exactly that
+        // instead of nothing happening. Whether `rules::repair_cost`'s 1-copper-per-point proxy
+        // actually OVER-charges relative to the client's own DBC-driven estimate (issue candidate
+        // cause 2) is unconfirmed without a live cost comparison, and cause 3 (does the button even
+        // send the packet) is `needs-live-eyeball` in the issue itself — neither is guessable
+        // headlessly, so neither is touched here. The client's per-item clicks carry the item guid;
+        // the REPAIR-ALL button sends guid 0 (a live-verified finding — the earlier "no repair-all
+        // bit" claim here was wrong) → the module's whole-body slot u8::MAX.
         ClientOpcodeMessage::CMSG_REPAIR_ITEM(c) => {
             let self_guid = match &conn.state {
                 WorldState::InWorld(iw) => Some(iw.self_guid),
@@ -137,6 +148,12 @@ pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
                             "world: repair_all ignored (account {}): {e}",
                             conn.account_id
                         );
+                        send(
+                            tx,
+                            Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                                codec::build_gm_system_message(e.to_string()),
+                            ))),
+                        )?;
                     }
                 } else {
                     match store
@@ -152,6 +169,12 @@ pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
                                     "world: repair_item ignored (account {}): {e}",
                                     conn.account_id
                                 );
+                                send(
+                                    tx,
+                                    Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                                        codec::build_gm_system_message(e.to_string()),
+                                    ))),
+                                )?;
                             }
                         }
                         None => log::debug!(

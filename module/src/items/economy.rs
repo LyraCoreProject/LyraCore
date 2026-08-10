@@ -410,6 +410,37 @@ pub(crate) fn apply_player_repair(
 #[cfg(test)]
 mod tests {
     use super::{buyback_newest_first, buyback_ring_full};
+    use crate::test_scan::code_of;
+
+    /// #514: this crate has no `ReducerContext` harness by design (`test_scan`'s doc comment /
+    /// playbook §7), so `apply_player_repair`'s actual gating/cost/durability-restore behavior
+    /// against real table state is verified live via the wire harness, not here — the same boundary
+    /// every other reducer in this module lives behind (see `combat/swing.rs`'s chokepoint tests for
+    /// the same disclosure). This pins the two invariants a source-text scan CAN catch: the debit
+    /// happens (and is persisted) before the durability restore loop — so a rolled-back transaction
+    /// never leaves a charge without a repair — and every collected target actually gets its
+    /// durability written back to its template's max, not just summed into the cost.
+    #[test]
+    fn apply_player_repair_debits_before_it_restores_every_target() {
+        let src = include_str!("economy.rs");
+        let body = code_of(src, "pub(crate) fn apply_player_repair(");
+        let debit_at = body
+            .find("player.money -= total_cost;")
+            .expect("apply_player_repair must debit money before persisting");
+        let persist_at = body
+            .find("entities.guid().update(player);")
+            .expect("the debited player must be persisted");
+        let restore_at = body
+            .find("inst.durability = max_dur;")
+            .expect("apply_player_repair must restore durability to the template max");
+        let restore_persist_at = body
+            .find("instances.guid().update(inst);")
+            .expect("the restored item must be persisted");
+        assert!(
+            debit_at < persist_at && persist_at < restore_at && restore_at < restore_persist_at,
+            "expected debit → persist → restore → persist, in that order"
+        );
+    }
 
     /// BUYBACK RING FIFO EVICTION: the ring evicts its oldest entry once it already holds 12 (so the
     /// 13th sale pushes one out and the ring never grows past 12); below that it never evicts.

@@ -259,6 +259,10 @@ pub(crate) fn set_character_level(
         e.health = e.max_health;
         e.power = e.max_power; // refill power to the new max
         entities.guid().update(e);
+        // Sheet AP/damage-range are level-derived (#517) and only ever move via `recompute_sheet` —
+        // without this a GM `.level` set leaves the paperdoll's AP/damage numbers frozen at the
+        // pre-set level until an unrelated trigger (aura/gear/relog) fires.
+        crate::spell::recompute_sheet(ctx, character_guid);
     }
 
     // Persist the level to the character row so a relog keeps it. XP resets to 0 (266): banked

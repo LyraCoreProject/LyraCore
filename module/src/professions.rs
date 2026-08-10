@@ -370,6 +370,7 @@ pub(crate) fn apply_disenchant(ctx: &ReducerContext, guid: u64, slot: u8) -> Res
     // max HP/mana (a disenchanted +Sta piece shrinks the health bar). A bag item (>18) touches no equip slot.
     if slot <= crate::items::equip_slot::END {
         crate::spell::recompute_vitals(ctx, guid);
+        crate::spell::recompute_sheet(ctx, guid);
     }
     Ok(())
 }
@@ -422,6 +423,7 @@ pub(crate) fn apply_enchant_item(
     // max is unchanged (e.g. a +Strength weapon enchant), so this is safe to call unconditionally for gear.
     if target_slot <= crate::items::equip_slot::END {
         crate::spell::recompute_vitals(ctx, guid);
+        crate::spell::recompute_sheet(ctx, guid);
     }
     Ok(())
 }

@@ -362,8 +362,10 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
     // placeholder when the curve isn't loaded.
     let race = p.race();
     let class = p.class();
+    let mut leveled = false;
     // Ding loop: spend XP across as many thresholds as it crosses (a big award can be 2+ levels).
     while p.next_level_xp > 0 && p.xp >= p.next_level_xp {
+        leveled = true;
         p.xp -= p.next_level_xp;
         p.level += 1;
         // Lift every combat (weapon + Defense) skill line's cap to the new level*5: this
@@ -427,6 +429,26 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
                 new_level: p.level,
             },
         );
+    }
+    if leveled {
+        // Sheet AP/damage-range are level-derived (#517) and only ever move via `recompute_sheet`,
+        // which re-fetches the row by guid — so the ding's level/stat write must be PERSISTED first
+        // (a mid-loop call would see the still-stale pre-ding row). Pull the recomputed row back into
+        // `p` afterward so the caller's own `entities.guid().update(p)` (documented above as the
+        // single post-loop persist) doesn't stomp the fresh `sheet_*` fields with `p`'s stale
+        // in-memory copy.
+        // `WorldEntity` isn't `Clone`, so swap the up-to-date in-memory struct out of `*p` (via a
+        // throwaway placeholder fetched from the table) rather than cloning it, persist that, then
+        // read the recomputed row back into `*p`.
+        let entities = ctx.db.game_world_entity();
+        if let Some(placeholder) = entities.guid().find(p.guid) {
+            let moved = std::mem::replace(p, placeholder);
+            entities.guid().update(moved);
+            crate::spell::recompute_sheet(ctx, p.guid);
+            if let Some(fresh) = entities.guid().find(p.guid) {
+                *p = fresh;
+            }
+        }
     }
 }
 

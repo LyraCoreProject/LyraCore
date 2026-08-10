@@ -696,6 +696,24 @@ fn aura_moves_vitals_gate() {
     assert!(!aura_moves_vitals(A_MOD_RESISTANCE, STAT_ALL as i32));
 }
 
+/// The sheet-recompute gate: wider than `aura_moves_vitals` — every `A_MOD_STAT` attribute (including
+/// STR/AGI/SPI, which are inert for vitals) trips it, and so does an `A_MOD_COMBAT(COMBAT_ATTACK_POWER)`
+/// aura (Battle Shout) even though that kind never moves a pool.
+#[test]
+fn aura_moves_sheet_gate() {
+    assert!(aura_moves_sheet(A_MOD_STAT, STAT_STR as i32));
+    assert!(aura_moves_sheet(A_MOD_STAT, STAT_AGI as i32));
+    assert!(aura_moves_sheet(A_MOD_STAT, STAT_STA as i32));
+    assert!(aura_moves_sheet(A_MOD_STAT, STAT_INT as i32));
+    assert!(aura_moves_sheet(A_MOD_STAT, STAT_SPI as i32));
+    assert!(aura_moves_sheet(A_MOD_STAT, STAT_ALL as i32));
+    assert!(aura_moves_sheet(A_MOD_COMBAT, COMBAT_ATTACK_POWER as i32));
+    // A combat aura on a non-AP field (e.g. crit) must NOT trip the sheet recompute.
+    assert!(!aura_moves_sheet(A_MOD_COMBAT, COMBAT_CRIT as i32));
+    // A different aura kind with an AP-looking p0 still must NOT trip (the kind gate is first).
+    assert!(!aura_moves_sheet(A_PERIODIC_DAMAGE, COMBAT_ATTACK_POWER as i32));
+}
+
 /// Cast interrupt-on-damage / CC-break flag decode: `break_auras_on_damage` (which also folds in the
 /// cast-interrupt) breaks an aura only when its header's aura_interrupt carries bit 0. An un-flagged CC (the
 /// seed default, mask 0) is never broken; a flagged one (and any mask with bit 0 set) is. The runtime

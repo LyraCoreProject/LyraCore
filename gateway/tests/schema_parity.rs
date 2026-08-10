@@ -459,6 +459,8 @@ parity_test!(parity_game_world_entity, "game_world_entity", lyracore_module::Wor
     combat_until_ms, pickpocketed, next_swing_spell, overpower_until_ms, revenge_until_ms,
     stance, owner_guid, skinned, mana_regen_paused_until_ms, death_expire_micros, instance_id,
     run_speed_mult_bp, godmode, resting, cell,
+    sheet_str_bonus, sheet_agi_bonus, sheet_sta_bonus, sheet_int_bonus, sheet_spi_bonus,
+    sheet_ap_base, sheet_ap_mods, sheet_dmg_min, sheet_dmg_max,
 });
 // `game_config` became gateway-subscribed so the startup instance-hosting check can read
 // `hosts_instances` back instead of guessing. The generated binding was STALE when that subscription

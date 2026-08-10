@@ -604,6 +604,13 @@ pub(crate) fn aura_apply(
     if aura_moves_vitals(e.kind, e.p0) {
         recompute_vitals(ctx, target_guid);
     }
+    // #517: re-derive the character-sheet numbers the SAME way — gated on `aura_moves_sheet` (a wider
+    // gate than vitals: STR/AGI/SPI stat auras and Battle-Shout-style AP auras move the sheet but not a
+    // pool). AFTER the vitals recompute so a STA/INT aura's `recompute_sheet` sees the already-updated
+    // `e.spirit` field.
+    if crate::spell::aura_moves_sheet(e.kind, e.p0) {
+        recompute_sheet(ctx, target_guid);
+    }
 
     // Combo-FINISHER spend (Slice and Dice): SPEND the combo points AFTER the duration read above
     // (read-then-spend, same call, same (caster, enemy) key). SnD has exactly ONE aura effect (the haste),

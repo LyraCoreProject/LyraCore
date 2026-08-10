@@ -1123,6 +1123,15 @@ mod tests {
             run_speed_mult_bp: 10_000,
             godmode: false,
             resting: false,
+            sheet_str_bonus: 0,
+            sheet_agi_bonus: 0,
+            sheet_sta_bonus: 0,
+            sheet_int_bonus: 0,
+            sheet_spi_bonus: 0,
+            sheet_ap_base: 0,
+            sheet_ap_mods: 0,
+            sheet_dmg_min: 0,
+            sheet_dmg_max: 0,
         }
     }
 

@@ -1173,6 +1173,33 @@ pub(crate) fn armor_packet(coord: &Coordinator, changed: &Aura, self_guid: u64) 
         Box::new(codec::build_armor_values(self_guid, eff, pos)),
     )))
 }
+// Live PAPERDOLL STR/AGI/STA/INT/SPI/AP/damage-range on an aura apply/expire (#517, the Battle Shout
+// bug): `module::spell::recompute_sheet` is the SOURCE OF TRUTH and already re-derived + wrote
+// `game_world_entity.sheet_*` in the SAME reducer transaction that inserted/deleted `changed` — this
+// is a plain re-push of that row, never a second aura fold (the trap the ORIGINAL gateway-only
+// `sheet_stats` hit: it never read `game_aura` at all). Gated on the aura KIND matching what
+// `recompute_sheet` actually reacts to (`aura_moves_sheet`'s mirror), so an unrelated buff/debuff
+// (a DoT, a slow) doesn't spam the opcode — purely a re-push filter, not aura interpretation. Self-
+// scoped: the sheet shows only your own numbers, so no peer relay is needed.
+pub(crate) fn sheet_packet(coord: &Coordinator, changed: &Aura, self_guid: u64) -> Option<Outbound> {
+    const A_MOD_STAT: u8 = 0xA0; // taxonomy A_MOD_STAT
+    const A_MOD_COMBAT: u8 = 0xA3; // taxonomy A_MOD_COMBAT
+    const COMBAT_ATTACK_POWER: i32 = 0; // taxonomy COMBAT_ATTACK_POWER
+    let moves_sheet = changed.eff_kind == A_MOD_STAT
+        || (changed.eff_kind == A_MOD_COMBAT && changed.eff_p0 == COMBAT_ATTACK_POWER);
+    if changed.target_guid != self_guid || !moves_sheet {
+        return None;
+    }
+    let guard = coord.0.coord();
+    let db = &guard.conn.db;
+    let st = super::armor::sheet_stats(db, self_guid);
+    drop(guard);
+    st.map(|st| {
+        Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+            codec::build_sheet_stats_values(self_guid, &st),
+        )))
+    })
+}
 // Stealth peer-visibility: when a NON-self peer's A_STEALTH presence crosses the 0↔1 boundary,
 // HIDE it from this viewer (SMSG_DESTROY_OBJECT + evict from `created`) on the gain, REVEAL it
 // (re-CREATE + re-insert into `created`) on the loss. The recipient set is implicit — every
@@ -1293,6 +1320,9 @@ pub(crate) fn aura_insert_outbound(
         if let Some(o) = armor_packet(coord, row, self_guid) {
             out.push(o);
         }
+        if let Some(o) = sheet_packet(coord, row, self_guid) {
+            out.push(o);
+        }
     }
     out.extend(stealth_visibility(
         stealth_count,
@@ -1337,6 +1367,9 @@ pub(crate) fn aura_update_outbound(
         if let Some(o) = armor_packet(coord, row, self_guid) {
             out.push(o);
         }
+        if let Some(o) = sheet_packet(coord, row, self_guid) {
+            out.push(o);
+        }
     }
     out
 }
@@ -1364,6 +1397,9 @@ pub(crate) fn aura_delete_outbound(
             }
         }
         if let Some(o) = armor_packet(coord, row, self_guid) {
+            out.push(o);
+        }
+        if let Some(o) = sheet_packet(coord, row, self_guid) {
             out.push(o);
         }
     }
@@ -3148,6 +3184,11 @@ impl Coordinator {
                     if let Some(o) = armor_packet(&armor_coord_ins, row, self_guid) {
                         let _ = aura_ins_tx.send(o);
                     }
+                    // Live paperdoll (#517, Battle Shout): a self STR/AGI/STA/INT/SPI/AP aura insert
+                    // re-pushes the sheet — `recompute_sheet` already wrote the new numbers.
+                    if let Some(o) = sheet_packet(&armor_coord_ins, row, self_guid) {
+                        let _ = aura_ins_tx.send(o);
+                    }
                 }
                 let stealth_count = ctx
                     .db
@@ -3198,6 +3239,12 @@ impl Coordinator {
                     if let Some(o) = armor_packet(&armor_coord_upd, row, self_guid) {
                         let _ = aura_upd_tx.send(o);
                     }
+                    // Live paperdoll (#517): a self STR/AGI/STA/INT/SPI/AP aura whose fields changed
+                    // (e.g. a stack refresh) re-pushes the sheet — idempotent if `recompute_sheet` didn't
+                    // fire on this particular field change (the numbers just resend unchanged).
+                    if let Some(o) = sheet_packet(&armor_coord_upd, row, self_guid) {
+                        let _ = aura_upd_tx.send(o);
+                    }
                 }
             })
         });
@@ -3223,6 +3270,12 @@ impl Coordinator {
                     // Live armor (Demon Skin expiry): on_delete fires AFTER the row is gone, so the fold reads
                     // the remaining auras → the sheet drops back to base + gear.
                     if let Some(o) = armor_packet(&armor_coord_del, row, self_guid) {
+                        let _ = aura_del_tx.send(o);
+                    }
+                    // Live paperdoll (#517, Battle Shout expiry): `tick_auras`'s expiry pass already ran
+                    // `recompute_sheet` in the SAME reducer transaction that deleted this row — re-push
+                    // the now-reverted numbers.
+                    if let Some(o) = sheet_packet(&armor_coord_del, row, self_guid) {
                         let _ = aura_del_tx.send(o);
                     }
                 }
@@ -4631,6 +4684,15 @@ mod tests {
             godmode: false,
             resting: false,
             cell: lyracore_shared::spatial::grid_cell_id(0, 0),
+            sheet_str_bonus: 0,
+            sheet_agi_bonus: 0,
+            sheet_sta_bonus: 0,
+            sheet_int_bonus: 0,
+            sheet_spi_bonus: 0,
+            sheet_ap_base: 0,
+            sheet_ap_mods: 0,
+            sheet_dmg_min: 0,
+            sheet_dmg_max: 0,
         }
     }
 

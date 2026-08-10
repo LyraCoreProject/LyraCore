@@ -415,6 +415,7 @@ fn apply_talent_rank(
             if revitalize {
                 crate::spell::recompute_vitals(ctx, guid);
             }
+            crate::spell::recompute_sheet(ctx, guid);
         } else {
             spacetimedb::log::info!(
                 "talent {} rank {rank}: rank spell {rank_spell} not imported yet",
@@ -558,6 +559,7 @@ pub(crate) fn do_reset_talents(
     if revitalize {
         crate::spell::recompute_vitals(ctx, character_guid);
     }
+    crate::spell::recompute_sheet(ctx, character_guid);
 
     // Forget every spell the reset talents had put in the book: granted ABILITIES and (031 residual
     // fix) the passive RANK-SPELLS themselves — the book previously kept every passive through a

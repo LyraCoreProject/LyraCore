@@ -284,6 +284,33 @@ pub struct WorldEntity {
     /// post-publish step this migration REQUIRES.
     #[default(0i64)]
     pub cell: i64,
+    /// Character-sheet numbers (#517): `spell::recompute_sheet` is the SINGLE chokepoint that writes
+    /// these nine fields (base + `A_MOD_STAT`/`A_MOD_COMBAT(ATTACK_POWER)` aura + equipped gear incl.
+    /// enchants — the exact same folds `combat::swing_range_ctx` rolls against), so the gateway's
+    /// `build_sheet_stats_values` is a plain row read, never a second copy of aura/gear semantics. A
+    /// SIGNED bonus per attribute (`effective = base ± this`, e.g. `strength + sheet_str_bonus`); AP is
+    /// split at the source into base/mods because vanilla renders it through two DIFFERENT wire fields
+    /// (`UNIT_FIELD_ATTACK_POWER` / `_ATTACK_POWER_MODS`). 0 for every existing row (no bonus) and for
+    /// creatures (which never call `recompute_sheet`, having no sheet). `#[default(0)]` + END-appended
+    /// so `publish` auto-migrates existing rows (the migration rule).
+    #[default(0)]
+    pub sheet_str_bonus: i32,
+    #[default(0)]
+    pub sheet_agi_bonus: i32,
+    #[default(0)]
+    pub sheet_sta_bonus: i32,
+    #[default(0)]
+    pub sheet_int_bonus: i32,
+    #[default(0)]
+    pub sheet_spi_bonus: i32,
+    #[default(0)]
+    pub sheet_ap_base: u32,
+    #[default(0)]
+    pub sheet_ap_mods: i32,
+    #[default(0)]
+    pub sheet_dmg_min: u32,
+    #[default(0)]
+    pub sheet_dmg_max: u32,
 }
 
 impl WorldEntity {
@@ -909,6 +936,7 @@ pub(crate) fn apply_player_login(
     // recompute_vitals no-ops if nothing moved). Health may sit a hair under the new max until the first
     // regen tick — negligible at newbie gear levels. (Deliberate simplification: full-heal-to-new-max on login if it ever bites.)
     crate::spell::recompute_vitals(ctx, character.guid);
+    crate::spell::recompute_sheet(ctx, character.guid);
 
     // Rested XP (rank 30): accrue rested XP for the time spent logged out (5%/8h, capped 1.5 levels),
     // then consume the logout stamp so a re-login can't double-accrue. A never-logged-out character

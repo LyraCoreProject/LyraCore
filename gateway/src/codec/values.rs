@@ -260,31 +260,38 @@ pub fn build_armor_values(guid: u64, total: u32, pos_buff: u32) -> SMSG_UPDATE_O
     })
 }
 
-/// The gear-folded paperdoll numbers — computed by `stdb::armor::sheet_stats`, rendered by
-/// [`build_sheet_stats_values`]. `gear_*` are the equipped-item bonuses per attribute (signed:
-/// a cursed piece subtracts); the totals already include them.
+/// The character-sheet paperdoll numbers — a plain READ of `module::spell::recompute_sheet`'s output
+/// (#517; `stdb::armor::sheet_stats` fetches the row), rendered by [`build_sheet_stats_values`].
+/// `strength`/`agility`/`stamina`/`intellect`/`spirit` are the EFFECTIVE attribute (base + bonus, the
+/// white total `UNIT_FIELD_STAT0..4` wants); `*_bonus` is the SIGNED aura+gear(+enchant) delta the
+/// module already folded — split into the green/red paperdoll halves below via plain sign arithmetic,
+/// not a second aura read. `attack_power` is the stat-derived base AP; `ap_mods` is the `A_MOD_COMBAT(ATTACK_POWER)`
+/// aura portion alone (Battle Shout) — vanilla renders those through two different wire fields.
 pub struct SheetStatsValues {
     pub strength: u32,
     pub agility: u32,
     pub stamina: u32,
     pub intellect: u32,
     pub spirit: u32,
-    pub gear_str: i32,
-    pub gear_agi: i32,
-    pub gear_sta: i32,
-    pub gear_int: i32,
-    pub gear_spi: i32,
+    pub str_bonus: i32,
+    pub agi_bonus: i32,
+    pub sta_bonus: i32,
+    pub int_bonus: i32,
+    pub spi_bonus: i32,
     pub attack_power: u32,
+    pub ap_mods: i32,
     pub dmg_min: u32,
     pub dmg_max: u32,
 }
 
-/// Build a VALUES partial-update carrying the gear-folded paperdoll numbers: the five base
-/// attributes (totals) PLUS the PLAYER_FIELD_POSSTAT/NEGSTAT split — the client renders the stat
-/// number GREEN with a "(+N)" tooltip when POSSTAT is non-zero (same mechanism as the armor
-/// green), melee attack power, and the melee damage range (min/max are FLOAT fields — the client
-/// renders "N - M" and derives DPS with BASEATTACKTIME). Player mask (POSSTAT/NEGSTAT are
-/// PLAYER-block fields, like the armor buff-mods); typed setters throughout.
+/// Build a VALUES partial-update carrying the paperdoll numbers: the five EFFECTIVE attributes (white
+/// `UNIT_FIELD_STAT0..4`) PLUS the PLAYER_FIELD_POSSTAT/NEGSTAT split derived from each `*_bonus` sign
+/// — the client renders the stat number GREEN with a "(+N)" tooltip when POSSTAT is non-zero (same
+/// mechanism as the armor green), the stat-derived base attack power PLUS `UNIT_FIELD_ATTACK_POWER_MODS`
+/// (the Battle-Shout-style aura portion, rendered as its own green "(+N)"), and the melee damage range
+/// (min/max are FLOAT fields — the client renders "N - M" and derives DPS with BASEATTACKTIME). Player
+/// mask (POSSTAT/NEGSTAT/ATTACK_POWER_MODS are PLAYER-block fields, like the armor buff-mods); typed
+/// setters throughout.
 pub fn build_sheet_stats_values(guid: u64, s: &SheetStatsValues) -> SMSG_UPDATE_OBJECT {
     player_values(guid, |p| {
         p.set_unit_strength(s.strength as i32);
@@ -292,17 +299,21 @@ pub fn build_sheet_stats_values(guid: u64, s: &SheetStatsValues) -> SMSG_UPDATE_
         p.set_unit_stamina(s.stamina as i32);
         p.set_unit_intellect(s.intellect as i32);
         p.set_unit_spirit(s.spirit as i32);
-        p.set_player_field_posstat0(s.gear_str.max(0));
-        p.set_player_field_posstat1(s.gear_agi.max(0));
-        p.set_player_field_posstat2(s.gear_sta.max(0));
-        p.set_player_field_posstat3(s.gear_int.max(0));
-        p.set_player_field_posstat4(s.gear_spi.max(0));
-        p.set_player_field_negstat0(s.gear_str.min(0));
-        p.set_player_field_negstat1(s.gear_agi.min(0));
-        p.set_player_field_negstat2(s.gear_sta.min(0));
-        p.set_player_field_negstat3(s.gear_int.min(0));
-        p.set_player_field_negstat4(s.gear_spi.min(0));
+        p.set_player_field_posstat0(s.str_bonus.max(0));
+        p.set_player_field_posstat1(s.agi_bonus.max(0));
+        p.set_player_field_posstat2(s.sta_bonus.max(0));
+        p.set_player_field_posstat3(s.int_bonus.max(0));
+        p.set_player_field_posstat4(s.spi_bonus.max(0));
+        p.set_player_field_negstat0(s.str_bonus.min(0));
+        p.set_player_field_negstat1(s.agi_bonus.min(0));
+        p.set_player_field_negstat2(s.sta_bonus.min(0));
+        p.set_player_field_negstat3(s.int_bonus.min(0));
+        p.set_player_field_negstat4(s.spi_bonus.min(0));
         p.set_unit_attack_power(s.attack_power as i32);
+        // UNIT_FIELD_ATTACK_POWER_MODS packs two UNSIGNED shorts (pos, neg-as-magnitude), mirroring
+        // mangos's `SetInt16Value(field, 0/1, ..)` — never a signed short (a negative AP debuff isn't
+        // wired yet; `ap_mods` is currently always ≥0 from Battle Shout, so `neg` is 0 in practice).
+        p.set_unit_attack_power_mods(s.ap_mods.max(0) as u16, (-s.ap_mods).max(0) as u16);
         p.set_unit_mindamage(s.dmg_min as f32);
         p.set_unit_maxdamage(s.dmg_max as f32);
     })

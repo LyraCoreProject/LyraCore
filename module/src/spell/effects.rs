@@ -249,6 +249,77 @@ pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
     entities.guid().update(e);
 }
 
+/// Recompute `unit_guid`'s CHARACTER-SHEET numbers (#517) — the paperdoll fields the gateway's
+/// `build_sheet_stats_values` merely reads back, never computes: this is the SINGLE fold, so no aura or
+/// gear rule is ever duplicated gateway-side (the trap the previous gateway-only `sheet_stats` mirror
+/// hit — it never read `game_aura`, so no aura, including Battle Shout, could ever move the sheet).
+///
+/// Every number here is derived through the SAME functions the live combat/vitals math already uses —
+/// `combat::effective_strength`/`effective_agility` (base + `A_MOD_STAT` aura + equipped gear incl.
+/// enchants), `combat::aura_attack_power_bonus` (the `A_MOD_COMBAT(COMBAT_ATTACK_POWER)` fold Battle
+/// Shout rides), and `combat::swing_range_ctx` (the EXACT weapon/AP/disarm fold `roll_swing` rolls
+/// against) — so the sheet can never drift from what a swing actually does.
+///
+/// Stores a SIGNED bonus per attribute (`sheet_*_bonus`, base + aura + gear − base) rather than a
+/// pos/neg split: `effective = base + bonus` by construction, and the gateway derives the green/red
+/// paperdoll split via `bonus.max(0)`/`bonus.min(0)` — trivial sign arithmetic, not aura interpretation,
+/// so no drift risk moves back into the gateway. AP is split at the source instead
+/// (`sheet_ap_base`/`sheet_ap_mods`) because vanilla renders it through two DIFFERENT wire fields
+/// (`UNIT_FIELD_ATTACK_POWER` / `_ATTACK_POWER_MODS`), not a color split of one field.
+///
+/// A non-player (a creature has no character sheet) is a no-op. [entity]
+pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
+    let entities = ctx.db.game_world_entity();
+    let Some(mut e) = entities.guid().find(unit_guid) else {
+        return;
+    };
+    if !e.is_player() {
+        return;
+    }
+    let (race, class, _gender, _pt) = lyracore_shared::packing::unpack4(e.unit_bytes_0);
+
+    let eff_str = crate::combat::effective_strength(ctx, &e);
+    let eff_agi = crate::combat::effective_agility(ctx, &e);
+    let str_bonus = eff_str as i32 - e.strength as i32;
+    let agi_bonus = eff_agi as i32 - e.agility as i32;
+    let sta_bonus = stat_bonus(ctx, unit_guid, STAT_STA)
+        + crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Stamina);
+    let int_bonus = stat_bonus(ctx, unit_guid, STAT_INT)
+        + crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Intellect);
+    // `recompute_vitals` (called first at every real call site) already folds Spirit's base+aura into
+    // `e.spirit` — re-derive the SAME base curve so the sheet's bonus is `e.spirit - base`, never a
+    // second copy of the aura/pct math.
+    let base_spirit = crate::stats::base_attributes_for(ctx, race, class, e.level).4 as i32;
+    let spi_bonus = e.spirit as i32 - base_spirit;
+
+    let ap_base = crate::combat::melee_attack_power_for(class, eff_str, eff_agi, e.level);
+    let ap_mods = crate::combat::aura_attack_power_bonus(ctx, unit_guid) as i32;
+    let (dmg_min, dmg_max) = crate::combat::swing_range_ctx(ctx, &e);
+
+    if str_bonus == e.sheet_str_bonus
+        && agi_bonus == e.sheet_agi_bonus
+        && sta_bonus == e.sheet_sta_bonus
+        && int_bonus == e.sheet_int_bonus
+        && spi_bonus == e.sheet_spi_bonus
+        && ap_base == e.sheet_ap_base
+        && ap_mods == e.sheet_ap_mods
+        && dmg_min == e.sheet_dmg_min
+        && dmg_max == e.sheet_dmg_max
+    {
+        return; // nothing moved — skip the write (baseline-safe no-op)
+    }
+    e.sheet_str_bonus = str_bonus;
+    e.sheet_agi_bonus = agi_bonus;
+    e.sheet_sta_bonus = sta_bonus;
+    e.sheet_int_bonus = int_bonus;
+    e.sheet_spi_bonus = spi_bonus;
+    e.sheet_ap_base = ap_base;
+    e.sheet_ap_mods = ap_mods;
+    e.sheet_dmg_min = dmg_min;
+    e.sheet_dmg_max = dmg_max;
+    entities.guid().update(e);
+}
+
 /// Soak `incoming` damage through `target_guid`'s A_ABSORB shields BEFORE any health deduction, and
 /// return the REMAINING (un-absorbed) damage. Walks the target's A_ABSORB auras in a STABLE order (by
 /// aura `id`, so multiple stacked shields drain deterministically — oldest/lowest id first), drawing

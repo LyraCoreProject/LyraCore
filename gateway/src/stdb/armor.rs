@@ -14,6 +14,15 @@
 //! (A_MOD_RESISTANCE armor auras, amount×stacks), `items::equipped_stat_bonus(Armor)` (worn `stat_armor`,
 //! broken-skip). No armor ENCHANT exists in the module (its `ENCHANTS` table is STR/STA only), so there is
 //! no enchant overlay term and the gateway matches the module exactly for armor.
+//!
+//! [`sheet_stats`] (the STR/AGI/STA/INT/SPI/AP/damage-range half of the paperdoll, #517) is NOT a
+//! gateway-side fold like the Armor half above — it is a plain READ of `module::spell::recompute_sheet`'s
+//! output, END-appended onto `game_world_entity` (`sheet_*_bonus`/`sheet_ap_base`/`sheet_ap_mods`/
+//! `sheet_dmg_min`/`sheet_dmg_max`). Those columns already ride the player CREATE relay (the same row),
+//! so — unlike Armor — there is no coordinator-cache gap to patch: an aura present at login already
+//! shows on the very first CREATE, no on-aura re-push needed. Do NOT re-introduce a second aura/gear fold
+//! here for those numbers; extend `recompute_sheet` instead (that's the whole point of #517 — the
+//! previous gateway-only mirror never read `game_aura`, so no aura could ever move the sheet).
 
 use super::bindings::*;
 use spacetimedb_sdk::Table;
@@ -54,83 +63,37 @@ fn gear_armor_contribution(slot: u8, stat_armor: i32, max_durability: u32, durab
     stat_armor
 }
 
-/// Everything the paperdoll shows that GEAR moves, folded from the subscription cache the
-/// same way `effective_armor` below is: the five attributes = entity base + equipped `stat_*`
-/// bonuses (worn slots 0..=18, broken pieces excluded), melee attack power from the module's
-/// `combat::tables` curves (mirrored — Rogue/Hunter agility curve, Str-class default), and the
-/// melee damage range = main-hand tooltip damage + the `AP/14 × speed` fold (the SAME numbers the
-/// server rolls, ending the "sheet says 5-7 but swings land differently" confusion). CEILING (noted,
-/// not wired): AURA contributions (+stat buffs, Battle Shout AP) move combat but not this sheet —
-/// the aura relay is the follow-up.
-/// Mirror of `module::combat::tables::melee_attack_power_for` (Rogue 4 / Hunter 3 use the
-/// agility curve `level*2 + Str + Agi - 20`; everyone else `level*3 + Str*2 - 20`).
-fn melee_attack_power_for(class: u8, strength: u32, agility: u32, level: u32) -> u32 {
-    match class {
-        3 | 4 => (level * 2 + strength + agility).saturating_sub(20),
-        _ => (level * 3 + strength * 2).saturating_sub(20),
-    }
-}
-
-/// Mirror of `module::combat::tables::weapon_swing_range_ap` (AP_PER_DPS = 14) — also covers the
-/// unarmed shape when called with the unarmed base range (1..=3) and the unit's base attack time.
-fn swing_range_ap(ap: u32, dmg_min: u32, dmg_max: u32, delay_ms: u32) -> (u32, u32) {
-    let bonus = ap * delay_ms / (14 * 1000);
-    (dmg_min + bonus, dmg_max + bonus)
-}
-
+/// Everything the paperdoll shows that GEAR/AURAS move on the STR/AGI/STA/INT/SPI/AP/damage-range half
+/// of the sheet (#517) — a plain row read of `module::spell::recompute_sheet`'s output, never a second
+/// fold. `strength`/`agility`/`stamina`/`intellect`/`spirit` are the BASE attributes (the white
+/// `UNIT_FIELD_STAT0..4` total); `*_bonus` is the SIGNED aura+gear(+enchant) delta the caller splits
+/// into the green/red `PLAYER_FIELD_POSSTAT`/`NEGSTAT` pair via `.max(0)`/`.min(0)` — sign arithmetic
+/// only, not aura interpretation, so no drift risk re-enters the gateway. `attack_power` is the
+/// stat-derived base (folds effective STR/AGI, so a +STR trinket already moves it) and `ap_mods` is the
+/// `A_MOD_COMBAT(ATTACK_POWER)` aura portion alone (Battle Shout) — vanilla renders those through two
+/// different wire fields. `dmg_min`/`dmg_max` are `combat::swing_range_ctx`'s own numbers (weapon +
+/// AP + disarm folded in module-side), so the sheet can never show a range the swing doesn't roll.
 pub(crate) fn sheet_stats(db: &RemoteTables, guid: u64) -> Option<crate::codec::SheetStatsValues> {
-    let e = db.game_world_entity().iter().find(|e| e.guid == guid)?;
-    // Gear fold: one pass over the owner's worn, unbroken items joined to their templates.
-    let (mut g_str, mut g_agi, mut g_sta, mut g_int, mut g_spi) = (0i32, 0i32, 0i32, 0i32, 0i32);
-    let mut main_hand: Option<(u32, u32, u32)> = None; // (dmg_min, dmg_max, delay_ms)
-    for item in db
-        .game_item_instance()
-        .iter()
-        .filter(|i| i.owner_guid == guid && i.slot <= 18)
-    {
-        let Some(t) = db
-            .game_item_template()
-            .iter()
-            .find(|t| t.entry == item.entry)
-        else {
-            continue;
-        };
-        if t.max_durability > 0 && item.durability == 0 {
-            continue; // broken grants nothing (same rule as gear_armor_contribution)
-        }
-        g_str += t.stat_strength;
-        g_agi += t.stat_agility;
-        g_sta += t.stat_stamina;
-        g_int += t.stat_intellect;
-        g_spi += t.stat_spirit;
-        if item.slot == 15 && t.damage_max > 0.0 {
-            main_hand = Some((t.damage_min as u32, t.damage_max as u32, t.delay_ms));
-        }
-    }
-    let fold = |base: u32, bonus: i32| (base as i32 + bonus).max(0) as u32;
-    let strength = fold(e.strength, g_str);
-    let agility = fold(e.agility, g_agi);
-    let class = (e.unit_bytes_0 >> 8) as u8; // unpack4 byte 1 = class (codec::entity convention)
-    let level = e.level;
-    let attack_power = melee_attack_power_for(class, strength, agility, level);
-    let (dmg_min, dmg_max) = match main_hand {
-        Some((mn, mx, delay)) => swing_range_ap(attack_power, mn, mx, delay),
-        None => swing_range_ap(attack_power, 1, 3, e.base_attack_time_ms), // unarmed base 1..=3
-    };
+    let e = db.game_world_entity().guid().find(&guid)?;
+    // `e.strength`/`agility`/`stamina`/`intellect` are BASE only (unlike `e.spirit`, which
+    // `recompute_vitals` already overwrites to the effective value) — the wire field is the white
+    // EFFECTIVE total (base + bonus), matching the armor half's `total` (see module docs above), so
+    // add the signed `sheet_*_bonus` delta back in here rather than sending the base straight through.
     Some(crate::codec::SheetStatsValues {
-        strength,
-        agility,
-        stamina: fold(e.stamina, g_sta),
-        intellect: fold(e.intellect, g_int),
-        spirit: fold(e.spirit, g_spi),
-        gear_str: g_str,
-        gear_agi: g_agi,
-        gear_sta: g_sta,
-        gear_int: g_int,
-        gear_spi: g_spi,
-        attack_power,
-        dmg_min,
-        dmg_max,
+        strength: (e.strength as i32 + e.sheet_str_bonus).max(0) as u32,
+        agility: (e.agility as i32 + e.sheet_agi_bonus).max(0) as u32,
+        stamina: (e.stamina as i32 + e.sheet_sta_bonus).max(0) as u32,
+        intellect: (e.intellect as i32 + e.sheet_int_bonus).max(0) as u32,
+        spirit: e.spirit,
+        str_bonus: e.sheet_str_bonus,
+        agi_bonus: e.sheet_agi_bonus,
+        sta_bonus: e.sheet_sta_bonus,
+        int_bonus: e.sheet_int_bonus,
+        spi_bonus: e.sheet_spi_bonus,
+        attack_power: e.sheet_ap_base,
+        ap_mods: e.sheet_ap_mods,
+        dmg_min: e.sheet_dmg_min,
+        dmg_max: e.sheet_dmg_max,
     })
 }
 
@@ -219,68 +182,10 @@ mod tests {
         assert_eq!(gear_armor_contribution(18, 5, 0, 0), 5);
     }
 
-    /// The two curves above are HAND-MIRRORS of `module::combat::tables` (see their doc comments),
-    /// and the release-boundary hardening pass's first coverage baseline found neither of them
-    /// pinned by anything: the character sheet could drift from the numbers the server actually rolls and every offline test would
-    /// stay green. Same drift class `gateway/tests/schema_parity.rs` guards for table shape, same
-    /// answer — compare against the REAL module function through the `lyracore-module`
-    /// dev-dependency (`module/src/lib.rs` already `pub use combat::*`), never against a second copy
-    /// of the formula, because a copy drifts along with the mirror it is supposed to catch.
-    ///
-    /// Every class id, not a sample: the mirror's whole risk is its `3 | 4` arm splitting from the
-    /// module's `CLASS_HUNTER | CLASS_ROGUE` one, which only an exhaustive sweep catches.
-    #[cfg(target_os = "linux")] // needs the lyracore-module dev-dep — see gateway/Cargo.toml
-    #[test]
-    fn sheet_attack_power_mirror_matches_the_module_curve_for_every_class() {
-        for class in 0u8..=11 {
-            for (strength, agility, level) in [
-                (1, 1, 1),
-                (20, 20, 1),
-                (20, 40, 5),
-                (100, 60, 40),
-                (0, 0, 1),
-            ] {
-                assert_eq!(
-                    melee_attack_power_for(class, strength, agility, level),
-                    lyracore_module::melee_attack_power_for(class, strength, agility, level),
-                    "sheet AP mirror drifted from module::combat::tables::melee_attack_power_for \
-                     at class {class}, str {strength}, agi {agility}, level {level}"
-                );
-            }
-        }
-        // The saturating floor is part of the contract, not an accident: a level-1 naked caster's
-        // `level*3 + Str*2 - 20` is negative and must clamp to 0 on BOTH sides, not wrap.
-        assert_eq!(melee_attack_power_for(1, 0, 0, 1), 0);
-    }
-
-    /// `swing_range_ap` mirrors TWO module fns at once — `weapon_swing_range_ap` when the sheet has
-    /// a main hand, and `player_swing_range_ap` when it does not (`sheet_stats` calls it with the
-    /// unarmed base range spelled out as the literal `1, 3`). Both arms are pinned here, so that
-    /// literal cannot drift from the module's own `UNARMED_BASE_MIN`/`MAX` either.
-    #[cfg(target_os = "linux")] // needs the lyracore-module dev-dep — see gateway/Cargo.toml
-    #[test]
-    fn sheet_swing_range_mirror_matches_the_module_weapon_and_unarmed_folds() {
-        for ap in [0, 30, 140, 1000] {
-            for (dmg_min, dmg_max, delay_ms) in
-                [(1, 3, 2000), (5, 9, 1600), (43, 65, 3400), (0, 0, 1000)]
-            {
-                assert_eq!(
-                    swing_range_ap(ap, dmg_min, dmg_max, delay_ms),
-                    lyracore_module::weapon_swing_range_ap(ap, dmg_min, dmg_max, delay_ms),
-                    "sheet weapon swing mirror drifted at ap {ap}, {dmg_min}-{dmg_max}, {delay_ms}ms"
-                );
-            }
-            // The unarmed call shape `sheet_stats` uses: base range 1..=3 + the same AP fold.
-            for attack_time_ms in [1000, 2000, 3400] {
-                assert_eq!(
-                    swing_range_ap(ap, 1, 3, attack_time_ms),
-                    lyracore_module::player_swing_range_ap(ap, attack_time_ms),
-                    "sheet UNARMED swing mirror drifted at ap {ap}, {attack_time_ms}ms — the \
-                     literal `1, 3` in sheet_stats no longer matches the module's unarmed base"
-                );
-            }
-        }
-    }
+    // The former `melee_attack_power_for`/`swing_range_ap` gateway-side mirrors (and the parity tests
+    // that pinned them against `lyracore_module`) are GONE (#517): `sheet_stats` above is now a plain
+    // read of `module::spell::recompute_sheet`'s output, so there is no gateway-side formula left to
+    // drift from the module — the module row IS the source of truth.
 
     #[test]
     fn aura_and_gear_terms_compose_additively_before_the_caller_clamps() {

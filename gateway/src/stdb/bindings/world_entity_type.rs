@@ -68,6 +68,15 @@ pub struct WorldEntity {
     pub godmode: bool,
     pub resting: bool,
     pub cell: i64,
+    pub sheet_str_bonus: i32,
+    pub sheet_agi_bonus: i32,
+    pub sheet_sta_bonus: i32,
+    pub sheet_int_bonus: i32,
+    pub sheet_spi_bonus: i32,
+    pub sheet_ap_base: u32,
+    pub sheet_ap_mods: i32,
+    pub sheet_dmg_min: u32,
+    pub sheet_dmg_max: u32,
 }
 
 impl __sdk::InModule for WorldEntity {
@@ -139,6 +148,15 @@ pub struct WorldEntityCols {
     pub godmode: __sdk::__query_builder::Col<WorldEntity, bool>,
     pub resting: __sdk::__query_builder::Col<WorldEntity, bool>,
     pub cell: __sdk::__query_builder::Col<WorldEntity, i64>,
+    pub sheet_str_bonus: __sdk::__query_builder::Col<WorldEntity, i32>,
+    pub sheet_agi_bonus: __sdk::__query_builder::Col<WorldEntity, i32>,
+    pub sheet_sta_bonus: __sdk::__query_builder::Col<WorldEntity, i32>,
+    pub sheet_int_bonus: __sdk::__query_builder::Col<WorldEntity, i32>,
+    pub sheet_spi_bonus: __sdk::__query_builder::Col<WorldEntity, i32>,
+    pub sheet_ap_base: __sdk::__query_builder::Col<WorldEntity, u32>,
+    pub sheet_ap_mods: __sdk::__query_builder::Col<WorldEntity, i32>,
+    pub sheet_dmg_min: __sdk::__query_builder::Col<WorldEntity, u32>,
+    pub sheet_dmg_max: __sdk::__query_builder::Col<WorldEntity, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for WorldEntity {
@@ -215,6 +233,15 @@ impl __sdk::__query_builder::HasCols for WorldEntity {
             godmode: __sdk::__query_builder::Col::new(table_name, "godmode"),
             resting: __sdk::__query_builder::Col::new(table_name, "resting"),
             cell: __sdk::__query_builder::Col::new(table_name, "cell"),
+            sheet_str_bonus: __sdk::__query_builder::Col::new(table_name, "sheet_str_bonus"),
+            sheet_agi_bonus: __sdk::__query_builder::Col::new(table_name, "sheet_agi_bonus"),
+            sheet_sta_bonus: __sdk::__query_builder::Col::new(table_name, "sheet_sta_bonus"),
+            sheet_int_bonus: __sdk::__query_builder::Col::new(table_name, "sheet_int_bonus"),
+            sheet_spi_bonus: __sdk::__query_builder::Col::new(table_name, "sheet_spi_bonus"),
+            sheet_ap_base: __sdk::__query_builder::Col::new(table_name, "sheet_ap_base"),
+            sheet_ap_mods: __sdk::__query_builder::Col::new(table_name, "sheet_ap_mods"),
+            sheet_dmg_min: __sdk::__query_builder::Col::new(table_name, "sheet_dmg_min"),
+            sheet_dmg_max: __sdk::__query_builder::Col::new(table_name, "sheet_dmg_max"),
         }
     }
 }

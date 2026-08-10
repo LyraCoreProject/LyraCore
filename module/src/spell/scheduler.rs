@@ -316,22 +316,35 @@ pub(crate) fn do_cancel_aura(
     let auras = ctx.db.game_aura();
     // Snapshot the matching aura ids (+ whether each moves a vitals pool) before deleting — never
     // mutate the table mid-iteration.
-    let to_remove: Vec<(u64, bool)> = auras
+    let to_remove: Vec<(u64, bool, bool)> = auras
         .by_target()
         .filter(&player_guid)
         .filter(|a| a.spell_id == spell_id)
-        .map(|a| (a.id, aura_moves_vitals(a.eff_kind, a.eff_p0)))
+        .map(|a| {
+            (
+                a.id,
+                aura_moves_vitals(a.eff_kind, a.eff_p0),
+                crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0),
+            )
+        })
         .collect();
     if to_remove.is_empty() {
         return Err(format!("no cancelable aura {spell_id} on the caller"));
     }
     let mut revitalize = false;
-    for (id, moves_vitals) in to_remove {
+    let mut resheet = false;
+    for (id, moves_vitals, moves_sheet) in to_remove {
         auras.id().delete(id);
         revitalize |= moves_vitals;
+        resheet |= moves_sheet;
     }
     if revitalize {
         recompute_vitals(ctx, player_guid);
+    }
+    // #517: same wider gate as the apply site (targeting.rs) — AFTER vitals so a lost STA/INT aura's
+    // sheet recompute sees the already-updated `e.spirit`.
+    if resheet {
+        recompute_sheet(ctx, player_guid);
     }
     Ok(())
 }
@@ -629,9 +642,15 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         auras.count()
     );
     let mut revitalize: Vec<u64> = Vec::new();
+    // #517: same expiry snapshot, wider gate — a reaped Battle Shout (or a STR/AGI/SPI stat aura) must
+    // pull the sheet numbers back down too, even though it never touched a vitals pool.
+    let mut resheet: Vec<u64> = Vec::new();
     for a in &expired {
         if aura_moves_vitals(a.eff_kind, a.eff_p0) && !revitalize.contains(&a.target_guid) {
             revitalize.push(a.target_guid);
+        }
+        if crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0) && !resheet.contains(&a.target_guid) {
+            resheet.push(a.target_guid);
         }
     }
     // CC diminishing returns (work-item 192): a NATURAL EXPIRY is one of the two REMOVAL events that starts
@@ -658,6 +677,11 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     // for the common case (baseline-safe).
     for target_guid in revitalize {
         recompute_vitals(ctx, target_guid);
+    }
+    // AFTER vitals, same rationale as the apply/cancel sites — a reaped STA/INT aura's sheet recompute
+    // must see the already-updated `e.spirit`.
+    for target_guid in resheet {
+        recompute_sheet(ctx, target_guid);
     }
 
     // Break-on-damage from DoTs (LAST — after the next_tick advance + expiry, so a broken aura is never

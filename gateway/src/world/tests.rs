@@ -6633,6 +6633,42 @@ fn repair_item_guid_zero_is_repair_all_and_dispatches_the_whole_body_slot() {
 }
 
 #[test]
+fn repair_all_err_is_relayed_as_a_system_chat_line_not_silently_swallowed() {
+    // #514: a rejected repair-all (NPC gate / range / not-enough-money) used to be logged at debug
+    // and dropped, so the player saw nothing at all. It must now reach the client as a self-only
+    // SMSG_MESSAGECHAT System line carrying the module's rejection text.
+    let mut s = quest_store();
+    s.trade_error = Some("not enough money to repair".into());
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_REPAIR_ITEM {
+        npc: Guid::new(200),
+        item: Guid::new(0),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_MESSAGECHAT(m) => {
+            assert!(
+                matches!(
+                    m.chat_type,
+                    wow_world_messages::vanilla::SMSG_MESSAGECHAT_ChatType::System { .. }
+                ),
+                "repair failure relays as a System chat line"
+            );
+            assert_eq!(m.message, "not enough money to repair");
+        }
+        other => panic!("expected SMSG_MESSAGECHAT, got {other}"),
+    }
+    assert!(
+        store.repaired_items.lock().unwrap().is_empty(),
+        "the failed repair never landed a fake success"
+    );
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
 fn trainer_list_replies_smsg_trainer_list_with_the_fixture_spells() {
     let mut s = quest_store();
     s.trainer_spells = vec![codec::TrainerSpellView {

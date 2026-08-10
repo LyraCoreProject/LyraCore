@@ -542,11 +542,19 @@ pub(crate) fn is_combat_skill_line(line: u32) -> bool {
 /// mid-session ding path (`xp::grant_xp`) and login (`ensure_player_skills`, reconciling an ALREADY-dinged
 /// character whose caps were frozen at first-login level — so a relog alone un-sticks a stale character,
 /// not just future dings). [entity]
+///
+/// Lockpicking (633, work-item 172) also tracks `level*5` in vanilla but isn't part of
+/// `is_combat_skill_line` — that predicate is shared with `trainer::apply_trainer_buy`'s weapon-master
+/// fork, and Lockpicking is never a trainer offering (it's granted by learning Pick Lock, see
+/// `grant_lockpicking_on_learn`), so it's checked here as a second, dedicated clause instead of joining
+/// the shared taxonomy.
 pub(crate) fn raise_combat_caps(ctx: &ReducerContext, guid: u64, new_level: u32) {
     let cap = skill_cap_for_level(new_level) as u16;
     let skills = ctx.db.game_player_skill();
     for mut row in skills.by_character().filter(&guid).collect::<Vec<_>>() {
-        if is_combat_skill_line(row.skill_line) && row.max_rank < cap {
+        let tracks_level =
+            is_combat_skill_line(row.skill_line) || row.skill_line == skill_line::LOCKPICKING;
+        if tracks_level && row.max_rank < cap {
             row.max_rank = cap;
             skills.id().update(row);
         }
