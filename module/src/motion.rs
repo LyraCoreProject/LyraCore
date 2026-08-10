@@ -330,6 +330,16 @@ pub fn publish_motion(ctx: &ReducerContext, _schedule: MotionPublishSchedule) {
     if ctx.sender() != ctx.database_identity() {
         return;
     }
+    publish_staged(ctx);
+}
+
+/// The drain behind [`publish_motion`] — republish every staged mover into the public relay.
+/// #482 also runs this at the END of `gw_movement_batch`, INSIDE the batch transaction: the
+/// subscription sweep (the whole reason the pending stage exists, #461) is paid once per batch
+/// either way, and draining inline removes the schedule's 50ms latency quantum plus the
+/// pending-row churn for the gateway path. The scheduled tick keeps running for the legacy
+/// per-player path and is a cheap no-op when the batch already drained.
+pub(crate) fn publish_staged(ctx: &ReducerContext) {
     let pending = ctx.db.game_entity_motion_pending();
     let entities = ctx.db.game_world_entity();
     // Collect first: the loop deletes from the table it is walking.
@@ -665,20 +675,21 @@ mod tests {
             body.contains("ctx.sender() != ctx.database_identity()"),
             "the tick must stay scheduler-only. Body was:\n{body}"
         );
+        let drain = crate::test_scan::code_of(include_str!("motion.rs"), "pub(crate) fn publish_staged(ctx: &ReducerContext) {");
         assert!(
-            body.contains("tick_action(entities.guid().find(row.guid).is_some())"),
+            drain.contains("tick_action(entities.guid().find(row.guid).is_some())"),
             "every queued row must go through `tick_action` with a REAL liveness probe — a \
              publish that skips it resurrects motion rows for departed entities. Body was:\n{body}"
         );
         assert_eq!(
-            body.matches("publish(ctx, &row)").count(),
+            drain.matches("publish(ctx, &row)").count(),
             1,
-            "exactly one publish call, and it is the `TickAction::Publish` arm. Body was:\n{body}"
+            "exactly one publish call, and it is the `TickAction::Publish` arm. Body was:\n{drain}"
         );
         assert!(
-            body.contains("pending.guid().delete(row.guid)"),
+            drain.contains("pending.guid().delete(row.guid)"),
             "the queue must be drained whatever the action, or a stale row lives forever. Body \
-             was:\n{body}"
+             was:\n{drain}"
         );
     }
 

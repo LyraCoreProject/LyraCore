@@ -149,22 +149,22 @@ impl Coordinator {
         on_done: impl Fn(std::result::Result<(), String>) + Send + Sync + 'static,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            let coord = self.0.call_pipe();
-            return call_reducer_nowait!(
-                coord.conn.reducers,
-                "gw_movement_update",
-                gw_movement_update_then(
-                    actor_guid,
-                    opcode,
-                    movement_info.to_vec(),
-                    x,
-                    y,
-                    z,
-                    o,
-                    move_time_ms
-                ),
-                on_done
-            );
+            // #482: push onto the shard's batch — ONE gw_movement_batch transaction per 40ms
+            // tick carries the whole realm's heartbeats instead of one transaction each (the
+            // measured 92%-writer wall). Per-move rejection logging moved module-side (the batch
+            // reducer logs and skips), so completion is immediate here.
+            self.0.motion_batch.lock().unwrap().push(GwMove {
+                actor_guid,
+                opcode,
+                movement_info: movement_info.to_vec(),
+                x,
+                y,
+                z,
+                o,
+                move_time_ms,
+            });
+            on_done(Ok(()));
+            return Ok(());
         }
         let player = self.player_conn(account_id)?;
         call_reducer_nowait!(

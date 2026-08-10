@@ -506,6 +506,11 @@ pub(crate) struct CoordinatorInner {
     /// the watchdogged `coord()`; extending the watchdog to rebuild pipes is the upgrade path.
     call_pipes: Vec<RwLock<LiveConn>>,
     call_pipe_next: std::sync::atomic::AtomicUsize,
+    /// #482: the per-shard movement batch — the hot path pushes one `GwMove` per inbound
+    /// heartbeat and the 40ms flush task sends the whole tick as ONE `gw_movement_batch`
+    /// transaction (was: one transaction per heartbeat — ~10k tx/s of per-transaction machinery
+    /// at 2000 players, the measured 92%-writer wall).
+    pub(crate) motion_batch: Mutex<Vec<super::bindings::GwMove>>,
     /// Per-account player connections (each with its own node-issued identity == the account's
     /// bound identity). Opened on first need (at logon, when `bound_identity` is read) and reused
     /// for the world phase so `player_login`/`movement_update` run as the player, not the owner.
@@ -1716,10 +1721,45 @@ impl Coordinator {
             sharded_tables,
             call_pipes,
             call_pipe_next: std::sync::atomic::AtomicUsize::new(0),
+            motion_batch: Mutex::new(Vec::new()),
             players: Mutex::new(HashMap::new()),
             on_reconnect: Mutex::new(Vec::new()),
         });
         spawn_coordinator_watchdog(inner.clone());
+        // #482: the movement batch flusher — one gw_movement_batch transaction per 40ms tick
+        // (25/s, the same cadence philosophy as publish_motion's write batching). Fire-and-forget
+        // per flush; a failed send logs and drops that tick's moves (the next heartbeat
+        // supersedes them anyway — movement is idempotent positional state).
+        {
+            let inner = inner.clone();
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(Duration::from_millis(40));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tick.tick().await;
+                    let batch: Vec<super::bindings::GwMove> = {
+                        let mut b = inner.motion_batch.lock().unwrap_or_else(|p| p.into_inner());
+                        if b.is_empty() {
+                            continue;
+                        }
+                        std::mem::take(&mut *b)
+                    };
+                    // #482 batch-shape: cap each call at 128 moves and spread the chunks across
+                    // the pipe pool — a single ~400-move transaction head-of-line-blocked login
+                    // calls for its whole execution (the measured 1970→1071 seat regression);
+                    // several ~5ms transactions interleave with them instead.
+                    for chunk in batch.chunks(128) {
+                        let n = chunk.len();
+                        let pipe = inner.call_pipe();
+                        if let Err(e) = pipe.conn.reducers.gw_movement_batch(chunk.to_vec()) {
+                            log::warn!(
+                                "gw_movement_batch send failed ({n} moves dropped this tick): {e}"
+                            );
+                        }
+                    }
+                }
+            });
+        }
         Ok(inner)
     }
 

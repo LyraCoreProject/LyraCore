@@ -1320,11 +1320,12 @@ pub(crate) fn apply_movement_update(
     if mover.is_player() && !mover.dead && (grid_x != old_gx || grid_y != old_gy) {
         crate::exploration::check_area_exploration(ctx, &mut mover);
     }
-    // Rest state (196): check EVERY heartbeat, not grid-gated — an inn is smaller than a 50yd cell so a
-    // coarse crossing check would miss it. The hot path is a cheap `in_rest_area` test vs the loaded
-    // `mover.resting` (no DB); only a threshold crossing touches the DB. Folds the byte flip into the
-    // update below.
-    if mover.is_player() && !mover.dead {
+    // Rest state (196): not grid-gated (an inn is smaller than a 50yd cell) but THROTTLED to
+    // ~1Hz per mover (#482): gate on the heartbeat clock crossing a second boundary. At run
+    // speed that is a check every ~7yd — still finer than any inn — and it removes a per-
+    // heartbeat rest evaluation from the hottest path on the server (measured: the per-move
+    // hook chain was ~58µs at 10k moves/s).
+    if mover.is_player() && !mover.dead && (move_time_ms / 1000 != old_move_ms / 1000) {
         crate::rest::check_rest_state(ctx, &mut mover);
     }
     // `old_x/old_y/old_z` are the last PERSISTED position, so this drift is exactly how far the

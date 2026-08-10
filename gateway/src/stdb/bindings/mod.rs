@@ -439,6 +439,8 @@ pub mod gw_loot_master_give_reducer;
 pub mod gw_loot_money_reducer;
 pub mod gw_loot_roll_reducer;
 pub mod gw_move_item_reducer;
+pub mod gw_move_type;
+pub mod gw_movement_batch_reducer;
 pub mod gw_movement_update_reducer;
 pub mod gw_party_chat_reducer;
 pub mod gw_pet_command_reducer;
@@ -1072,6 +1074,8 @@ pub use gw_loot_master_give_reducer::gw_loot_master_give;
 pub use gw_loot_money_reducer::gw_loot_money;
 pub use gw_loot_roll_reducer::gw_loot_roll;
 pub use gw_move_item_reducer::gw_move_item;
+pub use gw_move_type::GwMove;
+pub use gw_movement_batch_reducer::gw_movement_batch;
 pub use gw_movement_update_reducer::gw_movement_update;
 pub use gw_party_chat_reducer::gw_party_chat;
 pub use gw_pet_command_reducer::gw_pet_command;
@@ -2057,6 +2061,9 @@ pub enum Reducer {
         from_slot: u8,
         to_slot: u8,
     },
+    GwMovementBatch {
+        moves: Vec<GwMove>,
+    },
     GwMovementUpdate {
         actor_guid: u64,
         opcode: u16,
@@ -2726,6 +2733,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwLootMoney { .. } => "gw_loot_money",
             Reducer::GwLootRoll { .. } => "gw_loot_roll",
             Reducer::GwMoveItem { .. } => "gw_move_item",
+            Reducer::GwMovementBatch { .. } => "gw_movement_batch",
             Reducer::GwMovementUpdate { .. } => "gw_movement_update",
             Reducer::GwPartyChat { .. } => "gw_party_chat",
             Reducer::GwPetCommand { .. } => "gw_pet_command",
@@ -4252,6 +4260,11 @@ impl __sdk::Reducer for Reducer {
                 from_slot: from_slot.clone(),
                 to_slot: to_slot.clone(),
             }),
+            Reducer::GwMovementBatch { moves } => {
+                __sats::bsatn::to_vec(&gw_movement_batch_reducer::GwMovementBatchArgs {
+                    moves: moves.clone(),
+                })
+            }
             Reducer::GwMovementUpdate {
                 actor_guid,
                 opcode,

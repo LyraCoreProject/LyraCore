@@ -190,6 +190,65 @@ pub fn gw_movement_update(
     crate::world::apply_movement_update(ctx, mover, opcode, movement_info, x, y, z, o, move_time_ms)
 }
 
+/// One movement update inside a [`gw_movement_batch`] call (#482). Field-for-field the
+/// `gw_movement_update` argument list with the actor made explicit per entry.
+#[derive(spacetimedb::SpacetimeType)]
+pub struct GwMove {
+    pub actor_guid: u64,
+    pub opcode: u16,
+    pub movement_info: Vec<u8>,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub o: f32,
+    pub move_time_ms: u32,
+}
+
+/// #482: ONE transaction per gateway tick instead of one per player heartbeat. The measured wall
+/// behind this: ~10k `gw_movement_update` transactions/s at ~43µs of per-transaction machinery
+/// each put the writer at 92% while the actual row work (the batched `publish_motion` side) was
+/// a fraction of that. The gateway collects a tick's worth of movement (25–50ms) and sends it
+/// here; each entry runs the SAME `apply_movement_update` core with the same per-entry
+/// validation. A failing entry (mover despawned mid-tick, NaN guard, in-transit fence) is LOGGED
+/// and skipped — one bad move must never roll back the other few hundred players' tick.
+#[reducer]
+pub fn gw_movement_batch(ctx: &ReducerContext, moves: Vec<GwMove>) -> Result<(), String> {
+    require_operator(ctx)?;
+    for m in moves {
+        let mover = match actor(ctx, m.actor_guid) {
+            Ok(e) => e,
+            Err(e) => {
+                spacetimedb::log::debug!(
+                    "gw_movement_batch: entry for {} skipped: {e}",
+                    m.actor_guid
+                );
+                continue;
+            }
+        };
+        if let Err(e) = crate::world::apply_movement_update(
+            ctx,
+            mover,
+            m.opcode,
+            m.movement_info,
+            m.x,
+            m.y,
+            m.z,
+            m.o,
+            m.move_time_ms,
+        ) {
+            spacetimedb::log::debug!(
+                "gw_movement_batch: move for {} rejected: {e}",
+                m.actor_guid
+            );
+        }
+    }
+    // #482: drain the staged motion INSIDE this transaction — the subscription sweep is paid
+    // once per batch either way (#461's whole point), and inline draining removes the publish
+    // schedule's 50ms latency quantum plus the pending-row churn for this path.
+    crate::motion::publish_staged(ctx);
+    Ok(())
+}
+
 // ===========================================================================================
 //  Action verbs — thin gated wrappers over the actor.rs cores
 // ===========================================================================================
