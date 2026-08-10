@@ -2,19 +2,19 @@
 //! unsubscribe on drop) and `Coordinator::subscribe_player_events` — the 51-callback relay that
 //! turns row deltas on the per-account connection into outbound SMSG. Moved verbatim from
 //! `mod.rs`; that function's own doc comment (just above it) is the structure map, the teardown-
-//! contract pointer, and the planned carve (#353).
+//! contract pointer, and the plan to carve this 51-callback body into smaller pieces.
 //!
-//! **#468 took the four box-scoped tables out of here entirely.** Peer visibility, peer movement,
-//! creature legs and gameobjects are no longer per-player registrations: they ride ONE global
-//! subscription per shard on the coordinator connection, and `stdb::world_view` routes each row to
-//! the sessions an in-process cell index says can see it. What is left in this file for those
-//! tables is the RELAY BODIES — [`offer_peer_create_for`], [`relay_entity_update`],
+//! **The shared-connection model took the four box-scoped tables out of here entirely.** Peer
+//! visibility, peer movement, creature legs and gameobjects are no longer per-player registrations:
+//! they ride ONE global subscription per shard on the coordinator connection, and `stdb::world_view`
+//! routes each row to the sessions an in-process cell index says can see it. What is left in this
+//! file for those tables is the RELAY BODIES — [`offer_peer_create_for`], [`relay_entity_update`],
 //! [`relay_peer_destroy`], [`relay_gameobject_create`], [`motion_outbound`],
 //! [`creature_leg_outbound`] — each of which
 //! decides and encodes for exactly ONE viewer and is run on that session's own writer thread, never
 //! on the shared pump.
 //!
-//! That carve is also the shape #353 asks for on the rest: pure-ish top-level items with their own
+//! That carve is also the shape planned for the rest: pure-ish top-level items with their own
 //! tests, called from a thin registration. [`entity_update_to_outbound`] was the first of them.
 
 use crate::codec::{self, CreateKind};
@@ -47,7 +47,7 @@ pub struct PlayerSubscriptions {
     /// cached `PlayerConn`; drained in `Drop`. Homogeneous so adding a relay is a single `push` at
     /// registration instead of a new field hand-mirrored across the struct, `empty()`, and `Drop`.
     teardowns: Vec<Box<dyn FnOnce(&PlayerConn) + Send>>,
-    /// This session's registration in the gateway-wide shared view (#468). `None` only for the
+    /// This session's registration in the gateway-wide shared view. `None` only for the
     /// in-memory test store. Dropping the guard unregisters it, which is what stops the shared
     /// coordinator dispatch from ever enqueueing for a dead session.
     viewer: Option<Arc<Viewer>>,
@@ -72,7 +72,8 @@ impl PlayerSubscriptions {
     ///
     /// Runs on the session's own thread and does no I/O: the delta is a 10-cell set diff in memory
     /// and the entering rows are read out of coordinator caches that are already resident. Before
-    /// #468 this was an unsubscribe + resubscribe round trip per cell crossing, per player.
+    /// Before the shared-connection model, this was an unsubscribe + resubscribe round trip per
+    /// cell crossing, per player.
     pub fn aoi_update(&mut self, x: f32, y: f32) {
         let (Some(viewer), Some(view)) = (self.viewer.as_ref(), self.view.as_ref()) else {
             return;
@@ -93,7 +94,7 @@ impl Drop for PlayerSubscriptions {
         if let Some(h) = self.sub.take() {
             let _ = h.unsubscribe();
         }
-        // #468: leave the shared view LAST — while the registration is live the coordinator
+        // Leave the shared view LAST — while the registration is live the coordinator
         // dispatch may still enqueue for this session, which is harmless (the writer is draining or
         // gone) but pointless.
         if let (Some(view), Some(viewer)) = (self.view.take(), self.viewer.take()) {
@@ -121,13 +122,13 @@ fn bag_content_parts(slot: u8) -> Option<(u8, u8)> {
     Some((BAG_SLOT_START + rel / MAX_BAG_SIZE, rel % MAX_BAG_SIZE))
 }
 
-/// Build the wire relay for one `game_teleport_event` row (work-item 224). Pure: takes the
+/// Build the wire relay for one `game_teleport_event` row. Pure: takes the
 /// already-derived `still_here` boolean (whether the live entity survived the transaction — the
 /// module/gateway-mirrored same-map/cross-map signal, see the `on_teleport` callback's doc comment)
 /// instead of a live `ReducerContext`/connection, so it's testable without a DB (module crate
 /// convention: extract pure functions and test those).
 ///
-/// `still_here` → same-map: `MSG_MOVE_TELEPORT_ACK` (byte-identical to the pre-224 behavior — the ONLY
+/// `still_here` → same-map: `MSG_MOVE_TELEPORT_ACK` (byte-identical to the previous behavior — the ONLY
 /// caller-visible difference from before is that this is now reached via a branch rather than
 /// unconditionally). NOT `still_here` → cross-map: `SMSG_TRANSFER_PENDING`+`SMSG_NEW_WORLD` as one batch
 /// (`codec::build_cross_map_teleport`). `Err` only for a `map_id` the client's `Map` enum doesn't know
@@ -212,7 +213,7 @@ fn build_peer_create(coord: &Coordinator, row: &WorldEntity) -> Option<ServerOpc
     }
 }
 
-/// Work-item 190 slice 2: may an instance-tagged CORPSE/GAMEOBJECT row be CREATE-relayed to this
+/// May an instance-tagged CORPSE/GAMEOBJECT row be CREATE-relayed to this
 /// viewer? Instance equality against a KNOWN viewer instance — `None` (viewer entity not resident,
 /// see `viewer_instance`) relays nothing: suppress-then-sweep is strictly safer than the old
 /// default-to-0 (which leaked instance-0 rows to a viewer whose real instance wasn't known yet).
@@ -226,12 +227,14 @@ pub(crate) fn instance_relay_gate(row_instance_id: u64, viewer_instance_id: Opti
 }
 
 /// One corpse CREATE relay — the shared body of the `game_corpse` on_insert callback AND the
-/// post-AOI resident sweep (190 slice 2 review MEDIUM): with `LYRACORE_AOI=1` the base sub's corpse
+/// post-AOI resident sweep: with `LYRACORE_AOI=1` the base sub's corpse
 /// callbacks fire before the viewer's entity is resident, so the gate suppresses them (see
 /// `viewer_instance`); once the AOI entity subscription has applied, the sweep re-offers every
 /// resident corpse row through the same gate. Sends the CREATE plus, for the viewer's OWN corpse,
-/// the reclaim-delay packet (work-item 201).
-/// #109 diagnosis counters. Deliberately atomics read ONCE at logout rather than a log per call: a
+/// the reclaim-delay packet.
+/// Diagnosis counters for a failure where the peer-movement relay died permanently on a session —
+/// the motion subscription stopped delivering while the module kept accepting movement. Deliberately
+/// atomics read ONCE at logout rather than a log per call: a
 /// `log::info!` on the relay path made the intermittent failure vanish across six consecutive runs,
 /// so any instrument that touches the hot path perturbs the very race being measured.
 ///
@@ -242,10 +245,10 @@ pub(crate) fn instance_relay_gate(row_instance_id: u64, viewer_instance_id: Opti
 pub(crate) static MOTION_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub(crate) static MOTION_SENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// The THIRD hop the two counters above could not see (work-item 287): queued → handed to the
+/// The THIRD hop the two counters above could not see: queued → handed to the
 /// writer. Both relays used to push with `let _ = tx.send(..)`, so a send to a session whose writer
 /// half was already gone got discarded with no trace — a delivery path degrading silently, the exact
-/// failure *shape* #109 and perf 2.3's orphaned writers had. Incremented by BOTH
+/// failure *shape* the stuck-relay incident and other orphaned writers had. Incremented by BOTH
 /// [`relay_entity_motion`] and [`relay_creature_leg`]: they feed the same per-session writer channel,
 /// so one counter answers "is the writer still taking peer-motion packets at all".
 pub(crate) static MOTION_DROPPED: std::sync::atomic::AtomicU64 =
@@ -253,7 +256,7 @@ pub(crate) static MOTION_DROPPED: std::sync::atomic::AtomicU64 =
 
 // One argument per counter in the diagnostic line this formats.
 #[allow(clippy::too_many_arguments)]
-/// The `MOTIONSTAT` 10-second line (work-item 287) — pure, so what the operator reads is pinned by a
+/// The `MOTIONSTAT` 10-second line — pure, so what the operator reads is pinned by a
 /// test instead of by eyeballing a `log::info!`. Deltas are the CHANGE over the last window, which is
 /// what makes a degradation visible while the cumulative totals keep climbing.
 ///
@@ -305,8 +308,9 @@ pub(crate) fn fanout_ratio(d_calls: u64, d_submitted: u64) -> Option<f64> {
 pub(crate) const FANOUT_COLLAPSE_RATIO: f64 = 0.6;
 
 /// Consecutive collapsed windows before the warning fires — 3 × 10 s, so ~30 s of sustained
-/// under-delivery. THE HYSTERESIS IS A DELIBERATE DIVERGENCE FROM THE #109 SIGNAL, which has none
-/// and re-fires every window: #109 keys on "movement submitted but the relay callback fired almost
+/// under-delivery. THE HYSTERESIS IS A DELIBERATE DIVERGENCE FROM THE STUCK-RELAY SIGNAL (the
+/// `MOTION_CALLS`/`MOTION_SENT` diagnosis above), which has none
+/// and re-fires every window: that signal keys on "movement submitted but the relay callback fired almost
 /// never", which is a binary, unambiguous, does-not-self-heal condition worth shouting about
 /// instantly. Fan-out is a RATIO of two noisy counters over a 10-second window, and it moves for
 /// legitimate reasons every time the crowd changes shape. A signal like that fires spuriously if it
@@ -366,9 +370,9 @@ pub(crate) struct FanoutHealth {
 /// * **Under-delivery to SOME sessions.** Both counters are process-global, so one wedged session
 ///   among 300 healthy ones is invisible here.
 ///
-/// A TOTAL loss of the relay trips this as well as the #109 signal (fan-out goes to ~0, which is
+/// A TOTAL loss of the relay trips this as well as the stuck-relay signal (fan-out goes to ~0, which is
 /// certainly below any baseline) — two lines about one failure, 30 s apart, which is the right way
-/// round: #109's is instant and keeps repeating, this one adds "and it stayed that way".
+/// round: the stuck-relay signal is instant and keeps repeating, this one adds "and it stayed that way".
 pub(crate) fn fanout_health_step(
     state: FanoutHealth,
     fanout: Option<f64>,
@@ -376,7 +380,7 @@ pub(crate) fn fanout_health_step(
 ) -> (FanoutHealth, Option<u32>) {
     // Uninformative window: too little movement to compare, or none at all. Keep the baseline (a
     // quiet window is not evidence about fan-out) but break any run in progress — the same activity
-    // floor the #109 signal uses, for the same reason: a handful of movements with little relay
+    // floor the stuck-relay signal uses, for the same reason: a handful of movements with little relay
     // traffic is one lonely player, not a broken relay.
     let Some(f) = fanout.filter(|_| submitted_delta > crate::world::MOVE_ACTIVITY_FLOOR) else {
         return (
@@ -463,8 +467,8 @@ fn relay_corpse_create(tx: &SessionTx, self_guid: u64, row: &Corpse) {
 }
 
 /// The corpse CREATE body as outbound packets — shared by the per-player relay, the login
-/// resident sweep, and the shared-dispatch twin (#468 4c family 6). The owner's reclaim-delay
-/// packet (work-item 201) rides inside, keyed on the VIEWER's guid.
+/// resident sweep, and the shared-dispatch twin. The owner's reclaim-delay
+/// packet rides inside, keyed on the VIEWER's guid.
 pub(crate) fn corpse_create_outbound(self_guid: u64, row: &Corpse) -> Vec<Outbound> {
     let m = codec::build_corpse_create_object(&corpse_view(row.clone()));
     let mut out = vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
@@ -482,8 +486,8 @@ pub(crate) fn corpse_create_outbound(self_guid: u64, row: &Corpse) -> Vec<Outbou
     out
 }
 
-/// #468 stage 4c, family 6 (corpses): the body→bones re-CREATE — the per-player `on_corpse_update`
-/// relay's twin. The instance gate already ran in `world_view::corpse_changed`.
+/// The shared-dispatch twin of the per-player `on_corpse_update` relay (corpses): the body→bones
+/// re-CREATE. The instance gate already ran in `world_view::corpse_changed`.
 pub(crate) fn relay_corpse_update(row: &Corpse) -> Vec<Outbound> {
     let m = codec::build_corpse_create_object(&corpse_view(row.clone()));
     vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
@@ -492,10 +496,10 @@ pub(crate) fn relay_corpse_update(row: &Corpse) -> Vec<Outbound> {
 }
 
 /// The pre-dedup visibility gate `offer_peer_create` runs before it ever touches the `created` set —
-/// self-skip, instance isolation (work-item 190 slice 1), spirit-healer ghost-gating, and the
+/// self-skip, instance isolation, spirit-healer ghost-gating, and the
 /// currently-stealthed check. Pure over ALREADY-READ state (the caller does the DB lookups and passes
 /// their results in) so it is unit-testable without a live SDK connection — the three scenarios
-/// work-items 144/145/190 care about (re-entry re-creates, login sees pre-existing peers, cross-instance
+/// this predicate must get right (re-entry re-creates, login sees pre-existing peers, cross-instance
 /// stays excluded) all reduce to "does this predicate return true for this row" plus the dedup-set
 /// mechanics exercised separately below. Order/semantics moved verbatim out of the old inline body:
 /// - Self is never offered (the dedup set is pre-seeded with `self_guid` instead).
@@ -539,7 +543,7 @@ const SAY_RANGE_SQ: f32 = 25.0 * 25.0; // 625.0 yd²
 const YELL_RANGE_SQ: f32 = 300.0 * 300.0; // 90_000.0 yd²
 
 // ==================================================================================================
-//  #468 stage 1 — the SHARED-dispatch relay bodies.
+//  The SHARED-dispatch relay bodies.
 //
 //  Each of these is one audience-of-one relay: `stdb::world_view` decides WHICH sessions a row
 //  concerns (via the cell index) and enqueues one of these per session as an `Outbound::Job`, so
@@ -557,14 +561,14 @@ const YELL_RANGE_SQ: f32 = 300.0 * 300.0; // 90_000.0 yd²
 /// `db` is the cache of the shard that HOLDS the row (its aura rows and pet-spell rows live there);
 /// `coord` is that shard's handle, used to read the peer's equipped gear RLS-bypassed. The viewer's
 /// own instance and ghost state come off [`Viewer`] — never a lookup in `db`, because a row on
-/// another shard's cache has no copy of the viewer's row to look them up in (the reason #73 needed a
-/// second per-player connection at all).
+/// another shard's cache has no copy of the viewer's row to look them up in (the reason cross-seam
+/// visibility ever needed a second per-player connection at all).
 ///
 /// On a `build_peer_create` encode failure the guid is ROLLED BACK out of `created`: leaving it in
-/// permanently suppresses the peer (work-item 144's second latent bug).
+/// permanently suppresses the peer (a second latent bug in the same re-entry path, below).
 #[must_use = "these relay bodies RETURN the packets to send — the caller enqueues them; \
-              dropping the result is a silently invisible peer, which is the exact class #468's \
-              differential test exists to prevent"]
+              dropping the result is a silently invisible peer, which is the exact class the \
+              shared-dispatch path's differential test exists to prevent"]
 pub(crate) fn offer_peer_create_for(
     coord: &Coordinator,
     viewer: &Viewer,
@@ -576,7 +580,8 @@ pub(crate) fn offer_peer_create_for(
     }
     let viewer_is_ghost = viewer.gates.is_ghost();
     // Short-circuit BEFORE the aura scan: a spirit healer viewed by a living player is refused
-    // regardless of stealth, and the pre-#468 code returned here without ever touching game_aura.
+    // regardless of stealth, and the code before the shared-connection model returned here without
+    // ever touching game_aura.
     if row.npc_flags & SPIRITHEALER_NPC_FLAG != 0 && !viewer_is_ghost {
         return Vec::new();
     }
@@ -605,8 +610,8 @@ pub(crate) fn offer_peer_create_for(
         return Vec::new();
     };
     let mut out = vec![Outbound::One(m)];
-    // 023: this viewer's OWN summoned pet just appeared — bind it client-side (UNIT_FIELD_SUMMON +
-    // the pet action bar).
+    // Pet action bar: this viewer's OWN summoned pet just appeared — bind it client-side
+    // (UNIT_FIELD_SUMMON + the pet action bar).
     if row.owner_guid == viewer.self_guid {
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
             Box::new(codec::build_owner_summon_values(viewer.self_guid, row.guid)),
@@ -624,13 +629,13 @@ pub(crate) fn offer_peer_create_for(
     out
 }
 
-/// One entity row changed, for one viewer: re-entry-as-UPDATE first (work-item 144 — a peer that
+/// One entity row changed, for one viewer: re-entry-as-UPDATE first (a peer that
 /// left the box and returns arrives as an update of a still-cached row, and without this branch it
 /// is permanently invisible until relog), otherwise the pure field diff, plus the viewer's own
 /// spirit-healer ghost transition.
 #[must_use = "these relay bodies RETURN the packets to send — the caller enqueues them; \
-              dropping the result is a silently invisible peer, which is the exact class #468's \
-              differential test exists to prevent"]
+              dropping the result is a silently invisible peer, which is the exact class the \
+              shared-dispatch path's differential test exists to prevent"]
 pub(crate) fn relay_entity_update(
     coord: &Coordinator,
     viewer: &Viewer,
@@ -657,8 +662,9 @@ pub(crate) fn relay_entity_update(
                 .gates
                 .is_ghost
                 .store(is_ghost, std::sync::atomic::Ordering::Relaxed);
-            // Every spirit healer currently IN VIEW (the index answers that; pre-#468 this scanned
-            // the AOI-scoped connection cache, which was the same set). Idempotent through
+            // Every spirit healer currently IN VIEW (the index answers that; before the
+            // shared-connection model this scanned the AOI-scoped connection cache, which was the
+            // same set). Idempotent through
             // `created`, exactly like the stealth Reveal/Hide arms.
             let guard = coord.0.coord();
             let healers: Vec<WorldEntity> = guard
@@ -688,8 +694,8 @@ pub(crate) fn relay_entity_update(
 /// A peer left this viewer's view (its row was deleted, or it walked out of the box). DESTROY once,
 /// and only if the viewer had actually been shown it.
 #[must_use = "these relay bodies RETURN the packets to send — the caller enqueues them; \
-              dropping the result is a silently invisible peer, which is the exact class #468's \
-              differential test exists to prevent"]
+              dropping the result is a silently invisible peer, which is the exact class the \
+              shared-dispatch path's differential test exists to prevent"]
 pub(crate) fn relay_peer_destroy(viewer: &Viewer, guid: u64, owner_guid: u64) -> Vec<Outbound> {
     if guid == viewer.self_guid {
         return Vec::new();
@@ -700,7 +706,7 @@ pub(crate) fn relay_peer_destroy(viewer: &Viewer, guid: u64, owner_guid: u64) ->
     let mut out = vec![Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
         codec::build_destroy_object(guid),
     ))];
-    // 023: this viewer's own pet despawned — clear UNIT_FIELD_SUMMON and send the empty
+    // Pet action bar: this viewer's own pet despawned — clear UNIT_FIELD_SUMMON and send the empty
     // SMSG_PET_SPELLS (the vanilla "remove pet bar" form).
     if owner_guid == viewer.self_guid {
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
@@ -716,8 +722,8 @@ pub(crate) fn relay_peer_destroy(viewer: &Viewer, guid: u64, owner_guid: u64) ->
 /// A gameobject entering (or changing state within) this viewer's view → CREATE_OBJECT, joined to
 /// its static template on the holding shard's coordinator cache.
 #[must_use = "these relay bodies RETURN the packets to send — the caller enqueues them; \
-              dropping the result is a silently invisible peer, which is the exact class #468's \
-              differential test exists to prevent"]
+              dropping the result is a silently invisible peer, which is the exact class the \
+              shared-dispatch path's differential test exists to prevent"]
 pub(crate) fn relay_gameobject_create(
     coord: &Coordinator,
     viewer: &Viewer,
@@ -747,8 +753,8 @@ pub(crate) fn relay_gameobject_create(
 /// A gameobject leaving view. Ungated on purpose (the `on_melee_delete` precedent): DESTROY for a
 /// guid the client never created is a client no-op, and gating it risks a stale prop.
 #[must_use = "these relay bodies RETURN the packets to send — the caller enqueues them; \
-              dropping the result is a silently invisible peer, which is the exact class #468's \
-              differential test exists to prevent"]
+              dropping the result is a silently invisible peer, which is the exact class the \
+              shared-dispatch path's differential test exists to prevent"]
 pub(crate) fn relay_gameobject_destroy(_viewer: &Viewer, guid: u64) -> Vec<Outbound> {
     vec![Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
         codec::build_destroy_object(guid),
@@ -756,11 +762,12 @@ pub(crate) fn relay_gameobject_destroy(_viewer: &Viewer, guid: u64) -> Vec<Outbo
 }
 
 /// One mover's motion row → `MSG_MOVE_*` bytes for one session. The `created` guard is the same one
-/// the pre-#468 relay had: no MSG_MOVE for a guid this client never got a CREATE for.
+/// the relay before the shared-connection model had: no MSG_MOVE for a guid this client never got a
+/// CREATE for.
 #[must_use = "these relay bodies RETURN the packets to send — the caller enqueues them; \
-              dropping the result is a silently invisible peer, which is the exact class #468's \
-              differential test exists to prevent"]
-/// #468 stage 4c, family 1 (/roll): the shared-dispatch twin of the per-player `on_roll` relay in
+              dropping the result is a silently invisible peer, which is the exact class the \
+              shared-dispatch path's differential test exists to prevent"]
+/// The shared-dispatch twin of the per-player `on_roll` relay (`/roll`) in
 /// `subscribe_player_events`. Same packet, byte for byte; the audience decision (shard identity)
 /// already happened in `world_view::roll_appeared`, and rolls are public, so there is no
 /// per-viewer state to consult here.
@@ -771,20 +778,20 @@ pub(crate) fn relay_roll(row: &RollEvent) -> Vec<Outbound> {
     ))]
 }
 
-/// #468 stage 4c, family 2 (rest state): the shared-dispatch twin of the per-player
-/// `on_rest_insert` relay. Same raw PLAYER_BYTES_2 VALUES packet; the audience (owner only) was
-/// already resolved by the owner-session lookup in `world_view::rest_state_appeared`.
+/// The shared-dispatch twin of the per-player
+/// `on_rest_insert` relay (rest state). Same raw PLAYER_BYTES_2 VALUES packet; the audience (owner
+/// only) was already resolved by the owner-session lookup in `world_view::rest_state_appeared`.
 pub(crate) fn relay_rest_state(self_guid: u64, player_bytes_2: u32) -> Vec<Outbound> {
     let (opcode, body) = codec::build_rest_state_values(self_guid, player_bytes_2);
     vec![Outbound::Raw { opcode, body }]
 }
 
-/// #468 stage 4c, family 7 (swing log): the ONE body both legs run — the per-player `on_combat`
+/// Swing log: the ONE body both legs run — the per-player `on_combat`
 /// callback sends what this returns; the shared dispatch enqueues it per viewer. Gated on the
 /// viewer's `created` set (no point animating an invisible attacker's swing — the victim's health
 /// still moves via the entity VALUES relay if the victim is in scope).
 ///
-/// `tx` is used ONLY for the delayed ranged-impact damage log (097: the number arrives WITH the
+/// `tx` is used ONLY for the delayed ranged-impact damage log (auto-shot: the number arrives WITH the
 /// arrow, via a thread per landed shot — a shared timer wheel if archer armies happen); every
 /// immediate packet is RETURNED so the shared path writes it at the job's queue position.
 pub(crate) fn combat_event_outbound(
@@ -796,7 +803,7 @@ pub(crate) fn combat_event_outbound(
         return Vec::new();
     }
     let mut out = Vec::new();
-    // #10/097 vanilla shot shape: a RANGED shot is a SPELL on the wire — SMSG_SPELL_GO (a HIT
+    // Auto Shot vanilla shot shape: a RANGED shot is a SPELL on the wire — SMSG_SPELL_GO (a HIT
     // carries the target in `hits`; a MISS in `misses` — the client renders the white "Miss"
     // from that list) followed by SMSG_SPELLNONMELEEDAMAGELOG for a landed hit ("Your Auto
     // Shot hits X for N"). NEVER SMSG_ATTACKERSTATEUPDATE — that is the MELEE swing packet,
@@ -836,7 +843,7 @@ pub(crate) fn combat_event_outbound(
             let msg = Outbound::One(ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(
                 log,
             )));
-            // (097) The shot's damage lands at fire + travel (module ranged_impact applies
+            // Auto Shot: the shot's damage lands at fire + travel (module ranged_impact applies
             // the health there) — hold the LOG to the same moment so the number arrives
             // WITH the arrow, not at the muzzle.
             if row.impact_delay_ms > 0 {
@@ -851,7 +858,7 @@ pub(crate) fn combat_event_outbound(
             }
         }
     } else if !row.spell_swing {
-        // 114: a fired on-next-swing spell (Heroic Strike/Cleave) REPLACES the white hit — the
+        // A fired on-next-swing spell (Heroic Strike/Cleave) REPLACES the white hit — the
         // whole swing rides the spell's cast-event row (GO + yellow named damage log), so this
         // event sends NO white ATTACKERSTATEUPDATE. killing_blow/ATTACKSTOP below still applies.
         let m = codec::build_attacker_state_update(
@@ -880,8 +887,8 @@ pub(crate) fn combat_event_outbound(
     out
 }
 
-/// #468 stage 4c, family 8 (combat stance, engage leg): SMSG_ATTACKSTART for a melee engagement —
-/// the one body both legs run. Ranged rows are NOT melee combat (097: ATTACKSTART would animate a
+/// Combat-stance engage leg: SMSG_ATTACKSTART for a melee engagement —
+/// the one body both legs run. Ranged rows are NOT melee combat (Auto Shot: ATTACKSTART would animate a
 /// melee swing between shots); the `created` gate skips an out-of-scope attacker like the swing
 /// relay.
 pub(crate) fn melee_engage_outbound(
@@ -900,9 +907,9 @@ pub(crate) fn melee_engage_outbound(
     ))]
 }
 
-/// #468 stage 4c, family 8 (combat stance, disengage leg). A RANGED row's delete is the ONE
+/// Combat-stance disengage leg. A RANGED row's delete is the ONE
 /// server-initiated auto-repeat teardown choke point: the OWNING player (and only them) gets the
-/// 0-byte SMSG_CANCEL_AUTO_REPEAT so its toggle drops in lockstep (097); a melee row's delete is
+/// 0-byte SMSG_CANCEL_AUTO_REPEAT so its toggle drops in lockstep (Auto Shot); a melee row's delete is
 /// SMSG_ATTACKSTOP for everyone (a non-kill disengage leaves stance too).
 pub(crate) fn melee_disengage_outbound(self_guid: u64, row: &MeleeAttack) -> Vec<Outbound> {
     if row.ranged_spell_id != 0 {
@@ -917,7 +924,7 @@ pub(crate) fn melee_disengage_outbound(self_guid: u64, row: &MeleeAttack) -> Vec
     ))]
 }
 
-/// #468 stage 4c, family 12 (spell cast visuals): the ONE body both legs run — the full cast-lock
+/// Spell cast visuals: the ONE body both legs run — the full cast-lock
 /// contract (START/GO sequencing, interrupt teardown, pushback, proc log, damage/heal logs,
 /// cooldown), pure over the row + the viewer's own guid. Every caster-private branch keys on
 /// `self_guid` exactly as the per-player closure did.
@@ -933,7 +940,7 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
         // teardown (unlike the START/GO broadcast visuals), so relay it ONLY to the caster — else
         // bystanders get stray "Interrupted" feedback and a bystander mid-casting the same spell
         // risks a spurious teardown.
-        // 171: a CREATURE caster (0xF130 high-guid) has no self — broadcast so every observer's
+        // A CREATURE caster (0xF130 high-guid) has no self — broadcast so every observer's
         // mob cast bar tears down on a Kick/Counterspell (the packet carries the mob's guid, so
         // a bystander's own bar is untouched; mirrors the START broadcast that drew the bar).
         let is_creature = row.caster_guid >> 48 == 0xF130;
@@ -945,7 +952,7 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
         }
         return out;
     }
-    // PUSHBACK signal (work-item 039): a direct hit slid the caster's in-progress timed cast's
+    // PUSHBACK signal: a direct hit slid the caster's in-progress timed cast's
     // fire time. Broadcast (NOT self-only) — SMSG_SPELL_DELAYED is a caster-visible cast-bar
     // shift, like SMSG_SPELL_START/GO below, so anyone watching the caster's cast bar sees it
     // slide (unlike SMSG_SPELL_FAILURE above, which is a private cast-bar-teardown message). This
@@ -960,7 +967,7 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
         )));
         return out;
     }
-    // PROC-LOG row (114): a swing-proc damage line (Seal of Righteousness holy riding a landed
+    // PROC-LOG row: a swing-proc damage line (Seal of Righteousness holy riding a landed
     // melee swing). ONLY the named yellow combat-log/floating number — never START/GO/cooldown
     // (nothing casts; the seal aura is already up). Broadcast like the damage log below.
     if row.is_proc_log {
@@ -996,14 +1003,14 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
         )));
         return out;
     }
-    // [083] Cast-GO (cast_time_ms == 0). Mangos-faithful sequence:
+    // Cast-GO (cast_time_ms == 0). Mangos-faithful sequence:
     //   - GENUINE INSTANT (is_completion=false): START(0)+GO — SendSpellStart fires for EVERY
     //     non-triggered cast (timer 0 for an instant) to register the pending cast, then cast() →
     //     SendSpellGo finalizes it. START flags = 0x02, GO flags = 0x0100 (set in the builders).
     //   - TIMED COMPLETION (is_completion=true): GO ALONE — the begin already sent START(cast_time);
     //     a 2nd START(0) reset the bar to zero-length ("stuck on full"). The SMSG_SPELL_GO is the
     //     client's cast finalizer (it matches by caster guid + spell id to release the pending cast).
-    // [083] The CASTER's OWN instant cast (cast_time 0 → this GO branch, !is_completion) already got
+    // The CASTER's OWN instant cast (cast_time 0 → this GO branch, !is_completion) already got
     // START+GO SYNCHRONOUSLY from the CMSG_CAST_SPELL handler (so they precede the aura effects the
     // SDK's alphabetical callback order would otherwise send first). Skip the duplicate to the caster
     // — but still relay it to OBSERVERS (caster != self) and for TIMED COMPLETIONS (is_completion,
@@ -1011,7 +1018,7 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
     // missile / on-hit trigger) also matches !is_completion && caster==self and is suppressed here —
     // it did not get a synchronous send, so it loses its caster-side visual until the client_initiated
     // flag lands (tracked follow-up). Acceptable for the slice; observers still see it.
-    // 088: suppress ONLY what the CMSG handler actually sent synchronously — the row says so
+    // Suppress ONLY what the CMSG handler actually sent synchronously — the row says so
     // (client_initiated rides from the cast_spell reducer path alone). The old shape
     // (!is_completion && self) also swallowed the caster's TRIGGERED instants — channel-tick
     // missiles (Arcane Missiles/Drain Life), on-hit trigger_spell procs — which never had a
@@ -1027,7 +1034,7 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
         }
         // CAST_RESULT(OK) is caster-only: clears the pending spell state so the subsequent
         // GO can release m_currentSpells. Only for timed completions — the instant-cast
-        // caster got it synchronously from the CMSG_CAST_SPELL handler. [083]
+        // caster got it synchronously from the CMSG_CAST_SPELL handler.
         if row.is_completion && row.caster_guid == self_guid {
             out.push(Outbound::Raw {
                 opcode: 0x0130,
@@ -1036,7 +1043,7 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
         }
         let mut go =
             codec::build_spell_go(row.caster_guid, row.spell_id, row.target_guid, None);
-        // 114: a 0-damage on-next-swing FIRE that rode a missed/dodged/parried swing reports
+        // A 0-damage on-next-swing FIRE that rode a missed/dodged/parried swing reports
         // the outcome in the GO's miss list — the client prints the yellow "Your Heroic
         // Strike missed/was dodged/was parried" line (the white MISS was suppressed via
         // spell_swing). swing_hit_info uses the CombatEvent codes (2 miss, 3 dodge, 4 parry);
@@ -1084,7 +1091,7 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
             ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(log)),
         ));
     }
-    // 251: the green floating heal number + combat-log line — SMSG_SPELLHEALLOG whenever
+    // The green floating heal number + combat-log line — SMSG_SPELLHEALLOG whenever
     // this cast restored health (module sums EFFECTIVE heal onto the row; overheal-only
     // casts carry 0 and stay silent, matching the damage gate's shape).
     if row.healed > 0 {
@@ -1149,15 +1156,15 @@ pub(crate) fn armor_packet(coord: &Coordinator, changed: &Aura, self_guid: u64) 
     {
         return None;
     }
-    // #468: the entity row (the BASE armor term) lives only on the coordinator now — the
+    // The entity row (the BASE armor term) lives only on the coordinator now — the
     // per-player connection no longer subscribes `game_world_entity` at all. The
     // coordinator's cache also carries the auras, the item instances and the item
     // templates, so this fold is complete there in a way it never was on the player
-    // connection (which lost `game_item_template` to #292).
+    // connection (which lost `game_item_template` to the connection reclaim).
     let guard = coord.0.coord();
     let db = &guard.conn.db;
     let eff = super::armor::effective_armor(db, self_guid);
-    // 082: carry the positive AURA portion alongside the total so the paperdoll renders the
+    // Carry the positive AURA portion alongside the total so the paperdoll renders the
     // green "(+N)" (Devotion Aura showed as plain white armor). Raw path — the positive
     // field has no gtker setter. Login self-corrects through this same relay (the SDK
     // replays aura rows after subscription-apply).
@@ -1211,7 +1218,7 @@ pub(crate) fn stealth_visibility(
             if !created.lock().unwrap().insert(changed.target_guid) {
                 return Vec::new();
             }
-            // #468: "is the peer in this viewer's scope" used to be "is its row in this
+            // "Is the peer in this viewer's scope" used to be "is its row in this
             // connection's cache", which the per-player box subscription made equivalent.
             // The shared connection's cache holds the whole world, so the question has to be
             // put to the cell index instead — otherwise a stealther unstealthing on the far
@@ -1234,7 +1241,7 @@ pub(crate) fn stealth_visibility(
                     None => {
                         // Encode failure: roll the dedup entry back like `offer_peer_create`
                         // does, else this guid is permanently suppressed (marked created with
-                        // no CREATE ever sent) — the same latent bug 144 fixed on the
+                        // no CREATE ever sent) — the same latent re-entry bug fixed on the
                         // insert/update path.
                         created.lock().unwrap().remove(&changed.target_guid);
                         Vec::new()
@@ -1250,7 +1257,7 @@ pub(crate) fn stealth_visibility(
     }
 }
 
-/// #468 stage 4c, family 14 (aura), insert leg — the shared-dispatch twin of the per-player
+/// Aura insert leg — the shared-dispatch twin of the per-player
 /// `on_aura_insert` closure. Same helper stack (`aura_sync`/`aura_duration_packet`/
 /// `run_speed_packet`/`armor_packet`/`stealth_visibility`); the aura iterators read the
 /// COORDINATOR cache (identical rows — both subscriptions were `SELECT *`), and
@@ -1300,7 +1307,7 @@ pub(crate) fn aura_insert_outbound(
     out
 }
 
-/// Family 14, update leg — twin of `on_aura_update` (no stealth transition on an update).
+/// Aura update leg — twin of `on_aura_update` (no stealth transition on an update).
 pub(crate) fn aura_update_outbound(
     coord: &Coordinator,
     created: &Arc<Mutex<HashSet<u64>>>,
@@ -1334,7 +1341,7 @@ pub(crate) fn aura_update_outbound(
     out
 }
 
-/// Family 14, delete leg — twin of `on_aura_delete` (the REVEAL half of stealth). The coordinator
+/// Aura delete leg — twin of `on_aura_delete` (the REVEAL half of stealth). The coordinator
 /// cache is post-delete by callback contract, so the sync/speed/armor folds read the remaining set.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn aura_delete_outbound(
@@ -1373,7 +1380,7 @@ pub(crate) fn aura_delete_outbound(
     out
 }
 
-/// #468 stage 4c, family 17 (group / loot-roll / quest-share): the ONE kind-decode body both legs
+/// Group / loot-roll / quest-share: the ONE kind-decode body both legs
 /// run. PRIVATE data — the audience (the row's recipient, and nobody else) is resolved by the
 /// caller (RLS on the per-player leg; the owner-session lookup + `private_recipient_audience` on
 /// the shared leg). `coord` is the privileged handle the QUEST_SHARE detail JOIN needs.
@@ -1407,7 +1414,7 @@ pub(crate) fn group_event_outbound(
             codec::build_group_decline(row.other_name.clone()),
         ))),
         group_kind::DESTROYED => Some(ServerOpcodeMessage::SMSG_GROUP_DESTROYED),
-        // Work-item 199: a party (`/p`) chat line, one row per recipient (every OTHER member
+        // A party (`/p`) chat line, one row per recipient (every OTHER member
         // + an echo to the sender — both pushed by `module/src/chat.rs::party_chat`).
         // `row.other_guid` is the SPEAKER (resolved/pushed by `group::push_event`, same
         // convention the roll kinds below use); `row.payload` is the raw message text
@@ -1463,7 +1470,7 @@ pub(crate) fn group_event_outbound(
                 None
             }
         },
-        // Work-item 221: a grouped money-loot split's per-recipient share → the SAME
+        // A grouped money-loot split's per-recipient share → the SAME
         // `SMSG_LOOT_MONEY_NOTIFY` the (now-removed) unconditional gateway send used to build,
         // just per-recipient and carrying the SHARE instead of the total (`amount` here IS the
         // wire field, matching `codec::build_loot_money_notify`'s single `amount: u32`).
@@ -1474,7 +1481,7 @@ pub(crate) fn group_event_outbound(
                 None
             }
         },
-        // Work-item 194 (sharing): an eligible party member receives the shared quest —
+        // Quest sharing: an eligible party member receives the shared quest —
         // `row.other_guid` is the SHARER (resolved/pushed by `group::push_event`), `row.payload`
         // is the quest entry. Opens the DETAILS screen with the SHARER as "giver" (the
         // recipient's own `CMSG_QUESTGIVER_ACCEPT_QUEST` then re-validates fresh via the
@@ -1498,7 +1505,7 @@ pub(crate) fn group_event_outbound(
                 None
             }
         },
-        // Work-item 194 (sharing): the SENDER's per-member feedback line, one row per member,
+        // Quest sharing: the SENDER's per-member feedback line, one row per member,
         // always (whether or not the share actually landed) — `row.other_guid` is that member,
         // `row.payload` is the `share_result` wire byte (mirrors gtker's `QuestPartyMessage` 1:1).
         quest_share_kind::QUEST_PUSH_RESULT => match row.payload.parse::<u8>() {
@@ -1521,9 +1528,9 @@ pub(crate) fn group_event_outbound(
     }
 }
 
-/// The 4c "who may see this row" predicate for the PRIVATE recipient-addressed families (whisper,
-/// group/loot-roll/quest-share, resurrect prompt): the row's addressee and nobody else. On the
-/// shared feed this — together with the owner-session lookup that enforces it structurally — is
+/// The shared-dispatch "who may see this row" predicate for the PRIVATE recipient-addressed families
+/// (whisper, group/loot-roll/quest-share, resurrect prompt): the row's addressee and nobody else. On
+/// the shared feed this — together with the owner-session lookup that enforces it structurally — is
 /// the entire privacy guarantee RLS used to provide.
 pub(crate) fn private_recipient_audience(row_recipient_guid: u64, viewer_guid: u64) -> bool {
     // 0 is "unaddressed"/"uninitialized", never a real character — an equality alone would let an
@@ -1531,7 +1538,7 @@ pub(crate) fn private_recipient_audience(row_recipient_guid: u64, viewer_guid: u
     row_recipient_guid != 0 && row_recipient_guid == viewer_guid
 }
 
-/// #468 stage 4c, family 16 (whisper): the packet body both legs run. Audience resolved by the
+/// Whisper: the packet body both legs run. Audience resolved by the
 /// caller — RLS per-player, the recipient owner-session lookup on the shared leg.
 pub(crate) fn whisper_event_outbound(row: &WhisperEvent) -> Vec<Outbound> {
     let m = codec::build_whisper(row.other_guid, row.is_inform, row.message.clone());
@@ -1540,7 +1547,7 @@ pub(crate) fn whisper_event_outbound(row: &WhisperEvent) -> Vec<Outbound> {
     ))]
 }
 
-/// #468 stage 4c, family 15 (resurrect prompt): the packet body both legs run. Audience: the
+/// Resurrect prompt: the packet body both legs run. Audience: the
 /// offer's target, resolved by the caller.
 pub(crate) fn resurrect_request_outbound(row: &ResurrectRequest) -> Vec<Outbound> {
     let m = codec::build_resurrect_request(row.caster_guid, row.caster_name.clone());
@@ -1549,8 +1556,8 @@ pub(crate) fn resurrect_request_outbound(row: &ResurrectRequest) -> Vec<Outbound
     ))]
 }
 
-/// #468 stage 4c, family 13 (projectile impact): the floating damage number for a projectile that
-/// finished its travel (#084) — never a START/GO. Pure over the row; broadcast.
+/// Projectile impact: the floating damage number for a projectile that
+/// finished its travel — never a START/GO. Pure over the row; broadcast.
 pub(crate) fn impact_event_outbound(row: &SpellImpactEvent) -> Vec<Outbound> {
     if row.damage == 0 {
         return Vec::new(); // a fully-absorbed impact (or a vanished target) logs nothing
@@ -1568,7 +1575,7 @@ pub(crate) fn impact_event_outbound(row: &SpellImpactEvent) -> Vec<Outbound> {
     vec![Outbound::One(ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(log)))]
 }
 
-/// #468 stage 4c, family 10 (say/yell chat): the one body both legs run. The speaker always hears
+/// Say/yell chat: the one body both legs run. The speaker always hears
 /// their own line (vanilla); everyone else is `chat_in_range`-gated (SAY ~25yd, YELL ~300yd, map +
 /// instance fenced), with both endpoints read from the COORDINATOR's global cache — the AOI-scoped
 /// per-player cache could not see a 100–300yd YELL speaker. Missing endpoint → drop (safer than
@@ -1624,7 +1631,7 @@ pub(crate) fn chat_event_outbound(
     ))]
 }
 
-/// #468 stage 4c, family 11 (chat channels): membership IS the audience (no proximity — General
+/// Chat channels: membership IS the audience (no proximity — General
 /// spans the zone), checked against the coordinator's `game_channel_member` cache per viewer. The
 /// sender hears their echo through the same path (they're a member too).
 pub(crate) fn channel_event_outbound(
@@ -1656,7 +1663,7 @@ pub(crate) fn channel_event_outbound(
     ))]
 }
 
-/// #468 stage 4c, family 9 (emotes): SMSG_TEXT_EMOTE + SMSG_EMOTE, broadcast (no range gate today
+/// Emotes: SMSG_TEXT_EMOTE + SMSG_EMOTE, broadcast (no range gate today
 /// — preserved as-is for A/B equality). The target name resolves through the coordinator cache
 /// (player, else creature template); unknown ids degrade gracefully so the rest still relays.
 pub(crate) fn emote_event_outbound(coord: &Coordinator, row: &EmoteEvent) -> Vec<Outbound> {
@@ -1699,7 +1706,7 @@ pub(crate) fn emote_event_outbound(coord: &Coordinator, row: &EmoteEvent) -> Vec
     out
 }
 
-/// #468 stage 4c, family 5 (dynamic objects): the shared-dispatch twin of the per-player
+/// Dynamic objects: the shared-dispatch twin of the per-player
 /// `on_dynobj_insert` relay. The instance gate already ran in `world_view::dynobj_appeared`.
 pub(crate) fn relay_dynobj_create(row: &DynamicObject) -> Vec<Outbound> {
     let m = codec::build_dynamicobject_create_object(
@@ -1724,7 +1731,7 @@ pub(crate) fn relay_destroy_object(guid: u64) -> Vec<Outbound> {
     ))]
 }
 
-/// #468 stage 4c, family 3 (skill pane): the shared-dispatch twin of the per-player skill relays
+/// Skill pane: the shared-dispatch twin of the per-player skill relays
 /// (insert and update ran the same body there too). Audience (owner only) resolved by the
 /// owner-session lookup in `world_view::skill_changed`; the slot allocation writes the viewer's
 /// OWN `skill_slots` — the same map the per-player leg captures, seeded from the login layout.
@@ -1779,8 +1786,8 @@ pub(crate) fn motion_outbound(
 
 /// One creature's spline row → `SMSG_MONSTER_MOVE` for one session.
 #[must_use = "these relay bodies RETURN the packets to send — the caller enqueues them; \
-              dropping the result is a silently invisible peer, which is the exact class #468's \
-              differential test exists to prevent"]
+              dropping the result is a silently invisible peer, which is the exact class the \
+              shared-dispatch path's differential test exists to prevent"]
 pub(crate) fn creature_leg_outbound(
     created: &Mutex<HashSet<u64>>,
     row: &CreatureSpline,
@@ -1810,7 +1817,7 @@ pub(crate) fn creature_leg_outbound(
     ))]
 }
 
-/// The `on_update` dispatch decision (work-item 144): does this update need to be treated as a
+/// The `on_update` dispatch decision: does this update need to be treated as a
 /// re-entry (offer a fresh CREATE via `offer_peer_create`) instead of a field diff? True exactly when
 /// the guid isn't self AND isn't already in the viewer's `created` set — i.e. either this is the first
 /// time this viewer has seen the row, or it left scope (evicted by `on_delete`) and is now returning as
@@ -1946,7 +1953,7 @@ pub(crate) fn entity_update_to_outbound(
             let m = codec::build_power_values(new.guid, power_b, new.power);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
-        // GM playtest `.speed` (work-item 223): a `run_speed_mult_bp` change relays
+        // GM playtest `.speed`: a `run_speed_mult_bp` change relays
         // SMSG_FORCE_RUN_SPEED_CHANGE — player movement is client-authoritative, so the server-side
         // field alone never speeds the client up. Mirrors the existing `A_MOD_SPEED(MOVE)` aura relay
         // (`run_speed_packet`, same `BASE_RUN_SPEED` constant) but keyed off THIS field, any unit (not
@@ -1968,7 +1975,7 @@ pub(crate) fn entity_update_to_outbound(
 /// toast, the rest-state PLAYER_BYTES_2 flip). Both must relay only what happens LIVE, after the
 /// player is in the world.
 ///
-/// **Why a flag and not just a frozen id set** (issue #41). The previous shape froze the row ids
+/// **Why a flag and not just a frozen id set.** The previous shape froze the row ids
 /// present at login and skipped those — two ways to misfire, and the live run hit both:
 ///
 ///  1. **Re-minted ids.** `sweep_transfer_game_character_explored` sets `r.id = 0` so the
@@ -2096,8 +2103,9 @@ impl Coordinator {
     /// outbound SMSG pushed onto `tx` (Phase 6/7). 51 `on_insert`/`on_update`/`on_delete`
     /// registrations across the table groups indexed below, most on `player.conn` (this
     /// session's own per-player connection) and a minority pinned to `self.0.coord()` (the
-    /// COORDINATOR connection, immune to this connection's AOI-resubscription churn — the 279
-    /// delivery law, used for anything a dropped callback would make worse than a late packet:
+    /// COORDINATOR connection, immune to this connection's AOI-resubscription churn — the
+    /// coordinator-relay rule (see `stdb::connection`), used for anything a dropped callback would
+    /// make worse than a late packet:
     /// XP, level-up, quest log, item instances, teleport, the addon bridge, reputation, and the
     /// realm-core group/whisper/explored-fog twins). Each group carries a `// ====` banner at
     /// its registration site, top to bottom in this same order:
@@ -2119,8 +2127,8 @@ impl Coordinator {
     ///   - `game_spell_impact_event` — deferred projectile impact damage
     ///   - `game_chat_event` / `game_channel_event` / `game_emote_event` — chat, channels, emotes
     ///   - `game_whisper_event` / `game_group_event` — whisper + party (each per-player leg, then
-    ///     its realm-core twin); `game_group_event` also carries loot-roll (187) and quest-share
-    ///     (194), reused by reserved kind range rather than a table of their own
+    ///     its realm-core twin); `game_group_event` also carries loot-roll and quest-share,
+    ///     reused by reserved kind range rather than a table of their own
     ///   - `game_roll_event` — `/roll` broadcast
     ///   - `game_aura` — buff/debuff array sync, self armor, stealth peer-visibility
     ///   - `game_character_quest` — quest log (coordinator)
@@ -2130,23 +2138,23 @@ impl Coordinator {
     ///   - `game_player_reputation` — reputation standing (coordinator)
     ///
     /// `game_movement_event` and `game_creature_move_event`, the two tables the doc comment here
-    /// used to name, are GONE (perf catalog 2.1) — replaced by the `game_entity_motion` /
-    /// `game_creature_spline` box subscriptions above; nothing writes either any more (#350).
+    /// used to name, are GONE — replaced by the `game_entity_motion` /
+    /// `game_creature_spline` box subscriptions above; nothing writes either any more.
     ///
     /// TEARDOWN CONTRACT: every registration above needs a matching `remove_on_*` in the
     /// `teardowns` vec near the end of this function — up to ~2,800 lines away, the distance
-    /// issue #353 flagged. That vec's own comment repeats the rule ("Adding a relay = register it
-    /// + push its teardown here") and `every_registered_player_callback_has_a_teardown_issue_89`
+    /// that motivates the carve-up below. That vec's own comment repeats the rule ("Adding a
+    /// relay = register it + push its teardown here") and `every_registered_player_callback_has_a_teardown_issue_89`
     /// (this file's test module) checks it by scanning this file's own source text: a missed
     /// teardown relays a logged-out player's state — private whispers, in the failure mode that
     /// vec's comment spells out — into a dead channel for the gateway's whole lifetime.
     ///
-    /// PLANNED CARVE (#353, not done here — this function is still one ~3,000-line body; this
+    /// PLANNED CARVE (not done here — this function is still one ~3,000-line body; this
     /// doc comment plus the inline `// ====` banners are the alpha-scope deliverable, a map for
     /// the reader, not the refactor): extract one `fn register_<table>_relays(...) ->
     /// Vec<Box<dyn FnOnce(&PlayerConn) + Send>>` per group above, each returning its OWN
     /// teardowns so registration and teardown are co-located instead of mirrored ~2,800 lines
-    /// apart — this file's own `offer_peer_create_for` family (#468) proves the pattern. Mechanical,
+    /// apart — this file's own `offer_peer_create_for` family proves the pattern. Mechanical,
     /// no behavior change; land it one table-group
     /// at a time so each PR stays reviewable, and re-run
     /// `every_registered_player_callback_has_a_teardown_issue_89` plus the `scanned_source`-based
@@ -2170,12 +2178,12 @@ impl Coordinator {
         // The wrong constant (a) failed to ghost-gate the real Spirit Healer (npc_flags 0x21) and
         // (b) wrongly ghost-gated the 39 armorers/quartermasters that carry REPAIR (0x4000), hiding
         // them from living players.
-        // #468 stage 4c: with shared calls on, migrated families register on the shared
+        // With shared calls on, migrated families register on the shared
         // coordinator dispatch (`world_view::arm_shard`) instead of this connection, and their
         // per-player base queries are dropped — each family forks on this ONE flag so an A/B run
         // compares whole configurations, never a mix.
         let shared_calls = crate::config::shared_calls_enabled();
-        // #468 stage 4d: under LYRACORE_SHARED_CALLS no per-player connection exists — every
+        // Under LYRACORE_SHARED_CALLS no per-player connection exists — every
         // remaining `pp()` use below sits inside a `(!shared_calls)` branch, which is what the
         // expect asserts.
         let player = if shared_calls {
@@ -2185,13 +2193,13 @@ impl Coordinator {
         };
         let pp = || player.as_ref().expect("per-player leg is flag-off only");
         let created = Arc::new(Mutex::new(HashSet::from([self_guid])));
-        // #73 view-merge / #207 fast-follow 2: the one piece of viewer-owned state the away leg's
+        // The view-merge fast-follow gap: the one piece of viewer-owned state the away leg's
         // peer-visibility gate needs but cannot read off an away connection. Written by the ghost-flag
         // relay (this viewer's OWN row), read by every per-viewer relay body in this file — a
         // shared coordinator callback holds the cache of the shard that owns the ROW, which for a
         // cross-shard peer is not the shard that owns the VIEWER. See `ViewerGates`'s doc comment.
         let viewer_gates = Arc::new(ViewerGates::default());
-        // #468: this session's handle on the gateway-wide shared view. Minted HERE, at the top,
+        // This session's handle on the gateway-wide shared view. Minted HERE, at the top,
         // because relays registered further down capture it — the actual REGISTRATION (which makes
         // the shared dispatch start enqueueing for this session) happens near the end, once
         // everything that could still fail with `?` has succeeded.
@@ -2208,7 +2216,7 @@ impl Coordinator {
         // Melee swing log (broadcast; no RLS) → SMSG_ATTACKERSTATEUPDATE (swing animation + damage
         // text). The victim's health bar is moved separately by the on_update VALUES relay above.
         //
-        // 4c family 7: registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the SAME
+        // Registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the SAME
         // `combat_event_outbound` body; flag-on it is enqueued per viewer by
         // `world_view::combat_event_appeared` and the base query is dropped below.
         let cb_tx = tx.clone();
@@ -2236,7 +2244,7 @@ impl Coordinator {
         // (so a non-kill disengage leaves stance too — not just the killing blow above). Covers
         // AUTO-ATTACK combat; a pure-caster engagement has no melee row, so UNIT_FLAG_IN_COMBAT for that
         // case is a follow-up. AOI-guard the start like the swing relay (skip an out-of-scope attacker).
-        // 4c family 8: registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the same
+        // Registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the same
         // `melee_engage_outbound`/`melee_disengage_outbound` bodies (the 097 ranged-vs-melee fork
         // and the owner-only CANCEL_AUTO_REPEAT live there); flag-on
         // `world_view::melee_engaged`/`melee_disengaged` enqueues them per viewer.
@@ -2271,7 +2279,7 @@ impl Coordinator {
         //  Live PLAYER_SKILL_INFO[slot] VALUES so a newly-learned or trained skill line updates the
         //  open pane without a relog.
         // ======================================================================================
-        // LIVE skill pane relay (234): a game_player_skill INSERT (new line learned) or UPDATE
+        // LIVE skill pane relay: a game_player_skill INSERT (new line learned) or UPDATE
         // (skill-up/train) pushes the PLAYER_SKILL_INFO[slot] partial so the open pane moves and
         // the client prints its own "Your skill in X has increased to N." line — no relog. The
         // slot map is seeded from the SAME deterministic layout the login CREATE used
@@ -2301,7 +2309,7 @@ impl Coordinator {
             let next_free = layout.len() as u8;
             std::sync::Arc::new(std::sync::Mutex::new((map, next_free)))
         };
-        // 4c family 3: registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the shared
+        // Registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the shared
         // dispatch (`world_view::skill_changed` → `relay_skill`) runs the same body against the
         // SAME `skill_slots` map (it rides the Viewer), and the base query is dropped below.
         let skill_tx = tx.clone();
@@ -2373,16 +2381,15 @@ impl Coordinator {
         //  replay, plus the one-shot "Discovered: <area>" popup on a genuinely fresh bit. See the
         //  coordinator twin below for the delivery-law guarantee.
         // ======================================================================================
-        // Explored areas (200) → the PLAYER_EXPLORED_ZONES map-fog word. Fires on a live discovery AND
+        // Explored areas → the PLAYER_EXPLORED_ZONES map-fog word. Fires on a live discovery AND
         // on the login initial-sync of the char's stored areas — idempotent VALUES, so login re-sends
         // every word and restores the fog (exactly like the skill-VALUES relay above). A partial VALUES
         // overwrites the whole word, so recompute the FULL word (OR of every explored bit of THIS char
         // in the same 32-bucket) rather than the single new bit, or co-word areas get clobbered.
-        // Exploration (200): the login/import replay must not toast a "Discovered" popup (the fog
+        // Exploration: the login/import replay must not toast a "Discovered" popup (the fog
         // VALUES still fires for all). See `ReplayGate` — it is CLOSED until the snapshot below is
-        // taken, and keys on `area_bit` so a transfer's re-minted row ids cannot read as discoveries
-        // (issue #41).
-        // 4c family 4: registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the coordinator
+        // taken, and keys on `area_bit` so a transfer's re-minted row ids cannot read as discoveries.
+        // Registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the coordinator
         // twin below carries BOTH halves (fog VALUES for live discoveries + the gated "Discovered"
         // toast), the login fog restore becomes an explicit sweep at world entry (no per-session
         // subscription apply means no initial-sync replay to ride), and the per-player
@@ -2414,7 +2421,7 @@ impl Coordinator {
                     let _ = explored_tx.send(Outbound::Raw { opcode, body });
                     // "Discovered: <area>" text popup — a FRESH discovery only. Skips the login initial-sync
                     // replay AND the rows a cross-database transfer re-inserts (else every already-explored
-                    // area toasts a Discovered line, quoting XP nobody granted — issue #41).
+                    // area toasts a Discovered line, quoting XP nobody granted).
                     if let Some(out) = discovery_packet(&explored_gate, row) {
                         let _ = explored_tx.send(out);
                     }
@@ -2426,19 +2433,20 @@ impl Coordinator {
         //  PLAYER_BYTES_2 (zzz icon + blue XP bar) on a live inn crossing; the login rest state
         //  itself rides the CREATE byte, not this relay.
         // ======================================================================================
-        // Rest state (196): a LIVE inn crossing relays PLAYER_BYTES_2 (zzz icon + blue XP bar). The login
+        // Rest state: a LIVE inn crossing relays PLAYER_BYTES_2 (zzz icon + blue XP bar). The login
         // state rides the CREATE byte (spawn bakes it from Character.resting), so the historical events
         // present at login are skipped — the same `ReplayGate` as the Discovered popup above.
         //
-        // #41 AUDIT — the re-minted-id assumption: this relay is CLEAR of it. `game_rest_state_event`
+        // AUDIT against the explored-area duplicate-discovery bug's re-minted-id assumption: this
+        // relay is CLEAR of it. `game_rest_state_event`
         // is on `transfer::NOT_TRANSPORTED` (a one-shot relay row with a GC TTL; the durable rest
         // state travels on the character row), so no transfer ever re-inserts one here and no id is
-        // ever re-minted. It DID share the other half of #41 — the frozen id set racing the replay
+        // ever re-minted. It DID share the other failure mode of that bug — the frozen id set racing the replay
         // callbacks, which could relay a HISTORICAL event's `player_bytes_2` over the correct login
         // byte — so it moves onto the same gate, which needs no key at all: nothing before the gate
         // opens is a live inn crossing.
         //
-        // 4c family 2: registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the shared
+        // Registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the shared
         // dispatch (`world_view::rest_state_appeared` → `relay_rest_state`, same packet, audience
         // resolved by the owner-session lookup) delivers, and the base query is dropped below;
         // no ReplayGate is needed on that path — nothing re-subscribes per session, so only live
@@ -2463,16 +2471,17 @@ impl Coordinator {
 
         // ======================================================================================
         //  XP + LEVEL-UP, coordinator-registered — game_xp_event / game_levelup_event (insert)
-        //  SMSG_LOG_XPGAIN / SMSG_LEVELUP_INFO. Moved off the per-player connection by 279 (the 277
-        //  loss class): both ride kill transactions concurrent with AOI churn on that connection.
+        //  SMSG_LOG_XPGAIN / SMSG_LEVELUP_INFO. Moved off the per-player connection by the
+        //  coordinator-relay rule (see `stdb::connection`): both ride kill transactions concurrent
+        //  with AOI churn on that connection.
         // ======================================================================================
         // XP gain (slice 1) → SMSG_LOG_XPGAIN; level-up → SMSG_LEVELUP_INFO. Both event tables are
-        // COORDINATOR-registered since 279 (the 277 loss class): xp/levelup events ride KILL
+        // COORDINATOR-registered per the coordinator-relay rule: xp/levelup events ride KILL
         // transactions, which can be large and concurrent with movement (AOI churn on the
         // per-player conn) — a lost SMSG_LEVELUP_INFO was observed as the levelup_info suite
         // flake. The coordinator bypasses the recipient RLS, so the closure now self-filters
         // on recipient_identity (the session's bound player identity).
-        // 4d: the bound identity WITHOUT touching a per-player connection — synthetic under the
+        // The bound identity WITHOUT touching a per-player connection — synthetic under the
         // flag (what establish_session bound and the module stamps on event rows), the cached
         // connection's real identity otherwise. Identical values to the old `player.identity` read.
         let self_identity =
@@ -2488,7 +2497,7 @@ impl Coordinator {
                 if row.recipient_identity != self_identity {
                     return;
                 }
-                // #72: belt-and-suspenders — nothing about a warm handoff should produce a kill/XP event
+                // Belt-and-suspenders — nothing about a warm handoff should produce a kill/XP event
                 // mid-swap, but this closure is self-keyed like every other relay this flag covers.
                 let m = codec::build_log_xpgain(row.killed_guid, row.total_exp, row.is_kill);
                 let _ = xp_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_LOG_XPGAIN(
@@ -2523,17 +2532,18 @@ impl Coordinator {
 
         // ======================================================================================
         //  EXPLORATION FOG, coordinator twin — game_character_explored (insert)
-        //  The 279 delivery-law guarantee for the per-player leg above: re-sends the same
-        //  idempotent fog VALUES from a connection that never churns, so a fresh-login discovery
-        //  can't be dropped by AOI resubscription.
+        //  The coordinator-relay rule's guarantee (see `stdb::connection`) for the per-player leg
+        //  above: re-sends the same idempotent fog VALUES from a connection that never churns, so a
+        //  fresh-login discovery can't be dropped by AOI resubscription.
         // ======================================================================================
-        // Fog-word GUARANTEE for live discoveries (279 law, live find 2026-07-19): the fresh-login
+        // Fog-word GUARANTEE for live discoveries (the coordinator-relay rule, see
+        // `stdb::connection`; live find 2026-07-19): the fresh-login
         // first-movement discovery is exactly the AOI-churn window where the per-player callback
         // drops — a new character discovered Northshire server-side and the map never cleared. The
         // coordinator re-sends the same idempotent full-word VALUES for every fresh insert (double
         // fog with the per-player relay is harmless); flag-off the "Discovered" popup deliberately
-        // stays on the per-player path only, so it never toasts twice — flag-on (4c family 4) the
-        // per-player leg is gone, so THIS callback carries the toast, behind the same #41
+        // stays on the per-player path only, so it never toasts twice — flag-on the
+        // per-player leg is gone, so THIS callback carries the toast, behind the same
         // `ReplayGate` (a coordinator reconnect re-applies the subscription and replays every
         // cached row; the gate's area_bit key is what keeps that from toasting the whole map).
         // Login restore: flag-off rides the per-player initial-sync; flag-on it is the explicit
@@ -2574,12 +2584,12 @@ impl Coordinator {
         //  Ground-area spell visuals (Consecration's swirl etc.) → CREATE on insert, DESTROY on the
         //  area's reap.
         // ======================================================================================
-        // Ground-area DYNAMICOBJECTs (118, Consecration's swirl; broadcast, no RLS) → CREATE on
+        // Ground-area DYNAMICOBJECTs (Consecration's swirl; broadcast, no RLS) → CREATE on
         // insert, DESTROY on the area's reap. The 5875 client renders the ground effect from
         // DYNAMICOBJECT_SPELLID's SpellVisual — the cast packets alone draw nothing (live find).
         // Instance-gated like corpses; the 0xF100… guid space never collides. Short-lived (≤ the
         // area's duration), so no login/AOI resident sweep — a mid-area login misses the visual.
-        // 4c family 5: registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the shared
+        // Registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the shared
         // dispatch (`world_view::dynobj_appeared`/`dynobj_vanished`, same packets + same instance
         // gate) delivers, and the base query is dropped below.
         let dynobj_ins_tx = tx.clone();
@@ -2629,19 +2639,19 @@ impl Coordinator {
         // Player corpses (slice 5; broadcast, no RLS) → CORPSE CREATE_OBJECT on insert (a body left at
         // a death location), SMSG_DESTROY_OBJECT on delete (reclaim/decay). The corpse guid (0xF101…)
         // never collides with a player/creature guid, so no self-skip/dedup is needed.
-        // 4c family 6: registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the shared
+        // Registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the shared
         // dispatch (`world_view::corpse_appeared`/`corpse_changed`/`corpse_vanished`, same
         // packets + same instance gate) delivers, and the base query is dropped below.
         let corpse_ins_tx = tx.clone();
         let on_corpse_insert = (!shared_calls).then(|| {
             pp().conn.db.game_corpse().on_insert(move |_ctx, row| {
-                // 190 slice 2: corpse rows are instance-tagged — CREATE only for same-instance viewers
+                // Corpse rows are instance-tagged — CREATE only for same-instance viewers
                 // (instance-0 corpses relay exactly as before; a Deadmines corpse stays inside its run).
                 if !instance_relay_gate(row.instance_id, Some(login_instance)) {
                     return;
                 }
                 // Shared body with the post-AOI resident sweep — see `relay_corpse_create` (the
-                // owner's reclaim-delay packet, work-item 201, rides inside it).
+                // owner's reclaim-delay packet rides inside it).
                 relay_corpse_create(&corpse_ins_tx, self_guid, row);
             })
         });
@@ -2653,7 +2663,7 @@ impl Coordinator {
                 )));
             })
         });
-        // Corpse state changes (work-item 201: body → bones decay, `gc.rs`'s reaper) → re-emit the
+        // Corpse state changes (body → bones decay, `gc.rs`'s reaper) → re-emit the
         // CREATE_OBJECT so a viewer's client re-renders it with the current bones flag. Mirrors the
         // insert relay above (same builder); UNVERIFIED-until-observed whether the 5875 client actually
         // re-renders a CORPSE object on a repeat CREATE for the same guid rather than no-op'ing it.
@@ -2664,7 +2674,7 @@ impl Coordinator {
                 .db
                 .game_corpse()
                 .on_update(move |_ctx, _old, row| {
-                    // 190 slice 2: same instance gate as the insert relay (the body→bones re-emit must not
+                    // Same instance gate as the insert relay (the body→bones re-emit must not
                     // leak a cross-instance corpse either).
                     if !instance_relay_gate(row.instance_id, Some(login_instance)) {
                         return;
@@ -2681,13 +2691,13 @@ impl Coordinator {
         //  SMSG_RESURRECT_REQUEST for an offer addressed to this player; no delete-side relay (the
         //  client's own accept/decline resolves it).
         // ======================================================================================
-        // Resurrection accept-prompt (#014; RLS-scoped — this subscription only sees the offer addressed
+        // Resurrection accept-prompt (RLS-scoped — this subscription only sees the offer addressed
         // to THIS player, same shape as `game_whisper_event`) → SMSG_RESURRECT_REQUEST. The row is deleted
         // by `resurrect_response` (accept or decline) or replaced by a fresh offer; no delete-side relay is
         // needed (the 5875 client's resurrect prompt has no server-driven dismiss opcode — it times out or
         // is dismissed by the player's own accept/decline, which this same CMSG round-trip already resolves).
         let rez_tx = tx.clone();
-        // 4c family 15: registered ONLY with LYRACORE_SHARED_CALLS off. RLS-addressed (this
+        // Registered ONLY with LYRACORE_SHARED_CALLS off. RLS-addressed (this
         // subscription only sees offers addressed to this player); flag-on the guarantee moves to
         // `world_view::resurrect_offered` (owner-session lookup on the row's target_guid +
         // `private_recipient_audience`).
@@ -2712,7 +2722,7 @@ impl Coordinator {
         // visual (SMSG_SPELL_GO) on every cast; an aura insert/refresh writes the slot-0 buff icon via
         // a partial UNIT_FIELD_AURA VALUES update, and its delete (expiry) clears the slot (zeros).
         //
-        // 4c family 12: registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the same
+        // Registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the same
         // `cast_event_outbound` body (the whole cast-lock contract lives there); flag-on
         // `world_view::cast_event_appeared` enqueues it per viewer.
         let cast_tx = tx.clone();
@@ -2729,10 +2739,10 @@ impl Coordinator {
         });
         // ======================================================================================
         //  SPELL IMPACT DAMAGE — game_spell_impact_event (insert)
-        //  The floating damage number for a projectile that has finished its travel time (#084);
+        //  The floating damage number for a projectile that has finished its travel time;
         //  never re-sends START/GO.
         // ======================================================================================
-        // Deferred PROJECTILE-IMPACT damage log (#084 — Shadow Bolt lands on impact, not at cast
+        // Deferred PROJECTILE-IMPACT damage log (Shadow Bolt lands on impact, not at cast
         // resolution). A SEPARATE table + listener from `on_cast` above (never touches it): the module's
         // `fire_spell_impact` (module/src/spell/scheduler.rs) inserts a `game_spell_impact_event` row when
         // a projectile's missile travel time elapses, carrying ONLY the already-resolved damage figures.
@@ -2740,7 +2750,7 @@ impl Coordinator {
         // the CMSG_CAST_SPELL handler (world/mod.rs) — this relay sends NOTHING but the floating damage
         // number, so it can never replay a duplicate START/GO for a cast that already visually resolved.
         //
-        // 4c family 13: registered ONLY with LYRACORE_SHARED_CALLS off; the shared twin is
+        // Registered ONLY with LYRACORE_SHARED_CALLS off; the shared twin is
         // `world_view::impact_appeared` → `impact_event_outbound`.
         let impact_tx = tx.clone();
         let on_impact = (!shared_calls).then(|| {
@@ -2764,7 +2774,7 @@ impl Coordinator {
         // Both endpoints are looked up from game_world_entity; if either is missing (edge-case
         // during login / logout) the message is dropped — safer than flooding all clients.
         //
-        // 4c family 10: registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the same
+        // Registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the same
         // `chat_event_outbound` body (speaker echo + range gate + coordinator-cache endpoint
         // lookups); flag-on `world_view::chat_appeared` enqueues it per viewer.
         let chat_tx = tx.clone();
@@ -2785,12 +2795,12 @@ impl Coordinator {
         //  SMSG_MESSAGECHAT for a line on a channel this connection is a member of
         //  (game_channel_member is subscribed but has no callback of its own).
         // ======================================================================================
-        // Chat channels (065): a channel line reaches every MEMBER, anywhere (no proximity —
+        // Chat channels: a channel line reaches every MEMBER, anywhere (no proximity —
         // General spans the zone; membership IS the audience). Each connection filters on its OWN
         // membership row (game_channel_member is in this player's subscription); the sender hears
         // their echo through the same path (they're a member too — vanilla echoes channel lines).
         //
-        // 4c family 11: registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the same
+        // Registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the same
         // `channel_event_outbound` body — the membership check reads the COORDINATOR's
         // game_channel_member cache in both flag states (same rows: the per-player query was an
         // unscoped SELECT *), which is what lets the per-player member query drop under the flag.
@@ -2815,7 +2825,7 @@ impl Coordinator {
         // SMSG_EMOTE animation. Both degrade gracefully: an unknown text-emote / animation id is simply
         // skipped so the rest still relays.
         //
-        // 4c family 9: registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the same
+        // Registered ONLY with LYRACORE_SHARED_CALLS off. Both legs run the same
         // `emote_event_outbound` body (target-name resolve through the coordinator cache, the
         // same join as reads.rs's synthesized_objectives).
         let emote_tx = tx.clone();
@@ -2839,7 +2849,7 @@ impl Coordinator {
         // Whisper (social tier; RLS-scoped — this subscription only sees rows addressed to this
         // player) → SMSG_MESSAGECHAT (Whisper "X whispers:" or WhisperInform "To X:").
         //
-        // 4c family 16: registered ONLY with LYRACORE_SHARED_CALLS off. PRIVATE data — on the
+        // Registered ONLY with LYRACORE_SHARED_CALLS off. PRIVATE data — on the
         // per-player leg RLS is the entire filter (this subscription only sees rows addressed to
         // this player); flag-on the same guarantee moves to `world_view::whisper_appeared`
         // (owner-session lookup + `private_recipient_audience`), running `whisper_event_outbound`.
@@ -2859,31 +2869,31 @@ impl Coordinator {
         // ======================================================================================
         //  GROUP / LOOT ROLL / QUEST SHARE, per-player leg — game_group_event (insert)
         //  Party invite/roster/decline/destroy packets. This SAME table is reused, by reserved kind
-        //  range, for loot/master-loot rolls (work-item 187) and quest share/push-result (work-item
-        //  194). See the realm-core twin below.
+        //  range, for loot/master-loot rolls and quest share/push-result. See the realm-core twin
+        //  below.
         // ======================================================================================
-        // Group events (066) → the party packets. INVITE/DECLINE carry the pre-resolved name;
+        // Group events → the party packets. INVITE/DECLINE carry the pre-resolved name;
         // LIST carries the full roster IN THE EVENT ROW'S PAYLOAD — the module serializes it in
         // the same transaction as the membership change (payload-carry; decoded by
         // lyracore_shared::group::decode_roster), so the roster is exactly what that change produced;
-        // DESTROYED clears the party UI. Kinds and grammar are the lyracore-shared group contract
-        // (work-item 163) — the module writes the same constants. Unknown kinds are dropped loudly.
+        // DESTROYED clears the party UI. Kinds and grammar are the lyracore-shared group contract —
+        // the module writes the same constants. Unknown kinds are dropped loudly.
         use lyracore_shared::group::event_kind as group_kind;
-        // Work-item 187: the roll/master-loot relay REUSES this SAME per-recipient event table
+        // The roll/master-loot relay REUSES this SAME per-recipient event table
         // instead of a new gateway-subscribed table (see `lyracore_shared::loot_roll`'s module doc for
         // the full rationale) — its kinds live in the reserved `4..=7` range, decoded below
         // alongside the group-membership kinds.
         use lyracore_shared::loot_roll::event_kind as roll_kind;
-        // Work-item 194 (sharing): QUEST_SHARE/QUEST_PUSH_RESULT reuse this SAME per-recipient table —
+        // Quest sharing: QUEST_SHARE/QUEST_PUSH_RESULT reuse this SAME per-recipient table —
         // kinds 10/11, the next free slots after PARTY_CHAT (9). QUEST_SHARE needs a full quest-detail
         // JOIN (quest_template/text/objectives/rewards) that ISN'T in this player's own per-connection
-        // subscription set (NOT ONE of the four is, since 292 dropped game_quest_objective from that
-        // list — see the base_queries DO-NOT-RE-ADD note below), so it
+        // subscription set (NOT ONE of the four is, since the connection reclaim dropped
+        // game_quest_objective from that list — see the base_queries DO-NOT-RE-ADD note below), so it
         // goes through a CLONED privileged coordinator handle (the SAME `quest_detail` inherent method
         // `world/mod.rs`'s CMSG_QUEST_QUERY handler uses — `group_event_outbound` carries it), not `ctx.db`.
         let quest_share_coord = self.clone();
         let group_tx = tx.clone();
-        // 4c family 17: registered ONLY with LYRACORE_SHARED_CALLS off. This is PRIVATE data
+        // Registered ONLY with LYRACORE_SHARED_CALLS off. This is PRIVATE data
         // (party membership, loot rolls, quest shares) — flag-on, delivery goes recipient-keyed
         // through `world_view::group_event_appeared` (owner-session lookup + the explicit
         // `private_recipient_audience` predicate), running the same `group_event_outbound` body.
@@ -2897,16 +2907,17 @@ impl Coordinator {
         // ======================================================================================
         //  GROUP, realm-core twin — game_group_event (insert, on the realm-core coordinator
         //  connection)
-        //  #22: party events for a session whose shard differs from realm-core, where membership
-        //  actually changes; the owner token bypasses RLS and the closure self-filters on
-        //  recipient_guid.
+        //  Realm-core party relay: party events for a session whose shard differs from realm-core,
+        //  where membership actually changes; the owner token bypasses RLS and the closure
+        //  self-filters on recipient_guid.
         // ======================================================================================
-        // REALM-CORE group relay (#22, group slice). The party packets a MULTI-DATABASE gateway
+        // REALM-CORE group relay. The party packets a MULTI-DATABASE gateway
         // must deliver come from the directory database, not from this player's shard: realm-core is
         // where membership changes, so it is where the events are written.
         //
         // It rides the realm-core COORDINATOR connection rather than a per-player one, for the
-        // reason the 277/279 delivery law already establishes for teleport/XP/levelup: the player
+        // reason the coordinator-relay rule (see `stdb::connection`) already establishes for
+        // teleport/XP/levelup: the player
         // connection is on the WRONG DATABASE entirely here (its identity is minted per database, so
         // there is no realm-core connection this player could authenticate as, and no RLS predicate
         // that could name them). The owner token bypasses RLS, so every player's rows arrive and each
@@ -2918,7 +2929,8 @@ impl Coordinator {
         // per-player relay above, untouched by this slice.
         //
         // TWO conditions, and the second is not an optimization. Unsharded → `None`, nothing is
-        // registered, and the relay above is the only one, exactly as before #22. And realm-core
+        // registered, and the relay above is the only one, exactly as before realm-core social/
+        // economy relays existed. And realm-core
         // must be a DIFFERENT DATABASE than the one this session is on: with `LYRACORE_SHARD_MAP` set but
         // `LYRACORE_REALM_CORE` unset, `realm_core()` answers the default database — so for a session that
         // is ALREADY on it, the party events would arrive twice (once here through the owner token,
@@ -2976,7 +2988,7 @@ impl Coordinator {
                         }
                     },
                     group_kind::DESTROYED => Some(ServerOpcodeMessage::SMSG_GROUP_DESTROYED),
-                    // Issue #50: a vote landing or a roll resolving is written HERE, on realm-core,
+                    // A vote landing or a roll resolving is written HERE, on realm-core,
                     // once the roll has been promoted — voting is routed to realm-core exclusively in
                     // a sharded deployment (`world::loot::run_vote`), so these two kinds are no longer
                     // shard-produced the way the comment below still correctly describes the rest.
@@ -3024,10 +3036,10 @@ impl Coordinator {
         // ======================================================================================
         //  WHISPER, realm-core twin — game_whisper_event (insert, on the realm-core coordinator
         //  connection)
-        //  #22: a whisper between two players on different databases is written on realm-core, the
-        //  only place both can be named; same self-filter as the group twin above.
+        //  Realm-core whisper relay: a whisper between two players on different databases is written
+        //  on realm-core, the only place both can be named; same self-filter as the group twin above.
         // ======================================================================================
-        // REALM-CORE whisper relay (#22, whisper slice). Same connection, same gate, same self-filter
+        // REALM-CORE whisper relay. Same connection, same gate, same self-filter
         // as the group relay above — and it has to be this connection: a whisper between two players
         // on DIFFERENT databases is written on realm-core (the only place both can be named), so no
         // per-player subscription on either shard will ever see the row. The owner token bypasses RLS,
@@ -3071,7 +3083,7 @@ impl Coordinator {
         // fans each roll row, so the roller sees their own result too (as vanilla does). The result is
         // server-computed server-side in the module's send_roll reducer.
         //
-        // 4c family 1: registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the shared
+        // Registered ONLY with LYRACORE_SHARED_CALLS off. Flag-on, the shared
         // coordinator dispatch (`world_view::roll_appeared` → `relay_roll`, the same packet) is the
         // delivery path, and this per-player leg would double-send; its base query is dropped below
         // for the same reason.
@@ -3109,7 +3121,7 @@ impl Coordinator {
         let armor_coord_ins = self.clone();
         let stealth_ins_created = created.clone();
         let aura_ins_tx = tx.clone();
-        // 4c family 14: registered ONLY with LYRACORE_SHARED_CALLS off; the shared twins are
+        // Registered ONLY with LYRACORE_SHARED_CALLS off; the shared twins are
         // `world_view::aura_applied`/`aura_updated`/`aura_removed` (the stealth count is computed
         // on the coordinator pump, where that connection's cache is exactly post-change).
         let on_aura_insert = (!shared_calls).then(|| {
@@ -3238,7 +3250,8 @@ impl Coordinator {
         // ======================================================================================
         //  QUEST LOG, coordinator-registered — game_character_quest (insert/update/delete)
         //  Full PLAYER_QUEST_LOG re-sync (raw-send) on any change to this player's log; moved off
-        //  the per-player connection by 279 for the same reason as XP/level-up above.
+        //  the per-player connection by the coordinator-relay rule for the same reason as
+        //  XP/level-up above.
         // ======================================================================================
         // Quest-log array sync (Phase 2, raw-send path). On ANY change to this player's quest log
         // (accept / kill-progress / turn-in), re-send the FULL PLAYER_QUEST_LOG block (full sync so a
@@ -3255,8 +3268,10 @@ impl Coordinator {
             }
             // build_quest_log_slots is now INVENTORY-AWARE (collect-quest completion), so it reads `db`
             // (game_quest_objective + game_item_instance). Both callers pass the COORDINATOR's cache
-            // (`quest_log_sync` is only ever invoked from coordinator-registered callbacks, 279), which
-            // holds every player's rows and is the only place game_quest_objective lives since 292.
+            // (`quest_log_sync` is only ever invoked from coordinator-registered callbacks per the
+            // coordinator-relay rule), which
+            // holds every player's rows and is the only place game_quest_objective lives since the
+            // connection reclaim.
             let quests: Vec<_> = db.game_character_quest().iter().collect();
             let slots = super::reads::build_quest_log_slots(db, &quests, self_guid);
             // Send the FULL quest-log sync on EVERY change, including the empty case. Turning in the LAST
@@ -3273,7 +3288,7 @@ impl Coordinator {
             Some(Outbound::Raw { opcode, body })
         }
         let quest_ins_tx = tx.clone();
-        // COORDINATOR-registered since 279 (the 277 loss class): quest-log rows ride kill and
+        // COORDINATOR-registered per the coordinator-relay rule: quest-log rows ride kill and
         // turn-in transactions — large, movement-concurrent, and a lost update leaves the quest
         // log desynced until relog. The coordinator sees EVERY player's rows (owner RLS bypass),
         // so each closure now guards on character_guid; quest_log_sync reads the coordinator
@@ -3303,7 +3318,7 @@ impl Coordinator {
                     if row.character_guid != self_guid {
                         return;
                     }
-                    // Kill-progress feedback (#3): emit SMSG_QUESTUPDATE_ADD_KILL ("Creature slain: n/N") for each
+                    // Kill-progress feedback: emit SMSG_QUESTUPDATE_ADD_KILL ("Creature slain: n/N") for each
                     // KILL objective whose count INCREASED this update. Diff logic is the unit-tested pure
                     // `codec::kill_progress_add_kills`; here we just gather this quest's objectives and relay.
                     let objs: Vec<(u8, u8, u32, u32)> = ctx
@@ -3323,7 +3338,7 @@ impl Coordinator {
                             ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_KILL(Box::new(m)),
                         ));
                     }
-                    // Timed-quest expiry (work-item 194): the tick flips `failed` false->true — relay
+                    // Timed-quest expiry: the tick flips `failed` false->true — relay
                     // SMSG_QUESTUPDATE_FAILEDTIMER so the client's quest-log entry shows FAILED. Diffed (not a
                     // bare `if row.failed`) so this fires exactly once, on the transition, never on every
                     // subsequent update to an already-failed row.
@@ -3349,7 +3364,8 @@ impl Coordinator {
                     if row.character_guid != self_guid {
                         return;
                     }
-                    // #72 (the second live defect, alongside items): finish_transfer's cascade deletes every
+                    // The second live defect from the warm-handoff work, alongside items: finish_transfer's
+                    // cascade deletes every
                     // game_character_quest row for this character on the SOURCE database — without this guard,
                     // quest_log_sync would read the now-empty set and send an all-zero PLAYER_QUEST_LOG VALUES,
                     // visually wiping the quest log on the client for the brief window before the OLD subs are
@@ -3370,7 +3386,7 @@ impl Coordinator {
         // (owner_guid). Each needs BOTH the item object (CREATE/DESTROY) AND the player's
         // PLAYER_FIELD_INV_SLOT pointer (set/clear) so the client places/removes it in the bag cell.
         // (The coinage half of a buy/sell already rides the game_world_entity on_update relay.)
-        // Item-GAIN feedback gate (185/#15): the base sub's initial apply fires on_item_insert for
+        // Item-GAIN feedback gate: the base sub's initial apply fires on_item_insert for
         // every owned item at LOGIN — and those callbacks arrive AFTER on_applied acks (wire-observed:
         // an on_applied-flipped boolean still let the whole bag toast at login), so the gate is the
         // AOI dedup pattern instead: snapshot the item guids resident at apply, suppress exactly those.
@@ -3456,7 +3472,7 @@ impl Coordinator {
                     );
                     // Look up the template for max_durability + container_slots (game_item_template is
                     // subscribed on the COORDINATOR, which is the cache `ctx.db` is here — this callback is
-                    // coordinator-registered, and 292 removed the catalogue from the per-player set).
+                    // coordinator-registered, and the connection reclaim removed the catalogue from the per-player set).
                     // Fall back to safe defaults if missing.
                     let (max_durability, container_slots) = ctx
                         .db
@@ -3485,7 +3501,7 @@ impl Coordinator {
                             ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
                         ));
                     }
-                    // 087: an item landing directly in an EQUIPMENT slot renders on the model/paperdoll.
+                    // An item landing directly in an EQUIPMENT slot renders on the model/paperdoll.
                     if let Some(o) =
                         codec::build_visible_item_values(self_guid, row.slot, row.entry)
                     {
@@ -3519,7 +3535,7 @@ impl Coordinator {
                                 codec::build_resistance_values(self_guid, eff),
                             )),
                         ));
-                        // 053: gear moved -> re-push the paperdoll stats/AP/damage-range alongside armor
+                        // Paperdoll: gear moved -> re-push the paperdoll stats/AP/damage-range alongside armor
                         // (same trigger set; the login initial-state item replay corrects the CREATE's
                         // base-only values the same way it does armor).
                         if let Some(st) = super::armor::sheet_stats(&ctx.db, self_guid) {
@@ -3542,7 +3558,8 @@ impl Coordinator {
                     if row.owner_guid != self_guid {
                         return;
                     }
-                    // #72 (the diagnosed live defect): finish_transfer's cascade deletes every
+                    // The diagnosed live defect from the warm-handoff work: finish_transfer's cascade
+                    // deletes every
                     // game_item_instance row this character owns on the SOURCE database while these OLD subs
                     // are still registered — without this guard every item relayed SMSG_DESTROY_OBJECT +
                     // cleared its inventory/visible-item slots on the client, even though the destination's
@@ -3553,7 +3570,7 @@ impl Coordinator {
                             ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
                         ));
                     }
-                    // 087: an item destroyed out of an EQUIPMENT slot un-renders from the model.
+                    // An item destroyed out of an EQUIPMENT slot un-renders from the model.
                     if let Some(o) = codec::build_visible_item_values(self_guid, row.slot, 0) {
                         let _ = item_del_tx.send(Outbound::One(
                             ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
@@ -3588,7 +3605,7 @@ impl Coordinator {
                                 codec::build_resistance_values(self_guid, eff),
                             )),
                         ));
-                        // 053: gear moved -> re-push the paperdoll stats/AP/damage-range alongside armor
+                        // Paperdoll: gear moved -> re-push the paperdoll stats/AP/damage-range alongside armor
                         // (same trigger set; the login initial-state item replay corrects the CREATE's
                         // base-only values the same way it does armor).
                         if let Some(st) = super::armor::sheet_stats(&ctx.db, self_guid) {
@@ -3637,7 +3654,7 @@ impl Coordinator {
                                 ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
                             ));
                         }
-                        // 087: equip/unequip moves render/un-render the gear on the model + paperdoll —
+                        // Equip/unequip moves render/un-render the gear on the model + paperdoll —
                         // the login create sets PLAYER_VISIBLE_ITEM but nothing relayed it mid-session,
                         // so equipped gear was invisible until relog. Clear the old equipment slot's
                         // entry, set the new one (each is a no-op None for non-equipment slots).
@@ -3710,7 +3727,7 @@ impl Coordinator {
                                 codec::build_resistance_values(self_guid, eff),
                             )),
                         ));
-                        // 053: gear moved -> re-push the paperdoll stats/AP/damage-range alongside armor
+                        // Paperdoll: gear moved -> re-push the paperdoll stats/AP/damage-range alongside armor
                         // (same trigger set; the login initial-state item replay corrects the CREATE's
                         // base-only values the same way it does armor).
                         if let Some(st) = super::armor::sheet_stats(&ctx.db, self_guid) {
@@ -3726,13 +3743,13 @@ impl Coordinator {
         // ======================================================================================
         //  TELEPORT, coordinator-registered — game_teleport_event (insert)
         //  MSG_MOVE_TELEPORT_ACK (same-map) or SMSG_TRANSFER_PENDING+SMSG_NEW_WORLD (cross-map); on
-        //  the coordinator since 277 because the per-player connection's AOI resubscription churn
-        //  can swallow the event mid-flight.
+        //  the coordinator per the coordinator-relay rule (see `stdb::connection`) because the
+        //  per-player connection's AOI resubscription churn can swallow the event mid-flight.
         // ======================================================================================
-        // Teleport relay (#11, work-item 224): a pending teleport for THIS player → MSG_MOVE_TELEPORT_ACK
+        // Teleport relay: a pending teleport for THIS player → MSG_MOVE_TELEPORT_ACK
         // (same-map) or SMSG_TRANSFER_PENDING+SMSG_NEW_WORLD (cross-map). Registered on the
-        // COORDINATOR connection since 277, NOT `player.conn`: the per-player conn's AOI grid
-        // subscriptions churn mid-flight (aoi.rs recenter, subscribe-new/unsubscribe-old), and a
+        // COORDINATOR connection per the coordinator-relay rule, NOT `player.conn`: the per-player
+        // conn's AOI grid subscriptions churn mid-flight (aoi.rs recenter, subscribe-new/unsubscribe-old), and a
         // concurrent transaction's deltas folded into an in-flight apply could swallow the event —
         // observed 100% on an instance-CREATING portal entry (~200-row transaction): the pair was
         // never sent and the despawned player limbo'd. The coordinator's subscription set is stable
@@ -3781,13 +3798,12 @@ impl Coordinator {
 
         // ======================================================================================
         //  ADDON MESSAGE, coordinator-registered — game_addon_message (insert)
-        //  A queued server→client addon message relayed as an addon-language whisper (work-item
-        //  184).
+        //  A queued server→client addon message relayed as an addon-language whisper.
         // ======================================================================================
-        // Addon-bridge relay (184): a queued server→client addon message becomes an
+        // Addon-bridge relay: a queued server→client addon message becomes an
         // addon-language whisper (raw-built — gtker's Language enum has no LANG_ADDON) the
-        // client surfaces to addons as CHAT_MSG_ADDON. COORDINATOR-registered (the 279 law:
-        // this is the custom-UI state stream — a dropped frame is a stuck progress bar), so the
+        // client surfaces to addons as CHAT_MSG_ADDON. COORDINATOR-registered (the coordinator-relay
+        // rule: this is the custom-UI state stream — a dropped frame is a stuck progress bar), so the
         // closure self-filters on the session's bound identity.
         let addon_tx = tx.clone();
         let addon_identity = self_identity;
@@ -3808,10 +3824,10 @@ impl Coordinator {
 
         // ======================================================================================
         //  REPUTATION, coordinator-registered — game_player_reputation (insert/update)
-        //  SMSG_SET_FACTION_STANDING on a standing change for this player (#13); the same
+        //  SMSG_SET_FACTION_STANDING on a standing change for this player; the same
         //  coordinator/replay-gate shape as XP and quest-log above.
         // ======================================================================================
-        // Reputation relay (#13): a stored standing for THIS player changed (quest turn-in rep gain) →
+        // Reputation relay: a stored standing for THIS player changed (quest turn-in rep gain) →
         // SMSG_SET_FACTION_STANDING so the client's reputation bar moves WITHOUT a relog. RLS scopes the
         // table to this player; the character_guid guard is belt-and-suspenders. build_set_faction_standing
         // returns None for a faction id the client enum doesn't know (nothing to show) → skip silently.
@@ -3827,10 +3843,11 @@ impl Coordinator {
                     if row.character_guid != self_guid {
                         return;
                     }
-                    // Login-apply replay (185 pattern): this standing already reached the client via
+                    // Login-apply replay: this standing already reached the client via
                     // INITIALIZE_FACTIONS — a re-relay makes the client toast it as a fresh gain.
                     //
-                    // #41 AUDIT — deliberately left keyed as it is, on BOTH counts. (a) `faction_id` is the
+                    // AUDIT against the explored-area duplicate-discovery bug — deliberately left keyed
+                    // as it is, on BOTH counts. (a) `faction_id` is the
                     // game's own faction id, not a surrogate PK, so a transfer's re-mint cannot change it —
                     // the exploration defect has no analogue here. (b) The freeze/replay race cannot reach
                     // it either: this callback rides the COORDINATOR connection, whose subscription is
@@ -3873,15 +3890,16 @@ impl Coordinator {
                     }
                 });
 
-        // Explored areas (200), SCOPED TO THIS CHARACTER — 292 second pass. `game_character_explored`
+        // Explored areas, SCOPED TO THIS CHARACTER — the connection reclaim's second pass.
+        // `game_character_explored`
         // is `public` with NO RLS filter (`module/src/exploration.rs`: "the gateway filters its
         // `on_insert` by `character_guid == self`; a per-recipient RLS is a scaling follow-up"), so an
         // unfiltered `SELECT *` made every session cache all 2,045 rows — every OTHER character's map
         // fog — to use only its own handful. Scoping the QUERY (the AOI-tracker mechanism, `aoi.rs`)
         // gets the same row reduction as an RLS filter would, entirely inside the gateway: no schema
         // migration, no binding lockstep, and the COORDINATOR's global subscription
-        // (`connection.rs:239`, the 279 fog-word guarantee leg) is untouched by construction rather
-        // than by relying on the owner token's RLS bypass.
+        // (`connection.rs:239`, the coordinator-relay rule's fog-word guarantee leg) is untouched by
+        // construction rather than by relying on the owner token's RLS bypass.
         //
         // Why not the RLS filter: the table has no `owner_identity` column, so every deployed
         // `#[client_visibility_filter]` in the module (16 of them, all `<identity col> = :sender`) is
@@ -3901,17 +3919,17 @@ impl Coordinator {
         // The per-player subscription set. `game_world_entity` is the ONLY spatial one: when AOI is on it
         // rides a SEPARATE grid-scoped subscription (the tracker, created below) and is OMITTED here; when
         // off it's a global SELECT * in this base set (the proven path). Everything else is unchanged.
-        // 4c cleanup rung: with LYRACORE_SHARED_CALLS on this list is EMPTY — every family rides
+        // Cleanup rung: with LYRACORE_SHARED_CALLS on this list is EMPTY — every family rides
         // the coordinator, the login snapshots below read the coordinator cache, and NO per-player
         // subscription is applied at all. Flag-off keeps the proven set byte-for-byte.
         //
-        // `game_creature_cast` is GONE in BOTH modes (#476): its only reader —
+        // `game_creature_cast` is GONE in BOTH modes: its only reader —
         // `offer_peer_create_for`'s pet-bar join — runs against the coordinator cache, which now
         // subscribes the table; the per-player copy had been dead weight since the stage-1 move.
         //
-        // (game_movement_event / game_creature_move_event are gone entirely — perf catalog 2.1;
-        // the ⚠ DO-NOT-RE-ADD notes for game_item_template (292, MEASURED ~48MB/conn),
-        // game_quest_objective (292) and game_gameobject_template (292) still bind: every one of
+        // (game_movement_event / game_creature_move_event are gone entirely; the ⚠ DO-NOT-RE-ADD
+        // notes for game_item_template, game_quest_objective and game_gameobject_template (the
+        // connection reclaim measured ~48MB/conn) still bind: every one of
         // their readers resolves to the coordinator's cache.)
         let mut base_queries: Vec<&str> = Vec::new();
         if !shared_calls {
@@ -3922,23 +3940,23 @@ impl Coordinator {
             // Quest-log relay (Phase 2): the player's own quest rows (RLS-scoped). The public
             // objective rows the `complete` state is computed from are read on the COORDINATOR.
             base_queries.push("SELECT * FROM game_character_quest");
-            // Teleport relay (#11): the player's own pending teleports (RLS-scoped) → MSG_MOVE_TELEPORT_ACK.
+            // Teleport relay: the player's own pending teleports (RLS-scoped) → MSG_MOVE_TELEPORT_ACK.
             base_queries.push("SELECT * FROM game_teleport_event");
-            // Reputation relay (#13): the player's own standings (RLS-scoped) → SMSG_SET_FACTION_STANDING.
+            // Reputation relay: the player's own standings (RLS-scoped) → SMSG_SET_FACTION_STANDING.
             base_queries.push("SELECT * FROM game_player_reputation");
-            // 4c family 1 (/roll): flag-off feeds the per-player `on_roll` relay above.
+            // /roll: flag-off feeds the per-player `on_roll` relay above.
             base_queries.push("SELECT * FROM game_roll_event");
-            // Rest-state flips (196) → the per-player on_insert relays PLAYER_BYTES_2 (zzz + blue
+            // Rest-state flips → the per-player on_insert relays PLAYER_BYTES_2 (zzz + blue
             // bar); flag-on the rows arrive on the coordinator's global subscription instead.
             base_queries.push("SELECT * FROM game_rest_state_event");
-            // Skill pane (234) → the per-player insert/update relays; the seeding reads and every
+            // Skill pane → the per-player insert/update relays; the seeding reads and every
             // other consumer already resolve to the coordinator's cache (`reads.rs::player_skills`).
             base_queries.push("SELECT * FROM game_player_skill");
-            // Explored areas (200) → the per-player fog/toast relay AND the login fog restore
+            // Explored areas → the per-player fog/toast relay AND the login fog restore
             // (its initial-sync replay). Own rows ONLY — see `explored_query` above; never
             // re-widen this. Flag-on, the coordinator twin + the explicit fog sweep own both.
             base_queries.push(&explored_query);
-            // Ground-area spell visuals (118) → the per-player CREATE/DESTROY relays.
+            // Ground-area spell visuals → the per-player CREATE/DESTROY relays.
             base_queries.push("SELECT * FROM game_dynamic_object");
             // Player corpses → the per-player CREATE/DESTROY/re-CREATE relays. (The login
             // resident sweep reads the COORDINATOR cache in both flag states.)
@@ -3953,7 +3971,7 @@ impl Coordinator {
             base_queries.push("SELECT * FROM game_channel_event");
             base_queries.push("SELECT * FROM game_channel_member");
             base_queries.push("SELECT * FROM game_emote_event");
-            // Cast visuals + the deferred projectile-impact damage log (#084) — two SEPARATE
+            // Cast visuals + the deferred projectile-impact damage log — two SEPARATE
             // tables, two per-player relays.
             base_queries.push("SELECT * FROM game_spell_cast_event");
             base_queries.push("SELECT * FROM game_spell_impact_event");
@@ -3962,21 +3980,22 @@ impl Coordinator {
             base_queries.push("SELECT * FROM game_aura");
             // The PRIVATE tier (RLS-scoped: each subscription sees only rows addressed to this
             // player). Flag-on, the recipient-keyed shared dispatch owns the guarantee.
-            // Resurrection accept-prompt (#014):
+            // Resurrection accept-prompt:
             base_queries.push("SELECT * FROM game_resurrect_request");
             base_queries.push("SELECT * FROM game_whisper_event");
-            // Group notifications (066): invite/roster/decline/destroy + loot rolls + quest share.
+            // Group notifications: invite/roster/decline/destroy + loot rolls + quest share.
             base_queries.push("SELECT * FROM game_group_event");
         }
-        // #468: the four box-scoped tables (`game_world_entity`, `game_gameobject`,
+        // The four box-scoped tables (`game_world_entity`, `game_gameobject`,
         // `game_entity_motion`, `game_creature_spline`) are deliberately ABSENT from this list in
         // BOTH modes. They ride ONE global subscription per shard on the coordinator connection and
         // are routed to sessions by the in-process cell index (`stdb::world_view`). Re-adding any of
         // them here would put ~600 copies of the largest table in the gateway back on the heap and
-        // restore the per-connection wakeup this issue removed.
+        // restore the per-connection wakeup the shared-connection model removed.
         //
-        // Apply the base subscription and block. 4c cleanup rung: flag-on the list is EMPTY and
-        // nothing is subscribed — the per-player connection carries calls only (and 4d deletes it).
+        // Apply the base subscription and block. Cleanup rung: flag-on the list is EMPTY and
+        // nothing is subscribed — the per-player connection carries calls only (and under the fully
+        // shared-call path it is deleted entirely).
         let sub = if base_queries.is_empty() {
             None
         } else {
@@ -4046,13 +4065,13 @@ impl Coordinator {
             }
         }
         {
-            // Exploration (200/#41): OPEN the discovery gate, seeded with the area_bits the character
+            // Exploration: OPEN the discovery gate, seeded with the area_bits the character
             // has already explored (whether they arrived by login or by a cross-database import — the
             // cache is written before the replay callbacks run, so both are in here). Their on_insert
             // replay therefore skips the "Discovered" popup while the fog VALUES still fires for all.
             // Only a genuinely new area_bit, discovered after this point, toasts.
             //
-            // Seeded from the COORDINATOR cache (4c family 4): it predates this session and holds
+            // Seeded from the COORDINATOR cache: it predates this session and holds
             // the same rows for this character in both flag states, while the per-player cache
             // stops carrying the explored query under the flag. The gate now also guards the
             // coordinator twin's toast branch, so the seed source must not depend on the flag.
@@ -4068,20 +4087,21 @@ impl Coordinator {
             );
         }
         {
-            // Rest state (196): open the rest gate — the historical events replayed above are history
+            // Rest state: open the rest gate — the historical events replayed above are history
             // (the login rest byte rides the CREATE). Only post-login inn crossings relay PLAYER_BYTES_2.
             rest_replay.lock().unwrap().open([]);
         }
 
-        // #468: register with the gateway-wide shared view, then sweep everything already inside
+        // Register with the gateway-wide shared view, then sweep everything already inside
         // the box into this client's world.
         //
         // The sweep is not belt-and-braces here, it is the ONLY thing that populates a fresh
         // client: there is no subscription apply to fire per-row `on_insert` any more — the rows
         // were resident in the coordinator caches long before this session existed. It is
         // idempotent through `created` regardless.
-        // Seed the ghost mirror from the character's OWN row before anything can read it. Pre-#468
-        // the spirit-healer gate re-read the live row on every offer, so a player who logged in
+        // Seed the ghost mirror from the character's OWN row before anything can read it. Before
+        // the shared-connection model, the spirit-healer gate re-read the live row on every offer,
+        // so a player who logged in
         // ALREADY DEAD saw the healer without any ghost transition ever firing; the mirror has to
         // start at the truth or that login regresses.
         {
@@ -4115,13 +4135,13 @@ impl Coordinator {
         );
         world_view::sweep_into_view(&view, &viewer);
 
-        // Corpse resident sweep (190 slice 2 review MEDIUM): corpse rows ride the base subscription
+        // Corpse resident sweep: corpse rows ride the base subscription
         // and their callbacks may have fired before this point. Re-offer every resident one through
         // the same instance gate — idempotent for the client (a repeat CREATE for the same corpse
         // guid re-renders it), and the gate is now the session's authoritative `login_instance`
         // rather than a cache lookup that could answer `None`.
         //
-        // Read from the COORDINATOR cache (4c family 6): same global rows in both flag states,
+        // Read from the COORDINATOR cache: same global rows in both flag states,
         // while the per-player cache stops carrying the corpse query under the flag.
         let resident_corpses: Vec<Corpse> = {
             let guard = self.0.coord();
@@ -4137,8 +4157,8 @@ impl Coordinator {
         // base term read 0 and their pushes OVERWROTE the CREATE's correct gear-folded armor. Push
         // the authoritative values once, from the COORDINATOR's cache — which holds the entity, the
         // auras, the item instances AND the item templates, i.e. every term of the fold (the
-        // per-player cache lost `game_item_template` to #292 and has never held the entity since
-        // #468).
+        // per-player cache lost `game_item_template` to the connection reclaim and has never held
+        // the entity since the shared-connection model).
         {
             let guard = self.0.coord();
             let db = &guard.conn.db;
@@ -4155,7 +4175,7 @@ impl Coordinator {
                 )));
             }
         }
-        // Login fog restore, shared-path leg (4c family 4): with no per-player subscription there
+        // Login fog restore, shared-path leg: with no per-player subscription there
         // is no initial-sync replay to re-send the fog words, so sweep them explicitly from the
         // coordinator cache — one idempotent full-word PLAYER_EXPLORED_ZONES VALUES per explored
         // 32-bit bucket of THIS character. Flag-off keeps the proven replay path and skips this.
@@ -4177,8 +4197,9 @@ impl Coordinator {
 
         // One teardown per callback registered above. Adding a relay = register it + push its
         // teardown here; the struct/empty()/Drop stay untouched.
-        // 279: these teardown handles all target the COORDINATOR db (their callbacks were
-        // moved off the churning per-player conn — see each registration's comment).
+        // Per the coordinator-relay rule, these teardown handles all target the COORDINATOR db
+        // (their callbacks were moved off the churning per-player conn — see each registration's
+        // comment).
         let (td_xp, td_lvl, td_ii, td_id, td_iu, td_qi, td_qu, td_qd, td_ri, td_ru, td_am, td_ex) = (
             self.clone(),
             self.clone(),
@@ -4239,7 +4260,7 @@ impl Coordinator {
                         .remove_on_update(on_skill_update);
                 }
             }),
-            // Issue #89: this one was missing. Every world entry registered ANOTHER copy of
+            // This one was missing. Every world entry registered ANOTHER copy of
             // on_explored_insert on the same table without ever removing the last one, so a single
             // live discovery fired the "Discovered: <area>" toast once per accumulated registration
             // (the coordinator-side sibling below, on_explored_coord, was already torn down — this
@@ -4394,8 +4415,8 @@ impl Coordinator {
                     .game_character_quest()
                     .remove_on_delete(on_quest_delete);
             }),
-            // 277: the teleport callback lives on the COORDINATOR db (see its registration) —
-            // remove it there; the &PlayerConn arg is unused for this one.
+            // Per the coordinator-relay rule, the teleport callback lives on the COORDINATOR db
+            // (see its registration) — remove it there; the &PlayerConn arg is unused for this one.
             Box::new(move |_c: &PlayerConn| {
                 tele_coord
                     .0
@@ -4439,7 +4460,7 @@ impl Coordinator {
                 }
             }),
         ];
-        // #22: the realm-core group callback lives on ANOTHER DATABASE's coordinator connection, so
+        // The realm-core group callback lives on ANOTHER DATABASE's coordinator connection, so
         // it is torn down against that handle (the `&PlayerConn` arg is unused, exactly as for the
         // teleport/XP coordinator relays above). Registered only on a multi-database gateway, so on
         // a single-database one this pushes nothing and the teardown list is unchanged.
@@ -4459,7 +4480,7 @@ impl Coordinator {
                     .remove_on_insert(handle);
             }));
         }
-        // #22 (whisper slice): the same teardown, for the callback registered one table over. Leaking
+        // The same teardown, for the callback registered one table over. Leaking
         // it is the worse half of the pair — a stale closure on a connection that outlives every
         // session would keep pushing a logged-out player's PRIVATE whisper lines into a dead channel,
         // once more per relogin, for the gateway's whole lifetime.
@@ -4486,7 +4507,7 @@ impl Coordinator {
 }
 
 impl Coordinator {
-    /// Wire up the bot-initiated (serendipity) invite relay (issue #54): one registration per
+    /// Wire up the bot-initiated (serendipity) invite relay: one registration per
     /// connected WORLD SHARD — `all_shards()`, not a per-player relay — because there is no player
     /// session to hang this off. A bot's goal tick decides "invite this fellow quester" with no
     /// client behind it, so nothing else in the gateway would ever notice the row.
@@ -4799,7 +4820,7 @@ mod tests {
         ));
         // Same map, different instance (e.g. an open-world speaker vs. a dungeon-instance listener
         // whose rows happen to share a database) -> never in range either (mirrors `peer_create_gate`'s
-        // instance isolation, work-item 190).
+        // instance isolation).
         assert!(!chat_in_range(
             0, 0, 100.0, 100.0, 0, 1, 100.0, 100.0, 90_000.0
         ));
@@ -4851,9 +4872,9 @@ mod tests {
 
     #[test]
     fn run_speed_mult_bp_change_emits_force_run_speed_change_with_the_derived_speed() {
-        // GM playtest `.speed` (work-item 223): a run_speed_mult_bp change relays
+        // GM playtest `.speed`: a run_speed_mult_bp change relays
         // SMSG_FORCE_RUN_SPEED_CHANGE with speed = BASE_RUN_SPEED (7.0) * bp/10000 — pin the derived
-        // value end-to-end (this is the "codec pin for the speed message" the work item calls for).
+        // value end-to-end (this is the "codec pin for the speed message" this feature calls for).
         let old = player_entity();
         let mut new = old.clone();
         new.run_speed_mult_bp = 30_000; // .speed 3 -> 3x
@@ -5045,7 +5066,7 @@ mod tests {
         assert!(created.contains(&target));
     }
 
-    // ---- Work-item 224: cross-map teleport relay --------------------------------------------
+    // ---- Cross-map teleport relay --------------------------------------------
 
     #[test]
     fn teleport_relay_same_map_is_byte_identical_to_the_pre_224_ack() {
@@ -5109,7 +5130,7 @@ mod tests {
         assert!(build_teleport_relay(false, 7, u32::MAX, 0.0, 0.0, 0.0, 0.0).is_err());
     }
 
-    // ---- Work-items 144/145/190: AOI re-entry, initial-apply, instance isolation --------------
+    // ---- AOI re-entry, initial-apply, instance isolation --------------
     //
     // `offer_peer_create`/`is_update_reentry` themselves need a live SDK connection (`RemoteTables`
     // is only constructible off a real subscription) to exercise end-to-end, so — per this repo's
@@ -5132,7 +5153,7 @@ mod tests {
         assert!(peer_create_gate(2, 1, 7, 7, 0, false, false));
         // Different instance (e.g. a dungeon party's row vs. an open-world viewer, or two
         // different parties' instances of the same dungeon) -> excluded. This is the gate the
-        // 145 login sweep and the 144 re-entry path BOTH sit behind — a cross-instance row must
+        // The login sweep and the re-entry path BOTH sit behind — a cross-instance row must
         // never be marked `created`, even transiently, by either path.
         assert!(!peer_create_gate(2, 1, 7, 0, 0, false, false));
         assert!(!peer_create_gate(2, 1, 3, 7, 0, false, false));
@@ -5153,7 +5174,7 @@ mod tests {
 
     #[test]
     fn reentry_after_leaving_aoi_recreates_exactly_once_work_item_144() {
-        // The exact scenario 144 reports: observer sees peer (CREATE) -> peer leaves the AOI box
+        // The exact re-entry scenario: observer sees peer (CREATE) -> peer leaves the AOI box
         // (on_delete evicts it from `created`, sends DESTROY) -> peer returns, delivered as an
         // UPDATE of the SDK's still-cached row (not a fresh on_insert) -> the observer must
         // re-CREATE it, not silently drop it forever.
@@ -5192,7 +5213,7 @@ mod tests {
 
     #[test]
     fn login_resident_sweep_creates_every_pre_existing_peer_exactly_once_work_item_145() {
-        // The 145 scenario: a fresh login's AOI box already contains peers/creatures (rows
+        // The login-sweep scenario: a fresh login's AOI box already contains peers/creatures (rows
         // resident in the connection's cache from the just-applied subscription) whose
         // `on_insert` may or may not have fired. The sweep in `subscribe_player_events` offers
         // every resident row through this SAME gate + dedup — model it directly.
@@ -5208,7 +5229,7 @@ mod tests {
         }
         assert_eq!(
             creates_sent, 3,
-            "every pre-existing resident must get a CREATE at login, not just self (145's bug: \
+            "every pre-existing resident must get a CREATE at login, not just self (the login-sweep bug: \
              only self + gameobjects appeared)"
         );
         assert!(residents.iter().all(|g| created.contains(g)));
@@ -5230,7 +5251,7 @@ mod tests {
     #[test]
     fn login_resident_sweep_excludes_cross_instance_residents_work_item_190() {
         // A row resident in the connection's cache from a DIFFERENT instance than the viewer
-        // (work-item 190 slice 1: always a no-op today since every entity is instance 0, but the
+        // (always a no-op today since every entity is instance 0, but the
         // gate must already hold the line) must never be swept into `created`.
         let self_guid = 1u64;
         let viewer_instance_id = 0u64;
@@ -5261,7 +5282,7 @@ mod tests {
     #[test]
     fn corpse_and_gameobject_creates_relay_only_within_the_viewers_instance_work_item_190_slice_2()
     {
-        // Open-world rows to an open-world viewer: byte-identical to pre-190 behavior (always relayed).
+        // Open-world rows to an open-world viewer: byte-identical to the previous behavior (always relayed).
         assert!(instance_relay_gate(0, Some(0)));
         // A per-instance GO copy / in-instance corpse reaches ONLY viewers inside that instance…
         assert!(instance_relay_gate(7, Some(7)));
@@ -5277,13 +5298,13 @@ mod tests {
         // COPY SOURCES on the dungeon map — the copies are what render inside the run).
         assert!(!instance_relay_gate(0, Some(7)));
         // Unknown viewer instance (entity not resident — the AOI-on login window) relays NOTHING,
-        // not even instance 0: suppress-then-sweep, never guess (190 slice 2 review MEDIUM).
+        // not even instance 0: suppress-then-sweep, never guess.
         assert!(!instance_relay_gate(0, None));
         assert!(!instance_relay_gate(7, None));
     }
 
     // -------------------------------------------------------------------------------------------
-    //  Issue #41 — the shard transfer must not re-announce every explored area
+    //  The shard transfer must not re-announce every explored area
     // -------------------------------------------------------------------------------------------
 
     /// One `game_character_explored` row. `id` is the `auto_inc` surrogate the destination RE-MINTS
@@ -5321,7 +5342,7 @@ mod tests {
         for row in [explored(9001, 40, 87, 120), explored(9002, 87, 12, 60)] {
             assert!(
                 discovery_packet(&gate, &row).is_none(),
-                "a re-minted row for an already-explored area_bit is not a discovery (issue #41)"
+                "a re-minted row for an already-explored area_bit is not a discovery"
             );
         }
 
@@ -5353,7 +5374,7 @@ mod tests {
         );
     }
 
-    /// The keyless half of the gate (rest state, 196): nothing relays until the snapshot is taken.
+    /// The keyless half of the gate (rest state): nothing relays until the snapshot is taken.
     #[test]
     fn the_replay_gate_admits_nothing_before_it_is_opened_issue_41() {
         let mut gate = ReplayGate::default();
@@ -5389,7 +5410,7 @@ mod tests {
         decommented.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    /// 292: the per-player subscription list must NEVER carry a static CATALOGUE table. This list
+    /// The per-player subscription list must NEVER carry a static CATALOGUE table. This list
     /// runs once per session, so anything in it is materialised into every player's client cache;
     /// `game_item_template` alone (17,720 rows x 32 columns) measured ~37MB per connection, taking
     /// 20 connections from +220MB to +953MB. The coordinator subscribes these once for the whole
@@ -5406,7 +5427,7 @@ mod tests {
             "game_spell",
             "game_creature_template",
             "game_quest_template",
-            // 292 second pass. Not tens of MB (396 rows) — kept in this list because it is
+            // The connection reclaim's second pass. Not tens of MB (396 rows) — kept in this list because it is
             // provably dead weight on the player connection: no callback is registered on
             // `player.conn.db.game_quest_objective()` and every reader takes the coordinator's
             // cache. The mutation this catches is a future quest feature "needing objectives on
@@ -5419,14 +5440,15 @@ mod tests {
                 "the per-player subscription list has re-acquired the static world table \
                  `{table}`. That is a whole extra copy of it in EVERY session's client cache for \
                  data the coordinator already holds once — up to tens of MB each for the big \
-                 catalogues (292, the likely mechanism behind #285's out-of-memory death at ~500 \
+                 catalogues (the likely mechanism behind a documented out-of-memory death at ~500 \
                  sessions), and dead weight even for the small ones. If a player-connection \
                  callback genuinely needs these rows, take `self.0.coord()`'s cache instead."
             );
         }
     }
 
-    /// 292 second pass: the per-player `game_character_explored` subscription must stay SCOPED to the
+    /// The connection reclaim's second pass: the per-player `game_character_explored`
+    /// subscription must stay SCOPED to the
     /// viewer's own character. The table is `public` with no RLS filter, so a bare `SELECT *` caches
     /// every character's map fog (2,045 rows at Elwynn scale) into every session to serve the viewer's
     /// own handful — and it grows with the character roster, not with the world.
@@ -5446,20 +5468,21 @@ mod tests {
                  character_guid = {self_guid}\");"
             ),
             "the per-player game_character_explored subscription is no longer scoped to \
-             `character_guid = {{self_guid}}` (292). Unscoped, every session caches every \
+             `character_guid = {{self_guid}}`. Unscoped, every session caches every \
              character's explored rows — the whole fog table per connection — to read only its own."
         );
         assert!(
             !code.contains("\"SELECT * FROM game_character_explored\""),
             "the UNFILTERED `SELECT * FROM game_character_explored` is back in a gateway \
-             subscription list in this file. The per-player leg must stay `character_guid`-scoped \
-             (292); the global one belongs to the COORDINATOR only (connection.rs, the 279 \
-             fog-word guarantee)."
+             subscription list in this file. The per-player leg must stay `character_guid`-scoped; \
+             the global one belongs to the COORDINATOR only (connection.rs, the coordinator-relay \
+             rule's fog-word guarantee)."
         );
     }
 
-    /// The span of ONE top-level `fn NAME(` in a DIFFERENT file of this module tree — #468 moved
-    /// the AOI wiring out of this file, and a tripwire that can only see this file would have gone
+    /// The span of ONE top-level `fn NAME(` in a DIFFERENT file of this module tree — the
+    /// shared-connection model moved the AOI wiring out of this file, and a tripwire that can only
+    /// see this file would have gone
     /// quiet rather than failing. Brace-matched, so it works on `impl`-nested layouts too. Returns
     /// the RAW (not comment-stripped) text — callers that need the mutation-hardened decommenting
     /// run it through [`decommented`] themselves, same two-step `scanned_source` already uses.
@@ -5531,7 +5554,7 @@ mod tests {
     }
 
 
-    /// Tripwire for the #22 (group slice) REALM-CORE relay — the only delivery path a multi-database
+    /// Tripwire for the realm-core group relay — the only delivery path a multi-database
     /// gateway has for party packets, and one no fake in this tree can reach (it registers a callback
     /// on another database's live coordinator connection).
     ///
@@ -5560,7 +5583,7 @@ mod tests {
              through the owner token, once through the per-player RLS relay above."
         );
         // Pinned as the FIRST statement of the callback, not merely as a substring somewhere in the
-        // file. Verified by mutation (review of PR #49): wrapping this exact line in `if false { … }`
+        // file. Verified by mutation: wrapping this exact line in `if false { … }`
         // left all 410 tests green while the owner-token relay delivered every player's invite
         // dialogs and party frames to every session — the same dead-binding/decoy trick that has
         // defeated five of this batch's source scans. Anchoring to the closure's opening brace is
@@ -5584,7 +5607,7 @@ mod tests {
         );
     }
 
-    /// Tripwire for the #22 (WHISPER slice) realm-core relay — the ONLY delivery path a
+    /// Tripwire for the realm-core whisper relay — the ONLY delivery path a
     /// multi-database gateway has for a whisper between two players on different databases, and one
     /// no fake in this tree can reach (it registers a callback on another database's live coordinator
     /// connection).
@@ -5604,7 +5627,7 @@ mod tests {
     fn the_realm_core_whisper_relay_is_gated_filtered_and_torn_down() {
         let code = scanned_source();
         // Anchored to the callback's opening brace, not to a bare identifier: the group relay's own
-        // filter scan was defeated (PR #49 review) by wrapping the scanned line in `if false { … }`,
+        // filter scan was defeated by wrapping the scanned line in `if false { … }`,
         // and before that by a comment quoting it. Pinning the registration THROUGH the first
         // statement makes a wrapper, a `let`, or a preceding statement visible.
         assert!(
@@ -5661,7 +5684,8 @@ mod tests {
             body.matches("build_exploration_experience_raw").count(),
             1,
             "the \"Discovered\" popup must be built in `discovery_packet` and nowhere else — an \
-             ungated second call site is the #41 defect wearing a different hat"
+             ungated second call site is the explored-area duplicate-discovery defect wearing a \
+             different hat"
         );
         assert_eq!(
             body.matches("discovery_packet(&explored_gate, row)").count(),
@@ -5674,7 +5698,8 @@ mod tests {
             ),
             "`discovery_packet`'s answer must be SENT — asking the gate and dropping the packet \
              leaves every test in this module green while no player ever sees a \"Discovered\" line \
-             again (the inverse of #41, and the mutation that survived the identifier-only scan)"
+             again (the inverse of the explored-area duplicate-discovery defect, and the mutation \
+             that survived the identifier-only scan)"
         );
     }
 
@@ -5682,10 +5707,10 @@ mod tests {
     /// cannot see: the gates have to be OPENED after the subscription ack, seeded from the client
     /// cache's `area_bit`s. Deleting either `open` call leaves every test green while silently
     /// killing the feature it protects (no discovery ever toasts again; no inn crossing ever
-    /// relays) — the inverse defect of #41, and just as invisible.
+    /// relays) — the inverse of that same defect, and just as invisible.
     ///
     /// AFTER is the whole point, and counting occurrences never checked it: hoisting both `open`
-    /// calls to just BEFORE `.subscribe()` keeps all three counts at one and reinstates #41 in full
+    /// calls to just BEFORE `.subscribe()` keeps all three counts at one and reinstates the defect in full
     /// — the gate is open, the seed is read from an empty cache, and the initial apply toasts every
     /// explored area again. So this asserts source ORDER against the ack wait, not just presence.
     ///
@@ -5707,7 +5732,7 @@ mod tests {
             body.matches(".map(|r| r.area_bit),").count(),
             1,
             "the discovery gate must be seeded with area_bits — the key that survives the \
-             destination's auto_inc re-mint (issue #41); seeding it with row ids is the defect"
+             destination's auto_inc re-mint; seeding it with row ids is the defect"
         );
         assert_eq!(
             body.matches("rest_replay.lock().unwrap().open(").count(),
@@ -5727,16 +5752,16 @@ mod tests {
                 "the {gate} gate is opened BEFORE the subscription ack. Then the seed is read from \
                  a cache the initial apply has not been written into yet, the gate is already open \
                  when the replay callbacks fire, and every already-explored area toasts again — \
-                 issue #41 exactly, with every count in this test still equal to one"
+                 the same defect exactly, with every count in this test still equal to one"
             );
         }
     }
 
     // -------------------------------------------------------------------------------------------
-    //  Issue #89 — every player-connection callback registered here must be torn down
+    //  Every player-connection callback registered here must be torn down
     // -------------------------------------------------------------------------------------------
     //
-    // The actual #89 defect: `on_explored_insert` (game_character_explored, the toast relay) was
+    // The actual double-discovery-toast defect: `on_explored_insert` (game_character_explored, the toast relay) was
     // registered on EVERY world entry and never removed from the teardown list — its coordinator-side
     // sibling `on_explored_coord` had one, this one did not. Each accumulated registration is another
     // live callback on the same table, so one discovery fired the "Discovered: <area>" toast once per
@@ -5807,7 +5832,7 @@ mod tests {
         );
     }
 
-    // ── Peer-motion relay: the CALL SITE, not just the codec helper (work-items 286 + 287) ──────────
+    // ── Peer-motion relay: the CALL SITE, not just the codec helper ──────────
     //
     // §8 of the agent playbook: the dominant failure here is a test that pins an extracted helper
     // while the wiring that calls it stays free to vanish. `codec::tests` proves the raw builder
@@ -5819,14 +5844,15 @@ mod tests {
     /// `MOTION_CALLS`/`SENT`/`DROPPED` are process-global atomics and the test binary runs tests in
     /// PARALLEL, so any test that moves them or measures a delta around them must hold this lock.
     /// Without it, the delta a counter test measures silently includes whatever a concurrent relay
-    /// test did (which is exactly how the shed test below first turned the 287 test red). Poison is
+    /// test did (which is exactly how the shed test below first turned the motion-counters test red). Poison is
     /// ignored deliberately: a panicking test has already failed and must not cascade into every
     /// other one.
     static MOTION_COUNTERS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// Test shims for the two relays #468 split in half.
+    /// Test shims for the two relays the shared-connection model split in half.
     ///
-    /// Before #468 each of these pushed straight onto the session channel from the per-player SDK
+    /// Before the shared-connection model, each of these pushed straight onto the session channel
+    /// from the per-player SDK
     /// callback. Now the SHARED dispatch (`stdb::world_view`) makes the shed decision on the pump
     /// and enqueues a job, and the job calls the `*_outbound` half on the session's writer thread.
     /// These shims are that pair, back to back, so the wire-pinning and counter tests below keep
@@ -5897,7 +5923,7 @@ mod tests {
     }
 
     /// What the observer's writer actually receives for one peer heartbeat: an `Outbound::Raw` whose
-    /// opcode and body equal what the TYPED path would have serialized (work-item 286). The typed
+    /// opcode and body equal what the TYPED path would have serialized. The typed
     /// message is built here independently of the raw builder, so this fails if the relay passes the
     /// wrong guid, the wrong opcode, the row's bytes in the wrong place — or stops sending at all.
     #[test]
@@ -5988,7 +6014,7 @@ mod tests {
         );
     }
 
-    /// **Work-item 287.** Both relays push with a discarding send; a session whose writer half is
+    /// **Fan-out collapse.** Both relays push with a discarding send; a session whose writer half is
     /// already gone used to swallow the packet with no trace. Both discard sites are driven here
     /// (a dropped receiver is exactly the "writer gone" case) and the counter must move for each.
     ///
@@ -6053,7 +6079,8 @@ mod tests {
         );
     }
 
-    /// The operator-facing half of 287: the 10-second line must carry the delivery ratio, the
+    /// The operator-facing half of the delivery instrument: the 10-second line must carry the
+    /// delivery ratio, the
     /// per-movement fan-out, and the dropped count — the three numbers the 371-client run had to
     /// reconstruct by hand afterwards. Pinned as text because that text IS the instrument.
     #[test]
@@ -6089,7 +6116,7 @@ mod tests {
         );
     }
 
-    // ── Fan-out collapse signal (task B1, finishing 287) ────────────────────────────────────────────
+    // ── Fan-out collapse signal ─────────────────────────────────────────────────────────────────
 
     /// The shared ratio: observers per submitted movement, and `None` — never a fake 0.0 — for a
     /// window with no movement in it. The `MOTIONSTAT` line and the warning both read this, which is
@@ -6147,7 +6174,7 @@ mod tests {
         );
     }
 
-    /// **The hysteresis, which is the deliberate divergence from the #109 signal.** A 40 %+ fan-out
+    /// **The hysteresis, which is the deliberate divergence from the stuck-relay signal.** A 40 %+ fan-out
     /// collapse must persist for `FANOUT_COLLAPSE_WINDOWS` consecutive windows before it says
     /// anything: the ratio wobbles, and a warning that cries wolf gets grepped away. Windows 1 and 2
     /// are silent; window 3 warns and reports the run length.
@@ -6397,10 +6424,11 @@ mod tests {
     /// The relay's own WIRING, which no unit test can reach: `relay_entity_motion` only ever runs
     /// because both halves of the `game_entity_motion` subscription call it (insert = a mover's first
     /// heartbeat in this box, update = every one after). Deleting either closure leaves every test
-    /// above green and freezes peers — the #109 shape, and the "grep every subscriber when a relay
-    /// changes shape" hazard work-item 286 opens with. A scan (not a mock) for the reason the other
-    /// tripwires in this file are: the callbacks are registered on a live `DbConnection`.
-    /// Both halves of the motion relay (work-item 286, re-pinned for #468): `game_entity_motion` is
+    /// above green and freezes peers — the stuck-relay shape, and the "grep every subscriber when a
+    /// relay changes shape" hazard the peer-motion relay work opens with. A scan (not a mock) for the
+    /// reason the other tripwires in this file are: the callbacks are registered on a live
+    /// `DbConnection`.
+    /// Both halves of the motion relay, re-pinned for the shared-connection model: `game_entity_motion` is
     /// UPSERTED per mover per heartbeat, so `on_insert` is a mover's first heartbeat in the world and
     /// `on_update` is essentially all peer movement. Dropping either registration is silent — peers
     /// freeze after their first step, or never move at all. Same for the creature-leg twin.
@@ -6429,7 +6457,7 @@ mod tests {
     }
 
 
-    /// And the instrument's wiring (287): the counters are only ever read by the 10-second task in
+    /// And the instrument's wiring: the counters are only ever read by the 10-second task in
     /// `world::run`. Without this scan, reverting that task to the old hand-formatted line — no
     /// delivery ratio, no dropped count — leaves the whole suite green, which is precisely how the
     /// 63 % under-delivery went unlogged in the first place.
@@ -6453,8 +6481,8 @@ mod tests {
     /// that CALLS it — the 10-second task in `world::run`, unreachable from a unit test — quietly
     /// disappears, leaving the suite green and the under-delivery silent again. A scan, because the
     /// task body is a `tokio::spawn` inside `run`; asserted on both the step call and the `log::warn!`
-    /// that is the entire deliverable (computing the verdict and not printing it would be #99's
-    /// "reported the call, not the effect" defect).
+    /// that is the entire deliverable (computing the verdict and not printing it would be the same
+    /// "reported the call, not the effect" defect class).
     #[test]
     fn the_10s_task_warns_on_a_fanout_collapse_b1() {
         let body = crate::test_scan::code_of(
@@ -6474,7 +6502,7 @@ mod tests {
         );
     }
 
-    /// The actual issue #89 audit: no player-connection callback registered in this file may be left
+    /// The actual teardown audit: no player-connection callback registered in this file may be left
     /// without a teardown. Mutation (verified live, reverted with `Edit`): deleting the
     /// `on_explored_insert` teardown line this test exists to protect turns this test red with the
     /// exact identifier named in the failure message.
@@ -6485,7 +6513,8 @@ mod tests {
             missing.is_empty(),
             "the following callbacks are registered with no matching `remove_on_*` teardown — each \
              leaks another live subscription per world entry (or per session), and a single live \
-             event then fires its relay once per accumulated registration — issue #89's exact defect, \
+             event then fires its relay once per accumulated registration — the double-discovery-toast \
+             defect's exact shape, \
              reproduced for a different table: {missing:?}"
         );
     }

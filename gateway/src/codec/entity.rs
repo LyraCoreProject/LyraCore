@@ -15,7 +15,7 @@ use super::*;
 pub struct EntityView {
     pub guid: u64,
     pub map_id: u32,
-    /// The partition half of the `(map_id, instance_id)` address (#456): 0 for the open world, the
+    /// The partition half of the `(map_id, instance_id)` address: 0 for the open world, the
     /// live instance id inside a dungeon copy. Carried here because `enter_world` needs it to scope
     /// the AOI subscription, and the raw `game_world_entity` row is not otherwise in scope there —
     /// `player_login` hands back a view, not the row.
@@ -65,7 +65,7 @@ pub struct EntityView {
     pub spirit: u32,
     pub npc_flags: u32, // UNIT_NPC_FLAGS — gossip/vendor/etc. for a creature; 0 for a player
     /// Owning player for a SUMMONED unit (warlock pet) — drives UNIT_FIELD_SUMMONEDBY/CREATEDBY on
-    /// the pet CREATE so the 5875 client can bind it to the owner's pet frame (023). 0 = wild.
+    /// the pet CREATE so the 5875 client can bind it to the owner's pet frame. 0 = wild.
     pub owner_guid: u64,
     /// UNIT_FIELD_RESISTANCES[0] — the EFFECTIVE armor shown on the character sheet (base + armor auras +
     /// gear; see `stdb::armor::effective_armor`). Defaults to the server-authoritative BASE armor (the
@@ -134,7 +134,7 @@ pub(crate) fn visible_item_index(slot: u8) -> Option<VisibleItemIndex> {
 /// renders the gear (slice-2). Only applied for a player CREATE; pass `&[]` for creatures/peers.
 /// (Peers SHOULD eventually see equipped gear via VISIBLE_ITEM too, but slice-2 drives only self.)
 /// The per-class STATIC skill base (spec schools + weapons + language) — the login CREATE's slot
-/// layout starts from this. Shared with the live skill relay (234) so a line's PLAYER_SKILL_INFO
+/// layout starts from this. Shared with the live skill relay so a line's PLAYER_SKILL_INFO
 /// slot NEVER moves mid-session (the client keys the pane rows on the slot index).
 pub fn class_static_skills(class_b: u8) -> &'static [(Skill, u16, u16)] {
     match class_b {
@@ -255,7 +255,7 @@ pub fn class_static_skills(class_b: u8) -> &'static [(Skill, u16, u16)] {
     }
 }
 
-/// The deterministic PLAYER_SKILL_INFO slot layout (234): the class static base, overridden by any
+/// The deterministic PLAYER_SKILL_INFO slot layout: the class static base, overridden by any
 /// matching learned row, then every remaining learned line APPENDED — index i IS the descriptor
 /// slot. Used by the login CREATE and the live relay's slot map; both MUST derive from this one fn.
 pub fn skill_slot_layout(class_b: u8, learned: &[(u32, u16, u16)]) -> Vec<(Skill, u16, u16)> {
@@ -401,12 +401,12 @@ pub fn build_create_object(
         // none until per-character skill data exists (importer follow-up). Creatures get none.
         // Additive to the full CREATE mask (where OBJECT_FIELD_TYPE correctly belongs) — not a partial
         // VALUES update, so the dirty_reset discipline does not apply here.
-        // Per-class skill lines (parity #1): a class's spell-school tabs (so its spells render a spellbook
+        // Per-class skill lines: a class's spell-school tabs (so its spells render a spellbook
         // tab instead of the SpellBookFrame Lua crash) + its weapon/armor/defense skills + Common. We send
         // ALL of a class's spec schools so any ability resolves a tab. A class with no ported spells gets a
         // martial set (it can melee; no spells means no spell tab is needed). Warrior is byte-identical to
         // the prior hardcoded set. Per-RACE language (Orcish for Horde) is a follow-up — Common for now.
-        // LIVE skills (work-item 061, replacing the old static Cooking-1/75 fixture): the block
+        // LIVE skills (replacing the old static Cooking-1/75 fixture): the block
         // starts from the per-class STATIC base above (the spec-school/weapon/language rows the
         // client needs pre-import), then the character's `game_player_skill` rows OVERRIDE any
         // matching line (a trained weapon skill shows its real climb at relog) and every remaining
@@ -463,7 +463,7 @@ pub fn build_create_object(
             .set_unit_baseattacktime(entity.base_attack_time_ms as i32)
             .set_unit_dynamic_flags(entity.dynamic_flags as i32) // slice 2: corpse/lootable bits
             .set_unit_npc_flags(entity.npc_flags as i32); // gossip/vendor/questgiver/trainer icons (item 6)
-                                                          // 023: a SUMMONED unit (warlock pet) carries its owner in SUMMONEDBY/CREATEDBY — what the
+                                                          // A SUMMONED unit (warlock pet) carries its owner in SUMMONEDBY/CREATEDBY — what the
                                                           // client needs to treat the unit as this player's pet (frame binding). Wild creatures skip
                                                           // both fields (byte-identical CREATE).
         if entity.owner_guid != 0 {
@@ -568,7 +568,7 @@ pub fn login_sequence_messages(
             unknown1: 0,
         })
         .collect();
-    // Action bar (work-item 212): if the character has IMPORTED `game_player_action` rows (creation
+    // Action bar: if the character has IMPORTED `game_player_action` rows (creation
     // copied `game_createinfo_action` — the real vanilla default bar for this race/class), build the
     // bar from THOSE rows and trust them completely — no merge with the synth below, so a
     // real-but-Attack-less imported bar is never silently patched (the dump is expected to carry its
@@ -577,7 +577,7 @@ pub fn login_sequence_messages(
     // packs as `action | (action_type << 24)` — the vanilla client's own action-button encoding
     // (`action` in the low 24 bits, `action_type` the high byte; type 0 = spell, matching the synth
     // below's implicit type-0 raw-spell-id packing). Absent (pre-import, the common case today) →
-    // fall back to the byte-identical synth that shipped before this work item.
+    // fall back to the byte-identical synth that shipped before imported gossip existed.
     let mut action_buttons = [0u32; 120];
     if !player_actions.is_empty() {
         for &(button, action, action_type) in player_actions {
@@ -622,7 +622,7 @@ pub fn login_sequence_messages(
             data: action_buttons,
         })),
         ServerOpcodeMessage::SMSG_INITIALIZE_FACTIONS(Box::new(SMSG_INITIALIZE_FACTIONS {
-            // #13 slice 2: fold each persisted `game_player_reputation` row's standing into its stored
+            // Fold each persisted `game_player_reputation` row's standing into its stored
             // `reputation_index` slot (0..63) — the SAME Faction.dbc ReputationListID the live
             // SET_FACTION_STANDING relay addresses (see build_set_faction_standing_raw's crash note).
             // HARD GUARDRAIL: index by reputation_index, NEVER faction_id — faction_id indexed past the
@@ -638,7 +638,7 @@ pub fn login_sequence_messages(
                 for &(index, standing, at_war) in reputations {
                     if let Some(slot) = usize::try_from(index).ok().and_then(|i| slots.get_mut(i)) {
                         slot.standing = standing as u32; // signed standing, bit-cast (client reads it i32) — same as build_set_faction_standing_raw
-                                                         // 195 slice B: the persisted At-War checkbox survives relog via this flag
+                                                         // The persisted At-War checkbox survives relog via this flag
                                                          // byte (AT_WAR = 0x02). VISIBLE (0x01) rides along — a slot with a stored
                                                          // row is a faction the player has met, and the client needs VISIBLE to
                                                          // render the pane row the checkbox lives on.
@@ -676,7 +676,7 @@ pub fn build_destroy_object(guid: u64) -> SMSG_DESTROY_OBJECT {
     }
 }
 
-/// Build `SMSG_PET_SPELLS` for a freshly summoned pet (023): the default vanilla pet action bar —
+/// Build `SMSG_PET_SPELLS` for a freshly summoned pet: the default vanilla pet action bar —
 /// Attack/Follow/Stay commands in slots 0–2, the pet's castable spells (if any) in slots 3–6, and
 /// the Aggressive/Defensive/Passive react states in slots 7–9, each slot packed as
 /// `action | (active_state << 24)` — the packing the 5875 client decodes. The pet starts Enabled,
@@ -713,7 +713,7 @@ pub fn build_pet_spells(pet_guid: u64, spells: &[u32]) -> SMSG_PET_SPELLS {
 }
 
 /// The empty `SMSG_PET_SPELLS` (guid 0, no bar block) — the vanilla "remove the pet bar" form,
-/// sent when the pet despawns/dies (023).
+/// sent when the pet despawns/dies.
 pub fn build_pet_spells_clear() -> SMSG_PET_SPELLS {
     SMSG_PET_SPELLS {
         pet: Guid::new(0),
@@ -725,7 +725,7 @@ pub fn build_pet_spells_clear() -> SMSG_PET_SPELLS {
 /// faction as a u16, the 5875 client reads u32, hence the hand-rolled 12-byte body).
 const SMSG_SET_FACTION_STANDING_OPCODE: u16 = 0x0124;
 
-/// Build the live reputation-bar update (#13) relayed when a `game_player_reputation` row is inserted/updated,
+/// Build the live reputation-bar update relayed when a `game_player_reputation` row is inserted/updated,
 /// in the exact 5875 layout: `count(u32)` then per faction `reputation_index(u32)` + `standing(u32)`.
 ///
 /// CRASH ROOT-CAUSE (3rd McBride attempt — the real one): the entry field is the Faction.dbc **ReputationListID**

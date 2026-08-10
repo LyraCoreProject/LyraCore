@@ -1,11 +1,12 @@
-//! Realm-wide whispers (issue #22, WHISPER slice) — the routing tests.
+//! Realm-wide whispers — the routing tests.
 //!
 //! What EXECUTES here is production `world::whisper`, against the same in-memory multi-database
 //! topology the group slice and the cross-database transfer tests use (`party_tests::party_topology`
 //! — Ginger in the open world on `world`, Vim inside the dungeon on `instances`, plus an offline
 //! character and a playerbot). What the fakes stand in for is named at each seam: `realm_whispers` is
 //! exactly the tuple the operator-gated `realm_whisper` reducer was handed, recorded before it judges
-//! anything, and `whispers` is what the pre-#22 player-facing `send_whisper` was handed instead.
+//! anything, and `whispers` is what the pre-realm-core player-facing `send_whisper` was handed
+//! instead.
 
 use super::party_tests::{character, party_topology, BOT, DORMANT, GINGER, TRIN, VIM};
 use super::*;
@@ -18,7 +19,7 @@ use super::*;
 #[test]
 fn a_whisper_reaches_a_target_standing_on_another_shard() {
     let (realm, world, instances, calls) = party_topology();
-    // The pre-#22 read, run against the shard the sender is on: Vim is simply not there.
+    // The pre-realm-core read, run against the shard the sender is on: Vim is simply not there.
     assert_eq!(
         world.character_guid_by_name("Vim").unwrap(),
         None,
@@ -44,7 +45,7 @@ fn a_whisper_reaches_a_target_standing_on_another_shard() {
     assert!(
         !log.iter().any(|(_, c)| c == "send_whisper"),
         "a multi-database gateway must not run the whisper through a shard's own name lookup — that \
-         is exactly the shard-local behaviour #22 removes. Calls were {log:?}"
+         is exactly the shard-local behaviour realm-wide whisper routing removes. Calls were {log:?}"
     );
     let _ = instances;
 }
@@ -123,11 +124,11 @@ fn an_offline_target_is_refused_with_the_modules_own_text() {
 
 /// **The gate this slice must NOT copy from the group slice.**
 ///
-/// PR #49's review found the moved ONLINE gate reading `game_character.online` where the module read
-/// `game_world_entity` — a behaviour change in a refactor's clothes, because every playerbot has a
-/// live entity and `online == false` forever. Whisper is the MIRROR case: `send_whisper` gates on the
-/// session flag, so a whisper to a bot is refused today, and reaching for the group slice's
-/// `live_anywhere` here would silently start accepting them on a multi-database gateway alone.
+/// Adversarial review found the moved ONLINE gate reading `game_character.online` where the module
+/// read `game_world_entity` — a behaviour change in a refactor's clothes, because every playerbot
+/// has a live entity and `online == false` forever. Whisper is the MIRROR case: `send_whisper`
+/// gates on the session flag, so a whisper to a bot is refused today, and reaching for the group
+/// slice's `live_anywhere` here would silently start accepting them on a multi-database gateway alone.
 ///
 /// Both facts are asserted, so the divergence is visible in the test rather than only in the fixture:
 /// the bot IS live (the invite gate's answer) and IS refused (the whisper gate's answer).
@@ -266,8 +267,8 @@ fn a_sender_with_no_live_character_anywhere_is_refused() {
 
 /// **The invariant this batch has broken six times: unset config changes NOTHING.**
 ///
-/// A single-database gateway has no realm-core to route to, so a whisper takes the pre-#22 path —
-/// the player's own connection, the player-facing `send_whisper` reducer, the TYPED NAME still
+/// A single-database gateway has no realm-core to route to, so a whisper takes the pre-realm-core
+/// path — the player's own connection, the player-facing `send_whisper` reducer, the TYPED NAME still
 /// unresolved (the module resolves it, gates it and delivers it), and not one realm-wide read.
 #[test]
 fn an_unsharded_gateway_whispers_through_the_players_own_reducer() {
@@ -286,7 +287,7 @@ fn an_unsharded_gateway_whispers_through_the_players_own_reducer() {
 
     // Three shapes the sharded plane treats differently, and the unsharded plane must not: a normal
     // whisper, a name nothing resolves, and a caller the gateway has no guid for. All three go to the
-    // module verbatim — every gate on this plane is the module's, exactly as before #22.
+    // module verbatim — every gate on this plane is the module's, exactly as before realm-core.
     store
         .send_whisper(7, 0, "Vim".into(), "hi".into())
         .expect("baseline: the mock accepts a direct call");
@@ -313,8 +314,8 @@ fn an_unsharded_gateway_whispers_through_the_players_own_reducer() {
             ("vim".to_string(), "still?".to_string()),
         ],
         "an unsharded gateway must call `send_whisper` with the name the player TYPED, in order, \
-         exactly as it did before #22 — resolving or gating anything here would fork the behaviour \
-         of the deployment nobody configured"
+         exactly as it did before realm-core — resolving or gating anything here would fork the \
+         behaviour of the deployment nobody configured"
     );
     let log = calls.lock().unwrap().clone();
     assert!(
@@ -346,7 +347,8 @@ fn an_unsharded_gateway_whispers_through_the_players_own_reducer() {
 ///
 /// The ONLINE gate is the disambiguator (vanilla `/w` addresses the character that is logged in), so
 /// the union hands it every candidate. Several ONLINE homonyms remain arbitrary — the real fix is a
-/// realm-wide name constraint, which is #22's, not this slice's.
+/// realm-wide name constraint, which belongs to realm-wide social & economy on realm-core, not this
+/// slice's.
 #[test]
 fn a_homonym_on_the_senders_own_shard_does_not_shadow_the_live_target() {
     const HOMONYM: u64 = 9; // a SECOND character named "Vim", on the OPEN-WORLD shard
@@ -480,9 +482,9 @@ fn a_name_query_resolves_a_character_on_another_shard() {
 /// Two mutations live here and nowhere else. Deleting the dispatch's route to `world::whisper` sends
 /// every whisper back to the shard-local reducer with every test above still green; and passing a
 /// literal (or another player's guid) as the sender attributes the whisper — and the "X whispers:"
-/// line the recipient sees — to somebody else, which is impersonation rather than a misroute. PR
-/// #49's review found exactly that survivor in the party ops, so the sender guid realm-core is told
-/// to act as is asserted here, from the socket that authenticated it.
+/// line the recipient sees — to somebody else, which is impersonation rather than a misroute.
+/// Adversarial review found exactly that survivor in the party ops, so the sender guid realm-core
+/// is told to act as is asserted here, from the socket that authenticated it.
 #[test]
 fn a_real_session_routes_a_whisper_to_realm_core_as_its_own_character() {
     let (realm, _world, instances, calls) = party_topology();
@@ -513,8 +515,8 @@ fn a_real_session_routes_a_whisper_to_realm_core_as_its_own_character() {
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     // A READ DEADLINE, and it is the point rather than hygiene: the mutation this pins makes the
     // expected packet never arrive, and a blocking read on a packet that will never come turns a
-    // test that must go RED into one that HANGS — neither a pass nor a fail (two of PR #49's
-    // mutations did exactly that).
+    // test that must go RED into one that HANGS — neither a pass nor a fail (two of that
+    // adversarial review's mutations did exactly that).
     client
         .set_read_timeout(Some(std::time::Duration::from_secs(5)))
         .unwrap();
@@ -601,7 +603,7 @@ fn a_real_session_routes_a_whisper_to_realm_core_as_its_own_character() {
     let log = calls.lock().unwrap().clone();
     assert!(
         !log.iter().any(|(_, c)| c == "send_whisper"),
-        "the whisper ran through the session shard's own name lookup — the shard-local behaviour #22 \
-         removes. Calls were {log:?}"
+        "the whisper ran through the session shard's own name lookup — the shard-local behaviour \
+         realm-wide whisper routing removes. Calls were {log:?}"
     );
 }

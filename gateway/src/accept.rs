@@ -1,5 +1,6 @@
-//! Accept-loop error policy (#451, root-caused on #447) — the one place that decides whether an
-//! `accept(2)` failure ends a listener or costs one connection.
+//! Accept-loop error policy — the one place that decides whether an `accept(2)` failure ends a
+//! listener or costs one connection. Root-caused on the mass-session login storm that killed the
+//! gateway outright (see below).
 //!
 //! # The bug this exists to prevent
 //!
@@ -152,8 +153,9 @@ mod tests {
         io::Error::from_raw_os_error(errno)
     }
 
-    /// The whole point of #451's change: the errno that actually killed the realm on 2026-08-07 —
-    /// and its siblings from the #447 enumeration — must cost one connection, not the process.
+    /// The whole point of this change: the errno that actually killed the realm on 2026-08-07 — and
+    /// its siblings among the transient errnos this module retries — must cost one connection, not
+    /// the process.
     #[test]
     fn the_errnos_that_killed_the_realm_are_transient() {
         for (errno, name) in [

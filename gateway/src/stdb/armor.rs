@@ -54,7 +54,7 @@ fn gear_armor_contribution(slot: u8, stat_armor: i32, max_durability: u32, durab
     stat_armor
 }
 
-/// Everything the paperdoll shows that GEAR moves (053), folded from the subscription cache the
+/// Everything the paperdoll shows that GEAR moves, folded from the subscription cache the
 /// same way `effective_armor` below is: the five attributes = entity base + equipped `stat_*`
 /// bonuses (worn slots 0..=18, broken pieces excluded), melee attack power from the module's
 /// `combat::tables` curves (mirrored — Rogue/Hunter agility curve, Str-class default), and the
@@ -134,7 +134,7 @@ pub(crate) fn sheet_stats(db: &RemoteTables, guid: u64) -> Option<crate::codec::
     })
 }
 
-/// The POSITIVE aura portion of `guid`'s armor (082): the sum of positive `A_MOD_RESISTANCE(armor)`
+/// The POSITIVE aura portion of `guid`'s armor: the sum of positive `A_MOD_RESISTANCE(armor)`
 /// contributions only — what the paperdoll renders as the green "(+N)" via
 /// `UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE[0]`. Negative auras (Sunder) are excluded (they'd ride the
 /// NEGATIVE twin field — not wired this slice; the ceiling is a red armor readout instead of white).
@@ -220,8 +220,8 @@ mod tests {
     }
 
     /// The two curves above are HAND-MIRRORS of `module::combat::tables` (see their doc comments),
-    /// and #222's first coverage baseline found neither of them pinned by anything: the character
-    /// sheet could drift from the numbers the server actually rolls and every offline test would
+    /// and the release-boundary hardening pass's first coverage baseline found neither of them
+    /// pinned by anything: the character sheet could drift from the numbers the server actually rolls and every offline test would
     /// stay green. Same drift class `gateway/tests/schema_parity.rs` guards for table shape, same
     /// answer — compare against the REAL module function through the `lyracore-module`
     /// dev-dependency (`module/src/lib.rs` already `pub use combat::*`), never against a second copy

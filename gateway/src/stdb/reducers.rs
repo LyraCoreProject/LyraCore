@@ -19,7 +19,7 @@ impl Coordinator {
         account_id: u64,
         character_guid: u64,
     ) -> Result<crate::codec::EntityView> {
-        // #468 stage 4d: under LYRACORE_SHARED_CALLS the login rides `gw_player_login` on the
+        // Under LYRACORE_SHARED_CALLS the login rides `gw_player_login` on the
         // COORDINATOR connection (module half: delegates to apply_player_login with the account's
         // bound identity as row owner, binds entity→lease, fail-closed on either missing) — and no
         // per-player connection is built here or anywhere else on the login path.
@@ -55,7 +55,7 @@ impl Coordinator {
         let home_x = char_row.as_ref().map(|c| c.home_x).unwrap_or(0.0);
         let home_y = char_row.as_ref().map(|c| c.home_y).unwrap_or(0.0);
         let home_z = char_row.as_ref().map(|c| c.home_z).unwrap_or(0.0);
-        // 15 s cap, 15 ms steps. Was 3 s — the cold-1000 measurement (#468) showed the reducer
+        // 15 s cap, 15 ms steps. Was 3 s — the cold-1000 measurement showed the reducer
         // COMMITTING while the coordinator stream lagged the login-burst tail past 3 s (writer at
         // 34.5%, so pure propagation, not CPU): 67/1000 logins died here with the entity already
         // live. The poll exits on first sight, so the longer cap costs nothing outside a burst.
@@ -87,7 +87,7 @@ impl Coordinator {
 
     /// Persist + relay an inbound movement (Phases 5-6): call the `movement_update` reducer on the
     /// per-account connection so the module attributes it to the right `game_world_entity` — or,
-    /// under `LYRACORE_SHARED_CALLS` (#468 stage 4b), the operator-gated `gw_movement_update` on
+    /// under `LYRACORE_SHARED_CALLS`, the operator-gated `gw_movement_update` on
     /// the COORDINATOR connection with the mover named by `actor_guid`. `actor_guid == 0` means
     /// the caller doesn't know the guid (never true in-world); it forces the per-player path.
     /// `movement_info` is the raw body to relay verbatim to observers (empty until the inbound
@@ -130,8 +130,8 @@ impl Coordinator {
         )
     }
 
-    /// [`movement_update`](Self::movement_update) without waiting on the completion channel
-    /// (perf catalog 1.13, #110). `on_done` receives the module's outcome on the SDK callback
+    /// [`movement_update`](Self::movement_update) without waiting on the completion channel.
+    /// `on_done` receives the module's outcome on the SDK callback
     /// thread. See `call_reducer_nowait!` for why movement specifically must not block. Same
     /// `LYRACORE_SHARED_CALLS` routing as the blocking form.
     #[allow(clippy::too_many_arguments)]
@@ -149,7 +149,7 @@ impl Coordinator {
         on_done: impl Fn(std::result::Result<(), String>) + Send + Sync + 'static,
     ) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
-            // #482: push onto the shard's batch — ONE gw_movement_batch transaction per 40ms
+            // Push onto the shard's batch — ONE gw_movement_batch transaction per 40ms
             // tick carries the whole realm's heartbeats instead of one transaction each (the
             // measured 92%-writer wall). Per-move rejection logging moved module-side (the batch
             // reducer logs and skips), so completion is immediate here.
@@ -175,7 +175,7 @@ impl Coordinator {
         )
     }
 
-    /// #468 stage 4b: heartbeat this gateway's `game_gateway_lease` row every 15 s on the default
+    /// Heartbeat this gateway's `game_gateway_lease` row every 15 s on the default
     /// shard's coordinator connection, forever. Fire-and-forget per beat — a missed beat is
     /// harmless (the TTL tolerates several) and the loop must never stall on a slow call. Spawned
     /// from `main` only when `LYRACORE_SHARED_CALLS` is on.
@@ -239,8 +239,9 @@ impl Coordinator {
             Err(e) if e.to_string().contains("NAME_IN_USE") => CharCreateOutcome::NameInUse,
             Err(e) if e.to_string().contains("SERVER_LIMIT") => CharCreateOutcome::ServerLimit,
             // The 5875 client has no code for "this database may not mint guids", so the outcome is
-            // the generic failure — but the REASON must not be swallowed: #108's whole point is that
-            // an unlicensed shard fails loudly instead of minting into someone else's range.
+            // the generic failure — but the REASON must not be swallowed: the whole point of
+            // guid-range licensing is that an unlicensed shard fails loudly instead of minting
+            // into someone else's range.
             Err(e) => {
                 log::warn!("create_character on {} failed: {e:#}", self.shard_name());
                 CharCreateOutcome::Failed
@@ -288,7 +289,7 @@ impl Coordinator {
         )
     }
 
-    /// Publish `character_guid`'s location into this handle's character→shard index (#20). Call it
+    /// Publish `character_guid`'s location into this handle's character→shard index. Call it
     /// on the REALM-CORE handle: on a world shard the index is already maintained transactionally by
     /// `finish_transfer`. Operator-gated module-side (the index is a routing input).
     pub fn set_character_shard(
@@ -379,7 +380,7 @@ impl Coordinator {
         )
     }
 
-    /// Forward an addon-bridge command (184) to the module's `client_command` dispatch.
+    /// Forward an addon-bridge command to the module's `client_command` dispatch.
     pub fn client_command(
         &self,
         account_id: u64,
@@ -443,8 +444,8 @@ impl Coordinator {
         )
     }
 
-    /// Start the player's RANGED auto-attack on `target_guid` with `spell_id` (75 Auto Shot / 5019 Shoot,
-    /// #10) over the per-account connection so the module attributes the shot to the caller.
+    /// Start the player's RANGED auto-attack on `target_guid` with `spell_id` (75 Auto Shot / 5019 Shoot)
+    /// over the per-account connection so the module attributes the shot to the caller.
     /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_ranged_attack`.
     pub fn start_ranged_attack(
         &self,
@@ -506,7 +507,7 @@ impl Coordinator {
 
     /// Cast a GROUND-TARGETED spell at a clicked world point (`CMSG_CAST_SPELL` with a DEST_LOCATION —
     /// Flamestrike/Blizzard/Rain of Fire). Same per-account attribution as `cast_spell`; the `(x,y,z)` is
-    /// the ground click so the module anchors the AoE/patch there (118 phase 2).
+    /// the ground click so the module anchors the AoE/patch there.
     pub fn cast_spell_at(
         &self,
         account_id: u64,
@@ -554,7 +555,7 @@ impl Coordinator {
     }
 
     /// Cancel the caller's in-progress cast (`CMSG_CANCEL_CAST`) over the per-account connection so the
-    /// module clears the caller's pending cast — no phantom completion GO. [083]
+    /// module clears the caller's pending cast — no phantom completion GO.
     pub fn cancel_cast(&self, account_id: u64, actor_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
             let coord = self.0.call_pipe();
@@ -592,7 +593,7 @@ impl Coordinator {
         )
     }
 
-    /// Join a chat channel (065, CMSG_JOIN_CHANNEL — the client auto-sends on zone-in).
+    /// Join a chat channel (CMSG_JOIN_CHANNEL — the client auto-sends on zone-in).
     pub fn join_channel(&self, account_id: u64,
         actor_guid: u64, channel: String) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
@@ -611,7 +612,7 @@ impl Coordinator {
         )
     }
 
-    /// Leave a chat channel (065, CMSG_LEAVE_CHANNEL).
+    /// Leave a chat channel (CMSG_LEAVE_CHANNEL).
     pub fn leave_channel(&self, account_id: u64,
         actor_guid: u64, channel: String) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
@@ -630,7 +631,7 @@ impl Coordinator {
         )
     }
 
-    /// Speak into a channel (065, the CMSG_MESSAGECHAT Channel arm).
+    /// Speak into a channel (the CMSG_MESSAGECHAT Channel arm).
     pub fn send_channel_message(
         &self,
         account_id: u64,
@@ -719,7 +720,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_MESSAGECHAT` Party (`/p`, work-item 199) — over the per-account connection so the module
+    /// `CMSG_MESSAGECHAT` Party (`/p`) — over the per-account connection so the module
     /// attributes the line (and its group-membership check) to the caller.
     pub fn party_chat(&self, account_id: u64,
         actor_guid: u64, message: String) -> Result<()> {
@@ -735,7 +736,7 @@ impl Coordinator {
         call_reducer!(player.conn.reducers, "party_chat", party_chat_then(message))
     }
 
-    /// GM playtest dot-command (work-item 223): `CMSG_MESSAGECHAT` Say text starting with `.`, over the
+    /// GM playtest dot-command: `CMSG_MESSAGECHAT` Say text starting with `.`, over the
     /// per-account connection so the module attributes it (and its `gm_level` gate) to the caller.
     /// Deliberately does NOT use the `call_reducer!` macro: that macro wraps a module `Err` as
     /// `"{what} reducer failed: {e}"` (fine when a caller only substring-matches it, like `party_chat`'s
@@ -778,7 +779,7 @@ impl Coordinator {
         }
     }
 
-    /// `CMSG_PUSHQUESTTOPARTY` (work-item 194) — over the per-account connection so the module
+    /// `CMSG_PUSHQUESTTOPARTY` — over the per-account connection so the module
     /// attributes the sender + its grouped/on-quest gates to the caller.
     pub fn push_quest(&self, account_id: u64, actor_guid: u64, quest_id: u32) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
@@ -797,7 +798,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_GROUP_INVITE` (work-item 066) — `target_guid` is already resolved by the gateway.
+    /// `CMSG_GROUP_INVITE` — `target_guid` is already resolved by the gateway.
     pub fn group_invite(&self, account_id: u64,
         actor_guid: u64, target_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
@@ -878,7 +879,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_LOOT_METHOD` (work-item 187 slice 1) — the leader sets the party's loot method/
+    /// `CMSG_LOOT_METHOD` — the leader sets the party's loot method/
     /// threshold/master. Echoed to every member via the existing `SMSG_GROUP_LIST` relay (the
     /// module's `group_loot_method` reducer re-renders the roster payload); no separate ack packet
     /// (vanilla sends none for this opcode either).
@@ -906,7 +907,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_GOSSIP_SELECT_OPTION` — the NOTIFY-ONLY module chokepoint (work-item 146). Fired
+    /// `CMSG_GOSSIP_SELECT_OPTION` — the NOTIFY-ONLY module chokepoint. Fired
     /// best-effort BEFORE the gateway's own gossip behavior; a failure never blocks the reply.
     pub fn gossip_select(
         &self,
@@ -932,7 +933,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_ADD_FRIEND` (work-item 130) — `target_guid` is already resolved by the gateway.
+    /// `CMSG_ADD_FRIEND` — `target_guid` is already resolved by the gateway.
     pub fn add_friend(&self, account_id: u64,
         actor_guid: u64, target_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
@@ -1068,7 +1069,7 @@ impl Coordinator {
         call_reducer!(player.conn.reducers, "skin", skin_then(corpse_guid))
     }
 
-    /// `CMSG_LOOT_ROLL` (work-item 187 slices 2-3) — record the caller's need/greed/pass vote on a
+    /// `CMSG_LOOT_ROLL` — record the caller's need/greed/pass vote on a
     /// live roll. Live votes/roll numbers relay to every eligible member via the `game_group_event`
     /// roll-kind rows (`stdb/subscriptions.rs`).
     pub fn loot_roll(
@@ -1095,7 +1096,7 @@ impl Coordinator {
         )
     }
 
-    /// `CMSG_LOOT_MASTER_GIVE` (work-item 187 slice 4) — the master looter assigns an above-
+    /// `CMSG_LOOT_MASTER_GIVE` — the master looter assigns an above-
     /// threshold row to `target_guid`.
     pub fn loot_master_give(
         &self,
@@ -1230,7 +1231,7 @@ impl Coordinator {
         )
     }
 
-    /// Fishing cast (060): instant-resolve catch — the module's lenient alpha gate auto-learns the
+    /// Fishing cast: instant-resolve catch — the module's lenient alpha gate auto-learns the
     /// skill and grants the fish straight to the bag. Caller resolved via ctx.sender.
     pub fn fish(&self, account_id: u64, actor_guid: u64) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
@@ -1245,7 +1246,7 @@ impl Coordinator {
         call_reducer!(player.conn.reducers, "fish", fish_then())
     }
 
-    /// Pick Lock (119): unlock the locked GameObject `go_guid` over the per-account connection (so the
+    /// Pick Lock: unlock the locked GameObject `go_guid` over the per-account connection (so the
     /// module attributes the pick to the caller via ctx.sender). The module gates range / lock
     /// requirement / Lockpicking skill; on success it records the GO unlocked + climbs the skill.
     pub fn pick_lock(&self, account_id: u64,
@@ -1578,7 +1579,7 @@ impl Coordinator {
         )
     }
 
-    /// Answer a pending resurrect offer (`CMSG_RESURRECT_RESPONSE`, #014) over the per-account connection.
+    /// Answer a pending resurrect offer (`CMSG_RESURRECT_RESPONSE`) over the per-account connection.
     /// Under `LYRACORE_SHARED_CALLS` this rides the coordinator connection as `gw_respond_resurrect`.
     pub fn resurrect_response(&self, account_id: u64, actor_guid: u64, accept: bool) -> Result<()> {
         if crate::config::shared_calls_enabled() && actor_guid != 0 {
@@ -1642,7 +1643,7 @@ impl Coordinator {
     }
 
     // -------------------------------------------------------------------------------------
-    // Cross-database transfer (#19). ALL of these run over the COORDINATOR connection, not the
+    // Cross-database transfer. ALL of these run over the COORDINATOR connection, not the
     // per-player one: they are operator-gated orchestration (`require_operator`), and the
     // destination shard has no bound player identity until the character has arrived on it — which
     // is precisely what they exist to make happen.
@@ -1725,7 +1726,7 @@ impl Coordinator {
         )
     }
 
-    /// `record_shard_load` (#78) — fired against THIS handle's connection. Callers hold the
+    /// `record_shard_load` — fired against THIS handle's connection. Callers hold the
     /// **realm-core** handle: `game_shard_load` is only ever read from there.
     pub fn record_shard_load(
         &self,
@@ -1740,8 +1741,8 @@ impl Coordinator {
         )
     }
 
-    /// `realm_group_op` — one party op against the database THIS handle points at (#22, group
-    /// slice). The gateway calls it on the **realm-core** handle, where membership is authoritative.
+    /// `realm_group_op` — one party op against the database THIS handle points at. The gateway
+    /// calls it on the **realm-core** handle, where membership is authoritative.
     ///
     /// Through the COORDINATOR connection, not the player's: the reducer is operator-gated because
     /// it takes the acting character's guid as an argument (realm-core has no live entity to derive
@@ -1762,8 +1763,8 @@ impl Coordinator {
         )
     }
 
-    /// `realm_whisper` — deliver one whisper against the database THIS handle points at (#22,
-    /// whisper slice). The gateway calls it on the **realm-core** handle, the only database that can
+    /// `realm_whisper` — deliver one whisper against the database THIS handle points at. The
+    /// gateway calls it on the **realm-core** handle, the only database that can
     /// address both parties of a cross-shard whisper (a guid is realm-wide; an identity is not).
     ///
     /// Through the COORDINATOR connection, not the player's: the reducer is operator-gated because it
@@ -1785,8 +1786,8 @@ impl Coordinator {
         )
     }
 
-    /// `sync_group_mirror` — replace THIS shard's mirror of one party with realm-core's roster
-    /// (#22, group slice). Operator-gated, coordinator connection, same reasoning as above; called
+    /// `sync_group_mirror` — replace THIS shard's mirror of one party with realm-core's roster.
+    /// Operator-gated, coordinator connection, same reasoning as above; called
     /// on each WORLD shard after a party op and at world entry.
     pub fn sync_group_mirror(&self, roster: &crate::world::party::GroupRoster) -> Result<()> {
         call_reducer!(
@@ -1803,7 +1804,7 @@ impl Coordinator {
         )
     }
 
-    /// `realm_loot_op` — one loot-roll op against the database THIS handle points at (#50). The
+    /// `realm_loot_op` — one loot-roll op against the database THIS handle points at. The
     /// gateway calls it on the **realm-core** handle: START promotes a world shard's staging roll,
     /// VOTE casts `CMSG_LOOT_ROLL`'s vote.
     ///
@@ -1841,7 +1842,7 @@ impl Coordinator {
     }
 
     /// `settle_loot_roll` — grant a resolved roll's item on THIS world shard, if it holds the
-    /// matching corpse row (#50). Operator-gated, coordinator connection; the loot-roll relay calls
+    /// matching corpse row. Operator-gated, coordinator connection; the loot-roll relay calls
     /// it on every connected world shard after observing realm-core's `ROLL_WON` event — the
     /// module's own `withheld` guard makes a wrong-shard call a harmless no-op.
     pub fn settle_loot_roll(&self, corpse_guid: u64, slot: u8, winner_guid: u64) -> Result<()> {
@@ -1853,7 +1854,7 @@ impl Coordinator {
     }
 
     /// `clear_promoted_loot_roll` — delete a staging roll's rows on THIS world shard, once the
-    /// loot-roll relay has promoted it onto realm-core (#50). Operator-gated, coordinator connection.
+    /// loot-roll relay has promoted it onto realm-core. Operator-gated, coordinator connection.
     pub fn clear_promoted_loot_roll(&self, roll_id: u64) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,

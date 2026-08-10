@@ -47,11 +47,11 @@ pub struct QuestDetailView {
     pub request_items_text: String,
     pub money_reward: u32,
     pub reward_xp: u32,
-    /// cmangos NextQuestId/NextQuestInChain (work-item 194): the successor quest auto-offered on
+    /// cmangos NextQuestId/NextQuestInChain: the successor quest auto-offered on
     /// turn-in (0 = no successor). Threaded into `SMSG_QUEST_QUERY_RESPONSE`'s `next_quest_in_chain`
     /// field (`build_quest_query_response_raw`) — previously a hardcoded 0 stub.
     pub next_quest_id: u32,
-    /// Work-item 194(e): the level-cap (60) money conversion of this quest's XP reward
+    /// The level-cap (60) money conversion of this quest's XP reward
     /// (`lyracore_shared::quest::max_level_money_reward`) — the SAME number a level-60 turn-in actually
     /// pays. Threaded into `SMSG_QUEST_QUERY_RESPONSE`'s `max_level_money_reward` field (previously a
     /// hardcoded 0 stub); the client only surfaces it in the log preview when the VIEWER is capped, so
@@ -132,7 +132,7 @@ pub fn build_questgiver_status(
     }
 }
 
-/// `SMSG_QUESTUPDATE_ADD_KILL` — the "Creature slain: n/N" kill-progress toast (#3). `creature_id` is the
+/// `SMSG_QUESTUPDATE_ADD_KILL` — the "Creature slain: n/N" kill-progress toast. `creature_id` is the
 /// objective's target creature entry (the client looks up its name); `guid` is sent as 0 — the quest-update
 /// relay knows the entry + counts but not the specific corpse, and the client renders the toast from
 /// `creature_id` regardless.
@@ -151,7 +151,7 @@ pub fn build_questupdate_add_kill(
     }
 }
 
-/// Pure kill-progress diff (#3): given a quest's objectives and its old→new progress counts, return one
+/// Pure kill-progress diff: given a quest's objectives and its old→new progress counts, return one
 /// `SMSG_QUESTUPDATE_ADD_KILL` per KILL objective (kind 0) whose count INCREASED. The gateway's
 /// `on_quest_update` relay is just this + the send — extracted so the diff is unit-testable without a live
 /// client. `objectives` are `(kind, obj_index, target_entry, required_count)`.
@@ -195,7 +195,7 @@ mod add_kill_tests {
     }
 }
 
-/// `SMSG_QUESTUPDATE_FAILEDTIMER` (0x0197, work-item 194) — a timed quest's log entry flips to FAILED
+/// `SMSG_QUESTUPDATE_FAILEDTIMER` (0x0197) — a timed quest's log entry flips to FAILED
 /// the instant `quest_timer_pass` fails it (`gateway/src/stdb/subscriptions.rs`'s `on_quest_update`
 /// diffs `!old.failed && row.failed`). Pure builder: not boxed (unlike `SMSG_QUESTUPDATE_ADD_KILL`) —
 /// gtker's enum wraps this variant directly.
@@ -203,7 +203,7 @@ pub fn build_questupdate_failedtimer(quest_id: u32) -> SMSG_QUESTUPDATE_FAILEDTI
     SMSG_QUESTUPDATE_FAILEDTIMER { quest_id }
 }
 
-/// `MSG_QUEST_PUSH_RESULT` (0x0276, work-item 194 sharing) — the SENDER's per-member feedback line
+/// `MSG_QUEST_PUSH_RESULT` (0x0276) — the SENDER's per-member feedback line
 /// after `push_quest_to_party` ("So-and-so already has that quest", "is too far away", etc). `code` is
 /// the module's `lyracore_shared::quest::share_result` wire byte, which mirrors gtker's
 /// `QuestPartyMessage::as_int()` 1:1 by construction — decode is a straight `try_into()`; an
@@ -403,9 +403,9 @@ pub fn build_quest_query_response_raw(d: &QuestDetailView) -> (u16, Vec<u8>) {
     u32le(&mut body, 0); // reputation_objective_value
     u32le(&mut body, 0); // required_opposite_faction (u32 in 5875 — gtker wrote u16)
     u32le(&mut body, 0); // required_opposite_reputation_value
-    u32le(&mut body, d.next_quest_id); // next_quest_in_chain (work-item 194: was a hardcoded 0 stub)
+    u32le(&mut body, d.next_quest_id); // next_quest_in_chain (was a hardcoded 0 stub)
     u32le(&mut body, d.money_reward);
-    u32le(&mut body, d.max_level_money_reward); // work-item 194(e): was a hardcoded 0 stub
+    u32le(&mut body, d.max_level_money_reward); // was a hardcoded 0 stub
     u32le(&mut body, 0); // reward_spell
     u32le(&mut body, 0); // source_item_id
     u32le(&mut body, 0); // quest_flags
@@ -584,7 +584,7 @@ mod tests {
         assert_eq!(body[title_pos + 15], 0);
     }
 
-    /// Work-item 194: `next_quest_in_chain` and `max_level_money_reward` are THREADED from the view,
+    /// `next_quest_in_chain` and `max_level_money_reward` are THREADED from the view,
     /// not the old hardcoded-0 stubs — pinned at their exact byte offsets (9 leading u32s, then
     /// `next_quest_in_chain` at byte 36; `money_reward` at 40, then `max_level_money_reward` at 44).
     #[test]
@@ -677,7 +677,7 @@ mod tests {
         }
     }
 
-    /// Work-item 194: `SMSG_QUESTUPDATE_FAILEDTIMER` (0x0197) carries the quest id at byte 0 of its
+    /// `SMSG_QUESTUPDATE_FAILEDTIMER` (0x0197) carries the quest id at byte 0 of its
     /// body — pinned by encoding the real gtker message (not just constructing the struct), so a
     /// gtker version bump that changes the layout fails here loudly.
     #[test]
@@ -693,7 +693,7 @@ mod tests {
         assert_eq!(&body[0..4], &783u32.to_le_bytes());
     }
 
-    /// Work-item 194: `MSG_QUEST_PUSH_RESULT` (0x0276) carries the member guid then the `QuestPartyMessage`
+    /// `MSG_QUEST_PUSH_RESULT` (0x0276) carries the member guid then the `QuestPartyMessage`
     /// byte — pinned via a real gtker encode. `share_result::HAVE_QUEST` (7) round-trips to
     /// `QuestPartyMessage::HaveQuest` (also 7 per gtker's own `as_int()`), proving the 1:1 mirror.
     #[test]

@@ -29,13 +29,13 @@ use anyhow::Result;
 use config::GatewayConfig;
 use provision_cli::{parse_gateway_mode, read_password_line, GatewayMode};
 
-// Heap profiling (work-item 292): `--features dhat-heap` swaps in dhat's allocator and
+// Heap profiling: `--features dhat-heap` swaps in dhat's allocator and
 // writes dhat-heap.json at exit. Never for production — it records every allocation and is slow.
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
-/// Startup, in the order the three things have to happen (#451):
+/// Startup, in the order the three things have to happen:
 ///
 /// 1. **Logging first**, so everything below is visible.
 /// 2. **`RLIMIT_NOFILE` raised before anything opens a descriptor.** Best-effort; a failure logs and
@@ -54,11 +54,11 @@ fn main() -> Result<()> {
 
     env_logger::init();
 
-    // #451/#447: a stock container gives us soft 1024 against a hard limit of 524288, and the
+    // A stock container gives us soft 1024 against a hard limit of 524288, and the
     // gateway dies at ~200 sessions with EMFILE while 512x of headroom sits unclaimed.
     fd_limit::raise_nofile_soft_to_hard();
 
-    // #451: THE ceiling on concurrent players — every world session parks one blocking thread for
+    // THE ceiling on concurrent players — every world session parks one blocking thread for
     // its whole life, and the logon tier draws handshakes from the same pool. Logged because a full
     // pool does not refuse, it queues: the symptom is silence, not an error.
     let max_blocking_threads = config::max_blocking_threads();
@@ -102,19 +102,19 @@ async fn run() -> Result<()> {
     // establish_session / provision_account. Stateless gateways share K through the DB.
     let coordinator = stdb::Coordinator::connect(&cfg).await?;
 
-    // Bot-initiated (serendipity) invites (issue #54): a playerbot's goal tick has no client and no
+    // Bot-initiated (serendipity) invites: a playerbot's goal tick has no client and no
     // player connection to ride, so it is picked up here — on the coordinator, independent of any
     // session — rather than from a per-player relay.
     coordinator.spawn_bot_invite_relay();
 
-    // #269: reclaim the per-account SpacetimeDB connections opened by logons that never went on to
+    // Reclaim the per-account SpacetimeDB connections opened by logons that never went on to
     // a world session (an abandoned login, a client that reaches the realm list and quits). The
-    // world tier releases its own at socket teardown (#449), but a logon close only PARKS the
+    // world tier releases its own at socket teardown, but a logon close only PARKS the
     // connection — so without this sweep the logon half of the leak is never reclaimed at all, and
     // each leaked connection costs a websocket fd + an SDK pump thread for the process lifetime.
     coordinator.spawn_account_session_reaper();
 
-    // #468 stage 4b: keep this gateway's lease alive while the shared-calls path is on. The
+    // Keep this gateway's lease alive while the shared-call path (`LYRACORE_SHARED_CALLS`) is on. The
     // module's lease reaper despawns every session bound to a lease that stops heartbeating, so
     // the heartbeat is what bounds ghost lifetime after a gateway crash — and its ABSENCE while
     // sessions are bound is what would despawn a healthy gateway's players, which is why it spawns
@@ -128,7 +128,7 @@ async fn run() -> Result<()> {
     let logon = tokio::spawn(logon::run(cfg.clone(), coordinator.clone()));
     let world = tokio::spawn(world::run(cfg.clone(), coordinator.clone()));
 
-    // Heap profiling (292, feature-gated): a `dhat::Profiler` writes its report on DROP,
+    // Heap profiling (feature-gated): a `dhat::Profiler` writes its report on DROP,
     // and a signal-killed process never drops anything. So under this feature the gateway runs for
     // `LYRACORE_PROFILE_SECS` and then RETURNS from main, letting the profiler write dhat-heap.json.
     #[cfg(feature = "dhat-heap")]
@@ -196,14 +196,14 @@ async fn provision(cfg: &GatewayConfig, username: &str, password: &[u8]) -> Resu
     Ok(())
 }
 
-/// Issue #54 wiring tripwires: five behavioural tests (`gateway/src/world/party_tests.rs`) already
-/// pin `world::party::run_bot_invite` — a pure function called directly, with no coordinator, no
+/// Bot-invite-relay wiring tripwires: five behavioural tests (`gateway/src/world/party_tests.rs`)
+/// already pin `world::party::run_bot_invite` — a pure function called directly, with no coordinator, no
 /// subscription, no `main` in the loop. Nothing in that suite would notice any of the SIX call sites
 /// below vanishing; a live coordinator (the only thing that WOULD notice) is out of reach for a unit
 /// test. So each site's PRESENCE — not its sense, there is no boolean guard here to invert — is pinned
 /// by a source scan, following `character_fence_tripwire`'s precedent and `test_scan::code_of`'s
 /// comment-stripping (a bare `.contains()` on an un-stripped body is exactly what a trailing-comment
-/// needle defeats — issue #64). Tests 4-5 additionally pin ORDER, not just presence — the
+/// needle defeats). Tests 4-5 additionally pin ORDER, not just presence — the
 /// find-offset ordering-tripwire style `world_store.rs`'s `routing_call_site_tests` use — because
 /// the reconnect hook only works if it runs after the connection swap it depends on.
 ///
@@ -316,7 +316,7 @@ mod bot_invite_relay_wiring_tripwire {
             body.contains("on_reconnect") && body.contains("arm_bot_invite_relay();"),
             "`spawn_bot_invite_relay` no longer installs the per-shard `on_reconnect` re-arm. The \
              relay still works until the first coordinator reconnect, then goes permanently silent \
-             with no error — the same symptom, and the same invisibility, as the bug #54 fixed. \
+             with no error — the same symptom, and the same invisibility, as the bug this relay's own fix addressed. \
              Body was:\n{body}"
         );
     }
@@ -345,8 +345,8 @@ mod bot_invite_relay_wiring_tripwire {
     }
 }
 
-/// #269: the logon tier's connection reclaim is a two-part wiring, and BOTH parts are the kind of
-/// call site that this very issue exists because nobody made. #269 was filed when `release_player_conn`
+/// The logon tier's connection reclaim is a two-part wiring, and BOTH parts are the kind of
+/// call site that goes missing silently. It was filed when `release_player_conn`
 /// turned up as `dead_code` — present, correct, and called by nothing — so the reclaim's call sites get
 /// the same tripwires the bot-invite relay's did.
 #[cfg(test)]
@@ -364,9 +364,9 @@ mod logon_conn_reclaim_wiring_tripwire {
         let body = code_of(src, "async fn run() -> Result<()> {");
         assert!(
             body.contains("coordinator.spawn_account_session_reaper();"),
-            "`main` no longer spawns the #269 reaper. Nothing else releases a parked logon \
+            "`main` no longer spawns the account-session reaper. Nothing else releases a parked logon \
              connection, so the fd/thread leak that ended the gateway with `Too many open files` \
-             (#447) is back on the logon path, with no error and no log line. Body was:\n{body}"
+             is back on the logon path, with no error and no log line. Body was:\n{body}"
         );
     }
 
@@ -386,19 +386,30 @@ mod logon_conn_reclaim_wiring_tripwire {
         assert!(
             body.contains("self.lease(world_id);"),
             "`CoordinatorStore::bound_identity` no longer leases the account session it opens, so \
-             the logon connection is never counted and the #269 reaper never sees it. Body \
+             the logon connection is never counted and the account-session reaper never sees it. Body \
              was:\n{body}"
         );
     }
 }
 
-/// #226: the untrusted-input boundaries stay free of panic constructs.
+/// The untrusted-input boundaries stay free of panic constructs.
 ///
-/// The audit that closed #226 found ZERO reachable panics on any release path a remote client or an
-/// operator env var can drive — the logon SRP6 handshake, the world framing loop, the one hand-rolled
-/// client-byte decoder and the shard-map/env parsing all propagate errors instead. That is a property
-/// worth KEEPING, not a one-time finding: a single `.unwrap()` added to any of these files turns a
-/// malformed packet from "this session closes" into "this session thread unwinds".
+/// The release-boundary hardening audit found ZERO reachable panics in the three files BOUNDARIES
+/// actually scans below: the UNAUTHENTICATED logon SRP6 handshake, the one hand-rolled client-byte decoder
+/// (`codec/addon.rs`), and the shard-map/env parsing (`config.rs`) all propagate errors instead.
+/// That is a property worth KEEPING, not a one-time finding: a single `.unwrap()` added to any of
+/// these files turns a malformed packet from "this session closes" into "this session thread
+/// unwinds", or a typo'd env var from "config falls back" into "the process aborts at startup".
+///
+/// This is narrower than the untrusted-input surface as a whole: it does NOT cover the
+/// post-authentication packet path (`world/mod.rs`, including its frame-read loop) or the
+/// DB-callback files (`stdb/subscriptions.rs`, `stdb/world_view.rs`), which also turn
+/// client- and DB-supplied bytes into values. A manual read (2026-08-10) found those files' hot paths
+/// disciplined, but their release code carries dozens of real `.unwrap()`s overall (mostly
+/// `RwLock`/`Mutex` poisoning, not remote-input parsing) — far past what BOUNDARIES' all-or-nothing
+/// per-file gate can absorb without turning this into a refactor. A clean spot in one of those
+/// files is a fact about that file today, not a property this test enforces; extending BOUNDARIES
+/// to them is future work, not a documentation fix.
 ///
 /// A source scan is the right tool for the same reason as the tripwires above — the alternative is
 /// driving thread/FD exhaustion and every malformed-frame shape against a live node — and it is a
@@ -501,7 +512,7 @@ mod boundary_panic_tripwire {
                     !code.contains(needle),
                     "`{path}` release code now contains `{needle}`. That file is {what}, so a panic \
                      there is a remote (or operator) input turning into an unwound thread instead of \
-                     a closed connection and a log line — issue #226's boundary rule. Return an error \
+                     a closed connection and a log line — this file's boundary rule. Return an error \
                      (`?` / `map_err` / `ok_or_else`), or degrade with `unwrap_or*`. If it really is \
                      an impossible invariant, it does not belong in a file on this list: move the \
                      code, or take the file off BOUNDARIES with a written reason."

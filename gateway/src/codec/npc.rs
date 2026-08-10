@@ -42,23 +42,23 @@ pub fn build_creature_query_response(c: &CreatureView) -> SMSG_CREATURE_QUERY_RE
 }
 
 // ===========================================================================================
-//  Gossip (rank 12, extended by work-item 217): the gateway answers CMSG_GOSSIP_HELLO with a greeting
+//  Gossip (rank 12): the gateway answers CMSG_GOSSIP_HELLO with a greeting
 //  window (title resolved via the CMSG_NPC_TEXT_QUERY round-trip) + either the NPC's IMPORTED menu
 //  options (`game_gossip_option`, precedence) or the flag-derived vendor/innkeeper/Farewell synthesis
-//  (fallback, byte-identical to the pre-217 behavior) — never both.
+//  (fallback, byte-identical to the pre-import behavior) — never both.
 // ===========================================================================================
 
-/// One imported gossip menu option (`game_gossip_option`, work-item 217), as the gateway reads it —
+/// One imported gossip menu option (`game_gossip_option`), as the gateway reads it —
 /// already sorted by `option_index` (the render/select order). Carries the RAW condition so the
 /// dispatcher can filter with [`option_condition_holds`] (the codec stays pure; the store call for
 /// quest status lives in `gateway::world`'s dispatch).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GossipOptionView {
-    pub row_id: u32, // game_gossip_option PK — the STABLE option identity (283)
+    pub row_id: u32, // game_gossip_option PK — the STABLE option identity
     pub icon: u32,
     pub text: String,
     pub action: u32,         // see `lyracore_shared::constants::gossip_option`
-    pub action_menu_id: u32, // submenu target — stored, never navigated (217 scope)
+    pub action_menu_id: u32, // submenu target — stored, never navigated
     pub cond_type: u32,      // see `lyracore_shared::constants::gossip_condition`
     pub cond_value1: u32,
     pub cond_value2: u32,
@@ -105,12 +105,12 @@ const GOSSIP_GREETING: &str = "Greetings, traveler. I have nothing for you at th
 /// plain gossip NPC → byte-identical to before for those.
 ///
 /// `imported` is the ALREADY-FILTERED (by the dispatcher, via [`option_condition_holds`]) option list
-/// from `game_gossip_option`, in `option_index` order — work-item 217. `Some(nonempty)` → those
+/// from `game_gossip_option`, in `option_index` order. `Some(nonempty)` → those
 /// options render VERBATIM (a trailing "Farewell." is appended so every menu still has a close
 /// option), taking full precedence over the flag-derived synthesis below. `None`/empty (nothing
 /// imported for this creature) → today's fallback: synthesize "browse goods" (vendor, stock
 /// presence) + "Make this inn your home." (innkeeper, npc_flags) + "Farewell.", BYTE-IDENTICAL to
-/// the pre-217 behavior (see `codec::tests::gossip_message_fallback_is_byte_identical_to_pre_217`).
+/// the pre-import behavior (see `codec::tests::gossip_message_fallback_is_byte_identical_to_pre_217`).
 pub fn build_gossip_message(
     npc_guid: u64,
     title_text_id: u32,
@@ -143,7 +143,7 @@ pub fn build_gossip_message(
             gossips
         }
         _ => {
-            // Fallback (pre-217, byte-identical): browse-goods (vendor), make-home (innkeeper), then
+            // Fallback (pre-import, byte-identical): browse-goods (vendor), make-home (innkeeper), then
             // Farewell. A plain gossip NPC shows only Farewell.
             let mut gossips = Vec::new();
             if is_vendor {
@@ -195,10 +195,10 @@ pub const fn gossip_option_innkeeper(is_vendor: bool) -> u32 {
     }
 }
 
-/// The full 8-slot weighted `npc_text` row (work-item 217), as the gateway reads it: each slot is
+/// The full 8-slot weighted `npc_text` row, as the gateway reads it: each slot is
 /// `(male, female, probability)`. `SMSG_NPC_TEXT_UPDATE` ships all 8 to the client, which does its OWN
 /// weighted random pick — there is no server-side RNG here (see `build_npc_text_update`). An unused
-/// slot is `("", "", 0.0)`. `stdb::npc_text_for_id` normalizes the pre-217 "legacy single-slot" case
+/// slot is `("", "", 0.0)`. `stdb::npc_text_for_id` normalizes the pre-import "legacy single-slot" case
 /// (a row imported before the multi-slot table existed) so slot 0's probability reads `1.0` rather
 /// than the raw `0.0` default — see that method's doc comment.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -209,7 +209,7 @@ pub struct NpcTextView {
 /// Build the `SMSG_NPC_TEXT_UPDATE` reply to `CMSG_NPC_TEXT_QUERY`. `Some(view)` (an imported row —
 /// `stdb::npc_text_for_id`) ships its 8 real weighted slots verbatim; `None` (no row for this
 /// `text_id`) falls back to the generic greeting string in slot 0 at probability 1.0, every other slot
-/// silent — byte-identical to the pre-217 behavior.
+/// silent — byte-identical to the pre-import behavior.
 pub fn build_npc_text_update(text_id: u32, view: Option<&NpcTextView>) -> SMSG_NPC_TEXT_UPDATE {
     let texts: [NpcTextUpdate; 8] = match view {
         Some(v) => core::array::from_fn(|i| {
@@ -253,7 +253,7 @@ pub struct VendorItemView {
     pub buy_price: u32,
     pub max_durability: u32,
     pub max_count: u32,
-    /// The stack sold per purchase (080, cmangos BuyCount): water/food ×5, ammo ×200. ≥1.
+    /// The stack sold per purchase (cmangos BuyCount): water/food ×5, ammo ×200. ≥1.
     pub buy_count: u32,
 }
 
@@ -264,7 +264,7 @@ pub struct VendorItemView {
 ///   - `count: u8` (= `items.len()`)
 ///   - per item, in `slot` order: `muid: u32` (1-based index), `item_entry: u32`,
 ///     `display_id: u32`, `max_count: u32` (0 stored → 0xFFFF_FFFF unlimited), `buy_price: u32`,
-///     `max_durability: u32`, `buy_count: u32` (080: the template's per-purchase stack).
+///     `max_durability: u32`, `buy_count: u32` (the template's per-purchase stack).
 ///
 /// An empty stock is just the guid + a zero count. Returns `(opcode, body)` for
 /// [`Outbound::Raw`](crate::world::Outbound::Raw).
@@ -288,7 +288,7 @@ pub fn build_list_inventory_raw(vendor_guid: u64, items: &[VendorItemView]) -> (
         body.extend_from_slice(&max_count.to_le_bytes()); // max stock: u32
         body.extend_from_slice(&it.buy_price.to_le_bytes()); // buy price (copper): u32
         body.extend_from_slice(&it.max_durability.to_le_bytes()); // max durability: u32
-        body.extend_from_slice(&it.buy_count.max(1).to_le_bytes()); // buy_count: u32 (080)
+        body.extend_from_slice(&it.buy_count.max(1).to_le_bytes()); // buy_count: u32
     }
     (SMSG_LIST_INVENTORY_OPCODE, body)
 }

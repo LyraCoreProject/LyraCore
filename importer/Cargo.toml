@@ -20,14 +20,14 @@ path = "src/main.rs"
 anyhow = "1"
 flate2 = "1"
 lyracore-shared.workspace = true
-wow-adt = "=0.6.4"
-wow-m2 = "=0.6.4"
+wow-adt = "=0.7.0"
+wow-m2 = "=0.7.0"
 # Stream 1 (client DBC): read DBFilesClient/*.dbc out of the operator's OWN client MPQs (wow-mpq) and
 # parse them (gtker wow_dbc, same crate family as the gateway's wow_world_messages/wow_srp). Both are
 # pure parsers shipping ZERO Blizzard data, and native-only (NEVER deps of the wasm `module`). Pin
 # wow-mpq exactly so the PatchChain API + format support can't drift under a minor bump.
-wow-mpq = "=0.6.4"
-wow-wmo = "=0.6.4"
+wow-mpq = "=0.7.0"
+wow-wmo = "=0.7.0"
 wow_dbc = { version = "0.3", features = ["vanilla"] }
 # The Spell.dbc importer matches on the typed `AuraMod` enum + reads `Attributes` flags off `SpellRow`.
 # Those types live in wow_world_base; wow_dbc 0.3 pins it to =0.2.0, so we depend on the SAME version

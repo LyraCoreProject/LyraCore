@@ -1,4 +1,4 @@
-//! FIFO admission gate for world-session establishment (#180): a login storm arrives faster than
+//! FIFO admission gate for world-session establishment: a login storm arrives faster than
 //! the writer can absorb enter-world/subscription-setup cost — measured 2026-07-30 at 500 sessions,
 //! 40 ms stagger: `subscribe` alone was 38% of the writer, 148 reducer calls timed out, and 233 of
 //! 500 players were silently dropped (`create_character`/`establish_session`/`release_transfer`/
@@ -12,7 +12,7 @@
 //! (so the header cipher already exists — every packet from here on, including the queued resends,
 //! must be encrypted) but BEFORE `AUTH_OK`. That is before the client can even reach
 //! `CMSG_CHAR_ENUM`, let alone `CMSG_PLAYER_LOGIN`'s `subscribe_player_events` — the actual
-//! expensive part #180 measured. NOT the logon tier (SRP + realm list on 3724): that authenticates
+//! expensive part measured above. NOT the logon tier (SRP + realm list on 3724): that authenticates
 //! the account, not world capacity, and stays ungated.
 //!
 //! **Config** (both env vars, both default `0` = unlimited — an unconfigured gateway, including
@@ -112,8 +112,8 @@ impl LoginQueue {
     }
 
     /// The gate every unconfigured gateway gets: `LYRACORE_MAX_SESSIONS` unset ⇒ this, and every
-    /// existing test/call site that doesn't care about #180 passes this to stay byte-identical to
-    /// pre-#180 behavior.
+    /// existing test/call site that doesn't care about the admission gate passes this to stay
+    /// byte-identical to the pre-gate behavior.
     ///
     /// Test-only: a production gateway builds its queue with [`LoginQueue::from_env`], which already
     /// yields an unlimited gate when `LYRACORE_MAX_SESSIONS` is unset.
@@ -262,7 +262,7 @@ mod tests {
     use super::*;
 
     // ===================================================================================
-    //  #223 — the seat CAP itself: the limit that keeps a login storm from taking the realm
+    //  The seat CAP itself: the limit that keeps a login storm from taking the realm
     //  down, and the release paths that keep seats from leaking.
     // ===================================================================================
 
@@ -353,8 +353,8 @@ mod tests {
         }
     }
 
-    /// A seat must never be released twice. `depart()` is called from session teardown, and #180's
-    /// own comment notes the care taken that it runs exactly once per admitted session — but
+    /// A seat must never be released twice. `depart()` is called from session teardown, and this
+    /// module's own comment notes the care taken that it runs exactly once per admitted session — but
     /// `active` is a `usize`, so a double release would underflow to `usize::MAX` and the cap would
     /// be permanently, silently unenforceable. The `saturating_sub` is what prevents that; this
     /// pins it.

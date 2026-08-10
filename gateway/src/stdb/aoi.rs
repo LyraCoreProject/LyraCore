@@ -1,11 +1,12 @@
-//! What is left of the Area-of-Interest tier after #468 stage 1: the per-viewer state that outlived
-//! the per-player subscription, and the frozen SQL oracle its replacement is tested against.
+//! What is left of the Area-of-Interest tier after the shared-connection model landed: the
+//! per-viewer state that outlived the per-player subscription, and the frozen SQL oracle its
+//! replacement is tested against.
 //!
 //! # What used to be here
 //!
-//! Until #468 this file owned a per-player, grid-SCOPED subscription over four tables that
-//! recentered (unsubscribe + resubscribe) as the player crossed cells. All of it existed to push
-//! AOI filtering into the database.
+//! Before the shared-connection model, this file owned a per-player, grid-SCOPED subscription
+//! over four tables that recentered (unsubscribe + resubscribe) as the player crossed cells. All
+//! of it existed to push AOI filtering into the database.
 //!
 //! It measured badly. At 600 players it produced ~600 distinct subscription query strings that
 //! could neither be shared nor pruned, and every committed transaction woke ~600 SDK pumps —
@@ -19,20 +20,21 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-/// #184: count every AOI recenter (a viewer crossing a cell) across every session, cheaply — one
+/// Count every AOI recenter (a viewer crossing a cell) across every session, cheaply — one
 /// `fetch_add` on the movement hot path, read back by the periodic log line in `world/mod.rs`. A
 /// COUNT, not a rate; the log line takes the delta.
 ///
-/// Post-#468 a recenter is a 10-cell set diff in memory instead of a subscription round trip, so the
-/// number is no longer a proxy for database load — it is still the right proxy for how much
+/// Under the shared-connection model a recenter is a 10-cell set diff in memory instead of a
+/// subscription round trip, so the number is no longer a proxy for database load — it is still
+/// the right proxy for how much
 /// CREATE/DESTROY churn the movement path is generating.
 pub(crate) static AOI_RECENTERS: AtomicU64 = AtomicU64::new(0);
 
 /// Viewer-owned state that a relay running on a SHARED connection cannot look up.
 ///
-/// The ghost flag was already a mirror before #468 (a relay could not read the viewer's own row,
-/// which lives only on its home shard). It stayed a mirror afterwards for the same reason with a
-/// different cause: a coordinator callback holds the cache of the shard that owns the ROW, which for
+/// The ghost flag was already a mirror before the shared-connection model (a relay could not read
+/// the viewer's own row, which lives only on its home shard). It stayed a mirror afterwards for
+/// the same reason with a different cause: a coordinator callback holds the cache of the shard that owns the ROW, which for
 /// a cross-shard peer is not the shard that owns the VIEWER. A plain atomic, written on paths that
 /// already run per session — never a cross-shard read per row.
 #[derive(Default)]
@@ -40,8 +42,8 @@ pub(crate) struct ViewerGates {
     /// The viewer's own GHOST player-flag, for the spirit-healer visibility gate. Seeded at world
     /// entry from the character's own row and edge-detected thereafter by the self-row update relay.
     ///
-    /// The seeding is not optional: before #468 the gate re-read the live row on every offer, so a
-    /// player who logged in ALREADY dead saw the spirit healer without any transition ever firing.
+    /// The seeding is not optional: before the shared-connection model the gate re-read the live
+    /// row on every offer, so a player who logged in ALREADY dead saw the spirit healer without any transition ever firing.
     pub(crate) is_ghost: AtomicBool,
 }
 
@@ -51,7 +53,7 @@ impl ViewerGates {
     }
 }
 
-/// The FROZEN subscription-SQL oracle (#468).
+/// The FROZEN subscription-SQL oracle, from before the shared-connection model.
 ///
 /// These builders are byte-for-byte the ones that generated the per-player AOI box subscription this
 /// file used to send. They are compiled only under `cfg(test)` and nothing in the gateway calls them
@@ -88,7 +90,7 @@ mod frozen_sql_oracle {
         )
     }
 
-    /// ONE point-probe query per (table, cell) — the shape #456 landed. Kept alongside the range
+    /// ONE point-probe query per (table, cell) — the shape the missing-AOI-index fix landed. Kept alongside the range
     /// form because a future change has to satisfy BOTH or it has narrowed visibility on one of
     /// them.
     fn cell_queries(map_id: u32, instance_id: u64, cells: impl Iterator<Item = i64>) -> Vec<String> {

@@ -1,4 +1,4 @@
-//! Realm-wide party state (issue #22, GROUP slice) — the routing tests.
+//! Realm-wide party state — the routing tests.
 //!
 //! What EXECUTES here is production `world::party`, against the same in-memory multi-database
 //! topology the cross-database transfer tests use. What the fakes stand in for is named at each
@@ -19,7 +19,7 @@ pub(super) const DORMANT: u64 = 4; // has a character row on `world`, but is off
 /// ENTITY ("a session-less playerbot's live entity counts"); the session flag would refuse it.
 pub(super) const BOT: u64 = 5;
 /// A second PLAYERBOT, resident on the OTHER shard (`instances`) — the same session-less shape as
-/// [`BOT`], on the far side of the boundary. #51: the invite is authoritative on realm-core, so a bot
+/// [`BOT`], on the far side of the boundary. The invite is authoritative on realm-core, so a bot
 /// standing on a different database than the inviting player is reachable in principle; this pins it.
 const FAR_BOT: u64 = 6;
 
@@ -34,13 +34,13 @@ pub(super) fn character(guid: u64, name: &str) -> codec::CharacterView {
     }
 }
 
-/// A live #22 topology: realm-core (the party authority) plus the two world shards Phase A runs,
+/// A live party topology: realm-core (the party authority) plus the two world shards Phase A runs,
 /// wired the way the production gateway wires them — every shard's `realm_store()` is the realm
 /// handle, and `world_stores()` is every connected world shard (including the asking one, exactly
 /// as `Coordinator::all_shards` answers).
 ///
-/// Ginger is resident on `world`, Vim on `instances` — the SPLIT that #19 AC#4 could not represent
-/// and that made a cross-boundary invite fail live (2026-07-25).
+/// Ginger is resident on `world`, Vim on `instances` — the SPLIT that the Phase A tracer could not
+/// represent and that made a cross-boundary invite fail live (2026-07-25).
 pub(super) fn party_topology_with(
     mirror_error: Option<&str>,
     accept_error: Option<&str>,
@@ -101,7 +101,7 @@ pub(super) fn party_topology() -> (
 }
 
 /// Form the split party the live run could not: Ginger (open world) invites Vim (inside Deadmines),
-/// Vim accepts. `pub(super)` (issue #50's `loot_tests` reuses it — a disband-capable op needs a real
+/// Vim accepts. `pub(super)` (`loot_tests` reuses it — a disband-capable op needs a real
 /// party to disband).
 pub(super) fn form_split_party(world: &InMemoryStore, instances: &InMemoryStore) {
     party::run(world, 7, GINGER, party::Op::Invite(VIM)).expect("the invite crosses");
@@ -116,13 +116,13 @@ pub(super) fn form_split_party(world: &InMemoryStore, instances: &InMemoryStore)
 #[test]
 fn an_invite_resolves_a_target_standing_on_another_shard() {
     let (_realm, world, instances, _calls) = party_topology();
-    // The pre-#22 read, run against the shard the inviter is on: Vim is simply not there.
+    // The pre-realm-core read, run against the shard the inviter is on: Vim is simply not there.
     assert_eq!(
         world.character_guid_by_name("Vim").unwrap(),
         None,
         "the fixture must reproduce the live shape — Vim's row lives on the instances shard"
     );
-    // The #22 read, from the same handle: the union finds them.
+    // The realm-core read, from the same handle: the union finds them.
     assert_eq!(
         party::resolve_by_name(world.as_ref(), "Vim").unwrap(),
         Some(VIM)
@@ -167,7 +167,7 @@ fn a_cross_shard_invite_and_accept_form_one_party_on_realm_core() {
     assert!(
         !ops.iter().any(|(_, call)| call == "group_invite" || call == "group_accept"),
         "a multi-database gateway must not run the party op on a world shard's own tables — that is \
-         exactly the shard-local behaviour #22 removes. Calls were {ops:?}"
+         exactly the shard-local behaviour realm-wide party routing removes. Calls were {ops:?}"
     );
 }
 
@@ -236,7 +236,7 @@ fn every_world_shard_mirrors_the_authoritative_roster_after_a_party_op() {
 
 /// The mirror is a WRITE-THROUGH cache, so a party that DISBANDS has to be forgotten everywhere —
 /// otherwise each shard keeps a party whose members left, and their local reads keep splitting XP
-/// with a group that no longer exists. (This is also the live artifact #22 was filed with: an
+/// with a group that no longer exists. (This is also the live artifact that motivated this slice: an
 /// orphaned `game_group` row, leader Ginger, zero members, left on the instances shard.)
 #[test]
 fn a_disbanded_party_is_tombstoned_on_every_world_shard() {
@@ -294,8 +294,8 @@ fn leaving_a_party_re_pushes_the_roster_of_the_group_the_leaver_left() {
 
 /// **The invariant this batch has broken five times: unset config changes NOTHING.**
 ///
-/// A single-database gateway has no realm-core to route to, so every op takes the pre-#22 path —
-/// the player's own connection, the player-facing reducer, that database's own tables — and neither
+/// A single-database gateway has no realm-core to route to, so every op takes the pre-realm-core
+/// path — the player's own connection, the player-facing reducer, that database's own tables — and neither
 /// the realm plane nor the mirror is touched at all.
 #[test]
 fn an_unsharded_gateway_runs_every_party_op_on_the_players_own_shard() {
@@ -339,7 +339,8 @@ fn an_unsharded_gateway_runs_every_party_op_on_the_players_own_shard() {
             "group_uninvite",
             "group_loot_method",
         ],
-        "an unsharded gateway must call exactly the six player-facing reducers it called before #22, \
+        "an unsharded gateway must call exactly the six player-facing reducers it called before \
+         realm-core, \
          in the order the client asked for them"
     );
     assert!(
@@ -359,8 +360,9 @@ fn an_unsharded_gateway_runs_every_party_op_on_the_players_own_shard() {
     assert_eq!(*store.group_loot_methods.lock().unwrap(), vec![(2, VIM, 3)]);
 }
 
-/// World ENTRY is what carries a party across the boundary now that #19's blob mirror is gone: the
-/// arriving shard gets realm-core's roster pushed onto it, and the player gets their frame back.
+/// World ENTRY is what carries a party across the boundary now that the character-transfer blob's
+/// party mirror is gone: the arriving shard gets realm-core's roster pushed onto it, and the player
+/// gets their frame back.
 #[test]
 fn world_entry_pushes_the_authoritative_roster_onto_the_shard_the_player_arrives_on() {
     let (realm, world, instances, _calls) = party_topology();
@@ -500,8 +502,8 @@ fn an_invite_to_a_missing_or_offline_target_never_reaches_realm_core() {
 ///
 /// Gating on the session flag therefore refuses `/invite <bot>` on a MULTI-DATABASE gateway while
 /// the single-database plane still accepts it — the moved gate answering differently than the module
-/// did, which is a behaviour change wearing a refactor's clothes. The bot party runs (#276) are
-/// driven by exactly this opcode.
+/// did, which is a behaviour change wearing a refactor's clothes. The playerbot real-player-simulation
+/// runs are driven by exactly this opcode.
 #[test]
 fn a_playerbot_is_invitable_because_the_online_gate_reads_the_entity_not_the_session_flag() {
     let (realm, world, _instances, _calls) = party_topology();
@@ -524,15 +526,15 @@ fn a_playerbot_is_invitable_because_the_online_gate_reads_the_entity_not_the_ses
 }
 
 // ===========================================================================================
-//  Issue #51: somebody has to ANSWER a bot's invite
+//  Somebody has to ANSWER a bot's invite
 // ===========================================================================================
 
 /// **AC: a bot accepts a pending group invite from a player.**
 ///
 /// The invite landed correctly and nothing ever answered it (observed live 2026-07-26). On a
 /// single-database gateway the module answers in-transaction — `invite_core` fires `on_group_invite`
-/// and `brain.rs`'s `playerbots_auto_accept` accepts through it — but #22 moved the invite onto
-/// realm-core, where `pkg_playerbots_bot` is empty, so the hook is a no-op there and the dialog hung
+/// and `brain.rs`'s `playerbots_auto_accept` accepts through it — but moving the invite onto
+/// realm-core, where `pkg_playerbots_bot` is empty, makes the hook a no-op there, and the dialog hung
 /// until the 2-minute GC. A human therefore could not group with a bot at all, which is the single
 /// most useful manual test the bots exist to support.
 ///
@@ -598,7 +600,7 @@ fn only_a_live_entity_without_a_session_reads_as_a_playerbot() {
 
 /// **A REAL PLAYER, ANSWERED FOR — the impersonation this predicate has to refuse.**
 ///
-/// Found by the adversarial review of PR #53 and reproduced here before it was fixed. The two halves
+/// Found by adversarial review and reproduced here before it was fixed. The two halves
 /// of the predicate used to read DIFFERENT databases: the entity check UNIONED every shard, while the
 /// session flag came from [`presence`], which is first-hit-wins over `game_character`. So a guid with
 /// a stale row on the ASKING shard and its live, logged-in self on another one had its session flag
@@ -661,10 +663,10 @@ fn a_stale_character_row_on_another_shard_cannot_make_a_logged_in_player_look_se
 
 /// **AC: the bot's membership reaches the shard it stands on.**
 ///
-/// The bot's own in-world behaviour — follow-the-leader (#276 slice 2), the kill-XP split, `/p` — all
-/// read the SHARD's mirror, not realm-core. The answer therefore has to happen before the mirror push
-/// of the op that caused it, or the bot is a member the shard does not know about until the party's
-/// next op (and a bot party has no next op — the human does everything).
+/// The bot's own in-world behaviour — follow-the-leader (the playerbot simulation's slice 2), the
+/// kill-XP split, `/p` — all read the SHARD's mirror, not realm-core. The answer therefore has to
+/// happen before the mirror push of the op that caused it, or the bot is a member the shard does not
+/// know about until the party's next op (and a bot party has no next op — the human does everything).
 #[test]
 fn the_bots_new_membership_is_mirrored_onto_its_own_shard_by_the_same_op() {
     let (realm, world, instances, _calls) = party_topology();
@@ -870,7 +872,8 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     });
     *session_shard.peers.lock().unwrap() = vec![session_shard.clone()];
     // Ginger is ALREADY in a party on realm-core when they log in — a party formed while they were
-    // on the loading screen, which is exactly what the deleted #19 blob mirror could never carry.
+    // on the loading screen, which is exactly what the deleted character-transfer blob mirror could
+    // never carry.
     {
         let mut p = realm.party.lock().unwrap();
         p.next_group_id = 5;
@@ -898,7 +901,7 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
 
-    // The login sequence is 10 packets; #22 appends the party frame as an 11th.
+    // The login sequence is 10 packets; the realm-wide party slice appends the party frame as an 11th.
     let mut roster_named: Option<String> = None;
     for _ in 0..11 {
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec) {
@@ -987,7 +990,7 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     assert!(
         !log.iter().any(|(_, call)| call == "group_invite"),
         "the invite ran against the session shard's own party tables — the shard-local behaviour \
-         #22 removes. Calls were {log:?}"
+         realm-wide party routing removes. Calls were {log:?}"
     );
     // …AS the character this socket authenticated into the world with. `realm_group_op` takes the
     // actor's guid as an ARGUMENT (realm-core has no live entity to derive it from), so the guid the
@@ -1045,7 +1048,7 @@ fn a_shard_that_refuses_the_mirror_does_not_fail_the_party_op() {
 }
 
 // ===========================================================================================
-//  Issue #54: bot-initiated (serendipity) invites go through the SAME authority a player's own
+//  Bot-initiated (serendipity) invites go through the SAME authority a player's own
 //  CMSG_GROUP_INVITE does, so a `sync_group_mirror` push never contradicts a bot-formed party.
 // ===========================================================================================
 
@@ -1054,7 +1057,8 @@ fn a_shard_that_refuses_the_mirror_does_not_fail_the_party_op() {
 /// `run_bot_invite` — not `invite_core` — is what a playerbot's serendipity pick now runs through.
 /// The bot has no client and no account connection, so this must reach realm-core the same guid-based
 /// way [`answer_for_session_less`] already does, and must NOT touch either shard's own `game_group`/
-/// `game_group_member` tables directly (the exact shard-local write #22 already removed once).
+/// `game_group_member` tables directly (the exact shard-local write realm-wide party routing already
+/// removed once).
 #[test]
 fn a_bot_invite_forms_a_party_on_realm_core_across_a_shard_boundary() {
     use lyracore_shared::group::realm_op;
@@ -1092,7 +1096,8 @@ fn a_bot_invite_forms_a_party_on_realm_core_across_a_shard_boundary() {
     );
     assert!(
         !log.iter().any(|(_, call)| call == "group_invite" || call == "group_accept"),
-        "a bot invite must not write either shard's own party tables directly — that is the #54 bug. \
+        "a bot invite must not write either shard's own party tables directly — that is the \
+         serendipity-invite shard-local-write bug. \
          Calls were {log:?}"
     );
     for (name, shard) in [("world", &world), ("instances", &instances)] {
@@ -1138,13 +1143,15 @@ fn a_bots_party_survives_the_next_sync_group_mirror_push_that_touches_it() {
         world.mirror.lock().unwrap().clone(),
         vec![authoritative],
         "the bot party must survive the push — realm-core has a real row for it, so the mirror must \
-         reconfirm the roster rather than tombstone it. Wiping it here is the #54 bug, reproduced"
+         reconfirm the roster rather than tombstone it. Wiping it here is the serendipity-invite \
+         shard-local-write bug, reproduced"
     );
 }
 
 /// **The counterfactual, proving the mechanism above is real.** A group that realm-core has never
-/// heard of — modelling the PRE-#54 bug, where a bot wrote this shard's `game_group`/`game_group_member`
-/// rows directly and realm-core's authority never gained a matching row — IS wiped by the next push
+/// heard of — modelling the bug's PRE-fix shape, where a bot wrote this shard's
+/// `game_group`/`game_group_member` rows directly and realm-core's authority never gained a matching
+/// row — IS wiped by the next push
 /// that touches its id. This is not a hypothetical: the world shard's own `game_group.group_id` and
 /// realm-core's run independent `#[auto_inc]` counters, so a shard-local-only id colliding with some
 /// unrelated REAL realm-core party's id was exactly how the live bug manifested — any op on that real
@@ -1161,7 +1168,7 @@ fn a_shard_local_only_group_realm_core_never_heard_of_is_wiped_by_the_next_push(
     };
     world
         .sync_group_mirror(&phantom)
-        .expect("simulate the pre-#54 shard-local-only write");
+        .expect("simulate the bug's pre-fix shard-local-only write");
     assert_eq!(
         world.mirror.lock().unwrap().clone(),
         vec![phantom],
@@ -1179,7 +1186,8 @@ fn a_shard_local_only_group_realm_core_never_heard_of_is_wiped_by_the_next_push(
 
     assert!(
         world.mirror.lock().unwrap().is_empty(),
-        "a group realm-core does not know about must read as tombstoned — this is the #54 bug's exact \
+        "a group realm-core does not know about must read as tombstoned — this is the \
+         serendipity-invite bug's exact \
          mechanism, which is why routing bot invites through realm-core (not writing shard-local rows) \
          is the fix rather than teaching the mirror to tolerate unknown groups"
     );

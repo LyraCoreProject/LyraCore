@@ -1,29 +1,56 @@
 use super::*;
 use std::os::unix::net::UnixStream;
 
-/// #22 (group slice): the realm-wide party routing tests. A child module so they can reach
+/// The realm-wide party routing tests. A child module so they can reach
 /// `InMemoryStore` and its fake realm-core topology without widening anything, kept in their own
 /// file because this one is already the largest in the tree.
 #[path = "party_tests.rs"]
 mod party_tests;
 
-/// #22 (whisper slice): the realm-wide whisper routing tests. A sibling of `party_tests` for the
+/// The realm-wide whisper routing tests. A sibling of `party_tests` for the
 /// same reason — it reaches `InMemoryStore` (and `party_tests`' live topology) without widening
 /// anything.
 #[path = "whisper_tests.rs"]
 mod whisper_tests;
 
-/// #50: the realm-wide loot-roll routing/relay tests. A sibling of `party_tests`/`whisper_tests` for
+/// The realm-wide loot-roll routing/relay tests. A sibling of `party_tests`/`whisper_tests` for
 /// the same reason — it reaches `InMemoryStore` without widening anything.
 #[path = "loot_tests.rs"]
 mod loot_tests;
 
-/// #223: the inbound FRAMING boundary — malformed, truncated, oversized and unsupported packets
+/// The inbound FRAMING boundary — malformed, truncated, oversized and unsupported packets
 /// driven as raw bytes over a real cipher. A sibling of the modules above for the same reason (it
 /// reaches `InMemoryStore` and `client_handshake`), kept separate because it is the only file here
 /// that writes headers no typed builder can produce.
 #[path = "framing_tests.rs"]
 mod framing_tests;
+
+/// The per-account connection release regressions. A sibling of the modules above for the
+/// same reason — it reaches `InMemoryStore` without widening anything.
+#[path = "connection_release_tests.rs"]
+mod connection_release_tests;
+
+/// Multi-shard routing — reducer calls and subscriptions never target a shard other than the
+/// player's home shard. A sibling of the modules above for the same reason. `ShardCallLog` is
+/// `pub(super)` here and re-exported below because this file's own pre-shard-routing tests (and
+/// `transfer_tests`) still share the one call-log type.
+#[path = "shard_routing_tests.rs"]
+mod shard_routing_tests;
+use shard_routing_tests::ShardCallLog;
+
+/// Cross-database transfer — Phase A of the elastic world-sharding design (escrowed transfers,
+/// instance/continent shards, region-level load balancing). A sibling of the
+/// modules above for the same reason; its `FakeShardDb`/`FakeChar`/`lk` fixtures stay in THIS file
+/// (see the comment above `struct FakeChar` below) because this file's own `Store` impl and two
+/// earlier regression tests construct them directly.
+#[path = "transfer_tests.rs"]
+mod transfer_tests;
+
+/// `SMSG_COMPRESSED_MOVES` corruption regressions, driven through the real `spawn_writer` +
+/// `wow_srp` cipher pair. A sibling of the modules above for the same reason.
+#[path = "wire_corruption_tests.rs"]
+mod wire_corruption_tests;
+
 use wow_world_base::shared::friend_result_vanilla_tbc::FriendResult;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::{
@@ -34,6 +61,7 @@ use wow_world_messages::vanilla::{
     Gender,
     GroupLootSetting,
     ItemQuality,
+    ItemSlot,
     Language,
     Level,
     Map,
@@ -53,8 +81,12 @@ use wow_world_messages::vanilla::{
     CMSG_ATTACKSWING,
     CMSG_AUTH_SESSION,
     CMSG_AUTOEQUIP_ITEM,
+    // Inventory + death/resurrection dispatch tests.
+    CMSG_AUTOSTORE_BAG_ITEM,
     CMSG_BUYBACK_ITEM,
     CMSG_BUY_ITEM,
+    CMSG_CANCEL_AURA,
+    CMSG_CANCEL_CAST,
     CMSG_CAST_SPELL,
     CMSG_CHAR_CREATE,
     CMSG_CHAR_DELETE,
@@ -83,11 +115,22 @@ use wow_world_messages::vanilla::{
     CMSG_QUESTGIVER_HELLO,
     CMSG_QUESTGIVER_STATUS_QUERY,
     CMSG_QUESTLOG_REMOVE_QUEST,
+    // Item guid → slot resolution (vendor sell / armorer repair).
+    CMSG_RECLAIM_CORPSE,
+    CMSG_REPAIR_ITEM,
+    CMSG_REPOP_REQUEST,
+    CMSG_RESURRECT_RESPONSE,
+    CMSG_SELL_ITEM,
+    CMSG_SET_SELECTION,
+    CMSG_SPIRIT_HEALER_ACTIVATE,
+    CMSG_SWAP_INV_ITEM,
+    CMSG_SWAP_ITEM,
     CMSG_TRAINER_BUY_SPELL,
-    // Work-item 194: item-starts-quest + party sharing.
+    CMSG_TRAINER_LIST,
+    // Item-starts-quest + party sharing.
     CMSG_USE_ITEM,
     CMSG_WHO,
-    // Work-item 224 (cross-map teleport): the client's world-port-finished ack.
+    // Cross-map teleport: the client's world-port-finished ack.
     MSG_MOVE_WORLDPORT_ACK,
 };
 use wow_world_messages::Guid;
@@ -104,7 +147,7 @@ type MoveRecord = (u32, f32, f32, f32, f32, u32);
 
 #[derive(Default)]
 struct InMemoryStore {
-    /// WORLDPORT_ACK gate (224): true = entity present -> a spurious ack is ignored;
+    /// WORLDPORT_ACK gate: true = entity present -> a spurious ack is ignored;
     /// false (derive-Default) = absent -> a genuine transfer is pending.
     entity_in_world: bool,
     username: String,
@@ -134,147 +177,149 @@ struct InMemoryStore {
     combat_until_ms: u64,
     /// Tracks whether `logout` was called (entity removal path taken).
     logout_called: std::sync::atomic::AtomicBool,
-    /// Recorded `delete_character` calls: (account_id, character_guid). [081]
+    /// Recorded `delete_character` calls: (account_id, character_guid).
     deleted: std::sync::Mutex<Vec<(u64, u64)>>,
     /// When set, `delete_character` returns this outcome instead of `Success`.
     delete_outcome: Option<codec::CharDeleteOutcome>,
-    /// #60: characters actually produced by a `create_character` call during the test, unioned
+    /// Characters actually produced by a `create_character` call during the test, unioned
     /// into `characters()`'s answer. Without this, a CMSG_CHAR_CREATE round trip is a no-op the
     /// fake immediately forgets, so a test driving CREATE then CMSG_CHAR_ENUM/CMSG_PLAYER_LOGIN
     /// for "the character just created" would actually be exercising a hardcoded/pre-seeded guid
-    /// with no real link to the CREATE call — the tautology issue #60's review caught.
+    /// with no real link to the CREATE call — the tautology a review caught.
     created_characters: std::sync::Mutex<Vec<codec::CharacterView>>,
-    /// #60: the Nth guid `create_character` assigns, offset well above every hand-seeded fixture
+    /// The Nth guid `create_character` assigns, offset well above every hand-seeded fixture
     /// guid in this file (the highest is 100, in the transfer tests) so it can never collide.
     next_created_guid: std::sync::atomic::AtomicU64,
     /// Reputation standings `player_reputations` returns — `(reputation_index, standing)` pairs folded
-    /// into the login SMSG_INITIALIZE_FACTIONS (#13 slice 2, work-item 076).
+    /// into the login SMSG_INITIALIZE_FACTIONS (restoring persisted standings instead of the
+    /// all-neutral stub).
     reputations: Vec<(i32, i32, bool)>,
-    /// Imported action-bar rows `player_actions` returns — `(button, action, action_type)` triples
-    /// (work-item 212). Empty by default (the pre-import fallback path).
+    /// Imported action-bar rows `player_actions` returns — `(button, action, action_type)` triples.
+    /// Empty by default (the pre-import fallback path).
     player_actions: Vec<(u8, u32, u8)>,
-    /// Friend/ignore rows (work-item 130): `(owner_guid, target_guid, is_ignore)`. `add_friend`/
+    /// Friend/ignore rows: `(owner_guid, target_guid, is_ignore)`. `add_friend`/
     /// `add_ignore`/`del_friend`/`del_ignore` mutate it; `contact_lists` reads it scoped to the caller.
     contacts: std::sync::Mutex<Vec<(u64, u64, bool)>>,
     group_invites: std::sync::Mutex<Vec<u64>>,
-    /// When set, `start_attack` returns this error (drives the ATTACKSWING dead/friendly/desync split). [179]
+    /// When set, `start_attack` returns this error (drives the ATTACKSWING dead/friendly/desync split).
     start_attack_error: Option<String>,
-    /// When set, `start_ranged_attack` returns this error (Auto Shot failure → SMSG_CAST_RESULT). [179]
+    /// When set, `start_ranged_attack` returns this error (Auto Shot failure → SMSG_CAST_RESULT).
     start_ranged_attack_error: Option<String>,
-    /// When set, `cast_spell` returns this error (cast rejection → SMSG_CAST_RESULT Failure). [179]
+    /// When set, `cast_spell` returns this error (cast rejection → SMSG_CAST_RESULT Failure).
     cast_spell_error: Option<String>,
-    /// When set, `send_whisper` returns this error (→ SMSG_CHAT_PLAYER_NOT_FOUND). [179]
+    /// When set, `send_whisper` returns this error (→ SMSG_CHAT_PLAYER_NOT_FOUND).
     whisper_error: Option<String>,
-    /// #22 (whisper slice): recorded `send_whisper` calls — `(target_player, message)`, the TYPED
-    /// NAME as the pre-#22 path passes it (the module resolves it). The single-database plane's
+    /// Recorded `send_whisper` calls — `(target_player, message)`, the TYPED
+    /// NAME as the pre-realm-core path passes it (the module resolves it). The single-database plane's
     /// byte-identity is asserted against this.
     whispers: std::sync::Mutex<Vec<(String, String)>>,
-    /// When set, `party_chat` returns this error (work-item 199) — e.g. `group_err::NOT_IN_GROUP`
+    /// When set, `party_chat` returns this error — e.g. `group_err::NOT_IN_GROUP`
     /// to drive the "not in a group" → `SMSG_PARTY_COMMAND_RESULT(NotInGroup)` mapping.
     party_chat_error: Option<String>,
-    /// Recorded `party_chat` messages (work-item 199) — the dispatch test asserts the RIGHT text
+    /// Recorded `party_chat` messages — the dispatch test asserts the RIGHT text
     /// reached the reducer call.
     party_chats: std::sync::Mutex<Vec<String>>,
-    /// When set, `gm_command` returns this error (work-item 223) — e.g. `"permission denied"` to
+    /// When set, `gm_command` returns this error — e.g. `"permission denied"` to
     /// drive the Say-handler's `Err` → self-only `SMSG_MESSAGECHAT` System relay.
     gm_command_error: Option<String>,
-    /// Recorded `gm_command` dispatches (work-item 223) — the dot-command divert test asserts the
+    /// Recorded `gm_command` dispatches — the dot-command divert test asserts the
     /// RIGHT raw text (still carrying its leading `.`) reached the reducer call, and that a NON-dot
     /// Say never reaches this vec at all.
     gm_commands: std::sync::Mutex<Vec<String>>,
-    /// Recorded `cast_spell` dispatches: (spell_id, target_guid) — pins target threading. [179]
+    /// Recorded `cast_spell` dispatches: (spell_id, target_guid) — pins target threading.
     casts: std::sync::Mutex<Vec<(u32, u64)>>,
     // Test recorder: the tuple is the recorded CALL's argument list, so it tracks the verb it records.
     #[allow(clippy::type_complexity)]
-    /// Ground-targeted casts routed via `cast_spell_at`: (spell_id, target_guid, x, y, z). [118 phase 2]
+    /// Ground-targeted casts routed via `cast_spell_at`: (spell_id, target_guid, x, y, z).
     ground_casts: std::sync::Mutex<Vec<(u32, u64, f32, f32, f32)>>,
-    /// Recorded `start_ranged_attack` dispatches: (target_guid, spell_id) — the Auto Shot intercept. [179]
+    /// Recorded `start_ranged_attack` dispatches: (target_guid, spell_id) — the Auto Shot intercept.
     ranged_attacks: std::sync::Mutex<Vec<(u64, u32)>>,
     /// What `spell_cast_time` returns: None (default) = unknown spell (the handler treats it as
-    /// instant), Some(t) = the game_spell header's cast_time_ms. [179]
+    /// instant), Some(t) = the game_spell header's cast_time_ms.
     cast_time_ms: Option<u32>,
     queues_next_swing: bool,
     channel_joins: std::sync::Mutex<Vec<String>>,
     channel_messages: std::sync::Mutex<Vec<(String, String)>>,
-    /// Enchant/disenchant routing `enchant_route` returns (None = a normal cast). [179]
+    /// Enchant/disenchant routing `enchant_route` returns (None = a normal cast).
     enchant_route: Option<super::EnchantRoute>,
-    /// Item-guid → bag-slot fixture backing `item_slot_by_guid`. [179]
+    /// Item-guid → bag-slot fixture backing `item_slot_by_guid`.
     item_slots: Vec<(u64, u8)>,
-    /// Recorded `enchant_item_on_slot` calls: (slot, enchant_id). [179]
+    /// Recorded `enchant_item_on_slot` calls: (slot, enchant_id).
     enchanted: std::sync::Mutex<Vec<(u8, u32)>>,
-    /// Recorded `disenchant_item` slots. [179]
+    /// Recorded `disenchant_item` slots.
     disenchanted: std::sync::Mutex<Vec<u8>>,
-    /// The lootable copper `loot_target_money` reports for any target (default 0). [179]
+    /// The lootable copper `loot_target_money` reports for any target (default 0).
     corpse_money: u32,
-    /// Recorded `loot_money` targets — CMSG_LOOT_MONEY must drive the TRACKED guid. [179]
+    /// Recorded `loot_money` targets — CMSG_LOOT_MONEY must drive the TRACKED guid.
     money_looted: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `skin_corpse` targets (the empty-loot-window skinning fallback). [179]
+    /// Recorded `skin_corpse` targets (the empty-loot-window skinning fallback).
     skinned: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `buyback_item` calls: (vendor_guid, slot) — pins the 69→0 slot mapping. [179]
+    /// Recorded `buyback_item` calls: (vendor_guid, slot) — pins the 69→0 slot mapping.
     bought_back: std::sync::Mutex<Vec<(u64, u8)>>,
-    /// What `talent_grant_spell` returns (0 = passive talent → no SMSG_LEARNED_SPELL push). [179]
+    /// What `talent_grant_spell` returns (0 = passive talent → no SMSG_LEARNED_SPELL push).
     talent_grant: u32,
     /// What `talent_pane_sync` returns: (teach rank-spell, superseded prev, points remaining).
     talent_pane: (u32, u32, u32),
-    /// Spell ids `spell_is_fishing` claims (060).
+    /// Spell ids `spell_is_fishing` claims.
     fishing_spells: Vec<u32>,
-    /// Count of `fish` reducer dispatches (060).
+    /// Count of `fish` reducer dispatches.
     fish_casts: std::sync::atomic::AtomicU64,
-    /// Spell ids `spell_is_open_lock` claims (Pick Lock, 119).
+    /// Spell ids `spell_is_open_lock` claims (Pick Lock).
     open_lock_spells: Vec<u32>,
-    /// Recorded `pick_lock` reducer dispatches: the target GO guid decoded off the cast (119).
+    /// Recorded `pick_lock` reducer dispatches: the target GO guid decoded off the cast.
     pick_lock_casts: std::sync::Mutex<Vec<u64>>,
-    /// `npc_is_innkeeper` flag for the gossip bind-home routing. [179]
+    /// `npc_is_innkeeper` flag for the gossip bind-home routing.
     innkeeper: bool,
-    /// Whether `bind_home` ran (the innkeeper gossip select). [179]
+    /// Whether `bind_home` ran (the innkeeper gossip select).
     home_bound: std::sync::atomic::AtomicBool,
-    /// Recorded `send_chat` lines: (chat_type, language, message). [179]
+    /// Recorded `send_chat` lines: (chat_type, language, message).
     chats: std::sync::Mutex<Vec<(u8, u8, String)>>,
     /// When true, `release_session` reports the epoch superseded (stale socket) — the world-side
-    /// half of #42: `leave_world` must then SKIP the `logout` reducer. [179]
+    /// half of the session-epoch arbitration: `leave_world` must then SKIP the `logout` reducer.
     stale_session: bool,
-    /// #447: the REAL per-account live-socket arbitration (`crate::stdb::AccountSessions`), not a
+    /// The REAL per-account live-socket arbitration (`crate::stdb::AccountSessions`), not a
     /// re-implementation of it — a fake that reimplements the gate only ever tests the fake. The
     /// production `Coordinator` impl runs this exact type behind the exact same predicate; the only
     /// thing stubbed here is the release ACTION (recording instead of closing a websocket).
     account_sessions: crate::stdb::AccountSessions,
-    /// Accounts whose cached per-account connection was released, in order (#447). Must stay empty
+    /// Accounts whose cached per-account connection was released, in order. Must stay empty
     /// while ANY socket for the account is still live.
     released_conns: std::sync::Mutex<Vec<u64>>,
-    /// Imported gossip menu options `gossip_options` returns for ANY npc_guid (work-item 217) — empty
-    /// by default (the pre-217 fallback path).
+    /// Imported gossip menu options `gossip_options` returns for ANY npc_guid — empty
+    /// by default (the pre-import fallback path).
     gossip_opts: Vec<codec::GossipOptionView>,
     /// The caller's quest log for `quest_status`, as `(quest_id, rewarded)` pairs — a quest id present
-    /// here is "taken"; `rewarded` distinguishes active vs. turned-in. Absent = never seen (217).
+    /// here is "taken"; `rewarded` distinguishes active vs. turned-in. Absent = never seen.
     quest_log: Vec<(u32, bool)>,
     /// The `npc_text_for_id` view `npc_text_for_id` returns for ANY text_id — `None` by default (the
-    /// generic-greeting fallback), settable per-test for the 8-slot pin coverage (217).
+    /// generic-greeting fallback), settable per-test for the 8-slot pin coverage.
     npc_text_view: Option<codec::NpcTextView>,
-    /// Per-VIEWER corpse loot fixture for `corpse_loot(corpse_guid, viewer_guid)` (work-item 187 slice
-    /// 0): different viewers of the SAME corpse can now see different windows (`quest_only` rows are
-    /// per-looter) — keyed by viewer guid, standing in for whatever the real per-viewer read
+    /// Per-VIEWER corpse loot fixture for `corpse_loot(corpse_guid, viewer_guid)` — different viewers
+    /// of the SAME corpse can see different windows (`quest_only` rows are per-looter) — keyed by
+    /// viewer guid, standing in for whatever the real per-viewer read
     /// (`gateway/src/stdb/reads.rs::corpse_loot`) would return for that viewer; its own filtering
     /// decision is unit-tested directly in `reads.rs`, not reproduced here. Empty by default — every
-    /// pre-187 test that never sets this keeps seeing an empty window, byte-identical to before.
+    /// test that never sets this keeps seeing an empty window, byte-identical to before.
     corpse_loot_by_viewer: std::collections::HashMap<u64, Vec<codec::LootItemView>>,
-    /// Recorded `group_loot_method` calls: (loot_setting, master_guid, loot_threshold) — work-item 187 slice 1.
+    /// Recorded `group_loot_method` calls: (loot_setting, master_guid, loot_threshold).
     group_loot_methods: std::sync::Mutex<Vec<(u8, u64, u8)>>,
-    /// Recorded `loot_roll` calls: (corpse_guid, loot_slot, vote) — work-item 187 slices 2-3.
+    /// Recorded `loot_roll` calls: (corpse_guid, loot_slot, vote).
     loot_rolls: std::sync::Mutex<Vec<(u64, u32, u8)>>,
-    /// Recorded `loot_master_give` calls: (corpse_guid, loot_slot, target_guid) — work-item 187 slice 4.
+    /// Recorded `loot_master_give` calls: (corpse_guid, loot_slot, target_guid).
     loot_master_gives: std::sync::Mutex<Vec<(u64, u8, u64)>>,
-    /// `item_start_quest` fixture (work-item 194: item-starts-quest) — `Some((item_guid, quest_id))`
+    /// `item_start_quest` fixture (item-starts-quest) — `Some((item_guid, quest_id))`
     /// makes CMSG_USE_ITEM open the quest details screen instead of consuming the item; `None`
-    /// (default) is the pre-194 behavior (every item goes through the normal `use_item` consume path).
+    /// (default) is the pre-item-starts-quest behavior (every item goes through the normal
+    /// `use_item` consume path).
     item_start_quest_fixture: Option<(u64, u32)>,
-    /// Recorded `use_item` slots — work-item 194's non-consumption test proves this stays EMPTY when
+    /// Recorded `use_item` slots — the non-consumption test proves this stays EMPTY when
     /// `item_start_quest_fixture` intercepts the use.
     used_items: std::sync::Mutex<Vec<u8>>,
-    /// Recorded `push_quest` calls: (account_id, quest_id) — work-item 194 (sharing).
+    /// Recorded `push_quest` calls: (account_id, quest_id) — quest sharing.
     pushed_quests: std::sync::Mutex<Vec<(u64, u32)>>,
-    /// When set, `push_quest` returns this error instead of `Ok` — work-item 194.
+    /// When set, `push_quest` returns this error instead of `Ok`.
     push_quest_error: Option<String>,
-    /// Recorded `player_login` call count — work-item 224's WORLDPORT_ACK test distinguishes the
+    /// Recorded `player_login` call count — the WORLDPORT_ACK test distinguishes the
     /// initial `CMSG_PLAYER_LOGIN` call from a world-port RE-entry call, since both dispatch through
     /// this one trait method (`enter_world` is shared by both call sites).
     login_calls: std::sync::atomic::AtomicU32,
@@ -287,8 +332,8 @@ struct InMemoryStore {
     /// behind a world-port that routed fine (the stranding guard, a refused re-login on the
     /// destination shard). The client is mid-loading-screen for it either way.
     worldport_login_error: Option<String>,
-    /// Recorded `subscribe_player_events` calls: (self_guid, login_map, login_x, login_y) — work-item
-    /// 224's WORLDPORT_ACK test asserts this fires AGAIN (a fresh `created` dedup set) at the new
+    /// Recorded `subscribe_player_events` calls: (self_guid, login_map, login_x, login_y) — the
+    /// WORLDPORT_ACK test asserts this fires AGAIN (a fresh `created` dedup set) at the new
     /// map/position rather than reusing the old subscription.
     subscribed: std::sync::Mutex<Vec<(u64, u32, f32, f32)>>,
     /// The egress DEPTH counter of the live session `subscribe_player_events` was handed — so a test
@@ -297,7 +342,7 @@ struct InMemoryStore {
     /// `Arc` and NOT the `SessionTx` itself: holding a sender clone here would keep the writer's
     /// `rx.recv()` alive forever and hang every `enter_world` test's `server.join()`.
     session_depth: std::sync::Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>>,
-    /// Multi-shard routing (#17): the database this handle stands for. `""` (derive-Default) is the
+    /// Multi-shard routing: the database this handle stands for. `""` (derive-Default) is the
     /// single-shard world every other test runs in, where nothing routes.
     shard: String,
     /// The handle `home_shard()` hands back — the character's home shard. `None` (default) = "you
@@ -305,7 +350,7 @@ struct InMemoryStore {
     home: Option<std::sync::Arc<InMemoryStore>>,
     /// Home-shard reassignment: when set, every `home_shard()` resolution AFTER the first
     /// answers THIS shard instead of `home` — the mock's stand-in for a routing change landing
-    /// between two logins (a shard-map edit, or the #20 index re-homing a character). `None`
+    /// between two logins (a shard-map edit, or the realm-core index re-homing a character). `None`
     /// (default): every resolution answers `home`, byte-identical to before this field existed.
     home_after_flip: Option<std::sync::Arc<InMemoryStore>>,
     /// How many times `home_shard()` has been asked — drives `home_after_flip`, and is itself the
@@ -317,113 +362,151 @@ struct InMemoryStore {
     /// SHARED between a store and its `home` handle: `(shard, call)` for every instrumented
     /// player-scoped call, in order. The routing test asserts nothing lands on the wrong database.
     calls: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
-    /// #19: the fake DATABASE this handle talks to, for the cross-database transfer tests. `None`
+    /// The fake DATABASE this handle talks to, for the cross-database transfer tests. `None`
     /// (the default) leaves every transfer trait method at its "this store does not shard" default,
     /// so every other test in this file is untouched.
     xdb: Option<std::sync::Arc<FakeShardDb>>,
-    /// #22 (group slice): the handle `realm_store()` hands back — the database that owns party
+    /// The handle `realm_store()` hands back — the database that owns party
     /// membership realm-wide. `None` (derive-Default) is the SINGLE-DATABASE gateway, which is what
     /// every other test in this file is, and it is what routes every party op back onto the
     /// player-facing reducers below.
     realm: Option<std::sync::Arc<InMemoryStore>>,
-    /// #22: the connected WORLD shards `world_stores()` fans the roster mirror out to (and the
+    /// The connected WORLD shards `world_stores()` fans the roster mirror out to (and the
     /// cross-shard name/presence lookups walk). Empty = single database. Behind a `Mutex` only so
     /// the topology can be wired up AFTER every handle exists — production reads the shared
     /// `ShardSet`, which has the same shape and the same "includes this handle" membership.
     peers: std::sync::Mutex<Vec<std::sync::Arc<InMemoryStore>>>,
-    /// #22: the AUTHORITATIVE party state, when this handle is the realm-core one. Shared with
+    /// The AUTHORITATIVE party state, when this handle is the realm-core one. Shared with
     /// nobody — a realm handle owns exactly one of these, and every shard reads its own `mirror`.
     party: std::sync::Arc<std::sync::Mutex<FakeParty>>,
-    /// #22: true when this handle is realm-core, so `group_roster` answers from `party` (the
+    /// True when this handle is realm-core, so `group_roster` answers from `party` (the
     /// authority) instead of `mirror` (this shard's cache of it).
     is_realm: bool,
-    /// #22: what `sync_group_mirror` wrote onto THIS shard, latest per group. The invalidation
+    /// What `sync_group_mirror` wrote onto THIS shard, latest per group. The invalidation
     /// story, made observable.
     mirror: std::sync::Mutex<Vec<super::party::GroupRoster>>,
-    /// #22: guids with a LIVE entity on this shard — the per-guid `entity_in_world` answer a
+    /// Guids with a LIVE entity on this shard — the per-guid `entity_in_world` answer a
     /// realm-wide party frame's online flags are built from. Empty = the single `entity_in_world`
     /// flag above decides, as it did before.
     live_guids: Vec<u64>,
-    /// #22: seeded characters that are nevertheless OFFLINE, so the invite gate's "player not
+    /// Seeded characters that are nevertheless OFFLINE, so the invite gate's "player not
     /// online" arm can be driven. Empty = every seeded character is online, as before.
     offline_guids: Vec<u64>,
-    /// #22: when set, `sync_group_mirror` fails with this message — a world shard that cannot be
+    /// When set, `sync_group_mirror` fails with this message — a world shard that cannot be
     /// mirrored (an unreachable database), which must not fail a party op realm-core already took.
     mirror_error: Option<String>,
-    /// #22 (whisper slice): what `realm_whisper` was asked to deliver on THIS handle —
+    /// What `realm_whisper` was asked to deliver on THIS handle —
     /// `(sender_guid, target_guid, message, sender_is_ignored)`. The realm handle owns the list; a
     /// world shard's staying empty is how a test tells "the whisper went to the authority" from "it
     /// quietly went back to being shard-local".
     realm_whispers: std::sync::Mutex<Vec<(u64, u64, String, bool)>>,
-    /// #22 (whisper slice): when set, `realm_whisper` fails with this message — an unreachable
+    /// When set, `realm_whisper` fails with this message — an unreachable
     /// realm-core, which must still leave the player with the same refusal packet they always got.
     realm_whisper_error: Option<String>,
-    /// #22 (whisper slice): when set, `contact_lists` fails with this message on THIS shard — the
+    /// When set, `contact_lists` fails with this message on THIS shard — the
     /// unreachable-database arm of the realm-wide ignore-list union.
     contact_lists_error: Option<String>,
-    /// #51: when set, `realm_group_op(ACCEPT, …)` fails with this message. INJECTED because a real
+    /// When set, `realm_group_op(ACCEPT, …)` fails with this message. INJECTED because a real
     /// one cannot be staged synchronously: every accept-time refusal the module has (already grouped,
     /// party full, the inviter no longer leads) needs the party to change BETWEEN the invite and the
     /// accept, and the gateway's bot answer runs in the same call as the invite. The failure is still
     /// reachable in production — a concurrent op on another socket — and what it must not do is leave
     /// the invite dialog hanging.
     party_accept_error: Option<String>,
-    /// #19: the transfer step to fail at, simulating a gateway killed before that step's
+    /// The transfer step to fail at, simulating a gateway killed before that step's
     /// transaction committed. `None` = nothing fails.
     kill_at: Option<String>,
-    /// #19: when set, `settle_home_shard` fails with this message (a transfer that could not be
+    /// When set, `settle_home_shard` fails with this message (a transfer that could not be
     /// driven — an unreachable destination shard, a refused import).
     settle_error: Option<String>,
-    /// #39: how many `settle_home_shard` calls SUCCEED before `settle_error` starts firing. 0
-    /// (derive-Default) = the very first one fails, i.e. the login-time failure #19's test drives.
+    /// How many `settle_home_shard` calls SUCCEED before `settle_error` starts firing. 0
+    /// (derive-Default) = the very first one fails, i.e. the login-time failure the transfer
+    /// test drives.
     /// 1 = the login routes fine and the WORLD-PORT's settle is the one that cannot be driven —
     /// the case that hung a real client on its loading screen forever.
     settle_ok_calls: usize,
     /// How many times `settle_home_shard` has been asked (drives `settle_ok_calls`).
     settle_calls: std::sync::atomic::AtomicUsize,
-    /// #19: accounts `bind_shard_session` was called for, per shard.
+    /// Accounts `bind_shard_session` was called for, per shard.
     bound_sessions: std::sync::Mutex<Vec<u64>>,
-    /// #34: the REALM-CORE character→shard index this handle's `publish_shard_index` writes. In
+    /// The REALM-CORE character→shard index this handle's `publish_shard_index` writes. In
     /// production that write goes to a third database (`realm_core()`); here it is just a map, so a
     /// test can assert the drive published the destination it settled on.
     realm_index: std::sync::Mutex<Vec<(u64, u32, u64)>>,
-    /// #34: when set, `publish_shard_index` fails with this message — an unreachable realm-core.
+    /// When set, `publish_shard_index` fails with this message — an unreachable realm-core.
     publish_error: Option<String>,
-    /// #39: when set, every `movement_update` fails with this message. The case that matters is
+    /// When set, every `movement_update` fails with this message. The case that matters is
     /// `"mover not in world"` — the module's answer for a packet that arrives after
     /// `teleport_player` despawned the entity, i.e. the tail of every cross-map port.
     movement_error: Option<String>,
     // Test recorder: the tuple is `realm_loot_op`'s argument list verbatim.
     #[allow(clippy::type_complexity)]
-    /// #50: recorded `realm_loot_op` calls — `(op, corpse_guid, slot, item_entry, actor_guid, vote,
+    /// Recorded `realm_loot_op` calls — `(op, corpse_guid, slot, item_entry, actor_guid, vote,
     /// deadline_micros, recipients)` — every arg the gateway's loot-roll routing/relay passed. The
     /// realm handle owns this; a world shard's staying empty is how a test tells "the vote/promotion
     /// went to the authority" from "it stayed shard-local".
     realm_loot_ops: std::sync::Mutex<Vec<(u8, u64, u8, u32, u64, u8, i64, Vec<u64>)>>,
-    /// #50: when set, `realm_loot_op` fails with this message.
+    /// When set, `realm_loot_op` fails with this message.
     realm_loot_op_error: Option<String>,
-    /// #50: this WORLD SHARD's staging rolls `pending_local_rolls` answers — the relay's promotion
+    /// This WORLD SHARD's staging rolls `pending_local_rolls` answers — the relay's promotion
     /// INPUT. `Mutex`-wrapped (like `mirror`/`realm_whispers`) so a test can set it AFTER the fixture
     /// is wrapped in an `Arc` — every existing party/whisper topology builder hands back `Arc`s.
     /// Empty (derive-Default) = nothing to promote, byte-identical to before this field existed.
     pending_rolls: std::sync::Mutex<Vec<super::loot::PendingLootRoll>>,
-    /// #50: recorded `settle_loot_roll` calls on THIS shard — `(corpse_guid, slot, winner_guid)`.
+    /// Recorded `settle_loot_roll` calls on THIS shard — `(corpse_guid, slot, winner_guid)`.
     settled_rolls: std::sync::Mutex<Vec<(u64, u8, u64)>>,
-    /// #50: when set, `settle_loot_roll` fails with this message.
+    /// When set, `settle_loot_roll` fails with this message.
     settle_loot_roll_error: Option<String>,
-    /// #50: recorded `clear_promoted_loot_roll` calls on THIS shard — the roll ids the relay told
+    /// Recorded `clear_promoted_loot_roll` calls on THIS shard — the roll ids the relay told
     /// this shard's staging copy to forget after a successful promotion.
     cleared_rolls: std::sync::Mutex<Vec<u64>>,
-    /// #50: this REALM-CORE handle's fixture `ROLL_WON` queue — `(corpse_guid, slot, winner_guid)`
+    /// This REALM-CORE handle's fixture `ROLL_WON` queue — `(corpse_guid, slot, winner_guid)`
     /// triples, in the order they "arrived". `loot_won_since(after_id)` answers every entry whose
     /// 1-based INDEX exceeds `after_id`, and the new watermark is the queue's length — the same
     /// shape the real `game_group_event.id` high-water mark has, without needing a fake event table.
     /// `Mutex`-wrapped for the same after-`Arc`-construction reason as `pending_rolls`.
     won_events: std::sync::Mutex<Vec<(u64, u8, u64)>>,
+    /// Recorded `move_item` calls — `(from_slot, to_slot)`. Backs both CMSG_SWAP_INV_ITEM
+    /// (drag within the main inventory) and CMSG_SWAP_ITEM (cross-bag, main-bag-only in this
+    /// gateway), which both route onto this one store method.
+    moved_items: std::sync::Mutex<Vec<(u8, u8)>>,
+    /// Recorded `unequip_item` slots — the CMSG_AUTOSTORE_BAG_ITEM (right-click an equipped
+    /// item) dispatch.
+    unequipped_slots: std::sync::Mutex<Vec<u8>>,
+    /// Recorded `sell_item` calls — `(vendor_guid, slot)`, AFTER the gateway resolves the
+    /// wire's item INSTANCE guid to an inventory slot via `player_items`.
+    sold_items: std::sync::Mutex<Vec<(u64, u8)>>,
+    /// Recorded `repair_item` calls — `(npc_guid, slot)`. `slot == u8::MAX` is the
+    /// "repair all" fixture (item guid 0 on the wire).
+    repaired_items: std::sync::Mutex<Vec<(u64, u8)>>,
+    /// Trainer rows `trainer_list` returns for ANY (player, trainer) pair — the
+    /// CMSG_TRAINER_LIST fixture. Empty by default (an empty trainer window).
+    trainer_spells: Vec<codec::TrainerSpellView>,
+    /// Recorded `repop` calls — the caller's self_guid, one entry per CMSG_REPOP_REQUEST.
+    repopped: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `reclaim_corpse` calls — `(self_guid, corpse_guid)` off CMSG_RECLAIM_CORPSE.
+    reclaimed_corpses: std::sync::Mutex<Vec<(u64, u64)>>,
+    /// Recorded `resurrect_response` calls — `(self_guid, accept)`, pinning the wire's
+    /// `status != 0` → bool mapping.
+    resurrect_responses: std::sync::Mutex<Vec<(u64, bool)>>,
+    /// Recorded `spirit_healer_res` calls — `(self_guid, healer_guid)` off
+    /// CMSG_SPIRIT_HEALER_ACTIVATE.
+    spirit_healer_calls: std::sync::Mutex<Vec<(u64, u64)>>,
+    /// Recorded `set_target` target guids — CMSG_SET_SELECTION. (`rec("set_target")` already
+    /// pins the per-shard call NAME; this pins the ARGUMENT actually threaded through.)
+    selected_targets: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `cancel_aura` spell ids — CMSG_CANCEL_AURA.
+    cancelled_auras: std::sync::Mutex<Vec<u32>>,
+    /// Recorded `cancel_cast` self_guids — CMSG_CANCEL_CAST.
+    cancelled_casts: std::sync::Mutex<Vec<u64>>,
+    /// What `player_items` returns for ANY owner guid — the CMSG_SELL_ITEM/CMSG_REPAIR_ITEM
+    /// item-instance-guid → inventory-slot resolution fixture. Empty by default (no items), matching
+    /// every earlier test that never sets this.
+    player_items_fixture: Vec<codec::ItemInstanceView>,
 }
 
 impl InMemoryStore {
-    /// Record one player-scoped call against THIS handle's shard (#17).
+    /// Record one player-scoped call against THIS handle's shard.
     fn rec(&self, what: &str) {
         self.calls
             .lock()
@@ -431,7 +514,7 @@ impl InMemoryStore {
             .push((self.shard.clone(), what.to_string()));
     }
 
-    /// Record a transfer step and honour an injected kill (#19). `Err` means "the gateway died
+    /// Record a transfer step and honour an injected kill. `Err` means "the gateway died
     /// before this step's transaction committed", which is exactly a truncated drive.
     fn xstep(&self, what: &str) -> Result<&std::sync::Arc<FakeShardDb>> {
         let db = self
@@ -461,7 +544,7 @@ impl WorldStore for InMemoryStore {
         &self.shard
     }
 
-    // --- #19: the escrow protocol, with the MODULE's guards reproduced. A permissive mock would
+    // --- The escrow protocol, with the MODULE's guards reproduced. A permissive mock would
     // --- let every ordering mutation in `run_transfer` pass; these are what make the order matter.
 
     fn settle_home_shard(
@@ -639,7 +722,7 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
 
-    /// #34: the realm-core index publish. Recorded in the shared call log so its POSITION in the
+    /// The realm-core index publish. Recorded in the shared call log so its POSITION in the
     /// drive is assertable, not just its effect.
     fn publish_shard_index(
         &self,
@@ -651,9 +734,9 @@ impl WorldStore for InMemoryStore {
             return Err(anyhow!("{e}"));
         }
         // Through `xstep`, like every other step of the drive — NOT a bare `rec`. Every other
-        // transfer method routes its "gateway killed here" injection through it, and this one did
-        // not when it was added (#34), so `kill_at = "publish_shard_index"` was silently inert and
-        // the crash matrix reported a PASS for a boundary it never killed at.
+        // transfer method routes its "gateway killed here" injection through it, and this one
+        // originally did not, so `kill_at = "publish_shard_index"` was silently inert and the
+        // crash matrix reported a PASS for a boundary it never killed at.
         self.xstep("publish_shard_index")?;
         self.realm_index
             .lock()
@@ -706,10 +789,10 @@ impl WorldStore for InMemoryStore {
         _appearance: codec::Appearance,
     ) -> Result<codec::CharCreateOutcome> {
         // Fake: a name already among the seeded OR previously created characters is "in use",
-        // else success — and a success actually RECORDS the character (#60), assigning it a real
-        // guid `characters()` then unions in. Before #60's review this call was a pure no-op the
-        // fake immediately forgot, which let a test claim to drive "the character CREATE just
-        // produced" while actually logging into an unrelated hardcoded/pre-seeded guid.
+        // else success — and a success actually RECORDS the character, assigning it a real
+        // guid `characters()` then unions in. Before a review caught it, this call was a pure
+        // no-op the fake immediately forgot, which let a test claim to drive "the character
+        // CREATE just produced" while actually logging into an unrelated hardcoded/pre-seeded guid.
         if self.characters.iter().any(|c| c.name == name)
             || self
                 .created_characters
@@ -835,7 +918,7 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
     fn player_items(&self, _owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
-        Ok(Vec::new())
+        Ok(self.player_items_fixture.clone())
     }
     fn player_skills(&self, _character_guid: u64) -> Result<Vec<(u32, u16, u16)>> {
         Ok(Vec::new())
@@ -877,13 +960,14 @@ impl WorldStore for InMemoryStore {
         &self,
         _account_id: u64,
         _self_guid: u64,
-        _vendor_guid: u64,
-        _slot: u8,
+        vendor_guid: u64,
+        slot: u8,
     ) -> Result<()> {
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
         }
+        self.sold_items.lock().unwrap().push((vendor_guid, slot));
+        Ok(())
     }
     fn buyback_item(&self, _account_id: u64, _self_guid: u64, vendor_guid: u64, slot: u8) -> Result<()> {
         if let Some(e) = &self.trade_error {
@@ -892,18 +976,19 @@ impl WorldStore for InMemoryStore {
         self.bought_back.lock().unwrap().push((vendor_guid, slot));
         Ok(())
     }
-    fn repair_item(&self, _account_id: u64, _self_guid: u64, _npc_guid: u64, _slot: u8) -> Result<()> {
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
+    fn repair_item(&self, _account_id: u64, _self_guid: u64, npc_guid: u64, slot: u8) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
         }
+        self.repaired_items.lock().unwrap().push((npc_guid, slot));
+        Ok(())
     }
     fn trainer_list(
         &self,
         _player_guid: u64,
         _trainer_guid: u64,
     ) -> Result<Vec<codec::TrainerSpellView>> {
-        Ok(Vec::new())
+        Ok(self.trainer_spells.clone())
     }
     fn buy_trainer_spell(
         &self,
@@ -1003,11 +1088,12 @@ impl WorldStore for InMemoryStore {
             None => Ok(()),
         }
     }
-    fn unequip_item(&self, _account_id: u64, _self_guid: u64, _from_slot: u8) -> Result<()> {
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
+    fn unequip_item(&self, _account_id: u64, _self_guid: u64, from_slot: u8) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
         }
+        self.unequipped_slots.lock().unwrap().push(from_slot);
+        Ok(())
     }
     fn use_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
         self.used_items.lock().unwrap().push(slot);
@@ -1052,11 +1138,12 @@ impl WorldStore for InMemoryStore {
             None => (false, false),
         }
     }
-    fn move_item(&self, _account_id: u64, _self_guid: u64, _from_slot: u8, _to_slot: u8) -> Result<()> {
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
+    fn move_item(&self, _account_id: u64, _self_guid: u64, from_slot: u8, to_slot: u8) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
         }
+        self.moved_items.lock().unwrap().push((from_slot, to_slot));
+        Ok(())
     }
     fn quest_giver_evals(
         &self,
@@ -1124,9 +1211,9 @@ impl WorldStore for InMemoryStore {
         spell_id // mock: self-contained ranks (no wrapper table in the mock store)
     }
     fn entity_in_world(&self, guid: u64) -> bool {
-        // #22: `live_guids` is the per-guid answer the realm-wide party frame needs ("is this member
-        // live on THIS shard"). Empty by default, so the single flag above is still the answer every
-        // pre-#22 test set.
+        // `live_guids` is the per-guid answer the realm-wide party frame needs ("is this member
+        // live on THIS shard"). Empty by default, so the single flag above is still the answer
+        // every test written before realm-wide party routing set.
         self.entity_in_world || self.live_guids.contains(&guid)
     }
     fn abandon_quest(&self, account_id: u64, _self_guid: u64, quest_id: u32) -> Result<()> {
@@ -1136,8 +1223,9 @@ impl WorldStore for InMemoryStore {
         self.abandoned.lock().unwrap().push((account_id, quest_id));
         Ok(())
     }
-    fn set_target(&self, _account_id: u64, _self_guid: u64, _target_guid: u64) -> Result<()> {
+    fn set_target(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
         self.rec("set_target");
+        self.selected_targets.lock().unwrap().push(target_guid);
         Ok(())
     }
     fn inspect(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
@@ -1206,10 +1294,12 @@ impl WorldStore for InMemoryStore {
             .push((spell_id, target_guid, x, y, z));
         Ok(())
     }
-    fn cancel_aura(&self, _account_id: u64, _self_guid: u64, _spell_id: u32) -> Result<()> {
+    fn cancel_aura(&self, _account_id: u64, _self_guid: u64, spell_id: u32) -> Result<()> {
+        self.cancelled_auras.lock().unwrap().push(spell_id);
         Ok(())
     }
-    fn cancel_cast(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+    fn cancel_cast(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.cancelled_casts.lock().unwrap().push(self_guid);
         Ok(())
     }
     fn spell_cast_time(&self, _spell_id: u32) -> Option<u32> {
@@ -1258,7 +1348,7 @@ impl WorldStore for InMemoryStore {
         language: u8,
         message: String,
     ) -> Result<()> {
-        // #22: recorded per SHARD like every other player-scoped call, so the partition rule (say/
+        // Recorded per SHARD like every other player-scoped call, so the partition rule (say/
         // yell stay shard-local and range-scoped) is assertable rather than merely stated.
         self.rec("send_chat");
         self.chats
@@ -1282,7 +1372,7 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
     fn send_whisper(&self, _account_id: u64, _self_guid: u64, target_player: String, message: String) -> Result<()> {
-        // #22 (whisper slice): recorded per SHARD, so a test can tell the pre-#22 path (the
+        // Recorded per SHARD, so a test can tell the pre-realm-core path (the
         // player-facing reducer on the player's own database, with the TYPED NAME still unresolved)
         // from the realm-core one (`realm_whispers`, by guid).
         self.rec("send_whisper");
@@ -1326,7 +1416,8 @@ impl WorldStore for InMemoryStore {
     ) -> Result<()> {
         Ok(())
     }
-    fn repop(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+    fn repop(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.repopped.lock().unwrap().push(self_guid);
         Ok(())
     }
     fn claim_session(&self, _account_id: u64) -> u64 {
@@ -1334,7 +1425,7 @@ impl WorldStore for InMemoryStore {
     }
     fn release_session(&self, _account_id: u64, _epoch: u64) -> bool {
         // Default (false) = this session still owns the entity; `stale_session` simulates a newer
-        // login having superseded it (the #42 arbitration), so teardown must skip `logout`.
+        // login having superseded it (the session-epoch arbitration), so teardown must skip `logout`.
         !self.stale_session
     }
     fn open_account_session(&self, account_id: u64) {
@@ -1347,18 +1438,30 @@ impl WorldStore for InMemoryStore {
             self.released_conns.lock().unwrap().push(account_id);
         }
     }
-    fn reclaim_corpse(&self, _account_id: u64, _self_guid: u64, _corpse_guid: u64) -> Result<()> {
+    fn reclaim_corpse(&self, _account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()> {
+        self.reclaimed_corpses
+            .lock()
+            .unwrap()
+            .push((self_guid, corpse_guid));
         Ok(())
     }
-    fn resurrect_response(&self, _account_id: u64, _self_guid: u64, _accept: bool) -> Result<()> {
+    fn resurrect_response(&self, _account_id: u64, self_guid: u64, accept: bool) -> Result<()> {
+        self.resurrect_responses
+            .lock()
+            .unwrap()
+            .push((self_guid, accept));
         Ok(())
     }
     fn spirit_healer_res(
         &self,
         _account_id: u64,
-        _self_guid: u64,
-        _healer_guid: u64,
+        self_guid: u64,
+        healer_guid: u64,
     ) -> Result<()> {
+        self.spirit_healer_calls
+            .lock()
+            .unwrap()
+            .push((self_guid, healer_guid));
         Ok(())
     }
     fn corpse_location(&self, _owner_guid: u64) -> Result<Option<(u32, f32, f32, f32)>> {
@@ -1425,7 +1528,7 @@ impl WorldStore for InMemoryStore {
             .characters
             .iter()
             .find(|c| c.guid == guid)
-            // #22: `offline_guids` drives the invite gate's "player not online" arm. Empty by
+            // `offline_guids` drives the invite gate's "player not online" arm. Empty by
             // default, so a seeded character is online exactly as it always was.
             .map(|c| {
                 (
@@ -1436,10 +1539,10 @@ impl WorldStore for InMemoryStore {
                 )
             }))
     }
-    // Group (066): a minimal in-memory party — enough for the dispatch tests to drive
+    // Group: a minimal in-memory party — enough for the dispatch tests to drive
     // invite-result mapping and the GROUP_LIST build without a live module.
     //
-    // #22: each of these records the SHARD it ran on (`rec`), so a test can tell the
+    // Each of these records the SHARD it ran on (`rec`), so a test can tell the
     // single-database path (the op lands on the player's own shard, here) apart from the realm-core
     // one (it lands in `FakeParty::ops` and never reaches these at all).
     fn group_invite(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
@@ -1481,7 +1584,7 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
 
-    // --- #22 (group slice): the realm-core plane ---
+    // --- The realm-core plane (party/group routing) ---
 
     fn realm_store(&self) -> Option<std::sync::Arc<dyn WorldStore>> {
         self.realm
@@ -1690,7 +1793,7 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
 
-    // --- #50: realm-wide loot rolls ---
+    // --- Realm-wide loot rolls ---
 
     #[allow(clippy::too_many_arguments)]
     fn realm_loot_op(
@@ -1816,11 +1919,14 @@ fn ns(s: &str) -> NormalizedString {
     NormalizedString::new(s).unwrap()
 }
 
-/// Drive the client side of the world handshake against a server running `run_world_session`
-/// (or `world_handshake`): read the plaintext challenge, send `CMSG_AUTH_SESSION` with a
-/// valid proof, read the encrypted AUTH_OK. Returns the client's cipher halves for the
-/// post-handshake encrypted traffic.
-fn client_handshake<S: Read + Write>(
+/// Drive the shared prefix of every world handshake: read the plaintext `SMSG_AUTH_CHALLENGE`,
+/// derive the client-side proof + cipher pair for `key` with `wow_srp`, and send
+/// `CMSG_AUTH_SESSION`. Lower-level than [`client_handshake`] — it does not read whatever comes
+/// back, so a call site can assert on that itself (an `AuthOk`, an `AuthWaitQueue`, a plaintext
+/// rejection...). Returns the cipher pair `into_client_header_crypto` derived, split; a `key` that
+/// does not match what the server holds still produces a (mismatched, useless) pair here — the
+/// send happens regardless — so a rejection-path call site is free to bind them as `_`.
+fn drive_auth<S: Read + Write>(
     client: &mut S,
     username: &str,
     key: [u8; 40],
@@ -1833,11 +1939,25 @@ fn client_handshake<S: Read + Write>(
     let client_seed_value = client_seed.seed();
     let (client_proof, crypto) =
         client_seed.into_client_header_crypto(&ns(username), key, server_seed);
-    let (enc, mut dec) = crypto.split();
+    let (enc, dec) = crypto.split();
 
     auth_session(username, client_seed_value, client_proof)
         .write_unencrypted_client(&mut *client)
         .unwrap();
+
+    (enc, dec)
+}
+
+/// Drive the client side of the world handshake against a server running `run_world_session`
+/// (or `world_handshake`): read the plaintext challenge, send `CMSG_AUTH_SESSION` with a
+/// valid proof, read the encrypted AUTH_OK. Returns the client's cipher halves for the
+/// post-handshake encrypted traffic.
+fn client_handshake<S: Read + Write>(
+    client: &mut S,
+    username: &str,
+    key: [u8; 40],
+) -> (EncrypterHalf, DecrypterHalf) {
+    let (enc, mut dec) = drive_auth(client, username, key);
 
     match ServerOpcodeMessage::read_encrypted(&mut *client, &mut dec).unwrap() {
         ServerOpcodeMessage::SMSG_AUTH_RESPONSE(r) => {
@@ -1859,16 +1979,23 @@ fn auth_session(username: &str, client_seed: u32, client_proof: [u8; 20]) -> CMS
     }
 }
 
-#[test]
-fn handshake_succeeds_and_traffic_is_encrypted_both_ways() {
-    let store = std::sync::Arc::new(InMemoryStore {
+/// A store for a logged-in TESTER (account `account_id`), with no character/scenario state beyond
+/// the session itself — the shape every handshake/login/logout/movement test overlays with its own
+/// fields via `..`. `quest_store()` is the sibling for tests that also need a login entity.
+fn tester_store(account_id: u64) -> InMemoryStore {
+    InMemoryStore {
         username: "TESTER".into(),
         session: Some(WorldSession {
-            account_id: 42,
+            account_id,
             session_key: K,
         }),
         ..Default::default()
-    });
+    }
+}
+
+#[test]
+fn handshake_succeeds_and_traffic_is_encrypted_both_ways() {
+    let store = std::sync::Arc::new(tester_store(42));
 
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
@@ -1885,22 +2012,8 @@ fn handshake_succeeds_and_traffic_is_encrypted_both_ways() {
         }
     });
 
-    // --- client: read the plaintext server challenge, learn the server seed ---
-    let server_seed = match ServerOpcodeMessage::read_unencrypted(&mut client).unwrap() {
-        ServerOpcodeMessage::SMSG_AUTH_CHALLENGE(c) => c.server_seed,
-        other => panic!("expected SMSG_AUTH_CHALLENGE, got {other}"),
-    };
-
-    // --- client: build the proof + cipher with wow_srp's client side, send AUTH_SESSION ---
-    let client_seed = ProofSeed::new();
-    let client_seed_value = client_seed.seed();
-    let (client_proof, client_crypto) =
-        client_seed.into_client_header_crypto(&ns("TESTER"), K, server_seed);
-    let (mut c_enc, mut c_dec) = client_crypto.split();
-
-    auth_session("TESTER", client_seed_value, client_proof)
-        .write_unencrypted_client(&mut client)
-        .unwrap();
+    // --- client: drive the shared challenge→proof→AUTH_SESSION prefix (`drive_auth`) ---
+    let (mut c_enc, mut c_dec) = drive_auth(&mut client, "TESTER", K);
 
     // --- client: the AUTH_OK response is the first ENCRYPTED packet ---
     match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
@@ -1919,22 +2032,15 @@ fn handshake_succeeds_and_traffic_is_encrypted_both_ways() {
     server.join().unwrap();
 }
 
-/// #180 wiring: `world_handshake_with_queue` actually CONSULTS the [`LoginQueue`] gate rather than
-/// always admitting outright. A cap of 1 with the one seat already taken must send `AuthWaitQueue {
-/// queue_position: 1 }` as the FIRST response — not `AuthOk` — and only send `AuthOk` after the seat
-/// frees. This is the assertion that would FAIL if the gate check were ever deleted from
-/// `world_handshake_with_queue` (a behavioral mutation on the production path, not merely a
-/// structural "does this function exist" check).
+/// Login-queue wiring: `world_handshake_with_queue` actually CONSULTS the [`LoginQueue`] gate
+/// rather than always admitting outright. A cap of 1 with the one seat already taken must send
+/// `AuthWaitQueue { queue_position: 1 }` as the FIRST response — not `AuthOk` — and only send
+/// `AuthOk` after the seat frees. This is the assertion that would FAIL if the gate check were
+/// ever deleted from `world_handshake_with_queue` (a behavioral mutation on the production path,
+/// not merely a structural "does this function exist" check).
 #[test]
 fn queued_handshake_sends_wait_queue_then_admits_once_a_seat_frees() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 42,
-            session_key: K,
-        }),
-        ..Default::default()
-    });
+    let store = std::sync::Arc::new(tester_store(42));
     let queue = std::sync::Arc::new(LoginQueue::new(1, 0));
     // Occupy the only seat directly — exactly what an already-connected world session holds.
     assert_eq!(queue.request(), Admission::Admitted);
@@ -1952,21 +2058,8 @@ fn queued_handshake_sends_wait_queue_then_admits_once_a_seat_frees() {
         assert_eq!(conn.account_id, 42);
     });
 
-    // --- client: plaintext challenge, then AUTH_SESSION with a valid proof (same shape as the
-    // unqueued handshake test above) ---
-    let server_seed = match ServerOpcodeMessage::read_unencrypted(&mut client).unwrap() {
-        ServerOpcodeMessage::SMSG_AUTH_CHALLENGE(c) => c.server_seed,
-        other => panic!("expected SMSG_AUTH_CHALLENGE, got {other}"),
-    };
-    let client_seed = ProofSeed::new();
-    let client_seed_value = client_seed.seed();
-    let (client_proof, client_crypto) =
-        client_seed.into_client_header_crypto(&ns("TESTER"), K, server_seed);
-    let (_c_enc, mut c_dec) = client_crypto.split();
-
-    auth_session("TESTER", client_seed_value, client_proof)
-        .write_unencrypted_client(&mut client)
-        .unwrap();
+    // --- client: drive the shared challenge→proof→AUTH_SESSION prefix (`drive_auth`) ---
+    let (_c_enc, mut c_dec) = drive_auth(&mut client, "TESTER", K);
 
     // --- client: the FIRST encrypted response must be AuthWaitQueue at position 1, not AuthOk —
     // proving the handshake actually queued instead of bypassing the gate ---
@@ -1998,19 +2091,12 @@ fn queued_handshake_sends_wait_queue_then_admits_once_a_seat_frees() {
     server.join().unwrap();
 }
 
-/// #180: a socket that disconnects WHILE QUEUED must leave the line without ever taking a seat — the
+/// A socket that disconnects WHILE QUEUED must leave the line without ever taking a seat — the
 /// gate's own unit tests cover `LoginQueue::cancel` directly; this proves `world_handshake_with_queue`
 /// actually calls it on a clean hangup (rather than, say, leaking a phantom waiter forever).
 #[test]
 fn disconnecting_while_queued_leaves_the_line_without_taking_a_seat() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
-        ..Default::default()
-    });
+    let store = std::sync::Arc::new(tester_store(7));
     let queue = std::sync::Arc::new(LoginQueue::new(1, 0));
     assert_eq!(queue.request(), Admission::Admitted); // occupy the only seat
 
@@ -2027,19 +2113,7 @@ fn disconnecting_while_queued_leaves_the_line_without_taking_a_seat() {
         );
     });
 
-    let server_seed = match ServerOpcodeMessage::read_unencrypted(&mut client).unwrap() {
-        ServerOpcodeMessage::SMSG_AUTH_CHALLENGE(c) => c.server_seed,
-        other => panic!("expected SMSG_AUTH_CHALLENGE, got {other}"),
-    };
-    let client_seed = ProofSeed::new();
-    let client_seed_value = client_seed.seed();
-    let (client_proof, client_crypto) =
-        client_seed.into_client_header_crypto(&ns("TESTER"), K, server_seed);
-    let (_c_enc, mut c_dec) = client_crypto.split();
-
-    auth_session("TESTER", client_seed_value, client_proof)
-        .write_unencrypted_client(&mut client)
-        .unwrap();
+    let (_c_enc, mut c_dec) = drive_auth(&mut client, "TESTER", K);
 
     // Read (and discard) the first AuthWaitQueue so we know the server has actually queued us
     // before hanging up — a hangup racing the very first send would prove nothing about `cancel`.
@@ -2069,7 +2143,7 @@ fn disconnecting_while_queued_leaves_the_line_without_taking_a_seat() {
 
 #[test]
 fn a_restarted_gateway_completes_the_handshake_from_realm_state_alone() {
-    // #20 AC#2 (the stateless-gateway invariant, now realm-scoped). The session key K lives in
+    // The stateless-gateway invariant, now realm-scoped. The session key K lives in
     // `game_session` — on realm-core when it is configured, on the world DB when it is not — and
     // the gateway keeps NOTHING about it. So killing the gateway mid-session and starting a fresh
     // one must let the same account re-handshake with no re-logon, against a brand-new process
@@ -2121,10 +2195,11 @@ fn a_restarted_gateway_completes_the_handshake_from_realm_state_alone() {
 
 #[test]
 fn a_gateway_that_cannot_reach_the_session_store_rejects_rather_than_guessing() {
-    // The other half of AC#2: "resume from realm state" must not degrade into "resume from
-    // anything". A store that cannot answer (realm-core unreachable → `lookup_session` yields no
-    // session) rejects the handshake plaintext instead of establishing a session on an unverified
-    // key. `CoordinatorStore` reaches this state by way of `Coordinator::realm_core()`'s Err.
+    // The other half of the stateless-gateway invariant: "resume from realm state" must not
+    // degrade into "resume from anything". A store that cannot answer (realm-core unreachable →
+    // `lookup_session` yields no session) rejects the handshake plaintext instead of establishing
+    // a session on an unverified key. `CoordinatorStore` reaches this state by way of
+    // `Coordinator::realm_core()`'s Err.
     let store = InMemoryStore {
         username: "TESTER".into(),
         session: None,
@@ -2139,17 +2214,7 @@ fn a_gateway_that_cannot_reach_the_session_store_rejects_rather_than_guessing() 
         );
     });
 
-    let server_seed = match ServerOpcodeMessage::read_unencrypted(&mut client).unwrap() {
-        ServerOpcodeMessage::SMSG_AUTH_CHALLENGE(c) => c.server_seed,
-        other => panic!("expected SMSG_AUTH_CHALLENGE, got {other}"),
-    };
-    let client_seed = ProofSeed::new();
-    let client_seed_value = client_seed.seed();
-    let (client_proof, _crypto) =
-        client_seed.into_client_header_crypto(&ns("TESTER"), K, server_seed);
-    auth_session("TESTER", client_seed_value, client_proof)
-        .write_unencrypted_client(&mut client)
-        .unwrap();
+    let (_enc, _dec) = drive_auth(&mut client, "TESTER", K);
     match ServerOpcodeMessage::read_unencrypted(&mut client).unwrap() {
         ServerOpcodeMessage::SMSG_AUTH_RESPONSE(r) => {
             assert!(matches!(*r, SMSG_AUTH_RESPONSE::AuthUnknownAccount));
@@ -2221,19 +2286,7 @@ fn unknown_account_is_rejected_cleanly() {
         assert!(world_handshake(&mut s, &store).unwrap().is_none());
     });
 
-    let server_seed = match ServerOpcodeMessage::read_unencrypted(&mut client).unwrap() {
-        ServerOpcodeMessage::SMSG_AUTH_CHALLENGE(c) => c.server_seed,
-        other => panic!("expected SMSG_AUTH_CHALLENGE, got {other}"),
-    };
-
-    let client_seed = ProofSeed::new();
-    let client_seed_value = client_seed.seed();
-    let (client_proof, _crypto) =
-        client_seed.into_client_header_crypto(&ns("NOBODY"), K, server_seed);
-
-    auth_session("NOBODY", client_seed_value, client_proof)
-        .write_unencrypted_client(&mut client)
-        .unwrap();
+    let (_enc, _dec) = drive_auth(&mut client, "NOBODY", K);
 
     match ServerOpcodeMessage::read_unencrypted(&mut client).unwrap() {
         ServerOpcodeMessage::SMSG_AUTH_RESPONSE(r) => {
@@ -2248,7 +2301,7 @@ fn unknown_account_is_rejected_cleanly() {
 
 #[test]
 fn char_enum_returns_the_seeded_character() {
-    // The pre-seeded Human Warrior "Tester" must appear on the character-select screen (AC#3).
+    // The pre-seeded Human Warrior "Tester" must appear on the character-select screen.
     let tester = codec::CharacterView {
         guid: 1,
         name: "Tester".into(),
@@ -2265,13 +2318,8 @@ fn char_enum_returns_the_seeded_character() {
         ..Default::default()
     };
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         characters: vec![tester],
-        ..Default::default()
+        ..tester_store(7)
     });
 
     let (mut client, server_end) = UnixStream::pair().unwrap();
@@ -2316,13 +2364,8 @@ fn char_create_replies_success_then_name_in_use() {
         ..Default::default()
     };
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         characters: vec![tester],
-        ..Default::default()
+        ..tester_store(7)
     });
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
@@ -2371,7 +2414,7 @@ fn char_create_replies_success_then_name_in_use() {
 
 /// CMSG_CHAR_DELETE for an owned guid replies SMSG_CHAR_DELETE(success) and dispatches the
 /// (account_id, character_guid) to the store; a store-reported failure still replies (never
-/// session-fatal), same treatment as CMSG_CHAR_CREATE. [081]
+/// session-fatal), same treatment as CMSG_CHAR_CREATE.
 #[test]
 fn char_delete_replies_success_and_dispatches_owned_guid() {
     let tester = codec::CharacterView {
@@ -2383,13 +2426,8 @@ fn char_delete_replies_success_and_dispatches_owned_guid() {
         ..Default::default()
     };
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         characters: vec![tester],
-        ..Default::default()
+        ..tester_store(7)
     });
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
@@ -2414,17 +2452,12 @@ fn char_delete_replies_success_and_dispatches_owned_guid() {
 }
 
 /// A store-reported delete failure (e.g. NOT_OWNER/NO_SUCH_CHAR mapped module-side) still
-/// replies SMSG_CHAR_DELETE(failed) — the connection is NOT torn down. [081]
+/// replies SMSG_CHAR_DELETE(failed) — the connection is NOT torn down.
 #[test]
 fn char_delete_failure_replies_failed_and_keeps_session_alive() {
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         delete_outcome: Some(codec::CharDeleteOutcome::Failed),
-        ..Default::default()
+        ..tester_store(7)
     });
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
@@ -2518,15 +2551,10 @@ fn warrior_entity() -> codec::EntityView {
 #[test]
 fn player_login_emits_sequence_then_self_create() {
     // CMSG_PLAYER_LOGIN must yield the full login sequence (in order) followed by the
-    // self CREATE_OBJECT2 at the correct position/guid (AC#4 wire behavior).
+    // self CREATE_OBJECT2 at the correct position/guid.
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         login_entity: Some(warrior_entity()),
-        ..Default::default()
+        ..tester_store(7)
     });
 
     let (mut client, server_end) = UnixStream::pair().unwrap();
@@ -2593,24 +2621,20 @@ fn player_login_emits_sequence_then_self_create() {
 
 #[test]
 fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
-    // Work-item 224: MSG_MOVE_WORLDPORT_ACK must re-run the SAME enter_world path as
+    // MSG_MOVE_WORLDPORT_ACK must re-run the SAME enter_world path as
     // CMSG_PLAYER_LOGIN — rebuilding the entity (now on the NEW map the module's teleport_player
-    // durably wrote to the character row) and re-subscribing with a FRESH `created` dedup set (the
-    // "AOI initial-apply" precedent, work-item 145) rather than reusing the old map's subscription —
+    // durably wrote to the character row) and re-subscribing with a FRESH `created` dedup set — a
+    // reused dedup set from the old map would suppress the initial sweep of pre-existing entities
+    // through the CREATE path, leaving the new map looking empty until something moved or spawned —
     // a stale created-set is exactly what would leave entities invisible on cross-map arrival.
     let mut ported = warrior_entity();
     ported.map_id = 1; // Kalimdor — simulates teleport_player's durable cross-map write
     ported.x = 100.0;
     ported.y = 200.0;
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         login_entity: Some(warrior_entity()),
         worldport_entity: Some(ported),
-        ..Default::default()
+        ..tester_store(7)
     });
 
     let (mut client, server_end) = UnixStream::pair().unwrap();
@@ -2687,20 +2711,15 @@ fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
 
 #[test]
 fn login_initialize_factions_carries_persisted_standing_at_its_reputation_index() {
-    // Work-item 076: a persisted `game_player_reputation` row must land in the login
+    // A persisted `game_player_reputation` row must land in the login
     // SMSG_INITIALIZE_FACTIONS at its STORED reputation_index slot (0..63), never faction_id — the
     // guardrail that also gates the live SET_FACTION_STANDING relay (McBride ERROR #132).
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         login_entity: Some(warrior_entity()),
         // Stormwind's rep-index is 19 (Faction.dbc ReputationListID), NOT its faction id (72) —
         // exercising the exact index/id distinction the guardrail protects.
         reputations: vec![(19, 3175, false)],
-        ..Default::default()
+        ..tester_store(7)
     });
 
     let (mut client, server_end) = UnixStream::pair().unwrap();
@@ -2748,14 +2767,7 @@ fn inbound_movement_is_recorded_under_its_opcode() {
         MSG_MOVE_HEARTBEAT_Client, MovementInfo, MovementInfo_MovementFlags, Vector3d,
     };
 
-    let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
-        ..Default::default()
-    });
+    let store = std::sync::Arc::new(tester_store(7));
 
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
@@ -2794,7 +2806,7 @@ fn inbound_movement_is_recorded_under_its_opcode() {
     assert_eq!(t, 12345);
 }
 
-/// Issue #39 defect 2, the ACTUAL hang. `teleport_player` despawns the live entity the instant the
+/// The ACTUAL hang. `teleport_player` despawns the live entity the instant the
 /// portal's reducer commits, but the client keeps sending movement until `SMSG_TRANSFER_PENDING`
 /// reaches it — so every cross-map port has a window in which packets land on an entity that no
 /// longer exists, and the module answers "mover not in world". That answer used to propagate as a
@@ -2811,14 +2823,9 @@ fn a_movement_packet_for_a_despawned_entity_never_kills_the_session() {
     };
     let calls: ShardCallLog = Default::default();
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         calls: calls.clone(),
         movement_error: Some("mover not in world".into()),
-        ..Default::default()
+        ..tester_store(7)
     });
 
     let (mut client, server_end) = UnixStream::pair().unwrap();
@@ -2840,7 +2847,7 @@ fn a_movement_packet_for_a_despawned_entity_never_kills_the_session() {
         },
     };
     // Two packets: the second only reaches the module if the first did not end the session. It is a
-    // STATE TRANSITION (never coalesced, work-item 231 rule 1) so it forwards immediately.
+    // STATE TRANSITION (never coalesced) so it forwards immediately.
     beat(1)
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
@@ -2874,13 +2881,8 @@ fn a_movement_failure_that_is_not_a_desync_is_still_session_fatal() {
         MSG_MOVE_HEARTBEAT_Client, MovementInfo, MovementInfo_MovementFlags, Vector3d,
     };
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         movement_error: Some("timed out after 10s".into()),
-        ..Default::default()
+        ..tester_store(7)
     });
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
@@ -2909,7 +2911,7 @@ fn a_movement_failure_that_is_not_a_desync_is_still_session_fatal() {
     assert!(format!("{err:#}").contains("timed out"), "{err:#}");
 }
 
-/// The OTHER half of #39's movement gate, and the reason it is bounded rather than unconditional.
+/// The OTHER half of the movement gate above, and the reason it is bounded rather than unconditional.
 /// A desync means the player's entity is gone for good (a schema-change publish tore down the
 /// coordinator subscription, or the row was deleted out from under this socket) — `is_desync_error`
 /// exists precisely because "no further action can EVER be served on this session", and the cure is
@@ -2926,14 +2928,9 @@ fn a_movement_desync_that_never_heals_still_ends_the_session() {
         MovementInfo_MovementFlags, Vector3d,
     };
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         // The entity is gone and is NEVER coming back — not a teleport tail, a real desync.
         movement_error: Some("mover not in world".into()),
-        ..Default::default()
+        ..tester_store(7)
     });
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
@@ -2972,12 +2969,12 @@ fn a_movement_desync_that_never_heals_still_ends_the_session() {
     let err = server.join().unwrap().expect_err(
         "a movement desync that never heals must STILL end the session: tolerating the tail of a \
          cross-map port is one thing, serving a permanently desynced client a frozen world forever \
-         is the hang #39 is about, with no loading screen to blame it on",
+         is the hang a stuck cross-map transfer causes, with no loading screen to blame it on",
     );
     assert!(format!("{err:#}").contains("not in world"), "{err:#}");
 }
 
-/// Issue #39 AC#4. A transfer that cannot be driven at `MSG_MOVE_WORLDPORT_ACK` used to close the
+/// A transfer that cannot be driven at `MSG_MOVE_WORLDPORT_ACK` used to close the
 /// socket with the client mid-load — an infinite loading bar, no message, no recourse. The entry
 /// must FAIL LOUDLY instead: the client is told the transfer is off (`SMSG_TRANSFER_ABORTED`,
 /// naming the map it is loading) before the session ends.
@@ -2992,17 +2989,12 @@ fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_scree
         },
     );
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         characters: vec![],
         login_entity: Some(warrior_entity()),
         xdb: Some(xdb),
         settle_error: Some("instances shard unreachable".into()),
         settle_ok_calls: 1, // the LOGIN routes fine; the world-port's settle is the one that fails
-        ..Default::default()
+        ..tester_store(7)
     });
 
     let (mut client, server_end) = UnixStream::pair().unwrap();
@@ -3042,7 +3034,7 @@ fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_scree
     );
 }
 
-/// #39 AC#4, the half the abort above misses: ROUTING is not the only step of a world-port that can
+/// The half the abort above misses: ROUTING is not the only step of a world-port that can
 /// fail. `route_home` may succeed (the transfer runs, the character is now durably on the
 /// destination shard) and the RE-ENTRY behind it still fail — `player_login` refused by the
 /// stranding guard, a subscription that could not be registered, a login batch that would not
@@ -3061,17 +3053,12 @@ fn a_world_port_whose_world_entry_fails_also_aborts_the_clients_loading_screen()
         },
     );
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         characters: vec![],
         login_entity: Some(warrior_entity()),
         xdb: Some(xdb),
         // Routing succeeds; the world entry on the far side is what fails.
         worldport_login_error: Some("character 1 is stranded on map 36".into()),
-        ..Default::default()
+        ..tester_store(7)
     });
 
     let (mut client, server_end) = UnixStream::pair().unwrap();
@@ -3099,7 +3086,7 @@ fn a_world_port_whose_world_entry_fails_also_aborts_the_clients_loading_screen()
     }
     let m = aborted.expect(
         "a world-port whose ENTRY fails must still abort the client's loading screen — silence \
-         here is the infinite loading bar #39 exists to kill",
+         here is the infinite loading bar this abort exists to kill",
     );
     assert_eq!(
         m.map,
@@ -3114,8 +3101,8 @@ fn a_world_port_whose_world_entry_fails_also_aborts_the_clients_loading_screen()
     assert!(format!("{err:#}").contains("stranded"), "{err:#}");
 }
 
-/// Work-item 231, the HARD requirement: a peer-visibility test proving state-transition packets
-/// are NEVER delayed by the coalescer, driven through the real `dispatch` loop (not just the pure
+/// The HARD requirement for movement coalescing: a peer-visibility test proving state-transition
+/// packets are NEVER delayed by the coalescer, driven through the real `dispatch` loop (not just the pure
 /// `CoalesceState` unit tests in `coalesce.rs`). Sequence: run-start, two same-vector heartbeats
 /// (held/superseded — the sub-yard intermediate at x=5.0 must drop ENTIRELY, rule 3), a turn
 /// (state change — must flush the pending heartbeat FIRST, then itself, undelayed), then a stop
@@ -3202,7 +3189,7 @@ fn movement_state_changes_forward_immediately_and_in_order_never_delayed() {
     );
 }
 
-/// Work-item 231, rule 2 (the robust flush-on-any-other-opcode): a non-movement CMSG must see the
+/// Rule 2 (the robust flush-on-any-other-opcode): a non-movement CMSG must see the
 /// module's CURRENT position, so a pending coalesced heartbeat is flushed BEFORE any other opcode
 /// is dispatched — proven here by driving a real non-movement opcode (`CMSG_QUESTGIVER_STATUS_QUERY`,
 /// the same no-op sentinel other tests in this file use) and observing that only the LATEST held
@@ -3312,13 +3299,8 @@ fn desync_error_classifies_entity_missing_as_fatal_but_not_transient() {
 /// fixture every quest test builds on, then overlays quest evals / details / log slots.
 fn quest_store() -> InMemoryStore {
     InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         login_entity: Some(warrior_entity()),
-        ..Default::default()
+        ..tester_store(7)
     }
 }
 
@@ -3357,7 +3339,14 @@ fn eval(quest_id: u32, role: u8, active: bool, complete: bool) -> codec::GiverQu
 }
 
 /// Spin up a world session over a socket pair, handshake as TESTER, enter the world as `guid`, and
-/// drain the 10-message login sequence (LYRACORE_QUEST_LOG off in tests → no quest-log update appended).
+/// drain the login sequence — 10 fixed messages (LYRACORE_QUEST_LOG off in tests → no quest-log update
+/// appended) plus one SMSG_UPDATE_OBJECT CREATE per `player_items()` row (`enter_world` inserts
+/// one per owned item BEFORE the self-spawn CREATE — see its doc comment in `mod.rs`). Every
+/// earlier test leaves `player_items_fixture` empty, so this reads exactly the same 10 messages
+/// as before; only a test that seeds items (the CMSG_SELL_ITEM/CMSG_REPAIR_ITEM guid→slot ones)
+/// needs the extra drain, and getting it wrong here manifests as the CLIENT closing with unread
+/// bytes still queued — which the kernel reports back to the SERVER thread's next read as
+/// ECONNRESET, not a clean EOF.
 /// Returns the client socket + encrypted halves + the server join handle for the test to drive.
 fn enter_world(
     store: std::sync::Arc<InMemoryStore>,
@@ -3372,6 +3361,7 @@ fn enter_world(
     // The login sequence ends with the quest-log VALUES packet IFF the player has quests (mirrors
     // `send_quest_log`'s skip-when-empty). Checked before `store` is moved into the server thread.
     let has_quest_log = store.player_quest_log(guid).is_ok_and(|s| !s.is_empty());
+    let item_creates = store.player_items(guid).map(|v| v.len()).unwrap_or(0);
     let server_store = store;
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -3382,7 +3372,7 @@ fn enter_world(
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    for _ in 0..10 {
+    for _ in 0..10 + item_creates {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     if has_quest_log {
@@ -3432,7 +3422,7 @@ fn the_writer_drains_the_egress_depth_back_to_zero_b2() {
 
 #[test]
 fn group_invite_by_name_replies_party_command_result_success() {
-    // Work-item 066: CMSG_GROUP_INVITE "Buddy" resolves the name, calls the store, and echoes
+    // CMSG_GROUP_INVITE "Buddy" resolves the name, calls the store, and echoes
     // SMSG_PARTY_COMMAND_RESULT(Invite, "Buddy", Success); the store recorded the resolved guid.
     let mut s = quest_store();
     s.characters = vec![codec::CharacterView {
@@ -3494,7 +3484,7 @@ fn group_invite_unknown_name_replies_bad_player_name() {
 
 #[test]
 fn add_friend_by_name_then_friend_list_carries_online_presence() {
-    // Work-item 130: CMSG_ADD_FRIEND "Buddy" -> SMSG_FRIEND_STATUS AddedOnline (guid 2, resolved by
+    // CMSG_ADD_FRIEND "Buddy" -> SMSG_FRIEND_STATUS AddedOnline (guid 2, resolved by
     // name); a follow-up CMSG_FRIEND_LIST then carries them online with their level/class/zone.
     let mut s = quest_store();
     s.characters = vec![codec::CharacterView {
@@ -3598,7 +3588,7 @@ fn add_ignore_by_name_replies_ignore_added() {
     server.join().unwrap();
 }
 
-/// `resolve_add_contact`'s error-string mapping (work-item 130), driven end-to-end through the
+/// `resolve_add_contact`'s error-string mapping, driven end-to-end through the
 /// existing `trade_error` mock: `add_friend`/`add_ignore` return the module's rejection text and the
 /// gateway must translate each needle into its `FriendResult`, distinctly for the friend vs ignore list.
 #[test]
@@ -3864,7 +3854,7 @@ fn quest_abandon_unknown_slot_is_a_noop() {
     assert!(store.abandoned.lock().unwrap().is_empty());
 }
 
-// ── Inspect (work-item 137) ──────────────────────────────────────────────────────────────────────
+// ── Inspect ───────────────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn inspect_in_range_friendly_target_replies_smsg_inspect_with_the_target_guid() {
@@ -3915,21 +3905,16 @@ fn inspect_refused_target_sends_no_reply() {
     server.join().unwrap();
 }
 
-// ── Vendor / buy-failed (work item 069) ─────────────────────────────────────────────────────────
+// ── Vendor / buy-failed ─────────────────────────────────────────────────────────
 
 #[test]
 fn buy_item_err_sends_smsg_buy_failed() {
     // When `buy_item` returns Err (e.g. "not enough money"), the gateway must send SMSG_BUY_FAILED
-    // with the matching BuyResult code so the player gets an on-screen error (work item 069).
+    // with the matching BuyResult code so the player gets an on-screen error.
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         login_entity: Some(warrior_entity()),
         trade_error: Some("not enough money to buy that item".into()),
-        ..Default::default()
+        ..tester_store(7)
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_BUY_ITEM {
@@ -3955,22 +3940,17 @@ fn buy_item_err_sends_smsg_buy_failed() {
     server.join().unwrap();
 }
 
-// ── Inventory change failure (work item 070) ─────────────────────────────────────────────────────
+// ── Inventory change failure ─────────────────────────────────────────────────────
 
 #[test]
 fn equip_item_err_sends_smsg_inventory_change_failure() {
     // When `equip_item` returns Err (e.g. item requires higher level / wrong class), the gateway
     // must send SMSG_INVENTORY_CHANGE_FAILURE so the client displays the error sound/popup instead
-    // of silently snapping the item back (work item 070).
+    // of silently snapping the item back.
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         login_entity: Some(warrior_entity()),
         trade_error: Some("required level not met".into()),
-        ..Default::default()
+        ..tester_store(7)
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     // Slot 24 is a backpack slot (>= 23); bag 255 = INVENTORY_SLOT_BAG_0 (main bag).
@@ -3988,7 +3968,7 @@ fn equip_item_err_sends_smsg_inventory_change_failure() {
     server.join().unwrap();
 }
 
-// ── Item-starts-quest (work-item 194) ───────────────────────────────────────────────────────────
+// ── Item-starts-quest ────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn use_item_with_start_quest_opens_details_and_does_not_consume() {
@@ -4029,7 +4009,7 @@ fn use_item_with_start_quest_opens_details_and_does_not_consume() {
 
 #[test]
 fn use_item_without_start_quest_falls_through_to_the_ordinary_use_path() {
-    // The pre-194 baseline: an ordinary item (no start_quest fixture) still goes through use_item.
+    // The baseline: an ordinary item (no start_quest fixture) still goes through use_item.
     let store = std::sync::Arc::new(quest_store());
     let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
     CMSG_USE_ITEM {
@@ -4045,7 +4025,7 @@ fn use_item_without_start_quest_falls_through_to_the_ordinary_use_path() {
     assert_eq!(store.used_items.lock().unwrap().as_slice(), &[5]);
 }
 
-// ── Quest sharing (work-item 194) ───────────────────────────────────────────────────────────────
+// ── Quest sharing ────────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn push_quest_to_party_dispatches_the_quest_id() {
@@ -4073,7 +4053,7 @@ fn push_quest_to_party_rejection_is_logged_and_ignored_not_session_fatal() {
 }
 
 // ===========================================================================
-// Logout gate tests (work item #077)
+// Logout gate tests (blocking logout while in combat)
 // ===========================================================================
 
 #[test]
@@ -4081,13 +4061,8 @@ fn logout_while_out_of_combat_succeeds() {
     // combat_until_ms=0 (default, never in combat) → CMSG_LOGOUT_REQUEST must reply
     // Success/Instant + LOGOUT_COMPLETE and the logout() store reducer must be called.
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         login_entity: Some(warrior_entity()),
-        ..Default::default()
+        ..tester_store(7)
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
@@ -4135,14 +4110,9 @@ fn logout_while_in_combat_is_denied() {
     // Note: socket teardown (drop below) still calls leave_world/logout as cleanup; that is correct
     // and separate from the CMSG gate.
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         login_entity: Some(warrior_entity()),
         combat_until_ms: u64::MAX, // always in combat
-        ..Default::default()
+        ..tester_store(7)
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
@@ -4188,7 +4158,7 @@ fn logout_while_in_combat_is_denied() {
 
 #[test]
 fn played_time_replies_with_the_durable_total_plus_the_live_session_span() {
-    // work-item 029: CMSG_PLAYED_TIME -> SMSG_PLAYED_TIME. The character row carries a durable
+    // CMSG_PLAYED_TIME -> SMSG_PLAYED_TIME. The character row carries a durable
     // 3600s total plus a session_start_micros stamped in the recent past, so the reply must be
     // strictly greater than the durable floor (the live span gets folded in) and sane (not absurdly
     // large — bounds the test against a unit mixup, e.g. treating micros as millis).
@@ -4201,11 +4171,6 @@ fn played_time_replies_with_the_durable_total_plus_the_live_session_span() {
     let session_start_micros = now_micros - session_started_secs_ago * 1_000_000;
 
     let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
         login_entity: Some(warrior_entity()),
         characters: vec![codec::CharacterView {
             guid: 1,
@@ -4214,7 +4179,7 @@ fn played_time_replies_with_the_durable_total_plus_the_live_session_span() {
             session_start_micros,
             ..Default::default()
         }],
-        ..Default::default()
+        ..tester_store(7)
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
@@ -4247,7 +4212,7 @@ fn played_time_replies_with_the_durable_total_plus_the_live_session_span() {
 }
 
 // ===========================================================================================
-//  Work-item 179: the deferred handler-level tests — CMSG_CAST_SPELL routing, quest instant
+//  The handler-level tests — CMSG_CAST_SPELL routing, quest instant
 //  routing, the loot window state machine, the ATTACKSWING error split, and the smaller mappings.
 //  Each drives the full encrypted session (enter_world) and pins wire replies + store dispatches.
 // ===========================================================================================
@@ -4293,7 +4258,7 @@ fn item_targets(item_guid: u64) -> SpellCastTargets {
     }
 }
 
-/// `SpellCastTargets` carrying a DEST_LOCATION (a ground-targeted click — Flamestrike/Blizzard). [118 p2]
+/// `SpellCastTargets` carrying a DEST_LOCATION (a ground-targeted click — Flamestrike/Blizzard).
 fn dest_targets(x: f32, y: f32, z: f32) -> SpellCastTargets {
     use wow_world_messages::vanilla::{
         SpellCastTargets_SpellCastTargetFlags_DestLocation, Vector3d,
@@ -4307,11 +4272,11 @@ fn dest_targets(x: f32, y: f32, z: f32) -> SpellCastTargets {
     }
 }
 
-// ── CMSG_CAST_SPELL routing (instant-cast ordering [083], Auto Shot intercept #10, enchant [094]) ──
+// ── CMSG_CAST_SPELL routing (instant-cast ordering, Auto Shot intercept, enchant routing) ──────────
 
 #[test]
 fn instant_cast_sends_start_then_raw_cast_result_ok_then_go_and_threads_the_target() {
-    // [083] root-cause client-wedge fix: an INSTANT cast must emit START(0) → raw CAST_RESULT(OK,
+    // Root-cause client-wedge fix: an INSTANT cast must emit START(0) → raw CAST_RESULT(OK,
     // opcode 0x0130, 5-byte body) → GO synchronously, IN THAT ORDER, and the cast must reach the
     // store with the client's unit target. cast_time_ms = Some(0) is the explicit-instant case.
     let mut s = quest_store();
@@ -4510,7 +4475,7 @@ fn rejected_instant_cast_clears_the_client_then_reports_failure() {
 
 #[test]
 fn auto_shot_intercept_starts_the_ranged_attack_instead_of_casting() {
-    // #10/097 vanilla shape: Auto Shot (75) and wand Shoot (5019) are auto-repeat ranged attacks —
+    // Vanilla shape: Auto Shot (75) and wand Shoot (5019) are auto-repeat ranged attacks —
     // the handler arms start_ranged_attack with the cast's unit target, then the activation ack is
     // SMSG_SPELL_START ALONE with timer 0 (no CAST_RESULT, no GO — the cast parks in the client's
     // AUTOREPEAT slot and never resolves; each shot's GO comes from the swing-tick relay).
@@ -4596,7 +4561,7 @@ fn auto_shot_failure_replies_cast_result_only_and_never_arms() {
 
 #[test]
 fn enchant_cast_resolves_the_item_guid_to_its_slot_and_dispatches_the_enchant() {
-    // [094] an ITEM-target cast whose spell routes as Enchant(id): item guid → bag slot →
+    // An ITEM-target cast whose spell routes as Enchant(id): item guid → bag slot →
     // enchant_item_on_slot(slot, id), then the manual START → raw CAST_RESULT(OK) → GO clear.
     let mut s = quest_store();
     s.enchant_route = Some(super::EnchantRoute::Enchant(777));
@@ -4675,7 +4640,7 @@ fn enchant_cast_without_an_item_target_replies_failure_and_dispatches_nothing() 
     assert!(store.disenchanted.lock().unwrap().is_empty());
 }
 
-// ── Quest instant routing (CMSG_QUESTGIVER_HELLO, work-item 112) ────────────────────────────────
+// ── Quest instant routing (CMSG_QUESTGIVER_HELLO) ────────────────────────────────────────────────
 
 #[test]
 fn quest_hello_with_one_menu_quest_opens_its_screen_directly_by_state() {
@@ -4755,12 +4720,12 @@ fn quest_hello_with_two_menu_quests_shows_the_list() {
     server.join().unwrap();
 }
 
-// ── Loot window state machine (slices 3/4) ──────────────────────────────────────────────────────
+// ── Loot window state machine ────────────────────────────────────────────────────────────────────
 
 #[test]
 fn loot_opens_the_window_and_loot_money_drives_the_tracked_guid() {
     // CMSG_LOOT arms looting_target and replies the RAW loot window (guid + money in the body);
-    // CMSG_LOOT_MONEY (which carries NO guid) must then hit the TRACKED corpse. Work-item 221: a
+    // CMSG_LOOT_MONEY (which carries NO guid) must then hit the TRACKED corpse. A
     // SOLO money loot sends ONLY SMSG_LOOT_CLEAR_MONEY — the unconditional SMSG_LOOT_MONEY_NOTIFY
     // is gone (vanilla never sends it to a solo looter; the client prints its own local "You loot X
     // copper" line). A corpse with money is NOT skinned.
@@ -4811,7 +4776,7 @@ fn loot_opens_the_window_and_loot_money_drives_the_tracked_guid() {
 
 #[test]
 fn loot_money_with_zero_copper_still_clears_with_no_notify() {
-    // amount == 0: the same no-notify contract as any solo loot (work-item 221) — CLEAR_MONEY still
+    // amount == 0: the same no-notify contract as any solo loot — CLEAR_MONEY still
     // goes out so the client's loot window drops its money row.
     let store = std::sync::Arc::new(quest_store()); // corpse_money = 0
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
@@ -4888,7 +4853,7 @@ fn loot_release_clears_the_tracked_target_so_loot_money_is_a_noop() {
     );
 }
 
-// ── Group loot methods (work-item 187 slices 1-4) ───────────────────────────────────────────────
+// ── Group loot methods ───────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn loot_method_dispatches_the_decoded_setting_threshold_and_master() {
@@ -4996,7 +4961,7 @@ fn loot_roll_rejection_is_logged_and_ignored_not_session_fatal() {
     server.join().unwrap();
 }
 
-// ── Per-viewer quest loot (work-item 187 slice 0) ───────────────────────────────────────────────
+// ── Per-viewer quest loot ────────────────────────────────────────────────────────────────────────
 // `corpse_loot` now takes a VIEWER guid; these tests pin the WIRING — that `CMSG_LOOT`/
 // `CMSG_GAMEOBJ_USE` thread `iw.self_guid` through to the store call so two different viewers of the
 // same corpse can be served two different windows. The actual quest-need FILTER decision
@@ -5062,7 +5027,7 @@ fn corpse_loot_is_threaded_with_the_viewers_own_guid_not_the_corpses() {
 
 #[test]
 fn both_grouped_viewers_see_their_own_row_when_both_need_the_quest_item() {
-    // "Both have it -> both loot one each" (the work item's done-when line): the SAME shared corpse,
+    // "Both have it -> both loot one each": the SAME shared corpse,
     // BOTH viewers' fixtures carry a row (simulating the real filter admitting the row to each because
     // each independently needs it) — each connection's window shows its own row unaffected by the
     // other's presence.
@@ -5099,7 +5064,7 @@ fn both_grouped_viewers_see_their_own_row_when_both_need_the_quest_item() {
 #[test]
 fn a_viewer_with_no_fixture_entry_sees_an_empty_window_non_quest_rows_unaffected() {
     // A viewer nobody set up a fixture for (e.g. doesn't need the quest, or the corpse has no
-    // quest-only rows at all — the common, pre-187 case) sees an empty window, exactly the existing
+    // quest-only rows at all — the common case) sees an empty window, exactly the existing
     // default behavior this slice must not disturb.
     let store = std::sync::Arc::new(quest_store()); // corpse_loot_by_viewer empty
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
@@ -5625,9 +5590,9 @@ fn gossip_select_of_any_other_option_completes_without_binding() {
     assert!(!store.home_bound.load(std::sync::atomic::Ordering::SeqCst));
 }
 
-// --- work-item 217: imported gossip menu options + multi-slot npc_text ---------------------------
+// --- Imported gossip menu options + multi-slot npc_text -------------------------------------------
 
-/// A shorthand imported option builder for the 217 mock tests.
+/// A shorthand imported option builder for the gossip mock tests.
 fn opt(icon: u32, text: &str, action: u32) -> codec::GossipOptionView {
     codec::GossipOptionView {
         icon,
@@ -5923,7 +5888,7 @@ fn messagechat_say_and_yell_route_to_chat_types_0_and_1() {
 
 #[test]
 fn messagechat_dot_say_diverts_to_gm_command_never_touching_chat() {
-    // Work-item 223: a Say line starting with '.' diverts to gm_command BEFORE send_chat — never a
+    // A Say line starting with '.' diverts to gm_command BEFORE send_chat — never a
     // broadcast, never a game_chat_event insert. No reply on success (the command's own effect is its
     // own feedback).
     let store = std::sync::Arc::new(quest_store());
@@ -5984,7 +5949,7 @@ fn messagechat_non_dot_say_is_byte_identical_to_before_223() {
 
 #[test]
 fn messagechat_dot_say_error_relays_a_system_chat_line_to_the_sender_only() {
-    // Work-item 223: a rejected dot-command (bad gm_level, unknown command, bad args) is relayed back
+    // A rejected dot-command (bad gm_level, unknown command, bad args) is relayed back
     // to the SENDER as a System SMSG_MESSAGECHAT carrying the module's raw message VERBATIM — no
     // "reducer failed" wrapper prefix, no broadcast, no game_chat_event row.
     let mut s = quest_store();
@@ -6019,7 +5984,7 @@ fn messagechat_dot_say_error_relays_a_system_chat_line_to_the_sender_only() {
 
 #[test]
 fn force_run_speed_change_ack_is_swallowed_with_no_reply_and_no_session_teardown() {
-    // Work-item 223: the client's ack to our `.speed`-triggered SMSG_FORCE_RUN_SPEED_CHANGE must be
+    // The client's ack to our `.speed`-triggered SMSG_FORCE_RUN_SPEED_CHANGE must be
     // consumed cleanly (no reply, no desync/disconnect) — proven by a sentinel opcode right after it
     // still getting its normal reply on the SAME session.
     use wow_world_messages::vanilla::{
@@ -6064,10 +6029,11 @@ fn messagechat_whisper_to_an_unknown_player_replies_player_not_found() {
     s.whisper_error = Some("no player by that name".into());
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    // A READ DEADLINE (#22, whisper slice). This test is the only witness that a REFUSED whisper
+    // A READ DEADLINE. This test is the only witness that a REFUSED whisper
     // answers at all, and the mutation it pins — dropping the reply from the dispatch arm — made it
     // block forever on a packet that will never come instead of failing. A hang is neither a pass nor
-    // a fail (two of PR #49's mutations did exactly this); `no_hang`'s lesson, applied at the socket.
+    // a fail (two mutations against the realm-wide party/whisper routing did exactly this); `no_hang`'s
+    // lesson, applied at the socket.
     client
         .set_read_timeout(Some(std::time::Duration::from_secs(5)))
         .unwrap();
@@ -6121,7 +6087,7 @@ fn messagechat_guild_is_dropped() {
 
 #[test]
 fn messagechat_party_from_a_grouped_caller_routes_to_party_chat() {
-    // Work-item 199: a grouped caller's `/p` reaches the module's `party_chat` reducer with the
+    // A grouped caller's `/p` reaches the module's `party_chat` reducer with the
     // typed text; no reply on success (the caller sees their own line via the SAME per-recipient
     // relay a real member would get — the echo the module pushes, not a gateway-built reply).
     let store = std::sync::Arc::new(quest_store());
@@ -6152,7 +6118,7 @@ fn messagechat_party_from_a_grouped_caller_routes_to_party_chat() {
 
 #[test]
 fn messagechat_party_from_an_ungrouped_caller_replies_not_in_group() {
-    // Work-item 199: the module's "not in a group" rejection maps to the SAME
+    // The module's "not in a group" rejection maps to the SAME
     // SMSG_PARTY_COMMAND_RESULT(NotInGroup) line `group_leave`/`group_uninvite` already use for
     // this exact reducer error (the shared `lyracore_shared::group::err::NOT_IN_GROUP` contract).
     let mut s = quest_store();
@@ -6213,8 +6179,9 @@ fn messagechat_party_other_rejections_are_silently_dropped() {
 
 #[test]
 fn stale_epoch_logout_skips_the_logout_reducer() {
-    // The world-side half of #42: when release_session says a newer login superseded this socket,
-    // leave_world must NOT call logout (deleting the entity would vanish the LIVE player).
+    // The world-side half of the session-epoch arbitration: when release_session says a newer
+    // login superseded this socket, leave_world must NOT call logout (deleting the entity would
+    // vanish the LIVE player).
     let mut s = quest_store();
     s.stale_session = true;
     let store = std::sync::Arc::new(s);
@@ -6240,606 +6207,11 @@ fn stale_epoch_logout_skips_the_logout_reducer() {
     );
 }
 
-// ===========================================================================================
-//  #447 — the per-account connection release (the fd/thread leak that ends the process).
-//
-//  Every distinct account's `PlayerConn` costs a websocket fd + an SDK pump OS thread, and until
-//  now nothing ever released one: `accept(2)` returns EMFILE when the fd table runs out and both
-//  accept loops propagate it into `main`, so the gateway exits after N sessions where N is a pure
-//  function of `ulimit -n`. Releasing is only safe once NO socket for the account remains — these
-//  tests pin both halves of that (does release; does NOT release early).
-// ===========================================================================================
-
-/// Accounts whose cached per-account connection the store has released so far, in order.
-fn released(store: &std::sync::Arc<InMemoryStore>) -> Vec<u64> {
-    store.released_conns.lock().unwrap().clone()
-}
-
-#[test]
-fn the_last_socket_for_an_account_releases_its_cached_connection() {
-    // The leak itself: one session, opened and torn down, must reclaim the account's connection.
-    let store = std::sync::Arc::new(quest_store());
-    let (client, _enc, _dec, server) = enter_world(store.clone(), 1);
-    assert!(
-        released(&store).is_empty(),
-        "nothing may be released while the session is live"
-    );
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(
-        released(&store),
-        vec![7],
-        "the account's last socket must release its cached per-account connection"
-    );
-}
-
-#[test]
-fn a_reconnect_racing_a_teardown_keeps_the_new_sessions_connection() {
-    // THE danger case. Socket B re-logs on the same account while socket A is still tearing down;
-    // both share ONE cached `PlayerConn`. Releasing on A's teardown would cut the LIVE player's
-    // link — worse than the leak. A's teardown must therefore release nothing, and B must still be
-    // servable afterwards.
-    let store = std::sync::Arc::new(quest_store());
-    let (client_a, _a_enc, _a_dec, server_a) = enter_world(store.clone(), 1);
-    let (mut client_b, mut b_enc, mut b_dec, server_b) = enter_world(store.clone(), 1);
-
-    // A goes away (the client vanished / the socket reset).
-    drop(client_a);
-    server_a.join().unwrap();
-    assert!(
-        released(&store).is_empty(),
-        "A's teardown must NOT release the connection B is still using"
-    );
-
-    // B is genuinely still alive on the far side of A's teardown — served over the connection that
-    // would have been closed. (`leave_world` back to character select first, so the char enum is
-    // dispatched on the realm/default handle exactly as production does.)
-    CMSG_LOGOUT_REQUEST {}
-        .write_encrypted_client(&mut client_b, &mut b_enc)
-        .unwrap();
-    ServerOpcodeMessage::read_encrypted(&mut client_b, &mut b_dec).unwrap(); // SMSG_LOGOUT_RESPONSE
-    ServerOpcodeMessage::read_encrypted(&mut client_b, &mut b_dec).unwrap(); // SMSG_LOGOUT_COMPLETE
-    CMSG_CHAR_ENUM {}
-        .write_encrypted_client(&mut client_b, &mut b_enc)
-        .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client_b, &mut b_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_CHAR_ENUM(_) => {}
-        other => panic!("B must still be servable after A's teardown, got {other}"),
-    }
-    assert!(
-        released(&store).is_empty(),
-        "still nothing released while B is live"
-    );
-
-    // Only when B — the last socket — goes does the connection get reclaimed, exactly once.
-    drop(client_b);
-    server_b.join().unwrap();
-    assert_eq!(
-        released(&store),
-        vec![7],
-        "the LAST socket releases the connection, and only it"
-    );
-}
-
-#[test]
-fn a_stale_epoch_teardown_still_releases_when_it_is_the_last_socket() {
-    // The release gate is the SOCKET count, not the #42 entity epoch. A socket whose epoch was
-    // superseded (so `leave_world` correctly skips `logout`) is still the last socket here, and
-    // its connection must still be reclaimed — otherwise every superseded session leaks, which is
-    // precisely the mass-churn shape of #447.
-    let mut s = quest_store();
-    s.stale_session = true;
-    let store = std::sync::Arc::new(s);
-    let (client, _enc, _dec, server) = enter_world(store.clone(), 1);
-    drop(client);
-    server.join().unwrap();
-    assert!(
-        !store
-            .logout_called
-            .load(std::sync::atomic::Ordering::SeqCst),
-        "precondition: a superseded epoch must not delete the newer session's entity"
-    );
-    assert_eq!(
-        released(&store),
-        vec![7],
-        "a superseded session is still a socket, and its teardown is still a release"
-    );
-}
-
-// ===========================================================================================
-//  Multi-shard routing (#17) — the routing half of Phase A of the elastic-sharding spec (#12).
-//  AC#4: reducer calls and subscriptions never target a shard other than the player's home shard.
-//  The `InMemoryStore` pair below stands for two DATABASES sharing one ordered call log, so a test
-//  can read off exactly which database served every player-scoped call of a whole live session.
-// ===========================================================================================
-
-type ShardCallLog = std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
-
-/// A two-database topology: `world` (the default handle the listener hands every session — where
-/// accounts, sessions, and the character list live) and `instances` (the shard that owns this
-/// character's location, i.e. what `home_shard` resolves to). Both write to one shared call log.
-fn sharded_stores() -> (std::sync::Arc<InMemoryStore>, ShardCallLog) {
-    let calls: ShardCallLog = Default::default();
-    // The character's post-world-port entity, for the re-entry test below.
-    let mut ported = warrior_entity();
-    ported.map_id = 1;
-    let home = std::sync::Arc::new(InMemoryStore {
-        shard: "instances".into(),
-        calls: calls.clone(),
-        login_entity: Some(warrior_entity()),
-        worldport_entity: Some(ported),
-        ..Default::default()
-    });
-    let world = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        calls: calls.clone(),
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
-        characters: vec![codec::CharacterView {
-            guid: 1,
-            name: "Tester".into(),
-            race: 1,
-            class: 1,
-            level: 1,
-            ..Default::default()
-        }],
-        login_entity: Some(warrior_entity()),
-        home: Some(home),
-        ..Default::default()
-    });
-    (world, calls)
-}
-
-/// One heartbeat at a fixed position — the movement half of the routed traffic.
-fn heartbeat(timestamp: u32) -> wow_world_messages::vanilla::MSG_MOVE_HEARTBEAT_Client {
-    use wow_world_messages::vanilla::{MovementInfo, MovementInfo_MovementFlags, Vector3d};
-    wow_world_messages::vanilla::MSG_MOVE_HEARTBEAT_Client {
-        info: MovementInfo {
-            flags: MovementInfo_MovementFlags::empty(),
-            timestamp,
-            position: Vector3d {
-                x: -8950.0,
-                y: -130.0,
-                z: 83.0,
-            },
-            orientation: 1.5,
-            fall_time: 0.0,
-        },
-    }
-}
-
-/// Drive a full session (char-select → login → movement → an attack → disconnect) and return the
-/// ordered `(shard, call)` log.
-fn drive_routed_session(
-    store: std::sync::Arc<InMemoryStore>,
-    calls: ShardCallLog,
-) -> Vec<(String, String)> {
-    let (mut client, server_end) = UnixStream::pair().unwrap();
-    let server_store = store;
-    let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
-    });
-    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
-
-    // Character select — REALM-scoped, before any character (and therefore any shard) is chosen.
-    CMSG_CHAR_ENUM {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-
-    // Enter the world: this is where the session pins itself to the character's home shard.
-    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    for _ in 0..10 {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
-
-    // In-world traffic: a movement heartbeat (flushed by the following non-movement opcode) and a
-    // melee swing — one subscription-driven path and one reducer path.
-    heartbeat(100)
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    CMSG_ATTACKSWING {
-        guid: Guid::new(90),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    let _ = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec);
-
-    drop(client); // EOF → teardown runs `logout`
-    server.join().unwrap();
-    let log = calls.lock().unwrap().clone();
-    log
-}
-
-#[test]
-fn every_player_scoped_call_after_login_targets_the_home_shard_only() {
-    // AC#4 (#17): once the session resolves the character's home shard, EVERY reducer call and the
-    // per-player subscription run against that database — the login itself, the AOI/relay
-    // subscription, movement, combat, and the teardown logout. Nothing leaks back to the default.
-    let (store, calls) = sharded_stores();
-    let log = drive_routed_session(store, calls);
-
-    assert_eq!(
-        log.first().map(|(s, c)| (s.as_str(), c.as_str())),
-        Some(("world", "characters")),
-        "character select is realm-scoped and must stay on the default database: {log:?}"
-    );
-    let after_login = &log[1..];
-    assert!(
-        after_login.iter().all(|(shard, _)| shard == "instances"),
-        "no call may target a shard other than the player's home shard: {log:?}"
-    );
-    for expected in [
-        "player_login",
-        "subscribe_player_events", // the per-player connection + AOI subscriptions
-        "movement_update",
-        "start_attack",
-        "logout",
-    ] {
-        assert!(
-            log.iter()
-                .any(|(shard, call)| shard == "instances" && call == expected),
-            "{expected} must have run on the home shard: {log:?}"
-        );
-    }
-}
-
-#[test]
-fn a_single_entry_shard_map_never_routes_and_keeps_every_call_on_the_one_database() {
-    // The safety property (#17): with no second shard to resolve to — which is what a single-entry
-    // (default/unconfigured) shard map always answers — the session never swaps handles, so the
-    // whole flow is served by the database the listener handed it, byte-identically to before.
-    let (store, calls) = sharded_stores();
-    let single = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        calls: calls.clone(),
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
-        characters: store.characters.clone(),
-        login_entity: Some(warrior_entity()),
-        home: None, // ← a single-entry shard map: "you are already on the right shard"
-        ..Default::default()
-    });
-    let log = drive_routed_session(single, calls);
-
-    assert!(
-        log.iter().all(|(shard, _)| shard == "world"),
-        "an unrouted session must never leave its own database: {log:?}"
-    );
-    for expected in [
-        "characters",
-        "player_login",
-        "subscribe_player_events",
-        "movement_update",
-        "logout",
-    ] {
-        assert!(
-            log.iter().any(|(_, call)| call == expected),
-            "{expected} missing: {log:?}"
-        );
-    }
-}
-
-#[test]
-fn a_routing_flip_re_routes_the_next_entrant_and_leaves_the_resident_alone() {
-    // Home-shard routing at the session level. `pool-b` stands for the shard a character was
-    // just re-homed to; the mock swaps its answer between the two logins the way a shard-map
-    // edit (or a #20 index re-home) landing between them does.
-    //
-    // TWO claims are being pinned here, and they are different claims:
-    //   1. NEW ENTRANTS follow the flip — the second session's login, subscription, movement,
-    //      combat and logout all run on `pool-b`.
-    //   2. RESIDENTS DO NOT — the first session's traffic stays on `instances` for its whole life,
-    //      because routing is resolved once per world ENTRY and the pin is never revisited.
-    //      Nothing moves a live session.
-    let calls: ShardCallLog = Default::default();
-    let resolutions: std::sync::Arc<std::sync::atomic::AtomicUsize> = Default::default();
-    let instances = std::sync::Arc::new(InMemoryStore {
-        shard: "instances".into(),
-        calls: calls.clone(),
-        home_shard_calls: resolutions.clone(),
-        login_entity: Some(warrior_entity()),
-        ..Default::default()
-    });
-    let pool_b = std::sync::Arc::new(InMemoryStore {
-        shard: "pool-b".into(),
-        calls: calls.clone(),
-        home_shard_calls: resolutions.clone(),
-        login_entity: Some(warrior_entity()),
-        ..Default::default()
-    });
-    let world = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        calls: calls.clone(),
-        home_shard_calls: resolutions.clone(),
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
-        characters: vec![codec::CharacterView {
-            guid: 1,
-            name: "Tester".into(),
-            race: 1,
-            class: 1,
-            level: 1,
-            ..Default::default()
-        }],
-        login_entity: Some(warrior_entity()),
-        home: Some(instances),
-        home_after_flip: Some(pool_b), // the routing flips between the two sessions
-        ..Default::default()
-    });
-
-    // Session 1 — the RESIDENT. Enters before the flip.
-    let resident = drive_routed_session(world.clone(), calls.clone());
-    assert!(
-        resident
-            .iter()
-            .skip(1)
-            .all(|(shard, _)| shard == "instances"),
-        "the resident's whole session must stay on the shard it entered on: {resident:?}"
-    );
-    assert!(
-        !resident.iter().any(|(shard, _)| shard == "pool-b"),
-        "no resident call may follow the flip — this ticket re-routes NEW ENTRANTS ONLY: {resident:?}"
-    );
-    assert_eq!(
-        resolutions.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "routing is resolved exactly once per world entry, on ANY handle — nothing may \
-         re-resolve a live session mid-flight"
-    );
-
-    // Session 2 — the NEXT ENTRANT. Same stores, same character, post-flip.
-    calls.lock().unwrap().clear();
-    let entrant = drive_routed_session(world, calls.clone());
-    assert!(
-        entrant.iter().skip(1).all(|(shard, _)| shard == "pool-b"),
-        "the next entrant must land on the re-homed shard: {entrant:?}"
-    );
-    for expected in [
-        "player_login",
-        "subscribe_player_events",
-        "movement_update",
-        "logout",
-    ] {
-        assert!(
-            entrant
-                .iter()
-                .any(|(shard, call)| shard == "pool-b" && call == expected),
-            "{expected} must have run on the flipped shard: {entrant:?}"
-        );
-    }
-    assert_eq!(
-        resolutions.load(std::sync::atomic::Ordering::SeqCst),
-        2,
-        "two world entries, two resolutions — no more, and none from either session's own traffic"
-    );
-}
-
-#[test]
-fn a_world_port_keeps_the_pin_when_the_home_shard_still_owns_the_new_map() {
-    // A world-port re-resolves routing (the new map may belong to another shard). When the shard
-    // the session is ALREADY on still owns the destination it answers "no swap needed" — which must
-    // KEEP the pin, not silently drop the session back to the default database.
-    let (store, calls) = sharded_stores();
-    let (mut client, server_end) = UnixStream::pair().unwrap();
-    let server_store = store.clone();
-    let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
-    });
-    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
-    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    for _ in 0..10 {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
-    MSG_MOVE_WORLDPORT_ACK {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    for _ in 0..10 {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
-    drop(client);
-    server.join().unwrap();
-
-    let log = calls.lock().unwrap().clone();
-    assert!(
-        log.iter().all(|(shard, _)| shard == "instances"),
-        "the world-port re-entry must stay on the pinned home shard: {log:?}"
-    );
-    assert_eq!(
-        log.iter().filter(|(_, c)| c == "player_login").count(),
-        2,
-        "login + world-port re-entry both ran on the home shard: {log:?}"
-    );
-    assert_eq!(
-        log.iter()
-            .filter(|(_, c)| c == "subscribe_player_events")
-            .count(),
-        2,
-        "the re-entry re-subscribed on the home shard, not the default one: {log:?}"
-    );
-}
-
-#[test]
-fn a_logout_to_character_select_releases_the_home_shard_pin() {
-    // Adversarial review of #17: `leave_world` returns the socket to CharSelect but the session
-    // stays open, so the NEXT character-select frames (char enum / create / delete) are dispatched
-    // through `on_home_shard!` again. Those are REALM-scoped — `game_account` / `game_character`
-    // live on the default database — so a pin left over from the character we just logged out of
-    // would serve the character list off an instance shard (which, being empty, shows the player
-    // no characters at all, and would create/delete rows on the wrong database).
-    let (store, calls) = sharded_stores();
-    let (mut client, server_end) = UnixStream::pair().unwrap();
-    let server_store = store.clone();
-    let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
-    });
-    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
-
-    // Enter the world (pins to "instances"), then log out back to character select.
-    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    for _ in 0..10 {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
-    CMSG_LOGOUT_REQUEST {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(); // SMSG_LOGOUT_RESPONSE
-    ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(); // SMSG_LOGOUT_COMPLETE
-
-    // Back at character select: this must be served by the REALM (default) database again.
-    CMSG_CHAR_ENUM {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    let enumerated = match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_CHAR_ENUM(e) => e.characters.len(),
-        other => panic!("expected SMSG_CHAR_ENUM, got {other}"),
-    };
-    drop(client);
-    server.join().unwrap();
-
-    let log = calls.lock().unwrap().clone();
-    assert_eq!(
-        log.iter()
-            .filter(|(s, c)| c == "characters" && s == "world")
-            .count(),
-        1,
-        "the post-logout character enum must run on the realm/default database: {log:?}"
-    );
-    assert_eq!(
-        enumerated, 1,
-        "the player must still see their characters after a logout"
-    );
-}
-
-#[test]
-fn a_freshly_created_characters_first_login_transfers_off_the_default_shard() {
-    // #60 AC#3/#4: `create_character` always writes to the DEFAULT/realm shard, even when the
-    // start position routes to a different one under `LYRACORE_SHARD_MAP` — a deliberate decision (see
-    // the doc comment on `impl WorldStore for Coordinator::create_character`): create-then-
-    // transfer-on-first-login, not create-directly-on-the-owning-shard. That decision rides the
-    // SAME `route_home`/`settle_home_shard` machinery (#17/#19/#47) every other login already
-    // uses — prove it end to end for a guid the CREATE call ITSELF produced, not one hardcoded
-    // independently of it (the tautology the first version of this test was caught on: a bare
-    // `CMSG_PLAYER_LOGIN { guid: Guid::new(1) }` logs into `sharded_stores()`'s pre-seeded
-    // "Tester" fixture whether or not the preceding CREATE ever ran).
-    //
-    // So this drives the REAL 1.12 flow instead: CREATE, then re-ENUMERATE — `SMSG_CHAR_CREATE`
-    // carries no guid, the client is expected to learn it from the next `CMSG_CHAR_ENUM` — and
-    // pick "Newbie"'s guid out of THAT reply before logging in with it. `InMemoryStore::
-    // create_character` now actually records the character (see its doc comment) so this guid is
-    // genuinely create-produced, and `sharded_stores()`'s single connected `home` shard
-    // (`instances`) stands in for a start map that routes off `world`.
-    let (store, calls) = sharded_stores();
-
-    let (mut client, server_end) = UnixStream::pair().unwrap();
-    let server_store = store.clone();
-    let server = std::thread::spawn(move || {
-        run_world_session(server_end, server_store.as_ref()).unwrap();
-    });
-    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
-
-    // The creation itself must land on the default (`world`) shard — the chosen behaviour, not an
-    // accident of this test.
-    CMSG_CHAR_CREATE {
-        name: "Newbie".into(),
-        race: Race::Orc,
-        class: Class::Warrior,
-        gender: Gender::Male,
-        skin_color: 0,
-        face: 0,
-        hair_style: 0,
-        hair_color: 0,
-        facial_hair: 0,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_CHAR_CREATE(m) => {
-            assert_eq!(m.result, WorldResult::CharCreateSuccess)
-        }
-        other => panic!("expected SMSG_CHAR_CREATE, got {other}"),
-    }
-
-    // Learn the new character's guid the way a real client does: re-enumerate.
-    CMSG_CHAR_ENUM {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    let new_guid = match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_CHAR_ENUM(e) => e
-            .characters
-            .iter()
-            .find(|c| c.name == "Newbie")
-            .unwrap_or_else(|| {
-                panic!(
-                    "the freshly created character never appeared in the char enum — without \
-                     this, the login below cannot possibly be testing the character CREATE just \
-                     produced. characters: {:?}",
-                    e.characters
-                )
-            })
-            .guid
-            .guid(),
-        other => panic!("expected SMSG_CHAR_ENUM, got {other}"),
-    };
-
-    // That same character's FIRST login, in the SAME session, right after creation.
-    CMSG_PLAYER_LOGIN {
-        guid: Guid::new(new_guid),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    for _ in 0..10 {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
-    drop(client);
-    server.join().unwrap();
-
-    let log = calls.lock().unwrap().clone();
-    for expected in ["player_login", "subscribe_player_events", "logout"] {
-        assert!(
-            log.iter()
-                .any(|(shard, call)| shard == "instances" && call == expected),
-            "the freshly created character's FIRST login must drive the transfer onto its start \
-             map's owning shard, exactly like every later world entry — {expected} never ran on \
-             `instances`: {log:?}"
-        );
-    }
-    assert!(
-        !log.iter().any(|(shard, call)| shard == "world"
-            && (call == "player_login" || call == "subscribe_player_events")),
-        "the first login must not stay on the default shard once routing resolves it elsewhere: \
-         {log:?}"
-    );
-}
-
-// ===========================================================================================
-//  Cross-database transfer (#19) — Phase A of the elastic-sharding spec (#12).
-//
-//  `FakeShardDb` is a faithful re-implementation of the MODULE's escrow guards
-//  (`module/src/transfer/mod.rs`'s `plan_begin`/`plan_import`/`plan_finish` + `release_transfer`'s
-//  source check), so these tests exercise the one thing the module cannot check for itself: the
-//  ORDER the gateway drives two databases in, because each database can only see its own ledger.
-//  Two `FakeShardDb`s stand for two SpacetimeDB databases — the same shape #17's `sharded_stores`
-//  uses for routing.
-//
-//  Deliberately NOT a permissive mock: a fake that recorded calls and returned Ok would let every
-//  ordering mutation pass, which is the exact coverage gap the #26/#30 reviews kept finding.
-// ===========================================================================================
+// The cross-database transfer TESTS live in `transfer_tests.rs`, but the fixture types
+// below stay here: `InMemoryStore`'s own `Store` impl (the `xdb`/`xstep` glue a few hundred lines up)
+// and two world-port-abort regression tests earlier in this file construct `FakeShardDb`/`FakeChar`
+// directly, so these are a shared fixture rather than section-local. `transfer_tests` reaches them
+// the ordinary way private items in this file reach any child module — no `pub(super)` needed.
 
 /// One character's durable state, reduced to what a transfer has to preserve: where it is, and a
 /// PAYLOAD marker standing for the character-owned rows (gear/spells/skills/quest log). If the
@@ -6865,50 +6237,26 @@ struct FakeEscrow {
 /// The fake is only ever touched from the test's own thread, so a failed `try_lock` can only mean
 /// one thing: one of its own methods is holding that mutex further up the stack. `std::sync::Mutex`
 /// is not re-entrant, so the real `lock()` blocks forever — and `cargo test` has no per-test
-/// timeout, so the suite HANGS instead of failing. The #36 review hit exactly that: an ordering
-/// mutation of the driver made the gateway suite hang rather than turn a named test red, which is a
-/// coverage failure wearing a pass's clothes. A hang must never be a pass (issue #37).
+/// timeout, so the suite HANGS instead of failing. A review of the cross-database transfer driver
+/// hit exactly that: an ordering mutation of the driver made the gateway suite hang rather than
+/// turn a named test red, which is a coverage failure wearing a pass's clothes — mutation testing
+/// exists to catch exactly this. A hang must never be a pass.
 ///
 /// Deliberate simplification: `try_lock` instead of a watchdog thread per lock — it is one line,
 /// it fires instantly, and it names the offending mutex in the panic. The ceiling: it would also
 /// fire on genuine cross-thread contention, which these tests do not have (one `FakeShardDb` per
-/// test, one thread per test). `no_hang` below is the belt-and-braces net for a hang that is NOT
-/// a re-entrant lock (an unbounded retry loop in the driver, say).
+/// test, one thread per test). `transfer_tests::no_hang` is the belt-and-braces net for a hang that
+/// is NOT a re-entrant lock (an unbounded retry loop in the driver, say).
 fn lk<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.try_lock().expect(
         "re-entrant lock on FakeShardDb: a method is already holding this mutex further up the \
          stack. With `lock()` this would be a DEADLOCK and the suite would HANG instead of failing \
-         — see the fn doc on `lk` (issue #37).",
+         — see the fn doc on `lk`.",
     )
 }
 
-/// Run a test body under a wall-clock deadline, so a hang is a FAILURE rather than a CI job that
-/// sits at "still running" until someone kills it. Used on the cross-database driver tests — the
-/// ones that walk two databases through a multi-step protocol and are therefore the only place in
-/// this suite where a wedge could be a loop rather than a lock.
-fn no_hang<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> T {
-    let h = std::thread::spawn(f);
-    // Poll `is_finished` rather than shipping the result through a channel, so a body that PANICS
-    // still propagates its own panic message (via `resume_unwind`) instead of being reported as a
-    // hang. The hang is the only thing this wrapper is allowed to rename.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
-    while !h.is_finished() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "test body did not finish within {secs}s — treating the hang as a FAILURE (issue #37). \
-             A `cargo test` with no per-test timeout reports a wedged test as 'still running', \
-             which reads as neither a pass nor a fail; it must read as a fail."
-        );
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    match h.join() {
-        Ok(v) => v,
-        Err(e) => std::panic::resume_unwind(e),
-    }
-}
-
-/// Realm-core's authoritative party state, as far as the gateway's routing can see it (#22, group
-/// slice) — the module's `realm_group_op` rules, modelled at the granularity the ROUTING depends on:
+/// Realm-core's authoritative party state, as far as the gateway's routing can see it —
+/// the module's `realm_group_op` rules, modelled at the granularity the ROUTING depends on:
 /// which database the op lands on, who ends up in which group, and who gets notified.
 ///
 /// Same instrument, and same limits, as [`FakeShardDb`]: the module's own reducer bodies cannot run
@@ -7013,7 +6361,7 @@ struct FakeShardDb {
     /// fence, on the SOURCE the gateway's `confirm_import` attestation.
     in_rows: std::sync::Mutex<std::collections::HashMap<u64, u64>>,
     instances: std::sync::Mutex<std::collections::HashSet<u64>>,
-    /// #39: every instance id this database actually SPAWNED a population for — one entry per
+    /// Every instance id this database actually SPAWNED a population for — one entry per
     /// spawn, so "the second party member re-created the dungeon" is visible as a duplicate.
     populated: std::sync::Mutex<Vec<u64>>,
     evicted: std::sync::Mutex<Vec<u64>>,
@@ -7067,1540 +6415,384 @@ fn parse_blob(blob: &[u8]) -> (u64, FakeChar) {
     )
 }
 
-/// A store handle over a `FakeShardDb`, with an optional injected failure at one named step — how
-/// "the gateway was killed here" is simulated (that step's transaction never commits).
-fn xstore(
-    shard: &str,
-    db: std::sync::Arc<FakeShardDb>,
-    calls: ShardCallLog,
-    kill_at: Option<&str>,
-) -> std::sync::Arc<InMemoryStore> {
-    std::sync::Arc::new(InMemoryStore {
-        shard: shard.into(),
-        calls,
-        xdb: Some(db),
-        kill_at: kill_at.map(|s| s.to_string()),
-        ..Default::default()
-    })
-}
-
-const XGUID: u64 = 1;
-
-/// A fresh two-database topology: the character is resident on `world`, and its durable row already
-/// names the instance destination — which is what `teleport_player` writes before it despawns the
-/// entity for a cross-map hop, i.e. the state the WORLDPORT_ACK handler finds.
-#[allow(clippy::type_complexity)]
-fn xdb_pair(
-    kill_at: Option<&str>,
-) -> (
-    std::sync::Arc<InMemoryStore>,
-    std::sync::Arc<InMemoryStore>,
-    std::sync::Arc<FakeShardDb>,
-    std::sync::Arc<FakeShardDb>,
-    ShardCallLog,
-) {
-    let calls: ShardCallLog = Default::default();
-    let src_db = FakeShardDb::with_character(
-        XGUID,
-        FakeChar {
-            map_id: 36,
-            instance_id: 7,
-            payload: "gear+spells".into(),
-        },
-    );
-    let dst_db = FakeShardDb::empty();
-    let src = xstore("world", src_db.clone(), calls.clone(), kill_at);
-    let dst = xstore("instances", dst_db.clone(), calls.clone(), kill_at);
-    (src, dst, src_db, dst_db, calls)
-}
-
-/// The deadlock the #36 review found, turned into a named failure.
-///
-/// `FakeShardDb::import_character_blob` used to hold the `in_rows` guard across `db.live()`, which
-/// locks `in_rows` again — only the `&&` short-circuit in `has()` kept the happy path alive. When a
-/// driver mutation reached that line the gateway suite HUNG instead of turning a test red. Every
-/// lock now goes through `lk` (`try_lock`), so the same re-entrancy is an instant, named panic.
-///
-/// This test asserts the property directly: hold a guard, take the same mutex again, and the
-/// process must come back with a failure rather than never coming back at all.
-#[test]
-fn a_re_entrant_lock_on_the_fake_shard_db_fails_instead_of_hanging() {
-    let db = FakeShardDb::with_character(
-        XGUID,
-        FakeChar {
-            map_id: 36,
-            instance_id: 7,
-            payload: "gear+spells".into(),
-        },
-    );
-    let _held = lk(&db.in_rows);
-    // `live()` reads `in_rows`. With `lock()` this call never returns.
-    let hit = no_hang(5, {
-        let db = db.clone();
-        move || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| db.live(XGUID)))
-                .err()
-                .map(|e| {
-                    e.downcast_ref::<String>().cloned().unwrap_or_else(|| {
-                        e.downcast_ref::<&str>()
-                            .map(|s| s.to_string())
-                            .unwrap_or_default()
-                    })
-                })
-        }
-    });
-    let msg = hit.expect(
-        "a re-entrant lock on FakeShardDb did not fail — it either succeeded (the fake is no \
-         longer mutex-guarded) or it would have hung, and a hang is not a pass (issue #37)",
-    );
-    assert!(
-        msg.contains("re-entrant lock on FakeShardDb"),
-        "unexpected panic: {msg}"
-    );
-}
+// ── Inventory dispatch (CMSG_SWAP_INV_ITEM / CMSG_AUTOSTORE_BAG_ITEM / CMSG_SWAP_ITEM /
+// CMSG_SELL_ITEM / CMSG_REPAIR_ITEM / CMSG_TRAINER_LIST) ───────────────────────────────────────────
+//
+// The 2026-08-10 thermo review found these 13 opcodes with zero offline coverage — first-hour
+// gameplay (moving items around the backpack, selling/repairing at a vendor, dying and coming back)
+// with no wire-to-store test. Each test below drives `enter_world` + a real CMSG frame and asserts
+// either the fake `WorldStore` recorded the RIGHT call+args, or the client got the RIGHT SMSG — the
+// same shape as `use_item_without_start_quest_falls_through_to_the_ordinary_use_path` above.
 
 #[test]
-fn a_character_moves_whole_between_two_databases_with_its_rows() {
-    // Wall-clock net: a wedged driver must FAIL, not hang the suite (issue #37).
-    no_hang(30, || {
-        let (src, dst, src_db, dst_db, calls) = xdb_pair(None);
-        super::transfer::settle_transfer(src.as_ref(), dst.as_ref(), XGUID)
-            .expect("transfer completes");
-
-        assert!(
-            !src_db.has(XGUID),
-            "the source copy must be destroyed (delete-last)"
-        );
-        assert!(
-            dst_db.live(XGUID),
-            "the character must be LIVE at the destination"
-        );
-        assert_eq!(
-            dst_db.get(XGUID).unwrap(),
-            FakeChar { map_id: 36, instance_id: 7, payload: "gear+spells".into() },
-            "the character-owned ROWS must arrive, not just its identity — a manifest-only blob lands \
-             a naked character with no gear, spells or quest log"
-        );
-        assert!(
-            src_db.settled() && dst_db.settled(),
-            "no escrow row may outlive a completed transfer"
-        );
-        assert!(
-            lk(&dst_db.instances).contains(&7),
-            "the instance must be mirrored onto the destination shard"
-        );
-        assert_eq!(
-            *lk(&src_db.evicted),
-            vec![7],
-            "the source shard must stop ticking the instance once the run has moved (#19 AC#2)"
-        );
-        let log = calls.lock().unwrap().clone();
-        assert_eq!(
-            log,
-            vec![
-                // The speculative fence-clear on the SOURCE, before anything else: the transfer id is
-                // the character guid, so an arrival in-row left here by an earlier hop would make
-                // `begin_transfer` replay into a no-op (see
-                // `a_second_transfer_of_the_same_character_is_never_swallowed_as_a_replay`). It costs
-                // one no-op reducer call on a fresh transfer and is the same cheap release the
-                // already-home path makes.
-                ("world".to_string(), "release_transfer".to_string()),
-                ("world".to_string(), "begin_transfer".to_string()),
-                ("instances".to_string(), "ensure_instance".to_string()),
-                ("instances".to_string(), "import_character_blob".to_string()),
-                ("world".to_string(), "confirm_import".to_string()),
-                ("world".to_string(), "finish_transfer".to_string()),
-                // #34: realm-core learns where the character settled HERE — after the escrow's own
-                // transaction committed, before the arrival copy goes live.
-                ("world".to_string(), "publish_shard_index".to_string()),
-                ("instances".to_string(), "release_transfer".to_string()),
-                ("world".to_string(), "evict_instance_population".to_string()),
-            ],
-            "the step ORDER is the safety property neither database can check for itself"
-        );
-    });
-}
-
-/// Issue #34 part 1: the realm-core character→shard index is written BY THE TRANSFER, not left for
-/// a future login's probe to discover.
-///
-/// Before this, `set_character_shard` had exactly one caller in the whole gateway — the login
-/// self-heal — so a completed cross-database transfer updated the SOURCE database's copy of the
-/// index (transactionally, inside `finish_transfer`) and nothing else. The copy `home_shard`
-/// actually reads is realm-core's, and it learned about the move at the character's next login, by
-/// probing every shard. #20 AC#3 was unmet, and correct only because the probe masked it.
-#[test]
-fn a_completed_transfer_publishes_the_destination_to_the_realm_core_index() {
-    no_hang(30, || {
-        let (src, dst, _src_db, _dst_db, _calls) = xdb_pair(None);
-        super::transfer::settle_transfer(src.as_ref(), dst.as_ref(), XGUID)
-            .expect("transfer completes");
-        assert_eq!(
-            *src.realm_index.lock().unwrap(),
-            vec![(XGUID, 36, 7)],
-            "the drive settled the character on map 36 / instance 7 and told realm-core nothing. \
-             Without this write the index is only ever corrected by the login self-heal, so every \
-             login pays a full shard probe to rediscover a fact the transfer already knew — and #19 \
-             and #23 both route on an index that is never true. The published location must be the \
-             ESCROW's destination, which is what `finish_transfer` just settled."
-        );
-    });
-}
-
-/// Step 5b publishes the ESCROW OUT-ROW's destination, never the caller's `plan`.
-///
-/// This is the clause the whole "a replication, not a stale-index generator" argument rests on —
-/// the index can only ever name a destination `finish_transfer` actually settled, because it is read
-/// from the same row `do_finish` recorded its own receipt from. Every other clause was executed;
-/// this one was not, and substituting `plan.dest_*` for `escrow.dest_*` survived the whole suite
-/// (adversarial review of PR #46). The two agree on today's call paths, which is exactly why nothing
-/// noticed — and `run_transfer` re-reads the escrow precisely because they are not guaranteed to.
-#[test]
-fn a_resumed_transfer_publishes_the_escrow_destination_not_the_callers_plan() {
-    no_hang(30, || {
-        let (src, dst, _src_db, _dst_db, _calls) = xdb_pair(None);
-        // Open the escrow against the destination the durable row names (map 36 / instance 7).
-        let opened = src
-            .character_destination(XGUID)
-            .expect("the durable row names a destination");
-        src.begin_transfer(&opened).expect("the escrow opens");
-        // Now drive with a plan naming somewhere ELSE. `begin_transfer` answers `Replay` — the row
-        // on disk is the authority and the plan is ignored — so the transfer settles at 36/7.
-        let stale = super::transfer::TransferPlan {
-            dest_map_id: 0,
-            dest_instance_id: 0,
-            ..opened
-        };
-        super::transfer::run_transfer_injected(src.as_ref(), dst.as_ref(), &stale, None)
-            .expect("the drive completes against the escrow on disk");
-        assert_eq!(
-            *src.realm_index.lock().unwrap(),
-            vec![(XGUID, 36, 7)],
-            "the index was published from the DRIVER'S PLAN instead of the escrow out-row. The plan \
-             is whatever the caller happened to hand in; the escrow is what `finish_transfer` just \
-             settled and what `do_finish` wrote the source's own receipt from. Publishing the plan \
-             makes step 5b able to name a destination the transfer did not go to — the exact \
-             stale-index generator #34 exists to rule out — and it does so silently, because on the \
-             ordinary call paths the two happen to agree."
-        );
-    });
-}
-
-/// The write is a REQUIRED step of the drive, not a best-effort side call: an unreachable
-/// realm-core fails the transfer rather than silently leaving the directory wrong.
-#[test]
-fn a_transfer_whose_index_publish_fails_does_not_report_success() {
-    no_hang(30, || {
-        let calls: ShardCallLog = Default::default();
-        let src_db = FakeShardDb::with_character(
-            XGUID,
-            FakeChar {
-                map_id: 36,
-                instance_id: 7,
-                payload: "gear+spells".into(),
-            },
-        );
-        let dst_db = FakeShardDb::empty();
-        let src = std::sync::Arc::new(InMemoryStore {
-            shard: "world".into(),
-            calls: calls.clone(),
-            xdb: Some(src_db.clone()),
-            publish_error: Some("realm-core database lyracore-realm is not connected".into()),
-            ..Default::default()
-        });
-        let dst = xstore("instances", dst_db.clone(), calls.clone(), None);
-        let err = super::transfer::settle_transfer(src.as_ref(), dst.as_ref(), XGUID)
-            .expect_err("a failed index publish must fail the drive");
-        assert!(
-            err.to_string().contains("lyracore-realm"),
-            "the failure must name realm-core, not be swallowed: a publish that shrugged off an \
-             unreachable index would be exactly the best-effort, independently-committing write \
-             #34 exists to remove. Got: {err:#}"
-        );
-
-        // …and the failure is RECOVERABLE, which is what makes propagating it safe: the character
-        // is already whole at the destination, only fenced, so a fresh driver with a working
-        // realm-core finishes the job. Nothing is lost and nothing is duplicated.
-        assert!(!src_db.has(XGUID) && dst_db.has(XGUID) && !dst_db.live(XGUID));
-        let src2 = xstore("world", src_db.clone(), calls.clone(), None);
-        let dst2 = xstore("instances", dst_db.clone(), calls, None);
-        super::transfer::settle_transfer(dst2.as_ref(), dst2.as_ref(), XGUID)
-            .expect("a fresh driver recovers the fenced arrival copy");
-        assert!(dst_db.live(XGUID) && dst_db.settled() && src_db.settled());
-        drop(src2);
-    });
-}
-
-#[test]
-fn a_gateway_kill_at_every_transfer_step_recovers_to_exactly_one_whole_copy() {
-    // Wall-clock net: a wedged driver must FAIL, not hang the suite (issue #37).
-    no_hang(30, || {
-        // AC#3, headless half: kill the driver at every step boundary, then let a fresh STATELESS
-        // driver re-run — the character ends whole on exactly one shard, every time.
-        //
-        // Driven off `ABORT_STEPS` itself rather than a literal copy of it. #34 added step 5b
-        // (`publish_shard_index`) to `ABORT_STEPS` and to the drive, but the literal list here was
-        // not updated — so the one boundary the PR introduced was the one boundary this matrix did
-        // not kill at, while the PR reported the matrix as covering it. A hand-copied list of the
-        // thing under test can only ever drift in the direction that loses coverage.
-        for kill_at in super::transfer::ABORT_STEPS {
-            let (src, dst, src_db, dst_db, _) = xdb_pair(Some(kill_at));
-            let first = super::transfer::settle_transfer(src.as_ref(), dst.as_ref(), XGUID);
-            if kill_at == "evict_instance_population" {
-                // The eviction is deliberately best-effort: the character is already whole by then, so
-                // failing the player's login over a performance wart would be strictly worse.
-                first.expect("an eviction failure must not fail the transfer");
-            } else {
-                assert!(
-                    first.is_err(),
-                    "the injected kill at {kill_at} must abort the drive"
-                );
-            }
-
-            // INVARIANT AT THE CRASH POINT.
-            assert!(
-                src_db.has(XGUID) || dst_db.has(XGUID),
-                "ZERO durable copies after a kill at {kill_at} — the character was lost"
-            );
-            assert!(
-                !(src_db.live(XGUID) && dst_db.live(XGUID)),
-                "the character is LIVE on both databases after a kill at {kill_at} — a dupe"
-            );
-
-            // A brand-new driver with NO memory of the interrupted attempt: it re-derives the plan from
-            // durable state alone (the escrow row, or the character row's own destination), which is
-            // the whole of gateway-restart recovery.
-            let calls: ShardCallLog = Default::default();
-            let src2 = xstore("world", src_db.clone(), calls.clone(), None);
-            let dst2 = xstore("instances", dst_db.clone(), calls.clone(), None);
-            let holder: &dyn WorldStore = if src_db.has(XGUID) {
-                src2.as_ref()
-            } else {
-                dst2.as_ref()
-            };
-            super::transfer::settle_transfer(holder, dst2.as_ref(), XGUID)
-                .unwrap_or_else(|e| panic!("recovery after a kill at {kill_at} failed: {e:#}"));
-
-            assert!(
-                !src_db.has(XGUID),
-                "after recovering from a kill at {kill_at} the source copy must be gone"
-            );
-            assert!(
-                dst_db.live(XGUID),
-                "after recovering from a kill at {kill_at} the character must be live at the destination"
-            );
-            assert_eq!(
-                dst_db.get(XGUID).unwrap().payload,
-                "gear+spells",
-                "recovery from a kill at {kill_at} must not lose the character-owned rows"
-            );
-            assert!(
-                src_db.settled() && dst_db.settled(),
-                "recovery from a kill at {kill_at} left an escrow row behind"
-            );
-        }
-    });
-}
-
-/// `LYRACORE_TRANSFER_ABORT_AFTER=<step>` must let the named step COMMIT and then kill the driver before
-/// the next one — that is the only way the live AC#3 matrix can aim at a specific crash boundary in
-/// a drive that completes in ~17ms. In a `cargo test` build the injected death is a panic rather
-/// than `process::abort()` (see `transfer::die_by_injection`), so it is observable here.
-#[test]
-fn an_injected_abort_stops_the_driver_after_the_named_step_and_before_the_next() {
-    for (i, step) in super::transfer::ABORT_STEPS.iter().enumerate() {
-        let (src, dst, src_db, dst_db, calls) = xdb_pair(None);
-        let plan = src
-            .character_destination(XGUID)
-            .expect("the durable row names the destination");
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            super::transfer::run_transfer_injected(src.as_ref(), dst.as_ref(), &plan, Some(step))
-        }));
-        assert!(
-            outcome.is_err(),
-            "LYRACORE_TRANSFER_ABORT_AFTER={step} did not kill the driver — it returned {:?}. A step that \
-             merely returns (Ok or Err) is a CLEAN exit and reproduces nothing about a kill -9.",
-            outcome.as_ref().map(|r| r.is_ok())
-        );
-
-        // The step named must have RUN (its transaction committed), and nothing after it may have.
-        let log = calls.lock().unwrap().clone();
-        let names: Vec<&str> = log.iter().map(|(_, n)| n.as_str()).collect();
-        assert_eq!(
-            names.last().copied(),
-            Some(*step),
-            "LYRACORE_TRANSFER_ABORT_AFTER={step} left the shard-call log ending at {:?} — the abort must \
-             land AFTER {step} commits, not before it and not after a later step",
-            names.last()
-        );
-        assert_eq!(
-            names.len(),
-            i + 1,
-            "LYRACORE_TRANSFER_ABORT_AFTER={step} drove {} shard calls ({names:?}) — expected exactly the \
-             {} steps up to and including {step}",
-            names.len(),
-            i + 1
-        );
-
-        // And the AC#3 invariant the live matrix asserts against the two real databases.
-        assert!(
-            src_db.has(XGUID) || dst_db.has(XGUID),
-            "ZERO durable copies after an injected abort at {step} — the character was lost"
-        );
-        assert!(
-            !(src_db.live(XGUID) && dst_db.live(XGUID)),
-            "the character is LIVE on both databases after an injected abort at {step} — a dupe"
-        );
+fn swap_inv_item_dispatches_move_item_with_the_wire_slots() {
+    // CMSG_SWAP_INV_ITEM drives move_item directly with the two ItemSlot wire values decoded to
+    // their u8 ordinals — no guid resolution needed (unlike sell/repair, which carry an item guid).
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_SWAP_INV_ITEM {
+        source_slot: ItemSlot::MainHand,
+        destination_slot: ItemSlot::Inventory1,
     }
-}
-
-/// The unconfigured default must be indistinguishable from having no injection point at all: same
-/// shard calls, same order, same result. (This repo has shipped three "unconfigured is
-/// byte-identical" violations already; this is the guard against a fourth.)
-#[test]
-fn an_unset_transfer_abort_injection_changes_nothing() {
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client); // move_item (Ok) sends no SMSG on this path
+    server.join().unwrap();
     assert_eq!(
-        std::env::var("LYRACORE_TRANSFER_ABORT_AFTER").ok(),
-        None,
-        "LYRACORE_TRANSFER_ABORT_AFTER is set in this test process — the fault injector is opt-in and no \
-         normal run (or test run) may have it in the environment"
-    );
-
-    let (src, dst, src_db, dst_db, calls) = xdb_pair(None);
-    let plan = src.character_destination(XGUID).unwrap();
-    super::transfer::run_transfer_injected(src.as_ref(), dst.as_ref(), &plan, None)
-        .expect("an unconfigured drive must complete exactly as before");
-
-    let injected: Vec<String> = calls
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|(_, n)| n.clone())
-        .collect();
-    assert_eq!(
-        injected,
-        super::transfer::ABORT_STEPS
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>(),
-        "an unconfigured drive must run every step, in order, and nothing else"
-    );
-    assert!(
-        !src_db.has(XGUID) && dst_db.live(XGUID),
-        "and land the character whole at the destination"
-    );
-}
-
-/// Source-scan tripwire for the one line no in-process test can reach: `run_transfer`'s ENV WIRING.
-///
-/// Both tests above drive `run_transfer_injected` directly — deliberately, so a parallel test
-/// runner never has process-global env mutated underneath it — which leaves the wrapper that
-/// actually arms the injector in production completely unexercised. Found by mutation during this
-/// PR's review: replacing the call's last argument with a literal `None` (the injector still
-/// present, still compiled, permanently DISARMED) left all 370 gateway tests GREEN, while
-/// `LYRACORE_TRANSFER_ABORT_AFTER` did nothing and every step of the live AC#3 matrix would time out
-/// waiting for a death that can no longer happen.
-///
-/// The unmatched-step warning is pinned here for the same reason: it is the only thing standing
-/// between a typo'd step name and a crash matrix that reports PASS for a crash that never fired,
-/// and no in-process test asserts a log line.
-#[test]
-fn run_transfer_still_arms_the_injector_from_the_environment() {
-    let src = include_str!("transfer.rs");
-    let at = src
-        .find("pub fn run_transfer(")
-        .expect("`run_transfer` moved");
-    let end = src[at..].find("\n}\n").expect("`run_transfer` body");
-    let body = &src[at..at + end];
-    assert!(
-        body.contains("std::env::var(\"LYRACORE_TRANSFER_ABORT_AFTER\")"),
-        "`run_transfer` no longer reads LYRACORE_TRANSFER_ABORT_AFTER — the injector is dead in the \
-         PRODUCTION build (the tests call `run_transfer_injected` directly and stay green). Body \
-         was:\n{body}"
-    );
-    assert!(
-        body.contains("run_transfer_injected(src, dst, plan, abort_after.as_deref())"),
-        "`run_transfer` reads the env but no longer THREADS it into `run_transfer_injected` — the \
-         read is decorative and every crash point is permanently disarmed. Body was:\n{body}"
-    );
-    assert!(
-        body.contains("ABORT_STEPS.contains(&step)"),
-        "`run_transfer` no longer validates the step name against `ABORT_STEPS` — a typo'd \
-         LYRACORE_TRANSFER_ABORT_AFTER would then abort NOTHING, silently, and the crash matrix would \
-         report a PASS for a crash that never happened. Body was:\n{body}"
+        store.moved_items.lock().unwrap().as_slice(),
+        &[(ItemSlot::MainHand.as_int(), ItemSlot::Inventory1.as_int())]
     );
 }
 
 #[test]
-fn the_driver_never_attests_an_import_that_did_not_commit() {
-    // `confirm_import` files the in-row that licenses `finish_transfer` to CASCADE-DELETE the
-    // source copy. Attesting before the destination copy is durable is the one unrecoverable
-    // ordering bug in the protocol — and it is the GATEWAY's to prevent, because the source
-    // database cannot see the destination.
-    let (src, dst, src_db, dst_db, calls) = xdb_pair(Some("import_character_blob"));
-    let err = super::transfer::settle_transfer(src.as_ref(), dst.as_ref(), XGUID)
-        .expect_err("a failed import must abort the drive");
-    assert!(
-        format!("{err:#}").contains("import_character_blob"),
-        "{err:#}"
-    );
-
-    let log = calls.lock().unwrap().clone();
-    assert!(
-        !log.iter()
-            .any(|(_, c)| c == "confirm_import" || c == "finish_transfer"),
-        "nothing may attest or finish after a failed import: {log:?}"
-    );
-    assert!(
-        src_db.has(XGUID),
-        "the source copy must survive a failed import"
-    );
-    assert!(!dst_db.has(XGUID), "no destination copy materialised");
+fn swap_inv_item_err_sends_inventory_change_failure() {
+    // The equip-slot-transition validation lives in the module; a rejection (e.g. wrong item type
+    // for that slot) must reach the client as SMSG_INVENTORY_CHANGE_FAILURE, exactly like the
+    // AUTOEQUIP arm's own error test above.
+    let mut s = quest_store();
+    s.trade_error = Some("cannot equip that there".into());
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_SWAP_INV_ITEM {
+        source_slot: ItemSlot::Inventory0,
+        destination_slot: ItemSlot::MainHand,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(_) => {} // correct feedback packet
+        other => panic!("expected SMSG_INVENTORY_CHANGE_FAILURE, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
 }
 
 #[test]
-fn a_transfer_is_never_finished_before_the_destination_copy_is_durable() {
-    // The module's own guard, driven through the gateway: `finish_transfer` refuses while the
-    // in-row is absent, so even a driver that skipped `confirm_import` cannot destroy the source.
-    let (_, _, src_db, dst_db, _) = xdb_pair(None);
-    let calls: ShardCallLog = Default::default();
-    let src = xstore("world", src_db.clone(), calls.clone(), None);
-    let _dst = xstore("instances", dst_db, calls, None);
-    let plan = src
-        .character_destination(XGUID)
-        .expect("the durable row names the destination");
-    src.begin_transfer(&plan).expect("escrow opens");
-
-    let err = src
-        .finish_transfer(plan.transfer_id)
-        .expect_err("finish must refuse");
-    assert!(format!("{err:#}").contains("not imported"), "{err:#}");
-    assert!(src_db.has(XGUID), "the source copy must still be there");
+fn autostore_bag_item_dispatches_unequip_item_for_an_equipped_slot() {
+    // Right-clicking an EQUIPPED item (source_bag 255 = main bag, source_slot within the equipment
+    // range 0..=EQUIPMENT_SLOT_END) unequips it into the backpack.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_AUTOSTORE_BAG_ITEM {
+        source_bag: 255,
+        source_slot: 16, // off-hand — inside 0..=18
+        destination_bag: 255,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.unequipped_slots.lock().unwrap().as_slice(), &[16]);
 }
 
 #[test]
-fn the_arrival_copy_is_fenced_until_the_source_copy_is_destroyed() {
-    // Delete-last, observed from the outside: at every prefix of the drive there is at most ONE
-    // live copy, and the destination only goes live after the source copy is gone.
-    let (_, _, src_db, dst_db, _) = xdb_pair(None);
-    let calls: ShardCallLog = Default::default();
-    let src = xstore("world", src_db.clone(), calls.clone(), None);
-    let dst = xstore("instances", dst_db.clone(), calls, None);
-    let plan = src.character_destination(XGUID).unwrap();
-
-    src.begin_transfer(&plan).unwrap();
+fn autostore_bag_item_from_a_backpack_slot_is_unsupported_and_does_not_unequip() {
+    // Slot 24 is a BACKPACK slot (>= 23, past EQUIPMENT_SLOT_END=18) — the handler's own guard must
+    // refuse it rather than blindly forwarding to unequip_item (there is nothing to unequip there).
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_AUTOSTORE_BAG_ITEM {
+        source_bag: 255,
+        source_slot: 24,
+        destination_bag: 255,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
     assert!(
-        !src_db.live(XGUID) && !dst_db.has(XGUID),
-        "frozen on the source, nothing arrived yet"
-    );
-    let escrow = src.escrowed_transfer(XGUID).unwrap();
-    dst.import_character_blob(escrow.transfer_id, &escrow.blob)
-        .unwrap();
-    assert!(
-        dst_db.has(XGUID) && !dst_db.live(XGUID),
-        "the arrival copy is durable but FENCED while the source copy still exists"
-    );
-    assert!(
-        src_db.has(XGUID) && !src_db.live(XGUID),
-        "and the source copy is durable but frozen"
-    );
-    src.confirm_import(escrow.transfer_id).unwrap();
-    src.finish_transfer(escrow.transfer_id).unwrap();
-    assert!(
-        !src_db.has(XGUID),
-        "the source copy is destroyed BEFORE the release"
-    );
-    assert!(!dst_db.live(XGUID), "still fenced until the release");
-    dst.release_transfer(escrow.transfer_id).unwrap();
-    assert!(dst_db.live(XGUID));
-}
-
-/// Issue #39 AC#2 + AC#5, the regression this ticket exists for: the SECOND party member walking
-/// into a dungeon whose instance the first member already opened.
-///
-/// Live, this was the case that broke — the first player transferred perfectly, repeatedly, and the
-/// party member behind her hung on the loading screen forever with `run_transfer` never entered.
-/// The driver half of that is here: two characters whose durable rows name the SAME instance both
-/// have to land on the instances shard, in that one instance, with the destination mirroring it
-/// once and spawning its population once. A second `ensure_instance` that re-created the dungeon
-/// would be a party playing in two copies of Deadmines.
-#[test]
-fn a_second_party_member_transfers_into_the_instance_the_first_one_opened() {
-    no_hang(30, || {
-        const LEADER: u64 = XGUID;
-        const MEMBER: u64 = XGUID + 1;
-        let calls: ShardCallLog = Default::default();
-        let src_db = FakeShardDb::with_character(
-            LEADER,
-            FakeChar {
-                map_id: 36,
-                instance_id: 7,
-                payload: "leader-gear".into(),
-            },
-        );
-        // The second member resolved to the SAME instance id at the portal — that is what the
-        // module's party-first resolution (and the `game_instance_binding` each member carries in
-        // their blob) is for. Both rows sit on the world shard; both are owed a transfer.
-        lk(&src_db.characters).insert(
-            MEMBER,
-            FakeChar {
-                map_id: 36,
-                instance_id: 7,
-                payload: "member-gear".into(),
-            },
-        );
-        let dst_db = FakeShardDb::empty();
-        let src = xstore("world", src_db.clone(), calls.clone(), None);
-        let dst = xstore("instances", dst_db.clone(), calls.clone(), None);
-
-        super::transfer::settle_transfer(src.as_ref(), dst.as_ref(), LEADER)
-            .expect("the first member transfers");
-        super::transfer::settle_transfer(src.as_ref(), dst.as_ref(), MEMBER)
-            .expect("the SECOND member must transfer too — this is the entry that hung live");
-
-        for (guid, payload) in [(LEADER, "leader-gear"), (MEMBER, "member-gear")] {
-            assert!(
-                dst_db.live(guid),
-                "guid {guid} must be live on the instances shard"
-            );
-            assert!(!src_db.has(guid), "guid {guid}'s source copy must be gone");
-            let landed = dst_db.get(guid).unwrap();
-            assert_eq!(
-                landed.instance_id, 7,
-                "guid {guid} landed in a DIFFERENT instance — the party is split"
-            );
-            assert_eq!(
-                landed.payload, payload,
-                "guid {guid} arrived without its rows"
-            );
-        }
-        assert_eq!(
-            *lk(&dst_db.instances),
-            std::collections::HashSet::from([7]),
-            "exactly one instance may exist on the destination — a second is a second dungeon"
-        );
-        assert_eq!(
-            *lk(&dst_db.populated),
-            vec![7],
-            "the destination must SPAWN the instance once; the second member joins the live one"
-        );
-        assert!(
-            src_db.settled() && dst_db.settled(),
-            "no escrow may outlive either transfer"
-        );
-        let log = calls.lock().unwrap().clone();
-        assert_eq!(
-            log.iter()
-                .filter(|(s, c)| s == "world" && c == "begin_transfer")
-                .count(),
-            2,
-            "BOTH members must really be escrowed off the world shard — the live failure was the \
-             second one's transfer never running at all: {log:?}"
-        );
-    });
-}
-
-#[test]
-fn the_instance_is_mirrored_before_the_character_arrives_in_it() {
-    // Ordering, not just presence: `player_login`'s stranding guard DIVERTS a character whose
-    // `pending_instance_id` names an instance that does not exist on this shard — so an import
-    // that landed before the mirror would put the player outside the dungeon they walked into.
-    let (src, dst, _, _, calls) = xdb_pair(None);
-    super::transfer::settle_transfer(src.as_ref(), dst.as_ref(), XGUID).unwrap();
-    let log = calls.lock().unwrap().clone();
-    let mirror = log
-        .iter()
-        .position(|(_, c)| c == "ensure_instance")
-        .expect("mirrored");
-    let import = log
-        .iter()
-        .position(|(_, c)| c == "import_character_blob")
-        .expect("imported");
-    assert!(
-        mirror < import,
-        "the instance must exist before the character lands in it: {log:?}"
+        store.unequipped_slots.lock().unwrap().is_empty(),
+        "a backpack slot must not be routed through unequip_item"
     );
 }
 
 #[test]
-fn an_open_world_destination_mirrors_and_evicts_nothing() {
-    // Zoning OUT: instance 0 is the open world, which is not an instance and must never be
-    // "mirrored" (the module refuses id 0) or evicted (that would tear down the open world).
-    let calls: ShardCallLog = Default::default();
-    let src_db = FakeShardDb::with_character(
-        XGUID,
-        FakeChar {
-            map_id: 0,
-            instance_id: 0,
-            payload: "gear+spells".into(),
-        },
-    );
-    let dst_db = FakeShardDb::empty();
-    let src = xstore("instances", src_db, calls.clone(), None);
-    let dst = xstore("world", dst_db.clone(), calls.clone(), None);
-    super::transfer::settle_transfer(src.as_ref(), dst.as_ref(), XGUID).unwrap();
-
-    assert!(dst_db.live(XGUID), "the character must come back out whole");
-    let log = calls.lock().unwrap().clone();
-    assert!(
-        !log.iter()
-            .any(|(_, c)| c == "ensure_instance" || c == "evict_instance_population"),
-        "instance 0 is the open world — it is neither mirrored nor evicted: {log:?}"
-    );
+fn swap_item_within_the_main_bag_dispatches_move_item_via_the_typo_field() {
+    // gtker's generated field is spelled `destionation_slot` (a typo baked into the wire crate) — a
+    // test that used the correctly-spelled name wouldn't compile, so this pins that the GATEWAY reads
+    // the field the wire actually carries.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_SWAP_ITEM {
+        source_bag: 255,
+        source_slot: 23,
+        destination_bag: 255,
+        destionation_slot: 30,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.moved_items.lock().unwrap().as_slice(), &[(23, 30)]);
 }
 
 #[test]
-fn a_character_already_on_its_home_shard_is_not_transferred_but_is_unfenced() {
-    // The steady state (every login that does not cross a boundary), PLUS the one crash window
-    // that leaves an arrival fence behind with no escrow anywhere to re-drive from: killed between
-    // `finish_transfer` and `release_transfer`. Without the speculative release the character would
-    // be fenced out of its own login forever.
-    let calls: ShardCallLog = Default::default();
-    let db = FakeShardDb::with_character(
-        XGUID,
-        FakeChar {
-            map_id: 36,
-            instance_id: 7,
-            payload: "gear+spells".into(),
-        },
-    );
-    lk(&db.in_rows).insert(XGUID, XGUID); // the orphaned arrival fence
-    let home = xstore("instances", db.clone(), calls.clone(), None);
-    assert!(!db.live(XGUID), "precondition: the character is fenced");
-
-    super::transfer::settle_transfer(home.as_ref(), home.as_ref(), XGUID).unwrap();
-    assert!(db.live(XGUID), "the stranded arrival fence must be cleared");
-    let log = calls.lock().unwrap().clone();
-    assert_eq!(
-        log.iter().filter(|(_, c)| c == "begin_transfer").count(),
-        0,
-        "a character already on its home shard must never be re-escrowed: {log:?}"
-    );
+fn swap_item_across_containers_is_unsupported_and_does_not_move() {
+    // Only the main inventory (bag 255) is modeled; a swap touching an equipped sub-bag (19..=22)
+    // must be refused rather than corrupting an unmodeled container.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_SWAP_ITEM {
+        source_bag: 19,
+        source_slot: 0,
+        destination_bag: 255,
+        destionation_slot: 23,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert!(store.moved_items.lock().unwrap().is_empty());
 }
 
 #[test]
-fn a_second_transfer_of_the_same_character_is_never_swallowed_as_a_replay() {
-    // THE REPEAT-TRANSFER CASE (review of #19). The transfer id IS the character guid, so every
-    // hop a character ever makes reuses ONE id — and `plan_begin` reads "an out-row OR an in-row
-    // filed under this id names this character" as `BeginPlan::Replay`, i.e. `Ok(())`.
-    //
-    // Reachable state: the character hopped world -> instances and the driver died between
-    // `finish_transfer` and `release_transfer`, so the instances shard holds the character AND an
-    // unreleased arrival in-row under id == guid. Now it has to hop OUT again (its location is
-    // owned by another shard: a shard-map edit, or a diverted
-    // instance re-entry). Without the fence being cleared first, `begin_transfer` on the instances
-    // shard replays into `Ok(())` while escrowing NOTHING — and the character is stuck on a shard
-    // it can never leave, failing its own login on every attempt, with no operator recourse.
-    let calls: ShardCallLog = Default::default();
-    let src_db = FakeShardDb::with_character(
-        XGUID,
-        FakeChar {
-            map_id: 0,
-            instance_id: 0,
-            payload: "gear+spells".into(),
-        },
-    );
-    lk(&src_db.in_rows).insert(XGUID, XGUID); // the previous hop's unreleased fence
-    let dst_db = FakeShardDb::empty();
-    let src = xstore("instances", src_db.clone(), calls.clone(), None);
-    let dst = xstore("world", dst_db.clone(), calls.clone(), None);
-
-    super::transfer::settle_transfer(src.as_ref(), dst.as_ref(), XGUID)
-        .expect("a repeat transfer of the same character must actually run");
-
-    assert!(
-        !src_db.has(XGUID),
-        "the source copy must be destroyed — not silently left behind"
-    );
-    assert!(
-        dst_db.live(XGUID),
-        "the character must arrive LIVE on the far side of hop two"
-    );
-    assert_eq!(
-        dst_db.get(XGUID).unwrap().payload,
-        "gear+spells",
-        "hop two must carry the rows exactly as hop one did"
-    );
-    assert!(
-        src_db.settled() && dst_db.settled(),
-        "no escrow row may outlive the second transfer"
-    );
-    let log = calls.lock().unwrap().clone();
-    assert_eq!(
-        log.iter()
-            .filter(|(s, c)| s == "instances" && c == "begin_transfer")
-            .count(),
-        1,
-        "begin_transfer must have really escrowed, not replayed into a no-op: {log:?}"
-    );
-}
-
-#[test]
-fn a_failed_transfer_fails_the_login_instead_of_entering_the_world_anyway() {
-    // A half-moved character must never be let into the world on whichever shard happened to
-    // answer. Both outcomes are recoverable (the escrow holds and the next login re-drives it), but
-    // only refusing is honest — and entering anyway is how a character ends up live on the shard
-    // that is about to have its copy destroyed.
-    let (store, _) = sharded_stores();
-    let failing = std::sync::Arc::new(InMemoryStore {
-        shard: "world".into(),
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 7,
-            session_key: K,
-        }),
-        characters: store.characters.clone(),
-        login_entity: Some(warrior_entity()),
-        settle_error: Some("instances shard unreachable".into()),
+fn sell_item_resolves_the_instance_guid_to_its_slot_before_dispatch() {
+    // CMSG_SELL_ITEM carries the item's INSTANCE guid, not a slot — the gateway must resolve it via
+    // player_items() before calling the module's slot-based sell_item.
+    let mut s = quest_store();
+    s.player_items_fixture = vec![codec::ItemInstanceView {
+        guid: 0x4000_0000_0000_0099,
+        slot: 30,
         ..Default::default()
-    });
-    let (mut client, server_end) = UnixStream::pair().unwrap();
-    let server = std::thread::spawn(move || run_world_session(server_end, failing.as_ref()));
-    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
-    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    // No login sequence arrives; the session ends with the transfer's error.
+    }];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_SELL_ITEM {
+        vendor: Guid::new(555),
+        item: Guid::new(0x4000_0000_0000_0099),
+        amount: 1,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    // 248: a successful sell also pushes the refreshed buyback tab (one raw VALUES frame) — drain it
+    // tolerantly, same as `buyback_maps_the_wire_slot_enum_to_zero_based_ring_slots` above.
     let _ = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec);
     drop(client);
-    let outcome = server.join().unwrap();
-    let err = outcome.expect_err("a failed transfer must fail the session, not enter the world");
-    assert!(
-        format!("{err:#}").contains("instances shard unreachable"),
-        "{err:#}"
-    );
+    server.join().unwrap();
+    assert_eq!(store.sold_items.lock().unwrap().as_slice(), &[(555, 30)]);
 }
 
 #[test]
-fn entering_the_world_binds_this_accounts_identity_on_the_shard_it_landed_on() {
-    // A character that arrived via `import_character_blob` has only a SHADOW account row on the
-    // destination, with no identity bound — and `world::player_login` resolves its caller through
-    // `account_by_identity`. Without this bind the arriving player cannot log in at all, on a
-    // database the logon tier never touched.
-    let (store, calls) = sharded_stores();
-    let home = store
-        .home
-        .clone()
-        .expect("the fixture routes to a home shard");
-    let _ = drive_routed_session(store, calls.clone());
-    assert_eq!(
-        *home.bound_sessions.lock().unwrap(),
-        vec![7],
-        "the home shard must have this account's identity bound before player_login runs"
-    );
-    let log = calls.lock().unwrap().clone();
-    let bind = log
-        .iter()
-        .position(|(s, c)| s == "instances" && c == "bind_shard_session");
-    let login = log
-        .iter()
-        .position(|(s, c)| s == "instances" && c == "player_login");
-    assert!(
-        bind < login && bind.is_some(),
-        "the identity must be bound BEFORE player_login, not after: {log:?}"
-    );
-}
-
-/// ENFORCEMENT tripwire, the module's `body_of` pattern: the production routing read lives on
-/// `Coordinator` and needs a live SDK cache, so no mock can drive it — and a mutation of it
-/// survived the first cut of this file's mutation pass. Source-scan it instead.
-#[test]
-fn the_routing_read_uses_the_pending_instance_id_not_a_hardcoded_zero() {
-    let src = include_str!("../stdb/reads.rs");
-    let start = src
-        .find("pub fn character_location(")
-        .expect("`character_location` moved — re-derive this tripwire");
-    let body = &src[start..start + src[start..].find("\n    }").expect("fn has a body")];
-    let code: String = body
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        code.contains("c.pending_instance_id"),
-        "character_location no longer reads `pending_instance_id` for a character with no live \
-         entity. That column is where `teleport_player` parks the DESTINATION instance for a \
-         cross-map hop, so it is the whole routing key for instance entry (#19): reading 0 there \
-         routes a player walking into Deadmines by MAP alone, which is correct only until a shard \
-         map names a bucket (`389:0=pool-a`, see `config::ShardMap`). Body was:\n{code}"
-    );
-}
-
-/// Sibling tripwire (same reason — a live SDK cache no mock reaches): a character parked inside a
-/// dungeon lives on the INSTANCE shard, and Phase A has no realm-core index to ask.
-#[test]
-fn the_character_select_list_still_unions_across_every_shard() {
-    let ws = include_str!("../stdb/world_store.rs");
-    let at = ws
-        .find("fn characters(&self, account_id: u64)")
-        .expect("`characters` moved");
-    assert!(
-        ws[at..at + 900].contains("self.all_shards()"),
-        "the character-select list no longer unions across shards (#19) — asking only the realm \
-         database makes a character that logged out inside an instance vanish from character \
-         select entirely, because its durable row is on the instance shard."
-    );
-}
-
-// The escrow-priority tripwire that used to live here (`locate_character_still_prefers_the_shard_
-// holding_the_escrow`, a source scan of `Coordinator::locate_character`) was retired by issue #47:
-// `settle_home_shard`'s holder lookup is now `realm_core::locate_home_shard`, generic over the
-// `RealmDb` seam, and the escrow-priority property is pinned BEHAVIOURALLY there instead —
-// `locate_home_shard_still_prefers_the_shard_holding_the_escrow_in_the_fallback_scan` in
-// `realm_core.rs`, which runs the real fallback-scan code against `fake::Handle` rather than
-// matching its source text.
-
-/// Sibling tripwire, for #21: what `Coordinator::instance_shard_for` actually FORWARDS.
-///
-/// `ShardMap::instance_owner` is pinned by its own unit tests and the call site in
-/// `settle_home_shard` is pinned by `routing_call_site_tests`, but the three-line adapter between
-/// them is reachable from neither — it needs a live `ShardSet`. Verified by mutation: each of the
-/// three substitutions below left all 391 gateway tests green while deleting or inverting the
-/// stickiness rule outright.
-#[test]
-fn instance_shard_for_still_forwards_the_holder_the_instance_and_the_connected_set() {
-    let conn = include_str!("../stdb/connection.rs");
-    let at = conn
-        .find("pub(crate) fn instance_shard_for(")
-        .expect("`instance_shard_for` moved");
-    let body: String = conn[at..at + 500]
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    // (a) the HOLDER, not `self`. `self` is the session's handle — on a login that is the default
-    //     shard, which is never a member of a dungeon map's pool, so stickiness could never fire.
-    // (b) the real `instance_id`. A literal `0` makes `instance_owner`'s open-world guard reject
-    //     every call, and the map decides again — i.e. live runs fork on a pool resize.
-    // (c) the CONNECTED predicate. `|_| true` would return a holder the gateway never reached,
-    //     which `shard_handle` then cannot resolve, pinning the session to whatever asked.
-    assert!(
-        body.contains("instance_owner(map_id, instance_id, holder,"),
-        "instance_shard_for no longer forwards (map_id, instance_id, holder) verbatim to \
-         `ShardMap::instance_owner` (#21). The holder is the ONLY durable evidence of which pool \
-         member a live dungeon run is on; substituting `self.shard_name()` or a literal instance \
-         id silently restores pre-#21 routing and forks every live run when the operator adds a \
-         second instances database. Body was:\n{body}"
-    );
-    assert!(
-        body.contains("self.1.conns.contains_key(d)"),
-        "instance_shard_for's `connected` predicate no longer reads the live connection set — a \
-         stickiness answer naming a database the gateway never reached cannot be routed to, and \
-         must degrade to the shard map like every other resolver in `config.rs`. Body was:\n{body}"
-    );
-}
-
-#[test]
-fn a_resumed_transfer_reuses_the_escrowed_destination_not_the_character_row() {
-    // Resume authority: once an escrow exists, ITS destination is the one the destination shard may
-    // already hold an imported copy for. Re-deriving from the (frozen) character row instead would
-    // drive the second half of the transfer at a different place than the first half imported into.
-    let calls: ShardCallLog = Default::default();
-    let src_db = FakeShardDb::with_character(
-        XGUID,
-        FakeChar {
-            map_id: 36,
-            instance_id: 7,
-            payload: "gear+spells".into(),
-        },
-    );
-    lk(&src_db.out_rows).insert(
-        XGUID,
-        FakeEscrow {
-            transfer_id: XGUID,
-            character_guid: XGUID,
-            dest_map_id: 36,
-            dest_instance_id: 42, // ← the escrow's destination, deliberately NOT the row's
-            blob: fake_blob(XGUID, 36, 42, "gear+spells"),
-        },
-    );
-    let dst_db = FakeShardDb::empty();
-    let src = xstore("world", src_db.clone(), calls.clone(), None);
-    let dst = xstore("instances", dst_db.clone(), calls.clone(), None);
-    super::transfer::settle_transfer(src.as_ref(), dst.as_ref(), XGUID).unwrap();
-    assert_eq!(
-        dst_db.get(XGUID).unwrap().instance_id,
-        42,
-        "the resumed transfer must land where the ESCROW says, not where the character row says"
-    );
-    assert!(
-        lk(&dst_db.instances).contains(&42),
-        "and it must mirror the escrow's instance"
-    );
-}
-
-// ===========================================================================================
-//  Issue #209: "SMSG_COMPRESSED_MOVES corrupts at crowd scale" — regression pins.
-//
-//  Root-cause finding: the gateway never constructs `SMSG_COMPRESSED_MOVES` — a full-repo grep for
-//  `compressed_moves`/`COMPRESSED_MOVES`/`flate2` and a `git log -S "COMPRESSED_MOVES" --all` both
-//  come up empty. A direct probe of `wow_world_messages` 0.3's own codec for that opcode (encode via
-//  `write_into_vec`, decode via `ServerOpcodeMessage::read_unencrypted`) round-trips cleanly through
-//  at least 3000 synthetic movers; it only silently truncates its u16 size field past ~9000 movers,
-//  an order of magnitude past anything #209 reports. So "compressed moves corrupts" is not an encode
-//  defect in that opcode.
-//
-//  The likelier mechanism: `SMSG_COMPRESSED_MOVES` and `SMSG_COMPRESSED_UPDATE_OBJECT` are the ONLY
-//  two decoders in the entire vanilla message set with an internal `.unwrap()` (on a flate2
-//  `read_to_end`) instead of a graceful `Result` — every other decoder in `wow_world_messages` 0.3
-//  returns `Err` on garbage input. `wow_world_messages`' own framing reads exactly the header's
-//  declared `size` bytes into an in-memory buffer BEFORE dispatching to any per-opcode decoder, so a
-//  decode-internal panic on THIS opcode cannot itself desync the socket — but if an EARLIER frame's
-//  declared size was ever wrong for any reason, every later header decrypts from the wrong stream
-//  offset, and the first opcode whose decoder panics instead of erroring is deterministically where
-//  the crash surfaces — regardless of what actually caused the desync. That makes this decoder the
-//  "weakest link" any unrelated corruption converges on, not necessarily the origin.
-//
-//  What follows pins the two real, high-volume movement paths — `SMSG_MONSTER_MOVE` typed sends and
-//  the `Outbound::Raw` peer-motion relay (work-item 286) — through the ACTUAL `spawn_writer` (the
-//  single writer thread that owns the header cipher) with a REAL `wow_srp` cipher pair, at the exact
-//  scale #209 reports (100 known-good, 150/300/500 the reported-bad range). If the writer ever
-//  mis-declared one frame's size, this is where it would show up: as a decode failure on THIS test,
-//  not as an unrelated panic on an opcode the gateway doesn't send.
-// ===========================================================================================
-
-/// Push `n` movers' worth of both hot movement paths through a real `spawn_writer` + real cipher
-/// pair, then decode every frame back and demand: no decode error, and exactly `n` of each opcode,
-/// in order. A stream desync from a wrong size field would manifest here as either a decode `Err`
-/// or a frame decoding to the wrong `ServerOpcodeMessage` variant.
-fn movement_burst_over_a_real_cipher(n: usize) {
-    let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 42,
-            session_key: K,
-        }),
-        ..Default::default()
-    });
-    let (mut client, server_end) = UnixStream::pair().unwrap();
-    let server_store = store.clone();
-    let server = std::thread::spawn(move || {
-        let mut s = server_end;
-        let (_conn, encrypt) = world_handshake(&mut s, server_store.as_ref())
-            .unwrap()
-            .expect("handshake should succeed");
-        (s, encrypt)
-    });
-    let (_c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
-    let (s, encrypt) = server
-        .join()
-        .expect("server handshake thread must not panic");
-
-    let (tx, rx, depth) = session_channel();
-    let writer = spawn_writer(s, encrypt, rx, depth, 1).expect("spawn the writer thread");
-
-    // The reader MUST run concurrently with the writer, not after `writer.join()` — a Unix domain
-    // socket's kernel send buffer is finite, and a burst past it makes the writer's `write_all`
-    // block waiting for a reader that (if it only starts after the writer finishes) never comes:
-    // a real deadlock, caught empirically writing this test (it hung indefinitely at n=500 with
-    // both threads idle, not merely slow). Draining while the writer produces mirrors what a real
-    // socket pair does in production — neither side ever waits on a queue nobody is draining.
-    let reader = std::thread::spawn(move || {
-        let mut monster_moves = 0usize;
-        let mut heartbeats = 0usize;
-        for _ in 0..(2 * n) {
-            match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec) {
-                Ok(ServerOpcodeMessage::SMSG_MONSTER_MOVE(_)) => monster_moves += 1,
-                Ok(ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(_)) => heartbeats += 1,
-                Ok(other) => panic!(
-                    "n={n}: decoded an unexpected opcode after {monster_moves} monster-moves + \
-                     {heartbeats} heartbeats — this IS a stream desync: {other}"
-                ),
-                Err(e) => panic!(
-                    "n={n}: decode failed after {monster_moves} monster-moves + {heartbeats} \
-                     heartbeats — exactly the shape of #209's crash (a desynced header decoding to \
-                     garbage): {e}"
-                ),
-            }
-        }
-        (monster_moves, heartbeats)
-    });
-
-    for i in 0..n {
-        let guid = 0x1000_0000_0000_0000u64 + i as u64;
-        let start = wow_world_messages::vanilla::Vector3d {
-            x: -8938.0 + i as f32,
-            y: -131.0,
-            z: 83.5,
-        };
-        let dest = wow_world_messages::vanilla::Vector3d {
-            x: -8900.0 + i as f32,
-            y: -100.0,
-            z: 82.4,
-        };
-        let m = codec::build_monster_move(guid, start, dest, 500, i as u32 + 1, i % 2 == 0);
-        tx.send(Outbound::One(ServerOpcodeMessage::SMSG_MONSTER_MOVE(
-            Box::new(m),
-        )))
-        .expect("writer thread must still be alive mid-burst");
-
-        let info = MovementInfo {
-            flags: wow_world_messages::vanilla::MovementInfo_MovementFlags::empty(),
-            timestamp: i as u32,
-            position: wow_world_messages::vanilla::Vector3d {
-                x: 100.0 + i as f32,
-                y: 0.0,
-                z: 0.0,
-            },
-            orientation: 0.0,
-            fall_time: 0.0,
-        };
-        let info_bytes = codec::movement_info_to_bytes(&info)
-            .expect("a well-formed MovementInfo must serialize");
-        let (opcode, body) = codec::build_movement_relay_raw(
-            lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT,
-            guid,
-            &info_bytes,
-        )
-        .expect("a valid MovementInfo carrier must always produce a relay frame");
-        tx.send(Outbound::Raw { opcode, body })
-            .expect("writer thread must still be alive mid-burst");
+fn sell_item_for_an_unknown_guid_does_not_dispatch() {
+    // No fixture item matches this guid (already sold / never ours) — the gateway must log + ignore
+    // rather than calling sell_item with a garbage slot.
+    let store = std::sync::Arc::new(quest_store()); // player_items_fixture stays empty
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_SELL_ITEM {
+        vendor: Guid::new(555),
+        item: Guid::new(0x4000_0000_0000_0099),
+        amount: 1,
     }
-    drop(tx);
-    writer
-        .join()
-        .expect("writer thread must not panic under a movement burst");
-    let (monster_moves, heartbeats) = reader.join().expect("reader thread must not panic");
-
-    assert_eq!(
-        monster_moves, n,
-        "n={n}: lost or gained a typed SMSG_MONSTER_MOVE frame"
-    );
-    assert_eq!(
-        heartbeats, n,
-        "n={n}: lost or gained a raw peer-motion relay frame"
-    );
-}
-
-#[test]
-fn writer_thread_survives_movement_bursts_from_100_to_500_movers_without_desync() {
-    // 100 is the report's own known-good control; 150/300/500 span and exceed the reported-bad
-    // range (150+) and the natural live-validation target (a 300-mage raid, #209's own repro line).
-    for n in [100usize, 150, 300, 500] {
-        movement_burst_over_a_real_cipher(n);
-    }
-}
-
-/// #209 probe (writer-side black box): [`WriterTrace::record`] must recover the SAME `(opcode,
-/// size)` pair for the typed `Outbound::One` path as the wire actually carries — pinned against a
-/// real gtker message rather than trusting the `write_unencrypted_server` re-derivation blind.
-/// `SMSG_MONSTER_MOVE`'s body length is data-dependent (spline point count), so this also proves
-/// the ring doesn't hard-code a size.
-#[test]
-fn writer_trace_records_the_typed_path_opcode_and_size() {
-    let m = codec::build_monster_move(
-        0xF130_0000_0000_0001,
-        wow_world_messages::vanilla::Vector3d {
-            x: -8938.0,
-            y: -131.0,
-            z: 83.5,
-        },
-        wow_world_messages::vanilla::Vector3d {
-            x: -8900.0,
-            y: -100.0,
-            z: 82.4,
-        },
-        500,
-        1,
-        true,
-    );
-    let msg = ServerOpcodeMessage::SMSG_MONSTER_MOVE(Box::new(m));
-    let mut plain = Vec::new();
-    msg.write_unencrypted_server(&mut plain).unwrap();
-    let expected_size = u16::from_be_bytes([plain[0], plain[1]]);
-    let expected_opcode = u16::from_le_bytes([plain[2], plain[3]]);
-    let expected_checksum = fnv1a64(&plain[4..]);
-
-    let mut trace = WriterTrace::new();
-    trace.record(&Outbound::One(msg));
-
-    assert_eq!(
-        trace.ring.len(),
-        1,
-        "one Outbound::One must record exactly one frame"
-    );
-    let entry = trace.ring[0];
-    assert_eq!(entry.opcode, expected_opcode);
-    assert_eq!(entry.size, expected_size);
-    assert_eq!(entry.checksum, expected_checksum);
-}
-
-/// A `Batch` of N messages is N frames on the wire (the writer sends each contiguously) — the ring
-/// must expand it to N entries, not collapse it to one, or a diff against the harness's per-frame
-/// dump would silently misalign after the first batch.
-#[test]
-fn writer_trace_expands_a_batch_into_one_entry_per_message() {
-    let make = |i: u32| {
-        let m = codec::build_monster_move(
-            0x2000_0000_0000_0000 + i as u64,
-            wow_world_messages::vanilla::Vector3d {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            },
-            wow_world_messages::vanilla::Vector3d {
-                x: 1.0,
-                y: 1.0,
-                z: 1.0,
-            },
-            100,
-            i + 1,
-            false,
-        );
-        ServerOpcodeMessage::SMSG_MONSTER_MOVE(Box::new(m))
-    };
-    let mut trace = WriterTrace::new();
-    trace.record(&Outbound::Batch(vec![make(0), make(1), make(2)]));
-    assert_eq!(
-        trace.ring.len(),
-        3,
-        "a 3-message Batch must expand to 3 traced frames"
-    );
-}
-
-/// `Outbound::Raw`'s entry must reflect the EXACT body handed to it — `size` is `2 + body.len()`
-/// (matching `spawn_writer`'s own framing, not gtker's), and the checksum is over the raw body
-/// bytes with no re-serialization in between (Raw never touches gtker's codec).
-#[test]
-fn writer_trace_records_the_raw_path_verbatim() {
-    let body = vec![0xAAu8, 0xBB, 0xCC, 0xDD, 0xEE];
-    let mut trace = WriterTrace::new();
-    trace.record(&Outbound::Raw {
-        opcode: 0x00EE,
-        body: body.clone(),
-    });
-    let entry = trace.ring[0];
-    assert_eq!(entry.opcode, 0x00EE);
-    assert_eq!(entry.size, 2 + body.len() as u16);
-    assert_eq!(entry.checksum, fnv1a64(&body));
-}
-
-/// The ring is bounded at [`WriterTrace::CAPACITY`] — a long-lived session must not grow this
-/// unboundedly; pushing past capacity drops the OLDEST entry (a FIFO ring, oldest-first on dump).
-#[test]
-fn writer_trace_ring_caps_at_capacity_and_drops_oldest() {
-    let mut trace = WriterTrace::new();
-    for i in 0..(WriterTrace::CAPACITY + 5) {
-        trace.push(i as u16, 0, 0);
-    }
-    assert_eq!(trace.ring.len(), WriterTrace::CAPACITY);
-    // The oldest 5 pushes (opcodes 0..5) must have been evicted; the ring now starts at 5.
-    assert_eq!(trace.ring.front().unwrap().opcode, 5);
-    assert_eq!(
-        trace.ring.back().unwrap().opcode,
-        (WriterTrace::CAPACITY + 4) as u16
-    );
-}
-
-/// `dump` writes a real file under `/tmp/gw-writer-crash/<account_id>.txt` — the whole point of the
-/// black box is that it survives the process exiting the way #209's crash does. Uses a distinctive
-/// account id to avoid colliding with a real session's dump from a live repro run on the same box.
-#[test]
-fn writer_trace_dump_writes_a_file_with_the_traced_frames() {
-    let mut trace = WriterTrace::new();
-    trace.push(0x00EE, 31, 0xDEAD_BEEF_0000_0001);
-    trace.push(0x0130, 6, 0xDEAD_BEEF_0000_0002);
-    const ACCOUNT: u64 = 0x0FFF_FFFF_F209_0000; // won't collide with a real bench account id
-    trace.dump(ACCOUNT, "test-induced dump, not a real session end");
-
-    let path = format!("/tmp/gw-writer-crash/{ACCOUNT}.txt");
-    let contents = std::fs::read_to_string(&path).expect("dump must write a readable file");
-    assert!(
-        contents.contains("opcode=0x00EE"),
-        "missing first frame: {contents}"
-    );
-    assert!(
-        contents.contains("opcode=0x0130"),
-        "missing second frame: {contents}"
-    );
-    assert!(
-        contents.contains("test-induced dump"),
-        "missing the end reason: {contents}"
-    );
-    let _ = std::fs::remove_file(&path); // leave /tmp clean for a real repro's dumps
-}
-
-/// #209 hardening (this diff's actual fix): an `Outbound::Raw` body that overflows the u16 frame-size
-/// field must end the session instead of silently wrapping the declared size — the wrap is exactly
-/// the "one wrong size field desyncs every later header" mechanism this whole investigation chased.
-/// No current builder produces a body this large (confirmed by reading every `Outbound::Raw` call
-/// site), so this exercises the guard directly rather than waiting for a caller to reach it.
-///
-/// Mutation-checked by hand: reverting this arm to the old `debug_assert!`-only form makes this test
-/// FAIL — in `cargo test`'s own debug profile, the reinstated `debug_assert!` fires and panics the
-/// `world-writer` thread (caught here as `writer.join()` returning `Err`, not `Ok`). That panic is a
-/// debug-profile-only tripwire, though: in the RELEASE profile the capacity benchmark and any live
-/// deploy actually run, `debug_assert!` compiles out entirely and the `as u16` cast just wraps
-/// silently — a header claiming a tiny size, followed by the full oversized body, corrupting every
-/// packet after it. The mutation is caught here either way (panic in debug, corruption in release);
-/// this test's own build only exercises the debug-panic half of that story.
-#[test]
-fn oversized_raw_body_ends_the_session_instead_of_wrapping_the_size_field() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 42,
-            session_key: K,
-        }),
-        ..Default::default()
-    });
-    let (mut client, server_end) = UnixStream::pair().unwrap();
-    let server_store = store.clone();
-    let server = std::thread::spawn(move || {
-        let mut s = server_end;
-        let (_conn, encrypt) = world_handshake(&mut s, server_store.as_ref())
-            .unwrap()
-            .expect("handshake should succeed");
-        (s, encrypt)
-    });
-    let (_c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
-    let (s, encrypt) = server
-        .join()
-        .expect("server handshake thread must not panic");
-
-    let (tx, rx, depth) = session_channel();
-    let writer = spawn_writer(s, encrypt, rx, depth, 1).expect("spawn the writer thread");
-
-    // 2 (opcode) + this body must exceed u16::MAX to hit the guard.
-    let oversized_body = vec![0xABu8; u16::MAX as usize];
-    tx.send(Outbound::Raw {
-        opcode: 0x00A9,
-        body: oversized_body,
-    })
+    .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    drop(tx);
-
-    // The guard must make the writer end the connection cleanly, not hang and not panic.
-    writer
-        .join()
-        .expect("the writer thread must not panic on an oversized raw body");
-
-    // Nothing valid was ever written for this frame: the client sees EOF, not a bogus small-size
-    // frame followed by the oversized body. `read_encrypted` reads a 4-byte header first, so with
-    // zero bytes on the wire this must fail (EOF), never `Ok`.
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec) {
-        Err(_) => {}
-        Ok(m) => panic!(
-            "expected a clean EOF (nothing sent for the oversized frame), but decoded {m} — the \
-             size field wrapped and the client just parsed a corrupt frame as if it were real"
-        ),
-    }
+    drop(client); // no match → no sell_item call → no buyback-view push, no SMSG at all
+    server.join().unwrap();
+    assert!(store.sold_items.lock().unwrap().is_empty());
 }
 
-// ===========================================================================================
-//  Issue #209, discriminator round 2 (2026-08-04): movement-only load stayed clean at 500 co-located
-//  movers (the test above), but the real repro — a mage-boss raid pull, `--cast-spell 133` — crashes
-//  at 150 co-located CASTERS. That narrows the corrupt frame to the SPELL/COMBAT relay plane, not
-//  movement. This mirrors `movement_burst_over_a_real_cipher` above (PR #218's rig) for the frames
-//  that plane actually emits per cast, enumerated by reading every `Outbound::One`/`Outbound::Raw`
-//  send site on the cast/combat path (`gateway/src/stdb/subscriptions.rs`'s `on_cast`/`on_combat`
-//  listeners, and `world/mod.rs`'s synchronous `CMSG_CAST_SPELL` handler):
-//
-//    SMSG_SPELL_START            - cast-begin (subscriptions.rs on_cast; world/mod.rs sync ack)
-//    SMSG_SPELL_GO               - cast visual/finalize (subscriptions.rs on_cast + on_combat ranged;
-//                                   world/mod.rs sync ack)
-//    SMSG_SPELLNONMELEEDAMAGELOG - floating spell/ranged damage number (subscriptions.rs on_cast,
-//                                   on_combat ranged, on_impact projectile-land)
-//    SMSG_SPELL_COOLDOWN         - cooldown swipe, only for spells that have one (subscriptions.rs
-//                                   on_cast)
-//    SMSG_ATTACKERSTATEUPDATE    - melee swing (subscriptions.rs on_combat, non-ranged non-spell-swing)
-//    SMSG_SPELL_FAILURE/SMSG_SPELL_DELAYED - interrupt/pushback signals (subscriptions.rs on_cast) —
-//                                   rarer than the per-cast steady state above, not swept here
-//    Outbound::Raw{0x0130} SMSG_CAST_RESULT - the caster-only cast ACK (subscriptions.rs on_cast,
-//                                   world/mod.rs sync handler). DELIBERATELY EXCLUDED from this rig's
-//                                   round-trip below: gtker's own typed `SMSG_CAST_RESULT` decoder has
-//                                   the Success/Failure branch condition INVERTED from the real 1.12
-//                                   protocol (see `codec::combat::build_cast_result_ok`'s doc comment —
-//                                   this is why the gateway sends it via `Outbound::Raw` at all). A
-//                                   5-byte OK body (spell_id + 0x00) makes gtker's decoder try to read
-//                                   a Success-only "reason" byte that was never sent, which errors —
-//                                   correctly, for the real client, but as an artifact of THIS crate's
-//                                   own decoder, not of anything the gateway did wrong. Asserting this
-//                                   opcode round-trips through `ServerOpcodeMessage::read_encrypted`
-//                                   here would just fail on that pre-existing, unrelated gap and add
-//                                   noise to the #209 hunt, not signal.
-//
-//  Same rig as the movement test: real `spawn_writer`, real `wow_srp` cipher pair, a concurrently
-//  draining reader (the same deadlock trap applies), interleaved with the SAME movement heartbeat
-//  relay PR #218 already pinned clean — because the real repro is combat+cast ON TOP OF movement,
-//  not combat alone.
-// ===========================================================================================
-
-/// Push `n` casters' worth of one full per-cast sequence (SPELL_START → SPELL_GO →
-/// SPELLNONMELEEDAMAGELOG → SPELL_COOLDOWN, mirroring a single boss-target Fireball rotation) PLUS one
-/// boss-swing ATTACKERSTATEUPDATE and one peer-motion heartbeat, through a real `spawn_writer` + real
-/// cipher pair, then decode every frame back and demand: no decode error, and exactly `n` of each
-/// opcode, in order. A stream desync from a wrong size field on ANY of these opcodes would manifest
-/// here as a decode `Err` or a wrong-variant decode — precisely #209's crash shape, but attributable
-/// to the SPELL/COMBAT plane instead of movement.
-fn combat_cast_burst_over_a_real_cipher(n: usize) {
-    let store = std::sync::Arc::new(InMemoryStore {
-        username: "TESTER".into(),
-        session: Some(WorldSession {
-            account_id: 42,
-            session_key: K,
-        }),
+#[test]
+fn repair_item_resolves_the_instance_guid_to_its_slot_before_dispatch() {
+    let mut s = quest_store();
+    s.player_items_fixture = vec![codec::ItemInstanceView {
+        guid: 0x4000_0000_0000_0042,
+        slot: 7,
         ..Default::default()
-    });
-    let (mut client, server_end) = UnixStream::pair().unwrap();
-    let server_store = store.clone();
-    let server = std::thread::spawn(move || {
-        let mut s = server_end;
-        let (_conn, encrypt) = world_handshake(&mut s, server_store.as_ref())
-            .unwrap()
-            .expect("handshake should succeed");
-        (s, encrypt)
-    });
-    let (_c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
-    let (s, encrypt) = server
-        .join()
-        .expect("server handshake thread must not panic");
-
-    let (tx, rx, depth) = session_channel();
-    let writer = spawn_writer(s, encrypt, rx, depth, 1).expect("spawn the writer thread");
-
-    const SPELL_ID: u32 = 133; // Fireball — the #209 repro's own `--cast-spell 133`
-    const BOSS_GUID: u64 = 0xF130_0000_0000_0001; // one shared raid target, mirrors raid-mode BENCH_ARGS
-    const FRAMES_PER_CASTER: usize = 6; // START + GO + DAMAGE_LOG + COOLDOWN + ATTACKERSTATEUPDATE + heartbeat
-
-    // The reader MUST run concurrently with the writer — see `movement_burst_over_a_real_cipher`'s
-    // comment on the exact same deadlock this rig hit empirically at n=500 there.
-    let reader = std::thread::spawn(move || {
-        let mut starts = 0usize;
-        let mut goes = 0usize;
-        let mut damage_logs = 0usize;
-        let mut cooldowns = 0usize;
-        let mut swings = 0usize;
-        let mut heartbeats = 0usize;
-        for _ in 0..(FRAMES_PER_CASTER * n) {
-            match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec) {
-                Ok(ServerOpcodeMessage::SMSG_SPELL_START(_)) => starts += 1,
-                Ok(ServerOpcodeMessage::SMSG_SPELL_GO(_)) => goes += 1,
-                Ok(ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(_)) => damage_logs += 1,
-                Ok(ServerOpcodeMessage::SMSG_SPELL_COOLDOWN(_)) => cooldowns += 1,
-                Ok(ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(_)) => swings += 1,
-                Ok(ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(_)) => heartbeats += 1,
-                Ok(other) => panic!(
-                    "n={n}: decoded an unexpected opcode after {starts} starts + {goes} goes + \
-                     {damage_logs} damage-logs + {cooldowns} cooldowns + {swings} swings + \
-                     {heartbeats} heartbeats — this IS a stream desync, on the SPELL/COMBAT plane: \
-                     {other}"
-                ),
-                Err(e) => panic!(
-                    "n={n}: decode failed after {starts} starts + {goes} goes + {damage_logs} \
-                     damage-logs + {cooldowns} cooldowns + {swings} swings + {heartbeats} \
-                     heartbeats — exactly #209's crash shape, on the SPELL/COMBAT plane: {e}"
-                ),
-            }
-        }
-        (starts, goes, damage_logs, cooldowns, swings, heartbeats)
-    });
-
-    for i in 0..n {
-        let caster = 0x1000_0000_0000_0000u64 + i as u64;
-        let damage = 40 + (i as u32 % 60); // varies the body, like a real crit/resist spread would
-
-        let start = codec::build_spell_start(caster, SPELL_ID, 0, 0, None);
-        tx.send(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(
-            Box::new(start),
-        )))
-        .expect("writer thread must still be alive mid-burst");
-
-        let go = codec::build_spell_go(caster, SPELL_ID, BOSS_GUID, None);
-        tx.send(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(Box::new(
-            go,
-        ))))
-        .expect("writer thread must still be alive mid-burst");
-
-        let log = codec::build_spell_non_melee_damage_log(
-            BOSS_GUID,
-            caster,
-            SPELL_ID,
-            damage,
-            2, /* fire */
-            i % 5 == 0,
-            0,
-            0,
-        );
-        tx.send(Outbound::One(
-            ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(log)),
-        ))
-        .expect("writer thread must still be alive mid-burst");
-
-        let cd = codec::build_spell_cooldown(caster, SPELL_ID, 1500);
-        tx.send(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_COOLDOWN(
-            Box::new(cd),
-        )))
-        .expect("writer thread must still be alive mid-burst");
-
-        // The boss swinging back at whichever caster it's leashed onto this tick — real raid load is
-        // casts AND incoming melee at once, not casts in isolation.
-        let swing = codec::build_attacker_state_update(BOSS_GUID, caster, damage, 0, 0, 0);
-        tx.send(Outbound::One(
-            ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(Box::new(swing)),
-        ))
-        .expect("writer thread must still be alive mid-burst");
-
-        let info = MovementInfo {
-            flags: wow_world_messages::vanilla::MovementInfo_MovementFlags::empty(),
-            timestamp: i as u32,
-            position: wow_world_messages::vanilla::Vector3d {
-                x: -8938.0 + i as f32,
-                y: -131.0,
-                z: 83.5,
-            },
-            orientation: 0.0,
-            fall_time: 0.0,
-        };
-        let info_bytes = codec::movement_info_to_bytes(&info)
-            .expect("a well-formed MovementInfo must serialize");
-        let (opcode, body) = codec::build_movement_relay_raw(
-            lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT,
-            caster,
-            &info_bytes,
-        )
-        .expect("a valid MovementInfo carrier must always produce a relay frame");
-        tx.send(Outbound::Raw { opcode, body })
-            .expect("writer thread must still be alive mid-burst");
+    }];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_REPAIR_ITEM {
+        npc: Guid::new(200),
+        item: Guid::new(0x4000_0000_0000_0042),
     }
-    drop(tx);
-    writer
-        .join()
-        .expect("writer thread must not panic under a combat+cast burst");
-    let (starts, goes, damage_logs, cooldowns, swings, heartbeats) =
-        reader.join().expect("reader thread must not panic");
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client); // repair_item (Ok) sends no SMSG on this path
+    server.join().unwrap();
+    assert_eq!(store.repaired_items.lock().unwrap().as_slice(), &[(200, 7)]);
+}
 
-    assert_eq!(starts, n, "n={n}: lost or gained a SMSG_SPELL_START frame");
-    assert_eq!(goes, n, "n={n}: lost or gained a SMSG_SPELL_GO frame");
+#[test]
+fn repair_item_guid_zero_is_repair_all_and_dispatches_the_whole_body_slot() {
+    // 252 live find: the client's REPAIR-ALL button sends item guid 0, which the gateway routes to
+    // the module's whole-body slot (u8::MAX) WITHOUT going through player_items() resolution — no
+    // items are seeded here, so a wrongly-routed per-item lookup would find nothing and skip the call.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_REPAIR_ITEM {
+        npc: Guid::new(200),
+        item: Guid::new(0),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
     assert_eq!(
-        damage_logs, n,
-        "n={n}: lost or gained a SMSG_SPELLNONMELEEDAMAGELOG frame"
-    );
-    assert_eq!(
-        cooldowns, n,
-        "n={n}: lost or gained a SMSG_SPELL_COOLDOWN frame"
-    );
-    assert_eq!(
-        swings, n,
-        "n={n}: lost or gained a SMSG_ATTACKERSTATEUPDATE frame"
-    );
-    assert_eq!(
-        heartbeats, n,
-        "n={n}: lost or gained a peer-motion relay frame"
+        store.repaired_items.lock().unwrap().as_slice(),
+        &[(200, u8::MAX)]
     );
 }
 
 #[test]
-fn writer_thread_survives_combat_cast_bursts_from_100_to_300_casters_without_desync() {
-    // 100 = clean per the movement test's own control range; 150 = the discriminator's OWN reported
-    // crash threshold ("crashes at 150" combat+cast, vs. clean at 500 movement-only); 200/300 span and
-    // exceed it (300 is the natural raid-repro target — `BENCH_ARGS="--class mage --boss <hogger>
-    // --cast-spell 133"`, a 300-mage raid). If this ever goes red, the failure message above names
-    // the exact opcode and frame-count offset where the SPELL/COMBAT plane desynced — the #209 root
-    // cause, headlessly. If it stays green through all four, the corrupt frame is NOT produced by any
-    // of these send paths, and the next probe is the byte-level capture (the wire harness's
-    // `/tmp/wire-crash/` dump, issue #209 deliverable 1) taken at the moment of a LIVE repro.
-    for n in [100usize, 150, 200, 300] {
-        combat_cast_burst_over_a_real_cipher(n);
+fn trainer_list_replies_smsg_trainer_list_with_the_fixture_spells() {
+    let mut s = quest_store();
+    s.trainer_spells = vec![codec::TrainerSpellView {
+        spell_id: 100,
+        cost: 10,
+        required_level: 1,
+        player_level: 1,
+        known: false,
+        profession: false,
+    }];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_TRAINER_LIST {
+        guid: Guid::new(70),
     }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_TRAINER_LIST(list) => {
+            assert_eq!(list.guid, Guid::new(70));
+            assert_eq!(list.spells.len(), 1, "the fixture's one spell row");
+            assert_eq!(list.spells[0].spell, 100);
+        }
+        other => panic!("expected SMSG_TRAINER_LIST, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+// ── Death/resurrection dispatch (CMSG_REPOP_REQUEST / CMSG_RECLAIM_CORPSE /
+// CMSG_RESURRECT_RESPONSE / CMSG_SPIRIT_HEALER_ACTIVATE) ───────────────────────────────────────────
+
+#[test]
+fn repop_request_dispatches_repop_for_the_caller() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_REPOP_REQUEST {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drop(client); // repop's revive replicates via the entity VALUES relay, not a direct SMSG here
+    server.join().unwrap();
+    assert_eq!(store.repopped.lock().unwrap().as_slice(), &[1]);
+}
+
+#[test]
+fn reclaim_corpse_dispatches_with_the_wire_corpse_guid() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_RECLAIM_CORPSE {
+        guid: Guid::new(777),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(
+        store.reclaimed_corpses.lock().unwrap().as_slice(),
+        &[(1, 777)]
+    );
+}
+
+#[test]
+fn resurrect_response_accept_maps_status_byte_to_true() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_RESURRECT_RESPONSE {
+        guid: Guid::new(42),
+        status: 1,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(
+        store.resurrect_responses.lock().unwrap().as_slice(),
+        &[(1, true)]
+    );
+}
+
+#[test]
+fn resurrect_response_decline_maps_status_byte_to_false() {
+    // Proves the `status != 0` mapping actually distinguishes decline from accept, not just that
+    // SOME boolean reaches the store.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_RESURRECT_RESPONSE {
+        guid: Guid::new(42),
+        status: 0,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(
+        store.resurrect_responses.lock().unwrap().as_slice(),
+        &[(1, false)]
+    );
+}
+
+#[test]
+fn spirit_healer_activate_dispatches_and_confirms_the_healer_guid() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_SPIRIT_HEALER_ACTIVATE {
+        guid: Guid::new(888),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SPIRIT_HEALER_CONFIRM(p) => {
+            assert_eq!(p.guid, Guid::new(888), "echoes the healer's own guid");
+        }
+        other => panic!("expected SMSG_SPIRIT_HEALER_CONFIRM, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    // The SMSG above echoes the WIRE guid verbatim, so it alone can't catch a swapped-argument bug —
+    // this pins that the STORE call also got (self_guid, healer_guid) in the right order.
+    assert_eq!(
+        store.spirit_healer_calls.lock().unwrap().as_slice(),
+        &[(1, 888)]
+    );
+}
+
+// ── Targeting/aura dispatch (CMSG_SET_SELECTION / CMSG_CANCEL_AURA / CMSG_CANCEL_CAST) ─────────────
+
+#[test]
+fn set_selection_dispatches_set_target_with_the_wire_guid() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_SET_SELECTION {
+        target: Guid::new(321),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.selected_targets.lock().unwrap().as_slice(), &[321]);
+}
+
+#[test]
+fn cancel_aura_dispatches_with_the_wire_spell_id() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_CANCEL_AURA { id: 5555 }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.cancelled_auras.lock().unwrap().as_slice(), &[5555]);
+}
+
+#[test]
+fn cancel_cast_dispatches_for_the_caller() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_CANCEL_CAST { id: 133 }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.cancelled_casts.lock().unwrap().as_slice(), &[1]);
 }

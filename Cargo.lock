@@ -1032,9 +1032,9 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "foldhash"
-version = "0.1.5"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "foreign-types"
@@ -1233,17 +1233,6 @@ checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
 name = "hashbrown"
-version = "0.15.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
-dependencies = [
- "allocator-api2",
- "equivalent",
- "foldhash",
-]
-
-[[package]]
-name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
@@ -1259,6 +1248,11 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash",
+]
 
 [[package]]
 name = "heck"
@@ -1760,11 +1754,11 @@ dependencies = [
 
 [[package]]
 name = "lru"
-version = "0.12.5"
+version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
+checksum = "5d2f2f9b4ba7e6b24d95e7e899329d35be83bcded72c8540cdd5368932d1d90a"
 dependencies = [
- "hashbrown 0.15.5",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -3995,9 +3989,9 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "wow-adt"
-version = "0.6.4"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca9ccedef8d4f1e5fc1fdd86cf8545b5ae8fec49fa90b935a70e6967cfb835c0"
+checksum = "5fc3cfaa4fd73077626f88803b5d9ab776bda68c15a307082b353674fb11f43a"
 dependencies = [
  "binrw",
  "log",
@@ -4006,9 +4000,9 @@ dependencies = [
 
 [[package]]
 name = "wow-blp"
-version = "0.6.4"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c644ee8928a98ae9fbcf6fc2c241b111474aabfbd4c3b53646cc723a5395ab8"
+checksum = "88a6ce1ddfc8340b655f5486e1f80cdde7b84f41fd2df30628f1038e13caa8cf"
 dependencies = [
  "bytes",
  "color_quant",
@@ -4020,9 +4014,9 @@ dependencies = [
 
 [[package]]
 name = "wow-m2"
-version = "0.6.4"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f42056f18a246a76668eefb9623ca9ac50d705bfb3b0f810543704570e8313aa"
+checksum = "7eae17eff89e0f8a6b5d770ecb764b35fb2ce18e80562b480ab9f7de82058ec0"
 dependencies = [
  "anyhow",
  "bitflags 2.13.1",
@@ -4036,9 +4030,9 @@ dependencies = [
 
 [[package]]
 name = "wow-mpq"
-version = "0.6.4"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aecc4a02b8a2665fd5311dfc700e65ee17f4dd637724e74daa9b4287186bf21a"
+checksum = "db08e076ff71b9d1df42e06646e741c7155f3f99cfba944d7d25f48a6840d0b9"
 dependencies = [
  "adler2",
  "byteorder",
@@ -4066,9 +4060,9 @@ dependencies = [
 
 [[package]]
 name = "wow-wmo"
-version = "0.6.4"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1177552240ed27201314623f5886501309db1c3a37d5d97e6c64170529855c1e"
+checksum = "04f77f3b83e3ad7b44ec8c67a8caec7f227ca9f24e0f6d5dbe10d4f5b024833c"
 dependencies = [
  "binrw",
  "bitflags 2.13.1",
@@ -4205,9 +4199,9 @@ dependencies = [
 
 [[package]]
 name = "zeroize"
-version = "1.8.1"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ced3678a2879b30306d323f4542626697a464a97c0a07c9aebf7ebca65cd4dde"
+checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
 
 [[package]]
 name = "zerotrie"

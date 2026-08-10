@@ -1,4 +1,4 @@
-//! Per-connection movement coalescing (work-item 231). Every inbound `MSG_MOVE_*` used to become
+//! Per-connection movement coalescing. Every inbound `MSG_MOVE_*` used to become
 //! its own `movement_update` reducer transaction, so movement dominates the serialized stream as
 //! players scale. `CoalesceState` cuts pure-heartbeat volume ~3-5x while keeping every
 //! STATE-CHANGE (start/stop/turn/jump/fall-land/strafe, or ANY packet whose flags or heading

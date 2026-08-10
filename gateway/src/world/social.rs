@@ -1,6 +1,6 @@
-//! Social-family dispatch: the /who panel, the friends/ignore lists (work-item 130), and
-//! party/group management (066), carved out of `handle_query` in `world/mod.rs` — pure
-//! code-motion, same per-family `handle_*` shape as the rest of the dispatch chain.
+//! Social-family dispatch: the /who panel, the friends/ignore lists, and party/group management,
+//! carved out of `handle_query` in `world/mod.rs` — pure code-motion, same per-family `handle_*`
+//! shape as the rest of the dispatch chain.
 
 use super::{party, send, Outbound, SessionTx, WorldConn, WorldState, WorldStore};
 use crate::codec;
@@ -31,7 +31,7 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
                 Outbound::One(ServerOpcodeMessage::SMSG_WHO(Box::new(resp))),
             )?;
         }
-        // Friends / ignore list (work-item 130): opening the social pane's friends tab requests BOTH
+        // Friends / ignore list: opening the social pane's friends tab requests BOTH
         // lists off the one opcode — vanilla answers with SMSG_FRIEND_LIST + SMSG_IGNORE_LIST.
         // Silently dropped outside the world (no character to scope the lists to).
         ClientOpcodeMessage::CMSG_FRIEND_LIST => {
@@ -91,11 +91,11 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
                 ))),
             )?;
         }
-        // Party/group (066). The invite/uninvite names resolve gateway-side (the add_friend
+        // Party/group. The invite/uninvite names resolve gateway-side (the add_friend
         // convention); outcomes echo as SMSG_PARTY_COMMAND_RESULT. The cross-player packets
         // (SMSG_GROUP_INVITE/LIST/DECLINE/DESTROYED) ride the game_group_event relay.
         //
-        // #22 (group slice): the op itself goes through `world::party`, which decides WHICH DATABASE
+        // The op itself goes through `world::party`, which decides WHICH DATABASE
         // runs it — realm-core when the gateway is multi-database, the player's own shard otherwise.
         // Every arm below is otherwise unchanged, including which failures the client is told about.
         // Silently dropped outside the world: with no in-world character there is no `self_guid` to
@@ -172,7 +172,7 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
                 )?;
             }
         }
-        // `CMSG_LOOT_METHOD` (work-item 187 slice 1): the leader sets the party's loot method/
+        // `CMSG_LOOT_METHOD`: the leader sets the party's loot method/
         // threshold/master. No ack packet — vanilla itself sends none for this opcode (cmangos's
         // `HandleLootMethodOpcode` only calls `group->SendUpdate()`); the module's own reducer
         // echoes via the EXISTING `SMSG_GROUP_LIST` roster relay. A rejection (not the leader, bad
@@ -202,7 +202,7 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
 
 /// The session's in-world character guid, or `None` at character select. Party ops need it for two
 /// reasons that only coincide on a single-database gateway: it is the CHARACTER realm-core acts as
-/// (#22 — realm-core has no live entity to derive one from), and it is the character the module's
+/// (realm-core has no live entity to derive one from), and it is the character the module's
 /// own `entity_by_owner` would have resolved on the shard plane. Reading it here, from the state the
 /// gateway already authenticated for this socket, is what keeps the realm-core call trustworthy.
 ///
@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn party_result_for_maps_each_group_error_needle_and_falls_back() {
-        // The needles are the lyracore-shared group contract (work-item 163) — the module's Err strings
+        // The needles are the lyracore-shared group contract — the module's Err strings
         // match these exact substrings, one PartyResult per reducer rejection reason.
         use lyracore_shared::group::err as group_err;
         assert_eq!(

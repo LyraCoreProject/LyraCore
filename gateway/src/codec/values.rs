@@ -110,8 +110,8 @@ pub fn build_values_update_raw(guid: u64, mask: &update_mask::UpdateMaskValues) 
     (SMSG_UPDATE_OBJECT_OPCODE, body)
 }
 
-/// Build a partial VALUES update that sets ONE `PLAYER_EXPLORED_ZONES` word — the map fog-clear
-/// (work-item 200). `word_idx` is 0..64 (= `area_bit / 32`); `word_value` is the FULL u32 for that word,
+/// Build a partial VALUES update that sets ONE `PLAYER_EXPLORED_ZONES` word — the map fog-clear.
+/// `word_idx` is 0..64 (= `area_bit / 32`); `word_value` is the FULL u32 for that word,
 /// i.e. the OR of EVERY explored area_bit in that 32-bucket (a partial VALUES overwrites the whole
 /// word, so passing only the new bit would clobber the other explored areas sharing it). Routes through
 /// the raw path, which never carries `OBJECT_FIELD_TYPE` (the 5875 null+0x110 crash trap) by design.
@@ -124,7 +124,7 @@ pub fn build_explored_zones_values(guid: u64, word_idx: u16, word_value: u32) ->
     build_values_update_raw(guid, &mask)
 }
 
-/// Build a partial VALUES update that sets `PLAYER_BYTES_2` — the rest-state flip (196). `player_bytes_2`
+/// Build a partial VALUES update that sets `PLAYER_BYTES_2` — the rest-state flip. `player_bytes_2`
 /// is the FULL descriptor u32 (byte 0 facial hair + byte 3 rest state); a partial VALUES overwrites the
 /// whole field, so the module ships the complete value. Byte 3 = RESTED (0x01) → the client draws the zzz
 /// icon + blue XP bar; NORMAL (0x02) → normal. Routes through the OBJECT_FIELD_TYPE-free raw path.
@@ -246,7 +246,7 @@ pub fn build_max_vitals_values(
 /// shows exactly what physical mitigation uses. UNIT mask (armor is a UNIT field, like max-vitals) + the
 /// same `dirty_reset` discipline as `build_health_values` so the wire carries ONLY index 155 and never
 /// re-sends OBJECT_FIELD_TYPE (the 5875 null+0x110 crash trap).
-/// Build a VALUES partial-update carrying armor WITH its green "(+N)" split (082):
+/// Build a VALUES partial-update carrying armor WITH its green "(+N)" split:
 /// `UNIT_FIELD_RESISTANCES[0]` = the effective TOTAL and `PLAYER_FIELD_RESISTANCEBUFFMODSPOSITIVE[0]`
 /// (index 1187, PLAYER block) = the positive AURA portion the paperdoll colors green.
 /// TWO wrong guesses preceded this (live-found white armor both rounds): the buff-mods fields are
@@ -260,7 +260,7 @@ pub fn build_armor_values(guid: u64, total: u32, pos_buff: u32) -> SMSG_UPDATE_O
     })
 }
 
-/// The gear-folded paperdoll numbers (053) — computed by `stdb::armor::sheet_stats`, rendered by
+/// The gear-folded paperdoll numbers — computed by `stdb::armor::sheet_stats`, rendered by
 /// [`build_sheet_stats_values`]. `gear_*` are the equipped-item bonuses per attribute (signed:
 /// a cursed piece subtracts); the totals already include them.
 pub struct SheetStatsValues {
@@ -279,7 +279,7 @@ pub struct SheetStatsValues {
     pub dmg_max: u32,
 }
 
-/// Build a VALUES partial-update carrying the gear-folded paperdoll numbers (053): the five base
+/// Build a VALUES partial-update carrying the gear-folded paperdoll numbers: the five base
 /// attributes (totals) PLUS the PLAYER_FIELD_POSSTAT/NEGSTAT split — the client renders the stat
 /// number GREEN with a "(+N)" tooltip when POSSTAT is non-zero (same mechanism as the armor
 /// green), melee attack power, and the melee damage range (min/max are FLOAT fields — the client
@@ -323,7 +323,7 @@ pub fn build_coinage_values(guid: u64, money: u32) -> SMSG_UPDATE_OBJECT {
     })
 }
 
-/// Build a VALUES partial-update carrying `PLAYER_AMMO_ID` (#10) so the client treats ammo as loaded —
+/// Build a VALUES partial-update carrying `PLAYER_AMMO_ID` so the client treats ammo as loaded —
 /// without it Auto Shot greys out / refuses ("Ammo needs to be in the paper-doll ammo slot"). The value
 /// is the ammo item ENTRY (mangos convention: `SetUInt32Value(PLAYER_AMMO_ID, item->GetEntry())`; the
 /// client resolves the count + projectile from it). Uses gtker's typed `set_player_ammo_id` (it maps to
@@ -340,12 +340,12 @@ pub fn build_player_ammo_id_values(guid: u64, ammo_entry: u32) -> SMSG_UPDATE_OB
 /// and once after the login CREATE for a character with spent points (the CREATE's formula counts
 /// EARNED only). Same `dirty_reset` discipline as the other partial builders (never re-sends
 /// OBJECT_FIELD_TYPE, the 5875 crash field).
-/// `PLAYER_SKILL_INFO[slot]` partial VALUES (234) — a LIVE skill-up/train moves the open skill
+/// `PLAYER_SKILL_INFO[slot]` partial VALUES — a LIVE skill-up/train moves the open skill
 /// pane without a relog, and the 5875 client generates its own yellow "Your skill in X has
 /// increased to N." chat line from this field change (mangos sends no chat packet — verified
 /// against cm_Player::UpdateSkillPro). Slot comes from the session's skill-slot map (the login
 /// CREATE layout, `skill_slot_layout`); same dirty_reset discipline as every partial builder.
-/// Build a VALUES partial carrying only the owner's `UNIT_FIELD_SUMMON` (023): points the player at
+/// Build a VALUES partial carrying only the owner's `UNIT_FIELD_SUMMON`: points the player at
 /// their summoned pet's guid (what the client's pet frame keys on). Pass 0 to clear on despawn.
 /// Same dirty_reset discipline as every VALUES builder here (see `build_health_values`).
 pub fn build_owner_summon_values(owner_guid: u64, pet_guid: u64) -> SMSG_UPDATE_OBJECT {
@@ -415,7 +415,7 @@ pub fn build_inv_slot_values(
 }
 
 /// Build a VALUES partial-update for `PLAYER_VISIBLE_ITEM[slot]` — the descriptor the client
-/// renders the 3D gear model (and paperdoll slot) from (work-item 087). The LOGIN create sets
+/// renders the 3D gear model (and paperdoll slot) from. The LOGIN create sets
 /// these (entity.rs), but a MID-SESSION equip only relayed the INV_SLOT guid pointer, so gear
 /// never appeared on the model until relog. `entry` 0 clears (unequip). `None` for a
 /// non-equipment slot (bags/backpack are not model-visible).
@@ -529,7 +529,7 @@ mod lint_tests {
     use super::*;
     use wow_world_messages::vanilla::ServerMessage;
 
-    /// The TYPED-path half of the packet-lint wall (testing-hardening §3.2, pairs with
+    /// The TYPED-path half of the packet-lint wall (pairs with
     /// `world::packet_lint`'s raw-frame half): serialize a representative from every
     /// `build_*_values` shape in this file and assert the wire mask NEVER carries
     /// `OBJECT_FIELD_TYPE` (bit 2) — the 5875 null+0x110 crash class a missing `dirty_reset`

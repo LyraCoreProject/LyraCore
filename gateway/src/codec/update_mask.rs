@@ -93,7 +93,7 @@ pub mod idx {
     pub const CONTAINER_FIELD_SLOT_1: u16 = 50;
 
     pub const PLAYER_FLAGS: u16 = 190;
-    /// `PLAYER_BYTES_2` (196): byte 0 = facial hair, byte 3 = rest state (RESTED 0x01 → zzz + blue XP
+    /// `PLAYER_BYTES_2`: byte 0 = facial hair, byte 3 = rest state (RESTED 0x01 → zzz + blue XP
     /// bar / NORMAL 0x02). Vanilla 1.12 index 194 (gtker `set_player_bytes_2` → `set_bytes(194, …)`,
     /// cross-checked: `PLAYER_BYTES_3 = 195`, `PLAYER_FLAGS = 190`). Relayed live on an inn crossing.
     pub const PLAYER_BYTES_2: u16 = 194;

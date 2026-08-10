@@ -49,7 +49,7 @@ pub fn build_who_response(players: &[WhoPlayerView]) -> SMSG_WHO {
     }
 }
 
-// ─── Friends / ignore list (work-item 130) ─────────────────────────────────────────────────
+// ─── Friends / ignore list ─────────────────────────────────────────────────
 
 /// One friend row as needed by `SMSG_FRIEND_LIST` — flat ints the codec converts. `online` false
 /// means the row degrades to `Friend_FriendStatus::Offline` (no area/level/class carried, matching
@@ -140,7 +140,7 @@ pub fn build_chat_message(
     }
 }
 
-/// Build `SMSG_MESSAGECHAT` for a CHANNEL line (065): ChatType::Channel carries the channel's
+/// Build `SMSG_MESSAGECHAT` for a CHANNEL line: ChatType::Channel carries the channel's
 /// display name (as the sender's client spelled it — the client matches it to the joined tab),
 /// the speaking player's guid (name via NAME_QUERY), and rank 0 (moderator ranks are out of scope).
 pub fn build_channel_message(
@@ -179,7 +179,7 @@ pub fn build_whisper(other_guid: u64, is_inform: bool, message: String) -> SMSG_
     }
 }
 
-/// Build `SMSG_MESSAGECHAT` for a party (`/p`, work-item 199) line — `ChatType::Party` is
+/// Build `SMSG_MESSAGECHAT` for a party (`/p`) line — `ChatType::Party` is
 /// byte-identical to `Say`'s shape (both `chat_credit`/`speech_bubble_credit` carry the SPEAKER),
 /// so every recipient (including the speaker's own echo row) gets the exact same packet. Always
 /// Universal + no tag: like whispers (`build_whisper`), party lines aren't proximity/language-
@@ -197,7 +197,7 @@ pub fn build_party_chat(sender_guid: u64, message: String) -> SMSG_MESSAGECHAT {
     }
 }
 
-/// Build `SMSG_MESSAGECHAT` System — a self-only server line (work-item 223: the GM dot-command
+/// Build `SMSG_MESSAGECHAT` System — a self-only server line (the GM dot-command
 /// reducer's `Err` relayed back to the SENDER, e.g. "permission denied", "unknown command: .foo").
 /// `System`'s `sender2` guid is always 0 (no meaningful sender for a server-originated line, mirroring
 /// how vanilla's own system messages carry no unit credit). Always Universal + no tag, like whispers/
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn party_chat_carries_sender_in_both_credit_fields_and_serializes() {
-        // Work-item 199: `ChatType::Party` mirrors Say's shape exactly (chat_credit AND
+        // `ChatType::Party` mirrors Say's shape exactly (chat_credit AND
         // speech_bubble_credit both = the speaker) — pin it so a future gtker bump can't silently
         // reorder/drop a field without this test catching it.
         let m = build_party_chat(42, "form up".into());
@@ -467,7 +467,7 @@ mod tests {
 }
 
 // ===========================================================================================
-//  Party/group (work-item 066)
+//  Party/group
 // ===========================================================================================
 
 use wow_world_messages::vanilla::{
@@ -503,7 +503,7 @@ pub fn build_party_command_result(
 
 /// `SMSG_GROUP_LIST` for `self_guid`: vanilla lists the OTHER members (the recipient is implied),
 /// plus the leader and the loot block — NOW the group's REAL current loot method/threshold/master
-/// (work-item 187; was fixed FreeForAll/Uncommon). `loot_method`/`loot_threshold` are the module's
+/// (was fixed FreeForAll/Uncommon). `loot_method`/`loot_threshold` are the module's
 /// wire-matching `group::loot_method::*`/`ItemQuality` byte values — a direct `try_from`, never a
 /// hand-written match table (see `module/src/group.rs`'s doc on why the module adopted the wire
 /// ordering verbatim). An out-of-range byte (shouldn't happen — the module validates both before
@@ -647,7 +647,7 @@ mod party_tests {
         assert!(!carol.is_online);
     }
 
-    /// Work-item 187: the loot block now carries the group's REAL current method/threshold/master
+    /// The loot block now carries the group's REAL current method/threshold/master
     /// (was hardcoded FreeForAll/Uncommon) — a direct `try_from` off the module's wire-matching byte
     /// values, with a safe fallback for an (unreachable, module-validated) out-of-range byte.
     #[test]

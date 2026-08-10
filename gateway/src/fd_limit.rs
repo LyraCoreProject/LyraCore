@@ -1,5 +1,6 @@
-//! Raise this process's `RLIMIT_NOFILE` soft limit to its hard limit at startup (#451, from the
-//! #447 root cause).
+//! Raise this process's `RLIMIT_NOFILE` soft limit to its hard limit at startup — the file-descriptor
+//! ceiling was root cause when the gateway died outright under a mass-session login storm (see the
+//! measured consequence below).
 //!
 //! # Why a server does this to itself
 //!
@@ -9,12 +10,13 @@
 //! programs, not a security boundary — which is why servers routinely lift it and why leaving it
 //! alone is the unusual choice, not the safe one.
 //!
-//! The measured consequence of not doing it (2026-08-07, #447): a default Docker container has
+//! The measured consequence of not doing it (2026-08-07): a default Docker container has
 //! `RLIMIT_NOFILE` soft **1024** against a hard limit of **524288**, and the gateway died at ~200
 //! sessions with `Error: Too many open files (os error 24)` — a 512× headroom sitting unused. A live
 //! session costs 3–5 descriptors: the client socket, the `try_clone` dup the writer thread owns, and
-//! one SpacetimeDB websocket per shard the player's view touches (a dispersed realm opens more, per
-//! #451's thread-per-player measurement). So the stock 1024 buys roughly 200 players on a five-shard
+//! one SpacetimeDB websocket per shard the player's view touches (a dispersed realm opens more, since
+//! the AOI view-merge opens a further per-account connection on each away shard as players scatter).
+//! So the stock 1024 buys roughly 200 players on a five-shard
 //! realm, and the operator gets no warning that this is the number.
 //!
 //! # Failure is never fatal
@@ -25,9 +27,10 @@
 //! anything opens a descriptor, and it needs no runtime to do it.
 //!
 //! This is a mitigation for the fd *ceiling*, not for a leak. The per-account `PlayerConn` leak
-//! (#449, `release_player_conn` is dead code) is a separate defect: raising the limit buys headroom,
-//! it does not stop the accumulation. #451's third change — the accept loop surviving `EMFILE` — is
-//! what keeps the realm alive when the headroom does run out.
+//! (`release_player_conn` was dead code, so the cached connection was never released at session
+//! teardown) is a separate defect: raising the limit buys headroom, it does not stop the accumulation.
+//! A further change — the accept loop surviving `EMFILE` — is what keeps the realm alive when the
+//! headroom does run out.
 
 use std::io;
 
@@ -164,8 +167,8 @@ fn set_nofile_soft(soft: u64, hard: u64) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    /// The container shape #447 died in: soft 1024, hard 524288 — 512x of headroom that nothing was
-    /// claiming.
+    /// The container shape the gateway died in: soft 1024, hard 524288 — 512x of headroom that
+    /// nothing was claiming.
     #[test]
     fn the_default_docker_shape_gets_raised() {
         assert_eq!(
@@ -192,7 +195,8 @@ mod tests {
         );
     }
 
-    /// The maintainer-workstation shape from #447's table: nothing to do, and no syscall made.
+    /// The maintainer-workstation shape from the measured ceiling table: nothing to do, and no
+    /// syscall made.
     #[test]
     fn an_unlimited_hard_limit_is_still_a_raise_when_soft_is_lower() {
         let inf = unlimited();

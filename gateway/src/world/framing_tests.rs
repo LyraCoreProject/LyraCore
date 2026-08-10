@@ -1,4 +1,4 @@
-//! Issue #223 — the INBOUND framing boundary: what an authenticated socket does with a header or a
+//! The INBOUND framing boundary: what an authenticated socket does with a header or a
 //! body it cannot make sense of.
 //!
 //! Everything else in `world/tests.rs` sends well-formed `wow_world_messages` types, so the read
@@ -236,9 +236,9 @@ fn a_known_opcode_with_an_undecodable_body_is_session_fatal_too() {
 //  4. Session CLEANUP on the error path — the seat and the world entity
 // ===========================================================================================
 
-/// #180's seat accounting has to survive the abnormal exit, not only the polite one. A malformed
-/// frame ends `run_world_session_with_queue` through its `Err` path; the `queue.depart()` in the
-/// teardown runs after the read loop returns, however it returned.
+/// The login queue's seat accounting has to survive the abnormal exit, not only the polite one. A
+/// malformed frame ends `run_world_session_with_queue` through its `Err` path; the `queue.depart()`
+/// in the teardown runs after the read loop returns, however it returned.
 ///
 /// If a seat leaked on the error path, a realm at `LYRACORE_MAX_SESSIONS` would lose one seat per
 /// crashed or hostile client and eventually refuse every login, with nothing in the log to say why

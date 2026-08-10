@@ -37,7 +37,7 @@ pub fn build_log_xpgain(killed_guid: u64, total_exp: u32, is_kill: bool) -> SMSG
 }
 
 /// Build `SMSG_LEVELUP_INFO` (Tier 5 / XP) — the "You have reached level N" ding popup, carrying the
-/// health/mana gains and the five per-stat deltas the module's ding loop computed (033). rage/focus/
+/// health/mana gains and the five per-stat deltas the module's ding loop computed. rage/focus/
 /// energy/happiness stay 0 — those pools never grow per level in vanilla.
 #[allow(clippy::too_many_arguments)]
 pub fn build_levelup_info(

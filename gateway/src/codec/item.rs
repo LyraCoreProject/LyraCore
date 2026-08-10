@@ -40,19 +40,20 @@ pub struct ItemTemplateView {
     // NOTE: no `container_slots` here. The bag CREATE reads it off `ItemInstanceView` (below), which
     // gets it from its own `game_item_template` lookup at read/subscription time — a template mirror
     // on this struct would be a second, never-read copy of the same column.
-    /// Item binding (work-item 127): the cmangos `bonding` value (0=NoBind,1=BoP,2=BoE,3=BoU,
+    /// Item binding: the cmangos `bonding` value (0=NoBind,1=BoP,2=BoE,3=BoU,
     /// 4/5=QuestItem), sent as-is into `SMSG_ITEM_QUERY_SINGLE_RESPONSE.bonding` so the client renders
-    /// "Binds when picked up/equipped". Trade/mail enforcement is 067/068 — this is query-only.
+    /// "Binds when picked up/equipped". Trade/mail enforcement lives in the trade-window/mailbox
+    /// systems — this is query-only.
     pub bonding: u8,
-    /// Sheathe posture (113): the raw cmangos `item_template.sheath` byte — where the weapon stows
+    /// Sheathe posture: the raw cmangos `item_template.sheath` byte — where the weapon stows
     /// visually (Worn Shortsword=3 → hip; shields/2H on the back). Passed THROUGH to the wire (cmangos
     /// sends `pProto->Sheath` verbatim; gtker's SheatheType variant NAMES don't track the client's
     /// actual postures — values rule).
     pub sheath: u8,
-    // Work-item 213: the dropped item_template columns, mirrored straight from the module's
+    // The dropped item_template columns, mirrored straight from the module's
     // `ItemTemplate` (no consumer system reads these server-side yet — this view carries them ONLY
     // so `build_item_query_response` can fill in the wire fields it already writes hardcoded 0/default
-    // for, the "free gateway win" the work item calls out).
+    // for — the free gateway win).
     pub holy_res: i32,
     pub fire_res: i32,
     pub nature_res: i32,
@@ -144,8 +145,8 @@ pub fn build_item_query_response(
         out
     };
     // On-use/on-equip spell slots → the client renders the green "Use:/Equip:/Chance on hit:" text from
-    // its OWN Spell.dbc. All 5 slots are populated from the template (work-item 213 wired slots 3-5
-    // in — previously hardcoded empty). spell_trigger maps the raw ItemSpellTriggerType byte
+    // its OWN Spell.dbc. All 5 slots are populated from the template (slots 3-5 were wired
+    // in later — previously hardcoded empty). spell_trigger maps the raw ItemSpellTriggerType byte
     // (0=on-use, 1=on-equip, 2=chance-on-hit).
     let spell_slot = |id: u32, trig: u8| ItemSpells {
         spell: id,
@@ -165,7 +166,7 @@ pub fn build_item_query_response(
             name1: t.name.clone(),
             display_id: t.display_id,
             quality: ItemQuality::try_from(u32::from(t.quality)).unwrap_or_default(),
-            // Work-item 213: the raw item_template.Flags bitmask (unique/conjured/etc) — was
+            // The raw item_template.Flags bitmask (unique/conjured/etc) — was
             // hardcoded to the wire default (empty) before the column existed server-side.
             flags: ItemFlag::new(t.item_flags),
             buy_price: Gold::new(t.buy_price),
@@ -174,16 +175,16 @@ pub fn build_item_query_response(
                 .unwrap_or_default(),
             item_level: Level::new(t.item_level),
             required_level: Level::new(t.required_level),
-            // Work-item 213: weapon-skill / mail-plate proficiency gate. An out-of-range skill id
+            // Weapon-skill / mail-plate proficiency gate. An out-of-range skill id
             // degrades to Skill::None rather than failing the query (matches the other try_from
             // degrades in this function).
             required_skill: Skill::try_from(t.required_skill).unwrap_or_default(),
             required_skill_rank: t.required_skill_rank,
-            // Work-item 213: the 195 item half (reputation-gated items).
+            // The reputation-gated-item half of faction reaction gating.
             required_faction: Faction::try_from(t.required_reputation_faction).unwrap_or_default(),
             required_faction_rank: t.required_reputation_rank,
             stackable: t.max_stack.max(1),
-            // Work-item 213: unique-item stack cap (was hardcoded 0 before the column existed
+            // Unique-item stack cap (was hardcoded 0 before the column existed
             // server-side).
             max_count: t.max_count,
             stats,
@@ -202,7 +203,7 @@ pub fn build_item_query_response(
                 };
                 d
             },
-            // Work-item 213: the 6 resistance schools — resist gear tooltips were dead (always 0)
+            // The 6 resistance schools — resist gear tooltips were dead (always 0)
             // until these columns existed server-side.
             holy_resistance: t.holy_res,
             fire_resistance: t.fire_res,
@@ -211,21 +212,21 @@ pub fn build_item_query_response(
             shadow_resistance: t.shadow_res,
             arcane_resistance: t.arcane_res,
             delay: t.delay_ms,
-            // 113: the per-item sheathe posture (was a blanket MainHand → every weapon/shield stowed
+            // The per-item sheathe posture (was a blanket MainHand → every weapon/shield stowed
             // in the same spot). An out-of-range byte degrades to None rather than failing the query.
             sheathe_type: SheatheType::try_from(t.sheath).unwrap_or_default(),
             spells,
-            // Item binding (work-item 127): the raw cmangos byte maps directly onto the wire enum
+            // Item binding: the raw cmangos byte maps directly onto the wire enum
             // (NoBind=0, PickUp=1 "Binds when picked up", Equip=2 "Binds when equipped", Use=3,
             // QuestItem=4/5) — an out-of-range byte degrades to NoBind rather than failing the query.
             bonding: Bonding::try_from(u32::from(t.bonding)).unwrap_or_default(),
-            // Work-item 213: readable-item page id (needs its own page_text dump table + reader
+            // Readable-item page id (needs its own page_text dump table + reader
             // packet before a player can actually read one — data plumbing only for now) and the
-            // quest-starter link (194 consumes).
+            // quest-starter link (consumed by the quest system).
             page_text: t.page_text,
             start_quest: t.start_quest,
             max_durability: t.max_durability,
-            // Work-item 213: bag-type restriction bitmask (Soul Bag/Quiver/etc). An out-of-range
+            // Bag-type restriction bitmask (Soul Bag/Quiver/etc). An out-of-range
             // value degrades to BagFamily::None rather than failing the query.
             bag_family: BagFamily::try_from(t.bag_family).unwrap_or_default(),
             // Ranged weapon RANGE multiplier (mangos `RangedModRange`, % of base). The client scales a
@@ -337,7 +338,7 @@ use wow_world_messages::vanilla::{
     NewItemChatAlert, NewItemCreationType, NewItemSource, SMSG_ITEM_PUSH_RESULT,
 };
 
-/// `SMSG_ITEM_PUSH_RESULT` (work-item 185) — the "You receive item: [X]." chat/toast for a
+/// `SMSG_ITEM_PUSH_RESULT` — the "You receive item: [X]." chat/toast for a
 /// windowless gain, and the client's trigger to re-check watched-quest item objectives (the
 /// tracker + "Wolf Meat: 3/8" floaty — 1.12 recomputes those from its bags when this arrives).
 /// `stack_add` sends item_slot 0xFFFFFFFF (the mangoszero added-to-stack convention). Source is

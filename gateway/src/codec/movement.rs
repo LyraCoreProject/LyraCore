@@ -35,7 +35,7 @@ pub fn relayed_move_opcode(msg: &ClientOpcodeMessage) -> Option<u32> {
 /// animate run/walk/turn rather than teleport. Returns `None` for a non-relayed opcode. The
 /// crate packs the guid and frames the header on write (`ServerOpcodeMessage::write_*_server`).
 ///
-/// **No longer on the hot path** (work-item 286): the peer relay ships
+/// **No longer on the hot path**: the peer relay ships
 /// [`build_movement_relay_raw`]'s pre-serialized body instead of paying a decode + re-encode per
 /// observer. This stays as the typed REFERENCE implementation the raw builder is pinned against —
 /// `codec::tests::raw_movement_relay_is_byte_identical_to_the_typed_path` serializes it and demands
@@ -145,7 +145,7 @@ pub fn build_movement_relay(
 /// desync its stream).
 const MIN_MOVEMENT_INFO_LEN: usize = 4 + 4 + 12 + 4 + 4;
 
-/// The RAW twin of [`build_movement_relay`] (work-item 286): the same `MSG_MOVE_*` packet, built as
+/// The RAW twin of [`build_movement_relay`]: the same `MSG_MOVE_*` packet, built as
 /// `(opcode, body)` for [`Outbound::Raw`](crate::world::Outbound::Raw) **without decoding
 /// `info_bytes`**. `game_entity_motion.movement_info` already holds exactly the bytes gtker would
 /// serialize a `MovementInfo` into (the gateway put them there via [`movement_info_to_bytes`]), and
@@ -204,7 +204,7 @@ pub fn build_teleport_ack(
     }
 }
 
-/// Build the cross-map teleport-ARRIVAL pair (work-item 224): `SMSG_TRANSFER_PENDING(map)` (opcode
+/// Build the cross-map teleport-ARRIVAL pair: `SMSG_TRANSFER_PENDING(map)` (opcode
 /// 0x003F — starts the client's loading screen) immediately followed by `SMSG_NEW_WORLD(map, x, y, z, o)`
 /// (opcode 0x003E — the position on the new map). Sent back-to-back as ONE batch: both go out BEFORE the client even starts
 /// loading — the client only replies `MSG_MOVE_WORLDPORT_ACK` (opcode 0x00DC, empty body — [V]ed against
@@ -233,7 +233,7 @@ pub fn build_cross_map_teleport(
 }
 
 /// Build `SMSG_TRANSFER_ABORTED` (opcode 0x0040) — "the transfer you are loading for is not going to
-/// happen". Issue #39: the ONLY thing worse than failing a dungeon entry is not telling the client,
+/// happen". The ONLY thing worse than failing a dungeon entry is not telling the client,
 /// because a client that has already been sent `SMSG_TRANSFER_PENDING` sits on its loading screen
 /// forever with no error and no way out. This is the packet vanilla servers send on exactly this
 /// path (mangos `SendTransferAborted`, e.g. "instance not found" / "instance is full"), so the
@@ -318,7 +318,7 @@ pub fn movement_info_to_bytes(info: &MovementInfo) -> Result<Vec<u8>> {
 /// client packet and decoding. All `MSG_MOVE_*` client bodies are an identical `MovementInfo`, so
 /// HEARTBEAT works as the carrier regardless of the event's real opcode.
 ///
-/// The relay stopped calling this in work-item 286 (it memcpys the stored block instead), so its
+/// The relay stopped calling this once the raw twin shipped (it memcpys the stored block instead), so its
 /// only remaining callers are tests — kept as the decode half of the `movement_info_to_bytes`
 /// round-trip that pins the carrier format the module's rows are written in.
 #[cfg_attr(not(test), allow(dead_code))]

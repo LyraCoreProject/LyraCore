@@ -1,4 +1,5 @@
-//! The gateway's half of the escrowed cross-database transfer (issue #19, spec #12 Phase A).
+//! The gateway's half of the escrowed cross-database transfer — the Phase A tracer (enter Deadmines
+//! on the instances shard and come back), part of the elastic world-sharding design.
 //!
 //! The module owns the state machine (`module/src/transfer/`); this file owns the ORDER the two
 //! databases are driven in, because that ordering is the one safety property neither database can
@@ -73,7 +74,7 @@ pub fn transfer_id_for(character_guid: u64) -> u64 {
 /// `WorldStore` method names — the same vocabulary the headless crash-matrix test already speaks —
 /// so a step name is greppable straight to the call it follows. The list is also the drive's own
 /// sequence: `an_unset_transfer_abort_injection_changes_nothing` asserts the two are equal, so a
-/// step added to the drive without a crash point here is a hole in the AC#3 matrix.
+/// step added to the drive without a crash point here is a hole in the gateway-kill recovery matrix.
 pub const ABORT_STEPS: [&str; 8] = [
     "begin_transfer",
     "ensure_instance",
@@ -85,10 +86,12 @@ pub const ABORT_STEPS: [&str; 8] = [
     "evict_instance_population",
 ];
 
-/// Deliberate, injected death — the `kill -9` half of #19 AC#3.
+/// Deliberate, injected death — the `kill -9` half of the gateway-kill recovery requirement (a
+/// scripted kill at each transfer step must recover with the character whole on exactly one shard
+/// and the client able to reconnect).
 ///
-/// **Why `abort()` and not a `panic!` or an `Err`.** AC#3 is only meaningful if the process leaves
-/// behind *exactly* the durable state a real `kill -9` at this boundary would leave. That rules out
+/// **Why `abort()` and not a `panic!` or an `Err`.** That requirement is only meaningful if the
+/// process leaves behind *exactly* the durable state a real `kill -9` at this boundary would leave. That rules out
 /// the two cheaper options:
 ///
 /// * a returned `Err` is a CLEAN failure: `run_transfer`'s caller unwinds the world session's normal
@@ -129,7 +132,7 @@ fn abort_point(abort_after: Option<&str>, step: &str, transfer_id: u64) {
     }
     log::error!(
         "transfer {transfer_id}: LYRACORE_TRANSFER_ABORT_AFTER={step} — step committed, ABORTING BY \
-         FAULT INJECTION (#19 AC#3). This is a deliberate crash, not a bug."
+         FAULT INJECTION (the gateway-kill recovery test). This is a deliberate crash, not a bug."
     );
     die_by_injection()
 }
@@ -155,7 +158,7 @@ fn abort_point(abort_after: Option<&str>, step: &str, transfer_id: u64) {
 /// both databases: the source is frozen from step 1 (its escrow row fences it) and destroyed at 5,
 /// and the destination is fenced from 3 until 6.
 ///
-/// # Fault injection (#19 AC#3)
+/// # Fault injection (the gateway-kill recovery requirement)
 ///
 /// The whole seven-step drive commits in ~17ms live, so "`kill -9` the gateway at step N" is not a
 /// thing a log-watcher can land. `LYRACORE_TRANSFER_ABORT_AFTER=<step>` makes each crash point
@@ -220,7 +223,7 @@ pub(super) fn run_transfer_injected(
         // Deliberate simplification: party_id 0 (solo). The destination only reads it in
         // `resolve_or_create_instance`'s "the party's live instance" arm, which nothing on the
         // instance shard reaches — every member arrives with their own binding, which resolves
-        // first. Upgrade path: realm-core (#22) owns party ids across shards.
+        // first. Upgrade path: realm-core owns party ids across shards.
         dst.ensure_instance(escrow.dest_instance_id, escrow.dest_map_id, 0)?;
     }
     // Outside the `if`: the boundary exists whether or not the hop needed an instance mirrored, and
@@ -242,7 +245,9 @@ pub(super) fn run_transfer_injected(
     src.finish_transfer(escrow.transfer_id)?;
     abort_point(abort_after, "finish_transfer", escrow.transfer_id);
 
-    // 5b. PUBLISH the character→shard index to REALM-CORE (issue #34, #20 AC#3).
+    // 5b. PUBLISH the character→shard index to REALM-CORE (the index was never written on transfer;
+    // realm-core's own requirement is that the escrow's finish_transfer step update it
+    // transactionally).
     //
     // Step 5's own transaction wrote this same `(guid, map, instance)` into the SOURCE database's
     // `game_character_shard` — but there is no transaction spanning two SpacetimeDB databases, so
@@ -268,10 +273,10 @@ pub(super) fn run_transfer_injected(
     // this call fails — between 5 and 5b, realm-core's index still names the OLD shard, and the
     // recovery above does NOT repair it: it never re-enters `run_transfer`, so step 5b never runs
     // again for that transfer. The fallback is `settle_home_shard`'s own holder lookup
-    // (`realm_core::locate_home_shard`, issue #47), which probes and heals a stale entry on the
-    // character's NEXT WORLD ENTRY — not the next completed transfer, as it was before #47, when
-    // this fallback hung off the unreachable `WorldStore::home_shard` (`settle_home_shard` scanned
-    // the connected shards unconditionally and never touched the index at all). The window is still
+    // (`realm_core::locate_home_shard`), which probes and heals a stale entry on the
+    // character's NEXT WORLD ENTRY — not the next completed transfer, as it was before
+    // `settle_home_shard` read the realm-core index at all (it used to scan the connected shards
+    // unconditionally and never touch the index). The window is still
     // real between here and that next login; it is no longer indefinite.
     src.publish_shard_index(
         escrow.character_guid,
@@ -284,7 +289,8 @@ pub(super) fn run_transfer_injected(
     dst.release_transfer(escrow.transfer_id)?;
     abort_point(abort_after, "release_transfer", escrow.transfer_id);
 
-    // 7. The world writer stops paying for the dungeon (#19 AC#2). Deliberately LAST and
+    // 7. The world writer stops paying for the dungeon (the requirement that the instance's combat
+    //    load be demonstrably absent from the world writer while the run is live). Deliberately LAST and
     //    best-effort: the character is already whole on the destination, so a failure here is a
     //    performance wart (an idle population on the source until its 30-minute empty reap), never
     //    a correctness one — and failing the login over it would be strictly worse for the player.

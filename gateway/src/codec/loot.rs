@@ -62,7 +62,7 @@ pub fn build_loot_release_response(guid: u64) -> SMSG_LOOT_RELEASE_RESPONSE {
 }
 
 // ===========================================================================================
-//  GROUP LOOT METHODS (work-item 187 slices 2-4) — need/greed rolls + master looter. All four
+//  GROUP LOOT METHODS — need/greed rolls + master looter. All four
 //  messages below are gtker-TYPED vanilla-complete builders (verified present in the vendored
 //  `wow_world_messages` — no raw-build needed, unlike the money/item `SMSG_LOOT_RESPONSE` above).
 // ===========================================================================================
@@ -148,8 +148,8 @@ pub fn build_loot_roll_won(
         item_random_property_id: 0,
         winning_player: Guid::new(winning_player),
         winning_roll,
-        // The tier that actually won — a greed-only contest reports Greed, not Need (187 review
-        // finding #3; the module sends vote_kind::*, already wire-order-matching).
+        // The tier that actually won — a greed-only contest reports Greed, not Need
+        // (the module sends vote_kind::*, already wire-order-matching).
         vote: wire_vote(winning_vote),
     }
 }

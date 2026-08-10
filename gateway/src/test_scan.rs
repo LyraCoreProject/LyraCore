@@ -1,7 +1,7 @@
 //! Shared source-scan primitives for this crate's `#[cfg(test)]` wiring tripwires — a gateway-local
-//! port of `module/src/test_scan.rs` (issue #64: one hardened implementation instead of near-identical
-//! copies that drift, comment-strip inconsistently, or fall for a needle planted in a trailing
-//! comment). Ported rather than shared because the module and gateway are separate crates and
+//! port of `module/src/test_scan.rs` (one hardened implementation instead of near-identical copies
+//! that drift, comment-strip inconsistently, or fall for a needle planted in a trailing comment).
+//! Ported rather than shared because the module and gateway are separate crates and
 //! `module/src/test_scan.rs`'s functions are `pub(crate)` to that crate; the algorithm here is
 //! otherwise identical.
 //!

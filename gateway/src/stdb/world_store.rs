@@ -23,34 +23,35 @@ use super::views::{AccountRow, RealmRow};
 use super::PlayerSubscriptions;
 
 impl WorldStore for Coordinator {
-    /// Multi-shard routing (#17), now driven by the realm-core character→shard index (#20).
+    /// Multi-shard routing, driven by the realm-core character→shard index.
     ///
     /// Finds where `character_guid` lives, resolves that location through the shard map, and returns
     /// the owning shard's handle. `None` = this handle already owns it, which is the only answer a
-    /// single-entry shard map can give. #17 answered "where does it live" by reading `game_character`
-    /// on the default shard — true only until a transfer actually moves someone off it. #20 answers
-    /// it from the realm-core index, CONFIRMED against the shard that holds the row, and repairs the
+    /// single-entry shard map can give. The original routing answered "where does it live" by reading
+    /// `game_character` on the default shard — true only until a transfer actually moves someone off
+    /// it. Realm-core answers
+    /// it from its index, CONFIRMED against the shard that holds the row, and repairs the
     /// index when the two disagree. The decision itself is the pure, unit-tested
     /// [`crate::config::resolve_home_shard`]; this method only supplies it with live probes.
     // Note: routing is all this does — it does NOT provision the player on the destination.
     // Ceiling: a session that actually routes to a second database opens a fresh player connection
     // there whose node-issued identity was never bound by `establish_session` on THAT database, so
-    // `player_login` will be refused by the module's owner check. #20 narrowed that gap but did not
-    // close it: accounts and sessions ARE now shared (realm-core), but the per-shard player
+    // `player_login` will be refused by the module's owner check. Realm-core narrowed that gap but
+    // did not close it: accounts and sessions ARE now shared, but the per-shard player
     // connection's identity binding still has to be made on the shard the player lands on. Upgrade
-    // path: the escrowed transfer (#16) moves the character rows, instance entry (#19) drives it,
+    // path: the escrowed transfer moves the character rows, instance entry drives it,
     // and the arriving shard's `establish_session` (or `player_login`'s restamp) does the binding.
     fn home_shard(&self, character_guid: u64) -> Option<std::sync::Arc<dyn WorldStore>> {
-        // #20 + #34: the single-shard short-circuit, the realm-core index hint, the confirming
+        // The single-shard short-circuit, the realm-core index hint, the confirming
         // probe and the self-heal write-back — all of it in `realm_core::settle_shard_index`,
         // written against the `RealmDb` trait so the tests can execute THIS decision (index reads,
         // probe order, heal write and the "one database costs zero reads" property) without a live
-        // node. It was unreachable by any test while it lived inline here, and #33's review left
-        // two surviving mutations in it for exactly that reason.
+        // node. It was unreachable by any test while it lived inline here, and a mutation review
+        // left two surviving mutations in it for exactly that reason.
         let resolved = crate::realm_core::settle_shard_index(self, character_guid)?;
-        // The handle comes from #17's `shard_for`, unchanged: it resolves the same location
+        // The handle comes from `shard_for`, unchanged: it resolves the same location
         // through the same map and returns `None` when that is already this handle's shard. All
-        // #20 added in front of it is a better answer to "what IS the location". This runs at
+        // the index lookup adds in front of it is a better answer to "what IS the location". This runs at
         // world ENTRY only: a session already in the world holds its pinned handle and is never
         // asked again (see `WorldConn::route_home`).
         let shard = self.shard_for(resolved.location.0, resolved.location.1);
@@ -71,10 +72,10 @@ impl WorldStore for Coordinator {
     }
 
     // -------------------------------------------------------------------------------------
-    // Cross-database transfer (#19) — the production side of `world::transfer`.
+    // Cross-database transfer — the production side of `world::transfer`.
     // -------------------------------------------------------------------------------------
 
-    /// The #19 upgrade of `home_shard`: find where the character actually LIVES, resolve who should
+    /// The transfer-aware upgrade of `home_shard`: find where the character actually LIVES, resolve who should
     /// own it, and run the escrowed transfer when those differ. Single-shard → the `is_sharded`
     /// short-circuit, so the unconfigured gateway does not even read a row.
     ///
@@ -84,7 +85,7 @@ impl WorldStore for Coordinator {
     /// mock takes the trait default, which forwards to `home_shard`). That trap is why the
     /// tripwire at the bottom of this file scans THIS body.
     ///
-    /// The HOLDER lookup below is `realm_core::locate_home_shard` (issue #47) — the realm-core
+    /// The HOLDER lookup below is `realm_core::locate_home_shard` — the realm-core
     /// index consulted FIRST, the shard scan only on a miss, self-heal write-back on either path —
     /// not `settle_shard_index`/`home_shard`'s copy of the same rule, which this override still
     /// never calls and which the login hot path therefore still never reaches.
@@ -97,7 +98,7 @@ impl WorldStore for Coordinator {
         }
         // The shard that currently holds the durable row (or the in-flight escrow). Realm-core's
         // character→shard index is consulted first; the scan (`Coordinator::all_shards`) is the
-        // fallback, not the only path (#47).
+        // fallback, not the only path.
         let Some(holder) = crate::realm_core::locate_home_shard(self, character_guid) else {
             // Unknown character: leave the session where it is, exactly as `home_shard` does. The
             // module's own ownership check is what refuses the login.
@@ -117,14 +118,14 @@ impl WorldStore for Coordinator {
             .map(|r| (r.dest_map_id, r.dest_instance_id))
             .or_else(|| holder.character_location(character_guid))
             .ok_or_else(|| anyhow::anyhow!("character {character_guid} vanished mid-routing"))?;
-        // OWNER RESOLUTION. The #17/#20 shard map answers, in DATABASE NAMES resolved through
+        // OWNER RESOLUTION. The shard map answers, in DATABASE NAMES resolved through
         // `shard_for`/`instance_shard_for`, so "the answer names the shard I already am" decodes to
         // `None` in both, and `self` is the handle that means "stay put". The NAME never depends on
         // which handle asked (`shard_for` and `world_shards` both read the shared `ShardSet`), so
-        // this replaces #19's "resolve from the default handle" without reintroducing
-        // `realm_shard()`, which #20 deleted.
+        // this replaces the older "resolve from the default handle" without reintroducing
+        // `realm_shard()`, which realm-core deleted.
         //
-        // #21's instance-pool stickiness applies ONLY when there is no escrow in flight. With an
+        // The instance-pool stickiness applies ONLY when there is no escrow in flight. With an
         // escrow the destination is already fixed by the row (see the paragraph above): being
         // sticky about the holder there would resolve an owner that differs from the database the
         // blob is filed against, which is the third-shard hazard this comment block exists to
@@ -137,7 +138,7 @@ impl WorldStore for Coordinator {
         }
         .unwrap_or_else(|| self.clone());
         // The three facts that decide whether a resume is DRIVEN or silently skipped. Nothing logged
-        // them, so every diagnosis of a stranded copy (#81, twice) had to infer the holder from what
+        // them, so every diagnosis of a stranded copy (twice, live) had to infer the holder from what
         // did not happen — and `settle_transfer`'s `holder == owner` branch is silent by design.
         log::info!(
             "settle {character_guid}: holder={} owner={} escrow={} ({map_id}/{instance_id})",
@@ -220,15 +221,15 @@ impl WorldStore for Coordinator {
     }
 
     /// The world handshake's account→K lookup, split across the two databases that own the two
-    /// halves of the answer (#20). The body is `realm_core::lookup_session`, written against the
+    /// halves of the answer. The body is `realm_core::lookup_session`, written against the
     /// `RealmDb` trait so the split it performs — K from realm-core, the account id from THIS world
     /// shard — is executed by a test rather than only described by a comment. Both of those were
-    /// surviving mutations in #33's review.
+    /// surviving mutations in a mutation review.
     fn lookup_session(&self, account_name: &str) -> Result<Option<WorldSession>> {
         crate::realm_core::lookup_session(self, account_name)
     }
 
-    /// Publish a settled transfer's destination into the REALM-CORE character→shard index (#34).
+    /// Publish a settled transfer's destination into the REALM-CORE character→shard index.
     /// Step 5b of `world::transfer::run_transfer` — see `realm_core::publish_shard_index` for why
     /// this is a replication of `finish_transfer`'s own transactional write and not a best-effort
     /// side call.
@@ -241,7 +242,7 @@ impl WorldStore for Coordinator {
         crate::realm_core::publish_shard_index(self, character_guid, map_id, instance_id)
     }
 
-    /// The character-select list, UNIONED across every connected shard (#19).
+    /// The character-select list, UNIONED across every connected shard.
     ///
     /// A character that logged out inside a dungeon lives on the instance shard, not the realm
     /// database — and Phase A has no realm-core character index to ask, so the gateway asks every
@@ -268,12 +269,12 @@ impl WorldStore for Coordinator {
 
     /// Create a character on `self` — the DEFAULT/realm shard — always, even when the race's start
     /// position (`module/src/auth.rs`'s per-race spawn table) routes to a DIFFERENT world shard
-    /// under the configured `LYRACORE_SHARD_MAP` (issue #60, e.g. an Orc/Tauren/Troll/Night Elf's Kalimdor
-    /// start position on a two-continent split). This is the DECISION #60 asked to be made explicit:
+    /// under the configured `LYRACORE_SHARD_MAP` (e.g. an Orc/Tauren/Troll/Night Elf's Kalimdor
+    /// start position on a two-continent split). The DECISION, made explicit:
     ///
     /// **Create-then-transfer-on-first-login, not create-directly-on-the-owning-shard.** The row
     /// lands on `self` and stays there until the character's very first `CMSG_PLAYER_LOGIN` runs
-    /// `route_home`/`settle_home_shard` (#17/#19/#47) — the SAME resolve-and-transfer every OTHER
+    /// `route_home`/`settle_home_shard` — the SAME resolve-and-transfer every OTHER
     /// login already goes through, freshly created or not. Creating directly on the owning shard
     /// instead would need its own routing resolved BEFORE the character exists (nothing to look up
     /// in the character→shard index yet), built from scratch for a path that runs exactly once per
@@ -283,7 +284,7 @@ impl WorldStore for Coordinator {
     /// full gateway-kill crash matrix
     /// (`a_gateway_kill_at_every_transfer_step_recovers_to_exactly_one_whole_copy`,
     /// `world/tests.rs`), and a fresh character has no live history to lose in transit — if
-    /// anything the simplest case that machinery handles. What it did NOT have, before #60, is a
+    /// anything the simplest case that machinery handles. What it did NOT have at first is a
     /// test that the first login of a freshly created character actually drives that transfer
     /// end-to-end rather than merely reusing already-tested machinery by assumption:
     /// `a_freshly_created_characters_first_login_transfers_off_the_default_shard` (`world/tests.rs`).
@@ -299,14 +300,14 @@ impl WorldStore for Coordinator {
         self.create_character(account_id, name, race, class, gender, appearance)
     }
 
-    /// Delete a character wherever it actually LIVES (#60), not only on `self`.
+    /// Delete a character wherever it actually LIVES, not only on `self`.
     ///
-    /// `characters()` above is a cross-shard UNION (#19): a character resident on ANY connected
-    /// shard shows at char-select. Before #60 `delete_character` did not match that — the reducer
+    /// `characters()` above is a cross-shard UNION: a character resident on ANY connected
+    /// shard shows at char-select. `delete_character` did not match that — the reducer
     /// call only ever ran on `self`, so a character resident on a non-default shard was NOT_FOUND
-    /// there (surfaced as `Failed`) even though the row was real and deletable — the finding this
-    /// issue is about. The resolution is `realm_core::resolve_delete_shard` — the SAME index-first
-    /// lookup (`locate_home_shard`, #47) the world-entry path already trusts, not a second routing
+    /// there (surfaced as `Failed`) even though the row was real and deletable.
+    /// The resolution is `realm_core::resolve_delete_shard` — the SAME index-first
+    /// lookup (`locate_home_shard`) the world-entry path already trusts, not a second routing
     /// mechanism — and delete runs EXACTLY ONCE, on the resolved owner: turning "the wrong shard"
     /// into "every shard" would trade a correctness bug for a data-loss footgun. A character caught
     /// mid-transfer (an in-flight escrow) is refused rather than raced — see
@@ -317,7 +318,7 @@ impl WorldStore for Coordinator {
     /// is a per-database `#[auto_inc]` surrogate in general (`realm_core::lookup_session`'s doc
     /// covers that boundary — the REALM-CORE ↔ world-shard one, where ids legitimately differ), but
     /// a character can only ever REACH a non-default world shard through the escrowed transfer
-    /// (#19; `create_character` never targets one directly — see its own doc comment), and
+    /// (`create_character` never targets one directly — see its own doc comment), and
     /// `ensure_shadow_account` (`module/src/auth.rs`) creates that shard's shadow `game_account` row
     /// with the EXACT numeric id carried in the import blob, bypassing `#[auto_inc]` — so
     /// `account_id` is preserved bit-for-bit, world-shard to world-shard, across every transfer.
@@ -368,7 +369,7 @@ impl WorldStore for Coordinator {
         )
     }
 
-    /// The non-blocking submit (perf catalog 1.13, #110) — this is the override that actually
+    /// The non-blocking submit — this is the override that actually
     /// removes the ceiling; the trait default just forwards to the blocking call.
     fn movement_update_nowait(
         &self,
@@ -949,15 +950,16 @@ impl WorldStore for Coordinator {
         self.group_loot_method(account_id, self_guid, loot_setting, master_guid, loot_threshold)
     }
 
-    // --- Realm-wide party state (#22, group slice) ---
+    // --- Realm-wide party state (the realm-core group slice) ---
 
     /// The realm-core handle, but ONLY on a multi-database gateway.
     ///
-    /// The `is_sharded()` short-circuit is the whole of "unset env vars ⇒ today's gateway" for this
-    /// ticket: with one database `realm_core()` would answer THIS handle, and routing party ops
-    /// through the operator-gated realm reducers against the same database would be a different code
-    /// path, a different gate, and a different set of writes for no gain. Answering `None` here sends
-    /// `world::party` down the arm that calls exactly the reducers it called before #22.
+    /// The `is_sharded()` short-circuit is the whole of "unset env vars ⇒ today's gateway" for the
+    /// realm-wide party plane: with one database `realm_core()` would answer THIS handle, and routing
+    /// party ops through the operator-gated realm reducers against the same database would be a
+    /// different code path, a different gate, and a different set of writes for no gain. Answering
+    /// `None` here sends `world::party` down the arm that calls exactly the reducers it called
+    /// before realm-core existed.
     ///
     /// Configured-but-unreachable realm-core answers `None` as well (`realm_core()` is `Err`), so a
     /// realm-core outage degrades party ops to shard-local rather than failing them. That is a
@@ -1026,7 +1028,7 @@ impl WorldStore for Coordinator {
         self.loot_roll(account_id, self_guid, corpse_guid, loot_slot, vote)
     }
 
-    // --- Realm-wide loot rolls (#50) ---
+    // --- Realm-wide loot rolls ---
 
     fn realm_loot_op(
         &self,
@@ -1101,7 +1103,7 @@ impl WorldStore for Coordinator {
     }
 }
 
-/// The realm-core split's store seam (issue #34 part 2). Every method here is a view onto
+/// The realm-core split's store seam. Every method here is a view onto
 /// `Coordinator`'s like-named INHERENT method — Rust resolves inherent methods first, so these are
 /// forwards, not recursion, exactly like the `WorldStore` impl above.
 ///
@@ -1183,8 +1185,8 @@ impl crate::realm_core::RealmDb for Coordinator {
 #[cfg(test)]
 mod routing_call_site_tests {
     /// One method's body in this file, comments stripped. The routing decisions in this impl run
-    /// against a live SpacetimeDB node and NOTHING ELSE, so no fake can reach them (issue #34 item
-    /// 2): the pure resolvers in `crate::config` are pinned by their own tests, and the trait-level
+    /// against a live SpacetimeDB node and NOTHING ELSE, so no fake can reach
+    /// them: the pure resolvers in `crate::config` are pinned by their own tests, and the trait-level
     /// behavior is pinned by the fakes in `world::tests` — but *whether the Coordinator's own
     /// override still calls them* is exactly the mutation that stays green in both. A source scan is
     /// what the module tier already does for its un-runnable call sites (`transfer.rs`'s fence
@@ -1227,7 +1229,7 @@ mod routing_call_site_tests {
 
     /// Strip a Rust line comment from `line`, respecting simple double-quoted string literals so a
     /// `//` inside one is never mistaken for a comment start. Also closes the trailing-comment
-    /// defeat `code_of` above used to be open to (issue #64: `.filter(|l|
+    /// defeat `code_of` above used to be open to (`.filter(|l|
     /// !l.trim_start().starts_with("//"))` only drops a comment that is the FIRST thing on its
     /// line, so a needle surviving in a trailing comment on an otherwise-live line still satisfied
     /// a `.contains()` scan). Module-crate copy: `module/src/test_scan.rs`, which this cannot import
@@ -1248,9 +1250,10 @@ mod routing_call_site_tests {
         line
     }
 
-    /// `Coordinator::realm_core` — the AUTH ROUTER, and the one edit that reverts #20 wholesale.
+    /// `Coordinator::realm_core` — the AUTH ROUTER, and the one edit that reverts the whole
+    /// realm-core auth split.
     ///
-    /// Found surviving by the adversarial review of PR #46. `impl RealmDb for Coordinator` is
+    /// Found surviving by an adversarial review. `impl RealmDb for Coordinator` is
     /// pinned below, and every `realm_core.rs` body is executed against `fake::Handle` — but both
     /// stop at the forward. The inherent method the forward calls is one level lower, and replacing
     /// its body with `Ok(self.clone())` left ALL 403 gateway tests green while:
@@ -1259,12 +1262,12 @@ mod routing_call_site_tests {
     ///   so a password rotation or a ban applied on realm-core stops being enforced (M1's live
     ///   consequence, reached one call below where M1 was pinned);
     /// * the world handshake reads K from the world shard's session cache (M5, ditto);
-    /// * `establish_session` writes only the world shard, so the realm-wide session row #20 AC#2
-    ///   exists for is never written;
+    /// * `establish_session` writes only the world shard, so the realm-wide session row — the whole
+    ///   point of a shared session table — is never written;
     /// * fail-closed is gone: a dead realm-core no longer refuses anything, it is simply not asked.
     ///
-    /// That is the exact regression issue #20 was opened to prevent and issue #34 was opened to
-    /// pin, so it does not get to be the one line nothing watches. It cannot be executed (it reads
+    /// That is the exact regression the realm-core split was built to prevent, so it does not get
+    /// to be the one line nothing watches. It cannot be executed (it reads
     /// a live websocket's liveness), so it gets the same instrument as the forwards: exact shape.
     #[test]
     fn the_auth_database_router_is_still_a_router_and_not_a_passthrough() {
@@ -1326,8 +1329,8 @@ mod routing_call_site_tests {
     ///
     /// | edit | live consequence |
     /// |---|---|
-    /// | `publish_shard_index` → `Ok(())` | every completed transfer stops telling realm-core where the character went — #34 part 1 undone, silently |
-    /// | `lookup_session` → read the world DB directly | the world handshake authenticates off the world shard's session cache: #20's entire point, reverted |
+    /// | `publish_shard_index` → `Ok(())` | every completed transfer stops telling realm-core where the character went — the shard index silently stops being written |
+    /// | `lookup_session` → read the world DB directly | the world handshake authenticates off the world shard's session cache: realm-core's entire point, reverted |
     ///
     /// Equality rather than `contains`, because a `contains` scan is defeated by leaving its own
     /// text in a dead branch — which this repo has had done to it repeatedly. A deliberate change
@@ -1360,16 +1363,16 @@ mod routing_call_site_tests {
         }
     }
 
-    /// #60: `delete_character`'s routing composition. `realm_core::resolve_delete_shard` is tested
+    /// `delete_character`'s routing composition. `realm_core::resolve_delete_shard` is tested
     /// BEHAVIOURALLY (`realm_core.rs`, via `fake::Handle`) for the resolution and refusal decisions
     /// themselves, but — like `settle_home_shard` above — nothing can exercise *whether Coordinator's
     /// override actually dispatches through that answer* without a live node: `world::tests`' mocks
     /// implement `WorldStore` directly and never take this override. Pinned by EXACT SHAPE rather
     /// than `the_realm_core_delegations_are_exactly_delegations`'s bare-forward instrument just
     /// above, because this body is three branches, not one line — a `contains` scan of any single
-    /// branch is defeated by a decoy left in a dead one (issue #64's live demonstration), and
+    /// branch is defeated by a decoy left in a dead one (demonstrated live in this repo), and
     /// equality is what actually pins the composition: that delete runs on the RESOLVED owner (not
-    /// unconditionally on `self`, which is the bug #60 fixes), and that a refusal (`Err`) reports
+    /// unconditionally on `self`, which was the bug), and that a refusal (`Err`) reports
     /// `Failed` rather than falling through to delete anyway (which would race a resumed transfer).
     #[test]
     fn delete_character_dispatches_through_the_resolved_shard_not_always_self() {
@@ -1396,9 +1399,9 @@ mod routing_call_site_tests {
             want.trim_end_matches('}').trim_end(),
             "`impl WorldStore for Coordinator::delete_character` no longer resolves the owning \
              shard through `realm_core::resolve_delete_shard` before deleting. Either a character \
-             resident on a non-default shard is undeletable again (the bug #60 fixes), or — the \
+             resident on a non-default shard is undeletable again, or — the \
              opposite failure — delete stopped running on exactly ONE shard, which is the \
-             data-loss footgun #60's design explicitly refuses to introduce."
+             data-loss footgun this design explicitly refuses to introduce."
         );
     }
 
@@ -1410,11 +1413,11 @@ mod routing_call_site_tests {
     #[test]
     fn settle_home_shard_keeps_the_short_circuit_and_the_escrow_first_destination() {
         let code = code_of("settle_home_shard");
-        // #17/#20: it must short-circuit before anything else on a single-database gateway,
+        // It must short-circuit before anything else on a single-database gateway,
         // which is what "the env vars unset ⇒ today's gateway" means on the login hot path.
         // Pin the NEGATED form, not the bare substring: `code.contains("is_sharded()")`
         // still matched after the guard was inverted to `if self.is_sharded()`, which is the exact
-        // source-scan defeat class playbook §8 catalogues (a scan that a mutation walks straight
+        // source-scan defeat class this repo keeps hitting (a scan that a mutation walks straight
         // through). This body is unreachable from the suite — `Coordinator` cannot be constructed
         // offline, so every mock takes the trait default — so this scan is the only guard there is,
         // and it has to be precise enough to fail when the guard flips.
@@ -1423,7 +1426,7 @@ mod routing_call_site_tests {
             "settle_home_shard lost the single-shard short-circuit (or inverted it): an \
              unconfigured gateway would pay the shard scan and the escrow read on every world entry",
         );
-        // #19: the owner handed to `run_transfer` must be resolved from the ESCROW's stated
+        // The owner handed to `run_transfer` must be resolved from the ESCROW's stated
         // destination, not from whatever the durable row says, or a resumed transfer imports the
         // blob into a database it was never filed against. `run_transfer` cannot check this itself.
         let escrow_at = code
@@ -1440,10 +1443,10 @@ mod routing_call_site_tests {
         );
     }
 
-    /// The same tripwire, for #21's instance-pool stickiness. `ShardMap::instance_owner` is pinned
+    /// The same tripwire, for the instance-pool stickiness. `ShardMap::instance_owner` is pinned
     /// by its own unit tests, but *whether the production world-entry resolver still calls it* is
     /// unreachable from any fake: `world::tests`' mocks implement the TRAIT, and this rule lives in
-    /// the `Coordinator` impl. Deleting the call site restores the pre-#21 routing — a live dungeon
+    /// the `Coordinator` impl. Deleting the call site restores the pre-stickiness routing — a live dungeon
     /// run forks onto a newly added pool member on the next world entry — with every suite green.
     #[test]
     fn settle_home_shard_still_applies_the_instance_pool_stickiness() {
@@ -1462,7 +1465,7 @@ mod routing_call_site_tests {
              durable evidence of which pool member a live run is on, and `self` is the session's \
              handle, not the character's. Adding a second instances database would then re-point \
              the buckets of LIVE runs, and each of those parties would be transferred into a \
-             freshly mirrored, empty copy of their own dungeon (#21 AC#3)."
+             freshly mirrored, empty copy of their own dungeon."
         );
         // …and only on the no-escrow path. An in-flight escrow's destination is fixed by the row;
         // being sticky there hands `run_transfer` a `dst` the blob was never filed against.
@@ -1476,30 +1479,30 @@ mod routing_call_site_tests {
     #[test]
     fn home_shard_still_resolves_through_the_settle_shard_index() {
         let code = code_of("home_shard");
-        // #17/#20/#34: the single-shard short-circuit, the index hint, the probe and the self-heal
+        // The single-shard short-circuit, the index hint, the probe and the self-heal
         // live in `realm_core::settle_shard_index` — where they are BEHAVIOURALLY tested
         // (`a_single_database_gateway_resolves_the_home_shard_without_reading_anything`,
         // `a_deliberately_stale_index_entry_still_routes_correctly_and_is_healed_in_place`), which
         // they never were while they sat inline here. What this scan still has to pin is that
         // `home_shard` calls it at all: routing to `resolved` while nothing computed `resolved`
-        // from the index would drop the whole of #20 with every suite green.
+        // from the index would drop the whole realm-core routing with every suite green.
         assert!(
             code.contains("settle_shard_index(self, character_guid)"),
             "home_shard no longer resolves through `realm_core::settle_shard_index` — the realm-core \
              index hint, the confirming probe, the self-heal write-back and the single-database \
-             short-circuit are all in it, so dropping the call drops #20 entirely (and makes an \
+             short-circuit are all in it, so dropping the call drops realm-core routing entirely (and makes an \
              unconfigured gateway pay for routing it does not do)"
         );
     }
 
-    /// #22 (group slice): the ONE line that decides whether a party op runs on realm-core or on the
+    /// The ONE line that decides whether a party op runs on realm-core or on the
     /// player's own shard, and the only one no fake can reach — `world::party`'s tests drive the
     /// trait, and this is the `Coordinator` impl that answers it in production.
     ///
     /// Both directions are damage. Dropping the `is_sharded()` short-circuit routes a
     /// SINGLE-DATABASE gateway's party ops through the operator-gated realm reducers against its own
     /// database: a different reducer, a different gate, and a mirror push per op, in a configuration
-    /// #22 promises costs nothing. Dropping `realm_core()` — answering `self` — silently reinstates
+    /// the realm-core slice promises costs nothing. Dropping `realm_core()` — answering `self` — silently reinstates
     /// the shard-local party plane this whole slice exists to remove, with every suite green because
     /// every mock supplies its own realm handle.
     #[test]
@@ -1509,7 +1512,7 @@ mod routing_call_site_tests {
             code.contains("if !self.is_sharded() {") && code.contains("return None;"),
             "realm_store lost its single-database short-circuit: an unconfigured gateway would route \
              every party op through the operator-gated `realm_group_op` and mirror it back onto the \
-             one database it already wrote. #22's byte-identical promise is exactly this line."
+             one database it already wrote. The byte-identical promise is exactly this line."
         );
         assert!(
             code.contains("self.realm_core()"),

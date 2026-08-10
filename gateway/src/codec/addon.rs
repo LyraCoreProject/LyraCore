@@ -1,11 +1,11 @@
-//! Addon-bridge codec (work-item 184): the LANG_ADDON escape hatch on both wire directions.
+//! Addon-bridge codec: the LANG_ADDON escape hatch on both wire directions.
 //!
 //! gtker's vanilla `Language` enum has no `0xFFFFFFFF` variant, so a real `SendAddonMessage`
 //! frame FAILS typed decode (and would be session-fatal), and the reply can't ride the typed
 //! `SMSG_MESSAGECHAT` builder either. Both directions are therefore hand-parsed/hand-built here
 //! against the byte layouts pinned from gtker's own serializers (cmsg/smsg_messagechat.rs).
 //!
-//! Envelope (the 184 framing protocol, versioned): the chat TEXT is `"STC\t" + "v1|<cmd>|<seq>|
+//! Envelope (the bridge's framing protocol, versioned): the chat TEXT is `"STC\t" + "v1|<cmd>|<seq>|
 //! <part>/<parts>|<payload>"`. v1 implements the single-part fast path only — a multi-part
 //! message logs and drops (payloads that don't fit ~230 bytes are a design smell at this layer).
 

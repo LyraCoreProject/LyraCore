@@ -1,32 +1,32 @@
-//! The realm-core split, written against a trait instead of a live connection (issue #34 part 2).
+//! The realm-core split, written against a trait instead of a live connection.
 //!
 //! # Why this file exists
 //!
-//! Issue #33's adversarial review ran 16 mutations against the realm-core auth code. Eight went
+//! An adversarial review ran 16 mutations against the realm-core auth code. Eight went
 //! red — every one of them in `config.rs`, the pure resolver layer. Eight SURVIVED, and every one
 //! of those lived in `CoordinatorStore` or `impl WorldStore for Coordinator`: the layer that
 //! actually performs the split. Among the survivors were *"`account()` reads SRP6 material off the
 //! world DB"* and *"`lookup_session` reads the session key K off the world DB's cache"* — the exact
-//! regression issue #20 exists to prevent, invisible to a fully green suite. The reason was
+//! regression the realm-core split exists to prevent, invisible to a fully green suite. The reason was
 //! mechanical, not cultural: `Coordinator` wraps a live SpacetimeDB websocket, so nothing in the
 //! crate could execute those bodies without a node.
 //!
 //! # The seam
 //!
-//! The same one PR #38 used for the transfer transport, and for the same reason: make the
+//! The same one the transfer transport uses, and for the same reason: make the
 //! PRODUCTION function generic over the store type, and put the store behind a small trait. So
 //! [`RealmDb`] is `Coordinator` reduced to the fifteen calls the realm-core split actually makes;
 //! `Coordinator` implements it by forwarding to its own inherent methods (Rust resolves inherent
 //! methods first, so those forwards are views, not recursion), and [`fake::Handle`] implements it
 //! over an in-memory two-database topology. Every function below is then run BY THE TESTS, not
 //! modelled by them — a harness that re-implemented the rules would reproduce the exact failure
-//! this ticket is about.
+//! this file is about.
 //!
 //! What is NOT modelled here is the transport: `Coordinator`'s own one-line bodies (the websocket
 //! read, the `call_reducer!`) are substituted wholesale by the fake. That layer is pinned by
 //! exact-shape equality on the forwarding impl (`the_coordinator_forwards_are_views_not_logic`),
 //! because a `contains` scan is defeated by leaving the text in a dead branch. The module pins its
-//! own equivalent (`CtxShard`) exactly the same way, and #380 measured why that is still the right
+//! own equivalent (`CtxShard`) exactly the same way, and a later measurement showed why that is still the right
 //! instrument: a cargo-mutants run over that surface MISSED every mutation in the adapter, because a
 //! mutation tool can only ask whether a test fails and no headless test can drive the real
 //! connection. The same holds here.
@@ -72,17 +72,17 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
         bound_identity: [u8; 32],
     ) -> Result<()>;
 
-    // --- #269: the LOGON socket's lease on the account's cached per-account connection.
+    // --- The LOGON socket's lease on the account's cached per-account connection.
     //
     // `bound_identity` above is what OPENS that connection, so a logon that authenticates and then
     // walks away leaks its websocket fd and its SDK pump thread for the gateway's lifetime — the
-    // half of #269 that #449's world-tier accounting never reached. These two are the same
+    // half of the reclaim that the world-tier accounting never reached. These two are the same
     // `stdb::AccountSessions` refcount the world tier attaches to, which is what makes the
     // logon→world handover free: the world session's attach lands while the logon's lease is still
     // held (or inside its grace), so the connection is reused rather than rebuilt.
     /// Register this logon socket as a live user of `account_id`'s cached connection. Idempotent
     /// per socket — see `CoordinatorStore::lease`. `account_id` is the WORLD shard's id, the key
-    /// `player_conn` caches under; realm-core's id names nothing there (#20).
+    /// `player_conn` caches under; realm-core's own account id names nothing there.
     fn attach_account_session(&self, account_id: u64);
     /// Retire it when the logon socket closes. DEFERRED: it never releases the connection outright,
     /// because the account's next socket is normally the world session that reuses it. See
@@ -96,7 +96,7 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
     fn character_shard(&self, guid: u64) -> Option<(u32, u64)>;
     /// Write `guid`'s location into this database's character→shard index.
     fn set_character_shard(&self, guid: u64, map_id: u32, instance_id: u64) -> Result<()>;
-    /// Does THIS database hold an in-flight escrow (#19's `game_transfer_out`) for `guid`? A shard
+    /// Does THIS database hold an in-flight escrow (`game_transfer_out`) for `guid`? A shard
     /// answering `true` is the SOURCE of a resumed transfer and wins outright over any shard merely
     /// holding a durable row for the guid — see [`locate_home_shard`]. The one method here whose
     /// `Coordinator` forward is not a bare call (it narrows `escrow_row`'s `Option<TransferOut>` to
@@ -104,7 +104,7 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
     /// wrong database the way a real forward-body change could.
     fn has_escrow(&self, guid: u64) -> bool;
 
-    // --- #78: load sampling. The gateway is the one component that can see the whole realm (every
+    // --- Load sampling. The gateway is the one component that can see the whole realm (every
     // shard's metrics endpoint, every session, every live position), so it samples; realm-core just
     // records what it is told (`module/src/load.rs`, ring-buffered per key). `session_count` reads
     // THIS handle's own shard; `record_shard_load` is fired against whichever handle the CALLER
@@ -127,9 +127,10 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
 // ===============================================================================================
 
 /// The world handshake's account→K lookup, split across the two databases that own the two halves
-/// of the answer (#20). The body of `impl WorldStore for Coordinator::lookup_session`.
+/// of the answer. The body of `impl WorldStore for Coordinator::lookup_session`.
 ///
-/// **K comes from realm-core**, which is the whole of #20 AC#2: the session key is realm state, not
+/// **K comes from realm-core**, which is the whole point of a realm-wide session table: the session
+/// key is realm state, not
 /// gateway state, so a gateway that is killed and restarted mid-session re-reads it and the same
 /// handshake succeeds — now no matter which gateway, on which shard, the client reconnects to.
 ///
@@ -153,10 +154,10 @@ pub(crate) fn lookup_session<D: RealmDb>(
     };
     // Deliberate simplification: no ban check here. The logon challenge already refuses a banned
     // account BEFORE K is ever written, so the only case a handshake check would add is "banned
-    // while a live session row exists" — and the right answer to that is work-item 238's live kick
+    // while a live session row exists" — and the right answer to that is a live kick
     // (subscribe to the account row, disconnect on `banned`), not a one-shot check at handshake
-    // time. Adding one here would also change unconfigured-realm-core behavior, which #20 promises
-    // it will not. Ceiling: a ban does not take effect until the player's next logon.
+    // time. Adding one here would also change unconfigured-realm-core behavior, which the split
+    // promises it will not. Ceiling: a ban does not take effect until the player's next logon.
     let Some(session_key) = realm_core.session_key(authoritative.id)? else {
         return Ok(None);
     };
@@ -184,7 +185,7 @@ pub(crate) fn lookup_session<D: RealmDb>(
 // ===============================================================================================
 
 /// Resolve where `character_guid` lives, from the realm-core index plus a probe of the connected
-/// world shards, and repair the index when the two disagree (#20 AC#3). The first half of
+/// world shards, and repair the index when the two disagree. The first half of
 /// `impl WorldStore for Coordinator::home_shard`.
 ///
 /// `None` means "this handle already owns it" — which is the only answer a single-database gateway
@@ -194,8 +195,8 @@ pub(crate) fn lookup_session<D: RealmDb>(
 ///
 /// **Still only reachable through `WorldStore::home_shard`, which `world::route_home` never calls**
 /// — `stdb::world_store` overrides it with `settle_home_shard`, so this exact function stays a test
-/// fixture in production. That no longer means the index goes unread, though: issue #47 gave
-/// `settle_home_shard` its OWN index-first lookup, [`locate_home_shard`], built on the same
+/// fixture in production. That no longer means the index goes unread, though:
+/// `settle_home_shard` has its OWN index-first lookup, [`locate_home_shard`], built on the same
 /// `RealmDb` trait and the same hint→probe→heal shape as this function, so the hint read and the
 /// self-heal write both run on the live world-entry path now — through the sibling, not through
 /// this one. This function remains the trait DEFAULT's resolver (every mock that does not override
@@ -209,7 +210,7 @@ pub(crate) fn settle_shard_index<D: RealmDb>(db: &D, character_guid: u64) -> Opt
     }
     // Consult the realm-core character→shard index first, then confirm/repair it against the shard
     // that actually holds the character. `realm_core()` failing (configured, not connected) costs
-    // us the hint, not the login — routing degrades to the probe, which is #17's behavior. Only the
+    // us the hint, not the login — routing degrades to the probe, the pre-index behavior. Only the
     // AUTH paths fail closed on a missing realm-core.
     let index = db.realm_core().ok();
     let hint = index
@@ -242,11 +243,11 @@ pub(crate) fn settle_shard_index<D: RealmDb>(db: &D, character_guid: u64) -> Opt
     Some(resolved)
 }
 
-/// Publish a settled transfer's destination into the REALM-CORE character→shard index (issue #34).
+/// Publish a settled transfer's destination into the REALM-CORE character→shard index.
 ///
 /// # Why this is not "a best-effort write the gateway might make"
 ///
-/// #20 AC#3 asks for an index that is updated *transactionally by the escrow's finish step*.
+/// The design calls for an index updated *transactionally by the escrow's finish step*.
 /// `transfer::do_finish` does exactly that — but only for the database it runs on, because there is
 /// no transaction spanning two SpacetimeDB databases. Realm-core's copy is the one `home_shard`
 /// actually reads, and before this function existed nothing ever wrote it: `set_character_shard`'s
@@ -263,11 +264,11 @@ pub(crate) fn settle_shard_index<D: RealmDb>(db: &D, character_guid: u64) -> Opt
 /// that never happened, and this cannot.
 ///
 /// The residual window — the gateway dies between `finish_transfer` and this call, or this call
-/// itself fails — IS covered as of issue #47: `settle_home_shard`'s own index lookup,
+/// itself fails — IS covered: `settle_home_shard`'s own index lookup,
 /// [`locate_home_shard`], probes and heals a stale entry on the next world entry for the character
 /// (the recovery path — `settle_transfer`'s holder-is-owner release — still does not re-enter
 /// `run_transfer`, so a missed publish is corrected by the NEXT login's probe, not retried
-/// immediately). Before #47 this window was open indefinitely: `settle_shard_index`'s probe-and-heal
+/// immediately). Before that lookup existed this window was open indefinitely: `settle_shard_index`'s probe-and-heal
 /// hung off `WorldStore::home_shard`, which `stdb::world_store` overrides with `settle_home_shard`
 /// — and that override resolved the character by scanning the connected shards and never read or
 /// repaired the index, so a missed publish left realm-core's entry naming the old shard until the
@@ -283,17 +284,17 @@ pub(crate) fn publish_shard_index<D: RealmDb>(
 }
 
 // ===============================================================================================
-//  `settle_home_shard`'s holder lookup (issue #47) — the index is used, not just written
+//  `settle_home_shard`'s holder lookup — the index is used, not just written
 // ===============================================================================================
 
 /// Where `character_guid` CURRENTLY lives, consulting the realm-core character→shard index FIRST
 /// and paying the full scan only on a miss. This is `settle_home_shard`'s holder-resolution step —
 /// the method `world::route_home` actually calls on every world entry — replacing the unconditional
-/// scan (`Coordinator::locate_character`, issue #19) it used before #47.
+/// scan (`Coordinator::locate_character`) it used before.
 ///
-/// #20/#34 wrote the index and gave it a self-heal (`settle_shard_index`, above), but that sits
+/// The realm-core work wrote the index and gave it a self-heal (`settle_shard_index`, above), but that sits
 /// behind `WorldStore::home_shard`, which `settle_home_shard` overrides — so in production the index
-/// sat next to the login path unread and the self-heal never ran (issue #47's finding). This
+/// sat next to the login path unread and the self-heal never ran. This
 /// function is the fix, written against the same [`RealmDb`] seam for the same reason: so it runs
 /// UNDER THE TESTS via [`fake::Handle`] rather than being merely described by a source scan of
 /// `Coordinator`'s live-node-only override.
@@ -303,7 +304,7 @@ pub(crate) fn publish_shard_index<D: RealmDb>(
 /// the mismatch is healed back into the index (`heal_shard_entry`, the same rule
 /// `settle_shard_index` uses). The miss path — no hint, an unreachable realm-core, or the hinted
 /// shard no longer holding the character — scans every connected shard, default first, exactly as
-/// the pre-#47 `locate_character` did: a shard holding an in-flight ESCROW wins outright (between
+/// the older `locate_character` did: a shard holding an in-flight ESCROW wins outright (between
 /// `import_character_blob` and `finish_transfer` BOTH databases can hold a durable row for the guid,
 /// and the escrow-holder is the only side a resumed transfer can be driven from — see
 /// `world::transfer`), otherwise the first shard whose row answers. In practice the index already
@@ -312,7 +313,7 @@ pub(crate) fn publish_shard_index<D: RealmDb>(
 /// fast path IS the escrow case too; the scan is what a never-yet-healed or genuinely stale index
 /// falls back into.
 pub(crate) fn locate_home_shard<D: RealmDb>(db: &D, guid: u64) -> Option<D> {
-    // AC#5's own copy of the short-circuit. `settle_home_shard` (`stdb::world_store`) already
+    // This function's own copy of the short-circuit. `settle_home_shard` (`stdb::world_store`) already
     // guards its call to this function with an identical `if !self.is_sharded() { return Ok(None);
     // }` — that one is production's, stays exactly where it is, and cannot be exercised by any test
     // without a live SpacetimeDB connection (`Coordinator` cannot be constructed offline). This copy
@@ -321,7 +322,7 @@ pub(crate) fn locate_home_shard<D: RealmDb>(db: &D, guid: u64) -> Option<D> {
     // a test can actually reach — `fake::Handle` runs this function directly. Without it, a single
     // connected database (unsharded) still pays a `character_shard` probe, a `character_location`
     // scan and a `set_character_shard` heal write to reach the one answer "stay put" gives for
-    // free — exactly the reads AC#5 promises an unset `LYRACORE_REALM_CORE`/`LYRACORE_SHARD_MAP` never pays.
+    // free — exactly the reads an unset `LYRACORE_REALM_CORE`/`LYRACORE_SHARD_MAP` must never pay.
     if !db.is_sharded() {
         return None;
     }
@@ -347,14 +348,14 @@ pub(crate) fn locate_home_shard<D: RealmDb>(db: &D, guid: u64) -> Option<D> {
     // Miss: the full scan. A shard holding an escrow wins outright; otherwise prefer a shard whose
     // row AGREES with the shard map, and only then fall back to first-responder order.
     //
-    // THE DISAMBIGUATOR (issue #62 part 1). This used to take the first shard that answered at all,
+    // THE DISAMBIGUATOR. This used to take the first shard that answered at all,
     // so a guid with rows on two shards resolved by ITERATION ORDER — default first — and a stale
-    // artefact on the default shard beat the character's real home. Reproduced by #62's reviewer.
+    // artefact on the default shard beat the character's real home. Reproduced by a reviewer.
     //
     // The rule, stated so it can be argued with: **a durable row is authoritative only on the shard
     // the shard map assigns its own location to.** A row on `core` saying "I am at map 36" describes
     // a character that belongs on the instances shard, so it is evidence of a leftover, not of
-    // residence — the same principle as `heal_shard_entry`'s guard (#81), which is why both now read
+    // residence — the same principle as `heal_shard_entry`'s guard, which is why both now read
     // the same way: CONFIRM where a character is, never infer it from row order.
     //
     // Deliberately a PREFERENCE, not a filter: if the only row anywhere disagrees with the map, it is
@@ -397,7 +398,7 @@ fn heal_shard_entry<D: RealmDb>(rc: &D, guid: u64, shard: &D) {
         // `finish_transfer` (the row is frozen, not deleted, until then), but nothing to write back.
         return;
     };
-    // THE HEAL MUST CONFIRM, NEVER PREDICT (issue #81). The index answers "which SHARD holds this
+    // THE HEAL MUST CONFIRM, NEVER PREDICT. The index answers "which SHARD holds this
     // character": every reader resolves the stored `(map, instance)` back through the shard map to a
     // database name — `locate_home_shard`'s fast path does exactly that. So a pair that resolves to
     // some OTHER database records "she lives over there" about a character we just found HERE.
@@ -435,12 +436,12 @@ fn heal_shard_entry<D: RealmDb>(rc: &D, guid: u64, shard: &D) {
 }
 
 // ===============================================================================================
-//  `delete_character`'s cross-shard routing (issue #60)
+//  `delete_character`'s cross-shard routing
 // ===============================================================================================
 
-/// Where `delete_character` must run for `guid`, or why it must not run anywhere right now (#60).
+/// Where `delete_character` must run for `guid`, or why it must not run anywhere right now.
 ///
-/// Reuses `locate_home_shard`'s index-first resolution (#47) — the SAME routing decision the
+/// Reuses `locate_home_shard`'s index-first resolution — the SAME routing decision the
 /// world-entry path already trusts — rather than inventing a second mechanism. `Ok(Some(owner))` is
 /// the shard to delete on (which may legitimately BE `self` — nothing special-cases that, since
 /// calling delete on a handle that happens to name `self`'s own database is harmless). `Ok(None)`
@@ -448,7 +449,7 @@ fn heal_shard_entry<D: RealmDb>(rc: &D, guid: u64, shard: &D) {
 /// the caller falls back to its existing single-database delete and gets the exact NOT_FOUND-shaped
 /// answer it always did.
 ///
-/// `Err` means REFUSE: a shard holding an in-flight escrow (`game_transfer_out`, #19) for `guid` is
+/// `Err` means REFUSE: a shard holding an in-flight escrow (`game_transfer_out`) for `guid` is
 /// never a valid delete target. Between `import_character_blob` and `finish_transfer` the row can
 /// be split across two databases, so deleting either half mid-flight either destroys the character
 /// a moment before it lands on the other side, or leaves a frozen copy the resumed transfer then
@@ -505,17 +506,17 @@ pub(crate) mod fake {
         pub shard_index: Mutex<HashMap<u64, (u32, u64)>>,
         /// The node-issued identity of this database's per-account player connection.
         pub identities: Mutex<HashMap<u64, [u8; 32]>>,
-        /// #269: how many identities this database has ever minted. Stamped into every identity so
+        /// How many identities this database has ever minted. Stamped into every identity so
         /// a connection that was released and REBUILT is distinguishable from one that was reused —
         /// the node mints a fresh identity per connection, and a rebuilt one is exactly what
         /// `establish_session` has not bound.
         pub mints: Mutex<u8>,
-        /// `game_transfer_out`: guids with an in-flight escrow ON this database (#19, #47).
+        /// `game_transfer_out`: guids with an in-flight escrow ON this database.
         pub escrows: Mutex<HashSet<u64>>,
-        /// #78: this shard's live player-SESSION count (`CoordinatorInner::players.len()`'s fake
+        /// This shard's live player-SESSION count (`CoordinatorInner::players.len()`'s fake
         /// equivalent) — set directly by a test, not derived from `characters`/`identities`.
         pub open_sessions: Mutex<usize>,
-        /// #78: every `record_shard_load` call this database RECEIVED, in order.
+        /// Every `record_shard_load` call this database RECEIVED, in order.
         pub recorded_shard_loads: Mutex<Vec<(String, f32, u32)>>,
         /// Every `RealmDb` call served by this database, in order.
         pub log: Mutex<Vec<String>>,
@@ -536,7 +537,7 @@ pub(crate) mod fake {
         /// `false` = realm-core is configured but its websocket is down: `realm_core()` must `Err`
         /// rather than serve the world database's stale auth cache.
         pub realm_core_up: bool,
-        /// #269: the REAL per-account socket refcount (`crate::stdb::AccountSessions`), not a model
+        /// The REAL per-account socket refcount (`crate::stdb::AccountSessions`), not a model
         /// of it — the same type, behind the same predicate, that `stdb::ShardSet` holds. It lives
         /// on the REALM rather than on a `Db` for the same reason it lives on `ShardSet` rather
         /// than on `CoordinatorInner`: it counts SOCKETS, which is a gateway concept with no
@@ -574,7 +575,7 @@ pub(crate) mod fake {
                 .expect("no such database in the fake realm")
         }
 
-        /// #269: drive one pass of `Coordinator::reap_idle_account_sessions` — the REAL
+        /// Drive one pass of `Coordinator::reap_idle_account_sessions` — the REAL
         /// `AccountSessions::reap_idle` predicate, with the release action modelled rather than
         /// performed. `grace` is passed in so a test can ask "reap everything that is due right
         /// now" (`Duration::ZERO`) or "nothing is due yet" without sleeping.
@@ -603,7 +604,7 @@ pub(crate) mod fake {
             due
         }
 
-        /// Accounts released so far (#269).
+        /// Accounts released so far.
         pub fn released(&self) -> Vec<u64> {
             self.realm.released.lock().unwrap().clone()
         }
@@ -712,7 +713,7 @@ pub(crate) mod fake {
                 id[0] = account_id as u8;
                 id[1] = n as u8 + 1;
                 id[2] = self.db.len() as u8;
-                // #269: MONOTONIC, unlike the three above — a rebuild after a release re-enters an
+                // MONOTONIC, unlike the three above — a rebuild after a release re-enters an
                 // empty slot and would otherwise mint a byte-identical identity, hiding the very
                 // cost a release carries.
                 id[3] = *mints;
@@ -820,14 +821,14 @@ pub(crate) mod fake {
 }
 
 // ===============================================================================================
-//  Tests — the eight mutations #33's review could not reach
+//  Tests — the eight mutations the adversarial review could not reach
 // ===============================================================================================
 
 /// Each test below names the mutation it kills. In short: all eight live in `CoordinatorStore` /
 /// `impl WorldStore for Coordinator`, all
 /// eight needed a live SpacetimeDB node before this file existed, and the two that matter most —
 /// "read the SRP6 material off the world DB" and "read K off the world DB's cache" — are the exact
-/// regression issue #20 was opened to prevent.
+/// regression the realm-core auth split was built to prevent.
 #[cfg(test)]
 mod tests {
     use super::fake::{account, realm, realm_with_dead_core};
@@ -878,10 +879,10 @@ mod tests {
             a.salt,
             [0xAA; 32],
             "the logon challenge was answered with the WORLD shard's salt. `game_account` on a \
-             world shard is a write-through CACHE (docs/security-model.md) — refreshed at logon and \
+             world shard is a write-through CACHE — refreshed at logon and \
              never authoritative — so authenticating against it means a password rotation or a ban \
-             applied on realm-core silently stops being enforced. This is the regression #20 exists \
-             to prevent."
+             applied on realm-core silently stops being enforced. This is the regression the \
+             realm-core auth split exists to prevent."
         );
         assert_eq!(a.verifier, [0xBB; 32], "same, for the SRP6 verifier");
         assert_eq!(
@@ -891,7 +892,7 @@ mod tests {
         );
     }
 
-    /// #223 — a PROVISIONING corruption, not a client one. `game_account.salt`/`.verifier` are
+    /// A PROVISIONING corruption, not a client one. `game_account.salt`/`.verifier` are
     /// 32-byte vectors in the schema, and nothing in SpacetimeDB enforces the length: a half-written
     /// migration, a hand-typed `spacetime sql` row, or an importer bug can leave a short blob there.
     ///
@@ -967,7 +968,7 @@ mod tests {
             h.db_at(CORE).sessions.lock().unwrap().get(&9).map(|(k, _)| *k),
             Some(K),
             "realm-core's `game_session` must be written under REALM-CORE's id (9) — it is the row \
-             every world gateway later reads to complete a handshake (#20 AC#2)"
+             every world gateway later reads to complete a handshake"
         );
         assert_eq!(
             h.db_at(WORLD).sessions.lock().unwrap().get(&3).map(|(k, _)| *k),
@@ -1007,7 +1008,7 @@ mod tests {
                 .count(),
             1,
             "an unconfigured gateway must write `game_session` exactly ONCE — a second, identical \
-             reducer call per logon is not byte-identical to the pre-#20 gateway"
+             reducer call per logon is not byte-identical to the pre-realm-core gateway"
         );
     }
 
@@ -1102,10 +1103,11 @@ mod tests {
         assert_eq!(
             s.session_key, K,
             "the world handshake completed against the WORLD shard's cached copy of K. That copy \
-             is refreshed at logon and never authoritative (#20 AC#2): sourcing K from it means a \
+             is refreshed at logon and never authoritative: sourcing K from it means a \
              gateway restarted mid-session, or a client reconnecting to a different shard's \
              gateway, authenticates off a snapshot instead of realm state. This is the precise \
-             regression #20 exists to prevent, and it survived every test before this one."
+             regression the realm-wide session row exists to prevent, and it survived every test \
+             before this one."
         );
         assert_eq!(
             s.account_id, 3,
@@ -1196,7 +1198,8 @@ mod tests {
             h.db_at(CORE).shard_index.lock().unwrap().get(&100).copied(),
             Some((36, 7)),
             "the stale entry was not healed. Without the write-back every login pays the full \
-             shard probe forever, and the index — the thing #19 and #23 route on — never becomes \
+             shard probe forever, and the index — the thing world entry and instance entry route on \
+             — never becomes \
              true. This is the fallback that covers a gateway killed between `finish_transfer` and \
              `publish_shard_index`, so it must keep working."
         );
@@ -1254,10 +1257,10 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------------------
-    // Issue #47 — `locate_home_shard`: `settle_home_shard`'s holder lookup, index-first
+    // `locate_home_shard`: `settle_home_shard`'s holder lookup, index-first
     // -------------------------------------------------------------------------------------
 
-    /// **Issue #81, the whole sequence.** A crash between `import_character_blob` and
+    /// **The stranded-copy sequence, whole.** A crash between `import_character_blob` and
     /// `finish_transfer` left the player settled on the destination and a durable copy stranded on
     /// the source, escrow still held, with nothing left that would ever re-drive it. Live evidence:
     ///
@@ -1315,13 +1318,13 @@ mod tests {
             "resolution must answer the shard holding the ESCROW — that is the SOURCE, and the only \
              shard `settle_transfer` can re-drive the unfinished transfer from. Answering INSTANCES \
              (which merely holds the imported copy) makes owner == holder, so the resume is never \
-             driven and the source copy is stranded forever: issue #81, reproduced live 3/3 runs."
+             driven and the source copy is stranded forever — reproduced live 3/3 runs."
         );
     }
 
-    /// **Issue #62 part 1 — the scan must not resolve by iteration order.**
+    /// **The scan must not resolve by iteration order.**
     ///
-    /// Reproduced by that issue's reviewer: a guid with a stale row on the DEFAULT shard and its real
+    /// Reproduced by a reviewer: a guid with a stale row on the DEFAULT shard and its real
     /// row elsewhere, with no index entry, resolved to the default shard because the scan took the
     /// first shard that answered at all and `shards` is default-first.
     ///
@@ -1380,7 +1383,7 @@ mod tests {
     /// The SAME rule with the roles swapped, and it exists because the test above does not pin the
     /// rule it claims to.
     ///
-    /// Adversarial review of #101 found a wrong guard that passes all 496 tests:
+    /// An adversarial review found a wrong guard that passes all 496 tests:
     ///
     /// ```ignore
     /// if shard.shard_name() == shard.shard_map().default_db() { return; }   // "never heal on the default shard"
@@ -1390,7 +1393,7 @@ mod tests {
     /// PERMITTED and on `WORLD` (the default) when it must be DECLINED — so "holder disagrees with
     /// the shard map" and "holder is the default database" are indistinguishable across the whole
     /// suite. That mutant is not harmless: it never heals an open-world character at all, and it
-    /// fails to fix #81 on the RETURN leg (instances → world), where the real guard declines
+    /// fails to fix the stranded copy on the RETURN leg (instances → world), where the real guard declines
     /// `resolve(0,0) == "world" != "instances"` and the mutant permits — putting the index back to
     /// naming `world` while the escrow sits on `instances`, straight back into the strand.
     ///
@@ -1412,7 +1415,7 @@ mod tests {
             Some((0, 0)),
             "the heal wrote a location that resolves to WORLD for a character whose durable row is \
              on INSTANCES. The index answers WHICH SHARD holds her, so this entry names the wrong \
-             one — and on the return leg of a transfer that is #81 again, with the escrow on \
+             one — and on the return leg of a transfer that strands the copy again, with the escrow on \
              INSTANCES and the index pointing at WORLD."
         );
     }
@@ -1442,7 +1445,7 @@ mod tests {
                 .iter()
                 .any(|c| c.starts_with("character_shard(100)")),
             "the realm-core index was never consulted — `settle_home_shard`'s production path \
-             would be back to the unconditional scan issue #47 exists to fix"
+             would be back to the unconditional scan this lookup exists to replace"
         );
         assert!(
             h.db_at(WORLD).touched().is_empty(),
@@ -1523,14 +1526,14 @@ mod tests {
         );
     }
 
-    /// Sibling of `locate_character_still_prefers_the_shard_holding_the_escrow` (the pre-#47 scan's
+    /// Sibling of `locate_character_still_prefers_the_shard_holding_the_escrow` (the older scan's
     /// own tripwire): `locate_home_shard`'s FALLBACK scan must keep the same priority, or a resumed
     /// transfer gets driven from the wrong side of a fenced-import window.
     #[test]
     fn locate_home_shard_still_prefers_the_shard_holding_the_escrow_in_the_fallback_scan() {
         let h = realm(&[WORLD, INSTANCES, CORE], "36:*=instances", Some(CORE));
         // No index entry, so this forces the fallback scan. BOTH databases hold a durable row for
-        // guid 100 — the fenced-import window (#19) — and WORLD is iterated FIRST (default-first
+        // guid 100 — the fenced-import window — and WORLD is iterated FIRST (default-first
         // order), so a plain first-found scan would wrongly pick it.
         h.db_at(WORLD)
             .characters
@@ -1552,7 +1555,7 @@ mod tests {
         );
     }
 
-    /// Issue #47 AC#5: with `LYRACORE_REALM_CORE` (and `LYRACORE_SHARD_MAP`) unset, the resolver must be
+    /// With `LYRACORE_REALM_CORE` (and `LYRACORE_SHARD_MAP`) unset, the resolver must be
     /// byte-identical to the pre-sharding gateway — no realm-core read, no shard scan, no heal
     /// write. `settle_home_shard`'s OWN `if !self.is_sharded() { return Ok(None); }` (`stdb::
     /// world_store.rs`) already guards this in production, unchanged, but it lives on `Coordinator`
@@ -1575,17 +1578,17 @@ mod tests {
         assert!(
             h.db_at(WORLD).touched().is_empty(),
             "an unsharded gateway paid a read resolving its OWN home shard — `LYRACORE_REALM_CORE`/\
-             `LYRACORE_SHARD_MAP` unset must cost the login hot path nothing (issue #47 AC#5). Reads \
+             `LYRACORE_SHARD_MAP` unset must cost the login hot path nothing. Reads \
              were: {:?}",
             h.db_at(WORLD).touched()
         );
     }
 
     // -------------------------------------------------------------------------------------
-    // Issue #60 — `resolve_delete_shard`: `delete_character`'s cross-shard routing
+    // `resolve_delete_shard`: `delete_character`'s cross-shard routing
     // -------------------------------------------------------------------------------------
 
-    /// The bug #60 exists to fix, proven at the resolver: a character resident on a NON-default
+    /// The bug this routing exists to fix, proven at the resolver: a character resident on a NON-default
     /// shard must resolve to THAT shard, not `None` (which the caller reads as "delete on `self`").
     #[test]
     fn resolve_delete_shard_routes_to_the_shard_actually_holding_the_character() {
@@ -1597,7 +1600,7 @@ mod tests {
             owner.shard_name(),
             INSTANCES,
             "delete must run on the shard actually holding the row, not the default `world` shard \
-             — routing it there is exactly the NOT_FOUND-shaped failure #60 reports"
+             — routing it there is exactly the NOT_FOUND-shaped failure players hit"
         );
     }
 
@@ -1638,7 +1641,7 @@ mod tests {
         );
     }
 
-    /// The corruption guard (#60's design constraint): a character mid-transfer must be REFUSED,
+    /// The corruption guard (the design constraint on this routing): a character mid-transfer must be REFUSED,
     /// never deleted out from under a resumed transfer.
     #[test]
     fn resolve_delete_shard_refuses_a_character_mid_transfer() {
@@ -1652,7 +1655,7 @@ mod tests {
         );
     }
 
-    /// #60's own copy of the single-shard short-circuit: an unconfigured gateway must pay zero
+    /// This resolver's own copy of the single-shard short-circuit: an unconfigured gateway must pay zero
     /// reads resolving a delete target, exactly like `locate_home_shard`'s identical rule.
     #[test]
     fn resolve_delete_shard_short_circuits_on_an_unsharded_gateway_reading_nothing() {
@@ -1672,7 +1675,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------------------
-    // Issue #34 part 1 — the realm-core index write on transfer completion
+    // The realm-core index write on transfer completion
     // -------------------------------------------------------------------------------------
 
     #[test]
@@ -1684,7 +1687,7 @@ mod tests {
             Some((36, 7)),
             "the transfer's destination was not published to REALM-CORE — the only copy of the \
              index `home_shard` reads. Writing it on the world handle instead lands it on a copy \
-             nothing consults (#34 part 1)."
+             nothing consults."
         );
         assert!(
             h.db_at(WORLD).shard_index.lock().unwrap().is_empty(),
@@ -1698,17 +1701,17 @@ mod tests {
         assert!(
             publish_shard_index(&h, 100, 36, 7).is_err(),
             "a publish that silently swallowed an unreachable realm-core would be exactly the \
-             best-effort, independently-committing write #34 exists to remove"
+             best-effort, independently-committing write this replication exists to remove"
         );
     }
 
     // -------------------------------------------------------------------------------------
-    // #269 — the logon tier's connection lease
+    // The logon tier's connection lease
     //
-    // The world tier's half shipped in #449; what remains is a logon that authenticates and never
+    // The world tier's half shipped first; what remains is a logon that authenticates and never
     // proceeds to a world session, whose per-account connection (opened by `bound_identity`) nothing
     // ever reclaims — one websocket fd and one SDK pump thread per such account, for the process
-    // lifetime. That is the same class that exited the gateway with `Too many open files` (#447).
+    // lifetime. That is the same class that exited the gateway with `Too many open files`.
     //
     // These run the REAL `stdb::AccountSessions` through the REAL `CoordinatorStore`; only the
     // release ACTION is modelled (`fake::Handle::reap`), and it is modelled faithfully enough that a
@@ -1743,7 +1746,7 @@ mod tests {
             vec![3],
             "the logon's per-account connection was never released. Every account that ever \
              authenticated without playing then holds a websocket fd + an SDK pump thread for the \
-             gateway's lifetime, and `accept(2)` eventually returns EMFILE (#447)"
+             gateway's lifetime, and `accept(2)` eventually returns EMFILE"
         );
     }
 
@@ -1787,7 +1790,7 @@ mod tests {
             "the world session got a REBUILT connection. Its identity is not the one \
              `establish_session` bound, so `account_by_identity` fails for every reducer the player \
              calls — and even where it recovers, rebuilding an SDK connection on every single login \
-             is exactly the per-account cost #292 removed"
+             is exactly the per-account cost the connection cache removed"
         );
     }
 
@@ -1855,7 +1858,7 @@ mod tests {
     }
 
     /// The lease is taken on the WORLD shard's account id, never the authenticating database's
-    /// (#20). Getting this wrong accounts a connection that does not exist and leaves the real one
+    /// id. Getting this wrong accounts a connection that does not exist and leaves the real one
     /// unaccounted — a leak that still looks fixed on a single-database deployment, where the two
     /// ids happen to coincide.
     #[test]

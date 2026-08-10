@@ -29,8 +29,8 @@ pub struct CharacterView {
     /// (0..=18, matching `game_item_instance.slot`).  Default is all-zero (naked/grey).
     /// Populated by `Coordinator::characters` from `game_item_instance` + `game_item_template`.
     pub equipment: [CharacterGear; 19],
-    /// Accrued played-time total in whole seconds, NOT counting the current live session (work-item
-    /// 029, `/played`). Folded with `session_start_micros` at the `CMSG_PLAYED_TIME` reply site so an
+    /// Accrued played-time total in whole seconds, NOT counting the current live session (`/played`).
+    /// Folded with `session_start_micros` at the `CMSG_PLAYED_TIME` reply site so an
     /// online player's total keeps ticking without a periodic write.
     pub played_total_secs: u32,
     /// Unix-epoch micros the current live session began (0 = offline / no live session).
@@ -56,7 +56,7 @@ pub struct Appearance {
 pub enum CharCreateOutcome {
     Success,
     NameInUse,
-    /// Account already holds the per-realm character cap (10) — the 11th is refused (work-item 105).
+    /// Account already holds the per-realm character cap (10) — the 11th is refused.
     ServerLimit,
     Failed,
 }
@@ -75,7 +75,6 @@ pub fn build_char_create_response(outcome: CharCreateOutcome) -> SMSG_CHAR_CREAT
 }
 
 /// Outcome of a `CMSG_CHAR_DELETE` from the server's perspective (mapped to a `WorldResult`).
-/// [081]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CharDeleteOutcome {
     Success,
@@ -83,7 +82,7 @@ pub enum CharDeleteOutcome {
 }
 
 /// Build the `SMSG_CHAR_DELETE` reply. Per the wire doc this updates the character-select screen
-/// directly — the client does NOT need to re-send `CMSG_CHAR_ENUM` (unlike char-create). [081]
+/// directly — the client does NOT need to re-send `CMSG_CHAR_ENUM` (unlike char-create).
 pub fn build_char_delete_response(outcome: CharDeleteOutcome) -> SMSG_CHAR_DELETE {
     SMSG_CHAR_DELETE {
         result: match outcome {
@@ -152,7 +151,7 @@ pub fn build_name_query_response(c: &CharacterView) -> Result<SMSG_NAME_QUERY_RE
 /// Build the `SMSG_INSPECT` reply to `CMSG_INSPECT`: just an echo of the validated target guid — the
 /// client opens the paperdoll and renders it from the target's OWN visible-item fields (already synced
 /// via the entity's `PLAYER_VISIBLE_ITEM_*` update-mask fields), no extra payload needed. The gateway
-/// only sends this after the `inspect` reducer's range+friendly gate passes (work-item 137).
+/// only sends this after the `inspect` reducer's range+friendly gate passes.
 pub fn build_inspect_response(target_guid: u64) -> SMSG_INSPECT {
     SMSG_INSPECT {
         guid: Guid::new(target_guid),
@@ -183,7 +182,7 @@ pub fn logout_denied_in_combat() -> SMSG_LOGOUT_RESPONSE {
     }
 }
 
-/// The reply to `CMSG_PLAYED_TIME` (`/played`, work-item 029): `total_played_time` is the durable
+/// The reply to `CMSG_PLAYED_TIME` (`/played`): `total_played_time` is the durable
 /// `played_total_secs` plus this session's live elapsed span (so an online player's total keeps
 /// ticking without a periodic write); `level_played_time` is not tracked per-level in this slice, so
 /// it mirrors the total (matching vanilla's own `/played` fallback shape when level-time is unset).

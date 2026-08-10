@@ -1,4 +1,4 @@
-//! Realm-wide loot rolls (issue #50) — the routing + relay tests.
+//! Realm-wide loot rolls — the routing + relay tests.
 //!
 //! What EXECUTES here is production `world::loot`, against the same in-memory multi-database
 //! topology the group/whisper slices use (`party_tests::party_topology`). What the fakes stand in
@@ -15,8 +15,8 @@ use lyracore_shared::loot_roll::loot_op;
 
 // ---- `run_vote` (CMSG_LOOT_ROLL routing) ----
 
-/// Unsharded → the pre-#50 path, verbatim: the vote runs on the player's own reducer, and realm-core
-/// (there isn't one) never hears about it.
+/// Unsharded → the shard-local loot path, verbatim: the vote runs on the player's own reducer, and
+/// realm-core (there isn't one) never hears about it.
 #[test]
 fn an_unsharded_store_routes_the_vote_through_the_players_own_reducer() {
     let store = InMemoryStore::default();
@@ -72,7 +72,7 @@ fn a_sharded_store_routes_the_vote_to_realm_core_with_the_authenticated_guid() {
     assert!(
         world.loot_rolls.lock().unwrap().is_empty(),
         "a multi-database gateway must not run the vote through the shard's own reducer — that is \
-         exactly the shard-local behaviour #50 removes for a promoted roll"
+         exactly the shard-local behaviour the realm-wide loot relay removes for a promoted roll"
     );
 }
 
@@ -224,7 +224,8 @@ fn a_leave_flushes_every_connected_shards_pending_rolls_before_the_disband_reach
     );
 
     // ORDERING is the whole point: a promotion that landed AFTER the disband would still be an
-    // orphaned roll naming a group that no longer exists (issue #50's own review finding).
+    // orphaned roll naming a group that no longer exists — the disband-mid-roll defect this flush
+    // exists to close.
     // `rposition` for the disband dispatch: `form_split_party` above already made two of its own
     // `realm_group_op` calls (the invite, the accept) BEFORE the LEAVE under test — the disband is
     // the LAST one in the log, not the first.

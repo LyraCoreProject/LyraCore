@@ -1,19 +1,20 @@
-//! Realm-wide party state (issue #22, GROUP slice; spec issue #12).
+//! Realm-wide party state — the GROUP slice of realm-core's social & economy plane, part of the
+//! elastic world-sharding design.
 //!
 //! # What moved, and why here
 //!
 //! `game_group` / `game_group_member` / `game_group_invite` are authoritative on **realm-core**.
 //! None of the three is coupled to space — the spec's partition rule — and all three silently became
 //! shard-local the moment a second database existed: `group_invite` resolved its target inside the
-//! CALLING database, so a player inside Deadmines could not invite one standing in Elwynn, and #19's
-//! interim membership mirror was a snapshot taken at `begin_transfer`, so a party SPLIT across the
-//! boundary never saw itself. Both were observed live (2026-07-25), not theorised.
+//! CALLING database, so a player inside Deadmines could not invite one standing in Elwynn, and the
+//! escrowed transfer's interim membership mirror was a snapshot taken at `begin_transfer`, so a party
+//! SPLIT across the boundary never saw itself. Both were observed live (2026-07-25), not theorised.
 //!
 //! This module is the ROUTING half of the fix and the only place that decides which database a party
 //! op runs against. Everything in it is generic over [`WorldStore`], so the decisions execute under
-//! test against the same in-memory shard topology the cross-database transfer uses — the seam #37/#38
-//! built. The database-specific halves are thin: `Coordinator`'s trait impl (which database a handle
-//! names) and the module's `realm_group_op` (the rules, unchanged).
+//! test against the same in-memory shard topology the cross-database transfer uses — the seam the
+//! transfer-transport test harness built. The database-specific halves are thin: `Coordinator`'s
+//! trait impl (which database a handle names) and the module's `realm_group_op` (the rules, unchanged).
 //!
 //! # The three planes
 //!
@@ -24,9 +25,9 @@
 //!    and by [`on_world_entry`] when a character arrives. It exists because ~fifty in-world reads
 //!    (kill-XP split, quest credit, loot rules, `/p` chat, the party's dungeon binding) resolve
 //!    membership locally on the hot path and must not become cross-database calls. Same relationship
-//!    `game_account`/`game_session` have had with realm-core since #20.
+//!    `game_account`/`game_session` have had with realm-core from the start.
 //! 3. **A single-database gateway** has no realm-core to route to ([`WorldStore::realm_store`]
-//!    answers `None`), so every op takes the pre-#22 path: the player's own connection, the
+//!    answers `None`), so every op takes the pre-realm-core path: the player's own connection, the
 //!    player-facing reducer, the shard's own tables. Byte-identical, and pinned by
 //!    `an_unsharded_gateway_runs_every_party_op_on_the_players_own_shard`.
 //!
@@ -35,7 +36,7 @@
 //! `/say`-range chat, `/yell` and targeted emotes stay on the world shards as AOI-scoped events:
 //! they ARE spatial, which is the same rule that moved membership off them. Party (`/p`) chat still
 //! rides the shard's own `game_group_event` relay against the local mirror — non-proximity chat is a
-//! later slice of #22, and this one deliberately does not touch it.
+//! later slice of realm-core's social & economy work, and this one deliberately does not touch it.
 
 use anyhow::Result;
 
@@ -94,7 +95,7 @@ pub enum Op {
     },
 }
 
-/// Resolve a typed player name to a guid ACROSS every connected shard (#22, group slice).
+/// Resolve a typed player name to a guid ACROSS every connected shard.
 ///
 /// **This is the read that made a cross-shard invite impossible.** `/invite Bob` resolves the typed
 /// name against `game_character`, on ONE database — so a Bob who had walked into Deadmines simply
@@ -121,7 +122,7 @@ pub(crate) fn resolve_by_name<St: WorldStore + ?Sized>(
 }
 
 /// [`resolve_by_name`] without the first-hit short-circuit: EVERY guid the name resolves to, across
-/// every connected shard (#22, whisper slice — found in review of PR #56).
+/// every connected shard (found during the whisper slice's own review).
 ///
 /// **Character names are not realm-unique.** The uniqueness constraint `create_character` leans on is
 /// a per-database index, so the same name can exist on two shards at once — observed live on
@@ -130,11 +131,12 @@ pub(crate) fn resolve_by_name<St: WorldStore + ?Sized>(
 /// resolves a typed name to whichever homonym happens to sit on the SENDER's own shard: two players
 /// typing the same name reach two different people, and a private whisper goes to a stranger.
 ///
-/// This cannot be fixed here — a realm-wide name constraint is the fix, and it belongs to #22's own
-/// ticket — but a caller that knows which candidate it wants can pick it. [`super::whisper`] wants the
-/// one that is ONLINE, which is what `/w` addresses in vanilla. Order is the union's: this handle
-/// first, then `ShardMap::shards()` order (default first), so the choice among several ONLINE
-/// homonyms is still arbitrary — just no longer silently wrong whenever exactly one of them is live.
+/// This cannot be fixed here — a realm-wide name constraint is the fix, and it belongs to the
+/// broader realm-core social & economy effort — but a caller that knows which candidate it wants
+/// can pick it. [`super::whisper`] wants the one that is ONLINE, which is what `/w` addresses in
+/// vanilla. Order is the union's: this handle first, then `ShardMap::shards()` order (default
+/// first), so the choice among several ONLINE homonyms is still arbitrary — just no longer
+/// silently wrong whenever exactly one of them is live.
 ///
 /// Deduped, because `world_stores()` includes the asking shard (`Coordinator::all_shards` does).
 pub(crate) fn resolve_all_by_name<St: WorldStore + ?Sized>(
@@ -177,7 +179,7 @@ pub(crate) fn presence<St: WorldStore + ?Sized>(
 }
 
 /// [`resolve_by_name`] inverted: the character row for `guid` from whichever connected shard holds
-/// it (#22). Same first-hit-wins union, same unsharded short-circuit — one cache read when
+/// it. Same first-hit-wins union, same unsharded short-circuit — one cache read when
 /// `world_stores()` is empty.
 ///
 /// Two callers, and the second is why this is not private to the party frame: [`render_list`] needs a
@@ -215,14 +217,14 @@ pub(crate) fn live_anywhere<St: WorldStore + ?Sized>(store: &St, guid: u64) -> b
     store.entity_in_world(guid) || store.world_stores().iter().any(|s| s.entity_in_world(guid))
 }
 
-/// Is `guid` in the world with **nobody at the keyboard** — i.e. a session-less playerbot (issue #51)?
+/// Is `guid` in the world with **nobody at the keyboard** — i.e. a session-less playerbot?
 ///
-/// It is a live `game_world_entity` AND `game_character.online == false`: the exact pair of facts PR
-/// #49 had to separate, read together. The module writes them in ONE transaction — `player_login`
-/// sets the session flag in the same transaction that inserts the entity, and the logout persist
-/// clears it in the same transaction that removes it (`module/src/world.rs`) — while a playerbot is
-/// in the split state for its whole life, because `playerbots_spawn` materialises the entity through
-/// `build_player_entity` and never runs `player_login`.
+/// It is a live `game_world_entity` AND `game_character.online == false`: the exact pair of facts
+/// the group slice had to separate, read together. The module writes them in ONE transaction —
+/// `player_login` sets the session flag in the same transaction that inserts the entity, and the
+/// logout persist clears it in the same transaction that removes it (`module/src/world.rs`) — while
+/// a playerbot is in the split state for its whole life, because `playerbots_spawn` materialises
+/// the entity through `build_player_entity` and never runs `player_login`.
 ///
 /// **BOTH READS COME OFF THE SAME DATABASE, and that is the whole correctness argument.** The
 /// atomicity above is per-database, so pairing a UNION over the entity tables with a first-hit-wins
@@ -232,16 +234,16 @@ pub(crate) fn live_anywhere<St: WorldStore + ?Sized>(store: &St, guid: u64) -> b
 /// on the three-database stack a player logged in as guid 1 on `lyracore` also has an
 /// `online = false` row sitting on `lyracore-instances` — and an inviter standing inside a dungeon
 /// resolves the flag off that copy. Answering an invite for a real player is an impersonation, so the
-/// session flag is read on the shard that actually HOLDS the live entity, and nowhere else
-/// (adversarial review of PR #53). No row there at all ⇒ not session-less: this refuses rather than
-/// guesses.
+/// session flag is read on the shard that actually HOLDS the live entity, and nowhere else (caught
+/// in the bot-invite fix's own adversarial review). No row there at all ⇒ not session-less: this
+/// refuses rather than guesses.
 ///
 /// Why the gateway asks at all: a bot has no client, so nothing answers the group-invite dialog for
 /// it. On a SINGLE-database gateway the module answers in-transaction — `invite_core` fires the
 /// `on_group_invite` hook and the playerbots package accepts through it — but this slice moved the
 /// invite onto REALM-CORE, where `pkg_playerbots_bot` is empty, so that hook is a no-op there and a
-/// player's invite to a bot hung until the 2-minute GC (observed live 2026-07-26, issue #51). The
-/// gateway is the only party that can see both databases, so it is the only party that can notice.
+/// player's invite to a bot hung until the 2-minute GC (observed live 2026-07-26). The gateway is
+/// the only party that can see both databases, so it is the only party that can notice.
 ///
 /// `pkg_playerbots_bot` itself is not an option: it is a PRIVATE package table, so the gateway has no
 /// subscription to it (and giving the routing layer a package dependency to answer a question the
@@ -267,12 +269,12 @@ pub(crate) fn session_less_in_world<St: WorldStore + ?Sized>(store: &St, guid: u
     false
 }
 
-/// Answer the pending invite of a session-less playerbot, on the database that holds it (issue #51).
+/// Answer the pending invite of a session-less playerbot, on the database that holds it.
 ///
 /// Cadence: none — this runs SYNCHRONOUSLY inside the invite op, so there is no new scheduled tick,
-/// no poll, and no staggering to tune. (The issue asked for a staggered window on the playerbots
-/// goal tick; a poll there would have read the shard's own `game_group_invite`, which on a sharded
-/// deployment is never written — the invite lives on realm-core. See the PR body.)
+/// no poll, and no staggering to tune. (The original bug report asked for a staggered window on the
+/// playerbots goal tick; a poll there would have read the shard's own `game_group_invite`, which on
+/// a sharded deployment is never written — the invite lives on realm-core.)
 ///
 /// The bot acts as ITSELF: `realm_group_op`'s `actor` slot carries the bot's own guid for both the
 /// accept and the decline, never the inviter's — the impersonation hazard this slice already hit once.
@@ -309,7 +311,7 @@ fn answer_for_session_less<St: WorldStore + ?Sized>(store: &St, realm: &dyn Worl
 
 /// Run one party op for the session that owns `self_guid`.
 ///
-/// Unsharded → the pre-#22 path, verbatim: the player's own connection calls the player-facing
+/// Unsharded → the pre-realm-core path, verbatim: the player's own connection calls the player-facing
 /// reducer on the player's own shard, and nothing else happens.
 ///
 /// Sharded → realm-core runs the op, then every connected world shard's mirror is refreshed. The
@@ -355,7 +357,7 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     // just left (their membership row is gone by the time we look again, but the members still in it
     // need their mirrors updated too).
     let before = realm.group_roster(self_guid)?.map(|r| r.group_id);
-    // Issue #50 (found in adversarial review): LEAVE/UNINVITE are the only two ops that can shrink a group
+    // Found in adversarial review: LEAVE/UNINVITE are the only two ops that can shrink a group
     // below 2 members and reach `remove_member`'s disband branch on realm-core — and that branch
     // force-resolves live loot rolls, which the periodic loot-roll relay may not have promoted yet. A
     // roll staged in the gap between its kill-time creation and its next scheduled promotion is
@@ -380,7 +382,7 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
         } => (realm_op::LOOT_METHOD, master, setting, threshold),
     };
     realm.realm_group_op(code, self_guid, target, arg_a, arg_b)?;
-    // Nobody is at the keyboard of a playerbot, so nobody answers its dialog (issue #51). Done
+    // Nobody is at the keyboard of a playerbot, so nobody answers its dialog. Done
     // BEFORE the mirror push, so the ONE push that follows already carries the bot as a member —
     // which is what the shard's own party reads (kill-XP split, `/p`, follow-the-leader) need.
     if let Op::Invite(target) = op {
@@ -390,10 +392,10 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     Ok(())
 }
 
-/// Run a SERVER-DRIVEN invite with no client behind it — a playerbot's serendipity pick (issue #54,
-/// closing the gap #22's group slice opened: the module used to write this shard's LOCAL
+/// Run a SERVER-DRIVEN invite with no client behind it — a playerbot's serendipity pick, closing
+/// the gap the group slice opened: the module used to write this shard's LOCAL
 /// `game_group`/`game_group_member` rows directly, which the next `sync_group_mirror` push wiped
-/// because realm-core had never heard of them).
+/// because realm-core had never heard of them.
 ///
 /// There is no `account_id` here on purpose: a bot has no per-account connection for a reducer to
 /// authenticate as, on EITHER topology. So this never takes [`run`]'s unsharded arm (which needs
@@ -494,7 +496,8 @@ pub(crate) fn sync_mirrors<St: WorldStore + ?Sized>(
 /// World entry (login, and every cross-shard arrival): put the party the player is actually in onto
 /// the shard they just entered, and re-render their party frame.
 ///
-/// **This is what carries a party across a shard boundary now that #19's blob mirror is gone.** The
+/// **This is what carries a party across a shard boundary now that the escrowed transfer's blob
+/// mirror is gone.** The
 /// blob could only carry the membership the character had when it stepped into the portal; this
 /// reads the authority at the moment of arrival, so a party formed — or joined, or left — while the
 /// player was on the loading screen is what lands.

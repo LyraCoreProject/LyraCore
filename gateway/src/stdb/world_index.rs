@@ -1,10 +1,10 @@
-//! The in-process AOI index (#468 stage 1) — the gateway-side replacement for ~600 per-player,
+//! The in-process AOI index — the gateway-side replacement for ~600 per-player,
 //! box-scoped SpacetimeDB subscriptions.
 //!
 //! # Why this exists
 //!
-//! Until #468 every session opened its own SpacetimeDB connection and subscribed a 5×5 grid box
-//! over four tables (`game_world_entity`, `game_gameobject`, `game_entity_motion`,
+//! Before the shared-connection model, every session opened its own SpacetimeDB connection and
+//! subscribed a 5×5 grid box over four tables (`game_world_entity`, `game_gameobject`, `game_entity_motion`,
 //! `game_creature_spline`), re-subscribing on every cell crossing. At 600 players that is ~600
 //! distinct query strings that can neither be shared nor pruned, and every committed transaction
 //! woke ~600 SDK pumps to evaluate them — measured as load average 11–14 on 8 cores with only 7
@@ -36,7 +36,7 @@
 //!
 //! # Shards
 //!
-//! Guids are globally unique across databases (#103/#108), so every shard's coordinator stream
+//! Guids are globally unique across databases, so every shard's coordinator stream
 //! feeds ONE index keyed by `(map_id, instance_id, cell)` — one view spans the whole realm. Each
 //! entity remembers which shard's cache holds its row ([`ShardId`]) so a sweep can read the row
 //! back without searching every shard.
@@ -66,7 +66,7 @@ pub type ShardId = usize;
 /// one cell of exactly one `(map_id, instance_id)` partition and two distinct cells can never
 /// collide.
 ///
-/// **`instance_id` is part of the key, not a filter applied afterwards** (#456): a per-instance
+/// **`instance_id` is part of the key, not a filter applied afterwards**: a per-instance
 /// dungeon copy reuses its source map's coordinates, so a key without the partition would place a
 /// raid boss and an open-world critter in the same bucket.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -418,8 +418,8 @@ impl WorldIndex {
 
     /// Can `session` currently see `guid`? The point query behind relays that are driven by a
     /// DIFFERENT table (a stealth aura, say) and therefore have no cell of their own to dispatch on.
-    /// Before #468 these asked "is the row in my connection's cache", which the box subscription
-    /// made equivalent; on a shared connection the cache holds the whole world, so the question has
+    /// Before the shared-connection model these asked "is the row in my connection's cache",
+    /// which the box subscription made equivalent; on a shared connection the cache holds the whole world, so the question has
     /// to be asked of the index instead.
     pub fn can_see(&self, session: SessionId, guid: u64) -> bool {
         let inner = self.lock();
@@ -555,7 +555,7 @@ mod tests {
     }
 
     // ===========================================================================================
-    //  THE DIFFERENTIAL PROPERTY (#468 stage 1's whole safety argument)
+    //  THE DIFFERENTIAL PROPERTY (the shared-connection model's whole safety argument)
     // ===========================================================================================
 
     /// For every viewer, over randomised fixtures: **the index's visible set equals the set the box

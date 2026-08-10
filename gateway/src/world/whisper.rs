@@ -1,4 +1,5 @@
-//! Realm-wide whispers (issue #22, WHISPER slice; spec issue #12).
+//! Realm-wide whispers — the whisper slice of realm-core's social & economy plane (guilds, mail,
+//! AH, non-proximity chat, groups), part of the elastic world-sharding design.
 //!
 //! # What moved, and why here
 //!
@@ -7,13 +8,14 @@
 //! that fails to deliver — it is a whisper whose target *does not exist*: a Bob who walked into
 //! Deadmines has no character row on the open world's database, so the whisper died as
 //! "no player named Bob" before any delivery ran. Identical shape to the cross-boundary invite the
-//! group slice fixed, observed live on the same Phase A run (2026-07-25), and the reason #24 lists
-//! social as its blocker — whisper is the most-used cross-continent social action there is.
+//! group slice fixed, observed live on the same Phase A run (2026-07-25), and the reason the planned
+//! continent split (Kalimdor on its own shard) lists realm-wide social as a blocker — whisper is the
+//! most-used cross-continent social action there is.
 //!
 //! This module is the ROUTING half, the same way [`super::party`] is for membership: generic over
 //! [`WorldStore`], so every decision executes under test against the in-memory multi-database
-//! topology #37/#38 built, and the database-specific halves stay thin (`Coordinator`'s trait impl and
-//! the module's `realm_whisper`).
+//! topology the transfer-transport test harness built, and the database-specific halves stay thin
+//! (`Coordinator`'s trait impl and the module's `realm_whisper`).
 //!
 //! # The two planes
 //!
@@ -21,11 +23,12 @@
 //!    event, not a fact about the world — but because it is the one database both parties can be
 //!    addressed on: `game_whisper_event.recipient_guid` is realm-wide, while the bound identity the
 //!    shard relay filters on is minted per (account, database) and names nobody elsewhere. Delivery
-//!    rides realm-core's coordinator connection, self-filtered per session (the 277/279 law).
+//!    rides realm-core's coordinator connection, self-filtered per session (the coordinator-relay
+//!    rule — see `stdb::connection`).
 //! 2. **A single-database gateway** has no realm-core to route to ([`WorldStore::realm_store`]
-//!    answers `None`), so a whisper takes the pre-#22 path verbatim: `send_whisper` on the player's
-//!    own connection, name resolution and gates inside the module, delivery over the per-player RLS
-//!    relay. Byte-identical, and pinned by
+//!    answers `None`), so a whisper takes the pre-realm-core path verbatim: `send_whisper` on the
+//!    player's own connection, name resolution and gates inside the module, delivery over the
+//!    per-player RLS relay. Byte-identical, and pinned by
 //!    `an_unsharded_gateway_whispers_through_the_players_own_reducer`.
 //!
 //! # The three gates that had to move, and the one that must NOT be copied from the group slice
@@ -41,9 +44,10 @@
 //!   two disagree for every playerbot (spawned straight into the entity table, never runs
 //!   `player_login`, so `online == false` for its whole life), which means a whisper to a bot is
 //!   refused today and using `live_anywhere` here would silently start ACCEPTING them on a
-//!   multi-database gateway only. PR #49's review caught this defect in the mirror direction — the
-//!   moved ONLINE gate reading the session flag where the module read the entity — so each gate here
-//!   reads the table its own module gate read, and the bot case is pinned in both directions;
+//!   multi-database gateway only. The group slice's own review caught this defect in the mirror
+//!   direction — the moved ONLINE gate reading the session flag where the module read the entity —
+//!   so each gate here reads the table its own module gate read, and the bot case is pinned in both
+//!   directions;
 //! - **is the sender ignored by the target** — read from wherever the target's contact rows are, and
 //!   passed to `realm_whisper` as its verdict. The RULE (drop the incoming line, keep the sender's
 //!   echo, tell the sender nothing) stays in the module, on the shared `whisper_rows` core both
@@ -64,8 +68,9 @@ use super::{party, WorldStore};
 
 /// Send one whisper for the session that owns `self_guid`.
 ///
-/// Unsharded → the pre-#22 path, verbatim: `send_whisper` on the player's own connection with the
-/// typed name, and every gate inside the module. Nothing else runs — not even the name lookup.
+/// Unsharded → the pre-realm-core path, verbatim: `send_whisper` on the player's own connection
+/// with the typed name, and every gate inside the module. Nothing else runs — not even the name
+/// lookup.
 ///
 /// Sharded → the gates run here, realm-wide, and realm-core carries the whisper. `self_guid` is
 /// `None` at character select; that is the module's "whisperer not in world" arm, and it must stay an
@@ -123,7 +128,7 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
 }
 
 /// Does `owner_guid` have `other_guid` on their IGNORE list, on whichever shard holds their contact
-/// rows (#22, whisper slice)?
+/// rows?
 ///
 /// `game_character_contact` is character-owned and travels with the character (`chat.rs`'s transfer
 /// sweep), so exactly one connected database has the rows — but which one is not knowable from here,

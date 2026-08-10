@@ -1,13 +1,14 @@
-//! Realm-wide loot rolls (issue #50; spec issue #12).
+//! Realm-wide loot rolls, part of the elastic world-sharding design — voting that survives a
+//! participant crossing shards mid-roll.
 //!
 //! # What moved, and why here
 //!
 //! `game_loot_roll` / `game_loot_roll_vote` are authoritative on realm-core, alongside
-//! `game_group` / `game_group_member` (#22) — a roll's audience is who is in the group, not where
+//! `game_group` / `game_group_member` — a roll's audience is who is in the group, not where
 //! anyone stands, exactly like the membership it is snapshotted from. Two rejected alternatives are
 //! recorded on the issue and not re-litigated here: letting a world shard's MIRROR resolve rolls
-//! (makes a cache a decision-maker, the exact property #22 removed) and leaving rolls inert to the
-//! 60s deadline (a real regression against single-database behaviour).
+//! (makes a cache a decision-maker, the exact property realm-core's group slice removed) and
+//! leaving rolls inert to the 60s deadline (a real regression against single-database behaviour).
 //!
 //! This module is the ROUTING half, the same shape [`super::party`] and [`super::whisper`] are:
 //! generic over [`WorldStore`], so the decisions run under test against the in-memory topology those
@@ -29,16 +30,17 @@
 //! Once promoted, a vote is a client action again (`CMSG_LOOT_ROLL`), so [`run_vote`] routes it the
 //! same way `party::run`/`whisper::run` route theirs.
 //!
-//! # The new case (issue #50)
+//! # The new case
 //!
 //! A roll's participants could not previously be on different shards — `kill_reward_recipients` only
 //! ever names members physically near the corpse, i.e. on its own shard, at the instant the roll
-//! starts. What #50 makes possible is a participant LEAVING that shard mid-roll (a portal, a dungeon
-//! entry) during the 60s window. Pre-#50 their vote row was simply unreachable from wherever they
-//! went and auto-passed at the deadline, same as being offline. Post-#50 voting is realm-core state
-//! reached through whichever shard the player is CURRENTLY connected to, so a mid-roll shard-hopper
-//! can still vote from their new location — [`run_vote`] needs no special case for this, it falls out
-//! of routing every vote to realm-core rather than to "the shard that created the roll".
+//! starts. What this slice makes possible is a participant LEAVING that shard mid-roll (a portal, a
+//! dungeon entry) during the 60s window. Before this slice their vote row was simply unreachable
+//! from wherever they went and auto-passed at the deadline, same as being offline. Now voting is
+//! realm-core state reached through whichever shard the player is CURRENTLY connected to, so a
+//! mid-roll shard-hopper can still vote from their new location — [`run_vote`] needs no special
+//! case for this, it falls out of routing every vote to realm-core rather than to "the shard that
+//! created the roll".
 //!
 //! # What did NOT move
 //!
@@ -55,8 +57,8 @@
 //! Disband-mid-roll resolution needed no new plumbing at all: `group::remove_member`'s disband branch
 //! already calls `loot::force_resolve_rolls_for_disband` unconditionally, in the same transaction,
 //! before it tears the group row down — and that code has no `Plane` branch to skip it. Once the roll
-//! rows live on realm-core (via promotion), `remove_member` running there (through `realm_group_op`,
-//! #22) resolves them on the spot: same database, same transaction, no mirror, no round trip.
+//! rows live on realm-core (via promotion), `remove_member` running there (through `realm_group_op`)
+//! resolves them on the spot: same database, same transaction, no mirror, no round trip.
 //!
 //! # The disband race the periodic relay alone cannot close (found in review)
 //!
@@ -100,8 +102,8 @@ use anyhow::Result;
 use super::WorldStore;
 use lyracore_shared::loot_roll::loot_op;
 
-/// One unresolved loot roll a world shard has created but not yet had promoted onto realm-core
-/// (#50) — [`WorldStore::pending_local_rolls`]'s answer, and [`relay_tick`]'s promotion input.
+/// One unresolved loot roll a world shard has created but not yet had promoted onto realm-core —
+/// [`WorldStore::pending_local_rolls`]'s answer, and [`relay_tick`]'s promotion input.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingLootRoll {
     /// This shard's own row id — what [`WorldStore::clear_promoted_loot_roll`] addresses.
@@ -117,7 +119,7 @@ pub struct PendingLootRoll {
 
 /// Route `CMSG_LOOT_ROLL` for the session that owns `self_guid`.
 ///
-/// Unsharded → the pre-#50 path, verbatim: `loot_roll` on the player's own connection. Sharded →
+/// Unsharded → the pre-realm-core path, verbatim: `loot_roll` on the player's own connection. Sharded →
 /// realm-core, where the roll is authoritative once promoted; `actor_guid` is the guid the gateway
 /// authenticated for this socket, never the client's own claim (there isn't one — `CMSG_LOOT_ROLL`
 /// carries no actor field at all, only the roll's own `(corpse_guid, slot)` and the vote).
@@ -178,7 +180,7 @@ fn promote_one(shard: &dyn WorldStore, realm: &dyn WorldStore, roll: &PendingLoo
     }
 }
 
-/// Synchronously promote EVERY connected world shard's pending staging rolls onto realm-core (#50).
+/// Synchronously promote EVERY connected world shard's pending staging rolls onto realm-core.
 ///
 /// Called from `party::run`, immediately before dispatching a LEAVE/UNINVITE — the two ops that can
 /// shrink a group below 2 members and reach `remove_member`'s disband branch. This is what closes the
@@ -187,8 +189,9 @@ fn promote_one(shard: &dyn WorldStore, realm: &dyn WorldStore, roll: &PendingLoo
 /// anywhere in the realm at that moment is already on realm-core for `remove_member` to see.
 ///
 /// Every connected world shard, not just the acting character's own — a party's members, and
-/// therefore the corpses their kills stage rolls on, can be split across shards (#22's own premise),
-/// so narrowing this to one shard would silently reintroduce the class of bug #22 fixed for invites.
+/// therefore the corpses their kills stage rolls on, can be split across shards (the premise
+/// realm-core's group slice established), so narrowing this to one shard would silently reintroduce
+/// the class of bug the group slice fixed for invites.
 ///
 /// Best-effort per shard, the same posture `party::sync_mirrors` documents: a shard that cannot be
 /// reached leaves its own pending rolls unpromoted for THIS call, and the periodic relay retries them
@@ -216,7 +219,7 @@ pub(crate) fn flush_pending_promotions<St: WorldStore + ?Sized>(
     }
 }
 
-/// One promotion + settlement pass (#50). No-op on an unsharded store (`realm_store()` answers
+/// One promotion + settlement pass. No-op on an unsharded store (`realm_store()` answers
 /// `None`), which is what makes running this on a timer free for a single-database gateway.
 ///
 /// `won_watermark` is the caller's own `game_group_event.id` high-water mark, threaded through

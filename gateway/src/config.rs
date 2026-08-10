@@ -28,14 +28,19 @@ impl GatewayConfig {
 }
 
 // ===============================================================================================
-//  Shard map (#17 — the routing half of Phase A of the elastic-sharding spec, #12)
+//  Shard map — gateway multi-shard routing: the shard map, per-shard coordinators, login routed
+//  by character location.
 // ===============================================================================================
 
 /// Instances of one map are spread over a shard pool by `instance_id % INSTANCE_BUCKETS`, so a rule
 /// can name a slice of a map's instances instead of all of them.
+///
+/// The shipped topology only ever uses map-level wildcards (`<map_id>:*=<db>`); per-bucket rules
+/// (splitting one map's instances across several databases) are documented and tested below but not
+/// deployed — that is the upgrade path, not a live feature to go hunting for elsewhere.
 // Deliberate simplification: a hardcoded modulus IS the whole bucketing scheme. Ceiling — you
 // cannot resize the pool without every gateway agreeing on the same number, and rebalancing means
-// restarting them. Upgrade path: realm-core owns the assignment table (#12 Phase B/C) and
+// restarting them. Upgrade path: realm-core owns the assignment table and
 // gateways subscribe to it with an epoch, at which point this constant and the env parsing below
 // both go away.
 pub const INSTANCE_BUCKETS: u64 = 8;
@@ -75,7 +80,7 @@ struct ShardRule {
 pub struct ShardMap {
     default_db: String,
     rules: Vec<ShardRule>,
-    /// `LYRACORE_REALM_CORE` (#20): the database that owns accounts, sessions, and the character→shard
+    /// `LYRACORE_REALM_CORE`: the database that owns accounts, sessions, and the character→shard
     /// index. `None` = unconfigured, which is *exactly* today — auth lives on the default database.
     realm_core: Option<String>,
 }
@@ -83,7 +88,7 @@ pub struct ShardMap {
 impl ShardMap {
     /// Read the shard map from `LYRACORE_SHARD_MAP` (or the file named by `LYRACORE_SHARD_MAP_FILE`), defaulting
     /// every unmatched location to `default_db` (the `LYRACORE_DATABASE` database). Unset → single entry.
-    /// `LYRACORE_REALM_CORE` names the realm-core database (#20); unset → auth stays on `default_db`.
+    /// `LYRACORE_REALM_CORE` names the realm-core database; unset → auth stays on `default_db`.
     pub fn from_env(default_db: &str) -> Self {
         let text = match std::env::var("LYRACORE_SHARD_MAP") {
             Ok(t) => t,
@@ -102,7 +107,7 @@ impl ShardMap {
     }
 
     /// Point auth (accounts / sessions / the character→shard index) at a separate `realm-core`
-    /// database (#20). Blank, absent, or *equal to the default database* all mean "unconfigured" —
+    /// database. Blank, absent, or *equal to the default database* all mean "unconfigured" —
     /// the degenerate `LYRACORE_REALM_CORE=<the world db>` config must collapse to today's single-database
     /// behavior rather than opening a second connection to the same place.
     pub fn with_realm_core(mut self, name: Option<&str>) -> Self {
@@ -194,14 +199,15 @@ impl ShardMap {
     }
 
     // ==========================================================================================
-    //  The instance POOL (#21 — the "pool" half of Phase A)
+    //  The instance POOL — the instance-shard pool (instance lifecycle at scale).
     // ==========================================================================================
 
     /// Every database an instance of `map_id` can be routed to — the map's **instance pool**,
     /// deduped, in bucket order.
     ///
-    /// Note: this is [`resolve`](Self::resolve) read the other way round, and #21 adds **no new
-    /// assignment mechanism at all**. #17's `<map_id>:<bucket>=<db>` rule already IS the pool hook:
+    /// Note: this is [`resolve`](Self::resolve) read the other way round, and the instance-shard
+    /// pool adds **no new assignment mechanism at all**. The shard map's `<map_id>:<bucket>=<db>`
+    /// rule already IS the pool hook:
     ///
     /// ```text
     /// LYRACORE_SHARD_MAP="36:0=lyracore-instances-1, 36:1=lyracore-instances-1, 36:*=lyracore-instances-0"
@@ -231,7 +237,7 @@ impl ShardMap {
     /// Which database owns instance `instance_id` of `map_id`, for a character the `holder`
     /// database currently holds. [`resolve_connected`](Self::resolve_connected) plus **one**
     /// stickiness rule — and that rule is what makes "a second instances database can be added by
-    /// config alone, and existing runs are undisturbed" (#21 AC#3) true rather than aspirational.
+    /// config alone, and existing runs are undisturbed" true rather than aspirational.
     ///
     /// # Why the shard map alone is not sufficient
     ///
@@ -245,7 +251,7 @@ impl ShardMap {
     /// # What identifies an in-flight instance
     ///
     /// **The shard that already holds a character inside it.** There is no realm-wide instance→shard
-    /// index yet (that is #22), so this is the only durable evidence either database has — and it is
+    /// index yet, so this is the only durable evidence either database has — and it is
     /// evidence the caller has already read, because finding the holder is how world entry starts.
     /// So: if the holder is itself a member of this map's pool, and it reports the character inside a
     /// non-open-world instance, the holder wins.
@@ -259,7 +265,7 @@ impl ShardMap {
     ///
     /// A party member who has **not yet entered** a re-bucketed live instance is still routed by the
     /// map, and will fork it (they are held by the open-world shard, which is not in the pool, so
-    /// there is nothing to be sticky about). Closing that needs the instance→shard index (#22) —
+    /// there is nothing to be sticky about). Closing that needs the instance→shard index —
     /// until then the operator procedure is "grow the pool while it is idle".
     ///
     /// # Unconfigured
@@ -299,7 +305,7 @@ impl ShardMap {
     }
 
     /// **Will this realm's dungeon populations actually get spawned, exactly once, on the database
-    /// that runs them?** (issue #48, subsuming #39's startup reminder.)
+    /// that runs them?**
     ///
     /// Two facts have to agree and until now no single process held both: the ROUTING is this
     /// gateway's shard map, and `hosts_instances` is a column on each DATABASE. The gateway is the
@@ -307,7 +313,8 @@ impl ShardMap {
     /// `stdb/connection.rs`), so `hosts_instances(db)` below is a real read, not a guess. The MODULE
     /// cannot own this check even in principle: `create_instance_with_id` knows its own flag but has
     /// no idea whether any *other* database exists, let alone whether the shard map points dungeon
-    /// traffic at one — and spec #12 forbids it from learning (`no_module_game_logic_reads_a_shard_id`).
+    /// traffic at one — and the elastic-sharding spec forbids it from learning
+    /// (`no_module_game_logic_reads_a_shard_id`).
     ///
     /// # The two failure directions
     ///
@@ -318,13 +325,13 @@ impl ShardMap {
     ///
     /// - [`InstanceHosting::NoHost`] — the owning database has `hosts_instances = false`. Every
     ///   dungeon is created as a LEASE with **0 entities** and nothing, anywhere, will ever spawn its
-    ///   population. This is #48: measured as 8 consecutive empty instances and 4 bot-test failures
+    ///   population. Measured as 8 consecutive empty instances and 4 bot-test failures
     ///   that read as gameplay regressions. FATAL — a realm whose dungeons are all empty rooms should
     ///   not come up quietly.
     /// - [`InstanceHosting::LoadNotMoved`] — the DEFAULT database hosts populations while a dungeon
     ///   map's instances are owned elsewhere. The run works; it just spawns ~207 creatures + 28
     ///   gameobject copies on the world writer and evicts them again after the transfer, i.e. exactly
-    ///   the load Phase A exists to remove. A WARNING, and — unlike #39's reminder, which fired on
+    ///   the load Phase A exists to remove. A WARNING, and — unlike the old reminder, which fired on
     ///   every sharded startup regardless of the flag — it now fires only when the flag really is
     ///   wrong.
     ///
@@ -380,7 +387,7 @@ impl ShardMap {
                      NOT CONNECTED — so dungeon entries degrade back to {owner}, whose \
                      `game_config.hosts_instances` is FALSE. Until {resolved} is reachable every \
                      dungeon entry files a lease row and spawns NOTHING: players and bots walk into \
-                     a completely empty instance (issue #48). The open world is unaffected and the \
+                     a completely empty instance. The open world is unaffected and the \
                      routing itself is correct, so the gateway is COMING UP ANYWAY — bring \
                      {resolved} up and restart the gateway to restore dungeons (the coordinator \
                      watchdog does not re-run this check, and it does not connect shards that were \
@@ -392,8 +399,8 @@ impl ShardMap {
                     "instances of DUNGEON map {map_id} are owned by database {owner}, and \
                      {owner}'s `game_config.hosts_instances` is FALSE — every dungeon entry there \
                      files a lease row and spawns NOTHING, so players and bots walk into a \
-                     completely empty instance and no other database will ever populate it (issue \
-                     #48: 8 consecutive instances with 0 entities, 4 bot tests failing as if \
+                     completely empty instance and no other database will ever populate it \
+                     (measured: 8 consecutive instances with 0 entities, 4 bot tests failing as if \
                      gameplay had regressed). Fix ONE of these and restart: (a) let that database \
                      host its own dungeons — `spacetime sql {owner} \"UPDATE game_config SET \
                      hosts_instances = true WHERE id = 0\"`; or (b) configure LYRACORE_SHARD_MAP so map \
@@ -403,7 +410,7 @@ impl ShardMap {
                      lands here on the one member that forgot it, not on all eight."
                 ));
             }
-            // The inverse (#39's direction): the portal runs on the default database, so if THAT
+            // The inverse: the portal runs on the default database, so if THAT
             // one hosts populations while the run happens elsewhere, it pays for a dungeon twice
             // over — spawn then evict. Recorded, not returned: `NoHost` is strictly worse, so a
             // configuration that is somehow both must report the fatal.
@@ -415,8 +422,7 @@ impl ShardMap {
                      population (~207 creatures + 28 gameobject copies) on the world writer and \
                      evicts it again after the transfer. The run works; the load Phase A exists to \
                      remove does not go away, and nothing else will tell you. Fix: `spacetime sql \
-                     {0} \"UPDATE game_config SET hosts_instances = false WHERE id = 0\"` \
-                     (issue #39).",
+                     {0} \"UPDATE game_config SET hosts_instances = false WHERE id = 0\"`.",
                     self.default_db
                 ));
             }
@@ -441,19 +447,19 @@ impl ShardMap {
 }
 
 /// The startup verdict of [`ShardMap::check_instance_hosting`] — will this realm's dungeon
-/// populations actually be spawned, and on the right database? (issues #39 + #48.)
+/// populations actually be spawned, and on the right database?
 ///
 /// Exactly one variant means "correctly configured", and it carries no message: the ordinary
 /// single-database realm and a correctly-configured Phase A deployment are both SILENT. That is
-/// deliberate — #39's predecessor warned on every sharded startup whether or not anything was wrong,
-/// the operator confirmed it firing on a correct gateway, and a warning that always fires gets
-/// filtered, which defeats the one startup it needed to catch.
+/// deliberate — the reminder this check replaced warned on every sharded startup whether or not
+/// anything was wrong, the operator confirmed it firing on a correct gateway, and a warning that
+/// always fires gets filtered, which defeats the one startup it needed to catch.
 #[derive(Clone, Debug, PartialEq)]
 pub enum InstanceHosting {
     /// Every dungeon map's instances land on a database that hosts populations, and no database
     /// spawns a population it will not run. Nothing to report.
     Consistent,
-    /// The default database will spawn dungeon populations it does not run (#39): they are evicted
+    /// The default database will spawn dungeon populations it does not run: they are evicted
     /// again after the transfer. Wasteful, not broken — a warning.
     LoadNotMoved(String),
     /// Dungeons WOULD be empty right now, but only because the database the map is routed to did not
@@ -470,7 +476,7 @@ pub enum InstanceHosting {
     /// dungeons for the duration is strictly less bad than no realm at all, so: log it as an error
     /// (the shard's own "unreachable" error is already on the line above) and come up.
     UnreachableHost(String),
-    /// NOBODY will spawn the population: every dungeon is created empty (#48), and no amount of
+    /// NOBODY will spawn the population: every dungeon is created empty, and no amount of
     /// waiting fixes it because the owning database is CONNECTED and says it hosts nothing. Fatal.
     NoHost(String),
 }
@@ -478,7 +484,7 @@ pub enum InstanceHosting {
 impl InstanceHosting {
     /// Apply the verdict at startup: log the warning, or refuse to start.
     ///
-    /// `Err` is the whole point of #48 — an empty-dungeon realm must not come up quietly, because
+    /// `Err` is the whole point here — an empty-dungeon realm must not come up quietly, because
     /// the symptom (bot tests failing as if combat or questing had regressed) points at everything
     /// except the config line that caused it. The severity split is here, in a pure function, so a
     /// test can pin "the damaging direction is fatal and the wasteful one is not" without a node.
@@ -514,8 +520,9 @@ pub struct HomeShard {
 }
 
 /// Resolve which database owns `character_guid`, from the realm-core index hint plus a probe of the
-/// connected world shards (#20 AC#3). Pure, so the whole self-heal rule is unit-testable without a
-/// node — deliberately, because #17 shipped a routing bug in exactly the layer its mock hardcoded.
+/// connected world shards. Pure, so the whole self-heal rule is unit-testable without a
+/// node — deliberately, because an earlier shard-routing change shipped a bug hidden by a mock that
+/// hardcoded exactly the answer under test.
 ///
 /// - `hint` — the realm-core `game_character_shard` entry, or `None` when the index has no idea.
 /// - `connected` — the world shards that actually connected, DEFAULT FIRST (probe order).
@@ -525,7 +532,8 @@ pub struct HomeShard {
 /// The rule: **the index is a hint, the row is the truth.** A hint is accepted only when the shard it
 /// names actually holds the character; anything else falls through to walking the shards, and the
 /// answer is marked for write-back. With ONE connected shard this degenerates to "probe the default
-/// shard and resolve its location through the map" — i.e. #17's behavior, byte for byte.
+/// shard and resolve its location through the map" — i.e. the original shard-routing behavior, byte
+/// for byte.
 pub fn resolve_home_shard(
     map: &ShardMap,
     connected: &[String],
@@ -555,8 +563,8 @@ pub fn resolve_home_shard(
     }
 
     // 2. Fallback probe (the self-heal): ask every connected shard, default first, and route by the
-    //    location the owning shard reports — exactly how #17 routes, just sourced by probe rather
-    //    than by assuming the default shard still holds the row.
+    //    location the owning shard reports — exactly how the shard map routes, just sourced by
+    //    probe rather than by assuming the default shard still holds the row.
     connected.iter().find_map(|db| probe(db)).map(settle)
 }
 
@@ -601,7 +609,7 @@ pub fn quest_log_fields_enabled() -> bool {
     std::env::var("LYRACORE_QUEST_LOG").map_or(true, |v| v != "0")
 }
 
-/// #228 — the address the realm list advertises, overriding the `game_realm` row.
+/// The address the realm list advertises, overriding the `game_realm` row.
 ///
 /// The row is seeded `127.0.0.1:8085`, which is right for the loopback contributor fixture and
 /// wrong for every other way of reaching this gateway: a client that completed the SRP6 handshake
@@ -626,22 +634,21 @@ pub fn realm_address_override(raw: Option<String>) -> Option<String> {
 }
 
 /// Area-of-Interest gate (scaling): the per-player `game_world_entity` subscription is SCOPED to a
-/// grid-cell box (pre-#468 a re-subscribing per-player subscription; now an in-process cell index
-/// — `stdb::world_index`), instead
-/// of the global `SELECT *`. Default ON since 2026-07-10 (operator live-verified the 2-client
-/// enter/leave-scope behavior; the 5×5 50-yd box ≈ vanilla view distance). `LYRACORE_AOI=0` is the
-/// escape hatch back to the proven global subscription.
+/// grid-cell box (before the shared-connection model, a re-subscribing per-player subscription; now
+/// an in-process cell index — `stdb::world_index`), instead of the global `SELECT *`. Default ON;
+/// the 5×5 50-yd box ≈ vanilla view distance. `LYRACORE_AOI=0` is the escape hatch back to the
+/// global subscription.
 pub fn aoi_enabled() -> bool {
     std::env::var("LYRACORE_AOI").map_or(true, |v| v != "0")
 }
 
-/// #468 stage 4b: `LYRACORE_SHARED_CALLS=1` routes hot-path reducer calls over the COORDINATOR
-/// connection via the module's operator-gated `gw_*` verb surface (actor named by guid) instead of
-/// the per-account player connection. Default OFF — the per-player path is the proven one; this
-/// flag exists so the shared path can be soaked and benched per verb family before it becomes the
-/// only path (stage 4d). Requires a module carrying the `gw_*` reducers (PR #475) on every shard.
-/// #481: total reducer-call connections per shard (the call-pipe pool). Default 4 — sized from
-/// the measured ~1000-seats-per-pipe wall; `LYRACORE_CALL_PIPES=1` restores the single-connection
+/// `LYRACORE_SHARED_CALLS=1` routes hot-path reducer calls over the COORDINATOR connection via the
+/// module's operator-gated `gw_*` verb surface (actor named by guid) instead of the per-account
+/// player connection. Default ON; `LYRACORE_SHARED_CALLS=0` restores the per-player path. Requires
+/// a module carrying the `gw_*` reducers on every shard.
+///
+/// Total reducer-call connections per shard (the call-pipe pool). Default 4 — sized from the
+/// measured ~1000-seats-per-pipe wall; `LYRACORE_CALL_PIPES=1` restores the single-connection
 /// call path. Values are clamped to [1, 16].
 pub fn call_pipes() -> usize {
     std::env::var("LYRACORE_CALL_PIPES")
@@ -652,24 +659,21 @@ pub fn call_pipes() -> usize {
 }
 
 pub fn shared_calls_enabled() -> bool {
-    // #478 Phase 0 (operator-approved 2026-08-09): the shared pipe IS how LyraCore works — the
-    // flag defaults ON and the env var is the opt-OUT escape hatch (`LYRACORE_SHARED_CALLS=0`
-    // restores the per-player path byte-for-byte for the bake period; the legacy path is deleted
-    // outright once the bake holds, #478 Phases 1+).
+    // The shared pipe is how LyraCore works — default ON, and `LYRACORE_SHARED_CALLS=0` is the
+    // opt-out escape hatch that restores the per-player path byte-for-byte.
     std::env::var("LYRACORE_SHARED_CALLS").map_or(true, |v| v != "0")
 }
 
-/// #468 stage 4d (unblocked by #479): the per-account OWNER identity bound by `establish_session`
-/// under `LYRACORE_SHARED_CALLS` — deterministic and derived, so logins build NO per-player
-/// connection just to mint one. Never node-issued (real identities carry the node's c200 prefix;
-/// this is a tagged literal), unique per account. The module stamps it as row owner exactly like a
-/// real bound identity (`gw_player_login`'s fail-closed check is satisfied); no client connection
-/// ever presents it, so per-owner RLS admits nobody to those rows — on the shared pipe the GATEWAY
-/// predicates are the visibility layer (4c). Safe now because EVERY player verb forks onto its
-/// gw_* twin under the flag (#479) — the two GM verbs (client_command/gm_command) are the sole
-/// per-player holdouts and are non-functional flag-on until their operator decision lands.
-/// Flag-off logons re-bind the real connection identity on their next `establish_session`, so the
-/// modes can alternate.
+/// The per-account OWNER identity bound by `establish_session` under `LYRACORE_SHARED_CALLS` —
+/// deterministic and derived, so logins build NO per-player connection just to mint one. Never
+/// node-issued (real identities carry the node's c200 prefix; this is a tagged literal), unique
+/// per account. The module stamps it as row owner exactly like a real bound identity
+/// (`gw_player_login`'s fail-closed check is satisfied); no client connection ever presents it,
+/// so per-owner RLS admits nobody to those rows — on the shared pipe the GATEWAY predicates are
+/// the visibility layer. Safe because EVERY player verb forks onto its gw_* twin under the flag —
+/// the two GM verbs (client_command/gm_command) are the sole per-player holdouts and are
+/// non-functional flag-on until their operator decision lands. Flag-off logons re-bind the real
+/// connection identity on their next `establish_session`, so the modes can alternate.
 pub fn synthetic_owner_identity(account_id: u64) -> [u8; 32] {
     let mut id = [0u8; 32];
     id[..8].copy_from_slice(b"LYRAGWID");
@@ -678,7 +682,8 @@ pub fn synthetic_owner_identity(account_id: u64) -> [u8; 32] {
 }
 
 
-/// #209 probe: `LYRACORE_WRITER_TRACE=1` turns on a per-session black-box ring inside `spawn_writer` — the
+/// A crash-diagnosis probe for the SMSG_COMPRESSED_MOVES corruption at crowd scale:
+/// `LYRACORE_WRITER_TRACE=1` turns on a per-session black-box ring inside `spawn_writer` — the
 /// last 32 (opcode, declared size, rolling checksum) triples for the exact bytes handed to the
 /// socket, dumped to `/tmp/gw-writer-crash/<account>.txt` when a session's writer loop ends on a
 /// write error. Default OFF: the ring costs a checksum pass over every outbound body, which is not
@@ -688,7 +693,7 @@ pub fn writer_trace_enabled() -> bool {
     std::env::var("LYRACORE_WRITER_TRACE").is_ok_and(|v| v == "1")
 }
 
-/// #180 login queue: the hard ceiling on concurrently ESTABLISHED world sessions (a seat is held
+/// The login queue's hard ceiling on concurrently ESTABLISHED world sessions (a seat is held
 /// from `AUTH_OK` until the socket closes — see `world::login_queue`). Default `0` = unlimited,
 /// i.e. today's behavior byte for byte: a single-player dev realm, or any gateway that never sets
 /// this, never queues anyone. A malformed value falls back to unlimited rather than guessing.
@@ -699,7 +704,7 @@ pub fn max_sessions() -> usize {
         .unwrap_or(0)
 }
 
-/// #180 login queue: additionally rate-limits how many queued sessions may be admitted per tick
+/// The login queue additionally rate-limits how many queued sessions may be admitted per tick
 /// (`world::login_queue::LoginQueue`'s tick, 1s in production) — independent of `max_sessions`, so
 /// a burst of simultaneously freed seats (a raid wipe, a restart draining a full queue) trickles
 /// admissions instead of releasing its whole backlog into `CMSG_PLAYER_LOGIN` at once. Default `0`
@@ -720,7 +725,7 @@ pub fn admit_concurrency() -> usize {
 /// which is the property that matters; it is not trying to track tokio.
 pub const DEFAULT_MAX_BLOCKING_THREADS: usize = 512;
 
-/// #451: the ceiling on tokio's blocking pool, which is the real ceiling on concurrent players.
+/// The ceiling on tokio's blocking pool, which is the real ceiling on concurrent players.
 ///
 /// Both accept loops hand every accepted socket to `spawn_blocking` (the wire codecs in
 /// `wow_login_messages` / `wow_world_messages` are blocking `std::io`), and a world session holds
@@ -758,7 +763,7 @@ pub fn max_blocking_threads_from_env(raw: Option<&str>) -> usize {
 mod max_blocking_threads_tests {
     use super::*;
 
-    /// The safety property of #451's knob: **unset changes nothing**. Every existing deployment
+    /// The safety property of this knob: **unset changes nothing**. Every existing deployment
     /// keeps the exact 512-thread pool it has been running on.
     #[test]
     fn unset_is_tokios_own_default() {
@@ -778,7 +783,7 @@ mod max_blocking_threads_tests {
 
     /// Zero is not "unlimited" the way it is for `max_sessions` — a zero-thread blocking pool is a
     /// gateway that accepts every socket and services none of them, silently, which is precisely
-    /// the failure shape #451 exists to make impossible. Fall back rather than obey.
+    /// the failure shape this exists to make impossible. Fall back rather than obey.
     #[test]
     fn zero_falls_back_rather_than_seating_nobody() {
         assert_eq!(
@@ -806,7 +811,7 @@ mod max_blocking_threads_tests {
 mod realm_address_tests {
     use super::*;
 
-    /// The whole safety property of #228's override: **unset changes nothing**. Every existing
+    /// The whole safety property of this override: **unset changes nothing**. Every existing
     /// deployment, production included, keeps advertising the `game_realm` row it always did.
     #[test]
     fn an_unset_override_leaves_the_game_realm_row_in_charge() {
@@ -846,7 +851,7 @@ mod shard_map_tests {
 
     #[test]
     fn an_unconfigured_map_is_a_single_entry_that_never_routes() {
-        // The safety property (#17): absent config → every location resolves to the one database,
+        // The safety property: absent config → every location resolves to the one database,
         // so no reducer call and no subscription can target anything else.
         let m = ShardMap::parse("lyracore", "");
         assert_eq!(m.resolve(0, 0), "lyracore");
@@ -887,7 +892,7 @@ mod shard_map_tests {
     }
 
     // ==========================================================================================
-    //  Instance hosting (#48): the detector that replaced #39's always-firing reminder.
+    //  Instance hosting: the detector that replaced the old always-firing reminder.
     //
     //  Every test here drives the same pure function with the same two inputs — the routing (this
     //  gateway's) and the flag (each database's) — because the bug was precisely that no process
@@ -900,7 +905,7 @@ mod shard_map_tests {
         move |db: &str| pairs.iter().find(|(d, _)| *d == db).map(|(_, f)| *f)
     }
 
-    /// **Issue #48, the damaging direction.** No shard map + `hosts_instances = false` = every
+    /// **The damaging direction.** No shard map + `hosts_instances = false` = every
     /// dungeon created with 0 entities, forever, because there is no instances shard to route to.
     /// Measured live as 8 consecutive empty instances and four bot-test failures (`bot_deadmines`
     /// "no Defias death within 300s", `party_brains`, `bot_goals`, `class_roles`) that looked like
@@ -939,7 +944,7 @@ mod shard_map_tests {
 
     /// **The ordinary single-database realm** — `LYRACORE_SHARD_MAP` unset, flag at its `true` default,
     /// and the same again for a database with no config row at all. Silent, both ways. This is the
-    /// half #39 promised and #48 must not spend.
+    /// half the old reminder promised and this detector must not spend.
     #[test]
     fn the_unconfigured_single_database_realm_is_silent() {
         let single = ShardMap::parse("lyracore", "");
@@ -948,7 +953,7 @@ mod shard_map_tests {
             single.check_instance_hosting(flags(&[("lyracore", true)]), up),
             InstanceHosting::Consistent,
             "a single database that hosts its own dungeons is correctly configured — saying \
-             ANYTHING here is the noise #48 removed"
+             ANYTHING here is noise the detector was built to remove"
         );
         assert_eq!(
             single.check_instance_hosting(|_| None, up),
@@ -958,10 +963,10 @@ mod shard_map_tests {
         );
     }
 
-    /// **Issue #39's direction, now actually detected.** A shard map that routes Deadmines away
+    /// **The wasteful direction, now actually detected.** A shard map that routes Deadmines away
     /// while the world shard still hosts populations warns; the same shard map with the flag
-    /// correctly `false` says NOTHING. The second half is the fix for #44's always-fires noise —
-    /// the operator confirmed the old reminder firing on a correctly-configured gateway.
+    /// correctly `false` says NOTHING. The second half fixes the old reminder's always-fires noise —
+    /// the operator confirmed it firing on a correctly-configured gateway.
     #[test]
     fn a_routed_dungeon_warns_only_while_the_world_shard_still_hosts() {
         let phase_a = ShardMap::parse("lyracore", "36:*=lyracore-instances");
@@ -989,7 +994,7 @@ mod shard_map_tests {
             ),
             InstanceHosting::Consistent,
             "the CORRECT Phase A configuration must be completely silent — an always-firing \
-             warning gets filtered, which is exactly how #48 got missed"
+             warning gets filtered, which is exactly how the empty-dungeon failure went unnoticed"
         );
     }
 
@@ -1013,8 +1018,8 @@ mod shard_map_tests {
 
     /// A pool member that forgot the flag. `36:1=` sends every 8th run to a database whose
     /// `hosts_instances` is false, so one dungeon in eight is empty — the hardest possible version
-    /// of #48 to diagnose from the outside, and the reason the check walks every bucket instead of
-    /// asking about one representative instance id.
+    /// of the empty-dungeon failure to diagnose from the outside, and the reason the check walks
+    /// every bucket instead of asking about one representative instance id.
     #[test]
     fn one_unhosted_pool_member_out_of_eight_is_still_fatal() {
         let m = ShardMap::parse("lyracore", "36:1=instances-1, 36:*=instances-0");
@@ -1038,9 +1043,10 @@ mod shard_map_tests {
     /// is exactly the one that hosts nothing, so dungeons WOULD be empty. Reported, and deliberately
     /// **not fatal**.
     ///
-    /// This is the availability half of #48 and it cuts the other way from the rest of the file. The
-    /// operator's config is CORRECT here; a different process is down, transiently — a node that has
-    /// not finished coming up, a gateway launched a few seconds early in a restart, an instances
+    /// This is the availability half of the empty-dungeon failure, and it cuts the other way from
+    /// the rest of the file. The operator's config is CORRECT here; a different process is down,
+    /// transiently — a node that has not finished coming up, a gateway launched a few seconds
+    /// early in a restart, an instances
     /// database mid-republish. `Coordinator::connect` decided in writing that an unreachable
     /// non-default shard degrades rather than fails, precisely so the open world and every login
     /// survive it, and this check must not quietly overrule that one call below: `main` propagates
@@ -1212,8 +1218,8 @@ mod shard_map_tests {
     ///
     /// # This scan was defeated four ways in review — do not weaken it back
     ///
-    /// Every assertion here exists because a mutation satisfied its predecessor while restoring #48
-    /// with the whole 438-test suite green:
+    /// Every assertion here exists because a mutation satisfied its predecessor while reintroducing
+    /// the empty-dungeon failure with the whole 438-test suite green:
     ///
     /// 1. **`?` inside a string.** `.enforce().map_err(|m| log::warn!("hosting? {m}"))` contains a
     ///    `?` and propagates NOTHING. Now the `?` must be the LAST token of the statement, which is
@@ -1262,7 +1268,7 @@ mod shard_map_tests {
             body.contains("check_instance_hosting("),
             "Coordinator::connect no longer checks instance hosting — a gateway with no shard map \
              against a database with hosts_instances = false is back to creating every dungeon \
-             empty, silently (#48)"
+             empty, silently"
         );
         // Defeat 2: the check must be wired to the NAMED reader, not to an inline closure. Otherwise
         // the real read can sit next to it as a dead binding and satisfy the assertions below.
@@ -1270,7 +1276,7 @@ mod shard_map_tests {
             body.contains("check_instance_hosting(hosts_instances,"),
             "the hosting check is not being passed the `hosts_instances` reader by name — an inline \
              closure (`|_| Some(true)`) keeps every other assertion here true, leaves the real \
-             reader as a dead binding, and silently restores #48"
+             reader as a dead binding, and silently reintroduces the empty-dungeon failure"
         );
         let at = body.find(".enforce()").expect(
             "the hosting verdict is no longer enforced — `check_instance_hosting` is a pure \
@@ -1287,14 +1293,14 @@ mod shard_map_tests {
             stmt.trim_end().ends_with('?'),
             "the enforced verdict must PROPAGATE — the statement has to END in `?` so `NoHost` \
              aborts startup. `let _ = …`, `.ok()`, or a `?` buried in a log string swallows the \
-             fatal and restores #48 with every other test green: {stmt}"
+             fatal and reintroduces the empty-dungeon failure with every other test green: {stmt}"
         );
         // Defeat 3: comments are stripped, so this now needs the real subscription. It lives in
         // `coordinator_queries`, not in `connect`'s body, so this one assertion scans the whole file.
         assert!(
             connection_rs.contains("\"SELECT * FROM game_config\""),
             "the coordinator no longer subscribes game_config — the detector cannot read the flag \
-             back and degrades to #39's guess-and-warn reminder"
+             back and degrades to the old guess-and-warn reminder"
         );
         // The flag reader must actually READ THE COLUMN, from the id=0 SINGLETON — and the read must
         // be INSIDE the `hosts_instances` binding that the call site above passes by name, so the two
@@ -1329,7 +1335,7 @@ mod shard_map_tests {
 
     #[test]
     fn an_unreachable_shard_degrades_to_the_default_database_not_to_the_asker() {
-        // Adversarial review of #17: a shard that is named by the map but failed to connect must
+        // Adversarial review: a shard that is named by the map but failed to connect must
         // route to the DEFAULT database. Degrading to "whatever handle asked" is invisible from the
         // default handle but wrong from any other — a session already pinned to `pool-a` that ports
         // to a map owned by the down `pool-b` would keep its `pool-a` pin and be served by a
@@ -1354,13 +1360,14 @@ mod shard_map_tests {
     }
 
     // ==========================================================================================
-    //  The instance pool (#21): assignment by the EXISTING bucket rule, and the stickiness that
+    //  The instance pool: assignment by the EXISTING bucket rule, and the stickiness that
     //  keeps a live run where it is when the pool grows.
     // ==========================================================================================
 
-    /// AC#1 + AC#3's mechanism, in one test: **the pool is the bucket rule, and nothing else.**
-    /// Two pool members, ids allocated consecutively by the world shard's `auto_inc`, and the runs
-    /// alternate — no new assignment machinery was added or needed.
+    /// The requirement that instance creation targets the pool via the shard map, and that the
+    /// pool can grow by config alone — in one test: **the pool is the bucket rule, and nothing
+    /// else.** Two pool members, ids allocated consecutively by the world shard's `auto_inc`, and
+    /// the runs alternate — no new assignment machinery was added or needed.
     #[test]
     fn the_existing_bucket_rule_spreads_consecutive_runs_across_the_pool() {
         let m = ShardMap::parse(
@@ -1414,7 +1421,7 @@ mod shard_map_tests {
 
     #[test]
     fn an_unconfigured_map_has_a_one_database_pool_and_instance_owner_is_resolve() {
-        // The byte-identical-when-unset property, for #21's two new resolvers. With no rules the
+        // The byte-identical-when-unset property, for the pool's two new resolvers. With no rules the
         // pool is the single database and stickiness has nothing to stick to, so `instance_owner`
         // answers exactly what `resolve` answers for every input it can be asked about.
         let m = ShardMap::parse("lyracore", "");
@@ -1426,13 +1433,14 @@ mod shard_map_tests {
                     m.instance_owner(map_id, instance_id, "lyracore", |_| true),
                     m.resolve(map_id, instance_id),
                     "map {map_id}/instance {instance_id} must route identically with and without \
-                     the #21 stickiness rule when nothing is configured"
+                     the stickiness rule when nothing is configured"
                 );
             }
         }
     }
 
-    /// **AC#3.** The operator adds `instances-1` by editing `LYRACORE_SHARD_MAP` alone. New runs land on
+    /// **Growing the pool by config alone.** The operator adds `instances-1` by editing
+    /// `LYRACORE_SHARD_MAP` alone. New runs land on
     /// it; the run already live on `instances-0` — whose bucket the edit just re-pointed — keeps
     /// resolving to `instances-0` for the players who are inside it.
     #[test]
@@ -1523,14 +1531,14 @@ mod shard_map_tests {
     }
 
     // ==========================================================================================
-    //  Realm-core (#20): the auth database, and the character→shard index's self-heal rule.
+    //  Realm-core: the auth database, and the character→shard index's self-heal rule.
     // ==========================================================================================
 
     #[test]
     fn realm_core_unconfigured_keeps_auth_on_the_default_database() {
-        // The safety property (#20, mirroring #17's): with no LYRACORE_REALM_CORE the auth database IS
-        // the world database, so every account/session read and write goes exactly where it goes
-        // today, and no second coordinator connection is opened.
+        // The safety property (mirroring the shard map's): with no LYRACORE_REALM_CORE the auth
+        // database IS the world database, so every account/session read and write goes exactly
+        // where it goes today, and no second coordinator connection is opened.
         let m = ShardMap::parse("world", "1:*=instances");
         assert_eq!(m.realm_core_db(), None);
         assert_eq!(m.auth_db(|_| true), Ok("world"));
@@ -1580,8 +1588,9 @@ mod shard_map_tests {
     #[test]
     fn realm_core_naming_the_world_database_or_nothing_is_treated_as_unconfigured() {
         // `LYRACORE_REALM_CORE=lyracore` (== LYRACORE_DATABASE) is a plausible operator mistake and a
-        // plausible deliberate "hub == world" single-realm posture (work-item 238's slice 0). Both
-        // must collapse to today rather than opening a second connection to the same database.
+        // plausible deliberate "hub == world" single-realm posture (the shared-auth-hub design's
+        // zero-migration default). Both must collapse to today rather than opening a second
+        // connection to the same database.
         for cfg in [Some("world"), Some("  "), Some(""), None] {
             let m = ShardMap::parse("world", "").with_realm_core(cfg);
             assert_eq!(
@@ -1599,7 +1608,7 @@ mod shard_map_tests {
     #[test]
     fn one_shard_resolves_home_from_the_probe_alone_exactly_like_before_realm_core() {
         // Backward compatibility, stated as a test: single shard, no index entry → "ask the default
-        // shard where the character is, resolve that through the map". #17's behavior verbatim.
+        // shard where the character is, resolve that through the map" verbatim.
         let m = ShardMap::parse("world", "");
         let connected = vec!["world".to_string()];
         let got = resolve_home_shard(&m, &connected, None, |db| (db == "world").then_some((0, 0)));
@@ -1635,7 +1644,7 @@ mod shard_map_tests {
 
     #[test]
     fn a_deliberately_stale_index_entry_self_heals_via_the_fallback_probe() {
-        // AC#3. The index says the character is in a Deadmines instance; it actually walked out and
+        // The index says the character is in a Deadmines instance; it actually walked out and
         // is standing in the open world. The hinted shard doesn't hold it, so the probe walks the
         // shards, finds it on `world`, routes there, and flags the entry for correction.
         let m = ShardMap::parse("world", "389:*=instances");
@@ -1694,7 +1703,7 @@ mod shard_map_tests {
     }
 
     // ==========================================================================================
-    //  #223 — the SINGLE-DATABASE realm, and the parser's totality
+    //  The SINGLE-DATABASE realm, and the parser's totality
     // ==========================================================================================
 
     /// The configuration nearly every deployment runs, and exactly what you silently get when a
@@ -1705,8 +1714,8 @@ mod shard_map_tests {
     /// a five-database realm and is actually running one", or the reverse. Every routing question
     /// must answer with the one database, and no accessor may invent a second name.
     ///
-    /// It is also the contract every sharding feature is built against: each of #17/#21's rules
-    /// is a no-op here, which is what makes them safe to ship default-off.
+    /// It is also the contract every sharding feature is built against: each shard-map and
+    /// instance-pool rule is a no-op here, which is what makes them safe to ship default-off.
     #[test]
     fn the_unconfigured_realm_is_exactly_one_database_in_every_accessor() {
         // Exactly what `from_env` produces when LYRACORE_SHARD_MAP / _REALM_CORE are unset: an
@@ -1868,7 +1877,7 @@ mod shard_map_tests {
         }
     }
 
-    /// PROPERTY (#223): `LYRACORE_SHARD_MAP` is operator input, read at startup, and a mistake in it
+    /// PROPERTY: `LYRACORE_SHARD_MAP` is operator input, read at startup, and a mistake in it
     /// fails silently into a working-looking realm. The parser's whole job is therefore to
     /// DEGRADE — never to abort the process, and never to invent a destination.
     ///

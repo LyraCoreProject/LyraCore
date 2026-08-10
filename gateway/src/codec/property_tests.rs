@@ -1,4 +1,4 @@
-//! Issue #223 — property tests for the hand-rolled decoders: the client-byte parsers and the
+//! Property tests for the hand-rolled decoders: the client-byte parsers and the
 //! update-mask codec.
 //!
 //! WHY NOT `proptest`. These are property tests in the sense that matters (a generated input space
@@ -169,7 +169,7 @@ fn the_movement_carrier_decoder_never_panics_on_any_byte_string() {
 /// The one arithmetic edge in that function: it prepends a 4-byte header, so a body within 4 bytes
 /// of `u16::MAX` overflows the frame-size field. That must be an `Err`, not a wrap — a wrapped size
 /// is the "one wrong size field desyncs every later header" failure this codebase has already paid
-/// for once on the outbound side (#209).
+/// for once on the outbound side (the `SMSG_COMPRESSED_MOVES` crowd-scale corruption).
 #[test]
 fn a_movement_body_that_would_overflow_the_frame_size_is_an_error_not_a_wrap() {
     for len in [65_531usize, 65_532, 65_535, 70_000] {

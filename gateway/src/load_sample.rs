@@ -1,4 +1,5 @@
-//! Periodic per-shard load sampling (issue #78) — the ops half of Phase C.
+//! Periodic per-shard load sampling — the mechanism that lets seam decisions be driven by queryable
+//! load data instead of guesswork.
 //!
 //! The gateway is the one component that can see the whole realm: every shard's own SpacetimeDB
 //! node exposes `/v1/metrics` (the same endpoint this project's internal capacity-benchmark harness
@@ -212,7 +213,7 @@ impl OccupancySampler {
         if db_ids.is_empty() {
             log::warn!(
                 "LYRACORE_METRICS_DB_IDS is unset — SHARDLOAD will sample session counts but report \
-                 writer occupancy as unmeasured for every shard (issue #78). Discover each shard's \
+                 writer occupancy as unmeasured for every shard. Discover each shard's \
                  database identity with `\"$(bash scripts/wire-harness.sh --bin vanilla-wire-bench)\" --dry-run 1`, \
                  then set LYRACORE_METRICS_DB_IDS=\"<shard>=<hex>,...\"."
             );

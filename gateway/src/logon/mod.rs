@@ -72,7 +72,7 @@ pub trait LogonStore: Send + Sync {
     /// Persist the shared session key K (writes `game_session` via `establish_session`).
     ///
     /// `username` is passed alongside `account_id` because the two are NOT interchangeable across
-    /// databases (#20): `account_id` is the authenticating database's `#[auto_inc]` surrogate key,
+    /// databases: `account_id` is the authenticating database's `#[auto_inc]` surrogate key,
     /// while the username is the realm-wide identity of the account. An implementation that has to
     /// write more than one database (the realm-core split) must re-resolve the id per database from
     /// the username; it may never carry one database's id to another.
@@ -277,7 +277,7 @@ fn to_realm(r: &RealmInfo) -> Realm {
 pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
     let listener = TcpListener::bind(&cfg.logon_bind).await?;
     log::info!("logon listening on {}", cfg.logon_bind);
-    // #451: a transient accept errno must cost ONE connection, not the realm. See `crate::accept`
+    // A transient accept errno must cost ONE connection, not the realm. See `crate::accept`
     // for the policy and for the errno that actually killed the gateway on 2026-08-07.
     let mut backoff = AcceptBackoff::new();
     loop {
@@ -336,12 +336,12 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
 
 /// `LogonStore` backed by the SpacetimeDB coordinator connections.
 ///
-/// # Which database answers what (#20)
+/// # Which database answers what
 ///
 /// | question | database | why |
 /// |---|---|---|
 /// | SRP6 salt/verifier/banned | **realm-core** | the account is realm-wide state |
-/// | session key K | **realm-core** | so any gateway completes any handshake (AC#2) |
+/// | session key K | **realm-core** | so any gateway completes any handshake (the stateless-gateway invariant, now realm-scoped) |
 /// | the world connection's bound identity | world shard | it is that shard's connection |
 /// | `game_character.owner_identity` binding | world shard | characters are shard state |
 /// | realm list + per-realm character count | world shard | `game_realm` / `game_character` |
@@ -353,14 +353,14 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
 /// re-resolved from the username by [`CoordinatorStore::world_account_id`]. The id this store is
 /// handed came from realm-core and is meaningless anywhere else.
 ///
-/// Generic over the STORE (issue #34 part 2) rather than hard-wired to `Coordinator`, because
-/// `Coordinator` wraps a live SpacetimeDB websocket and nothing in the crate could execute these
-/// bodies without a node — which is why four mutations against them, including "read the SRP6
-/// material off the world DB", survived #33's whole suite. Production binds `D = Coordinator`;
+/// Generic over the STORE rather than hard-wired to `Coordinator`, because `Coordinator` wraps a
+/// live SpacetimeDB websocket and nothing in the crate could execute these bodies without a node —
+/// which is why four mutations against them, including "read the SRP6 material off the world DB",
+/// survived the realm-core PR's own suite before this fix. Production binds `D = Coordinator`;
 /// `realm_core::tests` binds `D = fake::Handle` and runs THESE bodies, not a model of them.
 pub(crate) struct CoordinatorStore<D: crate::realm_core::RealmDb> {
     coordinator: D,
-    /// #269: the WORLD-shard account id this LOGON SOCKET holds a connection lease on, `None` until
+    /// The WORLD-shard account id this LOGON SOCKET holds a connection lease on, `None` until
     /// its SRP6 proof resolves one.
     ///
     /// One `CoordinatorStore` is built per accepted logon socket (`run`, below) and dropped when
@@ -371,7 +371,7 @@ pub(crate) struct CoordinatorStore<D: crate::realm_core::RealmDb> {
     /// websocket fd + an SDK pump thread) for the gateway's LIFETIME, which is the leak this fixes.
     ///
     /// World-shard, not realm-core's: `player_conn` caches under the world shard's `#[auto_inc]`
-    /// id, and #20's whole discipline is that the two are not interchangeable — attaching
+    /// id, and realm-core's whole discipline is that the two are not interchangeable — attaching
     /// realm-core's id would account a connection that does not exist while leaving the real one
     /// unaccounted, i.e. leak on a split deployment while looking fixed on a single-database one.
     leased: std::sync::Mutex<Option<u64>>,
@@ -385,7 +385,7 @@ impl<D: crate::realm_core::RealmDb> CoordinatorStore<D> {
         }
     }
 
-    /// Take this socket's lease on `world_id`'s cached connection (#269), at most once per account.
+    /// Take this socket's lease on `world_id`'s cached connection, at most once per account.
     ///
     /// Idempotent because `handle_logon` loops: a client may re-run challenge+proof on the same
     /// socket, and a second attach with only one `Drop` to pair it would leave the refcount above
@@ -426,7 +426,7 @@ impl<D: crate::realm_core::RealmDb> CoordinatorStore<D> {
     }
 }
 
-/// #269: the logon socket closed. Hand back the lease `bound_identity` took, on every exit path —
+/// The logon socket closed. Hand back the lease `bound_identity` took, on every exit path —
 /// clean disconnect, protocol error, and unwind alike.
 ///
 /// This is a DEFERRED release, never an immediate one: the account's next socket is normally the
@@ -449,7 +449,7 @@ impl<D: crate::realm_core::RealmDb> Drop for CoordinatorStore<D> {
     }
 }
 
-/// The cross-database account-key rule (#20), extracted so it can be tested without a node.
+/// The cross-database account-key rule, extracted so it can be tested without a node.
 ///
 /// `Account.id` is `#[auto_inc]`, so it is a *per-database* surrogate key; the USERNAME is the only
 /// realm-wide account identity. Given realm-core's id for `username`, answer with the id the WORLD
@@ -457,7 +457,7 @@ impl<D: crate::realm_core::RealmDb> Drop for CoordinatorStore<D> {
 ///
 /// - `same_database` (realm-core unconfigured, or naming the world database) → the two ids are the
 ///   same id, so pass it straight through and do not spend a lookup. This is what keeps the
-///   unconfigured path identical to the pre-#20 gateway.
+///   unconfigured path identical to the pre-realm-core gateway.
 /// - otherwise → whatever the world shard's own `game_account` says.
 /// - **never** the realm-core id on a world-shard call. A missing world-side account is an `Err`,
 ///   not a fallback: falling back would hand the world shard an id that, on any deployment whose
@@ -522,9 +522,9 @@ impl<D: crate::realm_core::RealmDb> LogonStore for CoordinatorStore<D> {
         // itself re-resolved by username in `world_store::lookup_session`). Handing realm-core's id
         // here would bind `game_character.owner_identity` to a connection nothing ever uses again.
         let world_id = self.world_account_id(account_id, username)?;
-        // #269: this call is what OPENS the account's cached connection, so it is where the logon
+        // This call is what OPENS the account's cached connection, so it is where the logon
         // socket takes its lease on it. BEFORE the open, not after: an open that fails part-way (a
-        // build that times out, #451) must still be paired, and an attach that never happened
+        // build that times out) must still be paired, and an attach that never happened
         // cannot be undone by `Drop`.
         self.lease(world_id);
         self.coordinator.bound_identity(world_id)
@@ -534,7 +534,7 @@ impl<D: crate::realm_core::RealmDb> LogonStore for CoordinatorStore<D> {
     ///
     /// 1. **realm-core** — the authoritative `game_session` row (K + the bound identity). This is
     ///    the row every world gateway later reads to complete a handshake, so it is what makes the
-    ///    gateway stateless at REALM scope (AC#2).
+    ///    gateway stateless at REALM scope.
     /// 2. **the world shard** — the same reducer, whose real job here is binding
     ///    `game_character.owner_identity` for this account's characters so per-owner RLS lets the
     ///    player see them. Its `game_account`/`game_session` writes are the WRITE-THROUGH CACHE of
@@ -574,7 +574,7 @@ impl<D: crate::realm_core::RealmDb> LogonStore for CoordinatorStore<D> {
         Ok(vec![RealmInfo {
             id: realm.id,
             name: realm.name,
-            // #228: the row says where the world listener is *for this deployment* only if nobody
+            // The row says where the world listener is *for this deployment* only if nobody
             // told us otherwise. `LYRACORE_REALM_ADDRESS` is how `lyracore dev up --lan` makes the
             // realm reachable from another machine — see `config::advertised_realm_address`.
             address: crate::config::advertised_realm_address().unwrap_or(realm.address),
@@ -599,7 +599,7 @@ mod tests {
         account: LogonAccount,
         username: String,
         saved: Mutex<Option<[u8; 40]>>,
-        /// `(method, username)` for every store call that was told the account's name (#20): the
+        /// `(method, username)` for every store call that was told the account's name — the
         /// cross-database account key. A world-side implementation re-resolves its own id from it,
         /// so a method that stops being told it silently regresses to carrying realm-core's id.
         usernames: Mutex<Vec<(&'static str, String)>>,
@@ -780,7 +780,7 @@ mod tests {
 
     #[test]
     fn save_session_is_told_the_normalized_username_not_just_the_account_id() {
-        // #20. `CoordinatorStore::save_session` has to write TWO databases — realm-core (the
+        // `CoordinatorStore::save_session` has to write TWO databases — realm-core (the
         // authoritative K) and the world shard (the character owner_identity binding) — and
         // `account_id` is only meaningful on the database that issued it (`#[auto_inc]`). The
         // username is the cross-database key, so the state machine must hand it down, already
@@ -874,7 +874,7 @@ mod tests {
 
     #[test]
     fn a_world_side_id_is_re_resolved_from_the_username_never_carried_from_realm_core() {
-        // The rule behind the assertions above (#20). Realm-core says this account is id 7; the
+        // The rule behind the assertions above. Realm-core says this account is id 7; the
         // world shard issued id 4 for the same username. Every world-side call must use 4.
         assert_eq!(
             world_account_id(7, "TEST", false, "world", || Ok(Some(4))).unwrap(),
@@ -938,7 +938,7 @@ mod tests {
         server.join().unwrap();
     }
 
-    /// A provisioned account (real salt/verifier for `password`), for the negative-path tests. [179]
+    /// A provisioned account (real salt/verifier for `password`), for the negative-path tests.
     fn provisioned_store(username: &str, password: &str, banned: bool) -> InMemoryStore {
         let v = SrpVerifier::from_username_and_password(ns(username), ns(password));
         InMemoryStore {
@@ -1149,7 +1149,7 @@ mod tests {
     }
 
     // ===================================================================================
-    //  #223 — credential normalization, store-failure handling, and replay
+    //  Credential normalization, store-failure handling, and replay
     // ===================================================================================
 
     /// Drive a complete SRP6 handshake for `typed_account` against a store provisioned under
@@ -1366,7 +1366,7 @@ mod tests {
         }
     }
 
-    /// #223 — the PROVISIONING↔LOGON seam, driven end to end offline.
+    /// The PROVISIONING↔LOGON seam, driven end to end offline.
     ///
     /// `provision_cli`'s tests assert what `normalize_provision_credentials` returns (`"alice"` →
     /// `"ALICE"`); this file's tests assert what `handle_logon` accepts. Neither on its own catches
@@ -1810,7 +1810,7 @@ mod tests {
         server.join().unwrap();
     }
 
-    /// PROPERTY (#223): the logon listener is the only surface on this server that parses bytes from
+    /// PROPERTY: the logon listener is the only surface on this server that parses bytes from
     /// a peer who has proven NOTHING — no session key, no header cipher, no account. Whatever
     /// arrives, `handle_logon` must return: `Ok(())` on a clean disconnect, `Err` on anything it
     /// cannot make sense of. It must never panic (an unwound thread per malformed connect is a

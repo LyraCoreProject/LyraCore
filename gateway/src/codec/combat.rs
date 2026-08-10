@@ -77,7 +77,7 @@ pub fn build_spell_non_melee_damage_log(
 /// gateway relays this when the cast RESOLVES, so for both instant and just-finished timed casts the
 /// remaining cast time is 0). Self-cast: `cast_item == caster`, empty targets/flags.
 ///
-/// `target`/`ammo` exist for the RANGED auto-repeat activation (097): vanilla's SendSpellStart writes
+/// `target`/`ammo` exist for the RANGED auto-repeat activation: vanilla's SendSpellStart writes
 /// the real unit target (not SELF) and, for a ranged spell, CAST_FLAG_AMMO (0x20) + the ammo block —
 /// that block is what nocks the arrow/bullet on the 5875 client. All other casts pass `0, None`
 /// (byte-identical to before). [combat]
@@ -88,7 +88,7 @@ pub fn build_spell_start(
     target: u64,
     ammo: Option<(u32, u32)>,
 ) -> SMSG_SPELL_START {
-    // [083] CAST_FLAG_UNKNOWN2 (0x02) — base flag every mangos/vmangos SendSpellStart sets; a ranged
+    // CAST_FLAG_UNKNOWN2 (0x02) — base flag every mangos/vmangos SendSpellStart sets; a ranged
     // auto-repeat ORs in CAST_FLAG_AMMO (0x20) + the ammo block (mirrors build_spell_go's ammo path).
     let flags = match ammo {
         Some((ammo_display_id, ammo_inventory_type)) => SMSG_SPELL_START_CastFlags::new(
@@ -134,7 +134,7 @@ pub fn build_spell_failure(caster_guid: u64, spell_id: u32) -> SMSG_SPELL_FAILUR
 }
 
 /// `SMSG_SPELL_DELAYED` (opcode 0x01E2, 12-byte body: guid + u32 delay) — vanilla 1.12's cast-bar
-/// PUSHBACK signal (work-item 039). Sent when a landed DIRECT hit slides `caster_guid`'s in-progress
+/// PUSHBACK signal. Sent when a landed DIRECT hit slides `caster_guid`'s in-progress
 /// timed cast's fire time by `delay_ms` (the module caps this at `CAST_PUSHBACK_MAX` pushbacks per
 /// cast — see `module/src/spell/cast.rs::pushback_cast`); the client visibly slides its cast bar by the
 /// same amount rather than tearing it down (unlike `SMSG_SPELL_FAILURE`/`build_spell_failure`, which
@@ -157,7 +157,7 @@ pub fn build_spell_delayed(caster_guid: u64, delay_ms: u32) -> SMSG_SPELL_DELAYE
 /// Raw body for `SMSG_CAST_RESULT` (0x0130) with result = FAILED: spell_id(u32 LE) + 0x02
 /// (CAST_FAILED) + the 1.12 `CastFailureReason` byte — the client prints the red error line
 /// ("Not enough rage", "You must be behind your target", ...). Raw for the same reason as
-/// `build_cast_result_ok` below (gtker's typed SMSG_CAST_RESULT inverts the status semantics). [040]
+/// `build_cast_result_ok` below (gtker's typed SMSG_CAST_RESULT inverts the status semantics).
 pub fn build_cast_result_failed(spell_id: u32, reason: u8) -> Vec<u8> {
     let mut v = spell_id.to_le_bytes().to_vec();
     v.push(0x02);
@@ -165,7 +165,7 @@ pub fn build_cast_result_failed(spell_id: u32, reason: u8) -> Vec<u8> {
     v
 }
 
-/// Map a module cast-rejection message to the closest 1.12 `CastFailureReason` (040). The module's
+/// Map a module cast-rejection message to the closest 1.12 `CastFailureReason`. The module's
 /// rejections are human strings (not tagged codes), so this is a SUBSTRING map over the stable
 /// phrases in `resolve_cast_at`'s gates — if a gate's wording changes, the worst case is the
 /// generic fallback (0x17 DontReport: red-line-free silent fail, what mangos uses for
@@ -235,7 +235,7 @@ pub fn build_cast_result_ok(spell_id: u32) -> Vec<u8> {
 /// The cast visual (`SMSG_SPELL_GO`). `hit_target == 0` → a self-cast (hits = [caster]): the cast-clear
 /// after a `CMSG_CAST_SPELL`, and the aura-tracer relay. `hit_target != 0` → a shot/bolt landing on that
 /// target (hits = [target]): the per-cast projectile the client renders. `ammo` = `Some((display_id,
-/// inv_type))` sets the AMMO flag so an Auto Shot fires the ARROW graphic (#10); `None` → no flag (wand
+/// inv_type))` sets the AMMO flag so an Auto Shot fires the ARROW graphic; `None` → no flag (wand
 /// bolt / generic spell missile). `cast_item` == `caster` (cmangos convention; 0 is wrong), no misses.
 ///
 /// PROJECTILE FIX: the 5875 client flies a spell's travelling missile (SpellVisual→SpellMissile, e.g.
@@ -272,7 +272,7 @@ pub fn build_spell_go_area(caster_guid: u64, spell_id: u32) -> SMSG_SPELL_GO {
     }
 }
 
-/// `build_spell_go` with an explicit MISS outcome (097): a MISSED ranged auto-shot puts the target in
+/// `build_spell_go` with an explicit MISS outcome: a MISSED ranged auto-shot puts the target in
 /// the GO's `misses` list (SpellMissInfo::Miss) instead of `hits` — the 5875 client renders the white
 /// "Miss" over the target from this list (vanilla shape; a missed shot sends NO damage log). Every
 /// other call site keeps the 4-arg `build_spell_go` (miss = false, byte-identical).
@@ -283,7 +283,7 @@ pub fn build_spell_go_outcome(
     ammo: Option<(u32, u32)>,
     miss: bool,
 ) -> SMSG_SPELL_GO {
-    // [083] A self-cast arrives as hit_target 0 OR the caster's own guid (cast_spell resolves a self-cast
+    // A self-cast arrives as hit_target 0 OR the caster's own guid (cast_spell resolves a self-cast
     // to target_guid = caster). Both write TARGET_FLAG_SELF (the default), NOT TARGET_FLAG_UNIT → caster.
     let is_self_cast = hit_target == 0 || hit_target == caster_guid;
     let hit = if is_self_cast {
@@ -291,7 +291,7 @@ pub fn build_spell_go_outcome(
     } else {
         hit_target
     };
-    // [083] CAST_FLAG_UNKNOWN9 (0x0100) base — every mangos/vmangos SendSpellGo sets it; a ranged shot
+    // CAST_FLAG_UNKNOWN9 (0x0100) base — every mangos/vmangos SendSpellGo sets it; a ranged shot
     // ORs in CAST_FLAG_AMMO (0x20) + the ammo block.
     let flags = match ammo {
         Some((ammo_display_id, ammo_inventory_type)) => SMSG_SPELL_GO_CastFlags::new(
@@ -422,7 +422,7 @@ pub fn build_attacker_state_update(
         }],
         damage_state,
         unknown1: 0,
-        // 0 for a melee swing; the ranged spell (75 Auto Shot / 5019 Shoot) for a ranged shot (#10), so
+        // 0 for a melee swing; the ranged spell (75 Auto Shot / 5019 Shoot) for a ranged shot, so
         // the client attributes the shot to the ability. HitInfo is identical to melee — vanilla has no
         // ranged-specific HitInfo flag.
         spell_id,
@@ -450,7 +450,7 @@ mod tests {
         // an instant cast / cast-clear sends 0.
         assert_eq!(build_spell_start(0xF1, 133, 3500, 0, None).timer, 3500);
         assert_eq!(build_spell_start(0xF1, 133, 0, 0, None).timer, 0);
-        // 097: the ranged-activation START carries the AMMO flag + block and the real unit target.
+        // The ranged-activation START carries the AMMO flag + block and the real unit target.
         let s = build_spell_start(0xF1, 75, 0, 0xBEEF, Some((5996, 24)));
         assert_eq!(
             s.flags
@@ -459,7 +459,7 @@ mod tests {
             Some((5996, 24))
         );
         assert!(s.targets.target_flags.get_unit().is_some());
-        // 097: a MISSED shot's GO carries the target in `misses`, not `hits`.
+        // A MISSED shot's GO carries the target in `misses`, not `hits`.
         let go = build_spell_go_outcome(0xF1, 75, 0xBEEF, Some((5996, 24)), true);
         assert!(go.hits.is_empty());
         assert_eq!(go.misses.len(), 1);
@@ -508,7 +508,7 @@ mod tests {
 
     #[test]
     fn spell_delayed_carries_the_caster_guid_and_delay_ms() {
-        // Cast-pushback signal (work-item 039): SMSG_SPELL_DELAYED addressed to the caster's guid, with
+        // Cast-pushback signal: SMSG_SPELL_DELAYED addressed to the caster's guid, with
         // the delay in ms so the client's cast bar visibly slides. guid is the plain 8-byte caster guid.
         let caster = 0xF130_0000_0000_0007u64;
         let d = build_spell_delayed(caster, 500);
@@ -541,7 +541,7 @@ mod tests {
     }
 }
 
-/// The client-side SPELL-MODIFIER mirror (264): aggregate raw modifier rows `(family_mask, op,
+/// The client-side SPELL-MODIFIER mirror: aggregate raw modifier rows `(family_mask, op,
 /// amount, is_pct)` into one `SMSG_SET_FLAT/PCT_SPELL_MODIFIER` per SET BIT of each op's combined
 /// mask — `eff` is the mask BIT INDEX (0..31) and `value` the TOTAL for that (op, bit), the mangos
 /// SendSpellMod convention. The 5875 client then shortens its own cast bars/tooltips for the

@@ -69,7 +69,7 @@ use wow_world_messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMess
 use wow_world_messages::vanilla::{
     Area,
     BagFamily,
-    // Item binding (work-item 127): "Binds when picked up/equipped" tooltip line.
+    // Item binding: "Binds when picked up/equipped" tooltip line.
     Bonding,
     BuyResult,
     Character,
@@ -91,7 +91,7 @@ use wow_world_messages::vanilla::{
     InventoryType,
     ItemClassAndSubClass,
     ItemDamageType,
-    // Work-item 213: item flags bitmask + bag-type restriction on the query response.
+    // Item flags bitmask + bag-type restriction on the query response.
     ItemFlag,
     ItemQuality,
     ItemSlot,
@@ -145,7 +145,7 @@ use wow_world_messages::vanilla::{
     QuestItemRequirement,
     QuestItemReward,
     Race,
-    // Group loot methods (work-item 187): the need/greed vote enum shared by CMSG_LOOT_ROLL /
+    // Group loot methods: the need/greed vote enum shared by CMSG_LOOT_ROLL /
     // SMSG_LOOT_ROLL / SMSG_LOOT_ROLL_WON.
     RollVote,
     SMSG_CREATURE_QUERY_RESPONSE_found,
@@ -210,7 +210,7 @@ use wow_world_messages::vanilla::{
     SMSG_GOSSIP_MESSAGE,
     SMSG_INITIALIZE_FACTIONS,
     SMSG_INITIAL_SPELLS,
-    // Inspect (work-item 137): ack the target guid so the client opens the paperdoll window.
+    // Inspect: ack the target guid so the client opens the paperdoll window.
     SMSG_INSPECT,
     // Inventory-action failure feedback (equip / move / store / use rejection).
     SMSG_INVENTORY_CHANGE_FAILURE,
@@ -229,15 +229,15 @@ use wow_world_messages::vanilla::{
     SMSG_LOOT_REMOVED,
     SMSG_LOOT_ROLL,
     SMSG_LOOT_ROLL_WON,
-    // Group loot methods (work-item 187 slices 2-4): need/greed rolls + master looter.
+    // Group loot methods: need/greed rolls + master looter.
     SMSG_LOOT_START_ROLL,
     SMSG_MONSTER_MOVE,
     SMSG_NAME_QUERY_RESPONSE,
     SMSG_NEW_WORLD,
     SMSG_NPC_TEXT_UPDATE,
-    // Warlock pet UI (023): the pet action bar + enable state pushed at summon (guid-only form clears).
+    // Warlock pet UI: the pet action bar + enable state pushed at summon (guid-only form clears).
     SMSG_PET_SPELLS,
-    // /played (work-item 029): total/level played-time reply.
+    // /played: total/level played-time reply.
     SMSG_PLAYED_TIME,
     SMSG_QUESTGIVER_OFFER_REWARD,
     SMSG_QUESTGIVER_QUEST_COMPLETE,
@@ -248,9 +248,9 @@ use wow_world_messages::vanilla::{
     // gtker-typed — vanilla-complete, unlike the raw-encoded loot/vendor paths).
     SMSG_QUESTGIVER_STATUS,
     SMSG_QUESTUPDATE_ADD_KILL,
-    // Timed quests + sharing (work-item 194): expiry feedback + the party-share push-result round trip.
+    // Timed quests + sharing: expiry feedback + the party-share push-result round trip.
     SMSG_QUESTUPDATE_FAILEDTIMER,
-    // Resurrection accept-prompt handshake (#014): the offer sent to a dead ally awaiting their
+    // Resurrection accept-prompt handshake: the offer sent to a dead ally awaiting their
     // CMSG_RESURRECT_RESPONSE accept/decline.
     SMSG_RESURRECT_REQUEST,
     // NOTE: `SMSG_SET_FACTION_STANDING`/`FactionStanding` are deliberately absent — gtker writes the
@@ -261,7 +261,7 @@ use wow_world_messages::vanilla::{
     // Floating spell damage number (the per-cast non-melee damage log).
     SMSG_SPELLNONMELEEDAMAGELOG,
     SMSG_SPELL_COOLDOWN,
-    // Cast pushback (work-item 039): the client cast-bar slide signal on a direct-damage pushback hit.
+    // Cast pushback: the client cast-bar slide signal on a direct-damage pushback hit.
     SMSG_SPELL_DELAYED,
     // Cast-interrupt signal: the cast-bar teardown relayed to the caster when its timed cast is cancelled.
     SMSG_SPELL_FAILURE,
@@ -272,10 +272,10 @@ use wow_world_messages::vanilla::{
     // Class trainers: the trainer-window list + buy result + the live learned-spell push (all gtker-typed
     // vanilla — SMSG_TRAINER_LIST IS vanilla-complete in the crate, unlike the raw vendor list).
     SMSG_TRAINER_LIST,
-    // #39: the loud failure — a transfer that cannot proceed must abort the client's loading
+    // The loud failure: a transfer that cannot proceed must abort the client's loading
     // screen, never leave it spinning.
     SMSG_TRANSFER_ABORTED,
-    // Cross-map teleport arrival (work-item 224): loading-screen kickoff + the new-map position.
+    // Cross-map teleport arrival: loading-screen kickoff + the new-map position.
     SMSG_TRANSFER_PENDING,
     SMSG_TUTORIAL_FLAGS,
     // Buff/debuff timer (the UpdateMask aura array has no duration in 1.12 — sent separately).
@@ -287,7 +287,7 @@ use wow_world_messages::Guid;
 #[cfg(test)]
 mod tests;
 
-/// #223: generated-input (property) tests for the hand-rolled decoders — the client-byte parsers
+/// Generated-input (property) tests for the hand-rolled decoders — the client-byte parsers
 /// and the update-mask encode/decode round trip. Kept apart from `tests` because it is a different
 /// kind of assertion (a generated input space, over a fixed seed) and because it also hosts the
 /// seeded generator the logon-framing property test reuses.

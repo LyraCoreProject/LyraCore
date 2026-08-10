@@ -1,4 +1,4 @@
-//! The SHARED area-of-interest dispatch (#468 stage 1) — one set of row callbacks per shard's
+//! The SHARED area-of-interest dispatch — one set of row callbacks per shard's
 //! coordinator connection, routed to sessions through [`WorldIndex`].
 //!
 //! # What replaced what
@@ -11,7 +11,7 @@
 //! After: those four tables ride the coordinator's existing global subscription (one per shard),
 //! the callbacks below are registered ONCE per shard, and [`WorldIndex`] answers "which sessions can
 //! see this row". Every shard's stream feeds ONE index keyed by `(map_id, instance_id, cell)` —
-//! guids are globally unique across databases (#103/#108), so one index spans the whole realm.
+//! guids are globally unique across databases, so one index spans the whole realm.
 //!
 //! # The two rules this file exists to keep
 //!
@@ -34,7 +34,7 @@
 //! ghost gate, and the stealth gate. The security posture is unchanged in kind —
 //! these four tables were already read through an RLS-bypassing owner connection on the
 //! coordinator; what is new is that the gateway, not the subscription engine, decides who sees
-//! them, which is exactly the filtering responsibility #468 names.
+//! them, which is exactly the filtering responsibility the shared-connection model shifted here.
 
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -62,7 +62,7 @@ pub(crate) struct Viewer {
     /// down and calls `subscribe_player_events` again, which builds a fresh viewer.
     pub(crate) map_id: u32,
     /// The partition this session is playing in — supplied by the caller (login row / transfer
-    /// plan), never re-read from a cache. #456's lesson: the authoritative value is known at
+    /// plan), never re-read from a cache. The lesson: the authoritative value is known at
     /// construction, and a second possibly-stale copy can only disagree with it.
     pub(crate) instance_id: u64,
     pub(crate) tx: SessionTx,
@@ -70,20 +70,19 @@ pub(crate) struct Viewer {
     pub(crate) created: Arc<Mutex<HashSet<u64>>>,
     pub(crate) gates: Arc<ViewerGates>,
     /// PLAYER_SKILL_INFO slot map `(skill_line → slot, next_free)` — seeded at login from the same
-    /// deterministic layout the CREATE used (#468 4c family 3). Shared with the per-player skill
+    /// deterministic layout the CREATE used. Shared with the per-player skill
     /// relays exactly like `created`/`gates`: one instance, whichever leg the flag picks.
     pub(crate) skill_slots: Arc<Mutex<(HashMap<u32, u8>, u8)>>,
-    /// #480: this viewer's motion-coalescing buffer. Shared-dispatch-only state (no per-player
+    /// This viewer's motion-coalescing buffer. Shared-dispatch-only state (no per-player
     /// twin), so it is constructed inline and pinned by no tripwire.
     pub(crate) motion_pending: Arc<MotionPending>,
 }
 
-/// #480 dense-crowd coalescing: the pump UPSERTS the latest motion row per mover here and queues
+/// Dense-crowd coalescing: the pump UPSERTS the latest motion row per mover here and queues
 /// at most ONE flush job per viewer; a superseded heartbeat dies in the map instead of living as a
 /// queued job. A viewer needs only the LATEST position of each mover per flush — with N movers in
 /// a cell the per-viewer queue cost is now O(distinct movers), not O(heartbeats), which is the
-/// difference between a packed cell starving logins and not (the measured dense-500 numbers on
-/// #480).
+/// difference between a packed cell starving logins and not (the measured dense-500 numbers).
 #[derive(Default)]
 pub(crate) struct MotionPending {
     pub(crate) entity: Mutex<HashMap<u64, Arc<EntityMotion>>>,
@@ -254,7 +253,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         });
     }
 
-    // ---- game_roll_event (#468 stage 4c, family 1) -----------------------------------------
+    // ---- game_roll_event -------------------------------------------------------------------
     // /roll broadcast. Flag-gated: with LYRACORE_SHARED_CALLS off the per-player relay in
     // `subscribe_player_events` is the delivery path and registering here too would double-send
     // every roll to every session.
@@ -265,7 +264,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         });
     }
 
-    // ---- game_rest_state_event (#468 stage 4c, family 2) -----------------------------------
+    // ---- game_rest_state_event --------------------------------------------------------------
     // Rest-state flips (zzz + blue XP bar). Self-only relay; same flag gate as every 4c family.
     if crate::config::shared_calls_enabled() {
         let view = view.clone();
@@ -276,7 +275,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         });
     }
 
-    // ---- game_dynamic_object (#468 stage 4c, family 5) -------------------------------------
+    // ---- game_dynamic_object -----------------------------------------------------------------
     // Ground-area spell visuals. Shard broadcast, instance-gated per viewer on insert; the
     // delete leg is ungated, matching the per-player relay byte for byte.
     if crate::config::shared_calls_enabled() {
@@ -298,7 +297,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         }
     }
 
-    // ---- game_corpse (#468 stage 4c, family 6) ---------------------------------------------
+    // ---- game_corpse --------------------------------------------------------------------------
     // Player corpses. Shard broadcast, instance-gated per viewer on insert/update (the
     // body→bones re-CREATE); the delete leg is ungated, matching the per-player relay.
     if crate::config::shared_calls_enabled() {
@@ -322,7 +321,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         }
     }
 
-    // ---- game_combat_event (#468 stage 4c, family 7) ---------------------------------------
+    // ---- game_combat_event --------------------------------------------------------------------
     // Melee/ranged swing log. Shard broadcast; the created-set visibility gate runs inside the
     // job (`combat_event_outbound`), per viewer.
     if crate::config::shared_calls_enabled() {
@@ -334,7 +333,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         });
     }
 
-    // ---- game_melee_attack (#468 stage 4c, family 8) ---------------------------------------
+    // ---- game_melee_attack --------------------------------------------------------------------
     // Combat stance (ATTACKSTART/STOP + the owner-only ranged CANCEL_AUTO_REPEAT).
     if crate::config::shared_calls_enabled() {
         {
@@ -355,7 +354,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         }
     }
 
-    // ---- game_resurrect_request / game_whisper_event / game_group_event (#468 4c, 15–17) ---
+    // ---- game_resurrect_request / game_whisper_event / game_group_event -----------------------
     // The PRIVATE tier: every row is addressed to exactly one recipient, and on this feed the
     // gateway owns the guarantee RLS used to give. Delivery is recipient-keyed (the owner-session
     // lookup) + the explicit `private_recipient_audience` predicate — never a viewer fan.
@@ -387,7 +386,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         }
     }
 
-    // ---- game_aura (#468 stage 4c, family 14) ----------------------------------------------
+    // ---- game_aura ------------------------------------------------------------------------------
     // The aura composite: array sync (visibility-gated), self-only duration/run-speed/armor,
     // and the stealth HIDE/REVEAL transitions. The A_STEALTH count is computed HERE on the pump,
     // where this connection's cache is exactly post-change; everything else runs in the job.
@@ -436,7 +435,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         }
     }
 
-    // ---- game_spell_cast_event / game_spell_impact_event (#468 4c, families 12/13) ---------
+    // ---- game_spell_cast_event / game_spell_impact_event --------------------------------------
     // Cast visuals (the full cast-lock contract, per viewer) + deferred projectile impact logs.
     if crate::config::shared_calls_enabled() {
         {
@@ -457,7 +456,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         }
     }
 
-    // ---- game_emote_event / game_chat_event / game_channel_event (#468 4c, families 9–11) --
+    // ---- game_emote_event / game_chat_event / game_channel_event ------------------------------
     // The social tier. Emotes broadcast; say/yell range-gate per viewer; channel lines
     // membership-gate per viewer — each inside the job, via the shared bodies.
     if crate::config::shared_calls_enabled() {
@@ -490,7 +489,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         }
     }
 
-    // ---- game_player_skill (#468 stage 4c, family 3) ---------------------------------------
+    // ---- game_player_skill ----------------------------------------------------------------------
     // Live skill pane. Self-only relay; insert (line learned) and update (skill-up) run the same
     // body against the viewer's own slot map.
     if crate::config::shared_calls_enabled() {
@@ -553,7 +552,7 @@ fn entity_appeared(view: &WorldView, shard: ShardId, row: &WorldEntity) {
 /// A row changed. Three audiences, decided from the cell delta:
 ///
 /// * sessions that can see the NEW cell get the same "create if unseen, else diff" treatment the
-///   per-player `on_update` gave them (work-item 144's re-entry-as-update branch, unchanged);
+///   per-player `on_update` gave them (the re-entry-as-update branch, unchanged);
 /// * sessions that could see the OLD cell but not the new one get a DESTROY — the packet the SDK
 ///   used to produce as an `on_delete` when a row left a box;
 /// * nobody else is touched.
@@ -712,7 +711,7 @@ fn motion(view: &WorldView, row: &EntityMotion) {
         if viewer.self_guid == row.guid {
             continue;
         }
-        // #480: SUPERSEDE, don't append — the viewer needs only this mover's latest position, so
+        // SUPERSEDE, don't append — the viewer needs only this mover's latest position, so
         // the upsert replaces any not-yet-flushed heartbeat from the same mover and the queue
         // carries at most one flush job regardless of crowd size.
         viewer
@@ -732,7 +731,7 @@ fn creature_leg(view: &WorldView, row: &CreatureSpline) {
         let Some(viewer) = view.viewer(session) else {
             continue;
         };
-        // #480: same supersession as player motion — latest leg per creature wins.
+        // Same supersession as player motion — latest leg per creature wins.
         viewer
             .motion_pending
             .creature
@@ -743,7 +742,7 @@ fn creature_leg(view: &WorldView, row: &CreatureSpline) {
     }
 }
 
-/// Queue this viewer's ONE motion-flush job, unless one is already queued (#480). The egress shed
+/// Queue this viewer's ONE motion-flush job, unless one is already queued. The egress shed
 /// decision keeps its pump-side, one-atomic-load shape (task B2's contract): a shed drops the
 /// FLUSH — the pending map keeps superseding meanwhile, the flag resets so a later heartbeat
 /// retries, and nothing is stranded.
@@ -793,7 +792,7 @@ fn maybe_queue_motion_flush(_view: &WorldView, viewer: &Arc<Viewer>) {
 }
 
 // ===============================================================================================
-//  Non-spatial family dispatch (#468 stage 4c)
+//  Non-spatial dispatch (shared-call path)
 // ===============================================================================================
 
 /// Every viewer a shard-broadcast family may reach: the sessions whose characters `shard`'s
@@ -908,7 +907,7 @@ fn corpse_appeared(view: &WorldView, shard: ShardId, row: &Corpse) {
 }
 
 /// A corpse's state changed (body → bones decay) → re-emit the CREATE so the client re-renders it,
-/// same instance gate as the insert leg (190 slice 2 — the re-emit must not leak either).
+/// same instance gate as the insert leg (the re-emit must not leak across instances either).
 fn corpse_changed(view: &WorldView, shard: ShardId, row: &Corpse) {
     let row = Arc::new(row.clone());
     for viewer in viewers_on_shard(view, shard) {
@@ -1295,7 +1294,7 @@ pub(crate) fn recenter(view: &WorldView, viewer: &Arc<Viewer>, map_id: u32, x: f
 
 /// The world-entry sweep: offer every row already inside the fresh viewer's box.
 ///
-/// A subscription's first apply never reliably fired per-row `on_insert` (work-item 145), which is
+/// A subscription's first apply never reliably fired per-row `on_insert`, which is
 /// why the per-player path had a sweep too; here there is no apply at all — the rows were already
 /// resident in the coordinator caches long before this session existed — so the sweep is not a
 /// belt-and-braces measure, it is the ONLY thing that populates a fresh client's world.

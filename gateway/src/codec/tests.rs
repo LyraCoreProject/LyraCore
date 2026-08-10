@@ -6,7 +6,7 @@ use super::*;
 // Only the loot byte-match test needs gtker's typed loot response (the runtime path is raw).
 use wow_world_messages::vanilla::ServerMessage;
 use wow_world_messages::vanilla::{SMSG_LOOT_RESPONSE_LootMethod, SMSG_LOOT_RESPONSE};
-// Group loot methods (work-item 187): the vote-kind byte constants + wire RollVote enum.
+// Group loot methods: the vote-kind byte constants + wire RollVote enum.
 use lyracore_shared::loot_roll::vote_kind;
 use wow_world_messages::vanilla::RollVote;
 
@@ -34,7 +34,7 @@ fn warrior_entity() -> EntityView {
     }
 }
 
-/// Reputation relay (#13): a known faction id maps to its `Faction` enum value and the signed standing
+/// Reputation relay: a known faction id maps to its `Faction` enum value and the signed standing
 /// survives the wire `u32` bit-cast (the client reads it back as `i32`); an unknown faction id yields
 /// `None` so the relay skips silently instead of sending garbage.
 #[test]
@@ -427,7 +427,7 @@ fn loot_response_item_layout_is_full_vanilla() {
     assert_eq!(it[21], 0, "slot_type = TypeAllowLoot");
 }
 
-// ---- Group loot methods (work-item 187 slices 2-4) — codec pins for the roll messages ----
+// ---- Group loot methods — codec pins for the roll messages ----
 
 #[test]
 fn loot_start_roll_carries_the_countdown_and_item() {
@@ -490,7 +490,7 @@ fn loot_roll_won_carries_the_winner_roll_and_winning_tier() {
     assert_eq!(m.winning_player.guid(), 55);
     assert_eq!(m.winning_roll, 96);
     assert_eq!(m.vote, RollVote::Need);
-    // A greed-only contest reports Greed — the tier is threaded, not hardcoded (187 review #3).
+    // A greed-only contest reports Greed — the tier is threaded, not hardcoded.
     let g = build_loot_roll_won(0xF130_0000_0000_0007, 3, 1234, 55, 42, vote_kind::GREED);
     assert_eq!(g.vote, RollVote::Greed);
 }
@@ -509,7 +509,7 @@ fn loot_master_list_carries_every_eligible_guid() {
     assert!(!buf.is_empty());
 }
 
-// ---- Money-loot split (work-item 221) — codec pin for the MONEY_SHARE relay ----
+// ---- Money-loot split — codec pin for the MONEY_SHARE relay ----
 
 #[test]
 fn loot_money_notify_carries_the_share_not_a_hardcoded_total() {
@@ -613,7 +613,7 @@ fn corpse_create_is_a_corpse_object_with_race_in_bytes1() {
 #[test]
 fn corpse_create_object_flags_bones_state_work_item_201() {
     // A live body carries CORPSE_FLAG_UNK2 (0x04, what every real vanilla body sends); once the body
-    // has decayed to bones (`Corpse::is_bones`, work-item 201), the object should instead carry
+    // has decayed to bones (`Corpse::is_bones`), the object should instead carry
     // CORPSE_FLAG_BONE (0x01) so a real client renders bare bones instead of the dead body.
     // UNVERIFIED-until-observed — no live client has confirmed this bit actually drives the bones
     // render; the flag mapping is inferred from mangos' `CORPSE_FLAG_BONE` naming.
@@ -675,7 +675,7 @@ fn corpse_query_found_carries_position_else_not_found() {
 
 #[test]
 fn resurrect_request_names_the_caster_and_flags_player() {
-    // #014: the offer must name the CASTER (the client's "<Name> requests to resurrect you" prompt)
+    // The offer must name the CASTER (the client's "<Name> requests to resurrect you" prompt)
     // and echo the caster's guid — the dead target answers CMSG_RESURRECT_RESPONSE against THIS guid,
     // not their own. `player` is always true (the module only ever offers this to a player target).
     let msg = build_resurrect_request(42, "Priestly".to_string());
@@ -818,7 +818,7 @@ fn attacker_state_update_maps_hit_info_discriminant() {
     assert_eq!(block.damage_state, 4);
     assert_eq!(block.total_damage, 5);
     assert_eq!(block.blocked_amount, 25);
-    // Ranged (#10): a normal shot carries its spell id (75 Auto Shot) in spell_id so the client attributes
+    // Ranged: a normal shot carries its spell id (75 Auto Shot) in spell_id so the client attributes
     // it to the ability; HitInfo is identical to a melee normal hit (vanilla has no ranged HitInfo flag).
     let ranged = build_attacker_state_update(1, 2, 9, 0, 0, 75);
     assert_eq!(ranged.spell_id, 75);
@@ -1200,7 +1200,7 @@ fn movement_info_cases() -> Vec<(&'static str, MovementInfo)> {
     ]
 }
 
-/// **Work-item 286's load-bearing premise, asserted rather than argued.** The peer-motion relay no
+/// **The peer-motion relay's load-bearing premise, asserted rather than argued.** The peer-motion relay no
 /// longer decodes `game_entity_motion.movement_info` and re-encodes it through gtker; it writes a
 /// packed guid and memcpys the stored block. That is only safe if the resulting `(opcode, body)` is
 /// what `build_movement_relay` + gtker's own serializer produced — a wrong layout here does not
@@ -1318,7 +1318,7 @@ fn worn_shortsword() -> ItemTemplateView {
         entry: 25,
         class: 2,    // Weapon
         subclass: 7, // Sword (one-hand)
-        sheath: 3,   // the REAL dump value for entry 25 (113: hip posture on the live client)
+        sheath: 3,   // the REAL dump value for entry 25 (hip posture on the live client)
         name: "Worn Shortsword".to_string(),
         display_id: 1542,
         quality: 0,         // Poor
@@ -1356,13 +1356,13 @@ fn blackrock_gauntlets() -> ItemTemplateView {
         max_stack: 1,
         stat_armor: 105,
         stat_strength: 3,
-        bonding: 2, // Bind on Equip (BoE) — greens/blues at 1-10 bind when worn (work-item 127)
+        bonding: 2, // Bind on Equip (BoE) — greens/blues at 1-10 bind when worn
         ..Default::default()
     }
 }
 
 /// A hand-authored BoP (Bind on Pickup) template — a quest reward / starter-kit analogue — so the
-/// `bonding=1` wire value is pinned independently of the BoE fixture above (work-item 127).
+/// `bonding=1` wire value is pinned independently of the BoE fixture above.
 fn bound_on_pickup_relic() -> ItemTemplateView {
     ItemTemplateView {
         entry: 90001,
@@ -1405,7 +1405,7 @@ fn item_query_response_maps_worn_shortsword_and_serializes() {
             assert_eq!(found.inventory_type, InventoryType::WeaponMainHand);
             assert_eq!(found.max_durability, 20);
             assert_eq!(found.item_level, Level::new(2));
-            // 113: the per-item dump value rides through (wire 3) instead of the old blanket
+            // The per-item dump value rides through (wire 3) instead of the old blanket
             // MainHand — gtker NAMES it LargeWeaponLeft, but the value is what the client reads.
             assert_eq!(found.sheathe_type, SheatheType::LargeWeaponLeft);
             assert_eq!(found.sheathe_type.as_int(), 3);
@@ -1423,7 +1423,7 @@ fn item_query_response_maps_worn_shortsword_and_serializes() {
 #[test]
 fn item_query_response_armor_and_stats_reach_wire() {
     // Pins that stat_armor and equip stats are NOT zeroed out by the codec path — the fix for
-    // work-item #050 (ItemTemplateView dropped stat/armor/block columns). Serialize + read back
+    // ItemTemplateView having dropped the stat/armor/block columns. Serialize + read back
     // through the opcode so the full round-trip is verified.
     use wow_world_messages::vanilla::ItemStatType;
     let t = blackrock_gauntlets();
@@ -1459,8 +1459,8 @@ fn item_query_response_armor_and_stats_reach_wire() {
     }
 }
 
-/// Item binding (work-item 127): a BoP template's item query carries `bonding=1` (Bonding::PickUp)
-/// over the wire — the "Done when" criterion for the work item, pinned as a serialize+read round-trip
+/// Item binding: a BoP template's item query carries `bonding=1` (Bonding::PickUp)
+/// over the wire — the "Done when" criterion for the feature, pinned as a serialize+read round-trip
 /// like the other item-query tests, independent of the BoE fixture above.
 #[test]
 fn item_query_response_bop_template_carries_bonding_pickup() {
@@ -1481,7 +1481,7 @@ fn item_query_response_bop_template_carries_bonding_pickup() {
     }
 }
 
-/// The default (unbound) template — every existing item before this work item — must still carry
+/// The default (unbound) template — every item that predates these columns — must still carry
 /// `bonding=0` (NoBind), baseline-safe: an unbound item's tooltip renders no binding line.
 #[test]
 fn item_query_response_default_bonding_is_no_bind() {
@@ -1499,7 +1499,7 @@ fn item_query_response_default_bonding_is_no_bind() {
     }
 }
 
-/// A hand-authored resist ring exercising every work-item 213 column at once: 6 resistances, spell
+/// A hand-authored resist ring exercising every one of these item-query columns at once: 6 resistances, spell
 /// slots 3-5, the skill/reputation gates, maxcount/flags/page_text/startquest/bag_family. Mirrors
 /// a real vanilla "... of Fire Resistance" ring.
 fn ring_of_fire_resistance() -> ItemTemplateView {
@@ -1542,7 +1542,7 @@ fn ring_of_fire_resistance() -> ItemTemplateView {
     }
 }
 
-/// Work-item 213 "free gateway win": the resistances, spells 3-5, skill/rep gates, and
+/// The "free gateway win" columns: the resistances, spells 3-5, skill/rep gates, and
 /// maxcount/flags/page_text/startquest/bag_family the item-query response already had wire slots
 /// for (previously hardcoded 0/default) now carry the template's real values end-to-end through a
 /// serialize+read round-trip.
@@ -1601,9 +1601,9 @@ fn item_query_response_carries_the_work_item_213_columns() {
     }
 }
 
-/// The default (all-zero) template — every existing item before this work item — keeps every new
-/// work-item 213 wire field at its default/empty value: baseline-safe, byte-identical to the
-/// pre-213 response shape.
+/// The default (all-zero) template — every item that predates these columns — keeps every new
+/// item-query wire field at its default/empty value: baseline-safe, byte-identical to the
+/// response shape before these columns existed.
 #[test]
 fn item_query_response_default_template_keeps_the_work_item_213_columns_zero() {
     let t = worn_shortsword(); // every new field left at its ..Default::default() value (0)
@@ -1717,7 +1717,7 @@ fn player_create_seeds_inventory_slot_descriptor() {
 
 #[test]
 fn skill_block_reads_learned_rows_override_and_append() {
-    // 061: a learned row for a line already in the static class base (Defense 95) OVERRIDES it, a
+    // A learned row for a line already in the static class base (Defense 95) OVERRIDES it, a
     // learned profession (Mining 186) APPENDS at its real current/max, an unknown line id is
     // skipped, and the old Cooking fixture is GONE unless actually learned.
     let msg = build_create_object(
@@ -1878,9 +1878,9 @@ fn gossip_message_echoes_guid_with_a_greeting_option() {
     assert_eq!(both.gossips[i1].id, i1 as u32);
 }
 
-/// Byte-parity pin (work-item 217): passing `None` (the pre-217 call shape) must produce EXACTLY the
+/// Byte-parity pin: passing `None` (the pre-import call shape) must produce EXACTLY the
 /// same gossip window as before the option-import feature existed — the fallback path must never
-/// silently diverge from the pre-217 vendor/innkeeper synthesis.
+/// silently diverge from the pre-import vendor/innkeeper synthesis.
 #[test]
 fn gossip_message_fallback_is_byte_identical_to_pre_217() {
     let guid = 0xF130_0000_0000_0042u64;
@@ -1890,7 +1890,7 @@ fn gossip_message_fallback_is_byte_identical_to_pre_217() {
         none_path, empty_slice_path,
         "None and an empty imported slice must render identically"
     );
-    assert_eq!(none_path.gossips.len(), 3); // vendor + innkeeper + Farewell, exactly as pre-217
+    assert_eq!(none_path.gossips.len(), 3); // vendor + innkeeper + Farewell, exactly as pre-import
     assert_eq!(
         none_path.gossips[0].message,
         "I'd like to browse your goods."
@@ -1901,7 +1901,7 @@ fn gossip_message_fallback_is_byte_identical_to_pre_217() {
 
 #[test]
 fn gossip_message_imported_options_take_precedence_and_get_a_trailing_farewell() {
-    // An imported innkeeper NPC (217's acceptance criterion): browse goods + make-home + chat options,
+    // An imported innkeeper NPC: browse goods + make-home + chat options,
     // rendered VERBATIM from the dump (not the hardcoded fallback strings) — the vendor/innkeeper flags
     // are ignored entirely once options are imported.
     let opts = vec![
@@ -1972,7 +1972,7 @@ fn option_condition_holds_gates_on_quest_status_and_fails_open_for_unknown_types
 
 #[test]
 fn cast_result_failed_body_and_reason_map() {
-    // 040: the raw failure body is spell(u32 LE) + 0x02 (CAST_FAILED) + the CastFailureReason byte.
+    // The raw failure body is spell(u32 LE) + 0x02 (CAST_FAILED) + the CastFailureReason byte.
     assert_eq!(
         build_cast_result_failed(100, 0x4D),
         vec![100, 0, 0, 0, 0x02, 0x4D]
@@ -2120,7 +2120,7 @@ fn npc_text_update_carries_the_greeting_in_slot_0() {
     assert_eq!(t2.texts[0].probability, 1.0);
 }
 
-/// Work-item 217: all 8 weighted slots ship verbatim (male/female/probability each), not just slot 0 —
+/// All 8 weighted slots ship verbatim (male/female/probability each), not just slot 0 —
 /// the CLIENT does the weighted pick, so the server must never collapse this to a single string.
 #[test]
 fn npc_text_update_ships_every_populated_slot_with_its_own_probability() {
@@ -2603,7 +2603,7 @@ fn login_sequence_folds_reputation_by_index_and_ignores_out_of_range_slots() {
         factions.factions[63].standing as i32, -250,
         "a negative standing bit-cast through u32"
     );
-    // 195 slice B: the persisted At-War checkbox rides the flag byte — VISIBLE|AT_WAR (0x03) on the
+    // The persisted At-War checkbox rides the flag byte — VISIBLE|AT_WAR (0x03) on the
     // flagged slot, empty everywhere else (a false at_war never writes flags).
     assert!(
         factions.factions[63].flag.is_at_war(),
@@ -2625,11 +2625,11 @@ fn login_sequence_folds_reputation_by_index_and_ignores_out_of_range_slots() {
     }
 }
 
-// ---- work-item 212: imported action-bar rows vs. the synth fallback ----------------------------
+// ---- Imported action-bar rows vs. the synth fallback ----------------------------
 
 /// The BYTE-IDENTICAL synth fallback pin: with NO `game_player_action` rows (pre-import, the state
 /// every existing deployment is in today), the action bar must build EXACTLY as it did before this
-/// work item — Attack (6603) in slot 0, then each known spell, zeros elsewhere. This is a regression
+/// feature — Attack (6603) in slot 0, then each known spell, zeros elsewhere. This is a regression
 /// pin on `login_sequence_dedupes_known_spells_and_builds_the_action_bar` above (same fixture, spelled
 /// out again here so a future edit to the imported-bar branch can't silently start also touching the
 /// fallback branch it must leave alone).
@@ -2944,7 +2944,7 @@ fn teleport_ack_carries_target_position_with_no_movement_flags() {
     assert!(!buf.is_empty());
 }
 
-// ---- Work-item 224: cross-map teleport wire pins (SMSG_TRANSFER_PENDING / SMSG_NEW_WORLD) --------
+// ---- Cross-map teleport wire pins (SMSG_TRANSFER_PENDING / SMSG_NEW_WORLD) --------
 
 #[test]
 fn cross_map_teleport_sends_transfer_pending_then_new_world_carrying_target_map_and_position() {
@@ -3090,7 +3090,7 @@ fn item_create_object_bag_slots_build_a_container_with_num_slots() {
 
 #[test]
 fn corpse_create_object_falls_back_to_display_49_when_zero() {
-    // Defensive floor against the trap-#3 null-model crash: display_id 0 must never reach the wire —
+    // Defensive floor against a null-model crash: display_id 0 must never reach the wire —
     // fall back to 49 (Human Male) rather than let the client dereference a null model.
     let corpse = CorpseView {
         guid: 1,
@@ -3200,12 +3200,13 @@ fn visible_item_values_render_and_clear_equipment_slots_only_work_item_087() {
 }
 
 // ===========================================================================================
-//  Issue #209: "SMSG_COMPRESSED_MOVES corrupts at crowd scale" — negative-finding regression pin.
+//  "SMSG_COMPRESSED_MOVES corrupts at crowd scale" — negative-finding regression pin against that
+//  report.
 //
 //  The gateway does not construct `SMSG_COMPRESSED_MOVES` anywhere (nothing in `gateway/src` builds
 //  it, and `git log -S "COMPRESSED_MOVES" --all` finds no commit that ever did) — the movement paths
 //  actually in use are `SMSG_MONSTER_MOVE` (typed, one per creature leg) and the raw `MSG_MOVE_*`
-//  peer relay (`codec::build_movement_relay_raw`, work-item 286), both pinned at crowd scale in
+//  peer relay (`codec::build_movement_relay_raw`), both pinned at crowd scale in
 //  `world::tests::writer_thread_survives_movement_bursts_from_100_to_500_movers_without_desync`.
 //
 //  This test instead pins `wow_world_messages` 0.3's OWN codec for the opcode the issue names, since
@@ -3213,7 +3214,7 @@ fn visible_item_values_render_and_clear_equipment_slots_only_work_item_087() {
 //  lives entirely inside that dependency. Sweeping 1..3000 movers finds NO corruption — the codec
 //  round-trips cleanly the whole way; it only silently truncates its own u16 size field in the
 //  thousands-of-movers range (see the ignored `_finds_the_actual_gtker_wrap_threshold` case below),
-//  an order of magnitude past anything #209 reports. So whatever produced the reported crash, it was
+//  an order of magnitude past anything the report describes. So whatever produced the reported crash, it was
 //  not this codec misbehaving at 150-300 movers — that theory is pinned FALSE here, permanently.
 fn compressed_move_for(i: u64) -> wow_world_messages::vanilla::CompressedMove {
     use wow_world_messages::vanilla::{
@@ -3276,7 +3277,7 @@ fn compressed_moves_roundtrip(n: usize) -> Result<usize, String> {
 fn compressed_moves_codec_roundtrips_cleanly_from_1_to_3000_movers() {
     // 100 = the report's own "clean" control; 150/200/300 = the reported-bad range; 500/1000/3000 =
     // margin well past it. Every one of these must decode back to exactly the mover count it encoded
-    // — if any of them failed, that would BE the #209 encode bug, in the one place it could live.
+    // — if any of them failed, that would BE the reported encode bug, in the one place it could live.
     for n in [1usize, 10, 50, 100, 150, 200, 300, 500, 1000, 3000] {
         match compressed_moves_roundtrip(n) {
             Ok(decoded) => assert_eq!(
@@ -3285,7 +3286,7 @@ fn compressed_moves_codec_roundtrips_cleanly_from_1_to_3000_movers() {
             ),
             Err(e) => panic!(
                 "n={n}: SMSG_COMPRESSED_MOVES failed to round-trip through wow_world_messages' own \
-                 codec — this WOULD be the #209 encode defect, found at n={n}: {e}"
+                 codec — this WOULD be the reported encode defect, found at n={n}: {e}"
             ),
         }
     }
@@ -3294,7 +3295,7 @@ fn compressed_moves_codec_roundtrips_cleanly_from_1_to_3000_movers() {
 #[test]
 #[ignore = "slow (builds/compresses ~10k CompressedMove blocks); run explicitly to see the u16 wrap \
             threshold this crate's SMSG_COMPRESSED_MOVES::write_encrypted_server has — informational, \
-            not a #209 regression guard (that opcode is never sent at this scale, or at all)"]
+            not a regression guard for that report (that opcode is never sent at this scale, or at all)"]
 fn compressed_moves_codec_wraps_its_u16_size_field_only_far_past_reported_scale() {
     // Documents WHERE the real (latent, currently-unreachable) limit is: `write_encrypted_server`
     // computes `size = v.len().saturating_sub(2) as u16`, which silently truncates once the encoded
@@ -3307,12 +3308,12 @@ fn compressed_moves_codec_wraps_its_u16_size_field_only_far_past_reported_scale(
             _ => {
                 println!(
                     "wrap threshold: clean through n={last_clean}, corrupted by n={n} — both are \
-                     roughly two orders of magnitude past #209's reported 150-300 mover range"
+                     roughly two orders of magnitude past the reported 150-300 mover range"
                 );
                 assert!(
                     n > 5000,
                     "the wrap threshold moved to n={n}, uncomfortably close to a scale this repo \
-                     actually benchmarks (docs/bench 300+ mover raids) — worth re-checking #209"
+                     actually benchmarks (docs/bench 300+ mover raids) — worth re-checking against the original report"
                 );
                 return;
             }

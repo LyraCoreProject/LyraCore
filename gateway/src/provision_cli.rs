@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(password.as_ref(), "PASS WORD");
     }
 
-    /// #223 — a `Read` that returns `Interrupted` (EINTR) before yielding data. Stdin is a real fd
+    /// A `Read` that returns `Interrupted` (EINTR) before yielding data. Stdin is a real fd
     /// and a signal during `read(2)` is ordinary, not exotic: any signal the process takes while an
     /// operator is still typing lands here. The reader retries rather than failing, and the retry
     /// must not consume, duplicate or drop a byte.
@@ -238,7 +238,7 @@ mod tests {
         );
     }
 
-    /// PROPERTY (#223): whatever bytes arrive on stdin, `read_password_line` returns — never panics,
+    /// PROPERTY: whatever bytes arrive on stdin, `read_password_line` returns — never panics,
     /// and never yields more than the bound it advertises. It runs before any validation, on input
     /// nobody has checked, and it does its own manual buffer arithmetic (a hand-rolled byte loop
     /// with a capacity reservation and a CR fixup), which is exactly the shape that hides an
