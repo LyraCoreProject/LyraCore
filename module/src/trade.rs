@@ -18,15 +18,16 @@ use lyracore_shared::trade::event_kind;
 use crate::helpers::{player_interaction_gate, PlayerInteractionDenied};
 use crate::{
     game_character_contact, game_faction_template, game_item_instance, game_item_template,
-    WorldEntity,
+    game_world_entity, WorldEntity,
 };
 
 /// One Trade Session per player PAIR — and at most one per player, in either seat (the
 /// one-session-per-player invariant, enforced by [`initiate_verdict`]'s busy check). `open` is the
 /// handshake state: false = proposed (`BeginTrade` sent, window not yet open), true = both windows
-/// open. The accept flags and gold offers are #122's Trade Commit state, landed with the table so
-/// the bindings/schema chore runs once (they stay false/0 until then). Private — clients see trade
-/// state only through [`TradeEvent`]. Reaped on idle by #123; torn down on logout here. [entity]
+/// open. The accept flags and per-seat gold are the Trade Commit's state (#122): both true runs
+/// [`run_trade_commit`]; any offer mutation clears both ([`reset_accepts`]). Private — clients see
+/// trade state only through [`TradeEvent`]. Reaped on idle (#123, `gc.rs`); torn down on logout,
+/// death, and transfer. [entity]
 #[table(accessor = game_trade_session,
         index(accessor = by_initiator, btree(columns = [initiator_guid])),
         index(accessor = by_target, btree(columns = [target_guid])))]
@@ -162,6 +163,22 @@ fn remove_session(ctx: &ReducerContext, session: &TradeSession) {
     ctx.db.game_trade_session().id().delete(session.id);
 }
 
+/// A player-interaction-gate refusal as its wire kind — shared by the initiate verdict and the
+/// commit-time re-validation (#122), so the two moments can never name the same failure
+/// differently.
+pub(crate) fn gate_refusal_kind(denied: PlayerInteractionDenied) -> u8 {
+    match denied {
+        PlayerInteractionDenied::ActorDead => event_kind::YOU_DEAD,
+        PlayerInteractionDenied::NoTarget | PlayerInteractionDenied::TargetNotPlayer => {
+            event_kind::NO_TARGET
+        }
+        PlayerInteractionDenied::TargetDead => event_kind::TARGET_DEAD,
+        PlayerInteractionDenied::DifferentPartition | PlayerInteractionDenied::OutOfRange => {
+            event_kind::TARGET_TO_FAR
+        }
+    }
+}
+
 /// The pure initiate decision (the transfer-harness lesson: decisions pure, reducers thin): the
 /// player-interaction gate's answer + the faction and busy probes → the refusal `event_kind` the
 /// INITIATOR is told, or `Ok` to propose. Check order is pinned by the test below: gate refusals
@@ -174,16 +191,7 @@ pub(crate) fn initiate_verdict(
     target_busy: bool,
 ) -> Result<(), u8> {
     if let Err(denied) = gate {
-        return Err(match denied {
-            PlayerInteractionDenied::ActorDead => event_kind::YOU_DEAD,
-            PlayerInteractionDenied::NoTarget | PlayerInteractionDenied::TargetNotPlayer => {
-                event_kind::NO_TARGET
-            }
-            PlayerInteractionDenied::TargetDead => event_kind::TARGET_DEAD,
-            PlayerInteractionDenied::DifferentPartition | PlayerInteractionDenied::OutOfRange => {
-                event_kind::TARGET_TO_FAR
-            }
-        });
+        return Err(gate_refusal_kind(denied));
     }
     // The AUTO-decline half of ignore (#123): the target never sees a proposal from someone they
     // ignore — the server answers IgnoreYou at initiate time (the whisper-drop precedent). The
@@ -342,6 +350,30 @@ fn push_offer_events(ctx: &ReducerContext, session: &TradeSession, offerer_guid:
     push_trade_event_payload(ctx, partner, event_kind::OFFER_PARTNER, offerer_guid, payload);
 }
 
+/// The accept-reset rule's impure half (#122): if either party had accepted, clear BOTH flags
+/// and tell both windows `BackToTrade`. Returns the (possibly updated) session copy.
+fn reset_accepts(ctx: &ReducerContext, mut session: TradeSession) -> TradeSession {
+    if !mutation_clears_accepts(session.initiator_accepted, session.target_accepted) {
+        return session;
+    }
+    session.initiator_accepted = false;
+    session.target_accepted = false;
+    let session = ctx.db.game_trade_session().id().update(session);
+    push_trade_event(
+        ctx,
+        session.initiator_guid,
+        event_kind::BACK_TO_TRADE,
+        session.target_guid,
+    );
+    push_trade_event(
+        ctx,
+        session.target_guid,
+        event_kind::BACK_TO_TRADE,
+        session.initiator_guid,
+    );
+    session
+}
+
 /// `CMSG_SET_TRADE_ITEM` core (#121): place the item in inventory slot `inv_slot` into window
 /// slot `trade_slot`. The gateway already mapped the client's (bag, slot) addressing onto the
 /// absolute slot (the item-family convention). No open session is a silent no-op (client races a
@@ -359,10 +391,16 @@ pub(crate) fn apply_set_trade_item(
     if trade_slot > WILL_NOT_BE_TRADED_SLOT {
         return Err(format!("bad trade slot {trade_slot}"));
     }
-    // Equipment (slots 0..=18) and bag containers can't be offered — vanilla requires the item
-    // loose in a bag; the client enforces this, so a violation is a malformed/hacked client.
+    // Only loose BACKPACK items (23..=38) can be offered. Below: equipment/containers — vanilla
+    // requires the item loose, the client enforces it. Above: equipped-bag CONTENTS — the
+    // gateway doesn't model sub-bags yet (`handlers/item.rs`), and the commit's room accounting
+    // (`count_free_backpack_slots`) is backpack-only; letting a bag item in would let the verdict
+    // count room its delivery can't use.
     if inv_slot < lyracore_shared::constants::starter_item::BACKPACK_SLOT_0 {
         return Err("equipped items cannot be traded".to_string());
+    }
+    if inv_slot >= lyracore_shared::constants::starter_item::BACKPACK_SLOT_0 + 16 {
+        return Err("bag items cannot be traded yet".to_string());
     }
     let inst =
         crate::items::item_in_slot(ctx, actor.guid, inv_slot).ok_or("no item in slot")?;
@@ -395,6 +433,7 @@ pub(crate) fn apply_set_trade_item(
         trade_slot,
         item_guid: inst.guid,
     });
+    let session = reset_accepts(ctx, session);
     let session = touch_session(ctx, session);
     push_offer_events(ctx, &session, actor.guid);
     Ok(())
@@ -414,11 +453,19 @@ pub(crate) fn apply_clear_trade_item(
         return Err(format!("bad trade slot {trade_slot}"));
     }
     let slots = ctx.db.game_trade_slot();
+    let mut removed = false;
     for row in slots.by_session().filter(&session.id).collect::<Vec<_>>() {
         if row.owner_guid == actor.guid && row.trade_slot == trade_slot {
             slots.id().delete(row.id);
+            removed = true;
         }
     }
+    // Clearing an already-empty slot is a no-op, and a no-op is not a change — it must not
+    // trip the accept-reset rule.
+    if !removed {
+        return Ok(());
+    }
+    let session = reset_accepts(ctx, session);
     let session = touch_session(ctx, session);
     push_offer_events(ctx, &session, actor.guid);
     Ok(())
@@ -435,11 +482,21 @@ pub(crate) fn apply_set_trade_gold(
     let Some(mut session) = session_involving(ctx, actor.guid).filter(|s| s.open) else {
         return Ok(());
     };
+    let current = if actor.guid == session.initiator_guid {
+        session.initiator_gold
+    } else {
+        session.target_gold
+    };
+    // Re-sending the same amount is a no-op, not a change — the accept-reset rule stays quiet.
+    if current == copper {
+        return Ok(());
+    }
     if actor.guid == session.initiator_guid {
         session.initiator_gold = copper;
     } else {
         session.target_gold = copper;
     }
+    let session = reset_accepts(ctx, session);
     let session = touch_session(ctx, session);
     push_offer_events(ctx, &session, actor.guid);
     Ok(())
@@ -520,6 +577,310 @@ fn decline_proposal(ctx: &ReducerContext, target_guid: u64, kind: u8) {
     push_trade_event(ctx, session.initiator_guid, kind, session.target_guid);
 }
 
+/// One seat's commit-relevant facts (#122) — gathered impurely by [`run_trade_commit`], judged
+/// purely by [`commit_verdict`] (the transfer-planner lesson: decisions pure, reducers thin).
+/// `items_offered` counts TRADED slots only — the Will-Not-Be-Traded Slot never reaches a commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CommitSide {
+    pub guid: u64,
+    pub gold_offered: u32,
+    pub gold_balance: u32,
+    pub items_offered: u32,
+    pub free_bag_slots: u32,
+    pub offers_soulbound: bool,
+}
+
+/// Why a dual-accept commit refuses (#122) — `side` names the culprit seat so the wire answer
+/// (whose bags, whose tampering) is deterministic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommitRefusal {
+    /// A side offered more copper than it holds — the client caps input, so this is tampering.
+    GoldShort { side: u64 },
+    /// Receipt would push a purse past `u32::MAX` — no coin may be created or destroyed.
+    GoldOverflow { side: u64 },
+    /// A soulbound item is in an offer (a bind raced the offer-time refusal).
+    Soulbound { side: u64 },
+    /// A side's bags cannot fit the incoming items, NET of the slots its own offer frees.
+    InventoryFull { side: u64 },
+}
+
+/// The purse after a commit leg: `balance - outgoing + incoming`, or `None` on underflow (more
+/// offered than held) or past the u32 cap. The ONE spelling of the swap arithmetic — the verdict
+/// refuses with it and the execution applies with it, so they can never disagree. Pure.
+pub(crate) fn gold_after(balance: u32, outgoing: u32, incoming: u32) -> Option<u32> {
+    if outgoing > balance {
+        return None;
+    }
+    u32::try_from(balance as u64 - outgoing as u64 + incoming as u64).ok()
+}
+
+/// The pure commit gate (#122): tampered gold, soulbound, purse overflow, and net bag space,
+/// checked a-side first (deterministic culprit). Presence/range re-validation happens before the
+/// facts are even gathered (the player-interaction gate at commit time); faction cannot change.
+pub(crate) fn commit_verdict(a: &CommitSide, b: &CommitSide) -> Result<(), CommitRefusal> {
+    for side in [a, b] {
+        if side.gold_offered > side.gold_balance {
+            return Err(CommitRefusal::GoldShort { side: side.guid });
+        }
+        if side.offers_soulbound {
+            return Err(CommitRefusal::Soulbound { side: side.guid });
+        }
+    }
+    for (side, other) in [(a, b), (b, a)] {
+        // GoldShort is excluded above, so a `None` here can only be the cap.
+        if gold_after(side.gold_balance, side.gold_offered, other.gold_offered).is_none() {
+            return Err(CommitRefusal::GoldOverflow { side: side.guid });
+        }
+        if side.free_bag_slots + side.items_offered < other.items_offered {
+            return Err(CommitRefusal::InventoryFull { side: side.guid });
+        }
+    }
+    Ok(())
+}
+
+/// The accept-reset rule's pure half (#122): does this offer mutation clear the accept flags?
+/// Any change after EITHER accept voids both — the anti-scam floor.
+pub(crate) fn mutation_clears_accepts(initiator_accepted: bool, target_accepted: bool) -> bool {
+    initiator_accepted || target_accepted
+}
+
+/// `CMSG_ACCEPT_TRADE` core (#122): set the actor's accept flag; when BOTH seats have accepted,
+/// run the Trade Commit in this same transaction. Until then the partner hears `TradeAccept`.
+pub(crate) fn apply_accept_trade(ctx: &ReducerContext, actor: WorldEntity) -> Result<(), String> {
+    let Some(mut session) = session_involving(ctx, actor.guid).filter(|s| s.open) else {
+        return Ok(());
+    };
+    let i_am_initiator = actor.guid == session.initiator_guid;
+    if i_am_initiator {
+        session.initiator_accepted = true;
+    } else {
+        session.target_accepted = true;
+    }
+    if session.initiator_accepted && session.target_accepted {
+        return run_trade_commit(ctx, session, &actor);
+    }
+    let partner = if i_am_initiator {
+        session.target_guid
+    } else {
+        session.initiator_guid
+    };
+    let me = actor.guid;
+    touch_session(ctx, session);
+    push_trade_event(ctx, partner, event_kind::TRADE_ACCEPT, me);
+    Ok(())
+}
+
+/// `CMSG_UNACCEPT_TRADE` core (#122): withdraw the actor's accept; the partner hears
+/// `BackToTrade` (their own client already knows). A no-accept unaccept is a silent no-op.
+pub(crate) fn apply_unaccept_trade(ctx: &ReducerContext, actor: WorldEntity) -> Result<(), String> {
+    let Some(mut session) = session_involving(ctx, actor.guid).filter(|s| s.open) else {
+        return Ok(());
+    };
+    // UNCONDITIONAL clear — deliberately no had-accepted early return: a rolled-back commit can
+    // leave a client believing it accepted while the flag is false, and an idempotent unaccept is
+    // that window's one-click recovery (the reducer-Err paths cannot status the client — an `Err`
+    // rolls the event rows back with everything else).
+    let i_am_initiator = actor.guid == session.initiator_guid;
+    if i_am_initiator {
+        session.initiator_accepted = false;
+    } else {
+        session.target_accepted = false;
+    }
+    let partner = if i_am_initiator {
+        session.target_guid
+    } else {
+        session.initiator_guid
+    };
+    let me = actor.guid;
+    touch_session(ctx, session);
+    push_trade_event(ctx, partner, event_kind::BACK_TO_TRADE, me);
+    Ok(())
+}
+
+/// One seat's commit facts + the offered instances behind them, gathered in-transaction.
+/// A slot row whose item vanished or changed owner is SKIPPED (the push_offer_events self-heal
+/// posture) — it simply isn't part of the swap.
+fn gather_commit_side(
+    ctx: &ReducerContext,
+    session: &TradeSession,
+    entity: &WorldEntity,
+) -> (CommitSide, Vec<crate::ItemInstance>) {
+    let gold_offered = if entity.guid == session.initiator_guid {
+        session.initiator_gold
+    } else {
+        session.target_gold
+    };
+    let mut items = Vec::new();
+    let mut offers_soulbound = false;
+    for row in ctx.db.game_trade_slot().by_session().filter(&session.id) {
+        // The Will-Not-Be-Traded Slot (6) is shown, never committed.
+        if row.owner_guid != entity.guid || row.trade_slot >= WILL_NOT_BE_TRADED_SLOT {
+            continue;
+        }
+        if let Some(inst) = ctx.db.game_item_instance().guid().find(row.item_guid) {
+            if inst.owner_guid == entity.guid {
+                offers_soulbound |= inst.soulbound;
+                items.push(inst);
+            }
+        }
+    }
+    (
+        CommitSide {
+            guid: entity.guid,
+            gold_offered,
+            gold_balance: entity.money,
+            items_offered: items.len() as u32,
+            free_bag_slots: crate::items::count_free_backpack_slots(ctx, entity.guid),
+            offers_soulbound,
+        },
+        items,
+    )
+}
+
+/// Mint the received item on `receiver` — new guid (the giver's client watched the destroy),
+/// instance state COPIED (stack, durability, enchant: the #8 free-repair rule), soulbound stays
+/// false (soulbound never passes the gates). An `Err` here rolls the WHOLE commit back — the
+/// verdict guaranteed room, so a miss means concurrent mutation and nothing may move.
+fn deliver_traded_item(
+    ctx: &ReducerContext,
+    receiver: &WorldEntity,
+    inst: &crate::ItemInstance,
+    guid: u64,
+) -> Result<(), String> {
+    let slot = crate::items::first_free_backpack_slot(ctx, receiver.guid)
+        .ok_or("trade commit: receiver bags filled mid-transaction")?;
+    ctx.db.game_item_instance().insert(crate::ItemInstance {
+        guid,
+        entry: inst.entry,
+        owner_identity: receiver.owner_identity,
+        owner_guid: receiver.guid,
+        slot,
+        stack_count: inst.stack_count,
+        durability: inst.durability,
+        created_at: ctx.timestamp,
+        enchant_id: inst.enchant_id,
+        soulbound: false,
+    });
+    Ok(())
+}
+
+/// The Trade Commit (#122): re-validate presence/range, judge the pure [`commit_verdict`], then
+/// swap items and gold atomically — the reducer transaction IS the atomicity; any `Err` rolls
+/// everything back and nothing moves. `acceptor` is the seat whose accept completed the pair
+/// (stale-window refusals answer them).
+fn run_trade_commit(
+    ctx: &ReducerContext,
+    session: TradeSession,
+    acceptor: &WorldEntity,
+) -> Result<(), String> {
+    let partner_guid = if acceptor.guid == session.initiator_guid {
+        session.target_guid
+    } else {
+        session.initiator_guid
+    };
+    // The stale-window guard: presence + range re-checked at the only moment that matters.
+    let partner = crate::helpers::acting_entity_by_guid(ctx, partner_guid);
+    if let Err(denied) = player_interaction_gate(acceptor, partner.as_ref()) {
+        push_trade_event(ctx, acceptor.guid, gate_refusal_kind(denied), partner_guid);
+        // Both accepts void; both windows return to the offer state.
+        let session = reset_accepts(ctx, session);
+        touch_session(ctx, session);
+        return Ok(());
+    }
+    let partner = partner.expect("gate passed, partner present");
+
+    let (acceptor_side, acceptor_items) = gather_commit_side(ctx, &session, acceptor);
+    let (partner_side, partner_items) = gather_commit_side(ctx, &session, &partner);
+    match commit_verdict(&acceptor_side, &partner_side) {
+        Err(CommitRefusal::InventoryFull { side }) => {
+            // The one organic refusal: the window closes with the inventory error, the full
+            // side flagged on each client (`target_error` = "it was the other party").
+            remove_session(ctx, &session);
+            let (full, other) = if side == acceptor.guid {
+                (acceptor.guid, partner.guid)
+            } else {
+                (partner.guid, acceptor.guid)
+            };
+            push_trade_event(ctx, full, event_kind::INV_FULL_SELF, other);
+            push_trade_event(ctx, other, event_kind::INV_FULL_PARTNER, full);
+            Ok(())
+        }
+        Err(CommitRefusal::GoldShort { side }) | Err(CommitRefusal::GoldOverflow { side }) => {
+            // A purse that cannot honour the offer (short = tampering, the client caps input;
+            // overflow = a capped receiver). Window closes with NotEnoughMoney, culprit flagged.
+            remove_session(ctx, &session);
+            let (failed, other) = if side == acceptor.guid {
+                (acceptor.guid, partner.guid)
+            } else {
+                (partner.guid, acceptor.guid)
+            };
+            push_trade_event(ctx, failed, event_kind::GOLD_FAIL_SELF, other);
+            push_trade_event(ctx, other, event_kind::GOLD_FAIL_PARTNER, failed);
+            Ok(())
+        }
+        Err(CommitRefusal::Soulbound { .. }) => {
+            // A bind raced the offer-time refusal — genuinely exceptional; the trade dies.
+            cancel_trade_for(ctx, session.initiator_guid);
+            Ok(())
+        }
+        Ok(()) => {
+            // Mint incoming guids from the PRE-delete high-water mark: after the deletes a seat
+            // can hold zero rows, and `next_item_guid`'s birth-formula fallback could then
+            // re-mint a guid this very swap just deleted — an insert on a deleted PK is an
+            // UPDATE to the item relay, which renders the OLD item (the #8 ghost-item gotcha in
+            // its other form). Pre-delete, max+1 can collide with nothing.
+            let base_slot = lyracore_shared::constants::starter_item::BACKPACK_SLOT_0;
+            let mut partner_next = crate::items::next_item_guid(ctx, partner.guid, base_slot);
+            let mut acceptor_next = crate::items::next_item_guid(ctx, acceptor.guid, base_slot);
+            // ALL outgoing rows leave first — their slots are the room the verdict counted on.
+            let instances = ctx.db.game_item_instance();
+            for inst in acceptor_items.iter().chain(partner_items.iter()) {
+                instances.guid().delete(inst.guid);
+            }
+            for inst in &acceptor_items {
+                deliver_traded_item(ctx, &partner, inst, partner_next)?;
+                partner_next += 1;
+            }
+            for inst in &partner_items {
+                deliver_traded_item(ctx, acceptor, inst, acceptor_next)?;
+                acceptor_next += 1;
+            }
+            // Gold, both legs through the ONE arithmetic the verdict already approved, applied
+            // to the freshly-read rows (in-transaction they equal the verdict's snapshot; using
+            // the row's own money keeps a single source). The live `WorldEntity.money` row is
+            // the coinage relay + persist mirror.
+            let entities = ctx.db.game_world_entity();
+            let mut acceptor_row = entities
+                .guid()
+                .find(acceptor.guid)
+                .ok_or("trade commit: acceptor vanished mid-transaction")?;
+            acceptor_row.money = gold_after(
+                acceptor_row.money,
+                acceptor_side.gold_offered,
+                partner_side.gold_offered,
+            )
+            .ok_or("trade commit: gold arithmetic refused")?;
+            entities.guid().update(acceptor_row);
+            let mut partner_row = entities
+                .guid()
+                .find(partner.guid)
+                .ok_or("trade commit: partner vanished mid-transaction")?;
+            partner_row.money = gold_after(
+                partner_row.money,
+                partner_side.gold_offered,
+                acceptor_side.gold_offered,
+            )
+            .ok_or("trade commit: gold arithmetic refused")?;
+            entities.guid().update(partner_row);
+
+            remove_session(ctx, &session);
+            push_trade_event(ctx, acceptor.guid, event_kind::TRADE_COMPLETE, partner.guid);
+            push_trade_event(ctx, partner.guid, event_kind::TRADE_COMPLETE, acceptor.guid);
+            Ok(())
+        }
+    }
+}
+
 /// Tear down `guid`'s Trade Session (if any) and tell BOTH parties `TradeCanceled` — the client
 /// of the canceller expects the status too (it closes the window). Idempotent; also the logout
 /// teardown (`world::remove_from_world`), where the event to the leaver is harmless dead weight
@@ -546,6 +907,112 @@ pub(crate) fn cancel_trade_for(ctx: &ReducerContext, guid: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The swap arithmetic (#122): a purse never underflows (offering more than you hold) and
+    /// never wraps past the u32 cap — `None` from either side means the commit must refuse, so
+    /// no coin is ever created or destroyed. Boundaries pinned exactly.
+    #[test]
+    fn gold_after_refuses_underflow_and_the_u32_cap_exactly() {
+        assert_eq!(gold_after(100, 30, 5), Some(75));
+        assert_eq!(gold_after(100, 100, 0), Some(0), "empty the purse exactly");
+        assert_eq!(gold_after(100, 101, 0), None, "offering more than held");
+        assert_eq!(
+            gold_after(u32::MAX - 10, 0, 10),
+            Some(u32::MAX),
+            "landing exactly on the cap is legal"
+        );
+        assert_eq!(gold_after(u32::MAX - 10, 0, 11), None, "one past the cap refuses");
+        assert_eq!(
+            gold_after(u32::MAX, u32::MAX, u32::MAX),
+            Some(u32::MAX),
+            "full swap at the cap stays in range"
+        );
+    }
+
+    /// The commit gate (#122), enumerated per refusal: tampered gold, purse overflow, a raced
+    /// soulbound, and bag space NET of the slots a side's own offer frees. The a-side is checked
+    /// first, pinned so the wire kinds name a deterministic culprit.
+    #[test]
+    fn commit_verdict_names_the_refusing_side_for_each_floor_check() {
+        let side = |guid, gold_offered, gold_balance, items_offered, free_bag_slots| CommitSide {
+            guid,
+            gold_offered,
+            gold_balance,
+            items_offered,
+            free_bag_slots,
+            offers_soulbound: false,
+        };
+
+        // Happy: A pays 50 of 100, B pays nothing; one item each way, no free slots needed
+        // beyond what each side's own outgoing frees.
+        let a = side(1, 50, 100, 1, 0);
+        let b = side(2, 0, 20, 1, 0);
+        assert_eq!(commit_verdict(&a, &b), Ok(()));
+
+        // Gold short: a side offered copper it does not hold (client tampering).
+        assert_eq!(
+            commit_verdict(&side(1, 101, 100, 0, 16), &b),
+            Err(CommitRefusal::GoldShort { side: 1 })
+        );
+        assert_eq!(
+            commit_verdict(&a, &side(2, 21, 20, 0, 16)),
+            Err(CommitRefusal::GoldShort { side: 2 })
+        );
+
+        // Overflow: B's purse would pass the cap on receipt.
+        assert_eq!(
+            commit_verdict(&side(1, 50, 100, 0, 16), &side(2, 0, u32::MAX - 49, 0, 16)),
+            Err(CommitRefusal::GoldOverflow { side: 2 })
+        );
+
+        // Soulbound raced into an offer after the offer-time refusal.
+        let mut sb = side(1, 0, 0, 1, 16);
+        sb.offers_soulbound = true;
+        assert_eq!(
+            commit_verdict(&sb, &b),
+            Err(CommitRefusal::Soulbound { side: 1 })
+        );
+
+        // Bag space is NET: zero free slots but a 2-for-2 swap fits; 2 incoming for 1 outgoing
+        // with zero free does not, and the FULL side is the one named.
+        assert_eq!(
+            commit_verdict(&side(1, 0, 0, 2, 0), &side(2, 0, 0, 2, 0)),
+            Ok(())
+        );
+        assert_eq!(
+            commit_verdict(&side(1, 0, 0, 1, 0), &side(2, 0, 0, 2, 0)),
+            Err(CommitRefusal::InventoryFull { side: 1 })
+        );
+    }
+
+    /// The accept-reset rule's pure half (#122): ANY offer mutation clears the flags if either
+    /// party had accepted — the anti-scam floor from the design session.
+    #[test]
+    fn any_offer_mutation_clears_accepts_when_either_party_accepted() {
+        assert!(!mutation_clears_accepts(false, false));
+        assert!(mutation_clears_accepts(true, false));
+        assert!(mutation_clears_accepts(false, true));
+        assert!(mutation_clears_accepts(true, true));
+    }
+
+    /// The accept-reset rule's impure half, pinned by source scan (the `economy.rs` money-line
+    /// precedent — no `ReducerContext` harness can execute the mutators): all THREE offer
+    /// mutators route through `reset_accepts`, plus the commit's stale-window refusal. Deleting
+    /// any one call site fails here by name.
+    #[test]
+    fn every_offer_mutator_and_the_commit_refusal_route_through_reset_accepts() {
+        let src = crate::test_scan::read_scanned("module/src/trade.rs")
+            .expect("module/src/trade.rs ships in every checkout");
+        // concat! so this test's own needle never counts itself (the build-scan-strip lesson).
+        let needle = concat!("let session = reset_accepts", "(ctx, session);");
+        let calls = src.matches(needle).count();
+        assert_eq!(
+            calls, 4,
+            "set item, clear item, and set gold must EACH clear the accept flags on a real \
+             change (the anti-scam floor), and the commit's stale-window refusal must reset \
+             both seats; found {calls} reset_accepts call sites"
+        );
+    }
 
     /// The reap policy (#123): a session is stale only STRICTLY past the invite TTL since its
     /// last action — `touch_session` bumps `created_at` on every offer mutation and on window

@@ -845,6 +845,11 @@ pub trait WorldStore: Send + Sync {
     fn clear_trade_item(&self, account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()>;
     /// `CMSG_SET_TRADE_GOLD` — `copper` is the offered amount (#121).
     fn set_trade_gold(&self, account_id: u64, self_guid: u64, copper: u32) -> Result<()>;
+    /// `CMSG_ACCEPT_TRADE` — accept the current offer; dual-accept runs the atomic Trade Commit
+    /// module-side (#122).
+    fn accept_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    /// `CMSG_UNACCEPT_TRADE` — withdraw an accept; partner hears `BackToTrade` (#122).
+    fn unaccept_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
     /// `CMSG_BUSY_TRADE` — decline a pending proposal as busy; initiator hears `Busy` (#123).
     fn busy_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
     /// `CMSG_IGNORE_TRADE` — decline via ignore; initiator hears `IgnoreYou` (#123).

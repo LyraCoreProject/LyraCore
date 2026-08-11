@@ -1460,6 +1460,31 @@ pub(crate) fn trade_event_outbound(row: &TradeEvent) -> Vec<Outbound> {
         kind::YOU_DEAD => Some(SMSG_TRADE_STATUS::YouDead),
         kind::TARGET_DEAD => Some(SMSG_TRADE_STATUS::TargetDead),
         kind::IGNORE_YOU => Some(SMSG_TRADE_STATUS::IgnoreYou),
+        kind::TRADE_ACCEPT => Some(SMSG_TRADE_STATUS::TradeAccept),
+        kind::BACK_TO_TRADE => Some(SMSG_TRADE_STATUS::BackToTrade),
+        kind::TRADE_COMPLETE => Some(SMSG_TRADE_STATUS::TradeComplete),
+        // Commit refused on bag space (#122): the window closes with the inventory error;
+        // `target_error` says WHOSE bags — false = yours, true = the partner's.
+        kind::INV_FULL_SELF => Some(SMSG_TRADE_STATUS::CloseWindow {
+            inventory_result: wow_world_messages::vanilla::InventoryResult::InventoryFull,
+            item_limit_category_id: 0,
+            target_error: false,
+        }),
+        kind::INV_FULL_PARTNER => Some(SMSG_TRADE_STATUS::CloseWindow {
+            inventory_result: wow_world_messages::vanilla::InventoryResult::InventoryFull,
+            item_limit_category_id: 0,
+            target_error: true,
+        }),
+        kind::GOLD_FAIL_SELF => Some(SMSG_TRADE_STATUS::CloseWindow {
+            inventory_result: wow_world_messages::vanilla::InventoryResult::NotEnoughMoney,
+            item_limit_category_id: 0,
+            target_error: false,
+        }),
+        kind::GOLD_FAIL_PARTNER => Some(SMSG_TRADE_STATUS::CloseWindow {
+            inventory_result: wow_world_messages::vanilla::InventoryResult::NotEnoughMoney,
+            item_limit_category_id: 0,
+            target_error: true,
+        }),
         other => {
             log::warn!("trade relay: unknown kind {other} (event {})", row.id);
             None
@@ -3565,6 +3590,33 @@ mod tests {
         assert_eq!(status_of(kind::YOU_DEAD), SMSG_TRADE_STATUS::YouDead);
         assert_eq!(status_of(kind::TARGET_DEAD), SMSG_TRADE_STATUS::TargetDead);
         assert_eq!(status_of(kind::IGNORE_YOU), SMSG_TRADE_STATUS::IgnoreYou);
+        assert_eq!(status_of(kind::TRADE_ACCEPT), SMSG_TRADE_STATUS::TradeAccept);
+        assert_eq!(status_of(kind::BACK_TO_TRADE), SMSG_TRADE_STATUS::BackToTrade);
+        assert_eq!(status_of(kind::TRADE_COMPLETE), SMSG_TRADE_STATUS::TradeComplete);
+        // The bag-space refusal closes the window naming WHOSE bags overflowed.
+        let full_self = status_of(kind::INV_FULL_SELF);
+        let full_partner = status_of(kind::INV_FULL_PARTNER);
+        match (&full_self, &full_partner) {
+            (
+                SMSG_TRADE_STATUS::CloseWindow { target_error: false, inventory_result: a, .. },
+                SMSG_TRADE_STATUS::CloseWindow { target_error: true, inventory_result: b, .. },
+            ) => {
+                assert_eq!(*a, wow_world_messages::vanilla::InventoryResult::InventoryFull);
+                assert_eq!(*b, wow_world_messages::vanilla::InventoryResult::InventoryFull);
+            }
+            other => panic!("expected CloseWindow pair with flipped target_error, got {other:?}"),
+        }
+        // The purse-failure pair mirrors it with NotEnoughMoney.
+        match (&status_of(kind::GOLD_FAIL_SELF), &status_of(kind::GOLD_FAIL_PARTNER)) {
+            (
+                SMSG_TRADE_STATUS::CloseWindow { target_error: false, inventory_result: a, .. },
+                SMSG_TRADE_STATUS::CloseWindow { target_error: true, inventory_result: b, .. },
+            ) => {
+                assert_eq!(*a, wow_world_messages::vanilla::InventoryResult::NotEnoughMoney);
+                assert_eq!(*b, wow_world_messages::vanilla::InventoryResult::NotEnoughMoney);
+            }
+            other => panic!("expected NotEnoughMoney CloseWindow pair, got {other:?}"),
+        }
 
         assert!(
             trade_event_outbound(&event(200)).is_empty(),

@@ -778,6 +778,23 @@ pub fn gw_set_trade_gold(ctx: &ReducerContext, actor_guid: u64, copper: u32) -> 
     crate::trade::apply_set_trade_gold(ctx, acting, copper)
 }
 
+/// [`crate::trade::apply_accept_trade`] — accept the current offer; dual-accept runs the Trade
+/// Commit (#122).
+#[reducer]
+pub fn gw_accept_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_accept_trade(ctx, acting)
+}
+
+/// [`crate::trade::apply_unaccept_trade`] — withdraw an accept (#122).
+#[reducer]
+pub fn gw_unaccept_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_unaccept_trade(ctx, acting)
+}
+
 /// [`crate::trade::apply_busy_trade`] — decline a proposal as busy (#123).
 #[reducer]
 pub fn gw_busy_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {

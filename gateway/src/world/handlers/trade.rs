@@ -93,6 +93,30 @@ pub(crate) fn handle_trade<St: WorldStore + ?Sized>(
             }
             Ok(None)
         }
+        // Accept / unaccept (#122). The accept body's `unknown1` is padding (vmangos skips it;
+        // bots set 1) — dropped here, the module needs only who accepted.
+        ClientOpcodeMessage::CMSG_ACCEPT_TRADE(_) => {
+            if let Some(me) = self_guid(conn) {
+                if let Err(e) = store.accept_trade(conn.account_id, me) {
+                    log::debug!(
+                        "world: accept_trade ignored (account {}): {e}",
+                        conn.account_id
+                    );
+                }
+            }
+            Ok(None)
+        }
+        ClientOpcodeMessage::CMSG_UNACCEPT_TRADE => {
+            if let Some(me) = self_guid(conn) {
+                if let Err(e) = store.unaccept_trade(conn.account_id, me) {
+                    log::debug!(
+                        "world: unaccept_trade ignored (account {}): {e}",
+                        conn.account_id
+                    );
+                }
+            }
+            Ok(None)
+        }
         // Proposal declines (#123): the client auto-answers a BeginTrade it can't take — busy
         // (already in a dialog) or the initiator is on the ignore list.
         ClientOpcodeMessage::CMSG_BUSY_TRADE => {

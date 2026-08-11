@@ -945,6 +945,12 @@ impl WorldStore for Coordinator {
     fn set_trade_gold(&self, account_id: u64, self_guid: u64, copper: u32) -> Result<()> {
         self.set_trade_gold(account_id, self_guid, copper)
     }
+    fn accept_trade(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        self.accept_trade(account_id, self_guid)
+    }
+    fn unaccept_trade(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        self.unaccept_trade(account_id, self_guid)
+    }
     fn busy_trade(&self, account_id: u64, self_guid: u64) -> Result<()> {
         self.busy_trade(account_id, self_guid)
     }

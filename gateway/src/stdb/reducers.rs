@@ -789,6 +789,32 @@ impl Coordinator {
         )
     }
 
+    /// `CMSG_ACCEPT_TRADE` (#122).
+    pub fn accept_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("accept_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_accept_trade",
+            gw_accept_trade_then(actor_guid)
+        )
+    }
+
+    /// `CMSG_UNACCEPT_TRADE` (#122).
+    pub fn unaccept_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("unaccept_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_unaccept_trade",
+            gw_unaccept_trade_then(actor_guid)
+        )
+    }
+
     /// `CMSG_BUSY_TRADE` (#123).
     pub fn busy_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
         if actor_guid == 0 {

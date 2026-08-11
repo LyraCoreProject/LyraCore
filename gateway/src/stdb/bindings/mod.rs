@@ -383,6 +383,7 @@ pub mod guid_range_type;
 pub mod gw_abandon_quest_reducer;
 pub mod gw_accept_group_invite_reducer;
 pub mod gw_accept_quest_reducer;
+pub mod gw_accept_trade_reducer;
 pub mod gw_add_friend_reducer;
 pub mod gw_add_ignore_reducer;
 pub mod gw_attack_reducer;
@@ -457,6 +458,7 @@ pub mod gw_stop_attack_reducer;
 pub mod gw_take_loot_reducer;
 pub mod gw_trainer_buy_reducer;
 pub mod gw_turn_in_quest_reducer;
+pub mod gw_unaccept_trade_reducer;
 pub mod gw_unequip_item_reducer;
 pub mod gw_use_gameobject_reducer;
 pub mod gw_use_item_reducer;
@@ -954,6 +956,7 @@ pub use guid_range_type::GuidRange;
 pub use gw_abandon_quest_reducer::gw_abandon_quest;
 pub use gw_accept_group_invite_reducer::gw_accept_group_invite;
 pub use gw_accept_quest_reducer::gw_accept_quest;
+pub use gw_accept_trade_reducer::gw_accept_trade;
 pub use gw_add_friend_reducer::gw_add_friend;
 pub use gw_add_ignore_reducer::gw_add_ignore;
 pub use gw_attack_reducer::gw_attack;
@@ -1028,6 +1031,7 @@ pub use gw_stop_attack_reducer::gw_stop_attack;
 pub use gw_take_loot_reducer::gw_take_loot;
 pub use gw_trainer_buy_reducer::gw_trainer_buy;
 pub use gw_turn_in_quest_reducer::gw_turn_in_quest;
+pub use gw_unaccept_trade_reducer::gw_unaccept_trade;
 pub use gw_unequip_item_reducer::gw_unequip_item;
 pub use gw_use_gameobject_reducer::gw_use_gameobject;
 pub use gw_use_item_reducer::gw_use_item;
@@ -1743,6 +1747,9 @@ pub enum Reducer {
         giver_guid: u64,
         quest_entry: u32,
     },
+    GwAcceptTrade {
+        actor_guid: u64,
+    },
     GwAddFriend {
         actor_guid: u64,
         target_guid: u64,
@@ -2063,6 +2070,9 @@ pub enum Reducer {
         quest_entry: u32,
         reward_index: u32,
     },
+    GwUnacceptTrade {
+        actor_guid: u64,
+    },
     GwUnequipItem {
         actor_guid: u64,
         from_slot: u8,
@@ -2373,6 +2383,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwAbandonQuest { .. } => "gw_abandon_quest",
             Reducer::GwAcceptGroupInvite { .. } => "gw_accept_group_invite",
             Reducer::GwAcceptQuest { .. } => "gw_accept_quest",
+            Reducer::GwAcceptTrade { .. } => "gw_accept_trade",
             Reducer::GwAddFriend { .. } => "gw_add_friend",
             Reducer::GwAddIgnore { .. } => "gw_add_ignore",
             Reducer::GwAttack { .. } => "gw_attack",
@@ -2446,6 +2457,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwTakeLoot { .. } => "gw_take_loot",
             Reducer::GwTrainerBuy { .. } => "gw_trainer_buy",
             Reducer::GwTurnInQuest { .. } => "gw_turn_in_quest",
+            Reducer::GwUnacceptTrade { .. } => "gw_unaccept_trade",
             Reducer::GwUnequipItem { .. } => "gw_unequip_item",
             Reducer::GwUseGameobject { .. } => "gw_use_gameobject",
             Reducer::GwUseItem { .. } => "gw_use_item",
@@ -3576,6 +3588,11 @@ impl __sdk::Reducer for Reducer {
                 giver_guid: giver_guid.clone(),
                 quest_entry: quest_entry.clone(),
             }),
+            Reducer::GwAcceptTrade { actor_guid } => {
+                __sats::bsatn::to_vec(&gw_accept_trade_reducer::GwAcceptTradeArgs {
+                    actor_guid: actor_guid.clone(),
+                })
+            }
             Reducer::GwAddFriend {
                 actor_guid,
                 target_guid,
@@ -4139,6 +4156,11 @@ impl __sdk::Reducer for Reducer {
                 quest_entry: quest_entry.clone(),
                 reward_index: reward_index.clone(),
             }),
+            Reducer::GwUnacceptTrade { actor_guid } => {
+                __sats::bsatn::to_vec(&gw_unaccept_trade_reducer::GwUnacceptTradeArgs {
+                    actor_guid: actor_guid.clone(),
+                })
+            }
             Reducer::GwUnequipItem {
                 actor_guid,
                 from_slot,

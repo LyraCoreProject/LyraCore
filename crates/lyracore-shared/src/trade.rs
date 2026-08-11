@@ -39,6 +39,25 @@ pub mod event_kind {
     /// Initiator notice: the target has you ignored — proposal declined →
     /// `TradeStatus::IgnoreYou` (#123).
     pub const IGNORE_YOU: u8 = 11;
+    /// Your partner accepted the current offer (#122) → `TradeStatus::TradeAccept`.
+    pub const TRADE_ACCEPT: u8 = 12;
+    /// An accept was withdrawn — explicit unaccept, or the accept-reset rule firing on an offer
+    /// change (#122) → `TradeStatus::BackToTrade`.
+    pub const BACK_TO_TRADE: u8 = 13;
+    /// The Trade Commit succeeded (#122) → `TradeStatus::TradeComplete`.
+    pub const TRADE_COMPLETE: u8 = 14;
+    /// Commit refused, window closes: YOUR bags cannot fit the incoming items →
+    /// `TradeStatus::CloseWindow` with `InventoryResult::InventoryFull`, `target_error: false` (#122).
+    pub const INV_FULL_SELF: u8 = 15;
+    /// Commit refused, window closes: the PARTNER's bags cannot fit → same `CloseWindow`,
+    /// `target_error: true` (#122).
+    pub const INV_FULL_PARTNER: u8 = 16;
+    /// Commit refused, window closes: YOUR purse cannot honour the offer (short, or receipt would
+    /// pass the u32 cap) → `CloseWindow` with `InventoryResult::NotEnoughMoney`,
+    /// `target_error: false` (#122).
+    pub const GOLD_FAIL_SELF: u8 = 17;
+    /// Commit refused, window closes: the PARTNER's purse failed → same, `target_error: true`.
+    pub const GOLD_FAIL_PARTNER: u8 = 18;
 }
 
 /// One offered item as the trade window renders it — resolved by the MODULE at write time (the

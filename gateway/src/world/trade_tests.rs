@@ -8,8 +8,9 @@
 
 use super::*;
 use wow_world_messages::vanilla::{
-    CMSG_BEGIN_TRADE, CMSG_BUSY_TRADE, CMSG_CANCEL_TRADE, CMSG_CLEAR_TRADE_ITEM,
-    CMSG_IGNORE_TRADE, CMSG_INITIATE_TRADE, CMSG_SET_TRADE_GOLD, CMSG_SET_TRADE_ITEM,
+    CMSG_ACCEPT_TRADE, CMSG_BEGIN_TRADE, CMSG_BUSY_TRADE, CMSG_CANCEL_TRADE,
+    CMSG_CLEAR_TRADE_ITEM, CMSG_IGNORE_TRADE, CMSG_INITIATE_TRADE, CMSG_SET_TRADE_GOLD,
+    CMSG_SET_TRADE_ITEM, CMSG_UNACCEPT_TRADE,
 };
 
 /// **AC: initiating a trade with a targeted player reaches the store with the wire's target.**
@@ -129,6 +130,69 @@ fn set_trade_item_from_a_sub_bag_is_ignored_not_misaddressed() {
     drop(client);
     server.join().unwrap();
     assert!(store.set_trade_items.lock().unwrap().is_empty());
+}
+
+/// **AC (#122): the full loop's wire half** — A initiates and offers an item, B answers, offers
+/// gold, and both accept; every opcode dispatches its verb as the right seat, in order. (The
+/// swap itself — items, gold, atomicity — is the module's pure-tested commit core; the fake
+/// store records the dispatch, per the settled seam.)
+#[test]
+fn the_full_loop_dispatches_offer_and_dual_accept_in_order() {
+    let store = std::sync::Arc::new(quest_store());
+
+    let (mut a, mut a_enc, _a_dec, a_server) = enter_world(store.clone(), 1);
+    CMSG_INITIATE_TRADE { guid: Guid::new(2) }
+        .write_encrypted_client(&mut a, &mut a_enc)
+        .unwrap();
+    CMSG_SET_TRADE_ITEM { trade_slot: 0, bag: 255, slot: 23 }
+        .write_encrypted_client(&mut a, &mut a_enc)
+        .unwrap();
+    CMSG_ACCEPT_TRADE { unknown1: 0 }
+        .write_encrypted_client(&mut a, &mut a_enc)
+        .unwrap();
+    drop(a);
+    a_server.join().unwrap();
+
+    let (mut b, mut b_enc, _b_dec, b_server) = enter_world(store.clone(), 2);
+    CMSG_BEGIN_TRADE {}
+        .write_encrypted_client(&mut b, &mut b_enc)
+        .unwrap();
+    CMSG_SET_TRADE_GOLD { gold: wow_world_messages::vanilla::Gold::new(500) }
+        .write_encrypted_client(&mut b, &mut b_enc)
+        .unwrap();
+    CMSG_ACCEPT_TRADE { unknown1: 0 }
+        .write_encrypted_client(&mut b, &mut b_enc)
+        .unwrap();
+    drop(b);
+    b_server.join().unwrap();
+
+    assert_eq!(store.initiated_trades.lock().unwrap().as_slice(), &[(1, 2)]);
+    assert_eq!(store.set_trade_items.lock().unwrap().as_slice(), &[(1, 0, 23)]);
+    assert_eq!(store.set_trade_golds.lock().unwrap().as_slice(), &[(2, 500)]);
+    assert_eq!(store.accepted_trades.lock().unwrap().as_slice(), &[1, 2]);
+}
+
+/// **AC (#122): the accept-reset wire half** — after an accept, a further offer mutation and an
+/// explicit unaccept both dispatch; the reset itself (both flags cleared, BackToTrade to both)
+/// is the module's pure-tested rule.
+#[test]
+fn unaccept_and_post_accept_mutations_dispatch_for_the_acting_seat() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_ACCEPT_TRADE { unknown1: 0 }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    CMSG_SET_TRADE_GOLD { gold: wow_world_messages::vanilla::Gold::new(9) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    CMSG_UNACCEPT_TRADE {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.accepted_trades.lock().unwrap().as_slice(), &[1]);
+    assert_eq!(store.set_trade_golds.lock().unwrap().as_slice(), &[(1, 9)]);
+    assert_eq!(store.unaccepted_trades.lock().unwrap().as_slice(), &[1]);
 }
 
 /// **AC (#123): the decline flow** — the proposed target's client answers a `BeginTrade` it
