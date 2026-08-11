@@ -574,7 +574,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             respawn_secs: 0, // n/a (a CHEST has no respawn timer); 0 ⇒ the 3-min fallback if ever used
             gather_gray: 0,  // n/a (not a gather node) — the always-skill sentinel
             lock_id: 0,      // work-item 211: unlocked (seed/demo chest)
-            size: 0.0, // issue #107: no dump size for a hand-seeded fixture ⇒ codec renders 1.0
+            size: 0.0, // no dump size — the gateway renders this at 1.0
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 1,
@@ -609,7 +609,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             respawn_secs: 0,      // n/a (a GOOBER has no respawn timer)
             gather_gray: 0,       // n/a (not a gather node)
             lock_id: 0,           // work-item 211: unlocked (seed/demo goober)
-            size: 0.0,            // issue #107: no dump size ⇒ codec renders 1.0
+            size: 0.0,            // no dump size — the gateway renders this at 1.0
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 2,
@@ -650,7 +650,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             respawn_secs: 0, // 0 ⇒ the 3-min RESPAWN_WINDOW_MICROS fallback
             gather_gray: 0, // 0 ⇒ the always-skill sentinel (deterministic +1 every gather)
             lock_id: 0,  // work-item 211: gather nodes don't source a lockId this slice
-            size: 0.0, // issue #107: no dump size ⇒ codec renders 1.0 (the ETL carries the real one)
+            size: 0.0, // no dump size — the ETL carries the real one
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 3,
@@ -685,7 +685,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             respawn_secs: 0, // 0 ⇒ the 3-min RESPAWN_WINDOW_MICROS fallback
             gather_gray: 0, // 0 ⇒ the always-skill sentinel (deterministic +1 every gather)
             lock_id: 0,  // work-item 211: gather nodes don't source a lockId this slice
-            size: 0.0, // issue #107: no dump size ⇒ codec renders 1.0 (the ETL carries the real one)
+            size: 0.0, // no dump size — the ETL carries the real one
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 4,
@@ -740,7 +740,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
                     respawn_secs: 300, // real vanilla mining-node window (5 min); reroll fires at timer-fire
                     gather_gray: 0,    // always-skill sentinel (deterministic +1 every gather)
                     lock_id: 0, // work-item 211: gather nodes don't source a lockId this slice
-                    size: 0.0,  // issue #107: no dump size ⇒ codec renders 1.0
+                    size: 0.0,  // no dump size — the gateway renders this at 1.0
                 });
         }
     }

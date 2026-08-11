@@ -25,16 +25,12 @@ pub struct GameObjectView {
     pub rotation_1: f32,
     pub rotation_2: f32,
     pub rotation_3: f32,
-    /// `game_gameobject_template.size` (issue #107) — the prop's render scale. 0 (or anything not
-    /// positive) means "no size stored": every pre-#107 row, every hand-seeded fixture, and any dump
-    /// row whose `size` column failed to parse. `object_scale_x` maps that case to 1.0.
+    /// The template's render scale. Non-positive means no size stored — see `object_scale_x`.
     pub size: f32,
 }
 
-/// The `OBJECT_FIELD_SCALE_X` to send for a gameobject (issue #107): its template size, or 1.0 when
-/// no size is stored. The guard is `> 0.0` rather than `!= 0.0` on purpose — a corrupt negative or a
-/// NaN both fall back too, and a 0 reaching the wire renders the prop INVISIBLE (the same trap
-/// `creature_template.Scale == 0` carries, see the importer's DBC scale resolution).
+/// The `OBJECT_FIELD_SCALE_X` to send for a gameobject. Guards `> 0.0` rather than `!= 0.0` so a
+/// corrupt negative or a NaN falls back too — a 0 on the wire renders the prop invisible.
 fn object_scale_x(size: f32) -> f32 {
     if size > 0.0 {
         size
@@ -220,7 +216,7 @@ mod tests {
             rotation_1: 0.0,
             rotation_2: 0.0,
             rotation_3: 0.0,
-            size: 0.7, // an authentic sub-1.0 template size (issue #107) — must reach the wire verbatim
+            size: 0.7,
         };
         let built = build_gameobject_create_object(&go);
         match &built.objects[0] {
@@ -236,8 +232,6 @@ mod tests {
                 assert_eq!(m.gameobject_displayid(), Some(259));
                 assert_eq!(m.gameobject_state(), Some(1));
                 assert_eq!(m.gameobject_type_id(), Some(3));
-                // Issue #107: the template size, NOT the old hardcoded 1.0 — this is the field the
-                // client renders the prop's proportions from.
                 assert_eq!(m.object_scale_x(), Some(0.7));
             }
             other => panic!("expected a GameObject CreateObject2, got {other:?}"),
@@ -252,21 +246,15 @@ mod tests {
 
     #[test]
     fn object_scale_x_falls_back_to_one_for_any_non_positive_stored_size() {
-        // A real imported size rides through verbatim (issue #107 — that IS the fix).
         assert_eq!(object_scale_x(0.5), 0.5);
         assert_eq!(object_scale_x(1.75), 1.75);
-        // 0 = "no size stored": every pre-#107 row (default-migrated) and every hand-seeded fixture.
-        // Sending the 0 verbatim would render the prop INVISIBLE, which is worse than oversized.
         assert_eq!(object_scale_x(0.0), 1.0);
-        // A corrupt dump value can't reach the wire either way.
         assert_eq!(object_scale_x(-2.0), 1.0);
         assert_eq!(object_scale_x(f32::NAN), 1.0);
     }
 
     #[test]
     fn gameobject_create_object_sends_scale_one_when_the_template_carries_no_size() {
-        // The hand-seeded / pre-#107 path end-to-end: a 0 size must reach the descriptor as 1.0, i.e.
-        // byte-identical to the old hardcoded behaviour, so no existing fixture changes proportions.
         let go = GameObjectView {
             guid: (0xF110u64 << 48) | 2,
             template_entry: 50101,
@@ -319,7 +307,7 @@ mod tests {
             rotation_1: 0.2,
             rotation_2: 0.70710678,
             rotation_3: 0.70710678,
-            size: 0.0, // not read by the rotation VALUES update
+            size: 0.0,
         };
         let (opcode, body) = build_gameobject_rotation_values(&go);
         assert_eq!(opcode, 0x00A9, "SMSG_UPDATE_OBJECT opcode");
@@ -347,7 +335,7 @@ mod tests {
             rotation_1: 0.0,
             rotation_2: 0.0,
             rotation_3: 0.0,
-            size: 0.0, // not read by the rotation VALUES update
+            size: 0.0,
         };
         let (_, body) = build_gameobject_rotation_values(&go);
         let floats = decode_rotation_floats(go.guid, &body);

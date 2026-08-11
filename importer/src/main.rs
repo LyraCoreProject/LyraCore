@@ -561,9 +561,8 @@ fn classify_go_type(entry: u64, raw_type: u32) -> Option<u8> {
 /// unchanged), CHEST.data1 is the real `gameobject_loot_template` lootId (unchanged, now for every
 /// chest instead of a curated allowlist). Returns the row tuple AND, for a CHEST with a nonzero
 /// lootId, that lootId (to fold into `chest_loot_ids_used` — widened to EVERY imported chest).
-/// `size` is the dump's `gameobject_template.size` (issue #107), carried verbatim into the
-/// END-appended `size` column for EVERY type — a 0 (absent/corrupt column) stays 0 and the gateway
-/// codec renders it as 1.0.
+/// `size` rides verbatim into the END-appended `size` column for EVERY type; a 0 (absent/corrupt
+/// dump column) stays 0, which the gateway codec renders as 1.0.
 fn go_template_row(
     entry: u64,
     stored_type: u8,
@@ -750,10 +749,8 @@ mod got {
     pub const TYPE: usize = 1;
     pub const DISPLAY_ID: usize = 2;
     pub const NAME: usize = 3;
-    // The prop's render scale (issue #107) — the client sizes a GO's model from OBJECT_FIELD_SCALE_X,
-    // and gathering nodes are authentically sub-1.0. Positionally right after ExtraFlags per the
-    // schema comment above; carried verbatim (the 0/absent → 1.0 fallback lives in the gateway codec,
-    // not here, so a hand-seeded fixture with no size still renders — same split as the GO quaternion).
+    // The prop's render scale (OBJECT_FIELD_SCALE_X); gathering nodes are authentically sub-1.0.
+    // Carried verbatim — the 0/absent → 1.0 fallback lives in the gateway codec, not here.
     pub const SIZE: usize = 7;
     // Positionally identical across EVERY cmangos GO type (only the per-type MEANING differs — see
     // `go_template_row`'s doc): CHEST data0=lockId (repo-verified) data1=lootId (a
@@ -3856,8 +3853,8 @@ fn build_dump_plan(
             let name = field(row, got::NAME).to_string();
             let data0: u32 = field(row, got::DATA0).parse().unwrap_or(0);
             let data1: u32 = field(row, got::DATA1).parse().unwrap_or(0);
-            // Issue #107: 0 on an unparseable/absent column — the gateway reads that as "no size
-            // stored" and sends 1.0, i.e. exactly the pre-#107 behaviour, never an invisible prop.
+            // 0 on an unparseable/absent column — the gateway reads that as "no size stored" and
+            // sends 1.0, never an invisible prop.
             let size: f32 = field(row, got::SIZE).parse().unwrap_or(0.0);
             Some((
                 entry,
@@ -4803,8 +4800,7 @@ mod tests {
             "(3000,10,200,'Suspicious Lever',0,0,0,0,0,888,1)"
         );
         // GATHER: unaffected by lock_id (always 0) — the existing gather-row shape, now with a 10th
-        // (lock_id) + 11th (size) column appended. Issue #107: a node's authentic sub-1.0 size rides
-        // through verbatim rather than being flattened to 1.0 in the codec.
+        // (lock_id) + 11th (size) column appended. A node's sub-1.0 size rides through verbatim.
         let (gather_row, gather_loot) =
             go_template_row(1731, GO_GATHER, 259, "Copper Vein", 0, 0, 0.5);
         assert_eq!(
@@ -4813,7 +4809,7 @@ mod tests {
         );
         assert_eq!(gather_loot, None);
         // QUESTGIVER + an INERT type both fall through to the all-zero catch-all arm (11 cols). An
-        // absent/unparseable dump size arrives here as 0 and stays 0 — the gateway renders that 1.0.
+        // absent dump size arrives here as 0 and stays 0.
         let (qg_row, _) = go_template_row(4000, GO_QUESTGIVER, 50, "Wanted Poster", 1, 2, 0.0);
         assert_eq!(qg_row, "(4000,2,50,'Wanted Poster',0,0,0,0,0,0,0)");
         let (inert_row, _) = go_template_row(5000, 8, 60, "Spell Focus", 3, 4, 1.75);
