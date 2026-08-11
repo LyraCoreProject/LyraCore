@@ -390,6 +390,12 @@ pub trait WorldStore: Send + Sync {
     /// masks. Fail-open on missing data.
     fn npc_refuses_interaction(&self, npc_guid: u64, player_guid: u64) -> Result<bool>;
 
+    /// Does this trainer serve `player_guid`'s CLASS (#127)? The display half of #116's gate: a
+    /// Warrior gets no trainer window and no "train" gossip option at a Paladin trainer. Calls the
+    /// same `lyracore_shared::trainer` predicate the module enforces with, so the offer and the
+    /// purchase cannot disagree. Fail-open on missing data, like `npc_refuses_interaction`.
+    fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool>;
+
     /// Buy `count` of `item_entry` from `vendor_guid` (`CMSG_BUY_ITEM`, Tier 2). The module gates
     /// the purchase on the vendor (stock / range / copper); a gameplay `Err` is per-action, not fatal.
     fn buy_item(

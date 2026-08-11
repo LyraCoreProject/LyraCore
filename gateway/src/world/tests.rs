@@ -159,6 +159,9 @@ struct InMemoryStore {
     vendor_stock: Vec<codec::VendorItemView>,
     /// 195: `npc_refuses_interaction` return — false (derive-Default) keeps every fixture NPC open.
     npc_refuses: bool,
+    /// The class gate, spelled as a refusal so derive-Default (false) means "serves" and every
+    /// existing fixture trainer keeps working. Note the trait method reads the negation.
+    trainer_refuses_class: bool,
     /// When set, buy/sell return this error (a gameplay failure) instead of `Ok`.
     trade_error: Option<String>,
     /// Quest-giver evals returned by `quest_giver_evals` (the menu/status input).
@@ -941,6 +944,9 @@ impl WorldStore for InMemoryStore {
     }
     fn npc_refuses_interaction(&self, _npc_guid: u64, _player_guid: u64) -> Result<bool> {
         Ok(self.npc_refuses) // default false — every existing fixture NPC keeps interacting
+    }
+    fn trainer_serves(&self, _player_guid: u64, _trainer_guid: u64) -> Result<bool> {
+        Ok(!self.trainer_refuses_class) // default true — every existing fixture trainer serves
     }
     fn buy_item(
         &self,
@@ -6821,6 +6827,144 @@ fn trainer_list_replies_smsg_trainer_list_with_the_fixture_spells() {
             assert_eq!(list.spells[0].spell, 100);
         }
         other => panic!("expected SMSG_TRAINER_LIST, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+/// A wrong-class player gets no trainer window: not an empty one, not an error packet.
+///
+/// Silence needs a probe to assert — reading straight after the request would block forever when
+/// the server correctly sends nothing. The follow-up gossip reply arriving first proves the trainer
+/// request emitted no bytes of its own.
+#[test]
+fn trainer_list_is_silently_dropped_for_a_player_the_trainer_does_not_serve() {
+    let mut s = quest_store();
+    s.trainer_refuses_class = true;
+    s.trainer_spells = vec![codec::TrainerSpellView {
+        spell_id: 100,
+        cost: 10,
+        required_level: 1,
+        player_level: 1,
+        known: false,
+        profession: false,
+    }];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_TRAINER_LIST {
+        guid: Guid::new(70),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    // The follow-up whose reply we DO expect. Gossip always answers, so reading it back proves the
+    // trainer request emitted nothing — and it doubles as the "the NPC still talks to you" check:
+    // the class gate removes the training service, not the creature.
+    CMSG_GOSSIP_HELLO {
+        guid: Guid::new(70),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(_) => {}
+        ServerOpcodeMessage::SMSG_TRAINER_LIST(_) => {
+            panic!("a trainer that does not serve this class must send NO window")
+        }
+        other => panic!("expected only the gossip reply, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+/// The gossip menu of a trainer that does not serve this class keeps every other line and loses
+/// both training entries — the respec goes with the training because the module refuses both.
+#[test]
+fn gossip_hides_the_train_and_unlearn_options_for_a_class_the_trainer_does_not_serve() {
+    use lyracore_shared::constants::gossip_option;
+    // Level 20 matters: the respec option is independently hidden below level 10, so at the default
+    // fixture level this would pass without the class gate doing any work.
+    let mut s = quest_store_at_level(20);
+    s.gossip_opts = vec![
+        opt(0, "Well met, traveler.", gossip_option::GOSSIP),
+        opt(1, "I would like to train.", gossip_option::TRAINER),
+        opt(
+            0,
+            "I wish to unlearn my talents.",
+            gossip_option::UNLEARNTALENTS,
+        ),
+        opt(1, "I'd like to browse your goods.", gossip_option::VENDOR),
+    ];
+    s.trainer_refuses_class = true;
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_GOSSIP_HELLO {
+        guid: Guid::new(90),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(m) => {
+            let lines: Vec<&str> = m.gossips.iter().map(|g| g.message.as_str()).collect();
+            assert!(
+                !lines.contains(&"I would like to train."),
+                "the train option must be hidden: {lines:?}"
+            );
+            assert!(
+                !lines.contains(&"I wish to unlearn my talents."),
+                "the respec option must be hidden too: {lines:?}"
+            );
+            // The NPC is not silenced — it still talks, and still sells.
+            assert!(
+                lines.contains(&"Well met, traveler."),
+                "plain gossip lines survive: {lines:?}"
+            );
+            assert!(
+                lines.contains(&"I'd like to browse your goods."),
+                "the vendor line on the same NPC survives: {lines:?}"
+            );
+        }
+        other => panic!("expected SMSG_GOSSIP_MESSAGE, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+/// The same menu with the default fixture (serves) keeps all four options, so the test above pins
+/// the class gate rather than some unrelated filter dropping those actions for everyone.
+#[test]
+fn gossip_keeps_the_train_and_unlearn_options_for_a_class_the_trainer_serves() {
+    use lyracore_shared::constants::gossip_option;
+    // Same level as its counterpart, so the only difference between the two tests is the gate.
+    let mut s = quest_store_at_level(20);
+    s.gossip_opts = vec![
+        opt(0, "Well met, traveler.", gossip_option::GOSSIP),
+        opt(1, "I would like to train.", gossip_option::TRAINER),
+        opt(
+            0,
+            "I wish to unlearn my talents.",
+            gossip_option::UNLEARNTALENTS,
+        ),
+        opt(1, "I'd like to browse your goods.", gossip_option::VENDOR),
+    ];
+    let store = std::sync::Arc::new(s); // trainer_refuses_class stays false (derive-Default)
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_GOSSIP_HELLO {
+        guid: Guid::new(90),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(m) => {
+            let lines: Vec<&str> = m.gossips.iter().map(|g| g.message.as_str()).collect();
+            assert!(
+                lines.contains(&"I would like to train."),
+                "a served class still gets the train option: {lines:?}"
+            );
+            assert!(
+                lines.contains(&"I wish to unlearn my talents."),
+                "and the respec option: {lines:?}"
+            );
+        }
+        other => panic!("expected SMSG_GOSSIP_MESSAGE, got {other}"),
     }
     drop(client);
     server.join().unwrap();
