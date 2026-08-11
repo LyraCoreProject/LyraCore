@@ -183,17 +183,41 @@ pub const LOS_EYE_HEIGHT: f32 = 2.0;
 /// Sight-line sample spacing in yards (half the obs-grid resolution — can't skip a column).
 const LOS_STEP: f32 = 0.5;
 
-/// Line of sight from a to b: sample the segment every `LOS_STEP` and compare the ray's
-/// interpolated Z (+eye height at both ends) against the obstruction column tops.
+/// The obs-grid column containing world (x, y), or None off-grid.
+fn obs_col(x: f32, y: f32) -> Option<(u16, u16, usize, usize)> {
+    let (cx, cy) = (
+        crate::terrain::cell_index(x)?,
+        crate::terrain::cell_index(y)?,
+    );
+    Some((
+        cx,
+        cy,
+        sub_index(x, cx, OBS_DIM)?,
+        sub_index(y, cy, OBS_DIM)?,
+    ))
+}
+
+/// The raymarch behind `has_los` and `step_hit`: the first sample along a→b whose obstruction
+/// column tops the ray, or None when clear. `exempt_start` skips samples in a's OWN obs column
+/// — the committed-step gate needs it (a mover hugging a wall stands inside the blob's
+/// conservative margin, and counting its own column as blocked would hold it in place forever —
+/// the same live find that exempts the start cell in `line_walkable`), while sight checks keep
+/// the strict test.
 // Deliberate simplification: parametric sampling, not an exact DDA — at 0.5 yd steps over a
 // 1.04 yd obs grid a column cannot be stepped over; move to exact cell walking when someone
 // measures the difference.
-pub fn has_los(
+fn los_hit(
     fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
     a: (f32, f32, f32),
     b: (f32, f32, f32),
-) -> bool {
+    exempt_start: bool,
+) -> Option<(f32, f32)> {
     let mut cache = Cache::new(fetch);
+    let start_col = if exempt_start {
+        obs_col(a.0, a.1)
+    } else {
+        None
+    };
     let (dx, dy, dz) = (b.0 - a.0, b.1 - a.1, b.2 - a.2);
     let len = (dx * dx + dy * dy).sqrt();
     let steps = (len / LOS_STEP).ceil().max(1.0) as u32;
@@ -201,23 +225,43 @@ pub fn has_los(
         let t = i as f32 / steps as f32;
         let (x, y) = (a.0 + dx * t, a.1 + dy * t);
         let ray_z = a.2 + LOS_EYE_HEIGHT + (dz * t);
-        let (Some(cx), Some(cy)) = (crate::terrain::cell_index(x), crate::terrain::cell_index(y))
-        else {
+        let Some((cx, cy, ox, oy)) = obs_col(x, y) else {
             continue;
         };
+        if start_col == Some((cx, cy, ox, oy)) {
+            continue;
+        }
         let Some(cell) = cache.get(cx, cy) else {
-            continue;
-        };
-        let (Some(ox), Some(oy)) = (sub_index(x, cx, OBS_DIM), sub_index(y, cy, OBS_DIM)) else {
             continue;
         };
         if let Some(top) = obs_top(&cell.obs, cell.base_z, ox, oy) {
             if ray_z < top {
-                return false;
+                return Some((x, y));
             }
         }
     }
-    true
+    None
+}
+
+/// Line of sight from a to b: sample the segment every `LOS_STEP` and compare the ray's
+/// interpolated Z (+eye height at both ends) against the obstruction column tops.
+pub fn has_los(
+    fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
+    a: (f32, f32, f32),
+    b: (f32, f32, f32),
+) -> bool {
+    los_hit(fetch, a, b, false).is_none()
+}
+
+/// Committed-step gate ray (#102): `has_los`'s raymarch, but it RETURNS the first blocked
+/// sample so the caller can truncate the step just short of it, and the mover's own obs column
+/// is exempt (see `los_hit`). None = the step crosses no known obstruction.
+pub fn step_hit(
+    fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
+    a: (f32, f32, f32),
+    b: (f32, f32, f32),
+) -> Option<(f32, f32)> {
+    los_hit(fetch, a, b, true)
 }
 
 /// Nav-grid resolution in yards (one walk sub-cell).
@@ -557,6 +601,64 @@ mod runtime_tests {
         assert_eq!(expanded, 0, "own-cell exemption keeps the fast path");
         assert_eq!(path.len(), 1);
         assert!(complete);
+    }
+
+    #[test]
+    fn step_hit_stops_a_wall_crossing_step_and_clears_the_doorway() {
+        let z = 80.0;
+        // Step across the wall at ny=50 (oy=25): the gate ray hits, and the hit sample sits ON
+        // the wall's obs column (ox=16) — the gated mover truncates short instead of crossing.
+        let ((cx, _), _) = walled_cell();
+        let wall_x = sub_center(cx, 16, OBS_DIM);
+        let (ax, ay) = at(10, 50);
+        let (bx, by) = at(54, 50);
+        let (hx, _) =
+            step_hit(&mut fetcher(), (ax, ay, z), (bx, by, z)).expect("wall blocks the step");
+        assert!(
+            (hx - wall_x).abs() <= 0.8,
+            "hit sample {hx:.2} not at the wall column {wall_x:.2}"
+        );
+        // Straight through the doorway line (ny=31, oy=15): clear, same as `has_los`.
+        let (ax, ay) = at(10, 31);
+        let (bx, by) = at(54, 31);
+        assert!(step_hit(&mut fetcher(), (ax, ay, z), (bx, by, z)).is_none());
+    }
+
+    #[test]
+    fn step_hit_exempts_the_movers_own_obs_column() {
+        // A mover standing INSIDE the wall's obs column (the blob's conservative margin — movement
+        // isn't walkability-gated) must be able to step back into the open: its own column never
+        // holds it (the same live find as `line_walkable`'s start-cell exemption)…
+        let z = 80.0;
+        let ((cx, cy), _) = walled_cell();
+        let from = (sub_center(cx, 16, OBS_DIM), sub_center(cy, 25, OBS_DIM));
+        let to = at(10, 50);
+        assert!(step_hit(&mut fetcher(), (from.0, from.1, z), (to.0, to.1, z)).is_none());
+        // …while `has_los` keeps the strict test (sight semantics unchanged by #102).
+        assert!(!has_los(
+            &mut fetcher(),
+            (from.0, from.1, z),
+            (to.0, to.1, z)
+        ));
+    }
+
+    #[test]
+    fn no_path_fallback_straight_step_is_caught_by_the_gate() {
+        // #102 (c): a goal inside the wall makes `find_leg` bail (None) and the module falls back
+        // to a straight step AT the goal — the step-gate ray must hit at the wall column so the
+        // committed move truncates short of it instead of walking into geometry.
+        let z = 80.0;
+        let ((cx, _), _) = walled_cell();
+        let wall_x = sub_center(cx, 16, OBS_DIM);
+        let from = at(10, 50);
+        let goal = at(32, 50); // ON the wall line — unwalkable by construction
+        assert!(find_leg(&mut fetcher(), from, goal, 20_000).is_none());
+        let (hx, _) = step_hit(&mut fetcher(), (from.0, from.1, z), (goal.0, goal.1, z))
+            .expect("the straight fallback crosses the wall column");
+        assert!(
+            (hx - wall_x).abs() <= 0.8 && hx < from.0,
+            "hit sample {hx:.2} not at the wall column {wall_x:.2}"
+        );
     }
 
     #[test]

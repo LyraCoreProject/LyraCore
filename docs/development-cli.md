@@ -49,7 +49,8 @@ lyracore dev logs [spacetime|gateway]
 lyracore dev smoke
 lyracore dev down [--forget]
 lyracore account create USER [--password-stdin]
-lyracore import [--accept] [--client-data PATH]
+lyracore import [world] [--accept] [--client-data PATH]
+lyracore import vmaps [--client-data PATH]
 lyracore config
 lyracore config set client-data PATH
 lyracore character gm NAME true|false
@@ -67,7 +68,8 @@ lyracore update
 | `dev smoke` | the pinned wire harness's generic login smoke against the running fixture |
 | `dev down` | stop only the processes this CLI started, and only if the PID is still ours |
 | `account create` | provision an account's SRP6 credentials without a password in `argv` |
-| `import` | replace the seed fixture with the real world — consent notice, then the four-stage ETL |
+| `import`, `import world` | replace the seed fixture with the real world — consent notice, then the six-stage native ETL |
+| `import vmaps` | exact model/WMO collision triangles per world shard, read from your own client |
 | `config` | show, or set, the client-data path `import` and `doctor` remember |
 | `character gm` | flip GM commands on or off for a character, on whichever world shard has it |
 | `update` | pull the latest LyraCore into this checkout and tell you how to restart it |
@@ -79,9 +81,11 @@ job is to be usable in a checkout that has neither `scripts/` nor `adapters/`.
 
 `import` is the one deliberate exception, and it is a different thing: `importer/scripts/` is not
 private repo plumbing but **shipped tooling**, part of the importer the same way `module/src` is
-part of the module. Those scripts carry post-ETL assertions tuned against real dumps over months;
-`import` is a façade that adds ordering, a consent gate and per-stage diagnosis on top of them, on
-the same path `publish` took before it was absorbed into Rust. A checkout without
+part of the module. Since core#104 the world ETL's orchestration — mode ordering, staging, the
+`FLOOR_*` floors sourced from `import-manifest.sh` — runs natively in the CLI, on the same path
+`publish` took before it was absorbed into Rust. The CLI still shells to `pull-classic-db.sh`,
+`import-class-spells.sh` and the importer binary itself; `import-world.sh` remains the by-hand
+authority for custom boxes, region slices and second continents. A checkout without
 `importer/scripts/` gets a named prerequisite error, not a silent no-op.
 
 ## `import` — the real world, on your machine
@@ -99,19 +103,19 @@ distributes it or anything built from it, and states that the DBC half comes fro
 1.12.1 client. Only a typed `yes` or `--accept` proceeds; anything else exits 2 having run nothing.
 There is no terminal-less default: `import` with no TTY and no `--accept` refuses.
 
-Then four stages, fail-fast, each with its own diagnosis:
+Then six stages, fail-fast, each with its own diagnosis:
 
 | Stage | What runs | Failure looks like |
 | --- | --- | --- |
 | 1 | `importer/scripts/pull-classic-db.sh` — clone/fetch cmangos' repo at the pinned commit and assemble the dump, verifying it against `classic-db.lock`'s sha256 | network, or a **checksum mismatch** — which is not a network problem and must not be imported past |
-| 2 | locate the client `Data/` directory (`--client-data`, else prompt) and validate it | missing `dbc.MPQ`/`terrain.MPQ`; the install directory passed instead of `Data/` (the error names the corrected path); a TBC-or-later client (rejected by the archives only it has) |
-| 3 | `importer/scripts/import-world.sh` — the world ETL: creatures, quests, loot, vendors, gameobjects, terrain heightmap, navigation grid | the ETL's own `FAIL` lines, one per content family that came up short |
-| 4 | `importer/scripts/import-class-spells.sh` — the curated class-spell/trainer overlay | a "requested N ids but matched M" warning names ids your client build lacks |
+| 2 | locate the client `Data/` directory (`--client-data`, else config, else prompt) and validate it | missing `dbc.MPQ`/`terrain.MPQ`; the install directory passed instead of `Data/` (the error names the corrected path); a TBC-or-later client (rejected by the archives only it has) |
+| 3 | build the importer (`cargo build --bin lyracore-importer`) | a compile error in this checkout |
+| 4 | the importer's modes, in the bash flow's order — dump ETL, terrain, nav, DBC tables, talents, Spell.dbc, the class-spell overlay, the caster `--only` pass | each mode's own diagnosis, fail-fast (the bash ran on past failures) |
+| 5 | re-arm the realm — creature tick, fixtures, gather pools, both reducer calls checked | a reducer error (the bash sent these to `/dev/null`) |
+| 6 | the `FLOOR_*` assertions, natively, floors sourced from `import-manifest.sh` | a named `FLOOR_*` line per content family that came up short; failures collect, then exit 1 |
 
-Stage 4 is run again on purpose even though the world ETL calls it: inside the ETL it is piped
-through a reporting `grep` that swallows its exit status, so a class-spell failure — the one that
-leaves every class unable to train past its starter kit — would otherwise surface in play rather
-than in the import.
+The class-spell overlay runs once, exit-checked — the bash flow's deliberate double-run existed
+only because a reporting `grep` swallowed its exit status there.
 
 A `--client-data` path is validated **before** the consent notice is answered, so a typo costs
 nothing; the flagless run is prompted for at stage 2, in order. Every stage runs from the checkout
