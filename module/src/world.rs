@@ -1484,12 +1484,7 @@ pub(crate) fn apply_inspect(
 ) -> Result<(), String> {
     let target = crate::helpers::live_entity(ctx, target_guid)
         .map_err(|_| "no such inspect target".to_string())?;
-    let (dx, dy, dz) = (
-        target.x - inspector.x,
-        target.y - inspector.y,
-        target.z - inspector.z,
-    );
-    let dist_sq = dx * dx + dy * dy + dz * dz;
+    let dist_sq = crate::helpers::dist_sq(&inspector, &target);
     let friendly = ctx.db.game_faction_template().count() == 0
         || crate::faction::is_friendly(ctx, inspector.faction_template, target.faction_template);
     can_inspect(
