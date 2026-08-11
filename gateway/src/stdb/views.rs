@@ -125,6 +125,7 @@ pub(crate) fn entity_view(e: WorldEntity, zone_id: u32) -> crate::codec::EntityV
         next_level_xp: e.next_level_xp,
         money: e.money,
         unit_bytes_1: e.unit_bytes_1,
+        unit_bytes_2: e.unit_bytes_2,
         strength: e.strength,
         agility: e.agility,
         stamina: e.stamina,

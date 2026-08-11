@@ -1974,6 +1974,13 @@ pub(crate) fn entity_update_to_outbound(
             let m = codec::build_unit_flags_values(new.guid, new.unit_flags);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
+        // Sheath relay (#101): UNIT_FIELD_BYTES_2 byte 0 flipping as a unit draws or stows its weapon.
+        // Any unit, not player-gated — a creature drawing on engage is the same wire field. Without
+        // this arm the server knows the state and no observer ever hears about it.
+        if old.unit_bytes_2 != new.unit_bytes_2 {
+            let m = codec::build_sheath_values(new.guid, new.unit_bytes_2);
+            out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+        }
         // Live XP-bar update (slice 1): players only (creatures never change xp; player-only fields).
         let xp_changed = old.xp != new.xp || old.next_level_xp != new.next_level_xp;
         if xp_changed && is_player {
@@ -3464,6 +3471,7 @@ mod tests {
             target_guid: 0,
             money: 0,
             unit_bytes_1: 0,
+            unit_bytes_2: 0,
             strength: 1,
             agility: 1,
             stamina: 1,
@@ -3520,6 +3528,27 @@ mod tests {
             vec![ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
                 codec::build_health_values(new.guid, 50)
             ))]
+        );
+    }
+
+    /// #101: a sheath change must relay, or drawing a weapon is invisible to everyone but the player
+    /// who did it. The state lives in BYTE 0 of `unit_bytes_2` — pin the decoded packet, and pin that
+    /// an unchanged row stays silent (the client re-sends its current state on every weapon swap, and
+    /// a relay per no-op is a broadcast amplifier on a busy cell).
+    #[test]
+    fn sheath_change_relays_and_a_no_op_stays_silent() {
+        let old = player_entity();
+        let mut new = old.clone();
+        new.unit_bytes_2 = 1; // SHEATH_STATE_MELEE — weapons drawn
+        assert_eq!(
+            entity_update_to_outbound(&old, &new),
+            vec![ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                codec::build_sheath_values(new.guid, 1)
+            ))]
+        );
+        assert!(
+            entity_update_to_outbound(&old, &old.clone()).is_empty(),
+            "an unchanged row must not relay a sheath packet"
         );
     }
 

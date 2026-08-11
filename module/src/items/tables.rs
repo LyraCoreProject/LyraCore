@@ -90,11 +90,11 @@ pub struct ItemTemplate {
     /// END-appended + `#[default(0)]` → additive auto-migration. [reference]
     #[default(0)]
     pub container_slots: u8,
-    /// Vanilla item_template.sheath — where the item visually stows when sheathed (1=main-hand/hip,
-    /// 3=2H/back, 4=shield/back …). SCHEMA-ONLY today: this column is already live on the published
-    /// node, so removing it from source would abort the next publish as a column removal. Nothing
-    /// reads it yet — the SMSG_ITEM_QUERY codec still hardcodes MainHand until the sheath-aware codec
-    /// (work-item 113) lands.
+    /// Vanilla item_template.sheath — where the item visually stows when sheathed. Read by the
+    /// gateway item view and passed VERBATIM to `SMSG_ITEM_QUERY_SINGLE_RESPONSE.sheathe_type`
+    /// (cmangos sends `pProto->Sheath` the same way). The byte is an opaque client posture index —
+    /// gtker's `SheatheType` variant names do NOT describe the rendered posture, so trust dump
+    /// values, not names: Worn Shortsword (25) = 3, Dented Buckler (1166, shield) = 4, 0 = no stow.
     /// END-appended + `#[default(0)]` → additive auto-migration. [reference]
     #[default(0)]
     pub sheath: u8,

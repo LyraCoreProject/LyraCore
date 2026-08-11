@@ -357,7 +357,8 @@ mod it {
                                     // SHEATH=113 below — PAGE_TEXT and START_QUEST land on that same anchored run.
     pub const PAGE_TEXT: usize = 107; // readable-item page id (work-item 213: needs its own reader packet, deferred)
     pub const START_QUEST: usize = 110; // quest-starter link (work-item 213: 194 consumes)
-    pub const SHEATH: usize = 113; // sheath animation slot (0=none, 1=2h back, 2=staff back, 3=hip, ...)
+    pub const SHEATH: usize = 113; // sheath posture, sent verbatim to the client (0=no stow, 1H sword=3,
+                                   // shield=4 — opaque client indices, see items/tables.rs::sheath)
     pub const BLOCK: usize = 115; // shield block value (CREATE TABLE: …RandomProperty(114), block(115), itemset(116))
     pub const MAX_DURABILITY: usize = 117;
     // BagFamily (work-item 213): bag-type restriction bitmask. Anchored right after the

@@ -3,6 +3,7 @@
 //! `gw::gw_*` reducers drive (#483 — the sender-path twins are gone) plus `on_disconnect`.
 //! [entity]/[event]
 
+use lyracore_shared::constants::sheath_state;
 use lyracore_shared::spatial;
 use spacetimedb::{
     reducer, table, Identity, ReducerContext, Table,
@@ -320,6 +321,17 @@ pub struct WorldEntity {
     /// so `publish` auto-migrates.
     #[default(0)]
     pub sheet_crit_bp: u32,
+    /// `UNIT_FIELD_BYTES_2` (#101): byte 0 is the SHEATH STATE — 0 = weapons stowed, 1 = melee drawn,
+    /// 2 = ranged drawn. Written only by `set_sheathed` (the `CMSG_SETSHEATHED` the client sends on
+    /// `Z`), read by the gateway create block + relay so PEERS see a weapon drawn or stowed at all.
+    /// Distinct from `unit_bytes_1` (stand state / shapeshift / ghost vis) and from `player_bytes_2`
+    /// (facial hair / rest state) — three different wire fields, easy to confuse.
+    /// The remaining bytes (1 = PvP flags, 2 = pet flags, 3 = shapeshift) stay 0 until something
+    /// needs them; the whole u32 is stored so they don't each cost a migration.
+    /// `#[default(0)]` + END-appended so `publish` auto-migrates existing rows (weapons stowed, which
+    /// is what every existing row renders as today).
+    #[default(0)]
+    pub unit_bytes_2: u32,
 }
 
 impl WorldEntity {
@@ -1663,6 +1675,32 @@ pub(crate) fn ghost_restored_fields(player_flags: u32, unit_bytes_1: u32) -> (bo
         player_flags | pf::GHOST,
         unit_bytes_1 | unit_vis_flags::GHOST,
     )
+}
+
+/// Draw or stow the actor's weapons — the `CMSG_SETSHEATHED` the client sends when a player presses
+/// `Z` or starts an attack. Writes byte 0 of `UNIT_FIELD_BYTES_2`; the gateway's entity-update relay
+/// turns the row change into a VALUES packet, which is the ONLY way an observer learns that someone
+/// else drew or stowed a weapon. Without this the field stays 0 forever and every peer renders every
+/// player permanently unarmed. Where a stowed weapon hangs is a different field — the per-item
+/// `item_template.sheath` byte in the item query. [#101]
+pub(crate) fn apply_set_sheathed(
+    ctx: &ReducerContext,
+    mut actor: WorldEntity,
+    state: u8,
+) -> Result<(), String> {
+    if !sheath_state::is_valid(state) {
+        return Err(format!("invalid sheath state {state}"));
+    }
+    let packed = sheath_state::packed_with(actor.unit_bytes_2, state);
+    // No-op guard: the client re-sends the CURRENT state on every weapon swap and on some ability
+    // presses. Writing the identical row anyway would fire the entity-update relay, which broadcasts
+    // a VALUES packet to every observer in range — a swap-spam amplifier on a busy cell.
+    if packed == actor.unit_bytes_2 {
+        return Ok(());
+    }
+    actor.unit_bytes_2 = packed;
+    ctx.db.game_world_entity().guid().update(actor);
+    Ok(())
 }
 
 /// Resurrection Sickness debuff spell id (vanilla 15007). Seeded in `seed.rs` as a single negative

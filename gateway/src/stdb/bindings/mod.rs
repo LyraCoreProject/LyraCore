@@ -6,33 +6,15 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
-pub mod abandon_quest_reducer;
-pub mod accept_quest_reducer;
 pub mod account_type;
-pub mod add_friend_reducer;
-pub mod add_ignore_reducer;
 pub mod addon_message_type;
 pub mod areatrigger_teleport_type;
 pub mod arm_all_pools_reducer;
 pub mod aura_schedule_type;
 pub mod aura_type;
 pub mod begin_transfer_reducer;
-pub mod bind_home_reducer;
-pub mod bot_goal_type;
 pub mod bot_invite_intent_type;
-pub mod bot_kit_type;
-pub mod bot_personality_type;
-pub mod bot_rotation_type;
-pub mod bot_waypoint_edge_type;
-pub mod bot_waypoint_type;
-pub mod buy_item_reducer;
-pub mod buy_trainer_spell_reducer;
 pub mod buyback_entry_type;
-pub mod buyback_item_reducer;
-pub mod cancel_aura_reducer;
-pub mod cancel_cast_reducer;
-pub mod cast_spell_at_reducer;
-pub mod cast_spell_reducer;
 pub mod catalogue_fingerprint_type;
 pub mod channel_event_type;
 pub mod channel_member_type;
@@ -47,7 +29,6 @@ pub mod claim_guid_range_reducer;
 pub mod claim_operator_reducer;
 pub mod class_level_stats_type;
 pub mod clear_promoted_loot_roll_reducer;
-pub mod client_command_reducer;
 pub mod combat_event_type;
 pub mod combo_point_type;
 pub mod confirm_import_reducer;
@@ -75,11 +56,16 @@ pub mod debug_accept_quest_reducer;
 pub mod debug_add_threat_reducer;
 pub mod debug_apply_damage_reducer;
 pub mod debug_arm_instance_tick_reducer;
+pub mod debug_assert_blink_clamp_reducer;
+pub mod debug_assert_chase_stops_at_column_reducer;
+pub mod debug_assert_floor_snap_reducer;
 pub mod debug_audit_class_kits_reducer;
 pub mod debug_audit_quest_chains_reducer;
 pub mod debug_backfill_cell_ids_reducer;
 pub mod debug_backfill_go_grid_reducer;
 pub mod debug_begin_cast_reducer;
+pub mod debug_bench_collision_gate_reducer;
+pub mod debug_bench_los_reducer;
 pub mod debug_bind_home_reducer;
 pub mod debug_buy_item_reducer;
 pub mod debug_buy_trainer_spell_reducer;
@@ -113,6 +99,7 @@ pub mod debug_equip_weapon_reducer;
 pub mod debug_expire_quest_reducer;
 pub mod debug_explore_at_reducer;
 pub mod debug_fish_reducer;
+pub mod debug_floor_probe_reducer;
 pub mod debug_force_cast_at_reducer;
 pub mod debug_force_cast_reducer;
 pub mod debug_force_gameobject_respawn_reducer;
@@ -159,6 +146,7 @@ pub mod debug_set_money_reducer;
 pub mod debug_set_nav_enabled_reducer;
 pub mod debug_set_power_reducer;
 pub mod debug_set_skill_reducer;
+pub mod debug_set_vmap_enabled_reducer;
 pub mod debug_set_xp_rate_reducer;
 pub mod debug_setup_gather_pool_reducer;
 pub mod debug_skin_nearest_reducer;
@@ -180,22 +168,18 @@ pub mod debug_use_gameobject_reducer;
 pub mod debug_use_hearthstone_reducer;
 pub mod debug_use_item_reducer;
 pub mod debug_verify_combat_regen_reducer;
-pub mod del_friend_reducer;
-pub mod del_ignore_reducer;
+pub mod debug_vmap_area_info_reducer;
+pub mod debug_vmap_ray_reducer;
 pub mod delete_character_reducer;
-pub mod disenchant_reducer;
 pub mod dr_state_type;
 pub mod dynamic_object_type;
 pub mod emote_event_type;
-pub mod enchant_item_reducer;
 pub mod encounter_equip_type;
 pub mod encounter_hp_watch_type;
 pub mod encounter_spawn_type;
 pub mod encounter_state_type;
 pub mod ensure_instance_reducer;
-pub mod enter_areatrigger_reducer;
 pub mod entity_motion_type;
-pub mod equip_item_reducer;
 pub mod establish_session_reducer;
 pub mod event_reaper_schedule_type;
 pub mod evict_instance_population_reducer;
@@ -204,7 +188,6 @@ pub mod faction_type;
 pub mod finish_transfer_reducer;
 pub mod fire_pending_cast_reducer;
 pub mod fire_spell_impact_reducer;
-pub mod fish_reducer;
 pub mod game_account_table;
 pub mod game_addon_message_table;
 pub mod game_area_table;
@@ -343,6 +326,7 @@ pub mod game_roll_event_table;
 pub mod game_school_lockout_table;
 pub mod game_session_table;
 pub mod game_shard_load_table;
+pub mod game_shard_load_total_table;
 pub mod game_skill_ability_table;
 pub mod game_skill_availability_table;
 pub mod game_skill_line_table;
@@ -371,6 +355,7 @@ pub mod game_trainer_spell_table;
 pub mod game_transfer_in_table;
 pub mod game_transfer_out_table;
 pub mod game_transfer_reaper_schedule_table;
+pub mod game_vmap_chunk_table;
 pub mod game_whisper_event_table;
 pub mod game_world_config_table;
 pub mod game_world_entity_table;
@@ -378,25 +363,17 @@ pub mod game_xp_event_table;
 pub mod gateway_lease_reaper_schedule_type;
 pub mod gateway_lease_type;
 pub mod gateway_session_type;
-pub mod gm_command_reducer;
 pub mod gm_world_config_type;
 pub mod gossip_menu_type;
 pub mod gossip_option_type;
-pub mod gossip_select_reducer;
 pub mod graveyard_loc_type;
 pub mod graveyard_zone_type;
 pub mod ground_area_schedule_type;
 pub mod ground_area_type;
-pub mod group_accept_reducer;
-pub mod group_decline_reducer;
 pub mod group_event_type;
-pub mod group_invite_reducer;
 pub mod group_invite_type;
-pub mod group_leave_reducer;
-pub mod group_loot_method_reducer;
 pub mod group_member_type;
 pub mod group_type;
-pub mod group_uninvite_reducer;
 pub mod guid_allocator_type;
 pub mod guid_range_assignment_type;
 pub mod guid_range_type;
@@ -461,6 +438,7 @@ pub mod gw_send_roll_reducer;
 pub mod gw_send_whisper_reducer;
 pub mod gw_set_action_button_reducer;
 pub mod gw_set_faction_at_war_reducer;
+pub mod gw_set_sheathed_reducer;
 pub mod gw_set_target_reducer;
 pub mod gw_skin_reducer;
 pub mod gw_spirit_res_reducer;
@@ -483,28 +461,20 @@ pub mod import_nav_chunks_append_reducer;
 pub mod import_nav_chunks_reducer;
 pub mod import_terrain_chunks_append_reducer;
 pub mod import_terrain_chunks_reducer;
-pub mod inspect_reducer;
+pub mod import_vmap_chunks_append_reducer;
+pub mod import_vmap_chunks_reducer;
 pub mod install_guid_range_reducer;
 pub mod instance_reaper_schedule_type;
 pub mod item_instance_type;
 pub mod item_template_type;
-pub mod join_channel_reducer;
-pub mod learn_talent_reducer;
-pub mod leave_channel_reducer;
 pub mod level_stats_type;
 pub mod levelup_event_type;
-pub mod logout_reducer;
-pub mod loot_master_give_reducer;
-pub mod loot_money_reducer;
-pub mod loot_roll_reducer;
 pub mod loot_roll_type;
 pub mod loot_roll_vote_type;
 pub mod map_region_type;
 pub mod melee_attack_type;
 pub mod melee_schedule_type;
 pub mod motion_publish_schedule_type;
-pub mod move_item_reducer;
-pub mod movement_update_reducer;
 pub mod movement_violation_type;
 pub mod nav_chunk_type;
 pub mod npc_text_slot_type;
@@ -512,41 +482,16 @@ pub mod npc_text_type;
 pub mod npc_vendor_type;
 pub mod on_disconnect_reducer;
 pub mod operator_type;
-pub mod party_chat_reducer;
 pub mod pending_cast_type;
 pub mod pending_motion_type;
 pub mod pending_spell_impact_type;
-pub mod pet_command_reducer;
 pub mod pet_command_type;
-pub mod pick_lock_reducer;
-pub mod pkg_deadmines_reset_reducer;
-pub mod pkg_example_note_table;
-pub mod pkg_example_note_type;
-pub mod pkg_example_seed_note_reducer;
-pub mod pkg_example_stat_table;
-pub mod pkg_example_stat_type;
-pub mod pkg_playerbots_bot_table;
-pub mod pkg_playerbots_goal_table;
-pub mod pkg_playerbots_kit_table;
-pub mod pkg_playerbots_personality_table;
-pub mod pkg_playerbots_rotation_table;
-pub mod pkg_playerbots_waypoint_edge_table;
-pub mod pkg_playerbots_waypoint_table;
 pub mod player_action_type;
-pub mod player_bot_type;
-pub mod player_login_reducer;
 pub mod player_reputation_type;
 pub mod player_skill_type;
 pub mod player_spell_type;
-pub mod playerbots_despawn_all_reducer;
-pub mod playerbots_spawn_class_role_reducer;
-pub mod playerbots_spawn_race_reducer;
-pub mod playerbots_spawn_reducer;
-pub mod playerbots_spawn_role_reducer;
-pub mod playerbots_travel_reducer;
 pub mod provision_account_reducer;
 pub mod publish_motion_reducer;
-pub mod push_quest_to_party_reducer;
 pub mod quest_objective_type;
 pub mod quest_reward_choice_type;
 pub mod quest_reward_item_type;
@@ -563,42 +508,27 @@ pub mod reap_gateway_leases_reducer;
 pub mod reap_instances_reducer;
 pub mod reap_movement_events_reducer;
 pub mod reap_transfers_reducer;
-pub mod reclaim_corpse_reducer;
 pub mod record_region_load_reducer;
 pub mod record_shard_load_reducer;
 pub mod region_assignment_type;
 pub mod region_load_type;
 pub mod release_transfer_reducer;
-pub mod repair_item_reducer;
-pub mod repop_reducer;
-pub mod reset_instance_reducer;
-pub mod reset_talents_reducer;
 pub mod rest_state_event_type;
 pub mod resurrect_request_type;
-pub mod resurrect_response_reducer;
 pub mod roll_event_type;
 pub mod school_lockout_type;
-pub mod sell_item_reducer;
-pub mod send_channel_message_reducer;
-pub mod send_chat_reducer;
-pub mod send_emote_reducer;
-pub mod send_roll_reducer;
-pub mod send_whisper_reducer;
 pub mod server_config_type;
 pub mod session_type;
-pub mod set_action_button_reducer;
 pub mod set_character_shard_reducer;
-pub mod set_faction_at_war_reducer;
 pub mod set_gm_level_reducer;
 pub mod set_motion_tick_ms_reducer;
 pub mod set_region_assignment_reducer;
-pub mod set_target_reducer;
 pub mod settle_loot_roll_reducer;
+pub mod shard_load_total_type;
 pub mod shard_load_type;
 pub mod skill_ability_type;
 pub mod skill_availability_type;
 pub mod skill_line_type;
-pub mod skin_reducer;
 pub mod spell_cast_event_type;
 pub mod spell_cd_type;
 pub mod spell_chain_type;
@@ -610,16 +540,10 @@ pub mod spell_impact_event_type;
 pub mod spell_learn_type;
 pub mod spell_reagent_type;
 pub mod spell_type;
-pub mod spirit_healer_res_reducer;
-pub mod split_item_reducer;
 pub mod stamp_import_meta_reducer;
-pub mod start_attack_reducer;
 pub mod start_item_type;
 pub mod start_position_type;
-pub mod start_ranged_attack_reducer;
-pub mod stop_attack_reducer;
 pub mod sync_group_mirror_reducer;
-pub mod take_loot_reducer;
 pub mod talent_tab_type;
 pub mod talent_type;
 pub mod taunt_lock_type;
@@ -634,41 +558,20 @@ pub mod trainer_spell_type;
 pub mod transfer_in_type;
 pub mod transfer_out_type;
 pub mod transfer_reaper_schedule_type;
-pub mod turn_in_quest_reducer;
-pub mod unequip_item_reducer;
-pub mod use_gameobject_reducer;
-pub mod use_item_reducer;
+pub mod vmap_chunk_type;
 pub mod whisper_event_type;
 pub mod world_entity_type;
 pub mod xp_event_type;
 
-pub use abandon_quest_reducer::abandon_quest;
-pub use accept_quest_reducer::accept_quest;
 pub use account_type::Account;
-pub use add_friend_reducer::add_friend;
-pub use add_ignore_reducer::add_ignore;
 pub use addon_message_type::AddonMessage;
 pub use areatrigger_teleport_type::AreatriggerTeleport;
 pub use arm_all_pools_reducer::arm_all_pools;
 pub use aura_schedule_type::AuraSchedule;
 pub use aura_type::Aura;
 pub use begin_transfer_reducer::begin_transfer;
-pub use bind_home_reducer::bind_home;
-pub use bot_goal_type::BotGoal;
 pub use bot_invite_intent_type::BotInviteIntent;
-pub use bot_kit_type::BotKit;
-pub use bot_personality_type::BotPersonality;
-pub use bot_rotation_type::BotRotation;
-pub use bot_waypoint_edge_type::BotWaypointEdge;
-pub use bot_waypoint_type::BotWaypoint;
-pub use buy_item_reducer::buy_item;
-pub use buy_trainer_spell_reducer::buy_trainer_spell;
 pub use buyback_entry_type::BuybackEntry;
-pub use buyback_item_reducer::buyback_item;
-pub use cancel_aura_reducer::cancel_aura;
-pub use cancel_cast_reducer::cancel_cast;
-pub use cast_spell_at_reducer::cast_spell_at;
-pub use cast_spell_reducer::cast_spell;
 pub use catalogue_fingerprint_type::CatalogueFingerprint;
 pub use channel_event_type::ChannelEvent;
 pub use channel_member_type::ChannelMember;
@@ -683,7 +586,6 @@ pub use claim_guid_range_reducer::claim_guid_range;
 pub use claim_operator_reducer::claim_operator;
 pub use class_level_stats_type::ClassLevelStats;
 pub use clear_promoted_loot_roll_reducer::clear_promoted_loot_roll;
-pub use client_command_reducer::client_command;
 pub use combat_event_type::CombatEvent;
 pub use combo_point_type::ComboPoint;
 pub use confirm_import_reducer::confirm_import;
@@ -711,11 +613,16 @@ pub use debug_accept_quest_reducer::debug_accept_quest;
 pub use debug_add_threat_reducer::debug_add_threat;
 pub use debug_apply_damage_reducer::debug_apply_damage;
 pub use debug_arm_instance_tick_reducer::debug_arm_instance_tick;
+pub use debug_assert_blink_clamp_reducer::debug_assert_blink_clamp;
+pub use debug_assert_chase_stops_at_column_reducer::debug_assert_chase_stops_at_column;
+pub use debug_assert_floor_snap_reducer::debug_assert_floor_snap;
 pub use debug_audit_class_kits_reducer::debug_audit_class_kits;
 pub use debug_audit_quest_chains_reducer::debug_audit_quest_chains;
 pub use debug_backfill_cell_ids_reducer::debug_backfill_cell_ids;
 pub use debug_backfill_go_grid_reducer::debug_backfill_go_grid;
 pub use debug_begin_cast_reducer::debug_begin_cast;
+pub use debug_bench_collision_gate_reducer::debug_bench_collision_gate;
+pub use debug_bench_los_reducer::debug_bench_los;
 pub use debug_bind_home_reducer::debug_bind_home;
 pub use debug_buy_item_reducer::debug_buy_item;
 pub use debug_buy_trainer_spell_reducer::debug_buy_trainer_spell;
@@ -749,6 +656,7 @@ pub use debug_equip_weapon_reducer::debug_equip_weapon;
 pub use debug_expire_quest_reducer::debug_expire_quest;
 pub use debug_explore_at_reducer::debug_explore_at;
 pub use debug_fish_reducer::debug_fish;
+pub use debug_floor_probe_reducer::debug_floor_probe;
 pub use debug_force_cast_at_reducer::debug_force_cast_at;
 pub use debug_force_cast_reducer::debug_force_cast;
 pub use debug_force_gameobject_respawn_reducer::debug_force_gameobject_respawn;
@@ -795,6 +703,7 @@ pub use debug_set_money_reducer::debug_set_money;
 pub use debug_set_nav_enabled_reducer::debug_set_nav_enabled;
 pub use debug_set_power_reducer::debug_set_power;
 pub use debug_set_skill_reducer::debug_set_skill;
+pub use debug_set_vmap_enabled_reducer::debug_set_vmap_enabled;
 pub use debug_set_xp_rate_reducer::debug_set_xp_rate;
 pub use debug_setup_gather_pool_reducer::debug_setup_gather_pool;
 pub use debug_skin_nearest_reducer::debug_skin_nearest;
@@ -816,22 +725,18 @@ pub use debug_use_gameobject_reducer::debug_use_gameobject;
 pub use debug_use_hearthstone_reducer::debug_use_hearthstone;
 pub use debug_use_item_reducer::debug_use_item;
 pub use debug_verify_combat_regen_reducer::debug_verify_combat_regen;
-pub use del_friend_reducer::del_friend;
-pub use del_ignore_reducer::del_ignore;
+pub use debug_vmap_area_info_reducer::debug_vmap_area_info;
+pub use debug_vmap_ray_reducer::debug_vmap_ray;
 pub use delete_character_reducer::delete_character;
-pub use disenchant_reducer::disenchant;
 pub use dr_state_type::DrState;
 pub use dynamic_object_type::DynamicObject;
 pub use emote_event_type::EmoteEvent;
-pub use enchant_item_reducer::enchant_item;
 pub use encounter_equip_type::EncounterEquip;
 pub use encounter_hp_watch_type::EncounterHpWatch;
 pub use encounter_spawn_type::EncounterSpawn;
 pub use encounter_state_type::EncounterState;
 pub use ensure_instance_reducer::ensure_instance;
-pub use enter_areatrigger_reducer::enter_areatrigger;
 pub use entity_motion_type::EntityMotion;
-pub use equip_item_reducer::equip_item;
 pub use establish_session_reducer::establish_session;
 pub use event_reaper_schedule_type::EventReaperSchedule;
 pub use evict_instance_population_reducer::evict_instance_population;
@@ -840,7 +745,6 @@ pub use faction_type::Faction;
 pub use finish_transfer_reducer::finish_transfer;
 pub use fire_pending_cast_reducer::fire_pending_cast;
 pub use fire_spell_impact_reducer::fire_spell_impact;
-pub use fish_reducer::fish;
 pub use game_account_table::*;
 pub use game_addon_message_table::*;
 pub use game_area_table::*;
@@ -979,6 +883,7 @@ pub use game_roll_event_table::*;
 pub use game_school_lockout_table::*;
 pub use game_session_table::*;
 pub use game_shard_load_table::*;
+pub use game_shard_load_total_table::*;
 pub use game_skill_ability_table::*;
 pub use game_skill_availability_table::*;
 pub use game_skill_line_table::*;
@@ -1007,6 +912,7 @@ pub use game_trainer_spell_table::*;
 pub use game_transfer_in_table::*;
 pub use game_transfer_out_table::*;
 pub use game_transfer_reaper_schedule_table::*;
+pub use game_vmap_chunk_table::*;
 pub use game_whisper_event_table::*;
 pub use game_world_config_table::*;
 pub use game_world_entity_table::*;
@@ -1014,25 +920,17 @@ pub use game_xp_event_table::*;
 pub use gateway_lease_reaper_schedule_type::GatewayLeaseReaperSchedule;
 pub use gateway_lease_type::GatewayLease;
 pub use gateway_session_type::GatewaySession;
-pub use gm_command_reducer::gm_command;
 pub use gm_world_config_type::GmWorldConfig;
 pub use gossip_menu_type::GossipMenu;
 pub use gossip_option_type::GossipOption;
-pub use gossip_select_reducer::gossip_select;
 pub use graveyard_loc_type::GraveyardLoc;
 pub use graveyard_zone_type::GraveyardZone;
 pub use ground_area_schedule_type::GroundAreaSchedule;
 pub use ground_area_type::GroundArea;
-pub use group_accept_reducer::group_accept;
-pub use group_decline_reducer::group_decline;
 pub use group_event_type::GroupEvent;
-pub use group_invite_reducer::group_invite;
 pub use group_invite_type::GroupInvite;
-pub use group_leave_reducer::group_leave;
-pub use group_loot_method_reducer::group_loot_method;
 pub use group_member_type::GroupMember;
 pub use group_type::Group;
-pub use group_uninvite_reducer::group_uninvite;
 pub use guid_allocator_type::GuidAllocator;
 pub use guid_range_assignment_type::GuidRangeAssignment;
 pub use guid_range_type::GuidRange;
@@ -1097,6 +995,7 @@ pub use gw_send_roll_reducer::gw_send_roll;
 pub use gw_send_whisper_reducer::gw_send_whisper;
 pub use gw_set_action_button_reducer::gw_set_action_button;
 pub use gw_set_faction_at_war_reducer::gw_set_faction_at_war;
+pub use gw_set_sheathed_reducer::gw_set_sheathed;
 pub use gw_set_target_reducer::gw_set_target;
 pub use gw_skin_reducer::gw_skin;
 pub use gw_spirit_res_reducer::gw_spirit_res;
@@ -1119,28 +1018,20 @@ pub use import_nav_chunks_append_reducer::import_nav_chunks_append;
 pub use import_nav_chunks_reducer::import_nav_chunks;
 pub use import_terrain_chunks_append_reducer::import_terrain_chunks_append;
 pub use import_terrain_chunks_reducer::import_terrain_chunks;
-pub use inspect_reducer::inspect;
+pub use import_vmap_chunks_append_reducer::import_vmap_chunks_append;
+pub use import_vmap_chunks_reducer::import_vmap_chunks;
 pub use install_guid_range_reducer::install_guid_range;
 pub use instance_reaper_schedule_type::InstanceReaperSchedule;
 pub use item_instance_type::ItemInstance;
 pub use item_template_type::ItemTemplate;
-pub use join_channel_reducer::join_channel;
-pub use learn_talent_reducer::learn_talent;
-pub use leave_channel_reducer::leave_channel;
 pub use level_stats_type::LevelStats;
 pub use levelup_event_type::LevelupEvent;
-pub use logout_reducer::logout;
-pub use loot_master_give_reducer::loot_master_give;
-pub use loot_money_reducer::loot_money;
-pub use loot_roll_reducer::loot_roll;
 pub use loot_roll_type::LootRoll;
 pub use loot_roll_vote_type::LootRollVote;
 pub use map_region_type::MapRegion;
 pub use melee_attack_type::MeleeAttack;
 pub use melee_schedule_type::MeleeSchedule;
 pub use motion_publish_schedule_type::MotionPublishSchedule;
-pub use move_item_reducer::move_item;
-pub use movement_update_reducer::movement_update;
 pub use movement_violation_type::MovementViolation;
 pub use nav_chunk_type::NavChunk;
 pub use npc_text_slot_type::NpcTextSlot;
@@ -1148,41 +1039,16 @@ pub use npc_text_type::NpcText;
 pub use npc_vendor_type::NpcVendor;
 pub use on_disconnect_reducer::on_disconnect;
 pub use operator_type::Operator;
-pub use party_chat_reducer::party_chat;
 pub use pending_cast_type::PendingCast;
 pub use pending_motion_type::PendingMotion;
 pub use pending_spell_impact_type::PendingSpellImpact;
-pub use pet_command_reducer::pet_command;
 pub use pet_command_type::PetCommand;
-pub use pick_lock_reducer::pick_lock;
-pub use pkg_deadmines_reset_reducer::pkg_deadmines_reset;
-pub use pkg_example_note_table::*;
-pub use pkg_example_note_type::PkgExampleNote;
-pub use pkg_example_seed_note_reducer::pkg_example_seed_note;
-pub use pkg_example_stat_table::*;
-pub use pkg_example_stat_type::PkgExampleStat;
-pub use pkg_playerbots_bot_table::*;
-pub use pkg_playerbots_goal_table::*;
-pub use pkg_playerbots_kit_table::*;
-pub use pkg_playerbots_personality_table::*;
-pub use pkg_playerbots_rotation_table::*;
-pub use pkg_playerbots_waypoint_edge_table::*;
-pub use pkg_playerbots_waypoint_table::*;
 pub use player_action_type::PlayerAction;
-pub use player_bot_type::PlayerBot;
-pub use player_login_reducer::player_login;
 pub use player_reputation_type::PlayerReputation;
 pub use player_skill_type::PlayerSkill;
 pub use player_spell_type::PlayerSpell;
-pub use playerbots_despawn_all_reducer::playerbots_despawn_all;
-pub use playerbots_spawn_class_role_reducer::playerbots_spawn_class_role;
-pub use playerbots_spawn_race_reducer::playerbots_spawn_race;
-pub use playerbots_spawn_reducer::playerbots_spawn;
-pub use playerbots_spawn_role_reducer::playerbots_spawn_role;
-pub use playerbots_travel_reducer::playerbots_travel;
 pub use provision_account_reducer::provision_account;
 pub use publish_motion_reducer::publish_motion;
-pub use push_quest_to_party_reducer::push_quest_to_party;
 pub use quest_objective_type::QuestObjective;
 pub use quest_reward_choice_type::QuestRewardChoice;
 pub use quest_reward_item_type::QuestRewardItem;
@@ -1199,42 +1065,27 @@ pub use reap_gateway_leases_reducer::reap_gateway_leases;
 pub use reap_instances_reducer::reap_instances;
 pub use reap_movement_events_reducer::reap_movement_events;
 pub use reap_transfers_reducer::reap_transfers;
-pub use reclaim_corpse_reducer::reclaim_corpse;
 pub use record_region_load_reducer::record_region_load;
 pub use record_shard_load_reducer::record_shard_load;
 pub use region_assignment_type::RegionAssignment;
 pub use region_load_type::RegionLoad;
 pub use release_transfer_reducer::release_transfer;
-pub use repair_item_reducer::repair_item;
-pub use repop_reducer::repop;
-pub use reset_instance_reducer::reset_instance;
-pub use reset_talents_reducer::reset_talents;
 pub use rest_state_event_type::RestStateEvent;
 pub use resurrect_request_type::ResurrectRequest;
-pub use resurrect_response_reducer::resurrect_response;
 pub use roll_event_type::RollEvent;
 pub use school_lockout_type::SchoolLockout;
-pub use sell_item_reducer::sell_item;
-pub use send_channel_message_reducer::send_channel_message;
-pub use send_chat_reducer::send_chat;
-pub use send_emote_reducer::send_emote;
-pub use send_roll_reducer::send_roll;
-pub use send_whisper_reducer::send_whisper;
 pub use server_config_type::ServerConfig;
 pub use session_type::Session;
-pub use set_action_button_reducer::set_action_button;
 pub use set_character_shard_reducer::set_character_shard;
-pub use set_faction_at_war_reducer::set_faction_at_war;
 pub use set_gm_level_reducer::set_gm_level;
 pub use set_motion_tick_ms_reducer::set_motion_tick_ms;
 pub use set_region_assignment_reducer::set_region_assignment;
-pub use set_target_reducer::set_target;
 pub use settle_loot_roll_reducer::settle_loot_roll;
+pub use shard_load_total_type::ShardLoadTotal;
 pub use shard_load_type::ShardLoad;
 pub use skill_ability_type::SkillAbility;
 pub use skill_availability_type::SkillAvailability;
 pub use skill_line_type::SkillLine;
-pub use skin_reducer::skin;
 pub use spell_cast_event_type::SpellCastEvent;
 pub use spell_cd_type::SpellCd;
 pub use spell_chain_type::SpellChain;
@@ -1246,16 +1097,10 @@ pub use spell_impact_event_type::SpellImpactEvent;
 pub use spell_learn_type::SpellLearn;
 pub use spell_reagent_type::SpellReagent;
 pub use spell_type::Spell;
-pub use spirit_healer_res_reducer::spirit_healer_res;
-pub use split_item_reducer::split_item;
 pub use stamp_import_meta_reducer::stamp_import_meta;
-pub use start_attack_reducer::start_attack;
 pub use start_item_type::StartItem;
 pub use start_position_type::StartPosition;
-pub use start_ranged_attack_reducer::start_ranged_attack;
-pub use stop_attack_reducer::stop_attack;
 pub use sync_group_mirror_reducer::sync_group_mirror;
-pub use take_loot_reducer::take_loot;
 pub use talent_tab_type::TalentTab;
 pub use talent_type::Talent;
 pub use taunt_lock_type::TauntLock;
@@ -1270,10 +1115,7 @@ pub use trainer_spell_type::TrainerSpell;
 pub use transfer_in_type::TransferIn;
 pub use transfer_out_type::TransferOut;
 pub use transfer_reaper_schedule_type::TransferReaperSchedule;
-pub use turn_in_quest_reducer::turn_in_quest;
-pub use unequip_item_reducer::unequip_item;
-pub use use_gameobject_reducer::use_gameobject;
-pub use use_item_reducer::use_item;
+pub use vmap_chunk_type::VmapChunk;
 pub use whisper_event_type::WhisperEvent;
 pub use world_entity_type::WorldEntity;
 pub use xp_event_type::XpEvent;
@@ -1286,19 +1128,6 @@ pub use xp_event_type::XpEvent;
 /// to indicate which reducer caused the event.
 
 pub enum Reducer {
-    AbandonQuest {
-        quest_entry: u32,
-    },
-    AcceptQuest {
-        giver_guid: u64,
-        quest_entry: u32,
-    },
-    AddFriend {
-        target_guid: u64,
-    },
-    AddIgnore {
-        target_guid: u64,
-    },
     ArmAllPools,
     BeginTransfer {
         transfer_id: u64,
@@ -1311,35 +1140,6 @@ pub enum Reducer {
         dest_o: f32,
         cross_database: bool,
     },
-    BindHome,
-    BuyItem {
-        vendor_guid: u64,
-        item_entry: u32,
-        count: u32,
-    },
-    BuyTrainerSpell {
-        trainer_guid: u64,
-        spell_id: u32,
-    },
-    BuybackItem {
-        vendor_guid: u64,
-        slot: u8,
-    },
-    CancelAura {
-        spell_id: u32,
-    },
-    CancelCast,
-    CastSpell {
-        spell_id: u32,
-        target_guid: u64,
-    },
-    CastSpellAt {
-        spell_id: u32,
-        target_guid: u64,
-        x: f32,
-        y: f32,
-        z: f32,
-    },
     ClaimGuidRange {
         shard_name: String,
         current_mark: u64,
@@ -1347,10 +1147,6 @@ pub enum Reducer {
     ClaimOperator,
     ClearPromotedLootRoll {
         roll_id: u64,
-    },
-    ClientCommand {
-        cmd: String,
-        payload: String,
     },
     ConfirmImport {
         transfer_id: u64,
@@ -1386,6 +1182,16 @@ pub enum Reducer {
         instance_id: u64,
         tick_ms: u64,
     },
+    DebugAssertBlinkClamp {
+        character_guid: u64,
+    },
+    DebugAssertChaseStopsAtColumn {
+        character_guid: u64,
+    },
+    DebugAssertFloorSnap {
+        map_id: u32,
+        creature_entry: u32,
+    },
     DebugAuditClassKits,
     DebugAuditQuestChains,
     DebugBackfillCellIds,
@@ -1394,6 +1200,25 @@ pub enum Reducer {
         caster_guid: u64,
         spell_id: u32,
         target_guid: u64,
+    },
+    DebugBenchCollisionGate {
+        map: u32,
+        min_x: f32,
+        min_y: f32,
+        max_x: f32,
+        max_y: f32,
+        directions: u32,
+        radius: f32,
+    },
+    DebugBenchLos {
+        map: u32,
+        min_x: f32,
+        min_y: f32,
+        max_x: f32,
+        max_y: f32,
+        directions: u32,
+        radius: f32,
+        exact: bool,
     },
     DebugBindHome {
         character_guid: u64,
@@ -1546,6 +1371,12 @@ pub enum Reducer {
     },
     DebugFish {
         character_guid: u64,
+    },
+    DebugFloorProbe {
+        map: u32,
+        x: f32,
+        y: f32,
+        probe_z: f32,
     },
     DebugForceCast {
         character_guid: u64,
@@ -1730,6 +1561,9 @@ pub enum Reducer {
         skill_line: u32,
         value: u32,
     },
+    DebugSetVmapEnabled {
+        enabled: bool,
+    },
     DebugSetXpRate {
         rate: f32,
     },
@@ -1828,33 +1662,29 @@ pub enum Reducer {
     DebugVerifyCombatRegen {
         character_guid: u64,
     },
-    DelFriend {
-        target_guid: u64,
+    DebugVmapAreaInfo {
+        map: u32,
+        x: f32,
+        y: f32,
+        z: f32,
     },
-    DelIgnore {
-        target_guid: u64,
+    DebugVmapRay {
+        map: u32,
+        x_0: f32,
+        y_0: f32,
+        z_0: f32,
+        x_1: f32,
+        y_1: f32,
+        z_1: f32,
     },
     DeleteCharacter {
         account_id: u64,
         character_guid: u64,
     },
-    Disenchant {
-        slot: u8,
-    },
-    EnchantItem {
-        target_slot: u8,
-        enchant_id: u32,
-    },
     EnsureInstance {
         instance_id: u64,
         map_id: u32,
         party_id: u64,
-    },
-    EnterAreatrigger {
-        trigger_id: u32,
-    },
-    EquipItem {
-        from_slot: u8,
     },
     EstablishSession {
         account_id: u64,
@@ -1872,29 +1702,6 @@ pub enum Reducer {
     },
     FireSpellImpact {
         sched: PendingSpellImpact,
-    },
-    Fish,
-    GmCommand {
-        text: String,
-    },
-    GossipSelect {
-        npc_guid: u64,
-        option_id: u32,
-        option_row_id: u32,
-    },
-    GroupAccept,
-    GroupDecline,
-    GroupInvite {
-        target_guid: u64,
-    },
-    GroupLeave,
-    GroupLootMethod {
-        loot_setting: u8,
-        master_guid: u64,
-        loot_threshold: u8,
-    },
-    GroupUninvite {
-        target_guid: u64,
     },
     GwAbandonQuest {
         actor_guid: u64,
@@ -2165,6 +1972,10 @@ pub enum Reducer {
         reputation_index: u32,
         at_war: bool,
     },
+    GwSetSheathed {
+        actor_guid: u64,
+        state: u8,
+    },
     GwSetTarget {
         actor_guid: u64,
         target_guid: u64,
@@ -2241,103 +2052,16 @@ pub enum Reducer {
     ImportTerrainChunksAppend {
         packed: String,
     },
-    Inspect {
-        target_guid: u64,
+    ImportVmapChunks {
+        packed: String,
+    },
+    ImportVmapChunksAppend {
+        packed: String,
     },
     InstallGuidRange {
         base: u64,
     },
-    JoinChannel {
-        channel: String,
-    },
-    LearnTalent {
-        talent_id: u32,
-    },
-    LeaveChannel {
-        channel: String,
-    },
-    Logout,
-    LootMasterGive {
-        corpse_guid: u64,
-        loot_slot: u8,
-        target_guid: u64,
-    },
-    LootMoney {
-        target_guid: u64,
-    },
-    LootRoll {
-        corpse_guid: u64,
-        loot_slot: u32,
-        vote: u8,
-    },
-    MoveItem {
-        from_slot: u8,
-        to_slot: u8,
-    },
-    MovementUpdate {
-        opcode: u16,
-        movement_info: Vec<u8>,
-        x: f32,
-        y: f32,
-        z: f32,
-        o: f32,
-        move_time_ms: u32,
-    },
     OnDisconnect,
-    PartyChat {
-        text: String,
-    },
-    PetCommand {
-        data: u32,
-        target_guid: u64,
-    },
-    PickLock {
-        go_guid: u64,
-    },
-    PkgDeadminesReset {
-        instance_id: u64,
-    },
-    PkgExampleSeedNote {
-        character_guid: u64,
-        note: String,
-    },
-    PlayerLogin {
-        character_guid: u64,
-    },
-    PlayerbotsDespawnAll,
-    PlayerbotsSpawn {
-        count: u32,
-        x: f32,
-        y: f32,
-        z: f32,
-    },
-    PlayerbotsSpawnClassRole {
-        count: u32,
-        x: f32,
-        y: f32,
-        z: f32,
-        class: u8,
-        role: u8,
-    },
-    PlayerbotsSpawnRace {
-        count: u32,
-        x: f32,
-        y: f32,
-        z: f32,
-        race: u8,
-        class: u8,
-    },
-    PlayerbotsSpawnRole {
-        count: u32,
-        x: f32,
-        y: f32,
-        z: f32,
-        role: u8,
-    },
-    PlayerbotsTravel {
-        bot_guid: u64,
-        dest_entry: u32,
-    },
     ProvisionAccount {
         username: String,
         salt: Vec<u8>,
@@ -2345,9 +2069,6 @@ pub enum Reducer {
     },
     PublishMotion {
         schedule: MotionPublishSchedule,
-    },
-    PushQuestToParty {
-        quest_entry: u32,
     },
     RangedImpact {
         shot: RangedImpactSchedule,
@@ -2387,9 +2108,6 @@ pub enum Reducer {
     ReapTransfers {
         schedule: TransferReaperSchedule,
     },
-    ReclaimCorpse {
-        corpse_guid: u64,
-    },
     RecordRegionLoad {
         map_id: u32,
         region_id: u32,
@@ -2404,57 +2122,10 @@ pub enum Reducer {
     ReleaseTransfer {
         transfer_id: u64,
     },
-    RepairItem {
-        npc_guid: u64,
-        slot: u8,
-    },
-    Repop,
-    ResetInstance,
-    ResetTalents {
-        trainer_guid: u64,
-    },
-    ResurrectResponse {
-        accept: bool,
-    },
-    SellItem {
-        vendor_guid: u64,
-        slot: u8,
-    },
-    SendChannelMessage {
-        channel: String,
-        message: String,
-    },
-    SendChat {
-        chat_type: u8,
-        language: u8,
-        message: String,
-    },
-    SendEmote {
-        text_emote: u32,
-        emote_anim: u32,
-        target_guid: u64,
-    },
-    SendRoll {
-        min_roll: u32,
-        max_roll: u32,
-    },
-    SendWhisper {
-        target_name: String,
-        message: String,
-    },
-    SetActionButton {
-        button: u8,
-        action: u32,
-        action_type: u8,
-    },
     SetCharacterShard {
         character_guid: u64,
         map_id: u32,
         instance_id: u64,
-    },
-    SetFactionAtWar {
-        reputation_index: u32,
-        at_war: bool,
     },
     SetGmLevel {
         character_name: String,
@@ -2469,24 +2140,10 @@ pub enum Reducer {
         shard: String,
         epoch: u64,
     },
-    SetTarget {
-        target_guid: u64,
-    },
     SettleLootRoll {
         corpse_guid: u64,
         slot: u8,
         winner_guid: u64,
-    },
-    Skin {
-        corpse_guid: u64,
-    },
-    SpiritHealerRes {
-        healer_guid: u64,
-    },
-    SplitItem {
-        slot: u8,
-        count: u32,
-        to_slot: u8,
     },
     StampImportMeta {
         family: String,
@@ -2494,14 +2151,6 @@ pub enum Reducer {
         file_hash: String,
         row_count: u64,
     },
-    StartAttack {
-        target_guid: u64,
-    },
-    StartRangedAttack {
-        target_guid: u64,
-        spell_id: u32,
-    },
-    StopAttack,
     SyncGroupMirror {
         group_id: u64,
         leader_guid: u64,
@@ -2509,10 +2158,6 @@ pub enum Reducer {
         loot_threshold: u8,
         master_looter_guid: u64,
         members: Vec<u64>,
-    },
-    TakeLoot {
-        corpse_guid: u64,
-        loot_slot: u8,
     },
     TickAuras {
         schedule: AuraSchedule,
@@ -2526,20 +2171,6 @@ pub enum Reducer {
     TickMelee {
         schedule: MeleeSchedule,
     },
-    TurnInQuest {
-        giver_guid: u64,
-        quest_entry: u32,
-        reward_index: u32,
-    },
-    UnequipItem {
-        from_slot: u8,
-    },
-    UseGameobject {
-        go_guid: u64,
-    },
-    UseItem {
-        slot: u8,
-    },
 }
 
 impl __sdk::InModule for Reducer {
@@ -2549,35 +2180,27 @@ impl __sdk::InModule for Reducer {
 impl __sdk::Reducer for Reducer {
     fn reducer_name(&self) -> &'static str {
         match self {
-            Reducer::AbandonQuest { .. } => "abandon_quest",
-            Reducer::AcceptQuest { .. } => "accept_quest",
-            Reducer::AddFriend { .. } => "add_friend",
-            Reducer::AddIgnore { .. } => "add_ignore",
             Reducer::ArmAllPools => "arm_all_pools",
             Reducer::BeginTransfer { .. } => "begin_transfer",
-            Reducer::BindHome => "bind_home",
-            Reducer::BuyItem { .. } => "buy_item",
-            Reducer::BuyTrainerSpell { .. } => "buy_trainer_spell",
-            Reducer::BuybackItem { .. } => "buyback_item",
-            Reducer::CancelAura { .. } => "cancel_aura",
-            Reducer::CancelCast => "cancel_cast",
-            Reducer::CastSpell { .. } => "cast_spell",
-            Reducer::CastSpellAt { .. } => "cast_spell_at",
             Reducer::ClaimGuidRange { .. } => "claim_guid_range",
             Reducer::ClaimOperator => "claim_operator",
             Reducer::ClearPromotedLootRoll { .. } => "clear_promoted_loot_roll",
-            Reducer::ClientCommand { .. } => "client_command",
             Reducer::ConfirmImport { .. } => "confirm_import",
             Reducer::CreateCharacter { .. } => "create_character",
             Reducer::DebugAcceptQuest { .. } => "debug_accept_quest",
             Reducer::DebugAddThreat { .. } => "debug_add_threat",
             Reducer::DebugApplyDamage { .. } => "debug_apply_damage",
             Reducer::DebugArmInstanceTick { .. } => "debug_arm_instance_tick",
+            Reducer::DebugAssertBlinkClamp { .. } => "debug_assert_blink_clamp",
+            Reducer::DebugAssertChaseStopsAtColumn { .. } => "debug_assert_chase_stops_at_column",
+            Reducer::DebugAssertFloorSnap { .. } => "debug_assert_floor_snap",
             Reducer::DebugAuditClassKits => "debug_audit_class_kits",
             Reducer::DebugAuditQuestChains => "debug_audit_quest_chains",
             Reducer::DebugBackfillCellIds => "debug_backfill_cell_ids",
             Reducer::DebugBackfillGoGrid => "debug_backfill_go_grid",
             Reducer::DebugBeginCast { .. } => "debug_begin_cast",
+            Reducer::DebugBenchCollisionGate { .. } => "debug_bench_collision_gate",
+            Reducer::DebugBenchLos { .. } => "debug_bench_los",
             Reducer::DebugBindHome { .. } => "debug_bind_home",
             Reducer::DebugBuyItem { .. } => "debug_buy_item",
             Reducer::DebugBuyTrainerSpell { .. } => "debug_buy_trainer_spell",
@@ -2611,6 +2234,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugExpireQuest { .. } => "debug_expire_quest",
             Reducer::DebugExploreAt { .. } => "debug_explore_at",
             Reducer::DebugFish { .. } => "debug_fish",
+            Reducer::DebugFloorProbe { .. } => "debug_floor_probe",
             Reducer::DebugForceCast { .. } => "debug_force_cast",
             Reducer::DebugForceCastAt { .. } => "debug_force_cast_at",
             Reducer::DebugForceGameobjectRespawn { .. } => "debug_force_gameobject_respawn",
@@ -2658,6 +2282,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugSetNavEnabled { .. } => "debug_set_nav_enabled",
             Reducer::DebugSetPower { .. } => "debug_set_power",
             Reducer::DebugSetSkill { .. } => "debug_set_skill",
+            Reducer::DebugSetVmapEnabled { .. } => "debug_set_vmap_enabled",
             Reducer::DebugSetXpRate { .. } => "debug_set_xp_rate",
             Reducer::DebugSetupGatherPool { .. } => "debug_setup_gather_pool",
             Reducer::DebugSkinNearest { .. } => "debug_skin_nearest",
@@ -2679,28 +2304,15 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugUseHearthstone { .. } => "debug_use_hearthstone",
             Reducer::DebugUseItem { .. } => "debug_use_item",
             Reducer::DebugVerifyCombatRegen { .. } => "debug_verify_combat_regen",
-            Reducer::DelFriend { .. } => "del_friend",
-            Reducer::DelIgnore { .. } => "del_ignore",
+            Reducer::DebugVmapAreaInfo { .. } => "debug_vmap_area_info",
+            Reducer::DebugVmapRay { .. } => "debug_vmap_ray",
             Reducer::DeleteCharacter { .. } => "delete_character",
-            Reducer::Disenchant { .. } => "disenchant",
-            Reducer::EnchantItem { .. } => "enchant_item",
             Reducer::EnsureInstance { .. } => "ensure_instance",
-            Reducer::EnterAreatrigger { .. } => "enter_areatrigger",
-            Reducer::EquipItem { .. } => "equip_item",
             Reducer::EstablishSession { .. } => "establish_session",
             Reducer::EvictInstancePopulation { .. } => "evict_instance_population",
             Reducer::FinishTransfer { .. } => "finish_transfer",
             Reducer::FirePendingCast { .. } => "fire_pending_cast",
             Reducer::FireSpellImpact { .. } => "fire_spell_impact",
-            Reducer::Fish => "fish",
-            Reducer::GmCommand { .. } => "gm_command",
-            Reducer::GossipSelect { .. } => "gossip_select",
-            Reducer::GroupAccept => "group_accept",
-            Reducer::GroupDecline => "group_decline",
-            Reducer::GroupInvite { .. } => "group_invite",
-            Reducer::GroupLeave => "group_leave",
-            Reducer::GroupLootMethod { .. } => "group_loot_method",
-            Reducer::GroupUninvite { .. } => "group_uninvite",
             Reducer::GwAbandonQuest { .. } => "gw_abandon_quest",
             Reducer::GwAcceptGroupInvite { .. } => "gw_accept_group_invite",
             Reducer::GwAcceptQuest { .. } => "gw_accept_quest",
@@ -2761,6 +2373,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwSendWhisper { .. } => "gw_send_whisper",
             Reducer::GwSetActionButton { .. } => "gw_set_action_button",
             Reducer::GwSetFactionAtWar { .. } => "gw_set_faction_at_war",
+            Reducer::GwSetSheathed { .. } => "gw_set_sheathed",
             Reducer::GwSetTarget { .. } => "gw_set_target",
             Reducer::GwSkin { .. } => "gw_skin",
             Reducer::GwSpiritRes { .. } => "gw_spirit_res",
@@ -2782,33 +2395,12 @@ impl __sdk::Reducer for Reducer {
             Reducer::ImportNavChunksAppend { .. } => "import_nav_chunks_append",
             Reducer::ImportTerrainChunks { .. } => "import_terrain_chunks",
             Reducer::ImportTerrainChunksAppend { .. } => "import_terrain_chunks_append",
-            Reducer::Inspect { .. } => "inspect",
+            Reducer::ImportVmapChunks { .. } => "import_vmap_chunks",
+            Reducer::ImportVmapChunksAppend { .. } => "import_vmap_chunks_append",
             Reducer::InstallGuidRange { .. } => "install_guid_range",
-            Reducer::JoinChannel { .. } => "join_channel",
-            Reducer::LearnTalent { .. } => "learn_talent",
-            Reducer::LeaveChannel { .. } => "leave_channel",
-            Reducer::Logout => "logout",
-            Reducer::LootMasterGive { .. } => "loot_master_give",
-            Reducer::LootMoney { .. } => "loot_money",
-            Reducer::LootRoll { .. } => "loot_roll",
-            Reducer::MoveItem { .. } => "move_item",
-            Reducer::MovementUpdate { .. } => "movement_update",
             Reducer::OnDisconnect => "on_disconnect",
-            Reducer::PartyChat { .. } => "party_chat",
-            Reducer::PetCommand { .. } => "pet_command",
-            Reducer::PickLock { .. } => "pick_lock",
-            Reducer::PkgDeadminesReset { .. } => "pkg_deadmines_reset",
-            Reducer::PkgExampleSeedNote { .. } => "pkg_example_seed_note",
-            Reducer::PlayerLogin { .. } => "player_login",
-            Reducer::PlayerbotsDespawnAll => "playerbots_despawn_all",
-            Reducer::PlayerbotsSpawn { .. } => "playerbots_spawn",
-            Reducer::PlayerbotsSpawnClassRole { .. } => "playerbots_spawn_class_role",
-            Reducer::PlayerbotsSpawnRace { .. } => "playerbots_spawn_race",
-            Reducer::PlayerbotsSpawnRole { .. } => "playerbots_spawn_role",
-            Reducer::PlayerbotsTravel { .. } => "playerbots_travel",
             Reducer::ProvisionAccount { .. } => "provision_account",
             Reducer::PublishMotion { .. } => "publish_motion",
-            Reducer::PushQuestToParty { .. } => "push_quest_to_party",
             Reducer::RangedImpact { .. } => "ranged_impact",
             Reducer::RealmGroupOp { .. } => "realm_group_op",
             Reducer::RealmLootOp { .. } => "realm_loot_op",
@@ -2817,74 +2409,26 @@ impl __sdk::Reducer for Reducer {
             Reducer::ReapInstances { .. } => "reap_instances",
             Reducer::ReapMovementEvents { .. } => "reap_movement_events",
             Reducer::ReapTransfers { .. } => "reap_transfers",
-            Reducer::ReclaimCorpse { .. } => "reclaim_corpse",
             Reducer::RecordRegionLoad { .. } => "record_region_load",
             Reducer::RecordShardLoad { .. } => "record_shard_load",
             Reducer::ReleaseTransfer { .. } => "release_transfer",
-            Reducer::RepairItem { .. } => "repair_item",
-            Reducer::Repop => "repop",
-            Reducer::ResetInstance => "reset_instance",
-            Reducer::ResetTalents { .. } => "reset_talents",
-            Reducer::ResurrectResponse { .. } => "resurrect_response",
-            Reducer::SellItem { .. } => "sell_item",
-            Reducer::SendChannelMessage { .. } => "send_channel_message",
-            Reducer::SendChat { .. } => "send_chat",
-            Reducer::SendEmote { .. } => "send_emote",
-            Reducer::SendRoll { .. } => "send_roll",
-            Reducer::SendWhisper { .. } => "send_whisper",
-            Reducer::SetActionButton { .. } => "set_action_button",
             Reducer::SetCharacterShard { .. } => "set_character_shard",
-            Reducer::SetFactionAtWar { .. } => "set_faction_at_war",
             Reducer::SetGmLevel { .. } => "set_gm_level",
             Reducer::SetMotionTickMs { .. } => "set_motion_tick_ms",
             Reducer::SetRegionAssignment { .. } => "set_region_assignment",
-            Reducer::SetTarget { .. } => "set_target",
             Reducer::SettleLootRoll { .. } => "settle_loot_roll",
-            Reducer::Skin { .. } => "skin",
-            Reducer::SpiritHealerRes { .. } => "spirit_healer_res",
-            Reducer::SplitItem { .. } => "split_item",
             Reducer::StampImportMeta { .. } => "stamp_import_meta",
-            Reducer::StartAttack { .. } => "start_attack",
-            Reducer::StartRangedAttack { .. } => "start_ranged_attack",
-            Reducer::StopAttack => "stop_attack",
             Reducer::SyncGroupMirror { .. } => "sync_group_mirror",
-            Reducer::TakeLoot { .. } => "take_loot",
             Reducer::TickAuras { .. } => "tick_auras",
             Reducer::TickCreatures { .. } => "tick_creatures",
             Reducer::TickGroundAreas { .. } => "tick_ground_areas",
             Reducer::TickMelee { .. } => "tick_melee",
-            Reducer::TurnInQuest { .. } => "turn_in_quest",
-            Reducer::UnequipItem { .. } => "unequip_item",
-            Reducer::UseGameobject { .. } => "use_gameobject",
-            Reducer::UseItem { .. } => "use_item",
             _ => unreachable!(),
         }
     }
     #[allow(clippy::clone_on_copy)]
     fn args_bsatn(&self) -> Result<Vec<u8>, __sats::bsatn::EncodeError> {
         match self {
-            Reducer::AbandonQuest { quest_entry } => {
-                __sats::bsatn::to_vec(&abandon_quest_reducer::AbandonQuestArgs {
-                    quest_entry: quest_entry.clone(),
-                })
-            }
-            Reducer::AcceptQuest {
-                giver_guid,
-                quest_entry,
-            } => __sats::bsatn::to_vec(&accept_quest_reducer::AcceptQuestArgs {
-                giver_guid: giver_guid.clone(),
-                quest_entry: quest_entry.clone(),
-            }),
-            Reducer::AddFriend { target_guid } => {
-                __sats::bsatn::to_vec(&add_friend_reducer::AddFriendArgs {
-                    target_guid: target_guid.clone(),
-                })
-            }
-            Reducer::AddIgnore { target_guid } => {
-                __sats::bsatn::to_vec(&add_ignore_reducer::AddIgnoreArgs {
-                    target_guid: target_guid.clone(),
-                })
-            }
             Reducer::ArmAllPools => {
                 __sats::bsatn::to_vec(&arm_all_pools_reducer::ArmAllPoolsArgs {})
             }
@@ -2909,55 +2453,6 @@ impl __sdk::Reducer for Reducer {
                 dest_o: dest_o.clone(),
                 cross_database: cross_database.clone(),
             }),
-            Reducer::BindHome => __sats::bsatn::to_vec(&bind_home_reducer::BindHomeArgs {}),
-            Reducer::BuyItem {
-                vendor_guid,
-                item_entry,
-                count,
-            } => __sats::bsatn::to_vec(&buy_item_reducer::BuyItemArgs {
-                vendor_guid: vendor_guid.clone(),
-                item_entry: item_entry.clone(),
-                count: count.clone(),
-            }),
-            Reducer::BuyTrainerSpell {
-                trainer_guid,
-                spell_id,
-            } => __sats::bsatn::to_vec(&buy_trainer_spell_reducer::BuyTrainerSpellArgs {
-                trainer_guid: trainer_guid.clone(),
-                spell_id: spell_id.clone(),
-            }),
-            Reducer::BuybackItem { vendor_guid, slot } => {
-                __sats::bsatn::to_vec(&buyback_item_reducer::BuybackItemArgs {
-                    vendor_guid: vendor_guid.clone(),
-                    slot: slot.clone(),
-                })
-            }
-            Reducer::CancelAura { spell_id } => {
-                __sats::bsatn::to_vec(&cancel_aura_reducer::CancelAuraArgs {
-                    spell_id: spell_id.clone(),
-                })
-            }
-            Reducer::CancelCast => __sats::bsatn::to_vec(&cancel_cast_reducer::CancelCastArgs {}),
-            Reducer::CastSpell {
-                spell_id,
-                target_guid,
-            } => __sats::bsatn::to_vec(&cast_spell_reducer::CastSpellArgs {
-                spell_id: spell_id.clone(),
-                target_guid: target_guid.clone(),
-            }),
-            Reducer::CastSpellAt {
-                spell_id,
-                target_guid,
-                x,
-                y,
-                z,
-            } => __sats::bsatn::to_vec(&cast_spell_at_reducer::CastSpellAtArgs {
-                spell_id: spell_id.clone(),
-                target_guid: target_guid.clone(),
-                x: x.clone(),
-                y: y.clone(),
-                z: z.clone(),
-            }),
             Reducer::ClaimGuidRange {
                 shard_name,
                 current_mark,
@@ -2973,12 +2468,6 @@ impl __sdk::Reducer for Reducer {
                     roll_id: roll_id.clone(),
                 },
             ),
-            Reducer::ClientCommand { cmd, payload } => {
-                __sats::bsatn::to_vec(&client_command_reducer::ClientCommandArgs {
-                    cmd: cmd.clone(),
-                    payload: payload.clone(),
-                })
-            }
             Reducer::ConfirmImport { transfer_id } => {
                 __sats::bsatn::to_vec(&confirm_import_reducer::ConfirmImportArgs {
                     transfer_id: transfer_id.clone(),
@@ -3043,6 +2532,25 @@ impl __sdk::Reducer for Reducer {
                     tick_ms: tick_ms.clone(),
                 })
             }
+            Reducer::DebugAssertBlinkClamp { character_guid } => __sats::bsatn::to_vec(
+                &debug_assert_blink_clamp_reducer::DebugAssertBlinkClampArgs {
+                    character_guid: character_guid.clone(),
+                },
+            ),
+            Reducer::DebugAssertChaseStopsAtColumn { character_guid } => __sats::bsatn::to_vec(
+                &debug_assert_chase_stops_at_column_reducer::DebugAssertChaseStopsAtColumnArgs {
+                    character_guid: character_guid.clone(),
+                },
+            ),
+            Reducer::DebugAssertFloorSnap {
+                map_id,
+                creature_entry,
+            } => {
+                __sats::bsatn::to_vec(&debug_assert_floor_snap_reducer::DebugAssertFloorSnapArgs {
+                    map_id: map_id.clone(),
+                    creature_entry: creature_entry.clone(),
+                })
+            }
             Reducer::DebugAuditClassKits => {
                 __sats::bsatn::to_vec(&debug_audit_class_kits_reducer::DebugAuditClassKitsArgs {})
             }
@@ -3063,6 +2571,44 @@ impl __sdk::Reducer for Reducer {
                 caster_guid: caster_guid.clone(),
                 spell_id: spell_id.clone(),
                 target_guid: target_guid.clone(),
+            }),
+            Reducer::DebugBenchCollisionGate {
+                map,
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+                directions,
+                radius,
+            } => __sats::bsatn::to_vec(
+                &debug_bench_collision_gate_reducer::DebugBenchCollisionGateArgs {
+                    map: map.clone(),
+                    min_x: min_x.clone(),
+                    min_y: min_y.clone(),
+                    max_x: max_x.clone(),
+                    max_y: max_y.clone(),
+                    directions: directions.clone(),
+                    radius: radius.clone(),
+                },
+            ),
+            Reducer::DebugBenchLos {
+                map,
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+                directions,
+                radius,
+                exact,
+            } => __sats::bsatn::to_vec(&debug_bench_los_reducer::DebugBenchLosArgs {
+                map: map.clone(),
+                min_x: min_x.clone(),
+                min_y: min_y.clone(),
+                max_x: max_x.clone(),
+                max_y: max_y.clone(),
+                directions: directions.clone(),
+                radius: radius.clone(),
+                exact: exact.clone(),
             }),
             Reducer::DebugBindHome { character_guid } => {
                 __sats::bsatn::to_vec(&debug_bind_home_reducer::DebugBindHomeArgs {
@@ -3337,6 +2883,14 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugFish { character_guid } => {
                 __sats::bsatn::to_vec(&debug_fish_reducer::DebugFishArgs {
                     character_guid: character_guid.clone(),
+                })
+            }
+            Reducer::DebugFloorProbe { map, x, y, probe_z } => {
+                __sats::bsatn::to_vec(&debug_floor_probe_reducer::DebugFloorProbeArgs {
+                    map: map.clone(),
+                    x: x.clone(),
+                    y: y.clone(),
+                    probe_z: probe_z.clone(),
                 })
             }
             Reducer::DebugForceCast {
@@ -3678,6 +3232,11 @@ impl __sdk::Reducer for Reducer {
                 skill_line: skill_line.clone(),
                 value: value.clone(),
             }),
+            Reducer::DebugSetVmapEnabled { enabled } => {
+                __sats::bsatn::to_vec(&debug_set_vmap_enabled_reducer::DebugSetVmapEnabledArgs {
+                    enabled: enabled.clone(),
+                })
+            }
             Reducer::DebugSetXpRate { rate } => {
                 __sats::bsatn::to_vec(&debug_set_xp_rate_reducer::DebugSetXpRateArgs {
                     rate: rate.clone(),
@@ -3861,32 +3420,37 @@ impl __sdk::Reducer for Reducer {
                     character_guid: character_guid.clone(),
                 },
             ),
-            Reducer::DelFriend { target_guid } => {
-                __sats::bsatn::to_vec(&del_friend_reducer::DelFriendArgs {
-                    target_guid: target_guid.clone(),
+            Reducer::DebugVmapAreaInfo { map, x, y, z } => {
+                __sats::bsatn::to_vec(&debug_vmap_area_info_reducer::DebugVmapAreaInfoArgs {
+                    map: map.clone(),
+                    x: x.clone(),
+                    y: y.clone(),
+                    z: z.clone(),
                 })
             }
-            Reducer::DelIgnore { target_guid } => {
-                __sats::bsatn::to_vec(&del_ignore_reducer::DelIgnoreArgs {
-                    target_guid: target_guid.clone(),
-                })
-            }
+            Reducer::DebugVmapRay {
+                map,
+                x_0,
+                y_0,
+                z_0,
+                x_1,
+                y_1,
+                z_1,
+            } => __sats::bsatn::to_vec(&debug_vmap_ray_reducer::DebugVmapRayArgs {
+                map: map.clone(),
+                x_0: x_0.clone(),
+                y_0: y_0.clone(),
+                z_0: z_0.clone(),
+                x_1: x_1.clone(),
+                y_1: y_1.clone(),
+                z_1: z_1.clone(),
+            }),
             Reducer::DeleteCharacter {
                 account_id,
                 character_guid,
             } => __sats::bsatn::to_vec(&delete_character_reducer::DeleteCharacterArgs {
                 account_id: account_id.clone(),
                 character_guid: character_guid.clone(),
-            }),
-            Reducer::Disenchant { slot } => {
-                __sats::bsatn::to_vec(&disenchant_reducer::DisenchantArgs { slot: slot.clone() })
-            }
-            Reducer::EnchantItem {
-                target_slot,
-                enchant_id,
-            } => __sats::bsatn::to_vec(&enchant_item_reducer::EnchantItemArgs {
-                target_slot: target_slot.clone(),
-                enchant_id: enchant_id.clone(),
             }),
             Reducer::EnsureInstance {
                 instance_id,
@@ -3897,16 +3461,6 @@ impl __sdk::Reducer for Reducer {
                 map_id: map_id.clone(),
                 party_id: party_id.clone(),
             }),
-            Reducer::EnterAreatrigger { trigger_id } => {
-                __sats::bsatn::to_vec(&enter_areatrigger_reducer::EnterAreatriggerArgs {
-                    trigger_id: trigger_id.clone(),
-                })
-            }
-            Reducer::EquipItem { from_slot } => {
-                __sats::bsatn::to_vec(&equip_item_reducer::EquipItemArgs {
-                    from_slot: from_slot.clone(),
-                })
-            }
             Reducer::EstablishSession {
                 account_id,
                 session_key,
@@ -3934,45 +3488,6 @@ impl __sdk::Reducer for Reducer {
             Reducer::FireSpellImpact { sched } => {
                 __sats::bsatn::to_vec(&fire_spell_impact_reducer::FireSpellImpactArgs {
                     sched: sched.clone(),
-                })
-            }
-            Reducer::Fish => __sats::bsatn::to_vec(&fish_reducer::FishArgs {}),
-            Reducer::GmCommand { text } => {
-                __sats::bsatn::to_vec(&gm_command_reducer::GmCommandArgs { text: text.clone() })
-            }
-            Reducer::GossipSelect {
-                npc_guid,
-                option_id,
-                option_row_id,
-            } => __sats::bsatn::to_vec(&gossip_select_reducer::GossipSelectArgs {
-                npc_guid: npc_guid.clone(),
-                option_id: option_id.clone(),
-                option_row_id: option_row_id.clone(),
-            }),
-            Reducer::GroupAccept => {
-                __sats::bsatn::to_vec(&group_accept_reducer::GroupAcceptArgs {})
-            }
-            Reducer::GroupDecline => {
-                __sats::bsatn::to_vec(&group_decline_reducer::GroupDeclineArgs {})
-            }
-            Reducer::GroupInvite { target_guid } => {
-                __sats::bsatn::to_vec(&group_invite_reducer::GroupInviteArgs {
-                    target_guid: target_guid.clone(),
-                })
-            }
-            Reducer::GroupLeave => __sats::bsatn::to_vec(&group_leave_reducer::GroupLeaveArgs {}),
-            Reducer::GroupLootMethod {
-                loot_setting,
-                master_guid,
-                loot_threshold,
-            } => __sats::bsatn::to_vec(&group_loot_method_reducer::GroupLootMethodArgs {
-                loot_setting: loot_setting.clone(),
-                master_guid: master_guid.clone(),
-                loot_threshold: loot_threshold.clone(),
-            }),
-            Reducer::GroupUninvite { target_guid } => {
-                __sats::bsatn::to_vec(&group_uninvite_reducer::GroupUninviteArgs {
-                    target_guid: target_guid.clone(),
                 })
             }
             Reducer::GwAbandonQuest {
@@ -4451,6 +3966,12 @@ impl __sdk::Reducer for Reducer {
                 reputation_index: reputation_index.clone(),
                 at_war: at_war.clone(),
             }),
+            Reducer::GwSetSheathed { actor_guid, state } => {
+                __sats::bsatn::to_vec(&gw_set_sheathed_reducer::GwSetSheathedArgs {
+                    actor_guid: actor_guid.clone(),
+                    state: state.clone(),
+                })
+            }
             Reducer::GwSetTarget {
                 actor_guid,
                 target_guid,
@@ -4580,175 +4101,24 @@ impl __sdk::Reducer for Reducer {
                     packed: packed.clone(),
                 },
             ),
-            Reducer::Inspect { target_guid } => {
-                __sats::bsatn::to_vec(&inspect_reducer::InspectArgs {
-                    target_guid: target_guid.clone(),
+            Reducer::ImportVmapChunks { packed } => {
+                __sats::bsatn::to_vec(&import_vmap_chunks_reducer::ImportVmapChunksArgs {
+                    packed: packed.clone(),
                 })
             }
+            Reducer::ImportVmapChunksAppend { packed } => __sats::bsatn::to_vec(
+                &import_vmap_chunks_append_reducer::ImportVmapChunksAppendArgs {
+                    packed: packed.clone(),
+                },
+            ),
             Reducer::InstallGuidRange { base } => {
                 __sats::bsatn::to_vec(&install_guid_range_reducer::InstallGuidRangeArgs {
                     base: base.clone(),
                 })
             }
-            Reducer::JoinChannel { channel } => {
-                __sats::bsatn::to_vec(&join_channel_reducer::JoinChannelArgs {
-                    channel: channel.clone(),
-                })
-            }
-            Reducer::LearnTalent { talent_id } => {
-                __sats::bsatn::to_vec(&learn_talent_reducer::LearnTalentArgs {
-                    talent_id: talent_id.clone(),
-                })
-            }
-            Reducer::LeaveChannel { channel } => {
-                __sats::bsatn::to_vec(&leave_channel_reducer::LeaveChannelArgs {
-                    channel: channel.clone(),
-                })
-            }
-            Reducer::Logout => __sats::bsatn::to_vec(&logout_reducer::LogoutArgs {}),
-            Reducer::LootMasterGive {
-                corpse_guid,
-                loot_slot,
-                target_guid,
-            } => __sats::bsatn::to_vec(&loot_master_give_reducer::LootMasterGiveArgs {
-                corpse_guid: corpse_guid.clone(),
-                loot_slot: loot_slot.clone(),
-                target_guid: target_guid.clone(),
-            }),
-            Reducer::LootMoney { target_guid } => {
-                __sats::bsatn::to_vec(&loot_money_reducer::LootMoneyArgs {
-                    target_guid: target_guid.clone(),
-                })
-            }
-            Reducer::LootRoll {
-                corpse_guid,
-                loot_slot,
-                vote,
-            } => __sats::bsatn::to_vec(&loot_roll_reducer::LootRollArgs {
-                corpse_guid: corpse_guid.clone(),
-                loot_slot: loot_slot.clone(),
-                vote: vote.clone(),
-            }),
-            Reducer::MoveItem { from_slot, to_slot } => {
-                __sats::bsatn::to_vec(&move_item_reducer::MoveItemArgs {
-                    from_slot: from_slot.clone(),
-                    to_slot: to_slot.clone(),
-                })
-            }
-            Reducer::MovementUpdate {
-                opcode,
-                movement_info,
-                x,
-                y,
-                z,
-                o,
-                move_time_ms,
-            } => __sats::bsatn::to_vec(&movement_update_reducer::MovementUpdateArgs {
-                opcode: opcode.clone(),
-                movement_info: movement_info.clone(),
-                x: x.clone(),
-                y: y.clone(),
-                z: z.clone(),
-                o: o.clone(),
-                move_time_ms: move_time_ms.clone(),
-            }),
             Reducer::OnDisconnect => {
                 __sats::bsatn::to_vec(&on_disconnect_reducer::OnDisconnectArgs {})
             }
-            Reducer::PartyChat { text } => {
-                __sats::bsatn::to_vec(&party_chat_reducer::PartyChatArgs { text: text.clone() })
-            }
-            Reducer::PetCommand { data, target_guid } => {
-                __sats::bsatn::to_vec(&pet_command_reducer::PetCommandArgs {
-                    data: data.clone(),
-                    target_guid: target_guid.clone(),
-                })
-            }
-            Reducer::PickLock { go_guid } => {
-                __sats::bsatn::to_vec(&pick_lock_reducer::PickLockArgs {
-                    go_guid: go_guid.clone(),
-                })
-            }
-            Reducer::PkgDeadminesReset { instance_id } => {
-                __sats::bsatn::to_vec(&pkg_deadmines_reset_reducer::PkgDeadminesResetArgs {
-                    instance_id: instance_id.clone(),
-                })
-            }
-            Reducer::PkgExampleSeedNote {
-                character_guid,
-                note,
-            } => __sats::bsatn::to_vec(&pkg_example_seed_note_reducer::PkgExampleSeedNoteArgs {
-                character_guid: character_guid.clone(),
-                note: note.clone(),
-            }),
-            Reducer::PlayerLogin { character_guid } => {
-                __sats::bsatn::to_vec(&player_login_reducer::PlayerLoginArgs {
-                    character_guid: character_guid.clone(),
-                })
-            }
-            Reducer::PlayerbotsDespawnAll => {
-                __sats::bsatn::to_vec(&playerbots_despawn_all_reducer::PlayerbotsDespawnAllArgs {})
-            }
-            Reducer::PlayerbotsSpawn { count, x, y, z } => {
-                __sats::bsatn::to_vec(&playerbots_spawn_reducer::PlayerbotsSpawnArgs {
-                    count: count.clone(),
-                    x: x.clone(),
-                    y: y.clone(),
-                    z: z.clone(),
-                })
-            }
-            Reducer::PlayerbotsSpawnClassRole {
-                count,
-                x,
-                y,
-                z,
-                class,
-                role,
-            } => __sats::bsatn::to_vec(
-                &playerbots_spawn_class_role_reducer::PlayerbotsSpawnClassRoleArgs {
-                    count: count.clone(),
-                    x: x.clone(),
-                    y: y.clone(),
-                    z: z.clone(),
-                    class: class.clone(),
-                    role: role.clone(),
-                },
-            ),
-            Reducer::PlayerbotsSpawnRace {
-                count,
-                x,
-                y,
-                z,
-                race,
-                class,
-            } => __sats::bsatn::to_vec(&playerbots_spawn_race_reducer::PlayerbotsSpawnRaceArgs {
-                count: count.clone(),
-                x: x.clone(),
-                y: y.clone(),
-                z: z.clone(),
-                race: race.clone(),
-                class: class.clone(),
-            }),
-            Reducer::PlayerbotsSpawnRole {
-                count,
-                x,
-                y,
-                z,
-                role,
-            } => __sats::bsatn::to_vec(&playerbots_spawn_role_reducer::PlayerbotsSpawnRoleArgs {
-                count: count.clone(),
-                x: x.clone(),
-                y: y.clone(),
-                z: z.clone(),
-                role: role.clone(),
-            }),
-            Reducer::PlayerbotsTravel {
-                bot_guid,
-                dest_entry,
-            } => __sats::bsatn::to_vec(&playerbots_travel_reducer::PlayerbotsTravelArgs {
-                bot_guid: bot_guid.clone(),
-                dest_entry: dest_entry.clone(),
-            }),
             Reducer::ProvisionAccount {
                 username,
                 salt,
@@ -4761,11 +4131,6 @@ impl __sdk::Reducer for Reducer {
             Reducer::PublishMotion { schedule } => {
                 __sats::bsatn::to_vec(&publish_motion_reducer::PublishMotionArgs {
                     schedule: schedule.clone(),
-                })
-            }
-            Reducer::PushQuestToParty { quest_entry } => {
-                __sats::bsatn::to_vec(&push_quest_to_party_reducer::PushQuestToPartyArgs {
-                    quest_entry: quest_entry.clone(),
                 })
             }
             Reducer::RangedImpact { shot } => {
@@ -4836,11 +4201,6 @@ impl __sdk::Reducer for Reducer {
                     schedule: schedule.clone(),
                 })
             }
-            Reducer::ReclaimCorpse { corpse_guid } => {
-                __sats::bsatn::to_vec(&reclaim_corpse_reducer::ReclaimCorpseArgs {
-                    corpse_guid: corpse_guid.clone(),
-                })
-            }
             Reducer::RecordRegionLoad {
                 map_id,
                 region_id,
@@ -4866,78 +4226,6 @@ impl __sdk::Reducer for Reducer {
                     transfer_id: transfer_id.clone(),
                 })
             }
-            Reducer::RepairItem { npc_guid, slot } => {
-                __sats::bsatn::to_vec(&repair_item_reducer::RepairItemArgs {
-                    npc_guid: npc_guid.clone(),
-                    slot: slot.clone(),
-                })
-            }
-            Reducer::Repop => __sats::bsatn::to_vec(&repop_reducer::RepopArgs {}),
-            Reducer::ResetInstance => {
-                __sats::bsatn::to_vec(&reset_instance_reducer::ResetInstanceArgs {})
-            }
-            Reducer::ResetTalents { trainer_guid } => {
-                __sats::bsatn::to_vec(&reset_talents_reducer::ResetTalentsArgs {
-                    trainer_guid: trainer_guid.clone(),
-                })
-            }
-            Reducer::ResurrectResponse { accept } => {
-                __sats::bsatn::to_vec(&resurrect_response_reducer::ResurrectResponseArgs {
-                    accept: accept.clone(),
-                })
-            }
-            Reducer::SellItem { vendor_guid, slot } => {
-                __sats::bsatn::to_vec(&sell_item_reducer::SellItemArgs {
-                    vendor_guid: vendor_guid.clone(),
-                    slot: slot.clone(),
-                })
-            }
-            Reducer::SendChannelMessage { channel, message } => {
-                __sats::bsatn::to_vec(&send_channel_message_reducer::SendChannelMessageArgs {
-                    channel: channel.clone(),
-                    message: message.clone(),
-                })
-            }
-            Reducer::SendChat {
-                chat_type,
-                language,
-                message,
-            } => __sats::bsatn::to_vec(&send_chat_reducer::SendChatArgs {
-                chat_type: chat_type.clone(),
-                language: language.clone(),
-                message: message.clone(),
-            }),
-            Reducer::SendEmote {
-                text_emote,
-                emote_anim,
-                target_guid,
-            } => __sats::bsatn::to_vec(&send_emote_reducer::SendEmoteArgs {
-                text_emote: text_emote.clone(),
-                emote_anim: emote_anim.clone(),
-                target_guid: target_guid.clone(),
-            }),
-            Reducer::SendRoll { min_roll, max_roll } => {
-                __sats::bsatn::to_vec(&send_roll_reducer::SendRollArgs {
-                    min_roll: min_roll.clone(),
-                    max_roll: max_roll.clone(),
-                })
-            }
-            Reducer::SendWhisper {
-                target_name,
-                message,
-            } => __sats::bsatn::to_vec(&send_whisper_reducer::SendWhisperArgs {
-                target_name: target_name.clone(),
-                message: message.clone(),
-            }),
-            Reducer::SetActionButton {
-                button,
-                action,
-                action_type,
-            } => __sats::bsatn::to_vec(&set_action_button_reducer::SetActionButtonArgs {
-                button: button.clone(),
-                action: action.clone(),
-                action_type: action_type.clone(),
-            }),
             Reducer::SetCharacterShard {
                 character_guid,
                 map_id,
@@ -4946,13 +4234,6 @@ impl __sdk::Reducer for Reducer {
                 character_guid: character_guid.clone(),
                 map_id: map_id.clone(),
                 instance_id: instance_id.clone(),
-            }),
-            Reducer::SetFactionAtWar {
-                reputation_index,
-                at_war,
-            } => __sats::bsatn::to_vec(&set_faction_at_war_reducer::SetFactionAtWarArgs {
-                reputation_index: reputation_index.clone(),
-                at_war: at_war.clone(),
             }),
             Reducer::SetGmLevel {
                 character_name,
@@ -4977,11 +4258,6 @@ impl __sdk::Reducer for Reducer {
                 shard: shard.clone(),
                 epoch: epoch.clone(),
             }),
-            Reducer::SetTarget { target_guid } => {
-                __sats::bsatn::to_vec(&set_target_reducer::SetTargetArgs {
-                    target_guid: target_guid.clone(),
-                })
-            }
             Reducer::SettleLootRoll {
                 corpse_guid,
                 slot,
@@ -4990,23 +4266,6 @@ impl __sdk::Reducer for Reducer {
                 corpse_guid: corpse_guid.clone(),
                 slot: slot.clone(),
                 winner_guid: winner_guid.clone(),
-            }),
-            Reducer::Skin { corpse_guid } => __sats::bsatn::to_vec(&skin_reducer::SkinArgs {
-                corpse_guid: corpse_guid.clone(),
-            }),
-            Reducer::SpiritHealerRes { healer_guid } => {
-                __sats::bsatn::to_vec(&spirit_healer_res_reducer::SpiritHealerResArgs {
-                    healer_guid: healer_guid.clone(),
-                })
-            }
-            Reducer::SplitItem {
-                slot,
-                count,
-                to_slot,
-            } => __sats::bsatn::to_vec(&split_item_reducer::SplitItemArgs {
-                slot: slot.clone(),
-                count: count.clone(),
-                to_slot: to_slot.clone(),
             }),
             Reducer::StampImportMeta {
                 family,
@@ -5019,19 +4278,6 @@ impl __sdk::Reducer for Reducer {
                 file_hash: file_hash.clone(),
                 row_count: row_count.clone(),
             }),
-            Reducer::StartAttack { target_guid } => {
-                __sats::bsatn::to_vec(&start_attack_reducer::StartAttackArgs {
-                    target_guid: target_guid.clone(),
-                })
-            }
-            Reducer::StartRangedAttack {
-                target_guid,
-                spell_id,
-            } => __sats::bsatn::to_vec(&start_ranged_attack_reducer::StartRangedAttackArgs {
-                target_guid: target_guid.clone(),
-                spell_id: spell_id.clone(),
-            }),
-            Reducer::StopAttack => __sats::bsatn::to_vec(&stop_attack_reducer::StopAttackArgs {}),
             Reducer::SyncGroupMirror {
                 group_id,
                 leader_guid,
@@ -5046,13 +4292,6 @@ impl __sdk::Reducer for Reducer {
                 loot_threshold: loot_threshold.clone(),
                 master_looter_guid: master_looter_guid.clone(),
                 members: members.clone(),
-            }),
-            Reducer::TakeLoot {
-                corpse_guid,
-                loot_slot,
-            } => __sats::bsatn::to_vec(&take_loot_reducer::TakeLootArgs {
-                corpse_guid: corpse_guid.clone(),
-                loot_slot: loot_slot.clone(),
             }),
             Reducer::TickAuras { schedule } => {
                 __sats::bsatn::to_vec(&tick_auras_reducer::TickAurasArgs {
@@ -5073,28 +4312,6 @@ impl __sdk::Reducer for Reducer {
                 __sats::bsatn::to_vec(&tick_melee_reducer::TickMeleeArgs {
                     schedule: schedule.clone(),
                 })
-            }
-            Reducer::TurnInQuest {
-                giver_guid,
-                quest_entry,
-                reward_index,
-            } => __sats::bsatn::to_vec(&turn_in_quest_reducer::TurnInQuestArgs {
-                giver_guid: giver_guid.clone(),
-                quest_entry: quest_entry.clone(),
-                reward_index: reward_index.clone(),
-            }),
-            Reducer::UnequipItem { from_slot } => {
-                __sats::bsatn::to_vec(&unequip_item_reducer::UnequipItemArgs {
-                    from_slot: from_slot.clone(),
-                })
-            }
-            Reducer::UseGameobject { go_guid } => {
-                __sats::bsatn::to_vec(&use_gameobject_reducer::UseGameobjectArgs {
-                    go_guid: go_guid.clone(),
-                })
-            }
-            Reducer::UseItem { slot } => {
-                __sats::bsatn::to_vec(&use_item_reducer::UseItemArgs { slot: slot.clone() })
             }
             _ => unreachable!(),
         }
@@ -5229,6 +4446,7 @@ pub struct DbUpdate {
     game_school_lockout: __sdk::TableUpdate<SchoolLockout>,
     game_session: __sdk::TableUpdate<Session>,
     game_shard_load: __sdk::TableUpdate<ShardLoad>,
+    game_shard_load_total: __sdk::TableUpdate<ShardLoadTotal>,
     game_skill_ability: __sdk::TableUpdate<SkillAbility>,
     game_skill_availability: __sdk::TableUpdate<SkillAvailability>,
     game_skill_line: __sdk::TableUpdate<SkillLine>,
@@ -5256,19 +4474,11 @@ pub struct DbUpdate {
     game_transfer_in: __sdk::TableUpdate<TransferIn>,
     game_transfer_out: __sdk::TableUpdate<TransferOut>,
     game_transfer_reaper_schedule: __sdk::TableUpdate<TransferReaperSchedule>,
+    game_vmap_chunk: __sdk::TableUpdate<VmapChunk>,
     game_whisper_event: __sdk::TableUpdate<WhisperEvent>,
     game_world_config: __sdk::TableUpdate<GmWorldConfig>,
     game_world_entity: __sdk::TableUpdate<WorldEntity>,
     game_xp_event: __sdk::TableUpdate<XpEvent>,
-    pkg_example_note: __sdk::TableUpdate<PkgExampleNote>,
-    pkg_example_stat: __sdk::TableUpdate<PkgExampleStat>,
-    pkg_playerbots_bot: __sdk::TableUpdate<PlayerBot>,
-    pkg_playerbots_goal: __sdk::TableUpdate<BotGoal>,
-    pkg_playerbots_kit: __sdk::TableUpdate<BotKit>,
-    pkg_playerbots_personality: __sdk::TableUpdate<BotPersonality>,
-    pkg_playerbots_rotation: __sdk::TableUpdate<BotRotation>,
-    pkg_playerbots_waypoint: __sdk::TableUpdate<BotWaypoint>,
-    pkg_playerbots_waypoint_edge: __sdk::TableUpdate<BotWaypointEdge>,
 }
 
 impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
@@ -5651,6 +4861,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_shard_load" => db_update
                     .game_shard_load
                     .append(game_shard_load_table::parse_table_update(table_update)?),
+                "game_shard_load_total" => db_update.game_shard_load_total.append(
+                    game_shard_load_total_table::parse_table_update(table_update)?,
+                ),
                 "game_skill_ability" => db_update
                     .game_skill_ability
                     .append(game_skill_ability_table::parse_table_update(table_update)?),
@@ -5732,6 +4945,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_transfer_reaper_schedule" => db_update.game_transfer_reaper_schedule.append(
                     game_transfer_reaper_schedule_table::parse_table_update(table_update)?,
                 ),
+                "game_vmap_chunk" => db_update
+                    .game_vmap_chunk
+                    .append(game_vmap_chunk_table::parse_table_update(table_update)?),
                 "game_whisper_event" => db_update
                     .game_whisper_event
                     .append(game_whisper_event_table::parse_table_update(table_update)?),
@@ -5744,33 +4960,6 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_xp_event" => db_update
                     .game_xp_event
                     .append(game_xp_event_table::parse_table_update(table_update)?),
-                "pkg_example_note" => db_update
-                    .pkg_example_note
-                    .append(pkg_example_note_table::parse_table_update(table_update)?),
-                "pkg_example_stat" => db_update
-                    .pkg_example_stat
-                    .append(pkg_example_stat_table::parse_table_update(table_update)?),
-                "pkg_playerbots_bot" => db_update
-                    .pkg_playerbots_bot
-                    .append(pkg_playerbots_bot_table::parse_table_update(table_update)?),
-                "pkg_playerbots_goal" => db_update
-                    .pkg_playerbots_goal
-                    .append(pkg_playerbots_goal_table::parse_table_update(table_update)?),
-                "pkg_playerbots_kit" => db_update
-                    .pkg_playerbots_kit
-                    .append(pkg_playerbots_kit_table::parse_table_update(table_update)?),
-                "pkg_playerbots_personality" => db_update.pkg_playerbots_personality.append(
-                    pkg_playerbots_personality_table::parse_table_update(table_update)?,
-                ),
-                "pkg_playerbots_rotation" => db_update.pkg_playerbots_rotation.append(
-                    pkg_playerbots_rotation_table::parse_table_update(table_update)?,
-                ),
-                "pkg_playerbots_waypoint" => db_update.pkg_playerbots_waypoint.append(
-                    pkg_playerbots_waypoint_table::parse_table_update(table_update)?,
-                ),
-                "pkg_playerbots_waypoint_edge" => db_update.pkg_playerbots_waypoint_edge.append(
-                    pkg_playerbots_waypoint_edge_table::parse_table_update(table_update)?,
-                ),
 
                 unknown => {
                     return Err(__sdk::InternalError::unknown_name(
@@ -6325,6 +5514,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_shard_load = cache
             .apply_diff_to_table::<ShardLoad>("game_shard_load", &self.game_shard_load)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_shard_load_total = cache
+            .apply_diff_to_table::<ShardLoadTotal>(
+                "game_shard_load_total",
+                &self.game_shard_load_total,
+            )
+            .with_updates_by_pk(|row| &row.shard);
         diff.game_skill_ability = cache
             .apply_diff_to_table::<SkillAbility>("game_skill_ability", &self.game_skill_ability)
             .with_updates_by_pk(|row| &row.id);
@@ -6421,6 +5616,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_transfer_reaper_schedule,
             )
             .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.game_vmap_chunk = cache
+            .apply_diff_to_table::<VmapChunk>("game_vmap_chunk", &self.game_vmap_chunk)
+            .with_updates_by_pk(|row| &row.id);
         diff.game_whisper_event = cache
             .apply_diff_to_table::<WhisperEvent>("game_whisper_event", &self.game_whisper_event)
             .with_updates_by_pk(|row| &row.id);
@@ -6432,45 +5630,6 @@ impl __sdk::DbUpdate for DbUpdate {
             .with_updates_by_pk(|row| &row.guid);
         diff.game_xp_event = cache
             .apply_diff_to_table::<XpEvent>("game_xp_event", &self.game_xp_event)
-            .with_updates_by_pk(|row| &row.id);
-        diff.pkg_example_note = cache
-            .apply_diff_to_table::<PkgExampleNote>("pkg_example_note", &self.pkg_example_note)
-            .with_updates_by_pk(|row| &row.id);
-        diff.pkg_example_stat = cache
-            .apply_diff_to_table::<PkgExampleStat>("pkg_example_stat", &self.pkg_example_stat)
-            .with_updates_by_pk(|row| &row.key);
-        diff.pkg_playerbots_bot = cache
-            .apply_diff_to_table::<PlayerBot>("pkg_playerbots_bot", &self.pkg_playerbots_bot)
-            .with_updates_by_pk(|row| &row.id);
-        diff.pkg_playerbots_goal = cache
-            .apply_diff_to_table::<BotGoal>("pkg_playerbots_goal", &self.pkg_playerbots_goal)
-            .with_updates_by_pk(|row| &row.id);
-        diff.pkg_playerbots_kit = cache
-            .apply_diff_to_table::<BotKit>("pkg_playerbots_kit", &self.pkg_playerbots_kit)
-            .with_updates_by_pk(|row| &row.id);
-        diff.pkg_playerbots_personality = cache
-            .apply_diff_to_table::<BotPersonality>(
-                "pkg_playerbots_personality",
-                &self.pkg_playerbots_personality,
-            )
-            .with_updates_by_pk(|row| &row.id);
-        diff.pkg_playerbots_rotation = cache
-            .apply_diff_to_table::<BotRotation>(
-                "pkg_playerbots_rotation",
-                &self.pkg_playerbots_rotation,
-            )
-            .with_updates_by_pk(|row| &row.id);
-        diff.pkg_playerbots_waypoint = cache
-            .apply_diff_to_table::<BotWaypoint>(
-                "pkg_playerbots_waypoint",
-                &self.pkg_playerbots_waypoint,
-            )
-            .with_updates_by_pk(|row| &row.entry);
-        diff.pkg_playerbots_waypoint_edge = cache
-            .apply_diff_to_table::<BotWaypointEdge>(
-                "pkg_playerbots_waypoint_edge",
-                &self.pkg_playerbots_waypoint_edge,
-            )
             .with_updates_by_pk(|row| &row.id);
 
         diff
@@ -6851,6 +6010,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_shard_load" => db_update
                     .game_shard_load
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_shard_load_total" => db_update
+                    .game_shard_load_total
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_skill_ability" => db_update
                     .game_skill_ability
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -6932,6 +6094,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_transfer_reaper_schedule" => db_update
                     .game_transfer_reaper_schedule
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_vmap_chunk" => db_update
+                    .game_vmap_chunk
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_whisper_event" => db_update
                     .game_whisper_event
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -6943,33 +6108,6 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_xp_event" => db_update
                     .game_xp_event
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "pkg_example_note" => db_update
-                    .pkg_example_note
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "pkg_example_stat" => db_update
-                    .pkg_example_stat
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "pkg_playerbots_bot" => db_update
-                    .pkg_playerbots_bot
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "pkg_playerbots_goal" => db_update
-                    .pkg_playerbots_goal
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "pkg_playerbots_kit" => db_update
-                    .pkg_playerbots_kit
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "pkg_playerbots_personality" => db_update
-                    .pkg_playerbots_personality
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "pkg_playerbots_rotation" => db_update
-                    .pkg_playerbots_rotation
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "pkg_playerbots_waypoint" => db_update
-                    .pkg_playerbots_waypoint
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "pkg_playerbots_waypoint_edge" => db_update
-                    .pkg_playerbots_waypoint_edge
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 unknown => {
                     return Err(
@@ -7356,6 +6494,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_shard_load" => db_update
                     .game_shard_load
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_shard_load_total" => db_update
+                    .game_shard_load_total
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_skill_ability" => db_update
                     .game_skill_ability
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -7437,6 +6578,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_transfer_reaper_schedule" => db_update
                     .game_transfer_reaper_schedule
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_vmap_chunk" => db_update
+                    .game_vmap_chunk
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_whisper_event" => db_update
                     .game_whisper_event
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -7448,33 +6592,6 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_xp_event" => db_update
                     .game_xp_event
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "pkg_example_note" => db_update
-                    .pkg_example_note
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "pkg_example_stat" => db_update
-                    .pkg_example_stat
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "pkg_playerbots_bot" => db_update
-                    .pkg_playerbots_bot
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "pkg_playerbots_goal" => db_update
-                    .pkg_playerbots_goal
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "pkg_playerbots_kit" => db_update
-                    .pkg_playerbots_kit
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "pkg_playerbots_personality" => db_update
-                    .pkg_playerbots_personality
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "pkg_playerbots_rotation" => db_update
-                    .pkg_playerbots_rotation
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "pkg_playerbots_waypoint" => db_update
-                    .pkg_playerbots_waypoint
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "pkg_playerbots_waypoint_edge" => db_update
-                    .pkg_playerbots_waypoint_edge
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 unknown => {
                     return Err(
@@ -7615,6 +6732,7 @@ pub struct AppliedDiff<'r> {
     game_school_lockout: __sdk::TableAppliedDiff<'r, SchoolLockout>,
     game_session: __sdk::TableAppliedDiff<'r, Session>,
     game_shard_load: __sdk::TableAppliedDiff<'r, ShardLoad>,
+    game_shard_load_total: __sdk::TableAppliedDiff<'r, ShardLoadTotal>,
     game_skill_ability: __sdk::TableAppliedDiff<'r, SkillAbility>,
     game_skill_availability: __sdk::TableAppliedDiff<'r, SkillAvailability>,
     game_skill_line: __sdk::TableAppliedDiff<'r, SkillLine>,
@@ -7642,19 +6760,11 @@ pub struct AppliedDiff<'r> {
     game_transfer_in: __sdk::TableAppliedDiff<'r, TransferIn>,
     game_transfer_out: __sdk::TableAppliedDiff<'r, TransferOut>,
     game_transfer_reaper_schedule: __sdk::TableAppliedDiff<'r, TransferReaperSchedule>,
+    game_vmap_chunk: __sdk::TableAppliedDiff<'r, VmapChunk>,
     game_whisper_event: __sdk::TableAppliedDiff<'r, WhisperEvent>,
     game_world_config: __sdk::TableAppliedDiff<'r, GmWorldConfig>,
     game_world_entity: __sdk::TableAppliedDiff<'r, WorldEntity>,
     game_xp_event: __sdk::TableAppliedDiff<'r, XpEvent>,
-    pkg_example_note: __sdk::TableAppliedDiff<'r, PkgExampleNote>,
-    pkg_example_stat: __sdk::TableAppliedDiff<'r, PkgExampleStat>,
-    pkg_playerbots_bot: __sdk::TableAppliedDiff<'r, PlayerBot>,
-    pkg_playerbots_goal: __sdk::TableAppliedDiff<'r, BotGoal>,
-    pkg_playerbots_kit: __sdk::TableAppliedDiff<'r, BotKit>,
-    pkg_playerbots_personality: __sdk::TableAppliedDiff<'r, BotPersonality>,
-    pkg_playerbots_rotation: __sdk::TableAppliedDiff<'r, BotRotation>,
-    pkg_playerbots_waypoint: __sdk::TableAppliedDiff<'r, BotWaypoint>,
-    pkg_playerbots_waypoint_edge: __sdk::TableAppliedDiff<'r, BotWaypointEdge>,
     __unused: std::marker::PhantomData<&'r ()>,
 }
 
@@ -8252,6 +7362,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_shard_load,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<ShardLoadTotal>(
+            "game_shard_load_total",
+            &self.game_shard_load_total,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<SkillAbility>(
             "game_skill_ability",
             &self.game_skill_ability,
@@ -8379,6 +7494,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_transfer_reaper_schedule,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<VmapChunk>(
+            "game_vmap_chunk",
+            &self.game_vmap_chunk,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<WhisperEvent>(
             "game_whisper_event",
             &self.game_whisper_event,
@@ -8397,51 +7517,6 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<XpEvent>(
             "game_xp_event",
             &self.game_xp_event,
-            event,
-        );
-        callbacks.invoke_table_row_callbacks::<PkgExampleNote>(
-            "pkg_example_note",
-            &self.pkg_example_note,
-            event,
-        );
-        callbacks.invoke_table_row_callbacks::<PkgExampleStat>(
-            "pkg_example_stat",
-            &self.pkg_example_stat,
-            event,
-        );
-        callbacks.invoke_table_row_callbacks::<PlayerBot>(
-            "pkg_playerbots_bot",
-            &self.pkg_playerbots_bot,
-            event,
-        );
-        callbacks.invoke_table_row_callbacks::<BotGoal>(
-            "pkg_playerbots_goal",
-            &self.pkg_playerbots_goal,
-            event,
-        );
-        callbacks.invoke_table_row_callbacks::<BotKit>(
-            "pkg_playerbots_kit",
-            &self.pkg_playerbots_kit,
-            event,
-        );
-        callbacks.invoke_table_row_callbacks::<BotPersonality>(
-            "pkg_playerbots_personality",
-            &self.pkg_playerbots_personality,
-            event,
-        );
-        callbacks.invoke_table_row_callbacks::<BotRotation>(
-            "pkg_playerbots_rotation",
-            &self.pkg_playerbots_rotation,
-            event,
-        );
-        callbacks.invoke_table_row_callbacks::<BotWaypoint>(
-            "pkg_playerbots_waypoint",
-            &self.pkg_playerbots_waypoint,
-            event,
-        );
-        callbacks.invoke_table_row_callbacks::<BotWaypointEdge>(
-            "pkg_playerbots_waypoint_edge",
-            &self.pkg_playerbots_waypoint_edge,
             event,
         );
     }
@@ -9228,6 +8303,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_school_lockout_table::register_table(client_cache);
         game_session_table::register_table(client_cache);
         game_shard_load_table::register_table(client_cache);
+        game_shard_load_total_table::register_table(client_cache);
         game_skill_ability_table::register_table(client_cache);
         game_skill_availability_table::register_table(client_cache);
         game_skill_line_table::register_table(client_cache);
@@ -9255,19 +8331,11 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_transfer_in_table::register_table(client_cache);
         game_transfer_out_table::register_table(client_cache);
         game_transfer_reaper_schedule_table::register_table(client_cache);
+        game_vmap_chunk_table::register_table(client_cache);
         game_whisper_event_table::register_table(client_cache);
         game_world_config_table::register_table(client_cache);
         game_world_entity_table::register_table(client_cache);
         game_xp_event_table::register_table(client_cache);
-        pkg_example_note_table::register_table(client_cache);
-        pkg_example_stat_table::register_table(client_cache);
-        pkg_playerbots_bot_table::register_table(client_cache);
-        pkg_playerbots_goal_table::register_table(client_cache);
-        pkg_playerbots_kit_table::register_table(client_cache);
-        pkg_playerbots_personality_table::register_table(client_cache);
-        pkg_playerbots_rotation_table::register_table(client_cache);
-        pkg_playerbots_waypoint_table::register_table(client_cache);
-        pkg_playerbots_waypoint_edge_table::register_table(client_cache);
     }
     const ALL_TABLE_NAMES: &'static [&'static str] = &[
         "game_account",
@@ -9394,6 +8462,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_school_lockout",
         "game_session",
         "game_shard_load",
+        "game_shard_load_total",
         "game_skill_ability",
         "game_skill_availability",
         "game_skill_line",
@@ -9421,18 +8490,10 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_transfer_in",
         "game_transfer_out",
         "game_transfer_reaper_schedule",
+        "game_vmap_chunk",
         "game_whisper_event",
         "game_world_config",
         "game_world_entity",
         "game_xp_event",
-        "pkg_example_note",
-        "pkg_example_stat",
-        "pkg_playerbots_bot",
-        "pkg_playerbots_goal",
-        "pkg_playerbots_kit",
-        "pkg_playerbots_personality",
-        "pkg_playerbots_rotation",
-        "pkg_playerbots_waypoint",
-        "pkg_playerbots_waypoint_edge",
     ];
 }

@@ -591,6 +591,7 @@ pub fn build_creature_entity(
         target_guid: 0,
         money: 0,        // no loot until the killing blow rolls it onto the corpse
         unit_bytes_1: 0, // creatures aren't ghosts
+        unit_bytes_2: 0, // sheath state UNARMED — a creature spawns with its weapon stowed
         // A creature is a Unit — no character sheet — so the five player attributes are 0.
         strength: 0,
         agility: 0,
@@ -725,6 +726,10 @@ pub fn build_player_entity(
         } else {
             0
         },
+        // Sheath state UNARMED (#101). Deliberately NOT persisted across logout: vanilla rebuilds a
+        // player with weapons stowed, and the client re-sends `CMSG_SETSHEATHED` when the player
+        // draws again, so there is nothing to restore.
+        unit_bytes_2: 0,
         strength: 0,
         agility: 0,
         stamina: 0,

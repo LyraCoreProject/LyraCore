@@ -67,6 +67,7 @@ use wow_world_messages::vanilla::{
     Race,
     RollVote,
     SpellCastTargets,
+    SheathState,
     SpellCastTargets_SpellCastTargetFlags,
     SpellCastTargets_SpellCastTargetFlags_Item,
     SpellCastTargets_SpellCastTargetFlags_Unit,
@@ -119,6 +120,7 @@ use wow_world_messages::vanilla::{
     CMSG_REPOP_REQUEST,
     CMSG_RESURRECT_RESPONSE,
     CMSG_SELL_ITEM,
+    CMSG_SETSHEATHED,
     CMSG_SET_SELECTION,
     CMSG_SPIRIT_HEALER_ACTIVATE,
     CMSG_SWAP_INV_ITEM,
@@ -232,6 +234,8 @@ struct InMemoryStore {
     ground_casts: std::sync::Mutex<Vec<(u32, u64, f32, f32, f32)>>,
     /// Recorded `start_ranged_attack` dispatches: (target_guid, spell_id) — the Auto Shot intercept.
     ranged_attacks: std::sync::Mutex<Vec<(u64, u32)>>,
+    /// Recorded `set_sheathed` dispatches: (self_guid, state) — the `CMSG_SETSHEATHED` route (#101).
+    sheathed: std::sync::Mutex<Vec<(u64, u8)>>,
     /// What `spell_cast_time` returns: None (default) = unknown spell (the handler treats it as
     /// instant), Some(t) = the game_spell header's cast_time_ms.
     cast_time_ms: Option<u32>,
@@ -1272,6 +1276,10 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
     fn stop_attack(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+        Ok(())
+    }
+    fn set_sheathed(&self, _account_id: u64, self_guid: u64, state: u8) -> Result<()> {
+        self.sheathed.lock().unwrap().push((self_guid, state));
         Ok(())
     }
     fn cast_spell(&self, _account_id: u64, _self_guid: u64, spell_id: u32, target_guid: u64) -> Result<()> {
@@ -2525,6 +2533,7 @@ fn warrior_entity() -> codec::EntityView {
         next_level_xp: 0,
         money: 0,
         unit_bytes_1: 0,
+        unit_bytes_2: 0,
         // L1 Human Warrior base attributes (cmangos curve) — non-zero so the CREATE exercises them.
         strength: 23,
         agility: 20,
@@ -4466,6 +4475,31 @@ fn rejected_instant_cast_clears_the_client_then_reports_failure() {
     }
     drop(client);
     server.join().unwrap();
+}
+
+#[test]
+fn set_sheathed_routes_the_clients_z_press_to_the_store() {
+    // #101: CMSG_SETSHEATHED used to reach NO handler — it fell through every arm of `dispatch` and
+    // was dropped, so UNIT_FIELD_BYTES_2 stayed 0 forever and peers rendered everyone unarmed.
+    // Each of the three real states must reach the store verb with its byte intact.
+    for (sent, expect) in [
+        (SheathState::Unarmed, 0u8),
+        (SheathState::Melee, 1),
+        (SheathState::Ranged, 2),
+    ] {
+        let store = std::sync::Arc::new(quest_store());
+        let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+        CMSG_SETSHEATHED { sheathed: sent }
+            .write_encrypted_client(&mut client, &mut c_enc)
+            .unwrap();
+        drop(client);
+        server.join().unwrap();
+        assert_eq!(
+            store.sheathed.lock().unwrap().as_slice(),
+            &[(1, expect)],
+            "{sent:?} must reach set_sheathed as byte {expect}"
+        );
+    }
 }
 
 #[test]

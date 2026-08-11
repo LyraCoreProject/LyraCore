@@ -438,6 +438,19 @@ impl Coordinator {
         )
     }
 
+    /// Draw or stow the player's weapons (`CMSG_SETSHEATHED`). [#101]
+    pub fn set_sheathed(&self, _account_id: u64, actor_guid: u64, state: u8) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("set_sheathed: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_set_sheathed",
+            gw_set_sheathed_then(actor_guid, state)
+        )
+    }
+
     /// Cast a spell (`CMSG_CAST_SPELL`, aura tracer) over the coordinator connection so the module
     /// attributes the cast to the caller. `target_guid` is the client's selected unit (0 = none/self →
     /// the module substitutes the caster), threaded so target-keyed effects see the real target.

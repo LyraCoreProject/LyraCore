@@ -170,6 +170,18 @@ pub fn build_unit_flags_values(guid: u64, unit_flags: u32) -> SMSG_UPDATE_OBJECT
     })
 }
 
+/// VALUES partial-update carrying `UNIT_FIELD_BYTES_2` so observers see a weapon DRAWN or STOWED the
+/// moment it happens — the `CMSG_SETSHEATHED` a client sends on `Z`. Unit mask, not player-gated: a
+/// creature draws its weapon on engage too. Same `dirty_reset` discipline as its siblings (the wire
+/// carries only this field, never OBJECT_FIELD_TYPE). Where a stowed weapon HANGS is a different
+/// field entirely — the per-item `sheathe_type` in the item query. [#101]
+pub fn build_sheath_values(guid: u64, unit_bytes_2: u32) -> SMSG_UPDATE_OBJECT {
+    let (b2a, b2b, b2c, b2d) = unpack4(unit_bytes_2);
+    unit_values(guid, |unit| {
+        unit.set_unit_bytes_2(b2a, b2b, b2c, b2d);
+    })
+}
+
 /// VALUES partial-update carrying the unit's current power so the resource bar moves LIVE (e.g. a
 /// warrior gaining rage in combat — without this the bar stays at 0 and the client greys every
 /// rage-costed spell). `power_b` is the power-type byte from `unit_bytes_0` and selects the descriptor

@@ -46,7 +46,13 @@ pub trait record_shard_load {
         sessions: u32,
         gateway_key: u64,
     ) -> __sdk::Result<()> {
-        self.record_shard_load_then(shard, writer_occupancy_pct, sessions, gateway_key, |_, _| {})
+        self.record_shard_load_then(
+            shard,
+            writer_occupancy_pct,
+            sessions,
+            gateway_key,
+            |_, _| {},
+        )
     }
 
     /// Request that the remote module invoke the reducer `record_shard_load` to run as soon as possible,

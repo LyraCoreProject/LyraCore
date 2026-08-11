@@ -1099,6 +1099,7 @@ mod tests {
             target_guid: 0,
             money: 0,
             unit_bytes_1: 0,
+            unit_bytes_2: 0,
             strength: 0,
             agility: 0,
             stamina: 0,
