@@ -6,7 +6,7 @@
 //! insert/update so the client's reputation bar moves live, and folds stored standings into the login
 //! `SMSG_INITIALIZE_FACTIONS` so a relog doesn't reset the rep pane to neutral. [entity]
 
-use spacetimedb::{client_visibility_filter, table, Filter, Identity, ReducerContext, Table};
+use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use crate::{game_character, game_faction, game_faction_template, game_world_entity};
 
@@ -40,11 +40,6 @@ pub struct PlayerReputation {
     #[default(false)]
     pub at_war: bool,
 }
-
-/// A player connection sees only its own standings (mirrors the character/skill/spell RLS filters).
-#[client_visibility_filter]
-const PLAYER_REPUTATION_RLS: Filter =
-    Filter::Sql("SELECT * FROM game_player_reputation WHERE owner_identity = :sender");
 
 // Character-owned sweep: reputation is durable per-character data, deleted along with its
 // character (mirrors the item/spell/skill/talent/quest sweeps).
@@ -198,24 +193,6 @@ pub(crate) fn grant_reputation(
         reputation_index: rep_index,
         at_war: false,
     });
-}
-
-/// The rep pane's "At War" checkbox (195 slice B, `CMSG_SET_FACTION_ATWAR` via the gateway).
-/// `reputation_index` is the client's 0..63 rep-array slot — the wire carries the ReputationListID,
-/// NOT a faction id (the gtker field name lies, same as SET_FACTION_STANDING) — so reverse-resolve
-/// it through `game_faction`. Upserts the caller's row: an existing row flips the flag in place; a
-/// first touch seeds at `base_standing` exactly like `grant_reputation`'s first-gain path (the pane
-/// can be at-war with a faction the player has no standing row for yet). Sender-bound like every
-/// player op.
-#[spacetimedb::reducer]
-pub fn set_faction_at_war(
-    ctx: &ReducerContext,
-    reputation_index: u32,
-    at_war: bool,
-) -> Result<(), String> {
-    let player = crate::helpers::entity_by_owner(ctx, ctx.sender())
-        .ok_or_else(|| "caller not in world".to_string())?;
-    apply_set_faction_at_war(ctx, player, reputation_index, at_war)
 }
 
 /// The At-War core, actor-explicit (#479): everything [`set_faction_at_war`] does after resolving

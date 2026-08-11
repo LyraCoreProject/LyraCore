@@ -14,6 +14,16 @@ fn filtered_gossip_options<St: WorldStore + ?Sized>(
     npc_guid: u64,
     player_guid: u64,
 ) -> Result<Vec<codec::GossipOptionView>> {
+    use lyracore_shared::constants::{gossip_option, MIN_TALENT_LEVEL};
+    // The unlearn-talents row has no condition of its own (cmangos gates it in C++ code at
+    // GossipHello, not via a `conditions` row — see `gossip_option::UNLEARNTALENTS`'s doc), so it
+    // needs its own level check here rather than falling through `option_condition_holds`. Below
+    // level 10 a character literally cannot have a talent point, so the option would be inert even
+    // if shown (#516).
+    let level = store
+        .character_by_guid(player_guid)?
+        .map(|c| c.level)
+        .unwrap_or(0);
     let raw = store.gossip_options(npc_guid)?;
     Ok(raw
         .into_iter()
@@ -21,6 +31,7 @@ fn filtered_gossip_options<St: WorldStore + ?Sized>(
             let (taken, rewarded) = store.quest_status(player_guid, opt.cond_value1);
             codec::option_condition_holds(opt.cond_type, taken, rewarded)
         })
+        .filter(|opt| opt.action != gossip_option::UNLEARNTALENTS || level >= MIN_TALENT_LEVEL)
         .collect())
 }
 
@@ -209,6 +220,12 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                             tx,
                             Outbound::One(ServerOpcodeMessage::SMSG_TRAINER_LIST(Box::new(list))),
                         )?;
+                    }
+                    Some(opt) if opt.action == gossip_option::UNLEARNTALENTS => {
+                        // Respec (#516). Errors (out of range / not enough gold) are per-action —
+                        // the window closes either way, same as bind_home above.
+                        let _ = store.reset_talents(conn.account_id, player_guid, npc);
+                        send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
                     }
                     // BANKER/TAXI/plain-GOSSIP/submenu-link, the trailing Farewell, or an out-of-range
                     // index (a stale click racing a condition change) — close the window. Submenu

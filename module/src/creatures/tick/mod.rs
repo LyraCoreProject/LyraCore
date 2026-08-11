@@ -151,6 +151,17 @@ pub struct CreatureSpline {
     /// `backfill_cell_ids` covers it for completeness.
     #[default(0i64)]
     pub cell: i64,
+    /// #518: this leg is a FACING-ONLY packet (the mover does NOT move — `sx/sy/sz` == `dx/dy/dz`,
+    /// `dur_ms` is 0) and `facing_angle` is the new heading the client should snap to
+    /// (`SMSG_MONSTER_MOVE`'s `FacingAngle` variant). A stationary stand-and-swing creature never
+    /// throws a normal leg (nothing to interpolate), so without this the client never learns its
+    /// heading changed — the "keeps its pre-combat orientation until you move" bug. `false`/`0.0`
+    /// (the pre-518 baseline) reproduces the old `Normal`-type stop exactly, so every other caller
+    /// of [`emit_move_spline`] is unaffected. END-appended + defaulted (migration rule).
+    #[default(false)]
+    pub facing: bool,
+    #[default(0.0f32)]
+    pub facing_angle: f32,
 }
 
 // ===========================================================================================
@@ -769,6 +780,53 @@ pub(crate) fn emit_move_spline(
         cell: lyracore_shared::spatial::grid_cell_id(grid.0, grid.1),
         spline_id,
         run,
+        facing: false,
+        facing_angle: 0.0,
+    };
+    if ctx.db.game_creature_spline().guid().find(guid).is_some() {
+        ctx.db.game_creature_spline().guid().update(row);
+    } else {
+        ctx.db.game_creature_spline().insert(row);
+    }
+}
+
+/// #518: write a FACING-ONLY spline row — `guid` doesn't move (start == dest, `dur_ms` 0) but its
+/// heading changes to `angle_rad`. Routes through the SAME `game_creature_spline` relay carrier as
+/// every other creature leg (one AOI-scoped table, one gateway subscription) rather than a new one;
+/// the gateway distinguishes it by the `facing` flag and emits `SMSG_MONSTER_MOVE`'s `FacingAngle`
+/// variant instead of `Normal`. Callers own the epsilon gate (don't call this every tick — see
+/// `pass_chase`'s stand-and-swing branch) and the entity row's `orientation` write; this is purely
+/// the relay half, mirroring [`emit_move_spline`]'s split.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_facing_spline(
+    ctx: &ReducerContext,
+    guid: u64,
+    pos: (f32, f32, f32),
+    angle_rad: f32,
+    spline_id: u32,
+    map_id: u32,
+    instance_id: u64,
+    grid: (i32, i32),
+) {
+    let row = CreatureSpline {
+        guid,
+        start_micros: ctx.timestamp.to_micros_since_unix_epoch() as u64,
+        dur_ms: 0,
+        sx: pos.0,
+        sy: pos.1,
+        sz: pos.2,
+        dx: pos.0,
+        dy: pos.1,
+        dz: pos.2,
+        map_id,
+        instance_id,
+        grid_x: grid.0,
+        grid_y: grid.1,
+        cell: lyracore_shared::spatial::grid_cell_id(grid.0, grid.1),
+        spline_id,
+        run: false,
+        facing: true,
+        facing_angle: angle_rad,
     };
     if ctx.db.game_creature_spline().guid().find(guid).is_some() {
         ctx.db.game_creature_spline().guid().update(row);

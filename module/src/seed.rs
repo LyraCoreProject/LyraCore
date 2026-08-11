@@ -86,6 +86,7 @@ fn seed_production_core(ctx: &ReducerContext) {
         nav_enabled: true,
         hosts_instances: true,
         bots_idle: false, // bots think by default; the load-test lever freezes them
+        vmap_enabled: false, // #521/#523: off until an operator imports vmap data + flips it
     });
 
     // Human Warrior start position (display 49 = human male native model).
@@ -589,6 +590,10 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 5.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 5.0, hw::Y).1,
         cell: lyracore_shared::spatial::cell_id_at(hw::X + 5.0, hw::Y),
+        rotation_0: 0.0,
+        rotation_1: 0.0,
+        rotation_2: 0.0,
+        rotation_3: 0.0, // seed fixtures orient via `orientation` only; codec derives yaw (#515)
     });
     ctx.db
         .game_gameobject_template()
@@ -619,6 +624,10 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 8.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 8.0, hw::Y).1,
         cell: lyracore_shared::spatial::cell_id_at(hw::X + 8.0, hw::Y),
+        rotation_0: 0.0,
+        rotation_1: 0.0,
+        rotation_2: 0.0,
+        rotation_3: 0.0, // seed fixtures orient via `orientation` only; codec derives yaw (#515)
     });
 
     // --- GATHER nodes: a Copper Vein (MINING) + a Peacebloom (HERBALISM) by the player spawn so the
@@ -655,6 +664,10 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 6.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 6.0, hw::Y).1,
         cell: lyracore_shared::spatial::cell_id_at(hw::X + 6.0, hw::Y),
+        rotation_0: 0.0,
+        rotation_1: 0.0,
+        rotation_2: 0.0,
+        rotation_3: 0.0, // seed fixtures orient via `orientation` only; codec derives yaw (#515)
     });
     ctx.db
         .game_gameobject_template()
@@ -685,6 +698,10 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         grid_x: lyracore_shared::spatial::grid_cell(hw::X + 7.0, hw::Y).0,
         grid_y: lyracore_shared::spatial::grid_cell(hw::X + 7.0, hw::Y).1,
         cell: lyracore_shared::spatial::cell_id_at(hw::X + 7.0, hw::Y),
+        rotation_0: 0.0,
+        rotation_1: 0.0,
+        rotation_2: 0.0,
+        rotation_3: 0.0, // seed fixtures orient via `orientation` only; codec derives yaw (#515)
     });
 
     // --- TIER-VARIETY DEMONSTRATOR (gather multinodes): an IN-PLACE Copper point that ~15% of the time

@@ -16,6 +16,7 @@ use super::tables::{
     ItemInstance,
 };
 
+#[allow(dead_code)] // core kept for a future gw_split_item twin (#483 deleted the sender-path reducer)
 /// Shared stack-split logic for the player + debug paths: split `count` units off the stack in `slot`
 /// into the empty `to_slot`, leaving the remainder in the source. Vanilla only splits a STRICT subset
 /// (you can't split off the whole stack — that's a move), so `count == 0` or `count >= stack_count` is
@@ -302,6 +303,7 @@ pub(crate) fn valid_dest_slot(to_slot: u8) -> bool {
         || (BAG_CONTENT_OFFSET..BAG_CONTENT_END).contains(&to_slot) // 120..=191
 }
 
+#[allow(dead_code)] // core kept for a future gw_split_item twin (#483 deleted the sender-path reducer)
 /// The destination-slot gate for `apply_item_split` ONLY: everything `valid_dest_slot` admits, MINUS
 /// the equipment region (0..=`equip_slot::END`, i.e. 0..=18). A split can never legitimately place an
 /// item on the body — `apply_item_move` is the only path that runs equip-validation
@@ -358,6 +360,7 @@ pub(crate) fn validate_bag_dest_slot(
     Ok(())
 }
 
+#[allow(dead_code)] // core kept for a future gw_split_item twin (#483 deleted the sender-path reducer)
 /// A split must leave at least one unit in BOTH the source and the new stack — splitting off none
 /// (`count == 0`) or the whole stack (`count >= stack_count`, that's a move) is rejected. Extracted from
 /// `apply_item_split` (pure code-motion) so the count-gate boundaries are unit-tested without a live

@@ -32,10 +32,9 @@
 //! LOOT methods, round-robin, and raid groups are out of scope.
 
 use spacetimedb::{
-    client_visibility_filter, reducer, table, Filter, Identity, ReducerContext, Table, Timestamp,
+    reducer, table, Identity, ReducerContext, Table, Timestamp,
 };
 
-use crate::helpers::entity_by_owner;
 use crate::{game_character, game_world_entity};
 
 /// Vanilla party size.
@@ -298,11 +297,6 @@ pub struct GroupEvent {
     pub recipient_guid: u64,
 }
 
-/// A connection sees only its own group notifications (mirrors the whisper RLS).
-#[client_visibility_filter]
-const GROUP_EVENT_RLS: Filter =
-    Filter::Sql("SELECT * FROM game_group_event WHERE recipient_identity = :sender");
-
 pub(crate) fn push_event(
     ctx: &ReducerContext,
     recipient_guid: u64,
@@ -448,16 +442,12 @@ fn push_list_to_all(ctx: &ReducerContext, group_id: u64) {
 /// `CMSG_GROUP_INVITE` (name gateway-resolved to `target_guid`): validate, record the pending
 /// invite (replacing any older one on the target), notify the target, and fire the
 /// `on_group_invite` package hook (a bot target auto-accepts through it — but only on the plane where
-/// the bot's own rows live: see [`invite_core_on`]'s note on the hook, issue #51).
-#[reducer]
-pub fn group_invite(ctx: &ReducerContext, target_guid: u64) -> Result<(), String> {
-    let sender = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
-    invite_core(ctx, sender.guid, target_guid)
-}
-
-/// The identity-free invite core (the `accept_invite_for` pattern): shared by the player reducer
-/// above and any server-driven inviter — a playerbot's serendipity invite (276) calls this with
-/// the bot's guid. Same gates in the same order; the reducer is byte-identical for clients.
+/// the bot's own rows live: see [`invite_core_on`]'s note on the hook, issue #51). Reached via
+/// `gw::gw_group_invite`.
+///
+/// The identity-free invite core (the `accept_invite_for` pattern): shared by `gw::gw_group_invite`
+/// and any server-driven inviter — a playerbot's serendipity invite (276) calls this with
+/// the bot's guid. Same gates in the same order for every caller.
 pub(crate) fn invite_core(
     ctx: &ReducerContext,
     inviter_guid: u64,
@@ -551,14 +541,10 @@ fn invite_core_on(
 }
 
 /// `CMSG_GROUP_ACCEPT`: consume the caller's pending invite; create the inviter's group if this
-/// is its first acceptance, join it otherwise, and push a roster refresh to every member.
-#[reducer]
-pub fn group_accept(ctx: &ReducerContext) -> Result<(), String> {
-    let sender = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
-    accept_invite_for(ctx, sender.guid)
-}
-
-/// The identity-free accept core: shared by the player reducer above and any server-driven
+/// is its first acceptance, join it otherwise, and push a roster refresh to every member. Reached
+/// via `gw::gw_accept_group_invite`.
+///
+/// The identity-free accept core: shared by `gw::gw_accept_group_invite` and any server-driven
 /// acceptor (a playerbot's auto-accept hook calls this with the bot's guid).
 pub(crate) fn accept_invite_for(ctx: &ReducerContext, acceptor_guid: u64) -> Result<(), String> {
     accept_invite_on(ctx, Plane::Shard, acceptor_guid)
@@ -655,13 +641,6 @@ fn accept_invite_on(ctx: &ReducerContext, plane: Plane, acceptor_guid: u64) -> R
     Ok(())
 }
 
-/// `CMSG_GROUP_DECLINE`: consume the caller's pending invite and notify the inviter.
-#[reducer]
-pub fn group_decline(ctx: &ReducerContext) -> Result<(), String> {
-    let sender = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
-    decline_invite_for(ctx, sender.guid)
-}
-
 /// The identity-free decline core (#22): the body `group_decline` used to inline, so the realm-core
 /// plane runs the SAME code rather than a second implementation of it.
 pub(crate) fn decline_invite_for(ctx: &ReducerContext, decliner_guid: u64) -> Result<(), String> {
@@ -682,13 +661,6 @@ pub(crate) fn decline_invite_for(ctx: &ReducerContext, decliner_guid: u64) -> Re
     Ok(())
 }
 
-/// `CMSG_GROUP_DISBAND` (the client's "Leave Party"): leave the caller's group.
-#[reducer]
-pub fn group_leave(ctx: &ReducerContext) -> Result<(), String> {
-    let sender = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
-    leave_group_for(ctx, sender.guid)
-}
-
 /// The identity-free leave core (#22) — the body `group_leave` used to inline.
 pub(crate) fn leave_group_for(ctx: &ReducerContext, leaver_guid: u64) -> Result<(), String> {
     if group_of(ctx, leaver_guid).is_none() {
@@ -696,13 +668,6 @@ pub(crate) fn leave_group_for(ctx: &ReducerContext, leaver_guid: u64) -> Result<
     }
     remove_member(ctx, leaver_guid);
     Ok(())
-}
-
-/// `CMSG_GROUP_UNINVITE` (name gateway-resolved): the leader kicks `target_guid`.
-#[reducer]
-pub fn group_uninvite(ctx: &ReducerContext, target_guid: u64) -> Result<(), String> {
-    let sender = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
-    uninvite_from_group(ctx, sender.guid, target_guid)
 }
 
 /// The identity-free kick core (#22) — the body `group_uninvite` used to inline.
@@ -722,26 +687,6 @@ pub(crate) fn uninvite_from_group(
     }
     remove_member(ctx, target_guid);
     Ok(())
-}
-
-/// `CMSG_LOOT_METHOD` (work-item 187 slice 1): the LEADER sets the party's loot method/threshold/
-/// master. Validates the method is one of the five known values, the threshold is a real
-/// `ItemQuality` (0..=6), and — only when the method is actually MASTER — that `master_guid` names a
-/// CURRENT member (0 is accepted for a non-MASTER method: harmless/unused until MASTER is picked).
-/// Echoes via the EXISTING roster relay (`push_list_to_all` → `SMSG_GROUP_LIST`, carrying the new
-/// loot settings in its payload) — vanilla itself sends no `SMSG_PARTY_COMMAND_RESULT` for this
-/// opcode (cmangos's `HandleLootMethodOpcode` only calls `group->SendUpdate()`), so neither do we;
-/// the work item's own draft text ("+ group update") undersold this — no separate ack packet exists
-/// in the real protocol for this specific opcode, only the roster re-render.
-#[reducer]
-pub fn group_loot_method(
-    ctx: &ReducerContext,
-    loot_setting: u8,
-    master_guid: u64,
-    loot_threshold: u8,
-) -> Result<(), String> {
-    let sender = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
-    set_loot_method_for(ctx, sender.guid, loot_setting, master_guid, loot_threshold)
 }
 
 /// The identity-free loot-method core (#22) — the body `group_loot_method` used to inline.

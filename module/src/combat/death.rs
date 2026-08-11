@@ -11,8 +11,8 @@
 use spacetimedb::{ReducerContext, Table, TimeDuration};
 
 use crate::{
-    game_aura, game_creature_spawn, game_creature_template, game_threat, game_world_entity,
-    WorldEntity,
+    game_aura, game_creature_spawn, game_creature_spline, game_creature_template, game_threat,
+    game_world_entity, WorldEntity,
 };
 
 // The corpse-lifecycle timers below are used by `kill_creature`'s decay-arm step; `RESPAWN_MICROS` has
@@ -93,6 +93,47 @@ pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Opti
     roll_corpse_loot(ctx, &mut target, target_guid, killer, &kill_recipients);
     target.health = 0;
     target.dead = true;
+    // #519: a creature killed mid-leg (flee/patrol/chase) still carries an in-flight
+    // `game_creature_spline` row with a real duration — left alone, the client keeps interpolating the
+    // corpse toward the old destination after death (a Kobold Vermin sliding onward while dead). Same
+    // "TOLD to halt instead of left interpolating" 0-duration stop `pass_chase`'s stand-and-swing branch
+    // uses (movement.rs), but fired here instead so EVERY lethal path (flee/patrol/chase, not just
+    // engaged melee) gets the same treatment at this one death chokepoint. The stop lands at the
+    // server's authoritative death position (`target.x/y/z`, unmoved by the kill) so the corpse renders
+    // exactly where loot-click range judges it.
+    //
+    // Deliberately NOT deleted here too, for two independent reasons:
+    //   1. SpacetimeDB diffs a transaction's NET effect per row, not each intermediate write — update
+    //      then delete of the SAME PK in one transaction nets out, for subscribers, as a bare delete of
+    //      the PRE-transaction row. The stop values staged by `emit_move_spline` above would never reach
+    //      the wire, and the gateway has no `on_delete` handler for `game_creature_spline` either
+    //      (`world_view.rs`), so a bare delete relays nothing — the corpse would keep sliding exactly as
+    //      before this fix.
+    //   2. `game_creature_spline` deletion is deliberately confined to ONE chokepoint,
+    //      `despawn_creature_entity` (issue #359's "canonical despawn checklist" — see its doc + tripwire
+    //      in `tick/lifecycle.rs`), which forbids new deletion sites for this table on the same grounds
+    //      #395 retired the old per-caller copies. Adding a second deletion path here would be exactly
+    //      the divergence #359 exists to prevent.
+    // So the row is left for the existing 60s corpse-decay reap (`pass_decay` → `despawn_creature_entity`,
+    // a LATER transaction) to clear, same as it always has for every other creature death. This means
+    // #519's literal "no row for the dead guid" Done-when only becomes true after that reap, not
+    // immediately on kill — the stop-spline packet and position are what a headless check right after
+    // kill can assert; row absence is a 60s-later assertion. See the issue-519 comment reconciling this.
+    if ctx.db.game_creature_spline().guid().find(target_guid).is_some() {
+        let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+        crate::creatures::tick::emit_move_spline(
+            ctx,
+            target_guid,
+            (target.x, target.y, target.z),
+            (target.x, target.y, target.z),
+            0,
+            false,
+            now_ms,
+            target.map_id,
+            target.instance_id,
+            (target.grid_x, target.grid_y),
+        );
+    }
     entities.guid().update(target);
     // Snapshot the victim's threat table for the death payload BEFORE disengage wipes it — threat
     // is the engine's per-player damage/heal ledger, and hooks fire only after the wipe (see

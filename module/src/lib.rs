@@ -300,6 +300,10 @@ mod test_scan;
 mod threat;
 mod trainer;
 mod transfer;
+/// Exact per-cell vmap collision-triangle store + LoS/collision ray queries (issue #521, part of
+/// the #169 full-vmap epic). Builds on `nav`'s obstruction-grid approximation with an exact
+/// triangle store; see the module doc comment for the split.
+pub mod vmap;
 // Source-scan tripwires (issue #379 pulled these out of this file, which had grown to 1,146 lines —
 // four fifths of it cfg(test) scan machinery — so the doc comment atop this file ("this is the thin
 // index") stayed true). See `tripwires.rs`'s own module doc for the roster and the shared engine in
@@ -335,7 +339,6 @@ pub use items::*;
 pub use load::*;
 pub use loot::*;
 pub use motion::*;
-pub use professions::*;
 pub use quest::*;
 pub use realm_core::*;
 pub use region::*;

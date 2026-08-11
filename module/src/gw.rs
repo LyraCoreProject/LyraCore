@@ -17,8 +17,9 @@
 //!   (`world::apply_movement_update`, the `actor.rs` verbs, ...). Gates live in the cores and
 //!   cannot drift between the two entries.
 //!
-//! Rollout: the gateway calls these only when `LYRACORE_SHARED_CALLS` is set (stage 4b); the
-//! sender-shaped reducers keep working untouched, so this stage is additive and publishable alone.
+//! These are THE player-verb surface (#483): the sender-shaped (`ctx.sender`-authorized) twins
+//! are deleted, and every player action reaches the module through a `gw_*` verb on the
+//! gateway's privileged connection.
 
 use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Table, Timestamp};
 
@@ -953,6 +954,19 @@ pub fn gw_learn_talent(ctx: &ReducerContext, actor_guid: u64, talent_id: u32) ->
     require_operator(ctx)?;
     let learner = actor(ctx, actor_guid)?;
     crate::talent::do_learn_talent(ctx, actor_guid, learner.owner_identity, talent_id).map(|_| ())
+}
+
+/// [`crate::talent::do_reset_talents`] behind the gateway gate — the "I wish to unlearn my
+/// talents." gossip option (work-item 198's respec primitive, wired to gossip by #516).
+#[reducer]
+pub fn gw_reset_talents(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    trainer_guid: u64,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    actor(ctx, actor_guid)?;
+    crate::talent::do_reset_talents(ctx, actor_guid, trainer_guid).map(|_| ())
 }
 
 /// [`crate::gameobject::apply_pick_lock`] with the picker named by guid.

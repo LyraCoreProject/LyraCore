@@ -12,17 +12,44 @@ pub struct GatewayConfig {
     pub module_name: String,
     /// Auth token for the privileged coordination connection (reads account/session).
     pub coordinator_token: Option<String>,
+    /// This gateway PROCESS's own identity (issue #308) — `LYRACORE_GATEWAY_ID`, default
+    /// `<hostname>:<world_bind port>`. Exists so a load sample this process writes onto realm-core
+    /// (`load_sample::sample_and_record` → `record_shard_load`) can be told apart from another
+    /// gateway process's sample for the SAME shard, instead of one clobbering the other
+    /// (`docs/region-sharding.md`'s "Load sampling" section). Also the natural place to hang a
+    /// per-process label on the other per-process health signals (`MOTIONSTAT`/`AOISTAT`) later —
+    /// not done here, out of this issue's scope.
+    pub gateway_id: String,
+}
+
+/// The hostname half of the default `gateway_id` — `HOSTNAME` if set (containers commonly export
+/// it), else `/proc/sys/kernel/hostname` (Linux, no extra dependency), else a fixed fallback so a
+/// gateway always starts rather than failing to compute its own identity.
+fn default_hostname() -> String {
+    std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| std::fs::read_to_string("/proc/sys/kernel/hostname").ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "localhost".to_string())
 }
 
 impl GatewayConfig {
     pub fn from_env() -> Self {
         let get = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
+        let world_bind = get("LYRACORE_WORLD_BIND", "0.0.0.0:8085");
+        let default_gateway_id = format!(
+            "{}:{}",
+            default_hostname(),
+            world_bind.rsplit(':').next().unwrap_or(&world_bind)
+        );
         Self {
             logon_bind: get("LYRACORE_LOGON_BIND", "0.0.0.0:3724"),
-            world_bind: get("LYRACORE_WORLD_BIND", "0.0.0.0:8085"),
+            world_bind: world_bind.clone(),
             stdb_uri: get("LYRACORE_SPACETIMEDB_URL", "http://127.0.0.1:3000"),
             module_name: get("LYRACORE_DATABASE", "lyracore"),
             coordinator_token: std::env::var("LYRACORE_COORDINATOR_TOKEN").ok(),
+            gateway_id: get("LYRACORE_GATEWAY_ID", &default_gateway_id),
         }
     }
 }
@@ -56,7 +83,7 @@ struct ShardRule {
 /// Multi-shard routing table: `(map_id, instance-bucket) → database name`.
 ///
 /// The gateway holds one coordinator connection per database named here, and pins each player's
-/// per-player connection + AOI subscriptions to the shard that owns their character's location.
+/// session's reducer calls + AOI scoping to the shard that owns their character's location.
 ///
 /// **Unconfigured = one entry** (the `LYRACORE_DATABASE` database): every lookup resolves to it, nothing
 /// ever routes, and the gateway behaves byte-identically to the single-database build. That is the
@@ -642,11 +669,6 @@ pub fn aoi_enabled() -> bool {
     std::env::var("LYRACORE_AOI").map_or(true, |v| v != "0")
 }
 
-/// `LYRACORE_SHARED_CALLS=1` routes hot-path reducer calls over the COORDINATOR connection via the
-/// module's operator-gated `gw_*` verb surface (actor named by guid) instead of the per-account
-/// player connection. Default ON; `LYRACORE_SHARED_CALLS=0` restores the per-player path. Requires
-/// a module carrying the `gw_*` reducers on every shard.
-///
 /// Total reducer-call connections per shard (the call-pipe pool). Default 4 — sized from the
 /// measured ~1000-seats-per-pipe wall; `LYRACORE_CALL_PIPES=1` restores the single-connection
 /// call path. Values are clamped to [1, 16].
@@ -658,22 +680,12 @@ pub fn call_pipes() -> usize {
         .clamp(1, 16)
 }
 
-pub fn shared_calls_enabled() -> bool {
-    // The shared pipe is how LyraCore works — default ON, and `LYRACORE_SHARED_CALLS=0` is the
-    // opt-out escape hatch that restores the per-player path byte-for-byte.
-    std::env::var("LYRACORE_SHARED_CALLS").map_or(true, |v| v != "0")
-}
-
-/// The per-account OWNER identity bound by `establish_session` under `LYRACORE_SHARED_CALLS` —
-/// deterministic and derived, so logins build NO per-player connection just to mint one. Never
-/// node-issued (real identities carry the node's c200 prefix; this is a tagged literal), unique
-/// per account. The module stamps it as row owner exactly like a real bound identity
-/// (`gw_player_login`'s fail-closed check is satisfied); no client connection ever presents it,
-/// so per-owner RLS admits nobody to those rows — on the shared pipe the GATEWAY predicates are
-/// the visibility layer. Safe because EVERY player verb forks onto its gw_* twin under the flag —
-/// the two GM verbs (client_command/gm_command) are the sole per-player holdouts and are
-/// non-functional flag-on until their operator decision lands. Flag-off logons re-bind the real
-/// connection identity on their next `establish_session`, so the modes can alternate.
+/// The per-account OWNER identity bound by `establish_session` — deterministic and derived, so
+/// logins build NO per-player connection just to mint one. Never node-issued (real identities
+/// carry the node's c200 prefix; this is a tagged literal), unique per account. The module stamps
+/// it as row owner exactly like a real bound identity (`gw_player_login`'s fail-closed check is
+/// satisfied); no client connection ever presents it, so the GATEWAY predicates are the
+/// visibility layer for owned rows.
 pub fn synthetic_owner_identity(account_id: u64) -> [u8; 32] {
     let mut id = [0u8; 32];
     id[..8].copy_from_slice(b"LYRAGWID");

@@ -49,7 +49,7 @@ flowchart TB
     C2 --> WORLD
     LOGON --- SUBS
     WORLD --- SUBS
-    SUBS -- "reducer calls (per-player minted identity)" --> W0
+    SUBS -- "reducer calls (gw_* verbs, actor named by guid)" --> W0
     SUBS -- "subscription deltas (owner token, RLS bypass)" --> W0
     SUBS <--> W1
     SUBS <--> INST
@@ -160,7 +160,7 @@ gateway's environment. Omit one and you get a **working-looking single-database 
 | `LYRACORE_LOGON_BIND` / `LYRACORE_WORLD_BIND` | listener binds | `0.0.0.0:3724` / `0.0.0.0:8085` | loud |
 | `LYRACORE_AOI` | AOI-scoped subscriptions | **on** (`=0` disables) | — |
 | `LYRACORE_QUEST_LOG` | quest-log descriptor fields | **on** | — |
-| `LYRACORE_MAX_SESSIONS` / `LYRACORE_ADMIT_CONCURRENCY` | login-queue seat ceiling / admissions per tick | `0` = unlimited | a malformed value silently unlimits |
+| `LYRACORE_MAX_SESSIONS` / `LYRACORE_ADMIT_CONCURRENCY` | login-queue seat ceiling / admissions per tick — **per gateway PROCESS, not realm-wide** (#309): each gateway's `Mutex<State>` counts only its own seats, so `N` gateways at `LYRACORE_MAX_SESSIONS=500` admit `500*N` sessions realm-wide, and `QUEUESTAT` depth is per-gateway too. That is intentional — the cap guards *that process's* egress, a real per-process resource — but the storm the queue exists to survive (#180) is a **writer** problem shared by every gateway, so a realm running several gateways must divide its intended realm-wide ceiling by the gateway count when setting this per-process value | `0` = unlimited | a malformed value silently unlimits; an under-divided value lets N gateways reproduce the #180 writer storm while each believes it is within cap |
 | `LYRACORE_MAX_BLOCKING_THREADS` | tokio blocking-pool cap — **the real ceiling on concurrent players** (see below) | `512` (tokio's own default) | malformed **or zero** falls back to `512`; the resolved value is logged at startup |
 | `LYRACORE_LOAD_SAMPLE_SECS` | shard load sampling cadence | `30` | — |
 | `LYRACORE_METRICS_DB_IDS` | `<shard>=<hex-identity-prefix>` map for `/v1/metrics` | `""` | warns loudly at startup; occupancy unmeasured |
@@ -189,8 +189,8 @@ invisible in the log. Measured 2026-08-07 on an 8-core/15 GB container, 600 clie
 | 4096 | 535 | 65 |
 
 477 rather than a clean 512 because logon handshakes draw from the same pool. Raising it is worth
-about 58 sessions on that host and is **not** sufficient by itself — the next ceiling is per-player
-connection setup (`player connect task did not answer within 20s`), which is #451's open item 2.
+about 58 sessions on that host. (The next ceiling this section used to name — per-player
+connection setup — is gone with the per-player connections themselves, #483.)
 
 Two related startup behaviours have no environment variable, because there is no case for turning
 them off:
@@ -281,14 +281,15 @@ shard; a partial publish presents as an unrelated mid-session hang, not a loud e
 
 ## 5. The read plane: subscriptions, AOI, and relays
 
-### 5.1 Two kinds of connection
+### 5.1 One kind of connection
 
-| | Coordinator connection | Per-player connection |
-|---|---|---|
-| Count | one per database in the topology | one per logged-in account per shard (plus one per away shard a straddling player touches) |
-| Auth | the **owner token** → bypasses RLS | **no token** → the node mints a fresh identity, bound to the account by `establish_session` |
-| Created | `gateway/src/stdb/connection.rs` | `connection.rs`, cached by `Coordinator::player_conn` |
-| Used for | every read (it is the cache the gateway reads through) + privileged reducers | every gameplay reducer call, so `ctx.sender` is the player |
+Every gateway↔database connection is a **coordinator connection**: one per database in the
+topology (plus a small call-pipe pool per shard for reducer calls, `LYRACORE_CALL_PIPES`),
+authenticated with the **owner token** (bypasses RLS), created in `gateway/src/stdb/connection.rs`.
+It serves every read (it is the cache the gateway reads through) and every reducer call — player
+verbs go through the module's operator-gated `gw_*` surface with the actor named by guid, so no
+per-player connection exists anywhere (#483; the account's "bound identity" is now the derived
+`synthetic_owner_identity`, minted by no connection and presented by no client).
 
 A coordinator connection subscribes 51 literal `SELECT * FROM <table>` queries, plus 10 more when
 more than one database is configured (`connection.rs`). The extra ten are conditional
@@ -306,52 +307,45 @@ sharded tables.
 | Recenter | on map change or leaving the anchor cell — roughly every 7 s of walking | `gateway/src/stdb/aoi.rs` (`GridBox`/recenter logic) |
 | Kill switch | `LYRACORE_AOI=0`; **default on since 2026-07-10** | `gateway/src/config.rs` |
 
-Four tables ride box-scoped range subscriptions on the **per-player** connection —
-`game_world_entity`, `game_gameobject`, `game_entity_motion`, `game_creature_spline` — all built by
-one query builder (`table_range_query` in `gateway/src/stdb/aoi.rs`), with a source-scan test
-asserting nothing bypasses it (`the_box_query_set_covers_every_box_scoped_table`). A recenter
-subscribes the new rectangles first and only unsubscribes the
-old handles once every new one has applied, so coverage never gaps; an error keeps the previous
-coverage.
+AOI is resolved **in-gateway**: the coordinator connections hold each shard's full cache, and the
+shared `WorldView` cell index (`gateway/src/stdb/world_view.rs` + `world_index.rs`) routes each
+row delta to the sessions whose AOI box covers it. A recenter is an in-memory set diff on the
+shared index — no subscription churn.
 
 > Historical note: the original AOI design used 3×3 boxes of 533 yd cells and was default off. None
 > of those numbers are current; the table above is.
 
 ### 5.3 The coordinator-relay law
 
-Most `on_insert` relays hang off the per-player connection. A specific class of them **must not**:
+Every relay hangs off a coordinator connection, in one of two shapes:
 
-> The per-player connection's AOI subscriptions churn mid-flight (subscribe-new / unsubscribe-old on
-> every recenter), and a concurrent transaction's deltas folded into an in-flight apply can swallow
-> an event. Observed at 100% on an instance-creating portal entry: the pair was never sent and the
-> despawned player limbo'd. — documented in `gateway/src/stdb/subscriptions.rs`
+- **Shared per-shard dispatch** (`world_view::arm_shard`, armed once per shard connection and
+  re-armed through `CoordinatorInner::on_reconnect` after a watchdog swap): the broadcast-shaped
+  families — entities, motion, combat, chat, auras, corpses, casts, and the recipient-keyed
+  PRIVATE tier (whisper/group/resurrect). The cross-shard whisper/group twins ride the same
+  dispatchers on the realm-core connection (`arm_realm_private`), armed only when realm-core is a
+  distinct database.
+- **Per-session registrations** (`subscribe_player_events`): the **stuck-state** relays — a state
+  the player is wedged in until the packet arrives — `game_xp_event`, `game_levelup_event`,
+  `game_character_explored` (the discovery toast), `game_character_quest`, `game_item_instance`,
+  `game_teleport_event`, `game_addon_message`, `game_player_reputation`. Each pushes a matching
+  teardown into the session's `PlayerSubscriptions` guard. `game_bot_invite_intent` is registered
+  once at gateway startup and re-armed through `on_reconnect`.
 
-So every relay carrying **stuck state** — a state the player is wedged in until the packet arrives —
-is registered on the **coordinator** connection, whose subscription set is stable and whose owner
-token bypasses the recipient RLS; the closure self-filters by recipient. That set is:
-`game_xp_event`, `game_levelup_event`, `game_character_explored`, `game_group_event`,
-`game_whisper_event`, `game_character_quest`, `game_item_instance`, `game_teleport_event`,
-`game_addon_message`, `game_player_reputation`, and `game_bot_invite_intent`. The last one is
-registered once at gateway startup with no session to hang it off, so it is re-armed through
-`CoordinatorInner::on_reconnect` (`connection.rs`) after a watchdog swap.
-
-Two of these ride the coordinator for a *different* reason: `game_group_event` and
-`game_whisper_event` live on realm-core, and a per-player identity is minted per-database and names
-nobody there.
+The owner token bypasses recipient RLS, so delivery is gated gateway-side: recipient-keyed lookups
+plus the `private_recipient_audience` predicate for the private tier, per-viewer gates for the
+broadcast tier.
 
 ### 5.4 RLS is not a universal backstop — state this plainly
 
-- **Player connections are anonymous.** They connect with no token; the node mints an identity.
-  Anyone who can reach the node's `:3000` port can mint one too and call any reducer that is not
-  operator-gated, with exactly the footing a gateway player connection has. `ctx.sender` checks stop
-  such a caller from acting as a *specific other* player; they do not stop it from acting as *some*
-  player. **The model's safety rests on `:3000` being unreachable**, and nothing in this repository
-  enforces that today.
-- **Not every public table has an RLS filter.** `game_character_explored` is public with none: it
-  has no `owner_identity` column, and all 16 deployed filters are `<identity col> = :sender`. It is
-  scoped instead by the only per-player subscription in the gateway that is not `SELECT *`
-  (`... WHERE character_guid = {self_guid}`, the `explored_query` in `subscriptions.rs`) plus a
-  gateway-side self guard.
+- **Anyone who can reach the node's `:3000` port** can connect with no token, get a minted
+  identity, and call any reducer that is not operator-gated. The player-verb surface is
+  operator-gated (`gw_*`, `require_operator`), and the sender-path player reducers are deleted
+  (#483) — but **the model's safety still rests on `:3000` being unreachable**, and nothing in
+  this repository enforces that today.
+- **RLS does not gate delivery.** The gateway reads every table through the owner token and gates
+  visibility with its own predicates (§5.3); the deployed `client_visibility_filter` rules only
+  ever applied to client-identity subscriptions, which no longer exist.
 - **RLS validation is partial, and knowing which half matters.** Preflight's RLS-filter validation
   step checks every filter against the generated bindings and **fails** if a filter names an
   unknown table or column — so an identifier typo no longer survives to production. What preflight

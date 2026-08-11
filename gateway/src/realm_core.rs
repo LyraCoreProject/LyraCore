@@ -72,23 +72,6 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
         bound_identity: [u8; 32],
     ) -> Result<()>;
 
-    // --- The LOGON socket's lease on the account's cached per-account connection.
-    //
-    // `bound_identity` above is what OPENS that connection, so a logon that authenticates and then
-    // walks away leaks its websocket fd and its SDK pump thread for the gateway's lifetime — the
-    // half of the reclaim that the world-tier accounting never reached. These two are the same
-    // `stdb::AccountSessions` refcount the world tier attaches to, which is what makes the
-    // logon→world handover free: the world session's attach lands while the logon's lease is still
-    // held (or inside its grace), so the connection is reused rather than rebuilt.
-    /// Register this logon socket as a live user of `account_id`'s cached connection. Idempotent
-    /// per socket — see `CoordinatorStore::lease`. `account_id` is the WORLD shard's id, the key
-    /// `player_conn` caches under; realm-core's own account id names nothing there.
-    fn attach_account_session(&self, account_id: u64);
-    /// Retire it when the logon socket closes. DEFERRED: it never releases the connection outright,
-    /// because the account's next socket is normally the world session that reuses it. See
-    /// `stdb::AccountSessions` for the grace and why the epoch gate is the wrong instrument here.
-    fn detach_account_session_deferred(&self, account_id: u64);
-
     // --- the character→shard index
     /// Where THIS database's own rows say the character is. `None` = not here.
     fn character_location(&self, guid: u64) -> Option<(u32, u64)>;
@@ -113,12 +96,15 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
     /// Live player sessions cached on THIS shard's coordinator connection — an approximate
     /// per-shard population (a point-in-time snapshot, not a windowed average).
     fn session_count(&self) -> usize;
-    /// Record `shard`'s occupancy + session sample.
+    /// Record `shard`'s occupancy + session sample, tagged with `gateway_key` (this gateway
+    /// process's identity, hashed — `load_sample::gateway_key`, issue #308) so N gateway processes
+    /// sampling the same shard keep independent ring history instead of clobbering each other.
     fn record_shard_load(
         &self,
         shard: &str,
         writer_occupancy_pct: f32,
         sessions: u32,
+        gateway_key: u64,
     ) -> Result<()>;
 }
 
@@ -516,8 +502,9 @@ pub(crate) mod fake {
         /// This shard's live player-SESSION count (`CoordinatorInner::players.len()`'s fake
         /// equivalent) — set directly by a test, not derived from `characters`/`identities`.
         pub open_sessions: Mutex<usize>,
-        /// Every `record_shard_load` call this database RECEIVED, in order.
-        pub recorded_shard_loads: Mutex<Vec<(String, f32, u32)>>,
+        /// Every `record_shard_load` call this database RECEIVED, in order: (shard,
+        /// writer_occupancy_pct, sessions, gateway_key).
+        pub recorded_shard_loads: Mutex<Vec<(String, f32, u32, u64)>>,
         /// Every `RealmDb` call served by this database, in order.
         pub log: Mutex<Vec<String>>,
     }
@@ -537,15 +524,6 @@ pub(crate) mod fake {
         /// `false` = realm-core is configured but its websocket is down: `realm_core()` must `Err`
         /// rather than serve the world database's stale auth cache.
         pub realm_core_up: bool,
-        /// The REAL per-account socket refcount (`crate::stdb::AccountSessions`), not a model
-        /// of it — the same type, behind the same predicate, that `stdb::ShardSet` holds. It lives
-        /// on the REALM rather than on a `Db` for the same reason it lives on `ShardSet` rather
-        /// than on `CoordinatorInner`: it counts SOCKETS, which is a gateway concept with no
-        /// database in it, and the connections a release drops are spread across every shard.
-        pub sessions: crate::stdb::AccountSessions,
-        /// Accounts whose cached per-account connections the reaper released, in order. The only
-        /// thing stubbed here is the release ACTION (recording instead of closing a websocket).
-        pub released: Mutex<Vec<u64>>,
     }
 
     /// A handle on ONE database of a [`Realm`] — the fake's `Coordinator`.
@@ -575,39 +553,6 @@ pub(crate) mod fake {
                 .expect("no such database in the fake realm")
         }
 
-        /// Drive one pass of `Coordinator::reap_idle_account_sessions` — the REAL
-        /// `AccountSessions::reap_idle` predicate, with the release action modelled rather than
-        /// performed. `grace` is passed in so a test can ask "reap everything that is due right
-        /// now" (`Duration::ZERO`) or "nothing is due yet" without sleeping.
-        ///
-        /// The release drops the account's minted identity on EVERY database, which is what makes
-        /// this fake able to show the cost a release actually carries: production's
-        /// `release_player_conn_on` removes the cached `PlayerConn` from every shard's `players`
-        /// map, so the account's next checkout builds a new connection and the node mints it a
-        /// DIFFERENT identity — one `establish_session` has not bound. A test can therefore read
-        /// "was this connection rebuilt?" straight off `bound_identity`.
-        pub fn reap(&self, grace: std::time::Duration) -> Vec<u64> {
-            let due = self
-                .realm
-                .sessions
-                .reap_idle(std::time::Instant::now(), grace);
-            for id in &due {
-                for db in self.realm.dbs.values() {
-                    db.identities.lock().unwrap().remove(id);
-                }
-            }
-            self.realm
-                .released
-                .lock()
-                .unwrap()
-                .extend(due.iter().copied());
-            due
-        }
-
-        /// Accounts released so far.
-        pub fn released(&self) -> Vec<u64> {
-            self.realm.released.lock().unwrap().clone()
-        }
     }
 
     /// Build a realm. `dbs` are the database names (the first is the default world shard), `rules`
@@ -621,8 +566,6 @@ pub(crate) mod fake {
                 .collect(),
             map,
             realm_core_up: true,
-            sessions: crate::stdb::AccountSessions::default(),
-            released: Mutex::new(Vec::new()),
         };
         Handle {
             realm: Arc::new(realm),
@@ -757,18 +700,6 @@ pub(crate) mod fake {
                 .insert(account_id, (*session_key, bound_identity));
             Ok(())
         }
-        fn attach_account_session(&self, account_id: u64) {
-            self.store().note(&format!("attach_session({account_id})"));
-            self.realm.sessions.attach(account_id);
-        }
-        fn detach_account_session_deferred(&self, account_id: u64) {
-            self.store().note(&format!("detach_session({account_id})"));
-            // Byte-for-byte the production call (`Coordinator::detach_account_session_deferred`):
-            // park, never release.
-            self.realm
-                .sessions
-                .detach_deferred(account_id, std::time::Instant::now());
-        }
         fn character_location(&self, guid: u64) -> Option<(u32, u64)> {
             let db = self.store();
             db.note(&format!("character_location({guid})"));
@@ -807,6 +738,7 @@ pub(crate) mod fake {
             shard: &str,
             writer_occupancy_pct: f32,
             sessions: u32,
+            gateway_key: u64,
         ) -> Result<()> {
             let db = self.store();
             db.note(&format!("record_shard_load({shard})"));
@@ -814,6 +746,7 @@ pub(crate) mod fake {
                 shard.to_string(),
                 writer_occupancy_pct,
                 sessions,
+                gateway_key,
             ));
             Ok(())
         }
@@ -834,7 +767,6 @@ mod tests {
     use super::fake::{account, realm, realm_with_dead_core};
     use super::*;
     use crate::logon::{CoordinatorStore, LogonStore};
-    use std::time::Duration;
 
     const WORLD: &str = "world";
     const CORE: &str = "lyracore-realm";
@@ -1706,231 +1638,6 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------------------
-    // The logon tier's connection lease
-    //
-    // The world tier's half shipped first; what remains is a logon that authenticates and never
-    // proceeds to a world session, whose per-account connection (opened by `bound_identity`) nothing
-    // ever reclaims — one websocket fd and one SDK pump thread per such account, for the process
-    // lifetime. That is the same class that exited the gateway with `Too many open files`.
-    //
-    // These run the REAL `stdb::AccountSessions` through the REAL `CoordinatorStore`; only the
-    // release ACTION is modelled (`fake::Handle::reap`), and it is modelled faithfully enough that a
-    // rebuilt connection is visible as a changed identity. `Duration::ZERO` means "sweep everything
-    // already parked", so the handover window is exercised without sleeping through it.
-    // -------------------------------------------------------------------------------------
-
-    /// A world session's `WorldStore::open_account_session`, which is
-    /// `Coordinator::attach_account_session` — the SAME `AccountSessions` the logon store attaches
-    /// to, because both reach it through one `Arc<ShardSet>` on one cloned `Coordinator`.
-    fn world_session_opens(h: &super::fake::Handle, world_account_id: u64) {
-        RealmDb::attach_account_session(h, world_account_id);
-    }
-
-    /// The leak this issue is scoped to. Nothing but the reaper can reclaim it: `handle_logon`
-    /// returned, the socket is gone, and no world session ever attached.
-    #[test]
-    fn a_logon_that_never_enters_the_world_has_its_connection_reclaimed() {
-        let h = split_realm();
-        let store = CoordinatorStore::new(h.clone());
-        store.bound_identity(9, USER).expect("identity");
-        assert!(
-            h.reap(Duration::ZERO).is_empty(),
-            "a logon socket that is still OPEN (sitting on the realm-list screen) is a live user of \
-             the connection — reaping it there would break the realm select it is in the middle of"
-        );
-
-        drop(store); // the client quit at the realm list; `handle_logon` returned
-
-        assert_eq!(
-            h.reap(Duration::ZERO),
-            vec![3],
-            "the logon's per-account connection was never released. Every account that ever \
-             authenticated without playing then holds a websocket fd + an SDK pump thread for the \
-             gateway's lifetime, and `accept(2)` eventually returns EMFILE"
-        );
-    }
-
-    /// DANGER CASE — the handover, and the reason the release is deferred rather than immediate.
-    ///
-    /// The 1.12 client's logon socket may close before OR after the world handshake; that ordering
-    /// is client behaviour we do not control. Releasing at the logon close would therefore rebuild
-    /// the connection on most logins — and a rebuilt connection carries a NEW identity, while the
-    /// one `establish_session` bound into `game_session` and onto `game_character.owner_identity`
-    /// moments earlier is the old one.
-    #[test]
-    fn the_world_session_inherits_the_connection_the_logon_opened() {
-        let h = split_realm();
-        let store = CoordinatorStore::new(h.clone());
-        let bound = store.bound_identity(9, USER).expect("identity");
-        store
-            .save_session(9, USER, &K, bound)
-            .expect("the session row is written");
-
-        // The dangerous order: the client drops its logon socket the moment it starts the world
-        // connection, so the account is momentarily down to ZERO sockets while still mid-login.
-        drop(store);
-        assert!(
-            h.reap(Duration::from_secs(120)).is_empty(),
-            "a sweep landing inside the handover window released the connection. The grace exists \
-             precisely because this window is not empty — the logon close and the world handshake \
-             are two independent client actions and we control the order of neither"
-        );
-        world_session_opens(&h, 3); // CMSG_AUTH_SESSION completes, milliseconds later
-        assert!(
-            h.reap(Duration::ZERO).is_empty(),
-            "the connection the world session just took over was released anyway — the handover \
-             must CANCEL the pending release, not merely postpone it"
-        );
-
-        let world_phase = CoordinatorStore::new(h.clone())
-            .bound_identity(9, USER)
-            .expect("identity");
-        assert_eq!(
-            world_phase, bound,
-            "the world session got a REBUILT connection. Its identity is not the one \
-             `establish_session` bound, so `account_by_identity` fails for every reducer the player \
-             calls — and even where it recovers, rebuilding an SDK connection on every single login \
-             is exactly the per-account cost the connection cache removed"
-        );
-    }
-
-    /// The other close order, and the one where the plain refcount already suffices: the world
-    /// session attaches while the logon socket is still open, so its close parks nothing at all.
-    #[test]
-    fn a_logon_close_after_the_world_handshake_parks_nothing() {
-        let h = split_realm();
-        let store = CoordinatorStore::new(h.clone());
-        let bound = store.bound_identity(9, USER).expect("identity");
-        world_session_opens(&h, 3);
-        drop(store);
-        assert!(h.reap(Duration::ZERO).is_empty());
-        assert_eq!(
-            CoordinatorStore::new(h.clone())
-                .bound_identity(9, USER)
-                .expect("identity"),
-            bound
-        );
-    }
-
-    /// DANGER CASE — a world session is already live (a player seated, or parked at character
-    /// select) when a fresh logon arrives on the same account. This is the case that makes
-    /// `release_session`'s EPOCH the wrong gate: a socket at character select holds no epoch, so an
-    /// epoch-gated release would cut it. The socket refcount does not have that blind spot.
-    #[test]
-    fn a_fresh_logon_never_cuts_a_live_world_sessions_connection() {
-        let h = split_realm();
-        world_session_opens(&h, 3); // already playing
-        let store = CoordinatorStore::new(h.clone());
-        let bound = store.bound_identity(9, USER).expect("identity");
-        drop(store); // the second client gave up at the realm list
-
-        assert!(
-            h.reap(Duration::ZERO).is_empty(),
-            "the seated player's connection was released out from under them"
-        );
-        assert_eq!(
-            CoordinatorStore::new(h.clone())
-                .bound_identity(9, USER)
-                .expect("identity"),
-            bound,
-            "the seated player's connection was rebuilt, so their bound identity is now stale"
-        );
-    }
-
-    /// DANGER CASE — two concurrent logons on one account. The first close must not release what
-    /// the second is using, and the two together must release exactly once.
-    #[test]
-    fn two_concurrent_logons_release_the_connection_once_at_the_last_close() {
-        let h = split_realm();
-        let first = CoordinatorStore::new(h.clone());
-        let second = CoordinatorStore::new(h.clone());
-        first.bound_identity(9, USER).expect("identity");
-        second.bound_identity(9, USER).expect("identity");
-
-        drop(first);
-        assert!(
-            h.reap(Duration::ZERO).is_empty(),
-            "the second logon is still using this connection"
-        );
-        drop(second);
-        assert_eq!(h.reap(Duration::ZERO), vec![3]);
-        assert_eq!(h.released(), vec![3], "exactly one release, at the last close");
-    }
-
-    /// The lease is taken on the WORLD shard's account id, never the authenticating database's
-    /// id. Getting this wrong accounts a connection that does not exist and leaves the real one
-    /// unaccounted — a leak that still looks fixed on a single-database deployment, where the two
-    /// ids happen to coincide.
-    #[test]
-    fn the_lease_is_taken_on_the_world_shards_account_id() {
-        let h = split_realm();
-        let store = CoordinatorStore::new(h.clone());
-        store.bound_identity(9, USER).expect("identity");
-        assert_eq!(
-            (
-                h.realm.sessions.live_count(3),
-                h.realm.sessions.live_count(9)
-            ),
-            (1, 0),
-            "the logon leased realm-core's account id (9). `player_conn` caches under the WORLD \
-             shard's id (3), so the connection that was actually opened is unaccounted and leaks, \
-             while a phantom entry for 9 is what gets released"
-        );
-        drop(store);
-        assert_eq!(h.reap(Duration::ZERO), vec![3]);
-    }
-
-    /// `handle_logon` LOOPS: a client may re-run challenge+proof on one socket. Each extra proof
-    /// would attach again, but only one `Drop` pairs them — so a double attach pins the connection
-    /// at a non-zero count forever, which is the leak wearing the fix's clothes.
-    #[test]
-    fn re_proving_the_same_account_on_one_socket_leases_at_most_once() {
-        let h = split_realm();
-        let store = CoordinatorStore::new(h.clone());
-        store.bound_identity(9, USER).expect("identity");
-        store.bound_identity(9, USER).expect("identity again");
-        assert_eq!(h.realm.sessions.live_count(3), 1);
-        drop(store);
-        assert_eq!(
-            h.reap(Duration::ZERO),
-            vec![3],
-            "a re-proof on the same socket left the account's refcount above zero, so nothing will \
-             ever release its connection"
-        );
-    }
-
-    /// …and re-authenticating as a DIFFERENT account on the same socket hands the first one back,
-    /// rather than pinning a connection no socket uses any more.
-    #[test]
-    fn re_authenticating_as_another_account_hands_the_first_lease_back() {
-        let h = split_realm();
-        const OTHER: &str = "SECOND";
-        h.db_at(CORE)
-            .accounts
-            .lock()
-            .unwrap()
-            .insert(OTHER.into(), account(11, OTHER, 0xCC, 0xDD));
-        h.db_at(WORLD)
-            .accounts
-            .lock()
-            .unwrap()
-            .insert(OTHER.into(), account(4, OTHER, 0x33, 0x44));
-
-        let store = CoordinatorStore::new(h.clone());
-        store.bound_identity(9, USER).expect("identity");
-        store.bound_identity(11, OTHER).expect("identity");
-        assert_eq!(h.realm.sessions.live_count(3), 0);
-        assert_eq!(h.realm.sessions.live_count(4), 1);
-        assert_eq!(
-            h.reap(Duration::ZERO),
-            vec![3],
-            "the abandoned account's connection stayed pinned by a socket that no longer uses it"
-        );
-        drop(store);
-        assert_eq!(h.reap(Duration::ZERO), vec![4]);
-    }
-
-    // -------------------------------------------------------------------------------------
     // The seam's own blind spot: `Coordinator`'s forwarding impl
     // -------------------------------------------------------------------------------------
 
@@ -1979,10 +1686,6 @@ mod tests {
             fn realm(&self) -> Result<RealmRow> { self.realm() } \
             fn establish_session( &self, account_id: u64, session_key: &[u8; 40], bound_identity: [u8; 32], ) \
             -> Result<()> { self.establish_session(account_id, session_key, bound_identity) } \
-            fn attach_account_session(&self, account_id: u64) { \
-            self.attach_account_session(account_id) } \
-            fn detach_account_session_deferred(&self, account_id: u64) { \
-            self.detach_account_session_deferred(account_id) } \
             fn character_location(&self, guid: u64) -> Option<(u32, u64)> { \
             self.character_location(guid) } \
             fn character_shard(&self, guid: u64) -> Option<(u32, u64)> { self.character_shard(guid) } \
@@ -1990,8 +1693,9 @@ mod tests {
             self.set_character_shard(guid, map_id, instance_id) } \
             fn has_escrow(&self, guid: u64) -> bool { self.escrow_row(guid).is_some() } \
             fn session_count(&self) -> usize { self.session_count() } \
-            fn record_shard_load( &self, shard: &str, writer_occupancy_pct: f32, sessions: u32, ) \
-            -> Result<()> { self.record_shard_load(shard, writer_occupancy_pct, sessions) }"
+            fn record_shard_load( &self, shard: &str, writer_occupancy_pct: f32, sessions: u32, \
+            gateway_key: u64, ) -> Result<()> { self.record_shard_load(shard, \
+            writer_occupancy_pct, sessions, gateway_key) }"
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");

@@ -507,7 +507,13 @@ pub fn scale_health_for_rank(base_health: u32, rank: u8) -> u32 {
 /// seed, respawn pass, debug spawn, pet summon — so a package hook sees every creature that enters
 /// the world without any core dispatch-site edits. Player-entity inserts (login,
 /// debug_spawn_player_entity) deliberately do NOT come through here.
-pub(crate) fn insert_creature_entity(ctx: &spacetimedb::ReducerContext, entity: WorldEntity) {
+pub(crate) fn insert_creature_entity(ctx: &spacetimedb::ReducerContext, mut entity: WorldEntity) {
+    // #526: stand on a model floor (bridge, WMO interior deck) instead of the imported spawn.z
+    // when one's imported at/below this spawn point — `floor_z` is `None` off vmap-slice/gate, so
+    // an unimported map spawns byte-identical to before this line existed.
+    if let Some(floor) = crate::vmap::floor_z(ctx, entity.map_id, entity.x, entity.y, entity.z) {
+        entity.z = entity.z.max(floor);
+    }
     let payload = crate::hooks::CreatureSpawnPayload {
         guid: entity.guid,
         entry: entity.entry,
@@ -611,7 +617,7 @@ pub fn build_creature_entity(
         run_speed_mult_bp: 10_000, // 1× — GM `.speed` targets players only
         godmode: false,         // GM `.god` targets players only
         resting: false,         // creatures never rest (196)
-        // A creature never calls `recompute_sheet` (no character sheet) — all nine sheet fields stay 0.
+        // A creature never calls `recompute_sheet` (no character sheet) — all ten sheet fields stay 0.
         sheet_str_bonus: 0,
         sheet_agi_bonus: 0,
         sheet_sta_bonus: 0,
@@ -621,6 +627,7 @@ pub fn build_creature_entity(
         sheet_ap_mods: 0,
         sheet_dmg_min: 0,
         sheet_dmg_max: 0,
+        sheet_crit_bp: 0,
     }
 }
 
@@ -764,6 +771,7 @@ pub fn build_player_entity(
         sheet_ap_mods: 0,
         sheet_dmg_min: 0,
         sheet_dmg_max: 0,
+        sheet_crit_bp: 0,
     };
     // The level-derived stat block — the five base attributes, armor, and max health/power — from the
     // real class/level curve (importer P3), via the ONE shared writer also used by the ding loop and a

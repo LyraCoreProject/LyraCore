@@ -280,7 +280,7 @@ mod partition_discipline_tripwire {
         // `debug.rs` (budget 9, after #368 dropped it from 12) into a directory; the 9 raw scans
         // landed in two of the seven files — same total, just split along the new file boundary.
         ("module/src/debug/mod.rs", 9, "`debug_reducers`-gated test harness; compiled out of production builds entirely (2 of these are #456's `debug_backfill_cell_ids`, a deliberately whole-shard migration sweep — each shard runs it once after the publish that adds the `cell` column)"),
-        ("module/src/debug/instance.rs", 2, "`debug_reducers`-gated test harness; compiled out of production builds entirely"),
+        ("module/src/debug/instance.rs", 4, "`debug_reducers`-gated test harness; compiled out of production builds entirely; +2 for #526's `debug_assert_floor_snap`, which scans game_creature_spawn/game_world_entity by `entry` for a guid high-water mark (template-keyed, not a spatial query) before minting a scratch spawn guid"),
         // Importers — realm-wide by definition: they wipe and rebuild every partition at once.
         ("module/src/creatures/spawn.rs", 4, "`import_creature_spawns` drops every creature entity + spawn row before reloading the world; +1 for `debug_normalize_spawn_timers`, a one-shot operator migration that must visit this database's whole spawn table by definition; +1 for `debug_retire_region_creatures` (#194), which manages the partitioning itself — it scans spawn HOMES to hand a region's population to its owning shard"),
         ("module/src/gameobject.rs", 2, "`import_gameobjects` drops every gameobject row before reloading the world; plus one by-`template_entry` lookup (an entry-keyed find, not a spatial query — no index on that column)"),
@@ -906,13 +906,226 @@ pub(crate) mod grid_cell_tripwire {
         line.starts_with("pub grid_x") || line.starts_with("grid_x: i32")
     }
 
-    #[test]
-    fn every_grid_x_write_also_writes_the_packed_cell() {
+    /// `true` if the nearest non-whitespace character before `idx` is `{` or `,` — i.e. `grid_x,` at
+    /// `idx` sits in a struct-literal FIELD position (first field right after the opening brace, or
+    /// any field after a preceding one), not buried inside some other expression. This is what
+    /// actually distinguishes the struct-literal shorthand from an ordinary function-call argument
+    /// (`grid_cell_id(grid_x, grid_y)`: the character before that `grid_x` is `(`, not `{`/`,`) —
+    /// deliberately independent of whether the field shares its line with other fields, so both
+    /// this repo's one-field-per-line style AND a compact `E { grid_x, grid_y }` one-liner match.
+    fn is_field_position(code: &str, idx: usize) -> bool {
+        let bytes = code.as_bytes();
+        let mut i = idx;
+        while i > 0 {
+            let c = bytes[i - 1];
+            if c == b' ' || c == b'\t' || c == b'\n' || c == b'\r' {
+                i -= 1;
+                continue;
+            }
+            return c == b'{' || c == b',';
+        }
+        false
+    }
+
+    /// `impl` block a `Self { .. }` struct literal at `idx` resolves to. Walks backward for the
+    /// nearest `impl` keyword, then takes `impl<..> TypeName` or, for a trait impl, the identifier
+    /// after ` for ` (`impl Trait for TypeName`) — the same rule `Self` follows in the language.
+    /// A near-clone of the `impl<..>` generics-skip is unavoidable here (no shared engine, unlike
+    /// `raw_table_reads`) because this walks forward from a keyword instead of backward from a brace.
+    fn resolve_self_type(code: &str, idx: usize) -> Option<&str> {
+        let impl_pos = code[..idx].rfind("impl")?;
+        let after = code[impl_pos + "impl".len()..].trim_start();
+        let bytes = after.as_bytes();
+        let mut i = 0usize;
+        if bytes.first() == Some(&b'<') {
+            let mut depth = 0i32;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'<' => depth += 1,
+                    b'>' => {
+                        depth -= 1;
+                        i += 1;
+                        if depth == 0 {
+                            break;
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+        }
+        let rest = after[i..].trim_start();
+        fn ident_at(s: &str) -> Option<&str> {
+            let end = s
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(s.len());
+            if end == 0 {
+                None
+            } else {
+                Some(&s[..end])
+            }
+        }
+        if let Some(for_pos) = rest.find(" for ") {
+            return ident_at(rest[for_pos + " for ".len()..].trim_start());
+        }
+        ident_at(rest)
+    }
+
+    /// Walks backward from `idx` tracking `{`/`}` depth to find the nearest enclosing brace, then
+    /// takes the identifier immediately before it (skipping whitespace). Returns that identifier
+    /// only if it looks like a type name (starts uppercase, matching this codebase's convention) —
+    /// `TypeName { .. }` or `TypeName { ..prev }` — so `None` correctly falls out for a shorthand
+    /// `grid_x,` that is really an ordinary function-CALL argument (`queue_motion(.., grid_x,
+    /// grid_y, ..)`: its nearest enclosing `{` is a `fn`/`if`/`match` body brace, not preceded by a
+    /// type name) or any other bare code block. A literal `Self { .. }` constructor resolves through
+    /// [`resolve_self_type`] to the `impl` block's real type name instead of returning `"Self"`
+    /// verbatim — `struct_has_cell_field` searches for `struct Self`, which never exists.
+    fn enclosing_struct_literal_type(code: &str, idx: usize) -> Option<&str> {
+        let bytes = code.as_bytes();
+        let mut depth = 0i32;
+        let mut i = idx;
+        while i > 0 {
+            i -= 1;
+            match bytes[i] {
+                b'}' => depth += 1,
+                b'{' => {
+                    if depth > 0 {
+                        depth -= 1;
+                        continue;
+                    }
+                    let mut end = i;
+                    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+                        end -= 1;
+                    }
+                    let mut start = end;
+                    while start > 0 {
+                        let c = bytes[start - 1];
+                        if c.is_ascii_alphanumeric() || c == b'_' {
+                            start -= 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if start == end {
+                        return None; // no identifier right before `{` — a bare code block
+                    }
+                    let ident = &code[start..end];
+                    if ident == "Self" {
+                        return resolve_self_type(code, i);
+                    }
+                    return ident
+                        .chars()
+                        .next()
+                        .filter(|c| c.is_ascii_uppercase())
+                        .map(|_| ident);
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// `true` if `code` (a single file's text) declares `struct TYPE_NAME { .. pub cell: i64 .. }`
+    /// somewhere — i.e. `TYPE_NAME` is one of the cell-bearing rows this tripwire polices. Every
+    /// cell-bearing type's struct literals in this codebase live in the same file as its own `#[table]`
+    /// definition, so a same-file search is enough; a type this can't find (or that genuinely has no
+    /// `cell` column — several event-log tables carry `grid_x`/`grid_y` as a plain `by_grid` btree
+    /// index with no packed `cell` at all, by design) is treated as "not this tripwire's business",
+    /// not as a violation.
+    fn struct_has_cell_field(code: &str, type_name: &str) -> bool {
+        let needle = format!("struct {type_name}");
+        let mut search_from = 0usize;
+        while let Some(rel) = code[search_from..].find(&needle) {
+            let start = search_from + rel;
+            let after = start + needle.len();
+            let boundary_ok = code[after..]
+                .chars()
+                .next()
+                .map(|c| !(c.is_alphanumeric() || c == '_'))
+                .unwrap_or(true);
+            if boundary_ok {
+                if let Some(rel_brace) = code[after..].find('{') {
+                    let body_start = after + rel_brace;
+                    let mut depth = 0i32;
+                    let mut body_end = None;
+                    for (i, c) in code[body_start..].char_indices() {
+                        match c {
+                            '{' => depth += 1,
+                            '}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    body_end = Some(body_start + i);
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(end) = body_end {
+                        if code[body_start..=end].contains("pub cell: i64") {
+                            return true;
+                        }
+                    }
+                }
+            }
+            search_from = start + needle.len();
+        }
+        false
+    }
+
+    /// Every line where `code` writes `grid_x` — via `grid_x: value` (an explicit initializer or
+    /// assignment target), `.grid_x = value` (a field assignment), or bare field-init SHORTHAND
+    /// `grid_x,` — with no `cell` write within `WINDOW` characters after it. Shared by the
+    /// real-file scan below and its own fixture test, so both exercise the identical matching logic.
+    ///
+    /// The shorthand form gets two extra gates the explicit forms don't need, because unlike
+    /// `grid_x: ` / `.grid_x = ` its literal text also shows up somewhere that ISN'T a struct-literal
+    /// write: `grid_x,` must sit in a struct-literal FIELD position (`is_field_position` — the
+    /// nearest non-whitespace character before it is `{` or `,`; excludes a read like
+    /// `grid_cell_id(grid_x, grid_y)`, whose preceding character is `(`, regardless of whether the
+    /// field shares a line with others), AND its enclosing struct-literal type must actually declare
+    /// a `cell` column (`enclosing_struct_literal_type` + `struct_has_cell_field` — excludes both
+    /// ordinary function-call arguments, whose enclosing brace is a fn/if/match body not a type name,
+    /// and the several event-log tables that carry `grid_x`/`grid_y` with no `cell` column at all,
+    /// by design). `enclosing_struct_literal_type` resolves a literal `Self { .. }` constructor
+    /// through `resolve_self_type` to the `impl` block's real type name, so a constructor written as
+    /// `Self { .. }` inside `impl E { .. }` is policed exactly like `E { .. }` would be.
+    fn grid_x_writes_missing_cell(code: &str) -> Vec<usize> {
         // Assembled at run time — a contiguous literal would match this file's own text.
         let field_init = format!("{}{}", "grid_x", ": ");
         let assign = format!("{}{}", ".grid_x", " = ");
+        let shorthand = format!("{}{}", "grid_x", ",");
         let cell_token = "cell";
 
+        let mut violations = Vec::new();
+        for needle in [field_init.as_str(), assign.as_str(), shorthand.as_str()] {
+            for (idx, _) in code.match_indices(needle) {
+                if on_comment_line(code, idx) || is_field_declaration(code, idx) {
+                    continue;
+                }
+                if needle == shorthand.as_str() {
+                    if !is_field_position(code, idx) {
+                        continue;
+                    }
+                    let Some(type_name) = enclosing_struct_literal_type(code, idx) else {
+                        continue;
+                    };
+                    if !struct_has_cell_field(code, type_name) {
+                        continue;
+                    }
+                }
+                let end = (idx + WINDOW).min(code.len());
+                if !code[idx..end].contains(cell_token) {
+                    violations.push(line_of(code, idx));
+                }
+            }
+        }
+        violations
+    }
+
+    #[test]
+    fn every_grid_x_write_also_writes_the_packed_cell() {
         let mut violations = Vec::new();
         for file in super::character_owned_tripwire::scanned_files() {
             let display = file.display().to_string();
@@ -921,16 +1134,8 @@ pub(crate) mod grid_cell_tripwire {
             }
             let code = std::fs::read_to_string(&file)
                 .unwrap_or_else(|e| panic!("cannot read {display}: {e}"));
-            for needle in [field_init.as_str(), assign.as_str()] {
-                for (idx, _) in code.match_indices(needle) {
-                    if on_comment_line(&code, idx) || is_field_declaration(&code, idx) {
-                        continue;
-                    }
-                    let end = (idx + WINDOW).min(code.len());
-                    if !code[idx..end].contains(cell_token) {
-                        violations.push(format!("{display}:{}", line_of(&code, idx)));
-                    }
-                }
+            for line in grid_x_writes_missing_cell(&code) {
+                violations.push(format!("{display}:{line}"));
             }
         }
 
@@ -967,6 +1172,97 @@ pub(crate) mod grid_cell_tripwire {
         assert!(
             good[idx..end].contains("cell"),
             "the accompanied form must PASS"
+        );
+    }
+
+    /// Issue #467: the tripwire's original `grid_x: ` needle never saw field-init SHORTHAND
+    /// (`grid_x,`, no `: value`) — what an initializer built from same-named locals uses, the
+    /// idiom `motion.rs` uses throughout. This feeds `grid_x_writes_missing_cell` a struct literal
+    /// written that way and asserts a broken one (no `cell` field) is CAUGHT, a correct one PASSES,
+    /// and a `grid_x,` that is merely a function-call ARGUMENT (a read, not a struct-literal field)
+    /// is not mistaken for a write.
+    #[test]
+    fn the_scan_catches_a_broken_shorthand_initializer() {
+        // `struct E` declares a `cell` column, so this tripwire is E's business — mirrors a real
+        // cell-bearing table's own file, where the `#[table]` struct and every construction site
+        // live together.
+        let cell_bearing_struct = "struct E {\n    pub grid_x: i32,\n    pub grid_y: i32,\n    pub cell: i64,\n}\n";
+
+        let bad = format!(
+            "{cell_bearing_struct}fn f() -> E {{\n    E {{\n        grid_x,\n        grid_y,\n    }}\n}}\n"
+        );
+        assert_eq!(
+            grid_x_writes_missing_cell(&bad).len(),
+            1,
+            "a shorthand `grid_x,` field with no `cell` field beside it must be a VIOLATION"
+        );
+
+        let good = format!(
+            "{cell_bearing_struct}fn f() -> E {{\n    E {{\n        grid_x,\n        grid_y,\n        cell,\n    }}\n}}\n"
+        );
+        assert!(
+            grid_x_writes_missing_cell(&good).is_empty(),
+            "a shorthand initializer that also sets `cell` must PASS"
+        );
+
+        let read = "fn f() {\n    let cell = grid_cell_id(grid_x, grid_y);\n}\n";
+        assert!(
+            grid_x_writes_missing_cell(read).is_empty(),
+            "`grid_x,` as a function-call ARGUMENT (a read) must not be mistaken for a write"
+        );
+
+        // A struct with grid_x/grid_y but genuinely NO `cell` column (the event-log-table shape) —
+        // shorthand there is legitimately not this tripwire's business.
+        let no_cell_struct = "struct NoCell {\n    pub grid_x: i32,\n    pub grid_y: i32,\n}\n";
+        let no_cell_use = format!(
+            "{no_cell_struct}fn f() -> NoCell {{\n    NoCell {{\n        grid_x,\n        grid_y,\n    }}\n}}\n"
+        );
+        assert!(
+            grid_x_writes_missing_cell(&no_cell_use).is_empty(),
+            "a type with no `cell` column must not be flagged for lacking one"
+        );
+    }
+
+    /// A code-review finding on #467: the shorthand path resolved its enclosing struct-literal type
+    /// by searching the file for `struct <name> { .. }`, which finds nothing for the near-universal
+    /// `Self { .. }` constructor idiom (`impl E { fn f() -> Self { Self { .. } } }`) — `Self` is not
+    /// a struct declaration. Confirms a broken `Self { .. }` shorthand initializer is still CAUGHT.
+    #[test]
+    fn the_scan_catches_a_broken_self_shorthand_initializer() {
+        let bad = "struct E {\n    pub grid_x: i32,\n    pub grid_y: i32,\n    pub cell: i64,\n}\n\
+                   impl E {\n    fn f() -> Self {\n        Self {\n            grid_x,\n            grid_y,\n        }\n    }\n}\n";
+        assert_eq!(
+            grid_x_writes_missing_cell(bad).len(),
+            1,
+            "a broken `Self {{ .. }}` shorthand initializer must be a VIOLATION"
+        );
+
+        let good = "struct E {\n    pub grid_x: i32,\n    pub grid_y: i32,\n    pub cell: i64,\n}\n\
+                    impl E {\n    fn f() -> Self {\n        Self {\n            grid_x,\n            grid_y,\n            cell,\n        }\n    }\n}\n";
+        assert!(
+            grid_x_writes_missing_cell(good).is_empty(),
+            "a `Self {{ .. }}` shorthand initializer that also sets `cell` must PASS"
+        );
+    }
+
+    /// A code-review finding on #467: `is_own_line` required the ENTIRE trimmed line to be exactly
+    /// `grid_x,`, so a compact one-liner (`E { grid_x, grid_y }`, multiple fields sharing a line)
+    /// was skipped outright — violation or not. Confirms a broken compact literal is still CAUGHT.
+    #[test]
+    fn the_scan_catches_a_broken_compact_one_line_shorthand() {
+        let cell_bearing_struct = "struct E {\n    pub grid_x: i32,\n    pub grid_y: i32,\n    pub cell: i64,\n}\n";
+
+        let bad = format!("{cell_bearing_struct}fn f() -> E {{ E {{ grid_x, grid_y }} }}\n");
+        assert_eq!(
+            grid_x_writes_missing_cell(&bad).len(),
+            1,
+            "a broken compact one-line shorthand initializer must be a VIOLATION"
+        );
+
+        let good = format!("{cell_bearing_struct}fn f() -> E {{ E {{ grid_x, grid_y, cell }} }}\n");
+        assert!(
+            grid_x_writes_missing_cell(&good).is_empty(),
+            "a compact one-line shorthand initializer that also sets `cell` must PASS"
         );
     }
 }

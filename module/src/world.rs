@@ -1,17 +1,18 @@
 //! The live in-world player: the field-sync `WorldEntity` row (also reused for creatures, type
-//! Unit), the per-recipient movement-relay event table, and the player gameplay reducers
-//! (`player_login`, `movement_update`, `set_target`, `logout`, `on_disconnect`). [entity]/[event]
+//! Unit), the per-recipient movement-relay event table, and the login/movement/death cores the
+//! `gw::gw_*` reducers drive (#483 — the sender-path twins are gone) plus `on_disconnect`.
+//! [entity]/[event]
 
 use lyracore_shared::spatial;
 use spacetimedb::{
-    client_visibility_filter, reducer, table, Filter, Identity, ReducerContext, Table,
+    reducer, table, Identity, ReducerContext, Table,
 };
 
 use crate::faction::game_faction_template;
 // Graveyard resolution (work-item 209/226) lives in `graveyard.rs` (issue #385 extraction) — this
 // alias keeps every `graveyard::...` call site below byte-identical.
 use crate::graveyard;
-use crate::helpers::{account_by_identity, entity_by_owner};
+use crate::helpers::entity_by_owner;
 use crate::spell::game_resurrect_request;
 use crate::{game_character, game_character_buyback, game_corpse, game_instance};
 
@@ -311,6 +312,14 @@ pub struct WorldEntity {
     pub sheet_dmg_min: u32,
     #[default(0)]
     pub sheet_dmg_max: u32,
+    /// Melee crit chance in basis points (#532) — a plain copy of `combat::effective_crit_bp`'s
+    /// output, the SAME fold the swing table rolls against (flat base + agility-derived,
+    /// level-suppressed + gear crit rating + `A_MOD_COMBAT(CRIT)` auras). No second formula: this
+    /// column exists only so the gateway can relay `PLAYER_CRIT_PERCENTAGE` without recomputing crit
+    /// itself. 0 for every existing row and for creatures (no sheet). `#[default(0)]` + END-appended
+    /// so `publish` auto-migrates.
+    #[default(0)]
+    pub sheet_crit_bp: u32,
 }
 
 impl WorldEntity {
@@ -578,11 +587,6 @@ pub struct TeleportEvent {
     pub cross_map: bool,
 }
 
-/// A connection drains only the teleports addressed to it (it's the player being teleported).
-#[client_visibility_filter]
-const TELEPORT_EVENT_RLS: Filter =
-    Filter::Sql("SELECT * FROM game_teleport_event WHERE recipient_identity = :sender");
-
 /// Whether a `teleport_player` target lands on a DIFFERENT map than the entity's current one — the
 /// single decision point behind both the module's same-map-in-place-update vs. cross-map-despawn branch
 /// below, and (mirrored gateway-side via live-entity presence post-transaction, since the two can't share
@@ -740,34 +744,15 @@ pub(crate) fn recall_to_home(ctx: &ReducerContext, guid: u64) {
     }
 }
 
-/// `CMSG_GOSSIP_SELECT_OPTION` "Make this inn your home" at an innkeeper → bind the caller's home to where
-/// they stand. Player-authorized via `ctx.sender` (the gateway fires it on the player's conn). The
-/// `debug_bind_home` twin drives `set_home` by explicit guid for the harness. [entity]
-#[reducer]
-pub fn bind_home(ctx: &ReducerContext) -> Result<(), String> {
-    let player = crate::helpers::entity_by_owner(ctx, ctx.sender())
-        .ok_or_else(|| "user not in world".to_string())?;
-    set_home(ctx, player.guid);
-    Ok(())
-}
-
 // ===========================================================================================
 //  Enter world
 // ===========================================================================================
 
-#[reducer]
-pub fn player_login(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    let account = account_by_identity(ctx, ctx.sender())
-        .ok_or_else(|| "caller identity not bound to an account".to_string())?;
-    apply_player_login(ctx, &account, character_guid, ctx.sender())
-}
-
-/// The login core, actor-explicit (#468 stage 4d): everything `player_login` does after resolving
-/// WHOSE login this is. `owner` is the identity stamped onto the live entity and the character's
-/// owner-RLS rows — the per-player connection's own identity on the sender path; on the gateway
-/// path (`gw::gw_player_login`) the account's BOUND identity, so the rows a per-player connection
-/// would see stay owned by the identity that connection would present. Both entries share this one
-/// body, so the two login paths cannot drift.
+/// The login core, actor-explicit (#468 stage 4d): everything the old sender-path `player_login`
+/// did after resolving WHOSE login this is. `owner` is the identity stamped onto the live entity
+/// and the character's owner-RLS rows — on the gateway path (`gw::gw_player_login`, the only
+/// remaining caller, #483) the account's BOUND identity, so the rows a per-player connection would
+/// see stay owned by the identity that connection would present.
 pub(crate) fn apply_player_login(
     ctx: &ReducerContext,
     account: &crate::Account,
@@ -1224,27 +1209,9 @@ pub(crate) fn plan_movement(
     }
 }
 
-#[reducer]
-#[allow(clippy::too_many_arguments)]
-pub fn movement_update(
-    ctx: &ReducerContext,
-    opcode: u16,
-    movement_info: Vec<u8>,
-    x: f32,
-    y: f32,
-    z: f32,
-    o: f32,
-    move_time_ms: u32,
-) -> Result<(), String> {
-    let mover =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "mover not in world".to_string())?;
-    apply_movement_update(ctx, mover, opcode, movement_info, x, y, z, o, move_time_ms)
-}
-
-/// The movement core, actor-explicit (#468 stage 4): everything `movement_update` does after
-/// resolving WHO moved. The sender reducer above and the trusted gateway path
-/// (`gw::gw_movement_update`) both delegate here, so the two entries cannot drift — same shape as
-/// every `actor.rs` verb, factored out per that file's own rule for still-inlined cores.
+/// The movement core, actor-explicit (#468 stage 4): everything the old sender-path `movement_update`
+/// did after resolving WHO moved. The trusted gateway path (`gw::gw_movement_update`) delegates here
+/// — same shape as every `actor.rs` verb, factored out per that file's own rule for still-inlined cores.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_movement_update(
     ctx: &ReducerContext,
@@ -1447,18 +1414,7 @@ pub(crate) fn apply_movement_update(
 //  Targeting
 // ===========================================================================================
 
-/// Set the caller's current target (`CMSG_SET_SELECTION`). Stores `UNIT_FIELD_TARGET` on the
-/// player's live entity so the server is target-aware (the foundation for combat / "cast at
-/// target"). `target_guid` 0 clears the target. Authorized via `ctx.sender` like all player ops.
-#[reducer]
-pub fn set_target(ctx: &ReducerContext, target_guid: u64) -> Result<(), String> {
-    let player =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caller not in world".to_string())?;
-    apply_set_target(ctx, player, target_guid)
-}
-
-/// The target-write core, actor-explicit (#468 stage 4a) — `set_target` and `gw::gw_set_target`
-/// both delegate here.
+/// The target-write core, actor-explicit (#468 stage 4a) — `gw::gw_set_target` delegates here.
 pub(crate) fn apply_set_target(
     ctx: &ReducerContext,
     mut player: WorldEntity,
@@ -1506,14 +1462,8 @@ pub(crate) fn can_inspect(
 /// (full equipment display additionally needs the target's visible-item fields, tracked separately).
 /// The faction gate is SKIPPED when `FactionTemplate` data isn't loaded (table empty), the same
 /// fail-open convention as `combat::start_attack`'s friendly-gate, so a dev/test server without an
-/// imported `FactionTemplate.dbc` never blocks inspect. Authorized via `ctx.sender`.
-#[reducer]
-pub fn inspect(ctx: &ReducerContext, target_guid: u64) -> Result<(), String> {
-    let inspector =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caller not in world".to_string())?;
-    apply_inspect(ctx, inspector, target_guid)
-}
-
+/// imported `FactionTemplate.dbc` never blocks inspect.
+///
 /// The inspect core, actor-explicit (#479) — same split as [`apply_set_target`].
 pub(crate) fn apply_inspect(
     ctx: &ReducerContext,
@@ -1546,17 +1496,12 @@ pub(crate) fn apply_inspect(
 /// 1 HP and teleport to the nearest graveyard, leaving a corpse behind at the death spot (see
 /// `do_repop`). The client leaves the death screen purely from `UNIT_FIELD_HEALTH > 0` (vanilla 1.12
 /// has no "you are alive" opcode — death and revive are both field replication). No-op if the caller
-/// isn't dead. Authorized via `ctx.sender` like all player ops.
-#[reducer]
-pub fn repop(ctx: &ReducerContext) -> Result<(), String> {
-    let player =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caller not in world".to_string())?;
-    do_repop(ctx, player.guid)
-}
-
-/// The `repop` body keyed off an explicit guid — shared by the `repop` reducer (resolves
-/// `ctx.sender()` → guid) and `debug::debug_repop` (a CLI `spacetime call` drives the ghost/release
-/// transition by guid, so the death loop is verifiable headless). No-op if the entity is missing.
+/// isn't dead.
+///
+/// The `repop` body keyed off an explicit guid — shared by `gw::gw_repop` (resolves the actor guid
+/// from the shared connection) and `debug::debug_repop` (a CLI `spacetime call` drives the
+/// ghost/release transition by guid, so the death loop is verifiable headless). No-op if the entity
+/// is missing.
 pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
     use lyracore_shared::constants::{player_flags, unit_vis_flags};
     let entities = ctx.db.game_world_entity();
@@ -1735,19 +1680,14 @@ fn spirit_res_vitals(max_health: u32, max_power: u32) -> (u32, u32) {
 /// Spirit Healer resurrection (`CMSG_SPIRIT_HEALER_ACTIVATE`): a GHOST activates the graveyard Spirit
 /// Healer (npc_flags SPIRITHEALER 0x20) to res IN PLACE at reduced vitals + a 10-min Resurrection
 /// Sickness debuff — the alternative to the corpse run (which res's at the body with no sickness). The
-/// `_healer_guid` arg (the healer's guid) is IGNORED like `reclaim_corpse`'s `_corpse_guid`: the res is
-/// self-authorized off `ctx.sender()` (the client only sends this from the healer dialog, which the
-/// SPIRITHEALER flag already ghost-gates). Authorized via `ctx.sender` like all player ops.
-#[reducer]
-pub fn spirit_healer_res(ctx: &ReducerContext, _healer_guid: u64) -> Result<(), String> {
-    let player =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caller not in world".to_string())?;
-    do_spirit_healer_res(ctx, player.guid)
-}
-
-/// The `spirit_healer_res` body keyed off an explicit player guid — shared by the reducer (resolves
-/// `ctx.sender()` → guid) and `debug::debug_spirit_healer_res` (a CLI `spacetime call` drives the res
-/// by guid, so the feature is verifiable without the mouse-only healer dialog). Gates on the entity
+/// healer arg (the healer's guid) is IGNORED like `reclaim_corpse`'s `_corpse_guid`: the res targets
+/// the actor named by guid (the client only sends this from the healer dialog, which the
+/// SPIRITHEALER flag already ghost-gates).
+///
+/// The `do_spirit_healer_res` body keyed off an explicit player guid — shared by `gw::gw_spirit_res`
+/// (resolves the actor guid from the shared connection) and `debug::debug_spirit_healer_res` (a CLI
+/// `spacetime call` drives the res by guid, so the feature is verifiable without the mouse-only
+/// healer dialog). Gates on the entity
 /// being a ghost (mirroring `reclaim_corpse`); res's IN PLACE at 50% health + 50% mana (no range/delay/
 /// corpse check — that's the corpse-run path), clears the ghost/dead state (health > 0 + cleared flags
 /// replicate → the client leaves the death screen, exactly like `reclaim_corpse`; vanilla has no
@@ -1957,30 +1897,14 @@ pub(crate) fn remove_from_world(ctx: &ReducerContext, owner: Identity) {
     ctx.db.game_world_entity().guid().delete(entity.guid);
 }
 
-/// Explicit logout (CMSG_LOGOUT_REQUEST path — stretch).
-#[reducer]
-pub fn logout(ctx: &ReducerContext) {
-    remove_from_world(ctx, ctx.sender());
-}
-
-/// NOTIFY-ONLY gossip-option chokepoint: the gateway calls this (fire-and-forget)
-/// when it handles CMSG_GOSSIP_SELECT_OPTION, BEFORE running its own vendor/innkeeper/close
-/// behavior — gossip handling itself lives gateway-side, so without this reducer the module (and
-/// therefore packages) would never see the click. Fires `on_gossip_select` and does nothing else;
-/// a failure here never blocks the gateway's gossip reply. `debug_gossip_select` drives the same
-/// fire by explicit guid for the harness (the CLI identity owns no entity).
-#[reducer]
-pub fn gossip_select(
-    ctx: &ReducerContext,
-    npc_guid: u64,
-    option_id: u32,
-    option_row_id: u32,
-) -> Result<(), String> {
-    let player =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "user not in world".to_string())?;
-    apply_gossip_select(ctx, player.guid, npc_guid, option_id, option_row_id)
-}
-
+/// NOTIFY-ONLY gossip-option chokepoint: the gateway calls this (fire-and-forget, via
+/// `gw::gw_gossip_select`) when it handles CMSG_GOSSIP_SELECT_OPTION, BEFORE running its own
+/// vendor/innkeeper/close behavior — gossip handling itself lives gateway-side, so without this
+/// reducer the module (and therefore packages) would never see the click. Fires `on_gossip_select`
+/// and does nothing else; a failure here never blocks the gateway's gossip reply.
+/// `debug_gossip_select` drives the same fire by explicit guid for the harness (the CLI identity
+/// owns no entity).
+///
 /// The gossip-notify core, actor-explicit (#479) — same split as [`apply_set_target`], keyed by
 /// guid (the hook payload is the only thing the body reads off the actor).
 pub(crate) fn apply_gossip_select(

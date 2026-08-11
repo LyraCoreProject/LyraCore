@@ -8,9 +8,8 @@
 //! this module (`pub use engage::*`) so every `crate::combat::<sym>` path resolves regardless of which
 //! submodule actually defines it.
 
-use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
+use spacetimedb::{table, ReducerContext, ScheduleAt, Table, Timestamp};
 
-use crate::helpers::entity_by_owner;
 use crate::{game_faction_template, game_world_entity, WorldEntity};
 
 // Tables' pure formulas/consts and the sibling submodules' re-exports (`roll_swing`, `kill_creature`,
@@ -325,16 +324,6 @@ pub struct RangedImpactSchedule {
 //  Reducers
 // ===========================================================================================
 
-/// Start (or retarget) the caller's melee auto-attack on `target_guid` (`CMSG_ATTACKSWING`).
-/// Authorized via `ctx.sender` like all player ops; delegates to the shared `apply_start_attack`
-/// core (which the actor verb API exposes by explicit guid). The first tick swings immediately.
-#[reducer]
-pub fn start_attack(ctx: &ReducerContext, target_guid: u64) -> Result<(), String> {
-    let attacker =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "attacker not in world".to_string())?;
-    apply_start_attack(ctx, attacker.guid, target_guid)
-}
-
 /// The TARGET-side half of the attack-command gate, shared verbatim by `apply_start_attack` and
 /// `apply_start_ranged_attack` (#370 — it was a copy-paste, and a copy of a gate is a gate that
 /// eventually only half-holds): the target must EXIST, be on the same map + instance, not be a
@@ -416,28 +405,6 @@ pub(crate) fn apply_start_attack(
         melee.insert(row);
     }
     Ok(())
-}
-
-/// Start (or retarget) the caller's RANGED auto-attack on `target_guid` with `spell_id` (75 Auto Shot /
-/// 5019 wand Shoot), via `CMSG_CAST_SPELL`. Authorized via `ctx.sender`; delegates to the shared
-/// `apply_start_ranged_attack` (which `debug_ranged_attack_nearest` reuses).
-#[reducer]
-pub fn start_ranged_attack(
-    ctx: &ReducerContext,
-    target_guid: u64,
-    spell_id: u32,
-) -> Result<(), String> {
-    let attacker =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "attacker not in world".to_string())?;
-    // Fall back to the caster's current selection (UNIT_FIELD_TARGET, set by CMSG_SET_SELECTION) when the
-    // cast carried no explicit unit target — some clients send Auto Shot/Shoot relying on the selection
-    // rather than packing the target into SpellCastTargets.
-    let resolved = if target_guid != 0 {
-        target_guid
-    } else {
-        attacker.target_guid
-    };
-    apply_start_ranged_attack(ctx, attacker.guid, resolved, spell_id)
 }
 
 /// Shared core: arm `attacker_guid`'s RANGED auto-attack on `target_guid` with `spell_id`. Same gates as
@@ -541,15 +508,6 @@ pub(crate) fn apply_start_ranged_attack(
     } else {
         melee.insert(row);
     }
-    Ok(())
-}
-
-/// Stop the caller's melee auto-attack (`CMSG_ATTACKSTOP`).
-#[reducer]
-pub fn stop_attack(ctx: &ReducerContext) -> Result<(), String> {
-    let attacker =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "attacker not in world".to_string())?;
-    stop_attack_for(ctx, attacker.guid);
     Ok(())
 }
 

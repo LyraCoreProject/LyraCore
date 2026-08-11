@@ -20,6 +20,7 @@ pub mod region;
 pub mod spatial;
 pub mod terrain;
 pub mod values_mask;
+pub mod vmap;
 pub mod whisper;
 
 /// The exact error text the module's `start_attack` reducer returns when the target is a corpse.

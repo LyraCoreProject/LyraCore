@@ -5,12 +5,12 @@
 
 use crate::config::{GatewayConfig, ShardMap};
 use anyhow::{anyhow, Context, Result};
-use spacetimedb_sdk::{DbContext, Identity, SubscriptionHandle as _};
+use spacetimedb_sdk::{DbContext, SubscriptionHandle as _, Table};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use super::account_sessions::{AccountSessions, SessionEpochs};
+use super::account_sessions::SessionEpochs;
 use super::bindings::*;
 
 /// Shared handle to the privileged coordination connection **of one shard**.
@@ -38,9 +38,6 @@ pub(crate) struct ShardSet {
     /// an extra shard that failed to connect is ABSENT (routing then degrades to the default).
     conns: HashMap<String, Arc<CoordinatorInner>>,
     sessions: SessionEpochs,
-    /// How many live world SOCKETS each account currently has. Separate from `sessions`
-    /// above on purpose — see [`AccountSessions`].
-    live_sessions: AccountSessions,
     /// The gateway-wide shared area-of-interest view — the cell index plus the viewer
     /// registry that every shard's coordinator dispatch routes through. Shard-INDEPENDENT for the
     /// same reason `sessions` is: it answers a question about SESSIONS, and guids are globally
@@ -54,7 +51,8 @@ pub(crate) struct ShardSet {
 /// subscription is dead, so dropping it is clean).
 pub(crate) struct LiveConn {
     /// Privileged (owner) connection: reads every table (RLS bypass) and is the cache the
-    /// gateway reads through. Reducers gated on the *player's* identity go through `PlayerConn`.
+    /// gateway reads through. Player verbs go through the module's operator-gated `gw_*` surface
+    /// over the call pipes, with the actor named by guid.
     pub(crate) conn: DbConnection,
     /// Keeps the SDK message-pump thread alive for the connection's lifetime.
     _pump: std::thread::JoinHandle<()>,
@@ -90,14 +88,10 @@ pub(crate) struct CoordinatorInner {
     /// transaction (was: one transaction per heartbeat — ~10k tx/s of per-transaction machinery
     /// at 2000 players, the measured 92%-writer wall).
     pub(crate) motion_batch: Mutex<Vec<super::bindings::GwMove>>,
-    /// Per-account player connections (each with its own node-issued identity == the account's
-    /// bound identity). Opened on first need (at logon, when `bound_identity` is read) and reused
-    /// for the world phase so `player_login`/`movement_update` run as the player, not the owner.
-    players: Mutex<HashMap<u64, Arc<PlayerConn>>>,
     /// Re-arm hook for a connection-scoped relay that has no per-login registration point to
     /// self-heal through after a reconnect (the bot-invite relay is the first of these, and
     /// as of now the only one — every OTHER coordinator relay re-registers itself on the fresh
-    /// connection implicitly, because it is armed from inside a per-player LOGIN, which happens
+    /// connection implicitly, because it is armed from inside a per-session LOGIN, which happens
     /// again after any reconnect. This one is armed once at gateway startup with no login to hang a
     /// re-arm off, so without this hook a reconnect (the watchdog's own doc comment: "self-heal
     /// across a SpacetimeDB migration" — a module republish, which this project does routinely) would
@@ -149,19 +143,6 @@ impl CoordinatorInner {
         self.coord()
     }
 
-    /// The per-account player-connection cache, recovering a poisoned lock (matches the file's
-    /// discipline — see `coord()`). `player_conn`'s doc above documents two realm-wide outages that
-    /// came from a stale critical section poisoning this very lock; that section is narrowed now,
-    /// but recovering here is defense-in-depth against any future one — a stale cache beats
-    /// every subsequent lookup panicking for every account on the shard.
-    fn players(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Arc<PlayerConn>>> {
-        self.players.lock().unwrap_or_else(|p| {
-            log::error!(
-                "players lock poisoned (a prior panic in a critical section) — recovering"
-            );
-            p.into_inner()
-        })
-    }
 }
 
 /// Build one CALL-ONLY pipe — same connect shape as [`connect_blocking`] but subscribing a
@@ -199,19 +180,6 @@ fn connect_call_pipe(uri: String, db_name: String, token: Option<String>) -> Res
         _pump: pump,
         _sub: sub,
     })
-}
-
-/// A per-account SpacetimeDB connection. Its node-issued `identity` is bound to the account by
-/// `establish_session`, so reducers it calls satisfy the module's `ctx.sender == owner` checks.
-pub(crate) struct PlayerConn {
-    pub(crate) conn: DbConnection,
-    pub(crate) identity: Identity,
-    /// The `run_threaded` pump, JOINABLE. The pump holds a CLONE of the `DbConnection`, so the
-    /// connection and its caches are freed only once this thread RETURNS — dropping the `PlayerConn`
-    /// is not enough, somebody has to reap it. `LiveConn` above already does this on a reconnect.
-    ///
-    /// Read by `release_player_conn_on`, i.e. at the teardown of the account's last world socket.
-    pump: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 /// The coordinator subscription set, as a pure function of ONE flag — so the property that
@@ -311,7 +279,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // Explored areas (a live find, same rule): the fog-word relay's coordinator leg — a fresh
         // login's first-movement discovery lands exactly in the per-player AOI-churn window.
         "SELECT * FROM game_character_explored",
-        // /roll events: under LYRACORE_SHARED_CALLS the shared dispatch
+        // /roll events: the shared dispatch
         // (`world_view::roll_appeared`) relays these from this cache instead of ~N per-player
         // subscriptions. Tiny TTL-reaped event table; subscribed unconditionally so the flag
         // never changes what this connection holds.
@@ -660,15 +628,25 @@ fn spawn_loot_roll_relay(coordinator: Coordinator) -> std::thread::JoinHandle<()
 /// QUEUESTAT/AOISTAT use (`world/mod.rs`). Costs an unconfigured single-database gateway nothing
 /// but its own idle wakeups and one metrics scrape (occupancy still measurable there — realm-core
 /// unconfigured just means `record_shard_load` runs against this same database).
-fn spawn_load_sampler(coordinator: Coordinator, stdb_uri: String) -> std::thread::JoinHandle<()> {
+fn spawn_load_sampler(
+    coordinator: Coordinator,
+    stdb_uri: String,
+    gateway_id: String,
+) -> std::thread::JoinHandle<()> {
     let sampler = crate::load_sample::OccupancySampler::from_env(&stdb_uri);
     let interval = crate::load_sample::sample_interval();
+    // Hashed once at startup (issue #308): `game_shard_load.gateway_key` is what keys this
+    // process's samples apart from every OTHER gateway process's, so N gateways sampling the same
+    // shard sum to a realm-wide total instead of the last writer clobbering the rest.
+    let this_gateway_key = crate::load_sample::gateway_key(&gateway_id);
     std::thread::Builder::new()
         .name("stdb-load-sampler".into())
         .spawn(move || loop {
             std::thread::sleep(interval);
             let occupancy = sampler.sample_all();
-            for line in crate::load_sample::sample_and_record(&coordinator, &occupancy) {
+            for line in
+                crate::load_sample::sample_and_record(&coordinator, &occupancy, this_gateway_key)
+            {
                 log::info!("{line}");
             }
         })
@@ -789,36 +767,6 @@ fn ensure_guid_ranges(conns: &HashMap<String, Arc<CoordinatorInner>>, map: &Shar
             ),
         }
     }
-}
-
-/// Build + connect a per-account player connection on a dedicated OS thread (same no-ambient-
-/// runtime reasoning as `connect_blocking`). Connects with no token so the node mints a fresh
-/// identity; that identity becomes the account's bound identity. Blocks until connected so the
-/// identity is known. No subscriptions: this connection only *calls* reducers (so they run as
-/// the player); all reads go through the privileged coordinator cache.
-fn connect_player_blocking(uri: String, db_name: String) -> Result<PlayerConn> {
-    let (id_tx, id_rx) = std::sync::mpsc::channel::<Identity>();
-    let conn = DbConnection::builder()
-        .with_uri(&uri)
-        .with_database_name(&db_name)
-        .on_connect(move |_ctx, identity, _token| {
-            let _ = id_tx.send(identity);
-        })
-        .on_connect_error(|_ctx, err| log::error!("player connect error: {err}"))
-        .build()
-        .map_err(|e| anyhow!("player build/connect failed: {e}"))?;
-
-    let pump = conn.run_threaded();
-    let identity = id_rx
-        .recv_timeout(Duration::from_secs(15))
-        .map_err(|_| anyhow!("player connection not established within 15s"))?;
-    log::info!("player connection established as {identity}");
-
-    Ok(PlayerConn {
-        conn,
-        identity,
-        pump: std::sync::Mutex::new(Some(pump)),
-    })
 }
 
 /// Block on a reducer-completion channel, mapping the outcome to `anyhow`.
@@ -956,309 +904,22 @@ macro_rules! call_reducer {
 }
 pub(crate) use call_reducer;
 
-/// Fire a reducer and **do not wait** for its completion.
-///
-/// `call_reducer!` blocks the calling thread on the completion channel. For movement that is a hard
-/// throughput ceiling: `forward_movement` runs on the session's own socket-reader thread, so a
-/// player's NEXT packet cannot be read until the previous movement has made a full gateway→DB→gateway
-/// round-trip. Measured 2026-07-28: **~200 committed `movement_update`/s across the whole server**,
-/// unchanged at 100/150/200 players, i.e. a ~996 ms round-trip of which the database accounted for
-/// 2.1 ms — the rest was thread wakeup, with 642 threads over 28 cores.
-///
-/// The outcome is delivered to `$on_done` instead, which runs on the SDK's callback thread. Use this
-/// ONLY where no reply packet depends on the result; anything that gates a response must keep the
-/// blocking shape.
-macro_rules! call_reducer_nowait {
-    ($reducers:expr, $what:literal, $method:ident ( $($arg:expr),* $(,)? ), $on_done:expr) => {{
-        let done = $on_done;
-        $reducers
-            .$method($($arg,)* move |_ctx, status| {
-                done(match status {
-                    Ok(inner) => inner,
-                    Err(e) => Err(format!("{e:?}")),
-                });
-            })
-            .map_err(|e| anyhow!(concat!("send ", $what, ": {}"), e))
-    }};
-}
-pub(crate) use call_reducer_nowait;
-
 impl Coordinator {
-    /// Get (or lazily open) the per-account player connection. Opening builds a new SDK
-    /// connection on a dedicated OS thread; safe to call from the `spawn_blocking` logon/world
-    /// handlers (no ambient tokio runtime there). Cached for the gateway's lifetime so the same
-    /// node-issued identity is reused across the logon and world phases.
-    ///
-    /// Shard-scoped: the connection is opened against THIS handle's database and cached in
-    /// THIS shard's `players` map, so a session holding its home-shard handle can only ever open a
-    /// player connection — and therefore only ever call reducers and subscribe — on its home shard.
-    /// Live player-session count on THIS shard — the size of the very cache `player_conn`
-    /// below maintains. Approximate: an account with a cached-but-dead connection (see the
-    /// liveness check just below) still counts until its NEXT checkout evicts it, and an account
-    /// that never called any reducer that opens a player connection is not counted at all even if
-    /// its client socket is open (logon-phase connections only need the owner connection). Good
-    /// enough for an ops gauge.
+    /// Live player-session count on THIS shard: player entities (`account_id != 0`) in the
+    /// shard's coordinator cache. Shard truth, so horizontally-scaled gateways report the same
+    /// number instead of each undercounting to its own connections. Good enough for an ops gauge.
     pub(crate) fn session_count(&self) -> usize {
-        self.0.players().len()
+        let guard = self.0.coord();
+        let n = guard
+            .conn
+            .db
+            .game_world_entity()
+            .iter()
+            .filter(|e| e.account_id != 0)
+            .count();
+        n
     }
 
-    pub(crate) fn player_conn(&self, account_id: u64) -> Result<Arc<PlayerConn>> {
-        // ⚠ The cache read is a STATEMENT of its own, and it must stay one.
-        //
-        // Written as `if let Some(p) = self.0.players.lock().unwrap()…`, the `MutexGuard` temporary
-        // from the scrutinee lives until the END of the `if let` body — the edition-2021
-        // temporary-scope rule (edition 2024 changed it; this workspace is 2021, see
-        // `[workspace.package] edition` in the root `Cargo.toml`). Under that shape the two lines
-        // below each took the whole realm down, and both are reachable ONLY when a cached
-        // connection is unhealthy — i.e. exactly during a mass-session churn (login storm or mass
-        // disconnect), which is where both outages happened:
-        //
-        //  1. the `remove` re-locks `players` while the scrutinee guard is still held.
-        //     `std::sync::Mutex` is not reentrant, so the session thread DEADLOCKS holding the
-        //     process-wide `players` lock, and every other session's `player_conn` /
-        //     `session_count` queues behind it forever. Each one also strands a tokio
-        //     blocking-pool thread (default cap: 512) permanently. This is the "evict and
-        //     rebuild a dead conn" path, so that repair has never actually been able to run.
-        //  2. `is_active()` is `send_chan.lock().unwrap()` *inside the SDK*. Once a per-player
-        //     connection's pump thread has panicked at
-        //     `spacetimedb-sdk-2.7.1/src/db_connection.rs:413` ("Unable to send unsubscribe
-        //     message…" — the churn crash's log signature, thrown while that very mutex is held) the mutex
-        //     is POISONED and `is_active()` panics. Under the old shape it panicked while holding
-        //     the `players` guard, poisoning `players` too — after which every `.lock().unwrap()`
-        //     on it panics, for every account on this shard.
-        //
-        // Binding the clone first makes the guard's life one statement long: a panic out of
-        // `is_active()` unwinds one session and leaves the cache usable, and the eviction below
-        // can no longer self-deadlock.
-        let cached = self.0.players().get(&account_id).cloned();
-        if let Some(p) = cached {
-            // Liveness check on checkout: a module republish closes every websocket
-            // ("module exited") — the coordinator self-heals, but a cached player conn died
-            // silently and its reducer calls go NOWHERE (player_login "timed out after 10s"
-            // until a gateway restart). A dead conn is evicted and rebuilt below exactly like
-            // a first login; the next logon flow re-binds the fresh identity via
-            // `establish_session` as it always does.
-            if p.conn.is_active() {
-                return Ok(p);
-            }
-            log::warn!(
-                "player conn for account {account_id} is dead (module restart?) — rebuilding"
-            );
-            self.0.players().remove(&account_id);
-        }
-        let uri = self.0.uri.clone();
-        let db_name = self.0.db_name.clone();
-        // The build must see an ambient runtime, so the SDK's `enter_or_create_runtime()`
-        // takes its `Handle::try_current() == Ok` branch and REUSES this runtime instead of
-        // creating a private 1-worker runtime per connection. That private runtime was ~1-2 OS
-        // threads per distinct account, never released for the gateway's lifetime,
-        // and at 500 accounts it is what left the gateway unable to serve logons after a
-        // mass-disconnect run.
-        //
-        // ⚠ "ambient runtime" must NOT mean "on a runtime worker". The previous shape
-        // (`handle.spawn(async { block_in_place(build) })`) starves under exactly the load this
-        // path exists for. `block_in_place` on a worker GIVES THE WORKER'S CORE AWAY and asks the
-        // blocking pool to run it — `runtime::spawn_blocking(move || run(worker))`,
-        // tokio-1.53.1 `runtime/scheduler/multi_thread/worker.rs:489`, whose own comment four
-        // lines up reads "If we heavily call `spawn_blocking`, there might be no available thread
-        // to run this core". This gateway heavily calls `spawn_blocking`: EVERY world session
-        // (`world::run`) and EVERY logon handshake (`logon::run`) holds one pool thread for its
-        // whole life. So at a few hundred sessions the pool is full, the handed-off core is never
-        // picked up, and the runtime loses a core PER IN-FLIGHT BUILD — taking down the SDK
-        // message pumps that every other session's reducer completions ride on. Measured offline
-        // (see `connect_build_does_not_starve_on_a_full_blocking_pool` below): 8 workers, pool
-        // full, 8 builds in flight ⇒ an unrelated task waits 1.7 s; the shape below waits 51 ms.
-        // That is what produced the live "player connect task did not answer within 20s" errors and
-        // the bimodal movement p95 at ~500 seats.
-        //
-        // So: build on a THREAD THE RUNTIME DOES NOT OWN, with an `enter()` guard. The guard makes
-        // `Handle::try_current()` succeed (keeping the shared-runtime reuse above and the SDK's message
-        // loops on this runtime), while the SDK's internal `block_in_place` takes its "outside of
-        // the tokio runtime, so blocking is fine" branch — no core handed away, no blocking-pool
-        // thread needed, nothing to queue behind.
-        //
-        // Nothing about the security model moves: the connection is still per-account with its own
-        // minted identity, so `ctx.sender` authorisation and the module's RLS filters are untouched.
-        let conn = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::Builder::new()
-                    .name(format!("stdb-player-{account_id}"))
-                    .spawn(move || {
-                        let _guard = handle.enter();
-                        let built = connect_player_blocking(uri, db_name);
-                        // The caller's `recv_timeout` below is a HARD deadline, but it cannot
-                        // cancel this build — so a connection that lands late must be cleaned up
-                        // HERE or it is orphaned. It was never inserted into `players`, so
-                        // `release_player_conn_on` will never see it; the SDK's `DbContextImpl`
-                        // has no `Drop`, and the `run_threaded` pump holds a clone, so dropping it
-                        // leaves a live websocket + a live pump thread for the process lifetime.
-                        // That is the same fd/thread leak the churn fix closed, on the failure path.
-                        if let Err(std::sync::mpsc::SendError(Ok(p))) = tx.send(built) {
-                            log::warn!(
-                                "player conn for account {account_id} arrived after the caller's \
-                                 deadline — disconnecting the orphan"
-                            );
-                            let _ = p.conn.disconnect();
-                            let pump = p.pump.lock().unwrap().take();
-                            if let Some(h) = pump {
-                                let _ = h.join();
-                            }
-                        }
-                    })
-                    .context("spawn player connect thread")?;
-                rx.recv_timeout(Duration::from_secs(20))
-                    .map_err(|_| anyhow!("player connect task did not answer within 20s"))??
-            }
-            // No ambient runtime: fall back to the original dedicated-thread build. Correct, just
-            // one private runtime per connection. Unit-tests-only since the shared-connection work
-            // retired the seam view-merge (its `ensure_away` opened away-shard player connections
-            // from bare `std::thread`s, which was the one production path into this branch —
-            // measured at ~3.6 threads/session co-located, ~5.2 dispersed).
-            Err(_) => std::thread::Builder::new()
-                .name(format!("stdb-player-{account_id}"))
-                .spawn(move || connect_player_blocking(uri, db_name))
-                .context("spawn player connect thread")?
-                .join()
-                .map_err(|_| anyhow!("player connect thread panicked"))??,
-        };
-        let arc = Arc::new(conn);
-        self.0.players().insert(account_id, arc.clone());
-        Ok(arc)
-    }
-
-    /// Register a live world socket for `account_id` (called once its handshake has resolved the
-    /// account). Pairs with [`Coordinator::detach_account_session`]. See [`AccountSessions`].
-    pub(crate) fn attach_account_session(&self, account_id: u64) {
-        self.1.live_sessions.attach(account_id);
-    }
-
-    /// Retire a live world socket for `account_id` at teardown and, iff it was the LAST one,
-    /// release the account's cached per-account connections on every shard.
-    ///
-    /// This is the whole fd/thread reclaim: until it was wired up, each distinct account leaked one
-    /// websocket fd and one SDK pump OS thread **per shard it ever touched**, for the gateway's
-    /// lifetime. `accept(2)` returns `EMFILE` once the process runs out of fds, and both accept
-    /// loops propagate that straight into `main` — so the leak is what ends the process, at a
-    /// session count that is a pure function of `ulimit -n`.
-    ///
-    /// Safety is [`AccountSessions::detach`]'s postcondition, not this function's: it returns true
-    /// only when no socket for the account remains, so there is nobody left to cut off. Note this
-    /// is a STRONGER gate than the `release_session` epoch arbitration `leave_world` uses — see
-    /// [`AccountSessions`] for the character-select case the epoch gate would get wrong.
-    pub(crate) fn detach_account_session(&self, account_id: u64) {
-        if !self.1.live_sessions.detach(account_id) {
-            return;
-        }
-        self.release_account_conns(account_id);
-    }
-
-    /// Retire a live LOGON socket for `account_id`. Never releases immediately: the account's
-    /// next socket is normally the world session that reuses this very connection, and the two
-    /// closes are not ordered. See [`AccountSessions`] for why releasing here would be worse than
-    /// slow, and [`Coordinator::spawn_account_session_reaper`] for what does release it.
-    pub(crate) fn detach_account_session_deferred(&self, account_id: u64) {
-        self.1
-            .live_sessions
-            .detach_deferred(account_id, Instant::now());
-    }
-
-    /// Release every account parked by a logon close at least `grace` ago that no world session
-    /// claimed. Returns how many were released.
-    ///
-    /// Takes `now`/`grace` rather than reading the clock so the whole predicate is drivable from a
-    /// test without sleeping; [`Coordinator::spawn_account_session_reaper`] supplies the real ones.
-    pub(crate) fn reap_idle_account_sessions(&self, now: Instant, grace: Duration) -> usize {
-        let due = self.1.live_sessions.reap_idle(now, grace);
-        for account_id in &due {
-            self.release_account_conns(*account_id);
-        }
-        due.len()
-    }
-
-    /// Sweep for logon connections nobody claimed. Without this task nothing ever reclaims
-    /// them: `detach_account_session_deferred` deliberately only parks, so the reaper is the whole
-    /// release path for the logon tier.
-    pub fn spawn_account_session_reaper(&self) {
-        let coord = self.clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(ACCOUNT_SESSION_REAP_INTERVAL);
-            loop {
-                tick.tick().await;
-                let n = coord.reap_idle_account_sessions(Instant::now(), LOGON_HANDOVER_GRACE);
-                if n > 0 {
-                    log::info!(
-                        "account-session reaper: released {n} per-account connection(s) whose logon \
-                         never entered the world"
-                    );
-                }
-            }
-        });
-    }
-
-    /// Drop `account_id`'s cached per-account connection on every shard.
-    ///
-    /// EVERY shard, not just this handle's: the account's home shard can change
-    /// mid-session across a cross-database transfer, and the logon tier opens its connection on
-    /// the DEFAULT shard regardless of where the world session lands — so an account can hold a
-    /// cached `PlayerConn` in more than one shard's `players` map, and each leaks the same fd +
-    /// thread. `release_player_conn_on` is a `remove`, so covering a shard twice is inert.
-    fn release_account_conns(&self, account_id: u64) {
-        for inner in self.1.conns.values() {
-            release_player_conn_on(inner, account_id);
-        }
-        release_player_conn_on(&self.0, account_id);
-    }
-}
-
-/// How long a cached per-account connection outlives the logon socket that opened it when no world
-/// session has taken over.
-///
-/// Sized for the handover, not for the leak: the gap it has to cover is "client closes its logon
-/// socket → client completes the world handshake", which is milliseconds in the normal case and
-/// bounded by the login queue in the worst one. Erring long is nearly free here — the leak this
-/// reclaims is one connection per DISTINCT account that authenticated and never played (the cache
-/// dedupes repeats), so it grows over a server's lifetime rather than in bursts, and two minutes of
-/// extra retention changes no ceiling. Erring short is not free: a session that rebuilds its
-/// connection gets a fresh identity, which `establish_session` has not bound.
-///
-/// ⚠ A client that sits in the login queue for longer than this reaches
-/// `open_account_session` after its connection was already reaped, and its `player_login` then
-/// fails `account_by_identity` — recoverable by reconnecting (the next logon re-binds), and inert
-/// on the default topology, where `LYRACORE_MAX_SESSIONS` is unset and nothing ever queues.
-const LOGON_HANDOVER_GRACE: Duration = Duration::from_secs(120);
-
-/// How often [`Coordinator::spawn_account_session_reaper`] sweeps.
-const ACCOUNT_SESSION_REAP_INTERVAL: Duration = Duration::from_secs(30);
-
-/// Release one shard's cached connection for `account_id`: drop it from the cache, disconnect the
-/// websocket, and reap the pump thread off-thread.
-///
-/// Two earlier attempts at this reclaimed NOTHING, because each connection owned a private tokio
-/// runtime that outlived it. With the build moved onto a shared runtime worker (see
-/// [`Coordinator::player_conn`]) the only remaining per-connection thread is the pump, and joining
-/// it lets the connection actually drop.
-///
-/// ⚠ Not safe on its own — a stale socket SHARES this connection with the session that superseded
-/// it. Only [`Coordinator::detach_account_session`] may call it, and only once the account's
-/// last live socket is gone.
-fn release_player_conn_on(inner: &CoordinatorInner, account_id: u64) {
-    let Some(p) = inner.players().remove(&account_id) else {
-        return;
-    };
-    if let Err(e) = p.conn.disconnect() {
-        log::debug!("292: account {account_id} conn was already inactive ({e})");
-    }
-    // Reap OFF this thread: the pump must be joined for its caches to be freed, but a teardown
-    // must never hang on a pump that refuses to exit.
-    let handle = p.pump.lock().unwrap().take();
-    if let Some(h) = handle {
-        let _ = std::thread::Builder::new()
-            .name(format!("stdb-reap-{account_id}"))
-            .spawn(move || {
-                let _ = h.join();
-            });
-    }
 }
 
 impl Coordinator {
@@ -1326,7 +987,6 @@ impl Coordinator {
             call_pipes,
             call_pipe_next: std::sync::atomic::AtomicUsize::new(0),
             motion_batch: Mutex::new(Vec::new()),
-            players: Mutex::new(HashMap::new()),
             on_reconnect: Mutex::new(Vec::new()),
         });
         spawn_coordinator_watchdog(inner.clone());
@@ -1453,7 +1113,6 @@ impl Coordinator {
                 map,
                 conns,
                 sessions: SessionEpochs::default(),
-                live_sessions: AccountSessions::default(),
                 world,
             }),
         );
@@ -1471,7 +1130,7 @@ impl Coordinator {
         // The load sampler: per-shard writer occupancy + session counts, sampled on a timer and recorded
         // onto realm-core so an operator can answer "which shard is hot" with `spacetime sql`
         // alone.
-        spawn_load_sampler(coordinator.clone(), cfg.stdb_uri.clone());
+        spawn_load_sampler(coordinator.clone(), cfg.stdb_uri.clone(), cfg.gateway_id.clone());
         Ok(coordinator)
     }
 
@@ -1505,6 +1164,28 @@ impl Coordinator {
                     super::world_view::arm_shard(hook_view.clone(), hook_shard.clone(), id);
                     super::world_view::seed_from_caches(&hook_view);
                 }));
+        }
+        // The cross-shard whisper/group twins (#22) ride realm-core's connection — armed only
+        // when realm-core is a DISTINCT database (a world shard's own `arm_shard` above already
+        // watches these tables, and a second registration would deliver every packet twice).
+        if let Ok(realm) = self.realm_core() {
+            if !shards.iter().any(|s| s.shard_name() == realm.shard_name()) {
+                let world = self.clone();
+                super::world_view::arm_realm_private(view.clone(), realm.clone(), world.clone());
+                let (hook_view, hook_realm) = (view.clone(), realm.clone());
+                realm
+                    .0
+                    .on_reconnect
+                    .lock()
+                    .unwrap()
+                    .push(Arc::new(move || {
+                        super::world_view::arm_realm_private(
+                            hook_view.clone(),
+                            hook_realm.clone(),
+                            world.clone(),
+                        );
+                    }));
+            }
         }
         super::world_view::seed_from_caches(&view);
     }
@@ -1680,283 +1361,10 @@ impl Coordinator {
     }
 }
 
-#[cfg(test)]
-mod runtime_share {
-    /// TEMPORARY probe: can a player `DbConnection` be built on a multi-thread runtime WORKER?
-    /// If yes, `enter_or_create_runtime()` reuses the ambient runtime instead of spawning a private
-    /// one per connection — removing the ~1-2 leaked threads per account with ctx.sender and RLS
-    /// completely untouched. The comment at the top of `connect_blocking` claims a tokio worker
-    /// panics here; `block_in_place` is specifically FOR multi-thread workers, so that half is
-    /// worth testing rather than trusting.
-    fn bg_threads() -> usize {
-        std::fs::read_dir("/proc/self/task")
-            .map(|d| {
-                d.filter_map(|e| std::fs::read_to_string(e.ok()?.path().join("comm")).ok())
-                    .filter(|c| c.starts_with("spacetimedb-bac"))
-                    .count()
-            })
-            .unwrap_or(0)
-    }
 
-    /// `#[ignore]`d: needs a live node on 127.0.0.1:3000. Run it with
-    /// `cargo test --bin lyracore-gateway runtime_share -- --ignored --nocapture` after any change to how
-    /// player connections are built, and expect a delta of ZERO. A non-zero delta means the build
-    /// left the runtime context again and every account is paying for a private runtime.
-    #[ignore]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn build_on_a_worker_reuses_the_ambient_runtime() {
-        let before = bg_threads();
-        println!("PROBE before: spacetimedb-bac = {before}");
-        let mut held = Vec::new();
-        for i in 0..3 {
-            let r = tokio::task::block_in_place(|| {
-                super::connect_player_blocking(
-                    "http://127.0.0.1:3000".to_string(),
-                    "lyracore".to_string(),
-                )
-            });
-            match r {
-                Ok(c) => {
-                    println!("PROBE conn {i}: OK");
-                    held.push(c);
-                }
-                Err(e) => {
-                    println!("PROBE conn {i}: FAILED: {e:#}");
-                    return;
-                }
-            }
-        }
-        let after = bg_threads();
-        println!(
-            "PROBE after 3: spacetimedb-bac = {after} (delta {})",
-            after as i64 - before as i64
-        );
-        println!(
-            "PROBE VERDICT: {}",
-            if after <= before {
-                "SHARED RUNTIME - no private runtime per connection"
-            } else {
-                "still one private runtime per connection"
-            }
-        );
-    }
 
-    fn rss_mb() -> f64 {
-        std::fs::read_to_string("/proc/self/status")
-            .ok()
-            .and_then(|s| {
-                s.lines()
-                    .find(|l| l.starts_with("VmRSS:"))
-                    .and_then(|l| l.split_whitespace().nth(1)?.parse::<f64>().ok())
-            })
-            .map(|kb| kb / 1024.0)
-            .unwrap_or(0.0)
-    }
-
-    /// 292 memory half: what does a player connection cost with NO subscriptions at all? That
-    /// isolates the SDK/connection FLOOR from the subscription row cache, and the two have opposite
-    /// fixes — a large floor means fewer connections or an upstream change; a small floor means the
-    /// remaining ~26 per-player queries are the target.
-    ///
-    /// `#[ignore]`d: needs a live node. Run with
-    /// `cargo test --bin lyracore-gateway connection_floor -- --ignored --nocapture`.
-    #[ignore]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn connection_floor_without_subscriptions() {
-        const N: usize = 40;
-        let before = rss_mb();
-        println!("FLOOR rss before: {before:.0} MB");
-        let mut held = Vec::new();
-        for i in 0..N {
-            match tokio::task::block_in_place(|| {
-                super::connect_player_blocking(
-                    "http://127.0.0.1:3000".to_string(),
-                    "lyracore".to_string(),
-                )
-            }) {
-                Ok(c) => held.push(c),
-                Err(e) => {
-                    println!("FLOOR conn {i} failed: {e:#}");
-                    return;
-                }
-            }
-        }
-        let after = rss_mb();
-        println!(
-            "FLOOR rss after {N} unsubscribed conns: {after:.0} MB — delta {:.0} MB = {:.2} MB/conn",
-            after - before,
-            (after - before) / N as f64
-        );
-        println!(
-            "FLOOR threads: {}",
-            std::fs::read_dir("/proc/self/task").unwrap().count()
-        );
-    }
-
-    /// 292 memory half, ATTRIBUTION: cost per subscribed query, measured one query at a time over N
-    /// connections. The floor probe above says an unsubscribed connection is ~1MB, so whatever this
-    /// finds IS the per-session memory problem. Ordered worst-first in the output so the next
-    /// pruning target is obvious.
-    ///
-    /// `#[ignore]`d: needs a live node. Run with
-    /// `cargo test --bin lyracore-gateway subscription_cost -- --ignored --nocapture`.
-    #[ignore]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn subscription_cost_per_query() {
-        use spacetimedb_sdk::DbContext as _;
-        const N: usize = 12;
-        // The globals still on the per-player list, plus the AOI entity box for comparison.
-        // ⚠ Built with `format!`, never as whole literals — and do not spell the select-star-from
-        // phrase in a comment here either. `gateway/tests/schema_parity.rs`'s completeness guard
-        // scans THIS FILE for that exact phrase to discover what the coordinator subscribes, so a
-        // literal (or a comment quoting one) reads to it as a real subscription with no parity
-        // manifest entry. It failed both ways once while this probe was being written.
-        let tables = [
-            "game_gameobject_template",
-            "game_creature_cast",
-            "game_corpse",
-            "game_aura",
-            "game_melee_attack",
-            "game_dynamic_object",
-            "game_channel_member",
-            "game_item_instance",
-            "game_player_skill",
-        ];
-        let mut queries: Vec<String> = tables
-            .iter()
-            .map(|t| format!("{} * FROM {t}", "SELECT"))
-            .collect();
-        queries.push(format!(
-            "{} * FROM game_world_entity WHERE grid_x >= 0 AND grid_x <= 4 AND grid_y >= 0 AND grid_y <= 4",
-            "SELECT"
-        ));
-        let mut results: Vec<(String, f64)> = Vec::new();
-        for q in &queries {
-            let before = rss_mb();
-            let mut held = Vec::new();
-            for _ in 0..N {
-                let Ok(c) = tokio::task::block_in_place(|| {
-                    super::connect_player_blocking(
-                        "http://127.0.0.1:3000".to_string(),
-                        "lyracore".to_string(),
-                    )
-                }) else {
-                    println!("COST connect failed, aborting");
-                    return;
-                };
-                let (tx, rx) = std::sync::mpsc::channel();
-                let tx2 = tx.clone();
-                let h = c
-                    .conn
-                    .subscription_builder()
-                    .on_applied(move |_| {
-                        let _ = tx.send(true);
-                    })
-                    .on_error(move |_, _| {
-                        let _ = tx2.send(false);
-                    })
-                    .subscribe(vec![q.to_string()]);
-                let _ = rx.recv_timeout(std::time::Duration::from_secs(10));
-                held.push((c, h));
-            }
-            let per = (rss_mb() - before) / N as f64;
-            results.push((q.clone(), per));
-            println!("COST {per:>7.2} MB/conn   {q}");
-            drop(held);
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        }
-        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        println!("\nCOST RANKED (worst first):");
-        for (q, mb) in &results {
-            println!("COST {mb:>7.2} MB/conn   {q}");
-        }
-    }
-}
-
-/// The process-wide `players` lock must never be held across the liveness check.
-///
-/// `player_conn` is the one place a `MutexGuard` on `Coordinator`'s shared `players` map could
-/// outlive its own statement, and under edition 2021 the `if let ... = mutex.lock().unwrap()...`
-/// shape makes it do exactly that. The consequences are two different realm-wide outages (a
-/// self-deadlock on the eviction `remove`, and poisoning `players` when the SDK's `is_active()`
-/// panics on its own poisoned mutex) — both reachable only when a cached player connection is
-/// unhealthy, which is the mass-session-churn state (login storm / mass disconnect). Neither can be
-/// reproduced in a unit test: both need a live SpacetimeDB node and a per-player connection whose
-/// pump thread has already panicked. (`CoordinatorInner::players()` now recovers a poisoned lock the same way
-/// `coord()`/`call_pipe()` do, so a future fallible call inside a narrowed critical section
-/// degrades to a logged error instead of reproducing either outage.)
-///
-/// So it is pinned the way this crate pins its other live-only invariants — a behavioural test of
-/// the LANGUAGE RULE (so the scan below is not lexical superstition), plus a source scan of the one
-/// function. `deadlocks` is asserted with `try_lock`, never `lock`: a test that actually deadlocked
-/// would hang the suite rather than fail it.
-#[cfg(test)]
-mod player_conn_lock_scope {
-    use crate::test_scan::code_of;
-
-    /// The hazard itself, on a plain `Mutex<HashMap>` — the exact shape `player_conn` used to have.
-    /// If a future edition bump makes this pass, the scan below becomes optional rather than wrong,
-    /// and this test is where that shows up.
-    #[test]
-    fn an_if_let_scrutinee_guard_is_still_held_inside_the_body() {
-        use std::collections::HashMap;
-        use std::sync::Mutex;
-
-        let players: Mutex<HashMap<u64, u64>> = Mutex::new(HashMap::from([(1u64, 7u64)]));
-        if let Some(_p) = players.lock().unwrap().get(&1).cloned() {
-            assert!(
-                players.try_lock().is_err(),
-                "the scrutinee `MutexGuard` was dropped before the `if let` body — the edition-2021 \
-                 temporary-scope rule this module guards against no longer applies. Re-read \
-                 `player_conn`'s comment before relaxing anything."
-            );
-        } else {
-            panic!("fixture is wrong: the key must be present");
-        }
-        // Control: bound to a `let` first, the guard is gone by the time the body runs — which is
-        // precisely the fix `player_conn` applies.
-        let cached = players.lock().unwrap().get(&1).cloned();
-        if let Some(_p) = cached {
-            assert!(
-                players.try_lock().is_ok(),
-                "binding the clone to its own `let` must end the guard's life at that statement"
-            );
-        }
-    }
-
-    #[test]
-    fn player_conn_never_locks_players_in_an_if_let_scrutinee() {
-        let src = include_str!("connection.rs");
-        let body = code_of(
-            src,
-            "pub(crate) fn player_conn(&self, account_id: u64) -> Result<Arc<PlayerConn>> {",
-        );
-        for line in body.lines() {
-            let t = line.trim();
-            let scrutinee_lock = (t.starts_with("if let ")
-                || t.starts_with("while let ")
-                || t.starts_with("match "))
-                && t.contains("players")
-                && t.contains(".lock()");
-            assert!(
-                !scrutinee_lock,
-                "`player_conn` locks `players` in a `{t}` scrutinee. Under edition 2021 that guard \
-                 lives to the end of the body, which (a) self-deadlocks on the eviction `remove` \
-                 and (b) poisons the process-wide `players` map if the SDK's `is_active()` panics \
-                 on its own poisoned mutex — the two realm-wide outages this pins. Bind the \
-                 cloned value to its own `let` first."
-            );
-        }
-        assert!(
-            body.contains("let cached = self.0.players().get(&account_id).cloned();"),
-            "`player_conn` no longer takes the cached connection out of the map in a statement of \
-             its own — the one thing that keeps the `players` guard from outliving the liveness \
-             check. Body was:\n{body}"
-        );
-    }
-}
-
-/// Why `player_conn`'s build runs on a thread the runtime does NOT own.
+/// Why the SDK connection builds (`connect_blocking`, the call pipes) run on threads the
+/// runtime does NOT own.
 ///
 /// The gateway spends one tokio blocking-pool thread per world session and per logon handshake, for
 /// that session's whole life (`world::run`, `logon::run`). `block_in_place` on a runtime worker gives
@@ -1967,7 +1375,6 @@ mod player_conn_lock_scope {
 /// for that diagnosis (the live half was a ~535-seat ceiling with bimodal connect timeouts).
 #[cfg(test)]
 mod connect_build_shape {
-    use crate::test_scan::code_of;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
     use std::sync::Arc;
@@ -2089,41 +1496,5 @@ mod connect_build_shape {
             "a bare thread must see no runtime (private-runtime path) and an entered one must see \
              this runtime (the shared-runtime path)"
         );
-    }
-
-    /// Pin the shape in the source, the way `player_conn_lock_scope` pins its own: the build must not
-    /// go back onto a runtime worker.
-    #[test]
-    fn player_conn_builds_off_the_runtime_workers() {
-        let src = include_str!("connection.rs");
-        let body = code_of(
-            src,
-            "pub(crate) fn player_conn(&self, account_id: u64) -> Result<Arc<PlayerConn>> {",
-        );
-        assert!(
-            body.contains("let _guard = handle.enter();"),
-            "`player_conn` no longer enters the ambient runtime on its build thread — without the \
-             guard the SDK builds a PRIVATE runtime per connection. Body was:\n{body}"
-        );
-        for line in body.lines() {
-            let t = line.trim();
-            // Comments in there NAME both shapes on purpose — it is the explanation of why the
-            // code below is written the way it is. Only code counts.
-            if t.starts_with("//") {
-                continue;
-            }
-            assert!(
-                !t.contains("block_in_place("),
-                "`player_conn` calls `block_in_place` again ({t}). On a runtime worker that hands \
-                 the core to the blocking pool, which every world session already holds a thread \
-                 of — the starvation this shape exists to avoid. Build on a thread the runtime does \
-                 not own."
-            );
-            assert!(
-                !t.contains("handle.spawn("),
-                "`player_conn` spawns the build as a runtime task again ({t}) — see this module's \
-                 doc comment on why the build must stay off the runtime's workers."
-            );
-        }
     }
 }

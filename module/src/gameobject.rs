@@ -17,7 +17,6 @@ use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 use crate::game_corpse_loot;
 use crate::game_gameobject_loot; // CHEST data-driven loot table (work-item 210)
 use crate::game_player_skill; // GATHER skill-gate reads the gather skill row (accessor trait)
-use crate::helpers::entity_by_owner;
 use crate::loot::CorpseLoot;
 use crate::nav::game_nav_chunk; // arm_pool's map-fence (issue #79) — neither is wildcard-exported at the crate root
 use crate::terrain::game_terrain_chunk;
@@ -235,6 +234,30 @@ pub struct GameObject {
     /// nothing ever re-stamps them on its own. That backfill is a REQUIRED post-publish step.
     #[default(0i64)]
     pub cell: i64,
+    /// The cmangos spawn quaternion (`gameobject.rotation0..3`) — issue #515. The client renders a
+    /// static prop's ORIENTATION from this 4-float quaternion (`GAMEOBJECT_ROTATION`, wire index 10),
+    /// not from `orientation` alone: rot2/rot3 carry yaw, rot0/rot1 carry the terrain pitch/roll a
+    /// bench flush against a sloped wall needs. `orientation` above still drives movement-facing math
+    /// and the CREATE's `MovementBlock_UpdateFlag_Living` heading; these four are ADDITIONAL, wire-only.
+    /// END-appended + `#[default(0.0f32)]` (additive auto-migration; f32 defaults fine per danger-zones
+    /// §1.2, unlike a `String` end-append). All-zero (every pre-migration row, and any hand-seeded
+    /// fixture that never set these) is the codec's signal to DERIVE a yaw-only quaternion from
+    /// `orientation` instead of sending a degenerate zero rotation — see
+    /// `gateway/src/codec/gameobject.rs::build_gameobject_rotation_values`.
+    /// ⚠ Field spelling: SpacetimeDB normalizes column names to snake_case, so a Rust field
+    /// `rotation0` is STORED as column `rotation_0`. #515 shipped as `rotation0..3` (stored
+    /// `rotation_0..3`); a parallel session saw the normalized live columns, took them for orphans,
+    /// and re-declared them as `rotation_0..3` — same four columns, two spellings, briefly published
+    /// as a duplicate-name type that broke row decode. The merge collapsed everything onto the
+    /// stored spelling. Keep field name == column name here; never re-introduce `rotation0`.
+    #[default(0.0f32)]
+    pub rotation_0: f32,
+    #[default(0.0f32)]
+    pub rotation_1: f32,
+    #[default(0.0f32)]
+    pub rotation_2: f32,
+    #[default(0.0f32)]
+    pub rotation_3: f32,
 }
 
 // ===========================================================================================
@@ -412,6 +435,12 @@ fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
         grid_x: lyracore_shared::spatial::grid_cell(m.x, m.y).0,
         grid_y: lyracore_shared::spatial::grid_cell(m.x, m.y).1,
         cell: lyracore_shared::spatial::cell_id_at(m.x, m.y),
+        // Pool members carry no spawn quaternion (cmangos pool_gameobject has none either) — the
+        // codec derives a yaw-only quaternion from `orientation` for the all-zero case (#515).
+        rotation_0: 0.0,
+        rotation_1: 0.0,
+        rotation_2: 0.0,
+        rotation_3: 0.0,
     });
 }
 
@@ -919,27 +948,6 @@ pub(crate) fn toggle_state(state: u8) -> u8 {
     }
 }
 
-/// Use a gameobject (`CMSG_GAMEOBJ_USE`). Player-authorized via `ctx.sender`; `debug_use_gameobject*`
-/// drive the same core by explicit guid/entry for the harness (the CLI identity owns no entity).
-#[reducer]
-pub fn use_gameobject(ctx: &ReducerContext, go_guid: u64) -> Result<(), String> {
-    let player =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "user not in world".to_string())?;
-    apply_use_gameobject(ctx, player.guid, go_guid)
-}
-
-/// Pick the lock on `go_guid` (`CMSG_CAST_SPELL` for an E_OPEN_LOCK spell — Pick Lock 1804). The gateway
-/// intercepts the cast by effect KIND (like enchant/fish), decodes the GO guid off the cast's
-/// SpellCastTargets, calls this over the per-account connection (so `ctx.sender` is the caster), then
-/// sends the START/OK/GO handshake itself (this reducer emits no game_spell_cast_event). Player-authorized
-/// via `ctx.sender`; `debug_pick_lock_entry` drives the same core by template entry for the harness.
-#[reducer]
-pub fn pick_lock(ctx: &ReducerContext, go_guid: u64) -> Result<(), String> {
-    let player =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "user not in world".to_string())?;
-    apply_pick_lock(ctx, player.guid, go_guid)
-}
-
 /// Pick the lock on the FIRST spawned gameobject of template `go_entry` as `character_guid` — same core
 /// as `pick_lock` but resolves by template entry so `spacetime call` can drive it with SMALL args (it
 /// mangles guids > 2^53), mirroring `debug_use_gameobject_entry`. The headless Pick Lock verify lever.
@@ -966,11 +974,15 @@ pub fn debug_pick_lock_entry(
 /// because `game_gameobject` has a `created_at: Timestamp`. Mirrors `import_creature_spawns`.
 ///
 /// `packed`: rows separated by `;`, fields by `,`, in the order
-/// `guid,template_entry,map_id,x,y,z,orientation,initial_state`. `created_at` = `ctx.timestamp`.
-/// `initial_state` (work-item 211, END field — widened alongside `import_gameobjects_append` in the
-/// SAME commit, not a table migration: this is a string protocol between the importer and this
-/// reducer, not a reducer arg) lets a DOOR/BUTTON spawn already-open (cmangos `startOpen`); every
-/// other type's importer row carries 0 (ready/closed), byte-identical to the pre-211 always-0 shape.
+/// `guid,template_entry,map_id,x,y,z,orientation,initial_state,rot0,rot1,rot2,rot3`. `created_at` =
+/// `ctx.timestamp`. `initial_state` (work-item 211, END field — widened alongside
+/// `import_gameobjects_append` in the SAME commit, not a table migration: this is a string protocol
+/// between the importer and this reducer, not a reducer arg) lets a DOOR/BUTTON spawn already-open
+/// (cmangos `startOpen`); every other type's importer row carries 0 (ready/closed), byte-identical to
+/// the pre-211 always-0 shape. `rot0..3` (issue #515, END fields — the cmangos spawn quaternion) ride
+/// AFTER `initial_state` rather than beside `orientation` so every pre-515 packed-row builder in this
+/// file's tests keeps working unmodified; a hand-built row that omits them fails loudly (field-count
+/// check below) rather than silently importing a zero quaternion.
 #[reducer]
 pub fn import_gameobjects(ctx: &ReducerContext, packed: String) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -995,19 +1007,23 @@ pub fn import_gameobjects_append(ctx: &ReducerContext, packed: String) -> Result
     Ok(())
 }
 
-/// Parse `packed` (`;`-separated rows of `guid,template_entry,map,x,y,z,o,initial_state`) into
-/// `game_gameobject` rows (stamped at `ctx.timestamp`), returning the count loaded. Shared by both
-/// reducers above. `initial_state` is work-item 211's DOOR/BUTTON `startOpen` carry — every non-door/
-/// button importer row still sends 0, so existing content is byte-identical.
+/// Parse `packed` (`;`-separated rows of
+/// `guid,template_entry,map,x,y,z,o,initial_state,rot0,rot1,rot2,rot3`) into `game_gameobject` rows
+/// (stamped at `ctx.timestamp`), returning the count loaded. Shared by both reducers above.
+/// `initial_state` is work-item 211's DOOR/BUTTON `startOpen` carry — every non-door/button importer
+/// row still sends 0, so existing content is byte-identical. `rot0..3` (issue #515) is the cmangos
+/// spawn quaternion; the importer sends the dump's literal `0,0,0,0` for any row it doesn't have one
+/// for, so this reducer never needs to derive a fallback itself — that derivation is the WIRE codec's
+/// job (`gateway/src/codec/gameobject.rs`), not storage's.
 fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
     let gos = ctx.db.game_gameobject();
     let now = ctx.timestamp;
     let mut loaded = 0u32;
     for row in packed.split(';').filter(|r| !r.is_empty()) {
         let f: Vec<&str> = row.split(',').collect();
-        if f.len() != 8 {
+        if f.len() != 12 {
             return Err(format!(
-                "gameobject import row needs 8 fields, got {}: {row}",
+                "gameobject import row needs 12 fields, got {}: {row}",
                 f.len()
             ));
         }
@@ -1037,6 +1053,10 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
             grid_x: lyracore_shared::spatial::grid_cell(gx_src, gy_src).0,
             grid_y: lyracore_shared::spatial::grid_cell(gx_src, gy_src).1,
             cell: lyracore_shared::spatial::cell_id_at(gx_src, gy_src),
+            rotation_0: pf32(f[8])?,
+            rotation_1: pf32(f[9])?,
+            rotation_2: pf32(f[10])?,
+            rotation_3: pf32(f[11])?,
         })
         .map_err(|e| format!("gameobject insert failed (dup guid?): {e}"))?;
         loaded += 1;

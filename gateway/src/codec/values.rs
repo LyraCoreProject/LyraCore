@@ -267,6 +267,9 @@ pub fn build_armor_values(guid: u64, total: u32, pos_buff: u32) -> SMSG_UPDATE_O
 /// module already folded — split into the green/red paperdoll halves below via plain sign arithmetic,
 /// not a second aura read. `attack_power` is the stat-derived base AP; `ap_mods` is the `A_MOD_COMBAT(ATTACK_POWER)`
 /// aura portion alone (Battle Shout) — vanilla renders those through two different wire fields.
+/// `crit_pct` (#532) is `module::combat::effective_crit_bp`/100.0 — the SAME basis-point value the
+/// swing table rolls against, converted to the float percent `PLAYER_CRIT_PERCENTAGE` wants; no
+/// second crit formula lives on the gateway.
 pub struct SheetStatsValues {
     pub strength: u32,
     pub agility: u32,
@@ -282,6 +285,7 @@ pub struct SheetStatsValues {
     pub ap_mods: i32,
     pub dmg_min: u32,
     pub dmg_max: u32,
+    pub crit_pct: f32,
 }
 
 /// Build a VALUES partial-update carrying the paperdoll numbers: the five EFFECTIVE attributes (white
@@ -316,6 +320,7 @@ pub fn build_sheet_stats_values(guid: u64, s: &SheetStatsValues) -> SMSG_UPDATE_
         p.set_unit_attack_power_mods(s.ap_mods.max(0) as u16, (-s.ap_mods).max(0) as u16);
         p.set_unit_mindamage(s.dmg_min as f32);
         p.set_unit_maxdamage(s.dmg_max as f32);
+        p.set_player_crit_percentage(s.crit_pct);
     })
 }
 

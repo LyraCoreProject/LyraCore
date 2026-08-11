@@ -444,10 +444,14 @@ Only put it on a network you trust, and read the next section.
 **Never expose ports 3000, 3724, or 8085 to the internet, and never port-forward them.** The reasons
 are concrete, not precautionary:
 
-- **`:3000` is the real trust boundary.** The gateway's per-player connections to SpacetimeDB are
-  **anonymous and tokenless**: the node mints a fresh identity for each. Anyone who can reach `:3000`
-  can mint their own identity the same way and call **any reducer that is not operator-gated** —
-  from exactly the footing a player has. The whole model's safety rests on `:3000` being unreachable.
+- **`:3000` is the real trust boundary.** The gateway itself talks to SpacetimeDB only over its
+  owner-token coordinator connection, and every player action is required to arrive through the
+  module's operator-gated `gw_*` reducer surface (#483) — per-player connections are gone, so
+  there is no anonymous, tokenless identity the *gateway* mints any more. That does not move the
+  boundary: `:3000` is still the node's public endpoint, and anyone who can reach it can open their
+  own anonymous, tokenless connection the same way the old per-player tier used to, and call **any
+  reducer that is not operator-gated** — from exactly the footing a player has. The whole model's
+  safety still rests on `:3000` being unreachable to anyone but the gateway.
 - **The fixture publishes the debug build.** `dev up` goes through `./lyracore publish`, which
   bakes in `--features=debug_reducers` — that is **124 extra reducers**, most with no
   identity gate at all (`debug_set_health(any_guid, 0)`, `set_level`, `kill_nearest`, `teleport`, …).

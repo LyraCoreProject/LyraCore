@@ -21,6 +21,10 @@ pub struct GameObject {
     pub grid_x: i32,
     pub grid_y: i32,
     pub cell: i64,
+    pub rotation_0: f32,
+    pub rotation_1: f32,
+    pub rotation_2: f32,
+    pub rotation_3: f32,
 }
 
 impl __sdk::InModule for GameObject {
@@ -45,6 +49,10 @@ pub struct GameObjectCols {
     pub grid_x: __sdk::__query_builder::Col<GameObject, i32>,
     pub grid_y: __sdk::__query_builder::Col<GameObject, i32>,
     pub cell: __sdk::__query_builder::Col<GameObject, i64>,
+    pub rotation_0: __sdk::__query_builder::Col<GameObject, f32>,
+    pub rotation_1: __sdk::__query_builder::Col<GameObject, f32>,
+    pub rotation_2: __sdk::__query_builder::Col<GameObject, f32>,
+    pub rotation_3: __sdk::__query_builder::Col<GameObject, f32>,
 }
 
 impl __sdk::__query_builder::HasCols for GameObject {
@@ -65,6 +73,10 @@ impl __sdk::__query_builder::HasCols for GameObject {
             grid_x: __sdk::__query_builder::Col::new(table_name, "grid_x"),
             grid_y: __sdk::__query_builder::Col::new(table_name, "grid_y"),
             cell: __sdk::__query_builder::Col::new(table_name, "cell"),
+            rotation_0: __sdk::__query_builder::Col::new(table_name, "rotation_0"),
+            rotation_1: __sdk::__query_builder::Col::new(table_name, "rotation_1"),
+            rotation_2: __sdk::__query_builder::Col::new(table_name, "rotation_2"),
+            rotation_3: __sdk::__query_builder::Col::new(table_name, "rotation_3"),
         }
     }
 }

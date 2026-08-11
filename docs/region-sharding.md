@@ -329,6 +329,12 @@ single-box recenter — just run once per shard instead of once for the whole bo
 
 ### The away connection never blocks the movement thread
 
+> **Historical, superseded by #483.** `Coordinator::player_conn` and the per-account connection it
+> named no longer exist — every gateway↔database connection is a coordinator connection now, and
+> away-shard reads ride the shared coordinator caches instead of a dedicated foreign-shard connect.
+> The connect-latency problem this subsection solves does not arise under that model. Kept for the
+> reasoning trail; do not use it as a description of current behavior.
+
 Opening a foreign shard's per-account connection (`Coordinator::player_conn`) is the one genuinely
 slow step in this whole feature — it builds a fresh SDK connection, up to a 20s timeout. The
 original attempt opened it synchronously inside the recenter that first needed it, which was raised
@@ -416,17 +422,40 @@ background task (`gateway/src/load_sample.rs`) samples all three every `LYRACORE
 `game_region_assignment` uses:
 
 ```
-game_shard_load  { id, shard, sampled_at_micros, writer_occupancy_pct, sessions }
-game_region_load { id, map_id, region_id, sampled_at_micros, players }
+game_shard_load       { id, shard, sampled_at_micros, writer_occupancy_pct, sessions, gateway_key }
+game_shard_load_total { shard, sessions, updated_at_micros }
+game_region_load      { id, map_id, region_id, sampled_at_micros, players }
 ```
 
-Both are **ring-buffered, not TTL-reaped**: each keeps only the last 20 samples per key (per shard;
-per `(map_id, region_id)`) — oldest evicted at insert time, so neither table can become an
+Both are **ring-buffered, not TTL-reaped**: each keeps only the last 20 samples per key — per
+`(shard, gateway_key)` for `game_shard_load`, per `(map_id, region_id)` for `game_region_load` —
+oldest evicted at insert time, so neither table can become an
 unreaped, unbounded grower. At the default cadence, 20 samples is **~10 minutes of history**, which is the
 mechanism for the "sustained load, not a spike" acceptance criterion: a shard reading 90% on every
 row in its ring is saturated; a shard reading 90% once and 12% on the other nineteen rows was a
 momentary burst. `game_region_load` never carries a row for `DEFAULT_REGION` — "the rest of the
 map" is not a candidate seam, so a count against it answers nothing actionable.
+
+**`gateway_key` (issue #308) — why `sessions` is per-GATEWAY, not per-shard, and how to sum it.**
+`sessions` is `Coordinator::session_count()`, which is **this gateway process's own** player-
+connection cache for that shard — never the shard's realm-wide total. With one gateway process
+that distinction is invisible; with N gateway processes connected to the same shard (the
+horizontal-scaling topology of multiple gateways in front of one shard), each writes its OWN
+`sessions` sample. `gateway_key` is a deterministic hash of that process's `LYRACORE_GATEWAY_ID`
+(config-supplied, default `<hostname>:<world-listener-port>` — `gateway/src/config.rs`,
+`load_sample::gateway_key`), so the ring is scoped per `(shard, gateway_key)` instead of per
+`shard` alone: every gateway keeps its own history side-by-side rather than each insert evicting
+every OTHER gateway's rows (the old "last writer wins" bug). `gateway_key` is a hash, not the raw
+string, because a `String` column END-appended to an existing table cannot carry a
+`#[default(...)]` (`docs/danger-zones.md` §1.2) — pre-migration rows read `gateway_key = 0`, an
+"unknown gateway" bucket, not a real one.
+
+`spacetime sql` has no `GROUP BY`/`SUM` to fold the per-gateway rows into a total on read
+(`docs/danger-zones.md` §2), so `record_shard_load` folds them at WRITE time instead: every sample
+recomputes the realm-wide sum (latest `sessions` row per distinct `gateway_key` for that shard) and
+upserts it into `game_shard_load_total`, one row per shard, keyed by `shard`. That table — not a
+manual sum over `game_shard_load` — is what a single `spacetime sql` query against realm-core
+should read for the shard's session total.
 
 **Approximate by construction — the staleness an operator should know about:**
 
@@ -460,7 +489,16 @@ construction (≤20 rows per key), so a plain dump is enough to eyeball sustaine
 shard means SUSTAINED, one row means a spike:
 
 ```bash
-spacetime sql lyracore-realm "SELECT shard, writer_occupancy_pct, sessions, sampled_at_micros FROM game_shard_load WHERE writer_occupancy_pct > 50"
+spacetime sql lyracore-realm "SELECT shard, writer_occupancy_pct, sessions, gateway_key, sampled_at_micros FROM game_shard_load WHERE writer_occupancy_pct > 50"
+```
+
+Writer occupancy is a per-*node* number and identical across every gateway's rows for a shard, so it
+reads correctly straight off any one row. `sessions` on `game_shard_load` is **per gateway**, per
+the `gateway_key` note above — for the shard's realm-wide session total, query the materialized
+total table instead:
+
+```bash
+spacetime sql lyracore-realm "SELECT shard, sessions, updated_at_micros FROM game_shard_load_total WHERE shard = 'lyracore-world-1'"
 ```
 
 **Which region is the busy part of it** — pick a population threshold that means "crowded" for your

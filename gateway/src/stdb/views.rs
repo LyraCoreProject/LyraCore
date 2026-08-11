@@ -175,6 +175,10 @@ pub(crate) fn go_view(go: GameObject, tmpl: &GameObjectTemplate) -> crate::codec
         state: go.state,
         type_id: tmpl.type_id,
         display_id: tmpl.display_id,
+        rotation_0: go.rotation_0,
+        rotation_1: go.rotation_1,
+        rotation_2: go.rotation_2,
+        rotation_3: go.rotation_3,
     }
 }
 

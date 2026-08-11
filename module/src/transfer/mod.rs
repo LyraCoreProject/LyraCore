@@ -1166,8 +1166,8 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
     sink.import_rows(guid, &decoded.payload)?;
 
     // The destination has no `game_account` row (accounts are realm-scoped and live on the default
-    // database until realm-core, #22). `player_login` resolves the caller through
-    // `account_by_identity`, so without one the arriving player cannot log in at all.
+    // database until realm-core, #22). `gw::gw_player_login` resolves the account by id, so
+    // without one the arriving player cannot log in at all.
     // Deliberate simplification: a SHADOW account — id + a synthetic username, no credentials. The
     // gateway rebinds `identity` through `establish_session` on this shard at every world entry, which is the only
     // field this row exists to hold. Upgrade path: realm-core owns accounts (#12 Phase B) and this

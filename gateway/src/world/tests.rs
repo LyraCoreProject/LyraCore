@@ -27,8 +27,6 @@ mod framing_tests;
 
 /// The per-account connection release regressions. A sibling of the modules above for the
 /// same reason — it reaches `InMemoryStore` without widening anything.
-#[path = "connection_release_tests.rs"]
-mod connection_release_tests;
 
 /// Multi-shard routing — reducer calls and subscriptions never target a shard other than the
 /// player's home shard. A sibling of the modules above for the same reason. `ShardCallLog` is
@@ -272,19 +270,16 @@ struct InMemoryStore {
     innkeeper: bool,
     /// Whether `bind_home` ran (the innkeeper gossip select).
     home_bound: std::sync::atomic::AtomicBool,
+    /// Recorded `reset_talents` dispatches: (account_id, self_guid, trainer_guid) — the unlearn-talents
+    /// gossip select (#516).
+    reset_talents_calls: std::sync::Mutex<Vec<(u64, u64, u64)>>,
+    /// When set, `reset_talents` returns this error instead of recording the call.
+    reset_talents_error: Option<String>,
     /// Recorded `send_chat` lines: (chat_type, language, message).
     chats: std::sync::Mutex<Vec<(u8, u8, String)>>,
     /// When true, `release_session` reports the epoch superseded (stale socket) — the world-side
     /// half of the session-epoch arbitration: `leave_world` must then SKIP the `logout` reducer.
     stale_session: bool,
-    /// The REAL per-account live-socket arbitration (`crate::stdb::AccountSessions`), not a
-    /// re-implementation of it — a fake that reimplements the gate only ever tests the fake. The
-    /// production `Coordinator` impl runs this exact type behind the exact same predicate; the only
-    /// thing stubbed here is the release ACTION (recording instead of closing a websocket).
-    account_sessions: crate::stdb::AccountSessions,
-    /// Accounts whose cached per-account connection was released, in order. Must stay empty
-    /// while ANY socket for the account is still live.
-    released_conns: std::sync::Mutex<Vec<u64>>,
     /// Imported gossip menu options `gossip_options` returns for ANY npc_guid — empty
     /// by default (the pre-import fallback path).
     gossip_opts: Vec<codec::GossipOptionView>,
@@ -1138,6 +1133,16 @@ impl WorldStore for InMemoryStore {
             None => (false, false),
         }
     }
+    fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()> {
+        if let Some(e) = &self.reset_talents_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.reset_talents_calls
+            .lock()
+            .unwrap()
+            .push((account_id, self_guid, trainer_guid));
+        Ok(())
+    }
     fn move_item(&self, _account_id: u64, _self_guid: u64, from_slot: u8, to_slot: u8) -> Result<()> {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
@@ -1427,16 +1432,6 @@ impl WorldStore for InMemoryStore {
         // Default (false) = this session still owns the entity; `stale_session` simulates a newer
         // login having superseded it (the session-epoch arbitration), so teardown must skip `logout`.
         !self.stale_session
-    }
-    fn open_account_session(&self, account_id: u64) {
-        self.account_sessions.attach(account_id);
-    }
-    fn close_account_session(&self, account_id: u64) {
-        // Byte-for-byte the production predicate (`Coordinator::detach_account_session`): release
-        // ONLY when this was the account's last live socket.
-        if self.account_sessions.detach(account_id) {
-            self.released_conns.lock().unwrap().push(account_id);
-        }
     }
     fn reclaim_corpse(&self, _account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()> {
         self.reclaimed_corpses
@@ -5708,6 +5703,105 @@ fn gossip_select_on_an_imported_innkeeper_option_binds_home() {
     assert!(
         store.home_bound.load(std::sync::atomic::Ordering::SeqCst),
         "bind_home must have run"
+    );
+}
+
+/// A `quest_store()` fixture whose logged-in character (guid 1) reports `level`, so
+/// `filtered_gossip_options`' level gate has something to read (`quest_store()` itself leaves
+/// `characters` empty, which reads as level 0 — every below-10 test can lean on that default).
+fn quest_store_at_level(level: u8) -> InMemoryStore {
+    InMemoryStore {
+        characters: vec![codec::CharacterView {
+            guid: 1,
+            level,
+            ..Default::default()
+        }],
+        ..quest_store()
+    }
+}
+
+#[test]
+fn gossip_hello_hides_unlearn_talents_below_level_10() {
+    // #516: the imported "I wish to unlearn my talents." row (reclassified by the importer to
+    // `UNLEARNTALENTS`, since the raw dump column never carries it) must not render for a character
+    // who cannot yet have a talent point.
+    use lyracore_shared::constants::gossip_option;
+    let mut s = quest_store_at_level(5);
+    s.gossip_opts = vec![
+        opt(0, "I require warrior training.", gossip_option::TRAINER),
+        opt(0, "I wish to unlearn my talents.", gossip_option::UNLEARNTALENTS),
+    ];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_GOSSIP_HELLO {
+        guid: Guid::new(90),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(m) => {
+            assert_eq!(
+                m.gossips.len(),
+                2,
+                "training + trailing Farewell only, no unlearn option: {:?}",
+                m.gossips
+            );
+            assert_eq!(m.gossips[0].message, "I require warrior training.");
+            assert_eq!(m.gossips[1].message, "Farewell.");
+        }
+        other => panic!("expected SMSG_GOSSIP_MESSAGE, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn gossip_hello_shows_unlearn_talents_at_level_10_and_select_routes_to_reset_talents() {
+    use lyracore_shared::constants::gossip_option;
+    let mut s = quest_store_at_level(10);
+    s.gossip_opts = vec![
+        opt(0, "I require warrior training.", gossip_option::TRAINER),
+        opt(0, "I wish to unlearn my talents.", gossip_option::UNLEARNTALENTS),
+    ];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_GOSSIP_HELLO {
+        guid: Guid::new(90),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(m) => {
+            assert_eq!(
+                m.gossips.len(),
+                3,
+                "training + unlearn + trailing Farewell: {:?}",
+                m.gossips
+            );
+            assert_eq!(m.gossips[1].message, "I wish to unlearn my talents.");
+        }
+        other => panic!("expected SMSG_GOSSIP_MESSAGE, got {other}"),
+    }
+    // Click it (index 1, same list HELLO just rendered) — must route to reset_talents, not just
+    // close the window inert.
+    CMSG_GOSSIP_SELECT_OPTION {
+        guid: Guid::new(90),
+        gossip_list_id: 1,
+        unknown: None,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE => {}
+        other => panic!("expected SMSG_GOSSIP_COMPLETE, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    let calls = store.reset_talents_calls.lock().unwrap();
+    assert_eq!(
+        calls.as_slice(),
+        &[(7, 1, 90)],
+        "reset_talents must have been called with (account_id, self_guid, trainer_guid)"
     );
 }
 

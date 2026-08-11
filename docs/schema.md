@@ -85,8 +85,9 @@ Two shapes recur and are worth naming:
 - **`[static]` / catalogue tables** — `game_item_template` (17,720 rows), `game_spell`,
   `game_spell_effect`, `game_creature_template`, `game_quest_*`, `game_faction*`, DBC-derived
   reference data. Written only by the importer, replicated identically to every shard, and checked
-  for skew by the maintainers' cross-shard catalogue-parity check. **Never** subscribed on a
-  per-player connection — see §5.
+  for skew by the maintainers' cross-shard catalogue-parity check. Per-player connections are gone
+  (#483) — there is now exactly one connection per database, so a catalogue is read into exactly one
+  cache copy by construction. See §5 for why that used to need enforcing.
 - **`[event]` tables** — transient outbound signals that cannot be derived from a row diff (a
   movement relay carries the *animation opcode*, which field sync cannot). Inserted inside the
   transaction that caused them and reaped ~1 s later. Delivery is the insert delta; the row itself is
@@ -215,9 +216,11 @@ SELECT * FROM <table> WHERE <identity column> = :sender
    the caller's *current* position. Interest management is therefore gateway-managed — see
    [`architecture.md`](./architecture.md) §5.2.
 2. **Not every public table has a filter.** `game_character_explored` is public with none: it has no
-   `owner_identity` column, and adding one would be a migration on a live table. It is scoped by a
-   per-player subscription predicate plus a gateway-side self guard instead
-   (`module/src/exploration.rs:26–32`).
+   `owner_identity` column, and adding one would be a migration on a live table. Before #483 it was
+   scoped by a per-player subscription predicate plus a gateway-side self guard; the coordinator now
+   subscribes it unqualified like every other base table (there is no per-player connection left to
+   put a predicate on), and the self-scoping happens entirely in-gateway, by the same owner-session
+   lookup the other self-only relay families use (`module/src/exploration.rs:26–32`).
 3. **Offline validation covers identifiers, not shapes.** Step 3 of `lyracore preflight` is an
    RLS-filter validation pass: it parses every `Filter::Sql` and checks its tables and
    columns against the generated bindings — it **fails the preflight** on an unknown identifier.
@@ -234,10 +237,13 @@ is the cache the gateway reads through.
 
 ## 5. Two subscription rules the schema exists to serve
 
-- **No static catalogue on a per-player connection.** `game_item_template` alone is 17,720 rows ×
-  32 columns; measured, 20 connections went 283 MB → 1,236 MB with it and 283 MB → 503 MB without.
-  `gateway/src/stdb/subscriptions.rs:3362` carries the ban, the numbers, and a test that fails if
-  one is re-added. Catalogue reads go through the coordinator cache.
+- **No static catalogue duplicated per connection — moot since #483.** `game_item_template` alone
+  is 17,720 rows × 32 columns; measured pre-#483, 20 per-player connections went 283 MB → 1,236 MB
+  with it and 283 MB → 503 MB without. `gateway/src/stdb/subscriptions.rs:3362` (pre-#483) carried
+  the ban, the numbers, and a test that failed if one was re-added. The concern this rule guarded
+  against — one cache copy per player connection — no longer exists: per-player connections are
+  deleted, so every catalogue read already goes through the single coordinator cache, once per
+  database, with nothing left to duplicate it.
 - **The sharded-only tables are subscribed conditionally.** A subscription to a table the deployed
   module does not have **fails to apply**, which fails the whole gateway — so a gateway restarted
   before its module was republished must not ask for `game_map_region`, `game_region_assignment`,

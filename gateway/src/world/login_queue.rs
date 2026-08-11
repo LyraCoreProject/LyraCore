@@ -28,6 +28,15 @@
 //!
 //! Deliberate simplification: no priority tiers, no persistence. A disconnected queued socket just
 //! leaves the line ([`LoginQueue::cancel`]); a reconnect gets a fresh ticket at the back.
+//!
+//! **Both knobs are per-process, not realm-wide (#309).** This queue lives in one gateway's memory:
+//! `active` counts only sessions admitted through *this* process, so `N` gateways each configured
+//! with `LYRACORE_MAX_SESSIONS=500` admit `500*N` sessions realm-wide, and QUEUESTAT depth is
+//! per-gateway. That's a legitimate reading — the cap guards this process's own egress, a real
+//! per-process resource — but the storm this queue exists to survive (#180) is a *writer* problem
+//! shared across every gateway in the realm; a multi-gateway deployment must divide its intended
+//! realm-wide ceiling by the gateway count when setting `LYRACORE_MAX_SESSIONS` /
+//! `LYRACORE_ADMIT_CONCURRENCY`. See `docs/architecture.md` §3.2.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};

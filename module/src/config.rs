@@ -81,6 +81,19 @@ pub struct ServerConfig {
     // Operator-set like `nav_enabled`: `UPDATE game_config SET bots_idle = true WHERE id = 0`.
     #[default(false)]
     pub bots_idle: bool,
+    // END-APPENDED (issue #521, decision #10): exact per-cell vmap collision-triangle consumption
+    // gate — the LoS/collision ray queries in `vmap::los_ray`/`vmap::collision_ray`, and (#523)
+    // `nav::has_los`'s consumers (aggro/assist/creature-casts/engage/swing-gate/caster hold-range)
+    // plus Blink's collision clamp. Default OFF: the standard import pipeline
+    // (`importer/scripts/import-world.sh`) has no vmap step, so a normally-provisioned world has
+    // ZERO `game_vmap_chunk` rows for every map — and the missing-chunk contract (no row = "no
+    // obstruction known here") then reads as "every ray is clear" MAP-WIDE, not just per-cell.
+    // That's fine for a partially-covered map (the intended degrade) but wrong as a global
+    // default while vmap import is a manual, unwired path (#520/#521). Flip per-map only after
+    // `importer --vmap` has actually populated `game_vmap_chunk` for it. Toggle:
+    // `debug_set_vmap_enabled` or `UPDATE game_config SET vmap_enabled = true WHERE id = 0`.
+    #[default(false)]
+    pub vmap_enabled: bool,
 }
 
 /// Starting items per (race, class) — the character-creation loadout. Loaded from the client

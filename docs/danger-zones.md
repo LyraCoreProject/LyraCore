@@ -135,14 +135,17 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
   entire "money corruption" investigation turned out to be this plus a test's own teardown. Same
   class: an offline `debug_set_money`-style write placed BETWEEN two sessions gets overwritten by the
   first session's late persist.
-- **Test locations must be line-of-sight-probed.** Melee swings gate on `has_los`, and grid-rasterized
-  navigation means a spot that looks open can sit inside a rasterized structure (obstruction above the
-  ground) — fights then stall forever with an armed row, `last_swing_ms=0`, and no error anywhere.
-  Before parking a fixture: `spacetime call lyracore -- debug_nav_leg 0 <x> <y> <x2> <y2>` and require
-  `has_los=true`. Also: a stationary automated client only reaches the 5 yd standstill melee range, so
-  fight fixtures belong at ≤4 yd unless the client walks in. And a level-1 character parked in an
-  imported world is a valid aggro target for the ambient spawns — disposable test characters default
-  to level 5 so they are grey to them.
+- **Test locations must be line-of-sight-probed.** Melee swings gate on `has_los`, which now defers
+  to the exact vmap ray (`vmap::los_ray`, WMO-only) whenever `game_config.vmap_enabled` is on
+  (#523), and only falls back to the grid-rasterized nav obs data when it's off — either way a spot
+  that looks open can sit inside real/rasterized geometry, so fights stall forever with an armed
+  row, `last_swing_ms=0`, and no error anywhere. Before parking a fixture, probe the ray that will
+  actually gate it: `spacetime call lyracore -- debug_vmap_ray <map> <x0> <y0> <z0> <x1> <y1> <z1>`
+  on a vmap-enabled map (require `los=None`), or `spacetime call lyracore -- debug_nav_leg <map>
+  <x> <y> <x2> <y2>` on a grid-only one (require `has_los=true`). Also: a stationary automated
+  client only reaches the 5 yd standstill melee range, so fight fixtures belong at ≤4 yd unless the
+  client walks in. And a level-1 character parked in an imported world is a valid aggro target for
+  the ambient spawns — disposable test characters default to level 5 so they are grey to them.
 - **In an imported world, LOW ids are not yours.** Anything that seeds test data at real, low entry
   ids will corrupt imported content: deleting and reinserting faction-template rows 14/1 breaks the
   imported Monster/Player templates until the next import, item entries 50/52 are real imported items,
@@ -237,8 +240,8 @@ cargo build
 ./lyracore publish
 # ⚠ That publishes the default database ONLY. A SCHEMA change must reach EVERY shard or the gateway
 # refuses logons on the ones left behind — and a partial publish can present as an unrelated
-# mid-session hang rather than a loud "no such table", because the loud failure is on the
-# coordinator path, not the per-player one. Pass them all in one command:
+# mid-session hang rather than a loud "no such table", because only the default-shard connect
+# fails loudly; a stale extra shard degrades silently. Pass them all in one command:
 ./lyracore publish lyracore lyracore-world-1 lyracore-instances lyracore-realm
 
 # Rebuild + restart the GATEWAY (always, if the gateway changed)

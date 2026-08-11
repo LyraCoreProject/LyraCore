@@ -22,7 +22,7 @@
 //! a repeat). Purely additive: brand-new tables + one hook call in `kill_creature`.
 
 use spacetimedb::{
-    client_visibility_filter, reducer, table, Filter, Identity, ReducerContext, Table,
+    table, Identity, ReducerContext, Table,
 };
 
 use crate::game_gameobject; // GAMEOBJECT quest givers (e.g. Wanted Poster, Lost Guards corpses)
@@ -30,7 +30,6 @@ use crate::game_item_instance; // ITEM quest givers (work-item 194: item_templat
 use crate::game_item_template;
 use crate::game_world_entity;
 use crate::game_xp_event; // quest XP "+N experience" relay (non-kill SMSG_LOG_XPGAIN)
-use crate::helpers::entity_by_owner;
 
 /// Objective kinds (`QuestObjective.kind`). Only KILL ships today; the others are the documented
 /// extension points the schema already accommodates (a new kind needs only a new call site into
@@ -301,11 +300,6 @@ pub struct CharacterQuest {
     #[default(false)]
     pub failed: bool,
 }
-
-/// A connection sees only its own quest log (mirrors the character / item RLS filters).
-#[client_visibility_filter]
-const CHARACTER_QUEST_RLS: Filter =
-    Filter::Sql("SELECT * FROM game_character_quest WHERE owner_identity = :sender");
 
 // Character-owned sweeps: the quest log is deleted on character delete, re-owned (identity
 // re-stamp) on a relog under a changed gateway identity.
@@ -1076,22 +1070,6 @@ pub(crate) fn apply_enter_areatrigger(ctx: &ReducerContext, player_guid: u64, tr
     }
 }
 
-/// Enter an AreaTrigger zone (`CMSG_AREATRIGGER`) — credits any "explore" quest tied to `trigger_id`,
-/// then (work-item 225) routes the player through a cross-map teleport if `trigger_id` is an imported
-/// dungeon entrance/exit. Player-authorized via `ctx.sender`; `debug_enter_areatrigger` drives the same
-/// core ([`apply_enter_areatrigger`]) by explicit guid.
-// note: client-driven — the client only sends CMSG_AREATRIGGER when it physically enters the zone, and
-// the server has no AreaTrigger.dbc coords, so it trusts the id (a modified client could auto-complete an
-// explore quest it already holds, or self-teleport into a dungeon it hasn't earned). Acceptable for
-// alpha; the full fix is loading the trigger coords and range-checking the player's position here.
-#[reducer]
-pub fn enter_areatrigger(ctx: &ReducerContext, trigger_id: u32) -> Result<(), String> {
-    let player =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "player not in world".to_string())?;
-    apply_enter_areatrigger(ctx, player.guid, trigger_id);
-    Ok(())
-}
-
 // ===========================================================================================
 //  Timed quests (work-item 194) — expiry tick
 // ===========================================================================================
@@ -1140,23 +1118,6 @@ crate::game_tick_pass!(fn quest_timer_pass(ctx) {
 // ===========================================================================================
 //  Sharing (work-item 194) — CMSG_PUSHQUESTTOPARTY
 // ===========================================================================================
-
-/// Share `quest_entry` with the sender's party (`CMSG_PUSHQUESTTOPARTY`, `MSG_QUEST_PUSH_RESULT`'s
-/// producer). The sender must be in-world, grouped, and ACTIVELY on the quest (an un-rewarded,
-/// un-failed row) — you can't share a quest you don't hold. For every OTHER group member, a PURE
-/// [`share_result`] decides the outcome; an eligible (`SHARING_QUEST`) member gets a `QUEST_SHARE`
-/// event (the gateway relay opens the quest's DETAILS screen with the SENDER as the "giver" — see
-/// [`GiverKind::Party`]); the SENDER gets one `QUEST_PUSH_RESULT` event per member regardless (the
-/// client's "so-and-so already has it / is too far / etc" feedback line). This reducer NEVER
-/// authorizes an accept by itself — the recipient's own `accept_quest` call re-validates group
-/// membership + range + the sender's live quest state FRESH via [`validate_party_giver`], so a
-/// spoofed giver_guid can't self-authorize even if this reducer never ran.
-#[reducer]
-pub fn push_quest_to_party(ctx: &ReducerContext, quest_entry: u32) -> Result<(), String> {
-    let sender =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "player not in world".to_string())?;
-    apply_push_quest_to_party(ctx, sender.guid, quest_entry)
-}
 
 /// The shared core behind [`push_quest_to_party`] and its debug twin `debug_push_quest`.
 pub(crate) fn apply_push_quest_to_party(
@@ -1281,42 +1242,6 @@ pub(crate) fn debug_force_expire(
 // ===========================================================================================
 //  Player reducers — authorized via ctx.sender, delegate to the cores
 // ===========================================================================================
-
-/// Accept a quest from a giver NPC (`CMSG_QUESTGIVER_ACCEPT_QUEST`). Player-authorized via
-/// `ctx.sender`; `debug_accept_quest` drives the same [`apply_accept_quest`] by explicit guid for the
-/// harness (the CLI identity owns no entity, and the gossip/quest UI is mouse-only / not yet wired).
-#[reducer]
-pub fn accept_quest(ctx: &ReducerContext, giver_guid: u64, quest_entry: u32) -> Result<(), String> {
-    let player =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "player not in world".to_string())?;
-    apply_accept_quest(ctx, player.guid, giver_guid, quest_entry)
-}
-
-/// Turn a completed quest in to a giver NPC for its rewards (`CMSG_QUESTGIVER_COMPLETE_QUEST` /
-/// reward). Player-authorized via `ctx.sender`; `debug_turn_in_quest` drives the same
-/// [`apply_turn_in_quest`] by explicit guid for the harness.
-#[reducer]
-pub fn turn_in_quest(
-    ctx: &ReducerContext,
-    giver_guid: u64,
-    quest_entry: u32,
-    reward_index: u32,
-) -> Result<(), String> {
-    let player =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "player not in world".to_string())?;
-    apply_turn_in_quest(ctx, player.guid, giver_guid, quest_entry, reward_index)
-}
-
-/// Abandon an active quest (`CMSG_QUESTLOG_REMOVE_QUEST` — the "Abandon Quest" button). Deletes the
-/// player's `game_character_quest` row, which fires the gateway's quest-log relay to clear the slot.
-/// Player-authorized via `ctx.sender`. Rejects abandoning an already-rewarded quest (it's done, not
-/// active) and a quest not in the log. No giver needed (you abandon from the log, anywhere).
-#[reducer]
-pub fn abandon_quest(ctx: &ReducerContext, quest_entry: u32) -> Result<(), String> {
-    let player =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "player not in world".to_string())?;
-    apply_abandon_quest(ctx, player.guid, quest_entry)
-}
 
 /// The abandon core, actor-explicit (#479) — the body [`abandon_quest`] used to inline, shared with
 /// `gw::gw_abandon_quest`.

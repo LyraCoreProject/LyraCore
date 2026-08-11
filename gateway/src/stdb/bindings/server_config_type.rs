@@ -12,6 +12,7 @@ pub struct ServerConfig {
     pub nav_enabled: bool,
     pub hosts_instances: bool,
     pub bots_idle: bool,
+    pub vmap_enabled: bool,
 }
 
 impl __sdk::InModule for ServerConfig {
@@ -27,6 +28,7 @@ pub struct ServerConfigCols {
     pub nav_enabled: __sdk::__query_builder::Col<ServerConfig, bool>,
     pub hosts_instances: __sdk::__query_builder::Col<ServerConfig, bool>,
     pub bots_idle: __sdk::__query_builder::Col<ServerConfig, bool>,
+    pub vmap_enabled: __sdk::__query_builder::Col<ServerConfig, bool>,
 }
 
 impl __sdk::__query_builder::HasCols for ServerConfig {
@@ -38,6 +40,7 @@ impl __sdk::__query_builder::HasCols for ServerConfig {
             nav_enabled: __sdk::__query_builder::Col::new(table_name, "nav_enabled"),
             hosts_instances: __sdk::__query_builder::Col::new(table_name, "hosts_instances"),
             bots_idle: __sdk::__query_builder::Col::new(table_name, "bots_idle"),
+            vmap_enabled: __sdk::__query_builder::Col::new(table_name, "vmap_enabled"),
         }
     }
 }

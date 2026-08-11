@@ -426,6 +426,7 @@ pub(crate) fn stranding_fallback(
     }
 }
 
+#[allow(dead_code)] // core kept for a future gw_reset_instance twin (#483 deleted the sender-path reducer)
 /// May this caller flag this instance for reset? Vanilla "Reset all instances" semantics: never
 /// while players are inside; a party instance takes its CURRENT leader, a solo instance
 /// (`party_id == 0`) takes any character bound to it (the caller reaches it via their own binding,
@@ -738,6 +739,12 @@ pub(crate) fn create_instance_with_id(
             grid_x: lyracore_shared::spatial::grid_cell(src.x, src.y).0,
             grid_y: lyracore_shared::spatial::grid_cell(src.x, src.y).1,
             cell: lyracore_shared::spatial::cell_id_at(src.x, src.y),
+            // Copy the source door/chest/goober's real spawn quaternion (#515) — a dungeon copy is
+            // the same prop at the same orientation, not a reset to identity.
+            rotation_0: src.rotation_0,
+            rotation_1: src.rotation_1,
+            rotation_2: src.rotation_2,
+            rotation_3: src.rotation_3,
         });
         next_go_seq += 1;
         copied += 1;
@@ -1044,18 +1051,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
 //  reset_instance — the party-leader / solo reset verb (slice 3 item 8)
 // ===========================================================================================
 
-/// "Reset all instances": flag every UNOCCUPIED instance the caller may reset (their own solo
-/// instances; their party's instances iff they are the CURRENT leader) — the reaper tears each
-/// down on its next firing that still observes it empty (≤60s), dropping bindings with it.
-/// Authorized via `ctx.sender` like all player ops; `debug_reset_instance` drives the same core
-/// by explicit guid.
-#[reducer]
-pub fn reset_instance(ctx: &ReducerContext) -> Result<(), String> {
-    let player = crate::helpers::entity_by_owner(ctx, ctx.sender())
-        .ok_or_else(|| "caller not in world".to_string())?;
-    apply_reset_instances(ctx, player.guid).map(|_| ())
-}
-
+#[allow(dead_code)] // core kept for a future gw_reset_instance twin (#483 deleted the sender-path reducer)
 /// The [`reset_instance`] body keyed off an explicit guid. Walks the caller's OWN bindings (being
 /// bound is the reach — vanilla resets the instances you're bound to), gating each per
 /// [`reset_eligible`]. Returns how many instances were flagged, `Err` if none were eligible.

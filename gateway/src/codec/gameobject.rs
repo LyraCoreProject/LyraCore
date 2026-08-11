@@ -17,6 +17,14 @@ pub struct GameObjectView {
     pub state: u8,
     pub type_id: u8,
     pub display_id: u32,
+    /// The cmangos spawn quaternion (issue #515) — `GAMEOBJECT_ROTATION`, the field the 5875 client
+    /// actually renders a static prop's orientation from. All-zero means "no quaternion stored"
+    /// (every pre-#515 row and every hand-seeded fixture): `build_gameobject_rotation_values` derives
+    /// a yaw-only fallback from `orientation` in that case rather than sending a degenerate rotation.
+    pub rotation_0: f32,
+    pub rotation_1: f32,
+    pub rotation_2: f32,
+    pub rotation_3: f32,
 }
 
 /// A `game_gameobject_template` row, for the `CMSG_GAMEOBJECT_QUERY` reply.
@@ -68,6 +76,38 @@ pub fn build_gameobject_create_object(go: &GameObjectView) -> SMSG_UPDATE_OBJECT
             mask2: UpdateMask::GameObject(mask),
         }],
     }
+}
+
+/// Build the raw `GAMEOBJECT_ROTATION` VALUES update (issue #515) — the 4-float spawn quaternion the
+/// client actually orients a static prop's model from. gtker's typed builder only exposes
+/// `set_gameobject_rotation(f32)`, which reaches slot 0 alone (the same descriptor-setter wall as the
+/// multi-aura array), so all 4 slots (rot0..3, wire index `GAMEOBJECT_ROTATION`..+3) ride the
+/// hand-rolled raw encoder instead. Not a partial UNIT/PLAYER update — `GAMEOBJECT_ROTATION` (10) never
+/// collides with `OBJECT_FIELD_TYPE` (2), so `build_values_update_raw`'s debug_assert is inert here by
+/// construction, same as every other GAMEOBJECT field.
+///
+/// Trap this exists to dodge: an all-zero stored quaternion (every row imported before this migration,
+/// and every hand-seeded fixture that never set these) is NOT a valid "identity" rotation to send
+/// verbatim — a real vanilla spawn's quaternion is never exactly (0,0,0,0) (that's a degenerate,
+/// zero-magnitude quaternion; a true identity is (0,0,0,1)). Sending it as-is renders the client's
+/// DEFAULT orientation regardless of `orientation`, which is the exact bug #515 reports. So the
+/// all-zero case DERIVES a yaw-only quaternion from `orientation` (`rot2 = sin(o/2)`, `rot3 = cos(o/2)`,
+/// matching vanilla's Z-axis-only yaw convention — rot0/rot1 stay 0, i.e. no terrain pitch/roll, which
+/// is the best a bare `orientation` float can express) instead.
+pub fn build_gameobject_rotation_values(go: &GameObjectView) -> (u16, Vec<u8>) {
+    let (rot0, rot1, rot2, rot3) =
+        if go.rotation_0 == 0.0 && go.rotation_1 == 0.0 && go.rotation_2 == 0.0 && go.rotation_3 == 0.0 {
+            let half = go.orientation * 0.5;
+            (0.0, 0.0, half.sin(), half.cos())
+        } else {
+            (go.rotation_0, go.rotation_1, go.rotation_2, go.rotation_3)
+        };
+    let mut mask = update_mask::UpdateMaskValues::new();
+    mask.set_f32(update_mask::idx::GAMEOBJECT_ROTATION, rot0);
+    mask.set_f32(update_mask::idx::GAMEOBJECT_ROTATION + 1, rot1);
+    mask.set_f32(update_mask::idx::GAMEOBJECT_ROTATION + 2, rot2);
+    mask.set_f32(update_mask::idx::GAMEOBJECT_ROTATION + 3, rot3);
+    build_values_update_raw(go.guid, &mask)
 }
 
 /// Build `SMSG_GAMEOBJECT_QUERY_RESPONSE` (the client asks for a GO template's name/type/display before
@@ -160,6 +200,10 @@ mod tests {
             state: 1, // open — distinct from the enum's 0 default, so a dropped setter call is caught
             type_id: 3, // CHEST
             display_id: 259,
+            rotation_0: 0.0,
+            rotation_1: 0.0,
+            rotation_2: 0.0,
+            rotation_3: 0.0,
         };
         let built = build_gameobject_create_object(&go);
         match &built.objects[0] {
@@ -184,6 +228,79 @@ mod tests {
         let mut buf = Vec::new();
         msg.write_unencrypted_server(&mut buf).unwrap();
         assert!(!buf.is_empty());
+    }
+
+    /// Decode a `build_gameobject_rotation_values` body: strips the fixed envelope (amount_of_objects,
+    /// has_transport, update_type, packed guid — byte-identical to `build_values_update_raw`'s other
+    /// callers, pinned separately by `raw_values_body_matches_gtker_envelope`) and reads the 4
+    /// consecutive `GAMEOBJECT_ROTATION` float slots in ascending index order. Test-only.
+    fn decode_rotation_floats(guid: u64, body: &[u8]) -> [f32; 4] {
+        let mut packed_guid = Vec::new();
+        super::write_packed_guid_u64(&mut packed_guid, guid);
+        let mask_start = 4 + 1 + 1 + packed_guid.len(); // amount_of_objects + has_transport + update_type + guid
+        let block_count = body[mask_start] as usize;
+        let values_start = mask_start + 1 + block_count * 4;
+        let mut out = [0.0f32; 4];
+        for (i, chunk) in body[values_start..values_start + 16].chunks_exact(4).enumerate() {
+            out[i] = f32::from_le_bytes(chunk.try_into().unwrap());
+        }
+        out
+    }
+
+    #[test]
+    fn gameobject_rotation_values_passes_through_a_stored_nonzero_quaternion() {
+        // A non-degenerate stored quaternion (e.g. a bench flush against a sloped wall, rot0/rot1
+        // nonzero) must ride the wire UNCHANGED — no derive-from-orientation fallback applies once
+        // ANY of the 4 stored slots is nonzero.
+        let go = GameObjectView {
+            guid: 5,
+            template_entry: 446,
+            x: -9450.0,
+            y: -90.0,
+            z: 55.0,
+            orientation: 1.57,
+            state: 0,
+            type_id: 0, // DOOR
+            display_id: 259,
+            rotation_0: 0.1,
+            rotation_1: 0.2,
+            rotation_2: 0.70710678,
+            rotation_3: 0.70710678,
+        };
+        let (opcode, body) = build_gameobject_rotation_values(&go);
+        assert_eq!(opcode, 0x00A9, "SMSG_UPDATE_OBJECT opcode");
+        let floats = decode_rotation_floats(go.guid, &body);
+        assert_eq!(floats, [0.1, 0.2, 0.70710678, 0.70710678]);
+    }
+
+    #[test]
+    fn gameobject_rotation_values_derives_yaw_only_from_orientation_when_quaternion_is_all_zero() {
+        // Every pre-#515 row and every hand-seeded fixture stores an all-zero quaternion — that must
+        // NOT ride verbatim (a real spawn's quaternion is never exactly (0,0,0,0); sending it as-is
+        // is the exact tilted-bench bug this issue reports). Derive rot2/rot3 = sin(o/2)/cos(o/2)
+        // (Z-axis-only yaw) instead, leaving rot0/rot1 (terrain pitch) at 0.
+        let go = GameObjectView {
+            guid: 5,
+            template_entry: 446,
+            x: -9450.0,
+            y: -90.0,
+            z: 55.0,
+            orientation: std::f32::consts::FRAC_PI_2, // 90°
+            state: 0,
+            type_id: 0,
+            display_id: 259,
+            rotation_0: 0.0,
+            rotation_1: 0.0,
+            rotation_2: 0.0,
+            rotation_3: 0.0,
+        };
+        let (_, body) = build_gameobject_rotation_values(&go);
+        let floats = decode_rotation_floats(go.guid, &body);
+        let half = go.orientation * 0.5;
+        assert_eq!(floats[0], 0.0, "no stored quaternion ⇒ no terrain pitch");
+        assert_eq!(floats[1], 0.0);
+        assert!((floats[2] - half.sin()).abs() < 1e-6, "rot2 = sin(o/2)");
+        assert!((floats[3] - half.cos()).abs() < 1e-6, "rot3 = cos(o/2)");
     }
 
     #[test]

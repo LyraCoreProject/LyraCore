@@ -683,6 +683,14 @@ pub fn debug_spawn_gameobject(
             grid_x: lyracore_shared::spatial::grid_cell(x, y).0,
             grid_y: lyracore_shared::spatial::grid_cell(x, y).1,
             cell: lyracore_shared::spatial::cell_id_at(x, y),
+            // All-zero (issue #515): the debug spawn lever doesn't carry a spawn quaternion this
+            // slice — the codec's yaw-only derive-from-orientation fallback covers it (orientation
+            // is also 0.0 here, so the derived quaternion is the identity rotation, byte-consistent
+            // with a hand-seeded fixture that never set these).
+            rotation_0: 0.0,
+            rotation_1: 0.0,
+            rotation_2: 0.0,
+            rotation_3: 0.0,
         });
     Ok(())
 }
@@ -1386,6 +1394,7 @@ pub fn debug_set_xp_rate(ctx: &ReducerContext, rate: f32) -> Result<(), String> 
                 nav_enabled: false,
                 hosts_instances: true,
                 bots_idle: false,
+                vmap_enabled: false,
             });
         }
     }

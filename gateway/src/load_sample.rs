@@ -49,6 +49,25 @@ pub(crate) fn sample_interval() -> Duration {
     Duration::from_secs(secs)
 }
 
+/// Deterministic 64-bit FNV-1a hash of this gateway's own identity string (`GatewayConfig::gateway_id`,
+/// `LYRACORE_GATEWAY_ID`) — issue #308. `game_shard_load.gateway_key` is `u64`, not `String`: a
+/// `String` END-appended to an existing table cannot carry a `#[default(...)]`
+/// (`docs/danger-zones.md` §1.2, "cannot default a `String` column"), so the raw identity never
+/// crosses the wire into the table — this hash does instead. FNV-1a (not `DefaultHasher`) because
+/// it is a fixed, documented algorithm: `std::collections::hash_map::DefaultHasher`'s algorithm is
+/// explicitly NOT guaranteed stable across Rust versions, which would silently reshuffle which ring
+/// bucket a redeployed gateway's samples land in.
+pub(crate) fn gateway_key(id: &str) -> u64 {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01B3;
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
 /// `<shard>=<hex-identity-prefix>` pairs, comma/semicolon/newline separated, `#` comments — the
 /// same separator convention `ShardMap::parse` uses for its rule text.
 ///
@@ -279,9 +298,13 @@ impl OccupancySampler {
 /// `occupancy_by_shard` is whatever [`OccupancySampler::sample_all`] returned THIS cycle — passed
 /// in rather than sampled here so this function stays generic over [`RealmDb`] and therefore
 /// testable without a live node or a live HTTP scrape.
+///
+/// `this_gateway_key` is [`gateway_key`] of this process's own `LYRACORE_GATEWAY_ID` — threaded in
+/// (rather than read from env here) for the same testability reason `occupancy_by_shard` is.
 pub(crate) fn sample_and_record<D: RealmDb>(
     db: &D,
     occupancy_by_shard: &HashMap<String, f32>,
+    this_gateway_key: u64,
 ) -> Vec<String> {
     let rc = match db.realm_core() {
         Ok(rc) => rc,
@@ -296,7 +319,7 @@ pub(crate) fn sample_and_record<D: RealmDb>(
         let sessions = shard.session_count() as u32;
         match occupancy_by_shard.get(&name) {
             Some(&pct) => {
-                if let Err(e) = rc.record_shard_load(&name, pct, sessions) {
+                if let Err(e) = rc.record_shard_load(&name, pct, sessions, this_gateway_key) {
                     log::warn!("SHARDLOAD: record_shard_load({name}) failed: {e:#}");
                 }
                 lines.push(format!(
@@ -404,6 +427,21 @@ spacetime_txn_cpu_time_sec_sum{db="zzz999",txn_type="Reducer"} 99.0
     }
 
     #[test]
+    fn gateway_key_is_deterministic_and_distinguishes_different_ids() {
+        assert_eq!(gateway_key("host-a:8085"), gateway_key("host-a:8085"));
+        assert_ne!(
+            gateway_key("host-a:8085"),
+            gateway_key("host-b:8085"),
+            "two different gateway identities must not collide onto the same ring key"
+        );
+        assert_ne!(
+            gateway_key(""),
+            0,
+            "an empty identity must not hash to the same 0 pre-migration rows default to"
+        );
+    }
+
+    #[test]
     fn parse_db_ids_of_an_empty_string_is_empty() {
         assert!(parse_db_ids("").is_empty());
         assert!(parse_db_ids("   \n # just a comment\n").is_empty());
@@ -428,12 +466,13 @@ spacetime_txn_cpu_time_sec_sum{db="zzz999",txn_type="Reducer"} 99.0
         *h.db_at(WORLD).open_sessions.lock().unwrap() = 7;
         let occ = HashMap::from([(WORLD.to_string(), 42.5f32)]);
 
-        let lines = sample_and_record(&h, &occ);
+        let lines = sample_and_record(&h, &occ, 99);
 
         assert_eq!(
             h.db_at(CORE).recorded_shard_loads.lock().unwrap().clone(),
-            vec![(WORLD.to_string(), 42.5, 7)],
-            "the world shard's occupancy + session sample must land on REALM-CORE, not on itself"
+            vec![(WORLD.to_string(), 42.5, 7, 99)],
+            "the world shard's occupancy + session sample must land on REALM-CORE, not on itself, \
+             carrying THIS gateway's key"
         );
         assert!(
             lines.iter().any(|l| l.starts_with("SHARDLOAD")
@@ -449,7 +488,7 @@ spacetime_txn_cpu_time_sec_sum{db="zzz999",txn_type="Reducer"} 99.0
         *h.db_at(WORLD).open_sessions.lock().unwrap() = 3;
         let occ = HashMap::new(); // nothing measured this cycle
 
-        let lines = sample_and_record(&h, &occ);
+        let lines = sample_and_record(&h, &occ, 99);
 
         assert!(
             h.db_at(CORE)
@@ -481,17 +520,18 @@ spacetime_txn_cpu_time_sec_sum{db="zzz999",txn_type="Reducer"} 99.0
             ("world-b".to_string(), 90.0f32),
         ]);
 
-        sample_and_record(&h, &occ);
+        sample_and_record(&h, &occ, 1);
 
         let mut recorded = h.db_at(CORE).recorded_shard_loads.lock().unwrap().clone();
         recorded.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(
             recorded,
             vec![
-                ("world-a".to_string(), 10.0, 10),
-                ("world-b".to_string(), 90.0, 20),
+                ("world-a".to_string(), 10.0, 10, 1),
+                ("world-b".to_string(), 90.0, 20, 1),
             ],
-            "both world shards must be sampled, each under its OWN name and numbers"
+            "both world shards must be sampled, each under its OWN name and numbers, all under \
+             this gateway's OWN key"
         );
     }
 
@@ -499,7 +539,7 @@ spacetime_txn_cpu_time_sec_sum{db="zzz999",txn_type="Reducer"} 99.0
     fn sample_and_record_skips_the_cycle_cleanly_when_realm_core_is_unreachable() {
         use crate::realm_core::fake::realm_with_dead_core;
         let h = realm_with_dead_core(&[WORLD, CORE], "", CORE);
-        let lines = sample_and_record(&h, &HashMap::from([(WORLD.to_string(), 5.0f32)]));
+        let lines = sample_and_record(&h, &HashMap::from([(WORLD.to_string(), 5.0f32)]), 1);
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("realm-core unreachable"), "{lines:?}");
     }
@@ -510,10 +550,10 @@ spacetime_txn_cpu_time_sec_sum{db="zzz999",txn_type="Reducer"} 99.0
         // sensible rather than silently doing nothing.
         let h = realm(&[WORLD], "", None);
         *h.db_at(WORLD).open_sessions.lock().unwrap() = 4;
-        sample_and_record(&h, &HashMap::from([(WORLD.to_string(), 33.0f32)]));
+        sample_and_record(&h, &HashMap::from([(WORLD.to_string(), 33.0f32)]), 1);
         assert_eq!(
             h.db_at(WORLD).recorded_shard_loads.lock().unwrap().clone(),
-            vec![(WORLD.to_string(), 33.0, 4)]
+            vec![(WORLD.to_string(), 33.0, 4, 1)]
         );
     }
 }

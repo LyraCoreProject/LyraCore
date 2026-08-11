@@ -451,6 +451,7 @@ pub mod gw_ranged_attack_reducer;
 pub mod gw_reclaim_corpse_reducer;
 pub mod gw_repair_item_reducer;
 pub mod gw_repop_reducer;
+pub mod gw_reset_talents_reducer;
 pub mod gw_respond_resurrect_reducer;
 pub mod gw_sell_item_reducer;
 pub mod gw_send_channel_message_reducer;
@@ -1086,6 +1087,7 @@ pub use gw_ranged_attack_reducer::gw_ranged_attack;
 pub use gw_reclaim_corpse_reducer::gw_reclaim_corpse;
 pub use gw_repair_item_reducer::gw_repair_item;
 pub use gw_repop_reducer::gw_repop;
+pub use gw_reset_talents_reducer::gw_reset_talents;
 pub use gw_respond_resurrect_reducer::gw_respond_resurrect;
 pub use gw_sell_item_reducer::gw_sell_item;
 pub use gw_send_channel_message_reducer::gw_send_channel_message;
@@ -2112,6 +2114,10 @@ pub enum Reducer {
     GwRepop {
         actor_guid: u64,
     },
+    GwResetTalents {
+        actor_guid: u64,
+        trainer_guid: u64,
+    },
     GwRespondResurrect {
         actor_guid: u64,
         accept: bool,
@@ -2393,6 +2399,7 @@ pub enum Reducer {
         shard: String,
         writer_occupancy_pct: f32,
         sessions: u32,
+        gateway_key: u64,
     },
     ReleaseTransfer {
         transfer_id: u64,
@@ -2744,6 +2751,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwReclaimCorpse { .. } => "gw_reclaim_corpse",
             Reducer::GwRepairItem { .. } => "gw_repair_item",
             Reducer::GwRepop { .. } => "gw_repop",
+            Reducer::GwResetTalents { .. } => "gw_reset_talents",
             Reducer::GwRespondResurrect { .. } => "gw_respond_resurrect",
             Reducer::GwSellItem { .. } => "gw_sell_item",
             Reducer::GwSendChannelMessage { .. } => "gw_send_channel_message",
@@ -4350,6 +4358,13 @@ impl __sdk::Reducer for Reducer {
                     actor_guid: actor_guid.clone(),
                 })
             }
+            Reducer::GwResetTalents {
+                actor_guid,
+                trainer_guid,
+            } => __sats::bsatn::to_vec(&gw_reset_talents_reducer::GwResetTalentsArgs {
+                actor_guid: actor_guid.clone(),
+                trainer_guid: trainer_guid.clone(),
+            }),
             Reducer::GwRespondResurrect { actor_guid, accept } => {
                 __sats::bsatn::to_vec(&gw_respond_resurrect_reducer::GwRespondResurrectArgs {
                     actor_guid: actor_guid.clone(),
@@ -4839,10 +4854,12 @@ impl __sdk::Reducer for Reducer {
                 shard,
                 writer_occupancy_pct,
                 sessions,
+                gateway_key,
             } => __sats::bsatn::to_vec(&record_shard_load_reducer::RecordShardLoadArgs {
                 shard: shard.clone(),
                 writer_occupancy_pct: writer_occupancy_pct.clone(),
                 sessions: sessions.clone(),
+                gateway_key: gateway_key.clone(),
             }),
             Reducer::ReleaseTransfer { transfer_id } => {
                 __sats::bsatn::to_vec(&release_transfer_reducer::ReleaseTransferArgs {

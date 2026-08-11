@@ -330,11 +330,6 @@ pub struct PlayerSkill {
     pub max_rank: u16,
 }
 
-/// A player connection sees only its own skills (mirrors the item/character RLS filters).
-#[spacetimedb::client_visibility_filter]
-const PLAYER_SKILL_RLS: spacetimedb::Filter =
-    spacetimedb::Filter::Sql("SELECT * FROM game_player_skill WHERE owner_identity = :sender");
-
 // Skills are deleted on character delete, re-owned (identity re-stamp) on a relog under a changed
 // gateway identity.
 crate::character_owned!(delete, fn sweep_delete_game_player_skill(ctx, character_guid) {

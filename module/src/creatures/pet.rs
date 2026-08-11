@@ -21,9 +21,10 @@
 //! is independent of the wand/ranged-auto-attack field). [entity]
 
 use lyracore_shared::{constants, spatial};
-use spacetimedb::{reducer, table, ReducerContext, Table};
+use spacetimedb::{table, ReducerContext, Table};
+#[cfg(feature = "debug_reducers")]
+use spacetimedb::reducer;
 
-use crate::helpers::entity_by_owner;
 use crate::{
     game_creature_template, game_entity_motion, game_melee_attack, game_world_entity, MeleeAttack,
     WorldEntity,
@@ -164,18 +165,6 @@ fn nearest_hostile_near(
         }
     }
     best.map(|(g, _)| g)
-}
-
-/// Handle a pet command-bar action (`CMSG_PET_ACTION`). `data` is the mangos-packed action
-/// (`flag << 24 | id`): flag `0x07` = a command (Stay/Follow/Attack/Dismiss), flag `0x06` = a react
-/// state (Passive/Defensive/Aggressive). `target_guid` is the ATTACK target (ignored otherwise). The
-/// caller is the pet's owner (resolved from `ctx.sender`); a pet-less caller is a no-op error. All pet
-/// policy lives here (the gateway passes the raw wire `data` through). [entity]
-#[reducer]
-pub fn pet_command(ctx: &ReducerContext, data: u32, target_guid: u64) -> Result<(), String> {
-    let owner =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caller not in world".to_string())?;
-    apply_pet_command(ctx, owner.guid, data, target_guid)
 }
 
 /// Shared core (also driven by `debug_pet_command` for headless tests): decode + apply one pet-bar
@@ -513,6 +502,7 @@ pub(crate) fn pass_pet(
             (owner.x, owner.y),
             follow_step,
             4.0,
+            pet.z,
         );
         if nx == pet.x && ny == pet.y {
             continue; // no-op step (already within the stop band) — skip the zero-length leg

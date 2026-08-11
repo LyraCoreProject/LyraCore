@@ -159,6 +159,27 @@ fn caster_hold_range_yd(ctx: &ReducerContext, entry: u32) -> f32 {
     max_r as f32
 }
 
+/// #518: minimum bearing drift (radians, ~17°) before a stationary stand-and-swing creature turns
+/// to face its target. Below this the mob is already close enough that a correction would be
+/// imperceptible AND would re-throw a facing packet every tick (a stationary fight has to settle
+/// into silence, same discipline as the committed-leg flee-spin fix above) — the epsilon exists
+/// purely to make "have I already turned to face it" idempotent tick over tick.
+const FACING_EPSILON_RAD: f32 = 0.3;
+
+/// Shortest signed angular distance from `from` to `to`, wrapped into `(-PI, PI]` — so a bearing
+/// that crosses the ±PI seam (e.g. orientation 3.0, target bearing -3.0) reads as a small turn, not
+/// a near-full-circle one. Pure — no I/O, unit-tested directly.
+fn angle_diff(from: f32, to: f32) -> f32 {
+    let two_pi = std::f32::consts::TAU;
+    let mut d = (to - from) % two_pi;
+    if d > std::f32::consts::PI {
+        d -= two_pi;
+    } else if d < -std::f32::consts::PI {
+        d += two_pi;
+    }
+    d
+}
+
 pub(super) fn pass_chase(ctx: &ReducerContext, scope: &TickScope) -> usize {
     let mut visited = 0usize;
     let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
@@ -238,6 +259,32 @@ pub(super) fn pass_chase(ctx: &ReducerContext, scope: &TickScope) -> usize {
                     (c.grid_x, c.grid_y),
                 );
             }
+            // #518: a stand-and-swing creature never throws another movement leg — a spline is the
+            // ONLY thing the client ever derives creature facing from, so without this it keeps
+            // whatever heading it had when it planted (its pre-combat orientation) for the entire
+            // fight, correcting only when the target's next kite step re-triggers a chase spline.
+            // Turn it toward the target here instead: epsilon-gated (`FACING_EPSILON_RAD`) so a
+            // truly stationary fight settles into silence rather than re-emitting every 500ms tick.
+            let bearing = dy.atan2(dx);
+            if angle_diff(c.orientation, bearing).abs() > FACING_EPSILON_RAD {
+                // Re-find (not a stale clone of `c`) — the shared entities-table-write convention this
+                // file already uses (e.g. `sense.rs`'s target-point write), so a concurrent write to
+                // this row within the same tick isn't clobbered by an out-of-date snapshot.
+                if let Some(mut e) = entities.guid().find(c.guid) {
+                    e.orientation = bearing;
+                    entities.guid().update(e);
+                }
+                emit_facing_spline(
+                    ctx,
+                    c.guid,
+                    (c.x, c.y, c.z),
+                    bearing,
+                    now_ms,
+                    c.map_id,
+                    c.instance_id,
+                    (c.grid_x, c.grid_y),
+                );
+            }
             continue;
         }
         // 049: an OFFENSIVE CASTER holds at spell range instead of face-tanking — vanilla casters
@@ -275,7 +322,7 @@ pub(super) fn pass_chase(ctx: &ReducerContext, scope: &TickScope) -> usize {
         };
         let (ax, ay) = (c.x + dir_x * leg_len, c.y + dir_y * leg_len);
         // 243: nav-aware — nav_step returns the aim point (LoS clear) or the first detour corner (blocked).
-        let (nx, ny) = crate::nav::nav_step(ctx, c.map_id, (c.x, c.y), (ax, ay), leg_len, 0.0);
+        let (nx, ny) = crate::nav::nav_step(ctx, c.map_id, (c.x, c.y), (ax, ay), leg_len, 0.0, c.z);
         if nx == c.x && ny == c.y {
             continue; // already there → nothing to move.
         }
@@ -414,6 +461,7 @@ pub(super) fn pass_return(
             (home.x, home.y),
             run * tick_secs,
             0.0,
+            c.z,
         );
         // Ground-snap (in the writer) each intermediate step of the walk home (work-item 174 follow-up,
         // PR-9 review: un-snapped home.z here made a leashed creature float/clip down the slope and
@@ -554,7 +602,7 @@ pub(super) fn pass_wander(
         // wanderer ambles slower); no snare → WALK exactly.
         let walk = crate::combat::effective_move_speed(ctx, c.guid, constants::speeds::WALK);
         let (nx, ny) =
-            crate::nav::nav_step(ctx, c.map_id, (c.x, c.y), (destx, desty), walk * 4.0, 0.0);
+            crate::nav::nav_step(ctx, c.map_id, (c.x, c.y), (destx, desty), walk * 4.0, 0.0, c.z);
         // Ground-snap the hop (in the writer, work-item 174); off-slice keeps the old behavior — the
         // home z (flat-ish ground around the post, like the return leg carries the spawn z).
         let Some((dx2, dy2, duration_ms)) = leg_toward((c.x, c.y), (nx, ny), walk) else {
@@ -676,7 +724,8 @@ pub(super) fn pass_flee(ctx: &ReducerContext, scope: &TickScope) -> usize {
         let run = crate::combat::effective_move_speed(ctx, c.guid, constants::speeds::RUN)
             * wounded_slow_factor(c.health, c.max_health);
         let (fx, fy) = flee_step(c.x, c.y, target.x, target.y, FLEE_LEG_YD);
-        let (nx, ny) = crate::nav::nav_step(ctx, c.map_id, (c.x, c.y), (fx, fy), FLEE_LEG_YD, 0.0);
+        let (nx, ny) =
+            crate::nav::nav_step(ctx, c.map_id, (c.x, c.y), (fx, fy), FLEE_LEG_YD, 0.0, c.z);
         let Some((dx2, dy2, duration_ms)) = leg_toward((c.x, c.y), (nx, ny), run) else {
             continue;
         };
@@ -811,4 +860,50 @@ pub(super) fn pass_fear_flee(ctx: &ReducerContext, scope: &TickScope, tick_secs:
     // Feared creatures RUN in terror; no ETA gate (re-stepped each tick until the aura expires).
     drain_legs(ctx, to_fear_flee, true, false, now_ms);
     visited
+}
+
+#[cfg(test)]
+mod facing_tests {
+    use super::*;
+    use std::f32::consts::{FRAC_PI_2, PI, TAU};
+
+    // #518: pure-function coverage for the stand-and-swing facing correction. `pass_chase` itself
+    // needs a live `ReducerContext` (a real melee-attack row + entity table), which is exercised by
+    // the wire suite; `angle_diff` and the epsilon threshold are the whole decision and are cheap to
+    // pin here directly.
+
+    #[test]
+    fn zero_drift_is_zero() {
+        assert_eq!(angle_diff(1.0, 1.0), 0.0);
+    }
+
+    #[test]
+    fn a_quarter_turn_reads_as_a_quarter_turn_either_direction() {
+        assert!((angle_diff(0.0, FRAC_PI_2) - FRAC_PI_2).abs() < 1e-6);
+        assert!((angle_diff(0.0, -FRAC_PI_2) - (-FRAC_PI_2)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_pi_seam_takes_the_short_way_round() {
+        // orientation just past +PI, target bearing just past -PI: only ~0.2 rad apart going
+        // "outward" across the seam, NOT the ~2*PI-0.2 rad the naive subtraction would give.
+        let from = PI - 0.1;
+        let to = -PI + 0.1;
+        let d = angle_diff(from, to);
+        assert!(d.abs() < 0.3, "expected a short turn across the seam, got {d}");
+    }
+
+    #[test]
+    fn a_full_turn_collapses_to_no_turn() {
+        assert!(angle_diff(0.5, 0.5 + TAU).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_epsilon_gate_is_silent_below_threshold_and_fires_above_it() {
+        let orientation = 0.0_f32;
+        let just_under = FACING_EPSILON_RAD - 0.01;
+        let just_over = FACING_EPSILON_RAD + 0.01;
+        assert!(angle_diff(orientation, just_under).abs() <= FACING_EPSILON_RAD);
+        assert!(angle_diff(orientation, just_over).abs() > FACING_EPSILON_RAD);
+    }
 }

@@ -49,6 +49,40 @@ pub struct ShardLoad {
     pub sampled_at_micros: i64,
     pub writer_occupancy_pct: f32,
     pub sessions: u32,
+    /// Which GATEWAY PROCESS wrote this sample (issue #308). With N gateway processes sampling the
+    /// same shard, `sessions` is only ever that ONE process's own player-connection cache size
+    /// (`Coordinator::session_count`) — never the shard's realm-wide total. Keying the ring by
+    /// `(shard, gateway_key)` instead of `shard` alone means every gateway's samples survive
+    /// side-by-side rather than the last writer clobbering the rest, so an operator (or a future
+    /// realm-list balancer) can sum the latest row per `gateway_key` to get the real total.
+    ///
+    /// A deterministic (FNV-1a) hash of the gateway's own `LYRACORE_GATEWAY_ID` (config-supplied,
+    /// default hostname:port — `load_sample::gateway_key`), not the raw string: END-appending a
+    /// `String` column here cannot be defaulted (`#[default(...)]` cannot default a `String` —
+    /// `docs/danger-zones.md` §1.2), so the identity crosses the wire as the number instead. `0` is
+    /// what every pre-migration row reads as — an "unknown gateway" bucket, not a collision with a
+    /// real one. A hash rather than a registry-assigned id trades a (negligible, at realm-gateway
+    /// counts) collision risk for needing no extra table or find-or-insert reducer; it is an
+    /// internal telemetry key, not game state.
+    #[default(0u64)]
+    pub gateway_key: u64,
+}
+
+/// The realm-wide total for one shard, MATERIALIZED at write time (issue #308's actual
+/// Done-when: `game_shard_load` alone is per-`(shard, gateway_key)` rows, and `spacetime sql` has
+/// no `GROUP BY`/`SUM` (`docs/danger-zones.md` §2) to fold those into a total on read — so
+/// [`record_shard_load`] recomputes and upserts this row on every sample instead, and an operator
+/// queries `game_shard_load_total` directly for the number the issue asks for.
+///
+/// PRIVATE: same rationale as [`ShardLoad`].
+#[table(accessor = game_shard_load_total)]
+pub struct ShardLoadTotal {
+    #[primary_key]
+    pub shard: String,
+    /// Sum, across every `gateway_key` that has ever sampled this shard, of that gateway's
+    /// LATEST `sessions` reading — see [`realm_wide_sessions`].
+    pub sessions: u32,
+    pub updated_at_micros: i64,
 }
 
 /// One periodic sample of a region's open-world player population, bucketed by the gateway from
@@ -81,6 +115,27 @@ pub(crate) fn ring_evict(existing_ids_ascending: &[u64], ring_size: usize) -> &[
     &existing_ids_ascending[..over]
 }
 
+/// Fold one shard's `(gateway_key, id, sessions)` samples into the realm-wide total: for each
+/// `gateway_key`, only its HIGHEST `id` (auto-inc, so highest = most recent) contributes — a
+/// gateway that has sampled 20 times must count once, not 20 — then those latest-per-gateway
+/// values are summed. Pure so [`record_shard_load`]'s upsert and the test below share one rule,
+/// same convention as [`ring_evict`].
+pub(crate) fn realm_wide_sessions(samples: impl Iterator<Item = (u64, u64, u32)>) -> u32 {
+    let mut latest_per_gateway: std::collections::HashMap<u64, (u64, u32)> = Default::default();
+    for (gateway_key, id, sessions) in samples {
+        latest_per_gateway
+            .entry(gateway_key)
+            .and_modify(|(best_id, best_sessions)| {
+                if id > *best_id {
+                    *best_id = id;
+                    *best_sessions = sessions;
+                }
+            })
+            .or_insert((id, sessions));
+    }
+    latest_per_gateway.values().map(|(_, sessions)| *sessions).sum()
+}
+
 /// The occupancy sanity gate, decided purely so both reducer and test share the exact rule. See
 /// [`MAX_SANE_OCCUPANCY_PCT`]'s doc for why the upper bound exists.
 pub(crate) fn validate_occupancy_pct(pct: f32) -> Result<(), String> {
@@ -105,6 +160,7 @@ pub fn record_shard_load(
     shard: String,
     writer_occupancy_pct: f32,
     sessions: u32,
+    gateway_key: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let shard = shard.trim().to_string();
@@ -113,9 +169,14 @@ pub fn record_shard_load(
     }
     validate_occupancy_pct(writer_occupancy_pct)?;
     let table = ctx.db.game_shard_load();
+    // Ring-scoped per (shard, gateway_key), NOT per shard alone — issue #308: with N gateways
+    // sampling the same shard, keying eviction (and therefore the ring) by shard alone let each
+    // gateway's insert evict every OTHER gateway's rows, so only the last writer's share ever
+    // survived. Scoping the ring per gateway too means every gateway keeps its own ~10 minutes of
+    // history, and summing the latest row per gateway_key for a shard gives the realm-wide total.
     let mut existing: Vec<u64> = table
         .iter()
-        .filter(|r| r.shard == shard)
+        .filter(|r| r.shard == shard && r.gateway_key == gateway_key)
         .map(|r| r.id)
         .collect();
     existing.sort_unstable();
@@ -124,11 +185,31 @@ pub fn record_shard_load(
     }
     table.insert(ShardLoad {
         id: 0,
-        shard,
+        shard: shard.clone(),
         sampled_at_micros: ctx.timestamp.to_micros_since_unix_epoch(),
         writer_occupancy_pct,
         sessions,
+        gateway_key,
     });
+    // Recompute and upsert the realm-wide total (issue #308's actual Done-when) rather than
+    // leaving that fold as a manual eyeball step — see `ShardLoadTotal`'s doc.
+    let total_sessions = realm_wide_sessions(
+        table
+            .iter()
+            .filter(|r| r.shard == shard)
+            .map(|r| (r.gateway_key, r.id, r.sessions)),
+    );
+    let totals = ctx.db.game_shard_load_total();
+    let total_row = ShardLoadTotal {
+        shard: shard.clone(),
+        sessions: total_sessions,
+        updated_at_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+    };
+    if totals.shard().find(&shard).is_some() {
+        totals.shard().update(total_row);
+    } else {
+        totals.insert(total_row);
+    }
     Ok(())
 }
 
@@ -192,6 +273,29 @@ mod tests {
     }
 
     #[test]
+    fn realm_wide_sessions_sums_only_the_latest_row_per_gateway() {
+        assert_eq!(realm_wide_sessions(std::iter::empty()), 0);
+        // One gateway, three samples over time (rising id): only the newest counts.
+        assert_eq!(
+            realm_wide_sessions(vec![(1, 10, 5), (1, 11, 7), (1, 12, 9)].into_iter()),
+            9,
+            "a single gateway's older samples must not be double-counted"
+        );
+        // Two gateways sampling the same shard: their latest rows sum to the realm-wide total.
+        assert_eq!(
+            realm_wide_sessions(vec![(1, 10, 5), (2, 11, 7)].into_iter()),
+            12,
+            "distinct gateways' latest samples sum to the realm-wide total (issue #308)"
+        );
+        // Ids need not arrive in order.
+        assert_eq!(
+            realm_wide_sessions(vec![(1, 12, 9), (1, 10, 5), (2, 11, 7)].into_iter()),
+            16,
+            "highest id wins regardless of iteration order"
+        );
+    }
+
+    #[test]
     fn validate_occupancy_pct_rejects_non_finite_negative_and_absurd_values() {
         assert!(validate_occupancy_pct(0.0).is_ok());
         assert!(validate_occupancy_pct(57.3).is_ok());
@@ -243,6 +347,17 @@ mod tests {
         assert!(
             shard_code.contains("ring_evict("),
             "record_shard_load must ring-evict before inserting"
+        );
+        assert!(
+            shard_code.contains("r.gateway_key == gateway_key"),
+            "record_shard_load must scope the ring by gateway_key too (issue #308) — filtering by \
+             shard alone lets one gateway's insert evict every OTHER gateway's rows"
+        );
+        assert!(
+            shard_code.contains("realm_wide_sessions("),
+            "record_shard_load must fold every gateway's latest sample into the materialized \
+             realm-wide total (issue #308's actual Done-when) — keying the ring by gateway_key \
+             alone leaves summation a manual step"
         );
 
         assert!(

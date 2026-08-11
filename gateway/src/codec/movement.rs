@@ -295,6 +295,30 @@ pub fn build_monster_move(
     }
 }
 
+/// Build `SMSG_MONSTER_MOVE` as a FACING-ONLY packet (#518): `mover_guid` does not move — `pos` is
+/// both the spline point and its sole (degenerate) destination, `duration` 0 — but its heading
+/// changes to `angle_rad`. This is the wire tool the issue calls out as "already exists, unwired":
+/// gtker 0.3 models 1.12's `FacingAngle` `MonsterMoveType` (`spline_point`/`splines` framing
+/// unchanged from [`build_monster_move`], only `move_type` differs), but nothing built it until a
+/// stationary stand-and-swing creature had no OTHER way to tell the client its facing changed — a
+/// `Normal`/`Stop` leg with `dest == start` carries a destination point, never a heading.
+pub fn build_monster_move_facing(
+    mover_guid: u64,
+    pos: Vector3d,
+    angle_rad: f32,
+    spline_id: u32,
+) -> SMSG_MONSTER_MOVE {
+    SMSG_MONSTER_MOVE {
+        guid: Guid::new(mover_guid),
+        spline_point: pos,
+        spline_id,
+        move_type: SMSG_MONSTER_MOVE_MonsterMoveType::FacingAngle { angle: angle_rad },
+        spline_flags: SplineFlag::new(0),
+        duration: 0,
+        splines: vec![pos],
+    }
+}
+
 /// Carry a `MovementInfo` across the DB as opaque bytes (`game_movement_event.movement_info`).
 /// The crate's `MovementInfo` (de)serializer is `pub(crate)`, but `MSG_MOVE_HEARTBEAT_Client`'s
 /// whole body *is* exactly one `MovementInfo` and its codec is public — so we round-trip through

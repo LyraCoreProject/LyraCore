@@ -548,6 +548,11 @@ pub trait WorldStore: Send + Sync {
     /// gossip option conditions (`codec::option_condition_holds`).
     fn quest_status(&self, guid: u64, quest_id: u32) -> (bool, bool);
 
+    /// Respec at `trainer_guid` (the "I wish to unlearn my talents." gossip option, gated to level
+    /// 10+ by `filtered_gossip_options` — #516). Errors (out of range / not enough gold) are
+    /// per-action; the caller just closes the gossip window either way.
+    fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()>;
+
     /// Move (or swap) the item in main-inventory `from_slot` to `to_slot` (`CMSG_SWAP_INV_ITEM`/
     /// `CMSG_SWAP_ITEM`). The module's move primitive validates equip-slot transitions, so this also
     /// covers drag-to-equip and drag-to-unequip. A gameplay `Err` is per-action, not session-fatal.
@@ -803,24 +808,6 @@ pub trait WorldStore: Send + Sync {
     /// Release a session epoch at teardown; returns true iff it was still current — i.e. the caller
     /// still owns the entity and may delete it. False means a newer login superseded this session.
     fn release_session(&self, account_id: u64, epoch: u64) -> bool;
-
-    /// Register this world socket as a live user of the account's cached per-account SDK
-    /// connection. Called exactly once per admitted session, as soon as the handshake has
-    /// resolved the account; paired with [`WorldStore::close_account_session`]. Default no-op for
-    /// the mock stores.
-    fn open_account_session(&self, _account_id: u64) {}
-
-    /// Retire this world socket at teardown and, iff it was the account's LAST one, release its
-    /// cached per-account SDK connections — a websocket fd plus an SDK pump OS thread per shard the
-    /// account touched, which used to leak for the whole process lifetime and eventually
-    /// exhausted the fd table (`accept(2)` → `EMFILE` → `main` returns `Err`).
-    ///
-    /// ⚠ The last-socket test is the gate, and it is deliberately STRONGER than the
-    /// `release_session` epoch arbitration `leave_world` uses: the epoch says only that no
-    /// IN-WORLD session remains, while the cached connection is shared by every socket on the
-    /// account including one parked at character select. See `stdb::AccountSessions`.
-    /// Default no-op for the mock stores.
-    fn close_account_session(&self, _account_id: u64) {}
 
     /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`, slice 5): the module validates the caller
     /// is a ghost owning the corpse, in range, past the reclaim delay, then resurrects at 50%.

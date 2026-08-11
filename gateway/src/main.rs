@@ -8,8 +8,8 @@
 //!
 //! Each connection is a state machine over `stdb::Coordinator` (module reads + reducer calls,
 //! `stdb/`) and the `codec` translators (`codec/`, one file per wire-message family); `world`
-//! additionally owns the per-player AOI subscription scoping (`stdb::aoi`) and the stuck-state
-//! relay planes (quest/item/rep/xp/level-up/teleport). See `docs/danger-zones.md` §3 for how to
+//! additionally owns the in-gateway AOI scoping (`stdb::aoi` + the shared `world_view` index)
+//! and the stuck-state relay planes (quest/item/rep/xp/level-up/teleport). See `docs/danger-zones.md` §3 for how to
 //! launch this against the real five-database realm — do not hand-roll the launch.
 
 mod accept;
@@ -107,24 +107,14 @@ async fn run() -> Result<()> {
     // session — rather than from a per-player relay.
     coordinator.spawn_bot_invite_relay();
 
-    // Reclaim the per-account SpacetimeDB connections opened by logons that never went on to
-    // a world session (an abandoned login, a client that reaches the realm list and quits). The
-    // world tier releases its own at socket teardown, but a logon close only PARKS the
-    // connection — so without this sweep the logon half of the leak is never reclaimed at all, and
-    // each leaked connection costs a websocket fd + an SDK pump thread for the process lifetime.
-    coordinator.spawn_account_session_reaper();
+    // Keep this gateway's lease alive. The module's lease reaper despawns every session bound to
+    // a lease that stops heartbeating, so the heartbeat is what bounds ghost lifetime after a
+    // gateway crash — and its ABSENCE while sessions are bound is what would despawn a healthy
+    // gateway's players, which is why it spawns unconditionally at startup, not lazily on first
+    // use.
+    coordinator.spawn_gateway_heartbeat();
 
-    // Keep this gateway's lease alive while the shared-call path (`LYRACORE_SHARED_CALLS`) is on. The
-    // module's lease reaper despawns every session bound to a lease that stops heartbeating, so
-    // the heartbeat is what bounds ghost lifetime after a gateway crash — and its ABSENCE while
-    // sessions are bound is what would despawn a healthy gateway's players, which is why it spawns
-    // whenever the flag that can bind sessions is set, not lazily on first use.
-    if crate::config::shared_calls_enabled() {
-        coordinator.spawn_gateway_heartbeat();
-    }
-
-    // Run both listeners concurrently. Each accepted socket gets its own task; in-world
-    // sockets additionally open a per-player SpacetimeDB connection (identity = account).
+    // Run both listeners concurrently. Each accepted socket gets its own task.
     let logon = tokio::spawn(logon::run(cfg.clone(), coordinator.clone()));
     let world = tokio::spawn(world::run(cfg.clone(), coordinator.clone()));
 
@@ -302,7 +292,7 @@ mod bot_invite_relay_wiring_tripwire {
     }
 
     /// 4. The reconnect re-arm — the fix for the ONLY coordinator relay with no self-healing path.
-    ///    Every sibling relay is armed from inside a per-player login, so a login after a reconnect
+    ///    Every sibling relay is armed from inside a per-session login, so a login after a reconnect
     ///    re-arms it implicitly; this one runs once at startup and would otherwise stay bound to a dead
     ///    `LiveConn` forever. The watchdog treats a SpacetimeDB migration — i.e. a routine module
     ///    republish — as a reconnect, so losing this hook means serendipity invites work for one session
@@ -341,53 +331,6 @@ mod bot_invite_relay_wiring_tripwire {
             "the `on_reconnect` hook is invoked BEFORE the connection swap. The hook re-reads \
              `coord()`, so it would re-arm on the dead connection — indistinguishable at runtime \
              from never re-arming, and just as silent."
-        );
-    }
-}
-
-/// The logon tier's connection reclaim is a two-part wiring, and BOTH parts are the kind of
-/// call site that goes missing silently. It was filed when `release_player_conn`
-/// turned up as `dead_code` — present, correct, and called by nothing — so the reclaim's call sites get
-/// the same tripwires the bot-invite relay's did.
-#[cfg(test)]
-mod logon_conn_reclaim_wiring_tripwire {
-    use crate::test_scan::code_of;
-
-    /// 1. The sweep. `detach_account_session_deferred` deliberately only PARKS the account (the
-    ///    logon→world handover must not rebuild the connection), so the reaper is the entire release
-    ///    path for the logon tier. Without this line every authenticated-but-never-played account
-    ///    holds its websocket fd and SDK pump thread for the gateway's lifetime — silently, and
-    ///    exactly as it did before this fix.
-    #[test]
-    fn main_spawns_the_account_session_reaper_at_startup() {
-        let src = include_str!("main.rs");
-        let body = code_of(src, "async fn run() -> Result<()> {");
-        assert!(
-            body.contains("coordinator.spawn_account_session_reaper();"),
-            "`main` no longer spawns the account-session reaper. Nothing else releases a parked logon \
-             connection, so the fd/thread leak that ended the gateway with `Too many open files` \
-             is back on the logon path, with no error and no log line. Body was:\n{body}"
-        );
-    }
-
-    /// 2. The lease. The reaper can only reclaim what was accounted in the first place, and the
-    ///    logon tier's attach lives in `CoordinatorStore::bound_identity` — the one call that OPENS
-    ///    the per-account connection. Dropping it makes every logon connection invisible to the
-    ///    refcount: nothing is ever parked, so nothing is ever reaped.
-    #[test]
-    fn the_logon_store_leases_the_connection_it_opens() {
-        let src = include_str!("logon/mod.rs");
-        // Anchored on the trailing `{` so this finds `CoordinatorStore`'s impl and not the
-        // identically-named (and `;`-terminated) `LogonStore` trait declaration above it.
-        let body = code_of(
-            src,
-            "fn bound_identity(&self, account_id: u64, username: &str) -> Result<[u8; 32]> {",
-        );
-        assert!(
-            body.contains("self.lease(world_id);"),
-            "`CoordinatorStore::bound_identity` no longer leases the account session it opens, so \
-             the logon connection is never counted and the account-session reaper never sees it. Body \
-             was:\n{body}"
         );
     }
 }

@@ -460,7 +460,7 @@ parity_test!(parity_game_world_entity, "game_world_entity", lyracore_module::Wor
     stance, owner_guid, skinned, mana_regen_paused_until_ms, death_expire_micros, instance_id,
     run_speed_mult_bp, godmode, resting, cell,
     sheet_str_bonus, sheet_agi_bonus, sheet_sta_bonus, sheet_int_bonus, sheet_spi_bonus,
-    sheet_ap_base, sheet_ap_mods, sheet_dmg_min, sheet_dmg_max,
+    sheet_ap_base, sheet_ap_mods, sheet_dmg_min, sheet_dmg_max, sheet_crit_bp,
 });
 // `game_config` became gateway-subscribed so the startup instance-hosting check can read
 // `hosts_instances` back instead of guessing. The generated binding was STALE when that subscription
@@ -468,7 +468,7 @@ parity_test!(parity_game_world_entity, "game_world_entity", lyracore_module::Wor
 // `server_config_type.rs` had never been regenerated, so this manifest line is the guard that made
 // the drift a red test.
 parity_test!(parity_game_config, "game_config", lyracore_module::ServerConfig, bindings::server_config_type::ServerConfig, {
-    id, xp_rate, nav_enabled, hosts_instances, bots_idle,
+    id, xp_rate, nav_enabled, hosts_instances, bots_idle, vmap_enabled,
 });
 parity_test!(parity_game_creature_template, "game_creature_template", lyracore_module::CreatureTemplate, bindings::creature_template_type::CreatureTemplate, {
     entry, name, subname, display_id, level, health, faction_template, npc_flags, unit_flags,
@@ -583,7 +583,7 @@ parity_test!(parity_game_player_skill, "game_player_skill", lyracore_module::Pla
 });
 parity_test!(parity_game_gameobject, "game_gameobject", lyracore_module::GameObject, bindings::game_object_type::GameObject, {
     guid, template_entry, map_id, x, y, z, orientation, state, created_at, respawn_at_micros,
-    instance_id, grid_x, grid_y, cell,
+    instance_id, grid_x, grid_y, cell, rotation_0, rotation_1, rotation_2, rotation_3,
 });
 // The AOI-index fix pinned these two when they still rode the per-player AOI box; the
 // shared-connection model moved them onto the coordinator's `SELECT *` list, so they are now in
@@ -594,7 +594,7 @@ parity_test!(parity_game_entity_motion, "game_entity_motion", lyracore_module::E
 });
 parity_test!(parity_game_creature_spline, "game_creature_spline", lyracore_module::CreatureSpline, bindings::creature_spline_type::CreatureSpline, {
     guid, start_micros, dur_ms, sx, sy, sz, dx, dy, dz, map_id, instance_id, grid_x, grid_y,
-    spline_id, run, cell,
+    spline_id, run, cell, facing, facing_angle,
 });
 parity_test!(parity_game_character_buyback, "game_character_buyback", lyracore_module::BuybackEntry, bindings::buyback_entry_type::BuybackEntry, {
     id, player_guid, item_entry, stack_count, price, soulbound,

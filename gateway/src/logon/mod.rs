@@ -360,47 +360,11 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
 /// `realm_core::tests` binds `D = fake::Handle` and runs THESE bodies, not a model of them.
 pub(crate) struct CoordinatorStore<D: crate::realm_core::RealmDb> {
     coordinator: D,
-    /// The WORLD-shard account id this LOGON SOCKET holds a connection lease on, `None` until
-    /// its SRP6 proof resolves one.
-    ///
-    /// One `CoordinatorStore` is built per accepted logon socket (`run`, below) and dropped when
-    /// that socket's handler returns, so the store IS the socket's lifetime — which is why the
-    /// paired release is a `Drop` impl rather than a call at the end of `handle_logon`: a read
-    /// error, a protocol error and a panic all end the socket, and all three would skip an explicit
-    /// call. Leaking the lease is not a cosmetic miss; it pins the account's cached connection (a
-    /// websocket fd + an SDK pump thread) for the gateway's LIFETIME, which is the leak this fixes.
-    ///
-    /// World-shard, not realm-core's: `player_conn` caches under the world shard's `#[auto_inc]`
-    /// id, and realm-core's whole discipline is that the two are not interchangeable — attaching
-    /// realm-core's id would account a connection that does not exist while leaving the real one
-    /// unaccounted, i.e. leak on a split deployment while looking fixed on a single-database one.
-    leased: std::sync::Mutex<Option<u64>>,
 }
 
 impl<D: crate::realm_core::RealmDb> CoordinatorStore<D> {
     pub(crate) fn new(coordinator: D) -> Self {
-        Self {
-            coordinator,
-            leased: std::sync::Mutex::new(None),
-        }
-    }
-
-    /// Take this socket's lease on `world_id`'s cached connection, at most once per account.
-    ///
-    /// Idempotent because `handle_logon` loops: a client may re-run challenge+proof on the same
-    /// socket, and a second attach with only one `Drop` to pair it would leave the refcount above
-    /// zero forever — the connection would then never be released by anything. Re-authenticating as
-    /// a DIFFERENT account hands the previous one back first, so the abandoned account's connection
-    /// becomes reapable instead of being pinned by a socket that no longer uses it.
-    fn lease(&self, world_id: u64) {
-        let mut leased = self.leased.lock().unwrap_or_else(|e| e.into_inner());
-        if *leased == Some(world_id) {
-            return;
-        }
-        if let Some(prev) = leased.replace(world_id) {
-            self.coordinator.detach_account_session_deferred(prev);
-        }
-        self.coordinator.attach_account_session(world_id);
+        Self { coordinator }
     }
 
     /// Translate the AUTHENTICATING database's account id into the WORLD shard's, by username.
@@ -423,29 +387,6 @@ impl<D: crate::realm_core::RealmDb> CoordinatorStore<D> {
                     .map(|a| a.id))
             },
         )
-    }
-}
-
-/// The logon socket closed. Hand back the lease `bound_identity` took, on every exit path —
-/// clean disconnect, protocol error, and unwind alike.
-///
-/// This is a DEFERRED release, never an immediate one: the account's next socket is normally the
-/// world session, which reuses the very connection this logon opened and whose identity
-/// `establish_session` has already written into `game_session` and onto
-/// `game_character.owner_identity`. Releasing here would rebuild that connection on every single
-/// login — and the rebuilt one mints a different identity than the one just bound. See
-/// `stdb::AccountSessions` for the handover grace, and `Coordinator::spawn_account_session_reaper`
-/// for what actually reclaims a logon nobody followed up on.
-impl<D: crate::realm_core::RealmDb> Drop for CoordinatorStore<D> {
-    fn drop(&mut self) {
-        let leased = self
-            .leased
-            .get_mut()
-            .unwrap_or_else(|e| e.into_inner())
-            .take();
-        if let Some(account_id) = leased {
-            self.coordinator.detach_account_session_deferred(account_id);
-        }
     }
 }
 
@@ -516,17 +457,12 @@ impl<D: crate::realm_core::RealmDb> LogonStore for CoordinatorStore<D> {
     }
 
     fn bound_identity(&self, account_id: u64, username: &str) -> Result<[u8; 32]> {
-        // The stable per-account identity the gateway uses for this account's world connection —
-        // and `Coordinator::player_conn` caches that connection under the WORLD shard's account id,
-        // which is also the id the world phase later checks out with (`WorldSession::account_id`,
-        // itself re-resolved by username in `world_store::lookup_session`). Handing realm-core's id
-        // here would bind `game_character.owner_identity` to a connection nothing ever uses again.
+        // The stable per-account identity for this account, DERIVED by the world shard's key
+        // (`synthetic_owner_identity`) — the world phase later checks out with the same id
+        // (`WorldSession::account_id`, itself re-resolved by username in
+        // `world_store::lookup_session`). Handing realm-core's id here would bind
+        // `game_character.owner_identity` to an identity nothing ever presents again.
         let world_id = self.world_account_id(account_id, username)?;
-        // This call is what OPENS the account's cached connection, so it is where the logon
-        // socket takes its lease on it. BEFORE the open, not after: an open that fails part-way (a
-        // build that times out) must still be paired, and an attach that never happened
-        // cannot be undone by `Drop`.
-        self.lease(world_id);
         self.coordinator.bound_identity(world_id)
     }
 

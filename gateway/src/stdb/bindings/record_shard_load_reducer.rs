@@ -10,6 +10,7 @@ pub(super) struct RecordShardLoadArgs {
     pub shard: String,
     pub writer_occupancy_pct: f32,
     pub sessions: u32,
+    pub gateway_key: u64,
 }
 
 impl From<RecordShardLoadArgs> for super::Reducer {
@@ -18,6 +19,7 @@ impl From<RecordShardLoadArgs> for super::Reducer {
             shard: args.shard,
             writer_occupancy_pct: args.writer_occupancy_pct,
             sessions: args.sessions,
+            gateway_key: args.gateway_key,
         }
     }
 }
@@ -42,8 +44,9 @@ pub trait record_shard_load {
         shard: String,
         writer_occupancy_pct: f32,
         sessions: u32,
+        gateway_key: u64,
     ) -> __sdk::Result<()> {
-        self.record_shard_load_then(shard, writer_occupancy_pct, sessions, |_, _| {})
+        self.record_shard_load_then(shard, writer_occupancy_pct, sessions, gateway_key, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `record_shard_load` to run as soon as possible,
@@ -57,6 +60,7 @@ pub trait record_shard_load {
         shard: String,
         writer_occupancy_pct: f32,
         sessions: u32,
+        gateway_key: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -70,6 +74,7 @@ impl record_shard_load for super::RemoteReducers {
         shard: String,
         writer_occupancy_pct: f32,
         sessions: u32,
+        gateway_key: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -80,6 +85,7 @@ impl record_shard_load for super::RemoteReducers {
                 shard,
                 writer_occupancy_pct,
                 sessions,
+                gateway_key,
             },
             callback,
         )

@@ -3,12 +3,11 @@
 //! gateway relays the corpse as a CORPSE-type CREATE_OBJECT (and DESTROY on delete); the ghost runs
 //! back and `reclaim_corpse` resurrects at 50%. [entity]/[server]
 
-use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
+use spacetimedb::{table, ReducerContext, Table, Timestamp};
 
 use lyracore_shared::packing::unpack4;
 
 use crate::game_world_entity;
-use crate::helpers::entity_by_owner;
 use crate::spell::game_resurrect_request;
 
 /// HIGHGUID_CORPSE high bits (0xF101): marks a guid as a corpse object for the 5875 client. The
@@ -171,17 +170,6 @@ pub struct Corpse {
     // `schema_parity.rs` manifest hand-synced in the SAME change (playbook failure-mode #1).
     #[default(0u64)]
     pub instance_id: u64,
-}
-
-/// Resurrect the caller at their corpse (`CMSG_RECLAIM_CORPSE`). Validates the caller is a
-/// ghost that OWNS this corpse, is on the same map within reclaim range, and the 30s delay elapsed;
-/// then restores 50% health, clears the ghost state (health > 0 + cleared flags replicate → the
-/// client comes alive), and deletes the corpse (→ SMSG_DESTROY_OBJECT). Authorized via `ctx.sender`.
-#[reducer]
-pub fn reclaim_corpse(ctx: &ReducerContext, _corpse_guid: u64) -> Result<(), String> {
-    let player =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caller not in world".to_string())?;
-    apply_reclaim_corpse(ctx, player)
 }
 
 /// The corpse-reclaim core, actor-explicit (#479): everything [`reclaim_corpse`] does after

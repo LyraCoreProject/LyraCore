@@ -15,6 +15,10 @@
 //!                                   TalentTab.dbc/Talent.dbc importer (talent.rs)
 //!   --terrain <client Data/ dir>    ADT heightmap stream (terrain.rs)
 //!   --nav <client Data/ dir>        WMO/M2 nav-grid rasterizer (nav.rs)
+//!   --vmap <client Data/ dir>       exact per-cell collision-triangle extract + pack + import
+//!                                   (--apply loads `game_vmap_chunk` via import_vmap_chunks; a
+//!                                   dry run stops at report — vmap.rs; #520/#521,
+//!                                   docs/decisions.md §10)
 //!   --dump-collision <client Data/ dir>  WMO/M2 collision-geometry inspector — dry-run only,
 //!                                   no --apply (collision.rs)
 //!   --pack-client <client Data/ dir>  builds the client patch MPQ + installs addons into the
@@ -32,6 +36,7 @@ mod pack_client;
 mod spell;
 mod talent;
 mod terrain;
+mod vmap;
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -756,6 +761,14 @@ mod go {
     pub const Y: usize = 5;
     pub const Z: usize = 6;
     pub const O: usize = 7;
+    // The cmangos spawn quaternion (issue #515) — the client's real prop orientation, `orientation`
+    // (O, above) alone only drives movement-facing math. Positionally right after O per the dump
+    // schema comment; carried through byte-verbatim (no derive/snap here — that fallback lives in
+    // the gateway codec for the all-zero case, not the importer).
+    pub const ROT0: usize = 8;
+    pub const ROT1: usize = 9;
+    pub const ROT2: usize = 10;
+    pub const ROT3: usize = 11;
 }
 mod ai {
     // areatrigger_involvedrelation: id(=areatrigger id), quest.
@@ -881,6 +894,7 @@ pub(crate) struct Args {
     pub(crate) terrain: Option<String>, // client Data/ dir for the ADT heightmap stream (see terrain.rs)
     pub(crate) dump_collision: Option<String>, // client Data/ dir: 240 spike, WMO/M2 collision dry-run (see collision.rs)
     pub(crate) nav: Option<String>, // client Data/ dir: 241 nav-grid rasterizer (see nav.rs)
+    pub(crate) vmap: Option<String>, // client Data/ dir: #520/#521 exact vmap triangle extract+pack+import (see vmap.rs)
     pack_client: Option<String>, // client Data/ dir for the --pack-client packager (see pack_client.rs)
     print_extents: bool, // with --dump: print the operator's own spawn bbox for --map and exit (work-item 206)
     spells: bool, // with --dbc: import Spell.dbc → game_spell/game_spell_effect (see spell.rs)
@@ -928,6 +942,7 @@ fn parse_args() -> Result<Args> {
         pack_client: None,
         dump_collision: None,
         nav: None,
+        vmap: None,
         terrain: None,
         print_extents: false,
         spells: false,
@@ -961,6 +976,7 @@ fn parse_args() -> Result<Args> {
                 )
             }
             "--nav" => a.nav = Some(it.next().context("--nav needs the client Data/ dir")?),
+            "--vmap" => a.vmap = Some(it.next().context("--vmap needs the client Data/ dir")?),
             "--dbc" => a.dbc = Some(it.next().context("--dbc needs the client Data/ dir")?),
             "--pack-client" => {
                 a.pack_client = Some(
@@ -1129,6 +1145,7 @@ fn parse_args() -> Result<Args> {
         && a.terrain.is_none()
         && a.dump_collision.is_none()
         && a.nav.is_none()
+        && a.vmap.is_none()
     {
         bail!("need an input: --dump <classic-db .sql[.gz]>, --dbc <client Data/ dir>, --terrain <client Data/ dir>, or --pack-client <client Data/ dir>");
     }
@@ -1839,6 +1856,22 @@ fn resolve_gossip_option_text(
     null_to_empty(raw).to_string()
 }
 
+/// Reclassify a gossip option's `action` by its resolved TEXT, for the handful of cmangos rows whose
+/// real behavior is gated in C++ code at `GossipHello`, not by the dump's `OptionType` column — so
+/// the column the importer copies through unchanged (see `gossip_option`'s doc) doesn't carry it.
+/// Confirmed empirically (#516): every "I wish to unlearn my talents." row across the live dump
+/// (38/38) imports with `OptionType=1` (`gossip_option::GOSSIP`), indistinguishable from a plain
+/// gossip line, so `filtered_gossip_options`' level-10 gate has nothing to key on without this pass.
+/// Falls through to the raw `action` for every other row (the importer-reclassify-by-name pattern —
+/// same shape as the wolf-faction and spell-kind reclassification passes).
+fn reclassify_gossip_option_action(text: &str, raw_action: u32) -> u32 {
+    if text == "I wish to unlearn my talents." {
+        lyracore_shared::constants::gossip_option::UNLEARNTALENTS
+    } else {
+        raw_action
+    }
+}
+
 /// Build `game_gossip_menu` + `game_npc_text` + `game_npc_text_slot` + `game_gossip_option` SQL rows
 /// from the cmangos dump for the given in-box creature template entries. Two `npc_text` data paths:
 ///   • Full 81-col npc_text rows → text extracted directly.
@@ -1992,7 +2025,10 @@ fn build_gossip_sql(dump: &str, creature_entries: &std::collections::HashSet<u64
         for (option_index, row) in sorted_opts.iter().enumerate() {
             let icon: u32 = field(row, gmo::OPTION_ICON).parse().unwrap_or(0);
             let text = resolve_gossip_option_text(row, &broadcast);
-            let action: u32 = field(row, gmo::OPTION_TYPE).parse().unwrap_or(0);
+            let action: u32 = reclassify_gossip_option_action(
+                &text,
+                field(row, gmo::OPTION_TYPE).parse().unwrap_or(0),
+            );
             let action_menu_id: u32 = field(row, gmo::ACTION_MENU_ID).parse().unwrap_or(0);
             let (cond_type, cond_value1, cond_value2) =
                 resolve_gossip_option_condition(row, &conditions);
@@ -3849,10 +3885,17 @@ fn build_dump_plan(
         }
         let db_guid: u64 = field(&row, go::GUID).parse().unwrap_or(0);
         let o: f64 = field(&row, go::O).parse().unwrap_or(0.0);
+        // The spawn quaternion (#515) — carried verbatim; 0,0,0,0 (a row with no rotation columns,
+        // or a genuinely-identity spawn) is a valid packed value, not a parse failure, so the
+        // fallback is `0.0` exactly like every other numeric field this loop parses.
+        let rot0: f64 = field(&row, go::ROT0).parse().unwrap_or(0.0);
+        let rot1: f64 = field(&row, go::ROT1).parse().unwrap_or(0.0);
+        let rot2: f64 = field(&row, go::ROT2).parse().unwrap_or(0.0);
+        let rot3: f64 = field(&row, go::ROT3).parse().unwrap_or(0.0);
         let initial_state = go_initial_state(meta.stored_type, meta.data0);
         // `m = map` (the row's own map, never args.map) — the packed-spawn precedent above.
         go_packed_rows.push(format!(
-            "{g},{id},{m},{x},{y},{z},{o},{initial_state}",
+            "{g},{id},{m},{x},{y},{z},{o},{initial_state},{rot0},{rot1},{rot2},{rot3}",
             g = go_guid(db_guid),
             m = map
         ));
@@ -4470,6 +4513,11 @@ fn main() -> Result<()> {
     // `--nav` → the 241 nav-grid rasterizer (see nav.rs).
     if args.nav.is_some() {
         return nav::run(&args);
+    }
+
+    // `--vmap` → the #520/#521 exact vmap triangle extract + pack + import (see vmap.rs).
+    if args.vmap.is_some() {
+        return vmap::run(&args);
     }
 
     // `--dbc` alone → standalone DBC mode (proof/checks), OR `--dbc --spells` → the Spell.dbc importer,
@@ -5829,6 +5877,34 @@ mod tests {
     }
 
     #[test]
+    fn gameobject_spawn_quaternion_rides_through_the_packed_row_verbatim() {
+        // Issue #515: the importer used to drop rotation_0..3 entirely (only `orientation` carried).
+        // A bench with a real, non-trivial cmangos spawn quaternion must reach the packed
+        // guid,id,map,x,y,z,o,initial_state,rot0,rot1,rot2,rot3 row byte-verbatim, in that order.
+        let dump = format!(
+            "INSERT INTO `gameobject_template` VALUES (446,0,259,'Wooden Bench',0,0,0,0,0,0,0,0); \
+             INSERT INTO `gameobject` VALUES \
+             (60,446,0,0,-8949.95,-132.493,83.5312,1.57,0.1,0.2,0.70710678,0.70710678);",
+        );
+        let args = test_args();
+        let plan = build_dump_plan(&dump, &args, &None, &None).expect("build_dump_plan");
+        let go_row = plan
+            .go_batches
+            .join(";")
+            .split(';')
+            .find(|r| r.split(',').nth(1) == Some("446"))
+            .map(|r| r.to_string())
+            .unwrap_or_else(|| panic!("the bench GO must import"));
+        let f: Vec<&str> = go_row.split(',').collect();
+        assert_eq!(f.len(), 12, "packed row carries all 12 fields: {go_row}");
+        assert_eq!(f[6], "1.57", "orientation rides through: {go_row}");
+        assert_eq!(f[8], "0.1", "rot0 rides through: {go_row}");
+        assert_eq!(f[9], "0.2", "rot1 rides through: {go_row}");
+        assert_eq!(f[10], "0.70710678", "rot2 rides through: {go_row}");
+        assert_eq!(f[11], "0.70710678", "rot3 rides through: {go_row}");
+    }
+
+    #[test]
     fn creature_movement_template_expands_onto_waypoint_spawns_without_direct_rows() {
         // Two waypoint-typed (MovementType=2) spawns of the same entry 644 on map 36, one direct-
         // routed spawn of entry 645: the entry-keyed creature_movement_template path expands onto
@@ -5905,6 +5981,7 @@ mod tests {
             pack_client: None,
             dump_collision: None,
             nav: None,
+            vmap: None,
             print_extents: false,
             spells: false,
             talents: false,

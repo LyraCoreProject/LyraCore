@@ -36,15 +36,41 @@ const MAX_QUAD_RISE: f32 = 4.97;
 /// Reducer batch ceiling (bytes of packed payload) — same ballpark the other importers respect.
 const BATCH_BYTES: usize = 28_000;
 
-type Tri = [[f32; 3]; 3];
+pub(crate) type Tri = [[f32; 3]; 3];
 
 // ---------------------------------------------------------------------------------------------
 // Geometry extraction
 // ---------------------------------------------------------------------------------------------
 
-/// Collidable triangles of one WMO (all groups), model-local coords. MOPY rule (wowdev):
-/// collidable = F_COLLISION (0x08) set, OR neither F_DETAIL (0x04) nor F_NOCAMCOLLIDE (0x02).
-fn wmo_tris(chain: &mut PatchChain, name: &str) -> Result<Vec<Tri>> {
+/// One WMO collision triangle plus the group it came from — `vmap.rs` (#520) packs this
+/// per-triangle metadata (source class + group id + MOGP flags); `nav.rs`'s rasterizer only
+/// needs `.tri`.
+pub(crate) struct WmoTri {
+    pub(crate) tri: Tri,
+    pub(crate) group_id: u32,
+    pub(crate) mogp_flags: u32,
+}
+
+/// One placement's loaded collision mesh — WMO carries per-triangle group metadata, M2 doesn't
+/// (a doodad has no groups/MOGP flags).
+pub(crate) enum Mesh {
+    Wmo(Vec<WmoTri>),
+    M2(Vec<Tri>),
+}
+
+impl Mesh {
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Mesh::Wmo(v) => v.len(),
+            Mesh::M2(v) => v.len(),
+        }
+    }
+}
+
+/// Collidable triangles of one WMO (all groups), model-local coords, tagged with group id + MOGP
+/// flags. MOPY rule (wowdev): collidable = F_COLLISION (0x08) set, OR neither F_DETAIL (0x04) nor
+/// F_NOCAMCOLLIDE (0x02).
+fn wmo_tris(chain: &mut PatchChain, name: &str) -> Result<Vec<WmoTri>> {
     let root_bytes = chain
         .read_file(name)
         .with_context(|| format!("reading WMO root {name}"))?;
@@ -79,11 +105,15 @@ fn wmo_tris(chain: &mut PatchChain, name: &str) -> Result<Vec<Tri>> {
             if c >= v.len() || b >= v.len() || a >= v.len() {
                 continue;
             }
-            tris.push([
-                [v[a].x, v[a].y, v[a].z],
-                [v[b].x, v[b].y, v[b].z],
-                [v[c].x, v[c].y, v[c].z],
-            ]);
+            tris.push(WmoTri {
+                tri: [
+                    [v[a].x, v[a].y, v[a].z],
+                    [v[b].x, v[b].y, v[b].z],
+                    [v[c].x, v[c].y, v[c].z],
+                ],
+                group_id: group.group_index,
+                mogp_flags: group.flags,
+            });
         }
     }
     Ok(tris)
@@ -139,19 +169,19 @@ fn m2_tris(chain: &mut PatchChain, name: &str) -> Vec<Tri> {
 /// Placement-space position → world: (K − p.z, K − p.x, p.y). Verified empirically in the 240
 /// spike (nsabbey placement (17245, 80, 25964) → world (−8897, −178, 80), matching the live
 /// abbey coords).
-fn place_pos(p: [f32; 3]) -> [f32; 3] {
+pub(crate) fn place_pos(p: [f32; 3]) -> [f32; 3] {
     [PLACE_K - p[2], PLACE_K - p[0], p[1]]
 }
 
 /// One candidate local→world convention: optional axis shuffle then yaw about world +Z.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Convention {
+pub(crate) struct Convention {
     /// false: local verts are already world-axis Z-up (v as-is).
     /// true: local verts are placement-axis Y-up (shuffle like `place_pos`: (−z, −x, y)).
-    shuffle: bool,
+    pub(crate) shuffle: bool,
     /// world yaw = `sign` × rot[1] + `offset_deg`, in degrees.
-    sign: f32,
-    offset_deg: f32,
+    pub(crate) sign: f32,
+    pub(crate) offset_deg: f32,
 }
 
 fn apply(
@@ -176,7 +206,7 @@ fn apply(
     ]
 }
 
-fn aabb(points: impl Iterator<Item = [f32; 3]>) -> ([f32; 3], [f32; 3]) {
+pub(crate) fn aabb(points: impl Iterator<Item = [f32; 3]>) -> ([f32; 3], [f32; 3]) {
     let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
     for p in points {
         for k in 0..3 {
@@ -190,7 +220,7 @@ fn aabb(points: impl Iterator<Item = [f32; 3]>) -> ([f32; 3], [f32; 3]) {
 /// Every MOVT vertex of a WMO (all groups, NO collidability filter) — calibration compares
 /// against MODF bounds, which cover ALL geometry; the collidable subset can be much smaller
 /// (Stormwind is 2/3 detail-flagged) and its AABB never matches.
-fn wmo_all_verts(chain: &mut PatchChain, name: &str) -> Result<Vec<[f32; 3]>> {
+pub(crate) fn wmo_all_verts(chain: &mut PatchChain, name: &str) -> Result<Vec<[f32; 3]>> {
     let root_bytes = chain
         .read_file(name)
         .with_context(|| format!("reading WMO root {name}"))?;
@@ -218,7 +248,7 @@ fn wmo_all_verts(chain: &mut PatchChain, name: &str) -> Result<Vec<[f32; 3]>> {
 /// Pick the convention that reproduces the MODF world AABBs across the calibration placements
 /// (mean per-axis corner error, capped sample). Hard-fails above 3 yd — a wrong convention
 /// must never silently rasterize rotated buildings.
-fn calibrate(samples: &[(&Placement, Vec<[f32; 3]>)]) -> Result<Convention> {
+pub(crate) fn calibrate(samples: &[(&Placement, Vec<[f32; 3]>)]) -> Result<Convention> {
     let mut candidates = Vec::new();
     for shuffle in [false, true] {
         for sign in [1.0f32, -1.0] {
@@ -316,14 +346,14 @@ fn calibrate(samples: &[(&Placement, Vec<[f32; 3]>)]) -> Result<Convention> {
 // Tile collection
 // ---------------------------------------------------------------------------------------------
 
-struct Placement {
-    name: String,
-    is_wmo: bool,
-    position: [f32; 3],
-    rotation: [f32; 3],
-    scale: f32,
-    bounds_min: Option<[f32; 3]>,
-    bounds_max: Option<[f32; 3]>,
+pub(crate) struct Placement {
+    pub(crate) name: String,
+    pub(crate) is_wmo: bool,
+    pub(crate) position: [f32; 3],
+    pub(crate) rotation: [f32; 3],
+    pub(crate) scale: f32,
+    pub(crate) bounds_min: Option<[f32; 3]>,
+    pub(crate) bounds_max: Option<[f32; 3]>,
 }
 
 fn offset_to_index(names: &[String]) -> BTreeMap<u32, usize> {
@@ -625,26 +655,29 @@ fn rasterize_cell(cell: &crate::terrain::CellRow, tris: &[&WorldTri]) -> Option<
 }
 
 // ---------------------------------------------------------------------------------------------
-// Entry point
+// Shared passes — reused verbatim by `vmap.rs` (#520): tile scan (heights + deduped placements),
+// mesh loading, and rotation calibration are identical between the two importer modes; only the
+// consumption (rasterize vs. transform-and-pack) differs.
 // ---------------------------------------------------------------------------------------------
 
-pub(crate) fn run(args: &crate::Args) -> Result<()> {
-    let data_dir = Path::new(args.nav.as_ref().expect("caller checked"));
-    let mut chain = crate::collision::open_geometry_chain(data_dir)?;
-    let map_name = crate::terrain::map_dir(args.map as u32)?;
-    let map_id = args.map as u32;
+pub(crate) struct TileScan {
+    pub(crate) cells: Vec<crate::terrain::CellRow>,
+    pub(crate) placements: Vec<Placement>,
+    pub(crate) tiles_read: u32,
+}
 
-    let (cell_x_min, cell_x_max, cell_y_min, cell_y_max) =
-        crate::terrain::slice_cell_range(args.bbox, args.center, args.radius);
-    for c in [cell_x_min, cell_x_max, cell_y_min, cell_y_max] {
-        if !(0..1024).contains(&c) {
-            bail!("slice cell index {c} outside the map square — check --box/--center/--radius");
-        }
-    }
+/// Pass 1: parse every ADT tile in the cell-index box — heights (via the shared `collect_cells`)
+/// plus WMO/M2 placements deduped by `unique_id` (placements repeat on adjacent tiles).
+pub(crate) fn scan_tiles(
+    chain: &mut PatchChain,
+    map_name: &str,
+    map_id: u32,
+    cell_range: (i32, i32, i32, i32),
+) -> Result<TileScan> {
+    let (cell_x_min, cell_x_max, cell_y_min, cell_y_max) = cell_range;
     let (tx_min, tx_max) = (cell_x_min / 16, cell_x_max / 16);
     let (ty_min, ty_max) = (cell_y_min / 16, cell_y_max / 16);
 
-    // Pass 1: parse tiles — heights (via the shared collect_cells) + deduped placements.
     let mut cells: Vec<crate::terrain::CellRow> = Vec::new();
     let mut placements: Vec<Placement> = Vec::new();
     let mut seen_ids: HashSet<(bool, u32)> = HashSet::new();
@@ -706,35 +739,38 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
             }
         }
     }
-    if cells.is_empty() {
-        bail!("no MCNK cells intersected the slice");
-    }
-    println!(
-        "nav: {tiles_read} tile(s), {} cells, {} unique placements ({} WMO)",
-        cells.len(),
-        placements.len(),
-        placements.iter().filter(|p| p.is_wmo).count()
-    );
+    Ok(TileScan {
+        cells,
+        placements,
+        tiles_read,
+    })
+}
 
-    // Pass 2: load each referenced model's collision mesh once.
-    let mut meshes: HashMap<String, Vec<Tri>> = HashMap::new();
-    for p in &placements {
+/// Pass 2: load each referenced model's collision mesh once (WMO keeps per-triangle group
+/// metadata; M2 doesn't have groups).
+pub(crate) fn load_meshes(
+    chain: &mut PatchChain,
+    placements: &[Placement],
+) -> Result<HashMap<String, Mesh>> {
+    let mut meshes: HashMap<String, Mesh> = HashMap::new();
+    for p in placements {
         if !meshes.contains_key(&p.name) {
-            let tris = if p.is_wmo {
-                wmo_tris(&mut chain, &p.name)?
+            let mesh = if p.is_wmo {
+                Mesh::Wmo(wmo_tris(chain, &p.name)?)
             } else {
-                m2_tris(&mut chain, &p.name)
+                Mesh::M2(m2_tris(chain, &p.name))
             };
-            meshes.insert(p.name.clone(), tris);
+            meshes.insert(p.name.clone(), mesh);
         }
     }
-    let mesh_tris: usize = meshes.values().map(Vec::len).sum();
-    println!(
-        "nav: {} unique models, {mesh_tris} local tris",
-        meshes.len()
-    );
+    Ok(meshes)
+}
 
-    // Pass 3: calibrate the rotation convention against MODF bounds (WMOs only), capped sample.
+/// Pass 3: calibrate the rotation convention against MODF bounds (WMOs only), capped sample.
+pub(crate) fn calibrate_from_placements(
+    chain: &mut PatchChain,
+    placements: &[Placement],
+) -> Result<Convention> {
     let mut samples: Vec<(&Placement, Vec<[f32; 3]>)> = Vec::new();
     let mut sample_verts: HashMap<&str, Vec<[f32; 3]>> = HashMap::new();
     let mut sampled_names: HashSet<&str> = HashSet::new();
@@ -747,7 +783,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         let verts = match sample_verts.get(p.name.as_str()) {
             Some(v) => v.clone(),
             None => {
-                let v = wmo_all_verts(&mut chain, &p.name)?;
+                let v = wmo_all_verts(chain, &p.name)?;
                 sample_verts.insert(&p.name, v.clone());
                 v
             }
@@ -756,13 +792,66 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
             samples.push((p, verts));
         }
     }
-    let conv = calibrate(&samples)?;
+    calibrate(&samples)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------------------------
+
+pub(crate) fn run(args: &crate::Args) -> Result<()> {
+    let data_dir = Path::new(args.nav.as_ref().expect("caller checked"));
+    let mut chain = crate::collision::open_geometry_chain(data_dir)?;
+    let map_name = crate::terrain::map_dir(args.map as u32)?;
+    let map_id = args.map as u32;
+
+    let (cell_x_min, cell_x_max, cell_y_min, cell_y_max) =
+        crate::terrain::slice_cell_range(args.bbox, args.center, args.radius);
+    for c in [cell_x_min, cell_x_max, cell_y_min, cell_y_max] {
+        if !(0..1024).contains(&c) {
+            bail!("slice cell index {c} outside the map square — check --box/--center/--radius");
+        }
+    }
+
+    // Pass 1: parse tiles — heights + deduped placements.
+    let scan = scan_tiles(
+        &mut chain,
+        map_name,
+        map_id,
+        (cell_x_min, cell_x_max, cell_y_min, cell_y_max),
+    )?;
+    let (cells, placements) = (scan.cells, scan.placements);
+    if cells.is_empty() {
+        bail!("no MCNK cells intersected the slice");
+    }
+    println!(
+        "nav: {} tile(s), {} cells, {} unique placements ({} WMO)",
+        scan.tiles_read,
+        cells.len(),
+        placements.len(),
+        placements.iter().filter(|p| p.is_wmo).count()
+    );
+
+    // Pass 2: load each referenced model's collision mesh once.
+    let meshes = load_meshes(&mut chain, &placements)?;
+    let mesh_tris: usize = meshes.values().map(Mesh::len).sum();
+    println!(
+        "nav: {} unique models, {mesh_tris} local tris",
+        meshes.len()
+    );
+
+    // Pass 3: calibrate the rotation convention against MODF bounds (WMOs only), capped sample.
+    let conv = calibrate_from_placements(&mut chain, &placements)?;
 
     // Pass 4: transform to world space + bin by terrain cell.
     let mut world_tris: Vec<WorldTri> = Vec::new();
     for p in &placements {
         let pos_w = place_pos(p.position);
-        for t in &meshes[&p.name] {
+        let local_tris: Vec<Tri> = match &meshes[&p.name] {
+            Mesh::Wmo(v) => v.iter().map(|w| w.tri).collect(),
+            Mesh::M2(v) => v.clone(),
+        };
+        for t in &local_tris {
             let w: Tri = [
                 apply(conv, p.rotation, p.scale, pos_w, t[0]),
                 apply(conv, p.rotation, p.scale, pos_w, t[1]),

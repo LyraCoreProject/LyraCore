@@ -12,7 +12,7 @@
 //! them. [entity]
 
 use spacetimedb::{
-    client_visibility_filter, reducer, table, Filter, Identity, ReducerContext, Table,
+    table, Identity, ReducerContext, Table,
 };
 
 use crate::spell::spellbook::createinfo_row_matches; // shared (race,class) wildcard-match helper
@@ -57,11 +57,6 @@ pub struct PlayerAction {
     pub action: u32,
     pub action_type: u8,
 }
-
-/// A player connection sees only its own action-bar rows (mirrors the item/skill/spell RLS filters).
-#[client_visibility_filter]
-const PLAYER_ACTION_RLS: Filter =
-    Filter::Sql("SELECT * FROM game_player_action WHERE owner_identity = :sender");
 
 // Character-owned sweeps: action-bar rows are deleted on character delete, re-owned (identity
 // re-stamp) on a relog under a changed gateway identity — same pattern as `game_player_spell`.
@@ -144,25 +139,6 @@ pub(crate) fn grant_createinfo_actions(
             action_type,
         });
     }
-}
-
-/// Persist one action-bar button change (`CMSG_SET_ACTION_BUTTON` — the client sends one per
-/// drag/clear, and expects the server to echo the full bar back at login via SMSG_ACTION_BUTTONS).
-/// Upserts by (character, button); `action == 0` is the drag-OFF clear (delete the row). Without
-/// this every bar change was LOST on relog — only the creation-seeded buttons survived (user find:
-/// a talent-learned Consecration vanished from the bar while staying in the book). `action` is the
-/// client's packed u24 (spell id, or item id + misc<<16), `action_type` the high type byte —
-/// stored verbatim; the login builder re-packs `action | type << 24`. Owner-authorized.
-#[reducer]
-pub fn set_action_button(
-    ctx: &ReducerContext,
-    button: u8,
-    action: u32,
-    action_type: u8,
-) -> Result<(), String> {
-    let character = crate::helpers::entity_by_owner(ctx, ctx.sender())
-        .ok_or_else(|| "not in world".to_string())?;
-    apply_set_action_button(ctx, character, button, action, action_type)
 }
 
 /// The action-bar write core, actor-explicit (#479): everything [`set_action_button`] does after

@@ -23,6 +23,11 @@ pub struct CreatureSpline {
     pub spline_id: u32,
     pub run: bool,
     pub cell: i64,
+    // #518, hand-appended (docs/danger-zones.md §1.2 END-append rule): a facing-only leg (the
+    // mover doesn't move, `sx/sy/sz` == `dx/dy/dz`, `dur_ms` 0). `facing_angle` is the new heading
+    // when `facing` is true; ignored otherwise.
+    pub facing: bool,
+    pub facing_angle: f32,
 }
 
 impl __sdk::InModule for CreatureSpline {
@@ -49,6 +54,8 @@ pub struct CreatureSplineCols {
     pub spline_id: __sdk::__query_builder::Col<CreatureSpline, u32>,
     pub run: __sdk::__query_builder::Col<CreatureSpline, bool>,
     pub cell: __sdk::__query_builder::Col<CreatureSpline, i64>,
+    pub facing: __sdk::__query_builder::Col<CreatureSpline, bool>,
+    pub facing_angle: __sdk::__query_builder::Col<CreatureSpline, f32>,
 }
 
 impl __sdk::__query_builder::HasCols for CreatureSpline {
@@ -71,6 +78,8 @@ impl __sdk::__query_builder::HasCols for CreatureSpline {
             spline_id: __sdk::__query_builder::Col::new(table_name, "spline_id"),
             run: __sdk::__query_builder::Col::new(table_name, "run"),
             cell: __sdk::__query_builder::Col::new(table_name, "cell"),
+            facing: __sdk::__query_builder::Col::new(table_name, "facing"),
+            facing_angle: __sdk::__query_builder::Col::new(table_name, "facing_angle"),
         }
     }
 }

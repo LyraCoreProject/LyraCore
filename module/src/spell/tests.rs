@@ -698,7 +698,8 @@ fn aura_moves_vitals_gate() {
 
 /// The sheet-recompute gate: wider than `aura_moves_vitals` — every `A_MOD_STAT` attribute (including
 /// STR/AGI/SPI, which are inert for vitals) trips it, and so does an `A_MOD_COMBAT(COMBAT_ATTACK_POWER)`
-/// aura (Battle Shout) even though that kind never moves a pool.
+/// aura (Battle Shout) or an `A_MOD_COMBAT(COMBAT_CRIT)` aura (#532 — a crit-rating buff like the test
+/// "Combat Insight") even though neither kind moves a pool.
 #[test]
 fn aura_moves_sheet_gate() {
     assert!(aura_moves_sheet(A_MOD_STAT, STAT_STR as i32));
@@ -708,8 +709,9 @@ fn aura_moves_sheet_gate() {
     assert!(aura_moves_sheet(A_MOD_STAT, STAT_SPI as i32));
     assert!(aura_moves_sheet(A_MOD_STAT, STAT_ALL as i32));
     assert!(aura_moves_sheet(A_MOD_COMBAT, COMBAT_ATTACK_POWER as i32));
-    // A combat aura on a non-AP field (e.g. crit) must NOT trip the sheet recompute.
-    assert!(!aura_moves_sheet(A_MOD_COMBAT, COMBAT_CRIT as i32));
+    assert!(aura_moves_sheet(A_MOD_COMBAT, COMBAT_CRIT as i32));
+    // A combat aura on a field the sheet doesn't render (e.g. hit rating) must NOT trip it.
+    assert!(!aura_moves_sheet(A_MOD_COMBAT, COMBAT_HIT as i32));
     // A different aura kind with an AP-looking p0 still must NOT trip (the kind gate is first).
     assert!(!aura_moves_sheet(A_PERIODIC_DAMAGE, COMBAT_ATTACK_POWER as i32));
 }

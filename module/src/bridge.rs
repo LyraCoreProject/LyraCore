@@ -14,11 +14,10 @@
 //! replace the match when a second package needs registration without touching this file.
 
 use spacetimedb::{
-    client_visibility_filter, reducer, table, Filter, Identity, ReducerContext, Table, Timestamp,
+    table, Identity, ReducerContext, Table, Timestamp,
 };
 
 use crate::game_character;
-use crate::helpers::entity_by_owner; // accessor trait
 
 /// One server→client addon message: relayed by the gateway as an addon-language whisper, arriving
 /// in the recipient's addons as `CHAT_MSG_ADDON` with `prefix == "STC"`. TTL-reaped with the other
@@ -36,12 +35,6 @@ pub struct AddonMessage {
     pub created_at: Timestamp,
 }
 
-/// A connection drains only its own addon messages (whisper-event RLS shape). The gateway's
-/// coordinator relay bypasses this by design (owner token) and self-filters per session.
-#[client_visibility_filter]
-const ADDON_MESSAGE_RLS: Filter =
-    Filter::Sql("SELECT * FROM game_addon_message WHERE recipient_identity = :sender");
-
 /// Queue an addon message for `character_guid`'s live session. The recipient identity comes off
 /// the durable character row (its owner binding) — a logged-out recipient's row is inserted and
 /// simply reaped unread (the 1s event TTL), which is the right semantics for UI state.
@@ -56,16 +49,6 @@ pub(crate) fn send(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload
         payload: payload.to_string(),
         created_at: ctx.timestamp,
     });
-}
-
-/// The client→server command entry point: the gateway forwards a parsed `STC` envelope here ON
-/// THE PLAYER'S CONNECTION, so `ctx.sender()` carries the player's authority like any reducer.
-/// Unknown commands log and drop (another server's addon may share the airwaves by accident —
-/// never a client-visible error).
-#[reducer]
-pub fn client_command(ctx: &ReducerContext, cmd: String, payload: String) -> Result<(), String> {
-    let e = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
-    apply_client_command(ctx, e.guid, &cmd, &payload)
 }
 
 /// The shared core behind [`client_command`] and its gateway twin `gw_client_command` (#479):

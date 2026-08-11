@@ -6,7 +6,7 @@
 //! (`grant_createinfo_spells`, from the seeded `game_createinfo_spell` data), and talents/trainers/
 //! quest rewards insert on top of it. [entity]
 
-use spacetimedb::{client_visibility_filter, table, Filter, Identity, ReducerContext, Table};
+use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use crate::{game_aura, game_spell}; // racial-passive attribute lookup (game_spell); aura strip (game_aura)
 
@@ -22,11 +22,6 @@ pub struct PlayerSpell {
     pub owner_identity: Identity,
     pub spell_id: u32,
 }
-
-/// A player connection sees only its own learned spells (mirrors the character/skill/talent RLS filters).
-#[client_visibility_filter]
-const PLAYER_SPELL_RLS: Filter =
-    Filter::Sql("SELECT * FROM game_player_spell WHERE owner_identity = :sender");
 
 // Character-owned sweeps: learned spells are deleted on character delete, re-owned
 // (identity re-stamp) on a relog under a changed gateway identity.

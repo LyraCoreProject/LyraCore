@@ -2,9 +2,7 @@
 
 // The `#[table(accessor = X)]` macro generates a trait named `X` that provides `ctx.db.X()`; it
 // must be in scope wherever a submodule reads a table. Import the accessor traits + row types.
-use crate::{
-    game_account, game_character, game_operator, game_world_entity, Account, Character, WorldEntity,
-};
+use crate::{game_character, game_operator, game_world_entity, Character, WorldEntity};
 use spacetimedb::{Identity, ReducerContext, Table};
 
 /// Gate a privileged owner-fired reducer to the trusted operator identity (the gateway coordinator +
@@ -17,14 +15,6 @@ pub fn require_operator(ctx: &ReducerContext) -> Result<(), String> {
         Some(_) => Err("operator only".to_string()),
         None => Err("operator not claimed".to_string()),
     }
-}
-
-/// The account currently bound to `identity` (set at `establish_session`), if any.
-pub fn account_by_identity(ctx: &ReducerContext, identity: Identity) -> Option<Account> {
-    ctx.db
-        .game_account()
-        .iter()
-        .find(|a| a.identity == Some(identity))
 }
 
 /// The live world entity owned by `owner`, if in world. Indexed probe through `by_owner` (perf
@@ -390,6 +380,7 @@ mod tests {
             sheet_ap_mods: 0,
             sheet_dmg_min: 0,
             sheet_dmg_max: 0,
+            sheet_crit_bp: 0,
         }
     }
 

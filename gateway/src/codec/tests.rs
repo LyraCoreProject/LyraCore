@@ -3026,6 +3026,32 @@ fn monster_move_run_flag_selects_the_run_spline_bit() {
     assert_eq!(running.move_type, SMSG_MONSTER_MOVE_MonsterMoveType::Normal);
 }
 
+#[test]
+fn monster_move_facing_carries_the_angle_and_a_degenerate_single_point_spline() {
+    // #518: a stand-and-swing creature turns to face its target without moving. The wire shape must
+    // be the `FacingAngle` variant (the client's ONLY source of a non-moving heading change), zero
+    // duration, and a single-point spline at the mover's own position (there IS no destination).
+    let pos = Vector3d {
+        x: 5.0,
+        y: -3.0,
+        z: 12.0,
+    };
+    let msg = build_monster_move_facing(9, pos, 1.75, 42);
+    assert_eq!(msg.guid.guid(), 9);
+    assert_eq!(msg.spline_point, pos);
+    assert_eq!(msg.spline_id, 42);
+    assert_eq!(
+        msg.move_type,
+        SMSG_MONSTER_MOVE_MonsterMoveType::FacingAngle { angle: 1.75 }
+    );
+    assert_eq!(msg.duration, 0, "facing-only — nothing to interpolate");
+    assert_eq!(
+        msg.splines,
+        vec![pos],
+        "degenerate one-point spline at the mover's own position"
+    );
+}
+
 // ---- P1: item.rs build_buy_failed 5-way map + build_item_create_object CONTAINER branch --------
 
 #[test]

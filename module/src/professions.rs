@@ -12,7 +12,7 @@
 //! `apply_enchant_item`/`entry_is_beast` call sites (debug.rs's twins) keep compiling unchanged —
 //! `loot.rs` re-exports this module's public surface.
 
-use spacetimedb::{reducer, ReducerContext};
+use spacetimedb::{ReducerContext};
 
 use crate::game_creature_template;
 use crate::game_fishing_loot;
@@ -21,7 +21,6 @@ use crate::game_item_template;
 use crate::game_player_skill;
 use crate::game_skinning_loot;
 use crate::game_world_entity;
-use crate::helpers::entity_by_owner;
 use crate::loot::LOOT_RANGE_SQ;
 
 // ===========================================================================================
@@ -206,15 +205,6 @@ pub(crate) fn skin_corpse(
     Ok(())
 }
 
-/// Skin a beast corpse (`CMSG_LOOT` on an already-looted beast body). Grants Light Leather, climbs
-/// Skinning, marks the corpse skinned. All gates live in `skin_corpse`; `Err` = client sees an empty
-/// loot window (the leather was not granted), which is the correct safe fallback.
-#[reducer]
-pub fn skin(ctx: &ReducerContext, corpse_guid: u64) -> Result<(), String> {
-    let p = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "skinner not in world".to_string())?;
-    skin_corpse(ctx, p.guid, corpse_guid)
-}
-
 // ===========================================================================================
 //  FISHING (completing the 13) — a bounded new gather mechanic: an immediate-catch reducer modeled on
 //  `skin_corpse` (auto-learn → grant a fish → climb the line). No bobber/cast/timer (DEFERRED), and a
@@ -293,15 +283,6 @@ pub(crate) fn apply_fish(ctx: &ReducerContext, guid: u64) -> Result<(), String> 
     Ok(())
 }
 
-/// FISH (`CMSG`-less player action for the alpha): cast at the player's spot, catch one fish, climb
-/// Fishing. Authorized via `ctx.sender` like every other player action. The bobber/cast/timer + the
-/// near-water gate are DEFERRED — this is the immediate-catch alpha mechanic.
-#[reducer]
-pub fn fish(ctx: &ReducerContext) -> Result<(), String> {
-    let p = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "fisher not in world".to_string())?;
-    apply_fish(ctx, p.guid)
-}
-
 // ===========================================================================================
 //  ENCHANTING (completing the 13) — two reducers over the per-instance enchant overlay (`enchant_id` on
 //  ItemInstance + the `rules::ENCHANTS` stat table). `disenchant` consumes an equipped item → mats +
@@ -375,14 +356,6 @@ pub(crate) fn apply_disenchant(ctx: &ReducerContext, guid: u64, slot: u8) -> Res
     Ok(())
 }
 
-/// DISENCHANT the item in equipment `slot` for mats + Enchanting skill. Authorized via `ctx.sender`.
-#[reducer]
-pub fn disenchant(ctx: &ReducerContext, slot: u8) -> Result<(), String> {
-    let p =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "enchanter not in world".to_string())?;
-    apply_disenchant(ctx, p.guid, slot)
-}
-
 /// ENCHANT the item in `target_slot` with `enchant_id`: validate the id (it must be a known enchant in
 /// `rules::ENCHANTS`), consume the enchanting mats, stamp `enchant_id` onto the instance, climb Enchanting.
 /// The core (resolved guid), shared by the `enchant_item` reducer + `debug_enchant_item` twin. The enchant
@@ -426,15 +399,6 @@ pub(crate) fn apply_enchant_item(
         crate::spell::recompute_sheet(ctx, guid);
     }
     Ok(())
-}
-
-/// ENCHANT the item in `target_slot` with `enchant_id` (consumes mats, climbs Enchanting). Authorized via
-/// `ctx.sender`.
-#[reducer]
-pub fn enchant_item(ctx: &ReducerContext, target_slot: u8, enchant_id: u32) -> Result<(), String> {
-    let p =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "enchanter not in world".to_string())?;
-    apply_enchant_item(ctx, p.guid, target_slot, enchant_id)
 }
 
 #[cfg(test)]

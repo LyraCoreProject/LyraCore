@@ -59,7 +59,6 @@ use crate::game_corpse_loot;
 use crate::game_group; // Group row: loot_method/loot_threshold/rr_cursor/master_looter_guid
 use crate::game_item_template;
 use crate::game_world_entity;
-use crate::helpers::entity_by_owner;
 use lyracore_shared::loot_roll::{event_kind as roll_event_kind, vote_kind};
 
 use super::CorpseLoot;
@@ -420,23 +419,6 @@ fn start_roll(
     for &guid in recipients {
         crate::group::push_event(ctx, guid, roll_event_kind::ROLL_START, 0, payload.clone());
     }
-}
-
-/// `CMSG_LOOT_ROLL`: record the caller's vote on the roll open for `(corpse_guid, loot_slot)`. A
-/// NEED/GREED vote rolls 1-100 IMMEDIATELY (mirrors real vanilla — `SMSG_LOOT_ROLL`'s number is
-/// generated at vote time, not deferred; see `LootRollVote` doc). Pushes `ROLL_VOTE` to every
-/// eligible member, then resolves NOW if this was the last outstanding vote (deadline-driven
-/// resolution is the separate `sweep_loot_rolls` path for an AFK/disconnected voter). Idempotent
-/// guard: a second vote from the same guid on the same roll is rejected (no re-vote/flip-flop).
-#[reducer]
-pub fn loot_roll(
-    ctx: &ReducerContext,
-    corpse_guid: u64,
-    loot_slot: u32,
-    vote: u8,
-) -> Result<(), String> {
-    let voter = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
-    cast_vote_on(ctx, corpse_guid, loot_slot as u8, voter.guid, vote)
 }
 
 /// The identity-free vote core (issue #50, mirrors `group.rs`'s `*_on` cores): shared by the player
@@ -832,24 +814,6 @@ pub fn clear_promoted_loot_roll(ctx: &ReducerContext, roll_id: u64) -> Result<()
     crate::helpers::require_operator(ctx)?;
     cleanup_roll(ctx, roll_id);
     Ok(())
-}
-
-/// `CMSG_LOOT_MASTER_GIVE`: the group's master looter assigns a `master_only` row to `target_guid`
-/// (any currently-eligible recipient of that corpse's kill — `game_corpse_loot_eligible`, not
-/// necessarily the group's CURRENT roster, matching the roll-vote snapshot's semantics). Validates
-/// the caller IS the row's stamped master (`designated_looter_guid`) and the row really is
-/// `master_only`. Grants directly; `Err` (inventory full) rolls the whole call back (nothing
-/// consumed) — the master can retry once the recipient frees space, matching every other
-/// `grant_item`-gated reducer's rollback shape in this codebase.
-#[reducer]
-pub fn loot_master_give(
-    ctx: &ReducerContext,
-    corpse_guid: u64,
-    loot_slot: u8,
-    target_guid: u64,
-) -> Result<(), String> {
-    let master = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
-    apply_master_give(ctx, master.guid, corpse_guid, loot_slot, target_guid)
 }
 
 /// The identity-free master-give core (#479, the `cast_vote_on` shape): everything

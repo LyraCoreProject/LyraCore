@@ -13,9 +13,8 @@
 //! known" maps to Unavailable and "level too low" to NotEnoughSkill (cosmetic — the client pre-gates the
 //! Learn button on the Green state from the list). [entity]
 
-use spacetimedb::{reducer, table, ReducerContext};
+use spacetimedb::{table, ReducerContext};
 
-use crate::helpers::entity_by_owner;
 use crate::{
     game_player_skill, game_spell_chain, game_spell_effect, game_world_entity, WorldEntity,
 };
@@ -330,20 +329,6 @@ pub(crate) fn apply_trainer_buy(
         )),
         Err(code) => Err(format!("[{code}] not enough money (need {})", offered.cost)),
     }
-}
-
-/// Learn `spell_id` from the trainer NPC `trainer_guid` (`CMSG_TRAINER_BUY_SPELL`). Player-authorized via
-/// `ctx.sender`; charges copper + teaches the spell. The gateway pushes `SMSG_LEARNED_SPELL` on success so
-/// the ability shows live. [entity]
-#[reducer]
-pub fn buy_trainer_spell(
-    ctx: &ReducerContext,
-    trainer_guid: u64,
-    spell_id: u32,
-) -> Result<(), String> {
-    let caster =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "[0] buyer not in world".to_string())?;
-    apply_trainer_buy(ctx, caster.guid, trainer_guid, spell_id)
 }
 
 #[cfg(test)]

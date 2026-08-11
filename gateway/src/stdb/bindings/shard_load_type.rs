@@ -12,6 +12,7 @@ pub struct ShardLoad {
     pub sampled_at_micros: i64,
     pub writer_occupancy_pct: f32,
     pub sessions: u32,
+    pub gateway_key: u64,
 }
 
 impl __sdk::InModule for ShardLoad {
@@ -27,6 +28,7 @@ pub struct ShardLoadCols {
     pub sampled_at_micros: __sdk::__query_builder::Col<ShardLoad, i64>,
     pub writer_occupancy_pct: __sdk::__query_builder::Col<ShardLoad, f32>,
     pub sessions: __sdk::__query_builder::Col<ShardLoad, u32>,
+    pub gateway_key: __sdk::__query_builder::Col<ShardLoad, u64>,
 }
 
 impl __sdk::__query_builder::HasCols for ShardLoad {
@@ -41,6 +43,7 @@ impl __sdk::__query_builder::HasCols for ShardLoad {
                 "writer_occupancy_pct",
             ),
             sessions: __sdk::__query_builder::Col::new(table_name, "sessions"),
+            gateway_key: __sdk::__query_builder::Col::new(table_name, "gateway_key"),
         }
     }
 }

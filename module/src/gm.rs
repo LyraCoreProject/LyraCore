@@ -13,7 +13,7 @@
 
 use spacetimedb::{log, reducer, table, ReducerContext, Table};
 
-use crate::helpers::{entity_by_owner, require_operator};
+use crate::helpers::{require_operator};
 use crate::{game_character, game_world_entity};
 
 // ===========================================================================================
@@ -244,18 +244,6 @@ pub fn set_gm_level(ctx: &ReducerContext, character_name: String, level: u8) -> 
     chars.guid().update(c);
     log::info!("set_gm_level: {character_name} (guid {guid}) -> gm_level {level}");
     Ok(())
-}
-
-/// The ONE generic GM dot-command reducer (work-item 223): the gateway forwards the raw Say text
-/// (still carrying its leading `.`) here BEFORE any chat relay/insert. Rejects a `gm_level == 0`
-/// caller with `"permission denied"`; otherwise parses + dispatches. Every accepted command logs to
-/// the module log (the audit trail) before it runs. `Err` never touches `game_chat_event` — the
-/// gateway relays it back to the SENDER ONLY as a system chat line.
-#[reducer]
-pub fn gm_command(ctx: &ReducerContext, text: String) -> Result<(), String> {
-    let caller =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "not in world".to_string())?;
-    apply_gm_command(ctx, caller, text)
 }
 
 /// The shared core behind [`gm_command`] and its gateway twin `gw_gm_command` (#479). The REAL

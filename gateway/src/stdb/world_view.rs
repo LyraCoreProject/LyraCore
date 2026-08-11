@@ -178,336 +178,227 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
     let db = &guard.conn.db;
 
     // ---- game_world_entity -----------------------------------------------------------------
-    {
-        let view = view.clone();
-        db.game_world_entity().on_insert(move |_ctx, row| {
-            guarded("game_world_entity.insert", || {
-                entity_appeared(&view, shard, row)
-            });
-        });
-    }
-    {
-        let view = view.clone();
-        db.game_world_entity().on_update(move |_ctx, old, new| {
-            guarded("game_world_entity.update", || {
-                entity_changed(&view, shard, old, new)
-            });
-        });
-    }
-    {
-        let view = view.clone();
-        db.game_world_entity().on_delete(move |_ctx, row| {
-            guarded("game_world_entity.delete", || entity_vanished(&view, row));
-        });
-    }
+    wire_insert(db.game_world_entity(), "game_world_entity.insert", &view, move |v, row| {
+        entity_appeared(v, shard, row)
+    });
+    wire_update(db.game_world_entity(), "game_world_entity.update", &view, move |v, old, new| {
+        entity_changed(v, shard, old, new)
+    });
+    wire_delete(db.game_world_entity(), "game_world_entity.delete", &view, |v, row| {
+        entity_vanished(v, row)
+    });
 
     // ---- game_gameobject -------------------------------------------------------------------
-    {
-        let view = view.clone();
-        db.game_gameobject().on_insert(move |_ctx, row| {
-            guarded("game_gameobject.insert", || {
-                gameobject_appeared(&view, shard, row)
-            });
-        });
-    }
-    {
-        let view = view.clone();
-        db.game_gameobject().on_update(move |_ctx, _old, row| {
-            guarded("game_gameobject.update", || {
-                gameobject_appeared(&view, shard, row)
-            });
-        });
-    }
-    {
-        let view = view.clone();
-        db.game_gameobject().on_delete(move |_ctx, row| {
-            guarded("game_gameobject.delete", || gameobject_vanished(&view, row));
-        });
-    }
+    wire_insert(db.game_gameobject(), "game_gameobject.insert", &view, move |v, row| {
+        gameobject_appeared(v, shard, row)
+    });
+    wire_update(db.game_gameobject(), "game_gameobject.update", &view, move |v, _old, row| {
+        gameobject_appeared(v, shard, row)
+    });
+    wire_delete(db.game_gameobject(), "game_gameobject.delete", &view, |v, row| {
+        gameobject_vanished(v, row)
+    });
 
     // ---- game_entity_motion (peer movement) ------------------------------------------------
-    {
-        let view = view.clone();
-        db.game_entity_motion().on_insert(move |_ctx, row| {
-            guarded("game_entity_motion.insert", || motion(&view, row));
-        });
-    }
-    {
-        let view = view.clone();
-        db.game_entity_motion().on_update(move |_ctx, _old, row| {
-            guarded("game_entity_motion.update", || motion(&view, row));
-        });
-    }
+    wire_insert(db.game_entity_motion(), "game_entity_motion.insert", &view, |v, row| {
+        motion(v, row)
+    });
+    wire_update(db.game_entity_motion(), "game_entity_motion.update", &view, |v, _old, row| {
+        motion(v, row)
+    });
 
     // ---- game_creature_spline (creature legs) ----------------------------------------------
-    {
-        let view = view.clone();
-        db.game_creature_spline().on_insert(move |_ctx, row| {
-            guarded("game_creature_spline.insert", || creature_leg(&view, row));
-        });
-    }
-    {
-        let view = view.clone();
-        db.game_creature_spline().on_update(move |_ctx, _old, row| {
-            guarded("game_creature_spline.update", || creature_leg(&view, row));
-        });
-    }
+    wire_insert(db.game_creature_spline(), "game_creature_spline.insert", &view, |v, row| {
+        creature_leg(v, row)
+    });
+    wire_update(db.game_creature_spline(), "game_creature_spline.update", &view, |v, _old, row| {
+        creature_leg(v, row)
+    });
 
     // ---- game_roll_event -------------------------------------------------------------------
-    // /roll broadcast. Flag-gated: with LYRACORE_SHARED_CALLS off the per-player relay in
-    // `subscribe_player_events` is the delivery path and registering here too would double-send
-    // every roll to every session.
-    if crate::config::shared_calls_enabled() {
-        let view = view.clone();
-        db.game_roll_event().on_insert(move |_ctx, row| {
-            guarded("game_roll_event.insert", || roll_appeared(&view, shard, row));
-        });
-    }
+    // /roll broadcast.
+    wire_insert(db.game_roll_event(), "game_roll_event.insert", &view, move |v, row| {
+        roll_appeared(v, shard, row)
+    });
 
     // ---- game_rest_state_event --------------------------------------------------------------
-    // Rest-state flips (zzz + blue XP bar). Self-only relay; same flag gate as every 4c family.
-    if crate::config::shared_calls_enabled() {
-        let view = view.clone();
-        db.game_rest_state_event().on_insert(move |_ctx, row| {
-            guarded("game_rest_state_event.insert", || {
-                rest_state_appeared(&view, row)
-            });
-        });
-    }
+    // Rest-state flips (zzz + blue XP bar). Self-only relay.
+    wire_insert(db.game_rest_state_event(), "game_rest_state_event.insert", &view, |v, row| {
+        rest_state_appeared(v, row)
+    });
 
     // ---- game_dynamic_object -----------------------------------------------------------------
     // Ground-area spell visuals. Shard broadcast, instance-gated per viewer on insert; the
     // delete leg is ungated, matching the per-player relay byte for byte.
-    if crate::config::shared_calls_enabled() {
-        {
-            let view = view.clone();
-            db.game_dynamic_object().on_insert(move |_ctx, row| {
-                guarded("game_dynamic_object.insert", || {
-                    dynobj_appeared(&view, shard, row)
-                });
-            });
-        }
-        {
-            let view = view.clone();
-            db.game_dynamic_object().on_delete(move |_ctx, row| {
-                guarded("game_dynamic_object.delete", || {
-                    dynobj_vanished(&view, shard, row)
-                });
-            });
-        }
-    }
+    wire_insert(db.game_dynamic_object(), "game_dynamic_object.insert", &view, move |v, row| {
+        dynobj_appeared(v, shard, row)
+    });
+    wire_delete(db.game_dynamic_object(), "game_dynamic_object.delete", &view, move |v, row| {
+        dynobj_vanished(v, shard, row)
+    });
 
     // ---- game_corpse --------------------------------------------------------------------------
     // Player corpses. Shard broadcast, instance-gated per viewer on insert/update (the
     // body→bones re-CREATE); the delete leg is ungated, matching the per-player relay.
-    if crate::config::shared_calls_enabled() {
-        {
-            let view = view.clone();
-            db.game_corpse().on_insert(move |_ctx, row| {
-                guarded("game_corpse.insert", || corpse_appeared(&view, shard, row));
-            });
-        }
-        {
-            let view = view.clone();
-            db.game_corpse().on_update(move |_ctx, _old, row| {
-                guarded("game_corpse.update", || corpse_changed(&view, shard, row));
-            });
-        }
-        {
-            let view = view.clone();
-            db.game_corpse().on_delete(move |_ctx, row| {
-                guarded("game_corpse.delete", || corpse_vanished(&view, shard, row));
-            });
-        }
-    }
+    wire_insert(db.game_corpse(), "game_corpse.insert", &view, move |v, row| {
+        corpse_appeared(v, shard, row)
+    });
+    wire_update(db.game_corpse(), "game_corpse.update", &view, move |v, _old, row| {
+        corpse_changed(v, shard, row)
+    });
+    wire_delete(db.game_corpse(), "game_corpse.delete", &view, move |v, row| {
+        corpse_vanished(v, shard, row)
+    });
 
     // ---- game_combat_event --------------------------------------------------------------------
     // Melee/ranged swing log. Shard broadcast; the created-set visibility gate runs inside the
     // job (`combat_event_outbound`), per viewer.
-    if crate::config::shared_calls_enabled() {
-        let view = view.clone();
-        db.game_combat_event().on_insert(move |_ctx, row| {
-            guarded("game_combat_event.insert", || {
-                combat_event_appeared(&view, shard, row)
-            });
-        });
-    }
+    wire_insert(db.game_combat_event(), "game_combat_event.insert", &view, move |v, row| {
+        combat_event_appeared(v, shard, row)
+    });
 
     // ---- game_melee_attack --------------------------------------------------------------------
     // Combat stance (ATTACKSTART/STOP + the owner-only ranged CANCEL_AUTO_REPEAT).
-    if crate::config::shared_calls_enabled() {
-        {
-            let view = view.clone();
-            db.game_melee_attack().on_insert(move |_ctx, row| {
-                guarded("game_melee_attack.insert", || {
-                    melee_engaged(&view, shard, row)
-                });
-            });
-        }
-        {
-            let view = view.clone();
-            db.game_melee_attack().on_delete(move |_ctx, row| {
-                guarded("game_melee_attack.delete", || {
-                    melee_disengaged(&view, shard, row)
-                });
-            });
-        }
-    }
+    wire_insert(db.game_melee_attack(), "game_melee_attack.insert", &view, move |v, row| {
+        melee_engaged(v, shard, row)
+    });
+    wire_delete(db.game_melee_attack(), "game_melee_attack.delete", &view, move |v, row| {
+        melee_disengaged(v, shard, row)
+    });
 
     // ---- game_resurrect_request / game_whisper_event / game_group_event -----------------------
     // The PRIVATE tier: every row is addressed to exactly one recipient, and on this feed the
     // gateway owns the guarantee RLS used to give. Delivery is recipient-keyed (the owner-session
     // lookup) + the explicit `private_recipient_audience` predicate — never a viewer fan.
-    // (The realm-core whisper/group twins for CROSS-shard delivery are separate per-session
-    // registrations on the realm-core connection and are untouched by this.)
-    if crate::config::shared_calls_enabled() {
-        {
-            let view = view.clone();
-            db.game_resurrect_request().on_insert(move |_ctx, row| {
-                guarded("game_resurrect_request.insert", || {
-                    resurrect_offered(&view, row)
-                });
-            });
-        }
-        {
-            let view = view.clone();
-            db.game_whisper_event().on_insert(move |_ctx, row| {
-                guarded("game_whisper_event.insert", || whisper_appeared(&view, row));
-            });
-        }
-        {
-            let view = view.clone();
-            let coord = coord.clone();
-            db.game_group_event().on_insert(move |_ctx, row| {
-                guarded("game_group_event.insert", || {
-                    group_event_appeared(&view, &coord, row)
-                });
-            });
-        }
+    // (The realm-core whisper/group twins for CROSS-shard delivery ride the same dispatchers,
+    // armed once per realm-core connection by `arm_realm_private` below.)
+    wire_insert(db.game_resurrect_request(), "game_resurrect_request.insert", &view, |v, row| {
+        resurrect_offered(v, row)
+    });
+    wire_insert(db.game_whisper_event(), "game_whisper_event.insert", &view, |v, row| {
+        whisper_appeared(v, row)
+    });
+    {
+        let coord = coord.clone();
+        wire_insert(db.game_group_event(), "game_group_event.insert", &view, move |v, row| {
+            group_event_appeared(v, &coord, row)
+        });
     }
 
     // ---- game_aura ------------------------------------------------------------------------------
     // The aura composite: array sync (visibility-gated), self-only duration/run-speed/armor,
     // and the stealth HIDE/REVEAL transitions. The A_STEALTH count is computed HERE on the pump,
     // where this connection's cache is exactly post-change; everything else runs in the job.
-    if crate::config::shared_calls_enabled() {
-        {
-            let view = view.clone();
-            let coord = coord.clone();
-            db.game_aura().on_insert(move |ctx, row| {
-                let n = ctx
-                    .db
-                    .game_aura()
-                    .iter()
-                    .filter(|a| {
-                        a.target_guid == row.target_guid
-                            && a.eff_kind == super::subscriptions::A_STEALTH
-                    })
-                    .count();
-                guarded("game_aura.insert", || aura_applied(&view, &coord, shard, row, n));
+    {
+        let view = view.clone();
+        let coord = coord.clone();
+        db.game_aura().on_insert(move |ctx, row| {
+            let n = ctx
+                .db
+                .game_aura()
+                .iter()
+                .filter(|a| {
+                    a.target_guid == row.target_guid
+                        && a.eff_kind == super::subscriptions::A_STEALTH
+                })
+                .count();
+            guarded("game_aura.insert", || aura_applied(&view, &coord, shard, row, n));
+        });
+    }
+    {
+        let view = view.clone();
+        let coord = coord.clone();
+        db.game_aura().on_update(move |_ctx, old, row| {
+            let expires_changed = old.expires_at != row.expires_at;
+            guarded("game_aura.update", || {
+                aura_updated(&view, &coord, shard, row, expires_changed)
             });
-        }
-        {
-            let view = view.clone();
-            let coord = coord.clone();
-            db.game_aura().on_update(move |_ctx, old, row| {
-                let expires_changed = old.expires_at != row.expires_at;
-                guarded("game_aura.update", || {
-                    aura_updated(&view, &coord, shard, row, expires_changed)
-                });
-            });
-        }
-        {
-            let view = view.clone();
-            let coord = coord.clone();
-            db.game_aura().on_delete(move |ctx, row| {
-                let n = ctx
-                    .db
-                    .game_aura()
-                    .iter()
-                    .filter(|a| {
-                        a.target_guid == row.target_guid
-                            && a.eff_kind == super::subscriptions::A_STEALTH
-                    })
-                    .count();
-                guarded("game_aura.delete", || aura_removed(&view, &coord, shard, row, n));
-            });
-        }
+        });
+    }
+    {
+        let view = view.clone();
+        let coord = coord.clone();
+        db.game_aura().on_delete(move |ctx, row| {
+            let n = ctx
+                .db
+                .game_aura()
+                .iter()
+                .filter(|a| {
+                    a.target_guid == row.target_guid
+                        && a.eff_kind == super::subscriptions::A_STEALTH
+                })
+                .count();
+            guarded("game_aura.delete", || aura_removed(&view, &coord, shard, row, n));
+        });
     }
 
     // ---- game_spell_cast_event / game_spell_impact_event --------------------------------------
     // Cast visuals (the full cast-lock contract, per viewer) + deferred projectile impact logs.
-    if crate::config::shared_calls_enabled() {
-        {
-            let view = view.clone();
-            db.game_spell_cast_event().on_insert(move |_ctx, row| {
-                guarded("game_spell_cast_event.insert", || {
-                    cast_event_appeared(&view, shard, row)
-                });
-            });
-        }
-        {
-            let view = view.clone();
-            db.game_spell_impact_event().on_insert(move |_ctx, row| {
-                guarded("game_spell_impact_event.insert", || {
-                    impact_appeared(&view, shard, row)
-                });
-            });
-        }
-    }
+    wire_insert(db.game_spell_cast_event(), "game_spell_cast_event.insert", &view, move |v, row| {
+        cast_event_appeared(v, shard, row)
+    });
+    wire_insert(db.game_spell_impact_event(), "game_spell_impact_event.insert", &view, move |v, row| {
+        impact_appeared(v, shard, row)
+    });
 
     // ---- game_emote_event / game_chat_event / game_channel_event ------------------------------
     // The social tier. Emotes broadcast; say/yell range-gate per viewer; channel lines
     // membership-gate per viewer — each inside the job, via the shared bodies.
-    if crate::config::shared_calls_enabled() {
-        {
-            let view = view.clone();
-            let coord = coord.clone();
-            db.game_emote_event().on_insert(move |_ctx, row| {
-                guarded("game_emote_event.insert", || {
-                    emote_appeared(&view, &coord, shard, row)
-                });
-            });
-        }
-        {
-            let view = view.clone();
-            let coord = coord.clone();
-            db.game_chat_event().on_insert(move |_ctx, row| {
-                guarded("game_chat_event.insert", || {
-                    chat_appeared(&view, &coord, shard, row)
-                });
-            });
-        }
-        {
-            let view = view.clone();
-            let coord = coord.clone();
-            db.game_channel_event().on_insert(move |_ctx, row| {
-                guarded("game_channel_event.insert", || {
-                    channel_appeared(&view, &coord, shard, row)
-                });
-            });
-        }
+    {
+        let coord = coord.clone();
+        wire_insert(db.game_emote_event(), "game_emote_event.insert", &view, move |v, row| {
+            emote_appeared(v, &coord, shard, row)
+        });
+    }
+    {
+        let coord = coord.clone();
+        wire_insert(db.game_chat_event(), "game_chat_event.insert", &view, move |v, row| {
+            chat_appeared(v, &coord, shard, row)
+        });
+    }
+    {
+        let coord = coord.clone();
+        wire_insert(db.game_channel_event(), "game_channel_event.insert", &view, move |v, row| {
+            channel_appeared(v, &coord, shard, row)
+        });
     }
 
     // ---- game_player_skill ----------------------------------------------------------------------
     // Live skill pane. Self-only relay; insert (line learned) and update (skill-up) run the same
     // body against the viewer's own slot map.
-    if crate::config::shared_calls_enabled() {
-        {
-            let view = view.clone();
-            db.game_player_skill().on_insert(move |_ctx, row| {
-                guarded("game_player_skill.insert", || skill_changed(&view, row));
-            });
-        }
-        {
-            let view = view.clone();
-            db.game_player_skill().on_update(move |_ctx, _old, row| {
-                guarded("game_player_skill.update", || skill_changed(&view, row));
-            });
-        }
-    }
+    wire_insert(db.game_player_skill(), "game_player_skill.insert", &view, |v, row| {
+        skill_changed(v, row)
+    });
+    wire_update(db.game_player_skill(), "game_player_skill.update", &view, |v, _old, row| {
+        skill_changed(v, row)
+    });
 
     drop(guard);
+}
+
+/// Register the cross-shard PRIVATE-tier twins (#22 → #483) on the REALM-CORE connection: whisper
+/// and group events written realm-side for a recipient whose home shard is elsewhere. Same
+/// recipient-keyed dispatchers as `arm_shard`'s private tier, armed ONCE per realm-core
+/// connection instead of once per session — the last per-session registrations are gone (#483).
+///
+/// Only called when realm-core is a DISTINCT database (`Coordinator::connect` gates it): on a
+/// single-database gateway the world shard's own `arm_shard` registration already watches these
+/// tables, and a second registration would deliver every private packet twice.
+///
+/// `coord` is a WORLD handle (the default shard) — `group_event_appeared` needs one for the
+/// QUEST_SHARE detail JOIN; realm-core's own cache holds no quest catalogue.
+///
+/// Re-reads `realm.0.coord()` on every call, so it doubles as the watchdog's post-reconnect
+/// re-arm hook, exactly like `arm_shard`.
+pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord: Coordinator) {
+    let guard = realm.0.coord();
+    let db = &guard.conn.db;
+    wire_insert(db.game_whisper_event(), "realm.game_whisper_event.insert", &view, |v, row| {
+        whisper_appeared(v, row)
+    });
+    wire_insert(db.game_group_event(), "realm.game_group_event.insert", &view, move |v, row| {
+        group_event_appeared(v, &coord, row)
+    });
 }
 
 /// Run one shared-connection callback body with a panic firewall. On a per-player connection a
@@ -523,6 +414,58 @@ fn guarded(what: &str, body: impl FnOnce()) {
              its next update."
         );
     }
+}
+
+// -----------------------------------------------------------------------------------------------
+//  Registration helpers — the clone-per-callback + `guarded(label, ...)` shape that every
+//  `arm_shard` registration repeated verbatim, factored to one line per callsite. `T::Row` and
+//  `EventContext` are pinned to the module's generated types, so a mismatched table/body pairing
+//  is a compile error, not a mislabeled log line.
+// -----------------------------------------------------------------------------------------------
+
+/// Register an INSERT callback: `wire_insert(db.game_x(), "game_x.insert", &view, |v, row| body(v, row));`
+fn wire_insert<T>(
+    table: T,
+    label: &'static str,
+    view: &Arc<WorldView>,
+    f: impl Fn(&Arc<WorldView>, &T::Row) + Send + 'static,
+) where
+    T: Table<EventContext = EventContext>,
+{
+    let view = view.clone();
+    table.on_insert(move |_ctx, row| {
+        guarded(label, || f(&view, row));
+    });
+}
+
+/// Register an UPDATE callback (see [`wire_insert`]); `f` gets `(view, old, new)`.
+fn wire_update<T>(
+    table: T,
+    label: &'static str,
+    view: &Arc<WorldView>,
+    f: impl Fn(&Arc<WorldView>, &T::Row, &T::Row) + Send + 'static,
+) where
+    T: TableWithPrimaryKey<EventContext = EventContext>,
+{
+    let view = view.clone();
+    table.on_update(move |_ctx, old, new| {
+        guarded(label, || f(&view, old, new));
+    });
+}
+
+/// Register a DELETE callback (see [`wire_insert`]).
+fn wire_delete<T>(
+    table: T,
+    label: &'static str,
+    view: &Arc<WorldView>,
+    f: impl Fn(&Arc<WorldView>, &T::Row) + Send + 'static,
+) where
+    T: Table<EventContext = EventContext>,
+{
+    let view = view.clone();
+    table.on_delete(move |_ctx, row| {
+        guarded(label, || f(&view, row));
+    });
 }
 
 // ===============================================================================================

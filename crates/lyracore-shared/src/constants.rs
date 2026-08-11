@@ -212,7 +212,17 @@ pub mod gossip_option {
     pub const TAXI: u32 = 4; // flight master (system 136, not wired — inert)
     pub const TRAINER: u32 = 5; // opens SMSG_TRAINER_LIST
     pub const INNKEEPER: u32 = 8; // binds the caller's hearthstone home (bind_home)
+    /// cmangos `GOSSIP_OPTION_UNLEARNTALENTS`. NOT what the raw dump carries — every "I wish to
+    /// unlearn my talents." row imports with `action=GOSSIP` (cmangos gates it in C++ code at
+    /// GossipHello, not via this column), so the importer reclassifies that specific row's text to
+    /// this action at import time (`resolve_gossip_option_text`'s caller in `importer/src/main.rs`).
+    /// Gated to level 10+ (talents don't exist below that) by `filtered_gossip_options` — #516.
+    pub const UNLEARNTALENTS: u32 = 16;
 }
+
+/// Minimum level a talent point exists at (mirrors vanilla's `PLAYER_LEVEL_MIN_TALENTS` — the client
+/// hides the talent pane below this). Gates the "I wish to unlearn my talents." gossip option.
+pub const MIN_TALENT_LEVEL: u8 = 10;
 
 /// `game_gossip_option.cond_type` — the MINIMAL condition set work-item 217 enforces (quest-status
 /// gates, the common case in the dump). Anything the importer can't map to one of these folds to

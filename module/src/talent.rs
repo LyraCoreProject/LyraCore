@@ -34,10 +34,9 @@
 //! nothing gates on "is this the only row in tree_id N".
 
 use spacetimedb::{
-    client_visibility_filter, reducer, table, Filter, Identity, ReducerContext, Table,
+    table, Identity, ReducerContext, Table,
 };
 
-use crate::helpers::entity_by_owner;
 use crate::{game_character, game_spell, game_spell_effect, game_world_entity, Spell, SpellEffect};
 
 // ===========================================================================================
@@ -131,11 +130,6 @@ pub struct CharacterTalent {
     pub talent_id: u32,
     pub rank: u8,
 }
-
-/// A player connection sees only its own learned talents (mirrors the character/skill RLS filters).
-#[client_visibility_filter]
-const CHARACTER_TALENT_RLS: Filter =
-    Filter::Sql("SELECT * FROM game_character_talent WHERE owner_identity = :sender");
 
 // Talents are deleted on character delete, and re-owned (identity re-stamp) on a relog under a
 // changed gateway identity.
@@ -457,18 +451,11 @@ pub fn apply_learned_talents(ctx: &ReducerContext, guid: u64, owner: Identity, l
     }
 }
 
-/// Player entry (`CMSG_LEARN_TALENT` — gateway wiring is a follow-up; driven by `debug_learn_talent` for
-/// now). Spends a point on `talent_id` for the calling player.
-#[reducer]
-pub fn learn_talent(ctx: &ReducerContext, talent_id: u32) -> Result<(), String> {
-    let e = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caster not in world".to_string())?;
-    do_learn_talent(ctx, e.guid, ctx.sender(), talent_id).map(|_| ())
-}
-
 // ===========================================================================================
 //  Respec — unlearn every learned talent for an escalating gold cost (work-item 198)
 // ===========================================================================================
 
+#[allow(dead_code)] // core kept for a future gw_reset_talents twin (#483 deleted the sender-path reducer)
 /// Gold cost (copper) of a character's NEXT respec, given `respec_count` prior resets: vanilla's
 /// `Player::resetTalentsCost` step table — 1g / 5g / 10g, then +5g per further reset, capped at 50g
 /// (1.12 has no cost decay — that's a TBC addition). Expressed directly in copper (1g = 10_000c, the
@@ -484,6 +471,7 @@ pub(crate) fn respec_cost_copper(respec_count: u32) -> u32 {
     copper.min(CAP_COPPER)
 }
 
+#[allow(dead_code)] // core kept for a future gw_reset_talents twin (#483 deleted the sender-path reducer)
 /// Shared validated core of a talent respec (the player + debug reducers both call this). Gates
 /// EXACTLY like `trainer::apply_trainer_buy` (a real in-range TRAINER on the same map), then charges
 /// `respec_cost_copper(character.respec_count)` and unwinds every learned talent: the passive auras
@@ -574,15 +562,6 @@ pub(crate) fn do_reset_talents(
     character.respec_count += 1;
     chars.guid().update(character);
     Ok(cost)
-}
-
-/// Player entry (`CMSG_GOSSIP_...` unlearn-talents option — gateway wiring is a follow-up; driven by
-/// `debug_reset_talents` for now). Resets every learned talent at `trainer_guid` for the calling
-/// player's escalating gold cost.
-#[reducer]
-pub fn reset_talents(ctx: &ReducerContext, trainer_guid: u64) -> Result<(), String> {
-    let e = entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "caster not in world".to_string())?;
-    do_reset_talents(ctx, e.guid, trainer_guid).map(|_| ())
 }
 
 // ===========================================================================================

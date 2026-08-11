@@ -1,7 +1,7 @@
 //! The durable Character table. Public but RLS-restricted so a player connection only ever sees
 //! its own characters (owner bound at `establish_session`). [entity]
 
-use spacetimedb::{client_visibility_filter, table, Filter, Identity};
+use spacetimedb::{table, Identity};
 
 /// Durable character; exists whether or not online. [entity]
 #[table(accessor = game_character, public, index(accessor = by_account, btree(columns = [account_id])))]
@@ -171,8 +171,3 @@ pub struct Character {
     #[default(10000)]
     pub pending_run_speed_mult_bp: u32,
 }
-
-/// A player connection sees only its own characters.
-#[client_visibility_filter]
-const CHARACTER_RLS: Filter =
-    Filter::Sql("SELECT * FROM game_character WHERE owner_identity = :sender");

@@ -15,14 +15,15 @@
 //! broken-skip). No armor ENCHANT exists in the module (its `ENCHANTS` table is STR/STA only), so there is
 //! no enchant overlay term and the gateway matches the module exactly for armor.
 //!
-//! [`sheet_stats`] (the STR/AGI/STA/INT/SPI/AP/damage-range half of the paperdoll, #517) is NOT a
-//! gateway-side fold like the Armor half above — it is a plain READ of `module::spell::recompute_sheet`'s
-//! output, END-appended onto `game_world_entity` (`sheet_*_bonus`/`sheet_ap_base`/`sheet_ap_mods`/
-//! `sheet_dmg_min`/`sheet_dmg_max`). Those columns already ride the player CREATE relay (the same row),
-//! so — unlike Armor — there is no coordinator-cache gap to patch: an aura present at login already
-//! shows on the very first CREATE, no on-aura re-push needed. Do NOT re-introduce a second aura/gear fold
-//! here for those numbers; extend `recompute_sheet` instead (that's the whole point of #517 — the
-//! previous gateway-only mirror never read `game_aura`, so no aura could ever move the sheet).
+//! [`sheet_stats`] (the STR/AGI/STA/INT/SPI/AP/damage-range/crit half of the paperdoll, #517 + #532) is
+//! NOT a gateway-side fold like the Armor half above — it is a plain READ of
+//! `module::spell::recompute_sheet`'s output, END-appended onto `game_world_entity` (`sheet_*_bonus`/
+//! `sheet_ap_base`/`sheet_ap_mods`/`sheet_dmg_min`/`sheet_dmg_max`/`sheet_crit_bp`). Those columns
+//! already ride the player CREATE relay (the same row), so — unlike Armor — there is no
+//! coordinator-cache gap to patch: an aura present at login already shows on the very first CREATE, no
+//! on-aura re-push needed. Do NOT re-introduce a second aura/gear fold here for those numbers; extend
+//! `recompute_sheet` instead (that's the whole point of #517 — the previous gateway-only mirror never
+//! read `game_aura`, so no aura could ever move the sheet).
 
 use super::bindings::*;
 use spacetimedb_sdk::Table;
@@ -63,16 +64,18 @@ fn gear_armor_contribution(slot: u8, stat_armor: i32, max_durability: u32, durab
     stat_armor
 }
 
-/// Everything the paperdoll shows that GEAR/AURAS move on the STR/AGI/STA/INT/SPI/AP/damage-range half
-/// of the sheet (#517) — a plain row read of `module::spell::recompute_sheet`'s output, never a second
-/// fold. `strength`/`agility`/`stamina`/`intellect`/`spirit` are the BASE attributes (the white
-/// `UNIT_FIELD_STAT0..4` total); `*_bonus` is the SIGNED aura+gear(+enchant) delta the caller splits
-/// into the green/red `PLAYER_FIELD_POSSTAT`/`NEGSTAT` pair via `.max(0)`/`.min(0)` — sign arithmetic
-/// only, not aura interpretation, so no drift risk re-enters the gateway. `attack_power` is the
-/// stat-derived base (folds effective STR/AGI, so a +STR trinket already moves it) and `ap_mods` is the
-/// `A_MOD_COMBAT(ATTACK_POWER)` aura portion alone (Battle Shout) — vanilla renders those through two
-/// different wire fields. `dmg_min`/`dmg_max` are `combat::swing_range_ctx`'s own numbers (weapon +
+/// Everything the paperdoll shows that GEAR/AURAS move on the STR/AGI/STA/INT/SPI/AP/damage-range/crit
+/// half of the sheet (#517 + #532) — a plain row read of `module::spell::recompute_sheet`'s output,
+/// never a second fold. `strength`/`agility`/`stamina`/`intellect`/`spirit` are the BASE attributes (the
+/// white `UNIT_FIELD_STAT0..4` total); `*_bonus` is the SIGNED aura+gear(+enchant) delta the caller
+/// splits into the green/red `PLAYER_FIELD_POSSTAT`/`NEGSTAT` pair via `.max(0)`/`.min(0)` — sign
+/// arithmetic only, not aura interpretation, so no drift risk re-enters the gateway. `attack_power` is
+/// the stat-derived base (folds effective STR/AGI, so a +STR trinket already moves it) and `ap_mods` is
+/// the `A_MOD_COMBAT(ATTACK_POWER)` aura portion alone (Battle Shout) — vanilla renders those through
+/// two different wire fields. `dmg_min`/`dmg_max` are `combat::swing_range_ctx`'s own numbers (weapon +
 /// AP + disarm folded in module-side), so the sheet can never show a range the swing doesn't roll.
+/// `crit_pct` is `sheet_crit_bp`/100.0 — `combat::effective_crit_bp`'s output, the exact band the swing
+/// table rolls a crit against.
 pub(crate) fn sheet_stats(db: &RemoteTables, guid: u64) -> Option<crate::codec::SheetStatsValues> {
     let e = db.game_world_entity().guid().find(&guid)?;
     // `e.strength`/`agility`/`stamina`/`intellect` are BASE only (unlike `e.spirit`, which
@@ -94,6 +97,10 @@ pub(crate) fn sheet_stats(db: &RemoteTables, guid: u64) -> Option<crate::codec::
         ap_mods: e.sheet_ap_mods,
         dmg_min: e.sheet_dmg_min,
         dmg_max: e.sheet_dmg_max,
+        // #532: PLAYER_CRIT_PERCENTAGE wants a float percent; `sheet_crit_bp` is basis points
+        // (100 bp == 1%), so divide by 100.0 — the sheet value IS `effective_crit_bp`'s output,
+        // no second crit formula.
+        crit_pct: e.sheet_crit_bp as f32 / 100.0,
     })
 }
 

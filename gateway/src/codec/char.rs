@@ -3,7 +3,7 @@
 
 use super::*;
 
-/// A character row as the gateway reads it from its per-player subscription (`game_character`),
+/// A character row as the gateway reads it from the coordinator cache (`game_character`),
 /// flattened to the plain ints/strings the codec needs to build `SMSG_CHAR_ENUM`. Decoupled
 /// from the module's table type; the typed enum conversions happen in [`build_char_enum`].
 #[derive(Clone, Debug, Default)]

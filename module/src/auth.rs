@@ -28,8 +28,8 @@ pub struct Account {
 ///
 /// Accounts are realm-scoped: SRP6 lives on the logon tier and writes `game_account` on the realm
 /// (default) database only. An instance/continent shard therefore has no account row at all — and
-/// `world::player_login` resolves its caller through `account_by_identity`, so a character that
-/// arrives via `transfer::import_character_blob` could not log in.
+/// `gw::gw_player_login` resolves the account by id, so a character that arrives via
+/// `transfer::import_character_blob` could not log in.
 ///
 /// This row is an INDEX ENTRY, not a credential: `salt`/`verifier` are empty, so it can never
 /// satisfy an SRP proof even if the logon tier were ever pointed at this database. `identity` is
@@ -237,14 +237,9 @@ pub fn establish_session(
     acc.identity = Some(bound_identity);
     accounts.id().update(acc);
 
-    // Bind owner_identity on this account's characters so per-owner RLS lets the player see them.
-    // Routed through the `by_account` index (issue #390) — this used to be a full-table scan.
-    let chars = ctx.db.game_character();
-    let to_bind: Vec<Character> = chars.by_account().filter(&account_id).collect();
-    for mut c in to_bind {
-        c.owner_identity = bound_identity;
-        chars.guid().update(c);
-    }
+    // No per-character owner_identity restamp here: it existed so per-owner RLS would admit the
+    // player's own connection, which no longer exists — `apply_player_login` stamps owner rows
+    // via `restamp_owned_data`, and the gateway predicates are the visibility layer (#483).
 
     let now = ctx.timestamp;
     let expires = now

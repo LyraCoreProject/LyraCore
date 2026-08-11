@@ -43,12 +43,11 @@
 //!    one-pass independent-rows-then-groups algorithm it always was; nesting is entirely an import-time
 //!    concern, invisible at roll time.
 
-use spacetimedb::{reducer, table, ReducerContext, Table};
+use spacetimedb::{table, ReducerContext, Table};
 
 use crate::character::game_character; // credit_purse's offline-recipient fallback (work-item 221)
 use crate::game_group_member; // clone_quest_loot_for_group's group-roster read (work-item 187 slice 0)
 use crate::game_world_entity;
-use crate::helpers::entity_by_owner;
 use crate::quest::objective_kind;
 use crate::{game_character_quest, game_quest_objective}; // killer_needs_item (fishing's zone resolve now lives in terrain::zone_id_at, #375)
 use lyracore_shared::loot_roll::event_kind as roll_event_kind; // apply_loot_money's MONEY_SHARE push
@@ -694,23 +693,6 @@ pub(crate) fn clone_quest_loot_for_group(
 /// Max distance to loot a corpse: (10 yd)². Generous — the vanilla client walks into interaction
 /// range itself before sending `CMSG_LOOT_MONEY`, so this only rejects clearly-out-of-range abuse.
 pub(crate) const LOOT_RANGE_SQ: f32 = 100.0;
-
-/// Take the money from a creature corpse (`CMSG_LOOT_MONEY`, routed by the gateway with the corpse
-/// the player currently has open). Validates the corpse is dead, has money, is on the same map, and
-/// is in range; then zeroes the corpse money and clears `UNIT_DYNFLAG_LOOTABLE` (relayed so the loot
-/// sparkle disappears). SOLO (no `game_corpse_loot_eligible` snapshot for this corpse): the whole
-/// amount credits the looter's purse, unchanged from before work-item 221, and NO event fires — the
-/// client prints its own local "You loot X copper" line. GROUPED (>=2 recipients snapshotted at KILL
-/// time): the copper splits evenly across the snapshot, remainder to the looter, each purse credited
-/// exactly once (`crate::loot::split_money`/`credit_purse`), and a `MONEY_SHARE` event fires per
-/// recipient (`SMSG_LOOT_MONEY_NOTIFY(share)` on relay) — see work-item 221. Authorized via
-/// `ctx.sender` like all player ops. A second call finds `money == 0` and errors (no dupe).
-#[reducer]
-pub fn loot_money(ctx: &ReducerContext, target_guid: u64) -> Result<(), String> {
-    let looter =
-        entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "looter not in world".to_string())?;
-    apply_loot_money(ctx, looter.guid, target_guid)
-}
 
 /// Shared core: take corpse money by explicit looter guid — the body behind the `loot_money`
 /// reducer and `actor::loot_money` (147/149). Pure code motion; every gate byte-identical.

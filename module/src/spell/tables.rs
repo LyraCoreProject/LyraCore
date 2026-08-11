@@ -4,7 +4,7 @@
 //! path resolves.
 
 use spacetimedb::{
-    client_visibility_filter, table, Filter, Identity, ReducerContext, ScheduleAt, Table, Timestamp,
+    table, Identity, ReducerContext, ScheduleAt, Table, Timestamp,
 };
 
 // The `scheduled(..)` table macros below reference the reducer callbacks by name; those reducers live in
@@ -657,8 +657,3 @@ pub struct ResurrectRequest {
     pub points: i32,         // frozen E_RESURRECT base_points (%), applied on accept
     pub created_at: Timestamp,
 }
-
-/// A connection drains only the resurrect offer addressed to it (same RLS shape as `game_whisper_event`).
-#[client_visibility_filter]
-const RESURRECT_REQUEST_RLS: Filter =
-    Filter::Sql("SELECT * FROM game_resurrect_request WHERE target_identity = :sender");

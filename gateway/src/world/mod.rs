@@ -1000,13 +1000,6 @@ pub fn run_world_session_with_queue<S: DuplexStream, St: WorldStore + ?Sized>(
     let (tx, rx, depth) = session_channel();
     let writer = spawn_writer(wsock, encrypt, rx, depth, conn.account_id)?;
 
-    // This socket is now a live user of the account's cached per-account SDK connection.
-    // Placed AFTER the last `?` above so every path from here reaches the paired
-    // `close_account_session` in the teardown block below (`result` is captured, not propagated,
-    // so no in-session error can skip it). Registering earlier would let a `try_clone`/`spawn_writer`
-    // failure pin the account's connection for the process lifetime — which is exactly the leak.
-    store.open_account_session(conn.account_id);
-
     let result = (|| -> Result<()> {
         // Frames are read RAW (header hand-decrypted) so an addon-language chat — which
         // gtker's `Language` enum cannot decode and which was session-FATAL — can be peeked and
@@ -1082,20 +1075,11 @@ pub fn run_world_session_with_queue<S: DuplexStream, St: WorldStore + ?Sized>(
 
     // Teardown: if still in-world, drop the relay subs (stops callbacks; peers get DESTROY via the
     // entity delete) and delete the entity ONLY if THIS session still owns it — a stale socket whose
-    // player already re-logged on a newer session declines, so we don't vanish the live player (the
-    // cached PlayerConn shares one identity, so only the gateway can tell the sockets apart).
+    // player already re-logged on a newer session declines, so we don't vanish the live player.
     // Teardown is already ending the session, so a `logout` failure is logged + swallowed (not fatal).
     if let Err(e) = conn.leave_world(store) {
         log::warn!("logout for account {} failed: {e:#}", conn.account_id);
     }
-    // Retire this socket. When it is the account's LAST one, this releases the cached
-    // per-account SpacetimeDB connections (one websocket fd + one SDK pump thread per shard the
-    // account touched) that otherwise leak for the gateway's lifetime and eventually exhaust the
-    // fd table. Strictly AFTER `leave_world`: that is what drops the AOI tracker (unsubscribing the
-    // home rects and every away shard) and runs the `logout` reducer, all of which go THROUGH the
-    // connections released here. A reconnect that beat this teardown still holds a socket of its
-    // own, so the count is non-zero and nothing is released — see `stdb::AccountSessions`.
-    store.close_account_session(conn.account_id);
     // Release this connection's seat unconditionally — reaching this line at all means
     // `world_handshake_with_queue` returned `Ok(Some(..))`, which is exactly the one case where it
     // guarantees a seat is held and NOT already departed (its own internal failure path departs

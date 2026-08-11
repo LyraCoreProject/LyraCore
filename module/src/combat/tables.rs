@@ -1132,6 +1132,7 @@ mod tests {
             sheet_ap_mods: 0,
             sheet_dmg_min: 0,
             sheet_dmg_max: 0,
+            sheet_crit_bp: 0,
         }
     }
 

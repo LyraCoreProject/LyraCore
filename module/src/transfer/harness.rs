@@ -758,8 +758,8 @@ fn a_populated_character_crosses_a_database_with_every_row_and_value() {
     assert_eq!(dst.in_row(XFER).unwrap().created_micros, NOW);
     assert!(
         dst.accounts.borrow().contains(&77),
-        "no shadow `game_account` row — `player_login` resolves the caller through \
-             `account_by_identity`, so the arriving player cannot log in at all"
+        "no shadow `game_account` row — `gw::gw_player_login` resolves the account by id, \
+             so the arriving player cannot log in at all"
     );
 }
 

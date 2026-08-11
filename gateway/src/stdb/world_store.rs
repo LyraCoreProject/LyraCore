@@ -212,10 +212,10 @@ impl WorldStore for Coordinator {
     }
 
     fn bind_shard_session(&self, account_id: u64, session_key: &[u8; 40]) -> Result<()> {
-        // Opening the per-player connection HERE is what mints (or reuses) this shard's identity
-        // for the account; `establish_session` then binds it to the shadow account row that
-        // `import_character_blob` created. On the realm shard this is the same binding the logon
-        // tier already wrote, re-asserted — idempotent, and cheap next to a login.
+        // `bound_identity` DERIVES this shard's identity for the account
+        // (`synthetic_owner_identity`); `establish_session` then binds it to the shadow account
+        // row that `import_character_blob` created. On the realm shard this is the same binding
+        // the logon tier already wrote, re-asserted — idempotent, and cheap next to a login.
         let identity = self.bound_identity(account_id)?;
         self.establish_session(account_id, session_key, identity)
     }
@@ -642,6 +642,10 @@ impl WorldStore for Coordinator {
         self.quest_status(guid, quest_id)
     }
 
+    fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()> {
+        self.reset_talents(account_id, self_guid, trainer_guid)
+    }
+
     fn move_item(&self, account_id: u64, self_guid: u64, from_slot: u8, to_slot: u8) -> Result<()> {
         self.move_item(account_id, self_guid, from_slot, to_slot)
     }
@@ -874,14 +878,6 @@ impl WorldStore for Coordinator {
 
     fn release_session(&self, account_id: u64, epoch: u64) -> bool {
         self.release_session(account_id, epoch)
-    }
-
-    fn open_account_session(&self, account_id: u64) {
-        self.attach_account_session(account_id)
-    }
-
-    fn close_account_session(&self, account_id: u64) {
-        self.detach_account_session(account_id)
     }
 
     fn reclaim_corpse(&self, account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()> {
@@ -1151,12 +1147,6 @@ impl crate::realm_core::RealmDb for Coordinator {
     ) -> Result<()> {
         self.establish_session(account_id, session_key, bound_identity)
     }
-    fn attach_account_session(&self, account_id: u64) {
-        self.attach_account_session(account_id)
-    }
-    fn detach_account_session_deferred(&self, account_id: u64) {
-        self.detach_account_session_deferred(account_id)
-    }
     fn character_location(&self, guid: u64) -> Option<(u32, u64)> {
         self.character_location(guid)
     }
@@ -1177,8 +1167,9 @@ impl crate::realm_core::RealmDb for Coordinator {
         shard: &str,
         writer_occupancy_pct: f32,
         sessions: u32,
+        gateway_key: u64,
     ) -> Result<()> {
-        self.record_shard_load(shard, writer_occupancy_pct, sessions)
+        self.record_shard_load(shard, writer_occupancy_pct, sessions, gateway_key)
     }
 }
 

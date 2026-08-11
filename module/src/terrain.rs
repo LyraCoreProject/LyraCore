@@ -51,8 +51,19 @@ pub fn ground_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32
 
 /// Snap a derived destination Z to terrain, keeping `fallback` off-slice. The one-liner every
 /// wander/flee/fear/bot leg goes through (work-item 174).
+///
+/// #526: also takes the `max` against the topmost imported vmap model floor (bridge, WMO
+/// interior deck) at or below this same Z — `vmap::floor_z` returns `None` off vmap-slice/gate,
+/// so an unimported map is byte-identical to before this line existed. The terrain heightmap and
+/// the vmap floor never both apply to the same surface (a bridge deck isn't in the ADT MCVT
+/// grid), so `max` picks whichever one actually has an answer here rather than averaging or
+/// preferring one system outright.
 pub fn snap_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32, fallback: f32) -> f32 {
-    ground_z(ctx, map_id, x, y).unwrap_or(fallback)
+    let base = ground_z(ctx, map_id, x, y).unwrap_or(fallback);
+    match crate::vmap::floor_z(ctx, map_id, x, y, fallback) {
+        Some(floor) => base.max(floor),
+        None => base,
+    }
 }
 
 /// The imported `AreaTable.dbc` area id (MCNK header field) for the cell at `(x, y)`, or `None` when

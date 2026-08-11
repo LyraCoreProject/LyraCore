@@ -221,21 +221,12 @@ impl Coordinator {
             .map_or(0, |e| e.combat_until_ms)
     }
 
-    /// The account's bound 32-byte SpacetimeDB identity: the node-issued identity of the
-    /// per-account player connection. `establish_session` writes this into `game_account.identity`
-    /// so the player connection's later `player_login`/`movement_update` calls pass the module's
-    /// `ctx.sender == owner` checks. Opening the connection here (at logon) caches it for reuse in
-    /// the world phase.
+    /// The account's bound 32-byte SpacetimeDB identity — DERIVED, not minted by a connection
+    /// (the per-player-connection build this replaced was the ~850/process wall; see
+    /// `synthetic_owner_identity`'s contract). `establish_session` writes it into
+    /// `game_account.identity`, which `gw_player_login` fail-closes on.
     pub fn bound_identity(&self, account_id: u64) -> Result<[u8; 32]> {
-        // Under LYRACORE_SHARED_CALLS the bound identity is DERIVED, not minted by a connection —
-        // this call was what opened the per-account connection at logon, i.e. the exact build the
-        // ~850/process wall lives in. Viable once the remaining cold verbs got their `gw_*` twins
-        // (the first attempt broke the then-unmigrated cold verbs and was reverted — see
-        // a6ce00b2). See `synthetic_owner_identity`'s contract for the full story.
-        if crate::config::shared_calls_enabled() {
-            return Ok(crate::config::synthetic_owner_identity(account_id));
-        }
-        Ok(self.player_conn(account_id)?.identity.to_byte_array())
+        Ok(crate::config::synthetic_owner_identity(account_id))
     }
 
     /// Read the shared session key K for the world handshake (Phase 2).

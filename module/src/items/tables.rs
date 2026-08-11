@@ -3,7 +3,7 @@
 //! small pure-ish primitives every op builds on: guid composition/minting and the per-slot scans.
 
 use spacetimedb::{
-    client_visibility_filter, table, Filter, Identity, ReducerContext, Table, Timestamp,
+    table, Identity, ReducerContext, Table, Timestamp,
 };
 
 use lyracore_shared::constants::starter_item;
@@ -216,11 +216,6 @@ pub struct ItemInstance {
     #[default(false)]
     pub soulbound: bool,
 }
-
-/// A player connection sees only its own items (mirrors the character RLS filter).
-#[client_visibility_filter]
-const ITEM_INSTANCE_RLS: Filter =
-    Filter::Sql("SELECT * FROM game_item_instance WHERE owner_identity = :sender");
 
 // Character-owned sweeps: items are deleted on character delete, re-owned (identity re-stamp) on a
 // relog under a changed gateway identity.

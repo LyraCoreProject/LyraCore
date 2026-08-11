@@ -5,7 +5,7 @@
 //! the popup + the heal carry the live feedback (see docs/roadmap).
 
 use spacetimedb::{
-    client_visibility_filter, log, table, Filter, Identity, ReducerContext, Table, Timestamp,
+    log, table, Identity, ReducerContext, Table, Timestamp,
 };
 
 use crate::game_character;
@@ -34,11 +34,6 @@ pub struct XpEvent {
     pub is_kill: bool,
 }
 
-/// A connection drains only its own XP gains.
-#[client_visibility_filter]
-const XP_EVENT_RLS: Filter =
-    Filter::Sql("SELECT * FROM game_xp_event WHERE recipient_identity = :sender");
-
 /// A level-up ("ding"), delivered to the player only → `SMSG_LEVELUP_INFO`. [event]
 #[table(accessor = game_levelup_event, public, index(accessor = by_recipient, btree(columns = [recipient_identity])))]
 pub struct LevelupEvent {
@@ -66,11 +61,6 @@ pub struct LevelupEvent {
     #[default(0)]
     pub spirit_gained: u32,
 }
-
-/// A connection drains only its own level-ups.
-#[client_visibility_filter]
-const LEVELUP_EVENT_RLS: Filter =
-    Filter::Sql("SELECT * FROM game_levelup_event WHERE recipient_identity = :sender");
 
 // ===========================================================================================
 //  Curve + award
