@@ -1481,6 +1481,38 @@ fn item_query_response_bop_template_carries_bonding_pickup() {
     }
 }
 
+/// Sheathe posture is a RAW passthrough, not a remap: a shield's dump byte (Dented Buckler,
+/// entry 1166, `sheath=4`) must reach the wire as 4. gtker names that variant `LargeWeaponRight`,
+/// which is why the assertion pins `as_int()` too — the name is noise, the byte is the contract.
+/// Pairs with the entry-25 (`sheath=3`) leg in `item_query_response_maps_worn_shortsword_and_serializes`.
+#[test]
+fn item_query_response_shield_carries_its_own_sheathe_byte() {
+    let t = ItemTemplateView {
+        entry: 1166,
+        class: 4,           // Armor
+        subclass: 6,        // Shield
+        inventory_type: 14, // Shield
+        sheath: 4,          // the REAL dump value for entry 1166
+        name: "Dented Buckler".to_string(),
+        ..worn_shortsword()
+    };
+    let msg = build_item_query_response(t.entry, Some(&t));
+    let mut buf = Vec::new();
+    msg.write_unencrypted_server(&mut buf).unwrap();
+    match ServerOpcodeMessage::read_unencrypted(&mut buf.as_slice()).unwrap() {
+        ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(m) => {
+            let found = m.found.expect("Dented Buckler must be found");
+            assert_eq!(
+                found.sheathe_type.as_int(),
+                4,
+                "shield sheath byte must ride through unremapped"
+            );
+            assert_eq!(found.sheathe_type, SheatheType::LargeWeaponRight);
+        }
+        other => panic!("expected SMSG_ITEM_QUERY_SINGLE_RESPONSE, got {other}"),
+    }
+}
+
 /// The default (unbound) template — every item that predates these columns — must still carry
 /// `bonding=0` (NoBind), baseline-safe: an unbound item's tooltip renders no binding line.
 #[test]
@@ -1751,6 +1783,44 @@ fn skill_block_reads_learned_rows_override_and_append() {
             );
         }
         other => panic!("expected a Player CreateObject2, got {other:?}"),
+    }
+}
+
+#[test]
+fn create_object_carries_the_sheath_state_for_player_and_creature() {
+    // #101: the CREATE is how a peer entering AOI range learns a unit's sheath state. Omit
+    // UNIT_FIELD_BYTES_2 and everyone who walks up to a player with a drawn sword sees them
+    // empty-handed until the next toggle. Byte 0 is the state; bytes 1-3 ride along untouched.
+    let mut e = warrior_entity();
+    e.unit_bytes_2 = 0xAB_CD_EF_01; // MELEE in byte 0, neighbours occupied
+    let msg = build_create_object(&e, CreateKind::SelfPlayer, &[], &[]).unwrap();
+    match &msg.objects[0] {
+        Object::CreateObject2 {
+            mask2: UpdateMask::Player(p),
+            ..
+        } => assert_eq!(
+            p.unit_bytes_2(),
+            Some((0x01, 0xEF, 0xCD, 0xAB)),
+            "player CREATE must carry UNIT_FIELD_BYTES_2 with the sheath state in byte 0"
+        ),
+        other => panic!("expected a Player CreateObject2, got {other:?}"),
+    }
+
+    // Same field on the Unit branch — a creature draws its weapon on engage too.
+    let mut c = warrior_entity();
+    c.type_mask = lyracore_shared::constants::type_mask::CREATURE;
+    c.unit_bytes_2 = 1;
+    let msg = build_create_object(&c, CreateKind::Peer, &[], &[]).unwrap();
+    match &msg.objects[0] {
+        Object::CreateObject2 {
+            mask2: UpdateMask::Unit(u),
+            ..
+        } => assert_eq!(
+            u.unit_bytes_2(),
+            Some((1, 0, 0, 0)),
+            "creature CREATE must carry the sheath state too"
+        ),
+        other => panic!("expected a Unit CreateObject2, got {other:?}"),
     }
 }
 

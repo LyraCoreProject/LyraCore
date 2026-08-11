@@ -747,6 +747,10 @@ impl WorldStore for Coordinator {
         self.stop_attack(account_id, self_guid)
     }
 
+    fn set_sheathed(&self, account_id: u64, self_guid: u64, state: u8) -> Result<()> {
+        self.set_sheathed(account_id, self_guid, state)
+    }
+
     fn cast_spell(&self, account_id: u64, self_guid: u64, spell_id: u32, target_guid: u64) -> Result<()> {
         self.cast_spell(account_id, self_guid, spell_id, target_guid)
     }

@@ -78,6 +78,7 @@ pub struct WorldEntity {
     pub sheet_dmg_min: u32,
     pub sheet_dmg_max: u32,
     pub sheet_crit_bp: u32,
+    pub unit_bytes_2: u32,
 }
 
 impl __sdk::InModule for WorldEntity {
@@ -159,6 +160,7 @@ pub struct WorldEntityCols {
     pub sheet_dmg_min: __sdk::__query_builder::Col<WorldEntity, u32>,
     pub sheet_dmg_max: __sdk::__query_builder::Col<WorldEntity, u32>,
     pub sheet_crit_bp: __sdk::__query_builder::Col<WorldEntity, u32>,
+    pub unit_bytes_2: __sdk::__query_builder::Col<WorldEntity, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for WorldEntity {
@@ -245,6 +247,7 @@ impl __sdk::__query_builder::HasCols for WorldEntity {
             sheet_dmg_min: __sdk::__query_builder::Col::new(table_name, "sheet_dmg_min"),
             sheet_dmg_max: __sdk::__query_builder::Col::new(table_name, "sheet_dmg_max"),
             sheet_crit_bp: __sdk::__query_builder::Col::new(table_name, "sheet_crit_bp"),
+            unit_bytes_2: __sdk::__query_builder::Col::new(table_name, "unit_bytes_2"),
         }
     }
 }

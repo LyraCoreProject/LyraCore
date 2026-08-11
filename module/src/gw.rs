@@ -327,6 +327,15 @@ pub fn gw_stop_attack(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Strin
     crate::actor::stop_attack(ctx, actor_guid)
 }
 
+/// [`crate::world::apply_set_sheathed`] behind the gateway gate — the `CMSG_SETSHEATHED` a client
+/// sends on `Z`. `state` is raw client input and is range-checked in the apply fn, not here. [#101]
+#[reducer]
+pub fn gw_set_sheathed(ctx: &ReducerContext, actor_guid: u64, state: u8) -> Result<(), String> {
+    require_operator(ctx)?;
+    let actor = actor(ctx, actor_guid)?;
+    crate::world::apply_set_sheathed(ctx, actor, state)
+}
+
 /// [`crate::actor::accept_quest`] behind the gateway gate.
 #[reducer]
 pub fn gw_accept_quest(
