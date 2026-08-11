@@ -601,7 +601,7 @@ parity_test!(parity_game_character_buyback, "game_character_buyback", lyracore_m
 });
 parity_test!(parity_game_gameobject_template, "game_gameobject_template", lyracore_module::GameObjectTemplate, bindings::game_object_template_type::GameObjectTemplate, {
     entry, type_id, display_id, name, data_0, data_1, gather_skill_line, respawn_secs,
-    gather_gray, lock_id,
+    gather_gray, lock_id, size,
 }, renames: {
     // Same `spacetime generate` (CLI 2.6.1) trailing-digit normalization as SpellEffect above.
     data0 => data_0, data1 => data_1,

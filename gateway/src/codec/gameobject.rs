@@ -25,6 +25,18 @@ pub struct GameObjectView {
     pub rotation_1: f32,
     pub rotation_2: f32,
     pub rotation_3: f32,
+    /// The template's render scale. Non-positive means no size stored — see `object_scale_x`.
+    pub size: f32,
+}
+
+/// The `OBJECT_FIELD_SCALE_X` to send for a gameobject. Guards `> 0.0` rather than `!= 0.0` so a
+/// corrupt negative or a NaN falls back too — a 0 on the wire renders the prop invisible.
+fn object_scale_x(size: f32) -> f32 {
+    if size > 0.0 {
+        size
+    } else {
+        1.0
+    }
 }
 
 /// A `game_gameobject_template` row, for the `CMSG_GAMEOBJECT_QUERY` reply.
@@ -45,7 +57,7 @@ pub fn build_gameobject_create_object(go: &GameObjectView) -> SMSG_UPDATE_OBJECT
     let mask = UpdateGameObject::builder()
         .set_object_guid(Guid::new(go.guid))
         .set_object_entry(go.template_entry as i32)
-        .set_object_scale_x(1.0)
+        .set_object_scale_x(object_scale_x(go.size))
         .set_gameobject_displayid(go.display_id as i32)
         .set_gameobject_state(go.state as i32)
         .set_gameobject_type_id(go.type_id as i32)
@@ -204,6 +216,7 @@ mod tests {
             rotation_1: 0.0,
             rotation_2: 0.0,
             rotation_3: 0.0,
+            size: 0.7,
         };
         let built = build_gameobject_create_object(&go);
         match &built.objects[0] {
@@ -219,6 +232,7 @@ mod tests {
                 assert_eq!(m.gameobject_displayid(), Some(259));
                 assert_eq!(m.gameobject_state(), Some(1));
                 assert_eq!(m.gameobject_type_id(), Some(3));
+                assert_eq!(m.object_scale_x(), Some(0.7));
             }
             other => panic!("expected a GameObject CreateObject2, got {other:?}"),
         }
@@ -228,6 +242,33 @@ mod tests {
         let mut buf = Vec::new();
         msg.write_unencrypted_server(&mut buf).unwrap();
         assert!(!buf.is_empty());
+    }
+
+    #[test]
+    fn object_scale_x_falls_back_to_one_for_any_non_positive_stored_size() {
+        assert_eq!(object_scale_x(0.5), 0.5);
+        assert_eq!(object_scale_x(1.75), 1.75);
+        assert_eq!(object_scale_x(0.0), 1.0);
+        assert_eq!(object_scale_x(-2.0), 1.0);
+        assert_eq!(object_scale_x(f32::NAN), 1.0);
+    }
+
+    #[test]
+    fn gameobject_create_object_sends_scale_one_when_the_template_carries_no_size() {
+        let go = GameObjectView {
+            guid: (0xF110u64 << 48) | 2,
+            template_entry: 50101,
+            display_id: 259,
+            size: 0.0,
+            ..Default::default()
+        };
+        match &build_gameobject_create_object(&go).objects[0] {
+            Object::CreateObject2 {
+                mask2: UpdateMask::GameObject(m),
+                ..
+            } => assert_eq!(m.object_scale_x(), Some(1.0)),
+            other => panic!("expected a GameObject CreateObject2, got {other:?}"),
+        }
     }
 
     /// Decode a `build_gameobject_rotation_values` body: strips the fixed envelope (amount_of_objects,
@@ -266,6 +307,7 @@ mod tests {
             rotation_1: 0.2,
             rotation_2: 0.70710678,
             rotation_3: 0.70710678,
+            size: 0.0,
         };
         let (opcode, body) = build_gameobject_rotation_values(&go);
         assert_eq!(opcode, 0x00A9, "SMSG_UPDATE_OBJECT opcode");
@@ -293,6 +335,7 @@ mod tests {
             rotation_1: 0.0,
             rotation_2: 0.0,
             rotation_3: 0.0,
+            size: 0.0,
         };
         let (_, body) = build_gameobject_rotation_values(&go);
         let floats = decode_rotation_floats(go.guid, &body);
