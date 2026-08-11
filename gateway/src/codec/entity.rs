@@ -537,19 +537,15 @@ pub fn build_create_object(
     })
 }
 
-/// Which world entry a login sequence serves. The distinction exists because
-/// `SMSG_LOGIN_VERIFY_WORLD` is a COMMAND to load the named map, not a passive confirmation — see
-/// [`login_sequence_messages`].
+/// Which world entry a login sequence serves — `SMSG_LOGIN_VERIFY_WORLD` is a command to load the
+/// named map, so only a fresh login may carry it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorldEntry {
-    /// `CMSG_PLAYER_LOGIN`: the client is at character select and has loaded nothing — it needs
-    /// `SMSG_LOGIN_VERIFY_WORLD` to know which map to load.
+    /// `CMSG_PLAYER_LOGIN`: the client has loaded nothing and needs verify-world to know which map.
     FreshLogin,
-    /// `MSG_MOVE_WORLDPORT_ACK`: the client has ALREADY loaded the destination map (that is what
-    /// its ack means — `SMSG_NEW_WORLD` carried the hop's authoritative map+position). Resending
-    /// `SMSG_LOGIN_VERIFY_WORLD` here makes it load the map AGAIN: the double-loading-screen bug
-    /// (#117). Reference cores (cmangos/vmangos classic) send verify-world only on the
-    /// fresh-login path, never in their worldport-ack reply.
+    /// `MSG_MOVE_WORLDPORT_ACK`: the client already loaded the destination (`SMSG_NEW_WORLD`
+    /// carried it); a verify-world resend runs a second loading screen. Reference cores send
+    /// verify-world only at fresh login.
     WorldPort,
 }
 

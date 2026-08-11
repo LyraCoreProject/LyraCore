@@ -309,7 +309,7 @@ fn a_world_port_keeps_the_pin_when_the_home_shard_still_owns_the_new_map() {
     MSG_MOVE_WORLDPORT_ACK {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    // 9, not 10: the re-entry sequence omits SMSG_LOGIN_VERIFY_WORLD (#117).
+    // 9, not 10: the re-entry sequence omits SMSG_LOGIN_VERIFY_WORLD.
     for _ in 0..9 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
@@ -337,14 +337,11 @@ fn a_world_port_keeps_the_pin_when_the_home_shard_still_owns_the_new_map() {
 
 #[test]
 fn a_spurious_worldport_ack_is_ignored_on_a_session_pinned_off_the_default_shard() {
-    // The spurious-ack gate must ask the HOME shard whether the live entity exists — the entity of
-    // a session pinned to `instances` lives in THAT shard's cache, and the default (`world`)
-    // handle would answer "absent" for it. Today that holds because the read loop routes EVERY
-    // frame through `on_home_shard!` before dispatch (`run_world_session`), so the handler's
-    // `store` is already the home handle (investigated as issue #118 and found NOT to be a bug).
-    // This test pins the property end to end: if dispatch ever stops home-routing, or the gate
-    // ever resolves through a default handle, the stray ack below tears down and re-runs the
-    // world entry — and the counts at the bottom catch it.
+    // The spurious-ack gate must ask the HOME shard for the live entity. That holds because the
+    // read loop routes every frame through `on_home_shard!` before dispatch, so the handler's
+    // `store` is already the home handle. Pinned end to end: if dispatch ever stops home-routing,
+    // or the gate resolves through a default handle, the stray ack below re-runs the world entry
+    // and the counts at the bottom catch it.
     let calls: ShardCallLog = Default::default();
     let home = std::sync::Arc::new(InMemoryStore {
         shard: "instances".into(),
@@ -412,8 +409,8 @@ fn a_spurious_worldport_ack_is_ignored_on_a_session_pinned_off_the_default_shard
 
 #[test]
 fn a_spurious_worldport_ack_is_ignored_on_the_default_shard() {
-    // The single-database twin of the test above. (The `entity_in_world: true` ignore path had
-    // no test at all before these two.)
+    // The single-database twin of the test above — the `entity_in_world: true` ignore path was
+    // untested before these two.
     let store = std::sync::Arc::new(InMemoryStore {
         login_entity: Some(warrior_entity()),
         entity_in_world: true,

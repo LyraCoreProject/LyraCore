@@ -77,8 +77,7 @@ fn send_quest_log<St: WorldStore + ?Sized>(
 /// exact path is correct for both. `session_epoch` is the caller's to manage: a fresh login claims a new
 /// one; a world-port reuses the existing one (the session itself hasn't changed). `entry` is the ONE
 /// packet-level difference between the two callers: a world-port re-entry omits
-/// `SMSG_LOGIN_VERIFY_WORLD` (see `codec::WorldEntry` — resending it makes the client load the map
-/// it just loaded, the double-loading-screen bug #117).
+/// `SMSG_LOGIN_VERIFY_WORLD` (see `codec::WorldEntry`).
 ///
 /// Drops any PREVIOUS `InWorld` state FIRST (a world-port re-entry has one, scoped to the OLD map/AOI
 /// box; a fresh login doesn't) — the old `PlayerSubscriptions`' RAII `Drop` unregisters every callback +
@@ -307,8 +306,8 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
         // the OLD map's subscriptions and register fresh ones at the new map/position (a brand new
         // `created` dedup set — the full AOI reset a cross-map re-entry requires, the same "initial-subscribe"
         // precedent already established), and re-send the (now new-map) login sequence + self CREATE_OBJECT —
-        // minus SMSG_LOGIN_VERIFY_WORLD (`WorldEntry::WorldPort`): the ack means the client ALREADY loaded
-        // the destination, and a verify-world resend commands a second load (the #117 double loading screen).
+        // minus SMSG_LOGIN_VERIFY_WORLD (`WorldEntry::WorldPort`): a verify-world resend would command a
+        // second load of the map the ack says is already loaded.
         // A spurious/late ack while not mid-transfer (e.g. a double-send) is a no-op — CharSelect has no
         // `self_guid` to re-enter with, so it's silently accepted-and-ignored like every other unsolicited
         // client ack in this dispatch. The session epoch is REUSED (not re-claimed) — nothing about
@@ -322,11 +321,8 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                 // Gate on a REAL pending transfer: cross-map teleport
                 // despawns the entity until this ack; a live entity means no transfer is in
                 // flight and the ack is spurious — ignore it instead of re-entering the world.
-                // `store` here is ALREADY the session's home-shard handle — the read loop routes
-                // every frame through `on_home_shard!` (run_world_session) — so this presence
-                // check reads the cache of the shard the entity actually lives on. (Verified
-                // against a pinned-off-default session by `shard_routing_tests::
-                // a_spurious_worldport_ack_is_ignored_on_a_session_pinned_off_the_default_shard`.)
+                // `store` is ALREADY the home-shard handle — the read loop routes every frame
+                // through `on_home_shard!` — so this reads the cache the entity actually lives in.
                 if store.entity_in_world(character_guid) {
                     log::debug!("world: spurious WORLDPORT_ACK ignored (guid {character_guid} still in world)");
                 } else {

@@ -2618,10 +2618,8 @@ fn login_sequence_dedupes_known_spells_and_builds_the_action_bar() {
 
 #[test]
 fn login_sequence_sends_verify_world_at_fresh_login_only() {
-    // SMSG_LOGIN_VERIFY_WORLD commands the client to LOAD the named map. A fresh login needs it
-    // (first message, so it precedes SMSG_TUTORIAL_FLAGS); a world-port re-entry must NOT carry it —
-    // the client already loaded the destination (its MSG_MOVE_WORLDPORT_ACK says so), and a resend
-    // runs a second loading screen (#117). Everything else in the sequence is identical.
+    // A fresh login starts with SMSG_LOGIN_VERIFY_WORLD; a world-port re-entry must not carry it
+    // (a resend commands a second map load). Everything else is identical.
     let fresh =
         login_sequence_messages(&warrior_entity(), &[], &[], &[], WorldEntry::FreshLogin).unwrap();
     assert!(
