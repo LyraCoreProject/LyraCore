@@ -711,6 +711,45 @@ impl Coordinator {
         )
     }
 
+    /// `CMSG_INITIATE_TRADE` — `target_guid` is the client's targeted player (#120).
+    pub fn initiate_trade(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("initiate_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_initiate_trade",
+            gw_initiate_trade_then(actor_guid, target_guid)
+        )
+    }
+
+    /// `CMSG_BEGIN_TRADE` (#120).
+    pub fn begin_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("begin_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_begin_trade",
+            gw_begin_trade_then(actor_guid)
+        )
+    }
+
+    /// `CMSG_CANCEL_TRADE` (#120).
+    pub fn cancel_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("cancel_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_cancel_trade",
+            gw_cancel_trade_then(actor_guid)
+        )
+    }
+
     /// `CMSG_GROUP_ACCEPT`. Rides the coordinator connection as
     /// `gw_accept_group_invite`.
     pub fn group_accept(&self, _account_id: u64, actor_guid: u64) -> Result<()> {

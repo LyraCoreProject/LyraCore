@@ -828,6 +828,17 @@ pub trait WorldStore: Send + Sync {
     /// activated healer's guid (passed through to the confirm echo). The module gates on ghost state.
     fn spirit_healer_res(&self, account_id: u64, self_guid: u64, healer_guid: u64) -> Result<()>;
 
+    // --- Trade (#120). Every status — BeginTrade/OpenWindow to the parties, or a refusal back to
+    // the caller — rides the `game_trade_event` relay; these calls answer nothing synchronously,
+    // and an `Err` is only an unresolved actor (per-action, log + ignore).
+
+    /// `CMSG_INITIATE_TRADE` — propose a Trade Session against the targeted player.
+    fn initiate_trade(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
+    /// `CMSG_BEGIN_TRADE` — the proposed target's client answered; the module opens both windows.
+    fn begin_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    /// `CMSG_CANCEL_TRADE` — tear the caller's Trade Session down (`TradeCanceled` to both).
+    fn cancel_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+
     /// Find `owner_guid`'s corpse location `(map_id, x, y, z)` for `MSG_CORPSE_QUERY` (slice 5).
     fn corpse_location(&self, owner_guid: u64) -> Result<Option<(u32, f32, f32, f32)>>;
 

@@ -48,6 +48,8 @@ mod transfer_tests;
 /// `wow_srp` cipher pair. A sibling of the modules above for the same reason.
 #[path = "wire_corruption_tests.rs"]
 mod wire_corruption_tests;
+#[path = "trade_tests.rs"]
+mod trade_tests;
 
 use wow_world_base::shared::friend_result_vanilla_tbc::FriendResult;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
@@ -502,6 +504,12 @@ struct InMemoryStore {
     /// item-instance-guid → inventory-slot resolution fixture. Empty by default (no items), matching
     /// every earlier test that never sets this.
     player_items_fixture: Vec<codec::ItemInstanceView>,
+    /// Recorded `initiate_trade` calls — `(self_guid, target_guid)` off CMSG_INITIATE_TRADE (#120).
+    initiated_trades: std::sync::Mutex<Vec<(u64, u64)>>,
+    /// Recorded `begin_trade` self_guids — CMSG_BEGIN_TRADE (#120).
+    begun_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `cancel_trade` self_guids — CMSG_CANCEL_TRADE (#120).
+    cancelled_trades: std::sync::Mutex<Vec<u64>>,
 }
 
 impl InMemoryStore {
@@ -1558,6 +1566,26 @@ impl WorldStore for InMemoryStore {
     }
     fn group_accept(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
         self.rec("group_accept");
+        Ok(())
+    }
+    // Trade (#120): pure recorders — the module owns every gate, so the fake just proves which
+    // verb the dispatch chose and which args survived the wire.
+    fn initiate_trade(&self, _account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+        self.rec("initiate_trade");
+        self.initiated_trades
+            .lock()
+            .unwrap()
+            .push((self_guid, target_guid));
+        Ok(())
+    }
+    fn begin_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("begin_trade");
+        self.begun_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+    fn cancel_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("cancel_trade");
+        self.cancelled_trades.lock().unwrap().push(self_guid);
         Ok(())
     }
     fn group_decline(&self, _account_id: u64, _self_guid: u64) -> Result<()> {

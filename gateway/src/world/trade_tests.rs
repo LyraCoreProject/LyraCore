@@ -1,0 +1,95 @@
+//! Trade handshake dispatch (#120) — the wire E2E half of the ticket's acceptance: real cipher,
+//! real packets, the `InMemoryStore` standing in for the module. What EXECUTES is the dispatch
+//! chain and `handlers::trade`; what the recorders prove is which store verb each CMSG chose and
+//! which arguments survived the wire, from BOTH sides of the trade. The other half — trade-event
+//! rows decoding to `SMSG_TRADE_STATUS` on the recipient's socket — is pinned by
+//! `stdb::subscriptions::tests::trade_event_kinds_decode_to_their_trade_status_variants` plus the
+//! shared `private_recipient_audience` tests; the full push is the dev-smoke/live-client pass.
+
+use super::*;
+use wow_world_messages::vanilla::{CMSG_BEGIN_TRADE, CMSG_CANCEL_TRADE, CMSG_INITIATE_TRADE};
+
+/// **AC: initiating a trade with a targeted player reaches the store with the wire's target.**
+#[test]
+fn initiate_trade_dispatches_with_the_wire_target_guid() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_INITIATE_TRADE {
+        guid: Guid::new(2),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client); // every status rides the game_trade_event relay, no direct SMSG here
+    server.join().unwrap();
+    assert_eq!(store.initiated_trades.lock().unwrap().as_slice(), &[(1, 2)]);
+}
+
+/// **AC: tested from both sides** — the SAME wire flow works with the seats swapped: player 2
+/// initiates against player 1.
+#[test]
+fn initiate_trade_dispatches_from_the_other_side_too() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 2);
+    CMSG_INITIATE_TRADE {
+        guid: Guid::new(1),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.initiated_trades.lock().unwrap().as_slice(), &[(2, 1)]);
+}
+
+/// **AC: the full handshake round trip, one store, both parties** — A proposes, B's client
+/// answers `CMSG_BEGIN_TRADE` (the vanilla auto-reply to `BeginTrade`), then B cancels. The
+/// per-shard call log pins the dispatch ORDER, the recorders pin who each verb acted as.
+#[test]
+fn the_handshake_flow_dispatches_initiate_then_begin_then_cancel() {
+    let store = std::sync::Arc::new(quest_store());
+
+    let (mut a, mut a_enc, _a_dec, a_server) = enter_world(store.clone(), 1);
+    CMSG_INITIATE_TRADE {
+        guid: Guid::new(2),
+    }
+    .write_encrypted_client(&mut a, &mut a_enc)
+    .unwrap();
+    drop(a);
+    a_server.join().unwrap();
+
+    let (mut b, mut b_enc, _b_dec, b_server) = enter_world(store.clone(), 2);
+    CMSG_BEGIN_TRADE {}
+        .write_encrypted_client(&mut b, &mut b_enc)
+        .unwrap();
+    CMSG_CANCEL_TRADE {}
+        .write_encrypted_client(&mut b, &mut b_enc)
+        .unwrap();
+    drop(b);
+    b_server.join().unwrap();
+
+    assert_eq!(store.initiated_trades.lock().unwrap().as_slice(), &[(1, 2)]);
+    assert_eq!(store.begun_trades.lock().unwrap().as_slice(), &[2]);
+    assert_eq!(store.cancelled_trades.lock().unwrap().as_slice(), &[2]);
+    let calls: Vec<String> = store
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, what)| what.contains("trade"))
+        .map(|(_, what)| what.clone())
+        .collect();
+    assert_eq!(calls, ["initiate_trade", "begin_trade", "cancel_trade"]);
+}
+
+/// **AC: either side can cancel** — the initiator's own `CMSG_CANCEL_TRADE` dispatches as
+/// themselves (the counterpart of the flow test's B-side cancel).
+#[test]
+fn cancel_trade_dispatches_for_the_initiating_side_too() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_CANCEL_TRADE {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.cancelled_trades.lock().unwrap().as_slice(), &[1]);
+}

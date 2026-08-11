@@ -927,6 +927,15 @@ impl WorldStore for Coordinator {
     fn group_invite(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
         self.group_invite(account_id, self_guid, target_guid)
     }
+    fn initiate_trade(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+        self.initiate_trade(account_id, self_guid, target_guid)
+    }
+    fn begin_trade(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        self.begin_trade(account_id, self_guid)
+    }
+    fn cancel_trade(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        self.cancel_trade(account_id, self_guid)
+    }
     fn group_accept(&self, account_id: u64, self_guid: u64) -> Result<()> {
         self.group_accept(account_id, self_guid)
     }

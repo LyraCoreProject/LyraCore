@@ -351,6 +351,9 @@ pub mod game_taunt_lock_table;
 pub mod game_teleport_event_table;
 pub mod game_terrain_chunk_table;
 pub mod game_threat_table;
+pub mod game_trade_event_table;
+pub mod game_trade_session_table;
+pub mod game_trade_slot_table;
 pub mod game_trainer_spell_table;
 pub mod game_transfer_in_table;
 pub mod game_transfer_out_table;
@@ -383,11 +386,13 @@ pub mod gw_accept_quest_reducer;
 pub mod gw_add_friend_reducer;
 pub mod gw_add_ignore_reducer;
 pub mod gw_attack_reducer;
+pub mod gw_begin_trade_reducer;
 pub mod gw_bind_home_reducer;
 pub mod gw_buy_item_reducer;
 pub mod gw_buyback_item_reducer;
 pub mod gw_cancel_aura_reducer;
 pub mod gw_cancel_cast_reducer;
+pub mod gw_cancel_trade_reducer;
 pub mod gw_cast_at_reducer;
 pub mod gw_cast_spell_at_reducer;
 pub mod gw_cast_spell_reducer;
@@ -407,6 +412,7 @@ pub mod gw_group_leave_reducer;
 pub mod gw_group_loot_method_reducer;
 pub mod gw_group_uninvite_reducer;
 pub mod gw_heartbeat_reducer;
+pub mod gw_initiate_trade_reducer;
 pub mod gw_inspect_reducer;
 pub mod gw_join_channel_reducer;
 pub mod gw_learn_talent_reducer;
@@ -554,6 +560,9 @@ pub mod tick_auras_reducer;
 pub mod tick_creatures_reducer;
 pub mod tick_ground_areas_reducer;
 pub mod tick_melee_reducer;
+pub mod trade_event_type;
+pub mod trade_session_type;
+pub mod trade_slot_type;
 pub mod trainer_spell_type;
 pub mod transfer_in_type;
 pub mod transfer_out_type;
@@ -908,6 +917,9 @@ pub use game_taunt_lock_table::*;
 pub use game_teleport_event_table::*;
 pub use game_terrain_chunk_table::*;
 pub use game_threat_table::*;
+pub use game_trade_event_table::*;
+pub use game_trade_session_table::*;
+pub use game_trade_slot_table::*;
 pub use game_trainer_spell_table::*;
 pub use game_transfer_in_table::*;
 pub use game_transfer_out_table::*;
@@ -940,11 +952,13 @@ pub use gw_accept_quest_reducer::gw_accept_quest;
 pub use gw_add_friend_reducer::gw_add_friend;
 pub use gw_add_ignore_reducer::gw_add_ignore;
 pub use gw_attack_reducer::gw_attack;
+pub use gw_begin_trade_reducer::gw_begin_trade;
 pub use gw_bind_home_reducer::gw_bind_home;
 pub use gw_buy_item_reducer::gw_buy_item;
 pub use gw_buyback_item_reducer::gw_buyback_item;
 pub use gw_cancel_aura_reducer::gw_cancel_aura;
 pub use gw_cancel_cast_reducer::gw_cancel_cast;
+pub use gw_cancel_trade_reducer::gw_cancel_trade;
 pub use gw_cast_at_reducer::gw_cast_at;
 pub use gw_cast_spell_at_reducer::gw_cast_spell_at;
 pub use gw_cast_spell_reducer::gw_cast_spell;
@@ -964,6 +978,7 @@ pub use gw_group_leave_reducer::gw_group_leave;
 pub use gw_group_loot_method_reducer::gw_group_loot_method;
 pub use gw_group_uninvite_reducer::gw_group_uninvite;
 pub use gw_heartbeat_reducer::gw_heartbeat;
+pub use gw_initiate_trade_reducer::gw_initiate_trade;
 pub use gw_inspect_reducer::gw_inspect;
 pub use gw_join_channel_reducer::gw_join_channel;
 pub use gw_learn_talent_reducer::gw_learn_talent;
@@ -1111,6 +1126,9 @@ pub use tick_auras_reducer::tick_auras;
 pub use tick_creatures_reducer::tick_creatures;
 pub use tick_ground_areas_reducer::tick_ground_areas;
 pub use tick_melee_reducer::tick_melee;
+pub use trade_event_type::TradeEvent;
+pub use trade_session_type::TradeSession;
+pub use trade_slot_type::TradeSlot;
 pub use trainer_spell_type::TrainerSpell;
 pub use transfer_in_type::TransferIn;
 pub use transfer_out_type::TransferOut;
@@ -1727,6 +1745,9 @@ pub enum Reducer {
         actor_guid: u64,
         target_guid: u64,
     },
+    GwBeginTrade {
+        actor_guid: u64,
+    },
     GwBindHome {
         actor_guid: u64,
     },
@@ -1746,6 +1767,9 @@ pub enum Reducer {
         spell_id: u32,
     },
     GwCancelCast {
+        actor_guid: u64,
+    },
+    GwCancelTrade {
         actor_guid: u64,
     },
     GwCastAt {
@@ -1830,6 +1854,10 @@ pub enum Reducer {
         target_guid: u64,
     },
     GwHeartbeat,
+    GwInitiateTrade {
+        actor_guid: u64,
+        target_guid: u64,
+    },
     GwInspect {
         actor_guid: u64,
         target_guid: u64,
@@ -2319,11 +2347,13 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwAddFriend { .. } => "gw_add_friend",
             Reducer::GwAddIgnore { .. } => "gw_add_ignore",
             Reducer::GwAttack { .. } => "gw_attack",
+            Reducer::GwBeginTrade { .. } => "gw_begin_trade",
             Reducer::GwBindHome { .. } => "gw_bind_home",
             Reducer::GwBuyItem { .. } => "gw_buy_item",
             Reducer::GwBuybackItem { .. } => "gw_buyback_item",
             Reducer::GwCancelAura { .. } => "gw_cancel_aura",
             Reducer::GwCancelCast { .. } => "gw_cancel_cast",
+            Reducer::GwCancelTrade { .. } => "gw_cancel_trade",
             Reducer::GwCastAt { .. } => "gw_cast_at",
             Reducer::GwCastSpell { .. } => "gw_cast_spell",
             Reducer::GwCastSpellAt { .. } => "gw_cast_spell_at",
@@ -2343,6 +2373,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwGroupLootMethod { .. } => "gw_group_loot_method",
             Reducer::GwGroupUninvite { .. } => "gw_group_uninvite",
             Reducer::GwHeartbeat => "gw_heartbeat",
+            Reducer::GwInitiateTrade { .. } => "gw_initiate_trade",
             Reducer::GwInspect { .. } => "gw_inspect",
             Reducer::GwJoinChannel { .. } => "gw_join_channel",
             Reducer::GwLearnTalent { .. } => "gw_learn_talent",
@@ -3532,6 +3563,11 @@ impl __sdk::Reducer for Reducer {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
             }),
+            Reducer::GwBeginTrade { actor_guid } => {
+                __sats::bsatn::to_vec(&gw_begin_trade_reducer::GwBeginTradeArgs {
+                    actor_guid: actor_guid.clone(),
+                })
+            }
             Reducer::GwBindHome { actor_guid } => {
                 __sats::bsatn::to_vec(&gw_bind_home_reducer::GwBindHomeArgs {
                     actor_guid: actor_guid.clone(),
@@ -3566,6 +3602,11 @@ impl __sdk::Reducer for Reducer {
             }),
             Reducer::GwCancelCast { actor_guid } => {
                 __sats::bsatn::to_vec(&gw_cancel_cast_reducer::GwCancelCastArgs {
+                    actor_guid: actor_guid.clone(),
+                })
+            }
+            Reducer::GwCancelTrade { actor_guid } => {
+                __sats::bsatn::to_vec(&gw_cancel_trade_reducer::GwCancelTradeArgs {
                     actor_guid: actor_guid.clone(),
                 })
             }
@@ -3712,6 +3753,13 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwHeartbeat => {
                 __sats::bsatn::to_vec(&gw_heartbeat_reducer::GwHeartbeatArgs {})
             }
+            Reducer::GwInitiateTrade {
+                actor_guid,
+                target_guid,
+            } => __sats::bsatn::to_vec(&gw_initiate_trade_reducer::GwInitiateTradeArgs {
+                actor_guid: actor_guid.clone(),
+                target_guid: target_guid.clone(),
+            }),
             Reducer::GwInspect {
                 actor_guid,
                 target_guid,
@@ -4470,6 +4518,9 @@ pub struct DbUpdate {
     game_teleport_event: __sdk::TableUpdate<TeleportEvent>,
     game_terrain_chunk: __sdk::TableUpdate<TerrainChunk>,
     game_threat: __sdk::TableUpdate<ThreatEntry>,
+    game_trade_event: __sdk::TableUpdate<TradeEvent>,
+    game_trade_session: __sdk::TableUpdate<TradeSession>,
+    game_trade_slot: __sdk::TableUpdate<TradeSlot>,
     game_trainer_spell: __sdk::TableUpdate<TrainerSpell>,
     game_transfer_in: __sdk::TableUpdate<TransferIn>,
     game_transfer_out: __sdk::TableUpdate<TransferOut>,
@@ -4933,6 +4984,15 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_threat" => db_update
                     .game_threat
                     .append(game_threat_table::parse_table_update(table_update)?),
+                "game_trade_event" => db_update
+                    .game_trade_event
+                    .append(game_trade_event_table::parse_table_update(table_update)?),
+                "game_trade_session" => db_update
+                    .game_trade_session
+                    .append(game_trade_session_table::parse_table_update(table_update)?),
+                "game_trade_slot" => db_update
+                    .game_trade_slot
+                    .append(game_trade_slot_table::parse_table_update(table_update)?),
                 "game_trainer_spell" => db_update
                     .game_trainer_spell
                     .append(game_trainer_spell_table::parse_table_update(table_update)?),
@@ -5601,6 +5661,15 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_threat = cache
             .apply_diff_to_table::<ThreatEntry>("game_threat", &self.game_threat)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_trade_event = cache
+            .apply_diff_to_table::<TradeEvent>("game_trade_event", &self.game_trade_event)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_trade_session = cache
+            .apply_diff_to_table::<TradeSession>("game_trade_session", &self.game_trade_session)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_trade_slot = cache
+            .apply_diff_to_table::<TradeSlot>("game_trade_slot", &self.game_trade_slot)
+            .with_updates_by_pk(|row| &row.id);
         diff.game_trainer_spell = cache
             .apply_diff_to_table::<TrainerSpell>("game_trainer_spell", &self.game_trainer_spell)
             .with_updates_by_pk(|row| &row.id);
@@ -6081,6 +6150,15 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_threat" => db_update
                     .game_threat
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_trade_event" => db_update
+                    .game_trade_event
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_trade_session" => db_update
+                    .game_trade_session
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_trade_slot" => db_update
+                    .game_trade_slot
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_trainer_spell" => db_update
                     .game_trainer_spell
@@ -6566,6 +6644,15 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_threat" => db_update
                     .game_threat
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_trade_event" => db_update
+                    .game_trade_event
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_trade_session" => db_update
+                    .game_trade_session
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_trade_slot" => db_update
+                    .game_trade_slot
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_trainer_spell" => db_update
                     .game_trainer_spell
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -6756,6 +6843,9 @@ pub struct AppliedDiff<'r> {
     game_teleport_event: __sdk::TableAppliedDiff<'r, TeleportEvent>,
     game_terrain_chunk: __sdk::TableAppliedDiff<'r, TerrainChunk>,
     game_threat: __sdk::TableAppliedDiff<'r, ThreatEntry>,
+    game_trade_event: __sdk::TableAppliedDiff<'r, TradeEvent>,
+    game_trade_session: __sdk::TableAppliedDiff<'r, TradeSession>,
+    game_trade_slot: __sdk::TableAppliedDiff<'r, TradeSlot>,
     game_trainer_spell: __sdk::TableAppliedDiff<'r, TrainerSpell>,
     game_transfer_in: __sdk::TableAppliedDiff<'r, TransferIn>,
     game_transfer_out: __sdk::TableAppliedDiff<'r, TransferOut>,
@@ -7472,6 +7562,21 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<ThreatEntry>(
             "game_threat",
             &self.game_threat,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<TradeEvent>(
+            "game_trade_event",
+            &self.game_trade_event,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<TradeSession>(
+            "game_trade_session",
+            &self.game_trade_session,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<TradeSlot>(
+            "game_trade_slot",
+            &self.game_trade_slot,
             event,
         );
         callbacks.invoke_table_row_callbacks::<TrainerSpell>(
@@ -8327,6 +8432,9 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_teleport_event_table::register_table(client_cache);
         game_terrain_chunk_table::register_table(client_cache);
         game_threat_table::register_table(client_cache);
+        game_trade_event_table::register_table(client_cache);
+        game_trade_session_table::register_table(client_cache);
+        game_trade_slot_table::register_table(client_cache);
         game_trainer_spell_table::register_table(client_cache);
         game_transfer_in_table::register_table(client_cache);
         game_transfer_out_table::register_table(client_cache);
@@ -8486,6 +8594,9 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_teleport_event",
         "game_terrain_chunk",
         "game_threat",
+        "game_trade_event",
+        "game_trade_session",
+        "game_trade_slot",
         "game_trainer_spell",
         "game_transfer_in",
         "game_transfer_out",

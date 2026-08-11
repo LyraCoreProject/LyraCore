@@ -321,6 +321,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_resurrect_request",
         "SELECT * FROM game_whisper_event",
         "SELECT * FROM game_group_event",
+        "SELECT * FROM game_trade_event",
         // Server-wide tunables. The gateway reads ONE column: `hosts_instances`, at
         // startup, to answer "when this realm creates a dungeon instance, will anything actually
         // spawn its population" (`ShardMap::check_instance_hosting`). Before this subscription the

@@ -714,6 +714,36 @@ pub fn gw_group_decline(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Str
     crate::group::decline_invite_for(ctx, actor_guid)
 }
 
+/// [`crate::trade::apply_initiate_trade`] — propose a Trade Session against `target_guid` (#120).
+/// Refusals are protocol answers on the trade-event relay, never an `Err` here.
+#[reducer]
+pub fn gw_initiate_trade(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    target_guid: u64,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_initiate_trade(ctx, acting, target_guid)
+}
+
+/// [`crate::trade::apply_begin_trade`] — the proposed target's client answered; open both windows.
+#[reducer]
+pub fn gw_begin_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_begin_trade(ctx, acting)
+}
+
+/// [`crate::trade::apply_cancel_trade`] — tear the actor's Trade Session down, `TradeCanceled` to
+/// both parties.
+#[reducer]
+pub fn gw_cancel_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_cancel_trade(ctx, acting)
+}
+
 /// [`crate::group::leave_group_for`] with the leaver named by guid.
 #[reducer]
 pub fn gw_group_leave(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {

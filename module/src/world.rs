@@ -1884,6 +1884,9 @@ pub(crate) fn remove_from_world(ctx: &ReducerContext, owner: Identity) {
     // its own attack and any attacks targeting it (future PvP).
     crate::combat::disengage(ctx, entity.guid);
 
+    // A live Trade Session dies with the leaver — the partner hears `TradeCanceled` (#120).
+    crate::trade::cancel_trade_for(ctx, entity.guid);
+
     // Clear the player's corpse on leaving the world (logout/disconnect) so a dead/ghost
     // player who quits doesn't leave an orphan body behind (corpse decay to bones rides the gc reaper). Idempotent.
     ctx.db

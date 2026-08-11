@@ -1419,6 +1419,39 @@ pub(crate) fn aura_delete_outbound(
     out
 }
 
+/// Trade-status relay (#120): `game_trade_event.kind` → the `SMSG_TRADE_STATUS` variant, to the
+/// row's recipient and nobody else (audience resolved by the caller, the `whisper_event_outbound`
+/// shape). The kind byte is `lyracore_shared::trade::event_kind` — NOT the vanilla discriminant;
+/// this match IS the wire mapping. An unknown kind (a newer module mid-rollout) drops with a warn
+/// rather than desyncing the window.
+pub(crate) fn trade_event_outbound(row: &TradeEvent) -> Vec<Outbound> {
+    use lyracore_shared::trade::event_kind as kind;
+    use wow_world_messages::vanilla::SMSG_TRADE_STATUS;
+    let status = match row.kind {
+        kind::BEGIN_TRADE => Some(SMSG_TRADE_STATUS::BeginTrade {
+            unknown1: wow_world_messages::Guid::new(row.other_guid),
+        }),
+        kind::OPEN_WINDOW => Some(SMSG_TRADE_STATUS::OpenWindow),
+        kind::TRADE_CANCELED => Some(SMSG_TRADE_STATUS::TradeCanceled),
+        kind::BUSY => Some(SMSG_TRADE_STATUS::Busy),
+        kind::NO_TARGET => Some(SMSG_TRADE_STATUS::NoTarget),
+        kind::TARGET_TO_FAR => Some(SMSG_TRADE_STATUS::TargetToFar),
+        kind::WRONG_FACTION => Some(SMSG_TRADE_STATUS::WrongFaction),
+        kind::YOU_DEAD => Some(SMSG_TRADE_STATUS::YouDead),
+        kind::TARGET_DEAD => Some(SMSG_TRADE_STATUS::TargetDead),
+        other => {
+            log::warn!("trade relay: unknown kind {other} (event {})", row.id);
+            None
+        }
+    };
+    match status {
+        Some(s) => vec![Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS(
+            Box::new(s),
+        ))],
+        None => Vec::new(),
+    }
+}
+
 /// Group / loot-roll / quest-share: the ONE kind-decode body both legs
 /// run. PRIVATE data — the audience (the row's recipient, and nobody else) is resolved by the
 /// caller (RLS on the per-player leg; the owner-session lookup + `private_recipient_audience` on
@@ -3430,6 +3463,55 @@ impl Coordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The trade-status wire mapping (#120): every `lyracore_shared::trade::event_kind` the module
+    /// emits decodes to its `SMSG_TRADE_STATUS` variant — `BeginTrade` carrying the counterparty
+    /// guid the client needs to open the window — and an unknown kind (newer module mid-rollout)
+    /// drops rather than desyncing the trade window.
+    #[test]
+    fn trade_event_kinds_decode_to_their_trade_status_variants() {
+        use lyracore_shared::trade::event_kind as kind;
+        use wow_world_messages::vanilla::SMSG_TRADE_STATUS;
+
+        let event = |k: u8| TradeEvent {
+            id: 1,
+            recipient_identity: spacetimedb_sdk::Identity::from_byte_array([0u8; 32]),
+            kind: k,
+            other_guid: 77,
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            recipient_guid: 1,
+        };
+        let status_of = |k: u8| -> SMSG_TRADE_STATUS {
+            let out = trade_event_outbound(&event(k));
+            assert_eq!(out.len(), 1, "kind {k} must decode to exactly one packet");
+            match &out[0] {
+                Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS(s)) => (**s).clone(),
+                Outbound::One(other) => panic!("kind {k}: expected SMSG_TRADE_STATUS, got {other}"),
+                _ => panic!("kind {k}: expected a single SMSG_TRADE_STATUS packet"),
+            }
+        };
+
+        assert_eq!(
+            status_of(kind::BEGIN_TRADE),
+            SMSG_TRADE_STATUS::BeginTrade {
+                unknown1: wow_world_messages::Guid::new(77)
+            },
+            "BeginTrade must carry the initiator guid off the row"
+        );
+        assert_eq!(status_of(kind::OPEN_WINDOW), SMSG_TRADE_STATUS::OpenWindow);
+        assert_eq!(status_of(kind::TRADE_CANCELED), SMSG_TRADE_STATUS::TradeCanceled);
+        assert_eq!(status_of(kind::BUSY), SMSG_TRADE_STATUS::Busy);
+        assert_eq!(status_of(kind::NO_TARGET), SMSG_TRADE_STATUS::NoTarget);
+        assert_eq!(status_of(kind::TARGET_TO_FAR), SMSG_TRADE_STATUS::TargetToFar);
+        assert_eq!(status_of(kind::WRONG_FACTION), SMSG_TRADE_STATUS::WrongFaction);
+        assert_eq!(status_of(kind::YOU_DEAD), SMSG_TRADE_STATUS::YouDead);
+        assert_eq!(status_of(kind::TARGET_DEAD), SMSG_TRADE_STATUS::TargetDead);
+
+        assert!(
+            trade_event_outbound(&event(200)).is_empty(),
+            "an unknown kind must drop, not guess a status"
+        );
+    }
 
     /// A live-entity row with no pending change; tests clone it and mutate one field at a time.
     /// `type_mask` carries the PLAYER bit by default (most relayed fields are player-only).
