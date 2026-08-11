@@ -799,13 +799,7 @@ mod gc_reap_tripwire {
     ///   creature legs onto the in-place `game_creature_spline` row, updated rather than
     ///   inserted/reaped); the table stays in the schema, empty, rather than as a separate
     ///   destructive migration to drop it. See the comment atop `reap_movement_events` in `gc.rs`.
-    const EXEMPT_ACCESSORS: &[&str] = &[
-        "game_creature_move_event",
-        // Torn down by explicit cancel and logout (#120), not by TTL — a `created_at`-only reap
-        // here would force-cancel a LIVE negotiation at 2 minutes. The idle TTL and its
-        // refresh-on-every-trade-action policy land TOGETHER in #123.
-        "game_trade_session",
-    ];
+    const EXEMPT_ACCESSORS: &[&str] = &["game_creature_move_event"];
 
     /// `gc.rs` actually reaps `accessor` — via the shared `reap!(accessor)` macro invocation, or a
     /// direct `ctx.db.accessor()` call (the shape of the ad-hoc blocks: `game_group_invite`'s own

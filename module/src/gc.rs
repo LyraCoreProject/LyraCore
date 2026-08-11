@@ -7,8 +7,8 @@ use crate::{
     game_addon_message, game_bot_invite_intent, game_channel_event, game_chat_event,
     game_combat_event, game_emote_event, game_group_event, game_group_invite, game_levelup_event,
     game_movement_violation, game_roll_event, game_spell_cast_event, game_spell_impact_event,
-    game_teleport_event, game_trade_event, game_whisper_event, game_xp_event, EVENT_TTL_MICROS,
-    INVITE_TTL_MICROS,
+    game_teleport_event, game_trade_event, game_trade_session, game_whisper_event, game_xp_event,
+    EVENT_TTL_MICROS, INVITE_TTL_MICROS,
 };
 // `rest` isn't re-exported at crate scope (`mod rest;`, no `pub use rest::*;` in lib.rs) — every
 // other event table's accessor trait rides that glob, so this is the one accessor here needing its
@@ -106,6 +106,23 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
             .collect();
         for id in stale {
             t.id().delete(id);
+        }
+    }
+
+    // Idle Trade Sessions (#123): `created_at` is bumped by every trade action, so the pure
+    // policy (`trade::session_is_stale`) measures idleness — a live negotiation is never reaped.
+    // Torn down THROUGH `cancel_trade_for`, never a bare delete, so both clients hear
+    // `TradeCanceled` instead of keeping stale windows open.
+    {
+        let sessions = ctx.db.game_trade_session();
+        let now = ctx.timestamp.to_micros_since_unix_epoch();
+        let stale: Vec<u64> = sessions
+            .iter()
+            .filter(|s| crate::trade::session_is_stale(s.created_at.to_micros_since_unix_epoch(), now))
+            .map(|s| s.initiator_guid)
+            .collect();
+        for guid in stale {
+            crate::trade::cancel_trade_for(ctx, guid);
         }
     }
 

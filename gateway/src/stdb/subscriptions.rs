@@ -1427,6 +1427,26 @@ pub(crate) fn aura_delete_outbound(
 pub(crate) fn trade_event_outbound(row: &TradeEvent) -> Vec<Outbound> {
     use lyracore_shared::trade::event_kind as kind;
     use wow_world_messages::vanilla::SMSG_TRADE_STATUS;
+    // The OFFER_* kinds carry a whole-side snapshot and decode to the fixed-444-byte extended
+    // status instead of a plain status (#121); `self_player` is the kind, not an inference.
+    if row.kind == kind::OFFER_SELF || row.kind == kind::OFFER_PARTNER {
+        // WIRE POLARITY (mangoszero `SendUpdateTrade`): the byte is `1 means traders data,
+        // 0 means own` — so the field is SET when the packet describes the PARTNER's side,
+        // despite the binding's `self_player` name. Live-client verification is #124's pass.
+        return match trade_offer_extended(row.kind == kind::OFFER_PARTNER, &row.payload) {
+            Some(msg) => vec![Outbound::One(
+                ServerOpcodeMessage::SMSG_TRADE_STATUS_EXTENDED(Box::new(msg)),
+            )],
+            None => {
+                log::warn!(
+                    "trade relay: unparseable offer payload {:?} (event {})",
+                    row.payload,
+                    row.id
+                );
+                Vec::new()
+            }
+        };
+    }
     let status = match row.kind {
         kind::BEGIN_TRADE => Some(SMSG_TRADE_STATUS::BeginTrade {
             unknown1: wow_world_messages::Guid::new(row.other_guid),
@@ -1439,6 +1459,7 @@ pub(crate) fn trade_event_outbound(row: &TradeEvent) -> Vec<Outbound> {
         kind::WRONG_FACTION => Some(SMSG_TRADE_STATUS::WrongFaction),
         kind::YOU_DEAD => Some(SMSG_TRADE_STATUS::YouDead),
         kind::TARGET_DEAD => Some(SMSG_TRADE_STATUS::TargetDead),
+        kind::IGNORE_YOU => Some(SMSG_TRADE_STATUS::IgnoreYou),
         other => {
             log::warn!("trade relay: unknown kind {other} (event {})", row.id);
             None
@@ -1450,6 +1471,42 @@ pub(crate) fn trade_event_outbound(row: &TradeEvent) -> Vec<Outbound> {
         ))],
         None => Vec::new(),
     }
+}
+
+/// Decode an `OFFER_*` payload into the fixed-444-byte `SMSG_TRADE_STATUS_EXTENDED` (#121):
+/// counts are 7/7 (the cmangos constant), unused slots stay zeroed (`TradeSlot::default`), and
+/// every filled slot carries the module-resolved stack/durability/enchant fields. Fails closed
+/// with the payload decoder. `describes_partner` sets the wire's misnamed `self_player` byte —
+/// mangoszero: "1 means traders data, 0 means own".
+fn trade_offer_extended(
+    describes_partner: bool,
+    payload: &str,
+) -> Option<wow_world_messages::vanilla::SMSG_TRADE_STATUS_EXTENDED> {
+    use wow_world_messages::vanilla::{TradeSlot, SMSG_TRADE_STATUS_EXTENDED};
+    let (gold, views) = lyracore_shared::trade::decode_offer(payload)?;
+    let mut trade_slots = [TradeSlot::default(); 7];
+    for v in views {
+        let slot = trade_slots.get_mut(v.trade_slot as usize)?;
+        *slot = TradeSlot {
+            trade_slot_number: v.trade_slot,
+            item: v.entry,
+            display_id: v.display_id,
+            stack_count: v.stack_count,
+            enchantment: v.enchantment,
+            max_durability: v.max_durability,
+            durability: v.durability,
+            ..TradeSlot::default()
+        };
+    }
+    Some(SMSG_TRADE_STATUS_EXTENDED {
+        // `1 means traders data` — see the call-site polarity note.
+        self_player: describes_partner,
+        trade_slot_count1: 7,
+        trade_slot_count2: 7,
+        money_in_trade: wow_world_messages::vanilla::Gold::new(gold),
+        spell_on_lowest_slot: 0,
+        trade_slots,
+    })
 }
 
 /// Group / loot-roll / quest-share: the ONE kind-decode body both legs
@@ -3480,6 +3537,7 @@ mod tests {
             other_guid: 77,
             created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
             recipient_guid: 1,
+            payload: String::new(),
         };
         let status_of = |k: u8| -> SMSG_TRADE_STATUS {
             let out = trade_event_outbound(&event(k));
@@ -3506,10 +3564,81 @@ mod tests {
         assert_eq!(status_of(kind::WRONG_FACTION), SMSG_TRADE_STATUS::WrongFaction);
         assert_eq!(status_of(kind::YOU_DEAD), SMSG_TRADE_STATUS::YouDead);
         assert_eq!(status_of(kind::TARGET_DEAD), SMSG_TRADE_STATUS::TargetDead);
+        assert_eq!(status_of(kind::IGNORE_YOU), SMSG_TRADE_STATUS::IgnoreYou);
 
         assert!(
             trade_event_outbound(&event(200)).is_empty(),
             "an unknown kind must drop, not guess a status"
+        );
+    }
+
+    /// The OFFER_* kinds decode to the fixed-444-byte extended status (#121): the polarity byte
+    /// comes from the KIND (never inferred), the window-visible item fields survive the payload
+    /// round-trip into the right wire slots, unused slots stay zeroed, and a malformed payload
+    /// drops the packet entirely.
+    #[test]
+    fn offer_events_decode_to_the_extended_status_with_the_kind_deciding_self_player() {
+        use lyracore_shared::trade::{encode_offer, event_kind as kind, OfferSlot};
+        use wow_world_messages::vanilla::SMSG_TRADE_STATUS_EXTENDED;
+
+        let payload = encode_offer(
+            1_2345,
+            &[OfferSlot {
+                trade_slot: 6,
+                entry: 6948,
+                display_id: 6418,
+                stack_count: 5,
+                enchantment: 2564,
+                durability: 34,
+                max_durability: 40,
+            }],
+        );
+        let event = |k: u8, p: &str| TradeEvent {
+            id: 1,
+            recipient_identity: spacetimedb_sdk::Identity::from_byte_array([0u8; 32]),
+            kind: k,
+            other_guid: 77,
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            recipient_guid: 1,
+            payload: p.to_string(),
+        };
+        let extended = |k: u8| -> SMSG_TRADE_STATUS_EXTENDED {
+            let out = trade_event_outbound(&event(k, &payload));
+            match out.first() {
+                Some(Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS_EXTENDED(m))) => {
+                    (**m).clone()
+                }
+                _ => panic!("kind {k}: expected one SMSG_TRADE_STATUS_EXTENDED"),
+            }
+        };
+
+        // Wire polarity (mangoszero): the `self_player` BYTE is "1 means traders data, 0 means
+        // own", so your OWN echo carries 0 and the partner's side carries 1.
+        let own = extended(kind::OFFER_SELF);
+        assert!(!own.self_player, "OFFER_SELF describes your own window: wire byte 0");
+        let theirs = extended(kind::OFFER_PARTNER);
+        assert!(theirs.self_player, "OFFER_PARTNER describes the partner's side: wire byte 1");
+
+        assert_eq!(own.money_in_trade.as_int(), 1_2345);
+        assert_eq!((own.trade_slot_count1, own.trade_slot_count2), (7, 7));
+        let s = &own.trade_slots[6];
+        assert_eq!(
+            (s.trade_slot_number, s.item, s.display_id, s.stack_count),
+            (6, 6948, 6418, 5)
+        );
+        assert_eq!(
+            (s.enchantment, s.durability, s.max_durability),
+            (2564, 34, 40)
+        );
+        assert_eq!(
+            own.trade_slots[0],
+            Default::default(),
+            "untouched slots stay zeroed"
+        );
+
+        assert!(
+            trade_event_outbound(&event(kind::OFFER_SELF, "not|a,valid,payload")).is_empty(),
+            "a malformed offer payload must drop the packet"
         );
     }
 

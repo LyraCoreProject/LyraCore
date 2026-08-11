@@ -48,6 +48,75 @@ pub(crate) fn handle_trade<St: WorldStore + ?Sized>(
             }
             Ok(None)
         }
+        // Offer mutations (#121). The (bag, slot) pair maps onto the module's absolute slots the
+        // same way the item family does: only the main pseudo-bag (255) is modelled — items inside
+        // equipped sub-bags are logged + ignored, `handle_item`'s posture.
+        ClientOpcodeMessage::CMSG_SET_TRADE_ITEM(c) => {
+            const MAIN_BAG: u8 = 255; // INVENTORY_SLOT_BAG_0
+            if let Some(me) = self_guid(conn) {
+                if c.bag != MAIN_BAG {
+                    log::debug!(
+                        "world: set_trade_item from sub-bag {} ignored (account {})",
+                        c.bag,
+                        conn.account_id
+                    );
+                } else if let Err(e) =
+                    store.set_trade_item(conn.account_id, me, c.trade_slot, c.slot)
+                {
+                    log::debug!(
+                        "world: set_trade_item ignored (account {}): {e}",
+                        conn.account_id
+                    );
+                }
+            }
+            Ok(None)
+        }
+        ClientOpcodeMessage::CMSG_CLEAR_TRADE_ITEM(c) => {
+            if let Some(me) = self_guid(conn) {
+                if let Err(e) = store.clear_trade_item(conn.account_id, me, c.trade_slot) {
+                    log::debug!(
+                        "world: clear_trade_item ignored (account {}): {e}",
+                        conn.account_id
+                    );
+                }
+            }
+            Ok(None)
+        }
+        ClientOpcodeMessage::CMSG_SET_TRADE_GOLD(c) => {
+            if let Some(me) = self_guid(conn) {
+                if let Err(e) = store.set_trade_gold(conn.account_id, me, c.gold.as_int()) {
+                    log::debug!(
+                        "world: set_trade_gold ignored (account {}): {e}",
+                        conn.account_id
+                    );
+                }
+            }
+            Ok(None)
+        }
+        // Proposal declines (#123): the client auto-answers a BeginTrade it can't take — busy
+        // (already in a dialog) or the initiator is on the ignore list.
+        ClientOpcodeMessage::CMSG_BUSY_TRADE => {
+            if let Some(me) = self_guid(conn) {
+                if let Err(e) = store.busy_trade(conn.account_id, me) {
+                    log::debug!(
+                        "world: busy_trade ignored (account {}): {e}",
+                        conn.account_id
+                    );
+                }
+            }
+            Ok(None)
+        }
+        ClientOpcodeMessage::CMSG_IGNORE_TRADE => {
+            if let Some(me) = self_guid(conn) {
+                if let Err(e) = store.ignore_trade(conn.account_id, me) {
+                    log::debug!(
+                        "world: ignore_trade ignored (account {}): {e}",
+                        conn.account_id
+                    );
+                }
+            }
+            Ok(None)
+        }
         other => Ok(Some(other)),
     }
 }

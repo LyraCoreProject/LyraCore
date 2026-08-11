@@ -7,7 +7,10 @@
 //! shared `private_recipient_audience` tests; the full push is the dev-smoke/live-client pass.
 
 use super::*;
-use wow_world_messages::vanilla::{CMSG_BEGIN_TRADE, CMSG_CANCEL_TRADE, CMSG_INITIATE_TRADE};
+use wow_world_messages::vanilla::{
+    CMSG_BEGIN_TRADE, CMSG_BUSY_TRADE, CMSG_CANCEL_TRADE, CMSG_CLEAR_TRADE_ITEM,
+    CMSG_IGNORE_TRADE, CMSG_INITIATE_TRADE, CMSG_SET_TRADE_GOLD, CMSG_SET_TRADE_ITEM,
+};
 
 /// **AC: initiating a trade with a targeted player reaches the store with the wire's target.**
 #[test]
@@ -78,6 +81,73 @@ fn the_handshake_flow_dispatches_initiate_then_begin_then_cancel() {
         .map(|(_, what)| what.clone())
         .collect();
     assert_eq!(calls, ["initiate_trade", "begin_trade", "cancel_trade"]);
+}
+
+/// **AC (#121): offer mutations dispatch with the wire's arguments** — set item (main bag →
+/// absolute slot passthrough), clear item, and gold (the `Gold` wire type decoded back to
+/// copper). One client, three opcodes, three recorders.
+#[test]
+fn offer_mutations_dispatch_with_wire_arguments() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_SET_TRADE_ITEM {
+        trade_slot: 2,
+        bag: 255,
+        slot: 23,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    CMSG_CLEAR_TRADE_ITEM { trade_slot: 2 }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    CMSG_SET_TRADE_GOLD {
+        gold: wow_world_messages::vanilla::Gold::new(1_2345),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.set_trade_items.lock().unwrap().as_slice(), &[(1, 2, 23)]);
+    assert_eq!(store.cleared_trade_items.lock().unwrap().as_slice(), &[(1, 2)]);
+    assert_eq!(store.set_trade_golds.lock().unwrap().as_slice(), &[(1, 1_2345)]);
+}
+
+/// **AC (#121): sub-bag items are out of scope, not mis-addressed** — a `CMSG_SET_TRADE_ITEM`
+/// from an equipped sub-bag is logged and IGNORED (the `handle_item` posture), never forwarded
+/// with a bag-local slot number that would alias a main-bag slot.
+#[test]
+fn set_trade_item_from_a_sub_bag_is_ignored_not_misaddressed() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_SET_TRADE_ITEM {
+        trade_slot: 0,
+        bag: 19,
+        slot: 2,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert!(store.set_trade_items.lock().unwrap().is_empty());
+}
+
+/// **AC (#123): the decline flow** — the proposed target's client answers a `BeginTrade` it
+/// can't take with `CMSG_BUSY_TRADE` (already in a dialog) or `CMSG_IGNORE_TRADE` (initiator
+/// ignored); each dispatches its own decline verb as the declining side.
+#[test]
+fn decline_opcodes_dispatch_their_own_verbs_for_the_declining_side() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 2);
+    CMSG_BUSY_TRADE {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    CMSG_IGNORE_TRADE {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.busy_trades.lock().unwrap().as_slice(), &[2]);
+    assert_eq!(store.ignore_trades.lock().unwrap().as_slice(), &[2]);
 }
 
 /// **AC: either side can cancel** — the initiator's own `CMSG_CANCEL_TRADE` dispatches as

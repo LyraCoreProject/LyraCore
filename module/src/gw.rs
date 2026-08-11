@@ -744,6 +744,56 @@ pub fn gw_cancel_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Stri
     crate::trade::apply_cancel_trade(ctx, acting)
 }
 
+/// [`crate::trade::apply_set_trade_item`] — offer the item in absolute inventory slot `inv_slot`
+/// in window slot `trade_slot` (#121). The gateway already mapped the client's (bag, slot) pair.
+#[reducer]
+pub fn gw_set_trade_item(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    trade_slot: u8,
+    inv_slot: u8,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_set_trade_item(ctx, acting, trade_slot, inv_slot)
+}
+
+/// [`crate::trade::apply_clear_trade_item`] (#121).
+#[reducer]
+pub fn gw_clear_trade_item(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    trade_slot: u8,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_clear_trade_item(ctx, acting, trade_slot)
+}
+
+/// [`crate::trade::apply_set_trade_gold`] — `copper` is the offered amount (#121).
+#[reducer]
+pub fn gw_set_trade_gold(ctx: &ReducerContext, actor_guid: u64, copper: u32) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_set_trade_gold(ctx, acting, copper)
+}
+
+/// [`crate::trade::apply_busy_trade`] — decline a proposal as busy (#123).
+#[reducer]
+pub fn gw_busy_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_busy_trade(ctx, acting)
+}
+
+/// [`crate::trade::apply_ignore_trade`] — decline a proposal via ignore (#123).
+#[reducer]
+pub fn gw_ignore_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_ignore_trade(ctx, acting)
+}
+
 /// [`crate::group::leave_group_for`] with the leaver named by guid.
 #[reducer]
 pub fn gw_group_leave(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {

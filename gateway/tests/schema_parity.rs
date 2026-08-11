@@ -409,7 +409,7 @@ parity_test!(parity_game_group_event, "game_group_event", lyracore_module::Group
 // The private per-recipient trade-status relay (#120) — the `game_group_event` shape minus the
 // name/payload columns (no trade status carries either).
 parity_test!(parity_game_trade_event, "game_trade_event", lyracore_module::TradeEvent, bindings::trade_event_type::TradeEvent, {
-    id, recipient_identity, kind, other_guid, created_at, recipient_guid,
+    id, recipient_identity, kind, other_guid, created_at, recipient_guid, payload,
 });
 // A bot's serendipity invite DECISION, picked up by the coordinator's
 // `world::party::run_bot_invite` relay (`stdb/subscriptions.rs`) — not a client-facing table, but

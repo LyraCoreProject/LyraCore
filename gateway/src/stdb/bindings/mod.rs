@@ -388,6 +388,7 @@ pub mod gw_add_ignore_reducer;
 pub mod gw_attack_reducer;
 pub mod gw_begin_trade_reducer;
 pub mod gw_bind_home_reducer;
+pub mod gw_busy_trade_reducer;
 pub mod gw_buy_item_reducer;
 pub mod gw_buyback_item_reducer;
 pub mod gw_cancel_aura_reducer;
@@ -396,6 +397,7 @@ pub mod gw_cancel_trade_reducer;
 pub mod gw_cast_at_reducer;
 pub mod gw_cast_spell_at_reducer;
 pub mod gw_cast_spell_reducer;
+pub mod gw_clear_trade_item_reducer;
 pub mod gw_client_command_reducer;
 pub mod gw_del_friend_reducer;
 pub mod gw_del_ignore_reducer;
@@ -412,6 +414,7 @@ pub mod gw_group_leave_reducer;
 pub mod gw_group_loot_method_reducer;
 pub mod gw_group_uninvite_reducer;
 pub mod gw_heartbeat_reducer;
+pub mod gw_ignore_trade_reducer;
 pub mod gw_initiate_trade_reducer;
 pub mod gw_inspect_reducer;
 pub mod gw_join_channel_reducer;
@@ -446,6 +449,8 @@ pub mod gw_set_action_button_reducer;
 pub mod gw_set_faction_at_war_reducer;
 pub mod gw_set_sheathed_reducer;
 pub mod gw_set_target_reducer;
+pub mod gw_set_trade_gold_reducer;
+pub mod gw_set_trade_item_reducer;
 pub mod gw_skin_reducer;
 pub mod gw_spirit_res_reducer;
 pub mod gw_stop_attack_reducer;
@@ -954,6 +959,7 @@ pub use gw_add_ignore_reducer::gw_add_ignore;
 pub use gw_attack_reducer::gw_attack;
 pub use gw_begin_trade_reducer::gw_begin_trade;
 pub use gw_bind_home_reducer::gw_bind_home;
+pub use gw_busy_trade_reducer::gw_busy_trade;
 pub use gw_buy_item_reducer::gw_buy_item;
 pub use gw_buyback_item_reducer::gw_buyback_item;
 pub use gw_cancel_aura_reducer::gw_cancel_aura;
@@ -962,6 +968,7 @@ pub use gw_cancel_trade_reducer::gw_cancel_trade;
 pub use gw_cast_at_reducer::gw_cast_at;
 pub use gw_cast_spell_at_reducer::gw_cast_spell_at;
 pub use gw_cast_spell_reducer::gw_cast_spell;
+pub use gw_clear_trade_item_reducer::gw_clear_trade_item;
 pub use gw_client_command_reducer::gw_client_command;
 pub use gw_del_friend_reducer::gw_del_friend;
 pub use gw_del_ignore_reducer::gw_del_ignore;
@@ -978,6 +985,7 @@ pub use gw_group_leave_reducer::gw_group_leave;
 pub use gw_group_loot_method_reducer::gw_group_loot_method;
 pub use gw_group_uninvite_reducer::gw_group_uninvite;
 pub use gw_heartbeat_reducer::gw_heartbeat;
+pub use gw_ignore_trade_reducer::gw_ignore_trade;
 pub use gw_initiate_trade_reducer::gw_initiate_trade;
 pub use gw_inspect_reducer::gw_inspect;
 pub use gw_join_channel_reducer::gw_join_channel;
@@ -1012,6 +1020,8 @@ pub use gw_set_action_button_reducer::gw_set_action_button;
 pub use gw_set_faction_at_war_reducer::gw_set_faction_at_war;
 pub use gw_set_sheathed_reducer::gw_set_sheathed;
 pub use gw_set_target_reducer::gw_set_target;
+pub use gw_set_trade_gold_reducer::gw_set_trade_gold;
+pub use gw_set_trade_item_reducer::gw_set_trade_item;
 pub use gw_skin_reducer::gw_skin;
 pub use gw_spirit_res_reducer::gw_spirit_res;
 pub use gw_stop_attack_reducer::gw_stop_attack;
@@ -1751,6 +1761,9 @@ pub enum Reducer {
     GwBindHome {
         actor_guid: u64,
     },
+    GwBusyTrade {
+        actor_guid: u64,
+    },
     GwBuyItem {
         actor_guid: u64,
         vendor_guid: u64,
@@ -1789,6 +1802,10 @@ pub enum Reducer {
         x: f32,
         y: f32,
         z: f32,
+    },
+    GwClearTradeItem {
+        actor_guid: u64,
+        trade_slot: u8,
     },
     GwClientCommand {
         actor_guid: u64,
@@ -1854,6 +1871,9 @@ pub enum Reducer {
         target_guid: u64,
     },
     GwHeartbeat,
+    GwIgnoreTrade {
+        actor_guid: u64,
+    },
     GwInitiateTrade {
         actor_guid: u64,
         target_guid: u64,
@@ -2007,6 +2027,15 @@ pub enum Reducer {
     GwSetTarget {
         actor_guid: u64,
         target_guid: u64,
+    },
+    GwSetTradeGold {
+        actor_guid: u64,
+        copper: u32,
+    },
+    GwSetTradeItem {
+        actor_guid: u64,
+        trade_slot: u8,
+        inv_slot: u8,
     },
     GwSkin {
         actor_guid: u64,
@@ -2349,6 +2378,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwAttack { .. } => "gw_attack",
             Reducer::GwBeginTrade { .. } => "gw_begin_trade",
             Reducer::GwBindHome { .. } => "gw_bind_home",
+            Reducer::GwBusyTrade { .. } => "gw_busy_trade",
             Reducer::GwBuyItem { .. } => "gw_buy_item",
             Reducer::GwBuybackItem { .. } => "gw_buyback_item",
             Reducer::GwCancelAura { .. } => "gw_cancel_aura",
@@ -2357,6 +2387,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwCastAt { .. } => "gw_cast_at",
             Reducer::GwCastSpell { .. } => "gw_cast_spell",
             Reducer::GwCastSpellAt { .. } => "gw_cast_spell_at",
+            Reducer::GwClearTradeItem { .. } => "gw_clear_trade_item",
             Reducer::GwClientCommand { .. } => "gw_client_command",
             Reducer::GwDelFriend { .. } => "gw_del_friend",
             Reducer::GwDelIgnore { .. } => "gw_del_ignore",
@@ -2373,6 +2404,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwGroupLootMethod { .. } => "gw_group_loot_method",
             Reducer::GwGroupUninvite { .. } => "gw_group_uninvite",
             Reducer::GwHeartbeat => "gw_heartbeat",
+            Reducer::GwIgnoreTrade { .. } => "gw_ignore_trade",
             Reducer::GwInitiateTrade { .. } => "gw_initiate_trade",
             Reducer::GwInspect { .. } => "gw_inspect",
             Reducer::GwJoinChannel { .. } => "gw_join_channel",
@@ -2406,6 +2438,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwSetFactionAtWar { .. } => "gw_set_faction_at_war",
             Reducer::GwSetSheathed { .. } => "gw_set_sheathed",
             Reducer::GwSetTarget { .. } => "gw_set_target",
+            Reducer::GwSetTradeGold { .. } => "gw_set_trade_gold",
+            Reducer::GwSetTradeItem { .. } => "gw_set_trade_item",
             Reducer::GwSkin { .. } => "gw_skin",
             Reducer::GwSpiritRes { .. } => "gw_spirit_res",
             Reducer::GwStopAttack { .. } => "gw_stop_attack",
@@ -3573,6 +3607,11 @@ impl __sdk::Reducer for Reducer {
                     actor_guid: actor_guid.clone(),
                 })
             }
+            Reducer::GwBusyTrade { actor_guid } => {
+                __sats::bsatn::to_vec(&gw_busy_trade_reducer::GwBusyTradeArgs {
+                    actor_guid: actor_guid.clone(),
+                })
+            }
             Reducer::GwBuyItem {
                 actor_guid,
                 vendor_guid,
@@ -3642,6 +3681,13 @@ impl __sdk::Reducer for Reducer {
                 x: x.clone(),
                 y: y.clone(),
                 z: z.clone(),
+            }),
+            Reducer::GwClearTradeItem {
+                actor_guid,
+                trade_slot,
+            } => __sats::bsatn::to_vec(&gw_clear_trade_item_reducer::GwClearTradeItemArgs {
+                actor_guid: actor_guid.clone(),
+                trade_slot: trade_slot.clone(),
             }),
             Reducer::GwClientCommand {
                 actor_guid,
@@ -3752,6 +3798,11 @@ impl __sdk::Reducer for Reducer {
             }),
             Reducer::GwHeartbeat => {
                 __sats::bsatn::to_vec(&gw_heartbeat_reducer::GwHeartbeatArgs {})
+            }
+            Reducer::GwIgnoreTrade { actor_guid } => {
+                __sats::bsatn::to_vec(&gw_ignore_trade_reducer::GwIgnoreTradeArgs {
+                    actor_guid: actor_guid.clone(),
+                })
             }
             Reducer::GwInitiateTrade {
                 actor_guid,
@@ -4026,6 +4077,21 @@ impl __sdk::Reducer for Reducer {
             } => __sats::bsatn::to_vec(&gw_set_target_reducer::GwSetTargetArgs {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
+            }),
+            Reducer::GwSetTradeGold { actor_guid, copper } => {
+                __sats::bsatn::to_vec(&gw_set_trade_gold_reducer::GwSetTradeGoldArgs {
+                    actor_guid: actor_guid.clone(),
+                    copper: copper.clone(),
+                })
+            }
+            Reducer::GwSetTradeItem {
+                actor_guid,
+                trade_slot,
+                inv_slot,
+            } => __sats::bsatn::to_vec(&gw_set_trade_item_reducer::GwSetTradeItemArgs {
+                actor_guid: actor_guid.clone(),
+                trade_slot: trade_slot.clone(),
+                inv_slot: inv_slot.clone(),
             }),
             Reducer::GwSkin {
                 actor_guid,

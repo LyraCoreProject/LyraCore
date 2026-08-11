@@ -838,6 +838,17 @@ pub trait WorldStore: Send + Sync {
     fn begin_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
     /// `CMSG_CANCEL_TRADE` — tear the caller's Trade Session down (`TradeCanceled` to both).
     fn cancel_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    /// `CMSG_SET_TRADE_ITEM` — `inv_slot` is the ABSOLUTE inventory slot (the gateway maps the
+    /// client's (bag, slot) pair, the item-family convention) (#121).
+    fn set_trade_item(&self, account_id: u64, self_guid: u64, trade_slot: u8, inv_slot: u8) -> Result<()>;
+    /// `CMSG_CLEAR_TRADE_ITEM` (#121).
+    fn clear_trade_item(&self, account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()>;
+    /// `CMSG_SET_TRADE_GOLD` — `copper` is the offered amount (#121).
+    fn set_trade_gold(&self, account_id: u64, self_guid: u64, copper: u32) -> Result<()>;
+    /// `CMSG_BUSY_TRADE` — decline a pending proposal as busy; initiator hears `Busy` (#123).
+    fn busy_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    /// `CMSG_IGNORE_TRADE` — decline via ignore; initiator hears `IgnoreYou` (#123).
+    fn ignore_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
 
     /// Find `owner_guid`'s corpse location `(map_id, x, y, z)` for `MSG_CORPSE_QUERY` (slice 5).
     fn corpse_location(&self, owner_guid: u64) -> Result<Option<(u32, f32, f32, f32)>>;

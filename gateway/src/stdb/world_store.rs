@@ -936,6 +936,21 @@ impl WorldStore for Coordinator {
     fn cancel_trade(&self, account_id: u64, self_guid: u64) -> Result<()> {
         self.cancel_trade(account_id, self_guid)
     }
+    fn set_trade_item(&self, account_id: u64, self_guid: u64, trade_slot: u8, inv_slot: u8) -> Result<()> {
+        self.set_trade_item(account_id, self_guid, trade_slot, inv_slot)
+    }
+    fn clear_trade_item(&self, account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()> {
+        self.clear_trade_item(account_id, self_guid, trade_slot)
+    }
+    fn set_trade_gold(&self, account_id: u64, self_guid: u64, copper: u32) -> Result<()> {
+        self.set_trade_gold(account_id, self_guid, copper)
+    }
+    fn busy_trade(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        self.busy_trade(account_id, self_guid)
+    }
+    fn ignore_trade(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        self.ignore_trade(account_id, self_guid)
+    }
     fn group_accept(&self, account_id: u64, self_guid: u64) -> Result<()> {
         self.group_accept(account_id, self_guid)
     }

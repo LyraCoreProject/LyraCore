@@ -510,6 +510,17 @@ struct InMemoryStore {
     begun_trades: std::sync::Mutex<Vec<u64>>,
     /// Recorded `cancel_trade` self_guids — CMSG_CANCEL_TRADE (#120).
     cancelled_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `set_trade_item` calls — `(self_guid, trade_slot, inv_slot)` AFTER the gateway's
+    /// (bag, slot) → absolute-slot mapping (#121).
+    set_trade_items: std::sync::Mutex<Vec<(u64, u8, u8)>>,
+    /// Recorded `clear_trade_item` calls — `(self_guid, trade_slot)` (#121).
+    cleared_trade_items: std::sync::Mutex<Vec<(u64, u8)>>,
+    /// Recorded `set_trade_gold` calls — `(self_guid, copper)` after the wire's Gold decode (#121).
+    set_trade_golds: std::sync::Mutex<Vec<(u64, u32)>>,
+    /// Recorded `busy_trade` self_guids — CMSG_BUSY_TRADE (#123).
+    busy_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `ignore_trade` self_guids — CMSG_IGNORE_TRADE (#123).
+    ignore_trades: std::sync::Mutex<Vec<u64>>,
 }
 
 impl InMemoryStore {
@@ -1586,6 +1597,40 @@ impl WorldStore for InMemoryStore {
     fn cancel_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
         self.rec("cancel_trade");
         self.cancelled_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+    fn set_trade_item(&self, _account_id: u64, self_guid: u64, trade_slot: u8, inv_slot: u8) -> Result<()> {
+        self.rec("set_trade_item");
+        self.set_trade_items
+            .lock()
+            .unwrap()
+            .push((self_guid, trade_slot, inv_slot));
+        Ok(())
+    }
+    fn clear_trade_item(&self, _account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()> {
+        self.rec("clear_trade_item");
+        self.cleared_trade_items
+            .lock()
+            .unwrap()
+            .push((self_guid, trade_slot));
+        Ok(())
+    }
+    fn set_trade_gold(&self, _account_id: u64, self_guid: u64, copper: u32) -> Result<()> {
+        self.rec("set_trade_gold");
+        self.set_trade_golds
+            .lock()
+            .unwrap()
+            .push((self_guid, copper));
+        Ok(())
+    }
+    fn busy_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("busy_trade");
+        self.busy_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+    fn ignore_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("ignore_trade");
+        self.ignore_trades.lock().unwrap().push(self_guid);
         Ok(())
     }
     fn group_decline(&self, _account_id: u64, _self_guid: u64) -> Result<()> {

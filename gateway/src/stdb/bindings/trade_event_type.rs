@@ -13,6 +13,7 @@ pub struct TradeEvent {
     pub other_guid: u64,
     pub created_at: __sdk::Timestamp,
     pub recipient_guid: u64,
+    pub payload: String,
 }
 
 impl __sdk::InModule for TradeEvent {
@@ -29,6 +30,7 @@ pub struct TradeEventCols {
     pub other_guid: __sdk::__query_builder::Col<TradeEvent, u64>,
     pub created_at: __sdk::__query_builder::Col<TradeEvent, __sdk::Timestamp>,
     pub recipient_guid: __sdk::__query_builder::Col<TradeEvent, u64>,
+    pub payload: __sdk::__query_builder::Col<TradeEvent, String>,
 }
 
 impl __sdk::__query_builder::HasCols for TradeEvent {
@@ -41,6 +43,7 @@ impl __sdk::__query_builder::HasCols for TradeEvent {
             other_guid: __sdk::__query_builder::Col::new(table_name, "other_guid"),
             created_at: __sdk::__query_builder::Col::new(table_name, "created_at"),
             recipient_guid: __sdk::__query_builder::Col::new(table_name, "recipient_guid"),
+            payload: __sdk::__query_builder::Col::new(table_name, "payload"),
         }
     }
 }
