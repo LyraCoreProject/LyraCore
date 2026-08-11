@@ -94,27 +94,16 @@ pub struct CreatureTemplate {
     #[default(0u32)]
     pub skin_loot_id: u32,
 
-    // Which class a trainer serves (issue #125, the data half of #116's class gate). cmangos
-    // `creature_template.TrainerType` / `TrainerClass` — columns 71 / 73, DUMP-VERIFIED 2026-08-11
-    // by enumerating the `CREATE TABLE creature_template` DDL of `Full_DB/ClassicDB_1_12_1_z2815.sql.gz`
-    // at the commit `importer/scripts/classic-db.lock` pins (the lock records a SHA + sha256, not that
-    // filename). NOT `[V]`-guessed — every pre-existing `ct::` anchor was re-checked against the same
-    // DDL in the same pass and all agreed.
+    // Which class a trainer serves. `creature_template.TrainerType`/`TrainerClass`, columns 71/73 —
+    // verified against the DDL of the dump `importer/scripts/classic-db.lock` pins, along with every
+    // other `ct::` anchor.
     //
-    // `trainer_type` is the cmangos enum — CLASS 0 · MOUNTS 1 · TRADESKILLS 2 · PETS 3. **0 is a real
-    // value, not an "unset" sentinel**, and it is also this column's default, so 10060 of the dump's
-    // 10384 templates read 0 simply because they are not trainers at all. Never gate on this column
-    // alone (the `cell` lesson in docs/danger-zones.md §1.2 — a default that is a valid value).
+    // `trainer_type` is CLASS 0 · MOUNTS 1 · TRADESKILLS 2 · PETS 3. 0 is a real value AND this
+    // column's default, so most templates read CLASS without being trainers at all — never gate on
+    // it alone (danger-zones §1.2: a default that is a valid value).
     //
-    // `trainer_class` is a class ID (1 Warrior · 2 Paladin · 3 Hunter · 4 Rogue · 5 Priest ·
-    // 7 Shaman · 8 Mage · 9 Warlock · 11 Druid), NOT a bitmask, and 0 means "serves everyone".
-    // Only 278 templates in the dump carry a nonzero value, so `trainer_class != 0` is the condition
-    // that actually identifies a class-gated trainer — and it is what makes the gate fail OPEN on a
-    // world that has not been re-imported yet (every migrated row reads 0 → unchanged behaviour).
-    //
-    // Ingested-only this slice: nothing reads these yet. The gate that consumes them is #126.
-    // `#[default(0u8)]` (TYPED — the `last_logout_micros` lesson) + END-appended → additive
-    // auto-migrate, no `-c` wipe.
+    // `trainer_class` is a class ID, not a mask; 0 means "serves everyone", which is what keeps the
+    // gate fail-open on a world that has not been re-imported.
     #[default(0u8)]
     pub trainer_type: u8,
     #[default(0u8)]

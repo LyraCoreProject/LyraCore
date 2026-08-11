@@ -98,7 +98,7 @@ pub(crate) fn profession_trainer_template() -> CreatureTemplate {
         armor: 0,              // a trainer never takes damage anyway
         pickpocket_loot_id: 0, // not imported — a friendly trainer is never pickpocketed
         skin_loot_id: 0,       // not imported — a Humanoid trainer isn't skinnable anyway
-        trainer_type: 2,   // TRADESKILLS: a profession trainer serves EVERY class (#126 gates on trainer_class, which stays 0)
+        trainer_type: 2,   // TRADESKILLS — serves every class; the gate keys on trainer_class, which stays 0
         trainer_class: 0,
     }
 }
