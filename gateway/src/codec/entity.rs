@@ -537,8 +537,22 @@ pub fn build_create_object(
     })
 }
 
+/// Which world entry a login sequence serves — `SMSG_LOGIN_VERIFY_WORLD` is a command to load the
+/// named map, so only a fresh login may carry it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorldEntry {
+    /// `CMSG_PLAYER_LOGIN`: the client has loaded nothing and needs verify-world to know which map.
+    FreshLogin,
+    /// `MSG_MOVE_WORLDPORT_ACK`: the client already loaded the destination (`SMSG_NEW_WORLD`
+    /// carried it); a verify-world resend runs a second loading screen. Reference cores send
+    /// verify-world only at fresh login.
+    WorldPort,
+}
+
 /// Emit the post-login SMSG sequence (Phase 4, gateway translation §5) to the owner, in the
-/// order the client expects — `SMSG_LOGIN_VERIFY_WORLD` must precede `SMSG_TUTORIAL_FLAGS`.
+/// order the client expects — `SMSG_LOGIN_VERIFY_WORLD` must precede `SMSG_TUTORIAL_FLAGS`,
+/// and is sent ONLY for a [`WorldEntry::FreshLogin`] (see the enum's doc for why a world-port
+/// re-entry must omit it).
 /// Slice values: zeroed account-data/factions/action-bar, real-time clock scale, no starting
 /// spells, bind = the start position. All headers encrypted.
 pub fn login_sequence_messages(
@@ -546,6 +560,7 @@ pub fn login_sequence_messages(
     learned: &[u32],
     reputations: &[(i32, i32, bool)],
     player_actions: &[(u8, u32, u8)],
+    entry: WorldEntry,
 ) -> Result<Vec<ServerOpcodeMessage>> {
     let map = Map::try_from(entity.map_id).map_err(|_| anyhow!("invalid map {}", entity.map_id))?;
     let area = Area::try_from(entity.zone_id).unwrap_or_default();
@@ -603,12 +618,17 @@ pub fn login_sequence_messages(
         }
     }
 
-    Ok(vec![
-        ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(Box::new(SMSG_LOGIN_VERIFY_WORLD {
-            map,
-            position,
-            orientation: entity.orientation,
-        })),
+    let mut msgs = Vec::new();
+    if entry == WorldEntry::FreshLogin {
+        msgs.push(ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(Box::new(
+            SMSG_LOGIN_VERIFY_WORLD {
+                map,
+                position,
+                orientation: entity.orientation,
+            },
+        )));
+    }
+    msgs.extend([
         ServerOpcodeMessage::SMSG_ACCOUNT_DATA_TIMES(Box::new(SMSG_ACCOUNT_DATA_TIMES {
             data: [0u32; 32],
         })),
@@ -677,7 +697,8 @@ pub fn login_sequence_messages(
             map: Map::try_from(entity.home_map).unwrap_or(map),
             area: Area::try_from(entity.home_zone).unwrap_or(area),
         })),
-    ])
+    ]);
+    Ok(msgs)
 }
 
 /// Build `SMSG_DESTROY_OBJECT` for a guid leaving view (Phase 7). Vanilla carries just the
