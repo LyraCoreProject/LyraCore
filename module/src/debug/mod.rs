@@ -659,6 +659,7 @@ pub fn debug_spawn_gameobject(
                 respawn_secs,
                 gather_gray,
                 lock_id: 0, // work-item 211: the debug spawn lever doesn't carry a lockId this slice
+                size: 0.0,  // issue #107: no dump size ⇒ the codec renders this debug GO at 1.0
             });
     }
     let guid = (0xF110u64 << 48) | template_entry as u64;
@@ -805,6 +806,7 @@ pub fn debug_setup_gather_pool(
                 respawn_secs,
                 gather_gray: 0,
                 lock_id: 0, // work-item 211: pool test templates don't carry a lockId this slice
+                size: 0.0,  // issue #107: no dump size ⇒ the codec renders this pool GO at 1.0
             });
         }
         member_tbl.insert(crate::gameobject::GameObjectPoolMember {

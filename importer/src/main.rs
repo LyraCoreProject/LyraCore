@@ -561,6 +561,9 @@ fn classify_go_type(entry: u64, raw_type: u32) -> Option<u8> {
 /// unchanged), CHEST.data1 is the real `gameobject_loot_template` lootId (unchanged, now for every
 /// chest instead of a curated allowlist). Returns the row tuple AND, for a CHEST with a nonzero
 /// lootId, that lootId (to fold into `chest_loot_ids_used` — widened to EVERY imported chest).
+/// `size` is the dump's `gameobject_template.size` (issue #107), carried verbatim into the
+/// END-appended `size` column for EVERY type — a 0 (absent/corrupt column) stays 0 and the gateway
+/// codec renders it as 1.0.
 fn go_template_row(
     entry: u64,
     stored_type: u8,
@@ -568,34 +571,38 @@ fn go_template_row(
     name: &str,
     data0: u32,
     data1: u32,
+    size: f32,
 ) -> (String, Option<u32>) {
     let n = sql_text(name);
     match stored_type {
         GO_GATHER => {
             let (skill, item, req, gray) = gather_node(entry)
                 .expect("classify_go_type only returns GO_GATHER for a GATHER_NODES entry");
-            (format!("({entry},{GO_GATHER},{disp},{n},{item},{req},{skill},{GATHER_RESPAWN_SECS},{gray},0)"), None)
+            (format!("({entry},{GO_GATHER},{disp},{n},{item},{req},{skill},{GATHER_RESPAWN_SECS},{gray},0,{size})"), None)
         }
         GO_CHEST => {
             let loot_id = data1;
             (
-                format!("({entry},{GO_CHEST},{disp},{n},0,{loot_id},0,0,0,{data0})"),
+                format!("({entry},{GO_CHEST},{disp},{n},0,{loot_id},0,0,0,{data0},{size})"),
                 (loot_id != 0).then_some(loot_id),
             )
         }
         GO_GOOBER => (
-            format!("({entry},{GO_GOOBER},{disp},{n},0,0,0,0,0,{data0})"),
+            format!("({entry},{GO_GOOBER},{disp},{n},0,0,0,0,0,{data0},{size})"),
             None,
         ),
         GO_DOOR => (
-            format!("({entry},{GO_DOOR},{disp},{n},0,0,0,0,0,{data1})"),
+            format!("({entry},{GO_DOOR},{disp},{n},0,0,0,0,0,{data1},{size})"),
             None,
         ),
         GO_BUTTON => (
-            format!("({entry},{GO_BUTTON},{disp},{n},0,0,0,0,0,{data1})"),
+            format!("({entry},{GO_BUTTON},{disp},{n},0,0,0,0,0,{data1},{size})"),
             None,
         ),
-        other => (format!("({entry},{other},{disp},{n},0,0,0,0,0,0)"), None), // QUESTGIVER + every INERT type
+        other => (
+            format!("({entry},{other},{disp},{n},0,0,0,0,0,0,{size})"),
+            None,
+        ), // QUESTGIVER + every INERT type
     }
 }
 
@@ -743,6 +750,11 @@ mod got {
     pub const TYPE: usize = 1;
     pub const DISPLAY_ID: usize = 2;
     pub const NAME: usize = 3;
+    // The prop's render scale (issue #107) — the client sizes a GO's model from OBJECT_FIELD_SCALE_X,
+    // and gathering nodes are authentically sub-1.0. Positionally right after ExtraFlags per the
+    // schema comment above; carried verbatim (the 0/absent → 1.0 fallback lives in the gateway codec,
+    // not here, so a hand-seeded fixture with no size still renders — same split as the GO quaternion).
+    pub const SIZE: usize = 7;
     // Positionally identical across EVERY cmangos GO type (only the per-type MEANING differs — see
     // `go_template_row`'s doc): CHEST data0=lockId (repo-verified) data1=lootId (a
     // gameobject_loot_template entry, work-item 210); DOOR/BUTTON data0=startOpen data1=lockId [V];
@@ -3825,6 +3837,7 @@ fn build_dump_plan(
         name: String,
         data0: u32,
         data1: u32,
+        size: f32,
     }
     let mut dropped_type25: Vec<u64> = Vec::new();
     let go_meta: std::collections::HashMap<u64, GoMeta> = go_tmpls
@@ -3843,6 +3856,9 @@ fn build_dump_plan(
             let name = field(row, got::NAME).to_string();
             let data0: u32 = field(row, got::DATA0).parse().unwrap_or(0);
             let data1: u32 = field(row, got::DATA1).parse().unwrap_or(0);
+            // Issue #107: 0 on an unparseable/absent column — the gateway reads that as "no size
+            // stored" and sends 1.0, i.e. exactly the pre-#107 behaviour, never an invisible prop.
+            let size: f32 = field(row, got::SIZE).parse().unwrap_or(0.0);
             Some((
                 entry,
                 GoMeta {
@@ -3851,6 +3867,7 @@ fn build_dump_plan(
                     name,
                     data0,
                     data1,
+                    size,
                 },
             ))
         })
@@ -3929,6 +3946,7 @@ fn build_dump_plan(
             &meta.name,
             meta.data0,
             meta.data1,
+            meta.size,
         );
         go_template_rows.push(row);
         if let Some(loot_id) = loot_id_used {
@@ -4324,7 +4342,7 @@ fn build_dump_plan(
     // The gameobject SPAWNS load separately via the import_gameobjects reducer below (also family-gated).
     if family_active(args, "gameobjects") {
         stmts.push("DELETE FROM game_gameobject_template WHERE entry > 0".into());
-        push_insert(&mut stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id", &go_template_rows);
+        push_insert(&mut stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size", &go_template_rows);
     }
     // Trainer spell lists (family "trainers").
     if family_active(args, "trainers") {
@@ -4762,35 +4780,44 @@ mod tests {
     fn go_template_row_carries_lock_id_per_type_and_widens_chest_loot() {
         // CHEST: dump data0 (lockId) -> template lock_id column; dump data1 (lootId) -> template data1,
         // AND is returned as the "fold into chest_loot_ids_used" value (widened to EVERY chest now).
-        let (row, loot_used) = go_template_row(106318, GO_CHEST, 259, "Battered Chest", 4242, 2277);
-        assert_eq!(row, "(106318,3,259,'Battered Chest',0,2277,0,0,0,4242)");
+        let (row, loot_used) =
+            go_template_row(106318, GO_CHEST, 259, "Battered Chest", 4242, 2277, 1.0);
+        assert_eq!(row, "(106318,3,259,'Battered Chest',0,2277,0,0,0,4242,1)");
         assert_eq!(loot_used, Some(2277));
         // A CHEST with lootId 0 (unimported drop table, or the seed/demo chest) does NOT get folded in.
-        let (_, none_used) = go_template_row(1, GO_CHEST, 1, "No Loot Chest", 0, 0);
+        let (_, none_used) = go_template_row(1, GO_CHEST, 1, "No Loot Chest", 0, 0, 1.0);
         assert_eq!(none_used, None);
         // DOOR/BUTTON: dump data1 (lockId) -> template lock_id column (data0 [startOpen] does NOT ride
         // the template — it feeds the SPAWN row's initial state instead, see `go_initial_state`).
-        let (door_row, door_loot) = go_template_row(2000, GO_DOOR, 100, "Stormwind Gate", 1, 555);
-        assert_eq!(door_row, "(2000,0,100,'Stormwind Gate',0,0,0,0,0,555)");
+        let (door_row, door_loot) =
+            go_template_row(2000, GO_DOOR, 100, "Stormwind Gate", 1, 555, 1.0);
+        assert_eq!(door_row, "(2000,0,100,'Stormwind Gate',0,0,0,0,0,555,1)");
         assert_eq!(door_loot, None);
-        let (button_row, _) = go_template_row(2001, GO_BUTTON, 101, "Lever", 0, 777);
-        assert_eq!(button_row, "(2001,1,101,'Lever',0,0,0,0,0,777)");
+        let (button_row, _) = go_template_row(2001, GO_BUTTON, 101, "Lever", 0, 777, 1.0);
+        assert_eq!(button_row, "(2001,1,101,'Lever',0,0,0,0,0,777,1)");
         // GOOBER: dump data0 (lockId) -> template lock_id column.
-        let (goober_row, _) = go_template_row(3000, GO_GOOBER, 200, "Suspicious Lever", 888, 999);
-        assert_eq!(goober_row, "(3000,10,200,'Suspicious Lever',0,0,0,0,0,888)");
+        let (goober_row, _) =
+            go_template_row(3000, GO_GOOBER, 200, "Suspicious Lever", 888, 999, 1.0);
+        assert_eq!(
+            goober_row,
+            "(3000,10,200,'Suspicious Lever',0,0,0,0,0,888,1)"
+        );
         // GATHER: unaffected by lock_id (always 0) — the existing gather-row shape, now with a 10th
-        // (lock_id) column appended.
-        let (gather_row, gather_loot) = go_template_row(1731, GO_GATHER, 259, "Copper Vein", 0, 0);
+        // (lock_id) + 11th (size) column appended. Issue #107: a node's authentic sub-1.0 size rides
+        // through verbatim rather than being flattened to 1.0 in the codec.
+        let (gather_row, gather_loot) =
+            go_template_row(1731, GO_GATHER, 259, "Copper Vein", 0, 0, 0.5);
         assert_eq!(
             gather_row,
-            "(1731,25,259,'Copper Vein',2770,1,186,300,100,0)"
+            "(1731,25,259,'Copper Vein',2770,1,186,300,100,0,0.5)"
         );
         assert_eq!(gather_loot, None);
-        // QUESTGIVER + an INERT type both fall through to the all-zero catch-all arm (10 cols).
-        let (qg_row, _) = go_template_row(4000, GO_QUESTGIVER, 50, "Wanted Poster", 1, 2);
-        assert_eq!(qg_row, "(4000,2,50,'Wanted Poster',0,0,0,0,0,0)");
-        let (inert_row, _) = go_template_row(5000, 8, 60, "Spell Focus", 3, 4);
-        assert_eq!(inert_row, "(5000,8,60,'Spell Focus',0,0,0,0,0,0)");
+        // QUESTGIVER + an INERT type both fall through to the all-zero catch-all arm (11 cols). An
+        // absent/unparseable dump size arrives here as 0 and stays 0 — the gateway renders that 1.0.
+        let (qg_row, _) = go_template_row(4000, GO_QUESTGIVER, 50, "Wanted Poster", 1, 2, 0.0);
+        assert_eq!(qg_row, "(4000,2,50,'Wanted Poster',0,0,0,0,0,0,0)");
+        let (inert_row, _) = go_template_row(5000, 8, 60, "Spell Focus", 3, 4, 1.75);
+        assert_eq!(inert_row, "(5000,8,60,'Spell Focus',0,0,0,0,0,0,1.75)");
     }
 
     #[test]

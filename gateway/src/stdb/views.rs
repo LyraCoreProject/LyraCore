@@ -180,6 +180,7 @@ pub(crate) fn go_view(go: GameObject, tmpl: &GameObjectTemplate) -> crate::codec
         rotation_1: go.rotation_1,
         rotation_2: go.rotation_2,
         rotation_3: go.rotation_3,
+        size: tmpl.size,
     }
 }
 

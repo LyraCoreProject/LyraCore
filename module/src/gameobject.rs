@@ -107,6 +107,16 @@ pub struct GameObjectTemplate {
     // default-migrated, and any type this slice doesn't source a lockId for).
     #[default(0u32)]
     pub lock_id: u32,
+    // END-APPENDED (issue #107 — GO render scale, additive auto-migration like every column above).
+    // The cmangos `gameobject_template.size` this prop renders at: the 5875 client sizes a
+    // gameobject's model from OBJECT_FIELD_SCALE_X, and gathering nodes are authentically sub-1.0, so
+    // a hardcoded 1.0 rendered every Peacebloom/Copper Vein visibly oversized. 0 = NO SIZE STORED
+    // (every pre-#107 row, default-migrated, and every hand-seeded fixture) — the gateway codec sends
+    // 1.0 for that case, so nothing changes proportions until the importer re-runs. Hand-synced
+    // positionally into the gateway's `game_object_template_type.rs` binding, same as `lock_id`
+    // above; unlike `lock_id` the gateway DOES read this one (`views::go_view`).
+    #[default(0f32)]
+    pub size: f32,
 }
 
 /// Lock.dbc → `game_lock` (work-item 211: the DATA half of open-lock; work-item 119 is the system half

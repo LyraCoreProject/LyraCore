@@ -17,6 +17,7 @@ pub struct GameObjectTemplate {
     pub respawn_secs: u32,
     pub gather_gray: u32,
     pub lock_id: u32,
+    pub size: f32,
 }
 
 impl __sdk::InModule for GameObjectTemplate {
@@ -37,6 +38,7 @@ pub struct GameObjectTemplateCols {
     pub respawn_secs: __sdk::__query_builder::Col<GameObjectTemplate, u32>,
     pub gather_gray: __sdk::__query_builder::Col<GameObjectTemplate, u32>,
     pub lock_id: __sdk::__query_builder::Col<GameObjectTemplate, u32>,
+    pub size: __sdk::__query_builder::Col<GameObjectTemplate, f32>,
 }
 
 impl __sdk::__query_builder::HasCols for GameObjectTemplate {
@@ -53,6 +55,7 @@ impl __sdk::__query_builder::HasCols for GameObjectTemplate {
             respawn_secs: __sdk::__query_builder::Col::new(table_name, "respawn_secs"),
             gather_gray: __sdk::__query_builder::Col::new(table_name, "gather_gray"),
             lock_id: __sdk::__query_builder::Col::new(table_name, "lock_id"),
+            size: __sdk::__query_builder::Col::new(table_name, "size"),
         }
     }
 }
