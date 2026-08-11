@@ -3,7 +3,8 @@
 
 use spacetimedb::{log, reducer, ReducerContext, Table};
 
-// trait import — VmapChunk is module-private, no crate-root glob re-export
+// trait imports — VmapChunk/NavChunk are module-private, no crate-root glob re-export
+use crate::nav::game_nav_chunk;
 use crate::vmap::game_vmap_chunk;
 use crate::{
     build_creature_entity, game_config, game_creature_spawn, game_creature_template,
@@ -774,6 +775,140 @@ pub fn debug_assert_chase_stops_at_column(
     if clearance <= 0.0 {
         return Err(format!(
             "nav_step stepped AT OR PAST the column plane (x={:.2} >= column x={WALL_X:.1}, clearance={clearance:.2}yd) — the collision ray isn't gating the step",
+            stepped.0
+        ));
+    }
+    Ok(())
+}
+
+/// #102 done-when: server-side proof that a unit ordered to an UNREACHABLE goal (a point inside a
+/// wall — `find_leg` → None → the straight-step fallback) stops at the wall instead of beelining
+/// through it, on the GRID tier of the step gate (`nav_enabled` on, `vmap_enabled` off) — the
+/// headless substitute for a debug tick trace. Same shape as `debug_assert_chase_stops_at_column`
+/// (#525, which proves the vmap tier of the SAME gate), but the synthetic wall is a `NavChunk`:
+/// a walk-blocked line + a 20 yd obs column ridge at a known x-plane, built through the same
+/// `lyracore_shared::nav` codec the importer rasterizes with. Reads `character_guid` only to
+/// resolve a live map to test against, then calls `nav_step` as a pure query (`cur` short of the
+/// wall, `dest` ON the wall line so the goal cell is unwalkable and `find_leg` provably bails).
+/// Asserts the returned step advanced meaningfully (the gate isn't "gave up") AND stopped short
+/// of the wall's x-plane (the fallback isn't "walked through"). Force-sets both consumption flags
+/// for the probe, stashes any real nav row at the probe cell, and restores everything after —
+/// never leaves the database in a different state than it found it.
+#[reducer]
+pub fn debug_assert_unreachable_goal_stops_at_wall(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<(), String> {
+    use lyracore_shared::nav::{
+        obs_raise, sub_center, walk_set, OBS_BYTES, OBS_DIM, OBS_NONE, WALK_BYTES, WALK_DIM,
+    };
+    use lyracore_shared::terrain::{cell_index, cell_key};
+
+    crate::helpers::require_operator(ctx)?;
+    let start = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(character_guid)
+        .ok_or_else(|| format!("no live entity for guid {character_guid}"))?;
+    let map_id = start.map_id;
+
+    // Wall down the walk-nx=32 line (obs ox=16) of the cell at (1400, 1400) — same probe corner
+    // #525 uses; all positions derive from the cell so nothing straddles a cell boundary.
+    let (cx, cy) = (
+        cell_index(1400.0).ok_or("probe corner off map")?,
+        cell_index(1400.0).ok_or("probe corner off map")?,
+    );
+    let wall_x = sub_center(cx, 32, WALK_DIM);
+    let cur = (sub_center(cx, 8, WALK_DIM), sub_center(cy, 32, WALK_DIM)); // ~12.5 yd before the wall
+    let dest = (wall_x, cur.1); // ON the wall line — unwalkable goal, `find_leg` returns None
+
+    let mut walk = vec![0xFFu8; WALK_BYTES];
+    let mut obs = vec![OBS_NONE; OBS_BYTES];
+    for ny in 0..WALK_DIM {
+        walk_set(&mut walk, 32, ny, false);
+    }
+    for oy in 0..OBS_DIM {
+        obs_raise(&mut obs, 0.0, 16, oy, 20.0);
+    }
+
+    // Stash-and-replace any REAL nav row at the probe cell (dev imports could cover it).
+    let key = cell_key(map_id, cx, cy);
+    let nav_chunks = ctx.db.game_nav_chunk();
+    let prior_row = nav_chunks
+        .key()
+        .find(key)
+        .map(|r| (r.base_z, r.walk.clone(), r.obs.clone()));
+    if prior_row.is_some() {
+        nav_chunks.key().delete(key);
+    }
+    nav_chunks.insert(crate::nav::NavChunk {
+        key,
+        map_id,
+        cell_x: cx,
+        cell_y: cy,
+        base_z: 0.0,
+        walk,
+        obs,
+    });
+
+    let cfg = ctx.db.game_config();
+    let prior_flags = cfg.id().find(0).map(|c| (c.nav_enabled, c.vmap_enabled));
+    match cfg.id().find(0) {
+        Some(mut c) => {
+            c.nav_enabled = true;
+            c.vmap_enabled = false;
+            cfg.id().update(c);
+        }
+        None => {
+            cfg.insert(ServerConfig {
+                id: 0,
+                xp_rate: 1.0,
+                nav_enabled: true,
+                hosts_instances: true,
+                bots_idle: false,
+                vmap_enabled: false,
+            });
+        }
+    }
+
+    let stepped = crate::nav::nav_step(ctx, map_id, cur, dest, 100.0, 0.0, 0.0);
+
+    // Cleanup FIRST — never leave synthetic nav data or flipped flags behind, even on assert failure.
+    nav_chunks.key().delete(key);
+    if let Some((base_z, walk, obs)) = prior_row {
+        nav_chunks.insert(crate::nav::NavChunk {
+            key,
+            map_id,
+            cell_x: cx,
+            cell_y: cy,
+            base_z,
+            walk,
+            obs,
+        });
+    }
+    if let Some((nav, vmap)) = prior_flags {
+        if let Some(mut c) = ctx.db.game_config().id().find(0) {
+            c.nav_enabled = nav;
+            c.vmap_enabled = vmap;
+            ctx.db.game_config().id().update(c);
+        }
+    }
+
+    let advanced = cur.0 - stepped.0; // the step walks toward -x (higher walk index = lower coord)
+    let clearance = stepped.0 - wall_x;
+    log::info!(
+        "debug_assert_unreachable_goal_stops_at_wall: stepped ({:.2},{:.2}) advanced={advanced:.2}yd clearance={clearance:.2}yd (wall at x={wall_x:.1})",
+        stepped.0, stepped.1
+    );
+    if advanced <= 1.0 {
+        return Err(format!(
+            "nav_step barely moved ({advanced:.2}yd advanced) — the grid step gate looks like it gave up instead of truncating at the obs column"
+        ));
+    }
+    if clearance <= 0.0 {
+        return Err(format!(
+            "nav_step stepped AT OR PAST the wall plane (x={:.2} <= wall x={wall_x:.1}, clearance={clearance:.2}yd) — the no-path fallback isn't step-gated",
             stepped.0
         ));
     }
