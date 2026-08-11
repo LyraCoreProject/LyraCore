@@ -474,7 +474,7 @@ parity_test!(parity_game_creature_template, "game_creature_template", lyracore_m
     entry, name, subname, display_id, level, health, faction_template, npc_flags, unit_flags,
     creature_type, creature_family, type_flags, rank, scale, base_attack_time_ms, money_min,
     money_max, max_level, max_level_health, aggro_range, damage_min, damage_max, armor,
-    pickpocket_loot_id, skin_loot_id,
+    pickpocket_loot_id, skin_loot_id, trainer_type, trainer_class,
 });
 parity_test!(parity_game_start_position, "game_start_position", lyracore_module::StartPosition, bindings::start_position_type::StartPosition, {
     race_class, race, class, map_id, zone_id, x, y, z, orientation, display_id,

@@ -32,6 +32,8 @@ pub struct CreatureTemplate {
     pub armor: u32,
     pub pickpocket_loot_id: u32,
     pub skin_loot_id: u32,
+    pub trainer_type: u8,
+    pub trainer_class: u8,
 }
 
 impl __sdk::InModule for CreatureTemplate {
@@ -67,6 +69,8 @@ pub struct CreatureTemplateCols {
     pub armor: __sdk::__query_builder::Col<CreatureTemplate, u32>,
     pub pickpocket_loot_id: __sdk::__query_builder::Col<CreatureTemplate, u32>,
     pub skin_loot_id: __sdk::__query_builder::Col<CreatureTemplate, u32>,
+    pub trainer_type: __sdk::__query_builder::Col<CreatureTemplate, u8>,
+    pub trainer_class: __sdk::__query_builder::Col<CreatureTemplate, u8>,
 }
 
 impl __sdk::__query_builder::HasCols for CreatureTemplate {
@@ -101,6 +105,8 @@ impl __sdk::__query_builder::HasCols for CreatureTemplate {
             armor: __sdk::__query_builder::Col::new(table_name, "armor"),
             pickpocket_loot_id: __sdk::__query_builder::Col::new(table_name, "pickpocket_loot_id"),
             skin_loot_id: __sdk::__query_builder::Col::new(table_name, "skin_loot_id"),
+            trainer_type: __sdk::__query_builder::Col::new(table_name, "trainer_type"),
+            trainer_class: __sdk::__query_builder::Col::new(table_name, "trainer_class"),
         }
     }
 }

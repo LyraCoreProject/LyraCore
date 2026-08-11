@@ -287,6 +287,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         armor: 0,              // unmitigated — a demo critter needs no armor
         pickpocket_loot_id: 0, // not imported — the demo chicken has no pickpocket table
         skin_loot_id: 0,       // not imported — the demo chicken isn't a beast anyway
+        trainer_type: 0,   // not a trainer
+        trainer_class: 0,
     });
 
     // The live creature is a game_world_entity row of type Unit. Its GUID must carry HIGHGUID_UNIT
