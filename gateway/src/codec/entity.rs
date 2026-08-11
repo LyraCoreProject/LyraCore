@@ -537,8 +537,26 @@ pub fn build_create_object(
     })
 }
 
+/// Which world entry a login sequence serves. The distinction exists because
+/// `SMSG_LOGIN_VERIFY_WORLD` is a COMMAND to load the named map, not a passive confirmation — see
+/// [`login_sequence_messages`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorldEntry {
+    /// `CMSG_PLAYER_LOGIN`: the client is at character select and has loaded nothing — it needs
+    /// `SMSG_LOGIN_VERIFY_WORLD` to know which map to load.
+    FreshLogin,
+    /// `MSG_MOVE_WORLDPORT_ACK`: the client has ALREADY loaded the destination map (that is what
+    /// its ack means — `SMSG_NEW_WORLD` carried the hop's authoritative map+position). Resending
+    /// `SMSG_LOGIN_VERIFY_WORLD` here makes it load the map AGAIN: the double-loading-screen bug
+    /// (#117). Reference cores (cmangos/vmangos classic) send verify-world only on the
+    /// fresh-login path, never in their worldport-ack reply.
+    WorldPort,
+}
+
 /// Emit the post-login SMSG sequence (Phase 4, gateway translation §5) to the owner, in the
-/// order the client expects — `SMSG_LOGIN_VERIFY_WORLD` must precede `SMSG_TUTORIAL_FLAGS`.
+/// order the client expects — `SMSG_LOGIN_VERIFY_WORLD` must precede `SMSG_TUTORIAL_FLAGS`,
+/// and is sent ONLY for a [`WorldEntry::FreshLogin`] (see the enum's doc for why a world-port
+/// re-entry must omit it).
 /// Slice values: zeroed account-data/factions/action-bar, real-time clock scale, no starting
 /// spells, bind = the start position. All headers encrypted.
 pub fn login_sequence_messages(
@@ -546,6 +564,7 @@ pub fn login_sequence_messages(
     learned: &[u32],
     reputations: &[(i32, i32, bool)],
     player_actions: &[(u8, u32, u8)],
+    entry: WorldEntry,
 ) -> Result<Vec<ServerOpcodeMessage>> {
     let map = Map::try_from(entity.map_id).map_err(|_| anyhow!("invalid map {}", entity.map_id))?;
     let area = Area::try_from(entity.zone_id).unwrap_or_default();
@@ -603,12 +622,17 @@ pub fn login_sequence_messages(
         }
     }
 
-    Ok(vec![
-        ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(Box::new(SMSG_LOGIN_VERIFY_WORLD {
-            map,
-            position,
-            orientation: entity.orientation,
-        })),
+    let mut msgs = Vec::new();
+    if entry == WorldEntry::FreshLogin {
+        msgs.push(ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(Box::new(
+            SMSG_LOGIN_VERIFY_WORLD {
+                map,
+                position,
+                orientation: entity.orientation,
+            },
+        )));
+    }
+    msgs.extend([
         ServerOpcodeMessage::SMSG_ACCOUNT_DATA_TIMES(Box::new(SMSG_ACCOUNT_DATA_TIMES {
             data: [0u32; 32],
         })),
@@ -677,7 +701,8 @@ pub fn login_sequence_messages(
             map: Map::try_from(entity.home_map).unwrap_or(map),
             area: Area::try_from(entity.home_zone).unwrap_or(area),
         })),
-    ])
+    ]);
+    Ok(msgs)
 }
 
 /// Build `SMSG_DESTROY_OBJECT` for a guid leaving view (Phase 7). Vanilla carries just the

@@ -2664,16 +2664,16 @@ fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // enter_world reruns the FULL login-style sequence verbatim for the re-entry.
-    let mut verify_world_map = None;
+    // enter_world reruns the login-style sequence for the re-entry — minus SMSG_LOGIN_VERIFY_WORLD
+    // (9 messages, not 10): the ack means the client ALREADY loaded the new map, and a verify-world
+    // resend commands a SECOND load — the #117 double-loading-screen bug.
     let mut create_guid = None;
-    for _ in 0..10 {
+    for _ in 0..9 {
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-            ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(m) => {
-                verify_world_map = Some(m.map);
-                assert!(
-                    (m.position.x - 100.0).abs() < 0.01,
-                    "the re-entry sequence must use the NEW position"
+            ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(_) => {
+                panic!(
+                    "the re-entry sequence must NOT resend SMSG_LOGIN_VERIFY_WORLD — it makes the \
+                     client reload the map it just loaded (#117, the second loading screen)"
                 );
             }
             ServerOpcodeMessage::SMSG_UPDATE_OBJECT(m) => {
@@ -2684,11 +2684,6 @@ fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
             _ => {}
         }
     }
-    assert_eq!(
-        verify_world_map,
-        Some(Map::Kalimdor),
-        "the re-entry sequence must reflect the NEW map"
-    );
     assert_eq!(
         create_guid,
         Some(1),
@@ -2707,6 +2702,11 @@ fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
     assert_eq!(
         calls[1].1, 1,
         "the second subscription is for the NEW (post-teleport) map"
+    );
+    assert!(
+        (calls[1].2 - 100.0).abs() < 0.01,
+        "the re-entry must use the NEW position (verify-world no longer carries it — the \
+         subscription placement is the observable)"
     );
 
     drop(client);

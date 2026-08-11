@@ -75,7 +75,10 @@ fn send_quest_log<St: WorldStore + ?Sized>(
 /// `CMSG_PLAYER_LOGIN` (fresh world entry) and `MSG_MOVE_WORLDPORT_ACK` (cross-map re-entry after
 /// `teleport_player` despawned the old entity) — see their call sites' doc comments for why reusing this
 /// exact path is correct for both. `session_epoch` is the caller's to manage: a fresh login claims a new
-/// one; a world-port reuses the existing one (the session itself hasn't changed).
+/// one; a world-port reuses the existing one (the session itself hasn't changed). `entry` is the ONE
+/// packet-level difference between the two callers: a world-port re-entry omits
+/// `SMSG_LOGIN_VERIFY_WORLD` (see `codec::WorldEntry` — resending it makes the client load the map
+/// it just loaded, the double-loading-screen bug #117).
 ///
 /// Drops any PREVIOUS `InWorld` state FIRST (a world-port re-entry has one, scoped to the OLD map/AOI
 /// box; a fresh login doesn't) — the old `PlayerSubscriptions`' RAII `Drop` unregisters every callback +
@@ -87,6 +90,7 @@ fn enter_world<St: WorldStore + ?Sized>(
     conn: &mut WorldConn,
     character_guid: u64,
     session_epoch: u64,
+    entry: codec::WorldEntry,
 ) -> Result<()> {
     conn.state = WorldState::CharSelect;
 
@@ -115,7 +119,7 @@ fn enter_world<St: WorldStore + ?Sized>(
     // to synthesizing the bar from `learned` in that case, byte-identical to before).
     let player_actions = store.player_actions(character_guid).unwrap_or_default();
     let mut batch =
-        codec::login_sequence_messages(&entity, &learned, &reputations, &player_actions)?;
+        codec::login_sequence_messages(&entity, &learned, &reputations, &player_actions, entry)?;
     for item in &items {
         batch.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
             codec::build_item_create_object(item),
@@ -290,7 +294,8 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                 st,
                 conn,
                 character_guid,
-                session_epoch
+                session_epoch,
+                codec::WorldEntry::FreshLogin
             ))?;
         }
         // Cross-map teleport: the client's ack that it finished loading the map named
@@ -301,7 +306,9 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
         // idempotent here — the ghost-relog branch no-ops because the entity is ALREADY gone), tear down
         // the OLD map's subscriptions and register fresh ones at the new map/position (a brand new
         // `created` dedup set — the full AOI reset a cross-map re-entry requires, the same "initial-subscribe"
-        // precedent already established), and re-send the (now new-map) login sequence + self CREATE_OBJECT.
+        // precedent already established), and re-send the (now new-map) login sequence + self CREATE_OBJECT —
+        // minus SMSG_LOGIN_VERIFY_WORLD (`WorldEntry::WorldPort`): the ack means the client ALREADY loaded
+        // the destination, and a verify-world resend commands a second load (the #117 double loading screen).
         // A spurious/late ack while not mid-transfer (e.g. a double-send) is a no-op — CharSelect has no
         // `self_guid` to re-enter with, so it's silently accepted-and-ignored like every other unsolicited
         // client ack in this dispatch. The session epoch is REUSED (not re-claimed) — nothing about
@@ -315,6 +322,11 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                 // Gate on a REAL pending transfer: cross-map teleport
                 // despawns the entity until this ack; a live entity means no transfer is in
                 // flight and the ack is spurious — ignore it instead of re-entering the world.
+                // `store` here is ALREADY the session's home-shard handle — the read loop routes
+                // every frame through `on_home_shard!` (run_world_session) — so this presence
+                // check reads the cache of the shard the entity actually lives on. (Verified
+                // against a pinned-off-default session by `shard_routing_tests::
+                // a_spurious_worldport_ack_is_ignored_on_a_session_pinned_off_the_default_shard`.)
                 if store.entity_in_world(character_guid) {
                     log::debug!("world: spurious WORLDPORT_ACK ignored (guid {character_guid} still in world)");
                 } else {
@@ -342,7 +354,8 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                             st,
                             conn,
                             character_guid,
-                            session_epoch
+                            session_epoch,
+                            codec::WorldEntry::WorldPort
                         ));
                     }
                     if let Err(e) = ported {
