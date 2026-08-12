@@ -417,6 +417,21 @@ after any named step for testing.
 Afterwards the gateway re-pins the session: new home handle, `bind_shard_session`, a fresh
 `player_login`, a fresh subscription set, then it replays the movement it queued during the hop.
 
+### 6.3b Mail attachments across the boundary
+
+The same problem with different nouns: a mail row is authoritative on realm-core, the sender's purse
+and items are on their own shard, and no transaction spans the two. `module/src/mail_escrow.rs`
+answers it with the same escrow shape — `realm_mail_fence` (the value leaves the purse INTO the
+escrow row, on the sender's shard), `realm_mail_commit` (the mail row plus a delivery receipt keyed
+by the same **caller-chosen** escrow id, on the mail plane), `realm_mail_confirm_delivery` (the
+attestation), `realm_mail_settle` (**delete last** — it refuses without the attestation).
+
+Two things differ from a character transfer and both are deliberate. Recovery is **forward only**:
+the escrow row carries the whole letter, so a stalled fence is re-driven rather than refunded, and
+`reap_mail_escrows` has no rollback arm at all — a source-side read that finds no attestation has
+learned "not yet attested", never "not delivered". And a **single-database** gateway does not come
+here: purse and mail row share one transaction there, so `mail::apply_send` writes both directly.
+
 ### 6.4 Cross-shard visibility
 
 Since #468 this is not a feature but a consequence of the shared AOI index: every shard's

@@ -25,6 +25,12 @@
 //! exist because the wire has exactly one item block per mail and a later slice must not migrate
 //! them in, not because anything writes them yet.
 //!
+//! The MECHANISM those slices move value with lives next door in [`crate::mail_escrow`]: on a
+//! sharded realm the purse is on one database and the mail row on another, so a fence, a commit
+//! keyed by a caller-chosen id, and a delete-last settle stand in for the transaction that cannot
+//! span them. Nothing in this file goes through it — the single-database plane genuinely has that
+//! transaction, and the postage debit #145 shipped is still the two-call path below.
+//!
 //! The wire-facing rules (the unread-mail float, the `item_text_id`, the expiry stamp) live in
 //! `lyracore_shared::mail`: the gateway builds `SMSG_MAIL_LIST_RESULT` from a cache read, so a rule
 //! kept here alone would have a second copy over there within one slice.
@@ -200,6 +206,12 @@ pub(crate) fn charge_postage(
 ///
 /// Both planes reach [`insert_mail`], so the ROW is identical either way — a sent mail and a
 /// seeded one cannot differ in a column the list read projects.
+///
+/// **This path must never route through [`crate::mail_escrow`], and the difference is not an
+/// oversight to tidy up.** The escrow exists because two databases cannot share a transaction;
+/// where they can, it is strictly worse — four transactions instead of one atomic write, plus a
+/// fence that can be interrupted where nothing could be. Pinned by
+/// `tests::the_single_database_send_path_never_reaches_the_escrow`.
 pub(crate) fn apply_send(
     ctx: &ReducerContext,
     sender_guid: u64,
@@ -374,6 +386,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// **The single-database plane does the whole send in ONE transaction and does not go through
+    /// the escrow.** A `lyracore dev up` gateway holds the purse and the mail row on one database,
+    /// so the debit and the insert are already atomic; routing them through a fence would buy
+    /// nothing and add three interruption points that cannot exist there.
+    ///
+    /// A source scan because the body needs a `ReducerContext` to execute. It is the cheapest
+    /// available guard against the tidy-up that would "unify the two paths" — which reads like
+    /// simplification and is a regression.
+    #[test]
+    fn the_single_database_send_path_never_reaches_the_escrow() {
+        let body = code_of(include_str!("mail.rs"), "pub(crate) fn apply_send(");
+        assert!(
+            !body.contains("escrow"),
+            "`apply_send` is the ONE-TRANSACTION plane. The escrow is the mechanism for the case \
+             where a transaction cannot span the two databases; here one can. Body was:\n{body}"
+        );
     }
 
     // ---- `realm_mail_mark_read` / `realm_mail_delete`'s operator gate ----

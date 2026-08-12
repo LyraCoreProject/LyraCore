@@ -65,6 +65,12 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &["game_transfer_out"];
 ///   is exactly the snapshot #19's interim mirror was (a party SPLIT across the boundary could never
 ///   see itself). The gateway re-pushes realm-core's roster onto the destination at world entry
 ///   (`sync_group_mirror`), so membership crosses by replication rather than by carriage.
+/// - `game_mail_escrow` — a mail attachment in flight. The fence is a fact about the DATABASE that
+///   took the value out of a purse, and the drive that settles it addresses that database; carrying
+///   the claim to the destination would move it away from the ledger holding the value. The
+///   character hops, the fence stays, and the reaper there still judges it.
+/// - `game_mail_delivery` — the mail plane's delivery receipts. They only exist where the
+///   authoritative mail rows do, and no character transfers off realm-core.
 /// - `game_character_shard` — the realm-core character→shard directory (#20). A routing HINT about
 ///   where the character is, and the blob exists to change that: the snapshot `begin_transfer` takes
 ///   still names the SOURCE, so carrying it would hand the destination a forwarding receipt pointing
@@ -79,6 +85,8 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_group_invite",
     "game_group_member",
     "game_pet_command",
+    "game_mail_escrow",
+    "game_mail_delivery",
     "game_character_shard",
 ];
 

@@ -275,6 +275,10 @@ mod loot;
 /// Mail: the durable `game_mail` row, its sweeps, and the shared insert core. Realm-core is
 /// authoritative; a single-database gateway reads and writes its own copy through the same rules.
 mod mail;
+/// Mail attachment escrow: the source-side fence, the mail-plane commit keyed by the same
+/// caller-chosen id, and the reaper. The mechanism for moving value into a mail row across a
+/// database boundary no transaction spans; the single-database plane deliberately bypasses it.
+mod mail_escrow;
 /// Batched movement republish (#461): the PRIVATE `game_entity_motion_pending` staging table that
 /// `movement_update` writes, and the 20 Hz `publish_motion` tick that drains it into the public
 /// `game_entity_motion` relay in one transaction.
