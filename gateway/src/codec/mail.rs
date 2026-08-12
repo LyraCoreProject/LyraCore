@@ -26,6 +26,11 @@ pub struct MailView {
     pub item_entry: u32,
     pub item_stack_count: u32,
     pub item_durability: u32,
+    /// The attached item's TEMPLATE max durability (`game_item_template.max_durability`), not the
+    /// row's own snapshot — the mail row only ever snapshots CURRENT durability. Read separately so
+    /// a damaged attachment previews damaged instead of `max_durability == item_durability` always
+    /// reading as pristine. 0 for no attachment, the same sentinel `item_durability` uses.
+    pub max_durability: u32,
     pub item_enchant_id: u32,
     /// Not sent on the wire — the client shows no bind state in the mail window. Carried because
     /// the sharded take hands the whole snapshot to the other database, and a bind state dropped in
@@ -67,7 +72,7 @@ pub fn build_mail_list(mails: &[MailView], now_secs: i64) -> SMSG_MAIL_LIST_RESU
                 item_suffix_factor: 0,
                 item_stack_size: m.item_stack_count.min(u8::MAX as u32) as u8,
                 item_spell_charges: 0,
-                max_durability: m.item_durability,
+                max_durability: m.max_durability,
                 durability: m.item_durability,
                 money: Gold::new(m.money),
                 cash_on_delivery_amount: m.cod,
@@ -332,6 +337,27 @@ mod tests {
         assert_eq!(
             wire.item_enchant_id, 7,
             "an enchant dropped here is an enchant the recipient cannot see they are owed"
+        );
+    }
+
+    /// **A damaged attachment must preview damaged.** The row snapshots only CURRENT durability, so
+    /// `max_durability` on the wire has to come from the view's own template-derived field, never
+    /// from `item_durability` — sending the current value for both always renders the icon at full
+    /// bars, hiding the damage the mail window exists to show.
+    #[test]
+    fn a_damaged_attachment_previews_with_its_templates_max_durability_not_its_current_one() {
+        let mut m = view(1, "well-used");
+        m.item_entry = 5_090_001;
+        m.item_durability = 10;
+        m.max_durability = 40;
+        let wire = &build_mail_list(&[m], 1_000).mails[0];
+        assert_eq!(
+            wire.durability, 10,
+            "the current durability rides unchanged"
+        );
+        assert_eq!(
+            wire.max_durability, 40,
+            "max_durability must be the TEMPLATE's, not a copy of the current value"
         );
     }
 
