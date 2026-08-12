@@ -711,6 +711,136 @@ impl Coordinator {
         )
     }
 
+    /// `CMSG_INITIATE_TRADE` — `target_guid` is the client's targeted player (#120).
+    pub fn initiate_trade(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("initiate_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_initiate_trade",
+            gw_initiate_trade_then(actor_guid, target_guid)
+        )
+    }
+
+    /// `CMSG_BEGIN_TRADE` (#120).
+    pub fn begin_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("begin_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_begin_trade",
+            gw_begin_trade_then(actor_guid)
+        )
+    }
+
+    /// `CMSG_CANCEL_TRADE` (#120).
+    pub fn cancel_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("cancel_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_cancel_trade",
+            gw_cancel_trade_then(actor_guid)
+        )
+    }
+
+    /// `CMSG_SET_TRADE_ITEM` (#121).
+    pub fn set_trade_item(&self, _account_id: u64, actor_guid: u64, trade_slot: u8, inv_slot: u8) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("set_trade_item: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_set_trade_item",
+            gw_set_trade_item_then(actor_guid, trade_slot, inv_slot)
+        )
+    }
+
+    /// `CMSG_CLEAR_TRADE_ITEM` (#121).
+    pub fn clear_trade_item(&self, _account_id: u64, actor_guid: u64, trade_slot: u8) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("clear_trade_item: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_clear_trade_item",
+            gw_clear_trade_item_then(actor_guid, trade_slot)
+        )
+    }
+
+    /// `CMSG_SET_TRADE_GOLD` (#121).
+    pub fn set_trade_gold(&self, _account_id: u64, actor_guid: u64, copper: u32) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("set_trade_gold: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_set_trade_gold",
+            gw_set_trade_gold_then(actor_guid, copper)
+        )
+    }
+
+    /// `CMSG_ACCEPT_TRADE` (#122).
+    pub fn accept_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("accept_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_accept_trade",
+            gw_accept_trade_then(actor_guid)
+        )
+    }
+
+    /// `CMSG_UNACCEPT_TRADE` (#122).
+    pub fn unaccept_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("unaccept_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_unaccept_trade",
+            gw_unaccept_trade_then(actor_guid)
+        )
+    }
+
+    /// `CMSG_BUSY_TRADE` (#123).
+    pub fn busy_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("busy_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_busy_trade",
+            gw_busy_trade_then(actor_guid)
+        )
+    }
+
+    /// `CMSG_IGNORE_TRADE` (#123).
+    pub fn ignore_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("ignore_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_ignore_trade",
+            gw_ignore_trade_then(actor_guid)
+        )
+    }
+
     /// `CMSG_GROUP_ACCEPT`. Rides the coordinator connection as
     /// `gw_accept_group_invite`.
     pub fn group_accept(&self, _account_id: u64, actor_guid: u64) -> Result<()> {

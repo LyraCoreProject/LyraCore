@@ -543,9 +543,8 @@ pub fn build_create_object(
 pub enum WorldEntry {
     /// `CMSG_PLAYER_LOGIN`: the client has loaded nothing and needs verify-world to know which map.
     FreshLogin,
-    /// `MSG_MOVE_WORLDPORT_ACK`: the client already loaded the destination (`SMSG_NEW_WORLD`
-    /// carried it); a verify-world resend runs a second loading screen. Reference cores send
-    /// verify-world only at fresh login.
+    /// `MSG_MOVE_WORLDPORT_ACK`: the client already loaded the destination, so a verify-world
+    /// resend runs a second loading screen.
     WorldPort,
 }
 

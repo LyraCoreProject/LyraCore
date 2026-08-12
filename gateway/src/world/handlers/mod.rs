@@ -15,6 +15,7 @@ mod item;
 mod loot;
 mod query;
 mod quest;
+mod trade;
 mod trainer;
 mod vendor;
 
@@ -25,6 +26,7 @@ pub(crate) use item::handle_item;
 pub(crate) use loot::handle_loot;
 pub(crate) use query::handle_query;
 pub(crate) use quest::handle_quest;
+pub(crate) use trade::handle_trade;
 pub(crate) use trainer::handle_trainer;
 pub(crate) use vendor::handle_vendor;
 

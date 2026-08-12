@@ -337,11 +337,8 @@ fn a_world_port_keeps_the_pin_when_the_home_shard_still_owns_the_new_map() {
 
 #[test]
 fn a_spurious_worldport_ack_is_ignored_on_a_session_pinned_off_the_default_shard() {
-    // The spurious-ack gate must ask the HOME shard for the live entity. That holds because the
-    // read loop routes every frame through `on_home_shard!` before dispatch, so the handler's
-    // `store` is already the home handle. Pinned end to end: if dispatch ever stops home-routing,
-    // or the gate resolves through a default handle, the stray ack below re-runs the world entry
-    // and the counts at the bottom catch it.
+    // The gate reads the live entity through the handler's `store`, which `on_home_shard!` has
+    // already routed home. If either stops holding, the stray ack re-runs the world entry.
     let calls: ShardCallLog = Default::default();
     let home = std::sync::Arc::new(InMemoryStore {
         shard: "instances".into(),

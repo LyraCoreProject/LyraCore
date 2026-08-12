@@ -48,6 +48,8 @@ mod transfer_tests;
 /// `wow_srp` cipher pair. A sibling of the modules above for the same reason.
 #[path = "wire_corruption_tests.rs"]
 mod wire_corruption_tests;
+#[path = "trade_tests.rs"]
+mod trade_tests;
 
 use wow_world_base::shared::friend_result_vanilla_tbc::FriendResult;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
@@ -164,6 +166,9 @@ struct InMemoryStore {
     vendor_stock: Vec<codec::VendorItemView>,
     /// 195: `npc_refuses_interaction` return — false (derive-Default) keeps every fixture NPC open.
     npc_refuses: bool,
+    /// Spelled as a refusal so derive-Default (false) keeps every fixture trainer serving; the
+    /// trait method reads the negation.
+    trainer_refuses_class: bool,
     /// When set, buy/sell return this error (a gameplay failure) instead of `Ok`.
     trade_error: Option<String>,
     /// Quest-giver evals returned by `quest_giver_evals` (the menu/status input).
@@ -512,6 +517,27 @@ struct InMemoryStore {
     /// item-instance-guid → inventory-slot resolution fixture. Empty by default (no items), matching
     /// every earlier test that never sets this.
     player_items_fixture: Vec<codec::ItemInstanceView>,
+    /// Recorded `initiate_trade` calls — `(self_guid, target_guid)` off CMSG_INITIATE_TRADE (#120).
+    initiated_trades: std::sync::Mutex<Vec<(u64, u64)>>,
+    /// Recorded `begin_trade` self_guids — CMSG_BEGIN_TRADE (#120).
+    begun_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `cancel_trade` self_guids — CMSG_CANCEL_TRADE (#120).
+    cancelled_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `set_trade_item` calls — `(self_guid, trade_slot, inv_slot)` AFTER the gateway's
+    /// (bag, slot) → absolute-slot mapping (#121).
+    set_trade_items: std::sync::Mutex<Vec<(u64, u8, u8)>>,
+    /// Recorded `clear_trade_item` calls — `(self_guid, trade_slot)` (#121).
+    cleared_trade_items: std::sync::Mutex<Vec<(u64, u8)>>,
+    /// Recorded `set_trade_gold` calls — `(self_guid, copper)` after the wire's Gold decode (#121).
+    set_trade_golds: std::sync::Mutex<Vec<(u64, u32)>>,
+    /// Recorded `accept_trade` self_guids — CMSG_ACCEPT_TRADE (#122).
+    accepted_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `unaccept_trade` self_guids — CMSG_UNACCEPT_TRADE (#122).
+    unaccepted_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `busy_trade` self_guids — CMSG_BUSY_TRADE (#123).
+    busy_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `ignore_trade` self_guids — CMSG_IGNORE_TRADE (#123).
+    ignore_trades: std::sync::Mutex<Vec<u64>>,
 }
 
 impl InMemoryStore {
@@ -951,6 +977,9 @@ impl WorldStore for InMemoryStore {
     }
     fn npc_refuses_interaction(&self, _npc_guid: u64, _player_guid: u64) -> Result<bool> {
         Ok(self.npc_refuses) // default false — every existing fixture NPC keeps interacting
+    }
+    fn trainer_serves(&self, _player_guid: u64, _trainer_guid: u64) -> Result<bool> {
+        Ok(!self.trainer_refuses_class) // default true — every existing fixture trainer serves
     }
     fn buy_item(
         &self,
@@ -1582,6 +1611,70 @@ impl WorldStore for InMemoryStore {
     }
     fn group_accept(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
         self.rec("group_accept");
+        Ok(())
+    }
+    // Trade (#120): pure recorders — the module owns every gate, so the fake just proves which
+    // verb the dispatch chose and which args survived the wire.
+    fn initiate_trade(&self, _account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+        self.rec("initiate_trade");
+        self.initiated_trades
+            .lock()
+            .unwrap()
+            .push((self_guid, target_guid));
+        Ok(())
+    }
+    fn begin_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("begin_trade");
+        self.begun_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+    fn cancel_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("cancel_trade");
+        self.cancelled_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+    fn set_trade_item(&self, _account_id: u64, self_guid: u64, trade_slot: u8, inv_slot: u8) -> Result<()> {
+        self.rec("set_trade_item");
+        self.set_trade_items
+            .lock()
+            .unwrap()
+            .push((self_guid, trade_slot, inv_slot));
+        Ok(())
+    }
+    fn clear_trade_item(&self, _account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()> {
+        self.rec("clear_trade_item");
+        self.cleared_trade_items
+            .lock()
+            .unwrap()
+            .push((self_guid, trade_slot));
+        Ok(())
+    }
+    fn set_trade_gold(&self, _account_id: u64, self_guid: u64, copper: u32) -> Result<()> {
+        self.rec("set_trade_gold");
+        self.set_trade_golds
+            .lock()
+            .unwrap()
+            .push((self_guid, copper));
+        Ok(())
+    }
+    fn accept_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("accept_trade");
+        self.accepted_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+    fn unaccept_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("unaccept_trade");
+        self.unaccepted_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+    fn busy_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("busy_trade");
+        self.busy_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+    fn ignore_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("ignore_trade");
+        self.ignore_trades.lock().unwrap().push(self_guid);
         Ok(())
     }
     fn group_decline(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
@@ -7066,6 +7159,141 @@ fn trainer_list_replies_smsg_trainer_list_with_the_fixture_spells() {
             assert_eq!(list.spells[0].spell, 100);
         }
         other => panic!("expected SMSG_TRAINER_LIST, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+/// A wrong-class player gets no trainer window: not an empty one, not an error packet. The
+/// follow-up gossip reply is the probe — reading straight after the request would block forever.
+#[test]
+fn trainer_list_is_silently_dropped_for_a_player_the_trainer_does_not_serve() {
+    let mut s = quest_store();
+    s.trainer_refuses_class = true;
+    s.trainer_spells = vec![codec::TrainerSpellView {
+        spell_id: 100,
+        cost: 10,
+        required_level: 1,
+        player_level: 1,
+        known: false,
+        profession: false,
+    }];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_TRAINER_LIST {
+        guid: Guid::new(70),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    // The follow-up whose reply we DO expect. Gossip always answers, so reading it back proves the
+    // trainer request emitted nothing — and it doubles as the "the NPC still talks to you" check:
+    // the class gate removes the training service, not the creature.
+    CMSG_GOSSIP_HELLO {
+        guid: Guid::new(70),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(_) => {}
+        ServerOpcodeMessage::SMSG_TRAINER_LIST(_) => {
+            panic!("a trainer that does not serve this class must send NO window")
+        }
+        other => panic!("expected only the gossip reply, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+/// The gossip menu of a trainer that does not serve this class keeps every other line and loses
+/// both training entries — the respec goes with the training because the module refuses both.
+#[test]
+fn gossip_hides_the_train_and_unlearn_options_for_a_class_the_trainer_does_not_serve() {
+    use lyracore_shared::constants::gossip_option;
+    // Level 20 matters: the respec option is independently hidden below level 10, so at the default
+    // fixture level this would pass without the class gate doing any work.
+    let mut s = quest_store_at_level(20);
+    s.gossip_opts = vec![
+        opt(0, "Well met, traveler.", gossip_option::GOSSIP),
+        opt(1, "I would like to train.", gossip_option::TRAINER),
+        opt(
+            0,
+            "I wish to unlearn my talents.",
+            gossip_option::UNLEARNTALENTS,
+        ),
+        opt(1, "I'd like to browse your goods.", gossip_option::VENDOR),
+    ];
+    s.trainer_refuses_class = true;
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_GOSSIP_HELLO {
+        guid: Guid::new(90),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(m) => {
+            let lines: Vec<&str> = m.gossips.iter().map(|g| g.message.as_str()).collect();
+            assert!(
+                !lines.contains(&"I would like to train."),
+                "the train option must be hidden: {lines:?}"
+            );
+            assert!(
+                !lines.contains(&"I wish to unlearn my talents."),
+                "the respec option must be hidden too: {lines:?}"
+            );
+            // The NPC is not silenced — it still talks, and still sells.
+            assert!(
+                lines.contains(&"Well met, traveler."),
+                "plain gossip lines survive: {lines:?}"
+            );
+            assert!(
+                lines.contains(&"I'd like to browse your goods."),
+                "the vendor line on the same NPC survives: {lines:?}"
+            );
+        }
+        other => panic!("expected SMSG_GOSSIP_MESSAGE, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+/// The same menu with the default fixture (serves) keeps all four options, so the test above pins
+/// the class gate rather than some unrelated filter dropping those actions for everyone.
+#[test]
+fn gossip_keeps_the_train_and_unlearn_options_for_a_class_the_trainer_serves() {
+    use lyracore_shared::constants::gossip_option;
+    // Same level as its counterpart, so the only difference between the two tests is the gate.
+    let mut s = quest_store_at_level(20);
+    s.gossip_opts = vec![
+        opt(0, "Well met, traveler.", gossip_option::GOSSIP),
+        opt(1, "I would like to train.", gossip_option::TRAINER),
+        opt(
+            0,
+            "I wish to unlearn my talents.",
+            gossip_option::UNLEARNTALENTS,
+        ),
+        opt(1, "I'd like to browse your goods.", gossip_option::VENDOR),
+    ];
+    let store = std::sync::Arc::new(s); // trainer_refuses_class stays false (derive-Default)
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_GOSSIP_HELLO {
+        guid: Guid::new(90),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(m) => {
+            let lines: Vec<&str> = m.gossips.iter().map(|g| g.message.as_str()).collect();
+            assert!(
+                lines.contains(&"I would like to train."),
+                "a served class still gets the train option: {lines:?}"
+            );
+            assert!(
+                lines.contains(&"I wish to unlearn my talents."),
+                "and the respec option: {lines:?}"
+            );
+        }
+        other => panic!("expected SMSG_GOSSIP_MESSAGE, got {other}"),
     }
     drop(client);
     server.join().unwrap();

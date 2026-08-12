@@ -24,6 +24,9 @@ fn filtered_gossip_options<St: WorldStore + ?Sized>(
         .character_by_guid(player_guid)?
         .map(|c| c.level)
         .unwrap_or(0);
+    // The module refuses both training and respec for the wrong class, so either option would
+    // advertise a guaranteed failure. Fail-open: a read error must not hide a working trainer.
+    let serves_class = store.trainer_serves(player_guid, npc_guid).unwrap_or(true);
     let raw = store.gossip_options(npc_guid)?;
     Ok(raw
         .into_iter()
@@ -32,6 +35,13 @@ fn filtered_gossip_options<St: WorldStore + ?Sized>(
             codec::option_condition_holds(opt.cond_type, taken, rewarded)
         })
         .filter(|opt| opt.action != gossip_option::UNLEARNTALENTS || level >= MIN_TALENT_LEVEL)
+        .filter(|opt| {
+            serves_class
+                || !matches!(
+                    opt.action,
+                    gossip_option::TRAINER | gossip_option::UNLEARNTALENTS
+                )
+        })
         .collect())
 }
 

@@ -402,14 +402,29 @@ pub(crate) fn valid_split_count(count: u32, stack_count: u32) -> bool {
 /// is full. Collects the owner's occupied slots into a set ONCE (#387 smalls: was one `by_owner_guid`
 /// index scan PER CANDIDATE slot — up to 16 full scans for a nearly-full backpack) then does a plain
 /// membership check per candidate. Vanilla auto-store fills the first free bag slot.
-pub(crate) fn first_free_backpack_slot(ctx: &ReducerContext, player_guid: u64) -> Option<u8> {
-    let occupied: std::collections::HashSet<u8> = ctx
-        .db
+/// The occupied-slot set behind the two backpack probes below — one spelling of the scan.
+fn occupied_slots(ctx: &ReducerContext, player_guid: u64) -> std::collections::HashSet<u8> {
+    ctx.db
         .game_item_instance()
         .by_owner_guid()
         .filter(&player_guid)
         .map(|i| i.slot)
-        .collect();
+        .collect()
+}
+
+/// How many loose backpack slots (23..=38) are open — the Trade Commit's net-bag-space input
+/// (#122). Backpack ONLY, matching `deliver_traded_item`'s allocation: equipped-bag room is
+/// invisible to trade until the gateway models sub-bags at all (`handlers/item.rs`'s gap), so a
+/// full-backpack/empty-bags player refuses conservatively rather than mis-delivering.
+pub(crate) fn count_free_backpack_slots(ctx: &ReducerContext, player_guid: u64) -> u32 {
+    let occupied = occupied_slots(ctx, player_guid);
+    (starter_item::BACKPACK_SLOT_0..BACKPACK_SLOT_END)
+        .filter(|slot| !occupied.contains(slot))
+        .count() as u32
+}
+
+pub(crate) fn first_free_backpack_slot(ctx: &ReducerContext, player_guid: u64) -> Option<u8> {
+    let occupied = occupied_slots(ctx, player_guid);
     (starter_item::BACKPACK_SLOT_0..BACKPACK_SLOT_END).find(|slot| !occupied.contains(slot))
 }
 

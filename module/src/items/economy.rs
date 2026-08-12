@@ -67,8 +67,7 @@ fn npc_interaction_gate(
     if npc.map_id != player.map_id || npc.instance_id != player.instance_id {
         return Err(format!("{noun} on another map"));
     }
-    let (dx, dy, dz) = (npc.x - player.x, npc.y - player.y, npc.z - player.z);
-    if dx * dx + dy * dy + dz * dz > VENDOR_RANGE_SQ {
+    if crate::helpers::dist_sq(&player, &npc) > VENDOR_RANGE_SQ {
         return Err(format!("{noun} out of range"));
     }
     Ok((player, npc))
