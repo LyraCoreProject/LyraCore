@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::nav::{Mesh, Placement, Tri};
 
@@ -298,11 +299,50 @@ impl Drop for VmapSpool {
     }
 }
 
+fn owns_map(sql_output: &str, map_id: u32) -> bool {
+    sql_output
+        .split(|c: char| !c.is_ascii_digit())
+        .filter_map(|token| token.parse::<u32>().ok())
+        .any(|candidate| candidate == map_id)
+}
+
+/// A vmap generation follows already-owned spatial data. Fail before opening client archives when
+/// this database cannot authoritatively serve the requested map.
+fn preflight_map_ownership(args: &crate::Args, map_id: u32) -> Result<()> {
+    let query = |table: &str| -> Result<String> {
+        let out = Command::new("spacetime")
+            .args([
+                "sql",
+                "-s",
+                &args.server,
+                &args.db,
+                &format!("SELECT map_id FROM {table}"),
+            ])
+            .output()
+            .with_context(|| format!("query {table} map ownership"))?;
+        if !out.status.success() {
+            bail!(
+                "{table} ownership query failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let terrain = query("game_terrain_chunk")?;
+    let nav = query("game_nav_chunk")?;
+    if owns_map(&terrain, map_id) && owns_map(&nav, map_id) {
+        Ok(())
+    } else {
+        bail!("target database {} does not own complete spatial map {map_id} (terrain and nav ownership are both required)", args.db)
+    }
+}
+
 pub(crate) fn run(args: &crate::Args) -> Result<()> {
+    let map_id = args.map as u32;
+    preflight_map_ownership(args, map_id)?;
     let data_dir = Path::new(args.vmap.as_ref().expect("caller checked"));
     let mut chain = crate::collision::open_geometry_chain(data_dir)?;
     let map_name = crate::terrain::map_dir(args.map as u32)?;
-    let map_id = args.map as u32;
 
     let (cell_x_min, cell_x_max, cell_y_min, cell_y_max) =
         crate::terrain::slice_cell_range(args.bbox, args.center, args.radius);
@@ -730,5 +770,13 @@ mod tests {
                 .unwrap();
             assert_eq!(count, 3);
         }
+    }
+
+    #[test]
+    fn ownership_parser_accepts_the_requested_map_and_rejects_another() {
+        let rows = "map_id\n0\n36\n";
+        assert!(owns_map(rows, 0));
+        assert!(owns_map(rows, 36));
+        assert!(!owns_map(rows, 1));
     }
 }
