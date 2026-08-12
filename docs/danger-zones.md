@@ -221,6 +221,95 @@ repeat those inspections. Do not delete `/var/lib/lyracore/spacetimedb` during a
 node's persistent database state. The unit binds standalone to loopback; expose it only through the
 separately configured front door, never by changing this service's listen address casually.
 
+### Live capacity-edge node-death validation (human-authorized)
+
+This is the production validation for #83, tracked by #176. It is deliberately a **runbook**, not a
+command to run from a development checkout: killing a database node disconnects real players. Run it
+only in an approved maintenance window, with an operator who can stop the test, and only after #173,
+#174, and #175 are deployed together. Do not mark #176 or #83 complete from code review, a unit test,
+or this blank template.
+
+Before the window, identify the gateway systemd unit as `<gateway-unit>` and the approved load driver
+as `<load-driver>`. Use isolated, disposable test accounts and a test realm or an explicitly approved
+production slice. The gateway configuration must provide at least 750 world-session and blocking-pool
+slots, and set `LYRACORE_ADMIT_CONCURRENCY=25`; record the actual `LYRACORE_MAX_SESSIONS` and
+`LYRACORE_MAX_BLOCKING_THREADS` values below. Do not quietly raise an operating limit just to make the
+test pass — the change itself needs normal deployment approval.
+
+1. Capture the gateway PID, its start time, and its active configuration before beginning. Capture the
+   standalone unit's `ActiveState`, `MainPID`, restart count, stderr tail, and the effective descriptor
+   limit:
+
+   ```bash
+   sudo systemctl show <gateway-unit> -p MainPID -p ActiveEnterTimestamp
+   sudo systemctl show spacetimedb-standalone -p ActiveState -p MainPID -p NRestarts -p LimitNOFILE
+   standalone_pid="$(sudo systemctl show spacetimedb-standalone -p MainPID --value)"
+   sudo awk '/Max open files/ { print }' "/proc/${standalone_pid}/limits"
+   sudo tail -n 100 /var/log/lyracore/spacetimedb-standalone.log
+   ```
+
+2. With `<load-driver>`, establish approximately 750 seated world sessions, then offer approximately
+   1,000 additional authenticated world logins at **25 per second** and keep their sockets open. Save
+   the driver's unabridged output and the gateway's `QUEUESTAT` lines. The pre-failure evidence must
+   show the intended seated population and a non-empty queue; if it does not, stop and record the
+   deviation rather than inducing node death.
+
+3. Start continuous, timestamped capture of the gateway journal, standalone journal, standalone stderr,
+   and load-driver output. An authorized operator must then perform the reviewed node-death action.
+   Record the exact command and timestamp in the evidence template; do not substitute a gateway restart
+   for node death. The gateway process must remain running throughout this step.
+
+4. Observe until the affected world sessions have disconnected and the queue has drained according to
+   the configured 25-per-second admission limit. Preserve the post-failure `QUEUESTAT` lines and a
+   gateway thread/process snapshot. The pass condition is no persistently parked world-session threads
+   and no retained queue seats: after the controlled clients disconnect, `QUEUESTAT` must converge to
+   zero active and zero depth (or the documented baseline if other approved traffic was present).
+
+5. Verify that systemd restarted standalone, that the restarted process still has `524288` open-file
+   descriptors available, and that its stderr append log contains both sides of the event. Confirm the
+   gateway PID and start time are unchanged. Finally, use fresh disposable accounts to prove that new
+   logins complete after coordinator recovery; save the driver result and relevant gateway journal span.
+
+6. Paste the completed evidence template below into a comment on #83 and #176. Any missing capture,
+   deviation, timeout, stale seat, parked session, failed login, or gateway restart is a failed or
+   inconclusive result — leave both issues open and link the evidence before scheduling a retry.
+
+#### Evidence template — do not pre-fill
+
+```text
+Validation date/time (UTC):
+Operator / approval / maintenance window:
+Gateway unit and host:
+Standalone host:
+Gateway build/commit:
+Standalone binary version:
+
+Prerequisites deployed: #173 / #174 / #175 (commit or release identifiers):
+Configured LYRACORE_MAX_SESSIONS:
+Configured LYRACORE_MAX_BLOCKING_THREADS:
+Configured LYRACORE_ADMIT_CONCURRENCY (must be 25):
+Load driver, version, and test-account range:
+Approved traffic isolation / baseline:
+
+Gateway PID + start time before / after (must match):
+Standalone MainPID before / after:
+Standalone ActiveState, NRestarts, LimitNOFILE:
+Effective `Max open files` from /proc/<pid>/limits after restart:
+Standalone stderr-log excerpts/attachment:
+
+Pre-failure seated sessions (target ~750):
+Pre-failure offered queued logins (target ~1000 at 25/s):
+Pre-failure QUEUESTAT evidence:
+Reviewed node-death command and timestamp:
+Post-failure gateway journal / thread-snapshot attachment:
+Post-failure QUEUESTAT evidence (active/depth converge to baseline):
+Coordinator-recovery evidence and fresh-login result:
+
+Deviations, failures, or missing evidence:
+Verdict: PASS / FAIL / INCONCLUSIVE
+Links to #83 and #176 comments containing the raw evidence:
+```
+
 `lyracore dev up` is the one deliberate exception to the production topology below: it is a
 contributor fixture on a loopback node, four databases since #108 (`lyracore`, `lyracore-kalimdor`,
 `lyracore-instances`, `lyracore-realm`) and one under `dev up --single`. It **owns** the topology

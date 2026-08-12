@@ -40,6 +40,16 @@ need "$runbook" 'systemctl status spacetimedb-standalone' \
   "operators can inspect supervisor status"
 need "$runbook" 'tail -n 100 /var/log/lyracore/spacetimedb-standalone\.log' \
   "operators can inspect the persistent stderr log"
+need "$runbook" 'Live capacity-edge node-death validation' \
+  "the production node-death procedure is documented"
+need "$runbook" 'approximately 750 seated world sessions' \
+  "the capacity-edge seated-session target is explicit"
+need "$runbook" '1,000 additional authenticated world logins at \*\*25 per second\*\*' \
+  "the queued-login load and admission rate are explicit"
+need "$runbook" 'Gateway PID \+ start time before / after \(must match\)' \
+  "the runbook proves recovery without a gateway restart"
+need "$runbook" 'Verdict: PASS / FAIL / INCONCLUSIVE' \
+  "the evidence record cannot silently claim an unrun validation"
 
 if [ "$fail" -eq 0 ]; then
   echo "[standalone supervisor] OK"
