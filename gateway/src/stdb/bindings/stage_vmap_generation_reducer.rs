@@ -12,6 +12,8 @@ pub(super) struct StageVmapGenerationArgs {
     pub expected_chunks: u32,
     pub expected_bytes: u64,
     pub manifest_digest_hex: String,
+    pub source_identity: String,
+    pub selection_identity: String,
 }
 
 impl From<StageVmapGenerationArgs> for super::Reducer {
@@ -22,6 +24,8 @@ impl From<StageVmapGenerationArgs> for super::Reducer {
             expected_chunks: args.expected_chunks,
             expected_bytes: args.expected_bytes,
             manifest_digest_hex: args.manifest_digest_hex,
+            source_identity: args.source_identity,
+            selection_identity: args.selection_identity,
         }
     }
 }
@@ -48,6 +52,8 @@ pub trait stage_vmap_generation {
         expected_chunks: u32,
         expected_bytes: u64,
         manifest_digest_hex: String,
+        source_identity: String,
+        selection_identity: String,
     ) -> __sdk::Result<()> {
         self.stage_vmap_generation_then(
             generation_id,
@@ -55,6 +61,8 @@ pub trait stage_vmap_generation {
             expected_chunks,
             expected_bytes,
             manifest_digest_hex,
+            source_identity,
+            selection_identity,
             |_, _| {},
         )
     }
@@ -72,6 +80,8 @@ pub trait stage_vmap_generation {
         expected_chunks: u32,
         expected_bytes: u64,
         manifest_digest_hex: String,
+        source_identity: String,
+        selection_identity: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -87,6 +97,8 @@ impl stage_vmap_generation for super::RemoteReducers {
         expected_chunks: u32,
         expected_bytes: u64,
         manifest_digest_hex: String,
+        source_identity: String,
+        selection_identity: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -99,6 +111,8 @@ impl stage_vmap_generation for super::RemoteReducers {
                 expected_chunks,
                 expected_bytes,
                 manifest_digest_hex,
+                source_identity,
+                selection_identity,
             },
             callback,
         )

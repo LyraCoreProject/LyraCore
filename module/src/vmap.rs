@@ -79,7 +79,7 @@ fn require_manifest<'a>(
 
 /// Map-scoped import lifecycle. The operator supplies `id`, making retries and importer resume
 /// deterministic without needing a reducer return value to discover an auto-incremented key.
-#[table(accessor = game_vmap_generation, index(accessor = by_map_state, btree(columns = [map_id, state])))]
+#[table(accessor = game_vmap_generation, public, index(accessor = by_map_state, btree(columns = [map_id, state])))]
 pub struct VmapGeneration {
     #[primary_key]
     pub id: u64,
@@ -91,6 +91,28 @@ pub struct VmapGeneration {
     pub expected_bytes: u64,
     /// Immutable 32-byte BLAKE3 digest of the canonical manifest stream.
     pub manifest_digest: Vec<u8>,
+    /// Immutable canonical identity of the source client data used to plan this generation.
+    pub source_identity: String,
+    /// Immutable canonical identity of the selected map/cell coverage.
+    pub selection_identity: String,
+}
+
+/// Public, blob-free receipt ledger for resumable imports. Operators and the importer can read
+/// this table to skip an already accepted `(generation_id, key, shard_ordinal)` without
+/// subscribing to or re-transferring collision payloads from the private chunk store.
+#[table(
+    accessor = game_vmap_generation_receipt,
+    public,
+    index(accessor = by_generation, btree(columns = [generation_id])),
+    index(accessor = by_generation_cell, btree(columns = [generation_id, key]))
+)]
+pub struct VmapGenerationReceipt {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub generation_id: u64,
+    pub shard_ordinal: u32,
+    pub key: u64,
 }
 
 /// A staged chunk belongs to exactly one generation. `shard_ordinal` is stable within one cell,
@@ -164,6 +186,24 @@ fn generation(ctx: &ReducerContext, generation_id: u64) -> Result<VmapGeneration
         .ok_or_else(|| format!("unknown vmap generation {generation_id}"))
 }
 
+fn same_stage_request(
+    row: &VmapGeneration,
+    map_id: u32,
+    expected_chunks: u32,
+    expected_bytes: u64,
+    manifest_digest: &[u8],
+    source_identity: &str,
+    selection_identity: &str,
+) -> bool {
+    row.map_id == map_id
+        && row.expected_chunks == expected_chunks
+        && row.expected_bytes == expected_bytes
+        && row.manifest_digest == manifest_digest
+        && row.source_identity == source_identity
+        && row.selection_identity == selection_identity
+        && row.state == STAGING
+}
+
 /// Start a generation. Repeating the exact request resumes it; a conflicting request is refused.
 #[reducer]
 pub fn stage_vmap_generation(
@@ -173,6 +213,8 @@ pub fn stage_vmap_generation(
     expected_chunks: u32,
     expected_bytes: u64,
     manifest_digest_hex: String,
+    source_identity: String,
+    selection_identity: String,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     if expected_chunks == 0 {
@@ -180,6 +222,12 @@ pub fn stage_vmap_generation(
     }
     if expected_bytes == 0 {
         return Err("vmap generation needs at least one expected byte".to_string());
+    }
+    if source_identity.is_empty() {
+        return Err("vmap generation source identity must not be empty".to_string());
+    }
+    if selection_identity.is_empty() {
+        return Err("vmap generation selection identity must not be empty".to_string());
     }
     let manifest_digest = hex_decode(&manifest_digest_hex)?;
     if manifest_digest.len() != 32 {
@@ -196,16 +244,21 @@ pub fn stage_vmap_generation(
                 accepted_chunks: 0,
                 expected_bytes,
                 manifest_digest,
+                source_identity,
+                selection_identity,
             });
             Ok(())
         }
         Some(row)
-            if row.map_id == map_id
-                && row.expected_chunks == expected_chunks
-                && row.expected_bytes == expected_bytes
-                && row.manifest_digest == manifest_digest
-                && row.state == STAGING =>
-        {
+            if same_stage_request(
+                &row,
+                map_id,
+                expected_chunks,
+                expected_bytes,
+                &manifest_digest,
+                &source_identity,
+                &selection_identity,
+            ) => {
             Ok(())
         }
         Some(_) => Err(format!(
@@ -226,6 +279,7 @@ pub fn append_vmap_generation_chunks(
     let mut generation = generation(ctx, generation_id)?;
     require_staging(generation.state)?;
     let chunks = ctx.db.game_vmap_generation_chunk();
+    let receipts = ctx.db.game_vmap_generation_receipt();
     for row in packed.split(';').filter(|row| !row.is_empty()) {
         let fields: Vec<&str> = row.splitn(5, ',').collect();
         if fields.len() != 5 {
@@ -264,6 +318,12 @@ pub fn append_vmap_generation_chunks(
             Some(_) => return Err(format!("conflicting retry for generation {generation_id}, cell {key}, shard {shard_ordinal}")),
             None => {
                 chunks.insert(VmapGenerationChunk { id: 0, generation_id, shard_ordinal, key, map_id, cell_x, cell_y, blob });
+                receipts.insert(VmapGenerationReceipt {
+                    id: 0,
+                    generation_id,
+                    shard_ordinal,
+                    key,
+                });
                 generation.accepted_chunks += 1;
             }
         }
@@ -342,6 +402,15 @@ pub fn discard_vmap_generation(ctx: &ReducerContext, generation_id: u64) -> Resu
         .collect();
     for id in ids {
         chunks.id().delete(id);
+    }
+    let receipts = ctx.db.game_vmap_generation_receipt();
+    let receipt_ids: Vec<u64> = receipts
+        .by_generation()
+        .filter(&generation_id)
+        .map(|receipt| receipt.id)
+        .collect();
+    for id in receipt_ids {
+        receipts.id().delete(id);
     }
     generation.state = DISCARDED;
     ctx.db.game_vmap_generation().id().update(generation);
@@ -729,5 +798,53 @@ mod tests {
         assert_eq!(h.active(0), Some(1));
         assert!(!h.chunks.keys().any(|(generation, _, _)| *generation == 2));
         assert!(h.discard(1).is_err(), "active data cannot be discarded");
+    }
+
+    #[test]
+    fn restaging_requires_the_same_provenance_identities() {
+        let row = VmapGeneration {
+            id: 7,
+            map_id: 0,
+            state: STAGING,
+            expected_chunks: 3,
+            accepted_chunks: 0,
+            expected_bytes: 12,
+            manifest_digest: vec![0xAA; 32],
+            source_identity: "client-1.12.1:abc".to_string(),
+            selection_identity: "map=0;cells=0,0..1,1".to_string(),
+        };
+        assert!(same_stage_request(
+            &row,
+            0,
+            3,
+            12,
+            &[0xAA; 32],
+            "client-1.12.1:abc",
+            "map=0;cells=0,0..1,1",
+        ));
+        assert!(
+            !same_stage_request(
+                &row,
+                0,
+                3,
+                12,
+                &[0xAA; 32],
+                "client-1.12.1:def",
+                "map=0;cells=0,0..1,1",
+            ),
+            "a matching payload from a different source cannot resume the generation"
+        );
+        assert!(
+            !same_stage_request(
+                &row,
+                0,
+                3,
+                12,
+                &[0xAA; 32],
+                "client-1.12.1:abc",
+                "map=0;cells=0,0..2,2",
+            ),
+            "a different coverage selection cannot resume the generation"
+        );
     }
 }

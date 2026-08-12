@@ -374,6 +374,7 @@ pub mod game_transfer_out_table;
 pub mod game_transfer_reaper_schedule_table;
 pub mod game_vmap_chunk_table;
 pub mod game_vmap_generation_chunk_table;
+pub mod game_vmap_generation_receipt_table;
 pub mod game_vmap_generation_table;
 pub mod game_whisper_event_table;
 pub mod game_world_config_table;
@@ -598,6 +599,7 @@ pub mod transfer_reaper_schedule_type;
 pub mod verify_vmap_generation_reducer;
 pub mod vmap_chunk_type;
 pub mod vmap_generation_chunk_type;
+pub mod vmap_generation_receipt_type;
 pub mod vmap_generation_type;
 pub mod whisper_event_type;
 pub mod world_entity_type;
@@ -971,6 +973,7 @@ pub use game_transfer_out_table::*;
 pub use game_transfer_reaper_schedule_table::*;
 pub use game_vmap_chunk_table::*;
 pub use game_vmap_generation_chunk_table::*;
+pub use game_vmap_generation_receipt_table::*;
 pub use game_vmap_generation_table::*;
 pub use game_whisper_event_table::*;
 pub use game_world_config_table::*;
@@ -1195,6 +1198,7 @@ pub use transfer_reaper_schedule_type::TransferReaperSchedule;
 pub use verify_vmap_generation_reducer::verify_vmap_generation;
 pub use vmap_chunk_type::VmapChunk;
 pub use vmap_generation_chunk_type::VmapGenerationChunk;
+pub use vmap_generation_receipt_type::VmapGenerationReceipt;
 pub use vmap_generation_type::VmapGeneration;
 pub use whisper_event_type::WhisperEvent;
 pub use world_entity_type::WorldEntity;
@@ -2302,6 +2306,8 @@ pub enum Reducer {
         expected_chunks: u32,
         expected_bytes: u64,
         manifest_digest_hex: String,
+        source_identity: String,
+        selection_identity: String,
     },
     StampImportMeta {
         family: String,
@@ -4582,12 +4588,16 @@ impl __sdk::Reducer for Reducer {
                 expected_chunks,
                 expected_bytes,
                 manifest_digest_hex,
+                source_identity,
+                selection_identity,
             } => __sats::bsatn::to_vec(&stage_vmap_generation_reducer::StageVmapGenerationArgs {
                 generation_id: generation_id.clone(),
                 map_id: map_id.clone(),
                 expected_chunks: expected_chunks.clone(),
                 expected_bytes: expected_bytes.clone(),
                 manifest_digest_hex: manifest_digest_hex.clone(),
+                source_identity: source_identity.clone(),
+                selection_identity: selection_identity.clone(),
             }),
             Reducer::StampImportMeta {
                 family,
@@ -4816,6 +4826,7 @@ pub struct DbUpdate {
     game_vmap_chunk: __sdk::TableUpdate<VmapChunk>,
     game_vmap_generation: __sdk::TableUpdate<VmapGeneration>,
     game_vmap_generation_chunk: __sdk::TableUpdate<VmapGenerationChunk>,
+    game_vmap_generation_receipt: __sdk::TableUpdate<VmapGenerationReceipt>,
     game_whisper_event: __sdk::TableUpdate<WhisperEvent>,
     game_world_config: __sdk::TableUpdate<GmWorldConfig>,
     game_world_entity: __sdk::TableUpdate<WorldEntity>,
@@ -5315,6 +5326,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 ),
                 "game_vmap_generation_chunk" => db_update.game_vmap_generation_chunk.append(
                     game_vmap_generation_chunk_table::parse_table_update(table_update)?,
+                ),
+                "game_vmap_generation_receipt" => db_update.game_vmap_generation_receipt.append(
+                    game_vmap_generation_receipt_table::parse_table_update(table_update)?,
                 ),
                 "game_whisper_event" => db_update
                     .game_whisper_event
@@ -6026,6 +6040,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_vmap_generation_chunk,
             )
             .with_updates_by_pk(|row| &row.id);
+        diff.game_vmap_generation_receipt = cache
+            .apply_diff_to_table::<VmapGenerationReceipt>(
+                "game_vmap_generation_receipt",
+                &self.game_vmap_generation_receipt,
+            )
+            .with_updates_by_pk(|row| &row.id);
         diff.game_whisper_event = cache
             .apply_diff_to_table::<WhisperEvent>("game_whisper_event", &self.game_whisper_event)
             .with_updates_by_pk(|row| &row.id);
@@ -6530,6 +6550,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_vmap_generation_chunk" => db_update
                     .game_vmap_generation_chunk
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_vmap_generation_receipt" => db_update
+                    .game_vmap_generation_receipt
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_whisper_event" => db_update
                     .game_whisper_event
@@ -7042,6 +7065,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_vmap_generation_chunk" => db_update
                     .game_vmap_generation_chunk
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_vmap_generation_receipt" => db_update
+                    .game_vmap_generation_receipt
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_whisper_event" => db_update
                     .game_whisper_event
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -7231,6 +7257,7 @@ pub struct AppliedDiff<'r> {
     game_vmap_chunk: __sdk::TableAppliedDiff<'r, VmapChunk>,
     game_vmap_generation: __sdk::TableAppliedDiff<'r, VmapGeneration>,
     game_vmap_generation_chunk: __sdk::TableAppliedDiff<'r, VmapGenerationChunk>,
+    game_vmap_generation_receipt: __sdk::TableAppliedDiff<'r, VmapGenerationReceipt>,
     game_whisper_event: __sdk::TableAppliedDiff<'r, WhisperEvent>,
     game_world_config: __sdk::TableAppliedDiff<'r, GmWorldConfig>,
     game_world_entity: __sdk::TableAppliedDiff<'r, WorldEntity>,
@@ -8008,6 +8035,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<VmapGenerationChunk>(
             "game_vmap_generation_chunk",
             &self.game_vmap_generation_chunk,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<VmapGenerationReceipt>(
+            "game_vmap_generation_receipt",
+            &self.game_vmap_generation_receipt,
             event,
         );
         callbacks.invoke_table_row_callbacks::<WhisperEvent>(
@@ -8852,6 +8884,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_vmap_chunk_table::register_table(client_cache);
         game_vmap_generation_table::register_table(client_cache);
         game_vmap_generation_chunk_table::register_table(client_cache);
+        game_vmap_generation_receipt_table::register_table(client_cache);
         game_whisper_event_table::register_table(client_cache);
         game_world_config_table::register_table(client_cache);
         game_world_entity_table::register_table(client_cache);
@@ -9020,6 +9053,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_vmap_chunk",
         "game_vmap_generation",
         "game_vmap_generation_chunk",
+        "game_vmap_generation_receipt",
         "game_whisper_event",
         "game_world_config",
         "game_world_entity",
