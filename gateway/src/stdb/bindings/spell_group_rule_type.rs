@@ -9,6 +9,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 pub struct SpellGroupRule {
     pub group_id: u32,
     pub rule: u8,
+    pub rank_is_comparable: bool,
 }
 
 impl __sdk::InModule for SpellGroupRule {
@@ -21,6 +22,7 @@ impl __sdk::InModule for SpellGroupRule {
 pub struct SpellGroupRuleCols {
     pub group_id: __sdk::__query_builder::Col<SpellGroupRule, u32>,
     pub rule: __sdk::__query_builder::Col<SpellGroupRule, u8>,
+    pub rank_is_comparable: __sdk::__query_builder::Col<SpellGroupRule, bool>,
 }
 
 impl __sdk::__query_builder::HasCols for SpellGroupRule {
@@ -29,6 +31,7 @@ impl __sdk::__query_builder::HasCols for SpellGroupRule {
         SpellGroupRuleCols {
             group_id: __sdk::__query_builder::Col::new(table_name, "group_id"),
             rule: __sdk::__query_builder::Col::new(table_name, "rule"),
+            rank_is_comparable: __sdk::__query_builder::Col::new(table_name, "rank_is_comparable"),
         }
     }
 }

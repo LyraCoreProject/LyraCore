@@ -197,7 +197,7 @@ fn fetcher(ctx: &ReducerContext, map_id: u32) -> impl FnMut(u16, u16) -> Option<
 /// (`config.rs`) and is a per-map operator opt-in once `importer --vmap` has actually populated
 /// the map's chunks — never flip the default without a wired import step.
 pub fn has_los(ctx: &ReducerContext, map_id: u32, a: (f32, f32, f32), b: (f32, f32, f32)) -> bool {
-    if crate::vmap::vmap_enabled(ctx) {
+    if crate::vmap::vmap_enabled(ctx, map_id) {
         return crate::vmap::los_ray(ctx, map_id, [a.0, a.1, a.2], [b.0, b.1, b.2]).is_none();
     }
     if !nav_enabled(ctx) {
@@ -276,7 +276,7 @@ fn collision_gate(
     stepped: (f32, f32),
     z: f32,
 ) -> (f32, f32) {
-    if stepped == cur || !crate::vmap::vmap_enabled(ctx) {
+    if stepped == cur || !crate::vmap::vmap_enabled(ctx, map_id) {
         return stepped;
     }
     let a = [cur.0, cur.1, z];

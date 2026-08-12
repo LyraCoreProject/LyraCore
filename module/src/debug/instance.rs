@@ -232,7 +232,7 @@ pub fn debug_vmap_ray(
     y1: f32,
     z1: f32,
 ) {
-    let enabled = crate::vmap::vmap_enabled(ctx);
+    let enabled = crate::vmap::vmap_enabled(ctx, map);
     let a = [x0, y0, z0];
     let b = [x1, y1, z1];
     let los = crate::vmap::los_ray(ctx, map, a, b);
@@ -248,7 +248,7 @@ pub fn debug_vmap_ray(
 /// the terrain underneath it). Analogue of `debug_nav_probe`.
 #[reducer]
 pub fn debug_floor_probe(ctx: &ReducerContext, map: u32, x: f32, y: f32, probe_z: f32) {
-    let enabled = crate::vmap::vmap_enabled(ctx);
+    let enabled = crate::vmap::vmap_enabled(ctx, map);
     let ground = crate::terrain::ground_z(ctx, map, x, y);
     let floor = crate::vmap::floor_z(ctx, map, x, y, probe_z);
     let snapped = crate::terrain::snap_z(ctx, map, x, y, probe_z);
@@ -264,7 +264,7 @@ pub fn debug_floor_probe(ctx: &ReducerContext, map: u32, x: f32, y: f32, probe_z
 /// group id, a point outside logs `indoor=None`/no group.
 #[reducer]
 pub fn debug_vmap_area_info(ctx: &ReducerContext, map: u32, x: f32, y: f32, z: f32) {
-    let enabled = crate::vmap::vmap_enabled(ctx);
+    let enabled = crate::vmap::vmap_enabled(ctx, map);
     let info = crate::vmap::area_info(ctx, map, x, y, z);
     log::info!(
         "vmap area-info ({x:.1},{y:.1},{z:.1}) map {map}: vmap_enabled={enabled} group_id={:?} indoor={:?}",
