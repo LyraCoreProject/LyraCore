@@ -35,8 +35,11 @@ pub const EXPIRY_DAYS: f32 = 30.0;
 pub const POSTAGE_COPPER: u32 = 30;
 
 /// What the post office charges to carry one letter. A function rather than a bare constant read
-/// at the call sites, because the item-attachment slice multiplies it and the call sites must not
-/// each learn that rule.
+/// at the call sites, so one place owns the rule.
+///
+/// Vanilla's formula is `30 * max(1, attachments)` and the wire carries at most ONE attachment, so
+/// a letter with an item costs the same 30 as a text-only one. The multiplier stays out of the
+/// signature until something can send more than one item.
 pub fn postage() -> u32 {
     POSTAGE_COPPER
 }
@@ -120,6 +123,20 @@ pub fn not_at_mailbox(mailbox_guid: u64) -> String {
 /// text-only letter. Refused rather than answered `Ok`, so "taking twice credits once" is a visible
 /// outcome instead of a silent one, and the row stays readable either way.
 pub const NOTHING_TO_TAKE: &str = "mail: nothing to take from that mail";
+
+/// The sender named an item instance that does not exist or is not theirs. Merged, like
+/// [`NOT_YOUR_MAIL`]: an item guid is client-supplied, and a refusal must not tell a crafted packet
+/// which guids are real.
+pub const NOT_YOUR_ITEM: &str = "mail: that item is not yours to send";
+
+/// The instance has bound to its owner. Vanilla refuses it at send with its own line, and the item
+/// stays in the sender's bags — an UNWORN bind-on-equip item is unbound and mails fine.
+pub const ITEM_IS_SOULBOUND: &str = "mail: soulbound items cannot be mailed";
+
+/// The item module's own full-bag refusal, verbatim (`items::ops`). Named here because the gateway
+/// maps exactly this text onto `ErrEquipError` — the variant that tells the player to make room —
+/// and a drift would silently become the generic internal error instead.
+pub const INVENTORY_FULL: &str = "inventory full";
 
 /// A mark-as-read or delete named a `mail_id` that either does not exist or is not the caller's —
 /// deliberately the SAME text for both, the way `letter_body`'s read already answers `None` for

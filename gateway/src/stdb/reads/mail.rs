@@ -31,6 +31,7 @@ impl Coordinator {
                 item_stack_count: m.item_stack_count,
                 item_durability: m.item_durability,
                 item_enchant_id: m.item_enchant_id,
+                item_soulbound: m.item_soulbound,
                 money: m.money,
                 cod: m.cod,
                 was_read: m.was_read,
@@ -68,6 +69,13 @@ impl Coordinator {
                 postage: e.postage,
                 payout: e.payout,
                 mail_id: e.mail_id,
+                item: crate::world::mail::AttachedItem {
+                    entry: e.item_entry,
+                    stack_count: e.item_stack_count,
+                    durability: e.item_durability,
+                    enchant_id: e.item_enchant_id,
+                    soulbound: e.item_soulbound,
+                },
             })
             .collect())
     }

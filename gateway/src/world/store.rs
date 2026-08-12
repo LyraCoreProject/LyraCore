@@ -819,6 +819,7 @@ pub trait WorldStore: Send + Sync {
     ///
     /// Every gate that decides who may write to whom has already run in `world::mail` — realm-core
     /// can answer none of them — so `sender_guid` must be the guid the socket authenticated.
+    #[allow(clippy::too_many_arguments)]
     fn mail_send(
         &self,
         sender_guid: u64,
@@ -826,12 +827,29 @@ pub trait WorldStore: Send + Sync {
         subject: String,
         body: String,
         money: u32,
+        item_guid: u64,
     ) -> Result<()>;
 
     /// Credit `mail_id`'s copper to `recipient_guid` and empty the row, in one transaction. The
     /// single-database twin of [`mail_send`](Self::mail_send), and refused for a mail that is not
     /// the caller's or has nothing left in it.
     fn mail_take_money(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
+
+    /// Re-create `mail_id`'s attached item in `recipient_guid`'s bags and empty the row's
+    /// attachment columns, in one transaction. [`mail_take_money`](Self::mail_take_money)'s twin,
+    /// and refused for a mail that is not the caller's, one with no attachment, or a full bag —
+    /// where the refusal rolls the clear back, so the item stays in the letter.
+    fn mail_take_item(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
+
+    /// Has `payee_guid` room in their bags here for one more item?
+    ///
+    /// Asked of the TAKER's own handle, before a sharded item take fences anything: the fence is a
+    /// one-way move, so a full bag found afterwards would strand the item in an escrow instead of
+    /// leaving it in the letter. `Err` is the refusal. Answers `Ok` by default, so a store that
+    /// models no bags does not block a take it has no opinion on.
+    fn mail_item_room(&self, _payee_guid: u64) -> Result<()> {
+        Ok(())
+    }
 
     /// **Escrow step 1 (send)** — take the postage plus the attached coin out of `sender_guid`'s
     /// purse into a fence keyed by the caller-chosen `escrow_id`, on the database THIS handle names.
@@ -848,12 +866,14 @@ pub trait WorldStore: Send + Sync {
         _body: String,
         _money: u32,
         _postage: u32,
+        _item_guid: u64,
     ) -> Result<()> {
         anyhow::bail!("mail_fence: this store models no escrow")
     }
 
     /// **Escrow step 2 (send)** — write the mail row and its receipt under `escrow_id`, on the
     /// database THIS handle names (realm-core). Idempotent: a replay writes nothing.
+    #[allow(clippy::too_many_arguments)]
     fn mail_commit(
         &self,
         _escrow_id: u64,
@@ -862,6 +882,7 @@ pub trait WorldStore: Send + Sync {
         _subject: String,
         _body: String,
         _money: u32,
+        _item: mail::AttachedItem,
     ) -> Result<()> {
         anyhow::bail!("mail_commit: this store models no escrow")
     }
@@ -889,6 +910,32 @@ pub trait WorldStore: Send + Sync {
         _amount: u32,
     ) -> Result<()> {
         anyhow::bail!("mail_payout: this store models no escrow")
+    }
+
+    /// **Escrow step 1 (item take)** — take `mail_id`'s attachment out of the row into a fence, on
+    /// the database that OWNS THE ROW. `expect_entry` is the item the caller is about to grant; a
+    /// mismatch is refused rather than fenced, because the gateway carries the snapshot across.
+    fn mail_take_item_fence(
+        &self,
+        _escrow_id: u64,
+        _payee_guid: u64,
+        _mail_id: u64,
+        _expect_entry: u32,
+    ) -> Result<()> {
+        anyhow::bail!("mail_take_item_fence: this store models no escrow")
+    }
+
+    /// **Escrow step 2 (item take)** — re-create the fenced item in `payee_guid`'s bags and file a
+    /// receipt under `escrow_id`, on the PAYEE's own handle. Idempotent: a replay grants nothing.
+    /// `Err` on a full bag, which leaves the fence holding the item for the next re-drive.
+    fn mail_item_payout(
+        &self,
+        _escrow_id: u64,
+        _payee_guid: u64,
+        _mail_id: u64,
+        _item: mail::AttachedItem,
+    ) -> Result<()> {
+        anyhow::bail!("mail_item_payout: this store models no escrow")
     }
 
     /// **Escrow step 3** — attest, on the handle HOLDING the fence, that the other database

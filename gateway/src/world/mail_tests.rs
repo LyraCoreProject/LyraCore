@@ -16,6 +16,8 @@ use super::*;
 const MAILBOX: u64 = 0xF110_0000_0000_0042;
 /// A gameobject guid the player is NOT standing at (another map, out of range, or not a mailbox).
 const FAR_MAILBOX: u64 = 0xF110_0000_0000_0099;
+/// The wire's "no item attached" — every letter in these fixtures unless it says otherwise.
+const NO_ITEM: u64 = 0;
 
 fn mail(id: u64, from: u64, subject: &str, body: &str) -> codec::MailView {
     codec::MailView {
@@ -801,6 +803,7 @@ fn post_money<St: WorldStore + ?Sized>(
         "Your sword".into(),
         "left it at the inn".into(),
         money,
+        NO_ITEM,
     )
 }
 
@@ -959,6 +962,7 @@ fn the_faction_gate_refuses_in_both_directions() {
         "Hail".into(),
         "".into(),
         0,
+        NO_ITEM,
     )
     .expect_err("a Horde sender cannot write to an Alliance recipient either");
     assert_eq!(refusal, mail::SendRefusal::NotYourTeam);
@@ -1027,6 +1031,7 @@ fn sending_is_refused_at_character_select_and_away_from_a_mailbox() {
         "Hi".into(),
         "".into(),
         0,
+        NO_ITEM,
     )
     .expect_err("character select drives no mailbox");
     assert!(
@@ -1042,6 +1047,7 @@ fn sending_is_refused_at_character_select_and_away_from_a_mailbox() {
         "Hi".into(),
         "".into(),
         0,
+        NO_ITEM,
     )
     .expect_err("a mailbox out of reach refuses");
     assert!(
@@ -1728,4 +1734,480 @@ fn taking_money_over_the_wire_acks_and_credits_the_purse() {
     server.join().unwrap();
     assert_eq!(store.purses.lock().unwrap()[0].1, PURSE + ATTACHED);
     assert_eq!(store.mails.lock().unwrap()[0].1.money, 0);
+}
+
+// =============================================================================================
+//  Item attachments
+// =============================================================================================
+//
+// Coin can be minted back; an item cannot, so every routing test below also asserts WHERE the item
+// is. `item_owners` counts the copies somebody could claim right now — bags plus mailbox — and it
+// must never exceed one, however the drive is interrupted.
+
+/// Ginger's item instance guid, as the client names it in `CMSG_SEND_MAIL`.
+const SWORD_GUID: u64 = 0x4000_0000_0000_0011;
+
+/// A DAMAGED, ENCHANTED weapon — every column mailing must not launder, set to something a
+/// template-based re-grant would get wrong. Reserved entry, per the fixture-id rule.
+fn sword() -> mail::AttachedItem {
+    mail::AttachedItem {
+        entry: 5_090_001,
+        stack_count: 1,
+        durability: 42,
+        enchant_id: 7,
+        soulbound: false,
+    }
+}
+
+/// Put `item` in `owner`'s bags on `shard`, as `game_item_instance` would.
+fn give_item(shard: &InMemoryStore, owner: u64, guid: u64, item: mail::AttachedItem) {
+    shard.mail_items.lock().unwrap().push((guid, owner, item));
+}
+
+/// The attachments anyone could claim right now: in bags on either shard, or sitting in a mailbox.
+/// A fenced item is deliberately not counted — it is in nobody's reach, which is the point.
+fn claimable_swords(shards: &[&InMemoryStore], realm: &InMemoryStore) -> usize {
+    let in_bags: usize = shards
+        .iter()
+        .map(|s| s.mail_items.lock().unwrap().len())
+        .sum();
+    let in_mail = realm
+        .mails
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, m)| m.item_entry != 0)
+        .count();
+    in_bags + in_mail
+}
+
+/// Post the fixture letter with the sword attached.
+fn post_item<St: WorldStore + ?Sized>(
+    store: &St,
+    to: &str,
+) -> std::result::Result<(), mail::SendRefusal> {
+    mail::send(
+        store,
+        Some(GINGER),
+        MAILBOX,
+        to,
+        "Your sword".into(),
+        "left it at the inn".into(),
+        0,
+        SWORD_GUID,
+    )
+}
+
+/// **AC: an attached item leaves the sender's bags at send and appears in the recipient's list with
+/// its stack, durability and enchant.** Every column is asserted, because the one that silently
+/// resets is a free repair or a laundered enchant.
+#[test]
+fn a_mailed_item_leaves_the_senders_bags_and_lists_with_its_state_intact() {
+    let (realm, world, _instances, _calls) = sharded_send();
+    give_item(&world, GINGER, SWORD_GUID, sword());
+
+    post_item(world.as_ref(), "Trin").expect("Trin is a Human on the same shard");
+
+    assert!(
+        world.bags_of(GINGER).is_empty(),
+        "the item leaves the bags at SEND — otherwise a send-and-logout duplicates it"
+    );
+    let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+    assert_eq!(trins.len(), 1);
+    assert_eq!(trins[0].item_entry, sword().entry);
+    assert_eq!(trins[0].item_stack_count, sword().stack_count);
+    assert_eq!(
+        trins[0].item_durability,
+        sword().durability,
+        "a damaged item must not arrive repaired"
+    );
+    assert_eq!(
+        trins[0].item_enchant_id,
+        sword().enchant_id,
+        "an enchanted item must not arrive stripped"
+    );
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+}
+
+/// **AC: both planes deliver the same attachment, through one shared core.** Same letter, same
+/// item; the only difference is whether a realm handle exists.
+#[test]
+fn the_realm_plane_and_the_single_database_fallback_deliver_the_same_attachment() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+    let single = unsharded_send();
+    give_item(&world, GINGER, SWORD_GUID, sword());
+    give_item(&single, GINGER, SWORD_GUID, sword());
+
+    post_item(world.as_ref(), "Trin").expect("realm plane");
+    post_item(single.as_ref(), "Trin").expect("fallback");
+
+    let sharded = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap();
+    let unsharded = mail::open_mailbox(single.as_ref(), Some(TRIN), MAILBOX).unwrap();
+    assert_eq!(sharded, unsharded, "the two planes must deliver one letter");
+    assert!(single.bags_of(GINGER).is_empty());
+}
+
+/// **AC: a soulbound instance is refused at send, with its own client error, and stays in the
+/// bags.** Its own variant because "soulbound" and "not yours" are different mistakes.
+#[test]
+fn a_soulbound_attachment_is_refused_at_send_and_stays_in_the_senders_bags() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+    give_item(
+        &world,
+        GINGER,
+        SWORD_GUID,
+        mail::AttachedItem {
+            soulbound: true,
+            ..sword()
+        },
+    );
+
+    let refusal = post_item(world.as_ref(), "Trin").expect_err("a bound item is not mailable");
+
+    assert!(matches!(refusal, mail::SendRefusal::AttachmentSoulbound(_)));
+    assert_eq!(world.bags_of(GINGER).len(), 1, "still theirs");
+    assert_eq!(
+        world.purses.lock().unwrap()[0].1,
+        PURSE,
+        "and a refused send costs nothing"
+    );
+    assert!(world.mail_escrows.lock().unwrap().is_empty());
+}
+
+/// **AC: an unworn bind-on-equip item is mailable.** The verdict reads the INSTANCE's bind state,
+/// so the unworn drop a player passes to an alt goes through.
+#[test]
+fn an_unworn_bind_on_equip_attachment_is_mailable() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+    give_item(&world, GINGER, SWORD_GUID, sword());
+
+    post_item(world.as_ref(), "Trin").expect("an unbound instance mails");
+
+    let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap();
+    assert!(!trins[0].item_soulbound, "it arrives as unbound as it left");
+}
+
+/// **AC: attaching an item the sender does not own is refused.** The item guid is client-supplied,
+/// so this is the authorization boundary on a send — and a guid that names nothing reads the same.
+#[test]
+fn attaching_an_item_the_sender_does_not_own_is_refused() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+    give_item(&world, TRIN, SWORD_GUID, sword());
+
+    let refusal = post_item(world.as_ref(), "Trin").expect_err("it is not Ginger's");
+    assert!(matches!(refusal, mail::SendRefusal::AttachmentInvalid(_)));
+
+    world.mail_items.lock().unwrap().clear();
+    let refusal = post_item(world.as_ref(), "Trin").expect_err("and nothing answers to that guid");
+    assert!(matches!(refusal, mail::SendRefusal::AttachmentInvalid(_)));
+    assert!(world.mail_escrows.lock().unwrap().is_empty());
+}
+
+/// **A fenced item is reachable by nothing.** Its instance row is gone, so a second letter's
+/// attach finds no item — and every other path that reads a player's items resolves through that
+/// same table, which is why nothing else had to learn an in-flight rule.
+#[test]
+fn an_item_in_flight_cannot_be_attached_to_a_second_letter() {
+    let (realm, world, _instances, _calls) = sharded_send();
+    give_item(&world, GINGER, SWORD_GUID, sword());
+    *realm.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
+    post_item(world.as_ref(), "Trin").expect_err("realm-core never answered");
+    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "held");
+
+    let refusal =
+        post_item(world.as_ref(), "Trin").expect_err("it is in flight, so it is nobody's");
+
+    assert!(matches!(refusal, mail::SendRefusal::AttachmentInvalid(_)));
+    assert_eq!(
+        claimable_swords(&[&world], &realm),
+        0,
+        "in flight is claimable by nobody"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+//  Taking it back out
+// ---------------------------------------------------------------------------------------------
+
+/// A letter with the sword, delivered to Trin. Returns the topology plus the mail id.
+fn delivered_item() -> (
+    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<InMemoryStore>,
+    ShardCallLog,
+    u64,
+) {
+    let (realm, world, _instances, calls) = sharded_send();
+    give_item(&world, GINGER, SWORD_GUID, sword());
+    post_item(world.as_ref(), "Trin").expect("posted");
+    let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
+    calls.lock().unwrap().clear();
+    (realm, world, calls, mail_id)
+}
+
+/// **AC: `CMSG_MAIL_TAKE_ITEM` places it in the recipient's bags with stack, durability, enchant
+/// and bind state unchanged** — and the letter survives with nothing in it.
+#[test]
+fn taking_an_item_puts_it_in_the_takers_bags_with_its_state_unchanged() {
+    let (realm, world, _calls, mail_id) = delivered_item();
+
+    let taken =
+        mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("the take completes");
+
+    assert_eq!(
+        taken,
+        (sword().entry, sword().stack_count),
+        "the wire's success arm names what the client just gained"
+    );
+    assert_eq!(world.bags_of(TRIN), vec![sword()]);
+    let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap();
+    assert_eq!(
+        trins.len(),
+        1,
+        "a mail emptied of its item is still a letter"
+    );
+    assert_eq!(trins[0].item_entry, 0);
+    assert!(realm.mail_escrows.lock().unwrap().is_empty(), "settled");
+}
+
+/// **The sharded take drives the same four steps the other way**, and probes the taker's own shard
+/// for room BEFORE it fences: past the fence the letter is empty, so a full bag found afterwards
+/// would strand the item in an escrow rather than leave it in the mail.
+#[test]
+fn a_sharded_item_take_probes_for_room_before_it_fences_anything() {
+    let (_realm, world, calls, mail_id) = delivered_item();
+
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("taken");
+
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, what)| what.starts_with("mail_item")
+                || what.starts_with("mail_take_item")
+                || what == "mail_confirm_delivery"
+                || what == "mail_settle")
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![
+            ("world".into(), "mail_item_room".into()),
+            ("lyracore-realm".into(), "mail_take_item_fence".into()),
+            ("world".into(), "mail_item_payout".into()),
+            ("lyracore-realm".into(), "mail_confirm_delivery".into()),
+            ("lyracore-realm".into(), "mail_settle".into()),
+        ]
+    );
+}
+
+/// **AC: a take into a full bag is refused with the equip-error variant and the item STAYS in the
+/// mail.** The case where a naive implementation destroys it — asserted on BOTH planes, because
+/// they reach the refusal by different routes (one transaction versus the pre-fence probe).
+#[test]
+fn a_take_into_a_full_bag_is_refused_and_the_item_stays_in_the_mail() {
+    let (realm, world, _calls, mail_id) = delivered_item();
+    world
+        .bags_full
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let refusal = mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
+        .expect_err("there is nowhere to put it");
+
+    assert!(
+        matches!(refusal, mail::TakeItemRefusal::BagsFull(_)),
+        "the client is told to make room, not handed a generic error: {refusal}"
+    );
+    assert!(world.bags_of(TRIN).is_empty());
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].item_entry,
+        sword().entry,
+        "the item is still in the letter — nothing was fenced"
+    );
+    assert!(realm.mail_escrows.lock().unwrap().is_empty());
+
+    world
+        .bags_full
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("once there is room");
+    assert_eq!(world.bags_of(TRIN), vec![sword()]);
+}
+
+/// The single-database plane reaches the same refusal through its ONE transaction: the grant fails,
+/// so the clear never happens and the item is still in the letter.
+#[test]
+fn a_take_into_a_full_bag_on_one_database_leaves_the_item_in_the_mail() {
+    let single = unsharded_send();
+    give_item(&single, GINGER, SWORD_GUID, sword());
+    post_item(single.as_ref(), "Trin").expect("posted");
+    let mail_id = mail::open_mailbox(single.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
+    single
+        .bags_full
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let refusal = mail::take_item(single.as_ref(), Some(TRIN), MAILBOX, mail_id)
+        .expect_err("there is nowhere to put it");
+
+    assert!(matches!(refusal, mail::TakeItemRefusal::BagsFull(_)));
+    assert_eq!(
+        mail::open_mailbox(single.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].item_entry,
+        sword().entry
+    );
+    assert!(single.bags_of(TRIN).is_empty());
+}
+
+/// **AC: taking is refused for anyone who is not the mail's recipient.** The mail id is
+/// client-supplied, so this is an authorization boundary — and it reads the same as a mail that
+/// does not exist, so a crafted id learns nothing.
+#[test]
+fn taking_an_item_from_a_mail_the_caller_is_not_the_recipient_of_is_refused() {
+    let (realm, world, _calls, mail_id) = delivered_item();
+
+    for (who, why) in [(GINGER, "the sender cannot take it back"), (TRIN, "sanity")] {
+        let outcome = mail::take_item(world.as_ref(), Some(who), MAILBOX, mail_id);
+        if who == GINGER {
+            let refusal = outcome.expect_err(why);
+            assert!(matches!(refusal, mail::TakeItemRefusal::Other(_)));
+            assert!(
+                world.bags_of(GINGER).is_empty(),
+                "and it is not in their bags"
+            );
+        } else {
+            outcome.expect(why);
+        }
+    }
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+}
+
+/// Taking twice grants once: the fence and the clear are one transaction, so the second click
+/// finds a letter with nothing in it.
+#[test]
+fn taking_the_same_item_twice_grants_it_once() {
+    let (realm, world, _calls, mail_id) = delivered_item();
+
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("taken");
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
+        .expect_err("there is nothing left in it");
+
+    assert_eq!(world.bags_of(TRIN), vec![sword()]);
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+//  Interruption — executed at every step, both directions
+// ---------------------------------------------------------------------------------------------
+
+/// **A send killed before the commit.** The item has left the bags and no letter exists, so it is
+/// held in the fence — never returned, because the shard cannot ask realm-core whether the letter
+/// arrived. The next mailbox visit rolls it forward.
+#[test]
+fn an_item_send_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit() {
+    let (realm, world, _instances, _calls) = sharded_send();
+    give_item(&world, GINGER, SWORD_GUID, sword());
+    *realm.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
+
+    post_item(world.as_ref(), "Trin").expect_err("realm-core never answered the commit");
+    assert!(world.bags_of(GINGER).is_empty());
+    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "held");
+    assert_eq!(claimable_swords(&[&world], &realm), 0);
+
+    *realm.mail_kill_at.lock().unwrap() = None;
+    mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+
+    let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap();
+    assert_eq!(trins.len(), 1, "the letter finally landed — exactly once");
+    assert_eq!(trins[0].item_durability, sword().durability);
+    assert!(world.mail_escrows.lock().unwrap().is_empty(), "and settled");
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+}
+
+/// **A send killed after the commit.** The letter is durable and the fence still stands; the
+/// re-drive's commit replays into its receipt, so the item arrives once and not twice.
+#[test]
+fn an_item_send_killed_after_the_commit_re_drives_into_one_item() {
+    let (realm, world, _instances, _calls) = sharded_send();
+    give_item(&world, GINGER, SWORD_GUID, sword());
+    *world.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
+
+    post_item(world.as_ref(), "Trin").expect_err("the attestation never landed");
+    assert_eq!(
+        claimable_swords(&[&world], &realm),
+        1,
+        "in the mailbox only"
+    );
+    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "still fenced");
+
+    *world.mail_kill_at.lock().unwrap() = None;
+    mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX)
+            .unwrap()
+            .len(),
+        1,
+        "one letter — the replayed commit found its receipt"
+    );
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+    assert!(world.mail_escrows.lock().unwrap().is_empty());
+}
+
+/// **A send killed after the attestation.** The fence is attested, so even the re-drive's settle is
+/// all that is left to do — and the item is in the mailbox exactly once throughout.
+#[test]
+fn an_item_send_killed_after_the_attestation_settles_on_the_next_visit() {
+    let (realm, world, _instances, _calls) = sharded_send();
+    give_item(&world, GINGER, SWORD_GUID, sword());
+    *world.mail_kill_at.lock().unwrap() = Some("mail_settle".into());
+
+    post_item(world.as_ref(), "Trin").expect_err("the settle never landed");
+    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1);
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+
+    *world.mail_kill_at.lock().unwrap() = None;
+    mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+
+    assert!(world.mail_escrows.lock().unwrap().is_empty(), "settled");
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+}
+
+/// **A take killed before the payout.** The item is out of the letter and held on realm-core; the
+/// next mailbox visit grants it into the bags, once.
+#[test]
+fn an_item_take_killed_before_the_payout_is_re_driven_at_the_next_mailbox_visit() {
+    let (realm, world, _calls, mail_id) = delivered_item();
+    *world.mail_kill_at.lock().unwrap() = Some("mail_item_payout".into());
+
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
+        .expect_err("the bags were never granted");
+    assert!(world.bags_of(TRIN).is_empty());
+    assert_eq!(claimable_swords(&[&world], &realm), 0, "held, not lost");
+    assert_eq!(realm.mail_escrows.lock().unwrap().len(), 1);
+
+    *world.mail_kill_at.lock().unwrap() = None;
+    mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+
+    assert_eq!(world.bags_of(TRIN), vec![sword()], "granted, once");
+    assert!(realm.mail_escrows.lock().unwrap().is_empty(), "and settled");
+}
+
+/// **A take killed after the payout.** The bags hold it and the fence still stands; the re-drive's
+/// payout replays into its receipt, so the item is created once and not twice.
+#[test]
+fn an_item_take_killed_after_the_payout_re_drives_into_one_item() {
+    let (realm, world, _calls, mail_id) = delivered_item();
+    *realm.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
+
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
+        .expect_err("the attestation never landed");
+    assert_eq!(world.bags_of(TRIN), vec![sword()]);
+    assert_eq!(realm.mail_escrows.lock().unwrap().len(), 1, "still fenced");
+
+    *realm.mail_kill_at.lock().unwrap() = None;
+    mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+
+    assert_eq!(
+        world.bags_of(TRIN),
+        vec![sword()],
+        "granted once, not twice"
+    );
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+    assert!(realm.mail_escrows.lock().unwrap().is_empty());
 }

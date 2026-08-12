@@ -6,13 +6,10 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct RealmMailCommitArgs {
+pub(super) struct RealmMailItemPayoutArgs {
     pub escrow_id: u64,
-    pub sender_guid: u64,
-    pub recipient_guid: u64,
-    pub subject: String,
-    pub body: String,
-    pub money: u32,
+    pub payee_guid: u64,
+    pub mail_id: u64,
     pub item_entry: u32,
     pub item_stack_count: u32,
     pub item_durability: u32,
@@ -20,15 +17,12 @@ pub(super) struct RealmMailCommitArgs {
     pub item_soulbound: bool,
 }
 
-impl From<RealmMailCommitArgs> for super::Reducer {
-    fn from(args: RealmMailCommitArgs) -> Self {
-        Self::RealmMailCommit {
+impl From<RealmMailItemPayoutArgs> for super::Reducer {
+    fn from(args: RealmMailItemPayoutArgs) -> Self {
+        Self::RealmMailItemPayout {
             escrow_id: args.escrow_id,
-            sender_guid: args.sender_guid,
-            recipient_guid: args.recipient_guid,
-            subject: args.subject,
-            body: args.body,
-            money: args.money,
+            payee_guid: args.payee_guid,
+            mail_id: args.mail_id,
             item_entry: args.item_entry,
             item_stack_count: args.item_stack_count,
             item_durability: args.item_durability,
@@ -38,42 +32,36 @@ impl From<RealmMailCommitArgs> for super::Reducer {
     }
 }
 
-impl __sdk::InModule for RealmMailCommitArgs {
+impl __sdk::InModule for RealmMailItemPayoutArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `realm_mail_commit`.
+/// Extension trait for access to the reducer `realm_mail_item_payout`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait realm_mail_commit {
-    /// Request that the remote module invoke the reducer `realm_mail_commit` to run as soon as possible.
+pub trait realm_mail_item_payout {
+    /// Request that the remote module invoke the reducer `realm_mail_item_payout` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`realm_mail_commit:realm_mail_commit_then`] to run a callback after the reducer completes.
-    fn realm_mail_commit(
+    /// /// Use [`realm_mail_item_payout:realm_mail_item_payout_then`] to run a callback after the reducer completes.
+    fn realm_mail_item_payout(
         &self,
         escrow_id: u64,
-        sender_guid: u64,
-        recipient_guid: u64,
-        subject: String,
-        body: String,
-        money: u32,
+        payee_guid: u64,
+        mail_id: u64,
         item_entry: u32,
         item_stack_count: u32,
         item_durability: u32,
         item_enchant_id: u32,
         item_soulbound: bool,
     ) -> __sdk::Result<()> {
-        self.realm_mail_commit_then(
+        self.realm_mail_item_payout_then(
             escrow_id,
-            sender_guid,
-            recipient_guid,
-            subject,
-            body,
-            money,
+            payee_guid,
+            mail_id,
             item_entry,
             item_stack_count,
             item_durability,
@@ -83,20 +71,17 @@ pub trait realm_mail_commit {
         )
     }
 
-    /// Request that the remote module invoke the reducer `realm_mail_commit` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `realm_mail_item_payout` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn realm_mail_commit_then(
+    fn realm_mail_item_payout_then(
         &self,
         escrow_id: u64,
-        sender_guid: u64,
-        recipient_guid: u64,
-        subject: String,
-        body: String,
-        money: u32,
+        payee_guid: u64,
+        mail_id: u64,
         item_entry: u32,
         item_stack_count: u32,
         item_durability: u32,
@@ -109,15 +94,12 @@ pub trait realm_mail_commit {
     ) -> __sdk::Result<()>;
 }
 
-impl realm_mail_commit for super::RemoteReducers {
-    fn realm_mail_commit_then(
+impl realm_mail_item_payout for super::RemoteReducers {
+    fn realm_mail_item_payout_then(
         &self,
         escrow_id: u64,
-        sender_guid: u64,
-        recipient_guid: u64,
-        subject: String,
-        body: String,
-        money: u32,
+        payee_guid: u64,
+        mail_id: u64,
         item_entry: u32,
         item_stack_count: u32,
         item_durability: u32,
@@ -129,13 +111,10 @@ impl realm_mail_commit for super::RemoteReducers {
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            RealmMailCommitArgs {
+            RealmMailItemPayoutArgs {
                 escrow_id,
-                sender_guid,
-                recipient_guid,
-                subject,
-                body,
-                money,
+                payee_guid,
+                mail_id,
                 item_entry,
                 item_stack_count,
                 item_durability,

@@ -1556,6 +1556,7 @@ impl Coordinator {
     ///
     /// **The single-database plane only.** A sharded realm cannot have that one transaction and
     /// drives the escrow below instead.
+    #[allow(clippy::too_many_arguments)]
     pub fn mail_send(
         &self,
         sender_guid: u64,
@@ -1563,11 +1564,12 @@ impl Coordinator {
         subject: String,
         body: String,
         money: u32,
+        item_guid: u64,
     ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_send",
-            realm_mail_send_then(sender_guid, recipient_guid, subject, body, money)
+            realm_mail_send_then(sender_guid, recipient_guid, subject, body, money, item_guid)
         )
     }
 
@@ -1578,6 +1580,27 @@ impl Coordinator {
             self.0.call_pipe().conn.reducers,
             "realm_mail_take_money",
             realm_mail_take_money_then(recipient_guid, mail_id)
+        )
+    }
+
+    /// `realm_mail_take_item` — re-create a mail's attachment in the recipient's bags and empty the
+    /// row, in one transaction. The single-database plane's whole item take.
+    pub fn mail_take_item(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_take_item",
+            realm_mail_take_item_then(recipient_guid, mail_id)
+        )
+    }
+
+    /// `realm_mail_item_room` — the bag-space probe a sharded item take runs BEFORE it fences, on
+    /// the taker's own handle. A read dressed as a reducer, because only the module can answer it
+    /// without a second copy of the bag search.
+    pub fn mail_item_room(&self, payee_guid: u64) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_item_room",
+            realm_mail_item_room_then(payee_guid)
         )
     }
 
@@ -1593,6 +1616,7 @@ impl Coordinator {
         body: String,
         money: u32,
         postage: u32,
+        item_guid: u64,
     ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -1604,13 +1628,15 @@ impl Coordinator {
                 subject,
                 body,
                 money,
-                postage
+                postage,
+                item_guid
             )
         )
     }
 
     /// `realm_mail_commit` — step 2 of a sharded send, on the REALM handle: the mail row plus a
     /// receipt under the same `escrow_id`, so a replay writes one letter and not two.
+    #[allow(clippy::too_many_arguments)]
     pub fn mail_commit(
         &self,
         escrow_id: u64,
@@ -1619,11 +1645,24 @@ impl Coordinator {
         subject: String,
         body: String,
         money: u32,
+        item: crate::world::mail::AttachedItem,
     ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_commit",
-            realm_mail_commit_then(escrow_id, sender_guid, recipient_guid, subject, body, money)
+            realm_mail_commit_then(
+                escrow_id,
+                sender_guid,
+                recipient_guid,
+                subject,
+                body,
+                money,
+                item.entry,
+                item.stack_count,
+                item.durability,
+                item.enchant_id,
+                item.soulbound
+            )
         )
     }
 
@@ -1656,6 +1695,47 @@ impl Coordinator {
             self.0.call_pipe().conn.reducers,
             "realm_mail_payout",
             realm_mail_payout_then(escrow_id, payee_guid, mail_id, amount)
+        )
+    }
+
+    /// `realm_mail_take_item_fence` — step 1 of a sharded ITEM take, on the handle that OWNS THE
+    /// MAIL ROW: the attachment leaves the row into an escrow there.
+    pub fn mail_take_item_fence(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        expect_entry: u32,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_take_item_fence",
+            realm_mail_take_item_fence_then(escrow_id, payee_guid, mail_id, expect_entry)
+        )
+    }
+
+    /// `realm_mail_item_payout` — step 2 of a sharded item take, on the TAKER's own handle: the
+    /// item plus a receipt under the same `escrow_id`. `mail_payout`'s twin.
+    pub fn mail_item_payout(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        item: crate::world::mail::AttachedItem,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_item_payout",
+            realm_mail_item_payout_then(
+                escrow_id,
+                payee_guid,
+                mail_id,
+                item.entry,
+                item.stack_count,
+                item.durability,
+                item.enchant_id,
+                item.soulbound
+            )
         )
     }
 

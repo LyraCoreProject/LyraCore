@@ -14,6 +14,7 @@ pub(super) struct RealmMailFenceArgs {
     pub body: String,
     pub money: u32,
     pub postage: u32,
+    pub item_guid: u64,
 }
 
 impl From<RealmMailFenceArgs> for super::Reducer {
@@ -26,6 +27,7 @@ impl From<RealmMailFenceArgs> for super::Reducer {
             body: args.body,
             money: args.money,
             postage: args.postage,
+            item_guid: args.item_guid,
         }
     }
 }
@@ -54,6 +56,7 @@ pub trait realm_mail_fence {
         body: String,
         money: u32,
         postage: u32,
+        item_guid: u64,
     ) -> __sdk::Result<()> {
         self.realm_mail_fence_then(
             escrow_id,
@@ -63,6 +66,7 @@ pub trait realm_mail_fence {
             body,
             money,
             postage,
+            item_guid,
             |_, _| {},
         )
     }
@@ -82,6 +86,7 @@ pub trait realm_mail_fence {
         body: String,
         money: u32,
         postage: u32,
+        item_guid: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -99,6 +104,7 @@ impl realm_mail_fence for super::RemoteReducers {
         body: String,
         money: u32,
         postage: u32,
+        item_guid: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -113,6 +119,7 @@ impl realm_mail_fence for super::RemoteReducers {
                 body,
                 money,
                 postage,
+                item_guid,
             },
             callback,
         )

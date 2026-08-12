@@ -29,6 +29,7 @@
 //! test below asserts on the ROW that licenses the next step, never on "nothing was written".
 
 use super::*;
+use crate::mail::ItemSnapshot;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
@@ -52,6 +53,7 @@ struct XEscrow {
     delivered: bool,
     payout: bool,
     mail_id: u64,
+    item: ItemSnapshot,
 }
 
 /// `game_mail_escrow` on ONE database. Its own struct because both fakes hold one: a letter fences
@@ -72,6 +74,15 @@ impl FakeLedger {
             .values()
             .map(|e| e.money.saturating_add(e.postage))
             .sum()
+    }
+    /// How many fences here are holding an item — the item's answer to `fenced_copper`, and the
+    /// term the "never in zero places" assertion needs for an attachment.
+    fn fenced_items(&self) -> usize {
+        self.escrows
+            .borrow()
+            .values()
+            .filter(|e| !e.item.is_empty())
+            .count()
     }
     fn has_fence(&self, escrow_id: u64) -> bool {
         self.escrows.borrow().contains_key(&escrow_id)
@@ -95,9 +106,15 @@ impl EscrowLedger for FakeLedger {
             delivered: e.delivered,
             payout: e.payout,
             mail_id: e.mail_id,
+            item_entry: e.item.entry,
+            item_stack_count: e.item.stack_count,
+            item_durability: e.item.durability,
+            item_enchant_id: e.item.enchant_id,
+            item_soulbound: e.item.soulbound,
         })
     }
     fn file_escrow(&mut self, row: MailEscrow) {
+        let item = row.item();
         self.escrows.borrow_mut().insert(
             row.escrow_id,
             XEscrow {
@@ -111,6 +128,7 @@ impl EscrowLedger for FakeLedger {
                 delivered: row.delivered,
                 payout: row.payout,
                 mail_id: row.mail_id,
+                item,
             },
         );
     }
@@ -155,6 +173,15 @@ pub struct FakeShard {
     /// Payout receipts: `escrow_id -> (mail_id, payee)`. The take direction's idempotency key, and
     /// it lives HERE because this is where the purse it protects is.
     receipts: RefCell<HashMap<u64, (u64, u64)>>,
+    /// `game_item_instance` here: `guid -> (owner, state)`. Deleting from this map is what the
+    /// fence does, and it is the whole "a fenced item is reachable by nothing" property — every
+    /// other item path in the module resolves a guid through this same table.
+    items: RefCell<HashMap<u64, (u64, ItemSnapshot)>>,
+    /// The bags have no room. `false` (the default) is the ordinary case; a test flips it to walk
+    /// the full-bag refusal, which is where a naive take destroys the item.
+    bags_full: Cell<bool>,
+    /// Mints a guid for an item this shard creates, standing in for `items::next_item_guid`.
+    next_item_guid: Cell<u64>,
     ledger: FakeLedger,
 }
 
@@ -167,8 +194,27 @@ impl FakeShard {
     fn purse_of(&self, guid: u64) -> u32 {
         self.purses.borrow().get(&guid).copied().unwrap_or(0)
     }
+    /// Every item `owner` holds here, as its snapshot state. The assertion surface for "it left the
+    /// bags", "it arrived unchanged" and "it never arrived twice".
+    fn bags_of(&self, owner: u64) -> Vec<ItemSnapshot> {
+        let mut held: Vec<ItemSnapshot> = self
+            .items
+            .borrow()
+            .values()
+            .filter(|(o, _)| *o == owner)
+            .map(|(_, i)| i.clone())
+            .collect();
+        held.sort_by_key(|i| i.entry);
+        held
+    }
+    fn give_item(&self, owner: u64, guid: u64, item: ItemSnapshot) {
+        self.items.borrow_mut().insert(guid, (owner, item));
+    }
     fn fenced_copper(&self) -> u32 {
         self.ledger.fenced_copper()
+    }
+    fn fenced_items(&self) -> usize {
+        self.ledger.fenced_items()
     }
     fn has_fence(&self, escrow_id: u64) -> bool {
         self.ledger.has_fence(escrow_id)
@@ -208,6 +254,27 @@ impl FenceSink for FakeShard {
             *p = p.saturating_sub(amount);
         }
     }
+    /// The production shim calls `mail::detach_item`, which reads the same
+    /// [`crate::mail::plan_attach`] verdict this does and then DELETES the row. The delete is
+    /// modelled faithfully because it is the property under test.
+    fn detach_item(&mut self, sender_guid: u64, item_guid: u64) -> Result<ItemSnapshot, String> {
+        let owned = self
+            .items
+            .borrow()
+            .get(&item_guid)
+            .map(|(o, i)| (*o, i.soulbound));
+        match crate::mail::plan_attach(item_guid, owned, sender_guid) {
+            crate::mail::Attach::Nothing => return Ok(ItemSnapshot::default()),
+            crate::mail::Attach::NotYours => {
+                return Err(lyracore_shared::mail::NOT_YOUR_ITEM.to_string())
+            }
+            crate::mail::Attach::Soulbound => {
+                return Err(lyracore_shared::mail::ITEM_IS_SOULBOUND.to_string())
+            }
+            crate::mail::Attach::Detach => {}
+        }
+        Ok(self.items.borrow_mut().remove(&item_guid).expect("owned").1)
+    }
 }
 
 impl PayoutSink for FakeShard {
@@ -231,6 +298,22 @@ impl PayoutSink for FakeShard {
             // No live entity here — the module's own answer for character select and mid-hop.
             None => false,
         }
+    }
+    /// `items::store_instance_state`'s shape: one new row carrying the recorded state, or the
+    /// item module's own full-bag refusal.
+    fn grant_item(&mut self, payee_guid: u64, item: &ItemSnapshot) -> Result<(), String> {
+        if !self.purses.borrow().contains_key(&payee_guid) {
+            return Err(lyracore_shared::mail::NOT_IN_WORLD.to_string());
+        }
+        if self.bags_full.get() {
+            return Err(lyracore_shared::mail::INVENTORY_FULL.to_string());
+        }
+        let guid = self.next_item_guid.get() + 1;
+        self.next_item_guid.set(guid);
+        self.items
+            .borrow_mut()
+            .insert(guid, (payee_guid, item.clone()));
+        Ok(())
     }
     fn file_receipt(&mut self, row: MailDelivery) {
         self.receipts
@@ -261,6 +344,7 @@ struct XMail {
     subject: String,
     body: String,
     money: u32,
+    item: ItemSnapshot,
 }
 
 /// realm-core: the authoritative mail rows, the delivery receipts that make a commit idempotent,
@@ -289,8 +373,20 @@ impl FakeMailPlane {
             .map(|m| m.money)
             .sum()
     }
+    /// The attachments sitting in this mailbox — the term "the item is still in the letter" is
+    /// asserted through.
+    fn items_in_mailbox(&self, recipient_guid: u64) -> Vec<ItemSnapshot> {
+        self.mailbox_of(recipient_guid)
+            .into_iter()
+            .map(|m| m.item)
+            .filter(|i| !i.is_empty())
+            .collect()
+    }
     fn fenced_copper(&self) -> u32 {
         self.ledger.fenced_copper()
+    }
+    fn fenced_items(&self) -> usize {
+        self.ledger.fenced_items()
     }
     fn has_fence(&self, escrow_id: u64) -> bool {
         self.ledger.has_fence(escrow_id)
@@ -340,6 +436,18 @@ impl TakeFenceSink for FakeMailPlane {
             m.money = 0;
         }
     }
+    fn mail_item(&self, mail_id: u64) -> Option<(u64, ItemSnapshot)> {
+        self.mails
+            .borrow()
+            .iter()
+            .find(|m| m.id == mail_id)
+            .map(|m| (m.recipient_guid, m.item.clone()))
+    }
+    fn clear_mail_item(&mut self, mail_id: u64) {
+        if let Some(m) = self.mails.borrow_mut().iter_mut().find(|m| m.id == mail_id) {
+            m.item = ItemSnapshot::default();
+        }
+    }
 }
 
 impl DeliverySink for FakeMailPlane {
@@ -354,7 +462,7 @@ impl DeliverySink for FakeMailPlane {
                 created_micros: 0,
             })
     }
-    fn deliver(&mut self, sender_guid: u64, letter: &Letter) -> u64 {
+    fn deliver(&mut self, sender_guid: u64, letter: &Letter, item: &ItemSnapshot) -> u64 {
         // The real sink calls `mail::insert_mail`, whose `id` is `auto_inc`; the fake mints the
         // same way, so a second delivery is a second ROW rather than an overwrite — which is what
         // makes a duplicated letter visible here at all.
@@ -367,6 +475,7 @@ impl DeliverySink for FakeMailPlane {
             subject: letter.subject.clone(),
             body: letter.body.clone(),
             money: letter.money,
+            item: item.clone(),
         });
         id
     }
@@ -392,6 +501,22 @@ const MONEY: u32 = 100;
 const POSTAGE: u32 = 30;
 /// What leaves the purse for this fixture's letter.
 const COST: u32 = MONEY + POSTAGE;
+/// The sender's item instance guid, and the "no attachment" sentinel the wire sends for a letter
+/// that carries none.
+const ITEM_GUID: u64 = 0x4000_0000_0000_0011;
+const NO_ITEM: u64 = 0;
+
+/// A DAMAGED, ENCHANTED weapon — every column mailing must not launder, set to something a
+/// template-based re-grant would get wrong. Reserved entry, per the fixture-id rule.
+fn sword() -> ItemSnapshot {
+    ItemSnapshot {
+        entry: 5_090_001,
+        stack_count: 1,
+        durability: 42,
+        enchant_id: 7,
+        soulbound: false,
+    }
+}
 
 fn letter() -> Letter {
     Letter {
@@ -421,29 +546,42 @@ fn drive(
     shard: &mut FakeShard,
     plane: &mut FakeMailPlane,
     escrow_id: u64,
+    item_guid: u64,
     killed: Killed,
 ) -> Result<(), String> {
-    assert_value_is_in_exactly_one_place(shard, plane);
+    let items = claimable_items(shard, plane);
+    let check = |shard: &FakeShard, plane: &FakeMailPlane| {
+        assert_value_is_in_exactly_one_place(shard, plane);
+        assert_the_item_is_never_lost_or_duplicated(shard, plane, items);
+    };
+    check(shard, plane);
     if killed == Killed::BeforeFence {
         return Ok(());
     }
-    apply_fence(shard, escrow_id, SENDER, letter())?;
-    assert_value_is_in_exactly_one_place(shard, plane);
+    apply_fence(shard, escrow_id, SENDER, letter(), item_guid)?;
+    check(shard, plane);
     if killed == Killed::AfterFence {
         return Ok(());
     }
-    apply_commit(plane, escrow_id, SENDER, &letter())?;
-    assert_value_is_in_exactly_one_place(shard, plane);
+    // The attachment rides from the fence to the mail plane through the DRIVER, re-read off the
+    // escrow row — the same derivation `world::mail::redrive` makes, so a re-drive and a fresh
+    // drive commit the identical letter.
+    let item = shard
+        .escrow(escrow_id)
+        .map(|e| e.item())
+        .unwrap_or_default();
+    apply_commit(plane, escrow_id, SENDER, &letter(), &item)?;
+    check(shard, plane);
     if killed == Killed::AfterCommit {
         return Ok(());
     }
     apply_confirm(shard, escrow_id)?;
-    assert_value_is_in_exactly_one_place(shard, plane);
+    check(shard, plane);
     if killed == Killed::AfterConfirm {
         return Ok(());
     }
     apply_settle(shard, escrow_id)?;
-    assert_value_is_in_exactly_one_place(shard, plane);
+    check(shard, plane);
     Ok(())
 }
 
@@ -478,6 +616,46 @@ fn assert_value_is_in_exactly_one_place(shard: &FakeShard, plane: &FakeMailPlane
     }
 }
 
+/// How many copies of the attachment somebody could USE right now — in a set of bags, or sitting in
+/// a mailbox waiting to be taken. A fenced item is deliberately NOT counted: it is in nobody's
+/// reach, which is the whole point of a fence.
+fn claimable_items(shard: &FakeShard, plane: &FakeMailPlane) -> usize {
+    shard.bags_of(SENDER).len()
+        + shard.bags_of(RECIPIENT).len()
+        + plane.items_in_mailbox(RECIPIENT).len()
+}
+
+/// **The attachment's invariant, checked after every step of every drive.** An item is the value
+/// that cannot be recreated if the protocol loses it, so both halves are asserted:
+///
+/// 1. **never duplicated** — at most `expected` claimable copies, so no interruption can leave it
+///    in two places somebody could spend it from;
+/// 2. **never nowhere** — claimable plus fenced never falls below `expected`, which is delete-last
+///    stated in items.
+///
+/// What is deliberately NOT asserted is that the fence and the mailbox never hold it at once.
+/// Between the commit and its settle they both do, and that overlap IS delete-last — the same
+/// window the copper's `assert_the_take_is_in_exactly_one_place` documents.
+fn assert_the_item_is_never_lost_or_duplicated(
+    shard: &FakeShard,
+    plane: &FakeMailPlane,
+    expected: usize,
+) {
+    let claimable = claimable_items(shard, plane);
+    let fenced = shard.fenced_items() + plane.fenced_items();
+    assert!(
+        claimable <= expected,
+        "the attachment is claimable from {claimable} places (expected at most {expected}) — an \
+         item is the value that cannot be recreated, so duplication is the failure this ordering \
+         exists to make unreachable"
+    );
+    assert!(
+        claimable + fenced >= expected,
+        "the attachment is claimable from {claimable} places and fenced in {fenced} — it is \
+         nowhere, which is the one unrecoverable outcome delete-last exists to make unreachable"
+    );
+}
+
 fn fixture() -> (FakeShard, FakeMailPlane) {
     (
         FakeShard::with_purse(SENDER, PURSE),
@@ -495,7 +673,7 @@ fn fixture() -> (FakeShard, FakeMailPlane) {
 fn the_four_step_sequence_moves_coin_between_two_databases() {
     let (mut shard, mut plane) = fixture();
 
-    drive(&mut shard, &mut plane, ESCROW, Killed::Never).expect("the drive completes");
+    drive(&mut shard, &mut plane, ESCROW, NO_ITEM, Killed::Never).expect("the drive completes");
 
     assert_eq!(shard.purse_of(SENDER), PURSE - COST, "one debit, not two");
     let inbox = plane.mailbox_of(RECIPIENT);
@@ -516,7 +694,7 @@ fn the_first_fence_arms_the_reaper() {
     let (mut shard, _plane) = fixture();
     assert!(!shard.ledger.reaper_armed.get());
 
-    apply_fence(&mut shard, ESCROW, SENDER, letter()).expect("fenced");
+    apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM).expect("fenced");
 
     assert!(shard.ledger.reaper_armed.get());
 }
@@ -532,7 +710,7 @@ fn the_first_fence_arms_the_reaper() {
 fn a_driver_killed_after_the_fence_leaves_the_value_held_and_never_refunded() {
     let (mut shard, mut plane) = fixture();
 
-    drive(&mut shard, &mut plane, ESCROW, Killed::AfterFence).expect("the fence lands");
+    drive(&mut shard, &mut plane, ESCROW, NO_ITEM, Killed::AfterFence).expect("the fence lands");
 
     assert_eq!(shard.purse_of(SENDER), PURSE - COST);
     assert_eq!(shard.fenced_copper(), COST, "the ledger holds it");
@@ -557,11 +735,11 @@ fn a_driver_killed_after_the_fence_leaves_the_value_held_and_never_refunded() {
 fn a_driver_killed_after_the_commit_replays_forward_into_one_letter() {
     let (mut shard, mut plane) = fixture();
 
-    drive(&mut shard, &mut plane, ESCROW, Killed::AfterCommit).expect("the commit lands");
+    drive(&mut shard, &mut plane, ESCROW, NO_ITEM, Killed::AfterCommit).expect("the commit lands");
     assert_eq!(plane.mailbox_of(RECIPIENT).len(), 1);
     assert!(shard.has_fence(ESCROW), "nothing has attested the delivery");
 
-    drive(&mut shard, &mut plane, ESCROW, Killed::Never).expect("the re-drive completes");
+    drive(&mut shard, &mut plane, ESCROW, NO_ITEM, Killed::Never).expect("the re-drive completes");
 
     assert_eq!(
         plane.mailbox_of(RECIPIENT).len(),
@@ -578,7 +756,14 @@ fn a_driver_killed_after_the_commit_replays_forward_into_one_letter() {
 fn a_driver_killed_after_the_attestation_is_rolled_forward_by_the_reaper() {
     let (mut shard, mut plane) = fixture();
 
-    drive(&mut shard, &mut plane, ESCROW, Killed::AfterConfirm).expect("the attestation lands");
+    drive(
+        &mut shard,
+        &mut plane,
+        ESCROW,
+        NO_ITEM,
+        Killed::AfterConfirm,
+    )
+    .expect("the attestation lands");
     assert!(shard.has_fence(ESCROW));
 
     shard.advance(MAIL_ESCROW_STALE_MICROS * 2);
@@ -594,7 +779,7 @@ fn a_driver_killed_after_the_attestation_is_rolled_forward_by_the_reaper() {
 #[test]
 fn a_settle_replayed_after_the_drive_completed_is_a_no_op() {
     let (mut shard, mut plane) = fixture();
-    drive(&mut shard, &mut plane, ESCROW, Killed::Never).expect("the drive completes");
+    drive(&mut shard, &mut plane, ESCROW, NO_ITEM, Killed::Never).expect("the drive completes");
 
     apply_settle(&mut shard, ESCROW).expect("a replayed settle is not an error");
 
@@ -608,7 +793,7 @@ fn a_settle_replayed_after_the_drive_completed_is_a_no_op() {
 fn a_driver_killed_before_the_fence_costs_the_sender_nothing() {
     let (mut shard, mut plane) = fixture();
 
-    drive(&mut shard, &mut plane, ESCROW, Killed::BeforeFence).expect("nothing happened");
+    drive(&mut shard, &mut plane, ESCROW, NO_ITEM, Killed::BeforeFence).expect("nothing happened");
 
     assert_eq!(shard.purse_of(SENDER), PURSE);
     assert!(plane.mailbox_of(RECIPIENT).is_empty());
@@ -627,8 +812,9 @@ fn a_driver_killed_before_the_fence_costs_the_sender_nothing() {
 fn a_replayed_fence_debits_the_purse_once() {
     let (mut shard, _plane) = fixture();
 
-    apply_fence(&mut shard, ESCROW, SENDER, letter()).expect("first");
-    apply_fence(&mut shard, ESCROW, SENDER, letter()).expect("replay is a no-op, not an error");
+    apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM).expect("first");
+    apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM)
+        .expect("replay is a no-op, not an error");
 
     assert_eq!(shard.purse_of(SENDER), PURSE - COST);
     assert_eq!(shard.fenced_copper(), COST);
@@ -640,9 +826,9 @@ fn a_replayed_fence_debits_the_purse_once() {
 fn an_escrow_id_reused_for_another_sender_is_refused() {
     let (mut shard, _plane) = fixture();
     shard.purses.borrow_mut().insert(99, PURSE);
-    apply_fence(&mut shard, ESCROW, SENDER, letter()).expect("first");
+    apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM).expect("first");
 
-    let err = apply_fence(&mut shard, ESCROW, 99, letter()).expect_err("the id is taken");
+    let err = apply_fence(&mut shard, ESCROW, 99, letter(), NO_ITEM).expect_err("the id is taken");
 
     assert!(err.contains("already fenced"), "{err}");
     assert_eq!(shard.purse_of(99), PURSE, "the second sender paid nothing");
@@ -654,9 +840,30 @@ fn an_escrow_id_reused_for_another_sender_is_refused() {
 fn a_replayed_commit_produces_one_mail_and_not_two() {
     let (_shard, mut plane) = fixture();
 
-    apply_commit(&mut plane, ESCROW, SENDER, &letter()).expect("first");
-    apply_commit(&mut plane, ESCROW, SENDER, &letter()).expect("replay");
-    apply_commit(&mut plane, ESCROW, SENDER, &letter()).expect("replay again");
+    apply_commit(
+        &mut plane,
+        ESCROW,
+        SENDER,
+        &letter(),
+        &ItemSnapshot::default(),
+    )
+    .expect("first");
+    apply_commit(
+        &mut plane,
+        ESCROW,
+        SENDER,
+        &letter(),
+        &ItemSnapshot::default(),
+    )
+    .expect("replay");
+    apply_commit(
+        &mut plane,
+        ESCROW,
+        SENDER,
+        &letter(),
+        &ItemSnapshot::default(),
+    )
+    .expect("replay again");
 
     assert_eq!(plane.mailbox_of(RECIPIENT).len(), 1);
 }
@@ -666,7 +873,7 @@ fn a_replayed_commit_produces_one_mail_and_not_two() {
 #[test]
 fn re_fencing_an_id_for_a_different_amount_is_refused() {
     let (mut shard, _plane) = fixture();
-    apply_fence(&mut shard, ESCROW, SENDER, letter()).expect("first");
+    apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM).expect("first");
 
     let err = apply_fence(
         &mut shard,
@@ -676,6 +883,7 @@ fn re_fencing_an_id_for_a_different_amount_is_refused() {
             money: MONEY * 2,
             ..letter()
         },
+        NO_ITEM,
     )
     .expect_err("a different letter under the same id");
 
@@ -690,7 +898,14 @@ fn re_fencing_an_id_for_a_different_amount_is_refused() {
 #[test]
 fn an_escrow_id_that_already_delivered_to_another_recipient_is_refused() {
     let (_shard, mut plane) = fixture();
-    apply_commit(&mut plane, ESCROW, SENDER, &letter()).expect("first letter");
+    apply_commit(
+        &mut plane,
+        ESCROW,
+        SENDER,
+        &letter(),
+        &ItemSnapshot::default(),
+    )
+    .expect("first letter");
 
     let err = apply_commit(
         &mut plane,
@@ -700,6 +915,7 @@ fn an_escrow_id_that_already_delivered_to_another_recipient_is_refused() {
             recipient_guid: RECIPIENT + 1,
             ..letter()
         },
+        &ItemSnapshot::default(),
     )
     .expect_err("the id belongs to another letter");
 
@@ -713,8 +929,8 @@ fn an_escrow_id_that_already_delivered_to_another_recipient_is_refused() {
 fn escrow_id_zero_is_reserved_on_both_planes() {
     let (mut shard, mut plane) = fixture();
 
-    apply_fence(&mut shard, 0, SENDER, letter()).expect_err("reserved");
-    apply_commit(&mut plane, 0, SENDER, &letter()).expect_err("reserved");
+    apply_fence(&mut shard, 0, SENDER, letter(), NO_ITEM).expect_err("reserved");
+    apply_commit(&mut plane, 0, SENDER, &letter(), &ItemSnapshot::default()).expect_err("reserved");
 
     assert_eq!(shard.purse_of(SENDER), PURSE);
     assert!(plane.mailbox_of(RECIPIENT).is_empty());
@@ -730,7 +946,7 @@ fn escrow_id_zero_is_reserved_on_both_planes() {
 fn an_unaffordable_letter_fences_nothing() {
     let mut shard = FakeShard::with_purse(SENDER, COST - 1);
 
-    let err = apply_fence(&mut shard, ESCROW, SENDER, letter()).expect_err("cannot pay");
+    let err = apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM).expect_err("cannot pay");
 
     assert!(
         err.contains(lyracore_shared::mail::NOT_ENOUGH_MONEY),
@@ -745,7 +961,7 @@ fn an_unaffordable_letter_fences_nothing() {
 #[test]
 fn a_settle_before_the_attestation_is_refused_and_the_fence_survives() {
     let (mut shard, mut plane) = fixture();
-    drive(&mut shard, &mut plane, ESCROW, Killed::AfterCommit).expect("committed");
+    drive(&mut shard, &mut plane, ESCROW, NO_ITEM, Killed::AfterCommit).expect("committed");
 
     let err = apply_settle(&mut shard, ESCROW).expect_err("not attested");
 
@@ -785,7 +1001,14 @@ fn a_settle_that_reaches_a_database_holding_no_fence_is_not_an_error() {
 #[test]
 fn the_reaper_does_not_touch_a_fence_a_driver_is_still_working_on() {
     let (mut shard, mut plane) = fixture();
-    drive(&mut shard, &mut plane, ESCROW, Killed::AfterConfirm).expect("attested");
+    drive(
+        &mut shard,
+        &mut plane,
+        ESCROW,
+        NO_ITEM,
+        Killed::AfterConfirm,
+    )
+    .expect("attested");
 
     shard.advance(MAIL_ESCROW_STALE_MICROS - 1);
     apply_reap(&mut shard);
@@ -800,7 +1023,14 @@ fn the_reaper_does_not_touch_a_fence_a_driver_is_still_working_on() {
 fn the_reaper_judges_each_fence_on_its_own_evidence() {
     let (mut shard, mut plane) = fixture();
     let held = ESCROW + 1;
-    drive(&mut shard, &mut plane, ESCROW, Killed::AfterConfirm).expect("attested");
+    drive(
+        &mut shard,
+        &mut plane,
+        ESCROW,
+        NO_ITEM,
+        Killed::AfterConfirm,
+    )
+    .expect("attested");
     apply_fence(
         &mut shard,
         held,
@@ -810,6 +1040,7 @@ fn the_reaper_judges_each_fence_on_its_own_evidence() {
             postage: POSTAGE,
             ..letter()
         },
+        NO_ITEM,
     )
     .expect("a second, unattested fence");
 
@@ -845,7 +1076,7 @@ const TAKE: u64 = 0x5EED_0002;
 /// recipient has a purse to take it into. The starting state of every take test.
 fn delivered_fixture() -> (FakeShard, FakeMailPlane, u64) {
     let (mut shard, mut plane) = fixture();
-    drive(&mut shard, &mut plane, ESCROW, Killed::Never).expect("the letter is delivered");
+    drive(&mut shard, &mut plane, ESCROW, NO_ITEM, Killed::Never).expect("the letter is delivered");
     shard.purses.borrow_mut().insert(RECIPIENT, 0);
     let mail_id = plane.mailbox_of(RECIPIENT)[0].id;
     (shard, plane, mail_id)
@@ -1126,4 +1357,431 @@ fn a_take_escrow_id_reused_for_another_take_is_refused_on_both_sides() {
         PURSE - COST,
         "and paid them nothing"
     );
+}
+
+// =============================================================================================
+//  The ITEM: the same mechanism, carrying the value that cannot be recreated
+// =============================================================================================
+//
+// Coin can be minted back; an item cannot. So these walk the same four steps and the same crash
+// points, and the instrument is `assert_the_item_has_exactly_one_owner` — which every drive above
+// already runs, because the send drive is the same function.
+
+/// A sender who is holding the fixture sword, and a mail plane with nothing on it.
+fn item_fixture() -> (FakeShard, FakeMailPlane) {
+    let (shard, plane) = fixture();
+    shard.give_item(SENDER, ITEM_GUID, sword());
+    (shard, plane)
+}
+
+/// **The whole send, with the item.** It leaves the bags, it arrives once, and every column that
+/// makes it worth something arrives with it.
+#[test]
+fn a_mailed_item_leaves_the_senders_bags_and_arrives_with_its_state_intact() {
+    let (mut shard, mut plane) = item_fixture();
+
+    drive(&mut shard, &mut plane, ESCROW, ITEM_GUID, Killed::Never).expect("the drive completes");
+
+    assert!(
+        shard.bags_of(SENDER).is_empty(),
+        "the item left the sender's bags at SEND, not at take — otherwise a send-and-logout \
+         duplicates it"
+    );
+    assert_eq!(
+        plane.items_in_mailbox(RECIPIENT),
+        vec![sword()],
+        "a damaged, enchanted item must not arrive repaired or stripped — that is a free repair \
+         and an enchant-laundering exploit, not a rounding error"
+    );
+}
+
+/// **A soulbound instance is refused at send and stays in the bags.** The one refusal that is
+/// about the ITEM rather than the sender, and it fires before anything is written.
+#[test]
+fn a_soulbound_item_is_refused_at_send_and_stays_in_the_senders_bags() {
+    let (mut shard, _plane) = fixture();
+    shard.give_item(
+        SENDER,
+        ITEM_GUID,
+        ItemSnapshot {
+            soulbound: true,
+            ..sword()
+        },
+    );
+
+    let err = apply_fence(&mut shard, ESCROW, SENDER, letter(), ITEM_GUID)
+        .expect_err("a bound item is not mailable");
+
+    assert!(
+        err.contains(lyracore_shared::mail::ITEM_IS_SOULBOUND),
+        "{err}"
+    );
+    assert_eq!(shard.bags_of(SENDER).len(), 1, "still theirs");
+    assert_eq!(shard.purse_of(SENDER), PURSE, "and it cost them nothing");
+    assert!(!shard.has_fence(ESCROW));
+}
+
+/// **An unworn bind-on-equip item IS mailable.** The verdict reads the instance's bind state, not
+/// the template's bonding, so the unworn drop a player passes to an alt goes through.
+#[test]
+fn an_unworn_bind_on_equip_item_is_mailable() {
+    let (mut shard, mut plane) = item_fixture();
+
+    drive(&mut shard, &mut plane, ESCROW, ITEM_GUID, Killed::Never).expect("the drive completes");
+
+    assert_eq!(plane.items_in_mailbox(RECIPIENT).len(), 1);
+    assert!(
+        !plane.items_in_mailbox(RECIPIENT)[0].soulbound,
+        "it arrives as unbound as it left"
+    );
+}
+
+/// **Attaching an item the sender does not own is refused**, and so is one that does not exist.
+/// The item guid is client-supplied, so this is the authorization boundary on a send.
+#[test]
+fn attaching_an_item_the_sender_does_not_own_fences_nothing() {
+    let (mut shard, _plane) = fixture();
+    shard.give_item(RECIPIENT, ITEM_GUID, sword());
+
+    let err = apply_fence(&mut shard, ESCROW, SENDER, letter(), ITEM_GUID)
+        .expect_err("it is not the sender's");
+
+    assert!(err.contains(lyracore_shared::mail::NOT_YOUR_ITEM), "{err}");
+    assert_eq!(shard.bags_of(RECIPIENT).len(), 1, "the owner still has it");
+    assert_eq!(shard.purse_of(SENDER), PURSE);
+    assert!(!shard.has_fence(ESCROW));
+}
+
+/// **A fenced item is reachable by nothing.** The instance row is gone, so the second letter's
+/// attach finds no item — and every other path that reads a player's items resolves through that
+/// same table, which is why no vendor, equip, use or trade path had to learn an in-flight rule.
+#[test]
+fn a_fenced_item_cannot_be_attached_to_a_second_letter() {
+    let (mut shard, _plane) = item_fixture();
+    apply_fence(&mut shard, ESCROW, SENDER, letter(), ITEM_GUID).expect("fenced");
+
+    let err = apply_fence(&mut shard, ESCROW + 1, SENDER, letter(), ITEM_GUID)
+        .expect_err("it is in flight, so it is nobody's");
+
+    assert!(err.contains(lyracore_shared::mail::NOT_YOUR_ITEM), "{err}");
+    assert!(shard.bags_of(SENDER).is_empty());
+    assert_eq!(shard.fenced_items(), 1, "held exactly once");
+}
+
+/// **Killed after the item fence.** The item is in the ledger and nowhere else; the reaper holds
+/// it forever rather than handing it back against a commit that may have landed.
+#[test]
+fn an_item_send_killed_after_the_fence_leaves_it_held_and_never_returned() {
+    let (mut shard, mut plane) = item_fixture();
+
+    drive(
+        &mut shard,
+        &mut plane,
+        ESCROW,
+        ITEM_GUID,
+        Killed::AfterFence,
+    )
+    .expect("the fence lands");
+    assert!(shard.bags_of(SENDER).is_empty());
+    assert_eq!(shard.fenced_items(), 1);
+
+    shard.advance(MAIL_ESCROW_STALE_MICROS * 100);
+    apply_reap(&mut shard);
+
+    assert!(shard.has_fence(ESCROW), "unattested — held, not returned");
+    assert_the_item_is_never_lost_or_duplicated(&shard, &plane, 1);
+}
+
+/// **Killed after the item commit.** The mail row holds it, the fence still stands, and the
+/// re-drive replays the commit into its receipt — one item in the mailbox, not two.
+#[test]
+fn an_item_send_killed_after_the_commit_replays_forward_into_one_item() {
+    let (mut shard, mut plane) = item_fixture();
+
+    drive(
+        &mut shard,
+        &mut plane,
+        ESCROW,
+        ITEM_GUID,
+        Killed::AfterCommit,
+    )
+    .expect("committed");
+    assert_eq!(plane.items_in_mailbox(RECIPIENT).len(), 1);
+
+    drive(&mut shard, &mut plane, ESCROW, ITEM_GUID, Killed::Never).expect("re-driven");
+
+    assert_eq!(
+        plane.items_in_mailbox(RECIPIENT),
+        vec![sword()],
+        "the re-driven commit found its receipt and wrote no second letter"
+    );
+    assert!(shard.bags_of(SENDER).is_empty());
+    assert!(!shard.has_fence(ESCROW));
+}
+
+/// **Killed after the attestation.** The mail row is durable and the source knows it, so the
+/// reaper finishes the item's move with no gateway at all.
+#[test]
+fn an_item_send_killed_after_the_attestation_is_rolled_forward_by_the_reaper() {
+    let (mut shard, mut plane) = item_fixture();
+
+    drive(
+        &mut shard,
+        &mut plane,
+        ESCROW,
+        ITEM_GUID,
+        Killed::AfterConfirm,
+    )
+    .expect("attested");
+    assert!(shard.has_fence(ESCROW));
+
+    shard.advance(MAIL_ESCROW_STALE_MICROS * 2);
+    apply_reap(&mut shard);
+
+    assert!(!shard.has_fence(ESCROW), "rolled forward");
+    assert_eq!(plane.items_in_mailbox(RECIPIENT), vec![sword()]);
+    assert_the_item_is_never_lost_or_duplicated(&shard, &plane, 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+//  Taking the item back out
+// ---------------------------------------------------------------------------------------------
+
+/// The crash points of an item take, named the way [`TakeKilled`] names the money take's.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ItemTakeKilled {
+    AfterFence,
+    AfterGrant,
+    AfterConfirm,
+    Never,
+}
+
+/// Deliver one letter carrying the sword and settle it, so the mail plane holds a row with an
+/// attachment and the recipient has a shard to take it onto.
+fn delivered_item_fixture() -> (FakeShard, FakeMailPlane, u64) {
+    let (mut shard, mut plane) = item_fixture();
+    drive(&mut shard, &mut plane, ESCROW, ITEM_GUID, Killed::Never).expect("delivered");
+    shard.purses.borrow_mut().insert(RECIPIENT, 0);
+    let mail_id = plane.mailbox_of(RECIPIENT)[0].id;
+    (shard, plane, mail_id)
+}
+
+/// The gateway's item-take drive: fence on the mail plane, grant on the taker's shard, attest,
+/// settle. Steps 3 and 4 are the SAME `apply_confirm` / `apply_settle` both other directions use.
+fn drive_take_item(
+    shard: &mut FakeShard,
+    plane: &mut FakeMailPlane,
+    escrow_id: u64,
+    mail_id: u64,
+    killed: ItemTakeKilled,
+) -> Result<(), String> {
+    // What is claimable when this take starts is what must be claimable when it ends, however it
+    // is interrupted: one sword, in one place at a time.
+    let items = claimable_items(shard, plane).max(1);
+    let check = |shard: &FakeShard, plane: &FakeMailPlane| {
+        assert_the_item_is_never_lost_or_duplicated(shard, plane, items);
+    };
+    check(shard, plane);
+    apply_take_item_fence(plane, escrow_id, RECIPIENT, mail_id, sword().entry)?;
+    check(shard, plane);
+    if killed == ItemTakeKilled::AfterFence {
+        return Ok(());
+    }
+    let item = plane
+        .escrow(escrow_id)
+        .map(|e| e.item())
+        .unwrap_or_default();
+    apply_item_payout(shard, escrow_id, RECIPIENT, mail_id, &item)?;
+    check(shard, plane);
+    if killed == ItemTakeKilled::AfterGrant {
+        return Ok(());
+    }
+    apply_confirm(plane, escrow_id)?;
+    check(shard, plane);
+    if killed == ItemTakeKilled::AfterConfirm {
+        return Ok(());
+    }
+    apply_settle(plane, escrow_id)?;
+    check(shard, plane);
+    Ok(())
+}
+
+/// **The whole take across two databases.** The item lands in the bags carrying the state it was
+/// sent with, and the letter survives with nothing in it.
+#[test]
+fn the_take_moves_a_mails_item_into_the_bags_on_another_database() {
+    let (mut shard, mut plane, mail_id) = delivered_item_fixture();
+
+    drive_take_item(&mut shard, &mut plane, TAKE, mail_id, ItemTakeKilled::Never)
+        .expect("the take completes");
+
+    assert_eq!(shard.bags_of(RECIPIENT), vec![sword()]);
+    assert!(plane.items_in_mailbox(RECIPIENT).is_empty());
+    assert_eq!(
+        plane.mailbox_of(RECIPIENT).len(),
+        1,
+        "a mail emptied of its item is still a letter"
+    );
+    assert!(!plane.has_fence(TAKE));
+}
+
+/// **A take into a full bag does not destroy the item.** The grant refuses, the fence keeps it,
+/// and the next re-drive lands it once there is room — the case a naive implementation loses.
+#[test]
+fn a_take_into_a_full_bag_is_refused_and_the_item_is_never_destroyed() {
+    let (mut shard, mut plane, mail_id) = delivered_item_fixture();
+    shard.bags_full.set(true);
+
+    let err = drive_take_item(&mut shard, &mut plane, TAKE, mail_id, ItemTakeKilled::Never)
+        .expect_err("there is nowhere to put it");
+
+    assert!(err.contains(lyracore_shared::mail::INVENTORY_FULL), "{err}");
+    assert!(shard.bags_of(RECIPIENT).is_empty());
+    assert_eq!(plane.fenced_items(), 1, "held, not lost");
+    assert!(
+        apply_settle(&mut plane, TAKE).is_err(),
+        "and unattested, so nothing can destroy it"
+    );
+
+    shard.bags_full.set(false);
+    drive_take_item(&mut shard, &mut plane, TAKE, mail_id, ItemTakeKilled::Never)
+        .expect("the re-drive completes once there is room");
+    assert_eq!(shard.bags_of(RECIPIENT), vec![sword()]);
+}
+
+/// **Taking the same item twice grants it once.** The clear and the fence are one transaction, so
+/// the second take finds a letter with nothing in it.
+#[test]
+fn taking_the_same_item_twice_grants_it_once() {
+    let (mut shard, mut plane, mail_id) = delivered_item_fixture();
+    drive_take_item(&mut shard, &mut plane, TAKE, mail_id, ItemTakeKilled::Never).expect("taken");
+
+    let err = apply_take_item_fence(&mut plane, TAKE + 1, RECIPIENT, mail_id, sword().entry)
+        .expect_err("there is nothing left in it");
+
+    assert!(
+        err.contains(lyracore_shared::mail::NOTHING_TO_TAKE),
+        "{err}"
+    );
+    assert_eq!(shard.bags_of(RECIPIENT), vec![sword()], "granted once");
+}
+
+/// **A take by anyone who is not the recipient is refused**, and the item stays in the letter. The
+/// mail id is client-supplied, so this is the authorization boundary and not a sanity check.
+#[test]
+fn an_item_take_by_a_character_who_is_not_the_recipient_is_refused() {
+    let (_shard, mut plane, mail_id) = delivered_item_fixture();
+
+    let err = apply_take_item_fence(&mut plane, TAKE, SENDER, mail_id, sword().entry)
+        .expect_err("the letter is not the sender's to empty");
+
+    assert!(err.contains(lyracore_shared::mail::NOT_YOUR_MAIL), "{err}");
+    assert_eq!(plane.items_in_mailbox(RECIPIENT), vec![sword()]);
+    assert!(!plane.has_fence(TAKE));
+}
+
+/// **Killed after the take fence.** The item is out of the letter and held on the mail plane; the
+/// reaper cannot judge it, and the re-drive finishes the job.
+#[test]
+fn an_item_take_killed_after_the_fence_is_held_and_then_re_driven_forward() {
+    let (mut shard, mut plane, mail_id) = delivered_item_fixture();
+
+    drive_take_item(
+        &mut shard,
+        &mut plane,
+        TAKE,
+        mail_id,
+        ItemTakeKilled::AfterFence,
+    )
+    .expect("the fence lands");
+    assert!(shard.bags_of(RECIPIENT).is_empty());
+    assert_eq!(plane.fenced_items(), 1);
+
+    plane.advance(MAIL_ESCROW_STALE_MICROS * 100);
+    apply_reap(&mut plane);
+    assert!(plane.has_fence(TAKE), "unattested — held");
+
+    drive_take_item(&mut shard, &mut plane, TAKE, mail_id, ItemTakeKilled::Never)
+        .expect("the re-drive completes");
+    assert_eq!(shard.bags_of(RECIPIENT), vec![sword()]);
+    assert!(!plane.has_fence(TAKE));
+}
+
+/// **Killed after the grant.** The bags hold it and the fence still stands; the re-drive's grant
+/// replays into its receipt, so the item is created once and not twice.
+#[test]
+fn an_item_take_killed_after_the_grant_replays_into_one_item() {
+    let (mut shard, mut plane, mail_id) = delivered_item_fixture();
+
+    drive_take_item(
+        &mut shard,
+        &mut plane,
+        TAKE,
+        mail_id,
+        ItemTakeKilled::AfterGrant,
+    )
+    .expect("the grant lands");
+    assert_eq!(shard.bags_of(RECIPIENT), vec![sword()]);
+    assert!(plane.has_fence(TAKE), "nothing has attested it yet");
+
+    drive_take_item(&mut shard, &mut plane, TAKE, mail_id, ItemTakeKilled::Never)
+        .expect("the re-drive completes");
+
+    assert_eq!(shard.bags_of(RECIPIENT), vec![sword()], "granted once");
+    assert!(!plane.has_fence(TAKE));
+}
+
+/// **Killed after the attestation.** The mail plane knows the bags hold it, so its own reaper
+/// finishes the take with no gateway at all.
+#[test]
+fn an_item_take_killed_after_the_attestation_is_rolled_forward_by_the_reaper() {
+    let (mut shard, mut plane, mail_id) = delivered_item_fixture();
+
+    drive_take_item(
+        &mut shard,
+        &mut plane,
+        TAKE,
+        mail_id,
+        ItemTakeKilled::AfterConfirm,
+    )
+    .expect("attested");
+
+    plane.advance(MAIL_ESCROW_STALE_MICROS * 2);
+    apply_reap(&mut plane);
+
+    assert!(!plane.has_fence(TAKE), "rolled forward");
+    assert_eq!(shard.bags_of(RECIPIENT), vec![sword()]);
+    assert_the_item_is_never_lost_or_duplicated(&shard, &plane, 1);
+}
+
+/// The gateway carries the entry from one database to the other, so a stale read is the one way
+/// the two could disagree. The fence refuses rather than fencing an item the grant would not match.
+#[test]
+fn an_item_take_driven_for_the_wrong_item_is_refused() {
+    let (_shard, mut plane, mail_id) = delivered_item_fixture();
+
+    let err = apply_take_item_fence(&mut plane, TAKE, RECIPIENT, mail_id, sword().entry + 1)
+        .expect_err("the letter does not hold that item");
+
+    assert!(err.contains("refusing to fence an item"), "{err}");
+    assert_eq!(
+        plane.items_in_mailbox(RECIPIENT),
+        vec![sword()],
+        "untouched"
+    );
+}
+
+/// A grant to a character who is not live on this database is refused and the fence keeps the
+/// item — a taker who logged out or hopped mid-drive gets it on the next re-drive, not never.
+#[test]
+fn an_item_payout_to_a_character_who_is_not_live_here_leaves_the_fence_holding_it() {
+    let (mut shard, mut plane, mail_id) = delivered_item_fixture();
+    shard.purses.borrow_mut().remove(&RECIPIENT);
+    apply_take_item_fence(&mut plane, TAKE, RECIPIENT, mail_id, sword().entry).expect("fenced");
+
+    let err = apply_item_payout(&mut shard, TAKE, RECIPIENT, mail_id, &sword())
+        .expect_err("no live entity here");
+
+    assert!(err.contains(lyracore_shared::mail::NOT_IN_WORLD), "{err}");
+    assert_eq!(plane.fenced_items(), 1, "still held, not lost");
 }

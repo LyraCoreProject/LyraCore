@@ -8,14 +8,15 @@
 
 use lyracore_shared::mail as mail_rules;
 use wow_world_messages::vanilla::{
-    Gold, MSG_QUERY_NEXT_MAIL_TIME_Server, Mail, Mail_MailType, SMSG_SEND_MAIL_RESULT_MailAction,
+    Gold, InventoryResult, MSG_QUERY_NEXT_MAIL_TIME_Server, Mail, Mail_MailType,
+    SMSG_SEND_MAIL_RESULT_MailAction, SMSG_SEND_MAIL_RESULT_MailResult,
     SMSG_SEND_MAIL_RESULT_MailResultTwo, SMSG_ITEM_TEXT_QUERY_RESPONSE, SMSG_MAIL_LIST_RESULT,
     SMSG_SEND_MAIL_RESULT,
 };
 
-/// One `game_mail` row, flattened for the codec. The attachment columns are carried even though
-/// nothing writes them yet: the wire has exactly one item block per mail, and the list packet is
-/// what a later slice's attachment must render through.
+/// One `game_mail` row, flattened for the codec. The attachment is the mail row's own snapshot
+/// columns — the wire has exactly one item block per mail, and this is what the mailbox window
+/// renders before the recipient takes it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MailView {
     pub id: u64,
@@ -26,6 +27,10 @@ pub struct MailView {
     pub item_stack_count: u32,
     pub item_durability: u32,
     pub item_enchant_id: u32,
+    /// Not sent on the wire — the client shows no bind state in the mail window. Carried because
+    /// the sharded take hands the whole snapshot to the other database, and a bind state dropped in
+    /// transit would be an item that arrives less bound than it left.
+    pub item_soulbound: bool,
     pub money: u32,
     pub cod: u32,
     pub was_read: bool,
@@ -126,6 +131,49 @@ pub fn build_mail_take_money_result(mail_id: u32, ok: bool) -> SMSG_SEND_MAIL_RE
             },
         },
     }
+}
+
+/// Answer `CMSG_MAIL_TAKE_ITEM` with `SMSG_SEND_MAIL_RESULT`/ItemTaken.
+///
+/// The ItemTaken action carries `MailResult` (not `MailResultTwo`), whose success arm names the
+/// item and stack the client just gained — `taken` is that pair, and it is what makes the mail
+/// window drop the right attachment without re-reading the list.
+///
+/// A FULL BAG gets its own verdict — `ErrEquipError` carrying vanilla's `InventoryFull` — because
+/// it is the one refusal the player can act on, and the item is still in the letter when they do.
+/// Every other refusal (not your mail, nothing in it, an unreachable database) answers the generic
+/// bucket, so a crafted mail id cannot tell an empty mail apart from somebody else's.
+pub fn build_mail_take_item_result(
+    mail_id: u32,
+    taken: Result<(u32, u32), MailTakeItemError>,
+) -> SMSG_SEND_MAIL_RESULT {
+    SMSG_SEND_MAIL_RESULT {
+        mail_id,
+        action: SMSG_SEND_MAIL_RESULT_MailAction::ItemTaken {
+            result: match taken {
+                Ok((item, item_count)) => SMSG_SEND_MAIL_RESULT_MailResult::Ok { item, item_count },
+                Err(MailTakeItemError::BagsFull) => {
+                    SMSG_SEND_MAIL_RESULT_MailResult::ErrEquipError {
+                        equip_error: u32::from(InventoryResult::InventoryFull.as_int()),
+                    }
+                }
+                Err(MailTakeItemError::Other) => {
+                    SMSG_SEND_MAIL_RESULT_MailResult::ErrInternalError {
+                        item: 0,
+                        item_count: 0,
+                    }
+                }
+            },
+        },
+    }
+}
+
+/// The two verdicts an item take can answer with. Deliberately smaller than the handler's own
+/// refusal type: the wire only distinguishes "make room" from "no".
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MailTakeItemError {
+    BagsFull,
+    Other,
 }
 
 /// Answer `CMSG_SEND_MAIL` with `SMSG_SEND_MAIL_RESULT`/Send.
@@ -249,6 +297,68 @@ mod tests {
         let mut m = view(1, "here you go");
         m.money = 130;
         assert_eq!(build_mail_list(&[m], 1_000).mails[0].money, Gold::new(130));
+    }
+
+    /// The list packet carries the whole attachment, so the recipient sees what is in a letter
+    /// before taking it: the icon comes from the entry, and the stack and durability from the
+    /// snapshot the sender's own item was copied into.
+    #[test]
+    fn the_list_packet_carries_a_mails_attached_item() {
+        let mut m = view(1, "here you go");
+        m.item_entry = 5_090_001;
+        m.item_stack_count = 12;
+        m.item_durability = 42;
+        m.item_enchant_id = 7;
+        let wire = &build_mail_list(&[m], 1_000).mails[0];
+        assert_eq!(wire.item, 5_090_001);
+        assert_eq!(wire.item_stack_size, 12);
+        assert_eq!(wire.durability, 42);
+        assert_eq!(
+            wire.item_enchant_id, 7,
+            "an enchant dropped here is an enchant the recipient cannot see they are owed"
+        );
+    }
+
+    /// A take answers through the ItemTaken action, whose success arm names the item and stack the
+    /// client just gained — that pair is what makes the mail window drop the right attachment.
+    #[test]
+    fn a_take_item_result_names_what_the_client_just_gained() {
+        match build_mail_take_item_result(7, Ok((5_090_001, 12))).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::ItemTaken { result } => assert_eq!(
+                result,
+                SMSG_SEND_MAIL_RESULT_MailResult::Ok {
+                    item: 5_090_001,
+                    item_count: 12
+                }
+            ),
+            other => panic!("expected the ItemTaken action, got {other:?}"),
+        }
+    }
+
+    /// **A full bag answers `ErrEquipError`, not the generic bucket.** It is the one refusal the
+    /// player can act on, and the item is still in the letter while they do — so the client must
+    /// render "make room" rather than "mail database error".
+    #[test]
+    fn a_full_bag_answers_the_equip_error_variant_and_everything_else_the_generic_one() {
+        match build_mail_take_item_result(7, Err(MailTakeItemError::BagsFull)).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::ItemTaken { result } => assert_eq!(
+                result,
+                SMSG_SEND_MAIL_RESULT_MailResult::ErrEquipError {
+                    equip_error: u32::from(InventoryResult::InventoryFull.as_int())
+                }
+            ),
+            other => panic!("expected the ItemTaken action, got {other:?}"),
+        }
+        match build_mail_take_item_result(7, Err(MailTakeItemError::Other)).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::ItemTaken { result } => assert_eq!(
+                result,
+                SMSG_SEND_MAIL_RESULT_MailResult::ErrInternalError {
+                    item: 0,
+                    item_count: 0
+                }
+            ),
+            other => panic!("expected the ItemTaken action, got {other:?}"),
+        }
     }
 
     /// A successful delete answers `Ok`; a refused one answers `ErrInternalError` — the generic

@@ -209,17 +209,15 @@ pub(crate) fn store_item(
     //    bag-equip order 19..22). Both searches land in the same flat `game_item_instance` model;
     //    the gateway routes items in the bag-content range (120..=191) via the container object.
     while count > 0 {
-        let free_slot = first_free_backpack_slot(ctx, player_guid)
-            .or_else(|| first_free_bag_slot(ctx, player_guid))
-            .ok_or_else(|| "inventory full".to_string())?;
+        let slot = free_slot(ctx, player_guid)?;
         let take = count.min(max_stack);
-        let new_guid = next_item_guid(ctx, player_guid, free_slot);
+        let new_guid = next_item_guid(ctx, player_guid, slot);
         instances.insert(ItemInstance {
             guid: new_guid,
             entry: tmpl.entry,
             owner_identity,
             owner_guid: player_guid,
-            slot: free_slot,
+            slot,
             stack_count: take,
             durability: tmpl.max_durability,
             created_at: ctx.timestamp,
@@ -233,6 +231,68 @@ pub(crate) fn store_item(
         });
         count -= take;
     }
+    Ok(())
+}
+
+/// The next slot an incoming item can land in: backpack first (23..=38), then the content slots of
+/// equipped bags in bag-equip order. `Err` is the full-bag refusal, and it is the ONE the whole
+/// server answers with — [`store_item`] and [`store_instance_state`] both come here, so a mail take
+/// and a vendor buy cannot disagree about whether there is room.
+pub(crate) fn free_slot(ctx: &ReducerContext, player_guid: u64) -> Result<u8, String> {
+    first_free_backpack_slot(ctx, player_guid)
+        .or_else(|| first_free_bag_slot(ctx, player_guid))
+        .ok_or_else(|| lyracore_shared::mail::INVENTORY_FULL.to_string())
+}
+
+/// Is there anywhere for one more item to land? [`free_slot`]'s boolean twin, for a caller that
+/// wants the answer BEFORE it starts moving value it cannot put back — the sharded mail take probes
+/// the recipient's shard with this so a full bag refuses the click instead of stranding the item in
+/// an escrow.
+pub(crate) fn has_free_slot(ctx: &ReducerContext, player_guid: u64) -> bool {
+    free_slot(ctx, player_guid).is_ok()
+}
+
+/// Put ONE item into `player_guid`'s bags carrying an exact recorded state — the same entry, stack,
+/// durability, enchant and bind state it had before it was taken away.
+///
+/// This is the other half of a snapshot move (mail today, trade next): the source deletes its
+/// `game_item_instance` row and records these columns, and this re-creates them. Re-granting from
+/// the TEMPLATE instead would hand back a repaired, unenchanted item — a free repair and an
+/// enchant-laundering exploit — which is the whole reason a snapshot exists.
+///
+/// One row into one free slot, never a merge into an existing partial stack: a merge would blend
+/// two instances' bind states, and the stack it merged into would silently absorb a soulbound one.
+/// Room is the item module's own [`free_slot`], so the full-bag refusal is the same one every other
+/// grant path answers with and the caller's transaction rolls back on it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn store_instance_state(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    owner_identity: Identity,
+    tmpl: &ItemTemplate,
+    stack_count: u32,
+    durability: u32,
+    enchant_id: u32,
+    soulbound: bool,
+) -> Result<(), String> {
+    let slot = free_slot(ctx, player_guid)?;
+    let guid = next_item_guid(ctx, player_guid, slot);
+    ctx.db.game_item_instance().insert(ItemInstance {
+        guid,
+        entry: tmpl.entry,
+        owner_identity,
+        owner_guid: player_guid,
+        slot,
+        // Clamped to the template's own stack cap: the snapshot is durable data that outlives a
+        // template edit, and a row above the cap would render as an impossible stack.
+        stack_count: stack_count.max(1).min(tmpl.max_stack.max(1)),
+        durability,
+        created_at: ctx.timestamp,
+        enchant_id,
+        // The recorded bind state, ORed with the template's grant-time rule — `store_item`'s
+        // expression exactly, so an arriving item cannot end up less bound than a granted one.
+        soulbound: soulbound || binds_on_grant(tmpl.bonding),
+    });
     Ok(())
 }
 
