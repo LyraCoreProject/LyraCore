@@ -161,8 +161,8 @@ struct InMemoryStore {
     vendor_stock: Vec<codec::VendorItemView>,
     /// 195: `npc_refuses_interaction` return — false (derive-Default) keeps every fixture NPC open.
     npc_refuses: bool,
-    /// The class gate, spelled as a refusal so derive-Default (false) means "serves" and every
-    /// existing fixture trainer keeps working. Note the trait method reads the negation.
+    /// Spelled as a refusal so derive-Default (false) keeps every fixture trainer serving; the
+    /// trait method reads the negation.
     trainer_refuses_class: bool,
     /// When set, buy/sell return this error (a gameplay failure) instead of `Ok`.
     trade_error: Option<String>,
@@ -6918,11 +6918,8 @@ fn trainer_list_replies_smsg_trainer_list_with_the_fixture_spells() {
     server.join().unwrap();
 }
 
-/// A wrong-class player gets no trainer window: not an empty one, not an error packet.
-///
-/// Silence needs a probe to assert — reading straight after the request would block forever when
-/// the server correctly sends nothing. The follow-up gossip reply arriving first proves the trainer
-/// request emitted no bytes of its own.
+/// A wrong-class player gets no trainer window: not an empty one, not an error packet. The
+/// follow-up gossip reply is the probe — reading straight after the request would block forever.
 #[test]
 fn trainer_list_is_silently_dropped_for_a_player_the_trainer_does_not_serve() {
     let mut s = quest_store();

@@ -57,8 +57,7 @@ mod tests {
         assert!(serves(2, trainer_type::CLASS, 2));
     }
 
-    /// The fail-open case. Every row of a world that has not been re-imported reads class 0 while
-    /// type also defaults to 0, so if this fails, publishing locks every player out of every trainer.
+    /// Fail-open: if this breaks, an un-reimported world locks every player out of every trainer.
     #[test]
     fn an_unpopulated_trainer_class_serves_every_class() {
         for &player_class in &CLASSES {
@@ -69,8 +68,8 @@ mod tests {
         }
     }
 
-    /// A non-CLASS trainer is never gated, including one carrying a class id — real data, not
-    /// hypothetical: the pet trainer Karrina Mekenda ships type 3 with class 3.
+    /// A populated class id on a non-CLASS trainer is real data (pet trainers ship one), not a
+    /// reason to gate.
     #[test]
     fn non_class_trainer_types_serve_every_class_even_with_a_populated_trainer_class() {
         for ty in [
@@ -93,8 +92,7 @@ mod tests {
         }
     }
 
-    /// Three real trainers verified against the pinned dump, as a fence on the gate reading the
-    /// ingested data the way the importer writes it.
+    /// The gate must read the columns the way the importer writes them.
     #[test]
     fn the_dump_verified_trainers_gate_as_ingested() {
         // Brother Sammuel (925), Paladin trainer: type 0 / class 2.

@@ -390,9 +390,8 @@ pub trait WorldStore: Send + Sync {
     /// masks. Fail-open on missing data.
     fn npc_refuses_interaction(&self, npc_guid: u64, player_guid: u64) -> Result<bool>;
 
-    /// Does this trainer serve `player_guid`'s class? A Warrior gets no window and no "train"
-    /// gossip option at a Paladin trainer. Calls the same predicate the module enforces with, so the
-    /// offer and the purchase cannot disagree. Fail-open on missing data.
+    /// Does this trainer serve `player_guid`'s class? Gates the window and the "train" gossip
+    /// option through the same predicate the module buys with. Fail-open on missing data.
     fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool>;
 
     /// Buy `count` of `item_entry` from `vendor_guid` (`CMSG_BUY_ITEM`, Tier 2). The module gates
