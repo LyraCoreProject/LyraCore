@@ -29,6 +29,14 @@ pub(crate) fn handle_trainer<St: WorldStore + ?Sized>(
             {
                 return Ok(None);
             }
+            // ...and so does one that does not teach your class. Silent drop, not an empty window:
+            // an empty list is indistinguishable from a trainer whose offerings were never imported.
+            if !store
+                .trainer_serves(self_guid, trainer_guid)
+                .unwrap_or(true)
+            {
+                return Ok(None);
+            }
             let spells = store.trainer_list(self_guid, trainer_guid)?;
             // Deliberate simplification: a generic greeting — the per-NPC trainer greeting text is
             // a later npc_text slice (same as the vendor's generic gossip line).
