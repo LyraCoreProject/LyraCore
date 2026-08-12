@@ -162,6 +162,9 @@ struct InMemoryStore {
     /// WORLDPORT_ACK gate: true = entity present -> a spurious ack is ignored;
     /// false (derive-Default) = absent -> a genuine transfer is pending.
     entity_in_world: bool,
+    /// An in-session controllable cache answer for movement desync regression tests.
+    entity_presence: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    entity_presence_checks: std::sync::atomic::AtomicUsize,
     username: String,
     session: Option<WorldSession>,
     characters: Vec<codec::CharacterView>,
@@ -1301,6 +1304,11 @@ impl WorldStore for InMemoryStore {
         spell_id // mock: self-contained ranks (no wrapper table in the mock store)
     }
     fn entity_in_world(&self, guid: u64) -> bool {
+        self.entity_presence_checks
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(present) = &self.entity_presence {
+            return present.load(std::sync::atomic::Ordering::SeqCst);
+        }
         // `live_guids` is the per-guid answer the realm-wide party frame needs ("is this member
         // live on THIS shard"). Empty by default, so the single flag above is still the answer
         // every test written before realm-wide party routing set.
@@ -2132,6 +2140,7 @@ fn auth_session(username: &str, client_seed: u32, client_proof: [u8; 20]) -> CMS
 /// fields via `..`. `quest_store()` is the sibling for tests that also need a login entity.
 fn tester_store(account_id: u64) -> InMemoryStore {
     InMemoryStore {
+        entity_in_world: true,
         username: "TESTER".into(),
         session: Some(WorldSession {
             account_id,
@@ -2915,7 +2924,10 @@ fn inbound_movement_is_recorded_under_its_opcode() {
         MSG_MOVE_HEARTBEAT_Client, MovementInfo, MovementInfo_MovementFlags, Vector3d,
     };
 
-    let store = std::sync::Arc::new(tester_store(7));
+    let store = std::sync::Arc::new(InMemoryStore {
+        entity_in_world: true,
+        ..tester_store(7)
+    });
 
     let (mut client, server_end) = UnixStream::pair().unwrap();
     let server_store = store.clone();
@@ -2970,9 +2982,10 @@ fn a_movement_packet_for_a_despawned_entity_never_kills_the_session() {
         MovementInfo_MovementFlags, Vector3d,
     };
     let calls: ShardCallLog = Default::default();
+    let entity_presence = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let store = std::sync::Arc::new(InMemoryStore {
         calls: calls.clone(),
-        movement_error: Some("mover not in world".into()),
+        entity_presence: Some(entity_presence.clone()),
         ..tester_store(7)
     });
 
@@ -2994,11 +3007,23 @@ fn a_movement_packet_for_a_despawned_entity_never_kills_the_session() {
             fall_time: 0.0,
         },
     };
-    // Two packets: the second only reaches the module if the first did not end the session. It is a
-    // STATE TRANSITION (never coalesced) so it forwards immediately.
+    // The first packet is a transfer tail. Once the coordinator cache sees the entity again, the
+    // next state transition must resume normal batched submission.
     beat(1)
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
+    for _ in 0..100 {
+        if store.entity_presence_checks.load(std::sync::atomic::Ordering::SeqCst) != 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_ne!(
+        store.entity_presence_checks.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the encrypted movement packet must reach the coordinator presence gate"
+    );
+    entity_presence.store(true, std::sync::atomic::Ordering::SeqCst);
     MSG_MOVE_START_FORWARD_Client { info: beat(2).info }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
@@ -3015,9 +3040,64 @@ fn a_movement_packet_for_a_despawned_entity_never_kills_the_session() {
             .iter()
             .filter(|(_, c)| c == "movement_update")
             .count(),
-        2,
-        "the session must keep serving packets after the desynced one is dropped"
+        1,
+        "the transfer-tail packet must not enter the batch, while movement resumes when presence returns"
     );
+}
+
+#[test]
+fn a_reappearing_entity_resets_the_movement_desync_tolerance() {
+    use wow_world_messages::vanilla::{
+        MSG_MOVE_START_FORWARD_Client, MSG_MOVE_STOP_Client, MovementInfo,
+        MovementInfo_MovementFlags, Vector3d,
+    };
+    let present = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let store = std::sync::Arc::new(InMemoryStore {
+        entity_presence: Some(present.clone()),
+        ..tester_store(7)
+    });
+    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
+    let info = |t| MovementInfo {
+        flags: MovementInfo_MovementFlags::empty(), timestamp: t,
+        position: Vector3d { x: -8950.0, y: -130.0, z: 83.0 }, orientation: 1.5, fall_time: 0.0,
+    };
+    let send_tail = |start: u32, end: u32, client: &mut UnixStream, enc: &mut EncrypterHalf| {
+        for t in start..end {
+            let sent = if t % 2 == 0 {
+                MSG_MOVE_START_FORWARD_Client { info: info(t) }.write_encrypted_client(&mut *client, enc)
+            } else {
+                MSG_MOVE_STOP_Client { info: info(t) }.write_encrypted_client(&mut *client, enc)
+            };
+            sent.unwrap();
+        }
+    };
+    let wait_for_checks = |n| {
+        for _ in 0..100 {
+            if store.entity_presence_checks.load(std::sync::atomic::Ordering::SeqCst) >= n { return; }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("the gateway did not check entity presence {n} times");
+    };
+
+    send_tail(0, MOVE_DESYNC_TOLERANCE, &mut client, &mut c_enc);
+    wait_for_checks(MOVE_DESYNC_TOLERANCE as usize);
+    present.store(true, std::sync::atomic::Ordering::SeqCst);
+    MSG_MOVE_START_FORWARD_Client { info: info(MOVE_DESYNC_TOLERANCE) }
+        .write_encrypted_client(&mut client, &mut c_enc).unwrap();
+    wait_for_checks(MOVE_DESYNC_TOLERANCE as usize + 1);
+    present.store(false, std::sync::atomic::Ordering::SeqCst);
+    send_tail(MOVE_DESYNC_TOLERANCE + 1, MOVE_DESYNC_TOLERANCE * 2 + 1, &mut client, &mut c_enc);
+    wait_for_checks(MOVE_DESYNC_TOLERANCE as usize * 2 + 1);
+    present.store(true, std::sync::atomic::Ordering::SeqCst);
+    MSG_MOVE_STOP_Client { info: info(MOVE_DESYNC_TOLERANCE * 2 + 1) }
+        .write_encrypted_client(&mut client, &mut c_enc).unwrap();
+    drop(client);
+    server.join().unwrap().expect("a restored entity must reset the tolerance before a later transfer tail arrives");
+    assert_eq!(store.moves.lock().unwrap().len(), 2,
+        "only movements sent while the entity was present may reach the shared batch");
 }
 
 /// The other side of the same gate: only a DESYNC is swallowed. A transport/reducer failure that
@@ -3029,6 +3109,7 @@ fn a_movement_failure_that_is_not_a_desync_is_still_session_fatal() {
         MSG_MOVE_HEARTBEAT_Client, MovementInfo, MovementInfo_MovementFlags, Vector3d,
     };
     let store = std::sync::Arc::new(InMemoryStore {
+        entity_in_world: true,
         movement_error: Some("timed out after 10s".into()),
         ..tester_store(7)
     });
@@ -3077,7 +3158,7 @@ fn a_movement_desync_that_never_heals_still_ends_the_session() {
     };
     let store = std::sync::Arc::new(InMemoryStore {
         // The entity is gone and is NEVER coming back — not a teleport tail, a real desync.
-        movement_error: Some("mover not in world".into()),
+        entity_in_world: false,
         ..tester_store(7)
     });
     let (mut client, server_end) = UnixStream::pair().unwrap();
