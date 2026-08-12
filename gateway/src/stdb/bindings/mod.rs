@@ -383,6 +383,7 @@ pub mod gw_accept_quest_reducer;
 pub mod gw_add_friend_reducer;
 pub mod gw_add_ignore_reducer;
 pub mod gw_attack_reducer;
+pub mod gw_auto_bank_item_reducer;
 pub mod gw_bind_home_reducer;
 pub mod gw_buy_item_reducer;
 pub mod gw_buyback_item_reducer;
@@ -940,6 +941,7 @@ pub use gw_accept_quest_reducer::gw_accept_quest;
 pub use gw_add_friend_reducer::gw_add_friend;
 pub use gw_add_ignore_reducer::gw_add_ignore;
 pub use gw_attack_reducer::gw_attack;
+pub use gw_auto_bank_item_reducer::gw_auto_bank_item;
 pub use gw_bind_home_reducer::gw_bind_home;
 pub use gw_buy_item_reducer::gw_buy_item;
 pub use gw_buyback_item_reducer::gw_buyback_item;
@@ -1727,6 +1729,10 @@ pub enum Reducer {
         actor_guid: u64,
         target_guid: u64,
     },
+    GwAutoBankItem {
+        actor_guid: u64,
+        slot: u8,
+    },
     GwBindHome {
         actor_guid: u64,
     },
@@ -2319,6 +2325,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwAddFriend { .. } => "gw_add_friend",
             Reducer::GwAddIgnore { .. } => "gw_add_ignore",
             Reducer::GwAttack { .. } => "gw_attack",
+            Reducer::GwAutoBankItem { .. } => "gw_auto_bank_item",
             Reducer::GwBindHome { .. } => "gw_bind_home",
             Reducer::GwBuyItem { .. } => "gw_buy_item",
             Reducer::GwBuybackItem { .. } => "gw_buyback_item",
@@ -3532,6 +3539,12 @@ impl __sdk::Reducer for Reducer {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
             }),
+            Reducer::GwAutoBankItem { actor_guid, slot } => {
+                __sats::bsatn::to_vec(&gw_auto_bank_item_reducer::GwAutoBankItemArgs {
+                    actor_guid: actor_guid.clone(),
+                    slot: slot.clone(),
+                })
+            }
             Reducer::GwBindHome { actor_guid } => {
                 __sats::bsatn::to_vec(&gw_bind_home_reducer::GwBindHomeArgs {
                     actor_guid: actor_guid.clone(),

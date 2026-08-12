@@ -1256,6 +1256,21 @@ impl Coordinator {
         )
     }
 
+    /// Auto-bank/auto-store-bank the item in `slot` (`CMSG_AUTOBANK_ITEM`/`CMSG_AUTOSTORE_BANK_ITEM`)
+    /// over the coordinator connection. The module infers deposit vs. withdraw from `slot` and
+    /// resolves the receiving free slot itself.
+    pub fn auto_bank_item(&self, _account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("auto_bank_item: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_auto_bank_item",
+            gw_auto_bank_item_then(actor_guid, slot)
+        )
+    }
+
     /// Accept quest `quest_id` from giver `giver_guid` (`CMSG_QUESTGIVER_ACCEPT_QUEST`) over the
     /// coordinator connection so the module attributes it to the caller. The module gates the accept
     /// (giver relation + range + level + not-already-held); a gameplay `Err` is per-action, not fatal.

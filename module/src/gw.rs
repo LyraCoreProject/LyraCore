@@ -791,6 +791,16 @@ pub fn gw_unequip_item(ctx: &ReducerContext, actor_guid: u64, from_slot: u8) -> 
     crate::items::apply_unequip_item(ctx, actor_guid, from_slot)
 }
 
+/// [`crate::items::apply_auto_bank_item`] with the owner named by guid — right-click to bank / right-
+/// click to withdraw, `CMSG_AUTOBANK_ITEM` / `CMSG_AUTOSTORE_BANK_ITEM`. The direction is inferred
+/// from `slot` in the module.
+#[reducer]
+pub fn gw_auto_bank_item(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Result<(), String> {
+    require_operator(ctx)?;
+    actor(ctx, actor_guid)?;
+    crate::items::apply_auto_bank_item(ctx, actor_guid, slot)
+}
+
 /// [`crate::items::apply_buyback_item`] with the buyer named by guid.
 #[reducer]
 pub fn gw_buyback_item(
