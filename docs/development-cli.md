@@ -4,8 +4,9 @@
 > is the clone → running realm → connected client path, with prerequisites and troubleshooting.
 > This page is the CLI's command and safety contract.
 
-`lyracore` runs the local developer fixture — since #327 a **sharded** one, three databases split
-along the continental divide (§"Sharded out of the box, on purpose"; `--single` collapses it back to one). It
+`lyracore` runs the local developer fixture — since #327 a **sharded** one, four databases split
+along the continental divide and the open-world/instance one
+(§"Sharded out of the box, on purpose"; `--single` collapses it back to one). It
 deliberately does not manage production realms, backups, system services, or the installation of
 Rust and SpacetimeDB.
 
@@ -61,13 +62,13 @@ lyracore update
 | `doctor` | are the prerequisites for `dev up` present? |
 | `preflight` | the OFFLINE deploy gate — the same five checks the core repo's own pre-publish gate runs, natively |
 | `publish` | the ONE correct `spacetime publish`, with the two mandatory flags and no path to a wipe |
-| `dev up` | start (or reuse) the loopback fixture — three databases, one continental split (`--single` for one) |
+| `dev up` | start (or reuse) the loopback fixture — four databases: two world shards, the instance pool, realm-core (`--single` for one) |
 | `dev status` | process identity, endpoint, and whether the database is actually published |
 | `dev logs` | tail the components this CLI started |
 | `dev smoke` | the pinned wire harness's generic login smoke against the running fixture |
 | `dev down` | stop only the processes this CLI started, and only if the PID is still ours |
 | `account create` | provision an account's SRP6 credentials without a password in `argv` |
-| `import` | replace the seed fixture with the real world — consent notice, then the four-stage ETL |
+| `import` | replace the seed fixture with the real world — consent notice, then the ETL on every database the fixture populates |
 | `config` | show, or set, the client-data path `import` and `doctor` remember |
 | `character gm` | flip GM commands on or off for a character, on whichever world shard has it |
 | `update` | pull the latest LyraCore into this checkout and tell you how to restart it |
@@ -99,7 +100,8 @@ distributes it or anything built from it, and states that the DBC half comes fro
 1.12.1 client. Only a typed `yes` or `--accept` proceeds; anything else exits 2 having run nothing.
 There is no terminal-less default: `import` with no TTY and no `--accept` refuses.
 
-Then four stages, fail-fast, each with its own diagnosis:
+Then two fixed stages plus an ETL and a class-spell pass **per populated database** — four stages
+under `--single`, six on the sharded fixture — fail-fast, each with its own diagnosis:
 
 | Stage | What runs | Failure looks like |
 | --- | --- | --- |
@@ -107,16 +109,28 @@ Then four stages, fail-fast, each with its own diagnosis:
 | 2 | locate the client `Data/` directory (`--client-data`, else prompt) and validate it | missing `dbc.MPQ`/`terrain.MPQ`; the install directory passed instead of `Data/` (the error names the corrected path); a TBC-or-later client (rejected by the archives only it has) |
 | 3 | `importer/scripts/import-world.sh` — the world ETL: creatures, quests, loot, vendors, gameobjects, terrain heightmap, navigation grid | the ETL's own `FAIL` lines, one per content family that came up short |
 | 4 | `importer/scripts/import-class-spells.sh` — the curated class-spell/trainer overlay | a "requested N ids but matched M" warning names ids your client build lacks |
+| 5–6 | stages 3 and 4 again, with `DB=lyracore-instances` — sharded fixture only | as above, and the message names the database |
 
 Stage 4 is run again on purpose even though the world ETL calls it: inside the ETL it is piped
 through a reporting `grep` that swallows its exit status, so a class-spell failure — the one that
 leaves every class unable to train past its starter kit — would otherwise surface in play rather
 than in the import.
 
+**Which databases get populated, and why not all of them.** The default world shard always, and
+`lyracore-instances` whenever the fixture routes dungeons there (#108): that database, not the world
+shard, spawns a Deadmines run's population from its own map-36 `game_creature_spawn` rows, and a
+realm where the pass was skipped reports nothing — the entry is routed correctly and the instance
+comes up empty. `lyracore-kalimdor` is deliberately absent: map 1 has no content in this dump slice,
+so importing it would be a long run that lands nothing. The pool's pass is the default ETL with `DB`
+changed and nothing else — same box, same `INCLUDE_MAPS=36` — so it duplicates the map-0 corridor
+onto the pool. Those rows are inert: routing never reads them, and the creature tick is seeded from
+players, so a playerless second copy of Elwynn costs one table scan per tick.
+
 A `--client-data` path is validated **before** the consent notice is answered, so a typo costs
 nothing; the flagless run is prompted for at stage 2, in order. Every stage runs from the checkout
-root regardless of the directory you invoked `lyracore` from. The target is the fixture database
-(`lyracore`), passed explicitly rather than left to each script's default.
+root regardless of the directory you invoked `lyracore` from. Every stage's target database is
+passed explicitly, never left to a script's default — that default is `lyracore`, and a silent one
+is how a shard once had its spells written to a different database entirely.
 
 ## `config` — remembering your client-data path
 
@@ -304,22 +318,51 @@ never met the sharded topology at all, and sharding is the thing that makes Lyra
 > removed from the codebase. The fixture keeps the broad splits: the continental shard map and
 > realm-core. The seam design is preserved in `docs/region-sharding.md` (retired).
 
-`dev up` brings up a **three-database** fixture, all of it published and health-checked by the
-CLI itself:
+> **The instance pool joined on 2026-08-11 (#108):** for the reason the region shard left. It is a
+> production tier a fresh clone could not exercise at all, so instance routing was the one split
+> nobody developed against.
+
+`dev up` brings up a **four-database** fixture, one per production tier in
+[`architecture.md`](./architecture.md) §3.1, all of it published and health-checked by the CLI
+itself:
 
 | Database | Role |
 | --- | --- |
 | `lyracore` | the default world shard — Eastern Kingdoms, where `init` seeds the fixture content (Northshire Valley) and a new character spawns |
 | `lyracore-kalimdor` | world shard for map 1, reached via a `LYRACORE_SHARD_MAP` rule |
+| `lyracore-instances` | the instance pool — every dungeon run (map 36, the Deadmines), reached by a second rule of the same shape |
 | `lyracore-realm` | realm-core — accounts and sessions, the character→shard index, load samples |
 
-So a fresh clone has one live split: the **Eastern Kingdoms | Kalimdor** continental divide,
-crossed by the escrowed cross-database transfer rather than by walking.
+So a fresh clone has two live splits: the **Eastern Kingdoms | Kalimdor** continental divide,
+crossed by the escrowed cross-database transfer rather than by walking, and the **open world |
+instance** one, crossed at a dungeon portal.
+
+Both shard-map rules are the same shape (`<map>:*=<db>`), because an instance map routes exactly
+like a continent one. The bucket half of a rule exists to spread ONE map's instances over a pool of
+several databases; a one-database pool does not need it, and map 0 is named by neither rule —
+Eastern Kingdoms stays whole on the default database.
+
+Three of those four names are production's own, and deliberately: what keeps a fixture off a
+production node is the node it is published to (`-s local`, loopback:3000), never the name.
 
 Two things the fixture does not give you. **Elwynn beyond Northshire has no content** until you run
 `./lyracore import` (a cmangos dump plus your own client MPQs) — Goldshire is not populated out of
 the box. And **`lyracore-kalimdor` is topology only** — map 1 has no content at all, so it is a
-routing demonstration and a `dev status` line, not a place to go.
+routing demonstration and a `dev status` line, not a place to go. `lyracore-instances` is *not* in
+that second category: `import` populates it, because it is the database that spawns a Deadmines
+run's population.
+
+⚠ **Dungeon populations still spawn on the world shard until you say otherwise.** Routing map 36 off
+`lyracore` does not move the spawning with it: `game_config.hosts_instances` is a per-database flag
+that defaults to on everywhere, so the gateway logs one WARNING per start saying every entry spawns
+~207 creatures on the world writer and evicts them again after the transfer. The run works. To model
+the production split, turn the flag off on the world shard once — it survives a republish:
+
+```bash
+spacetime sql -s local lyracore "UPDATE game_config SET hosts_instances = false WHERE id = 0"
+```
+
+Leave it alone under `dev up --single`, where the one database has to host its own dungeons.
 
 The CLI still *owns* the topology rather than inheriting it: the variables above are set to the
 fixture's own values for the child gateway, so a contributor with the production recipe exported in
@@ -331,13 +374,13 @@ experience to debug.
 > ⚠ **A schema change now means republishing every fixture database, not one.** `./lyracore publish`
 > covers the set; the same rule the production realm has always had (`docs/danger-zones.md` §1.2)
 > now applies locally, because the local realm is now genuinely sharded. Republishing only
-> `lyracore` after a migration leaves the other two on the old schema.
+> `lyracore` after a migration leaves the other three on the old schema.
 
 **`dev up --single` is the escape hatch.** It publishes and runs `lyracore` alone, with
 `LYRACORE_SHARD_MAP`, `LYRACORE_SHARD_MAP_FILE` and `LYRACORE_REALM_CORE`
 unset — per `gateway/src/config.rs`, an unconfigured shard map collapses every lookup to
 `LYRACORE_DATABASE`, so the result is byte-identical to a single-database build. Reach for it when
-you are debugging something that is not about sharding, when RAM is tight (three databases cost more
+you are debugging something that is not about sharding, when RAM is tight (four databases cost more
 than one), or to establish whether a bug is a sharding bug at all.
 
 ## `character gm` — grant or revoke GM commands

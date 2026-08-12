@@ -72,12 +72,18 @@ mod ct {
     pub const MAX_LOOT_GOLD: usize = 55;
     pub const LOOT_ID: usize = 56; // → creature_loot_template.entry (0 = no loot table)
                                    // Loot-family completeness (work-item 210): PickpocketLootId/SkinLootId sit IMMEDIATELY after LootId
-                                   // in every mangos-family creature_template schema (LootId, PickpocketLootId, SkinLootId are
-                                   // consecutive columns) — `[V]` confirm this against your own ClassicDB_1_12_1_z2815 dump before
-                                   // trusting it (unlike every other `ct::` const, these two were not hand-verified against a real
-                                   // dump row in this pass).
-    pub const PICKPOCKET_LOOT_ID: usize = 57; // [V] → pickpocketing_loot_template.entry (0 = no table)
-    pub const SKIN_LOOT_ID: usize = 58; // [V] → skinning_loot_template.entry (0 = no table)
+                                   // (LootId, PickpocketLootId, SkinningLootId are consecutive columns). These two carried a `[V]`
+                                   // "confirm against your own dump" caveat until the pinned dump's DDL was enumerated directly —
+                                   // both are now confirmed, along with every other const here.
+    pub const PICKPOCKET_LOOT_ID: usize = 57; // → pickpocketing_loot_template.entry (0 = no table)
+    pub const SKIN_LOOT_ID: usize = 58; // → skinning_loot_template.entry (0 = no table)
+    // Trainer service block: TrainerType, TrainerSpell, TrainerClass, TrainerRace, TrainerTemplateId
+    // run 71..75, bracketed by the verified `SKIN_LOOT_ID` and `GOSSIP_MENU_ID` anchors. Enumerated
+    // from the pinned dump's own CREATE TABLE — mangos-classic master has since gained
+    // DisplayIdProbability1-4 and five stat multipliers, so its order is 4 columns out here and 9 at
+    // `LootId`. TrainerSpell/TrainerRace/TrainerTemplateId are not ingested: no consumer.
+    pub const TRAINER_TYPE: usize = 71; // cmangos enum: CLASS 0 · MOUNTS 1 · TRADESKILLS 2 · PETS 3
+    pub const TRAINER_CLASS: usize = 73; // class ID (1..11), NOT a mask; 0 = serves every class
     pub const GOSSIP_MENU_ID: usize = 77; // creature_template.GossipMenuId
 }
 mod gm {
@@ -357,7 +363,8 @@ mod it {
                                     // SHEATH=113 below — PAGE_TEXT and START_QUEST land on that same anchored run.
     pub const PAGE_TEXT: usize = 107; // readable-item page id (work-item 213: needs its own reader packet, deferred)
     pub const START_QUEST: usize = 110; // quest-starter link (work-item 213: 194 consumes)
-    pub const SHEATH: usize = 113; // sheath animation slot (0=none, 1=2h back, 2=staff back, 3=hip, ...)
+    pub const SHEATH: usize = 113; // sheath posture, sent verbatim to the client (0=no stow, 1H sword=3,
+                                   // shield=4 — opaque client indices, see items/tables.rs::sheath)
     pub const BLOCK: usize = 115; // shield block value (CREATE TABLE: …RandomProperty(114), block(115), itemset(116))
     pub const MAX_DURABILITY: usize = 117;
     // BagFamily (work-item 213): bag-type restriction bitmask. Anchored right after the
@@ -560,6 +567,8 @@ fn classify_go_type(entry: u64, raw_type: u32) -> Option<u8> {
 /// unchanged), CHEST.data1 is the real `gameobject_loot_template` lootId (unchanged, now for every
 /// chest instead of a curated allowlist). Returns the row tuple AND, for a CHEST with a nonzero
 /// lootId, that lootId (to fold into `chest_loot_ids_used` — widened to EVERY imported chest).
+/// `size` rides verbatim into the END-appended `size` column for EVERY type; a 0 (absent/corrupt
+/// dump column) stays 0, which the gateway codec renders as 1.0.
 fn go_template_row(
     entry: u64,
     stored_type: u8,
@@ -567,34 +576,38 @@ fn go_template_row(
     name: &str,
     data0: u32,
     data1: u32,
+    size: f32,
 ) -> (String, Option<u32>) {
     let n = sql_text(name);
     match stored_type {
         GO_GATHER => {
             let (skill, item, req, gray) = gather_node(entry)
                 .expect("classify_go_type only returns GO_GATHER for a GATHER_NODES entry");
-            (format!("({entry},{GO_GATHER},{disp},{n},{item},{req},{skill},{GATHER_RESPAWN_SECS},{gray},0)"), None)
+            (format!("({entry},{GO_GATHER},{disp},{n},{item},{req},{skill},{GATHER_RESPAWN_SECS},{gray},0,{size})"), None)
         }
         GO_CHEST => {
             let loot_id = data1;
             (
-                format!("({entry},{GO_CHEST},{disp},{n},0,{loot_id},0,0,0,{data0})"),
+                format!("({entry},{GO_CHEST},{disp},{n},0,{loot_id},0,0,0,{data0},{size})"),
                 (loot_id != 0).then_some(loot_id),
             )
         }
         GO_GOOBER => (
-            format!("({entry},{GO_GOOBER},{disp},{n},0,0,0,0,0,{data0})"),
+            format!("({entry},{GO_GOOBER},{disp},{n},0,0,0,0,0,{data0},{size})"),
             None,
         ),
         GO_DOOR => (
-            format!("({entry},{GO_DOOR},{disp},{n},0,0,0,0,0,{data1})"),
+            format!("({entry},{GO_DOOR},{disp},{n},0,0,0,0,0,{data1},{size})"),
             None,
         ),
         GO_BUTTON => (
-            format!("({entry},{GO_BUTTON},{disp},{n},0,0,0,0,0,{data1})"),
+            format!("({entry},{GO_BUTTON},{disp},{n},0,0,0,0,0,{data1},{size})"),
             None,
         ),
-        other => (format!("({entry},{other},{disp},{n},0,0,0,0,0,0)"), None), // QUESTGIVER + every INERT type
+        other => (
+            format!("({entry},{other},{disp},{n},0,0,0,0,0,0,{size})"),
+            None,
+        ), // QUESTGIVER + every INERT type
     }
 }
 
@@ -742,6 +755,9 @@ mod got {
     pub const TYPE: usize = 1;
     pub const DISPLAY_ID: usize = 2;
     pub const NAME: usize = 3;
+    // The prop's render scale (OBJECT_FIELD_SCALE_X); gathering nodes are authentically sub-1.0.
+    // Carried verbatim — the 0/absent → 1.0 fallback lives in the gateway codec, not here.
+    pub const SIZE: usize = 7;
     // Positionally identical across EVERY cmangos GO type (only the per-type MEANING differs — see
     // `go_template_row`'s doc): CHEST data0=lockId (repo-verified) data1=lootId (a
     // gameobject_loot_template entry, work-item 210); DOOR/BUTTON data0=startOpen data1=lockId [V];
@@ -3466,6 +3482,10 @@ fn build_dump_plan(
     // etc.). Their spawns are in the box but should never appear in regular gameplay — skip template
     // AND suppress their spawns from the packed payload below.
     let mut excluded_entries: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    // How many imported templates carry a nonzero `trainer_class`. Reported below so an operator can
+    // confirm the columns populated: a wrong index reads a real neighbouring cell, which is the one
+    // failure mode here that produces plausible data instead of an error.
+    let mut class_trainer_count: usize = 0;
     for row in parse_table(dump, "creature_template") {
         let entry: u64 = field(&row, ct::ENTRY).parse().unwrap_or(0);
         if !entries.contains(&entry) {
@@ -3551,8 +3571,19 @@ fn build_dump_plan(
         // `aggro_range` (proximity aggro) has no cmangos source column, so emit 0 (passive —
         // retaliate-only, the column default); aggression tuning is a separate content pass.
         // `pickpocket_loot_id`/`skin_loot_id` (work-item 210) are END-appended after `armor`.
+        // Trainer service columns, END-appended after `skin_loot_id`. Both parse to `u8` and fall to
+        // 0 on an absent or unparseable cell; for `trainer_class` that 0 is the fail-open "serves
+        // everyone" value. Not `num_or_zero`: it only rewrites an EMPTY cell and would splice a
+        // non-numeric one into the INSERT, aborting the statement.
+        let trainer_type_val: u8 = field(&row, ct::TRAINER_TYPE).parse().unwrap_or(0);
+        let trainer_class_val: u8 = field(&row, ct::TRAINER_CLASS).parse().unwrap_or(0);
+        if trainer_class_val != 0 {
+            class_trainer_count += 1;
+        }
         templates.push(format!(
-            "({entry},{name},{subname},{display},{level},{health},{faction},{npc},{unit},{ctype},{family},{tflags},{rank},{scale},{bat},{mmin},{mmax},{maxlvl},{maxhp},0,{dmin},{dmax},{armor},{pploot},{skinloot})",
+            "({entry},{name},{subname},{display},{level},{health},{faction},{npc},{unit},{ctype},{family},{tflags},{rank},{scale},{bat},{mmin},{mmax},{maxlvl},{maxhp},0,{dmin},{dmax},{armor},{pploot},{skinloot},{ttype},{tclass})",
+            ttype = trainer_type_val,
+            tclass = trainer_class_val,
             armor = num_or_zero(ct::ARMOR),
             dmin = dmg_min,
             dmax = dmg_max,
@@ -3783,7 +3814,7 @@ fn build_dump_plan(
     }
 
     eprintln!(
-        "mapped: {} templates, {} spawns ({} excluded), {} waypoints",
+        "mapped: {} templates ({class_trainer_count} class-gated trainers), {} spawns ({} excluded), {} waypoints",
         templates.len(),
         spawns.len() - excluded_count,
         excluded_count,
@@ -3802,7 +3833,7 @@ fn build_dump_plan(
     if family_active(args, "creatures") {
         stmts.push("DELETE FROM game_creature_waypoint WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_template WHERE entry > 0".into());
-        push_insert(&mut stmts, "game_creature_template", "entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id", &templates);
+        push_insert(&mut stmts, "game_creature_template", "entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class", &templates);
         push_insert(
             &mut stmts,
             "game_creature_waypoint",
@@ -3824,6 +3855,7 @@ fn build_dump_plan(
         name: String,
         data0: u32,
         data1: u32,
+        size: f32,
     }
     let mut dropped_type25: Vec<u64> = Vec::new();
     let go_meta: std::collections::HashMap<u64, GoMeta> = go_tmpls
@@ -3842,6 +3874,9 @@ fn build_dump_plan(
             let name = field(row, got::NAME).to_string();
             let data0: u32 = field(row, got::DATA0).parse().unwrap_or(0);
             let data1: u32 = field(row, got::DATA1).parse().unwrap_or(0);
+            // 0 on an unparseable/absent column — the gateway reads that as "no size stored" and
+            // sends 1.0, never an invisible prop.
+            let size: f32 = field(row, got::SIZE).parse().unwrap_or(0.0);
             Some((
                 entry,
                 GoMeta {
@@ -3850,6 +3885,7 @@ fn build_dump_plan(
                     name,
                     data0,
                     data1,
+                    size,
                 },
             ))
         })
@@ -3928,6 +3964,7 @@ fn build_dump_plan(
             &meta.name,
             meta.data0,
             meta.data1,
+            meta.size,
         );
         go_template_rows.push(row);
         if let Some(loot_id) = loot_id_used {
@@ -4323,7 +4360,7 @@ fn build_dump_plan(
     // The gameobject SPAWNS load separately via the import_gameobjects reducer below (also family-gated).
     if family_active(args, "gameobjects") {
         stmts.push("DELETE FROM game_gameobject_template WHERE entry > 0".into());
-        push_insert(&mut stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id", &go_template_rows);
+        push_insert(&mut stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size", &go_template_rows);
     }
     // Trainer spell lists (family "trainers").
     if family_active(args, "trainers") {
@@ -4761,35 +4798,43 @@ mod tests {
     fn go_template_row_carries_lock_id_per_type_and_widens_chest_loot() {
         // CHEST: dump data0 (lockId) -> template lock_id column; dump data1 (lootId) -> template data1,
         // AND is returned as the "fold into chest_loot_ids_used" value (widened to EVERY chest now).
-        let (row, loot_used) = go_template_row(106318, GO_CHEST, 259, "Battered Chest", 4242, 2277);
-        assert_eq!(row, "(106318,3,259,'Battered Chest',0,2277,0,0,0,4242)");
+        let (row, loot_used) =
+            go_template_row(106318, GO_CHEST, 259, "Battered Chest", 4242, 2277, 1.0);
+        assert_eq!(row, "(106318,3,259,'Battered Chest',0,2277,0,0,0,4242,1)");
         assert_eq!(loot_used, Some(2277));
         // A CHEST with lootId 0 (unimported drop table, or the seed/demo chest) does NOT get folded in.
-        let (_, none_used) = go_template_row(1, GO_CHEST, 1, "No Loot Chest", 0, 0);
+        let (_, none_used) = go_template_row(1, GO_CHEST, 1, "No Loot Chest", 0, 0, 1.0);
         assert_eq!(none_used, None);
         // DOOR/BUTTON: dump data1 (lockId) -> template lock_id column (data0 [startOpen] does NOT ride
         // the template — it feeds the SPAWN row's initial state instead, see `go_initial_state`).
-        let (door_row, door_loot) = go_template_row(2000, GO_DOOR, 100, "Stormwind Gate", 1, 555);
-        assert_eq!(door_row, "(2000,0,100,'Stormwind Gate',0,0,0,0,0,555)");
+        let (door_row, door_loot) =
+            go_template_row(2000, GO_DOOR, 100, "Stormwind Gate", 1, 555, 1.0);
+        assert_eq!(door_row, "(2000,0,100,'Stormwind Gate',0,0,0,0,0,555,1)");
         assert_eq!(door_loot, None);
-        let (button_row, _) = go_template_row(2001, GO_BUTTON, 101, "Lever", 0, 777);
-        assert_eq!(button_row, "(2001,1,101,'Lever',0,0,0,0,0,777)");
+        let (button_row, _) = go_template_row(2001, GO_BUTTON, 101, "Lever", 0, 777, 1.0);
+        assert_eq!(button_row, "(2001,1,101,'Lever',0,0,0,0,0,777,1)");
         // GOOBER: dump data0 (lockId) -> template lock_id column.
-        let (goober_row, _) = go_template_row(3000, GO_GOOBER, 200, "Suspicious Lever", 888, 999);
-        assert_eq!(goober_row, "(3000,10,200,'Suspicious Lever',0,0,0,0,0,888)");
+        let (goober_row, _) =
+            go_template_row(3000, GO_GOOBER, 200, "Suspicious Lever", 888, 999, 1.0);
+        assert_eq!(
+            goober_row,
+            "(3000,10,200,'Suspicious Lever',0,0,0,0,0,888,1)"
+        );
         // GATHER: unaffected by lock_id (always 0) — the existing gather-row shape, now with a 10th
-        // (lock_id) column appended.
-        let (gather_row, gather_loot) = go_template_row(1731, GO_GATHER, 259, "Copper Vein", 0, 0);
+        // (lock_id) + 11th (size) column appended. A node's sub-1.0 size rides through verbatim.
+        let (gather_row, gather_loot) =
+            go_template_row(1731, GO_GATHER, 259, "Copper Vein", 0, 0, 0.5);
         assert_eq!(
             gather_row,
-            "(1731,25,259,'Copper Vein',2770,1,186,300,100,0)"
+            "(1731,25,259,'Copper Vein',2770,1,186,300,100,0,0.5)"
         );
         assert_eq!(gather_loot, None);
-        // QUESTGIVER + an INERT type both fall through to the all-zero catch-all arm (10 cols).
-        let (qg_row, _) = go_template_row(4000, GO_QUESTGIVER, 50, "Wanted Poster", 1, 2);
-        assert_eq!(qg_row, "(4000,2,50,'Wanted Poster',0,0,0,0,0,0)");
-        let (inert_row, _) = go_template_row(5000, 8, 60, "Spell Focus", 3, 4);
-        assert_eq!(inert_row, "(5000,8,60,'Spell Focus',0,0,0,0,0,0)");
+        // QUESTGIVER + an INERT type both fall through to the all-zero catch-all arm (11 cols). An
+        // absent dump size arrives here as 0 and stays 0.
+        let (qg_row, _) = go_template_row(4000, GO_QUESTGIVER, 50, "Wanted Poster", 1, 2, 0.0);
+        assert_eq!(qg_row, "(4000,2,50,'Wanted Poster',0,0,0,0,0,0,0)");
+        let (inert_row, _) = go_template_row(5000, 8, 60, "Spell Focus", 3, 4, 1.75);
+        assert_eq!(inert_row, "(5000,8,60,'Spell Focus',0,0,0,0,0,0,1.75)");
     }
 
     #[test]
@@ -5395,9 +5440,23 @@ mod tests {
     /// Build a `creature_template` INSERT tuple wide enough to reach `ct::GOSSIP_MENU_ID` (col 77):
     /// entry at col 0, gossip_menu_id at col 77, everything else `0`.
     fn creature_template_row(entry: u64, gossip_menu_id: u64) -> String {
+        creature_template_row_with_trainer(entry, gossip_menu_id, 0, 0)
+    }
+
+    /// `creature_template_row` plus `TrainerType` (71) and `TrainerClass` (73). Both sit below
+    /// `ct::GOSSIP_MENU_ID`, so the row is already wide enough. The gap between them is
+    /// `TrainerSpell`, which is not ingested.
+    fn creature_template_row_with_trainer(
+        entry: u64,
+        gossip_menu_id: u64,
+        trainer_type: u64,
+        trainer_class: u64,
+    ) -> String {
         let mut cols = vec!["0".to_string(); ct::GOSSIP_MENU_ID + 1];
         cols[ct::ENTRY] = entry.to_string();
         cols[ct::GOSSIP_MENU_ID] = gossip_menu_id.to_string();
+        cols[ct::TRAINER_TYPE] = trainer_type.to_string();
+        cols[ct::TRAINER_CLASS] = trainer_class.to_string();
         format!("({})", cols.join(","))
     }
 
@@ -5810,6 +5869,79 @@ mod tests {
         m0.include_maps = vec![36];
         assert!(creature_row_kept(&m0, 36, -16.4, -383.07, -33.35, 644));
         assert!(map_in_run(&m0, 0) && map_in_run(&m0, 36) && !map_in_run(&m0, 1));
+    }
+
+    /// The trainer columns land from the indices they are actually written at, with `TrainerSpell`
+    /// skipped between them.
+    ///
+    /// This is the only automated guard on those indices. A wrong one reads a real neighbouring cell
+    /// and produces plausible data rather than an error, so the fixture gives type and class
+    /// different values and poisons every neighbour.
+    #[test]
+    fn trainer_type_and_class_import_from_their_own_columns() {
+        // Paladin trainer: type 0 (CLASS) / class 2. Type stays at the enum's 0, so the class cell
+        // alone carries the signal — the same shape the live gate keys on.
+        let mut paladin = vec!["0".to_string(); ct::GOSSIP_MENU_ID + 1];
+        paladin[ct::ENTRY] = "925".to_string();
+        paladin[ct::TRAINER_TYPE] = "0".to_string();
+        paladin[ct::TRAINER_CLASS] = "2".to_string();
+        // Poison every neighbour so a slipped index reads a rejected value, not a plausible 0. Note
+        // 71+1 and 73-1 are the same cell: the two ingested columns are not adjacent.
+        paladin[70] = "66".to_string(); // MovementType — one before TrainerType
+        paladin[72] = "7".to_string(); // TrainerSpell — between the two we ingest
+        paladin[74] = "9".to_string(); // TrainerRace  — one after TrainerClass
+        let dump = format!(
+            "x INSERT INTO `creature` VALUES \
+             (1,925,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0),\
+             (2,11867,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0),\
+             (3,620,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES ({}),{},{}; y",
+            paladin.join(","),
+            // Weapon master: TRADESKILLS (2) with NO class — serves everyone.
+            creature_template_row_with_trainer(11867, 0, 2, 0),
+            // A plain critter: both cells 0, the overwhelming majority of the dump.
+            creature_template_row_with_trainer(620, 0, 0, 0),
+        );
+        let args = test_args();
+        let plan = build_dump_plan(&dump, &args, &None, &None).expect("build_dump_plan");
+        let insert = plan
+            .stmts
+            .iter()
+            .find(|s| s.starts_with("INSERT INTO game_creature_template"))
+            .unwrap_or_else(|| panic!("template insert present: {:?}", plan.stmts));
+        // The two columns are named, and END-appended after skin_loot_id (the migration rule).
+        assert!(
+            insert.contains("skin_loot_id,trainer_type,trainer_class"),
+            "trainer columns are named and end-appended: {insert}"
+        );
+        // Every emitted tuple, keyed by entry -> its last two cells.
+        let values = insert
+            .split_once(" VALUES ")
+            .expect("the insert names its columns then VALUES")
+            .1;
+        let trailing: std::collections::HashMap<&str, (&str, &str)> = values
+            .split("),(")
+            .map(|t| {
+                let t = t.trim_start_matches('(').trim_end_matches(';').trim_end_matches(')');
+                let f: Vec<&str> = t.split(',').collect();
+                (f[0], (f[f.len() - 2], f[f.len() - 1]))
+            })
+            .collect();
+        assert_eq!(
+            trailing.get("925"),
+            Some(&("0", "2")),
+            "the Paladin trainer imports type 0 / class 2 — a slipped index would read 66, 7 or 9: {insert}"
+        );
+        assert_eq!(
+            trailing.get("11867"),
+            Some(&("2", "0")),
+            "the weapon master imports TRADESKILLS with class 0 (serves everyone): {insert}"
+        );
+        assert_eq!(
+            trailing.get("620"),
+            Some(&("0", "0")),
+            "an ordinary creature imports 0/0 — the fail-open default: {insert}"
+        );
     }
 
     #[test]

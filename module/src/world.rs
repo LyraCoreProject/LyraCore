@@ -3,6 +3,7 @@
 //! `gw::gw_*` reducers drive (#483 — the sender-path twins are gone) plus `on_disconnect`.
 //! [entity]/[event]
 
+use lyracore_shared::constants::sheath_state;
 use lyracore_shared::spatial;
 use spacetimedb::{
     reducer, table, Identity, ReducerContext, Table,
@@ -320,6 +321,22 @@ pub struct WorldEntity {
     /// so `publish` auto-migrates.
     #[default(0)]
     pub sheet_crit_bp: u32,
+    /// `UNIT_FIELD_BYTES_2` (#101): byte 0 is the SHEATH STATE — 0 = weapons stowed, 1 = melee drawn,
+    /// 2 = ranged drawn. Written only by `set_sheathed` (the `CMSG_SETSHEATHED` the client sends on
+    /// `Z`), read by the gateway create block + relay so PEERS see a weapon drawn or stowed at all.
+    /// Distinct from `unit_bytes_1` (stand state / shapeshift / ghost vis) and from `player_bytes_2`
+    /// (facial hair / rest state) — three different wire fields, easy to confuse.
+    /// The remaining bytes (1 = PvP flags, 2 = pet flags, 3 = shapeshift) stay 0 until something
+    /// needs them; the whole u32 is stored so they don't each cost a migration.
+    /// `#[default(0)]` + END-appended so `publish` auto-migrates existing rows (weapons stowed, which
+    /// is what every existing row renders as today).
+    #[default(0)]
+    pub unit_bytes_2: u32,
+    /// Bank bag slots the player owns, mirrored off `Character.bank_bag_slots` at login and written
+    /// back by `persist_entity` — the `money` treatment, so the purchase reads and writes one place.
+    /// Always 0 on a creature. `#[default(0)]` + END-appended so `publish` auto-migrates.
+    #[default(0)]
+    pub bank_bag_slots: u8,
 }
 
 impl WorldEntity {
@@ -1139,7 +1156,7 @@ pub(crate) fn snapshot_needs_persist(
         || drift_sq > PERSIST_MAX_DRIFT_YD * PERSIST_MAX_DRIFT_YD
 }
 
-/// FALL DAMAGE (058), absorbed out of `movement_update`'s own inline block (issue #385): given the
+/// Environmental damage, absorbed out of `movement_update`'s own inline block (issue #385): given the
 /// shared curve's damage figure (`lyracore_shared::env::fall_damage`, already computed by the caller
 /// from the client's airborne time + max_health) and the mover's CURRENT health, decide the health to
 /// carry forward and whether the landing is lethal. A lethal fall does NOT subtract here — the
@@ -1147,7 +1164,7 @@ pub(crate) fn snapshot_needs_persist(
 /// re-fetches fresh (the shared death funnel: channel teardown, durability, on_death hooks — identical
 /// to a melee death, so release/reclaim works). `dmg == 0` (a soft landing) is a no-op pass-through.
 /// Pure/testable.
-pub(crate) fn resolve_fall_damage(dmg: u32, health: u32) -> (u32, bool) {
+pub(crate) fn resolve_environmental_damage(dmg: u32, health: u32) -> (u32, bool) {
     if dmg == 0 {
         return (health, false);
     }
@@ -1175,7 +1192,7 @@ pub(crate) struct MovementPlan {
     /// Relay this heartbeat's motion to nearby peers via `game_entity_motion`. Always `true` by
     /// construction — see the struct doc.
     pub relay_motion: bool,
-    /// A lethal fall (see [`resolve_fall_damage`]): the position already persisted (if
+    /// A lethal fall (see [`resolve_environmental_damage`]): the position already persisted (if
     /// `persist_entity`), `combat::kill_player` runs next.
     pub fall_lethal: bool,
     /// A real translation, not a pure turn ([`MovementDelta::moved`]) — gates the channel break and
@@ -1304,7 +1321,7 @@ pub(crate) fn apply_movement_update(
     {
         if let Some(ft) = lyracore_shared::env::fall_time_from_movement_info(&movement_info) {
             let dmg = lyracore_shared::env::fall_damage(ft, mover.max_health);
-            let (health, lethal) = resolve_fall_damage(dmg, mover.health);
+            let (health, lethal) = resolve_environmental_damage(dmg, mover.health);
             mover.health = health;
             fall_lethal = lethal;
         }
@@ -1322,6 +1339,23 @@ pub(crate) fn apply_movement_update(
     // hook chain was ~58µs at 10k moves/s).
     if mover.is_player() && !mover.dead && (move_time_ms / 1000 != old_move_ms / 1000) {
         crate::rest::check_rest_state(ctx, &mut mover);
+    }
+    // Breath shares the ~1 Hz movement gate with rest state, but only records the underwater edge;
+    // its own scheduled tick advances the non-spatial timer while a player is standing still.
+    if mover.is_player()
+        && !mover.dead
+        && !mover.godmode
+        && mover.player_flags & lyracore_shared::constants::player_flags::GHOST == 0
+        && (move_time_ms / 1000 != old_move_ms / 1000)
+    {
+        let liquid_level = crate::terrain::liquid_level_at(ctx, mover.map_id, mover.x, mover.y);
+        let submerged = lyracore_shared::env::is_submerged(
+            mover.z,
+            liquid_level.unwrap_or_default(),
+            liquid_level.is_some(),
+            mover.movement_flags,
+        );
+        crate::breath::update_breath_edge(ctx, &mover, submerged);
     }
     // `old_x/old_y/old_z` are the last PERSISTED position, so this drift is exactly how far the
     // stored row has fallen behind the client.
@@ -1472,12 +1506,7 @@ pub(crate) fn apply_inspect(
 ) -> Result<(), String> {
     let target = crate::helpers::live_entity(ctx, target_guid)
         .map_err(|_| "no such inspect target".to_string())?;
-    let (dx, dy, dz) = (
-        target.x - inspector.x,
-        target.y - inspector.y,
-        target.z - inspector.z,
-    );
-    let dist_sq = dx * dx + dy * dy + dz * dz;
+    let dist_sq = crate::helpers::dist_sq(&inspector, &target);
     let friendly = ctx.db.game_faction_template().count() == 0
         || crate::faction::is_friendly(ctx, inspector.faction_template, target.faction_template);
     can_inspect(
@@ -1665,6 +1694,32 @@ pub(crate) fn ghost_restored_fields(player_flags: u32, unit_bytes_1: u32) -> (bo
     )
 }
 
+/// Draw or stow the actor's weapons — the `CMSG_SETSHEATHED` the client sends when a player presses
+/// `Z` or starts an attack. Writes byte 0 of `UNIT_FIELD_BYTES_2`; the gateway's entity-update relay
+/// turns the row change into a VALUES packet, which is the ONLY way an observer learns that someone
+/// else drew or stowed a weapon. Without this the field stays 0 forever and every peer renders every
+/// player permanently unarmed. Where a stowed weapon hangs is a different field — the per-item
+/// `item_template.sheath` byte in the item query. [#101]
+pub(crate) fn apply_set_sheathed(
+    ctx: &ReducerContext,
+    mut actor: WorldEntity,
+    state: u8,
+) -> Result<(), String> {
+    if !sheath_state::is_valid(state) {
+        return Err(format!("invalid sheath state {state}"));
+    }
+    let packed = sheath_state::packed_with(actor.unit_bytes_2, state);
+    // No-op guard: the client re-sends the CURRENT state on every weapon swap and on some ability
+    // presses. Writing the identical row anyway would fire the entity-update relay, which broadcasts
+    // a VALUES packet to every observer in range — a swap-spam amplifier on a busy cell.
+    if packed == actor.unit_bytes_2 {
+        return Ok(());
+    }
+    actor.unit_bytes_2 = packed;
+    ctx.db.game_world_entity().guid().update(actor);
+    Ok(())
+}
+
 /// Resurrection Sickness debuff spell id (vanilla 15007). Seeded in `seed.rs` as a single negative
 /// A_MOD_STAT(STAT_ALL) aura and landed by `do_spirit_healer_res` via the shared aura engine.
 pub const RESURRECTION_SICKNESS_SPELL: u32 = 15007;
@@ -1772,6 +1827,8 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
         c.xp = entity.xp;
         c.next_level_xp = entity.next_level_xp;
         c.money = entity.money;
+        // Bought bank bag slots persist like the purse they were paid from.
+        c.bank_bag_slots = entity.bank_bag_slots;
         // Persist current health/power so a relog resumes at the same vitals instead
         // of being force-healed to full. Clamp health to >=1: the "relog comes back ALIVE" rule
         // (see the ghost-corpse cleanup in `player_login`) means a player who logged out dead/at 0 HP
@@ -1850,6 +1907,9 @@ pub(crate) fn remove_from_world(ctx: &ReducerContext, owner: Identity) {
     // shouldn't leave the player "attacking" or hold a target in combat). `disengage` removes both
     // its own attack and any attacks targeting it (future PvP).
     crate::combat::disengage(ctx, entity.guid);
+
+    // A live Trade Session dies with the leaver — the partner hears `TradeCanceled` (#120).
+    crate::trade::cancel_trade_for(ctx, entity.guid);
 
     // Clear the player's corpse on leaving the world (logout/disconnect) so a dead/ghost
     // player who quits doesn't leave an orphan body behind (corpse decay to bones rides the gc reaper). Idempotent.
@@ -1938,7 +1998,7 @@ mod tests {
     use super::{
         accrue_played_on_persist, can_inspect, ghost_restored_fields, is_cross_map_teleport,
         movement_violation, persisted_gm_playtest, persisted_pending_ghost, plan_movement,
-        resolve_fall_damage, snapshot_needs_persist, spirit_res_vitals, MovementDelta,
+        resolve_environmental_damage, snapshot_needs_persist, spirit_res_vitals, MovementDelta,
         INSPECT_RANGE_SQ, MOVE_VIOLATION_SPEED, MOVE_VIOLATION_TELEPORT, PERSIST_MAX_DRIFT_YD,
         RESURRECTION_SICKNESS_SPELL, RUN_SPEED_BP_1X,
     };
@@ -2027,24 +2087,24 @@ mod tests {
     // its own copy of the gate.
 
     #[test]
-    fn resolve_fall_damage_subtracts_short_of_lethal_and_flags_lethal_without_mutating() {
+    fn resolve_environmental_damage_subtracts_short_of_lethal_and_flags_lethal_without_mutating() {
         assert_eq!(
-            resolve_fall_damage(0, 50),
+            resolve_environmental_damage(0, 50),
             (50, false),
             "a soft landing (no damage) is a no-op"
         );
         assert_eq!(
-            resolve_fall_damage(20, 50),
+            resolve_environmental_damage(20, 50),
             (30, false),
             "sub-lethal damage subtracts"
         );
         assert_eq!(
-            resolve_fall_damage(50, 50),
+            resolve_environmental_damage(50, 50),
             (50, true),
             "exactly-lethal damage is flagged, not subtracted — kill_player re-fetches fresh"
         );
         assert_eq!(
-            resolve_fall_damage(80, 50),
+            resolve_environmental_damage(80, 50),
             (50, true),
             "over-lethal damage is flagged, not subtracted either"
         );

@@ -80,6 +80,44 @@ pub fn area_id_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<u
     (chunk.area_id != 0).then_some(chunk.area_id)
 }
 
+/// The imported liquid surface at `(x, y)`, or `None` when terrain is absent or its cell records
+/// no liquid. Like [`ground_z`] and [`area_id_at`], this is one indexed primary-key lookup with no
+/// interpolation because imported liquid is flat for a cell.
+pub fn liquid_level_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32> {
+    let (cx, cy) = (cell_index(x)?, cell_index(y)?);
+    let chunk = ctx
+        .db
+        .game_terrain_chunk()
+        .key()
+        .find(cell_key(map_id, cx, cy))?;
+    chunk.has_liquid.then_some(chunk.liquid_level)
+}
+
+/// Logs whether the live player is submerged according to its current movement state and imported
+/// terrain cell. This is a read-only operator probe; it does not change movement or environmental
+/// damage behavior.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_check_submerged(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
+    let entity = crate::helpers::live_entity(ctx, guid)?;
+    if !entity.is_player() {
+        return Err(format!("guid {guid} is not a player"));
+    }
+    let liquid_level = liquid_level_at(ctx, entity.map_id, entity.x, entity.y);
+    let submerged = liquid_level.is_some_and(|level| {
+        lyracore_shared::env::is_submerged(entity.z, level, true, entity.movement_flags)
+    });
+    spacetimedb::log::info!(
+        "submerged probe guid {guid} at map {} ({:.2},{:.2},{:.2}): liquid_level={liquid_level:?} movement_flags=0x{:08x} submerged={submerged}",
+        entity.map_id,
+        entity.x,
+        entity.y,
+        entity.z,
+        entity.movement_flags,
+    );
+    Ok(())
+}
+
 /// Chase the position's MCNK `area_id` (`area_id_at` above) ONE hop up `game_area.parent_area_id` to
 /// its enclosing zone — e.g. a Goldshire subzone area resolves to zone 12 (Elwynn). NOT a full
 /// recursive area-hierarchy walk (a subzone-of-a-subzone would need more than one hop; deferred to

@@ -277,6 +277,43 @@ pub fn build_buy_failed(vendor_guid: u64, item_entry: u32, err: &str) -> SMSG_BU
     }
 }
 
+/// Build `SMSG_SHOW_BANK` — opens the bank window, carrying the banker's guid.
+pub fn build_show_bank(banker_guid: u64) -> SMSG_SHOW_BANK {
+    SMSG_SHOW_BANK {
+        guid: Guid::new(banker_guid),
+    }
+}
+
+/// Build `SMSG_BUY_BANK_SLOT_RESULT`.
+pub fn build_buy_bank_slot_result(result: BuyBankSlotResult) -> SMSG_BUY_BANK_SLOT_RESULT {
+    SMSG_BUY_BANK_SLOT_RESULT { result }
+}
+
+/// Map `apply_buy_bank_slot`'s `Err` string onto `BuyBankSlotResult` by its leading `[N]` code
+/// (the trainer `[N]` precedent) — never by matching the prose, which can drift out from under a
+/// substring match. `lyracore_shared::bank::result`'s constants ARE the wire numbering, so `[N]`
+/// decodes straight through `BuyBankSlotResult::from_int`. An unparseable or out-of-range code
+/// falls back to `NotBanker`: a refusal, and the one outcome that asserts nothing about money or
+/// slot count, so a fallback here can never mislead the client into thinking a charge went through.
+pub fn parse_buy_bank_slot_result(err: &str) -> BuyBankSlotResult {
+    err.strip_prefix('[')
+        .and_then(|rest| rest.split(']').next())
+        .and_then(|code| code.parse::<u32>().ok())
+        .and_then(|code| BuyBankSlotResult::from_int(code).ok())
+        .unwrap_or(BuyBankSlotResult::NotBanker)
+}
+
+/// Build `SMSG_BUY_BANK_SLOT_RESULT` straight from the store call's outcome, so the dispatch
+/// handler never needs to name the gtker enum itself (the trainer/vendor handlers keep the same
+/// distance from their wire enums).
+pub fn build_buy_bank_slot_reply(outcome: Result<(), &str>) -> SMSG_BUY_BANK_SLOT_RESULT {
+    let result = match outcome {
+        Ok(()) => BuyBankSlotResult::Ok,
+        Err(e) => parse_buy_bank_slot_result(e),
+    };
+    build_buy_bank_slot_result(result)
+}
+
 /// Build the item or container CREATE_OBJECT (items slice-1 / bag extension). A non-spatial object:
 /// NO living/position movement block — just `UPDATEFLAG_ALL`. Branches on `inst.container_slots`:
 /// - Regular items (0): `ObjectType::Item` + `UpdateMask::Item` (baseline-safe, byte-identical).

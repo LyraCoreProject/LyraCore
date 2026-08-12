@@ -73,6 +73,9 @@ pub mod npc_flags {
     /// the raw flag. Innkeeper Farley(295) ships `npc_flags=135 = GOSSIP|QUESTGIVER|VENDOR|INNKEEPER`. The
     /// Northshire/Goldshire innkeepers carry this; the gossip "Make this inn your home" → `bind_home`.
     pub const INNKEEPER: u32 = 0x0000_0080;
+    /// `UNIT_NPC_FLAG_BANKER` (0x100, vanilla 1.12 / cmangos-classic) — opens the bank window and
+    /// gates every move into or out of a bank slot.
+    pub const BANKER: u32 = 0x0000_0100;
     /// `UNIT_NPC_FLAG_REPAIR` (0x4000, vanilla 1.12 / cmangos-classic) — repairs item durability
     /// (`CMSG_REPAIR_ITEM`). Armorers (Corina Steele 54, Quartermaster Hudson 1249, Hicks 1645, …)
     /// carry 0x4000|0x4 (REPAIR+VENDOR). NOTE: 0x1000 (4096) is AUCTIONEER in this numbering, NOT repair.
@@ -98,6 +101,31 @@ pub mod unit_vis_flags {
     /// the packed u32. The semi-transparent ghost render. OR this into `unit_bytes_1`; the
     /// codec's `unpack4` → `set_unit_bytes_1(a,b,c,d)` then places it in byte 3 (`d`).
     pub const GHOST: u32 = 0x0100_0000;
+}
+
+/// `UNIT_FIELD_BYTES_2` BYTE 0 — the sheath state (vanilla 1.12), stored in
+/// `game_world_entity.unit_bytes_2`. Says whether a weapon is DRAWN or STOWED; the per-item
+/// `item_template.sheath` byte (a different field, sent in the item query) says WHERE a stowed
+/// weapon hangs. Both are needed to render a sheathed weapon correctly. [#101]
+pub mod sheath_state {
+    /// Nothing drawn — weapons hang in their stow positions. The state every row starts in.
+    pub const UNARMED: u8 = 0;
+    /// Melee weapon(s) drawn and held.
+    pub const MELEE: u8 = 1;
+    /// Ranged weapon drawn and held.
+    pub const RANGED: u8 = 2;
+
+    /// The client's `CMSG_SETSHEATHED` payload is attacker-controlled: anything outside 0..=2 is a
+    /// malformed or hostile packet, and writing it into byte 0 would desync every observer's render.
+    pub fn is_valid(state: u8) -> bool {
+        matches!(state, UNARMED | MELEE | RANGED)
+    }
+
+    /// Replace byte 0 of a packed `unit_bytes_2`, preserving bytes 1-3 (PvP flags, pet flags,
+    /// shapeshift form) so a sheath change never clobbers a neighbour that later starts using them.
+    pub fn packed_with(unit_bytes_2: u32, state: u8) -> u32 {
+        (unit_bytes_2 & 0xFFFF_FF00) | state as u32
+    }
 }
 
 /// `UNIT_FIELD_FLAGS` bits (vanilla 1.12), stored in `game_world_entity.unit_flags`, sent in the CREATE
@@ -204,10 +232,10 @@ pub mod start_human_warrior {
 /// through unchanged — this module documents what the values MEAN so the gateway dispatch and the
 /// importer agree without duplicating magic numbers). `[V]` — confirm against your own dump; only
 /// GOSSIP/BANKER/VENDOR/TAXI/TRAINER/INNKEEPER are read by the dispatcher today, the rest are
-/// inert (submenu/banker/taxi systems aren't wired up — work-item 217 scope note).
+/// inert (submenu/taxi aren't wired up — work-item 217 scope note).
 pub mod gossip_option {
     pub const GOSSIP: u32 = 1; // plain text / submenu link (submenu navigation deferred, work-item 217)
-    pub const BANKER: u32 = 2; // opens the bank (system 133, not wired — inert)
+    pub const BANKER: u32 = 2; // opens the bank window
     pub const VENDOR: u32 = 3; // opens the vendor window (routes to build_list_inventory_raw)
     pub const TAXI: u32 = 4; // flight master (system 136, not wired — inert)
     pub const TRAINER: u32 = 5; // opens SMSG_TRAINER_LIST
@@ -244,6 +272,38 @@ mod tests {
     #[test]
     fn player_type_mask_is_0x19() {
         assert_eq!(type_mask::PLAYER, 0x19);
+    }
+
+    /// `packed_with` must touch BYTE 0 only. Byte 1 is PvP flags, byte 2 pet flags, byte 3 the
+    /// shapeshift form — a sheath toggle that cleared a druid's form byte would pop them out of Bear
+    /// on every `Z` press, which is exactly the class of bug a blind `= state as u32` would ship. [#101]
+    #[test]
+    fn packing_a_sheath_state_preserves_the_other_three_bytes() {
+        let neighbours = 0xAB_CD_EF_00_u32; // bytes 1-3 occupied, byte 0 clear
+        assert_eq!(
+            sheath_state::packed_with(neighbours, sheath_state::MELEE),
+            0xAB_CD_EF_01
+        );
+        // And going back to stowed clears byte 0 without disturbing them.
+        assert_eq!(
+            sheath_state::packed_with(0xAB_CD_EF_02, sheath_state::UNARMED),
+            0xAB_CD_EF_00
+        );
+    }
+
+    /// The `CMSG_SETSHEATHED` payload is attacker-controlled; only 0/1/2 are real states.
+    #[test]
+    fn sheath_state_validation_rejects_out_of_range_bytes() {
+        for ok in [
+            sheath_state::UNARMED,
+            sheath_state::MELEE,
+            sheath_state::RANGED,
+        ] {
+            assert!(sheath_state::is_valid(ok), "{ok} is a real sheath state");
+        }
+        for bad in [3u8, 4, 17, 255] {
+            assert!(!sheath_state::is_valid(bad), "{bad} must be refused");
+        }
     }
 
     #[test]
