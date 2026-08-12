@@ -518,9 +518,18 @@ impl WorldStore for Coordinator {
         subject: String,
         body: String,
         money: u32,
+        cod: u32,
         item_guid: u64,
     ) -> Result<()> {
-        self.mail_send(sender_guid, recipient_guid, subject, body, money, item_guid)
+        self.mail_send(
+            sender_guid,
+            recipient_guid,
+            subject,
+            body,
+            money,
+            cod,
+            item_guid,
+        )
     }
 
     fn mail_take_money(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
@@ -545,6 +554,8 @@ impl WorldStore for Coordinator {
         money: u32,
         postage: u32,
         item_guid: u64,
+        cod: u32,
+        cod_source_mail_id: u64,
     ) -> Result<()> {
         self.mail_fence(
             escrow_id,
@@ -555,6 +566,8 @@ impl WorldStore for Coordinator {
             money,
             postage,
             item_guid,
+            cod,
+            cod_source_mail_id,
         )
     }
 
@@ -567,6 +580,8 @@ impl WorldStore for Coordinator {
         body: String,
         money: u32,
         item: crate::world::mail::AttachedItem,
+        cod: u32,
+        cod_source_mail_id: u64,
     ) -> Result<()> {
         self.mail_commit(
             escrow_id,
@@ -576,6 +591,8 @@ impl WorldStore for Coordinator {
             body,
             money,
             item,
+            cod,
+            cod_source_mail_id,
         )
     }
 

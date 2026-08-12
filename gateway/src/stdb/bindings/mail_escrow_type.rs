@@ -23,6 +23,7 @@ pub struct MailEscrow {
     pub item_durability: u32,
     pub item_enchant_id: u32,
     pub item_soulbound: bool,
+    pub cod: u32,
 }
 
 impl __sdk::InModule for MailEscrow {
@@ -49,6 +50,7 @@ pub struct MailEscrowCols {
     pub item_durability: __sdk::__query_builder::Col<MailEscrow, u32>,
     pub item_enchant_id: __sdk::__query_builder::Col<MailEscrow, u32>,
     pub item_soulbound: __sdk::__query_builder::Col<MailEscrow, bool>,
+    pub cod: __sdk::__query_builder::Col<MailEscrow, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for MailEscrow {
@@ -71,6 +73,7 @@ impl __sdk::__query_builder::HasCols for MailEscrow {
             item_durability: __sdk::__query_builder::Col::new(table_name, "item_durability"),
             item_enchant_id: __sdk::__query_builder::Col::new(table_name, "item_enchant_id"),
             item_soulbound: __sdk::__query_builder::Col::new(table_name, "item_soulbound"),
+            cod: __sdk::__query_builder::Col::new(table_name, "cod"),
         }
     }
 }

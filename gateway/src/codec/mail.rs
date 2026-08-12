@@ -162,8 +162,10 @@ pub fn build_mail_take_money_result(mail_id: u32, ok: bool) -> SMSG_SEND_MAIL_RE
 ///
 /// A FULL BAG gets its own verdict — `ErrEquipError` carrying vanilla's `InventoryFull` — because
 /// it is the one refusal the player can act on, and the item is still in the letter when they do.
-/// Every other refusal (not your mail, nothing in it, an unreachable database) answers the generic
-/// bucket, so a crafted mail id cannot tell an empty mail apart from somebody else's.
+/// A cash-on-delivery price the taker cannot pay gets `ErrNotEnoughMoney` for the same reason: it
+/// is actionable, and it is the message that tells them to bring gold rather than that the mailbox
+/// is broken. Every other refusal (not your mail, nothing in it, an unreachable database) answers
+/// the generic bucket, so a crafted mail id cannot tell an empty mail apart from somebody else's.
 pub fn build_mail_take_item_result(
     mail_id: u32,
     taken: Result<(u32, u32), MailTakeItemError>,
@@ -178,6 +180,12 @@ pub fn build_mail_take_item_result(
                         equip_error: u32::from(InventoryResult::InventoryFull.as_int()),
                     }
                 }
+                Err(MailTakeItemError::NotEnoughMoney) => {
+                    SMSG_SEND_MAIL_RESULT_MailResult::ErrNotEnoughMoney {
+                        item: 0,
+                        item_count: 0,
+                    }
+                }
                 Err(MailTakeItemError::Other) => {
                     SMSG_SEND_MAIL_RESULT_MailResult::ErrInternalError {
                         item: 0,
@@ -189,11 +197,14 @@ pub fn build_mail_take_item_result(
     }
 }
 
-/// The two verdicts an item take can answer with. Deliberately smaller than the handler's own
-/// refusal type: the wire only distinguishes "make room" from "no".
+/// The verdicts an item take can answer with. Deliberately smaller than the handler's own refusal
+/// type: the wire only distinguishes the two a player can act on — "make room" and "bring gold" —
+/// from "no".
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MailTakeItemError {
     BagsFull,
+    /// The cash-on-delivery price is more than the taker has.
+    NotEnoughMoney,
     Other,
 }
 
@@ -320,6 +331,20 @@ mod tests {
         assert_eq!(build_mail_list(&[m], 1_000).mails[0].money, Gold::new(130));
     }
 
+    /// **The cash-on-delivery price is on the wire BEFORE anything is taken.** It is the field the
+    /// mail window renders as the asking price, so a player who cannot see it is being asked to buy
+    /// blind.
+    #[test]
+    fn the_list_packet_carries_a_mails_cash_on_delivery_price() {
+        let mut m = view(1, "yours for 250");
+        m.item_entry = 5_090_001;
+        m.cod = 250;
+        assert_eq!(
+            build_mail_list(&[m], 1_000).mails[0].cash_on_delivery_amount,
+            250
+        );
+    }
+
     /// The list packet carries the whole attachment, so the recipient sees what is in a letter
     /// before taking it: the icon comes from the entry, and the stack and durability from the
     /// snapshot the sender's own item was copied into.
@@ -388,6 +413,18 @@ mod tests {
                 SMSG_SEND_MAIL_RESULT_MailResult::ErrEquipError {
                     equip_error: u32::from(InventoryResult::InventoryFull.as_int())
                 }
+            ),
+            other => panic!("expected the ItemTaken action, got {other:?}"),
+        }
+        match build_mail_take_item_result(7, Err(MailTakeItemError::NotEnoughMoney)).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::ItemTaken { result } => assert_eq!(
+                result,
+                SMSG_SEND_MAIL_RESULT_MailResult::ErrNotEnoughMoney {
+                    item: 0,
+                    item_count: 0
+                },
+                "a COD price the taker cannot pay must read as 'bring gold', not as a broken \
+                 mailbox"
             ),
             other => panic!("expected the ItemTaken action, got {other:?}"),
         }

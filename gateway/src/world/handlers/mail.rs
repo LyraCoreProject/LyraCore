@@ -1,8 +1,6 @@
 //! Mail family: open the mailbox window, answer the client's mail poll, serve a letter's body, mark
-//! a mail read or delete it, post a letter with copper and one item attached, take either back
-//! out, and return a mail to its sender.
-//!
-//! COD is a later slice, and its opcode falls through to the next handler until it lands.
+//! a mail read or delete it, post a letter with copper and one item attached (at a
+//! cash-on-delivery price, or not), take either back out, and return a mail to its sender.
 //!
 //! Every failure is per-action: log, and either answer the packet the client is blocked on or send
 //! nothing. Nothing here tears a session down, matching the vendor/loot/combat arms.
@@ -171,9 +169,11 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                 ))),
             )?;
         }
-        // Take a mail's attached item into the bags. A full bag answers `ErrEquipError` and the
-        // item STAYS in the letter — the case where a naive implementation destroys it — while
-        // every other refusal reads the same, so a crafted mail id learns nothing.
+        // Take a mail's attached item into the bags, paying any cash-on-delivery price for it. A
+        // full bag answers `ErrEquipError` and an unaffordable price `ErrNotEnoughMoney` — the two
+        // refusals a player can act on, and in both the item STAYS in the letter, which is also
+        // what leaves a refused buyer free to return it. Every other refusal reads the same, so a
+        // crafted mail id learns nothing.
         ClientOpcodeMessage::CMSG_MAIL_TAKE_ITEM(c) => {
             let self_guid = social::self_guid(conn);
             let outcome =
@@ -188,6 +188,9 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                             mail::TakeItemRefusal::BagsFull(_) => {
                                 codec::MailTakeItemError::BagsFull
                             }
+                            mail::TakeItemRefusal::CannotAffordCod(_) => {
+                                codec::MailTakeItemError::NotEnoughMoney
+                            }
                             mail::TakeItemRefusal::Other(_) => codec::MailTakeItemError::Other,
                         })
                     }
@@ -199,8 +202,8 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                 ))),
             )?;
         }
-        // Post a letter. `cash_on_delivery_amount` rides this packet too and is deliberately
-        // ignored here — COD is a later slice. Every refusal answers with its OWN
+        // Post a letter. `cash_on_delivery_amount` is the price the RECIPIENT will owe for the
+        // attachment — it costs the sender nothing here. Every refusal answers with its OWN
         // `MailResultTwo`, never a generic internal error: the client renders each as distinct
         // on-screen text, which is all the player gets to work with.
         //
@@ -217,6 +220,7 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                 c.subject.clone(),
                 c.body.clone(),
                 c.money.as_int(),
+                c.cash_on_delivery_amount,
                 c.item.guid(),
             ) {
                 Ok(()) => Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok),

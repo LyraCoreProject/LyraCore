@@ -36,6 +36,10 @@
 //! A single-database gateway does none of this: the purse and the row are on one database, so the
 //! send and the take are each ONE transaction. Keeping that path genuinely atomic is deliberate.
 //!
+//! A cash-on-delivery take is TWO of those drives, in order and never interleaved: the buyer's
+//! payment ([`pay_cod`], a letter out of their purse) and then the item. Paying first is what makes
+//! a buyer who cannot afford it a clean refusal with the item still in the letter.
+//!
 //! # Poll, not push
 //!
 //! There is no relay and no event table. The client asks (`CMSG_GET_MAIL_LIST`,
@@ -47,6 +51,10 @@ use anyhow::Result;
 use super::{party, WorldStore};
 use crate::codec::MailView;
 use lyracore_shared::mail as mail_rules;
+
+/// An ordinary letter settles nobody's cash-on-delivery price — the escrow's "no source mail"
+/// sentinel, and the same 0 the module reads it as.
+const NO_COD_SOURCE: u64 = 0;
 
 /// Why a send was refused, in the client's own vocabulary.
 ///
@@ -251,6 +259,7 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
     subject: String,
     body: String,
     money: u32,
+    cod: u32,
     item_guid: u64,
 ) -> std::result::Result<(), SendRefusal> {
     let sender_guid = at_mailbox(store, self_guid, mailbox_guid)
@@ -295,11 +304,22 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
             ))
         }
     };
+    // A price with nothing attached buys nothing, so it is dropped here rather than left on a row
+    // that would charge the recipient for an empty letter. Once, in one place, so both planes agree.
+    let cod = mail_rules::cod_at_send(cod, item_guid != 0);
     match store.realm_store() {
         // One database: the purse and the row are both on it, so the debit and the insert are one
         // transaction — the property the design asks for, and the only plane that can have it.
         None => store
-            .mail_send(sender_guid, recipient_guid, subject, body, money, item_guid)
+            .mail_send(
+                sender_guid,
+                recipient_guid,
+                subject,
+                body,
+                money,
+                cod,
+                item_guid,
+            )
             .map_err(refusal_from_module),
         // Sharded: realm-core holds no purse, so no transaction covers both. The escrow does
         // instead — fence the whole cost on the sender's shard, commit the row on realm-core,
@@ -316,6 +336,8 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
                     money,
                     mail_rules::postage(),
                     item_guid,
+                    cod,
+                    NO_COD_SOURCE,
                 )
                 .map_err(refusal_from_module)?;
             // The fence is where the item stopped being a row and became a snapshot, so the
@@ -334,6 +356,8 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
                     body,
                     money,
                     item.clone(),
+                    cod,
+                    NO_COD_SOURCE,
                 )
             })
             .map_err(|e| SendRefusal::Internal(format!("{e:#}")))
@@ -420,9 +444,14 @@ pub struct HeldEscrow {
     /// purse's copper on its way into a mail row. It decides which database is the source and which
     /// is the destination, and nothing else about the row does.
     pub payout: bool,
+    /// The mail row this fence is about: the one a payout came out of, or the one whose
+    /// cash-on-delivery price a payment settles. 0 for an ordinary letter.
     pub mail_id: u64,
     /// The attachment in flight. Empty when the fence carries only coin.
     pub item: AttachedItem,
+    /// The price the LETTER in flight will ask its recipient for. 0 on a payout and on an ordinary
+    /// unpriced letter.
+    pub cod: u32,
 }
 
 /// Finish every escrow left standing for `self_guid`, on both planes.
@@ -443,7 +472,9 @@ pub(crate) fn redrive<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
     let Some(realm) = store.realm_store() else {
         return; // One database, one transaction, no fences to rescue.
     };
-    // The letters this player sent: fenced on their own shard, destined for a mail row on realm.
+    // The letters this player sent: fenced on their own shard, destined for a mail row on realm. A
+    // COD payment is one of them — it is a letter out of a purse — so it needs no arm of its own,
+    // only the source mail its commit settles, which the fence row carries.
     for held in store.mail_escrows_of(self_guid).unwrap_or_default() {
         if held.payout {
             continue; // A payout fence never lives on a shard; ignore a stray rather than mis-drive it.
@@ -457,6 +488,8 @@ pub(crate) fn redrive<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
                 held.body.clone(),
                 held.money,
                 held.item.clone(),
+                held.cod,
+                held.mail_id,
             )
         });
         log_redrive("send", held.escrow_id, outcome);
@@ -532,20 +565,23 @@ pub(crate) fn take_money<St: WorldStore + ?Sized>(
 
 /// Why an item take was refused, in the client's own vocabulary.
 ///
-/// Only the full-bag arm gets its own variant: `MailResultTwo::ErrEquipError` is the one the client
-/// renders as "make room", and it is the refusal a player can actually act on. Everything else —
-/// not your mail, nothing in it, an unreachable database — reads the same on the wire, so a crafted
-/// mail id learns nothing from the answer.
+/// Two arms get their own variant, and they are the two a player can act on: `ErrEquipError` is the
+/// one the client renders as "make room", and `ErrNotEnoughMoney` tells a COD buyer to bring gold
+/// rather than that the mailbox is broken. Everything else — not your mail, nothing in it, an
+/// unreachable database — reads the same on the wire, so a crafted mail id learns nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TakeItemRefusal {
     BagsFull(String),
+    /// The cash-on-delivery price is more than the taker has. The item stays in the letter, which is
+    /// what leaves them free to return the mail instead of buying it.
+    CannotAffordCod(String),
     Other(String),
 }
 
 impl std::fmt::Display for TakeItemRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::BagsFull(e) | Self::Other(e) => f.write_str(e),
+            Self::BagsFull(e) | Self::CannotAffordCod(e) | Self::Other(e) => f.write_str(e),
         }
     }
 }
@@ -554,6 +590,12 @@ fn take_item_refusal(e: anyhow::Error) -> TakeItemRefusal {
     let text = format!("{e:#}");
     if text.contains(mail_rules::INVENTORY_FULL) {
         TakeItemRefusal::BagsFull(text)
+    // The module's own two affordability texts, both of which a COD take can produce: its own, and
+    // the fence's generic one, since a COD payment is fenced as a letter like any other.
+    } else if text.contains(mail_rules::COD_NOT_AFFORDABLE)
+        || text.contains(mail_rules::NOT_ENOUGH_MONEY)
+    {
+        TakeItemRefusal::CannotAffordCod(text)
     } else {
         TakeItemRefusal::Other(text)
     }
@@ -583,18 +625,18 @@ pub(crate) fn take_item<St: WorldStore + ?Sized>(
     // The snapshot is read here on BOTH planes: the wire's success arm names the item and stack the
     // client just gained, and the sharded drive has to carry the snapshot to the other database
     // anyway. The read is already scoped to the reader, so a crafted mail id finds nothing.
-    let item = mail_of(store, self_guid)
+    let row = mail_of(store, self_guid)
         .map_err(take_item_refusal)?
         .into_iter()
         .find(|m| m.id == mail_id)
-        .map(|m| AttachedItem {
-            entry: m.item_entry,
-            stack_count: m.item_stack_count,
-            durability: m.item_durability,
-            enchant_id: m.item_enchant_id,
-            soulbound: m.item_soulbound,
-        })
         .ok_or_else(|| TakeItemRefusal::Other(mail_rules::NOT_YOUR_MAIL.to_string()))?;
+    let item = AttachedItem {
+        entry: row.item_entry,
+        stack_count: row.item_stack_count,
+        durability: row.item_durability,
+        enchant_id: row.item_enchant_id,
+        soulbound: row.item_soulbound,
+    };
     if item.is_empty() {
         return Err(TakeItemRefusal::Other(
             mail_rules::NOTHING_TO_TAKE.to_string(),
@@ -602,8 +644,9 @@ pub(crate) fn take_item<St: WorldStore + ?Sized>(
     }
     let taken = (item.entry, item.stack_count);
     let Some(realm) = store.realm_store() else {
-        // One database: the grant and the clear are one transaction, so a full bag refuses itself
-        // and the item stays in the letter with no protocol at all.
+        // One database: the debit, the grant, the clear and the seller's payout row are ONE
+        // transaction, so a full bag or an unaffordable price refuses itself and leaves the letter
+        // exactly as it was — no protocol at all.
         store
             .mail_take_item(self_guid, mail_id)
             .map_err(take_item_refusal)?;
@@ -612,6 +655,11 @@ pub(crate) fn take_item<St: WorldStore + ?Sized>(
     // Sharded: ask for room BEFORE fencing. Past the fence the letter is empty, so a full bag found
     // afterwards would leave the item held in an escrow rather than in the mail.
     store.mail_item_room(self_guid).map_err(take_item_refusal)?;
+    // And PAY before fencing, for the same reason pointed the other way: past the item fence the
+    // letter is empty, so a buyer who turns out not to be able to pay would already have the item
+    // in flight. Paying first makes the refusal clean — the item is still in the mail, and they can
+    // return it instead.
+    pay_cod(store, realm.as_ref(), self_guid, &row).map_err(take_item_refusal)?;
     let escrow_id = next_escrow_id();
     // The fence refuses if the row disagrees with what was read — a stale read that fenced one item
     // and granted another would mint the difference.
@@ -625,6 +673,67 @@ pub(crate) fn take_item<St: WorldStore + ?Sized>(
     })
     .map_err(take_item_refusal)?;
     Ok(taken)
+}
+
+/// Pay `row`'s cash-on-delivery price, if it has one, before its item is fenced. A no-op for every
+/// unpriced letter.
+///
+/// **This is a SEND, and deliberately not a fourth mechanism.** The buyer's copper leaves a purse
+/// on their own shard and lands in a mail row on realm-core — the exact move [`send`] makes — so it
+/// rides the same four steps with the same idempotency key. The one thing COD adds is the source
+/// mail: the commit settles that row's price in the transaction that writes the seller's payout, so
+/// the price stops being owed exactly when the copper arrives, never before and never after.
+///
+/// A refusal here leaves the letter untouched, price and item both, which is what makes "refused,
+/// so return it instead" a real option rather than a suggestion.
+fn pay_cod<St: WorldStore + ?Sized>(
+    store: &St,
+    realm: &dyn WorldStore,
+    taker_guid: u64,
+    row: &MailView,
+) -> Result<()> {
+    let Some(settlement) =
+        mail_rules::cod_settlement(row.cod, row.sender_guid, &row.subject, taker_guid)
+    else {
+        return Ok(());
+    };
+    // A click interrupted mid-payment RESUMES under its own escrow id rather than filing a second
+    // fence: the id is the idempotency key on both databases, so the replayed fence debits nothing.
+    // A fresh id would charge the buyer a second time for one purchase.
+    let escrow_id = store
+        .mail_escrows_of(taker_guid)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|e| !e.payout && e.mail_id == row.id)
+        .map(|e| e.escrow_id)
+        .unwrap_or_else(next_escrow_id);
+    store.mail_fence(
+        escrow_id,
+        settlement.payer_guid,
+        settlement.payee_guid,
+        settlement.subject.clone(),
+        String::new(),
+        settlement.copper,
+        // No postage — the post office does not charge for delivering a payment — and no
+        // attachment, and the payment asks its own recipient for nothing.
+        0,
+        0,
+        0,
+        row.id,
+    )?;
+    drive(store, escrow_id, || {
+        realm.mail_commit(
+            escrow_id,
+            settlement.payer_guid,
+            settlement.payee_guid,
+            settlement.subject.clone(),
+            String::new(),
+            settlement.copper,
+            AttachedItem::default(),
+            0,
+            row.id,
+        )
+    })
 }
 
 /// The next caller-chosen escrow id.
