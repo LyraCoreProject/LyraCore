@@ -389,17 +389,10 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     let keys = spool.keys()?;
     let mut total_bytes = 0usize;
     let mut shard_rows = 0usize;
-    let mut batches = 0usize;
-    let mut current = String::new();
     let mut digest = blake3::Hasher::new();
     digest.update(b"lyracore-vmap-manifest-v1");
     let m2_tris = world_tris - wmo_tris;
-    // Pass 5: stream payloads one batch at a time. #182 will switch this transport to generation
-    // reducers; this planner already guarantees deterministic rows without retaining batches.
-    // (rows `;` separated, first batch clears via `import_vmap_chunks`, the rest append). No row
-    // can exceed `BATCH_BYTES` on its own now (shards are already capped well under it), so this
-    // batching step only ever GROUPS rows, never has to special-case an oversized one.
-    for key in keys {
+    for &key in &keys {
         let mut ordinal = 0u32;
         spool.for_each_shard(key, |blob| {
             total_bytes += blob.len();
@@ -408,55 +401,80 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
             digest.update(&ordinal.to_le_bytes());
             digest.update(&(blob.len() as u32).to_le_bytes());
             digest.update(&blob);
-            let cell_x = ((key >> 16) & 0xFFFF) as u16;
-            let cell_y = (key & 0xFFFF) as u16;
-            let hex: String = blob.iter().map(|b| format!("{b:02x}")).collect();
-            let row = format!("{map_id},{cell_x},{cell_y},{hex}");
-            if !current.is_empty() && current.len() + row.len() + 1 > BATCH_BYTES {
-                if args.apply {
-                    crate::call_reducer(
-                        args,
-                        if batches == 0 {
-                            "import_vmap_chunks"
-                        } else {
-                            "import_vmap_chunks_append"
-                        },
-                        &current,
-                    )?;
-                }
-                batches += 1;
-                current.clear();
-            }
-            if !current.is_empty() {
-                current.push(';');
-            }
-            current.push_str(&row);
             ordinal += 1;
             Ok(())
         })?;
     }
-    if !current.is_empty() {
-        if args.apply {
-            crate::call_reducer(
-                args,
-                if batches == 0 {
-                    "import_vmap_chunks"
-                } else {
-                    "import_vmap_chunks_append"
-                },
-                &current,
-            )?;
+    let manifest = digest.finalize().to_hex().to_string();
+    let generation_id = u64::from_le_bytes(
+        blake3::hash(manifest.as_bytes()).as_bytes()[..8]
+            .try_into()
+            .unwrap(),
+    );
+    let expected_chunks = shard_rows.to_string();
+    let expected_bytes = total_bytes.to_string();
+    if args.apply {
+        crate::call_reducer_args(
+            args,
+            "stage_vmap_generation",
+            &[
+                &generation_id.to_string(),
+                &map_id.to_string(),
+                &expected_chunks,
+                &expected_bytes,
+                &manifest,
+            ],
+        )?;
+        let mut batches = 0usize;
+        let mut current = String::new();
+        for &key in &keys {
+            let mut ordinal = 0u32;
+            spool.for_each_shard(key, |blob| {
+                let cell_x = ((key >> 16) & 0xFFFF) as u16;
+                let cell_y = (key & 0xFFFF) as u16;
+                let hex: String = blob.iter().map(|b| format!("{b:02x}")).collect();
+                let row = format!("{ordinal},{map_id},{cell_x},{cell_y},{hex}");
+                if !current.is_empty() && current.len() + row.len() + 1 > BATCH_BYTES {
+                    crate::call_reducer_args(
+                        args,
+                        "append_vmap_generation_chunks",
+                        &[&generation_id.to_string(), &current],
+                    )?;
+                    batches += 1;
+                    current.clear();
+                }
+                if !current.is_empty() {
+                    current.push(';');
+                }
+                current.push_str(&row);
+                ordinal += 1;
+                Ok(())
+            })?;
         }
-        batches += 1;
+        if !current.is_empty() {
+            crate::call_reducer_args(
+                args,
+                "append_vmap_generation_chunks",
+                &[&generation_id.to_string(), &current],
+            )?;
+            batches += 1;
+        }
+        crate::call_reducer_args(
+            args,
+            "verify_vmap_generation",
+            &[&generation_id.to_string()],
+        )?;
+        crate::call_reducer_args(
+            args,
+            "activate_vmap_generation",
+            &[&generation_id.to_string()],
+        )?;
+        println!("vmap: activated generation {generation_id} after {batches} resumable batch(es)");
     }
     println!("vmap: map {map_id} — {world_tris} world tris ({wmo_tris} WMO, {m2_tris} M2) across {} cells, {total_bytes} packed bytes ({:.1} KB, {shard_rows} shard row(s))", spool.keys()?.len(), total_bytes as f64 / 1024.0);
-    println!("vmap: manifest {}", digest.finalize().to_hex());
-    println!("vmap: {batches} reducer batch(es)");
+    println!("vmap: manifest {manifest} generation {generation_id}");
     if !args.apply {
-        println!(
-            "-- DRY RUN: would call import_vmap_chunks (batch 0, clears) + {} × import_vmap_chunks_append",
-            batches.saturating_sub(1)
-        );
+        println!("-- DRY RUN: would stage, append, verify, and activate the generation");
         return Ok(());
     }
     println!("vmap: applied.");
