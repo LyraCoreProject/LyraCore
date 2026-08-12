@@ -57,6 +57,29 @@ pub(crate) fn handle_bank<St: WorldStore + ?Sized>(
                 );
             }
         }
+        // Buy the next bank bag slot from the named banker. Success and every refusal relay
+        // `SMSG_BUY_BANK_SLOT_RESULT`; the refusal code rides the module's `[N]` error tag.
+        ClientOpcodeMessage::CMSG_BUY_BANK_SLOT(c) => {
+            let banker_guid = c.guid.guid();
+            let outcome = store.buy_bank_slot(
+                conn.account_id,
+                social::self_guid(conn).unwrap_or(0),
+                banker_guid,
+            );
+            let err_text = outcome.as_ref().err().map(ToString::to_string);
+            if let Some(e) = &err_text {
+                log::debug!(
+                    "world: buy_bank_slot rejected (account {}): {e}",
+                    conn.account_id
+                );
+            }
+            send(
+                tx,
+                Outbound::One(ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(
+                    codec::build_buy_bank_slot_reply(err_text.as_deref().map_or(Ok(()), Err)),
+                )),
+            )?;
+        }
         // Right-click a banked item → withdraw into the first free backpack/bag slot.
         ClientOpcodeMessage::CMSG_AUTOSTORE_BANK_ITEM(c) => {
             if c.bag_index == MAIN_BAG {

@@ -2651,9 +2651,14 @@ fn login_sequence_caps_the_action_bar_at_120_slots_but_not_the_spellbook() {
     // the fixed 120-slot action bar array; SMSG_INITIAL_SPELLS must still list every one of them, while
     // SMSG_ACTION_BUTTONS truncates to the first 120 (no out-of-bounds write into the fixed array).
     let learned: Vec<u32> = (1000..1130).collect(); // 130 unique ids
-    let msgs =
-        login_sequence_messages(&warrior_entity(), &learned, &[], &[], WorldEntry::FreshLogin)
-            .unwrap();
+    let msgs = login_sequence_messages(
+        &warrior_entity(),
+        &learned,
+        &[],
+        &[],
+        WorldEntry::FreshLogin,
+    )
+    .unwrap();
     let spells = msgs
         .iter()
         .find_map(|m| match m {
@@ -2692,9 +2697,8 @@ fn login_sequence_folds_reputation_by_index_and_ignores_out_of_range_slots() {
     // SET_FACTION_STANDING relay uses (0..63); an index >= 64 has no slot and must be dropped
     // silently rather than panicking (a corrupt/import-drifted row must never crash login).
     let reps = [(5, 100, false), (63, -250, true), (64, 999, false)];
-    let msgs =
-        login_sequence_messages(&warrior_entity(), &[], &reps, &[], WorldEntry::FreshLogin)
-            .unwrap();
+    let msgs = login_sequence_messages(&warrior_entity(), &[], &reps, &[], WorldEntry::FreshLogin)
+        .unwrap();
     let factions = msgs
         .iter()
         .find_map(|m| match m {
@@ -2744,9 +2748,14 @@ fn login_sequence_folds_reputation_by_index_and_ignores_out_of_range_slots() {
 /// fallback branch it must leave alone).
 #[test]
 fn login_sequence_empty_player_actions_is_byte_identical_to_the_pre_212_synth() {
-    let msgs =
-        login_sequence_messages(&warrior_entity(), &[100, 200], &[], &[], WorldEntry::FreshLogin)
-            .unwrap();
+    let msgs = login_sequence_messages(
+        &warrior_entity(),
+        &[100, 200],
+        &[],
+        &[],
+        WorldEntry::FreshLogin,
+    )
+    .unwrap();
     let bar = msgs
         .iter()
         .find_map(|m| match m {
@@ -2772,9 +2781,14 @@ fn login_sequence_builds_the_bar_from_imported_player_actions_packing_the_type_b
         (1u8, 78u32, 0u8),   // button 1: Heroic Strike, type 0
         (5u8, 1234u32, 4u8), // button 5: some non-spell action, type 4 — must pack into the high byte
     ];
-    let msgs =
-        login_sequence_messages(&warrior_entity(), &[100, 200], &[], &rows, WorldEntry::FreshLogin)
-            .unwrap();
+    let msgs = login_sequence_messages(
+        &warrior_entity(),
+        &[100, 200],
+        &[],
+        &rows,
+        WorldEntry::FreshLogin,
+    )
+    .unwrap();
     let bar = msgs
         .iter()
         .find_map(|m| match m {
@@ -2800,9 +2814,8 @@ fn login_sequence_builds_the_bar_from_imported_player_actions_packing_the_type_b
 #[test]
 fn login_sequence_drops_an_out_of_range_imported_button() {
     let rows = [(255u8, 999u32, 0u8)];
-    let msgs =
-        login_sequence_messages(&warrior_entity(), &[], &[], &rows, WorldEntry::FreshLogin)
-            .unwrap();
+    let msgs = login_sequence_messages(&warrior_entity(), &[], &[], &rows, WorldEntry::FreshLogin)
+        .unwrap();
     let bar = msgs
         .iter()
         .find_map(|m| match m {
@@ -3185,6 +3198,56 @@ fn buy_failed_maps_module_err_strings_to_the_closest_buy_result() {
         assert_eq!(msg.result, expected, "err {err:?} must map to {expected:?}");
         assert_eq!(msg.guid.guid(), 42);
         assert_eq!(msg.item, 25);
+    }
+}
+
+/// `lyracore_shared::bank::result`'s constants exist so the module can tag a refusal without a
+/// dependency on the wire crate; they must never drift from gtker's own `BuyBankSlotResult::as_int`
+/// numbering, or `parse_buy_bank_slot_result` silently relays the wrong client-visible result.
+#[test]
+fn bank_result_constants_match_gtker_buy_bank_slot_result() {
+    use lyracore_shared::bank::result;
+    assert_eq!(
+        BuyBankSlotResult::FailedTooMany.as_int(),
+        result::FAILED_TOO_MANY as u32
+    );
+    assert_eq!(
+        BuyBankSlotResult::InsufficientFunds.as_int(),
+        result::INSUFFICIENT_FUNDS as u32
+    );
+    assert_eq!(
+        BuyBankSlotResult::NotBanker.as_int(),
+        result::NOT_BANKER as u32
+    );
+    assert_eq!(BuyBankSlotResult::Ok.as_int(), result::OK as u32);
+}
+
+#[test]
+fn buy_bank_slot_result_parses_the_leading_bracketed_code_not_the_prose() {
+    let cases: [(&str, BuyBankSlotResult); 5] = [
+        (
+            "[0] no bank bag slots left to buy",
+            BuyBankSlotResult::FailedTooMany,
+        ),
+        (
+            "[1] not enough money (need 1000)",
+            BuyBankSlotResult::InsufficientFunds,
+        ),
+        ("[2] target is not a banker", BuyBankSlotResult::NotBanker),
+        // Prose alone (no bracket) must not accidentally match a keyword — the fallback is
+        // the generic refusal, not a guess at intent.
+        (
+            "insufficient funds but no bracket tag",
+            BuyBankSlotResult::NotBanker,
+        ),
+        ("[9] unknown future code", BuyBankSlotResult::NotBanker),
+    ];
+    for (err, expected) in cases {
+        assert_eq!(
+            parse_buy_bank_slot_result(err),
+            expected,
+            "err {err:?} must map to {expected:?}"
+        );
     }
 }
 

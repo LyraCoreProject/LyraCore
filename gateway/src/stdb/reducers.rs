@@ -1030,6 +1030,20 @@ impl Coordinator {
         )
     }
 
+    /// Buy the next bank bag slot from `banker_guid` (`CMSG_BUY_BANK_SLOT`) over the coordinator
+    /// connection. A refusal carries the module's `[N]` `SMSG_BUY_BANK_SLOT_RESULT` code tag.
+    pub fn buy_bank_slot(&self, _account_id: u64, actor_guid: u64, banker_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("buy_bank_slot: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_buy_bank_slot",
+            gw_buy_bank_slot_then(actor_guid, banker_guid)
+        )
+    }
+
     pub fn learn_talent(&self, _account_id: u64,
         actor_guid: u64, talent_id: u32) -> Result<()> {
         if actor_guid == 0 {

@@ -187,6 +187,10 @@ pub(crate) fn apply_buy_bank_slot(
     player.money -= price;
     player.bank_bag_slots += 1;
     let owned = player.bank_bag_slots;
+    // PLAYER_BYTES_2 byte 2 mirrors the owned count so the client sees the bought slot without a
+    // relog; byte 0 (facial hair) and byte 3 (rest state) ride along untouched.
+    player.player_bytes_2 =
+        lyracore_shared::packing::with_bank_bag_slots(player.player_bytes_2, owned);
     ctx.db.game_world_entity().guid().update(player);
     BuyBankSlotOutcome::Bought { price, owned }
 }

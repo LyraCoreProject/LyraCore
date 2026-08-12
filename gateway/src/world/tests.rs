@@ -52,6 +52,7 @@ mod wire_corruption_tests;
 use wow_world_base::shared::friend_result_vanilla_tbc::FriendResult;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::{
+    BuyBankSlotResult,
     BuyResult,
     BuybackSlot,
     Class,
@@ -86,6 +87,7 @@ use wow_world_messages::vanilla::{
     CMSG_AUTOSTORE_BANK_ITEM,
     CMSG_BANKER_ACTIVATE,
     CMSG_BUYBACK_ITEM,
+    CMSG_BUY_BANK_SLOT,
     CMSG_BUY_ITEM,
     CMSG_CANCEL_AURA,
     CMSG_CANCEL_CAST,
@@ -475,6 +477,8 @@ struct InMemoryStore {
     /// Recorded `auto_bank_item` slots — backs both CMSG_AUTOBANK_ITEM (deposit) and
     /// CMSG_AUTOSTORE_BANK_ITEM (withdraw), which both route onto this one store method.
     auto_banked_items: std::sync::Mutex<Vec<u8>>,
+    /// Recorded `buy_bank_slot` calls — the banker guid named on each `CMSG_BUY_BANK_SLOT`.
+    bought_bank_slots: std::sync::Mutex<Vec<u64>>,
     /// Recorded `unequip_item` slots — the CMSG_AUTOSTORE_BAG_ITEM (right-click an equipped
     /// item) dispatch.
     unequipped_slots: std::sync::Mutex<Vec<u8>>,
@@ -1165,6 +1169,13 @@ impl WorldStore for InMemoryStore {
             return Err(anyhow!("{e}"));
         }
         self.auto_banked_items.lock().unwrap().push(slot);
+        Ok(())
+    }
+    fn buy_bank_slot(&self, _account_id: u64, _self_guid: u64, banker_guid: u64) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.bought_bank_slots.lock().unwrap().push(banker_guid);
         Ok(())
     }
     fn quest_giver_evals(
@@ -4121,6 +4132,61 @@ fn autostore_bank_item_from_a_sub_bag_is_unsupported_and_does_not_dispatch() {
         store.auto_banked_items.lock().unwrap().is_empty(),
         "a sub-bag source must not be routed through auto_bank_item"
     );
+}
+
+#[test]
+fn buy_bank_slot_success_sends_ok_and_reaches_the_named_banker() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_BUY_BANK_SLOT {
+        guid: Guid::new(88),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(p) => {
+            assert_eq!(p.result, BuyBankSlotResult::Ok);
+        }
+        other => panic!("expected SMSG_BUY_BANK_SLOT_RESULT, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.bought_bank_slots.lock().unwrap().as_slice(), &[88]);
+}
+
+#[test]
+fn buy_bank_slot_failure_maps_the_bracketed_code_to_the_matching_result() {
+    // The module tags a refusal with its `SMSG_BUY_BANK_SLOT_RESULT` code in brackets — parsed by
+    // code, not by matching the prose.
+    for (err, want) in [
+        (
+            "[0] no bank bag slots left to buy",
+            BuyBankSlotResult::FailedTooMany,
+        ),
+        (
+            "[1] not enough money (need 1000)",
+            BuyBankSlotResult::InsufficientFunds,
+        ),
+        ("[2] target is not a banker", BuyBankSlotResult::NotBanker),
+    ] {
+        let mut s = quest_store();
+        s.trade_error = Some(err.into());
+        let store = std::sync::Arc::new(s);
+        let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+        CMSG_BUY_BANK_SLOT {
+            guid: Guid::new(88),
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+        match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+            ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(p) => {
+                assert_eq!(p.result, want, "store error {err:?} must map to {want:?}");
+            }
+            other => panic!("expected SMSG_BUY_BANK_SLOT_RESULT, got {other}"),
+        }
+        drop(client);
+        server.join().unwrap();
+    }
 }
 
 // ── Inventory change failure ─────────────────────────────────────────────────────

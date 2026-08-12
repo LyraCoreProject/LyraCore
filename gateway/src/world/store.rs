@@ -564,6 +564,10 @@ pub trait WorldStore: Send + Sync {
     /// per-action `Err`.
     fn auto_bank_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()>;
 
+    /// Buy the next bank bag slot from `banker_guid` (`CMSG_BUY_BANK_SLOT`). A refusal `Err` leads
+    /// with its `SMSG_BUY_BANK_SLOT_RESULT` code in brackets (the trainer `[N]` precedent).
+    fn buy_bank_slot(&self, account_id: u64, self_guid: u64, banker_guid: u64) -> Result<()>;
+
     /// Evaluate a quest giver's quests against the player for the overhead status icon + the quest
     /// menu (quests gateway slice). See `stdb::reads::quest_giver_evals`.
     fn quest_giver_evals(

@@ -1992,6 +1992,16 @@ pub(crate) fn entity_update_to_outbound(
             let m = codec::build_coinage_values(new.guid, new.money);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
+        // Live bank bag slot count: PLAYER_BYTES_2 byte 2 on a purchase, so the bank window grows a
+        // slot without a relog. Scoped to byte 2 only — byte 3 (rest state) already relays through
+        // its own dedicated `game_rest_state_event` path and must not double-fire here.
+        const BANK_SLOT_BYTE: u32 = 0x00FF_0000;
+        if is_player
+            && (old.player_bytes_2 & BANK_SLOT_BYTE) != (new.player_bytes_2 & BANK_SLOT_BYTE)
+        {
+            let m = codec::build_bank_bag_slots_values(new.guid, new.player_bytes_2);
+            out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+        }
         // Ghost transition (slice 5): PLAYER_FLAGS_GHOST + the UNIT_FIELD_BYTES_1 vis bit on Release Spirit
         // (set) and reclaim (cleared) — observers see the player turn translucent/solid. Players only.
         if is_player
@@ -3654,6 +3664,46 @@ mod tests {
                 codec::build_target_values(new.guid, 0xDEAD_BEEF)
             ))]
         );
+    }
+
+    #[test]
+    fn bank_bag_slot_purchase_relays_and_the_rest_byte_survives() {
+        // A bought bank bag slot lands in byte 2 of PLAYER_BYTES_2; the relay must carry the FULL
+        // field (a partial VALUES overwrites the whole u32) so byte 0 (facial hair) and byte 3 (rest
+        // state — HAZARD: a zero byte 3 crashes the 5875 client's XP bar) ride along unchanged.
+        let mut old = player_entity();
+        old.player_bytes_2 = lyracore_shared::packing::player_bytes_2_with_rest(7, 0, false); // facial hair 7, 0 slots, NORMAL
+        let mut new = old.clone();
+        new.player_bytes_2 = lyracore_shared::packing::with_bank_bag_slots(old.player_bytes_2, 1);
+        let out = entity_update_to_outbound(&old, &new);
+        assert_eq!(
+            out,
+            vec![ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                codec::build_bank_bag_slots_values(new.guid, new.player_bytes_2)
+            ))]
+        );
+        let (facial_hair, _, bank_slots, rest) =
+            lyracore_shared::packing::unpack4(new.player_bytes_2);
+        assert_eq!(
+            facial_hair, 7,
+            "facial hair (byte 0) must survive the purchase"
+        );
+        assert_eq!(bank_slots, 1);
+        assert_eq!(
+            rest,
+            lyracore_shared::packing::REST_STATE_NORMAL,
+            "rest state (byte 3) must stay a valid non-zero value"
+        );
+    }
+
+    #[test]
+    fn a_rest_state_flip_alone_does_not_relay_the_bank_slot_packet() {
+        // Byte 3 changing (rest flip) must NOT trip the byte-2-scoped bank slot relay — that byte
+        // already relays through its own dedicated `game_rest_state_event` path.
+        let old = player_entity();
+        let mut new = old.clone();
+        new.player_bytes_2 = lyracore_shared::packing::player_bytes_2_with_rest(0, 0, true); // RESTED
+        assert!(entity_update_to_outbound(&old, &new).is_empty());
     }
 
     #[test]

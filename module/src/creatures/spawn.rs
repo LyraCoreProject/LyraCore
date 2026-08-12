@@ -712,8 +712,13 @@ pub fn build_player_entity(
             character.hair_color,
         ),
         // Rest state (196): bake the RESTED byte if this character logged out in an inn, so it logs
-        // back in already showing the zzz icon + blue XP bar (no post-login relay needed).
-        player_bytes_2: packing::player_bytes_2_with_rest(character.facial_hair, character.resting),
+        // back in already showing the zzz icon + blue XP bar (no post-login relay needed). Byte 2
+        // carries the persisted bank bag slot count so a purchase survives logout without a relog.
+        player_bytes_2: packing::player_bytes_2_with_rest(
+            character.facial_hair,
+            character.bank_bag_slots,
+            character.resting,
+        ),
         player_bytes_3: character.gender as u32,
         player_flags: 0,
         xp: character.xp,
