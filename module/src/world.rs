@@ -1151,7 +1151,7 @@ pub(crate) fn snapshot_needs_persist(
         || drift_sq > PERSIST_MAX_DRIFT_YD * PERSIST_MAX_DRIFT_YD
 }
 
-/// FALL DAMAGE (058), absorbed out of `movement_update`'s own inline block (issue #385): given the
+/// Environmental damage, absorbed out of `movement_update`'s own inline block (issue #385): given the
 /// shared curve's damage figure (`lyracore_shared::env::fall_damage`, already computed by the caller
 /// from the client's airborne time + max_health) and the mover's CURRENT health, decide the health to
 /// carry forward and whether the landing is lethal. A lethal fall does NOT subtract here — the
@@ -1159,7 +1159,7 @@ pub(crate) fn snapshot_needs_persist(
 /// re-fetches fresh (the shared death funnel: channel teardown, durability, on_death hooks — identical
 /// to a melee death, so release/reclaim works). `dmg == 0` (a soft landing) is a no-op pass-through.
 /// Pure/testable.
-pub(crate) fn resolve_fall_damage(dmg: u32, health: u32) -> (u32, bool) {
+pub(crate) fn resolve_environmental_damage(dmg: u32, health: u32) -> (u32, bool) {
     if dmg == 0 {
         return (health, false);
     }
@@ -1187,7 +1187,7 @@ pub(crate) struct MovementPlan {
     /// Relay this heartbeat's motion to nearby peers via `game_entity_motion`. Always `true` by
     /// construction — see the struct doc.
     pub relay_motion: bool,
-    /// A lethal fall (see [`resolve_fall_damage`]): the position already persisted (if
+    /// A lethal fall (see [`resolve_environmental_damage`]): the position already persisted (if
     /// `persist_entity`), `combat::kill_player` runs next.
     pub fall_lethal: bool,
     /// A real translation, not a pure turn ([`MovementDelta::moved`]) — gates the channel break and
@@ -1316,7 +1316,7 @@ pub(crate) fn apply_movement_update(
     {
         if let Some(ft) = lyracore_shared::env::fall_time_from_movement_info(&movement_info) {
             let dmg = lyracore_shared::env::fall_damage(ft, mover.max_health);
-            let (health, lethal) = resolve_fall_damage(dmg, mover.health);
+            let (health, lethal) = resolve_environmental_damage(dmg, mover.health);
             mover.health = health;
             fall_lethal = lethal;
         }
@@ -1334,6 +1334,23 @@ pub(crate) fn apply_movement_update(
     // hook chain was ~58µs at 10k moves/s).
     if mover.is_player() && !mover.dead && (move_time_ms / 1000 != old_move_ms / 1000) {
         crate::rest::check_rest_state(ctx, &mut mover);
+    }
+    // Breath shares the ~1 Hz movement gate with rest state, but only records the underwater edge;
+    // its own scheduled tick advances the non-spatial timer while a player is standing still.
+    if mover.is_player()
+        && !mover.dead
+        && !mover.godmode
+        && mover.player_flags & lyracore_shared::constants::player_flags::GHOST == 0
+        && (move_time_ms / 1000 != old_move_ms / 1000)
+    {
+        let liquid_level = crate::terrain::liquid_level_at(ctx, mover.map_id, mover.x, mover.y);
+        let submerged = lyracore_shared::env::is_submerged(
+            mover.z,
+            liquid_level.unwrap_or_default(),
+            liquid_level.is_some(),
+            mover.movement_flags,
+        );
+        crate::breath::update_breath_edge(ctx, &mover, submerged);
     }
     // `old_x/old_y/old_z` are the last PERSISTED position, so this drift is exactly how far the
     // stored row has fallen behind the client.
@@ -1974,7 +1991,7 @@ mod tests {
     use super::{
         accrue_played_on_persist, can_inspect, ghost_restored_fields, is_cross_map_teleport,
         movement_violation, persisted_gm_playtest, persisted_pending_ghost, plan_movement,
-        resolve_fall_damage, snapshot_needs_persist, spirit_res_vitals, MovementDelta,
+        resolve_environmental_damage, snapshot_needs_persist, spirit_res_vitals, MovementDelta,
         INSPECT_RANGE_SQ, MOVE_VIOLATION_SPEED, MOVE_VIOLATION_TELEPORT, PERSIST_MAX_DRIFT_YD,
         RESURRECTION_SICKNESS_SPELL, RUN_SPEED_BP_1X,
     };
@@ -2063,24 +2080,24 @@ mod tests {
     // its own copy of the gate.
 
     #[test]
-    fn resolve_fall_damage_subtracts_short_of_lethal_and_flags_lethal_without_mutating() {
+    fn resolve_environmental_damage_subtracts_short_of_lethal_and_flags_lethal_without_mutating() {
         assert_eq!(
-            resolve_fall_damage(0, 50),
+            resolve_environmental_damage(0, 50),
             (50, false),
             "a soft landing (no damage) is a no-op"
         );
         assert_eq!(
-            resolve_fall_damage(20, 50),
+            resolve_environmental_damage(20, 50),
             (30, false),
             "sub-lethal damage subtracts"
         );
         assert_eq!(
-            resolve_fall_damage(50, 50),
+            resolve_environmental_damage(50, 50),
             (50, true),
             "exactly-lethal damage is flagged, not subtracted — kill_player re-fetches fresh"
         );
         assert_eq!(
-            resolve_fall_damage(80, 50),
+            resolve_environmental_damage(80, 50),
             (50, true),
             "over-lethal damage is flagged, not subtracted either"
         );

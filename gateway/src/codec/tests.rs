@@ -5,7 +5,9 @@
 use super::*;
 // Only the loot byte-match test needs gtker's typed loot response (the runtime path is raw).
 use wow_world_messages::vanilla::ServerMessage;
-use wow_world_messages::vanilla::{SMSG_LOOT_RESPONSE_LootMethod, SMSG_LOOT_RESPONSE};
+use wow_world_messages::vanilla::{
+    EnvironmentalDamageType, SMSG_LOOT_RESPONSE_LootMethod, SMSG_LOOT_RESPONSE, TimerType,
+};
 // Group loot methods: the vote-kind byte constants + wire RollVote enum.
 use lyracore_shared::loot_roll::vote_kind;
 use wow_world_messages::vanilla::RollVote;
@@ -749,6 +751,46 @@ fn attack_start_carries_attacker_and_victim() {
             assert_eq!(m.victim.guid(), chicken);
         }
         other => panic!("expected SMSG_ATTACKSTART, got {other}"),
+    }
+}
+
+#[test]
+fn breath_mirror_timer_edges_roundtrip_on_the_vanilla_wire() {
+    let start = build_breath_timer_start(57_000, 60_000);
+    let mut start_bytes = Vec::new();
+    start.write_unencrypted_server(&mut start_bytes).unwrap();
+    match ServerOpcodeMessage::read_unencrypted(&mut start_bytes.as_slice()).unwrap() {
+        ServerOpcodeMessage::SMSG_START_MIRROR_TIMER(msg) => {
+            assert_eq!(msg.timer, TimerType::Breath);
+            assert_eq!(msg.time_remaining, 57_000);
+            assert_eq!(msg.duration, 60_000);
+            assert_eq!(msg.scale, u32::MAX, "wire bits for signed -1 drain scale");
+            assert!(!msg.is_frozen);
+        }
+        other => panic!("expected SMSG_START_MIRROR_TIMER, got {other}"),
+    }
+
+    let stop = build_breath_timer_stop();
+    let mut stop_bytes = Vec::new();
+    stop.write_unencrypted_server(&mut stop_bytes).unwrap();
+    match ServerOpcodeMessage::read_unencrypted(&mut stop_bytes.as_slice()).unwrap() {
+        ServerOpcodeMessage::SMSG_STOP_MIRROR_TIMER(msg) => assert_eq!(msg.timer, TimerType::Breath),
+        other => panic!("expected SMSG_STOP_MIRROR_TIMER, got {other}"),
+    }
+}
+
+#[test]
+fn drowning_damage_log_roundtrips_with_the_actual_damage() {
+    let msg = build_drowning_damage_log(0xF00D, 19);
+    let mut bytes = Vec::new();
+    msg.write_unencrypted_server(&mut bytes).unwrap();
+    match ServerOpcodeMessage::read_unencrypted(&mut bytes.as_slice()).unwrap() {
+        ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(log) => {
+            assert_eq!(log.guid.guid(), 0xF00D);
+            assert_eq!(log.damage_type, EnvironmentalDamageType::Drowning);
+            assert_eq!(log.damage, 19);
+        }
+        other => panic!("expected SMSG_ENVIRONMENTAL_DAMAGE_LOG, got {other}"),
     }
 }
 

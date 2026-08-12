@@ -789,6 +789,27 @@ pub(crate) fn relay_rest_state(self_guid: u64, player_bytes_2: u32) -> Vec<Outbo
     vec![Outbound::Raw { opcode, body }]
 }
 
+/// Shared-dispatch recipient leg for a breath relay row. The owner-session lookup in
+/// `world_view::breath_relay_appeared` has already established the self-only audience.
+pub(crate) fn relay_breath_event(
+    character_guid: u64,
+    kind: u8,
+    time_remaining_ms: u32,
+    duration_ms: u32,
+    damage: u32,
+) -> Vec<Outbound> {
+    let msg = match kind {
+        0 => codec::build_breath_timer_start(time_remaining_ms, duration_ms),
+        1 => codec::build_breath_timer_stop(),
+        2 => codec::build_drowning_damage_log(character_guid, damage),
+        unknown => {
+            log::warn!("breath relay: dropping unknown kind {unknown} for {character_guid}");
+            return Vec::new();
+        }
+    };
+    vec![Outbound::One(msg)]
+}
+
 /// Swing log: the ONE body both legs run — the per-player `on_combat`
 /// callback sends what this returns; the shared dispatch enqueues it per viewer. Gated on the
 /// viewer's `created` set (no point animating an invisible attacker's swing — the victim's health

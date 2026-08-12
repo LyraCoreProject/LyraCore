@@ -10,6 +10,7 @@ use crate::{
     game_teleport_event, game_trade_event, game_trade_session, game_whisper_event, game_xp_event,
     EVENT_TTL_MICROS, INVITE_TTL_MICROS,
 };
+use crate::breath_relay::game_breath_relay_event;
 // `rest` isn't re-exported at crate scope (`mod rest;`, no `pub use rest::*;` in lib.rs) — every
 // other event table's accessor trait rides that glob, so this is the one accessor here needing its
 // own import.
@@ -91,6 +92,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
                                     // row behind. The durable rest state (`Character.resting`/`rested_xp`) lives elsewhere; this row
                                     // is only the one-shot PLAYER_BYTES_2 relay.
     reap!(game_rest_state_event);
+    reap!(game_breath_relay_event); // breath timer edges + drowning damage relay (#141)
 
     // Never-answered pending invites. Same id+created_at shape as the event tables, but on
     // the longer INVITE_TTL (a human is looking at the invite dialog). After that the row is dead

@@ -234,7 +234,9 @@ include!(concat!(env!("OUT_DIR"), "/package_registries.rs"));
 mod action_bar;
 mod actor;
 mod auth;
+mod breath_relay;
 mod bridge;
+mod breath;
 mod character;
 mod chat;
 mod combat;
@@ -316,6 +318,8 @@ mod xp;
 
 pub use action_bar::*;
 pub use auth::*;
+pub use breath::*;
+pub use breath_relay::BreathRelayEvent; // gateway schema-parity relay (#141)
 pub use bridge::*;
 pub use character::*;
 pub use chat::*;

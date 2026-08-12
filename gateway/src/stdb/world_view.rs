@@ -227,6 +227,12 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         rest_state_appeared(v, row)
     });
 
+    // ---- game_breath_relay_event ------------------------------------------------------------
+    // Breath start/stop edges + server-resolved drowning combat log. Self-only relay.
+    wire_insert(db.game_breath_relay_event(), "game_breath_relay_event.insert", &view, |v, row| {
+        breath_relay_appeared(v, row)
+    });
+
     // ---- game_dynamic_object -----------------------------------------------------------------
     // Ground-area spell visuals. Shard broadcast, instance-gated per viewer on insert; the
     // delete leg is ungated, matching the per-player relay byte for byte.
@@ -817,6 +823,26 @@ fn rest_state_appeared(view: &WorldView, row: &RestStateEvent) {
     });
 }
 
+/// Breath relay events are delivered only to their owner.
+fn breath_relay_appeared(view: &WorldView, row: &BreathRelayEvent) {
+    let Some(session) = view.entities.session_of_owner(row.character_guid) else {
+        return;
+    };
+    let Some(viewer) = view.viewer(session) else {
+        return;
+    };
+    let (guid, kind, remaining, duration, damage) = (
+        row.character_guid,
+        row.kind,
+        row.time_remaining_ms,
+        row.duration_ms,
+        row.damage,
+    );
+    enqueue(&viewer.tx, move || {
+        super::subscriptions::relay_breath_event(guid, kind, remaining, duration, damage)
+    });
+}
+
 /// A skill row changed (line learned / skill-up). Self-only family, same owner-session-lookup
 /// audience as [`rest_state_appeared`] — the slot allocation runs in the job on the owner's own
 /// writer thread, against the viewer's `skill_slots` (the same map the per-player leg uses).
@@ -1136,7 +1162,7 @@ fn shard_audience(viewer_shard: Option<ShardId>, row_shard: ShardId) -> bool {
 
 #[cfg(test)]
 mod family_audience_tests {
-    use super::shard_audience;
+    use super::{shard_audience, WorldView};
     use crate::stdb::subscriptions::private_recipient_audience;
 
     #[test]
@@ -1159,6 +1185,21 @@ mod family_audience_tests {
             !private_recipient_audience(0, 0),
             "the all-zero case is a leak, not a match — both sides unset must still deny"
         );
+    }
+
+    #[test]
+    fn breath_relay_owner_lookup_selects_only_its_own_session() {
+        let index = WorldView::new(true).entities;
+        // No owner session on this gateway: the relay must be dropped.
+        assert_eq!(index.session_of_owner(41), None);
+        // WorldIndex's public tests pin the registration mechanics; the callback source scan below
+        // pins that breath events actually take this exact lookup rather than an AOI broadcast.
+        let source = include_str!("world_view.rs");
+        let start = source.find("fn breath_relay_appeared").unwrap();
+        let body = &source[start..];
+        assert!(body.contains("view.entities.session_of_owner(row.character_guid)"));
+        assert!(!body[..body.find("fn skill_changed").unwrap()]
+            .contains("viewers_on_shard"), "breath rows must never broadcast to shard viewers");
     }
 }
 
@@ -1322,4 +1363,3 @@ pub(crate) fn seed_from_caches(view: &WorldView) {
         view.shard_count()
     );
 }
-

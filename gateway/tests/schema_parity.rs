@@ -625,6 +625,9 @@ parity_test!(parity_game_roll_event, "game_roll_event", lyracore_module::RollEve
 parity_test!(parity_game_rest_state_event, "game_rest_state_event", lyracore_module::RestStateEvent, bindings::rest_state_event_type::RestStateEvent, {
     id, character_guid, player_bytes_2, created_at,
 });
+parity_test!(parity_game_breath_relay_event, "game_breath_relay_event", lyracore_module::BreathRelayEvent, bindings::breath_relay_event_type::BreathRelayEvent, {
+    id, character_guid, kind, time_remaining_ms, duration_ms, damage, created_at,
+});
 parity_test!(parity_game_dynamic_object, "game_dynamic_object", lyracore_module::DynamicObject, bindings::dynamic_object_type::DynamicObject, {
     guid, caster_guid, spell_id, map_id, instance_id, x, y, z, radius_yd,
 });
@@ -754,6 +757,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_character_talent",
     "game_roll_event",
     "game_rest_state_event",
+    "game_breath_relay_event",
     "game_dynamic_object",
     "game_combat_event",
     "game_melee_attack",
