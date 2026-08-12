@@ -29,7 +29,7 @@
 //! `lyracore_shared::mail`: the gateway builds `SMSG_MAIL_LIST_RESULT` from a cache read, so a rule
 //! kept here alone would have a second copy over there within one slice.
 
-use spacetimedb::{table, ReducerContext, Table, Timestamp};
+use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 /// One piece of mail, addressed by recipient GUID — the one realm-wide name a character has (a
 /// bound identity is minted per (account, database) and names nobody elsewhere, which is why
@@ -159,6 +159,86 @@ pub fn debug_seed_mail(
     Ok(())
 }
 
+/// Flip `mail_id`'s read state to read, for `recipient_guid`. A no-op (not an error) if it is
+/// already read, so a repeated click never fails. `Err` merges "no such mail" with "not yours" —
+/// see [`lyracore_shared::mail::NOT_YOUR_MAIL`] — because the row lookup is the ONLY authorization
+/// this write has: whichever plane runs it, the caller passed no live entity to check against.
+pub(crate) fn apply_mark_read(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    mail_id: u64,
+) -> Result<(), String> {
+    let mails = ctx.db.game_mail();
+    let row = mails
+        .id()
+        .find(mail_id)
+        .filter(|m| m.recipient_guid == recipient_guid)
+        .ok_or_else(|| lyracore_shared::mail::NOT_YOUR_MAIL.to_string())?;
+    if !row.was_read {
+        let mut row = row;
+        row.was_read = true;
+        mails.id().update(row);
+    }
+    Ok(())
+}
+
+/// Delete `mail_id` for `recipient_guid`. Destroys any attachment the row still carries — the
+/// attachment lives in the row's own columns (no child row, no separate escrow), so there is
+/// nothing left to separately clean up. Vanilla's confirmation prompt is client-side; the server
+/// enforces only that the mail is the caller's.
+pub(crate) fn apply_delete(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    mail_id: u64,
+) -> Result<(), String> {
+    let mails = ctx.db.game_mail();
+    let row = mails
+        .id()
+        .find(mail_id)
+        .filter(|m| m.recipient_guid == recipient_guid)
+        .ok_or_else(|| lyracore_shared::mail::NOT_YOUR_MAIL.to_string())?;
+    mails.id().delete(row.id);
+    Ok(())
+}
+
+/// The mail write surface's entry point (the mark-read/delete slice) — the first `realm_mail_*`
+/// reducer. Mirrors [`crate::chat::realm_whisper`]'s shape and its reason: mail is
+/// addressed by guid on a database that may hold no live entity for the caller, so this reducer
+/// takes `recipient_guid` explicitly instead of deriving it from `ctx.sender()`.
+///
+/// **Operator-gated, and it has to be** — the same trust boundary `realm_whisper` sits on. A client
+/// that could call this directly would flip the read state of anybody's mail in the realm; the
+/// `recipient_guid` argument is the ENTIRE authorization otherwise, and only the gateway is trusted
+/// to have already resolved it to the caller's own guid.
+///
+/// One reducer serves BOTH planes, unlike whisper's `realm_whisper`/`gw_send_whisper` split: the
+/// mail READ path already treats realm-core and the single-database fallback symmetrically (one
+/// `mail_list` read, asked of whichever handle owns the rows — `world::mail::mail_of`), because
+/// unlike a whisper's name resolution, addressing a mail row needs no plane-specific lookup. The
+/// gateway calls this same reducer on whichever handle `world::mail` picked, so the write cannot
+/// drift from the read about which database is authoritative.
+#[reducer]
+pub fn realm_mail_mark_read(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    mail_id: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    apply_mark_read(ctx, recipient_guid, mail_id)
+}
+
+/// [`realm_mail_mark_read`]'s twin for delete. Same trust boundary, same one-reducer-both-planes
+/// shape.
+#[reducer]
+pub fn realm_mail_delete(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    mail_id: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    apply_delete(ctx, recipient_guid, mail_id)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::test_scan::read_scanned;
@@ -195,6 +275,36 @@ mod tests {
                     n + 1
                 );
             }
+        }
+    }
+
+    // ---- `realm_mail_mark_read` / `realm_mail_delete`'s operator gate ----
+    //
+    // A reducer body needs a live `ReducerContext`, so neither can be EXECUTED by a test in this
+    // crate — same reason, same technique, as `chat.rs`'s pair for `realm_whisper`.
+
+    use crate::test_scan::code_of;
+
+    /// **The operator gate is the entire authorization of the mail write surface.** Both reducers
+    /// take `recipient_guid` as an argument rather than deriving it from `ctx.sender()`, so without
+    /// the gate any identity that can reach the node flips the read state of, or deletes, anybody's
+    /// mail in the realm.
+    ///
+    /// Asserted as the FIRST STATEMENT of the body, not merely present in it — see
+    /// `chat.rs::the_realm_whisper_reducer_is_operator_gated` for why a bare `contains` is not
+    /// enough (a neutered gate, `if false { .. }` or an early return above it, still contains the
+    /// text).
+    #[test]
+    fn the_realm_mail_write_reducers_are_operator_gated() {
+        for signature in ["pub fn realm_mail_mark_read(", "pub fn realm_mail_delete("] {
+            let body = code_of(include_str!("mail.rs"), signature);
+            let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(
+                normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
+                "`{signature}` no longer OPENS with the operator gate. It takes the caller's guid \
+                 as an argument, so the gate is the only thing between an arbitrary connection and \
+                 mutating anybody's mailbox in the realm. Body was:\n{body}"
+            );
         }
     }
 }

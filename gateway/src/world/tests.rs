@@ -966,6 +966,34 @@ impl WorldStore for InMemoryStore {
         self.rec("mailbox_in_range");
         Ok(self.mailboxes.contains(&mailbox_guid))
     }
+    /// Models the module's `apply_mark_read`: the row lookup scoped to `recipient_guid` IS the
+    /// authorization, so a mail that exists but belongs to someone else fails the same way a
+    /// nonexistent id does.
+    fn mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_mark_read");
+        let mut mails = self.mails.lock().unwrap();
+        match mails
+            .iter_mut()
+            .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
+        {
+            Some((_, m)) => {
+                m.was_read = true;
+                Ok(())
+            }
+            None => Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL)),
+        }
+    }
+    /// Models the module's `apply_delete`: same merged not-found/not-yours refusal as mark-read.
+    fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_delete");
+        let mut mails = self.mails.lock().unwrap();
+        let before = mails.len();
+        mails.retain(|(to, m)| !(*to == recipient_guid && m.id == mail_id));
+        if mails.len() == before {
+            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+        }
+        Ok(())
+    }
     fn buy_item(
         &self,
         _account_id: u64,

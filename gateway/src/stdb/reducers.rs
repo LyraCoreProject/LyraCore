@@ -1528,6 +1528,27 @@ impl Coordinator {
         )
     }
 
+    /// `realm_mail_mark_read` — flip a mail's read state against the database THIS handle points
+    /// at. Same trust shape as `realm_whisper` above: operator-gated, `recipient_guid` passed
+    /// explicitly (the plane may hold no live entity), called on whichever handle `world::mail`
+    /// picked — realm-core when sharded, this shard's own database when not.
+    pub fn mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_mark_read",
+            realm_mail_mark_read_then(recipient_guid, mail_id)
+        )
+    }
+
+    /// `realm_mail_delete` — [`mail_mark_read`](Self::mail_mark_read)'s twin for delete.
+    pub fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_delete",
+            realm_mail_delete_then(recipient_guid, mail_id)
+        )
+    }
+
     /// `sync_group_mirror` — replace THIS shard's mirror of one party with realm-core's roster.
     /// Operator-gated, coordinator connection, same reasoning as above; called
     /// on each WORLD shard after a party op and at world entry.

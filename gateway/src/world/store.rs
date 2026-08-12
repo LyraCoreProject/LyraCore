@@ -796,6 +796,20 @@ pub trait WorldStore: Send + Sync {
         Ok(false)
     }
 
+    /// Flip `mail_id`'s read state for `recipient_guid`, on the database THIS handle names.
+    ///
+    /// Called on the realm-core handle when there is one and on the session's own handle when there
+    /// is not — the SAME two-plane routing [`mail_list`](Self::mail_list) takes, because the write
+    /// and the read must never disagree about which database owns the rows. `Err` when `mail_id`
+    /// does not exist or is not `recipient_guid`'s — the gates ran in `world::mail` before this is
+    /// ever called, so a refusal here means a crafted id.
+    fn mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
+
+    /// Delete `mail_id` for `recipient_guid`, on the database THIS handle names — same two-plane
+    /// routing as [`mail_mark_read`](Self::mail_mark_read). Destroys any attachment the row still
+    /// carries, as vanilla does after its (client-side) confirmation prompt.
+    fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
+
     /// Read a corpse's lootable copper for `SMSG_LOOT_RESPONSE` (slice 3). 0 if the target is gone
     /// or not a corpse. Read-only — the actual take is `loot_money`.
     fn loot_target_money(&self, target_guid: u64) -> Result<u32>;

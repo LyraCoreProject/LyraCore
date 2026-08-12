@@ -496,6 +496,14 @@ impl WorldStore for Coordinator {
         self.mailbox_in_range(mailbox_guid, player_guid)
     }
 
+    fn mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.mail_mark_read(recipient_guid, mail_id)
+    }
+
+    fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.mail_delete(recipient_guid, mail_id)
+    }
+
     fn buy_item(
         &self,
         account_id: u64,
