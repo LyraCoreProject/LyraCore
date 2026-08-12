@@ -660,6 +660,40 @@ pub fn realm_address_override(raw: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// What the realm list advertises: the override when set, the `game_realm` row otherwise. One
+/// implementation, so the realm list and the startup check cannot disagree about what is advertised.
+pub fn advertised_realm_address_or(row_address: String) -> String {
+    advertised_realm_address().unwrap_or(row_address)
+}
+
+/// Loopback advertised while the world listener is reachable from elsewhere — the one combination
+/// that is wrong whatever the surrounding network. NAT and firewalls are unknowable from here, and
+/// unparseable input reads as reachable because this only drives a warning.
+pub fn advertised_address_is_unreachable(advertised: &str, world_bind: &str) -> bool {
+    let bind = host_of(world_bind);
+    // An empty or absent bind proves nothing about who can reach this listener, so it is not
+    // grounds to report the advertisement.
+    is_loopback_host(host_of(advertised)) && !bind.is_empty() && !is_loopback_host(bind)
+}
+
+/// The host half of a `host:port`, with IPv6 brackets stripped. A value with no port reads whole.
+fn host_of(address: &str) -> &str {
+    let host = match address.rsplit_once(':') {
+        // `[::1]:8085` — the split is the port separator only because the host is bracketed.
+        Some((host, _)) if !host.is_empty() => host,
+        _ => address,
+    };
+    host.trim_start_matches('[').trim_end_matches(']')
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => ip.is_loopback(),
+        // `127.example.com` is a hostname that merely starts like one, not a loopback address.
+        Err(_) => host.eq_ignore_ascii_case("localhost"),
+    }
+}
+
 /// Area-of-Interest gate (scaling): the per-player `game_world_entity` subscription is SCOPED to a
 /// grid-cell box (before the shared-connection model, a re-subscribing per-player subscription; now
 /// an in-process cell index — `stdb::world_index`), instead of the global `SELECT *`. Default ON;
@@ -854,6 +888,95 @@ mod realm_address_tests {
             realm_address_override(Some("  192.168.1.50:8085\n".to_string())),
             Some("192.168.1.50:8085".to_string())
         );
+    }
+
+    /// The reported failure: seeded loopback row, wildcard bind, every startup marker green, and no
+    /// remote client can enter the world.
+    #[test]
+    fn advertising_loopback_while_listening_for_remote_clients_is_unreachable() {
+        for bind in ["0.0.0.0:8085", "159.69.88.70:8085", "192.168.1.50:8085"] {
+            assert!(
+                advertised_address_is_unreachable("127.0.0.1:8085", bind),
+                "loopback advertised against {bind} must be reported"
+            );
+        }
+    }
+
+    /// The contributor fixture. Loopback everywhere is the supported local setup, so it must stay
+    /// silent or the warning becomes noise every developer learns to skip.
+    #[test]
+    fn a_loopback_fixture_is_never_reported() {
+        for bind in ["127.0.0.1:8085", "localhost:8085", "[::1]:8085"] {
+            assert!(
+                !advertised_address_is_unreachable("127.0.0.1:8085", bind),
+                "the loopback fixture bound to {bind} must stay silent"
+            );
+        }
+    }
+
+    #[test]
+    fn a_routable_advertised_address_is_never_reported_whatever_the_bind() {
+        for bind in ["0.0.0.0:8085", "127.0.0.1:8085", "10.0.0.5:8085"] {
+            assert!(!advertised_address_is_unreachable(
+                "159.69.88.70:8085",
+                bind
+            ));
+            assert!(!advertised_address_is_unreachable(
+                "realm.example.com:8085",
+                bind
+            ));
+        }
+    }
+
+    /// Every spelling of loopback the row or the bind can carry — a check that only knows
+    /// `127.0.0.1` would miss the same fault written another way.
+    #[test]
+    fn every_spelling_of_loopback_counts_as_loopback() {
+        for advertised in [
+            "127.0.0.1:8085",
+            "127.1.2.3:8085",
+            "localhost:8085",
+            "LOCALHOST:8085",
+            "[::1]:8085",
+        ] {
+            assert!(
+                advertised_address_is_unreachable(advertised, "0.0.0.0:8085"),
+                "{advertised} is loopback"
+            );
+        }
+    }
+
+    /// `127.0.0.1` is loopback; a hostname that merely starts with those characters is not.
+    #[test]
+    fn a_host_that_only_looks_like_loopback_is_left_alone() {
+        assert!(!advertised_address_is_unreachable(
+            "127.example.com:8085",
+            "0.0.0.0:8085"
+        ));
+        assert!(!advertised_address_is_unreachable(
+            "localhost.example.com:8085",
+            "0.0.0.0:8085"
+        ));
+    }
+
+    /// This drives a log line, nothing more. Anything unparseable reads as reachable rather than
+    /// panicking the gateway on the way up.
+    #[test]
+    fn malformed_input_stays_silent_instead_of_panicking() {
+        for (advertised, bind) in [
+            ("", ""),
+            ("", "0.0.0.0:8085"),
+            ("127.0.0.1:8085", ""),
+            (":", ":"),
+            ("::::", "0.0.0.0:8085"),
+            ("no-port", "also-no-port"),
+            ("127.0.0.1:notaport", "0.0.0.0:8085"),
+        ] {
+            let _ = advertised_address_is_unreachable(advertised, bind);
+        }
+        // The one malformed case with a definite answer: a loopback host and an unparseable bind
+        // must not be reported, since nothing proves the listener is remote-reachable.
+        assert!(!advertised_address_is_unreachable("127.0.0.1:8085", ""));
     }
 }
 

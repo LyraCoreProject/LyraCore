@@ -102,6 +102,9 @@ async fn run() -> Result<()> {
     // establish_session / provision_account. Stateless gateways share K through the DB.
     let coordinator = stdb::Coordinator::connect(&cfg).await?;
 
+    // Here because this is the first point the realm row is readable.
+    warn_on_unreachable_realm_address(&coordinator, &cfg);
+
     // Bot-initiated (serendipity) invites: a playerbot's goal tick has no client and no
     // player connection to ride, so it is picked up here — on the coordinator, independent of any
     // session — rather than from a per-player relay.
@@ -139,6 +142,23 @@ async fn run() -> Result<()> {
         l?;
         w?;
         Ok(())
+    }
+}
+
+/// Report a realm advertising loopback while listening for remote clients — otherwise the symptom
+/// is a login loop with every startup marker green. An unreadable row is not fatal: this only warns.
+fn warn_on_unreachable_realm_address(coordinator: &stdb::Coordinator, cfg: &GatewayConfig) {
+    let Ok(realm) = coordinator.realm() else {
+        return;
+    };
+    let advertised = config::advertised_realm_address_or(realm.address);
+    if config::advertised_address_is_unreachable(&advertised, &cfg.world_bind) {
+        log::warn!(
+            "realm advertises {advertised} but the world listener is bound to {} — a client that \
+             logs in is told to connect to its own machine and will bounce back to realm select. \
+             Set it on every database with the `set_realm_address` reducer.",
+            cfg.world_bind
+        );
     }
 }
 
@@ -243,6 +263,60 @@ mod provision_writes_both_databases_tripwire {
     }
 }
 
+/// The predicate's cases are pinned directly in `config::realm_address_tests`. What no unit test can
+/// reach is whether anything ever ASKS it: the check needs a live coordinator, so its presence in
+/// `main` is pinned by a scan the way every other startup wiring here is.
+#[cfg(test)]
+mod advertised_address_warning_wiring_tripwire {
+    use crate::test_scan::code_of;
+
+    #[test]
+    fn main_checks_the_advertised_address_at_startup() {
+        let src = include_str!("main.rs");
+        let body = code_of(src, "async fn run() -> Result<()> {");
+        assert!(
+            body.contains("warn_on_unreachable_realm_address(&coordinator, &cfg);"),
+            "`main` no longer checks the advertised realm address, so a realm seeded with the \
+             loopback default starts entirely green while no remote client can enter the world. \
+             Body was:\n{body}"
+        );
+    }
+
+    /// The check must sit after the coordinator exists, or it reads no realm row and silently
+    /// never fires.
+    #[test]
+    fn the_check_runs_after_the_coordinator_is_connected() {
+        let src = include_str!("main.rs");
+        let body = code_of(src, "async fn run() -> Result<()> {");
+        let connect = body
+            .find("let coordinator = stdb::Coordinator::connect(&cfg).await?;")
+            .expect("main still connects the coordinator");
+        let check = body
+            .find("warn_on_unreachable_realm_address(")
+            .expect("main still checks the advertised address");
+        assert!(
+            connect < check,
+            "the advertised-address check now runs BEFORE the coordinator connects, so it reads \
+             no realm row and the warning can never fire"
+        );
+    }
+
+    /// A warning naming neither address, or no way to fix it, sends the reader back to the docs —
+    /// which is the hour this line exists to save.
+    #[test]
+    fn the_warning_names_both_addresses_and_the_way_to_change_it() {
+        let src = include_str!("main.rs");
+        let body = code_of(src, "fn warn_on_unreachable_realm_address(");
+        for needle in ["{advertised}", "cfg.world_bind", "set_realm_address"] {
+            assert!(
+                body.contains(needle),
+                "the warning no longer carries `{needle}`, so it cannot be acted on without \
+                 opening documentation. Body was:\n{body}"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod bot_invite_relay_wiring_tripwire {
     use crate::test_scan::code_of;
@@ -251,7 +325,7 @@ mod bot_invite_relay_wiring_tripwire {
     #[test]
     fn main_arms_the_bot_invite_relay_at_startup() {
         let src = include_str!("main.rs");
-        let body = code_of(src, "async fn main() -> Result<()> {");
+        let body = code_of(src, "async fn run() -> Result<()> {");
         assert!(
             body.contains("coordinator.spawn_bot_invite_relay();"),
             "`main` no longer calls `spawn_bot_invite_relay` — nothing subscribes \
