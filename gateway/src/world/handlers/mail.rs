@@ -8,6 +8,7 @@
 //! nothing. Nothing here tears a session down, matching the vendor/loot/combat arms.
 
 use super::super::*;
+use wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo;
 
 pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
     tx: &SessionTx,
@@ -116,6 +117,60 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                     codec::build_mail_delete_result(c.mail_id, ok),
                 ))),
             )?;
+        }
+        // Post a letter. `item`, `money` and `cash_on_delivery_amount` ride this packet too and are
+        // deliberately ignored here — attachments are later slices, and a letter that silently ate
+        // an item would be the worst way to learn that. Every refusal answers with its OWN
+        // `MailResultTwo`, never a generic internal error: the client renders each as distinct
+        // on-screen text, which is all the player gets to work with.
+        //
+        // The one refusal that answers with SILENCE is the mailbox gate, matching the list arm
+        // above — vanilla has no mailbox-refusal packet, and the client only offers Send at a
+        // mailbox, so reaching it means a crafted packet or a desynced session.
+        ClientOpcodeMessage::CMSG_SEND_MAIL(c) => {
+            let self_guid = social::self_guid(conn);
+            let result2 = match mail::send(
+                store,
+                self_guid,
+                c.mailbox.guid(),
+                &c.receiver,
+                c.subject.clone(),
+                c.body.clone(),
+            ) {
+                Ok(()) => Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok),
+                Err(e) => {
+                    log::debug!(
+                        "world: mail send refused (account {}): {e}",
+                        conn.account_id
+                    );
+                    match e {
+                        mail::SendRefusal::NoMailbox(_) => None,
+                        mail::SendRefusal::RecipientNotFound(_) => {
+                            Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrRecipientNotFound)
+                        }
+                        mail::SendRefusal::CannotSendToSelf => {
+                            Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrCannotSendToSelf)
+                        }
+                        mail::SendRefusal::NotYourTeam => {
+                            Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrNotYourTeam)
+                        }
+                        mail::SendRefusal::NotEnoughMoney(_) => {
+                            Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrNotEnoughMoney)
+                        }
+                        mail::SendRefusal::Internal(_) => {
+                            Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError)
+                        }
+                    }
+                }
+            };
+            if let Some(result2) = result2 {
+                send(
+                    tx,
+                    Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
+                        codec::build_mail_send_result(result2),
+                    ))),
+                )?;
+            }
         }
         other => return Ok(Some(other)),
     }

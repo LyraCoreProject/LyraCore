@@ -414,6 +414,16 @@ struct InMemoryStore {
     /// Gameobject guids that ARE a mailbox within reach on this shard. Empty (derive-Default)
     /// refuses every mailbox, which is the wrong-map / out-of-range / not-a-mailbox arm.
     mailboxes: Vec<u64>,
+    /// `game_world_entity.money` per guid, on THIS database — the purse the postage comes out of.
+    /// A guid with no row here cannot pay, which is also the module's answer for a character with no
+    /// live entity on the shard being asked.
+    purses: std::sync::Mutex<Vec<(u64, u32)>>,
+    /// Letters written on THIS database: `(sender, recipient, subject, body, postage)`. The postage
+    /// is recorded because it is what tells the two planes apart — the single-database plane charges
+    /// IN the write call (one transaction), the sharded one charges on the sender's shard first and
+    /// passes 0 here.
+    #[allow(clippy::type_complexity)]
+    sent_mail: std::sync::Mutex<Vec<(u64, u64, String, String, u32)>>,
     /// When set, `realm_group_op(ACCEPT, …)` fails with this message. INJECTED because a real
     /// one cannot be staged synchronously: every accept-time refusal the module has (already grouped,
     /// party full, the inviter no longer leads) needs the party to change BETWEEN the invite and the
@@ -993,6 +1003,56 @@ impl WorldStore for InMemoryStore {
             return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
         }
         Ok(())
+    }
+    /// Models the module's `apply_send`: charge the postage first when this call carries one (the
+    /// single-database plane's one transaction), then write the row. The id is per-database, as the
+    /// module's `auto_inc` is.
+    fn mail_send(
+        &self,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        postage: u32,
+    ) -> Result<()> {
+        self.rec("mail_send");
+        if postage > 0 {
+            self.mail_charge_postage(sender_guid, postage)?;
+        }
+        self.sent_mail.lock().unwrap().push((
+            sender_guid,
+            recipient_guid,
+            subject.clone(),
+            body.clone(),
+            postage,
+        ));
+        let mut mails = self.mails.lock().unwrap();
+        let id = mails.iter().map(|(_, m)| m.id).max().unwrap_or(0) + 1;
+        mails.push((
+            recipient_guid,
+            codec::MailView {
+                id,
+                sender_guid,
+                subject,
+                body,
+                created_at_secs: 1_000,
+                ..Default::default()
+            },
+        ));
+        Ok(())
+    }
+    /// Models the module's `charge_postage`: atomic, and it refuses for a purse that cannot pay AND
+    /// for a guid with no purse at all (the module's "no live entity on this database" arm).
+    fn mail_charge_postage(&self, sender_guid: u64, copper: u32) -> Result<()> {
+        self.rec("mail_charge_postage");
+        let mut purses = self.purses.lock().unwrap();
+        match purses.iter_mut().find(|(guid, _)| *guid == sender_guid) {
+            Some((_, money)) if *money >= copper => {
+                *money -= copper;
+                Ok(())
+            }
+            _ => Err(anyhow!(lyracore_shared::mail::NOT_ENOUGH_MONEY)),
+        }
     }
     fn buy_item(
         &self,

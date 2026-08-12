@@ -504,6 +504,21 @@ impl WorldStore for Coordinator {
         self.mail_delete(recipient_guid, mail_id)
     }
 
+    fn mail_send(
+        &self,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        postage: u32,
+    ) -> Result<()> {
+        self.mail_send(sender_guid, recipient_guid, subject, body, postage)
+    }
+
+    fn mail_charge_postage(&self, sender_guid: u64, copper: u32) -> Result<()> {
+        self.mail_charge_postage(sender_guid, copper)
+    }
+
     fn buy_item(
         &self,
         account_id: u64,

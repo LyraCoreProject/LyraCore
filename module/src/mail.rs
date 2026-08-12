@@ -20,16 +20,18 @@
 //!
 //! # What is here, and what is not
 //!
-//! This slice is the READ path: the table, the sweeps, and a debug seeder so a mailbox is demoable
-//! before anything can send. Sending, attachments, take, mark-read, delete, return and COD are
-//! later slices — the attachment columns exist because the wire has exactly one item block
-//! per mail and a later slice must not migrate them in, not because anything writes them yet.
+//! Here now: the table and its sweeps, the read path's seeder, mark-read, delete, and sending a
+//! TEXT-ONLY letter. Attachments, take, return and COD are later slices — the attachment columns
+//! exist because the wire has exactly one item block per mail and a later slice must not migrate
+//! them in, not because anything writes them yet.
 //!
 //! The wire-facing rules (the unread-mail float, the `item_text_id`, the expiry stamp) live in
 //! `lyracore_shared::mail`: the gateway builds `SMSG_MAIL_LIST_RESULT` from a cache read, so a rule
 //! kept here alone would have a second copy over there within one slice.
 
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
+
+use crate::game_world_entity;
 
 /// One piece of mail, addressed by recipient GUID — the one realm-wide name a character has (a
 /// bound identity is minted per (account, database) and names nobody elsewhere, which is why
@@ -92,7 +94,6 @@ crate::character_owned!(transfer, fn sweep_transfer_game_mail(ctx, character_gui
 
 /// Insert one mail. The shared insert core: whichever plane holds the rows, this is the shape they
 /// take, so a seeded mail and a sent one can never differ in the columns the list read projects.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 pub(crate) fn insert_mail(
     ctx: &ReducerContext,
     recipient_guid: u64,
@@ -156,6 +157,63 @@ pub fn debug_seed_mail(
         "debug_seed_mail: mail {id} to {recipient_guid} from {sender_guid} (unread now: {})",
         has_unread(ctx, recipient_guid)
     );
+    Ok(())
+}
+
+/// Take `copper` out of `sender_guid`'s purse, or refuse and take nothing.
+///
+/// Reads the LIVE entity (`game_world_entity.money`), the way `trainer::buy` does: the durable
+/// `game_character.money` is a mirror the logout persist writes, so debiting the row instead would
+/// be overwritten by the sender's own session. Through `acting_entity_by_guid`, so a character
+/// mid-transfer reads as absent rather than paying out of a purse that is in flight.
+///
+/// The refusal is the whole "a sender who cannot afford postage is charged nothing" guarantee: it
+/// happens before any write, in the same transaction as the debit that would follow.
+pub(crate) fn charge_postage(
+    ctx: &ReducerContext,
+    sender_guid: u64,
+    copper: u32,
+) -> Result<(), String> {
+    let mut sender = crate::helpers::acting_entity_by_guid(ctx, sender_guid)
+        .ok_or_else(|| lyracore_shared::mail::NOT_IN_WORLD.to_string())?;
+    if sender.money < copper {
+        return Err(lyracore_shared::mail::NOT_ENOUGH_MONEY.to_string());
+    }
+    sender.money -= copper;
+    ctx.db.game_world_entity().guid().update(sender);
+    Ok(())
+}
+
+/// Write one sent letter, charging `postage` first when this database holds the sender's purse.
+///
+/// `postage` is passed rather than derived because it decides WHERE the debit happens, and that is
+/// the caller's knowledge, not this transaction's:
+///
+/// - **Single-database gateway** — the purse and the mail row are on one database, so the gateway
+///   passes the real postage and the debit and the insert are ONE transaction. That is the shape
+///   #9 asks for, and it is what `lyracore dev up` runs.
+/// - **Sharded realm** — realm-core holds no characters, so the purse is on the sender's own shard
+///   and one transaction is not reachable at all. The gateway charges there first
+///   ([`realm_mail_charge_postage`]) and passes 0 here. Debit-first is deliberate: the failure it
+///   leaves is a sender who paid postage and got no letter, which costs 30 copper and is logged,
+///   against a letter delivered for free if the order were reversed.
+///
+/// Both planes reach [`insert_mail`], so the ROW is identical either way — a sent mail and a
+/// seeded one cannot differ in a column the list read projects.
+pub(crate) fn apply_send(
+    ctx: &ReducerContext,
+    sender_guid: u64,
+    recipient_guid: u64,
+    subject: String,
+    body: String,
+    postage: u32,
+) -> Result<(), String> {
+    if postage > 0 {
+        charge_postage(ctx, sender_guid, postage)?;
+    }
+    // No attached copper and no attachment: the money and item slices are later, and a text-only
+    // letter is worth sending because the body rides `item_text_id` to the client's own query.
+    insert_mail(ctx, recipient_guid, sender_guid, subject, body, 0);
     Ok(())
 }
 
@@ -227,6 +285,46 @@ pub fn realm_mail_mark_read(
     apply_mark_read(ctx, recipient_guid, mail_id)
 }
 
+/// Post one letter, as `sender_guid`, to `recipient_guid`. The write half of the send path.
+///
+/// **Operator-gated, and it has to be** — harder than the two above. Every gate that decides WHO may
+/// write to whom (the recipient exists, the sender is in world, same faction, not yourself, standing
+/// at a mailbox) runs in the gateway, because realm-core holds no characters and no gameobjects to
+/// answer them with. So `sender_guid` here is not a claim this transaction can check: a client that
+/// could call this would post mail as anybody on the realm, and the gateway passes only the guid it
+/// authenticated for that socket.
+///
+/// `postage` is 0 on a sharded realm — see [`apply_send`] for why the debit is a separate call
+/// there, and why it happens first.
+#[reducer]
+pub fn realm_mail_send(
+    ctx: &ReducerContext,
+    sender_guid: u64,
+    recipient_guid: u64,
+    subject: String,
+    body: String,
+    postage: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    apply_send(ctx, sender_guid, recipient_guid, subject, body, postage)
+}
+
+/// Charge `sender_guid` the postage for a letter whose ROW is being written on another database.
+///
+/// The one reducer of this family that does NOT run on the mail plane: it runs on the shard holding
+/// the sender's live entity, because that is where the copper is. Operator-gated for the same reason
+/// as its siblings — it takes the payer's guid as an argument, so without the gate any connection
+/// could empty a stranger's purse.
+#[reducer]
+pub fn realm_mail_charge_postage(
+    ctx: &ReducerContext,
+    sender_guid: u64,
+    copper: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    charge_postage(ctx, sender_guid, copper)
+}
+
 /// [`realm_mail_mark_read`]'s twin for delete. Same trust boundary, same one-reducer-both-planes
 /// shape.
 #[reducer]
@@ -285,10 +383,11 @@ mod tests {
 
     use crate::test_scan::code_of;
 
-    /// **The operator gate is the entire authorization of the mail write surface.** Both reducers
-    /// take `recipient_guid` as an argument rather than deriving it from `ctx.sender()`, so without
-    /// the gate any identity that can reach the node flips the read state of, or deletes, anybody's
-    /// mail in the realm.
+    /// **The operator gate is the entire authorization of the mail write surface.** Every reducer
+    /// here takes the acting character's guid as an argument rather than deriving it from
+    /// `ctx.sender()`, so without the gate any identity that can reach the node flips the read state
+    /// of, deletes, or POSTS AS anybody's mail in the realm — and empties their purse for the
+    /// postage.
     ///
     /// Asserted as the FIRST STATEMENT of the body, not merely present in it — see
     /// `chat.rs::the_realm_whisper_reducer_is_operator_gated` for why a bare `contains` is not
@@ -296,7 +395,12 @@ mod tests {
     /// text).
     #[test]
     fn the_realm_mail_write_reducers_are_operator_gated() {
-        for signature in ["pub fn realm_mail_mark_read(", "pub fn realm_mail_delete("] {
+        for signature in [
+            "pub fn realm_mail_mark_read(",
+            "pub fn realm_mail_delete(",
+            "pub fn realm_mail_send(",
+            "pub fn realm_mail_charge_postage(",
+        ] {
             let body = code_of(include_str!("mail.rs"), signature);
             let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
             assert!(

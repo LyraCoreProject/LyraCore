@@ -29,6 +29,53 @@ pub const MAILBOX_RANGE_SQ: f32 = 100.0;
 /// destroyed.
 pub const EXPIRY_DAYS: f32 = 30.0;
 
+/// Postage for one letter, in copper — vanilla's flat 30, the same constant mangoszero charges
+/// per attachment slot. Charged at SEND, so a refused send costs nothing and a delivered one is
+/// paid for before the row exists.
+pub const POSTAGE_COPPER: u32 = 30;
+
+/// What the post office charges to carry one letter. A function rather than a bare constant read
+/// at the call sites, because the item-attachment slice multiplies it and the call sites must not
+/// each learn that rule.
+pub fn postage() -> u32 {
+    POSTAGE_COPPER
+}
+
+/// The copper that leaves the sender's purse for one mail: the postage, plus any coin travelling
+/// WITH the letter. Text-only mail passes 0; the money-attachment slice is what makes the argument
+/// non-zero, and it must debit one total rather than charging twice.
+///
+/// Saturating, so a crafted `money` near `u32::MAX` cannot wrap the total down to something the
+/// sender can afford.
+pub fn total_cost(attached_money: u32) -> u32 {
+    postage().saturating_add(attached_money)
+}
+
+/// The sender cannot pay [`total_cost`]. The ONE refusal the module owns on the send path — every
+/// other gate is answered by the gateway, which is the only party that can see the whole realm.
+pub const NOT_ENOUGH_MONEY: &str = "mail: not enough money for postage";
+
+/// No character on the realm answers to the typed name.
+pub fn no_recipient_named(name: &str) -> String {
+    format!("mail: no character named {name}")
+}
+
+/// Vanilla's rule: a letter to yourself is refused.
+pub const CANNOT_SEND_TO_SELF: &str = "mail: cannot send to yourself";
+
+/// Vanilla's rule: mail does not cross the faction line.
+pub const NOT_YOUR_TEAM: &str = "mail: recipient is not your team";
+
+/// The typed name resolves to SEVERAL characters and nothing can choose between them.
+///
+/// Character names are unique per DATABASE, not per realm (`party::resolve_all_by_name`), so a name
+/// can name two people at once. A whisper disambiguates by picking the one that is online; mail
+/// cannot, because reaching an offline character is the whole point of it. Refusing is deliberate —
+/// see the call site in `gateway/src/world/mail.rs`.
+pub fn ambiguous_recipient(name: &str) -> String {
+    format!("mail: {name} names more than one character on the realm")
+}
+
 /// The float the client's periodic mail poll expects.
 pub fn unread_mail_signal(has_unread: bool) -> f32 {
     if has_unread {
@@ -95,6 +142,21 @@ mod tests {
         assert_eq!(item_text_id_for(7, "hello"), 7);
         assert_eq!(item_text_id_for(7, ""), 0);
         assert_eq!(item_text_id_for(u64::from(u32::MAX) + 1, "hello"), 0);
+    }
+
+    /// Postage is vanilla's flat 30 copper, and a text-only letter costs exactly that.
+    #[test]
+    fn a_text_only_letter_costs_the_flat_postage() {
+        assert_eq!(postage(), 30);
+        assert_eq!(total_cost(0), 30);
+    }
+
+    /// Attached coin rides on TOP of the postage — one debit, not two — and the total saturates
+    /// rather than wrapping, so a crafted amount cannot make an unaffordable mail look affordable.
+    #[test]
+    fn attached_money_adds_to_the_postage_and_the_total_saturates() {
+        assert_eq!(total_cost(100), 130);
+        assert_eq!(total_cost(u32::MAX), u32::MAX);
     }
 
     /// The countdown starts at the full stamp and never goes negative.

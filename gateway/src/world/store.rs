@@ -810,6 +810,32 @@ pub trait WorldStore: Send + Sync {
     /// carries, as vanilla does after its (client-side) confirmation prompt.
     fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
 
+    /// Write one sent letter on the database THIS handle names — the same two-plane routing every
+    /// other mail method takes.
+    ///
+    /// Called with the real `postage` on a single-database gateway, where the sender's purse is on
+    /// this database too and the debit and the insert are ONE transaction. Called with 0 on a
+    /// sharded realm, where realm-core holds no purse: the gateway charges
+    /// [`mail_charge_postage`](Self::mail_charge_postage) on the sender's own shard first.
+    ///
+    /// Every gate that decides who may write to whom has already run in `world::mail` — realm-core
+    /// can answer none of them — so `sender_guid` must be the guid the socket authenticated.
+    fn mail_send(
+        &self,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        postage: u32,
+    ) -> Result<()>;
+
+    /// Take the postage out of `sender_guid`'s purse, on the database THIS handle names.
+    ///
+    /// Always the session's OWN handle: the purse is `game_world_entity.money`, which lives on the
+    /// shard the sender is standing on. `Err` is the "cannot afford it" refusal, and it is atomic —
+    /// a refused send is charged nothing.
+    fn mail_charge_postage(&self, sender_guid: u64, copper: u32) -> Result<()>;
+
     /// Read a corpse's lootable copper for `SMSG_LOOT_RESPONSE` (slice 3). 0 if the target is gone
     /// or not a corpse. Read-only — the actual take is `loot_money`.
     fn loot_target_money(&self, target_guid: u64) -> Result<u32>;
