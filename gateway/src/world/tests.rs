@@ -79,9 +79,11 @@ use wow_world_messages::vanilla::{
     CMSG_ATTACKSTOP,
     CMSG_ATTACKSWING,
     CMSG_AUTH_SESSION,
+    CMSG_AUTOBANK_ITEM,
     CMSG_AUTOEQUIP_ITEM,
     // Inventory + death/resurrection dispatch tests.
     CMSG_AUTOSTORE_BAG_ITEM,
+    CMSG_AUTOSTORE_BANK_ITEM,
     CMSG_BANKER_ACTIVATE,
     CMSG_BUYBACK_ITEM,
     CMSG_BUY_ITEM,
@@ -470,6 +472,9 @@ struct InMemoryStore {
     /// (drag within the main inventory) and CMSG_SWAP_ITEM (cross-bag, main-bag-only in this
     /// gateway), which both route onto this one store method.
     moved_items: std::sync::Mutex<Vec<(u8, u8)>>,
+    /// Recorded `auto_bank_item` slots — backs both CMSG_AUTOBANK_ITEM (deposit) and
+    /// CMSG_AUTOSTORE_BANK_ITEM (withdraw), which both route onto this one store method.
+    auto_banked_items: std::sync::Mutex<Vec<u8>>,
     /// Recorded `unequip_item` slots — the CMSG_AUTOSTORE_BAG_ITEM (right-click an equipped
     /// item) dispatch.
     unequipped_slots: std::sync::Mutex<Vec<u8>>,
@@ -1153,6 +1158,13 @@ impl WorldStore for InMemoryStore {
             return Err(anyhow!("{e}"));
         }
         self.moved_items.lock().unwrap().push((from_slot, to_slot));
+        Ok(())
+    }
+    fn auto_bank_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.auto_banked_items.lock().unwrap().push(slot);
         Ok(())
     }
     fn quest_giver_evals(
@@ -4015,6 +4027,100 @@ fn gossip_select_on_an_imported_banker_option_opens_the_bank_window() {
     }
     drop(client);
     server.join().unwrap();
+}
+
+#[test]
+fn autobank_item_from_the_main_bag_dispatches_auto_bank_item() {
+    // Right-click a bag item with the bank open (CMSG_AUTOBANK_ITEM) → the gateway names the source
+    // slot and lets the module resolve the free bank slot; deposit and withdraw share one store method.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_AUTOBANK_ITEM {
+        bag_index: 255,
+        slot_index: 23,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.auto_banked_items.lock().unwrap().as_slice(), &[23]);
+}
+
+#[test]
+fn autostore_bank_item_from_the_main_bag_dispatches_auto_bank_item() {
+    // Right-click a banked item (CMSG_AUTOSTORE_BANK_ITEM) → withdraw, same store method as deposit.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_AUTOSTORE_BANK_ITEM {
+        bag_index: 255,
+        slot_index: 39,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.auto_banked_items.lock().unwrap().as_slice(), &[39]);
+}
+
+#[test]
+fn autobank_item_err_sends_smsg_inventory_change_failure() {
+    // A full destination (bank full, or carry space full) is a per-action error relayed as the
+    // existing inventory-change-failure reply, never session-fatal.
+    let store = std::sync::Arc::new(InMemoryStore {
+        trade_error: Some("bank full".into()),
+        ..quest_store()
+    });
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_AUTOBANK_ITEM {
+        bag_index: 255,
+        slot_index: 23,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(_) => {} // correct feedback packet
+        other => panic!("expected SMSG_INVENTORY_CHANGE_FAILURE, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn autobank_item_from_a_sub_bag_is_unsupported_and_does_not_dispatch() {
+    // Only the main pseudo-bag (255) is addressed, matching the item handler's restriction — a
+    // sub-bag index is logged and ignored, never fatal.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_AUTOBANK_ITEM {
+        bag_index: 19,
+        slot_index: 0,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert!(
+        store.auto_banked_items.lock().unwrap().is_empty(),
+        "a sub-bag source must not be routed through auto_bank_item"
+    );
+}
+
+#[test]
+fn autostore_bank_item_from_a_sub_bag_is_unsupported_and_does_not_dispatch() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_AUTOSTORE_BANK_ITEM {
+        bag_index: 19,
+        slot_index: 0,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert!(
+        store.auto_banked_items.lock().unwrap().is_empty(),
+        "a sub-bag source must not be routed through auto_bank_item"
+    );
 }
 
 // ── Inventory change failure ─────────────────────────────────────────────────────

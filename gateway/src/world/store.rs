@@ -558,6 +558,12 @@ pub trait WorldStore: Send + Sync {
     /// covers drag-to-equip and drag-to-unequip. A gameplay `Err` is per-action, not session-fatal.
     fn move_item(&self, account_id: u64, self_guid: u64, from_slot: u8, to_slot: u8) -> Result<()>;
 
+    /// Auto-bank/auto-store-bank the item in `slot` (`CMSG_AUTOBANK_ITEM`/`CMSG_AUTOSTORE_BANK_ITEM`
+    /// — right-click to bank, right-click to withdraw). The module infers the direction from `slot`
+    /// and resolves the receiving free slot itself; a full destination (bank or carry space) is a
+    /// per-action `Err`.
+    fn auto_bank_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()>;
+
     /// Evaluate a quest giver's quests against the player for the overhead status icon + the quest
     /// menu (quests gateway slice). See `stdb::reads::quest_giver_evals`.
     fn quest_giver_evals(

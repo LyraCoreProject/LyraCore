@@ -542,6 +542,18 @@ pub fn debug_unequip_item(
     crate::items::apply_unequip_item(ctx, character_guid, from_slot)
 }
 
+/// Auto-bank/auto-store-bank `character_guid`'s item in `slot` — drives the right-click-to-bank and
+/// right-click-to-withdraw paths by explicit guid, via the shared `apply_auto_bank_item` (the
+/// direction is inferred from `slot`).
+#[reducer]
+pub fn debug_auto_bank_item(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    slot: u8,
+) -> Result<(), String> {
+    crate::items::apply_auto_bank_item(ctx, character_guid, slot)
+}
+
 /// Repair `character_guid`'s item in `slot` to full durability — drives the shared `apply_repair_item`
 /// (the future vendor/player repair) by explicit guid, so durability wear/break/repair is verifiable.
 #[reducer]

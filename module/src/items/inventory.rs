@@ -458,6 +458,40 @@ pub(crate) fn first_free_bag_slot(ctx: &ReducerContext, player_guid: u64) -> Opt
     None
 }
 
+/// First bank slot (39..=62) not occupied by any of the player's items, or `None` if the bank is
+/// full. Same one-scan shape as `first_free_backpack_slot` — collect the owner's occupied slots
+/// once, then a plain membership check per candidate.
+pub(crate) fn first_free_bank_slot(ctx: &ReducerContext, player_guid: u64) -> Option<u8> {
+    let occupied: std::collections::HashSet<u8> = ctx
+        .db
+        .game_item_instance()
+        .by_owner_guid()
+        .filter(&player_guid)
+        .map(|i| i.slot)
+        .collect();
+    (BANK_SLOT_START..=BANK_SLOT_END_INCL).find(|slot| !occupied.contains(slot))
+}
+
+/// Shared auto-bank/auto-store-bank core for the player + debug paths (right-click to bank, right-
+/// click to withdraw): the direction is inferred from `slot` itself rather than taken as an argument
+/// — a bank slot withdraws to the first free carry slot (backpack, then bag space, the same fallback
+/// `store_item` uses for loot); anything else deposits to the first free bank slot. Delegates the
+/// placement to `apply_item_move`, so both directions get the banker-proximity gate for free.
+pub(crate) fn apply_auto_bank_item(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    slot: u8,
+) -> Result<(), String> {
+    let to_slot = if is_bank_slot(slot) {
+        first_free_backpack_slot(ctx, player_guid)
+            .or_else(|| first_free_bag_slot(ctx, player_guid))
+            .ok_or_else(|| "inventory full".to_string())?
+    } else {
+        first_free_bank_slot(ctx, player_guid).ok_or_else(|| "bank full".to_string())?
+    };
+    apply_item_move(ctx, player_guid, slot, to_slot)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -499,6 +533,42 @@ mod tests {
                 "`{signature}` must test its destination slot for bank space"
             );
         }
+    }
+
+    /// FREE-BANK-SLOT SEARCH SHAPE: like `first_free_backpack_slot`, `first_free_bank_slot` must
+    /// collect the owner's occupied slots into a set ONCE rather than re-scanning per candidate slot.
+    /// There is no `ReducerContext` harness in this crate, so the shape is pinned by a source scan.
+    #[test]
+    fn first_free_bank_slot_scans_the_owners_rows_once() {
+        let src = include_str!("inventory.rs");
+        let body = code_of(src, "pub(crate) fn first_free_bank_slot(");
+        assert_eq!(
+            body.matches("by_owner_guid()").count(),
+            1,
+            "first_free_bank_slot must collect the owner's rows once, not scan per candidate slot"
+        );
+    }
+
+    /// AUTO-BANK DIRECTION INFERENCE: `apply_auto_bank_item` decides deposit vs. withdraw from the
+    /// SOURCE slot alone. Pinned by source scan (no `ReducerContext` harness): a bank source resolves
+    /// against the carry-space search pair; anything else resolves against the bank search.
+    #[test]
+    fn apply_auto_bank_item_infers_direction_from_the_source_slot() {
+        let src = include_str!("inventory.rs");
+        let body = code_of(src, "pub(crate) fn apply_auto_bank_item(");
+        assert!(
+            body.contains("is_bank_slot(slot)"),
+            "must branch on whether the source is a bank slot"
+        );
+        assert!(
+            body.contains("first_free_backpack_slot(ctx, player_guid)")
+                && body.contains("first_free_bag_slot(ctx, player_guid)"),
+            "withdraw must fall back from the backpack to bag space, like loot auto-store"
+        );
+        assert!(
+            body.contains("first_free_bank_slot(ctx, player_guid)"),
+            "deposit must resolve against the free-bank-slot search"
+        );
     }
 
     /// CARRIED-SLOT PREDICATE: equipment, bag-equip, backpack, and bag-content slots are carried; the
