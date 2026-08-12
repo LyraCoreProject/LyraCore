@@ -53,10 +53,13 @@ mod transfer_tests;
 /// `wow_srp` cipher pair. A sibling of the modules above for the same reason.
 #[path = "wire_corruption_tests.rs"]
 mod wire_corruption_tests;
+#[path = "trade_tests.rs"]
+mod trade_tests;
 
 use wow_world_base::shared::friend_result_vanilla_tbc::FriendResult;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::{
+    BuyBankSlotResult,
     BuyResult,
     BuybackSlot,
     Class,
@@ -72,6 +75,7 @@ use wow_world_messages::vanilla::{
     Race,
     RollVote,
     SpellCastTargets,
+    SheathState,
     SpellCastTargets_SpellCastTargetFlags,
     SpellCastTargets_SpellCastTargetFlags_Item,
     SpellCastTargets_SpellCastTargetFlags_Unit,
@@ -83,10 +87,14 @@ use wow_world_messages::vanilla::{
     CMSG_ATTACKSTOP,
     CMSG_ATTACKSWING,
     CMSG_AUTH_SESSION,
+    CMSG_AUTOBANK_ITEM,
     CMSG_AUTOEQUIP_ITEM,
     // Inventory + death/resurrection dispatch tests.
     CMSG_AUTOSTORE_BAG_ITEM,
+    CMSG_AUTOSTORE_BANK_ITEM,
+    CMSG_BANKER_ACTIVATE,
     CMSG_BUYBACK_ITEM,
+    CMSG_BUY_BANK_SLOT,
     CMSG_BUY_ITEM,
     CMSG_CANCEL_AURA,
     CMSG_CANCEL_CAST,
@@ -124,6 +132,7 @@ use wow_world_messages::vanilla::{
     CMSG_REPOP_REQUEST,
     CMSG_RESURRECT_RESPONSE,
     CMSG_SELL_ITEM,
+    CMSG_SETSHEATHED,
     CMSG_SET_SELECTION,
     CMSG_SPIRIT_HEALER_ACTIVATE,
     CMSG_SWAP_INV_ITEM,
@@ -162,6 +171,9 @@ struct InMemoryStore {
     vendor_stock: Vec<codec::VendorItemView>,
     /// 195: `npc_refuses_interaction` return — false (derive-Default) keeps every fixture NPC open.
     npc_refuses: bool,
+    /// Spelled as a refusal so derive-Default (false) keeps every fixture trainer serving; the
+    /// trait method reads the negation.
+    trainer_refuses_class: bool,
     /// When set, buy/sell return this error (a gameplay failure) instead of `Ok`.
     trade_error: Option<String>,
     /// Quest-giver evals returned by `quest_giver_evals` (the menu/status input).
@@ -237,6 +249,8 @@ struct InMemoryStore {
     ground_casts: std::sync::Mutex<Vec<(u32, u64, f32, f32, f32)>>,
     /// Recorded `start_ranged_attack` dispatches: (target_guid, spell_id) — the Auto Shot intercept.
     ranged_attacks: std::sync::Mutex<Vec<(u64, u32)>>,
+    /// Recorded `set_sheathed` dispatches: (self_guid, state) — the `CMSG_SETSHEATHED` route (#101).
+    sheathed: std::sync::Mutex<Vec<(u64, u8)>>,
     /// What `spell_cast_time` returns: None (default) = unknown spell (the handler treats it as
     /// instant), Some(t) = the game_spell header's cast_time_ms.
     cast_time_ms: Option<u32>,
@@ -488,6 +502,11 @@ struct InMemoryStore {
     /// (drag within the main inventory) and CMSG_SWAP_ITEM (cross-bag, main-bag-only in this
     /// gateway), which both route onto this one store method.
     moved_items: std::sync::Mutex<Vec<(u8, u8)>>,
+    /// Recorded `auto_bank_item` slots — backs both CMSG_AUTOBANK_ITEM (deposit) and
+    /// CMSG_AUTOSTORE_BANK_ITEM (withdraw), which both route onto this one store method.
+    auto_banked_items: std::sync::Mutex<Vec<u8>>,
+    /// Recorded `buy_bank_slot` calls — the banker guid named on each `CMSG_BUY_BANK_SLOT`.
+    bought_bank_slots: std::sync::Mutex<Vec<u64>>,
     /// Recorded `unequip_item` slots — the CMSG_AUTOSTORE_BAG_ITEM (right-click an equipped
     /// item) dispatch.
     unequipped_slots: std::sync::Mutex<Vec<u8>>,
@@ -521,6 +540,27 @@ struct InMemoryStore {
     /// item-instance-guid → inventory-slot resolution fixture. Empty by default (no items), matching
     /// every earlier test that never sets this.
     player_items_fixture: Vec<codec::ItemInstanceView>,
+    /// Recorded `initiate_trade` calls — `(self_guid, target_guid)` off CMSG_INITIATE_TRADE (#120).
+    initiated_trades: std::sync::Mutex<Vec<(u64, u64)>>,
+    /// Recorded `begin_trade` self_guids — CMSG_BEGIN_TRADE (#120).
+    begun_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `cancel_trade` self_guids — CMSG_CANCEL_TRADE (#120).
+    cancelled_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `set_trade_item` calls — `(self_guid, trade_slot, inv_slot)` AFTER the gateway's
+    /// (bag, slot) → absolute-slot mapping (#121).
+    set_trade_items: std::sync::Mutex<Vec<(u64, u8, u8)>>,
+    /// Recorded `clear_trade_item` calls — `(self_guid, trade_slot)` (#121).
+    cleared_trade_items: std::sync::Mutex<Vec<(u64, u8)>>,
+    /// Recorded `set_trade_gold` calls — `(self_guid, copper)` after the wire's Gold decode (#121).
+    set_trade_golds: std::sync::Mutex<Vec<(u64, u32)>>,
+    /// Recorded `accept_trade` self_guids — CMSG_ACCEPT_TRADE (#122).
+    accepted_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `unaccept_trade` self_guids — CMSG_UNACCEPT_TRADE (#122).
+    unaccepted_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `busy_trade` self_guids — CMSG_BUSY_TRADE (#123).
+    busy_trades: std::sync::Mutex<Vec<u64>>,
+    /// Recorded `ignore_trade` self_guids — CMSG_IGNORE_TRADE (#123).
+    ignore_trades: std::sync::Mutex<Vec<u64>>,
 }
 
 impl InMemoryStore {
@@ -1054,6 +1094,9 @@ impl WorldStore for InMemoryStore {
             _ => Err(anyhow!(lyracore_shared::mail::NOT_ENOUGH_MONEY)),
         }
     }
+    fn trainer_serves(&self, _player_guid: u64, _trainer_guid: u64) -> Result<bool> {
+        Ok(!self.trainer_refuses_class) // default true — every existing fixture trainer serves
+    }
     fn buy_item(
         &self,
         _account_id: u64,
@@ -1266,6 +1309,20 @@ impl WorldStore for InMemoryStore {
         self.moved_items.lock().unwrap().push((from_slot, to_slot));
         Ok(())
     }
+    fn auto_bank_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.auto_banked_items.lock().unwrap().push(slot);
+        Ok(())
+    }
+    fn buy_bank_slot(&self, _account_id: u64, _self_guid: u64, banker_guid: u64) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.bought_bank_slots.lock().unwrap().push(banker_guid);
+        Ok(())
+    }
     fn quest_giver_evals(
         &self,
         _giver_guid: u64,
@@ -1388,6 +1445,10 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
     fn stop_attack(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+        Ok(())
+    }
+    fn set_sheathed(&self, _account_id: u64, self_guid: u64, state: u8) -> Result<()> {
+        self.sheathed.lock().unwrap().push((self_guid, state));
         Ok(())
     }
     fn cast_spell(&self, _account_id: u64, _self_guid: u64, spell_id: u32, target_guid: u64) -> Result<()> {
@@ -1666,6 +1727,70 @@ impl WorldStore for InMemoryStore {
     }
     fn group_accept(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
         self.rec("group_accept");
+        Ok(())
+    }
+    // Trade (#120): pure recorders — the module owns every gate, so the fake just proves which
+    // verb the dispatch chose and which args survived the wire.
+    fn initiate_trade(&self, _account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+        self.rec("initiate_trade");
+        self.initiated_trades
+            .lock()
+            .unwrap()
+            .push((self_guid, target_guid));
+        Ok(())
+    }
+    fn begin_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("begin_trade");
+        self.begun_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+    fn cancel_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("cancel_trade");
+        self.cancelled_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+    fn set_trade_item(&self, _account_id: u64, self_guid: u64, trade_slot: u8, inv_slot: u8) -> Result<()> {
+        self.rec("set_trade_item");
+        self.set_trade_items
+            .lock()
+            .unwrap()
+            .push((self_guid, trade_slot, inv_slot));
+        Ok(())
+    }
+    fn clear_trade_item(&self, _account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()> {
+        self.rec("clear_trade_item");
+        self.cleared_trade_items
+            .lock()
+            .unwrap()
+            .push((self_guid, trade_slot));
+        Ok(())
+    }
+    fn set_trade_gold(&self, _account_id: u64, self_guid: u64, copper: u32) -> Result<()> {
+        self.rec("set_trade_gold");
+        self.set_trade_golds
+            .lock()
+            .unwrap()
+            .push((self_guid, copper));
+        Ok(())
+    }
+    fn accept_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("accept_trade");
+        self.accepted_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+    fn unaccept_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("unaccept_trade");
+        self.unaccepted_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+    fn busy_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("busy_trade");
+        self.busy_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+    fn ignore_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("ignore_trade");
+        self.ignore_trades.lock().unwrap().push(self_guid);
         Ok(())
     }
     fn group_decline(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
@@ -2641,6 +2766,7 @@ fn warrior_entity() -> codec::EntityView {
         next_level_xp: 0,
         money: 0,
         unit_bytes_1: 0,
+        unit_bytes_2: 0,
         // L1 Human Warrior base attributes (cmangos curve) — non-zero so the CREATE exercises them.
         strength: 23,
         agility: 20,
@@ -2771,16 +2897,15 @@ fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // enter_world reruns the FULL login-style sequence verbatim for the re-entry.
-    let mut verify_world_map = None;
+    // enter_world reruns the login-style sequence for the re-entry — minus SMSG_LOGIN_VERIFY_WORLD
+    // (9 messages, not 10): a verify-world resend commands a second load of the just-loaded map.
     let mut create_guid = None;
-    for _ in 0..10 {
+    for _ in 0..9 {
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-            ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(m) => {
-                verify_world_map = Some(m.map);
-                assert!(
-                    (m.position.x - 100.0).abs() < 0.01,
-                    "the re-entry sequence must use the NEW position"
+            ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(_) => {
+                panic!(
+                    "the re-entry sequence must NOT resend SMSG_LOGIN_VERIFY_WORLD — it makes the \
+                     client reload the map it just loaded (a second loading screen)"
                 );
             }
             ServerOpcodeMessage::SMSG_UPDATE_OBJECT(m) => {
@@ -2791,11 +2916,6 @@ fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
             _ => {}
         }
     }
-    assert_eq!(
-        verify_world_map,
-        Some(Map::Kalimdor),
-        "the re-entry sequence must reflect the NEW map"
-    );
     assert_eq!(
         create_guid,
         Some(1),
@@ -2814,6 +2934,11 @@ fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
     assert_eq!(
         calls[1].1, 1,
         "the second subscription is for the NEW (post-teleport) map"
+    );
+    assert!(
+        (calls[1].2 - 100.0).abs() < 0.01,
+        "the re-entry must use the NEW position (verify-world no longer carries it — the \
+         subscription placement is the observable)"
     );
 
     drop(client);
@@ -4051,6 +4176,228 @@ fn buy_item_err_sends_smsg_buy_failed() {
     server.join().unwrap();
 }
 
+// ── Bank ──────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn banker_activate_sends_smsg_show_bank_with_the_banker_guid() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_BANKER_ACTIVATE {
+        guid: Guid::new(77),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SHOW_BANK(p) => assert_eq!(p.guid.guid(), 77),
+        other => panic!("expected SMSG_SHOW_BANK, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn banker_activate_on_a_standing_refusing_banker_sends_no_reply() {
+    // CMSG_PLAYED_TIME (the sentinel below) only replies once `character_by_guid` resolves the
+    // caller's own guid, so give the store a character row for guid 1 (quest_store() has none) —
+    // same setup as `inspect_refused_target_sends_no_reply`.
+    let store = std::sync::Arc::new(InMemoryStore {
+        npc_refuses: true,
+        characters: vec![codec::CharacterView {
+            guid: 1,
+            ..Default::default()
+        }],
+        ..quest_store()
+    });
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_BANKER_ACTIVATE {
+        guid: Guid::new(77),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    // Sentinel: a follow-up request with a guaranteed reply. If the refused activate had wrongly
+    // produced an SMSG_SHOW_BANK, it would arrive first and this match would fail.
+    CMSG_PLAYED_TIME {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_PLAYED_TIME(_) => {} // no SMSG_SHOW_BANK for the refused banker
+        other => panic!("expected SMSG_PLAYED_TIME (no SMSG_SHOW_BANK for refused banker), got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn gossip_select_on_an_imported_banker_option_opens_the_bank_window() {
+    use lyracore_shared::constants::gossip_option;
+    let mut s = quest_store();
+    s.gossip_opts = vec![opt(0, "I would like to check my deposit box.", gossip_option::BANKER)];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_GOSSIP_SELECT_OPTION {
+        guid: Guid::new(90),
+        gossip_list_id: 0,
+        unknown: None,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SHOW_BANK(p) => assert_eq!(p.guid.guid(), 90),
+        other => panic!("expected SMSG_SHOW_BANK, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn autobank_item_from_the_main_bag_dispatches_auto_bank_item() {
+    // Right-click a bag item with the bank open (CMSG_AUTOBANK_ITEM) → the gateway names the source
+    // slot and lets the module resolve the free bank slot; deposit and withdraw share one store method.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_AUTOBANK_ITEM {
+        bag_index: 255,
+        slot_index: 23,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.auto_banked_items.lock().unwrap().as_slice(), &[23]);
+}
+
+#[test]
+fn autostore_bank_item_from_the_main_bag_dispatches_auto_bank_item() {
+    // Right-click a banked item (CMSG_AUTOSTORE_BANK_ITEM) → withdraw, same store method as deposit.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_AUTOSTORE_BANK_ITEM {
+        bag_index: 255,
+        slot_index: 39,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.auto_banked_items.lock().unwrap().as_slice(), &[39]);
+}
+
+#[test]
+fn autobank_item_err_sends_smsg_inventory_change_failure() {
+    // A full destination (bank full, or carry space full) is a per-action error relayed as the
+    // existing inventory-change-failure reply, never session-fatal.
+    let store = std::sync::Arc::new(InMemoryStore {
+        trade_error: Some("bank full".into()),
+        ..quest_store()
+    });
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_AUTOBANK_ITEM {
+        bag_index: 255,
+        slot_index: 23,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(_) => {} // correct feedback packet
+        other => panic!("expected SMSG_INVENTORY_CHANGE_FAILURE, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn autobank_item_from_a_sub_bag_is_unsupported_and_does_not_dispatch() {
+    // Only the main pseudo-bag (255) is addressed, matching the item handler's restriction — a
+    // sub-bag index is logged and ignored, never fatal.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_AUTOBANK_ITEM {
+        bag_index: 19,
+        slot_index: 0,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert!(
+        store.auto_banked_items.lock().unwrap().is_empty(),
+        "a sub-bag source must not be routed through auto_bank_item"
+    );
+}
+
+#[test]
+fn autostore_bank_item_from_a_sub_bag_is_unsupported_and_does_not_dispatch() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_AUTOSTORE_BANK_ITEM {
+        bag_index: 19,
+        slot_index: 0,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+    server.join().unwrap();
+    assert!(
+        store.auto_banked_items.lock().unwrap().is_empty(),
+        "a sub-bag source must not be routed through auto_bank_item"
+    );
+}
+
+#[test]
+fn buy_bank_slot_success_sends_ok_and_reaches_the_named_banker() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_BUY_BANK_SLOT {
+        guid: Guid::new(88),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(p) => {
+            assert_eq!(p.result, BuyBankSlotResult::Ok);
+        }
+        other => panic!("expected SMSG_BUY_BANK_SLOT_RESULT, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.bought_bank_slots.lock().unwrap().as_slice(), &[88]);
+}
+
+#[test]
+fn buy_bank_slot_failure_maps_the_bracketed_code_to_the_matching_result() {
+    // The module tags a refusal with its `SMSG_BUY_BANK_SLOT_RESULT` code in brackets — parsed by
+    // code, not by matching the prose.
+    for (err, want) in [
+        (
+            "[0] no bank bag slots left to buy",
+            BuyBankSlotResult::FailedTooMany,
+        ),
+        (
+            "[1] not enough money (need 1000)",
+            BuyBankSlotResult::InsufficientFunds,
+        ),
+        ("[2] target is not a banker", BuyBankSlotResult::NotBanker),
+    ] {
+        let mut s = quest_store();
+        s.trade_error = Some(err.into());
+        let store = std::sync::Arc::new(s);
+        let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+        CMSG_BUY_BANK_SLOT {
+            guid: Guid::new(88),
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+        match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+            ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(p) => {
+                assert_eq!(p.result, want, "store error {err:?} must map to {want:?}");
+            }
+            other => panic!("expected SMSG_BUY_BANK_SLOT_RESULT, got {other}"),
+        }
+        drop(client);
+        server.join().unwrap();
+    }
+}
+
 // ── Inventory change failure ─────────────────────────────────────────────────────
 
 #[test]
@@ -4582,6 +4929,31 @@ fn rejected_instant_cast_clears_the_client_then_reports_failure() {
     }
     drop(client);
     server.join().unwrap();
+}
+
+#[test]
+fn set_sheathed_routes_the_clients_z_press_to_the_store() {
+    // #101: CMSG_SETSHEATHED used to reach NO handler — it fell through every arm of `dispatch` and
+    // was dropped, so UNIT_FIELD_BYTES_2 stayed 0 forever and peers rendered everyone unarmed.
+    // Each of the three real states must reach the store verb with its byte intact.
+    for (sent, expect) in [
+        (SheathState::Unarmed, 0u8),
+        (SheathState::Melee, 1),
+        (SheathState::Ranged, 2),
+    ] {
+        let store = std::sync::Arc::new(quest_store());
+        let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+        CMSG_SETSHEATHED { sheathed: sent }
+            .write_encrypted_client(&mut client, &mut c_enc)
+            .unwrap();
+        drop(client);
+        server.join().unwrap();
+        assert_eq!(
+            store.sheathed.lock().unwrap().as_slice(),
+            &[(1, expect)],
+            "{sent:?} must reach set_sheathed as byte {expect}"
+        );
+    }
 }
 
 #[test]
@@ -6903,6 +7275,141 @@ fn trainer_list_replies_smsg_trainer_list_with_the_fixture_spells() {
             assert_eq!(list.spells[0].spell, 100);
         }
         other => panic!("expected SMSG_TRAINER_LIST, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+/// A wrong-class player gets no trainer window: not an empty one, not an error packet. The
+/// follow-up gossip reply is the probe — reading straight after the request would block forever.
+#[test]
+fn trainer_list_is_silently_dropped_for_a_player_the_trainer_does_not_serve() {
+    let mut s = quest_store();
+    s.trainer_refuses_class = true;
+    s.trainer_spells = vec![codec::TrainerSpellView {
+        spell_id: 100,
+        cost: 10,
+        required_level: 1,
+        player_level: 1,
+        known: false,
+        profession: false,
+    }];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_TRAINER_LIST {
+        guid: Guid::new(70),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    // The follow-up whose reply we DO expect. Gossip always answers, so reading it back proves the
+    // trainer request emitted nothing — and it doubles as the "the NPC still talks to you" check:
+    // the class gate removes the training service, not the creature.
+    CMSG_GOSSIP_HELLO {
+        guid: Guid::new(70),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(_) => {}
+        ServerOpcodeMessage::SMSG_TRAINER_LIST(_) => {
+            panic!("a trainer that does not serve this class must send NO window")
+        }
+        other => panic!("expected only the gossip reply, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+/// The gossip menu of a trainer that does not serve this class keeps every other line and loses
+/// both training entries — the respec goes with the training because the module refuses both.
+#[test]
+fn gossip_hides_the_train_and_unlearn_options_for_a_class_the_trainer_does_not_serve() {
+    use lyracore_shared::constants::gossip_option;
+    // Level 20 matters: the respec option is independently hidden below level 10, so at the default
+    // fixture level this would pass without the class gate doing any work.
+    let mut s = quest_store_at_level(20);
+    s.gossip_opts = vec![
+        opt(0, "Well met, traveler.", gossip_option::GOSSIP),
+        opt(1, "I would like to train.", gossip_option::TRAINER),
+        opt(
+            0,
+            "I wish to unlearn my talents.",
+            gossip_option::UNLEARNTALENTS,
+        ),
+        opt(1, "I'd like to browse your goods.", gossip_option::VENDOR),
+    ];
+    s.trainer_refuses_class = true;
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_GOSSIP_HELLO {
+        guid: Guid::new(90),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(m) => {
+            let lines: Vec<&str> = m.gossips.iter().map(|g| g.message.as_str()).collect();
+            assert!(
+                !lines.contains(&"I would like to train."),
+                "the train option must be hidden: {lines:?}"
+            );
+            assert!(
+                !lines.contains(&"I wish to unlearn my talents."),
+                "the respec option must be hidden too: {lines:?}"
+            );
+            // The NPC is not silenced — it still talks, and still sells.
+            assert!(
+                lines.contains(&"Well met, traveler."),
+                "plain gossip lines survive: {lines:?}"
+            );
+            assert!(
+                lines.contains(&"I'd like to browse your goods."),
+                "the vendor line on the same NPC survives: {lines:?}"
+            );
+        }
+        other => panic!("expected SMSG_GOSSIP_MESSAGE, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+/// The same menu with the default fixture (serves) keeps all four options, so the test above pins
+/// the class gate rather than some unrelated filter dropping those actions for everyone.
+#[test]
+fn gossip_keeps_the_train_and_unlearn_options_for_a_class_the_trainer_serves() {
+    use lyracore_shared::constants::gossip_option;
+    // Same level as its counterpart, so the only difference between the two tests is the gate.
+    let mut s = quest_store_at_level(20);
+    s.gossip_opts = vec![
+        opt(0, "Well met, traveler.", gossip_option::GOSSIP),
+        opt(1, "I would like to train.", gossip_option::TRAINER),
+        opt(
+            0,
+            "I wish to unlearn my talents.",
+            gossip_option::UNLEARNTALENTS,
+        ),
+        opt(1, "I'd like to browse your goods.", gossip_option::VENDOR),
+    ];
+    let store = std::sync::Arc::new(s); // trainer_refuses_class stays false (derive-Default)
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_GOSSIP_HELLO {
+        guid: Guid::new(90),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(m) => {
+            let lines: Vec<&str> = m.gossips.iter().map(|g| g.message.as_str()).collect();
+            assert!(
+                lines.contains(&"I would like to train."),
+                "a served class still gets the train option: {lines:?}"
+            );
+            assert!(
+                lines.contains(&"I wish to unlearn my talents."),
+                "and the respec option: {lines:?}"
+            );
+        }
+        other => panic!("expected SMSG_GOSSIP_MESSAGE, got {other}"),
     }
     drop(client);
     server.join().unwrap();

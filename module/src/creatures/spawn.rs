@@ -93,6 +93,21 @@ pub struct CreatureTemplate {
     pub pickpocket_loot_id: u32,
     #[default(0u32)]
     pub skin_loot_id: u32,
+
+    // Which class a trainer serves. `creature_template.TrainerType`/`TrainerClass`, columns 71/73 —
+    // verified against the DDL of the dump `importer/scripts/classic-db.lock` pins, along with every
+    // other `ct::` anchor.
+    //
+    // `trainer_type` is CLASS 0 · MOUNTS 1 · TRADESKILLS 2 · PETS 3. 0 is a real value AND this
+    // column's default, so most templates read CLASS without being trainers at all — never gate on
+    // it alone (danger-zones §1.2: a default that is a valid value).
+    //
+    // `trainer_class` is a class ID, not a mask; 0 means "serves everyone", which is what keeps the
+    // gate fail-open on a world that has not been re-imported.
+    #[default(0u8)]
+    pub trainer_type: u8,
+    #[default(0u8)]
+    pub trainer_class: u8,
 }
 
 /// Beast-family reference data, keyed by the family id that `CreatureTemplate.creature_family`
@@ -591,6 +606,7 @@ pub fn build_creature_entity(
         target_guid: 0,
         money: 0,        // no loot until the killing blow rolls it onto the corpse
         unit_bytes_1: 0, // creatures aren't ghosts
+        unit_bytes_2: 0, // sheath state UNARMED — a creature spawns with its weapon stowed
         // A creature is a Unit — no character sheet — so the five player attributes are 0.
         strength: 0,
         agility: 0,
@@ -628,6 +644,7 @@ pub fn build_creature_entity(
         sheet_dmg_min: 0,
         sheet_dmg_max: 0,
         sheet_crit_bp: 0,
+        bank_bag_slots: 0, // a creature owns no bank slots
     }
 }
 
@@ -710,14 +727,20 @@ pub fn build_player_entity(
             character.hair_color,
         ),
         // Rest state (196): bake the RESTED byte if this character logged out in an inn, so it logs
-        // back in already showing the zzz icon + blue XP bar (no post-login relay needed).
-        player_bytes_2: packing::player_bytes_2_with_rest(character.facial_hair, character.resting),
+        // back in already showing the zzz icon + blue XP bar (no post-login relay needed). Byte 2
+        // carries the persisted bank bag slot count so a purchase survives logout without a relog.
+        player_bytes_2: packing::player_bytes_2_with_rest(
+            character.facial_hair,
+            character.bank_bag_slots,
+            character.resting,
+        ),
         player_bytes_3: character.gender as u32,
         player_flags: 0,
         xp: character.xp,
         next_level_xp: character.next_level_xp,
         target_guid: 0,
-        money: character.money, // load the persisted purse
+        money: character.money,                   // load the persisted purse
+        bank_bag_slots: character.bank_bag_slots, // and the slots bought with it
         // Warriors start in Battle Stance (form 17 in UNIT_FIELD_BYTES_1[2]) so the action bar
         // shows the stance bar from login without requiring a manual stance cast. RAGE = Warrior.
         unit_bytes_1: if power_type == packing::power_type::RAGE {
@@ -725,6 +748,10 @@ pub fn build_player_entity(
         } else {
             0
         },
+        // Sheath state UNARMED (#101). Deliberately NOT persisted across logout: vanilla rebuilds a
+        // player with weapons stowed, and the client re-sends `CMSG_SETSHEATHED` when the player
+        // draws again, so there is nothing to restore.
+        unit_bytes_2: 0,
         strength: 0,
         agility: 0,
         stamina: 0,

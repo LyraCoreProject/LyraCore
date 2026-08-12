@@ -21,6 +21,7 @@ pub mod update_mask;
 
 // Packet-family submodules (pure code-motion out of the old monolithic body).
 mod char;
+mod breath;
 mod combat;
 mod corpse;
 mod entity;
@@ -46,6 +47,7 @@ pub use social::{
 // Re-export the family submodules so every previously-public symbol stays reachable as
 // `crate::codec::<sym>` (≈50 external call sites depend on this).
 pub use char::*;
+pub use breath::*;
 pub use combat::*;
 pub use corpse::*;
 pub use entity::*;
@@ -73,6 +75,9 @@ use wow_world_messages::vanilla::{
     BagFamily,
     // Item binding: "Binds when picked up/equipped" tooltip line.
     Bonding,
+    // Bank bag slot purchase result — the enum's own numbering IS the wire value; see
+    // `lyracore_shared::bank::result`, which must never drift from `as_int()` below.
+    BuyBankSlotResult,
     BuyResult,
     Character,
     CharacterFlags,
@@ -199,6 +204,8 @@ use wow_world_messages::vanilla::{
     SMSG_ATTACKSTART,
     SMSG_ATTACKSTOP,
     SMSG_BINDPOINTUPDATE,
+    // Bank bag slot purchase result feedback.
+    SMSG_BUY_BANK_SLOT_RESULT,
     // Vendor buy failure feedback.
     SMSG_BUY_FAILED,
     SMSG_CHAR_CREATE,
@@ -260,6 +267,8 @@ use wow_world_messages::vanilla::{
     // (`build_faction_standing_raw`). Re-importing the typed pair would resurrect the McBride
     // client-crash (see `update_mask.rs`'s note).
     SMSG_SET_REST_START,
+    // Banker activate + the BANKER gossip option: opens the bank window.
+    SMSG_SHOW_BANK,
     // Floating spell damage number (the per-cast non-melee damage log).
     SMSG_SPELLNONMELEEDAMAGELOG,
     SMSG_SPELL_COOLDOWN,

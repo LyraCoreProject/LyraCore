@@ -21,21 +21,29 @@ pub const REST_STATE_NORMAL: u8 = 0x02;
 /// RESTED (196) — the client draws the zzz icon + turns the XP bar blue when byte 3 holds this.
 pub const REST_STATE_RESTED: u8 = 0x01;
 
-/// Pack `PLAYER_BYTES_2`: byte0 = facial hair, byte3 = rest state (NORMAL so the client's XP/rested
-/// bar has a valid exhaustion state). Bytes 1-2 (bank bag slots etc.) stay 0 for the slice.
-pub const fn player_bytes_2(facial_hair: u8) -> u32 {
-    player_bytes_2_with_rest(facial_hair, false)
+/// Pack `PLAYER_BYTES_2`: byte0 = facial hair, byte2 = owned bank bag slot count, byte3 = rest state
+/// (NORMAL so the client's XP/rested bar has a valid exhaustion state). Byte 1 is unused.
+pub const fn player_bytes_2(facial_hair: u8, bank_bag_slots: u8) -> u32 {
+    player_bytes_2_with_rest(facial_hair, bank_bag_slots, false)
 }
 
 /// Pack `PLAYER_BYTES_2` with an explicit rest state (196) — `resting` → RESTED byte (zzz + blue bar),
-/// else NORMAL. Used at spawn so a character who logged out in an inn logs back in already showing rested.
-pub const fn player_bytes_2_with_rest(facial_hair: u8, resting: bool) -> u32 {
+/// else NORMAL. Used at spawn so a character who logged out in an inn logs back in already showing
+/// rested, and the purchased bank bag slot count shows without a relog.
+pub const fn player_bytes_2_with_rest(facial_hair: u8, bank_bag_slots: u8, resting: bool) -> u32 {
     let rest = if resting {
         REST_STATE_RESTED
     } else {
         REST_STATE_NORMAL
     };
-    (facial_hair as u32) | ((rest as u32) << 24)
+    (facial_hair as u32) | ((bank_bag_slots as u32) << 16) | ((rest as u32) << 24)
+}
+
+/// Replace byte 2 (owned bank bag slot count) on an already-packed `PLAYER_BYTES_2`, leaving byte 0
+/// (facial hair) and byte 3 (rest state — see the HAZARD note on [`REST_STATE_NORMAL`]) untouched.
+/// Used by the purchase path, which knows the new count but not the other two bytes' current values.
+pub const fn with_bank_bag_slots(packed: u32, bank_bag_slots: u8) -> u32 {
+    (packed & 0xFF00_FFFF) | ((bank_bag_slots as u32) << 16)
 }
 
 /// Unpack a packed `u32` descriptor field back into its four little-endian bytes — the inverse of
@@ -101,6 +109,22 @@ mod tests {
             (0x11, 0x22, 0x33, 0x44)
         );
         // player_bytes_2 must carry a valid rest state in byte 3 (else the client XP-bar Lua crashes).
-        assert_eq!(unpack4(player_bytes_2(7)), (7, 0, 0, REST_STATE_NORMAL));
+        assert_eq!(unpack4(player_bytes_2(7, 0)), (7, 0, 0, REST_STATE_NORMAL));
+    }
+
+    #[test]
+    fn player_bytes_2_carries_the_bank_slot_count_in_byte_2() {
+        assert_eq!(unpack4(player_bytes_2(7, 3)), (7, 0, 3, REST_STATE_NORMAL));
+        assert_eq!(
+            unpack4(player_bytes_2_with_rest(7, 3, true)),
+            (7, 0, 3, REST_STATE_RESTED)
+        );
+    }
+
+    #[test]
+    fn with_bank_bag_slots_touches_only_byte_2() {
+        let packed = player_bytes_2_with_rest(9, 1, true); // facial hair 9, RESTED
+        let updated = with_bank_bag_slots(packed, 4);
+        assert_eq!(unpack4(updated), (9, 0, 4, REST_STATE_RESTED));
     }
 }

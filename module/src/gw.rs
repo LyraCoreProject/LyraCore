@@ -327,6 +327,15 @@ pub fn gw_stop_attack(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Strin
     crate::actor::stop_attack(ctx, actor_guid)
 }
 
+/// [`crate::world::apply_set_sheathed`] behind the gateway gate — the `CMSG_SETSHEATHED` a client
+/// sends on `Z`. `state` is raw client input and is range-checked in the apply fn, not here. [#101]
+#[reducer]
+pub fn gw_set_sheathed(ctx: &ReducerContext, actor_guid: u64, state: u8) -> Result<(), String> {
+    require_operator(ctx)?;
+    let actor = actor(ctx, actor_guid)?;
+    crate::world::apply_set_sheathed(ctx, actor, state)
+}
+
 /// [`crate::actor::accept_quest`] behind the gateway gate.
 #[reducer]
 pub fn gw_accept_quest(
@@ -705,6 +714,103 @@ pub fn gw_group_decline(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Str
     crate::group::decline_invite_for(ctx, actor_guid)
 }
 
+/// [`crate::trade::apply_initiate_trade`] — propose a Trade Session against `target_guid` (#120).
+/// Refusals are protocol answers on the trade-event relay, never an `Err` here.
+#[reducer]
+pub fn gw_initiate_trade(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    target_guid: u64,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_initiate_trade(ctx, acting, target_guid)
+}
+
+/// [`crate::trade::apply_begin_trade`] — the proposed target's client answered; open both windows.
+#[reducer]
+pub fn gw_begin_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_begin_trade(ctx, acting)
+}
+
+/// [`crate::trade::apply_cancel_trade`] — tear the actor's Trade Session down, `TradeCanceled` to
+/// both parties.
+#[reducer]
+pub fn gw_cancel_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_cancel_trade(ctx, acting)
+}
+
+/// [`crate::trade::apply_set_trade_item`] — offer the item in absolute inventory slot `inv_slot`
+/// in window slot `trade_slot` (#121). The gateway already mapped the client's (bag, slot) pair.
+#[reducer]
+pub fn gw_set_trade_item(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    trade_slot: u8,
+    inv_slot: u8,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_set_trade_item(ctx, acting, trade_slot, inv_slot)
+}
+
+/// [`crate::trade::apply_clear_trade_item`] (#121).
+#[reducer]
+pub fn gw_clear_trade_item(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    trade_slot: u8,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_clear_trade_item(ctx, acting, trade_slot)
+}
+
+/// [`crate::trade::apply_set_trade_gold`] — `copper` is the offered amount (#121).
+#[reducer]
+pub fn gw_set_trade_gold(ctx: &ReducerContext, actor_guid: u64, copper: u32) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_set_trade_gold(ctx, acting, copper)
+}
+
+/// [`crate::trade::apply_accept_trade`] — accept the current offer; dual-accept runs the Trade
+/// Commit (#122).
+#[reducer]
+pub fn gw_accept_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_accept_trade(ctx, acting)
+}
+
+/// [`crate::trade::apply_unaccept_trade`] — withdraw an accept (#122).
+#[reducer]
+pub fn gw_unaccept_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_unaccept_trade(ctx, acting)
+}
+
+/// [`crate::trade::apply_busy_trade`] — decline a proposal as busy (#123).
+#[reducer]
+pub fn gw_busy_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_busy_trade(ctx, acting)
+}
+
+/// [`crate::trade::apply_ignore_trade`] — decline a proposal via ignore (#123).
+#[reducer]
+pub fn gw_ignore_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+    require_operator(ctx)?;
+    let acting = actor(ctx, actor_guid)?;
+    crate::trade::apply_ignore_trade(ctx, acting)
+}
+
 /// [`crate::group::leave_group_for`] with the leaver named by guid.
 #[reducer]
 pub fn gw_group_leave(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
@@ -782,6 +888,16 @@ pub fn gw_unequip_item(ctx: &ReducerContext, actor_guid: u64, from_slot: u8) -> 
     crate::items::apply_unequip_item(ctx, actor_guid, from_slot)
 }
 
+/// [`crate::items::apply_auto_bank_item`] with the owner named by guid — right-click to bank / right-
+/// click to withdraw, `CMSG_AUTOBANK_ITEM` / `CMSG_AUTOSTORE_BANK_ITEM`. The direction is inferred
+/// from `slot` in the module.
+#[reducer]
+pub fn gw_auto_bank_item(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Result<(), String> {
+    require_operator(ctx)?;
+    actor(ctx, actor_guid)?;
+    crate::items::apply_auto_bank_item(ctx, actor_guid, slot)
+}
+
 /// [`crate::items::apply_buyback_item`] with the buyer named by guid.
 #[reducer]
 pub fn gw_buyback_item(
@@ -806,6 +922,23 @@ pub fn gw_repair_item(
     require_operator(ctx)?;
     actor(ctx, actor_guid)?;
     crate::items::apply_player_repair(ctx, actor_guid, npc_guid, slot)
+}
+
+/// [`crate::items::apply_buy_bank_slot`] with the buyer named by guid. A refusal leads with its
+/// `SMSG_BUY_BANK_SLOT_RESULT` code in brackets so the relay maps it by code, not by prose.
+#[reducer]
+pub fn gw_buy_bank_slot(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    banker_guid: u64,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    actor(ctx, actor_guid)?;
+    crate::items::buy_bank_slot_result(crate::items::apply_buy_bank_slot(
+        ctx,
+        actor_guid,
+        banker_guid,
+    ))
 }
 
 /// [`crate::professions::apply_disenchant`] with the enchanter named by guid.
