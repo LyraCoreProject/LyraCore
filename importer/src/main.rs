@@ -90,6 +90,7 @@ mod gm {
     // gossip_menu: entry(=creature_template.GossipMenuId), text_id, script_id, condition_id
     pub const ENTRY: usize = 0;
     pub const TEXT_ID: usize = 1;
+    pub const CONDITION_ID: usize = 3;
 }
 mod npct {
     // npc_text (full 81-col format): ID, text0_0, text0_1, lang0, prob0, em0_0..5, text1_0, ...
@@ -153,6 +154,9 @@ mod cond {
     pub const VALUE1: usize = 2;
     pub const MANGOS_QUESTREWARDED: u64 = 8;
     pub const MANGOS_QUESTTAKEN: u64 = 9;
+    /// `CONDITION_ACTIVE_GAME_EVENT` [V]. No game-event calendar exists here, so this gate must fail
+    /// CLOSED — fail-open pitches Children's Week in July.
+    pub const MANGOS_ACTIVE_GAME_EVENT: u64 = 12;
 }
 mod cts {
     // creature_template_spells — ClassicDB_1_12_1_z2815: entry, setId, spell1..spell10
@@ -1792,6 +1796,9 @@ fn resolve_gossip_option_condition(
         match mangos_type {
             cond::MANGOS_QUESTTAKEN => (gossip_condition::QUEST_TAKEN, value1 as u32, 0),
             cond::MANGOS_QUESTREWARDED => (gossip_condition::QUEST_REWARDED, value1 as u32, 0),
+            // Fail-CLOSED, against this map's fail-open default: a seasonal option shown year-round
+            // is a wrong pitch, where a hidden one is only absent.
+            cond::MANGOS_ACTIVE_GAME_EVENT => (gossip_condition::NEVER, 0, 0),
             _ => (gossip_condition::NONE, 0, 0),
         }
     };
@@ -1934,18 +1941,24 @@ fn build_gossip_sql(dump: &str, creature_entries: &std::collections::HashSet<u64
     }
 
     // 3. Parse gossip_menu (cmangos): collect (entry, text_id) pairs for in-box creatures.
-    //    gossip_menu.entry = creature_template.GossipMenuId. We emit ONE row per creature_entry
-    //    (using the FIRST non-zero text_id found for that gossip_menu entry).
-    //    The outer map: gossip_menu_entry → first text_id.
+    //    gossip_menu.entry = creature_template.GossipMenuId. We emit ONE row per creature_entry. An
+    //    entry commonly has several rows — one unconditional greeting plus condition-gated variants —
+    //    and row order does not rank them, so the unconditional row is the default title.
     let mut menu_to_text: HashMap<u64, u64> = HashMap::new();
+    let mut menu_text_is_conditional: HashMap<u64, bool> = HashMap::new();
     for row in parse_table(dump, "gossip_menu") {
         let entry: u64 = field(&row, gm::ENTRY).parse().unwrap_or(0);
         let text_id: u64 = field(&row, gm::TEXT_ID).parse().unwrap_or(0);
         if entry == 0 || text_id == 0 {
             continue;
         }
-        // Keep the first row seen per entry (lowest insertion order = default condition).
-        menu_to_text.entry(entry).or_insert(text_id);
+        let conditional = field(&row, gm::CONDITION_ID).parse::<u64>().unwrap_or(0) != 0;
+        // Among rows of the same kind the first seen wins, so the choice is deterministic.
+        let held_conditional = menu_text_is_conditional.get(&entry).copied();
+        if held_conditional.is_none() || (held_conditional == Some(true) && !conditional) {
+            menu_to_text.insert(entry, text_id);
+            menu_text_is_conditional.insert(entry, conditional);
+        }
     }
 
     // 4. Map creature_entry → gossip_menu_id → text_id, collecting all needed text_ids. Also collect
@@ -2038,13 +2051,19 @@ fn build_gossip_sql(dump: &str, creature_entries: &std::collections::HashSet<u64
         let mut sorted_opts: Vec<&Vec<String>> = opts.iter().collect();
         // Dense, deterministic option_index — the cmangos `id` order (matches in-window order).
         sorted_opts.sort_by_key(|r| field(r, gmo::ID).parse::<u64>().unwrap_or(0));
-        for (option_index, row) in sorted_opts.iter().enumerate() {
+        // Counted rather than enumerated so a dropped row leaves no gap in the index.
+        let mut option_index = 0u32;
+        for row in sorted_opts.iter() {
             let icon: u32 = field(row, gmo::OPTION_ICON).parse().unwrap_or(0);
             let text = resolve_gossip_option_text(row, &broadcast);
             let action: u32 = reclassify_gossip_option_action(
                 &text,
                 field(row, gmo::OPTION_TYPE).parse().unwrap_or(0),
             );
+            // Quests ride the menu's own quest section, and these rows carry no usable label.
+            if action == lyracore_shared::constants::gossip_option::QUESTGIVER {
+                continue;
+            }
             let action_menu_id: u32 = field(row, gmo::ACTION_MENU_ID).parse().unwrap_or(0);
             let (cond_type, cond_value1, cond_value2) =
                 resolve_gossip_option_condition(row, &conditions);
@@ -2053,6 +2072,7 @@ fn build_gossip_sql(dump: &str, creature_entries: &std::collections::HashSet<u64
                 sql_text(&text),
             ));
             next_row_id += 1;
+            option_index += 1;
         }
     }
 
@@ -5544,6 +5564,94 @@ mod tests {
             etl.option_rows[1].contains(&format!("{entry},1,0,'Second.'")),
             "{}",
             etl.option_rows[1]
+        );
+    }
+
+    #[test]
+    fn build_gossip_sql_drops_questgiver_placeholder_rows_and_keeps_the_index_dense() {
+        // An `OptionType=2` row's label is the literal string "GOSSIP_OPTION_QUESTGIVER" (13 NPCs in
+        // the dump, Innkeeper Farley among them), and its quests arrive via the quest section anyway.
+        use lyracore_shared::constants::gossip_option;
+        let entry = 320u64;
+        let menu_id = 920u64;
+        let options = [
+            gossip_option_row_short(menu_id, 0, 0, "Chat.", gossip_option::GOSSIP as u64),
+            gossip_option_row_short(
+                menu_id,
+                1,
+                0,
+                "GOSSIP_OPTION_QUESTGIVER",
+                gossip_option::QUESTGIVER as u64,
+            ),
+            gossip_option_row_short(menu_id, 2, 0, "Train me.", gossip_option::TRAINER as u64),
+        ]
+        .join(",");
+        let dump = format!(
+            "x INSERT INTO `creature_template` VALUES {}; \
+             INSERT INTO `gossip_menu_option` VALUES {options}; y",
+            creature_template_row(entry, menu_id),
+        );
+        let entries: std::collections::HashSet<u64> = [entry].into_iter().collect();
+        let etl = build_gossip_sql(&dump, &entries);
+        assert_eq!(etl.option_rows.len(), 2, "{:?}", etl.option_rows);
+        assert!(
+            !etl.option_rows
+                .iter()
+                .any(|r| r.contains("GOSSIP_OPTION_QUESTGIVER")),
+            "{:?}",
+            etl.option_rows
+        );
+        // The surviving rows are indexed 0 and 1 — the drop must leave no gap for the menu to render.
+        assert!(etl.option_rows[0].contains(&format!("{entry},0,0,'Chat.'")));
+        assert!(etl.option_rows[1].contains(&format!("{entry},1,0,'Train me.'")));
+    }
+
+    #[test]
+    fn build_gossip_sql_takes_the_unconditional_greeting_as_the_menu_title() {
+        // Several rows per entry, in no meaningful order: one unconditional greeting plus
+        // condition-gated variants. First-row-wins made a conditional greeting the permanent title.
+        let entry = 321u64;
+        let menu_id = 921u64;
+        // npc_text short (17-col) rows: id, prob0..7, BroadcastTextId0..7 — only slot 0 populated.
+        let dump = format!(
+            "x INSERT INTO `creature_template` VALUES {}; \
+             INSERT INTO `gossip_menu` VALUES ({menu_id},5100,0,44),({menu_id},5101,0,0); \
+             INSERT INTO `npc_text` VALUES (5100,1.0,0,0,0,0,0,0,0,8100,0,0,0,0,0,0,0), \
+             (5101,1.0,0,0,0,0,0,0,0,8101,0,0,0,0,0,0,0); \
+             INSERT INTO `broadcast_text` VALUES (8100,'Come back when the war is over.','NULL'), \
+             (8101,'Well met, traveler.','NULL'); y",
+            creature_template_row(entry, menu_id),
+        );
+        let entries: std::collections::HashSet<u64> = [entry].into_iter().collect();
+        let etl = build_gossip_sql(&dump, &entries);
+        assert_eq!(
+            etl.menu_rows,
+            vec![format!("({entry},5101)")],
+            "the unconditional row (condition_id 0) is the default title"
+        );
+    }
+
+    #[test]
+    fn build_gossip_sql_hides_a_seasonal_event_option_instead_of_failing_open() {
+        // mangos type 12 = CONDITION_ACTIVE_GAME_EVENT, the one condition that fails CLOSED.
+        let entry = 322u64;
+        let menu_id = 922u64;
+        let option = format!("({menu_id},0,0,'What is Children'' Week?',1,0,0,0,0,0,'NULL',12,0,0)");
+        let dump = format!(
+            "x INSERT INTO `creature_template` VALUES {}; \
+             INSERT INTO `gossip_menu_option` VALUES {option}; y",
+            creature_template_row(entry, menu_id),
+        );
+        let entries: std::collections::HashSet<u64> = [entry].into_iter().collect();
+        let etl = build_gossip_sql(&dump, &entries);
+        assert_eq!(etl.option_rows.len(), 1);
+        assert!(
+            etl.option_rows[0].ends_with(&format!(
+                "{},0,0)",
+                lyracore_shared::constants::gossip_condition::NEVER
+            )),
+            "{}",
+            etl.option_rows[0]
         );
     }
 

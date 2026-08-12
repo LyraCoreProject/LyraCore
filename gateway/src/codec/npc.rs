@@ -43,9 +43,9 @@ pub fn build_creature_query_response(c: &CreatureView) -> SMSG_CREATURE_QUERY_RE
 
 // ===========================================================================================
 //  Gossip (rank 12): the gateway answers CMSG_GOSSIP_HELLO with a greeting
-//  window (title resolved via the CMSG_NPC_TEXT_QUERY round-trip) + either the NPC's IMPORTED menu
-//  options (`game_gossip_option`, precedence) or the flag-derived vendor/innkeeper/Farewell synthesis
-//  (fallback, byte-identical to the pre-import behavior) — never both.
+//  window (title resolved via the CMSG_NPC_TEXT_QUERY round-trip) + the NPC's IMPORTED menu options
+//  (`game_gossip_option`) MERGED with the flag-derived vendor/innkeeper synthesis, so an NPC whose
+//  dump menu omits the browse-goods or make-home row still reaches its stock and its bind.
 // ===========================================================================================
 
 /// One imported gossip menu option (`game_gossip_option`), as the gateway reads it —
@@ -76,8 +76,45 @@ pub fn option_condition_holds(cond_type: u32, quest_taken: bool, quest_rewarded:
         gossip_condition::NONE => true,
         gossip_condition::QUEST_TAKEN => quest_taken,
         gossip_condition::QUEST_REWARDED => quest_rewarded,
+        gossip_condition::NEVER => false, // fail-closed placeholder (seasonal events don't exist here)
         _ => true, // unrecognized → fail open, never silently hide an option
     }
+}
+
+/// The `row_id` of a gossip option the gateway synthesized rather than imported. No
+/// `game_gossip_option` row backs it, so a package keying on `row_id` can never match one.
+pub const SYNTHESIZED_ROW_ID: u32 = u32::MAX;
+
+/// The menu the NPC shows: the condition-filtered imported options, then the flag-derived lines the
+/// dump left out — a vendor whose imported menu has no `action=VENDOR` row has unreachable stock
+/// otherwise. The trailing "Farewell." is appended later, by `build_gossip_message`.
+pub fn gossip_menu_options(
+    imported: Vec<GossipOptionView>,
+    is_vendor: bool,
+    is_innkeeper: bool,
+) -> Vec<GossipOptionView> {
+    use lyracore_shared::constants::gossip_option;
+    let mut opts = imported;
+    let mut synthesize = |action: u32, icon: u32, text: &str| {
+        if opts.iter().any(|o| o.action == action) {
+            return;
+        }
+        opts.push(GossipOptionView {
+            row_id: SYNTHESIZED_ROW_ID,
+            icon,
+            text: text.to_string(),
+            action,
+            ..GossipOptionView::default()
+        });
+    };
+    if is_vendor {
+        // GOSSIP_ICON_VENDOR (the bag icon); everything else uses GOSSIP_ICON_CHAT (0).
+        synthesize(gossip_option::VENDOR, 1, "I'd like to browse your goods.");
+    }
+    if is_innkeeper {
+        synthesize(gossip_option::INNKEEPER, 0, "Make this inn your home.");
+    }
+    opts
 }
 
 /// The generic title text id sent in `SMSG_GOSSIP_MESSAGE`; the client round-trips it via
@@ -104,94 +141,38 @@ const GOSSIP_GREETING: &str = "Greetings, traveler. I have nothing for you at th
 /// gossip-FLAGGED questgiver (e.g. Marshal McBride) delivers its quests HERE. `quests` is empty for a
 /// plain gossip NPC → byte-identical to before for those.
 ///
-/// `imported` is the ALREADY-FILTERED (by the dispatcher, via [`option_condition_holds`]) option list
-/// from `game_gossip_option`, in `option_index` order. `Some(nonempty)` → those
-/// options render VERBATIM (a trailing "Farewell." is appended so every menu still has a close
-/// option), taking full precedence over the flag-derived synthesis below. `None`/empty (nothing
-/// imported for this creature) → today's fallback: synthesize "browse goods" (vendor, stock
-/// presence) + "Make this inn your home." (innkeeper, npc_flags) + "Farewell.", BYTE-IDENTICAL to
-/// the pre-import behavior (see `codec::tests::gossip_message_fallback_is_byte_identical_to_pre_217`).
+/// `options` is the final menu from [`gossip_menu_options`] — condition-filtered imports plus the
+/// synthesized vendor/innkeeper lines, in click order. A trailing "Farewell." is appended so every
+/// menu has a close option, and the dispatcher's snapshot indexes THIS list.
 pub fn build_gossip_message(
     npc_guid: u64,
     title_text_id: u32,
     quests: Vec<QuestItem>,
-    imported: Option<&[GossipOptionView]>,
-    is_vendor: bool,
-    is_innkeeper: bool,
+    options: &[GossipOptionView],
 ) -> SMSG_GOSSIP_MESSAGE {
-    // The `gossip_list_id` the client echoes in CMSG_GOSSIP_SELECT_OPTION is the option's POSITION —
-    // the dispatcher re-derives the SAME order (imported: re-filter identically; fallback:
-    // is_vendor/is_innkeeper) to recognise the pick.
-    let gossips = match imported {
-        Some(opts) if !opts.is_empty() => {
-            let mut gossips: Vec<GossipItem> = opts
-                .iter()
-                .enumerate()
-                .map(|(i, o)| GossipItem {
-                    id: i as u32,
-                    item_icon: o.icon as u8,
-                    coded: false,
-                    message: o.text.clone(),
-                })
-                .collect();
-            gossips.push(GossipItem {
-                id: gossips.len() as u32,
-                item_icon: 0,
-                coded: false,
-                message: "Farewell.".to_string(),
-            });
-            gossips
-        }
-        _ => {
-            // Fallback (pre-import, byte-identical): browse-goods (vendor), make-home (innkeeper), then
-            // Farewell. A plain gossip NPC shows only Farewell.
-            let mut gossips = Vec::new();
-            if is_vendor {
-                gossips.push(GossipItem {
-                    id: gossips.len() as u32, // == GOSSIP_OPTION_VENDOR (0): vendor is always first when present
-                    item_icon: 1,             // GOSSIP_ICON_VENDOR (the bag icon)
-                    coded: false,
-                    message: "I'd like to browse your goods.".to_string(),
-                });
-            }
-            if is_innkeeper {
-                gossips.push(GossipItem {
-                    id: gossips.len() as u32,
-                    item_icon: 0, // GOSSIP_ICON_CHAT (vanilla's innkeeper-bind option icon)
-                    coded: false,
-                    message: "Make this inn your home.".to_string(),
-                });
-            }
-            gossips.push(GossipItem {
-                id: gossips.len() as u32,
-                item_icon: 0,
-                coded: false,
-                message: "Farewell.".to_string(),
-            });
-            gossips
-        }
-    };
+    // The `gossip_list_id` the client echoes in CMSG_GOSSIP_SELECT_OPTION is the option's POSITION in
+    // this list; the dispatcher resolves it against the snapshot it took here, never a re-derivation.
+    let mut gossips: Vec<GossipItem> = options
+        .iter()
+        .enumerate()
+        .map(|(i, o)| GossipItem {
+            id: i as u32,
+            item_icon: o.icon as u8,
+            coded: false,
+            message: o.text.clone(),
+        })
+        .collect();
+    gossips.push(GossipItem {
+        id: gossips.len() as u32,
+        item_icon: 0,
+        coded: false,
+        message: "Farewell.".to_string(),
+    });
     SMSG_GOSSIP_MESSAGE {
         guid: Guid::new(npc_guid),
         title_text_id,
         gossips,
         quests,
-    }
-}
-
-/// The gossip menu index of the "browse goods" option — always slot 0 when present, so the
-/// `CMSG_GOSSIP_SELECT_OPTION` dispatcher can recognize the vendor pick (`gossip_list_id == 0` on a
-/// stocked NPC) and reply with the inventory window.
-pub const GOSSIP_OPTION_VENDOR: u32 = 0;
-
-/// The gossip menu index of the innkeeper "Make this inn your home." option — it follows the vendor
-/// option, so it's slot 1 on an NPC that's also a vendor, else slot 0. The dispatcher re-derives this to
-/// recognise the bind pick (matching the push order in `build_gossip_message`).
-pub const fn gossip_option_innkeeper(is_vendor: bool) -> u32 {
-    if is_vendor {
-        1
-    } else {
-        0
     }
 }
 
@@ -275,6 +256,12 @@ pub fn build_list_inventory_raw(vendor_guid: u64, items: &[VendorItemView]) -> (
     let mut body = Vec::with_capacity(9 + items.len() * 28);
     body.extend_from_slice(&vendor_guid.to_le_bytes()); // vendor guid: u64 (full, not packed)
     body.push(items.len() as u8); // count: u8
+    if items.is_empty() {
+        // count == 0 is followed by an error byte the client reads to pick its message; without it the
+        // 5875 client parses past the end of the body and shows nothing at all. 0 = "no items".
+        body.push(0);
+        return (SMSG_LIST_INVENTORY_OPCODE, body);
+    }
     for (i, it) in items.iter().enumerate() {
         body.extend_from_slice(&((i as u32) + 1).to_le_bytes()); // muid: 1-based slot index
         body.extend_from_slice(&it.item_entry.to_le_bytes()); // item entry: u32

@@ -311,6 +311,15 @@ pub enum WorldState {
     InWorld(InWorld),
 }
 
+/// The gossip menu one client is looking at. `options` is indexed by the `gossip_list_id` the client
+/// echoes back; past the end is the trailing Farewell line, or a stale click.
+pub struct GossipMenuSnapshot {
+    pub npc_guid: u64,
+    /// `(game_gossip_option.row_id, action)` per menu position. `row_id` is
+    /// `codec::SYNTHESIZED_ROW_ID` for the vendor/innkeeper lines the gateway added itself.
+    pub options: Vec<(u32, u32)>,
+}
+
 /// State that exists only while the player is in the world (the `InWorld` variant payload).
 pub struct InWorld {
     /// The selected character's guid (names `SMSG_ATTACKSTART`/`SMSG_ATTACKSTOP`).
@@ -349,6 +358,10 @@ pub struct WorldConn {
     /// tear it down on a state transition, and keeping it here avoids re-plumbing it through
     /// `enter_world`.
     move_coalesce: CoalesceState,
+    /// The gossip menu last sent to this client. A select carries only a position into a
+    /// condition-filtered list, so re-deriving that list at click time renumbers it under a quest
+    /// accepted while the window was open.
+    pub(crate) gossip_menu: Option<GossipMenuSnapshot>,
     /// Non-blocking movement submission/backpressure state. Shared batches have no per-entry
     /// reducer verdict, so entity presence drives the desync policy before submission.
     move_feedback: std::sync::Arc<MovementFeedback>,
@@ -642,6 +655,7 @@ pub fn world_handshake_with_queue<S: Read + Write, St: WorldStore + ?Sized>(
             decrypt,
             state: WorldState::CharSelect,
             move_coalesce: CoalesceState::default(),
+            gossip_menu: None,
             move_feedback: std::sync::Arc::new(MovementFeedback::default()),
             move_submit_dropped: 0,
             home: None,                     // resolved at CMSG_PLAYER_LOGIN

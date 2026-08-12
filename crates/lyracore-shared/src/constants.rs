@@ -235,11 +235,14 @@ pub mod start_human_warrior {
 /// inert (submenu/taxi aren't wired up — work-item 217 scope note).
 pub mod gossip_option {
     pub const GOSSIP: u32 = 1; // plain text / submenu link (submenu navigation deferred, work-item 217)
-    pub const BANKER: u32 = 2; // opens the bank window
+    /// Quests reach the window through its QUEST section, never an option row, so the importer drops
+    /// these — the dump's rows carry the literal placeholder label "GOSSIP_OPTION_QUESTGIVER".
+    pub const QUESTGIVER: u32 = 2;
     pub const VENDOR: u32 = 3; // opens the vendor window (routes to build_list_inventory_raw)
     pub const TAXI: u32 = 4; // flight master (system 136, not wired — inert)
     pub const TRAINER: u32 = 5; // opens SMSG_TRAINER_LIST
     pub const INNKEEPER: u32 = 8; // binds the caller's hearthstone home (bind_home)
+    pub const BANKER: u32 = 9; // opens the bank window
     /// cmangos `GOSSIP_OPTION_UNLEARNTALENTS`. NOT what the raw dump carries — every "I wish to
     /// unlearn my talents." row imports with `action=GOSSIP` (cmangos gates it in C++ code at
     /// GossipHello, not via this column), so the importer reclassifies that specific row's text to
@@ -254,7 +257,8 @@ pub const MIN_TALENT_LEVEL: u8 = 10;
 
 /// `game_gossip_option.cond_type` — the MINIMAL condition set work-item 217 enforces (quest-status
 /// gates, the common case in the dump). Anything the importer can't map to one of these folds to
-/// `NONE` (fail-open + logged), so an unsupported condition never wrongly HIDES an option.
+/// `NONE` (fail-open + logged), so an unsupported condition never wrongly HIDES an option. The one
+/// exception is `NEVER`, for a gate whose subject does not exist here at all.
 pub mod gossip_condition {
     /// Always show the option (no gate, or an unsupported/unmapped condition — fail-open).
     pub const NONE: u32 = 0;
@@ -263,6 +267,9 @@ pub mod gossip_condition {
     pub const QUEST_TAKEN: u32 = 1;
     /// Show only once `cond_value1` (a quest id) has been turned in — `quest_status(guid, quest_id).1`.
     pub const QUEST_REWARDED: u32 = 2;
+    /// Never show. The fail-CLOSED placeholder for a condition whose subject does not exist here yet
+    /// — a seasonal event gate folded to `NONE` would pitch Children's Week in July.
+    pub const NEVER: u32 = 3;
 }
 
 #[cfg(test)]
@@ -325,17 +332,17 @@ mod tests {
     #[test]
     fn gossip_option_actions_are_distinct() {
         use gossip_option::*;
-        let mut codes = [GOSSIP, BANKER, VENDOR, TAXI, TRAINER, INNKEEPER];
+        let mut codes = [GOSSIP, QUESTGIVER, BANKER, VENDOR, TAXI, TRAINER, INNKEEPER];
         codes.sort_unstable();
         assert_eq!(
             codes.windows(2).filter(|w| w[0] == w[1]).count(),
             0,
             "gossip_option action codes must not collide"
         );
-        // Pin the values the plan verified against the dump (217 premise fix).
+        // The cmangos `GossipOptionType` numbering.
         assert_eq!(
-            (GOSSIP, BANKER, VENDOR, TAXI, TRAINER, INNKEEPER),
-            (1, 2, 3, 4, 5, 8)
+            (GOSSIP, QUESTGIVER, VENDOR, TAXI, TRAINER, INNKEEPER, BANKER),
+            (1, 2, 3, 4, 5, 8, 9)
         );
     }
 

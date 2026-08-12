@@ -970,11 +970,13 @@ pub fn gw_fish(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
     crate::professions::apply_fish(ctx, actor_guid)
 }
 
-/// [`crate::world::set_home`] with the binder named by guid — the innkeeper hearth bind.
+/// [`crate::world::set_home`] with the binder named by guid — the innkeeper hearth bind. The bind
+/// names no NPC, so ungated it would let any client hearth anywhere on the map.
 #[reducer]
 pub fn gw_bind_home(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
     actor(ctx, actor_guid)?;
+    crate::items::innkeeper_access_gate(ctx, actor_guid)?;
     crate::world::set_home(ctx, actor_guid);
     Ok(())
 }

@@ -308,9 +308,14 @@ struct InMemoryStore {
     /// Imported gossip menu options `gossip_options` returns for ANY npc_guid — empty
     /// by default (the pre-import fallback path).
     gossip_opts: Vec<codec::GossipOptionView>,
+    /// Recorded `gossip_select` notifications as `(option_id, option_row_id)` — the clicked POSITION
+    /// and the stable row identity the module is told about.
+    gossip_selects: std::sync::Mutex<Vec<(u32, u32)>>,
     /// The caller's quest log for `quest_status`, as `(quest_id, rewarded)` pairs — a quest id present
     /// here is "taken"; `rewarded` distinguishes active vs. turned-in. Absent = never seen.
-    quest_log: Vec<(u32, bool)>,
+    /// Behind a `Mutex` so a test can change the log WHILE a gossip window is open — the
+    /// HELLO→SELECT race the menu snapshot exists to close.
+    quest_log: std::sync::Mutex<Vec<(u32, bool)>>,
     /// The `npc_text_for_id` view `npc_text_for_id` returns for ANY text_id — `None` by default (the
     /// generic-greeting fallback), settable per-test for the 8-slot pin coverage.
     npc_text_view: Option<codec::NpcTextView>,
@@ -1219,7 +1224,7 @@ impl WorldStore for InMemoryStore {
         Ok(self.gossip_opts.clone())
     }
     fn quest_status(&self, _guid: u64, quest_id: u32) -> (bool, bool) {
-        match self.quest_log.iter().find(|(id, _)| *id == quest_id) {
+        match self.quest_log.lock().unwrap().iter().find(|(id, _)| *id == quest_id) {
             Some((_, rewarded)) => (true, *rewarded),
             None => (false, false),
         }
@@ -2042,9 +2047,13 @@ impl WorldStore for InMemoryStore {
         &self,
         _account_id: u64, _self_guid: u64,
         _npc_guid: u64,
-        _option_id: u32,
-        _option_row_id: u32,
+        option_id: u32,
+        option_row_id: u32,
     ) -> Result<()> {
+        self.gossip_selects
+            .lock()
+            .unwrap()
+            .push((option_id, option_row_id));
         Ok(())
     }
     fn add_friend(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
@@ -4247,6 +4256,7 @@ fn gossip_select_on_an_imported_banker_option_opens_the_bank_window() {
     s.gossip_opts = vec![opt(0, "I would like to check my deposit box.", gossip_option::BANKER)];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
     CMSG_GOSSIP_SELECT_OPTION {
         guid: Guid::new(90),
         gossip_list_id: 0,
@@ -6018,9 +6028,11 @@ fn gossip_select_on_a_vendor_opens_the_inventory_window() {
     }];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    let menu = gossip_hello(&mut client, &mut c_enc, &mut c_dec, 80);
+    assert_eq!(menu.gossips[0].message, "I'd like to browse your goods.");
     CMSG_GOSSIP_SELECT_OPTION {
         guid: Guid::new(80),
-        gossip_list_id: codec::GOSSIP_OPTION_VENDOR,
+        gossip_list_id: 0,
         unknown: None,
     }
     .write_encrypted_client(&mut client, &mut c_enc)
@@ -6044,9 +6056,11 @@ fn gossip_select_on_an_innkeeper_binds_home_and_completes() {
     s.innkeeper = true;
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    let menu = gossip_hello(&mut client, &mut c_enc, &mut c_dec, 81);
+    assert_eq!(menu.gossips[0].message, "Make this inn your home.");
     CMSG_GOSSIP_SELECT_OPTION {
         guid: Guid::new(81),
-        gossip_list_id: codec::gossip_option_innkeeper(false),
+        gossip_list_id: 0,
         unknown: None,
     }
     .write_encrypted_client(&mut client, &mut c_enc)
@@ -6070,6 +6084,7 @@ fn gossip_select_of_any_other_option_completes_without_binding() {
     s.innkeeper = true;
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    gossip_hello(&mut client, &mut c_enc, &mut c_dec, 81);
     CMSG_GOSSIP_SELECT_OPTION {
         guid: Guid::new(81),
         gossip_list_id: 1,
@@ -6087,6 +6102,25 @@ fn gossip_select_of_any_other_option_completes_without_binding() {
 }
 
 // --- Imported gossip menu options + multi-slot npc_text -------------------------------------------
+
+/// Open `npc`'s gossip window and drain the menu, so a following `CMSG_GOSSIP_SELECT_OPTION` has the
+/// snapshot it resolves against — a click with nothing open selects nothing.
+fn gossip_hello(
+    client: &mut UnixStream,
+    enc: &mut EncrypterHalf,
+    dec: &mut DecrypterHalf,
+    npc: u64,
+) -> wow_world_messages::vanilla::SMSG_GOSSIP_MESSAGE {
+    CMSG_GOSSIP_HELLO {
+        guid: Guid::new(npc),
+    }
+    .write_encrypted_client(&mut *client, enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut *client, dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(m) => *m,
+        other => panic!("expected SMSG_GOSSIP_MESSAGE, got {other}"),
+    }
+}
 
 /// A shorthand imported option builder for the gossip mock tests.
 fn opt(icon: u32, text: &str, action: u32) -> codec::GossipOptionView {
@@ -6159,6 +6193,7 @@ fn gossip_select_on_an_imported_vendor_option_opens_the_inventory_window() {
     }];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
     CMSG_GOSSIP_SELECT_OPTION {
         guid: Guid::new(90),
         gossip_list_id: 0,
@@ -6188,6 +6223,7 @@ fn gossip_select_on_an_imported_innkeeper_option_binds_home() {
     ];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
     CMSG_GOSSIP_SELECT_OPTION {
         guid: Guid::new(90),
         gossip_list_id: 1,
@@ -6205,6 +6241,208 @@ fn gossip_select_on_an_imported_innkeeper_option_binds_home() {
         store.home_bound.load(std::sync::atomic::Ordering::SeqCst),
         "bind_home must have run"
     );
+}
+
+/// STABLE OPTION IDENTITY, the two-viewer case: the SAME dump row lands at a different menu
+/// position for two players whose quest state differs, and the module must be told the same
+/// `row_id` both times. The position alone is meaningless to a package handler.
+#[test]
+fn the_same_option_row_reaches_the_module_by_row_id_from_either_viewer() {
+    use lyracore_shared::constants::{gossip_condition, gossip_option};
+    let menu = || {
+        let mut gated = opt(0, "About that favor...", gossip_option::GOSSIP);
+        gated.row_id = 4001;
+        gated.cond_type = gossip_condition::QUEST_TAKEN;
+        gated.cond_value1 = 60;
+        let mut always = opt(0, "Stay here.", gossip_option::INNKEEPER);
+        always.row_id = 4002;
+        vec![gated, always]
+    };
+    // Viewer A has not taken quest 60 → the gated row is hidden, so "Stay here." renders at 0.
+    let mut a = quest_store();
+    a.gossip_opts = menu();
+    let a = std::sync::Arc::new(a);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(a.clone(), 1);
+    let rendered = gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
+    assert_eq!(rendered.gossips[0].message, "Stay here.");
+    CMSG_GOSSIP_SELECT_OPTION {
+        guid: Guid::new(90),
+        gossip_list_id: 0,
+        unknown: None,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let _ = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    drop(client);
+    server.join().unwrap();
+
+    // Viewer B HAS taken it → the gated row renders first and pushes "Stay here." to position 1.
+    let mut b = quest_store();
+    b.gossip_opts = menu();
+    b.quest_log = vec![(60, false)].into();
+    let b = std::sync::Arc::new(b);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(b.clone(), 1);
+    let rendered = gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
+    assert_eq!(rendered.gossips[1].message, "Stay here.");
+    CMSG_GOSSIP_SELECT_OPTION {
+        guid: Guid::new(90),
+        gossip_list_id: 1,
+        unknown: None,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let _ = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    drop(client);
+    server.join().unwrap();
+
+    let (a_pos, a_row) = a.gossip_selects.lock().unwrap()[0];
+    let (b_pos, b_row) = b.gossip_selects.lock().unwrap()[0];
+    assert_ne!(a_pos, b_pos, "the POSITION differs between the two viewers");
+    assert_eq!(
+        (a_row, b_row),
+        (4002, 4002),
+        "the row_id is the same option for both"
+    );
+}
+
+/// The HELLO→SELECT index-shift race: the player's quest state changes while the window is open, so
+/// a re-derived menu would renumber under the click. The snapshot HELLO took is what the click
+/// resolves against, so it still selects the line the player actually saw.
+#[test]
+fn a_quest_taken_while_the_window_is_open_does_not_shift_the_click() {
+    use lyracore_shared::constants::{gossip_condition, gossip_option};
+    let mut s = quest_store();
+    let mut gated = opt(0, "About that favor...", gossip_option::GOSSIP);
+    gated.row_id = 4001;
+    gated.cond_type = gossip_condition::QUEST_TAKEN;
+    gated.cond_value1 = 60;
+    let mut inn = opt(0, "Stay here.", gossip_option::INNKEEPER);
+    inn.row_id = 4002;
+    s.gossip_opts = vec![gated, inn];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    // Rendered while the quest is untaken: the gated line is hidden, "Stay here." is position 0.
+    let rendered = gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
+    assert_eq!(rendered.gossips[0].message, "Stay here.");
+    // The player accepts quest 60 elsewhere (another window, a party member's turn-in) — a fresh
+    // filter would now put the gated line at 0 and push "Stay here." to 1.
+    store.quest_log.lock().unwrap().push((60, false));
+    CMSG_GOSSIP_SELECT_OPTION {
+        guid: Guid::new(90),
+        gossip_list_id: 0,
+        unknown: None,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE => {}
+        other => panic!("expected SMSG_GOSSIP_COMPLETE, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    assert!(
+        store.home_bound.load(std::sync::atomic::Ordering::SeqCst),
+        "the click must still select the innkeeper line the player was shown"
+    );
+    assert_eq!(
+        store.gossip_selects.lock().unwrap()[0],
+        (0, 4002),
+        "and the module hears the row the player saw, not the one that moved into that slot"
+    );
+}
+
+/// A click with no open menu behind it (no HELLO, or one naming another NPC) selects nothing — it
+/// cannot be used to reach an option the player was never shown.
+#[test]
+fn a_select_with_no_open_menu_just_closes_the_window() {
+    use lyracore_shared::constants::gossip_option;
+    let mut s = quest_store();
+    s.gossip_opts = vec![opt(0, "Stay here.", gossip_option::INNKEEPER)];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
+    // Same position, a DIFFERENT npc — the open menu is 90's, so this selects nothing.
+    CMSG_GOSSIP_SELECT_OPTION {
+        guid: Guid::new(91),
+        gossip_list_id: 0,
+        unknown: None,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE => {}
+        other => panic!("expected SMSG_GOSSIP_COMPLETE, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    assert!(!store.home_bound.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(
+        store.gossip_selects.lock().unwrap()[0].1,
+        codec::SYNTHESIZED_ROW_ID,
+        "no imported row was selected"
+    );
+}
+
+/// Orphan Matron Nightingale: stock, an imported menu, and no vendor row in it. The synthesized
+/// browse-goods line must be appended to the imported options and must open the inventory window —
+/// while the imports held full precedence her stock was unreachable in game.
+#[test]
+fn an_imported_menu_missing_its_vendor_row_still_reaches_the_stock() {
+    use lyracore_shared::constants::gossip_option;
+    let mut s = quest_store();
+    s.gossip_opts = vec![opt(0, "What is Children's Week?", gossip_option::GOSSIP)];
+    s.vendor_stock = vec![codec::VendorItemView {
+        item_entry: 4540,
+        display_id: 6353,
+        buy_price: 25,
+        ..Default::default()
+    }];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    let menu = gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
+    assert_eq!(menu.gossips.len(), 3, "chat + browse goods + Farewell");
+    assert_eq!(menu.gossips[0].message, "What is Children's Week?");
+    assert_eq!(menu.gossips[1].message, "I'd like to browse your goods.");
+    CMSG_GOSSIP_SELECT_OPTION {
+        guid: Guid::new(90),
+        gossip_list_id: 1,
+        unknown: None,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let (op, body) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(op, codec::SMSG_LIST_INVENTORY_OPCODE);
+    assert_eq!(&body[0..8], &90u64.to_le_bytes());
+    drop(client);
+    server.join().unwrap();
+}
+
+/// Katie Hunter: the innkeeper flag with an imported menu that carries no bind row. The make-home
+/// line must be appended, and clicking it must bind.
+#[test]
+fn an_imported_menu_missing_its_bind_row_still_offers_the_hearth() {
+    use lyracore_shared::constants::gossip_option;
+    let mut s = quest_store();
+    s.gossip_opts = vec![opt(0, "Tell me about the inn.", gossip_option::GOSSIP)];
+    s.innkeeper = true;
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    let menu = gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
+    assert_eq!(menu.gossips[1].message, "Make this inn your home.");
+    CMSG_GOSSIP_SELECT_OPTION {
+        guid: Guid::new(90),
+        gossip_list_id: 1,
+        unknown: None,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE => {}
+        other => panic!("expected SMSG_GOSSIP_COMPLETE, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    assert!(store.home_bound.load(std::sync::atomic::Ordering::SeqCst));
 }
 
 /// A `quest_store()` fixture whose logged-in character (guid 1) reports `level`, so
@@ -6346,7 +6584,7 @@ fn gossip_hello_shows_a_quest_gated_option_once_the_quest_is_taken() {
     s.gossip_opts = vec![opt(0, "About that favor...", gossip_option::GOSSIP)];
     s.gossip_opts[0].cond_type = gossip_condition::QUEST_TAKEN;
     s.gossip_opts[0].cond_value1 = 60;
-    s.quest_log = vec![(60, false)]; // taken, not yet turned in
+    s.quest_log = vec![(60, false)].into(); // taken, not yet turned in
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_GOSSIP_HELLO {

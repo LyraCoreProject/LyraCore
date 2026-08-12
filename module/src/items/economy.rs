@@ -74,9 +74,34 @@ fn npc_interaction_gate(
 }
 
 /// The bank-access trust gate: a move or split touching a bank slot needs an OPEN bank, so the player
-/// must be alive with a live BANKER npc in reach. Unlike the vendor paths the client names no banker
-/// guid, so this searches the player's own partition instead of validating a named target.
+/// must be alive with a live BANKER npc in reach.
 pub(crate) fn bank_access_gate(ctx: &ReducerContext, player_guid: u64) -> Result<(), String> {
+    use lyracore_shared::constants::npc_flags;
+    flagged_npc_in_reach_gate(ctx, player_guid, npc_flags::BANKER, "banker", "use the bank")
+}
+
+/// The hearth-bind trust gate: binding a home needs a live INNKEEPER npc in reach.
+pub(crate) fn innkeeper_access_gate(ctx: &ReducerContext, player_guid: u64) -> Result<(), String> {
+    use lyracore_shared::constants::npc_flags;
+    flagged_npc_in_reach_gate(
+        ctx,
+        player_guid,
+        npc_flags::INNKEEPER,
+        "innkeeper",
+        "bind a home",
+    )
+}
+
+/// Is the player alive with a live NPC carrying `flag` inside the interaction radius? The gate for
+/// the interactions the client requests WITHOUT naming an NPC, so it searches the player's own
+/// partition — `npc_interaction_gate` covers the ones that do name a target.
+fn flagged_npc_in_reach_gate(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    flag: u32,
+    noun: &str,
+    verb: &str,
+) -> Result<(), String> {
     let player = ctx
         .db
         .game_world_entity()
@@ -84,7 +109,7 @@ pub(crate) fn bank_access_gate(ctx: &ReducerContext, player_guid: u64) -> Result
         .find(player_guid)
         .ok_or_else(|| "user not in world".to_string())?;
     if player.dead {
-        return Err("dead players cannot use the bank".to_string());
+        return Err(format!("dead players cannot {verb}"));
     }
     // Grid-indexed and partition-scoped: a spatial table must never be scanned whole.
     let near = crate::helpers::entities_near(
@@ -97,7 +122,8 @@ pub(crate) fn bank_access_gate(ctx: &ReducerContext, player_guid: u64) -> Result
     );
     let open = near.iter().any(|e| {
         let (dx, dy, dz) = (e.x - player.x, e.y - player.y, e.z - player.z);
-        banker_in_reach(
+        flagged_npc_in_reach(
+            flag,
             e.is_player(),
             e.npc_flags,
             e.dead,
@@ -105,18 +131,21 @@ pub(crate) fn bank_access_gate(ctx: &ReducerContext, player_guid: u64) -> Result
         )
     });
     if !open {
-        return Err("banker out of range".to_string());
+        return Err(format!("{noun} out of range"));
     }
     Ok(())
 }
 
-/// Does one nearby entity open the bank? A live NPC (never another player) carrying the BANKER flag,
+/// Does one nearby entity satisfy such a gate? A live NPC (never another player) carrying `flag`,
 /// inside the interaction radius. Pure so the refusal cases are unit-tested without a live module.
-pub(crate) fn banker_in_reach(is_player: bool, npc_flags: u32, dead: bool, dist_sq: f32) -> bool {
-    !is_player
-        && !dead
-        && npc_flags & lyracore_shared::constants::npc_flags::BANKER != 0
-        && dist_sq <= VENDOR_RANGE_SQ
+pub(crate) fn flagged_npc_in_reach(
+    flag: u32,
+    is_player: bool,
+    npc_flags: u32,
+    dead: bool,
+    dist_sq: f32,
+) -> bool {
+    !is_player && !dead && npc_flags & flag != 0 && dist_sq <= VENDOR_RANGE_SQ
 }
 
 /// The four distinguishable results of a bank bag slot purchase. Typed rather than a `Result<(),
@@ -535,11 +564,11 @@ pub(crate) fn apply_player_repair(
 #[cfg(test)]
 mod tests {
     use super::{
-        banker_in_reach, buy_bank_slot_result, buyback_newest_first, buyback_ring_full,
+        buy_bank_slot_result, buyback_newest_first, buyback_ring_full, flagged_npc_in_reach,
         BuyBankSlotOutcome, VENDOR_RANGE_SQ,
     };
     use crate::test_scan::code_of;
-    use lyracore_shared::constants::npc_flags::{BANKER, VENDOR};
+    use lyracore_shared::constants::npc_flags::{BANKER, INNKEEPER, VENDOR};
 
     /// BANK ACCESS: only a live BANKER-flagged NPC inside the interaction radius opens the bank. A
     /// player, a corpse, a non-banker NPC, and a banker one yard too far all leave it shut — so a move
@@ -547,6 +576,8 @@ mod tests {
     #[test]
     fn banker_in_reach_accepts_only_a_live_banker_inside_the_radius() {
         let edge = VENDOR_RANGE_SQ;
+        let banker_in_reach =
+            |is_player, flags, dead, d| flagged_npc_in_reach(BANKER, is_player, flags, dead, d);
         assert!(banker_in_reach(false, BANKER, false, 0.0));
         assert!(banker_in_reach(false, BANKER | VENDOR, false, edge));
         assert!(!banker_in_reach(true, BANKER, false, 0.0)); // another player, however flagged
@@ -554,6 +585,31 @@ mod tests {
         assert!(!banker_in_reach(false, VENDOR, false, 0.0)); // wrong npc kind
         assert!(!banker_in_reach(false, 0, false, 0.0)); // no npc flags at all
         assert!(!banker_in_reach(false, BANKER, false, edge + 1.0)); // out of range
+    }
+
+    /// HEARTH BIND: the same gate, keyed on INNKEEPER — a distant innkeeper must refuse the bind.
+    #[test]
+    fn innkeeper_in_reach_refuses_a_distant_or_wrong_kind_npc() {
+        let edge = VENDOR_RANGE_SQ;
+        let inn_in_reach =
+            |is_player, flags, dead, d| flagged_npc_in_reach(INNKEEPER, is_player, flags, dead, d);
+        assert!(inn_in_reach(false, INNKEEPER, false, 0.0));
+        assert!(inn_in_reach(false, INNKEEPER | VENDOR, false, edge));
+        assert!(!inn_in_reach(false, INNKEEPER, false, edge + 1.0)); // across the room, not at the bar
+        assert!(!inn_in_reach(false, BANKER, false, 0.0)); // wrong npc kind
+        assert!(!inn_in_reach(true, INNKEEPER, false, 0.0)); // another player
+        assert!(!inn_in_reach(false, INNKEEPER, true, 0.0)); // an innkeeper's corpse
+    }
+
+    /// The bind reducer must CALL the gate. There is no `ReducerContext` harness in this crate, so
+    /// the call's presence is pinned by a source scan (the `bank_access_gate` precedent).
+    #[test]
+    fn gw_bind_home_consults_the_innkeeper_gate() {
+        let body = code_of(include_str!("../gw.rs"), "pub fn gw_bind_home(");
+        assert!(
+            body.contains("innkeeper_access_gate"),
+            "gw_bind_home must gate on an innkeeper in reach: {body}"
+        );
     }
 
     /// Each purchase outcome must reach the reducer boundary as its own wire code, so the relay never
@@ -614,22 +670,30 @@ mod tests {
         );
     }
 
-    /// The banker search is a spatial query, so it must go through the partition-scoped, grid-indexed
-    /// helper — a whole-table read would see only the caller's own shard after a split.
+    /// The banker/innkeeper search is a spatial query, so it must go through the partition-scoped,
+    /// grid-indexed helper — a whole-table read would see only the caller's own shard after a split.
+    /// Both no-named-NPC gates share one search, so this pins the shared one plus each delegation.
     #[test]
-    fn bank_access_gate_searches_through_the_partition_scoped_helper() {
-        let body = code_of(
-            include_str!("economy.rs"),
-            "pub(crate) fn bank_access_gate(",
-        );
+    fn the_unnamed_npc_gates_search_through_the_partition_scoped_helper() {
+        let src = include_str!("economy.rs");
+        let body = code_of(src, "fn flagged_npc_in_reach_gate(");
         assert!(
             body.contains("crate::helpers::entities_near("),
-            "the banker proximity search must use `helpers::entities_near`"
+            "the proximity search must use `helpers::entities_near`"
         );
         assert!(
             body.contains("player.dead"),
-            "a dead player must not reach the bank"
+            "a dead player must not reach the bank or the innkeeper"
         );
+        for gate in [
+            "pub(crate) fn bank_access_gate(",
+            "pub(crate) fn innkeeper_access_gate(",
+        ] {
+            assert!(
+                code_of(src, gate).contains("flagged_npc_in_reach_gate("),
+                "{gate} must delegate to the shared search, not grow a second copy"
+            );
+        }
     }
 
     /// #514: this crate has no `ReducerContext` harness by design (`test_scan`'s doc comment /
