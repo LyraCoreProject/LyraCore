@@ -125,11 +125,14 @@ The realm runs as **four SpacetimeDB databases** behind one gateway tier:
 | `lyracore-instances` | instance pool (map 36 / Deadmines and friends) |
 | `lyracore-realm` | realm-core: accounts, sessions, groups, whispers, loot rolls, load samples |
 
-The **local developer fixture is its own, smaller topology** — three databases
-(`lyracore`, `lyracore-kalimdor`, `lyracore-realm`) split along the same lines,
-brought up by `./lyracore dev up`; `dev up --single` collapses it to one. It is not a cut-down
-version of the four above and does not share their names — see
-[`development-cli.md`](./development-cli.md) §"Sharded out of the box, on purpose".
+The **local developer fixture has one database per tier above** (#108) — `lyracore`,
+`lyracore-kalimdor`, `lyracore-instances`, `lyracore-realm` — brought up by `./lyracore dev up`;
+`dev up --single` collapses it to one. Only the second-continent shard is renamed
+(`lyracore-kalimdor`, one shard where production has a growing set); the other three names are
+production's own. What keeps a fixture off a production node is the **node** it is published to —
+every `dev` publish is `-s local`, against the SpacetimeDB on loopback:3000 that `dev up` starts —
+never the name. See [`development-cli.md`](./development-cli.md) §"Sharded out of the box, on
+purpose".
 
 **Direction:** the **region tier** — sub-map seams, the seam menu, region→shard assignments, warm
 mid-walk handoff — was **removed 2026-08-08 (#471)**, an operator decision to keep the alpha on the

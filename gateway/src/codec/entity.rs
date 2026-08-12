@@ -57,6 +57,10 @@ pub struct EntityView {
     pub next_level_xp: u32,
     pub money: u32, // PLAYER_FIELD_COINAGE for a player; corpse loot for a creature (slice 3)
     pub unit_bytes_1: u32, // UNIT_FIELD_BYTES_1; byte 3 carries UNIT_VIS_FLAG_GHOST while a ghost (slice 5)
+    /// `UNIT_FIELD_BYTES_2`; byte 0 is the sheath state (0 stowed / 1 melee drawn / 2 ranged drawn).
+    /// Without it in the CREATE, everyone entering AOI range renders this unit permanently unarmed
+    /// no matter what it is holding. [#101]
+    pub unit_bytes_2: u32,
     // The five base attributes (UNIT_FIELD_STAT0..4) for the character sheet; 0 for a creature.
     pub strength: u32,
     pub agility: u32,
@@ -294,6 +298,7 @@ pub fn build_create_object(
         let (facial_hair, pb2_b, pb2_c, pb2_d) = unpack4(entity.player_bytes_2);
         let (pb3_a, pb3_b, pb3_c, pb3_d) = unpack4(entity.player_bytes_3);
         let (ub1_a, ub1_b, ub1_c, ub1_d) = unpack4(entity.unit_bytes_1); // ghost vis bit in byte 3 (slice 5)
+        let (ub2_a, ub2_b, ub2_c, ub2_d) = unpack4(entity.unit_bytes_2); // sheath state in byte 0 (#101)
 
         // Character-sheet weapon damage (PARITY with module `combat::tables`): attack power =
         // (level*3 + str*2) - 20 (saturating); the UNARMED swing range = base[1..=3] + the
@@ -318,6 +323,9 @@ pub fn build_create_object(
             .set_unit_flags(entity.unit_flags as i32)
             .set_unit_baseattacktime(entity.base_attack_time_ms as i32)
             .set_unit_bytes_1(ub1_a, ub1_b, ub1_c, ub1_d) // ghost render bit (slice 5)
+            // gtker NAMES this setter's params after PLAYER_BYTES_2 (facial hair/rest state) — wrong
+            // field, right index (164). Byte 0 is the sheath state; the names are noise. [#101]
+            .set_unit_bytes_2(ub2_a, ub2_b, ub2_c, ub2_d)
             .set_player_features(skin, face, hair_style, hair_color)
             .set_player_bytes_2(facial_hair, pb2_b, pb2_c, pb2_d)
             .set_player_bytes_3(pb3_a, pb3_b, pb3_c, pb3_d)
@@ -447,6 +455,7 @@ pub fn build_create_object(
     } else {
         // Creature (Unit): no player descriptor fields. `entry` is REQUIRED so the client can issue
         // CMSG_CREATURE_QUERY; without it the creature renders nameless.
+        let (cb2_a, cb2_b, cb2_c, cb2_d) = unpack4(entity.unit_bytes_2); // sheath state in byte 0 (#101)
         let mut unit_builder = UpdateUnit::builder()
             .set_object_guid(Guid::new(entity.guid))
             .set_object_entry(entity.entry as i32)
@@ -461,6 +470,9 @@ pub fn build_create_object(
             .set_unit_nativedisplayid(entity.native_display_id as i32)
             .set_unit_flags(entity.unit_flags as i32)
             .set_unit_baseattacktime(entity.base_attack_time_ms as i32)
+            // Sheath state (#101) — a creature draws its weapon on engage exactly like a player, so
+            // this belongs on the Unit branch too, not just the player one.
+            .set_unit_bytes_2(cb2_a, cb2_b, cb2_c, cb2_d)
             .set_unit_dynamic_flags(entity.dynamic_flags as i32) // slice 2: corpse/lootable bits
             .set_unit_npc_flags(entity.npc_flags as i32); // gossip/vendor/questgiver/trainer icons (item 6)
                                                           // A SUMMONED unit (warlock pet) carries its owner in SUMMONEDBY/CREATEDBY — what the
@@ -525,8 +537,21 @@ pub fn build_create_object(
     })
 }
 
+/// Which world entry a login sequence serves — `SMSG_LOGIN_VERIFY_WORLD` is a command to load the
+/// named map, so only a fresh login may carry it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorldEntry {
+    /// `CMSG_PLAYER_LOGIN`: the client has loaded nothing and needs verify-world to know which map.
+    FreshLogin,
+    /// `MSG_MOVE_WORLDPORT_ACK`: the client already loaded the destination, so a verify-world
+    /// resend runs a second loading screen.
+    WorldPort,
+}
+
 /// Emit the post-login SMSG sequence (Phase 4, gateway translation §5) to the owner, in the
-/// order the client expects — `SMSG_LOGIN_VERIFY_WORLD` must precede `SMSG_TUTORIAL_FLAGS`.
+/// order the client expects — `SMSG_LOGIN_VERIFY_WORLD` must precede `SMSG_TUTORIAL_FLAGS`,
+/// and is sent ONLY for a [`WorldEntry::FreshLogin`] (see the enum's doc for why a world-port
+/// re-entry must omit it).
 /// Slice values: zeroed account-data/factions/action-bar, real-time clock scale, no starting
 /// spells, bind = the start position. All headers encrypted.
 pub fn login_sequence_messages(
@@ -534,6 +559,7 @@ pub fn login_sequence_messages(
     learned: &[u32],
     reputations: &[(i32, i32, bool)],
     player_actions: &[(u8, u32, u8)],
+    entry: WorldEntry,
 ) -> Result<Vec<ServerOpcodeMessage>> {
     let map = Map::try_from(entity.map_id).map_err(|_| anyhow!("invalid map {}", entity.map_id))?;
     let area = Area::try_from(entity.zone_id).unwrap_or_default();
@@ -591,12 +617,17 @@ pub fn login_sequence_messages(
         }
     }
 
-    Ok(vec![
-        ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(Box::new(SMSG_LOGIN_VERIFY_WORLD {
-            map,
-            position,
-            orientation: entity.orientation,
-        })),
+    let mut msgs = Vec::new();
+    if entry == WorldEntry::FreshLogin {
+        msgs.push(ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(Box::new(
+            SMSG_LOGIN_VERIFY_WORLD {
+                map,
+                position,
+                orientation: entity.orientation,
+            },
+        )));
+    }
+    msgs.extend([
         ServerOpcodeMessage::SMSG_ACCOUNT_DATA_TIMES(Box::new(SMSG_ACCOUNT_DATA_TIMES {
             data: [0u32; 32],
         })),
@@ -665,7 +696,8 @@ pub fn login_sequence_messages(
             map: Map::try_from(entity.home_map).unwrap_or(map),
             area: Area::try_from(entity.home_zone).unwrap_or(area),
         })),
-    ])
+    ]);
+    Ok(msgs)
 }
 
 /// Build `SMSG_DESTROY_OBJECT` for a guid leaving view (Phase 7). Vanilla carries just the

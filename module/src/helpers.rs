@@ -143,6 +143,69 @@ pub(crate) fn gate_in_transit<T>(candidate: Option<T>, in_transit: bool) -> Opti
     }
 }
 
+/// Squared 3D distance between two entities — the one spelling of the `dx*dx + dy*dy + dz*dz`
+/// range-check shape `npc_interaction_gate` / `apply_inspect` / trainer validation used to paste.
+/// (Loot's corpse variant keeps its scalar-coordinate form in `items/ops.rs` — different signature,
+/// not a copy of this one.)
+pub(crate) fn dist_sq(a: &WorldEntity, b: &WorldEntity) -> f32 {
+    let (dx, dy, dz) = (b.x - a.x, b.y - a.y, b.z - a.z);
+    dx * dx + dy * dy + dz * dz
+}
+
+/// Max distance for a player-to-player interaction (a Trade Session, #119): (10 yd)², the same
+/// interaction-range convention as `VENDOR_RANGE_SQ` / `INSPECT_RANGE_SQ` et al.
+#[allow(dead_code)] // callers land with the Trade Session work (#120)
+const PLAYER_INTERACTION_RANGE_SQ: f32 = 100.0;
+
+/// Why [`player_interaction_gate`] refused — a typed decision enum in the house pure-gate style
+/// (`trainer::BuyGrant`, `stacking::ApplyDecision`, `rolls::GroupLootDecision`): the Trade Session
+/// opener (#120) maps each reason onto a distinct `SMSG_TRADE_STATUS` variant, a mapping that
+/// substring-matching `Err(String)` text would leave fragile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // callers land with the Trade Session work (#120)
+pub(crate) enum PlayerInteractionDenied {
+    ActorDead,
+    NoTarget,
+    TargetNotPlayer,
+    TargetDead,
+    /// The target is outside the actor's `(map_id, instance_id)` partition — either dimension.
+    /// "Partition", not "map": danger-zones §1.7 fixes the two-dimensional vocabulary, and #120
+    /// must not read this as map-only when it picks a wire status.
+    DifferentPartition,
+    OutOfRange,
+}
+
+/// The pure player-vs-player interaction gate — `npc_interaction_gate`'s player twin, factored
+/// pure like `world::can_inspect` (module-crate convention: no `ReducerContext` test harness).
+/// The caller resolves the partner through a FENCED lookup ([`acting_entity_by_guid`]) and passes
+/// the result: a mid-transfer or offline partner arrives as `None` and reads NoTarget, the same
+/// absent-semantics the fence guarantees everywhere else.
+#[allow(dead_code)] // callers land with the Trade Session work (#120)
+pub(crate) fn player_interaction_gate(
+    actor: &WorldEntity,
+    target: Option<&WorldEntity>,
+) -> Result<(), PlayerInteractionDenied> {
+    if actor.dead {
+        return Err(PlayerInteractionDenied::ActorDead);
+    }
+    let Some(target) = target else {
+        return Err(PlayerInteractionDenied::NoTarget);
+    };
+    if !target.is_player() {
+        return Err(PlayerInteractionDenied::TargetNotPlayer);
+    }
+    if target.dead {
+        return Err(PlayerInteractionDenied::TargetDead);
+    }
+    if !in_same_partition(target, actor.map_id, actor.instance_id) {
+        return Err(PlayerInteractionDenied::DifferentPartition);
+    }
+    if dist_sq(actor, target) > PLAYER_INTERACTION_RANGE_SQ {
+        return Err(PlayerInteractionDenied::OutOfRange);
+    }
+    Ok(())
+}
+
 /// Live entities in the grid cells covering `radius` yards around `(x, y)` on `map_id` +
 /// `instance_id`, read through the `by_grid` btree index — the scale-safe replacement for a full
 /// `game_world_entity` scan. Coverage is by WHOLE cells (`spatial::GRID_CELL_SIZE`), so the result
@@ -347,6 +410,7 @@ mod tests {
             target_guid: 0,
             money: 0,
             unit_bytes_1: 0,
+            unit_bytes_2: 0,
             strength: 0,
             agility: 0,
             stamina: 0,
@@ -381,6 +445,7 @@ mod tests {
             sheet_dmg_min: 0,
             sheet_dmg_max: 0,
             sheet_crit_bp: 0,
+            bank_bag_slots: 0,
         }
     }
 
@@ -483,5 +548,89 @@ mod tests {
     fn entity_addr_matches_grid_of_field_order() {
         let e = entity(1, 7, 42, -3, 11);
         assert_eq!(entity_addr(&e), (7, 42, -3, 11));
+    }
+
+    /// A living player on map 0, instance 0, at `(x, 0, 0)` — the trade-gate tests' cast. Built on
+    /// [`entity`] (which is type_mask 0 = not a player) with the PLAYER bit set.
+    fn player_at(guid: u64, x: f32) -> WorldEntity {
+        let mut e = entity(guid, 0, 0, 0, 0);
+        e.type_mask = lyracore_shared::constants::type_mask::PLAYER_BIT;
+        e.x = x;
+        e
+    }
+
+    /// The player-interaction gate's two load-bearing outcomes for opening a Trade Session
+    /// (#119/#120): a living player standing next to another living player passes, and a partner
+    /// the fenced lookup could not produce (offline, or mid-transfer behind the issue-#16 fence)
+    /// reads as NoTarget — never a panic, never a pass.
+    #[test]
+    fn a_living_player_next_to_a_living_player_passes_and_an_absent_partner_is_no_target() {
+        let actor = player_at(1, 0.0);
+        let partner = player_at(2, 3.0);
+        assert_eq!(player_interaction_gate(&actor, Some(&partner)), Ok(()));
+        assert_eq!(
+            player_interaction_gate(&actor, None),
+            Err(PlayerInteractionDenied::NoTarget)
+        );
+    }
+
+    /// Every refusal the gate owes the trade handshake, each mapped 1:1 to a wire status by #120 —
+    /// plus the two edges that don't survive careless edits: the boundary (exactly 10 yd is IN
+    /// range, mirroring `can_inspect`'s `>` comparison) and precedence (a dead actor outranks an
+    /// absent partner, so the client hears YouDead, not NoTarget).
+    #[test]
+    fn the_gate_names_the_specific_refusal_and_holds_the_range_boundary_and_precedence() {
+        let actor = player_at(1, 0.0);
+
+        let mut dead_actor = player_at(1, 0.0);
+        dead_actor.dead = true;
+        let partner = player_at(2, 3.0);
+        assert_eq!(
+            player_interaction_gate(&dead_actor, Some(&partner)),
+            Err(PlayerInteractionDenied::ActorDead)
+        );
+        // Precedence: dead actor with no partner is still ActorDead.
+        assert_eq!(
+            player_interaction_gate(&dead_actor, None),
+            Err(PlayerInteractionDenied::ActorDead)
+        );
+
+        let mut creature = player_at(2, 3.0);
+        creature.type_mask = 0;
+        assert_eq!(
+            player_interaction_gate(&actor, Some(&creature)),
+            Err(PlayerInteractionDenied::TargetNotPlayer)
+        );
+
+        let mut dead_partner = player_at(2, 3.0);
+        dead_partner.dead = true;
+        assert_eq!(
+            player_interaction_gate(&actor, Some(&dead_partner)),
+            Err(PlayerInteractionDenied::TargetDead)
+        );
+
+        let mut other_map = player_at(2, 3.0);
+        other_map.map_id = 1;
+        assert_eq!(
+            player_interaction_gate(&actor, Some(&other_map)),
+            Err(PlayerInteractionDenied::DifferentPartition)
+        );
+        // Same map, different INSTANCE is just as unreachable — the partition has two dimensions.
+        let mut other_instance = player_at(2, 3.0);
+        other_instance.instance_id = 7;
+        assert_eq!(
+            player_interaction_gate(&actor, Some(&other_instance)),
+            Err(PlayerInteractionDenied::DifferentPartition)
+        );
+
+        // Exactly (10 yd)² is IN range; a step past is not. The distance is 3D — z counts.
+        let at_boundary = player_at(2, PLAYER_INTERACTION_RANGE_SQ.sqrt());
+        assert_eq!(player_interaction_gate(&actor, Some(&at_boundary)), Ok(()));
+        let mut past_boundary = player_at(2, PLAYER_INTERACTION_RANGE_SQ.sqrt());
+        past_boundary.z = 1.0;
+        assert_eq!(
+            player_interaction_gate(&actor, Some(&past_boundary)),
+            Err(PlayerInteractionDenied::OutOfRange)
+        );
     }
 }

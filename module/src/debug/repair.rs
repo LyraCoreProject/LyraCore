@@ -9,7 +9,8 @@ use crate::{
     game_aura_schedule, game_character, game_createinfo_spell, game_creature_move_schedule,
     game_faction, game_ground_area_schedule, game_instance_reaper_schedule, game_item_template,
     game_gateway_lease_reaper_schedule, game_motion_publish_schedule, game_spell, game_talent,
-    AuraSchedule, CreatureMoveSchedule,
+    game_breath_schedule,
+    AuraSchedule, BreathSchedule, CreatureMoveSchedule,
     GroundAreaSchedule,
 };
 
@@ -126,6 +127,16 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         1
     };
 
+    let breath_schedule = if ctx.db.game_breath_schedule().iter().next().is_some() {
+        0
+    } else {
+        ctx.db.game_breath_schedule().insert(BreathSchedule {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(1_000_000)),
+        });
+        1
+    };
+
     // formerly `debug_ensure_ground_area_schedule`: matches the 500ms interval in `seed::init`.
     let ground_area_schedule = if ctx.db.game_ground_area_schedule().iter().next().is_some() {
         0
@@ -228,6 +239,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         + demon_skin
         + regen
         + aura_schedule
+        + breath_schedule
         + ground_area_schedule
         + motion_schedule
         + 2;

@@ -179,6 +179,20 @@ pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
                 }
             }
         }
+        // Draw / stow weapons (#101). The client sends this on `Z`, on a weapon swap, and when an
+        // ability auto-draws. It is a pure render-state change: nothing gates on it, so a failure is
+        // logged and dropped rather than being session-fatal like ATTACKSWING/ATTACKSTOP. gtker
+        // already parsed the payload into a `SheathState`, so the byte reaching the module is one of
+        // 0/1/2 — the module re-checks anyway, being the trust boundary for every caller.
+        ClientOpcodeMessage::CMSG_SETSHEATHED(s) => {
+            let state = s.sheathed.as_int();
+            if let Err(e) = store.set_sheathed(conn.account_id, self_guid, state) {
+                log::debug!(
+                    "world: set_sheathed({state}) ignored (account {}): {e}",
+                    conn.account_id
+                );
+            }
+        }
         // Aura+spell tracer: cast a spell. On success the module applies the aura + emits the cast
         // event (relayed as SMSG_CAST_RESULT(OK)+SMSG_SPELL_GO + the buff-icon VALUES). On
         // rejection (unknown spell / not in world), reply SMSG_CAST_RESULT::Failure — a SILENT

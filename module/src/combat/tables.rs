@@ -1099,6 +1099,7 @@ mod tests {
             target_guid: 0,
             money: 0,
             unit_bytes_1: 0,
+            unit_bytes_2: 0,
             strength: 0,
             agility: 0,
             stamina: 0,
@@ -1133,6 +1134,7 @@ mod tests {
             sheet_dmg_min: 0,
             sheet_dmg_max: 0,
             sheet_crit_bp: 0,
+            bank_bag_slots: 0,
         }
     }
 
