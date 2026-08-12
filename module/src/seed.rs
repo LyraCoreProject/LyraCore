@@ -31,19 +31,18 @@ use lyracore_shared::constants;
 use spacetimedb::{reducer, Identity, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use crate::{
-    build_creature_entity, game_account, game_aura_schedule, game_character, game_config,
-    game_creature_loot, game_creature_move_schedule, game_creature_spawn, game_creature_template,
-    game_creature_waypoint, game_event_reaper_schedule, game_gameobject, game_gameobject_pool,
-    game_gameobject_pool_member, game_gameobject_template, game_graveyard, game_graveyard_zone,
+    build_creature_entity, game_account, game_aura_schedule, game_breath_schedule, game_character,
+    game_config, game_creature_loot, game_creature_move_schedule, game_creature_spawn,
+    game_creature_template, game_creature_waypoint, game_event_reaper_schedule, game_gameobject,
+    game_gameobject_pool, game_gameobject_pool_member, game_gameobject_template,
+    game_gateway_lease_reaper_schedule, game_graveyard, game_graveyard_zone,
     game_ground_area_schedule, game_instance_reaper_schedule, game_item_template,
-    game_gateway_lease_reaper_schedule, game_melee_schedule, game_motion_publish_schedule,
-    game_breath_schedule,
-    game_realm, game_spell, game_spell_effect,
-    game_start_position, Account, AuraSchedule, Character, CreatureLoot, CreatureMoveSchedule,
-    CreatureSpawn, CreatureTemplate, CreatureWaypoint, EventReaperSchedule, GameObject,
-    GameObjectPool, GameObjectPoolMember, GameObjectTemplate, GraveyardLoc, GraveyardZone,
-    BreathSchedule, GroundAreaSchedule, ItemTemplate, MeleeSchedule, Realm, ServerConfig, Spell, SpellEffect,
-    StartPosition, EVENT_TTL_MICROS,
+    game_melee_schedule, game_motion_publish_schedule, game_realm, game_spell, game_spell_effect,
+    game_start_position, Account, AuraSchedule, BreathSchedule, Character, CreatureLoot,
+    CreatureMoveSchedule, CreatureSpawn, CreatureTemplate, CreatureWaypoint, EventReaperSchedule,
+    GameObject, GameObjectPool, GameObjectPoolMember, GameObjectTemplate, GraveyardLoc,
+    GraveyardZone, GroundAreaSchedule, ItemTemplate, MeleeSchedule, Realm, ServerConfig, Spell,
+    SpellEffect, StartPosition, EVENT_TTL_MICROS,
 };
 
 #[reducer(init)]
@@ -288,7 +287,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         armor: 0,              // unmitigated — a demo critter needs no armor
         pickpocket_loot_id: 0, // not imported — the demo chicken has no pickpocket table
         skin_loot_id: 0,       // not imported — the demo chicken isn't a beast anyway
-        trainer_type: 0,   // not a trainer
+        trainer_type: 0,       // not a trainer
         trainer_class: 0,
     });
 
@@ -577,7 +576,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             respawn_secs: 0, // n/a (a CHEST has no respawn timer); 0 ⇒ the 3-min fallback if ever used
             gather_gray: 0,  // n/a (not a gather node) — the always-skill sentinel
             lock_id: 0,      // work-item 211: unlocked (seed/demo chest)
-            size: 0.0, // no dump size — the gateway renders this at 1.0
+            size: 0.0,       // no dump size — the gateway renders this at 1.0
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 1,
@@ -653,7 +652,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             respawn_secs: 0, // 0 ⇒ the 3-min RESPAWN_WINDOW_MICROS fallback
             gather_gray: 0, // 0 ⇒ the always-skill sentinel (deterministic +1 every gather)
             lock_id: 0,  // work-item 211: gather nodes don't source a lockId this slice
-            size: 0.0, // no dump size — the ETL carries the real one
+            size: 0.0,   // no dump size — the ETL carries the real one
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 3,
@@ -688,7 +687,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             respawn_secs: 0, // 0 ⇒ the 3-min RESPAWN_WINDOW_MICROS fallback
             gather_gray: 0, // 0 ⇒ the always-skill sentinel (deterministic +1 every gather)
             lock_id: 0,  // work-item 211: gather nodes don't source a lockId this slice
-            size: 0.0, // no dump size — the ETL carries the real one
+            size: 0.0,   // no dump size — the ETL carries the real one
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 4,
@@ -1424,7 +1423,9 @@ pub(crate) fn seed_createinfo_spells(ctx: &ReducerContext) {
 /// The stacking-group starter set (work-item 192) — hand-authored ahead of 102's cmangos `spell_group`/
 /// `spell_group_stack_rules` SQL dump, which will fill `game_spell_group`/`game_spell_group_rule`
 /// wholesale and supersede this. Idempotent (only-if-empty, mirroring `seed_createinfo_spells`); shared by
-/// `init` and `debug_seed_spell_groups` (init does NOT re-run on an auto-migrate publish).
+/// `init` and `debug_repair_after_publish` (init does NOT re-run on an auto-migrate publish). It
+/// converges its small hand-authored fixture: rules are updated and missing memberships are added,
+/// while existing memberships are never duplicated or deleted.
 ///
 /// Every spell id below is a REAL vanilla id (derived from public spell-rank knowledge, licensing
 /// firewall — no bulk DBC data, same posture as `CREATEINFO_KIT`). `game_spell_group` carries NO foreign
@@ -1436,35 +1437,31 @@ pub(crate) fn seed_createinfo_spells(ctx: &ReducerContext) {
 /// Fed (50116) are in today's curated kit; every other id here is dark until 102 lands real spell data —
 /// exactly the "seed ONLY ids that exist in our curated kit or are harmless if absent" rule.
 ///
-/// Rule choice `[V]` (unverified against a live cmangos `spell_group_stack_rules` dump — flagged per the
-/// import-discipline convention): EVERY family below is EXCLUSIVE_STRONGER (rank/magnitude-gated, ANY
-/// caster) except Blessings, which is EXCLUSIVE_PER_CASTER (matches real vanilla: a paladin's own
-/// Blessing replaces their prior one; a DIFFERENT paladin's Blessing stands separately). This satisfies
-/// every verbatim test vector in the work item (Fortitude rank-vs-rank, Blessings per-caster, Sunder/
-/// Expose 5-stack) — see `spell::stacking`'s test module. Re-verify + relabel once 102's dump lands.
+/// Every family is EXCLUSIVE_STRONGER except Blessings, which are EXCLUSIVE_PER_CASTER. Armor debuffs
+/// are intentionally marked rank-incomparable: their different spell chains share one
+/// effective-strength family, so only magnitude (including stacks) is meaningful.
 pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {
     use crate::spell::stacking::{
         game_spell_group, game_spell_group_rule, SpellGroup, SpellGroupRule,
         RULE_EXCLUSIVE_PER_CASTER, RULE_EXCLUSIVE_STRONGER,
     };
     let groups = ctx.db.game_spell_group();
-    if groups.count() > 0 {
-        return;
-    }
     let rules = ctx.db.game_spell_group_rule();
 
-    // (group_id, rule, &[member spell_id, ...])
-    const GROUPS: &[(u32, u8, &[u32])] = &[
+    // (group_id, rule, rank_is_comparable, &[member spell_id, ...])
+    const GROUPS: &[(u32, u8, bool, &[u32])] = &[
         // 1: Mark of the Wild / Gift of the Wild (Druid stat buff family).
         (
             1,
             RULE_EXCLUSIVE_STRONGER,
+            true,
             &[1126, 5232, 6756, 8907, 9884, 9885, 21849, 21850],
         ),
         // 2: Power Word: Fortitude / Prayer of Fortitude (Priest stamina buff family).
         (
             2,
             RULE_EXCLUSIVE_STRONGER,
+            true,
             &[1243, 1244, 1245, 2791, 10937, 10938, 21562, 21564],
         ),
         // 3: Paladin Blessings — per-caster exclusive (a paladin's OWN blessing replaces their prior
@@ -1472,18 +1469,28 @@ pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {
         (
             3,
             RULE_EXCLUSIVE_PER_CASTER,
-            &[19740, 19742, 20217, 1038, 20911, 19977],
+            true,
+            &[
+                19740, 19834, 19835, 19836, 19837, 19838, // Might
+                19742, 19850, 19852, 19853, 19854, // Wisdom
+                20217, // Kings
+                1038,  // Salvation
+                20911, // Sanctuary
+                19977, 19978, 19979, // Light
+            ],
         ),
         // 4: Battle Shout family (rank 1 = `tracer_spell::SPELL_ID`, IN the curated kit).
         (
             4,
             RULE_EXCLUSIVE_STRONGER,
+            true,
             &[6673, 5242, 6192, 11549, 11550, 11551, 25289],
         ),
         // 5: Armor-debuff family (Sunder Armor / Expose Armor / Faerie Fire) — cross-spell, any caster.
         (
             5,
             RULE_EXCLUSIVE_STRONGER,
+            false,
             &[
                 7386, 7405, 8380, 11596, 11597, 8647, 8649, 8650, 11197, 11198, 770, 778, 9749,
                 9907,
@@ -1493,30 +1500,52 @@ pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {
         (
             6,
             RULE_EXCLUSIVE_STRONGER,
+            true,
             &[1459, 1460, 1461, 10156, 10157, 23028],
         ),
         // 7: Spirit (Divine Spirit / Prayer of Spirit).
         (
             7,
             RULE_EXCLUSIVE_STRONGER,
+            true,
             &[14752, 14818, 14819, 27841, 27681],
         ),
         // 8: Shadow Protection (single + Prayer of).
-        (8, RULE_EXCLUSIVE_STRONGER, &[976, 10957, 10958, 27683]),
+        (
+            8,
+            RULE_EXCLUSIVE_STRONGER,
+            true,
+            &[976, 10957, 10958, 27683],
+        ),
         // 9: Well Fed (food buff family) — only the synthetic 50116 exists in this sandbox today; the
         // group exists so future real "well fed" tiers (Well Rested food buffs) join it without a schema
         // change.
-        (9, RULE_EXCLUSIVE_STRONGER, &[50116]),
+        (9, RULE_EXCLUSIVE_STRONGER, true, &[50116]),
     ];
 
-    for &(group_id, rule, members) in GROUPS {
-        rules.insert(SpellGroupRule { group_id, rule });
+    for &(group_id, rule, rank_is_comparable, members) in GROUPS {
+        let rule_row = SpellGroupRule {
+            group_id,
+            rule,
+            rank_is_comparable,
+        };
+        if rules.group_id().find(group_id).is_some() {
+            rules.group_id().update(rule_row);
+        } else {
+            rules.insert(rule_row);
+        }
         for &spell_id in members {
-            groups.insert(SpellGroup {
-                id: 0,
-                group_id,
-                spell_id,
-            });
+            if !groups
+                .by_group()
+                .filter(&group_id)
+                .any(|row| row.spell_id == spell_id)
+            {
+                groups.insert(SpellGroup {
+                    id: 0,
+                    group_id,
+                    spell_id,
+                });
+            }
         }
     }
 }
@@ -1654,54 +1683,48 @@ mod tests {
         );
     }
 
-    /// IDEMPOTENCE. Both spell seeders are only-if-empty: they return early when their table
-    /// already has rows, so re-running them (via the `debug_seed_*` twins, on a shard where `init`
-    /// long since ran) neither duplicates rows nor resurrects ones an operator deliberately
-    /// deleted. That second half is the one that has already gone wrong here once — a seeder that
-    /// unconditionally re-inserts silently undoes a live edit.
-    ///
-    /// The guard must come BEFORE the first write, which is the part a `.contains()` alone cannot
-    /// establish: a guard moved after the insert loop still contains the same text and protects
-    /// nothing. Positions are compared for exactly that reason.
+    /// The starting-kit seeder remains only-if-empty: it must not rewrite an operator's kit edits.
+    /// The spell-group seeder is deliberately different: it converges existing development databases
+    /// on the reconciled starter rows while avoiding duplicate memberships.
     #[test]
-    fn both_spell_seeders_still_return_early_before_writing_anything() {
+    fn starter_kit_seeder_still_returns_early_before_writing_anything() {
         let src = include_str!("seed.rs");
-        for (what, signature, table) in [
-            (
-                "the class/racial starting kit",
-                "pub(crate) fn seed_createinfo_spells(ctx: &ReducerContext) {",
-                "table",
-            ),
-            (
-                "the aura stacking groups",
-                "pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {",
-                "groups",
-            ),
+        let body = crate::test_scan::code_of(
+            src,
+            "pub(crate) fn seed_createinfo_spells(ctx: &ReducerContext) {",
+        );
+        let guard_at = body
+            .find("if table.count() > 0 {")
+            .expect("starting-kit guard is gone");
+        let return_at = body[guard_at..]
+            .find("return;")
+            .expect("starting-kit guard does not return");
+        let insert_at = body
+            .find(".insert(")
+            .expect("starting-kit seeder does not insert");
+        assert!(
+            guard_at + return_at < insert_at,
+            "starting-kit guard must precede its first write"
+        );
+    }
+
+    #[test]
+    fn spell_group_starter_contains_every_paladin_blessing_rank_and_converges_existing_rows() {
+        let body = crate::test_scan::code_of(
+            include_str!("seed.rs"),
+            "pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {",
+        );
+        for spell_id in [
+            19740, 19834, 19835, 19836, 19837, 19838, 19742, 19850, 19852, 19853, 19854, 20217,
+            1038, 20911, 19977, 19978, 19979,
         ] {
-            let body = crate::test_scan::code_of(src, signature);
-            let guard = format!("if {table}.count() > 0 {{");
-            let guard_at = body.find(&guard).unwrap_or_else(|| {
-                panic!(
-                    "{what}'s only-if-empty guard `{guard}` is gone. Without it the seeder \
-                     re-inserts on every `debug_seed_*` re-run: rows are duplicated, and any row \
-                     an operator deleted on purpose comes back. Body was:\n{body}"
-                )
-            });
-            let return_at = body[guard_at..].find("return;").unwrap_or_else(|| {
-                panic!("{what}'s guard no longer returns early. Body was:\n{body}")
-            });
-            let insert_at = body.find(".insert(").unwrap_or_else(|| {
-                panic!(
-                    "{what} no longer inserts anything — this scan has lost its target rather \
-                     than passed it. Body was:\n{body}"
-                )
-            });
             assert!(
-                guard_at + return_at < insert_at,
-                "{what}'s only-if-empty guard no longer precedes its first write, so it guards \
-                 nothing. Body was:\n{body}"
+                body.contains(&spell_id.to_string()),
+                "Blessing rank {spell_id} is missing"
             );
         }
+        assert!(body.contains("rules.group_id().update(rule_row)"));
+        assert!(body.contains(".any(|row| row.spell_id == spell_id)"));
     }
 
     /// REACHABILITY, which is idempotence's other half. `init` does not re-run on an auto-migrate
