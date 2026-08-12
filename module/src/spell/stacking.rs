@@ -55,6 +55,11 @@ pub struct SpellGroupRule {
     #[primary_key]
     pub group_id: u32,
     pub rule: u8,
+    /// Whether spell-chain ranks are comparable within this group. Cross-family groups such as
+    /// armor debuffs deliberately compare their effective magnitude only: a rank number from
+    /// Sunder Armor does not describe the strength of Expose Armor or Faerie Fire.
+    #[default(true)]
+    pub rank_is_comparable: bool,
 }
 
 /// Rule byte constants (`game_spell_group_rule.rule`) — mirrors the work item's architecture section
@@ -262,6 +267,12 @@ pub(crate) fn compute_strength(rank: u8, magnitude: i32) -> i32 {
     (rank as i32) * 100_000 + magnitude.clamp(0, 99_999)
 }
 
+/// Strength with the group's comparison contract applied. Keeping this decision next to the
+/// formula makes a heterogeneous group safe even after real spell-chain rows are imported.
+pub(crate) fn compute_group_strength(rank_is_comparable: bool, rank: u8, magnitude: i32) -> i32 {
+    compute_strength(if rank_is_comparable { rank } else { 0 }, magnitude)
+}
+
 /// `game_spell_chain.rank` for `spell_id`, or 0 if the spell has no chain row (every id outside a
 /// hand-tracked rank family — the common case).
 pub(crate) fn rank_of(ctx: &ReducerContext, spell_id: u32) -> u8 {
@@ -329,7 +340,8 @@ pub(crate) fn apply_group_conflict(
     spell_id: u32,
     caster_guid: u64,
     target_guid: u64,
-    strength: i32,
+    incoming_rank: u8,
+    incoming_magnitude: i32,
 ) -> bool {
     let groups = ctx.db.game_spell_group();
     let Some(group_id) = groups
@@ -340,13 +352,14 @@ pub(crate) fn apply_group_conflict(
     else {
         return true; // not in any group — the overwhelming common case
     };
-    let rule = ctx
+    let rule_row = ctx
         .db
         .game_spell_group_rule()
         .group_id()
         .find(group_id)
-        .map(|r| group_rule_from_u8(r.rule))
-        .unwrap_or(GroupRule::Stacks);
+        .map(|r| (group_rule_from_u8(r.rule), r.rank_is_comparable))
+        .unwrap_or((GroupRule::Stacks, true));
+    let (rule, rank_is_comparable) = rule_row;
     if rule == GroupRule::Stacks {
         return true;
     }
@@ -366,7 +379,8 @@ pub(crate) fn apply_group_conflict(
         .map(|a| AuraSummary {
             aura_id: a.id,
             caster_guid: a.caster_guid,
-            strength: compute_strength(
+            strength: compute_group_strength(
+                rank_is_comparable,
                 rank_of(ctx, a.spell_id),
                 a.amount
                     .saturating_abs()
@@ -374,6 +388,7 @@ pub(crate) fn apply_group_conflict(
             ),
         })
         .collect();
+    let strength = compute_group_strength(rank_is_comparable, incoming_rank, incoming_magnitude);
     match resolve_group_conflict(caster_guid, strength, rule, &members) {
         ApplyDecision::Refuse { reason } => {
             log::info!(
@@ -795,6 +810,71 @@ mod tests {
         assert_eq!(compute_strength(0, 100), compute_strength(0, 100));
         assert!(compute_strength(0, 200) > compute_strength(0, 100)); // equal rank -> magnitude decides
         assert_eq!(compute_strength(0, -50), 0); // clamp floor
+    }
+
+    #[test]
+    fn heterogeneous_groups_ignore_unrelated_spell_chain_ranks() {
+        // A rank-five Sunder is not intrinsically stronger than rank-one Expose Armor. In this
+        // group their effective armor reduction alone decides the outcome.
+        assert!(compute_group_strength(false, 1, 2_050) > compute_group_strength(false, 5, 450));
+        // Homogeneous rank families preserve rank-first comparison.
+        assert!(compute_group_strength(true, 2, 1) > compute_group_strength(true, 1, 99_999));
+    }
+
+    #[test]
+    fn every_aura_entry_point_converges_on_the_authoritative_insertion_boundary() {
+        let targeting = include_str!("cast/targeting.rs");
+        let aura_apply = crate::test_scan::code_of(targeting, "pub(crate) fn aura_apply(");
+        assert_eq!(
+            aura_apply.matches("auras.insert(Aura {").count(),
+            1,
+            "aura_apply must retain exactly one game_aura insertion site"
+        );
+        assert!(aura_apply.contains("apply_group_conflict("));
+        assert!(aura_apply.contains("resolve_dr_for_target("));
+        assert!(aura_apply.contains("pick_aura_slot("));
+
+        fn rust_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("spell source directory is readable") {
+                let path = entry.expect("spell source entry is readable").path();
+                if path.is_dir() {
+                    rust_sources(&path, out);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut sources = Vec::new();
+        rust_sources(
+            &crate::test_scan::repo_root().join("module/src/spell"),
+            &mut sources,
+        );
+        let insertions: Vec<_> = sources
+            .iter()
+            .filter_map(|path| {
+                // This test's own assertion contains the needle as a string literal; it is not a
+                // production aura path, so exclude the file containing the tripwire itself.
+                if path.file_name().is_some_and(|name| name == "stacking.rs") {
+                    return None;
+                }
+                let source = std::fs::read_to_string(path).expect("spell source is readable");
+                source
+                    .contains("auras.insert(Aura {")
+                    .then(|| path.display().to_string())
+            })
+            .collect();
+        assert_eq!(
+            insertions.len(),
+            1,
+            "a second game_aura insertion path bypasses aura_apply: {insertions:?}"
+        );
+
+        // Normal casts and linked effects share `apply_effect`; passive/talent/racial application
+        // calls the same boundary from `apply_spell_auras`.
+        assert!(targeting.contains("aura_apply(\n            ctx,"));
+        let resolve = include_str!("cast/resolve.rs");
+        let passive = crate::test_scan::code_of(resolve, "pub(crate) fn apply_spell_auras(");
+        assert!(passive.contains("aura_apply("));
     }
 
     /// `group_rule_from_u8` decodes the four documented rule bytes; an unrecognized byte is the safe
