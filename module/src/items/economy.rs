@@ -74,6 +74,52 @@ fn npc_interaction_gate(
     Ok((player, npc))
 }
 
+/// The bank-access trust gate: a move or split touching a bank slot needs an OPEN bank, so the player
+/// must be alive with a live BANKER npc in reach. Unlike the vendor paths the client names no banker
+/// guid, so this searches the player's own partition instead of validating a named target.
+pub(crate) fn bank_access_gate(ctx: &ReducerContext, player_guid: u64) -> Result<(), String> {
+    let player = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(player_guid)
+        .ok_or_else(|| "user not in world".to_string())?;
+    if player.dead {
+        return Err("dead players cannot use the bank".to_string());
+    }
+    // Grid-indexed and partition-scoped: a spatial table must never be scanned whole.
+    let near = crate::helpers::entities_near(
+        ctx,
+        player.map_id,
+        player.instance_id,
+        player.x,
+        player.y,
+        VENDOR_RANGE_SQ.sqrt(),
+    );
+    let open = near.iter().any(|e| {
+        let (dx, dy, dz) = (e.x - player.x, e.y - player.y, e.z - player.z);
+        banker_in_reach(
+            e.is_player(),
+            e.npc_flags,
+            e.dead,
+            dx * dx + dy * dy + dz * dz,
+        )
+    });
+    if !open {
+        return Err("banker out of range".to_string());
+    }
+    Ok(())
+}
+
+/// Does one nearby entity open the bank? A live NPC (never another player) carrying the BANKER flag,
+/// inside the interaction radius. Pure so the refusal cases are unit-tested without a live module.
+pub(crate) fn banker_in_reach(is_player: bool, npc_flags: u32, dead: bool, dist_sq: f32) -> bool {
+    !is_player
+        && !dead
+        && npc_flags & lyracore_shared::constants::npc_flags::BANKER != 0
+        && dist_sq <= VENDOR_RANGE_SQ
+}
+
 /// Does the vendor creature `vendor_entry` stock `item_entry`? Gates `apply_buy_item` so a player can
 /// only buy what a vendor actually sells (not any item with a buy price). Reads `game_npc_vendor`.
 pub(crate) fn vendor_sells(ctx: &ReducerContext, vendor_entry: u32, item_entry: u32) -> bool {
@@ -414,8 +460,42 @@ pub(crate) fn apply_player_repair(
 
 #[cfg(test)]
 mod tests {
-    use super::{buyback_newest_first, buyback_ring_full};
+    use super::{banker_in_reach, buyback_newest_first, buyback_ring_full, VENDOR_RANGE_SQ};
     use crate::test_scan::code_of;
+    use lyracore_shared::constants::npc_flags::{BANKER, VENDOR};
+
+    /// BANK ACCESS: only a live BANKER-flagged NPC inside the interaction radius opens the bank. A
+    /// player, a corpse, a non-banker NPC, and a banker one yard too far all leave it shut — so a move
+    /// into a bank slot with no banker in range is refused.
+    #[test]
+    fn banker_in_reach_accepts_only_a_live_banker_inside_the_radius() {
+        let edge = VENDOR_RANGE_SQ;
+        assert!(banker_in_reach(false, BANKER, false, 0.0));
+        assert!(banker_in_reach(false, BANKER | VENDOR, false, edge));
+        assert!(!banker_in_reach(true, BANKER, false, 0.0)); // another player, however flagged
+        assert!(!banker_in_reach(false, BANKER, true, 0.0)); // a banker's corpse
+        assert!(!banker_in_reach(false, VENDOR, false, 0.0)); // wrong npc kind
+        assert!(!banker_in_reach(false, 0, false, 0.0)); // no npc flags at all
+        assert!(!banker_in_reach(false, BANKER, false, edge + 1.0)); // out of range
+    }
+
+    /// The banker search is a spatial query, so it must go through the partition-scoped, grid-indexed
+    /// helper — a whole-table read would see only the caller's own shard after a split.
+    #[test]
+    fn bank_access_gate_searches_through_the_partition_scoped_helper() {
+        let body = code_of(
+            include_str!("economy.rs"),
+            "pub(crate) fn bank_access_gate(",
+        );
+        assert!(
+            body.contains("crate::helpers::entities_near("),
+            "the banker proximity search must use `helpers::entities_near`"
+        );
+        assert!(
+            body.contains("player.dead"),
+            "a dead player must not reach the bank"
+        );
+    }
 
     /// #514: this crate has no `ReducerContext` harness by design (`test_scan`'s doc comment /
     /// playbook §7), so `apply_player_repair`'s actual gating/cost/durability-restore behavior

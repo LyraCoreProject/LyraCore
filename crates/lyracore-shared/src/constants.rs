@@ -73,6 +73,9 @@ pub mod npc_flags {
     /// the raw flag. Innkeeper Farley(295) ships `npc_flags=135 = GOSSIP|QUESTGIVER|VENDOR|INNKEEPER`. The
     /// Northshire/Goldshire innkeepers carry this; the gossip "Make this inn your home" → `bind_home`.
     pub const INNKEEPER: u32 = 0x0000_0080;
+    /// `UNIT_NPC_FLAG_BANKER` (0x100, vanilla 1.12 / cmangos-classic) — opens the bank window and
+    /// gates every move into or out of a bank slot.
+    pub const BANKER: u32 = 0x0000_0100;
     /// `UNIT_NPC_FLAG_REPAIR` (0x4000, vanilla 1.12 / cmangos-classic) — repairs item durability
     /// (`CMSG_REPAIR_ITEM`). Armorers (Corina Steele 54, Quartermaster Hudson 1249, Hicks 1645, …)
     /// carry 0x4000|0x4 (REPAIR+VENDOR). NOTE: 0x1000 (4096) is AUCTIONEER in this numbering, NOT repair.
