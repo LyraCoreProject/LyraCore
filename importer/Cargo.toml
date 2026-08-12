@@ -18,6 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+blake3 = "1"
 flate2 = "1"
 lyracore-shared.workspace = true
 wow-adt = "=0.7.0"

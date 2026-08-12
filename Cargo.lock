@@ -1787,6 +1787,7 @@ name = "lyracore-importer"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "flate2",
  "lyracore-shared",
  "wow-adt",

@@ -15,11 +15,13 @@
 //! `module/src/vmap.rs` + `lyracore_shared::vmap::cast_ray`. Same licensing firewall as
 //! `--nav`/`--terrain`: in-memory only, nothing written to disk.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use lyracore_shared::terrain::cell_key;
 use lyracore_shared::vmap::{encode, TriClass, VmapTri, HEADER_BYTES, TRI_BYTES};
 use std::collections::HashMap;
-use std::path::Path;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 use crate::nav::{Mesh, Placement, Tri};
 
@@ -67,6 +69,7 @@ fn apply_full(
     ]
 }
 
+#[cfg(test)]
 fn placement_tris(p: &Placement, mesh: &Mesh, conv: crate::nav::Convention) -> Vec<VmapTri> {
     let pos_w = crate::nav::place_pos(p.position);
     let transform = |t: &Tri| -> [[f32; 3]; 3] {
@@ -97,6 +100,43 @@ fn placement_tris(p: &Placement, mesh: &Mesh, conv: crate::nav::Convention) -> V
     }
 }
 
+fn for_each_placement_tri(
+    p: &Placement,
+    mesh: &Mesh,
+    conv: crate::nav::Convention,
+    mut emit: impl FnMut(VmapTri),
+) {
+    let pos_w = crate::nav::place_pos(p.position);
+    let transform = |t: &Tri| {
+        [
+            apply_full(conv, p.rotation, p.scale, pos_w, t[0]),
+            apply_full(conv, p.rotation, p.scale, pos_w, t[1]),
+            apply_full(conv, p.rotation, p.scale, pos_w, t[2]),
+        ]
+    };
+    match mesh {
+        Mesh::Wmo(rows) => {
+            for w in rows {
+                emit(VmapTri {
+                    verts: transform(&w.tri),
+                    class: TriClass::Wmo {
+                        group_id: w.group_id,
+                        mogp_flags: w.mogp_flags,
+                    },
+                });
+            }
+        }
+        Mesh::M2(rows) => {
+            for tri in rows {
+                emit(VmapTri {
+                    verts: transform(tri),
+                    class: TriClass::M2,
+                });
+            }
+        }
+    }
+}
+
 /// A world-space triangle's cell-index rectangle (high coord → LOW cell index, same convention as
 /// `terrain::cell_index`/`nav.rs`'s binning). None when the triangle falls off the map square.
 fn tri_cell_range(t: &VmapTri) -> Option<(u16, u16, u16, u16)> {
@@ -120,6 +160,7 @@ fn tri_cell_range(t: &VmapTri) -> Option<(u16, u16, u16, u16)> {
 
 /// Bin triangles by the terrain cell key; a triangle spanning a cell boundary lands in EVERY cell
 /// its AABB touches (conservative — matches the nav rasterizer's binning direction).
+#[cfg(test)]
 pub(crate) fn bin_by_cell(map_id: u32, tris: &[VmapTri]) -> HashMap<u64, Vec<VmapTri>> {
     let mut by_cell: HashMap<u64, Vec<VmapTri>> = HashMap::new();
     for t in tris {
@@ -128,11 +169,133 @@ pub(crate) fn bin_by_cell(map_id: u32, tris: &[VmapTri]) -> HashMap<u64, Vec<Vma
         };
         for cx in cx0..=cx1 {
             for cy in cy0..=cy1 {
-                by_cell.entry(cell_key(map_id, cx, cy)).or_default().push(*t);
+                by_cell
+                    .entry(cell_key(map_id, cx, cy))
+                    .or_default()
+                    .push(*t);
             }
         }
     }
     by_cell
+}
+
+const SPOOL_RECORD_BYTES: usize = 45;
+
+/// Disk-backed cell spool. Only one transformed triangle and one output shard need be resident;
+/// filesystem ordering is never used as part of the manifest contract.
+struct VmapSpool {
+    dir: PathBuf,
+}
+
+impl VmapSpool {
+    fn new(map_id: u32) -> Result<Self> {
+        let dir =
+            std::env::temp_dir().join(format!("lyracore-vmap-{map_id}-{}", std::process::id()));
+        if dir.exists() {
+            fs::remove_dir_all(&dir)?;
+        }
+        fs::create_dir_all(&dir)?;
+        Ok(Self { dir })
+    }
+
+    fn path(&self, key: u64) -> PathBuf {
+        self.dir.join(format!("{key:016x}.bin"))
+    }
+
+    fn append(&self, key: u64, tri: VmapTri) -> Result<()> {
+        let mut out = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.path(key))?;
+        for vertex in tri.verts {
+            for value in vertex {
+                out.write_all(&value.to_le_bytes())?;
+            }
+        }
+        match tri.class {
+            TriClass::M2 => out.write_all(&[0])?,
+            TriClass::Wmo {
+                group_id,
+                mogp_flags,
+            } => {
+                out.write_all(&[1])?;
+                out.write_all(&group_id.to_le_bytes())?;
+                out.write_all(&mogp_flags.to_le_bytes())?;
+                return Ok(());
+            }
+        }
+        out.write_all(&0u32.to_le_bytes())?;
+        out.write_all(&0u32.to_le_bytes())?;
+        Ok(())
+    }
+
+    fn keys(&self) -> Result<Vec<u64>> {
+        let mut keys = Vec::new();
+        for entry in fs::read_dir(&self.dir)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let Some(hex) = name.strip_suffix(".bin") else {
+                continue;
+            };
+            keys.push(u64::from_str_radix(hex, 16).context("invalid vmap spool key")?);
+        }
+        keys.sort_unstable();
+        Ok(keys)
+    }
+
+    fn for_each_shard(&self, key: u64, mut emit: impl FnMut(Vec<u8>) -> Result<()>) -> Result<()> {
+        let mut file = File::open(self.path(key))?;
+        let per_shard = ((MAX_ROW_TRI_BYTES - HEADER_BYTES) / TRI_BYTES).max(1);
+        let mut tris = Vec::with_capacity(per_shard);
+        loop {
+            let mut bytes = [0u8; SPOOL_RECORD_BYTES];
+            match file.read(&mut bytes[..1])? {
+                0 => break,
+                1 => file
+                    .read_exact(&mut bytes[1..])
+                    .context("truncated vmap spool record")?,
+                _ => unreachable!(),
+            }
+            let mut at = 0;
+            let mut verts = [[0.0; 3]; 3];
+            for vertex in &mut verts {
+                for value in vertex {
+                    *value = f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+                    at += 4;
+                }
+            }
+            let class = match bytes[at] {
+                0 => TriClass::M2,
+                1 => {
+                    at += 1;
+                    let group_id = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+                    at += 4;
+                    let mogp_flags = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+                    TriClass::Wmo {
+                        group_id,
+                        mogp_flags,
+                    }
+                }
+                tag => bail!("invalid vmap spool class {tag}"),
+            };
+            tris.push(VmapTri { verts, class });
+            if tris.len() == per_shard {
+                emit(encode(&tris))?;
+                tris.clear();
+            }
+        }
+        if !tris.is_empty() {
+            emit(encode(&tris))?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for VmapSpool {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.dir);
+    }
 }
 
 pub(crate) fn run(args: &crate::Args) -> Result<()> {
@@ -166,88 +329,135 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         scan.placements.iter().filter(|p| p.is_wmo).count()
     );
 
-    // Pass 2: load each referenced model's collision mesh once.
-    let meshes = crate::nav::load_meshes(&mut chain, &scan.placements)?;
-    let mesh_tris: usize = meshes.values().map(Mesh::len).sum();
-    println!(
-        "vmap: {} unique models, {mesh_tris} local tris",
-        meshes.len()
-    );
-
-    // Pass 3: calibrate the rotation convention against MODF bounds (WMOs only), capped sample —
+    // Pass 2: calibrate the rotation convention against MODF bounds (WMOs only), capped sample —
     // same calibration the rasterizer uses; only the yaw term is empirically fit.
     let conv = crate::nav::calibrate_from_placements(&mut chain, &scan.placements)?;
 
-    // Pass 4: transform every placement's mesh to world space (FULL rotation) + bin by cell.
-    let mut world_tris: Vec<VmapTri> = Vec::new();
-    for p in &scan.placements {
-        world_tris.extend(placement_tris(p, &meshes[&p.name], conv));
+    // Pass 3: transform one placement at a time and spool its conservative cell overlap. This
+    // deliberately trades disk I/O for a bounded live geometry set.
+    let spool = VmapSpool::new(map_id)?;
+    let mut placements = scan.placements;
+    placements.sort_by(|a, b| {
+        a.name.cmp(&b.name).then_with(|| {
+            a.position
+                .iter()
+                .map(|v| v.to_bits())
+                .cmp(b.position.iter().map(|v| v.to_bits()))
+        })
+    });
+    let mut world_tris = 0usize;
+    let mut wmo_tris = 0usize;
+    for (i, placement) in placements.iter().enumerate() {
+        let mesh = crate::nav::load_mesh(&mut chain, placement)?;
+        let mut spool_error = None;
+        for_each_placement_tri(placement, &mesh, conv, |tri| {
+            if spool_error.is_some() {
+                return;
+            }
+            world_tris += 1;
+            wmo_tris += usize::from(matches!(tri.class, TriClass::Wmo { .. }));
+            if let Some((cx0, cx1, cy0, cy1)) = tri_cell_range(&tri) {
+                for cx in cx0..=cx1 {
+                    for cy in cy0..=cy1 {
+                        if let Err(err) = spool.append(cell_key(map_id, cx, cy), tri) {
+                            spool_error = Some(err);
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        if let Some(err) = spool_error {
+            return Err(err).with_context(|| format!("spooling placement {}", placement.name));
+        }
+        if (i + 1) % 100 == 0 {
+            println!(
+                "vmap: transformed {}/{} placements",
+                i + 1,
+                placements.len()
+            );
+        }
     }
-    let by_cell = bin_by_cell(map_id, &world_tris);
 
-    // Pass 5: shard + pack each cell's bin once — feeds both the size report and (if --apply)
+    // Pass 4: read one sorted cell spool at a time, producing a deterministic manifest and
     // the reducer batches below. A dense cell (e.g. a WMO complex whose AABB touches it) can hold
     // far more triangles than fit in one `spacetime call` CLI argument (Linux caps a single argv
     // string around 128 KB), so a cell's triangle list is FIRST split into `MAX_ROW_TRI_BYTES`-
     // capped shards — each independently `lyracore_shared::vmap::decode`able — and only THEN
     // batched by total payload size like `nav.rs`. `game_vmap_chunk` is a multi-row-per-cell
     // table for exactly this reason (see its doc comment).
-    let cell_blobs: Vec<(u64, Vec<u8>)> = by_cell
-        .iter()
-        .flat_map(|(&key, tris)| shard_cell(tris).into_iter().map(move |b| (key, b)))
-        .collect();
-    let total_bytes: usize = cell_blobs.iter().map(|(_, b)| b.len()).sum();
-    let wmo_tris = world_tris
-        .iter()
-        .filter(|t| matches!(t.class, TriClass::Wmo { .. }))
-        .count();
-    let m2_tris = world_tris.len() - wmo_tris;
-    println!(
-        "vmap: map {map_id} — {} world tris ({wmo_tris} WMO, {m2_tris} M2) across {} cells, \
-         {total_bytes} packed bytes ({:.1} KB, {} shard row(s))",
-        world_tris.len(),
-        by_cell.len(),
-        total_bytes as f64 / 1024.0,
-        cell_blobs.len()
-    );
-
-    // Pass 6 (#521): batch shard rows by byte budget + apply — same convention as `nav::run`
+    let keys = spool.keys()?;
+    let mut total_bytes = 0usize;
+    let mut shard_rows = 0usize;
+    let mut batches = 0usize;
+    let mut current = String::new();
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"lyracore-vmap-manifest-v1");
+    let m2_tris = world_tris - wmo_tris;
+    // Pass 5: stream payloads one batch at a time. #182 will switch this transport to generation
+    // reducers; this planner already guarantees deterministic rows without retaining batches.
     // (rows `;` separated, first batch clears via `import_vmap_chunks`, the rest append). No row
     // can exceed `BATCH_BYTES` on its own now (shards are already capped well under it), so this
     // batching step only ever GROUPS rows, never has to special-case an oversized one.
-    let mut batches: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    for (key, blob) in &cell_blobs {
-        let cell_x = ((key >> 16) & 0xFFFF) as u16;
-        let cell_y = (key & 0xFFFF) as u16;
-        let hex: String = blob.iter().map(|b| format!("{b:02x}")).collect();
-        let row = format!("{map_id},{cell_x},{cell_y},{hex}");
-        if !cur.is_empty() && cur.len() + row.len() + 1 > BATCH_BYTES {
-            batches.push(std::mem::take(&mut cur));
-        }
-        if !cur.is_empty() {
-            cur.push(';');
-        }
-        cur.push_str(&row);
+    for key in keys {
+        let mut ordinal = 0u32;
+        spool.for_each_shard(key, |blob| {
+            total_bytes += blob.len();
+            shard_rows += 1;
+            digest.update(&key.to_le_bytes());
+            digest.update(&ordinal.to_le_bytes());
+            digest.update(&(blob.len() as u32).to_le_bytes());
+            digest.update(&blob);
+            let cell_x = ((key >> 16) & 0xFFFF) as u16;
+            let cell_y = (key & 0xFFFF) as u16;
+            let hex: String = blob.iter().map(|b| format!("{b:02x}")).collect();
+            let row = format!("{map_id},{cell_x},{cell_y},{hex}");
+            if !current.is_empty() && current.len() + row.len() + 1 > BATCH_BYTES {
+                if args.apply {
+                    crate::call_reducer(
+                        args,
+                        if batches == 0 {
+                            "import_vmap_chunks"
+                        } else {
+                            "import_vmap_chunks_append"
+                        },
+                        &current,
+                    )?;
+                }
+                batches += 1;
+                current.clear();
+            }
+            if !current.is_empty() {
+                current.push(';');
+            }
+            current.push_str(&row);
+            ordinal += 1;
+            Ok(())
+        })?;
     }
-    if !cur.is_empty() {
-        batches.push(cur);
+    if !current.is_empty() {
+        if args.apply {
+            crate::call_reducer(
+                args,
+                if batches == 0 {
+                    "import_vmap_chunks"
+                } else {
+                    "import_vmap_chunks_append"
+                },
+                &current,
+            )?;
+        }
+        batches += 1;
     }
-    println!("vmap: {} reducer batch(es)", batches.len());
+    println!("vmap: map {map_id} — {world_tris} world tris ({wmo_tris} WMO, {m2_tris} M2) across {} cells, {total_bytes} packed bytes ({:.1} KB, {shard_rows} shard row(s))", spool.keys()?.len(), total_bytes as f64 / 1024.0);
+    println!("vmap: manifest {}", digest.finalize().to_hex());
+    println!("vmap: {batches} reducer batch(es)");
     if !args.apply {
         println!(
             "-- DRY RUN: would call import_vmap_chunks (batch 0, clears) + {} × import_vmap_chunks_append",
-            batches.len().saturating_sub(1)
+            batches.saturating_sub(1)
         );
         return Ok(());
-    }
-    for (i, batch) in batches.iter().enumerate() {
-        let reducer = if i == 0 {
-            "import_vmap_chunks"
-        } else {
-            "import_vmap_chunks_append"
-        };
-        crate::call_reducer(args, reducer, batch)?;
     }
     println!("vmap: applied.");
     Ok(())
@@ -267,6 +477,7 @@ const MAX_ROW_TRI_BYTES: usize = 20_000;
 /// `MAX_ROW_TRI_BYTES`. Order within a cell doesn't matter (the module concatenates every shard's
 /// decoded triangles back into one list — see `module/src/vmap.rs`'s `fetcher`), so this just
 /// chunks by triangle count.
+#[cfg(test)]
 fn shard_cell(tris: &[VmapTri]) -> Vec<Vec<u8>> {
     let per_shard = ((MAX_ROW_TRI_BYTES.saturating_sub(HEADER_BYTES)) / TRI_BYTES).max(1);
     if tris.is_empty() {
@@ -368,10 +579,7 @@ mod tests {
     #[test]
     fn a_triangle_wholly_inside_one_cell_lands_in_exactly_one_cell() {
         let (x_hi, x_lo, y_hi, y_lo) = cell_bounds(500, 500);
-        let (cx, cy) = (
-            (x_hi + x_lo) / 2.0,
-            (y_hi + y_lo) / 2.0,
-        );
+        let (cx, cy) = ((x_hi + x_lo) / 2.0, (y_hi + y_lo) / 2.0);
         let t = tri_at(cx, cy, 100.0, 1.0, TriClass::M2);
         let by_cell = bin_by_cell(MAP, &[t]);
         assert_eq!(by_cell.len(), 1);
@@ -471,5 +679,38 @@ mod tests {
         reassembled.sort_by(|a, b| a.verts[0][2].partial_cmp(&b.verts[0][2]).unwrap());
         expected.sort_by(|a, b| a.verts[0][2].partial_cmp(&b.verts[0][2]).unwrap());
         assert_eq!(reassembled, expected);
+    }
+
+    #[test]
+    fn disk_spool_orders_cells_and_bounds_live_shard_memory() {
+        let spool = VmapSpool::new(77).unwrap();
+        let per_shard = (MAX_ROW_TRI_BYTES - HEADER_BYTES) / TRI_BYTES;
+        // Insert deliberately reverse key order; output must be keyed order, independent of
+        // filesystem enumeration. Each cell is read one shard at a time, not as the full slice.
+        for key in [9u64, 3] {
+            for i in 0..(per_shard * 2 + 1) {
+                spool
+                    .append(key, tri_at(0.0, 0.0, i as f32, 1.0, TriClass::M2))
+                    .unwrap();
+            }
+        }
+        assert_eq!(spool.keys().unwrap(), vec![3, 9]);
+        for key in spool.keys().unwrap() {
+            let mut count = 0;
+            spool
+                .for_each_shard(key, |shard| {
+                    assert!(shard.len() <= MAX_ROW_TRI_BYTES);
+                    if count == 0 {
+                        assert_eq!(
+                            lyracore_shared::vmap::decode(&shard).unwrap().len(),
+                            per_shard
+                        );
+                    }
+                    count += 1;
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(count, 3);
+        }
     }
 }
