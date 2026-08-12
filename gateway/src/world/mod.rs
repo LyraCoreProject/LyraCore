@@ -43,7 +43,7 @@ pub mod transfer;
 pub mod whisper;
 use coalesce::CoalesceState;
 use handlers::{
-    handle_char, handle_combat, handle_item, handle_loot, handle_query, handle_quest,
+    handle_bank, handle_char, handle_combat, handle_item, handle_loot, handle_query, handle_quest,
     handle_trade, handle_trainer, handle_vendor,
 };
 use login_queue::{Admission, LoginQueue};
@@ -1157,6 +1157,9 @@ fn dispatch<St: WorldStore + ?Sized>(
         return Ok(());
     };
     let Some(msg) = handle_vendor(tx, store, conn, msg)? else {
+        return Ok(());
+    };
+    let Some(msg) = handle_bank(tx, store, conn, msg)? else {
         return Ok(());
     };
     let Some(msg) = handle_trainer(tx, store, conn, msg)? else {

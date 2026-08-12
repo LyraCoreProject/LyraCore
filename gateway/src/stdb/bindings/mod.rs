@@ -394,9 +394,11 @@ pub mod gw_accept_trade_reducer;
 pub mod gw_add_friend_reducer;
 pub mod gw_add_ignore_reducer;
 pub mod gw_attack_reducer;
+pub mod gw_auto_bank_item_reducer;
 pub mod gw_begin_trade_reducer;
 pub mod gw_bind_home_reducer;
 pub mod gw_busy_trade_reducer;
+pub mod gw_buy_bank_slot_reducer;
 pub mod gw_buy_item_reducer;
 pub mod gw_buyback_item_reducer;
 pub mod gw_cancel_aura_reducer;
@@ -975,9 +977,11 @@ pub use gw_accept_trade_reducer::gw_accept_trade;
 pub use gw_add_friend_reducer::gw_add_friend;
 pub use gw_add_ignore_reducer::gw_add_ignore;
 pub use gw_attack_reducer::gw_attack;
+pub use gw_auto_bank_item_reducer::gw_auto_bank_item;
 pub use gw_begin_trade_reducer::gw_begin_trade;
 pub use gw_bind_home_reducer::gw_bind_home;
 pub use gw_busy_trade_reducer::gw_busy_trade;
+pub use gw_buy_bank_slot_reducer::gw_buy_bank_slot;
 pub use gw_buy_item_reducer::gw_buy_item;
 pub use gw_buyback_item_reducer::gw_buyback_item;
 pub use gw_cancel_aura_reducer::gw_cancel_aura;
@@ -1781,6 +1785,10 @@ pub enum Reducer {
         actor_guid: u64,
         target_guid: u64,
     },
+    GwAutoBankItem {
+        actor_guid: u64,
+        slot: u8,
+    },
     GwBeginTrade {
         actor_guid: u64,
     },
@@ -1789,6 +1797,10 @@ pub enum Reducer {
     },
     GwBusyTrade {
         actor_guid: u64,
+    },
+    GwBuyBankSlot {
+        actor_guid: u64,
+        banker_guid: u64,
     },
     GwBuyItem {
         actor_guid: u64,
@@ -2410,9 +2422,11 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwAddFriend { .. } => "gw_add_friend",
             Reducer::GwAddIgnore { .. } => "gw_add_ignore",
             Reducer::GwAttack { .. } => "gw_attack",
+            Reducer::GwAutoBankItem { .. } => "gw_auto_bank_item",
             Reducer::GwBeginTrade { .. } => "gw_begin_trade",
             Reducer::GwBindHome { .. } => "gw_bind_home",
             Reducer::GwBusyTrade { .. } => "gw_busy_trade",
+            Reducer::GwBuyBankSlot { .. } => "gw_buy_bank_slot",
             Reducer::GwBuyItem { .. } => "gw_buy_item",
             Reducer::GwBuybackItem { .. } => "gw_buyback_item",
             Reducer::GwCancelAura { .. } => "gw_cancel_aura",
@@ -3643,6 +3657,12 @@ impl __sdk::Reducer for Reducer {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
             }),
+            Reducer::GwAutoBankItem { actor_guid, slot } => {
+                __sats::bsatn::to_vec(&gw_auto_bank_item_reducer::GwAutoBankItemArgs {
+                    actor_guid: actor_guid.clone(),
+                    slot: slot.clone(),
+                })
+            }
             Reducer::GwBeginTrade { actor_guid } => {
                 __sats::bsatn::to_vec(&gw_begin_trade_reducer::GwBeginTradeArgs {
                     actor_guid: actor_guid.clone(),
@@ -3658,6 +3678,13 @@ impl __sdk::Reducer for Reducer {
                     actor_guid: actor_guid.clone(),
                 })
             }
+            Reducer::GwBuyBankSlot {
+                actor_guid,
+                banker_guid,
+            } => __sats::bsatn::to_vec(&gw_buy_bank_slot_reducer::GwBuyBankSlotArgs {
+                actor_guid: actor_guid.clone(),
+                banker_guid: banker_guid.clone(),
+            }),
             Reducer::GwBuyItem {
                 actor_guid,
                 vendor_guid,

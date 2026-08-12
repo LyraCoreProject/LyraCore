@@ -452,7 +452,7 @@ parity_test!(parity_game_character, "game_character", lyracore_module::Character
     first_login, online, money, rested_xp, last_logout_micros, home_map, home_zone, home_x,
     home_y, home_z, played_total_secs, session_start_micros, health, power, respec_count,
     death_expire_micros, pending_instance_id, gm_level, pending_ghost, resting, rested_since_micros,
-    pending_godmode, pending_run_speed_mult_bp,
+    pending_godmode, pending_run_speed_mult_bp, bank_bag_slots,
 });
 parity_test!(parity_game_world_entity, "game_world_entity", lyracore_module::WorldEntity, bindings::world_entity_type::WorldEntity, {
     guid, owner_identity, account_id, map_id, x, y, z, orientation, grid_x, grid_y,
@@ -466,6 +466,7 @@ parity_test!(parity_game_world_entity, "game_world_entity", lyracore_module::Wor
     run_speed_mult_bp, godmode, resting, cell,
     sheet_str_bonus, sheet_agi_bonus, sheet_sta_bonus, sheet_int_bonus, sheet_spi_bonus,
     sheet_ap_base, sheet_ap_mods, sheet_dmg_min, sheet_dmg_max, sheet_crit_bp, unit_bytes_2,
+    bank_bag_slots,
 });
 // `game_config` became gateway-subscribed so the startup instance-hosting check can read
 // `hosts_instances` back instead of guessing. The generated binding was STALE when that subscription

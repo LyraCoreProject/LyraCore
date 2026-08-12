@@ -1160,6 +1160,20 @@ impl Coordinator {
         )
     }
 
+    /// Buy the next bank bag slot from `banker_guid` (`CMSG_BUY_BANK_SLOT`) over the coordinator
+    /// connection. A refusal carries the module's `[N]` `SMSG_BUY_BANK_SLOT_RESULT` code tag.
+    pub fn buy_bank_slot(&self, _account_id: u64, actor_guid: u64, banker_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("buy_bank_slot: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_buy_bank_slot",
+            gw_buy_bank_slot_then(actor_guid, banker_guid)
+        )
+    }
+
     pub fn learn_talent(&self, _account_id: u64,
         actor_guid: u64, talent_id: u32) -> Result<()> {
         if actor_guid == 0 {
@@ -1383,6 +1397,21 @@ impl Coordinator {
             coord.conn.reducers,
             "gw_move_item",
             gw_move_item_then(actor_guid, from_slot, to_slot)
+        )
+    }
+
+    /// Auto-bank/auto-store-bank the item in `slot` (`CMSG_AUTOBANK_ITEM`/`CMSG_AUTOSTORE_BANK_ITEM`)
+    /// over the coordinator connection. The module infers deposit vs. withdraw from `slot` and
+    /// resolves the receiving free slot itself.
+    pub fn auto_bank_item(&self, _account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("auto_bank_item: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_auto_bank_item",
+            gw_auto_bank_item_then(actor_guid, slot)
         )
     }
 

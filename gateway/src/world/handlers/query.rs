@@ -237,7 +237,10 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                         let _ = store.reset_talents(conn.account_id, player_guid, npc);
                         send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
                     }
-                    // BANKER/TAXI/plain-GOSSIP/submenu-link, the trailing Farewell, or an out-of-range
+                    Some(opt) if opt.action == gossip_option::BANKER => {
+                        super::send_show_bank(tx, npc)?;
+                    }
+                    // TAXI/plain-GOSSIP/submenu-link, the trailing Farewell, or an out-of-range
                     // index (a stale click racing a condition change) — close the window. Submenu
                     // navigation (`action_menu_id`) is deferred.
                     _ => send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?,

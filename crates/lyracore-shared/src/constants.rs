@@ -73,6 +73,9 @@ pub mod npc_flags {
     /// the raw flag. Innkeeper Farley(295) ships `npc_flags=135 = GOSSIP|QUESTGIVER|VENDOR|INNKEEPER`. The
     /// Northshire/Goldshire innkeepers carry this; the gossip "Make this inn your home" → `bind_home`.
     pub const INNKEEPER: u32 = 0x0000_0080;
+    /// `UNIT_NPC_FLAG_BANKER` (0x100, vanilla 1.12 / cmangos-classic) — opens the bank window and
+    /// gates every move into or out of a bank slot.
+    pub const BANKER: u32 = 0x0000_0100;
     /// `UNIT_NPC_FLAG_REPAIR` (0x4000, vanilla 1.12 / cmangos-classic) — repairs item durability
     /// (`CMSG_REPAIR_ITEM`). Armorers (Corina Steele 54, Quartermaster Hudson 1249, Hicks 1645, …)
     /// carry 0x4000|0x4 (REPAIR+VENDOR). NOTE: 0x1000 (4096) is AUCTIONEER in this numbering, NOT repair.
@@ -229,10 +232,10 @@ pub mod start_human_warrior {
 /// through unchanged — this module documents what the values MEAN so the gateway dispatch and the
 /// importer agree without duplicating magic numbers). `[V]` — confirm against your own dump; only
 /// GOSSIP/BANKER/VENDOR/TAXI/TRAINER/INNKEEPER are read by the dispatcher today, the rest are
-/// inert (submenu/banker/taxi systems aren't wired up — work-item 217 scope note).
+/// inert (submenu/taxi aren't wired up — work-item 217 scope note).
 pub mod gossip_option {
     pub const GOSSIP: u32 = 1; // plain text / submenu link (submenu navigation deferred, work-item 217)
-    pub const BANKER: u32 = 2; // opens the bank (system 133, not wired — inert)
+    pub const BANKER: u32 = 2; // opens the bank window
     pub const VENDOR: u32 = 3; // opens the vendor window (routes to build_list_inventory_raw)
     pub const TAXI: u32 = 4; // flight master (system 136, not wired — inert)
     pub const TRAINER: u32 = 5; // opens SMSG_TRAINER_LIST

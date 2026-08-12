@@ -8,6 +8,7 @@ use crate::game_npc_vendor;
 use crate::game_world_entity;
 use crate::WorldEntity; // npc_interaction_gate's return type
 
+use super::inventory::is_carried_slot;
 use super::ops::store_item;
 use super::rules::{buy_cost, equip_slot, repair_cost, sell_value};
 use super::tables::{
@@ -72,6 +73,127 @@ fn npc_interaction_gate(
     Ok((player, npc))
 }
 
+/// The bank-access trust gate: a move or split touching a bank slot needs an OPEN bank, so the player
+/// must be alive with a live BANKER npc in reach. Unlike the vendor paths the client names no banker
+/// guid, so this searches the player's own partition instead of validating a named target.
+pub(crate) fn bank_access_gate(ctx: &ReducerContext, player_guid: u64) -> Result<(), String> {
+    let player = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(player_guid)
+        .ok_or_else(|| "user not in world".to_string())?;
+    if player.dead {
+        return Err("dead players cannot use the bank".to_string());
+    }
+    // Grid-indexed and partition-scoped: a spatial table must never be scanned whole.
+    let near = crate::helpers::entities_near(
+        ctx,
+        player.map_id,
+        player.instance_id,
+        player.x,
+        player.y,
+        VENDOR_RANGE_SQ.sqrt(),
+    );
+    let open = near.iter().any(|e| {
+        let (dx, dy, dz) = (e.x - player.x, e.y - player.y, e.z - player.z);
+        banker_in_reach(
+            e.is_player(),
+            e.npc_flags,
+            e.dead,
+            dx * dx + dy * dy + dz * dz,
+        )
+    });
+    if !open {
+        return Err("banker out of range".to_string());
+    }
+    Ok(())
+}
+
+/// Does one nearby entity open the bank? A live NPC (never another player) carrying the BANKER flag,
+/// inside the interaction radius. Pure so the refusal cases are unit-tested without a live module.
+pub(crate) fn banker_in_reach(is_player: bool, npc_flags: u32, dead: bool, dist_sq: f32) -> bool {
+    !is_player
+        && !dead
+        && npc_flags & lyracore_shared::constants::npc_flags::BANKER != 0
+        && dist_sq <= VENDOR_RANGE_SQ
+}
+
+/// The four distinguishable results of a bank bag slot purchase. Typed rather than a `Result<(),
+/// String>` so a caller tells the refusals apart without matching error prose; the reducer boundary
+/// then tags each one with its `SMSG_BUY_BANK_SLOT_RESULT` code (see `buy_bank_slot_result`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BuyBankSlotOutcome {
+    /// Charged `price` copper; the buyer now owns `owned` slots.
+    Bought { price: u32, owned: u8 },
+    /// All six rungs already bought.
+    AlreadyMaxed,
+    /// Short of copper for the next rung.
+    CannotAfford { price: u32 },
+    /// The named target is no usable banker (wrong flag, wrong map, out of range, buyer dead).
+    NotBanker(String),
+}
+
+/// Map an outcome onto the reducer boundary, which can only carry `Result<(), String>`. A refusal
+/// leads with its wire code in brackets so the gateway maps it by code, not by prose (the
+/// `trainer_buy` precedent). Pure — unit-tested.
+pub(crate) fn buy_bank_slot_result(outcome: BuyBankSlotOutcome) -> Result<(), String> {
+    use lyracore_shared::bank::result;
+    match outcome {
+        BuyBankSlotOutcome::Bought { .. } => Ok(()),
+        BuyBankSlotOutcome::AlreadyMaxed => Err(format!(
+            "[{}] no bank bag slots left to buy",
+            result::FAILED_TOO_MANY
+        )),
+        BuyBankSlotOutcome::CannotAfford { price } => Err(format!(
+            "[{}] not enough money (need {price})",
+            result::INSUFFICIENT_FUNDS
+        )),
+        BuyBankSlotOutcome::NotBanker(why) => Err(format!("[{}] {why}", result::NOT_BANKER)),
+    }
+}
+
+/// Buy the next bank bag slot from `banker_guid`: charge the next unowned rung of the vanilla ladder
+/// and increment the owned count on the live entity (mirrored back to the character row by
+/// `persist_entity`, exactly as `money` is).
+///
+/// The client NAMES the banker here, so this validates that target through the shared
+/// `npc_interaction_gate` — unlike `bank_access_gate`, which searches the partition because a bank
+/// move names no NPC at all.
+pub(crate) fn apply_buy_bank_slot(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    banker_guid: u64,
+) -> BuyBankSlotOutcome {
+    let mut player = match npc_interaction_gate(
+        ctx,
+        player_guid,
+        banker_guid,
+        lyracore_shared::constants::npc_flags::BANKER,
+        "banker",
+        "target is not a banker",
+        "use the bank",
+    ) {
+        Ok((player, _banker)) => player,
+        Err(why) => return BuyBankSlotOutcome::NotBanker(why),
+    };
+    let Some(price) = lyracore_shared::bank::next_bank_slot_price(player.bank_bag_slots) else {
+        return BuyBankSlotOutcome::AlreadyMaxed;
+    };
+    if player.money < price {
+        return BuyBankSlotOutcome::CannotAfford { price };
+    }
+    player.money -= price;
+    player.bank_bag_slots += 1;
+    let owned = player.bank_bag_slots;
+    // PLAYER_BYTES_2 byte 2 mirrors the owned count so the client sees the bought slot without a
+    // relog; byte 0 (facial hair) and byte 3 (rest state) ride along untouched.
+    player.player_bytes_2 =
+        lyracore_shared::packing::with_bank_bag_slots(player.player_bytes_2, owned);
+    ctx.db.game_world_entity().guid().update(player);
+    BuyBankSlotOutcome::Bought { price, owned }
+}
+
 /// Does the vendor creature `vendor_entry` stock `item_entry`? Gates `apply_buy_item` so a player can
 /// only buy what a vendor actually sells (not any item with a buy price). Reads `game_npc_vendor`.
 pub(crate) fn vendor_sells(ctx: &ReducerContext, vendor_entry: u32, item_entry: u32) -> bool {
@@ -134,6 +256,10 @@ pub(crate) fn apply_item_sell(
     // window can't target worn gear, so a client must not be able to sell items off the body.
     if inst.slot <= equip_slot::END {
         return Err("cannot sell an equipped item".to_string());
+    }
+    // Selling is a bag-only action: an item sitting in the bank is out of the vendor window's reach.
+    if !is_carried_slot(inst.slot) {
+        return Err("cannot sell a banked item".to_string());
     }
     let tmpl = ctx
         .db
@@ -408,8 +534,103 @@ pub(crate) fn apply_player_repair(
 
 #[cfg(test)]
 mod tests {
-    use super::{buyback_newest_first, buyback_ring_full};
+    use super::{
+        banker_in_reach, buy_bank_slot_result, buyback_newest_first, buyback_ring_full,
+        BuyBankSlotOutcome, VENDOR_RANGE_SQ,
+    };
     use crate::test_scan::code_of;
+    use lyracore_shared::constants::npc_flags::{BANKER, VENDOR};
+
+    /// BANK ACCESS: only a live BANKER-flagged NPC inside the interaction radius opens the bank. A
+    /// player, a corpse, a non-banker NPC, and a banker one yard too far all leave it shut — so a move
+    /// into a bank slot with no banker in range is refused.
+    #[test]
+    fn banker_in_reach_accepts_only_a_live_banker_inside_the_radius() {
+        let edge = VENDOR_RANGE_SQ;
+        assert!(banker_in_reach(false, BANKER, false, 0.0));
+        assert!(banker_in_reach(false, BANKER | VENDOR, false, edge));
+        assert!(!banker_in_reach(true, BANKER, false, 0.0)); // another player, however flagged
+        assert!(!banker_in_reach(false, BANKER, true, 0.0)); // a banker's corpse
+        assert!(!banker_in_reach(false, VENDOR, false, 0.0)); // wrong npc kind
+        assert!(!banker_in_reach(false, 0, false, 0.0)); // no npc flags at all
+        assert!(!banker_in_reach(false, BANKER, false, edge + 1.0)); // out of range
+    }
+
+    /// Each purchase outcome must reach the reducer boundary as its own wire code, so the relay never
+    /// has to read the prose. `Bought` is the only `Ok`.
+    #[test]
+    fn every_purchase_outcome_carries_its_own_wire_code() {
+        use lyracore_shared::bank::result;
+        assert!(buy_bank_slot_result(BuyBankSlotOutcome::Bought {
+            price: 1_000,
+            owned: 1
+        })
+        .is_ok());
+        let maxed = buy_bank_slot_result(BuyBankSlotOutcome::AlreadyMaxed).unwrap_err();
+        assert!(
+            maxed.starts_with(&format!("[{}]", result::FAILED_TOO_MANY)),
+            "{maxed}"
+        );
+        let broke =
+            buy_bank_slot_result(BuyBankSlotOutcome::CannotAfford { price: 10_000 }).unwrap_err();
+        assert!(
+            broke.starts_with(&format!("[{}]", result::INSUFFICIENT_FUNDS)),
+            "{broke}"
+        );
+        let nope =
+            buy_bank_slot_result(BuyBankSlotOutcome::NotBanker("banker out of range".into()))
+                .unwrap_err();
+        assert!(
+            nope.starts_with(&format!("[{}]", result::NOT_BANKER)),
+            "{nope}"
+        );
+    }
+
+    /// The purchase names its banker, so it must validate that target through the shared NPC gate
+    /// (the vendor treatment) and charge before it hands the slot over.
+    #[test]
+    fn buy_bank_slot_validates_the_named_banker_and_charges_first() {
+        let body = code_of(
+            include_str!("economy.rs"),
+            "pub(crate) fn apply_buy_bank_slot(",
+        );
+        assert!(
+            body.contains("npc_interaction_gate("),
+            "the named banker must go through the shared NPC-interaction gate"
+        );
+        assert!(
+            body.contains("npc_flags::BANKER"),
+            "the named target must carry the BANKER flag"
+        );
+        let debit = body
+            .find("player.money -= price")
+            .expect("the purse is charged");
+        let grant = body
+            .find("player.bank_bag_slots += 1")
+            .expect("the slot count grows");
+        assert!(
+            debit < grant,
+            "the copper must be taken before the slot is granted"
+        );
+    }
+
+    /// The banker search is a spatial query, so it must go through the partition-scoped, grid-indexed
+    /// helper — a whole-table read would see only the caller's own shard after a split.
+    #[test]
+    fn bank_access_gate_searches_through_the_partition_scoped_helper() {
+        let body = code_of(
+            include_str!("economy.rs"),
+            "pub(crate) fn bank_access_gate(",
+        );
+        assert!(
+            body.contains("crate::helpers::entities_near("),
+            "the banker proximity search must use `helpers::entities_near`"
+        );
+        assert!(
+            body.contains("player.dead"),
+            "a dead player must not reach the bank"
+        );
+    }
 
     /// #514: this crate has no `ReducerContext` harness by design (`test_scan`'s doc comment /
     /// playbook §7), so `apply_player_repair`'s actual gating/cost/durability-restore behavior

@@ -332,6 +332,11 @@ pub struct WorldEntity {
     /// is what every existing row renders as today).
     #[default(0)]
     pub unit_bytes_2: u32,
+    /// Bank bag slots the player owns, mirrored off `Character.bank_bag_slots` at login and written
+    /// back by `persist_entity` — the `money` treatment, so the purchase reads and writes one place.
+    /// Always 0 on a creature. `#[default(0)]` + END-appended so `publish` auto-migrates.
+    #[default(0)]
+    pub bank_bag_slots: u8,
 }
 
 impl WorldEntity {
@@ -1822,6 +1827,8 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
         c.xp = entity.xp;
         c.next_level_xp = entity.next_level_xp;
         c.money = entity.money;
+        // Bought bank bag slots persist like the purse they were paid from.
+        c.bank_bag_slots = entity.bank_bag_slots;
         // Persist current health/power so a relog resumes at the same vitals instead
         // of being force-healed to full. Clamp health to >=1: the "relog comes back ALIVE" rule
         // (see the ghost-corpse cleanup in `player_login`) means a player who logged out dead/at 0 HP

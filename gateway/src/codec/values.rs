@@ -82,6 +82,17 @@ pub fn build_ghost_values(guid: u64, player_flags: u32, unit_bytes_1: u32) -> SM
     })
 }
 
+/// Build a VALUES partial-update carrying `PLAYER_BYTES_2` — same `dirty_reset` discipline as
+/// `build_health_values`. `player_bytes_2` is the FULL descriptor u32 (byte0 facial hair, byte2 owned
+/// bank bag slot count, byte3 rest state); a partial VALUES overwrites the whole field, so all three
+/// ride along even though only the slot count changed.
+pub fn build_bank_bag_slots_values(guid: u64, player_bytes_2: u32) -> SMSG_UPDATE_OBJECT {
+    let (a, b, c, d) = unpack4(player_bytes_2);
+    player_values(guid, |player| {
+        player.set_player_bytes_2(a, b, c, d);
+    })
+}
+
 /// `SMSG_UPDATE_OBJECT` opcode (vanilla build 5875). Cross-checked against the gtker header in
 /// `raw_values_body_matches_gtker_envelope` below.
 const SMSG_UPDATE_OBJECT_OPCODE: u16 = 0x00A9;

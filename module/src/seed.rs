@@ -213,6 +213,7 @@ fn seed_production_core(ctx: &ReducerContext) {
         rested_since_micros: 0, // 196
         pending_godmode: false, // 289: GM playtest carry — off until `.god` + a map change
         pending_run_speed_mult_bp: crate::world::RUN_SPEED_BP_1X, // 289: 1×
+        bank_bag_slots: 0,
     });
     // The seeded character goes through the same creation-time kit grant as `create_character`
     // (rows restamp to the real owner identity at establish_session, like its other owned rows).
