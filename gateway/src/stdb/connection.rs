@@ -7,6 +7,7 @@ use crate::config::{GatewayConfig, ShardMap};
 use anyhow::{anyhow, Context, Result};
 use spacetimedb_sdk::{DbContext, SubscriptionHandle as _, Table};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -54,10 +55,83 @@ pub(crate) struct LiveConn {
     /// gateway reads through. Player verbs go through the module's operator-gated `gw_*` surface
     /// over the call pipes, with the actor named by guid.
     pub(crate) conn: DbConnection,
+    /// Completes reducer waits as soon as this connection's transport dies. It belongs to the
+    /// connection generation, so a watchdog replacement cannot fail calls on the fresh socket.
+    pub(crate) reducer_completion: Arc<ReducerCompletion>,
     /// Keeps the SDK message-pump thread alive for the connection's lifetime.
     _pump: std::thread::JoinHandle<()>,
     /// Keeps the privileged subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
+}
+
+/// One-shot completion registry for calls sent through one SDK connection.
+///
+/// A reducer callback and the SDK disconnect callback may race. Removing the sender while
+/// holding this lock makes whichever signal arrives first the caller-visible outcome.
+pub(crate) struct ReducerCompletion {
+    next_id: AtomicU64,
+    state: Mutex<ReducerCompletionState>,
+}
+
+struct ReducerCompletionState {
+    connected: bool,
+    pending: HashMap<u64, std::sync::mpsc::Sender<std::result::Result<(), String>>>,
+}
+
+impl ReducerCompletion {
+    fn connected() -> Self {
+        Self {
+            next_id: AtomicU64::new(0),
+            state: Mutex::new(ReducerCompletionState {
+                connected: true,
+                pending: HashMap::new(),
+            }),
+        }
+    }
+
+    pub(crate) fn register(
+        &self,
+        tx: std::sync::mpsc::Sender<std::result::Result<(), String>>,
+    ) -> std::result::Result<u64, String> {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if !state.connected {
+            return Err("transport disconnected".to_string());
+        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        state.pending.insert(id, tx);
+        Ok(id)
+    }
+
+    pub(crate) fn finish(&self, id: u64, result: std::result::Result<(), String>) {
+        if let Some(tx) = self
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .pending
+            .remove(&id)
+        {
+            let _ = tx.send(result);
+        }
+    }
+
+    pub(crate) fn cancel(&self, id: u64) {
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .pending
+            .remove(&id);
+    }
+
+    fn disconnect(&self) {
+        let pending = {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            state.connected = false;
+            std::mem::take(&mut state.pending)
+        };
+        for (_, tx) in pending {
+            let _ = tx.send(Err("transport disconnected".to_string()));
+        }
+    }
 }
 
 pub(crate) struct CoordinatorInner {
@@ -138,24 +212,30 @@ impl CoordinatorInner {
                     return g;
                 }
             }
-            log::warn!("call-pipe pool: every pipe inactive — falling back to the coordinator connection");
+            log::warn!(
+                "call-pipe pool: every pipe inactive — falling back to the coordinator connection"
+            );
         }
         self.coord()
     }
-
 }
 
 /// Build one CALL-ONLY pipe — same connect shape as [`connect_blocking`] but subscribing a
 /// single one-row table (`game_config`) purely so the `LiveConn` subscription handle exists and
 /// its liveness signal works. Reducer calls need no cache.
 fn connect_call_pipe(uri: String, db_name: String, token: Option<String>) -> Result<LiveConn> {
+    let reducer_completion = Arc::new(ReducerCompletion::connected());
+    let disconnected = reducer_completion.clone();
     let conn = DbConnection::builder()
         .with_uri(&uri)
         .with_database_name(&db_name)
         .with_token(token)
         .on_connect(|_ctx, identity, _token| log::info!("call pipe connected as {identity}"))
         .on_connect_error(|_ctx, err| log::error!("call pipe connect error: {err}"))
-        .on_disconnect(|_ctx, err| log::warn!("call pipe connection closed: {err:?}"))
+        .on_disconnect(move |_ctx, err| {
+            log::warn!("call pipe connection closed: {err:?}");
+            disconnected.disconnect();
+        })
         .build()
         .map_err(|e| anyhow!("call pipe build/connect failed: {e}"))?;
     let pump = conn.run_threaded();
@@ -177,6 +257,7 @@ fn connect_call_pipe(uri: String, db_name: String, token: Option<String>) -> Res
     }
     Ok(LiveConn {
         conn,
+        reducer_completion,
         _pump: pump,
         _sub: sub,
     })
@@ -494,13 +575,18 @@ fn connect_blocking(
     token: Option<String>,
     sharded_tables: bool,
 ) -> Result<LiveConn> {
+    let reducer_completion = Arc::new(ReducerCompletion::connected());
+    let disconnected = reducer_completion.clone();
     let conn = DbConnection::builder()
         .with_uri(&uri)
         .with_database_name(&db_name)
         .with_token(token)
         .on_connect(|_ctx, identity, _token| log::info!("coordinator connected as {identity}"))
         .on_connect_error(|_ctx, err| log::error!("coordinator connect error: {err}"))
-        .on_disconnect(|_ctx, err| log::warn!("coordinator connection closed: {err:?}"))
+        .on_disconnect(move |_ctx, err| {
+            log::warn!("coordinator connection closed: {err:?}");
+            disconnected.disconnect();
+        })
         .build()
         .map_err(|e| anyhow!("coordinator build/connect failed: {e}"))?;
 
@@ -533,6 +619,7 @@ fn connect_blocking(
 
     Ok(LiveConn {
         conn,
+        reducer_completion,
         _pump: pump,
         _sub: sub,
     })
@@ -790,6 +877,17 @@ pub(crate) fn recv_reducer(
     }
 }
 
+pub(crate) fn recv_reducer_on(
+    rx: std::sync::mpsc::Receiver<std::result::Result<(), String>>,
+    what: &str,
+    completion: &ReducerCompletion,
+    call_id: u64,
+) -> Result<()> {
+    let result = recv_reducer(rx, what);
+    completion.cancel(call_id);
+    result
+}
+
 #[cfg(test)]
 mod coordinator_query_tests {
     use super::coordinator_queries;
@@ -866,7 +964,10 @@ mod coordinator_query_tests {
 
 #[cfg(test)]
 mod recv_reducer_tests {
-    use super::recv_reducer;
+    use super::{recv_reducer, ReducerCompletion};
+    use std::sync::mpsc;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     #[test]
     fn a_completed_reducer_maps_to_ok() {
@@ -888,8 +989,55 @@ mod recv_reducer_tests {
             "buy_item reducer failed: not enough copper"
         );
     }
-}
 
+    #[test]
+    fn a_connection_death_completes_only_its_pending_reducer_waits() {
+        let dead = ReducerCompletion::connected();
+        let live = ReducerCompletion::connected();
+        let (dead_tx, dead_rx) = mpsc::channel();
+        let (live_tx, live_rx) = mpsc::channel();
+        dead.register(dead_tx).unwrap();
+        live.register(live_tx).unwrap();
+
+        dead.disconnect();
+
+        assert_eq!(
+            dead_rx.recv_timeout(Duration::from_millis(100)).unwrap(),
+            Err("transport disconnected".to_string())
+        );
+        assert!(live_rx.recv_timeout(Duration::from_millis(20)).is_err());
+    }
+
+    #[test]
+    fn reducer_completion_wins_or_loses_cleanly_against_disconnect() {
+        let completion = Arc::new(ReducerCompletion::connected());
+        let (tx, rx) = mpsc::channel();
+        let id = completion.register(tx).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+
+        let done = completion.clone();
+        let done_barrier = barrier.clone();
+        let done_thread = std::thread::spawn(move || {
+            done_barrier.wait();
+            done.finish(id, Ok(()));
+        });
+        let dropped = completion.clone();
+        let dropped_barrier = barrier.clone();
+        let disconnect_thread = std::thread::spawn(move || {
+            dropped_barrier.wait();
+            dropped.disconnect();
+        });
+        barrier.wait();
+        done_thread.join().unwrap();
+        disconnect_thread.join().unwrap();
+
+        match rx.recv_timeout(Duration::from_millis(100)).unwrap() {
+            Ok(()) => {}
+            Err(message) => assert_eq!(message, "transport disconnected"),
+        }
+        assert!(rx.recv_timeout(Duration::from_millis(20)).is_err());
+    }
+}
 
 /// Fire a reducer over `$reducers` and block (≤10s) on its completion, mapping the outcome to
 /// `anyhow` (evaluates to `Result<()>`). Collapses the channel + status-flatten callback +
@@ -898,17 +1046,38 @@ mod recv_reducer_tests {
 /// send-error and timeout messages. The double-`Result` flattening (`InternalError` → `{e:?}`)
 /// lives here, so it is one edit instead of nine.
 macro_rules! call_reducer {
-    ($reducers:expr, $what:literal, $method:ident ( $($arg:expr),* $(,)? )) => {{
+    ($live:ident . conn . reducers, $what:literal, $method:ident ( $($arg:expr),* $(,)? )) => {{
+        call_reducer!(@call $live, $what, $method($($arg),*))
+    }};
+    ($owner:ident . 0 . call_pipe() . conn . reducers, $what:literal, $method:ident ( $($arg:expr),* $(,)? )) => {{
+        let live = $owner.0.call_pipe();
+        call_reducer!(@call live, $what, $method($($arg),*))
+    }};
+    ($owner:ident . coord() . conn . reducers, $what:literal, $method:ident ( $($arg:expr),* $(,)? )) => {{
+        let live = $owner.coord();
+        call_reducer!(@call live, $what, $method($($arg),*))
+    }};
+    (@call $live:ident, $what:literal, $method:ident ( $($arg:expr),* $(,)? )) => {{
         let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
-        $reducers
+        let completion = $live.reducer_completion.clone();
+        let call_id = completion
+            .register(tx)
+            .map_err(|e| anyhow!(concat!($what, " reducer transport disconnected: {}"), e))?;
+        let callback_completion = completion.clone();
+        $live
+            .conn
+            .reducers
             .$method($($arg,)* move |_ctx, status| {
-                let _ = tx.send(match status {
+                callback_completion.finish(call_id, match status {
                     Ok(inner) => inner,
                     Err(e) => Err(format!("{e:?}")),
                 });
             })
-            .map_err(|e| anyhow!(concat!("send ", $what, ": {}"), e))?;
-        recv_reducer(rx, $what)
+            .map_err(|e| {
+                completion.cancel(call_id);
+                anyhow!(concat!("send ", $what, ": {}"), e)
+            })?;
+        $crate::stdb::connection::recv_reducer_on(rx, $what, &completion, call_id)
     }};
 }
 pub(crate) use call_reducer;
@@ -928,7 +1097,6 @@ impl Coordinator {
             .count();
         n
     }
-
 }
 
 impl Coordinator {
@@ -1115,7 +1283,9 @@ impl Coordinator {
             .enforce()
             .map_err(|msg| anyhow!("{msg}"))?;
         ensure_guid_ranges(&conns, &map);
-        let world = Arc::new(super::world_view::WorldView::new(crate::config::aoi_enabled()));
+        let world = Arc::new(super::world_view::WorldView::new(
+            crate::config::aoi_enabled(),
+        ));
         let coordinator = Self(
             home,
             Arc::new(ShardSet {
@@ -1139,7 +1309,11 @@ impl Coordinator {
         // The load sampler: per-shard writer occupancy + session counts, sampled on a timer and recorded
         // onto realm-core so an operator can answer "which shard is hot" with `spacetime sql`
         // alone.
-        spawn_load_sampler(coordinator.clone(), cfg.stdb_uri.clone(), cfg.gateway_id.clone());
+        spawn_load_sampler(
+            coordinator.clone(),
+            cfg.stdb_uri.clone(),
+            cfg.gateway_id.clone(),
+        );
         Ok(coordinator)
     }
 
@@ -1164,15 +1338,10 @@ impl Coordinator {
         for (id, shard) in shards.iter().enumerate() {
             super::world_view::arm_shard(view.clone(), shard.clone(), id);
             let (hook_view, hook_shard) = (view.clone(), shard.clone());
-            shard
-                .0
-                .on_reconnect
-                .lock()
-                .unwrap()
-                .push(Arc::new(move || {
-                    super::world_view::arm_shard(hook_view.clone(), hook_shard.clone(), id);
-                    super::world_view::seed_from_caches(&hook_view);
-                }));
+            shard.0.on_reconnect.lock().unwrap().push(Arc::new(move || {
+                super::world_view::arm_shard(hook_view.clone(), hook_shard.clone(), id);
+                super::world_view::seed_from_caches(&hook_view);
+            }));
         }
         // The cross-shard whisper/group twins (#22) ride realm-core's connection — armed only
         // when realm-core is a DISTINCT database (a world shard's own `arm_shard` above already
@@ -1182,18 +1351,13 @@ impl Coordinator {
                 let world = self.clone();
                 super::world_view::arm_realm_private(view.clone(), realm.clone(), world.clone());
                 let (hook_view, hook_realm) = (view.clone(), realm.clone());
-                realm
-                    .0
-                    .on_reconnect
-                    .lock()
-                    .unwrap()
-                    .push(Arc::new(move || {
-                        super::world_view::arm_realm_private(
-                            hook_view.clone(),
-                            hook_realm.clone(),
-                            world.clone(),
-                        );
-                    }));
+                realm.0.on_reconnect.lock().unwrap().push(Arc::new(move || {
+                    super::world_view::arm_realm_private(
+                        hook_view.clone(),
+                        hook_realm.clone(),
+                        world.clone(),
+                    );
+                }));
             }
         }
         super::world_view::seed_from_caches(&view);
@@ -1369,8 +1533,6 @@ impl Coordinator {
         self.1.sessions.release(account_id, epoch)
     }
 }
-
-
 
 /// Why the SDK connection builds (`connect_blocking`, the call pipes) run on threads the
 /// runtime does NOT own.
