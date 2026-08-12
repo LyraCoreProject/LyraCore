@@ -9,7 +9,7 @@
 //! on the single handle in the unsharded one, and both must render the same list — that is the
 //! two-plane equivalence, not two tests that happen to agree.
 
-use super::party_tests::{character, GINGER, TRIN, VIM};
+use super::party_tests::{character, DORMANT, GINGER, TRIN, VIM};
 use super::*;
 
 /// The Goldshire mailbox, as the client names it in every mail packet.
@@ -691,6 +691,537 @@ fn a_refused_delete_still_acks_and_never_kills_the_session() {
 
     drop(client);
     server.join().unwrap();
+}
+
+// ---------------------------------------------------------------------------------------------
+//  Sending a text-only letter — the gates, the postage, and the cross-database delivery.
+//
+//  Everything the gateway decides about a send runs here: realm-core holds no characters, no live
+//  entities and no gameobjects, so "may these two write to each other" is answered before any
+//  reducer. The module answers affordability alone, which the fake store models faithfully — an
+//  atomic debit that refuses for a purse that cannot pay.
+// ---------------------------------------------------------------------------------------------
+
+/// A Horde character. `party_tests::character` builds a Human, so this is the faction gate's other
+/// side.
+fn orc(guid: u64, name: &str) -> codec::CharacterView {
+    codec::CharacterView {
+        race: 2,
+        ..character(guid, name)
+    }
+}
+
+const GRUG: u64 = 20; // Horde, standing next to Ginger — the faction refusal
+const ECHO_WORLD: u64 = 30; // "Echo" on the open world …
+const ECHO_INSTANCES: u64 = 31; // … and "Echo" again on the instances shard: the homonym
+/// Ginger's purse, comfortably above the 30-copper postage.
+const PURSE: u32 = 500;
+
+/// The sharded send topology: realm-core owns the mail rows, Ginger and the local cast live on the
+/// open world, Vim lives on the instances shard — the boundary the plane decision exists to cross.
+/// Only Ginger carries a purse, because only Ginger sends.
+fn sharded_send() -> (
+    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<InMemoryStore>,
+    ShardCallLog,
+) {
+    let calls: ShardCallLog = Default::default();
+    let realm = std::sync::Arc::new(InMemoryStore {
+        shard: "lyracore-realm".into(),
+        calls: calls.clone(),
+        is_realm: true,
+        ..Default::default()
+    });
+    let world = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        realm: Some(realm.clone()),
+        characters: vec![
+            character(GINGER, "Ginger"),
+            character(TRIN, "Trin"),
+            character(DORMANT, "Dormant"),
+            character(ECHO_WORLD, "Echo"),
+            orc(GRUG, "Grug"),
+        ],
+        live_guids: vec![GINGER, TRIN, GRUG],
+        offline_guids: vec![DORMANT],
+        mailboxes: vec![MAILBOX],
+        ..Default::default()
+    });
+    let instances = std::sync::Arc::new(InMemoryStore {
+        shard: "instances".into(),
+        calls: calls.clone(),
+        realm: Some(realm.clone()),
+        characters: vec![character(VIM, "Vim"), character(ECHO_INSTANCES, "Echo")],
+        live_guids: vec![VIM],
+        mailboxes: vec![MAILBOX],
+        ..Default::default()
+    });
+    *world.purses.lock().unwrap() = vec![(GINGER, PURSE)];
+    for shard in [&world, &instances] {
+        *shard.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+    }
+    (realm, world, instances, calls)
+}
+
+/// The same cast on one database — `lyracore dev up`'s gateway, where the purse and the mail row
+/// live together.
+fn unsharded_send() -> std::sync::Arc<InMemoryStore> {
+    let store = std::sync::Arc::new(InMemoryStore {
+        shard: "lyracore".into(),
+        characters: vec![character(GINGER, "Ginger"), character(TRIN, "Trin")],
+        live_guids: vec![GINGER, TRIN],
+        mailboxes: vec![MAILBOX],
+        ..Default::default()
+    });
+    *store.purses.lock().unwrap() = vec![(GINGER, PURSE)];
+    store
+}
+
+fn post<St: WorldStore + ?Sized>(
+    store: &St,
+    to: &str,
+) -> std::result::Result<(), mail::SendRefusal> {
+    mail::send(
+        store,
+        Some(GINGER),
+        MAILBOX,
+        to,
+        "Your sword".into(),
+        "left it at the inn".into(),
+    )
+}
+
+/// **AC: a letter to an online character on the same shard arrives in their list.**
+#[test]
+fn a_letter_to_a_character_on_the_same_shard_arrives_in_their_list() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+
+    post(world.as_ref(), "Trin").expect("Trin is a Human on the same shard");
+
+    let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+    assert_eq!(trins.len(), 1);
+    assert_eq!(trins[0].subject, "Your sword");
+    assert_eq!(trins[0].sender_guid, GINGER);
+    assert!(!trins[0].was_read, "a freshly posted letter is unread");
+}
+
+/// **AC: a letter to an OFFLINE character is waiting for them.** Nothing about the send gates on
+/// the recipient being logged in — that is the whole difference between mail and a whisper.
+#[test]
+fn a_letter_to_an_offline_character_is_waiting_in_their_mailbox() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+
+    post(world.as_ref(), "Dormant").expect("an offline character is a valid recipient");
+
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(DORMANT), MAILBOX)
+            .expect("the gate opens")
+            .len(),
+        1
+    );
+}
+
+/// **AC: a letter to a character homed on ANOTHER database arrives.** The required cross-shard test:
+/// Ginger is on the open world, Vim is inside the instance pool, and the letter still lands — read
+/// back from Vim's own handle, which routes to the same authority. This case is why realm-core owns
+/// the rows at all.
+#[test]
+fn a_letter_crosses_a_database_boundary_to_a_recipient_homed_on_another_shard() {
+    let (_realm, world, instances, calls) = sharded_send();
+    assert_eq!(
+        world.character_guid_by_name("Vim").unwrap(),
+        None,
+        "fixture: Vim's row lives on the instances shard, as it did live"
+    );
+
+    post(world.as_ref(), "Vim").expect("the realm-wide name union finds Vim");
+
+    let vims = mail::open_mailbox(instances.as_ref(), Some(VIM), MAILBOX).expect("the gate opens");
+    assert_eq!(vims.len(), 1);
+    assert_eq!(vims[0].sender_guid, GINGER);
+
+    let log = calls.lock().unwrap().clone();
+    assert!(
+        log.contains(&("lyracore-realm".to_string(), "mail_send".to_string())),
+        "the row must be written on the authority; calls were {log:?}"
+    );
+    assert!(
+        !log.contains(&("world".to_string(), "mail_send".to_string())),
+        "a row written on the sender's own shard is invisible to a recipient homed elsewhere — the \
+         exact bug the plane decision removes. Calls were {log:?}"
+    );
+}
+
+/// **AC: postage is debited at send** — out of the purse on the SENDER's own shard, because
+/// realm-core holds none.
+#[test]
+fn postage_is_debited_from_the_senders_own_shard_at_send() {
+    let (_realm, world, _instances, calls) = sharded_send();
+
+    post(world.as_ref(), "Trin").expect("the send goes through");
+
+    assert_eq!(
+        world.purses.lock().unwrap()[0].1,
+        PURSE - lyracore_shared::mail::postage()
+    );
+    let log = calls.lock().unwrap().clone();
+    assert!(
+        log.contains(&("world".to_string(), "mail_charge_postage".to_string())),
+        "the purse is on the sender's shard; calls were {log:?}"
+    );
+    assert!(
+        !log.contains(&(
+            "lyracore-realm".to_string(),
+            "mail_charge_postage".to_string()
+        )),
+        "realm-core holds no characters and no purse; calls were {log:?}"
+    );
+}
+
+/// **AC: a sender who cannot afford the postage is refused and charged NOTHING** — and no row is
+/// written, so a failed send costs exactly nothing.
+#[test]
+fn a_sender_who_cannot_afford_the_postage_is_refused_and_charged_nothing() {
+    let (_realm, world, _instances, calls) = sharded_send();
+    *world.purses.lock().unwrap() = vec![(GINGER, 10)];
+
+    let refusal = post(world.as_ref(), "Trin").expect_err("10 copper does not cover the postage");
+    assert!(matches!(refusal, mail::SendRefusal::NotEnoughMoney(_)));
+
+    assert_eq!(world.purses.lock().unwrap()[0].1, 10, "charged nothing");
+    assert!(mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX)
+        .unwrap()
+        .is_empty());
+    let log = calls.lock().unwrap().clone();
+    assert!(
+        !log.iter().any(|(_, call)| call == "mail_send"),
+        "an unaffordable send must not write a row; calls were {log:?}"
+    );
+}
+
+/// **AC: a non-existent recipient, yourself, and an opposing-faction recipient each produce their
+/// OWN refusal.** The variant is the whole diagnosability story for a letter that did not go, so a
+/// shared generic error would be the defect — none of these may collapse into another.
+#[test]
+fn each_refused_gate_produces_its_own_distinct_refusal() {
+    let (_realm, world, _instances, calls) = sharded_send();
+
+    assert!(matches!(
+        post(world.as_ref(), "Nobody").unwrap_err(),
+        mail::SendRefusal::RecipientNotFound(_)
+    ));
+    assert_eq!(
+        post(world.as_ref(), "Ginger").unwrap_err(),
+        mail::SendRefusal::CannotSendToSelf
+    );
+    assert_eq!(
+        post(world.as_ref(), "Grug").unwrap_err(),
+        mail::SendRefusal::NotYourTeam
+    );
+
+    assert_eq!(world.purses.lock().unwrap()[0].1, PURSE, "charged nothing");
+    let log = calls.lock().unwrap().clone();
+    assert!(
+        !log.iter().any(|(_, call)| call == "mail_send"),
+        "every gate must refuse BEFORE the write; calls were {log:?}"
+    );
+}
+
+/// **AC: the faction gate reads the SHARED race→team mapping**, not a second copy. Pinned by
+/// driving a Horde SENDER: a mapping that had drifted to "everyone is Alliance" would let this
+/// through, and would also have to be wrong in `graveyard`'s corpse release to stay consistent.
+#[test]
+fn the_faction_gate_refuses_in_both_directions() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+    *world.purses.lock().unwrap() = vec![(GRUG, PURSE)];
+
+    let refusal = mail::send(
+        world.as_ref(),
+        Some(GRUG),
+        MAILBOX,
+        "Trin",
+        "Hail".into(),
+        "".into(),
+    )
+    .expect_err("a Horde sender cannot write to an Alliance recipient either");
+    assert_eq!(refusal, mail::SendRefusal::NotYourTeam);
+    assert!(lyracore_shared::faction::same_team(2, 2), "fixture sanity");
+}
+
+/// **AC: a name that resolves to SEVERAL characters is refused, never guessed.**
+///
+/// Character names are unique per database, not per realm. Whisper picks the online candidate; mail
+/// cannot, because reaching an offline character is the point of it. Refusing costs the sender a
+/// retry — first-hit-wins would silently post the letter (and, once the attachment slices land, an
+/// item and a purse of gold) to a stranger who can simply take it.
+#[test]
+fn a_homonym_recipient_is_refused_rather_than_guessed() {
+    let (_realm, world, _instances, calls) = sharded_send();
+    assert_eq!(
+        party::resolve_all_by_name(world.as_ref(), "Echo").unwrap(),
+        vec![ECHO_WORLD, ECHO_INSTANCES],
+        "fixture: one name, two characters, on two databases"
+    );
+
+    let refusal = post(world.as_ref(), "Echo").expect_err("nothing can choose between them");
+    assert!(
+        matches!(refusal, mail::SendRefusal::RecipientNotFound(_)),
+        "an ambiguous name is answered as 'no such recipient' — the client's closest text, and the \
+         only honest one: got {refusal:?}"
+    );
+    assert!(!calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(_, call)| call == "mail_send"));
+}
+
+/// **AC: the sender's own list never shows the mail they sent.** A sent letter is the recipient's
+/// row and nobody else's — there is no outbox to take it back out of.
+#[test]
+fn the_senders_own_list_never_shows_the_mail_they_sent() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+
+    post(world.as_ref(), "Trin").expect("the send goes through");
+
+    assert!(
+        mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX)
+            .expect("the gate opens")
+            .is_empty(),
+        "the sender's mailbox must stay empty"
+    );
+    assert!(
+        !mail::has_unread(world.as_ref(), Some(GINGER)).unwrap(),
+        "and their envelope must not light for their own letter"
+    );
+}
+
+/// **AC: sending is refused from character select and away from a mailbox** — before any name is
+/// resolved and before any purse is touched.
+#[test]
+fn sending_is_refused_at_character_select_and_away_from_a_mailbox() {
+    let (_realm, world, _instances, calls) = sharded_send();
+
+    let refusal = mail::send(
+        world.as_ref(),
+        None,
+        MAILBOX,
+        "Trin",
+        "Hi".into(),
+        "".into(),
+    )
+    .expect_err("character select drives no mailbox");
+    assert!(
+        refusal.to_string().contains("not in world"),
+        "got {refusal}"
+    );
+
+    let refusal = mail::send(
+        world.as_ref(),
+        Some(GINGER),
+        FAR_MAILBOX,
+        "Trin",
+        "Hi".into(),
+        "".into(),
+    )
+    .expect_err("a mailbox out of reach refuses");
+    assert!(
+        refusal.to_string().contains("not at mailbox"),
+        "got {refusal}"
+    );
+
+    assert_eq!(world.purses.lock().unwrap()[0].1, PURSE);
+    let log = calls.lock().unwrap().clone();
+    assert!(
+        !log.iter()
+            .any(|(_, call)| call == "mail_send" || call == "mail_charge_postage"),
+        "a gate refusal must never reach the write; calls were {log:?}"
+    );
+}
+
+/// **AC: both planes produce the same row for the same letter, through one shared core.** Same
+/// sender, same recipient, same text; the only difference is whether a realm handle exists.
+#[test]
+fn both_planes_produce_the_same_row_for_the_same_letter() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+    let single = unsharded_send();
+
+    post(world.as_ref(), "Trin").expect("realm plane");
+    post(single.as_ref(), "Trin").expect("fallback plane");
+
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap(),
+        mail::open_mailbox(single.as_ref(), Some(TRIN), MAILBOX).unwrap(),
+        "the two planes must produce one letter"
+    );
+    assert_eq!(
+        single.purses.lock().unwrap()[0].1,
+        PURSE - lyracore_shared::mail::postage(),
+        "and both must charge the same postage"
+    );
+}
+
+/// **AC: the debit and the row insert are ONE transaction wherever they can be.**
+///
+/// On a single database the gateway passes the real postage INTO the write, so the module charges
+/// and inserts in one reducer. On a sharded realm the purse is on another database entirely, so one
+/// transaction is not reachable: the postage is charged on the sender's shard FIRST (an atomic
+/// refusal — nothing is charged when it fails) and the write carries 0.
+#[test]
+fn the_postage_rides_the_write_on_one_database_and_a_prior_debit_when_sharded() {
+    let (realm, world, _instances, _calls) = sharded_send();
+    let single = unsharded_send();
+
+    post(world.as_ref(), "Trin").expect("realm plane");
+    post(single.as_ref(), "Trin").expect("fallback plane");
+
+    assert_eq!(
+        single.sent_mail.lock().unwrap()[0].4,
+        lyracore_shared::mail::postage(),
+        "one database: the debit rides the same call that writes the row"
+    );
+    assert_eq!(
+        realm.sent_mail.lock().unwrap()[0].4,
+        0,
+        "sharded: realm-core has no purse to charge, so the debit already happened on the shard"
+    );
+    assert!(world.sent_mail.lock().unwrap().is_empty());
+}
+
+/// **AC: a sent letter's body is readable by the recipient through the item-text query.** The whole
+/// point of a text-only mail: the list packet carries only an `item_text_id`, and the client comes
+/// back for the text with it.
+#[test]
+fn a_sent_letters_body_is_readable_through_the_item_text_query_path() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+
+    post(world.as_ref(), "Trin").expect("the send goes through");
+
+    let mails = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+    let packet = codec::build_mail_list(&mails, 1_000);
+    let text_id = packet.mails[0].item_text_id;
+    assert_ne!(text_id, 0, "a letter WITH a body must advertise its own id");
+    assert_eq!(
+        mail::letter_body(world.as_ref(), Some(TRIN), u64::from(text_id)).unwrap(),
+        Some("left it at the inn".to_string())
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+//  Dispatch: sending over the real wire.
+// ---------------------------------------------------------------------------------------------
+
+/// The seated warrior (guid 1), standing at a mailbox with a purse, and two people to write to.
+fn seated_sender() -> std::sync::Arc<InMemoryStore> {
+    let store = std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(warrior_entity()),
+        mailboxes: vec![MAILBOX],
+        characters: vec![
+            character(1, "Tester"),
+            character(TRIN, "Trin"),
+            orc(GRUG, "Grug"),
+        ],
+        live_guids: vec![1, TRIN, GRUG],
+        ..tester_store(7)
+    });
+    *store.purses.lock().unwrap() = vec![(1, PURSE)];
+    store
+}
+
+/// Drive a logged-in session and post one letter, returning the `MailResultTwo` the client is told.
+fn send_over_the_wire(
+    store: &std::sync::Arc<InMemoryStore>,
+    receiver: &str,
+) -> wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo {
+    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..10 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    wow_world_messages::vanilla::CMSG_SEND_MAIL {
+        mailbox: Guid::new(MAILBOX),
+        receiver: receiver.into(),
+        subject: "Your sword".into(),
+        body: "left it at the inn".into(),
+        ..Default::default()
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let result2 = match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(m) => match m.action {
+            wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailAction::Send { result2 } => {
+                result2
+            }
+            other => panic!("expected the Send action, got {other:?}"),
+        },
+        other => panic!("expected SMSG_SEND_MAIL_RESULT, got {other}"),
+    };
+
+    // The session survives either way — a refused send costs a red line and nothing more.
+    ClientOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME(_) => {}
+        other => panic!("expected the mail-time poll, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+    result2
+}
+
+/// **AC: `CMSG_SEND_MAIL` posts the letter and acks Ok**, and the row is the recipient's.
+#[test]
+fn a_letter_sent_over_the_wire_is_acked_ok_and_lands_in_the_recipients_mailbox() {
+    let store = seated_sender();
+
+    assert_eq!(
+        send_over_the_wire(&store, "Trin"),
+        wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
+    );
+
+    let trins = mail::open_mailbox(store.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+    assert_eq!(trins.len(), 1);
+    assert_eq!(trins[0].body, "left it at the inn");
+    assert_eq!(store.purses.lock().unwrap()[0].1, PURSE - 30);
+}
+
+/// **AC: each refusal reaches the player as its OWN on-screen error**, over the real wire, and never
+/// as a generic internal one. This is the packet the whole gate split exists to produce.
+#[test]
+fn each_refused_send_reaches_the_client_as_its_own_wire_error() {
+    use wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo as R;
+
+    for (receiver, want) in [
+        ("Nobody", R::ErrRecipientNotFound),
+        ("Tester", R::ErrCannotSendToSelf),
+        ("Grug", R::ErrNotYourTeam),
+    ] {
+        let store = seated_sender();
+        assert_eq!(send_over_the_wire(&store, receiver), want, "for {receiver}");
+        assert_eq!(
+            store.purses.lock().unwrap()[0].1,
+            PURSE,
+            "a refused send charges nothing"
+        );
+    }
+
+    // And the affordability refusal, which the module owns rather than the gateway.
+    let store = seated_sender();
+    *store.purses.lock().unwrap() = vec![(1, 10)];
+    assert_eq!(send_over_the_wire(&store, "Trin"), R::ErrNotEnoughMoney);
 }
 
 /// **AC: a refused mail opcode is never session-fatal.** A mail poll at character select, and a

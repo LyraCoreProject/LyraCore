@@ -1721,6 +1721,37 @@ impl Coordinator {
         )
     }
 
+    /// `realm_mail_send` — write one sent letter against the database THIS handle points at. Same
+    /// trust shape as the two above, and the guid it carries is the one the socket authenticated:
+    /// every gate deciding who may write to whom ran in `world::mail`, because realm-core can answer
+    /// none of them. `postage` is the real cost on a single-database gateway (one transaction with
+    /// the insert) and 0 on a sharded realm, where the purse is on the sender's own shard.
+    pub fn mail_send(
+        &self,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        postage: u32,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_send",
+            realm_mail_send_then(sender_guid, recipient_guid, subject, body, postage)
+        )
+    }
+
+    /// `realm_mail_charge_postage` — take the postage out of the sender's purse. Called on the
+    /// SESSION's own handle, never the realm one: the purse is `game_world_entity.money`, on the
+    /// shard the sender is standing on.
+    pub fn mail_charge_postage(&self, sender_guid: u64, copper: u32) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_charge_postage",
+            realm_mail_charge_postage_then(sender_guid, copper)
+        )
+    }
+
     /// `sync_group_mirror` — replace THIS shard's mirror of one party with realm-core's roster.
     /// Operator-gated, coordinator connection, same reasoning as above; called
     /// on each WORLD shard after a party op and at world entry.

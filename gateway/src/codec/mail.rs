@@ -108,6 +108,20 @@ pub fn build_mail_delete_result(mail_id: u32, ok: bool) -> SMSG_SEND_MAIL_RESULT
     }
 }
 
+/// Answer `CMSG_SEND_MAIL` with `SMSG_SEND_MAIL_RESULT`/Send.
+///
+/// `result2` is chosen by the caller, one variant per gate: the client renders each as its own
+/// on-screen line, and that line is the whole diagnosability story for a letter that did not go.
+/// `mail_id` is 0 — a send names no existing mail, and vanilla sends 0 here too.
+pub fn build_mail_send_result(
+    result2: SMSG_SEND_MAIL_RESULT_MailResultTwo,
+) -> SMSG_SEND_MAIL_RESULT {
+    SMSG_SEND_MAIL_RESULT {
+        mail_id: 0,
+        action: SMSG_SEND_MAIL_RESULT_MailAction::Send { result2 },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +179,25 @@ mod tests {
     fn the_mail_poll_packet_carries_the_shared_unread_signal() {
         assert_eq!(build_next_mail_time(true).unread_mails, 0.0);
         assert!(build_next_mail_time(false).unread_mails < 0.0);
+    }
+
+    /// A send answers through the SEND action, carrying whichever verdict the gates produced.
+    #[test]
+    fn a_send_result_carries_the_gates_own_verdict_on_the_send_action() {
+        for want in [
+            SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok,
+            SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrRecipientNotFound,
+            SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrCannotSendToSelf,
+            SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrNotYourTeam,
+            SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrNotEnoughMoney,
+        ] {
+            let packet = build_mail_send_result(want);
+            assert_eq!(packet.mail_id, 0, "a send names no existing mail");
+            match packet.action {
+                SMSG_SEND_MAIL_RESULT_MailAction::Send { result2 } => assert_eq!(result2, want),
+                other => panic!("expected the Send action, got {other:?}"),
+            }
+        }
     }
 
     /// A successful delete answers `Ok`; a refused one answers `ErrInternalError` — the generic

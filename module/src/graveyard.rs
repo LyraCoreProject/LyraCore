@@ -216,21 +216,11 @@ pub(crate) fn pick_graveyard(
         .unwrap_or_else(|| nearest(px, py))
 }
 
-/// cmangos team-faction id used by `game_graveyard_zone.faction` (0 = both factions serve a zone;
-/// 469 = Alliance-only; 67 = Horde-only). Alliance races: Human(1)/Dwarf(3)/NightElf(4)/Gnome(7)/
-/// Draenei(11 — a TBC-era id some DBC builds still carry a placeholder row for); every other race
-/// byte — including an unrecognized one — defaults to ALLIANCE: the only content this sandbox has
-/// ever imported is Alliance-side (Elwynn/Westfall), so failing toward Alliance keeps the common
-/// path correct. A real Horde launch needs this list extended (and Horde-side content imported)
-/// before it matters.
-const TEAM_ALLIANCE: u32 = 469;
-const TEAM_HORDE: u32 = 67;
-pub(crate) fn team_for_race(race: u8) -> u32 {
-    match race {
-        2 | 5 | 6 | 8 => TEAM_HORDE, // Orc / Undead / Tauren / Troll
-        _ => TEAM_ALLIANCE,
-    }
-}
+/// The team-faction id `game_graveyard_zone.faction` carries, for a character's race. Moved to
+/// `lyracore_shared::faction` when the mail faction gate needed it: that gate runs in the GATEWAY
+/// (realm-core holds no characters), and a second copy of the race table over there would agree
+/// with this one only until somebody added a race to one of them.
+pub(crate) use lyracore_shared::faction::team_for_race;
 
 /// Convert one `game_graveyard` row into the pure [`Graveyard`] shape every candidate source
 /// converges on — the identical 7-line map every caller below used to repeat inline (issue #385).
