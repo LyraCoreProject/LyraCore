@@ -823,9 +823,7 @@ fn rest_state_appeared(view: &WorldView, row: &RestStateEvent) {
     });
 }
 
-/// A breath relay row uses the same structural self-only audience as rest state. A missing owner
-/// session means this gateway cannot lawfully deliver it, so drop the short-lived row rather than
-/// broadcasting it to any player nearby.
+/// Breath relay events are delivered only to their owner.
 fn breath_relay_appeared(view: &WorldView, row: &BreathRelayEvent) {
     let Some(session) = view.entities.session_of_owner(row.character_guid) else {
         return;
@@ -1189,9 +1187,6 @@ mod family_audience_tests {
         );
     }
 
-    /// Breath relay rows are structurally self-only: the WorldIndex's owner lookup has one live
-    /// session for the owner, never the surrounding viewers. This pins the same audience used by
-    /// `breath_relay_appeared` before its queued packet is encoded.
     #[test]
     fn breath_relay_owner_lookup_selects_only_its_own_session() {
         let index = WorldView::new(true).entities;

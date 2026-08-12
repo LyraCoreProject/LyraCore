@@ -6,14 +6,10 @@
 /// must be combined with the water-surface test in [`is_submerged`].
 pub const MOVEMENT_FLAG_SWIMMING: u32 = 0x0020_0000;
 
-/// vMaNGOS's default player collision height, used as the distance from the player's feet to its
-/// head when deciding whether it is underwater. Keep this separately named so model-aware logic
-/// can retune it in one place later.
+/// Default player collision height.
 pub const UNDERWATER_HEAD_HEIGHT: f32 = 2.0;
 
-/// Whether a player is below a liquid surface deeply enough to be submerged. A swimming flag by
-/// itself only establishes that the client is swimming; the head must also be below a terrain cell
-/// that records liquid.
+/// Whether the player's head is below a liquid surface.
 pub fn is_submerged(
     player_z: f32,
     liquid_level: f32,
@@ -39,8 +35,7 @@ pub struct BreathAdvance {
     pub drowning_ticks: u32,
 }
 
-/// Advance a breath bar by elapsed wall time. A scheduler stall catches up a bounded number of
-/// one-second drowning hits, avoiding both one harmless hit and an unbounded damage burst.
+/// Advance a breath bar by elapsed time.
 pub fn advance_breath(
     remaining_air_micros: i64,
     draining: bool,
@@ -73,8 +68,7 @@ pub fn advance_breath(
     }
 }
 
-/// Vanilla drowning's fixed-fraction base hit. The small level-scaled random addition is deferred;
-/// the core gameplay invariant is one fifth of maximum health per tick.
+/// One fifth of maximum health per drowning tick.
 pub fn drowning_damage(max_health: u32) -> u32 {
     max_health.saturating_mul(20).saturating_add(99) / 100
 }

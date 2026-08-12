@@ -754,8 +754,6 @@ fn attack_start_carries_attacker_and_victim() {
     }
 }
 
-/// Breath's start/stop edge packets decode through the actual 5875 dispatcher. In particular the
-/// generated binding calls the signed `scale` field `u32`; `u32::MAX` is the required wire -1.
 #[test]
 fn breath_mirror_timer_edges_roundtrip_on_the_vanilla_wire() {
     let start = build_breath_timer_start(57_000, 60_000);

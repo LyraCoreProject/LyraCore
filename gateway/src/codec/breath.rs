@@ -16,8 +16,7 @@ pub fn build_breath_timer_start(time_remaining_ms: u32, duration_ms: u32) -> Ser
         timer: BREATH_TIMER,
         time_remaining: time_remaining_ms,
         duration: duration_ms,
-        // Vanilla's wire field is signed: -1 means drain. gtker models it as u32, so preserve the
-        // signed wire bits rather than sending +1 (which makes the breath bar refill instead).
+        // The binding uses u32 for this signed wire field; -1 drains the timer.
         scale: (-1i32) as u32,
         is_frozen: false,
         id: 0,
