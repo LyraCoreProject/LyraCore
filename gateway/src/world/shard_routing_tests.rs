@@ -26,6 +26,7 @@ pub(super) fn sharded_stores() -> (std::sync::Arc<InMemoryStore>, ShardCallLog) 
     let mut ported = warrior_entity();
     ported.map_id = 1;
     let home = std::sync::Arc::new(InMemoryStore {
+        entity_in_world: true,
         shard: "instances".into(),
         calls: calls.clone(),
         login_entity: Some(warrior_entity()),
@@ -158,6 +159,7 @@ fn a_single_entry_shard_map_never_routes_and_keeps_every_call_on_the_one_databas
     // whole flow is served by the database the listener handed it, byte-identically to before.
     let (store, calls) = sharded_stores();
     let single = std::sync::Arc::new(InMemoryStore {
+        entity_in_world: true,
         shard: "world".into(),
         calls: calls.clone(),
         username: "TESTER".into(),
@@ -205,6 +207,7 @@ fn a_routing_flip_re_routes_the_next_entrant_and_leaves_the_resident_alone() {
     let calls: ShardCallLog = Default::default();
     let resolutions: std::sync::Arc<std::sync::atomic::AtomicUsize> = Default::default();
     let instances = std::sync::Arc::new(InMemoryStore {
+        entity_in_world: true,
         shard: "instances".into(),
         calls: calls.clone(),
         home_shard_calls: resolutions.clone(),
@@ -212,6 +215,7 @@ fn a_routing_flip_re_routes_the_next_entrant_and_leaves_the_resident_alone() {
         ..Default::default()
     });
     let pool_b = std::sync::Arc::new(InMemoryStore {
+        entity_in_world: true,
         shard: "pool-b".into(),
         calls: calls.clone(),
         home_shard_calls: resolutions.clone(),

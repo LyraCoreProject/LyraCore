@@ -64,12 +64,14 @@ pub mod debug_assert_chase_stops_at_column_reducer;
 pub mod debug_assert_floor_snap_reducer;
 pub mod debug_audit_class_kits_reducer;
 pub mod debug_audit_quest_chains_reducer;
+pub mod debug_auto_bank_item_reducer;
 pub mod debug_backfill_cell_ids_reducer;
 pub mod debug_backfill_go_grid_reducer;
 pub mod debug_begin_cast_reducer;
 pub mod debug_bench_collision_gate_reducer;
 pub mod debug_bench_los_reducer;
 pub mod debug_bind_home_reducer;
+pub mod debug_buy_bank_slot_reducer;
 pub mod debug_buy_item_reducer;
 pub mod debug_buy_trainer_spell_reducer;
 pub mod debug_cast_at_reducer;
@@ -142,6 +144,7 @@ pub mod debug_resurrect_response_reducer;
 pub mod debug_retire_region_creatures_reducer;
 pub mod debug_score_movement_reducer;
 pub mod debug_seed_creature_ai_fixtures_reducer;
+pub mod debug_seed_mail_reducer;
 pub mod debug_seed_scenario_fixtures_reducer;
 pub mod debug_sell_item_reducer;
 pub mod debug_set_health_reducer;
@@ -291,6 +294,7 @@ pub mod game_lock_table;
 pub mod game_lock_type;
 pub mod game_loot_roll_table;
 pub mod game_loot_roll_vote_table;
+pub mod game_mail_table;
 pub mod game_map_region_table;
 pub mod game_melee_attack_table;
 pub mod game_melee_schedule_table;
@@ -493,6 +497,7 @@ pub mod level_stats_type;
 pub mod levelup_event_type;
 pub mod loot_roll_type;
 pub mod loot_roll_vote_type;
+pub mod mail_type;
 pub mod map_region_type;
 pub mod melee_attack_type;
 pub mod melee_schedule_type;
@@ -647,12 +652,14 @@ pub use debug_assert_chase_stops_at_column_reducer::debug_assert_chase_stops_at_
 pub use debug_assert_floor_snap_reducer::debug_assert_floor_snap;
 pub use debug_audit_class_kits_reducer::debug_audit_class_kits;
 pub use debug_audit_quest_chains_reducer::debug_audit_quest_chains;
+pub use debug_auto_bank_item_reducer::debug_auto_bank_item;
 pub use debug_backfill_cell_ids_reducer::debug_backfill_cell_ids;
 pub use debug_backfill_go_grid_reducer::debug_backfill_go_grid;
 pub use debug_begin_cast_reducer::debug_begin_cast;
 pub use debug_bench_collision_gate_reducer::debug_bench_collision_gate;
 pub use debug_bench_los_reducer::debug_bench_los;
 pub use debug_bind_home_reducer::debug_bind_home;
+pub use debug_buy_bank_slot_reducer::debug_buy_bank_slot;
 pub use debug_buy_item_reducer::debug_buy_item;
 pub use debug_buy_trainer_spell_reducer::debug_buy_trainer_spell;
 pub use debug_cast_at_reducer::debug_cast_at;
@@ -725,6 +732,7 @@ pub use debug_resurrect_response_reducer::debug_resurrect_response;
 pub use debug_retire_region_creatures_reducer::debug_retire_region_creatures;
 pub use debug_score_movement_reducer::debug_score_movement;
 pub use debug_seed_creature_ai_fixtures_reducer::debug_seed_creature_ai_fixtures;
+pub use debug_seed_mail_reducer::debug_seed_mail;
 pub use debug_seed_scenario_fixtures_reducer::debug_seed_scenario_fixtures;
 pub use debug_sell_item_reducer::debug_sell_item;
 pub use debug_set_health_reducer::debug_set_health;
@@ -874,6 +882,7 @@ pub use game_lock_table::*;
 pub use game_lock_type::GameLock;
 pub use game_loot_roll_table::*;
 pub use game_loot_roll_vote_table::*;
+pub use game_mail_table::*;
 pub use game_map_region_table::*;
 pub use game_melee_attack_table::*;
 pub use game_melee_schedule_table::*;
@@ -1076,6 +1085,7 @@ pub use level_stats_type::LevelStats;
 pub use levelup_event_type::LevelupEvent;
 pub use loot_roll_type::LootRoll;
 pub use loot_roll_vote_type::LootRollVote;
+pub use mail_type::Mail;
 pub use map_region_type::MapRegion;
 pub use melee_attack_type::MeleeAttack;
 pub use melee_schedule_type::MeleeSchedule;
@@ -1246,6 +1256,10 @@ pub enum Reducer {
     },
     DebugAuditClassKits,
     DebugAuditQuestChains,
+    DebugAutoBankItem {
+        character_guid: u64,
+        slot: u8,
+    },
     DebugBackfillCellIds,
     DebugBackfillGoGrid,
     DebugBeginCast {
@@ -1274,6 +1288,10 @@ pub enum Reducer {
     },
     DebugBindHome {
         character_guid: u64,
+    },
+    DebugBuyBankSlot {
+        character_guid: u64,
+        banker_guid: u64,
     },
     DebugBuyItem {
         character_guid: u64,
@@ -1586,6 +1604,13 @@ pub enum Reducer {
         move_time_ms: u32,
     },
     DebugSeedCreatureAiFixtures,
+    DebugSeedMail {
+        recipient_guid: u64,
+        sender_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+    },
     DebugSeedScenarioFixtures,
     DebugSellItem {
         character_guid: u64,
@@ -2297,12 +2322,14 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugAssertFloorSnap { .. } => "debug_assert_floor_snap",
             Reducer::DebugAuditClassKits => "debug_audit_class_kits",
             Reducer::DebugAuditQuestChains => "debug_audit_quest_chains",
+            Reducer::DebugAutoBankItem { .. } => "debug_auto_bank_item",
             Reducer::DebugBackfillCellIds => "debug_backfill_cell_ids",
             Reducer::DebugBackfillGoGrid => "debug_backfill_go_grid",
             Reducer::DebugBeginCast { .. } => "debug_begin_cast",
             Reducer::DebugBenchCollisionGate { .. } => "debug_bench_collision_gate",
             Reducer::DebugBenchLos { .. } => "debug_bench_los",
             Reducer::DebugBindHome { .. } => "debug_bind_home",
+            Reducer::DebugBuyBankSlot { .. } => "debug_buy_bank_slot",
             Reducer::DebugBuyItem { .. } => "debug_buy_item",
             Reducer::DebugBuyTrainerSpell { .. } => "debug_buy_trainer_spell",
             Reducer::DebugCastAt { .. } => "debug_cast_at",
@@ -2376,6 +2403,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugRetireRegionCreatures { .. } => "debug_retire_region_creatures",
             Reducer::DebugScoreMovement { .. } => "debug_score_movement",
             Reducer::DebugSeedCreatureAiFixtures => "debug_seed_creature_ai_fixtures",
+            Reducer::DebugSeedMail { .. } => "debug_seed_mail",
             Reducer::DebugSeedScenarioFixtures => "debug_seed_scenario_fixtures",
             Reducer::DebugSellItem { .. } => "debug_sell_item",
             Reducer::DebugSetHealth { .. } => "debug_set_health",
@@ -2672,6 +2700,13 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugAuditQuestChains => __sats::bsatn::to_vec(
                 &debug_audit_quest_chains_reducer::DebugAuditQuestChainsArgs {},
             ),
+            Reducer::DebugAutoBankItem {
+                character_guid,
+                slot,
+            } => __sats::bsatn::to_vec(&debug_auto_bank_item_reducer::DebugAutoBankItemArgs {
+                character_guid: character_guid.clone(),
+                slot: slot.clone(),
+            }),
             Reducer::DebugBackfillCellIds => {
                 __sats::bsatn::to_vec(&debug_backfill_cell_ids_reducer::DebugBackfillCellIdsArgs {})
             }
@@ -2730,6 +2765,13 @@ impl __sdk::Reducer for Reducer {
                     character_guid: character_guid.clone(),
                 })
             }
+            Reducer::DebugBuyBankSlot {
+                character_guid,
+                banker_guid,
+            } => __sats::bsatn::to_vec(&debug_buy_bank_slot_reducer::DebugBuyBankSlotArgs {
+                character_guid: character_guid.clone(),
+                banker_guid: banker_guid.clone(),
+            }),
             Reducer::DebugBuyItem {
                 character_guid,
                 vendor_guid,
@@ -3300,6 +3342,19 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugSeedCreatureAiFixtures => __sats::bsatn::to_vec(
                 &debug_seed_creature_ai_fixtures_reducer::DebugSeedCreatureAiFixturesArgs {},
             ),
+            Reducer::DebugSeedMail {
+                recipient_guid,
+                sender_guid,
+                subject,
+                body,
+                money,
+            } => __sats::bsatn::to_vec(&debug_seed_mail_reducer::DebugSeedMailArgs {
+                recipient_guid: recipient_guid.clone(),
+                sender_guid: sender_guid.clone(),
+                subject: subject.clone(),
+                body: body.clone(),
+                money: money.clone(),
+            }),
             Reducer::DebugSeedScenarioFixtures => __sats::bsatn::to_vec(
                 &debug_seed_scenario_fixtures_reducer::DebugSeedScenarioFixturesArgs {},
             ),
@@ -4612,6 +4667,7 @@ pub struct DbUpdate {
     game_lock: __sdk::TableUpdate<GameLock>,
     game_loot_roll: __sdk::TableUpdate<LootRoll>,
     game_loot_roll_vote: __sdk::TableUpdate<LootRollVote>,
+    game_mail: __sdk::TableUpdate<Mail>,
     game_map_region: __sdk::TableUpdate<MapRegion>,
     game_melee_attack: __sdk::TableUpdate<MeleeAttack>,
     game_melee_schedule: __sdk::TableUpdate<MeleeSchedule>,
@@ -4971,6 +5027,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_loot_roll_vote" => db_update
                     .game_loot_roll_vote
                     .append(game_loot_roll_vote_table::parse_table_update(table_update)?),
+                "game_mail" => db_update
+                    .game_mail
+                    .append(game_mail_table::parse_table_update(table_update)?),
                 "game_map_region" => db_update
                     .game_map_region
                     .append(game_map_region_table::parse_table_update(table_update)?),
@@ -5612,6 +5671,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_loot_roll_vote = cache
             .apply_diff_to_table::<LootRollVote>("game_loot_roll_vote", &self.game_loot_roll_vote)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_mail = cache
+            .apply_diff_to_table::<Mail>("game_mail", &self.game_mail)
+            .with_updates_by_pk(|row| &row.id);
         diff.game_map_region = cache
             .apply_diff_to_table::<MapRegion>("game_map_region", &self.game_map_region)
             .with_updates_by_pk(|row| &row.key);
@@ -6162,6 +6224,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_loot_roll_vote" => db_update
                     .game_loot_roll_vote
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_mail" => db_update
+                    .game_mail
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_map_region" => db_update
                     .game_map_region
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -6664,6 +6729,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_loot_roll_vote" => db_update
                     .game_loot_roll_vote
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_mail" => db_update
+                    .game_mail
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_map_region" => db_update
                     .game_map_region
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -6982,6 +7050,7 @@ pub struct AppliedDiff<'r> {
     game_lock: __sdk::TableAppliedDiff<'r, GameLock>,
     game_loot_roll: __sdk::TableAppliedDiff<'r, LootRoll>,
     game_loot_roll_vote: __sdk::TableAppliedDiff<'r, LootRollVote>,
+    game_mail: __sdk::TableAppliedDiff<'r, Mail>,
     game_map_region: __sdk::TableAppliedDiff<'r, MapRegion>,
     game_melee_attack: __sdk::TableAppliedDiff<'r, MeleeAttack>,
     game_melee_schedule: __sdk::TableAppliedDiff<'r, MeleeSchedule>,
@@ -7502,6 +7571,7 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_loot_roll_vote,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<Mail>("game_mail", &self.game_mail, event);
         callbacks.invoke_table_row_callbacks::<MapRegion>(
             "game_map_region",
             &self.game_map_region,
@@ -8589,6 +8659,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_lock_table::register_table(client_cache);
         game_loot_roll_table::register_table(client_cache);
         game_loot_roll_vote_table::register_table(client_cache);
+        game_mail_table::register_table(client_cache);
         game_map_region_table::register_table(client_cache);
         game_melee_attack_table::register_table(client_cache);
         game_melee_schedule_table::register_table(client_cache);
@@ -8754,6 +8825,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_lock",
         "game_loot_roll",
         "game_loot_roll_vote",
+        "game_mail",
         "game_map_region",
         "game_melee_attack",
         "game_melee_schedule",

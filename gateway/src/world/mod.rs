@@ -35,6 +35,7 @@ mod coalesce;
 mod handlers;
 pub mod login_queue;
 pub mod loot;
+pub mod mail;
 pub mod packet_lint;
 pub mod party;
 mod social;
@@ -43,8 +44,8 @@ pub mod transfer;
 pub mod whisper;
 use coalesce::CoalesceState;
 use handlers::{
-    handle_bank, handle_char, handle_combat, handle_item, handle_loot, handle_query, handle_quest,
-    handle_trade, handle_trainer, handle_vendor,
+    handle_bank, handle_char, handle_combat, handle_item, handle_loot, handle_mail, handle_query,
+    handle_quest, handle_trade, handle_trainer, handle_vendor,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
@@ -267,7 +268,6 @@ pub static MOVE_COMPLETED: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 #[derive(Default, Debug)]
 pub struct MovementFeedback {
     in_flight: std::sync::atomic::AtomicUsize,
-    last_err: std::sync::Mutex<Option<String>>,
 }
 
 /// Outstanding non-blocking movement submissions allowed per session before the next one is
@@ -277,13 +277,6 @@ pub struct MovementFeedback {
 pub const MAX_IN_FLIGHT_MOVES: usize = 4;
 
 impl MovementFeedback {
-    pub fn record_err(&self, e: String) {
-        *self.last_err.lock().unwrap() = Some(e);
-    }
-    /// Take the pending error, if any — the session applies it on its next packet.
-    pub fn take_err(&self) -> Option<String> {
-        self.last_err.lock().unwrap().take()
-    }
     pub fn in_flight(&self) -> usize {
         self.in_flight.load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -369,8 +362,8 @@ pub struct WorldConn {
     /// condition-filtered list, so re-deriving that list at click time renumbers it under a quest
     /// accepted while the window was open.
     pub(crate) gossip_menu: Option<GossipMenuSnapshot>,
-    /// Non-blocking movement submit state: outstanding submissions and
-    /// the module's deferred verdict. `Arc` because the SDK completion callback outlives this call.
+    /// Non-blocking movement submission/backpressure state. Shared batches have no per-entry
+    /// reducer verdict, so entity presence drives the desync policy before submission.
     move_feedback: std::sync::Arc<MovementFeedback>,
     /// Movement packets dropped because `MAX_IN_FLIGHT_MOVES` was already outstanding. Logged at
     /// teardown next to the coalescing ratio — if this is large the server is behind, and it is the
@@ -395,8 +388,8 @@ pub struct WorldConn {
     /// is already keyed by, read from `game_session` moments earlier in `world_handshake`. `None`
     /// for sessions built by tests that never handshake.
     session_key: Option<[u8; 40]>,
-    /// Consecutive movement packets dropped because the module answered a DESYNC ("mover
-    /// not in world"). Reset by the first movement the module accepts. See
+    /// Consecutive movement packets dropped because the coordinator cache has no live entity.
+    /// Reset by the first movement whose entity is present. See
     /// [`MOVE_DESYNC_TOLERANCE`] for why the tolerance is bounded rather than unconditional.
     move_desync_drops: u32,
 }
@@ -1194,6 +1187,9 @@ fn dispatch<St: WorldStore + ?Sized>(
     let Some(msg) = handle_query(tx, store, conn, msg)? else {
         return Ok(());
     };
+    let Some(msg) = handle_mail(tx, store, conn, msg)? else {
+        return Ok(());
+    };
     // Phase 5/6 (§6): MSG_MOVE_* -> movement_update (persist + relay). The relayed peer events
     // come back on this player's game_movement_event subscription and are re-emitted (same
     // opcode + verbatim MovementInfo) to other players by their own subscription callbacks.
@@ -1293,24 +1289,12 @@ fn forward_movement<St: WorldStore + ?Sized>(
     // queue it. That is not a loss of fidelity — a movement packet is a POSITION SNAPSHOT, the next
     // one supersedes it, and the coalescer already discards intermediate heartbeats for exactly this
     // reason. Without a bound, fire-and-forget converts a throughput ceiling into unbounded memory.
-    let feedback = conn.move_feedback.clone();
-    if feedback.in_flight() >= MAX_IN_FLIGHT_MOVES {
-        conn.move_submit_dropped += 1;
-        return Ok(());
-    }
-    // The module's verdict arrives on a LATER callback, so apply whatever the previous submissions
-    // reported before sending this one — the desync-tolerance behaviour below is unchanged, only
-    // its input is now deferred by a packet or two.
-    if let Err(e) = feedback
-        .take_err()
-        .map_or(Ok(()), |e| Err(anyhow!(e)))
-        .and_then(|_| store.movement_update_nowait(conn.account_id, self_guid, opcode, info, &feedback))
-    {
-        if !is_desync_error(&e) {
-            return Err(e);
-        }
+    // A shared movement batch logs and skips individual reducer rejections, so it cannot supply a
+    // per-entry callback. The coordinator cache is the authoritative desync signal before queueing.
+    if !store.entity_in_world(self_guid) {
         conn.move_desync_drops += 1;
         if conn.move_desync_drops > MOVE_DESYNC_TOLERANCE {
+            let e = anyhow!("player not in world (guid {self_guid})");
             log::warn!(
                 "world: account {} has desynced on {} consecutive movement packets — this is not a \
                  teleport tail, ending the session so the client relogs from durable state: {e:#}",
@@ -1320,13 +1304,19 @@ fn forward_movement<St: WorldStore + ?Sized>(
             return Err(e);
         }
         log::debug!(
-            "world: dropping a movement packet for a despawned entity (account {}, drop {}): {e:#}",
+            "world: dropping a movement packet for a despawned entity (account {}, drop {})",
             conn.account_id,
             conn.move_desync_drops
         );
         return Ok(());
     }
     conn.move_desync_drops = 0;
+    let feedback = conn.move_feedback.clone();
+    if feedback.in_flight() >= MAX_IN_FLIGHT_MOVES {
+        conn.move_submit_dropped += 1;
+        return Ok(());
+    }
+    store.movement_update_nowait(conn.account_id, self_guid, opcode, info, &feedback)?;
     // AOI: recenter this player's grid-scoped entity subscription if they crossed a cell. No-op
     // when AOI is disabled (no tracker) or the player stayed in-cell. Same-map (the tracker holds
     // the login map; teleport/zone changes re-anchor in a later phase).

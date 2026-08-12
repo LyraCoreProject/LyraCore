@@ -381,7 +381,6 @@ impl WorldStore for Coordinator {
     ) -> Result<()> {
         let body = codec::movement_info_to_bytes(info)?;
         feedback.submitted();
-        let fb = feedback.clone();
         let r = self.movement_update_nowait(
             account_id,
             self_guid,
@@ -392,18 +391,10 @@ impl WorldStore for Coordinator {
             info.position.z,
             info.orientation,
             info.timestamp,
-            move |outcome| {
-                fb.completed();
-                if let Err(e) = outcome {
-                    fb.record_err(e);
-                }
-            },
         );
-        // A SEND failure is immediate and never reaches the callback, so undo the in-flight count
-        // here or the session leaks a permit per failed send and eventually coalesces forever.
-        if r.is_err() {
-            feedback.completed();
-        }
+        // Queueing is the only completion observable on a shared batch; individual reducer
+        // outcomes are intentionally unavailable to preserve one transaction per batch.
+        feedback.completed();
         r
     }
 
@@ -486,6 +477,14 @@ impl WorldStore for Coordinator {
 
     fn npc_refuses_interaction(&self, npc_guid: u64, player_guid: u64) -> Result<bool> {
         self.npc_refuses_interaction(npc_guid, player_guid)
+    }
+
+    fn mail_list(&self, recipient_guid: u64) -> Result<Vec<codec::MailView>> {
+        self.mail_list(recipient_guid)
+    }
+
+    fn mailbox_in_range(&self, mailbox_guid: u64, player_guid: u64) -> Result<bool> {
+        self.mailbox_in_range(mailbox_guid, player_guid)
     }
 
     fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool> {

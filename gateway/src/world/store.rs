@@ -293,8 +293,9 @@ pub trait WorldStore: Send + Sync {
 
     /// Movement, submitted WITHOUT waiting for the module's completion.
     ///
-    /// The outcome lands in `feedback` instead, and the session applies it on its next packet. The
-    /// default implementation forwards to the blocking `movement_update`, so mock stores and any
+    /// `feedback` models submission/backpressure only. Shared movement batches cannot return a
+    /// per-entry reducer verdict; the session checks the coordinator entity cache before calling.
+    /// The default implementation forwards to the blocking `movement_update`, so mock stores and any
     /// future `WorldStore` keep working unchanged — only the live `Coordinator` overrides it.
     fn movement_update_nowait(
         &self,
@@ -304,11 +305,8 @@ pub trait WorldStore: Send + Sync {
         info: &MovementInfo,
         _feedback: &std::sync::Arc<MovementFeedback>,
     ) -> Result<()> {
-        // Returns the error INLINE and deliberately does not also record it in `feedback` — doing
-        // both would count one failure twice (once here, once when the caller drains the slot on the
-        // next packet), which is exactly what
-        // `a_movement_packet_for_a_despawned_entity_never_kills_the_session` caught. A store that
-        // answers synchronously has no deferred verdict to report.
+        // Synchronous stores return their transport/reducer failure inline. Shared batches do not
+        // have an equivalent per-entry result channel.
         self.movement_update(account_id, self_guid, opcode, info)
     }
 
@@ -795,6 +793,25 @@ pub trait WorldStore: Send + Sync {
     /// verbatim (module-side parsing keeps the command set data-free). `Err`'s message is relayed back
     /// to the SENDER ONLY as a system chat line (never broadcast, never a `game_chat_event` row).
     fn gm_command(&self, account_id: u64, self_guid: u64, text: String) -> Result<()>;
+
+    /// Every mail addressed to `recipient_guid`, on the database THIS handle names.
+    ///
+    /// Called on the realm-core handle when there is one and on the session's own handle when there
+    /// is not — the two-plane read, which is why this is one method rather than a realm-only twin.
+    /// Empty by default so a mock that models no mailbox answers "no mail" instead of failing a
+    /// session; the real refusals are the gates in `world::mail`, which run before this.
+    fn mail_list(&self, _recipient_guid: u64) -> Result<Vec<codec::MailView>> {
+        Ok(Vec::new())
+    }
+
+    /// Is `player_guid` in range of the gameobject `mailbox_guid` names, and is it a mailbox at all?
+    ///
+    /// Always asked of the session's OWN handle: the mailbox is a gameobject on the shard the player
+    /// is standing on, and realm-core holds none. A PK lookup plus a map/instance/range check —
+    /// never a scan of the spatial gameobject table.
+    fn mailbox_in_range(&self, _mailbox_guid: u64, _player_guid: u64) -> Result<bool> {
+        Ok(false)
+    }
 
     /// Read a corpse's lootable copper for `SMSG_LOOT_RESPONSE` (slice 3). 0 if the target is gone
     /// or not a corpse. Read-only — the actual take is `loot_money`.
