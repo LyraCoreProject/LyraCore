@@ -410,18 +410,8 @@ pub(crate) fn aura_apply(
         now.checked_add(TimeDuration::from_micros((duration_ms as i64) * 1000))
             .unwrap_or(now)
     };
-    // Persist the DR level bump AFTER `expires` is known — `bump_dr_level` stamps a provisional DR window
-    // off this (already-scaled) aura's own expiry (see its doc comment); the authoritative window is
-    // stamped later, at REMOVAL (`scheduler::tick_auras`'s expiry pass / `effects::dispel_target`).
-    if let Some(category) = dr_category {
-        crate::spell::stacking::bump_dr_level(
-            ctx,
-            target_guid,
-            category,
-            now_micros,
-            expires.to_micros_since_unix_epoch(),
-        );
-    }
+    // Do not advance DR yet. A later group or slot refusal means no aura was applied, and an
+    // unsuccessful application must leave the target's diminishing-return state untouched.
     let next_tick_micros = if e.period_ms > 0 {
         now.to_micros_since_unix_epoch() + (e.period_ms as i64) * 1000
     } else {
@@ -526,16 +516,13 @@ pub(crate) fn aura_apply(
         // spell-same-caster refresh keeps the existing precedence rule, runs BEFORE group logic". No-op
         // (returns `true` immediately) for the overwhelming majority of spells (not in any
         // `game_spell_group`).
-        let strength = crate::spell::stacking::compute_strength(
-            crate::spell::stacking::rank_of(ctx, hdr.spell_id),
-            points.saturating_abs(),
-        );
         if !crate::spell::stacking::apply_group_conflict(
             ctx,
             hdr.spell_id,
             caster_guid,
             target_guid,
-            strength,
+            crate::spell::stacking::rank_of(ctx, hdr.spell_id),
+            points.saturating_abs(),
         ) {
             return; // refused — no aura placed, nothing evicted
         }
@@ -595,6 +582,18 @@ pub(crate) fn aura_apply(
             channel_target,
             enters_combat: e.enters_combat, // freeze so the periodic-energize tick re-enters combat (Bloodrage)
         });
+    }
+
+    // Both branches above have now successfully refreshed or inserted an aura. Only at this
+    // point may the target's DR progression advance; group/slot refusals returned earlier.
+    if let Some(category) = dr_category {
+        crate::spell::stacking::bump_dr_level(
+            ctx,
+            target_guid,
+            category,
+            now_micros,
+            expires.to_micros_since_unix_epoch(),
+        );
     }
 
     // Re-derive max-health (STA) / max-mana (INT) AFTER the aura row is placed, but ONLY when THIS aura
