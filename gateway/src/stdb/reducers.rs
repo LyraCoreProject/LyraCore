@@ -1549,34 +1549,132 @@ impl Coordinator {
         )
     }
 
-    /// `realm_mail_send` — write one sent letter against the database THIS handle points at. Same
-    /// trust shape as the two above, and the guid it carries is the one the socket authenticated:
-    /// every gate deciding who may write to whom ran in `world::mail`, because realm-core can answer
-    /// none of them. `postage` is the real cost on a single-database gateway (one transaction with
-    /// the insert) and 0 on a sharded realm, where the purse is on the sender's own shard.
+    /// `realm_mail_send` — write one sent letter against the database THIS handle points at, and
+    /// charge the sender for it in the same transaction. Same trust shape as the two above, and the
+    /// guid it carries is the one the socket authenticated: every gate deciding who may write to
+    /// whom ran in `world::mail`, because realm-core can answer none of them.
+    ///
+    /// **The single-database plane only.** A sharded realm cannot have that one transaction and
+    /// drives the escrow below instead.
     pub fn mail_send(
         &self,
         sender_guid: u64,
         recipient_guid: u64,
         subject: String,
         body: String,
-        postage: u32,
+        money: u32,
     ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_send",
-            realm_mail_send_then(sender_guid, recipient_guid, subject, body, postage)
+            realm_mail_send_then(sender_guid, recipient_guid, subject, body, money)
         )
     }
 
-    /// `realm_mail_charge_postage` — take the postage out of the sender's purse. Called on the
-    /// SESSION's own handle, never the realm one: the purse is `game_world_entity.money`, on the
-    /// shard the sender is standing on.
-    pub fn mail_charge_postage(&self, sender_guid: u64, copper: u32) -> Result<()> {
+    /// `realm_mail_take_money` — credit a mail's copper to the recipient and empty the row, in one
+    /// transaction. The single-database plane's whole take, for the same reason.
+    pub fn mail_take_money(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
-            "realm_mail_charge_postage",
-            realm_mail_charge_postage_then(sender_guid, copper)
+            "realm_mail_take_money",
+            realm_mail_take_money_then(recipient_guid, mail_id)
+        )
+    }
+
+    /// `realm_mail_fence` — step 1 of a sharded SEND, on the SENDER's own handle: the postage plus
+    /// the attached coin leave the purse into an escrow row keyed by the caller-chosen `escrow_id`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mail_fence(
+        &self,
+        escrow_id: u64,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        postage: u32,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_fence",
+            realm_mail_fence_then(
+                escrow_id,
+                sender_guid,
+                recipient_guid,
+                subject,
+                body,
+                money,
+                postage
+            )
+        )
+    }
+
+    /// `realm_mail_commit` — step 2 of a sharded send, on the REALM handle: the mail row plus a
+    /// receipt under the same `escrow_id`, so a replay writes one letter and not two.
+    pub fn mail_commit(
+        &self,
+        escrow_id: u64,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_commit",
+            realm_mail_commit_then(escrow_id, sender_guid, recipient_guid, subject, body, money)
+        )
+    }
+
+    /// `realm_mail_take_money_fence` — step 1 of a sharded TAKE, on the handle that OWNS THE MAIL
+    /// ROW: the copper leaves the row into an escrow there. The mirror of `mail_fence`.
+    pub fn mail_take_money_fence(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        expect_money: u32,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_take_money_fence",
+            realm_mail_take_money_fence_then(escrow_id, payee_guid, mail_id, expect_money)
+        )
+    }
+
+    /// `realm_mail_payout` — step 2 of a sharded take, on the TAKER's own handle: the purse plus a
+    /// receipt under the same `escrow_id`. `mail_commit`'s twin.
+    pub fn mail_payout(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        amount: u32,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_payout",
+            realm_mail_payout_then(escrow_id, payee_guid, mail_id, amount)
+        )
+    }
+
+    /// `realm_mail_confirm_delivery` — step 3, on the handle that HOLDS THE FENCE. The attestation
+    /// that the other database committed, and the only thing that licenses the settle.
+    pub fn mail_confirm_delivery(&self, escrow_id: u64) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_confirm_delivery",
+            realm_mail_confirm_delivery_then(escrow_id)
+        )
+    }
+
+    /// `realm_mail_settle` — step 4, on the handle that holds the fence: destroy it. Delete-last.
+    pub fn mail_settle(&self, escrow_id: u64) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_settle",
+            realm_mail_settle_then(escrow_id)
         )
     }
 

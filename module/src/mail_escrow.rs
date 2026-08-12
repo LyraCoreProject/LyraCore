@@ -22,6 +22,20 @@
 //!   realm_mail_settle             (destroy the fence — delete-LAST)
 //! ```
 //!
+//! Taking the coin back out runs the SAME four steps with the databases swapped — the fence is on
+//! the mail plane (the copper is in a row, not a purse) and the destination is the taker's own
+//! shard:
+//!
+//! ```text
+//!   MAIL plane (realm-core)                          TAKER's shard (the purse)
+//!   realm_mail_take_money_fence  ── the coin ──►
+//!     money leaves the mail row INTO the escrow row
+//!                                                  realm_mail_payout
+//!                                                    the purse + a payout receipt
+//!                        ◄── "it credited" ────
+//!   realm_mail_confirm_delivery / realm_mail_settle   (the same two reducers, unchanged)
+//! ```
+//!
 //! This is [`crate::transfer`]'s escrow with the nouns changed, deliberately so: that subsystem
 //! solved this exact problem for characters and its comments record which orderings were rejected.
 //! Three rules carry over unchanged.
@@ -54,15 +68,14 @@
 //! `mail::apply_send` does the whole send in ONE transaction and files no escrow row. That is not a
 //! shortcut to be tidied away later: an escrow is strictly worse there (four transactions where one
 //! is atomic, plus a fence that can be interrupted where nothing could be). Pinned by
-//! `mail::tests::the_single_database_send_path_never_reaches_the_escrow`.
+//! `mail::tests::the_single_database_money_paths_never_reach_the_escrow`.
 //!
 //! # Scope
 //!
-//! The mechanism only. Copper is what crosses today — the postage debit #145 shipped still runs on
-//! its own path, see [`crate::mail::apply_send`] — and the attached-coin (#146) and item (#147)
-//! slices are what put real value through here. The item snapshot columns are deliberately NOT
-//! pre-declared: they are numeric and bool, so #147 END-appends them with typed defaults, which is
-//! a clean additive migration. [server]
+//! Copper crosses here today — the whole cost of a sharded send (the attached coin AND the postage,
+//! in one debit) and the whole of a take. The item snapshot columns are deliberately NOT
+//! pre-declared: they are numeric and bool, so the item slice END-appends them with typed defaults,
+//! which is a clean additive migration. [server]
 
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration};
 
@@ -94,9 +107,10 @@ const MAIL_ESCROW_REAP_INTERVAL_MICROS: u64 = 5_000_000; // 5s
 /// so a stalled escrow can be re-driven forward from itself, which is the only recovery direction
 /// this design allows.
 ///
-/// NOT public and NOT gateway-subscribed, the `game_transfer_out` precedent: no client and no relay
-/// reads escrow rows. The gateway drives the protocol by CALLING the reducers below; it never needs
-/// to read the ledger to do that. [server]
+/// NOT public — no client ever sees an escrow row. The gateway DOES read it, through the owner
+/// token exactly as it reads `game_transfer_out`, and for the identical reason: it is the only
+/// component that can see both databases, so RE-DRIVING a stalled fence means re-deriving the whole
+/// letter from this row. Driving a fresh fence needs no read at all. [server]
 #[table(
     accessor = game_mail_escrow,
     index(accessor = by_sender, btree(columns = [sender_guid]))
@@ -127,6 +141,19 @@ pub struct MailEscrow {
     /// it in one row with one lifetime, and there is no blob here that a second row would need to
     /// hold — the escrow row already IS the letter.
     pub delivered: bool,
+    /// Which WAY this escrow is carrying value, and the one thing a re-drive cannot infer from the
+    /// row: `false` is a letter's coin leaving a purse for a mail row, `true` is a mail row's coin
+    /// on its way back into a purse. The rejected alternative was reading it off the DATABASE the
+    /// fence sits on (letters fence on a shard, payouts on realm-core) — true today and silently
+    /// wrong the day realm-core holds a purse. END-appended with a typed default, so an existing
+    /// fence auto-migrates as the only direction that existed when it was filed.
+    #[default(false)]
+    pub payout: bool,
+    /// The `game_mail` row a payout came out of. 0 for a letter, which has no mail row yet.
+    /// Suffixed `u64` deliberately: an untyped `0` is encoded as a u32 and the schema extraction
+    /// refuses the column ("data too short for u64").
+    #[default(0u64)]
+    pub mail_id: u64,
 }
 
 /// MAIL-plane receipt: "the mail row for this escrow id exists, and here it is". Keyed by the
@@ -296,6 +323,34 @@ pub(crate) fn plan_commit(receipted_for: Option<u64>, recipient_guid: u64) -> Co
     }
 }
 
+/// What the escrow id ALONE says about a take fence — the other half of the verdict is
+/// [`crate::mail::plan_take_money`], which is the same rule the single-database take reads.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TakeFenceId {
+    /// This id already fenced THIS mail for THIS payee. A retry: the copper is already out of the
+    /// row, so re-clearing it would take a second helping from a mail that no longer has one.
+    Replay,
+    /// The id is fenced for another payee, or for another mail. Refuse — the same reasoning as
+    /// [`FencePlan::IdCollision`]: answering `Replay` tells the driver its fence landed and it then
+    /// pays out coin nothing took out of a row.
+    Collision,
+    /// Nothing under this id. Ask the mail row.
+    Fresh,
+}
+
+/// `fenced` is the `(payee, mail_id)` of the escrow filed under this id, or `None`.
+pub(crate) fn plan_take_fence_id(
+    fenced: Option<(u64, u64)>,
+    payee_guid: u64,
+    mail_id: u64,
+) -> TakeFenceId {
+    match fenced {
+        None => TakeFenceId::Fresh,
+        Some((payee, mail)) if payee == payee_guid && mail == mail_id => TakeFenceId::Replay,
+        Some(_) => TakeFenceId::Collision,
+    }
+}
+
 /// What [`apply_settle`] must do.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SettlePlan {
@@ -388,6 +443,10 @@ pub(crate) trait EscrowLedger {
     /// Set `delivered` on the escrow row. A no-op when there is no row.
     fn attest_delivery(&mut self, escrow_id: u64);
     fn delete_escrow(&mut self, escrow_id: u64);
+    /// Arm the reaper schedule if it is not armed yet. On the ledger rather than on one step's
+    /// sink, because a database that can file a fence must be able to recover one — and both
+    /// directions file fences, on different databases.
+    fn arm_reaper(&mut self);
     fn now_micros(&self) -> i64;
 }
 
@@ -399,8 +458,6 @@ pub(crate) trait FenceSink: EscrowLedger {
     fn purse(&self, sender_guid: u64) -> Option<u32>;
     /// Take `amount` out of that purse. Called only after [`plan_fence`] said it is affordable.
     fn debit_purse(&mut self, sender_guid: u64, amount: u32);
-    /// Arm the reaper schedule if it is not armed yet.
-    fn arm_reaper(&mut self);
 }
 
 /// What the REAPER touches: the ledger, plus the census of fences to consider.
@@ -417,6 +474,28 @@ pub(crate) trait DeliverySink {
     fn receipt(&self, escrow_id: u64) -> Option<MailDelivery>;
     /// Write the mail row, through the same insert every other mail write takes, and answer its id.
     fn deliver(&mut self, sender_guid: u64, letter: &Letter) -> u64;
+    fn file_receipt(&mut self, row: MailDelivery);
+    fn now_micros(&self) -> i64;
+}
+
+/// What the TAKE FENCE touches, on the MAIL plane. The mirror image of [`FenceSink`]: there the
+/// source of the value is a purse, here it is the mail row's own `money` column.
+pub(crate) trait TakeFenceSink: EscrowLedger {
+    /// The named mail's `(recipient_guid, money)`, or `None` when no such row is on this database.
+    fn mail(&self, mail_id: u64) -> Option<(u64, u32)>;
+    /// Set that row's `money` to 0, leaving the letter itself readable. Called in the same
+    /// transaction as the fence, so no reachable state has the copper in both places.
+    fn clear_mail_money(&mut self, mail_id: u64);
+}
+
+/// What the PAYOUT step touches, on the TAKER's own shard: a purse and a receipt, and no way to ask
+/// the mail plane anything. [`DeliverySink`]'s twin for the other direction.
+pub(crate) trait PayoutSink {
+    fn receipt(&self, escrow_id: u64) -> Option<MailDelivery>;
+    /// Add `amount` to the payee's live purse here. `false` when they have no live entity on this
+    /// database — they logged out or hopped shard mid-drive — which leaves the fence held for a
+    /// later re-drive rather than paying a purse that is not there.
+    fn credit_purse(&mut self, payee_guid: u64, amount: u32) -> bool;
     fn file_receipt(&mut self, row: MailDelivery);
     fn now_micros(&self) -> i64;
 }
@@ -456,6 +535,17 @@ impl EscrowLedger for CtxDb<'_> {
     fn delete_escrow(&mut self, escrow_id: u64) {
         self.ctx.db.game_mail_escrow().escrow_id().delete(escrow_id);
     }
+    fn arm_reaper(&mut self) {
+        let sched = self.ctx.db.game_mail_escrow_reaper_schedule();
+        if sched.iter().next().is_none() {
+            sched.insert(MailEscrowReaperSchedule {
+                scheduled_id: 0,
+                scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
+                    MAIL_ESCROW_REAP_INTERVAL_MICROS as i64,
+                )),
+            });
+        }
+    }
     fn now_micros(&self) -> i64 {
         self.ctx.timestamp.to_micros_since_unix_epoch()
     }
@@ -471,16 +561,34 @@ impl FenceSink for CtxDb<'_> {
             self.ctx.db.game_world_entity().guid().update(e);
         }
     }
-    fn arm_reaper(&mut self) {
-        let sched = self.ctx.db.game_mail_escrow_reaper_schedule();
-        if sched.iter().next().is_none() {
-            sched.insert(MailEscrowReaperSchedule {
-                scheduled_id: 0,
-                scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
-                    MAIL_ESCROW_REAP_INTERVAL_MICROS as i64,
-                )),
-            });
-        }
+}
+
+impl TakeFenceSink for CtxDb<'_> {
+    fn mail(&self, mail_id: u64) -> Option<(u64, u32)> {
+        crate::mail::mail_money(self.ctx, mail_id)
+    }
+    fn clear_mail_money(&mut self, mail_id: u64) {
+        crate::mail::clear_mail_money(self.ctx, mail_id);
+    }
+}
+
+impl PayoutSink for CtxDb<'_> {
+    fn receipt(&self, escrow_id: u64) -> Option<MailDelivery> {
+        self.ctx.db.game_mail_delivery().escrow_id().find(escrow_id)
+    }
+    fn credit_purse(&mut self, payee_guid: u64, amount: u32) -> bool {
+        let Some(mut e) = crate::helpers::acting_entity_by_guid(self.ctx, payee_guid) else {
+            return false;
+        };
+        e.money = crate::mail::credited(e.money, amount);
+        self.ctx.db.game_world_entity().guid().update(e);
+        true
+    }
+    fn file_receipt(&mut self, row: MailDelivery) {
+        self.ctx.db.game_mail_delivery().insert(row);
+    }
+    fn now_micros(&self) -> i64 {
+        self.ctx.timestamp.to_micros_since_unix_epoch()
     }
 }
 
@@ -578,6 +686,8 @@ pub(crate) fn apply_fence<S: FenceSink>(
         postage: letter.postage,
         created_micros,
         delivered: false,
+        payout: false,
+        mail_id: 0,
     });
     sink.arm_reaper();
     log::info!("mail escrow {escrow_id}: fenced {cost} copper from sender {sender_guid}");
@@ -625,6 +735,126 @@ pub(crate) fn apply_commit<S: DeliverySink>(
         "mail escrow {escrow_id}: committed as mail {mail_id} for recipient {}",
         letter.recipient_guid
     );
+    Ok(())
+}
+
+/// **Step 1 of the TAKE, on the MAIL plane — take the copper out of the mail row and fence it.**
+///
+/// The send's [`apply_fence`] with the nouns swapped: there the source is a purse and the
+/// destination a mail row, here it is the other way round. Everything downstream is shared —
+/// [`apply_confirm`], [`apply_settle`] and [`apply_reap`] run against this fence unchanged, which
+/// is the point of the mechanism being a mechanism.
+///
+/// `expect_money` is the amount the gateway read off its cache and is about to pay out. A mismatch
+/// is refused rather than fenced: the gateway carries the amount to the other database itself, so a
+/// stale read that fenced 50 and paid out 100 would mint the difference.
+pub(crate) fn apply_take_fence<S: TakeFenceSink>(
+    sink: &mut S,
+    escrow_id: u64,
+    payee_guid: u64,
+    mail_id: u64,
+    expect_money: u32,
+) -> Result<(), String> {
+    if escrow_id == 0 {
+        return Err("escrow_id 0 is reserved (it is the \"no escrow\" sentinel)".to_string());
+    }
+    match plan_take_fence_id(
+        sink.escrow(escrow_id).map(|e| (e.sender_guid, e.mail_id)),
+        payee_guid,
+        mail_id,
+    ) {
+        TakeFenceId::Replay => return Ok(()),
+        TakeFenceId::Collision => {
+            return Err(format!(
+                "mail escrow {escrow_id} is already fenced for another take — refusing to reuse \
+                 the id for mail {mail_id}"
+            ))
+        }
+        TakeFenceId::Fresh => {}
+    }
+    let money = match crate::mail::plan_take_money(sink.mail(mail_id), payee_guid) {
+        crate::mail::TakeMoney::NotYours => {
+            return Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string())
+        }
+        crate::mail::TakeMoney::NothingToTake => {
+            return Err(lyracore_shared::mail::NOTHING_TO_TAKE.to_string())
+        }
+        crate::mail::TakeMoney::Take(money) => money,
+    };
+    if money != expect_money {
+        return Err(format!(
+            "mail {mail_id} holds {money} copper, not the {expect_money} this take was driven for \
+             — refusing to fence an amount the payout would not match"
+        ));
+    }
+    // Clear BEFORE filing, in the one transaction that does both: the fence row is the receipt for
+    // copper that has already left the letter, and a fence filed against a row still holding it
+    // would license a payout the mailbox could serve again.
+    sink.clear_mail_money(mail_id);
+    let created_micros = sink.now_micros();
+    sink.file_escrow(MailEscrow {
+        escrow_id,
+        // The payee is this escrow's `sender_guid`: the party the value came out of and, on this
+        // direction, the party it is going to. The reaper and the delete sweep both key on it.
+        sender_guid: payee_guid,
+        recipient_guid: payee_guid,
+        subject: String::new(),
+        body: String::new(),
+        money,
+        postage: 0,
+        created_micros,
+        delivered: false,
+        payout: true,
+        mail_id,
+    });
+    sink.arm_reaper();
+    log::info!(
+        "mail escrow {escrow_id}: fenced {money} copper out of mail {mail_id} for {payee_guid}"
+    );
+    Ok(())
+}
+
+/// **Step 2 of the TAKE, on the TAKER's own shard — credit the purse, idempotently.**
+///
+/// [`apply_commit`]'s twin, and it reuses [`plan_commit`] outright: a receipt under this escrow id
+/// means the purse was already credited, so a replay writes nothing. The receipt and the credit go
+/// in ONE transaction for the same reason the mail row and its receipt do.
+pub(crate) fn apply_payout<S: PayoutSink>(
+    sink: &mut S,
+    escrow_id: u64,
+    payee_guid: u64,
+    mail_id: u64,
+    amount: u32,
+) -> Result<(), String> {
+    if escrow_id == 0 {
+        return Err("escrow_id 0 is reserved (it is the \"no escrow\" sentinel)".to_string());
+    }
+    match plan_commit(
+        sink.receipt(escrow_id).map(|r| r.recipient_guid),
+        payee_guid,
+    ) {
+        CommitPlan::Replay => return Ok(()),
+        CommitPlan::IdCollision => {
+            return Err(format!(
+                "mail escrow {escrow_id} already paid out to another character — refusing to reuse \
+                 the id"
+            ))
+        }
+        CommitPlan::Deliver => {}
+    }
+    if !sink.credit_purse(payee_guid, amount) {
+        // Not an error the player caused, and not a loss: the fence still holds the copper, so the
+        // next re-drive pays it out once they are live here again.
+        return Err(lyracore_shared::mail::NOT_IN_WORLD.to_string());
+    }
+    let created_micros = sink.now_micros();
+    sink.file_receipt(MailDelivery {
+        escrow_id,
+        mail_id,
+        recipient_guid: payee_guid,
+        created_micros,
+    });
+    log::info!("mail escrow {escrow_id}: paid {amount} copper from mail {mail_id} to {payee_guid}");
     Ok(())
 }
 
@@ -776,6 +1006,43 @@ pub fn realm_mail_commit(
     )
 }
 
+/// Take a mail's copper out of the row and fence it. Step 1 of the take, on the mail plane.
+///
+/// Operator-gated, and the gate carries more weight here than on its siblings: `payee_guid` is the
+/// whole authorization for reading a mail row, so a client that could call this would empty
+/// anybody's mailbox into an escrow addressed to itself.
+#[reducer]
+pub fn realm_mail_take_money_fence(
+    ctx: &ReducerContext,
+    escrow_id: u64,
+    payee_guid: u64,
+    mail_id: u64,
+    expect_money: u32,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    apply_take_fence(
+        &mut CtxDb { ctx },
+        escrow_id,
+        payee_guid,
+        mail_id,
+        expect_money,
+    )
+}
+
+/// Credit a fenced take into the payee's purse. Step 2 of the take, on their own shard.
+/// Operator-gated — it mints copper into a purse named by argument.
+#[reducer]
+pub fn realm_mail_payout(
+    ctx: &ReducerContext,
+    escrow_id: u64,
+    payee_guid: u64,
+    mail_id: u64,
+    amount: u32,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    apply_payout(&mut CtxDb { ctx }, escrow_id, payee_guid, mail_id, amount)
+}
+
 /// Attest that the mail row is durable. Step 3, on the sender's shard. Operator-gated — an
 /// attestation is a licence to destroy value, so it is exactly as trusted as the fence itself.
 #[reducer]
@@ -868,6 +1135,26 @@ mod tests {
         assert_eq!(plan_commit(None, 22), CommitPlan::Deliver);
     }
 
+    /// The take direction's id guard. A retry re-fences nothing (the copper already left the row,
+    /// so a second clear would take a helping the letter no longer has); the same id pointed at
+    /// another payee or another mail is a different take wearing the first one's key.
+    #[test]
+    fn a_replayed_take_fence_is_a_no_op_and_a_reused_id_is_refused() {
+        assert_eq!(
+            plan_take_fence_id(Some((7, 42)), 7, 42),
+            TakeFenceId::Replay
+        );
+        assert_eq!(
+            plan_take_fence_id(Some((7, 42)), 8, 42),
+            TakeFenceId::Collision
+        );
+        assert_eq!(
+            plan_take_fence_id(Some((7, 42)), 7, 43),
+            TakeFenceId::Collision
+        );
+        assert_eq!(plan_take_fence_id(None, 7, 42), TakeFenceId::Fresh);
+    }
+
     /// A receipt naming ANOTHER recipient is the id reused for a different letter. Reading it as a
     /// replay tells the driver its letter arrived, and it settles a fence whose value went nowhere.
     #[test]
@@ -941,7 +1228,12 @@ mod tests {
                  self.escrow(escrow_id) { self.ctx .db .game_mail_escrow() .escrow_id() \
                  .update(MailEscrow { delivered: true, ..row }); } } fn delete_escrow(&mut self, \
                  escrow_id: u64) { self.ctx.db.game_mail_escrow().escrow_id().delete(escrow_id); } \
-                 fn now_micros(&self) -> i64 { self.ctx.timestamp.to_micros_since_unix_epoch() } }",
+                 fn arm_reaper(&mut self) { let sched = \
+                 self.ctx.db.game_mail_escrow_reaper_schedule(); if sched.iter().next().is_none() { \
+                 sched.insert(MailEscrowReaperSchedule { scheduled_id: 0, scheduled_at: \
+                 ScheduleAt::Interval(TimeDuration::from_micros( MAIL_ESCROW_REAP_INTERVAL_MICROS \
+                 as i64, )), }); } } fn now_micros(&self) -> i64 { \
+                 self.ctx.timestamp.to_micros_since_unix_epoch() } }",
             ),
             (
                 "impl FenceSink for CtxDb<'_> {",
@@ -950,11 +1242,24 @@ mod tests {
                  debit_purse(&mut self, sender_guid: u64, amount: u32) { if let Some(mut e) = \
                  crate::helpers::acting_entity_by_guid(self.ctx, sender_guid) { e.money = \
                  e.money.saturating_sub(amount); self.ctx.db.game_world_entity().guid().update(e); \
-                 } } fn arm_reaper(&mut self) { let sched = \
-                 self.ctx.db.game_mail_escrow_reaper_schedule(); if sched.iter().next().is_none() { \
-                 sched.insert(MailEscrowReaperSchedule { scheduled_id: 0, scheduled_at: \
-                 ScheduleAt::Interval(TimeDuration::from_micros( MAIL_ESCROW_REAP_INTERVAL_MICROS \
-                 as i64, )), }); } } }",
+                 } } }",
+            ),
+            (
+                "impl TakeFenceSink for CtxDb<'_> {",
+                "{ fn mail(&self, mail_id: u64) -> Option<(u64, u32)> { \
+                 crate::mail::mail_money(self.ctx, mail_id) } fn clear_mail_money(&mut self, \
+                 mail_id: u64) { crate::mail::clear_mail_money(self.ctx, mail_id); } }",
+            ),
+            (
+                "impl PayoutSink for CtxDb<'_> {",
+                "{ fn receipt(&self, escrow_id: u64) -> Option<MailDelivery> { \
+                 self.ctx.db.game_mail_delivery().escrow_id().find(escrow_id) } fn \
+                 credit_purse(&mut self, payee_guid: u64, amount: u32) -> bool { let Some(mut e) = \
+                 crate::helpers::acting_entity_by_guid(self.ctx, payee_guid) else { return false; \
+                 }; e.money = crate::mail::credited(e.money, amount); \
+                 self.ctx.db.game_world_entity().guid().update(e); true } fn file_receipt(&mut \
+                 self, row: MailDelivery) { self.ctx.db.game_mail_delivery().insert(row); } fn \
+                 now_micros(&self) -> i64 { self.ctx.timestamp.to_micros_since_unix_epoch() } }",
             ),
             (
                 "impl ReapSink for CtxDb<'_> {",
@@ -981,6 +1286,16 @@ mod tests {
                 "pub fn realm_mail_commit(",
                 "{ require_operator(ctx)?; apply_commit( &mut CtxDb { ctx }, escrow_id, \
                  sender_guid, &Letter { recipient_guid, subject, body, money, postage: 0, }, ) }",
+            ),
+            (
+                "pub fn realm_mail_take_money_fence(",
+                "{ require_operator(ctx)?; apply_take_fence( &mut CtxDb { ctx }, escrow_id, \
+                 payee_guid, mail_id, expect_money, ) }",
+            ),
+            (
+                "pub fn realm_mail_payout(",
+                "{ require_operator(ctx)?; apply_payout(&mut CtxDb { ctx }, escrow_id, payee_guid, \
+                 mail_id, amount) }",
             ),
             (
                 "pub fn realm_mail_confirm_delivery(",
@@ -1020,6 +1335,8 @@ mod tests {
         for signature in [
             "pub fn realm_mail_fence(",
             "pub fn realm_mail_commit(",
+            "pub fn realm_mail_take_money_fence(",
+            "pub fn realm_mail_payout(",
             "pub fn realm_mail_confirm_delivery(",
             "pub fn realm_mail_settle(",
         ] {

@@ -20,16 +20,16 @@
 //!
 //! # What is here, and what is not
 //!
-//! Here now: the table and its sweeps, the read path's seeder, mark-read, delete, and sending a
-//! TEXT-ONLY letter. Attachments, take, return and COD are later slices — the attachment columns
-//! exist because the wire has exactly one item block per mail and a later slice must not migrate
-//! them in, not because anything writes them yet.
+//! Here now: the table and its sweeps, the read path's seeder, mark-read, delete, sending a letter
+//! with COPPER attached, and taking that copper out. Item attachments, return-to-sender and COD are
+//! later slices — the item columns exist because the wire has exactly one item block per mail and a
+//! later slice must not migrate them in, not because anything writes them yet.
 //!
-//! The MECHANISM those slices move value with lives next door in [`crate::mail_escrow`]: on a
-//! sharded realm the purse is on one database and the mail row on another, so a fence, a commit
-//! keyed by a caller-chosen id, and a delete-last settle stand in for the transaction that cannot
-//! span them. Nothing in this file goes through it — the single-database plane genuinely has that
-//! transaction, and the postage debit #145 shipped is still the two-call path below.
+//! **Both money paths in this file are the SINGLE-DATABASE plane.** On a sharded realm the purse is
+//! on the sender's (or taker's) own shard and the mail row is on realm-core, so no transaction
+//! spans them and the copper crosses through [`crate::mail_escrow`] instead — a fence, a commit
+//! keyed by a caller-chosen id, and a delete-last settle. Where one transaction genuinely exists it
+//! is used; the two paths must not be "unified".
 //!
 //! The wire-facing rules (the unread-mail float, the `item_text_id`, the expiry stamp) live in
 //! `lyracore_shared::mail`: the gateway builds `SMSG_MAIL_LIST_RESULT` from a cache read, so a rule
@@ -190,42 +190,108 @@ pub(crate) fn charge_postage(
     Ok(())
 }
 
-/// Write one sent letter, charging `postage` first when this database holds the sender's purse.
+/// Write one sent letter and pay for it, in ONE transaction. **The single-database plane only.**
 ///
-/// `postage` is passed rather than derived because it decides WHERE the debit happens, and that is
-/// the caller's knowledge, not this transaction's:
+/// The whole cost — the postage plus any copper travelling with the letter — is one debit, computed
+/// by [`lyracore_shared::mail::total_cost`] rather than passed in: the caller cannot be trusted to
+/// have summed it, and a second copy of the sum is how the two planes drift. The debit happens
+/// first and refuses atomically, which is the "a refused send costs the sender nothing" guarantee.
 ///
-/// - **Single-database gateway** — the purse and the mail row are on one database, so the gateway
-///   passes the real postage and the debit and the insert are ONE transaction. That is the shape
-///   #9 asks for, and it is what `lyracore dev up` runs.
-/// - **Sharded realm** — realm-core holds no characters, so the purse is on the sender's own shard
-///   and one transaction is not reachable at all. The gateway charges there first
-///   ([`realm_mail_charge_postage`]) and passes 0 here. Debit-first is deliberate: the failure it
-///   leaves is a sender who paid postage and got no letter, which costs 30 copper and is logged,
-///   against a letter delivered for free if the order were reversed.
-///
-/// Both planes reach [`insert_mail`], so the ROW is identical either way — a sent mail and a
-/// seeded one cannot differ in a column the list read projects.
+/// A sharded realm never reaches here: realm-core holds no purse, so the debit and the row cannot
+/// share a transaction and the send goes through [`crate::mail_escrow`] instead — fence the copper
+/// on the sender's own shard, commit the row here, settle last. Both planes still reach
+/// [`insert_mail`], so the ROW is identical either way.
 ///
 /// **This path must never route through [`crate::mail_escrow`], and the difference is not an
 /// oversight to tidy up.** The escrow exists because two databases cannot share a transaction;
 /// where they can, it is strictly worse — four transactions instead of one atomic write, plus a
 /// fence that can be interrupted where nothing could be. Pinned by
-/// `tests::the_single_database_send_path_never_reaches_the_escrow`.
+/// `tests::the_single_database_money_paths_never_reach_the_escrow`.
 pub(crate) fn apply_send(
     ctx: &ReducerContext,
     sender_guid: u64,
     recipient_guid: u64,
     subject: String,
     body: String,
-    postage: u32,
+    money: u32,
 ) -> Result<(), String> {
-    if postage > 0 {
-        charge_postage(ctx, sender_guid, postage)?;
+    charge_postage(ctx, sender_guid, lyracore_shared::mail::total_cost(money))?;
+    insert_mail(ctx, recipient_guid, sender_guid, subject, body, money);
+    Ok(())
+}
+
+/// What a `CMSG_MAIL_TAKE_MONEY` must do. Pure, so the authorization boundary and the
+/// take-twice rule are testable without a database — and shared, so the single-database take and
+/// the mail-plane fence that starts the sharded one cannot answer differently.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TakeMoney {
+    /// No such mail, or it is not the caller's. One verdict for both, like [`apply_mark_read`]'s:
+    /// a crafted id must not be a way to learn which mail ids belong to somebody else.
+    NotYours,
+    /// The row holds no copper — a text-only letter, or one already emptied. The mail stays
+    /// readable; only the money is gone.
+    NothingToTake,
+    /// Credit this much to the caller and clear the row's `money`.
+    Take(u32),
+}
+
+/// `row` is the `(recipient_guid, money)` of the named mail, or `None` when no such row exists.
+pub(crate) fn plan_take_money(row: Option<(u64, u32)>, caller_guid: u64) -> TakeMoney {
+    match row {
+        Some((recipient_guid, _)) if recipient_guid != caller_guid => TakeMoney::NotYours,
+        Some((_, 0)) => TakeMoney::NothingToTake,
+        Some((_, money)) => TakeMoney::Take(money),
+        None => TakeMoney::NotYours,
     }
-    // No attached copper and no attachment: the money and item slices are later, and a text-only
-    // letter is worth sending because the body rides `item_text_id` to the client's own query.
-    insert_mail(ctx, recipient_guid, sender_guid, subject, body, 0);
+}
+
+/// The named mail's `(recipient_guid, money)`. The read behind both takes — the single-database one
+/// below and the mail-plane fence that starts the sharded one — so neither can invent its own idea
+/// of who owns a row.
+pub(crate) fn mail_money(ctx: &ReducerContext, mail_id: u64) -> Option<(u64, u32)> {
+    ctx.db
+        .game_mail()
+        .id()
+        .find(mail_id)
+        .map(|m| (m.recipient_guid, m.money))
+}
+
+/// Empty a mail of its copper, leaving the letter readable until the recipient deletes it.
+pub(crate) fn clear_mail_money(ctx: &ReducerContext, mail_id: u64) {
+    let mails = ctx.db.game_mail();
+    if let Some(mut row) = mails.id().find(mail_id) {
+        row.money = 0;
+        mails.id().update(row);
+    }
+}
+
+/// A purse after a credit. Saturating, so a purse near `u32::MAX` cannot wrap down to nothing —
+/// the same reason [`lyracore_shared::mail::total_cost`] saturates, in the other direction.
+pub(crate) fn credited(purse: u32, amount: u32) -> u32 {
+    purse.saturating_add(amount)
+}
+
+/// Take a mail's copper into the recipient's purse, in ONE transaction. **The single-database plane
+/// only**, for the same reason as [`apply_send`]: on a sharded realm the row is on realm-core and
+/// the purse is on the taker's own shard, so the take goes through [`crate::mail_escrow`] instead.
+///
+/// The clear and the credit are inseparable here, which is what makes "taking twice credits once"
+/// structural rather than a check: the second call finds `money` already 0.
+pub(crate) fn apply_take_money(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    mail_id: u64,
+) -> Result<(), String> {
+    let money = match plan_take_money(mail_money(ctx, mail_id), recipient_guid) {
+        TakeMoney::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string()),
+        TakeMoney::NothingToTake => return Err(lyracore_shared::mail::NOTHING_TO_TAKE.to_string()),
+        TakeMoney::Take(money) => money,
+    };
+    let mut taker = crate::helpers::acting_entity_by_guid(ctx, recipient_guid)
+        .ok_or_else(|| lyracore_shared::mail::NOT_IN_WORLD.to_string())?;
+    taker.money = credited(taker.money, money);
+    ctx.db.game_world_entity().guid().update(taker);
+    clear_mail_money(ctx, mail_id);
     Ok(())
 }
 
@@ -297,7 +363,8 @@ pub fn realm_mail_mark_read(
     apply_mark_read(ctx, recipient_guid, mail_id)
 }
 
-/// Post one letter, as `sender_guid`, to `recipient_guid`. The write half of the send path.
+/// Post one letter, as `sender_guid`, to `recipient_guid`, paying for it in the same transaction.
+/// **The single-database plane's whole send.**
 ///
 /// **Operator-gated, and it has to be** — harder than the two above. Every gate that decides WHO may
 /// write to whom (the recipient exists, the sender is in world, same faction, not yourself, standing
@@ -306,8 +373,8 @@ pub fn realm_mail_mark_read(
 /// could call this would post mail as anybody on the realm, and the gateway passes only the guid it
 /// authenticated for that socket.
 ///
-/// `postage` is 0 on a sharded realm — see [`apply_send`] for why the debit is a separate call
-/// there, and why it happens first.
+/// A sharded realm calls [`crate::mail_escrow::realm_mail_fence`] and friends instead; the postage
+/// rides that fence, which is why no separate postage reducer exists any more.
 #[reducer]
 pub fn realm_mail_send(
     ctx: &ReducerContext,
@@ -315,26 +382,25 @@ pub fn realm_mail_send(
     recipient_guid: u64,
     subject: String,
     body: String,
-    postage: u32,
+    money: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    apply_send(ctx, sender_guid, recipient_guid, subject, body, postage)
+    apply_send(ctx, sender_guid, recipient_guid, subject, body, money)
 }
 
-/// Charge `sender_guid` the postage for a letter whose ROW is being written on another database.
+/// Take a mail's copper into `recipient_guid`'s purse. **The single-database plane's whole take.**
 ///
-/// The one reducer of this family that does NOT run on the mail plane: it runs on the shard holding
-/// the sender's live entity, because that is where the copper is. Operator-gated for the same reason
-/// as its siblings — it takes the payer's guid as an argument, so without the gate any connection
-/// could empty a stranger's purse.
+/// Operator-gated, same boundary as its siblings: the row lookup scoped to `recipient_guid` is the
+/// entire authorization, and only the gateway is trusted to have resolved that guid to the socket
+/// it authenticated.
 #[reducer]
-pub fn realm_mail_charge_postage(
+pub fn realm_mail_take_money(
     ctx: &ReducerContext,
-    sender_guid: u64,
-    copper: u32,
+    recipient_guid: u64,
+    mail_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    charge_postage(ctx, sender_guid, copper)
+    apply_take_money(ctx, recipient_guid, mail_id)
 }
 
 /// [`realm_mail_mark_read`]'s twin for delete. Same trust boundary, same one-reducer-both-planes
@@ -351,7 +417,55 @@ pub fn realm_mail_delete(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::test_scan::read_scanned;
+
+    /// **The authorization boundary on a take.** A mail id is client-supplied, so the row lookup
+    /// scoped to the caller is the only thing between a crafted packet and another player's purse —
+    /// and "no such mail" answers the same as "not yours", so the refusal leaks no id.
+    #[test]
+    fn taking_money_is_refused_for_a_mail_the_caller_is_not_the_recipient_of() {
+        assert_eq!(plan_take_money(Some((7, 100)), 7), TakeMoney::Take(100));
+        assert_eq!(plan_take_money(Some((7, 100)), 8), TakeMoney::NotYours);
+        assert_eq!(plan_take_money(None, 7), TakeMoney::NotYours);
+    }
+
+    /// **Taking twice credits once.** The first take clears the row, so the second finds nothing —
+    /// and the mail itself survives, because only the money was in it.
+    #[test]
+    fn a_mail_already_emptied_of_money_has_nothing_left_to_take() {
+        assert_eq!(plan_take_money(Some((7, 0)), 7), TakeMoney::NothingToTake);
+    }
+
+    /// A credit saturates rather than wrapping — the mirror of the debit's saturation, and the
+    /// arithmetic that would otherwise turn a rich player's purse into an empty one.
+    #[test]
+    fn a_credited_purse_saturates_rather_than_wrapping() {
+        assert_eq!(credited(100, 30), 130);
+        assert_eq!(credited(u32::MAX, 1), u32::MAX);
+    }
+
+    /// **One rule, two planes.** The single-database send debits
+    /// `lyracore_shared::mail::total_cost`; the sharded one debits the escrow's
+    /// `Letter::fenced_copper`. They are two expressions of "postage plus the attached coin, in one
+    /// debit", and a drift between them is a plane that charges differently for the same letter.
+    #[test]
+    fn both_planes_charge_the_same_total_for_the_same_letter() {
+        for money in [0, 1, 100, u32::MAX - 1, u32::MAX] {
+            let letter = crate::mail_escrow::Letter {
+                recipient_guid: 1,
+                subject: String::new(),
+                body: String::new(),
+                money,
+                postage: lyracore_shared::mail::postage(),
+            };
+            assert_eq!(
+                lyracore_shared::mail::total_cost(money),
+                letter.fenced_copper(),
+                "the two planes must charge the same for {money} copper attached"
+            );
+        }
+    }
 
     /// **The mailbox proximity gate must never scan the spatial gameobject table.**
     ///
@@ -397,13 +511,19 @@ mod tests {
     /// available guard against the tidy-up that would "unify the two paths" — which reads like
     /// simplification and is a regression.
     #[test]
-    fn the_single_database_send_path_never_reaches_the_escrow() {
-        let body = code_of(include_str!("mail.rs"), "pub(crate) fn apply_send(");
-        assert!(
-            !body.contains("escrow"),
-            "`apply_send` is the ONE-TRANSACTION plane. The escrow is the mechanism for the case \
-             where a transaction cannot span the two databases; here one can. Body was:\n{body}"
-        );
+    fn the_single_database_money_paths_never_reach_the_escrow() {
+        for signature in [
+            "pub(crate) fn apply_send(",
+            "pub(crate) fn apply_take_money(",
+        ] {
+            let body = code_of(include_str!("mail.rs"), signature);
+            assert!(
+                !body.contains("escrow"),
+                "`{signature}` is the ONE-TRANSACTION plane. The escrow is the mechanism for the \
+                 case where a transaction cannot span the two databases; here one can. Body \
+                 was:\n{body}"
+            );
+        }
     }
 
     // ---- `realm_mail_mark_read` / `realm_mail_delete`'s operator gate ----
@@ -429,7 +549,7 @@ mod tests {
             "pub fn realm_mail_mark_read(",
             "pub fn realm_mail_delete(",
             "pub fn realm_mail_send(",
-            "pub fn realm_mail_charge_postage(",
+            "pub fn realm_mail_take_money(",
         ] {
             let body = code_of(include_str!("mail.rs"), signature);
             let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");

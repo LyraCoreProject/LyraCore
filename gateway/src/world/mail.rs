@@ -24,6 +24,18 @@
 //! Every refusal is per-action: the caller logs it and answers the packet the client is waiting on,
 //! or nothing at all. Nothing here is session-fatal.
 //!
+//! # Moving copper across the boundary
+//!
+//! A sharded send and a sharded take each move value between two databases that share no
+//! transaction, so both go through the module's escrow and both are DRIVEN from here: fence,
+//! commit, attest, settle, in that order and no other ([`drive`]). The gateway is the only
+//! component that can see both databases, which is also why the recovery lives here — the module's
+//! reaper settles an attested fence and holds everything else forever, and [`redrive`] is what
+//! turns a held fence back into a delivered letter.
+//!
+//! A single-database gateway does none of this: the purse and the row are on one database, so the
+//! send and the take are each ONE transaction. Keeping that path genuinely atomic is deliberate.
+//!
 //! # Poll, not push
 //!
 //! There is no relay and no event table. The client asks (`CMSG_GET_MAIL_LIST`,
@@ -95,6 +107,10 @@ pub(crate) fn open_mailbox<St: WorldStore + ?Sized>(
     mailbox_guid: u64,
 ) -> Result<Vec<MailView>> {
     let self_guid = at_mailbox(store, self_guid, mailbox_guid)?;
+    // Before the list, finish anything a dead gateway left in flight — this is the moment the
+    // player would otherwise see a letter that never arrived or copper that never landed. Never
+    // fatal: a failed re-drive leaves the fence for the next visit.
+    redrive(store, self_guid);
     mail_of(store, self_guid)
 }
 
@@ -174,6 +190,12 @@ pub(crate) fn delete<St: WorldStore + ?Sized>(
 /// in world and at the named mailbox; the recipient exists realm-wide; not yourself; same faction.
 /// The module answers affordability, which is the one question it has the state for.
 ///
+/// # The copper
+///
+/// `money` travels WITH the letter and the recipient takes it out; the postage is what the post
+/// office keeps. Both leave the purse in ONE debit at send — the sender cannot afford one without
+/// the other, and a refused send costs nothing.
+///
 /// # Homonyms: refused, not guessed
 ///
 /// A name can resolve to several characters — the uniqueness constraint is a per-DATABASE index
@@ -190,6 +212,7 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
     recipient_name: &str,
     subject: String,
     body: String,
+    money: u32,
 ) -> std::result::Result<(), SendRefusal> {
     let sender_guid = at_mailbox(store, self_guid, mailbox_guid)
         .map_err(|e| SendRefusal::NoMailbox(e.to_string()))?;
@@ -233,28 +256,196 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
             ))
         }
     };
-    // A text-only letter attaches no coin, so the total the sender pays is the bare postage. The
-    // argument exists because the money slice must debit ONE total rather than charging twice.
-    let cost = mail_rules::total_cost(0);
     match store.realm_store() {
         // One database: the purse and the row are both on it, so the debit and the insert are one
         // transaction — the property the design asks for, and the only plane that can have it.
         None => store
-            .mail_send(sender_guid, recipient_guid, subject, body, cost)
+            .mail_send(sender_guid, recipient_guid, subject, body, money)
             .map_err(refusal_from_module),
-        // Sharded: realm-core holds no purse, so the debit runs on the sender's own shard and the
-        // two writes cannot be one transaction. Debit FIRST — it is the atomic affordability check,
-        // so a refused send is charged nothing. The residue in the other direction is 30 copper on
-        // an unreachable realm-core, against a letter delivered free if the order were reversed.
+        // Sharded: realm-core holds no purse, so no transaction covers both. The escrow does
+        // instead — fence the whole cost on the sender's shard, commit the row on realm-core,
+        // settle last.
         Some(realm) => {
+            let escrow_id = next_escrow_id();
             store
-                .mail_charge_postage(sender_guid, cost)
+                .mail_fence(
+                    escrow_id,
+                    sender_guid,
+                    recipient_guid,
+                    subject.clone(),
+                    body.clone(),
+                    money,
+                    mail_rules::postage(),
+                )
                 .map_err(refusal_from_module)?;
-            realm
-                .mail_send(sender_guid, recipient_guid, subject, body, 0)
-                .map_err(refusal_from_module)
+            // Past the fence the sender has PAID. Every failure from here is recoverable and none
+            // is refundable, so it is reported as internal and the fence is left for a re-drive.
+            drive(store, escrow_id, || {
+                realm.mail_commit(escrow_id, sender_guid, recipient_guid, subject, body, money)
+            })
+            .map_err(|e| SendRefusal::Internal(format!("{e:#}")))
         }
     }
+}
+
+/// **Steps 2–4 of an escrow drive: commit, attest, settle.** One function for both directions and
+/// for the re-drive, because the ordering is the whole safety argument and a second copy of it is a
+/// second chance to get it wrong.
+///
+/// `source` is the handle HOLDING the fence — the sender's shard for a letter, the mail plane for a
+/// take. `commit` is the step on the other database, whichever that is. The attestation may only
+/// happen once `commit` has RETURNED: attesting first licenses destroying a fence whose value never
+/// arrived, which is the one unrecoverable outcome.
+///
+/// Re-entrant. Every step is idempotent on the escrow id, so calling this again after any of them
+/// replays the landed ones into no-ops — which is how [`redrive`] rescues an abandoned fence.
+fn drive<St, F>(source: &St, escrow_id: u64, commit: F) -> Result<()>
+where
+    St: WorldStore + ?Sized,
+    F: FnOnce() -> Result<()>,
+{
+    commit()?;
+    source.mail_confirm_delivery(escrow_id)?;
+    source.mail_settle(escrow_id)
+}
+
+/// One escrow row the gateway is holding, flattened for the drive. Everything a re-drive needs is
+/// here, because a fence carries its own letter.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HeldEscrow {
+    pub escrow_id: u64,
+    pub recipient_guid: u64,
+    pub subject: String,
+    pub body: String,
+    pub money: u32,
+    pub postage: u32,
+    /// `true` when this fence is a mail row's copper on its way into a purse, `false` when it is a
+    /// purse's copper on its way into a mail row. It decides which database is the source and which
+    /// is the destination, and nothing else about the row does.
+    pub payout: bool,
+    pub mail_id: u64,
+}
+
+/// Finish every escrow left standing for `self_guid`, on both planes.
+///
+/// **This is the recovery path, and without it a gateway that died mid-send strands a player's gold
+/// forever.** The module's reaper settles an ATTESTED fence and holds everything else — correctly,
+/// because a shard cannot ask realm-core whether the letter arrived. Only the gateway can, by
+/// re-driving the sequence forward: the commit replays into its receipt, the attestation lands, the
+/// settle releases the fence.
+///
+/// Called when the player opens a mailbox — the moment they would notice the missing copper, and a
+/// point where the two handles are both to hand. The rejected alternative was a background sweep
+/// over every escrow on the realm: it would need its own scheduler and would re-drive fences for
+/// characters this gateway has no session for.
+///
+/// Never fatal. A re-drive that fails leaves the fence exactly as it was, for the next attempt.
+pub(crate) fn redrive<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
+    let Some(realm) = store.realm_store() else {
+        return; // One database, one transaction, no fences to rescue.
+    };
+    // The letters this player sent: fenced on their own shard, destined for a mail row on realm.
+    for held in store.mail_escrows_of(self_guid).unwrap_or_default() {
+        if held.payout {
+            continue; // A payout fence never lives on a shard; ignore a stray rather than mis-drive it.
+        }
+        let outcome = drive(store, held.escrow_id, || {
+            realm.mail_commit(
+                held.escrow_id,
+                self_guid,
+                held.recipient_guid,
+                held.subject.clone(),
+                held.body.clone(),
+                held.money,
+            )
+        });
+        log_redrive("send", held.escrow_id, outcome);
+    }
+    // The takes this player started: fenced on realm-core, destined for their purse on this shard.
+    for held in realm.mail_escrows_of(self_guid).unwrap_or_default() {
+        if !held.payout {
+            continue;
+        }
+        let outcome = drive(realm.as_ref(), held.escrow_id, || {
+            store.mail_payout(held.escrow_id, self_guid, held.mail_id, held.money)
+        });
+        log_redrive("take", held.escrow_id, outcome);
+    }
+}
+
+fn log_redrive(kind: &str, escrow_id: u64, outcome: Result<()>) {
+    match outcome {
+        Ok(()) => log::info!("mail escrow {escrow_id}: abandoned {kind} re-driven to completion"),
+        // Loud: the copper is still fenced and still recoverable, but somebody has to know it is
+        // sitting there.
+        Err(e) => log::warn!(
+            "mail escrow {escrow_id}: {kind} re-drive failed, the fence is still HELD: {e:#}"
+        ),
+    }
+}
+
+/// Take mail `mail_id`'s copper into the purse of the session standing at `mailbox_guid`.
+///
+/// The authorization is the row lookup scoped to the caller, run on whichever plane owns the row —
+/// a mail id arrives from the client, so nothing here may trust it. Same gate as [`open_mailbox`]
+/// first, for the same reason.
+///
+/// The mail itself survives; only its `money` is cleared, so a letter stays readable until the
+/// recipient deletes it.
+pub(crate) fn take_money<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: Option<u64>,
+    mailbox_guid: u64,
+    mail_id: u64,
+) -> Result<()> {
+    let self_guid = at_mailbox(store, self_guid, mailbox_guid)?;
+    let Some(realm) = store.realm_store() else {
+        // One database: the credit and the clear are one transaction, so "taking twice credits
+        // once" needs no protocol at all.
+        return store.mail_take_money(self_guid, mail_id);
+    };
+    // Sharded: the row is on realm-core and the purse is on this shard. The amount has to travel
+    // with the drive, so it is read here and the fence refuses if the row disagrees — a stale read
+    // that fenced less than the payout credits would mint the difference.
+    let amount = mail_of(store, self_guid)?
+        .into_iter()
+        .find(|m| m.id == mail_id)
+        .map(|m| m.money)
+        .ok_or_else(|| anyhow::anyhow!(mail_rules::NOT_YOUR_MAIL))?;
+    if amount == 0 {
+        anyhow::bail!(mail_rules::NOTHING_TO_TAKE);
+    }
+    let escrow_id = next_escrow_id();
+    realm.mail_take_money_fence(escrow_id, self_guid, mail_id, amount)?;
+    // Past the fence the copper has left the row. A failure here is reported — the player's click
+    // did not land — but the fence keeps the copper, and the next mailbox visit re-drives it.
+    drive(realm.as_ref(), escrow_id, || {
+        store.mail_payout(escrow_id, self_guid, mail_id, amount)
+    })
+}
+
+/// The next caller-chosen escrow id.
+///
+/// Caller-chosen is the requirement: it is the idempotency key on both databases, so it must be
+/// stable across a retry of one drive — which a local holds — and distinct from every OTHER fence
+/// in flight. Seeding the counter from the process start time and bumping it makes two gateways
+/// collide only if they started in the same microsecond; if they ever did, the module's
+/// `IdCollision` guards refuse the second rather than paying it, so the failure is a refused send
+/// and not a lost purse. `auto_inc` cannot serve: it is per-database, and this key spans two.
+fn next_escrow_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: std::sync::OnceLock<AtomicU64> = std::sync::OnceLock::new();
+    NEXT.get_or_init(|| {
+        AtomicU64::new(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_micros() as u64)
+                // 0 is the module's "no escrow" sentinel, so never start there.
+                .unwrap_or(1)
+                .max(1),
+        )
+    })
+    .fetch_add(1, Ordering::Relaxed)
 }
 
 /// Read a module-side failure into the refusal the client is shown.

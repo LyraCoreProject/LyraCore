@@ -346,6 +346,7 @@ pub use items::*;
 pub use load::*;
 pub use loot::*;
 pub use mail::Mail; // re-exported for the gateway schema-parity test
+pub use mail_escrow::MailEscrow; // re-exported for the gateway schema-parity test
 pub use motion::*;
 pub use quest::*;
 pub use realm_core::*;

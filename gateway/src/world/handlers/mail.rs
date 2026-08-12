@@ -1,8 +1,8 @@
-//! Mail family: open the mailbox window, answer the client's mail poll, serve a letter's body, and
-//! mark a mail read or delete it.
+//! Mail family: open the mailbox window, answer the client's mail poll, serve a letter's body, mark
+//! a mail read or delete it, post a letter with copper attached, and take that copper out.
 //!
-//! Sending, attachments, take and return are later slices, and their opcodes fall through to the
-//! next handler until they land.
+//! Item attachments, return-to-sender and COD are later slices, and their opcodes fall through to
+//! the next handler until they land.
 //!
 //! Every failure is per-action: log, and either answer the packet the client is blocked on or send
 //! nothing. Nothing here tears a session down, matching the vendor/loot/combat arms.
@@ -118,9 +118,34 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                 ))),
             )?;
         }
-        // Post a letter. `item`, `money` and `cash_on_delivery_amount` ride this packet too and are
-        // deliberately ignored here — attachments are later slices, and a letter that silently ate
-        // an item would be the worst way to learn that. Every refusal answers with its OWN
+        // Take a mail's copper into the purse. The mail id is client-supplied, so the refusal for
+        // somebody else's mail is the authorization boundary and not a sanity check — and it reads
+        // the same as "there is nothing in it", so a crafted id learns nothing either way. Both
+        // outcomes ack through `SMSG_SEND_MAIL_RESULT`/MoneyTaken, which is what closes the
+        // client's spinner.
+        ClientOpcodeMessage::CMSG_MAIL_TAKE_MONEY(c) => {
+            let self_guid = social::self_guid(conn);
+            let ok =
+                match mail::take_money(store, self_guid, c.mailbox.guid(), u64::from(c.mail_id)) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        log::debug!(
+                            "world: mail take-money refused (account {}): {e}",
+                            conn.account_id
+                        );
+                        false
+                    }
+                };
+            send(
+                tx,
+                Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
+                    codec::build_mail_take_money_result(c.mail_id, ok),
+                ))),
+            )?;
+        }
+        // Post a letter. `item` and `cash_on_delivery_amount` ride this packet too and are
+        // deliberately ignored here — those are later slices, and a letter that silently ate an
+        // item would be the worst way to learn that. Every refusal answers with its OWN
         // `MailResultTwo`, never a generic internal error: the client renders each as distinct
         // on-screen text, which is all the player gets to work with.
         //
@@ -136,6 +161,7 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                 &c.receiver,
                 c.subject.clone(),
                 c.body.clone(),
+                c.money.as_int(),
             ) {
                 Ok(()) => Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok),
                 Err(e) => {

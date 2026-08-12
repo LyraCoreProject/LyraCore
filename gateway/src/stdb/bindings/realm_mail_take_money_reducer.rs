@@ -6,49 +6,49 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct RealmMailChargePostageArgs {
-    pub sender_guid: u64,
-    pub copper: u32,
+pub(super) struct RealmMailTakeMoneyArgs {
+    pub recipient_guid: u64,
+    pub mail_id: u64,
 }
 
-impl From<RealmMailChargePostageArgs> for super::Reducer {
-    fn from(args: RealmMailChargePostageArgs) -> Self {
-        Self::RealmMailChargePostage {
-            sender_guid: args.sender_guid,
-            copper: args.copper,
+impl From<RealmMailTakeMoneyArgs> for super::Reducer {
+    fn from(args: RealmMailTakeMoneyArgs) -> Self {
+        Self::RealmMailTakeMoney {
+            recipient_guid: args.recipient_guid,
+            mail_id: args.mail_id,
         }
     }
 }
 
-impl __sdk::InModule for RealmMailChargePostageArgs {
+impl __sdk::InModule for RealmMailTakeMoneyArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `realm_mail_charge_postage`.
+/// Extension trait for access to the reducer `realm_mail_take_money`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait realm_mail_charge_postage {
-    /// Request that the remote module invoke the reducer `realm_mail_charge_postage` to run as soon as possible.
+pub trait realm_mail_take_money {
+    /// Request that the remote module invoke the reducer `realm_mail_take_money` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`realm_mail_charge_postage:realm_mail_charge_postage_then`] to run a callback after the reducer completes.
-    fn realm_mail_charge_postage(&self, sender_guid: u64, copper: u32) -> __sdk::Result<()> {
-        self.realm_mail_charge_postage_then(sender_guid, copper, |_, _| {})
+    /// /// Use [`realm_mail_take_money:realm_mail_take_money_then`] to run a callback after the reducer completes.
+    fn realm_mail_take_money(&self, recipient_guid: u64, mail_id: u64) -> __sdk::Result<()> {
+        self.realm_mail_take_money_then(recipient_guid, mail_id, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `realm_mail_charge_postage` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `realm_mail_take_money` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn realm_mail_charge_postage_then(
+    fn realm_mail_take_money_then(
         &self,
-        sender_guid: u64,
-        copper: u32,
+        recipient_guid: u64,
+        mail_id: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -56,20 +56,20 @@ pub trait realm_mail_charge_postage {
     ) -> __sdk::Result<()>;
 }
 
-impl realm_mail_charge_postage for super::RemoteReducers {
-    fn realm_mail_charge_postage_then(
+impl realm_mail_take_money for super::RemoteReducers {
+    fn realm_mail_take_money_then(
         &self,
-        sender_guid: u64,
-        copper: u32,
+        recipient_guid: u64,
+        mail_id: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            RealmMailChargePostageArgs {
-                sender_guid,
-                copper,
+            RealmMailTakeMoneyArgs {
+                recipient_guid,
+                mail_id,
             },
             callback,
         )

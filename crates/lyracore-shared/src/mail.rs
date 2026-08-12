@@ -116,6 +116,11 @@ pub fn not_at_mailbox(mailbox_guid: u64) -> String {
     format!("mail: not at mailbox {mailbox_guid}")
 }
 
+/// The mail holds no copper — a second `CMSG_MAIL_TAKE_MONEY` on a mail already emptied, or a
+/// text-only letter. Refused rather than answered `Ok`, so "taking twice credits once" is a visible
+/// outcome instead of a silent one, and the row stays readable either way.
+pub const NOTHING_TO_TAKE: &str = "mail: nothing to take from that mail";
+
 /// A mark-as-read or delete named a `mail_id` that either does not exist or is not the caller's —
 /// deliberately the SAME text for both, the way `letter_body`'s read already answers `None` for
 /// either: a crafted id must not be a way to learn which mail ids belong to somebody else.

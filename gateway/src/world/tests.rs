@@ -418,12 +418,26 @@ struct InMemoryStore {
     /// A guid with no row here cannot pay, which is also the module's answer for a character with no
     /// live entity on the shard being asked.
     purses: std::sync::Mutex<Vec<(u64, u32)>>,
-    /// Letters written on THIS database: `(sender, recipient, subject, body, postage)`. The postage
-    /// is recorded because it is what tells the two planes apart — the single-database plane charges
-    /// IN the write call (one transaction), the sharded one charges on the sender's shard first and
-    /// passes 0 here.
+    /// Letters written on THIS database: `(sender, recipient, subject, body, attached money)`.
+    /// Recorded separately from `mails` because WHICH call wrote the row is what tells the two
+    /// planes apart — `mail_send` on one database, `mail_commit` on the mail plane of a sharded one.
     #[allow(clippy::type_complexity)]
     sent_mail: std::sync::Mutex<Vec<(u64, u64, String, String, u32)>>,
+    /// The escrow ledger on THIS database, as `(the guid the fence is filed under, the row)`. A
+    /// letter's fence is filed under its SENDER and lives on their shard; a take's is filed under
+    /// the PAYEE and lives on the plane holding the mail row.
+    #[allow(clippy::type_complexity)]
+    mail_escrows: std::sync::Mutex<Vec<(u64, mail::HeldEscrow)>>,
+    /// `game_mail_escrow.delivered` per escrow id: the attestation that licenses the settle. Kept
+    /// beside the fence rather than in it so the fake cannot settle one it never attested.
+    attested: std::sync::Mutex<Vec<(u64, bool)>>,
+    /// Delivery/payout receipts on THIS database, `(escrow_id, recipient or payee)` — the
+    /// idempotency key that makes a replayed commit or payout a no-op.
+    mail_receipts: std::sync::Mutex<Vec<(u64, u64)>>,
+    /// The mail-escrow step to fail on THIS database — a gateway killed before that step's
+    /// transaction committed. `transfer`'s `kill_at` for the mail drive, and a `Mutex` because a
+    /// re-drive test has to bring the database back up before driving again.
+    mail_kill_at: std::sync::Mutex<Option<String>>,
     /// When set, `realm_group_op(ACCEPT, …)` fails with this message. INJECTED because a real
     /// one cannot be staged synchronously: every accept-time refusal the module has (already grouped,
     /// party full, the inviter no longer leads) needs the party to change BETWEEN the invite and the
@@ -530,6 +544,61 @@ impl InMemoryStore {
             .lock()
             .unwrap()
             .push((self.shard.clone(), what.to_string()));
+    }
+
+    /// One mail-escrow step boundary. `Err` is the gateway dying before this step committed: the
+    /// call never lands, and nothing after it in the drive runs either.
+    fn mail_kill(&self, step: &str) -> Result<()> {
+        if self.mail_kill_at.lock().unwrap().as_deref() == Some(step) {
+            anyhow::bail!("injected: the gateway died before {step} on {}", self.shard);
+        }
+        Ok(())
+    }
+
+    /// Take `copper` out of a purse on THIS database, or refuse and take nothing — the module's
+    /// `charge_postage`, including its "no live entity here" arm for a guid with no purse row.
+    fn debit(&self, guid: u64, copper: u32) -> Result<()> {
+        let mut purses = self.purses.lock().unwrap();
+        match purses.iter_mut().find(|(g, _)| *g == guid) {
+            Some((_, money)) if *money >= copper => {
+                *money -= copper;
+                Ok(())
+            }
+            _ => Err(anyhow!(lyracore_shared::mail::NOT_ENOUGH_MONEY)),
+        }
+    }
+
+    fn credit(&self, guid: u64, copper: u32) {
+        let mut purses = self.purses.lock().unwrap();
+        if let Some((_, money)) = purses.iter_mut().find(|(g, _)| *g == guid) {
+            *money = money.saturating_add(copper);
+        }
+    }
+
+    /// The module's `insert_mail`: the row both write paths reach, so a letter written by the
+    /// single-database send and one written by the escrow's commit cannot differ.
+    fn write_mail(
+        &self,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+    ) {
+        let mut mails = self.mails.lock().unwrap();
+        let id = mails.iter().map(|(_, m)| m.id).max().unwrap_or(0) + 1;
+        mails.push((
+            recipient_guid,
+            codec::MailView {
+                id,
+                sender_guid,
+                subject,
+                body,
+                money,
+                created_at_secs: 1_000,
+                ..Default::default()
+            },
+        ));
     }
 
     /// Record a transfer step and honour an injected kill. `Err` means "the gateway died
@@ -1004,55 +1073,245 @@ impl WorldStore for InMemoryStore {
         }
         Ok(())
     }
-    /// Models the module's `apply_send`: charge the postage first when this call carries one (the
-    /// single-database plane's one transaction), then write the row. The id is per-database, as the
-    /// module's `auto_inc` is.
+    /// Models the module's `apply_send`: the postage plus the attached coin leave the purse and the
+    /// row is written, in ONE call — the single-database plane's one transaction. The id is
+    /// per-database, as the module's `auto_inc` is.
     fn mail_send(
         &self,
         sender_guid: u64,
         recipient_guid: u64,
         subject: String,
         body: String,
-        postage: u32,
+        money: u32,
     ) -> Result<()> {
         self.rec("mail_send");
-        if postage > 0 {
-            self.mail_charge_postage(sender_guid, postage)?;
-        }
+        self.debit(sender_guid, lyracore_shared::mail::total_cost(money))?;
         self.sent_mail.lock().unwrap().push((
             sender_guid,
             recipient_guid,
             subject.clone(),
             body.clone(),
-            postage,
+            money,
         ));
-        let mut mails = self.mails.lock().unwrap();
-        let id = mails.iter().map(|(_, m)| m.id).max().unwrap_or(0) + 1;
-        mails.push((
-            recipient_guid,
-            codec::MailView {
-                id,
-                sender_guid,
-                subject,
-                body,
-                created_at_secs: 1_000,
-                ..Default::default()
-            },
-        ));
+        self.write_mail(sender_guid, recipient_guid, subject, body, money);
         Ok(())
     }
-    /// Models the module's `charge_postage`: atomic, and it refuses for a purse that cannot pay AND
-    /// for a guid with no purse at all (the module's "no live entity on this database" arm).
-    fn mail_charge_postage(&self, sender_guid: u64, copper: u32) -> Result<()> {
-        self.rec("mail_charge_postage");
-        let mut purses = self.purses.lock().unwrap();
-        match purses.iter_mut().find(|(guid, _)| *guid == sender_guid) {
-            Some((_, money)) if *money >= copper => {
-                *money -= copper;
+    /// Models the module's `apply_take_money`: the credit and the clear are one transaction, so a
+    /// second take finds an empty row.
+    fn mail_take_money(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_take_money");
+        let money = {
+            let mut mails = self.mails.lock().unwrap();
+            let Some((_, m)) = mails
+                .iter_mut()
+                .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
+            else {
+                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+            };
+            if m.money == 0 {
+                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
+            }
+            std::mem::take(&mut m.money)
+        };
+        self.credit(recipient_guid, money);
+        Ok(())
+    }
+    /// Models `mail_escrow::apply_fence`: the whole cost leaves the purse into a fence row here.
+    fn mail_fence(
+        &self,
+        escrow_id: u64,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        postage: u32,
+    ) -> Result<()> {
+        self.rec("mail_fence");
+        self.mail_kill("mail_fence")?;
+        let mut escrows = self.mail_escrows.lock().unwrap();
+        if escrows.iter().any(|(_, e)| e.escrow_id == escrow_id) {
+            return Ok(()); // replay — the purse must not be debited twice for one letter
+        }
+        drop(escrows);
+        self.debit(sender_guid, money.saturating_add(postage))?;
+        escrows = self.mail_escrows.lock().unwrap();
+        escrows.push((
+            sender_guid,
+            mail::HeldEscrow {
+                escrow_id,
+                recipient_guid,
+                subject,
+                body,
+                money,
+                postage,
+                payout: false,
+                mail_id: 0,
+            },
+        ));
+        self.attested.lock().unwrap().push((escrow_id, false));
+        Ok(())
+    }
+    /// Models `mail_escrow::apply_commit`: the row plus a receipt, idempotent on the escrow id.
+    fn mail_commit(
+        &self,
+        escrow_id: u64,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+    ) -> Result<()> {
+        self.rec("mail_commit");
+        self.mail_kill("mail_commit")?;
+        let mut receipts = self.mail_receipts.lock().unwrap();
+        if receipts.iter().any(|(id, _)| *id == escrow_id) {
+            return Ok(());
+        }
+        receipts.push((escrow_id, recipient_guid));
+        drop(receipts);
+        self.sent_mail.lock().unwrap().push((
+            sender_guid,
+            recipient_guid,
+            subject.clone(),
+            body.clone(),
+            money,
+        ));
+        self.write_mail(sender_guid, recipient_guid, subject, body, money);
+        Ok(())
+    }
+    /// Models `mail_escrow::apply_take_fence`: the copper leaves the ROW into a fence here.
+    fn mail_take_money_fence(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        expect_money: u32,
+    ) -> Result<()> {
+        self.rec("mail_take_money_fence");
+        self.mail_kill("mail_take_money_fence")?;
+        if self
+            .mail_escrows
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, e)| e.escrow_id == escrow_id)
+        {
+            return Ok(());
+        }
+        let money = {
+            let mut mails = self.mails.lock().unwrap();
+            let Some((_, m)) = mails
+                .iter_mut()
+                .find(|(to, m)| *to == payee_guid && m.id == mail_id)
+            else {
+                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+            };
+            if m.money == 0 {
+                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
+            }
+            if m.money != expect_money {
+                return Err(anyhow!(
+                    "refusing to fence an amount the payout would not match"
+                ));
+            }
+            std::mem::take(&mut m.money)
+        };
+        self.mail_escrows.lock().unwrap().push((
+            payee_guid,
+            mail::HeldEscrow {
+                escrow_id,
+                recipient_guid: payee_guid,
+                subject: String::new(),
+                body: String::new(),
+                money,
+                postage: 0,
+                payout: true,
+                mail_id,
+            },
+        ));
+        self.attested.lock().unwrap().push((escrow_id, false));
+        Ok(())
+    }
+    /// Models `mail_escrow::apply_payout`: the credit plus a receipt, idempotent on the escrow id.
+    fn mail_payout(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        _mail_id: u64,
+        amount: u32,
+    ) -> Result<()> {
+        self.rec("mail_payout");
+        self.mail_kill("mail_payout")?;
+        let mut receipts = self.mail_receipts.lock().unwrap();
+        if receipts.iter().any(|(id, _)| *id == escrow_id) {
+            return Ok(());
+        }
+        if !self
+            .purses
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(g, _)| *g == payee_guid)
+        {
+            return Err(anyhow!(lyracore_shared::mail::NOT_IN_WORLD));
+        }
+        receipts.push((escrow_id, payee_guid));
+        drop(receipts);
+        self.credit(payee_guid, amount);
+        Ok(())
+    }
+    fn mail_confirm_delivery(&self, escrow_id: u64) -> Result<()> {
+        self.rec("mail_confirm_delivery");
+        self.mail_kill("mail_confirm_delivery")?;
+        let mut attested = self.attested.lock().unwrap();
+        match attested.iter_mut().find(|(id, _)| *id == escrow_id) {
+            Some((_, done)) => {
+                *done = true;
                 Ok(())
             }
-            _ => Err(anyhow!(lyracore_shared::mail::NOT_ENOUGH_MONEY)),
+            None => Err(anyhow!("mail escrow {escrow_id}: nothing fenced here")),
         }
+    }
+    /// Models `mail_escrow::apply_settle`, delete-last included: it REFUSES while unattested.
+    fn mail_settle(&self, escrow_id: u64) -> Result<()> {
+        self.rec("mail_settle");
+        self.mail_kill("mail_settle")?;
+        let attested = self
+            .attested
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(id, _)| *id == escrow_id)
+            .map(|(_, done)| *done);
+        match attested {
+            None => Ok(()), // already settled, or this call reached the wrong database
+            Some(false) => Err(anyhow!(
+                "mail escrow {escrow_id}: delivery not attested — refusing to destroy the fence"
+            )),
+            Some(true) => {
+                self.mail_escrows
+                    .lock()
+                    .unwrap()
+                    .retain(|(_, e)| e.escrow_id != escrow_id);
+                self.attested
+                    .lock()
+                    .unwrap()
+                    .retain(|(id, _)| *id != escrow_id);
+                Ok(())
+            }
+        }
+    }
+    fn mail_escrows_of(&self, sender_guid: u64) -> Result<Vec<mail::HeldEscrow>> {
+        self.rec("mail_escrows_of");
+        Ok(self
+            .mail_escrows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(owner, _)| *owner == sender_guid)
+            .map(|(_, e)| e.clone())
+            .collect())
     }
     fn buy_item(
         &self,

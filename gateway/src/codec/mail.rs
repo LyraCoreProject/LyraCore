@@ -108,6 +108,26 @@ pub fn build_mail_delete_result(mail_id: u32, ok: bool) -> SMSG_SEND_MAIL_RESULT
     }
 }
 
+/// Answer `CMSG_MAIL_TAKE_MONEY` with `SMSG_SEND_MAIL_RESULT`/MoneyTaken — the ack that closes the
+/// client's spinner and makes it re-read the mail.
+///
+/// A refusal answers `ErrInternalError` for the same reason the delete arm does: `MailResultTwo` has
+/// no variant for "not your mail" or "there is nothing in it", and mangoszero uses the generic
+/// bucket for exactly those. The two refusals deliberately look the same on the wire, so a crafted
+/// mail id cannot tell an empty mail apart from somebody else's.
+pub fn build_mail_take_money_result(mail_id: u32, ok: bool) -> SMSG_SEND_MAIL_RESULT {
+    SMSG_SEND_MAIL_RESULT {
+        mail_id,
+        action: SMSG_SEND_MAIL_RESULT_MailAction::MoneyTaken {
+            result2: if ok {
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
+            } else {
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+            },
+        },
+    }
+}
+
 /// Answer `CMSG_SEND_MAIL` with `SMSG_SEND_MAIL_RESULT`/Send.
 ///
 /// `result2` is chosen by the caller, one variant per gate: the client renders each as its own
@@ -198,6 +218,37 @@ mod tests {
                 other => panic!("expected the Send action, got {other:?}"),
             }
         }
+    }
+
+    /// A take answers through the MoneyTaken action, carrying the mail id back so the client
+    /// re-reads the right row. Both refusals it can produce — not your mail, and nothing left in it
+    /// — deliberately look the same on the wire.
+    #[test]
+    fn a_take_money_result_answers_on_the_money_taken_action() {
+        match build_mail_take_money_result(7, true).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::MoneyTaken { result2 } => {
+                assert_eq!(result2, SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok)
+            }
+            other => panic!("expected the MoneyTaken action, got {other:?}"),
+        }
+        let refused = build_mail_take_money_result(7, false);
+        assert_eq!(refused.mail_id, 7);
+        match refused.action {
+            SMSG_SEND_MAIL_RESULT_MailAction::MoneyTaken { result2 } => assert_eq!(
+                result2,
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+            ),
+            other => panic!("expected the MoneyTaken action, got {other:?}"),
+        }
+    }
+
+    /// The list packet carries the attached copper, so the recipient can see what is in a letter
+    /// before opening it.
+    #[test]
+    fn the_list_packet_carries_a_mails_attached_copper() {
+        let mut m = view(1, "here you go");
+        m.money = 130;
+        assert_eq!(build_mail_list(&[m], 1_000).mails[0].money, Gold::new(130));
     }
 
     /// A successful delete answers `Ok`; a refused one answers `ErrInternalError` — the generic

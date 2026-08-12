@@ -510,13 +510,78 @@ impl WorldStore for Coordinator {
         recipient_guid: u64,
         subject: String,
         body: String,
-        postage: u32,
+        money: u32,
     ) -> Result<()> {
-        self.mail_send(sender_guid, recipient_guid, subject, body, postage)
+        self.mail_send(sender_guid, recipient_guid, subject, body, money)
     }
 
-    fn mail_charge_postage(&self, sender_guid: u64, copper: u32) -> Result<()> {
-        self.mail_charge_postage(sender_guid, copper)
+    fn mail_take_money(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.mail_take_money(recipient_guid, mail_id)
+    }
+
+    fn mail_fence(
+        &self,
+        escrow_id: u64,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        postage: u32,
+    ) -> Result<()> {
+        self.mail_fence(
+            escrow_id,
+            sender_guid,
+            recipient_guid,
+            subject,
+            body,
+            money,
+            postage,
+        )
+    }
+
+    fn mail_commit(
+        &self,
+        escrow_id: u64,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+    ) -> Result<()> {
+        self.mail_commit(escrow_id, sender_guid, recipient_guid, subject, body, money)
+    }
+
+    fn mail_take_money_fence(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        expect_money: u32,
+    ) -> Result<()> {
+        self.mail_take_money_fence(escrow_id, payee_guid, mail_id, expect_money)
+    }
+
+    fn mail_payout(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        amount: u32,
+    ) -> Result<()> {
+        self.mail_payout(escrow_id, payee_guid, mail_id, amount)
+    }
+
+    fn mail_confirm_delivery(&self, escrow_id: u64) -> Result<()> {
+        self.mail_confirm_delivery(escrow_id)
+    }
+
+    fn mail_settle(&self, escrow_id: u64) -> Result<()> {
+        self.mail_settle(escrow_id)
+    }
+
+    fn mail_escrows_of(&self, sender_guid: u64) -> Result<Vec<crate::world::mail::HeldEscrow>> {
+        self.mail_escrows_of(sender_guid)
     }
 
     fn buy_item(
