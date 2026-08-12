@@ -196,10 +196,8 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                 .filter(|snap| snap.npc_guid == npc)
                 .and_then(|snap| snap.options.get(c.gossip_list_id as usize))
                 .copied();
-            // STABLE option identity: the module is notified with the clicked row's
-            // `game_gossip_option.row_id`, so a package handler keys on that (immune to menu position)
-            // rather than the volatile index. `SYNTHESIZED_ROW_ID` = the trailing Farewell, a gateway-
-            // synthesized line, or a stale click — none of which is a package's minted option.
+            // The module is told the clicked row's `row_id`, not its position: a position is
+            // per-viewer (a cond-gated row renumbers it), so it identifies nothing to a package.
             let option_row_id = clicked.map_or(codec::SYNTHESIZED_ROW_ID, |(row_id, _)| row_id);
             // Notify the module (the on_gossip_select hook chokepoint) — best-effort,
             // so a module hiccup never blocks the gossip reply below.

@@ -154,8 +154,8 @@ mod cond {
     pub const VALUE1: usize = 2;
     pub const MANGOS_QUESTREWARDED: u64 = 8;
     pub const MANGOS_QUESTTAKEN: u64 = 9;
-    /// `CONDITION_ACTIVE_GAME_EVENT` [V]. The seasonal gate, and the one condition that must fail
-    /// CLOSED: there is no game-event calendar here, so fail-open pitches Children's Week in July.
+    /// `CONDITION_ACTIVE_GAME_EVENT` [V]. No game-event calendar exists here, so this gate must fail
+    /// CLOSED — fail-open pitches Children's Week in July.
     pub const MANGOS_ACTIVE_GAME_EVENT: u64 = 12;
 }
 mod cts {
@@ -1796,8 +1796,8 @@ fn resolve_gossip_option_condition(
         match mangos_type {
             cond::MANGOS_QUESTTAKEN => (gossip_condition::QUEST_TAKEN, value1 as u32, 0),
             cond::MANGOS_QUESTREWARDED => (gossip_condition::QUEST_REWARDED, value1 as u32, 0),
-            // Fail-CLOSED, against the fail-open default the rest of this map follows: a seasonal
-            // option shown year-round is a live wrong pitch, where a hidden one is only absent.
+            // Fail-CLOSED, against this map's fail-open default: a seasonal option shown year-round
+            // is a wrong pitch, where a hidden one is only absent.
             cond::MANGOS_ACTIVE_GAME_EVENT => (gossip_condition::NEVER, 0, 0),
             _ => (gossip_condition::NONE, 0, 0),
         }
@@ -1941,10 +1941,9 @@ fn build_gossip_sql(dump: &str, creature_entries: &std::collections::HashSet<u64
     }
 
     // 3. Parse gossip_menu (cmangos): collect (entry, text_id) pairs for in-box creatures.
-    //    gossip_menu.entry = creature_template.GossipMenuId. We emit ONE row per creature_entry, and
-    //    an entry commonly has SEVERAL rows — one unconditional greeting plus condition-gated
-    //    variants. The UNCONDITIONAL row is the default; row order does not rank them, so taking the
-    //    first row seen made a conditional greeting the permanent title for that NPC.
+    //    gossip_menu.entry = creature_template.GossipMenuId. We emit ONE row per creature_entry. An
+    //    entry commonly has several rows — one unconditional greeting plus condition-gated variants —
+    //    and row order does not rank them, so the unconditional row is the default title.
     let mut menu_to_text: HashMap<u64, u64> = HashMap::new();
     let mut menu_text_is_conditional: HashMap<u64, bool> = HashMap::new();
     for row in parse_table(dump, "gossip_menu") {
@@ -1954,8 +1953,7 @@ fn build_gossip_sql(dump: &str, creature_entries: &std::collections::HashSet<u64
             continue;
         }
         let conditional = field(&row, gm::CONDITION_ID).parse::<u64>().unwrap_or(0) != 0;
-        // An unconditional row replaces a conditional one already held; among rows of the same kind
-        // the first seen wins, so the choice stays deterministic in dump order.
+        // Among rows of the same kind the first seen wins, so the choice is deterministic.
         let held_conditional = menu_text_is_conditional.get(&entry).copied();
         if held_conditional.is_none() || (held_conditional == Some(true) && !conditional) {
             menu_to_text.insert(entry, text_id);
@@ -2062,9 +2060,7 @@ fn build_gossip_sql(dump: &str, creature_entries: &std::collections::HashSet<u64
                 &text,
                 field(row, gmo::OPTION_TYPE).parse().unwrap_or(0),
             );
-            // A QUESTGIVER row is not a clickable option here: quests ride the menu's own quest
-            // section, and the dump's rows carry no usable label — the client renders the literal
-            // "GOSSIP_OPTION_QUESTGIVER" placeholder string.
+            // Quests ride the menu's own quest section, and these rows carry no usable label.
             if action == lyracore_shared::constants::gossip_option::QUESTGIVER {
                 continue;
             }
@@ -5573,9 +5569,8 @@ mod tests {
 
     #[test]
     fn build_gossip_sql_drops_questgiver_placeholder_rows_and_keeps_the_index_dense() {
-        // An `OptionType=2` (QUESTGIVER) row carries no usable label — the client renders the literal
-        // "GOSSIP_OPTION_QUESTGIVER" string (13 NPCs in the dump, Innkeeper Farley among them). Quests
-        // reach the window through its quest section, so the row is dropped at import.
+        // An `OptionType=2` row's label is the literal string "GOSSIP_OPTION_QUESTGIVER" (13 NPCs in
+        // the dump, Innkeeper Farley among them), and its quests arrive via the quest section anyway.
         use lyracore_shared::constants::gossip_option;
         let entry = 320u64;
         let menu_id = 920u64;
@@ -5613,9 +5608,8 @@ mod tests {
 
     #[test]
     fn build_gossip_sql_takes_the_unconditional_greeting_as_the_menu_title() {
-        // A gossip_menu entry commonly has several rows: one unconditional greeting plus
-        // condition-gated variants, in no meaningful order. Taking the first row seen made a
-        // conditional greeting the permanent title (195/227 option-bearing entries in the audit).
+        // Several rows per entry, in no meaningful order: one unconditional greeting plus
+        // condition-gated variants. First-row-wins made a conditional greeting the permanent title.
         let entry = 321u64;
         let menu_id = 921u64;
         // npc_text short (17-col) rows: id, prob0..7, BroadcastTextId0..7 — only slot 0 populated.
@@ -5639,8 +5633,7 @@ mod tests {
 
     #[test]
     fn build_gossip_sql_hides_a_seasonal_event_option_instead_of_failing_open() {
-        // mangos type 12 = CONDITION_ACTIVE_GAME_EVENT. There is no event calendar here, so this is
-        // the one condition that fails CLOSED — fail-open pitches Children's Week in July.
+        // mangos type 12 = CONDITION_ACTIVE_GAME_EVENT, the one condition that fails CLOSED.
         let entry = 322u64;
         let menu_id = 922u64;
         let option = format!("({menu_id},0,0,'What is Children'' Week?',1,0,0,0,0,0,'NULL',12,0,0)");

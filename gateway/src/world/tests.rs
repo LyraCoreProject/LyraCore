@@ -5974,9 +5974,8 @@ fn gossip_select_of_any_other_option_completes_without_binding() {
 
 // --- Imported gossip menu options + multi-slot npc_text -------------------------------------------
 
-/// Open `npc`'s gossip window and drain the menu, so the following `CMSG_GOSSIP_SELECT_OPTION` has
-/// the snapshot it resolves against — the real client can never select before it has been sent a
-/// menu, and the dispatcher refuses a click with nothing open (see `GossipMenuSnapshot`).
+/// Open `npc`'s gossip window and drain the menu, so a following `CMSG_GOSSIP_SELECT_OPTION` has the
+/// snapshot it resolves against — a click with nothing open selects nothing.
 fn gossip_hello(
     client: &mut UnixStream,
     enc: &mut EncrypterHalf,

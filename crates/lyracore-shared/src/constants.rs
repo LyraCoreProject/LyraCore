@@ -235,17 +235,14 @@ pub mod start_human_warrior {
 /// inert (submenu/taxi aren't wired up — work-item 217 scope note).
 pub mod gossip_option {
     pub const GOSSIP: u32 = 1; // plain text / submenu link (submenu navigation deferred, work-item 217)
-    /// cmangos `GOSSIP_OPTION_QUESTGIVER`. Quests are delivered by the menu's QUEST section, never by
-    /// an option row, so the importer DROPS these — left in, the client renders the literal
-    /// placeholder string "GOSSIP_OPTION_QUESTGIVER" (13 NPCs in the dump, Innkeeper Farley included).
+    /// Quests reach the window through its QUEST section, never an option row, so the importer drops
+    /// these — the dump's rows carry the literal placeholder label "GOSSIP_OPTION_QUESTGIVER".
     pub const QUESTGIVER: u32 = 2;
     pub const VENDOR: u32 = 3; // opens the vendor window (routes to build_list_inventory_raw)
     pub const TAXI: u32 = 4; // flight master (system 136, not wired — inert)
     pub const TRAINER: u32 = 5; // opens SMSG_TRAINER_LIST
     pub const INNKEEPER: u32 = 8; // binds the caller's hearthstone home (bind_home)
-    /// cmangos `GOSSIP_OPTION_BANKER` — opens the bank window. 9, NOT 2: 2 is QUESTGIVER, and while
-    /// this read 2 every questgiver placeholder row opened a bank window.
-    pub const BANKER: u32 = 9;
+    pub const BANKER: u32 = 9; // opens the bank window
     /// cmangos `GOSSIP_OPTION_UNLEARNTALENTS`. NOT what the raw dump carries — every "I wish to
     /// unlearn my talents." row imports with `action=GOSSIP` (cmangos gates it in C++ code at
     /// GossipHello, not via this column), so the importer reclassifies that specific row's text to
@@ -342,8 +339,7 @@ mod tests {
             0,
             "gossip_option action codes must not collide"
         );
-        // The cmangos `GossipOptionType` numbering. BANKER is 9; 2 is QUESTGIVER, and the two were
-        // conflated until the bank window started opening on questgiver placeholder rows.
+        // The cmangos `GossipOptionType` numbering.
         assert_eq!(
             (GOSSIP, QUESTGIVER, VENDOR, TAXI, TRAINER, INNKEEPER, BANKER),
             (1, 2, 3, 4, 5, 8, 9)

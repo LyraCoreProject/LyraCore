@@ -318,9 +318,8 @@ pub enum WorldState {
     InWorld(InWorld),
 }
 
-/// The gossip menu one client is currently looking at — see `WorldConn::gossip_menu`. `options` is
-/// indexed by the `gossip_list_id` the client echoes back; an index past the end is the trailing
-/// Farewell line (or a stale click), which just closes the window.
+/// The gossip menu one client is looking at. `options` is indexed by the `gossip_list_id` the client
+/// echoes back; past the end is the trailing Farewell line, or a stale click.
 pub struct GossipMenuSnapshot {
     pub npc_guid: u64,
     /// `(game_gossip_option.row_id, action)` per menu position. `row_id` is
@@ -366,11 +365,9 @@ pub struct WorldConn {
     /// tear it down on a state transition, and keeping it here avoids re-plumbing it through
     /// `enter_world`.
     move_coalesce: CoalesceState,
-    /// The gossip menu last sent to this client: the NPC guid plus one `(row_id, action)` per menu
-    /// position. `CMSG_GOSSIP_SELECT_OPTION` carries only a POSITION, and that position was assigned
-    /// against a per-player condition-filtered list — re-deriving the list at select time reads
-    /// whatever the quest state is NOW, so a quest accepted while the window was open shifts every
-    /// index under the click. The snapshot is what the player is actually looking at.
+    /// The gossip menu last sent to this client. A select carries only a position into a
+    /// condition-filtered list, so re-deriving that list at click time renumbers it under a quest
+    /// accepted while the window was open.
     pub(crate) gossip_menu: Option<GossipMenuSnapshot>,
     /// Non-blocking movement submit state: outstanding submissions and
     /// the module's deferred verdict. `Arc` because the SDK completion callback outlives this call.

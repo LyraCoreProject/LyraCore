@@ -81,16 +81,13 @@ pub fn option_condition_holds(cond_type: u32, quest_taken: bool, quest_rewarded:
     }
 }
 
-/// The `row_id` of a gossip option the gateway SYNTHESIZED rather than imported (the browse-goods and
-/// make-home lines, and the trailing Farewell). No `game_gossip_option` row backs them, so a package
-/// keying on `row_id` can never match one.
+/// The `row_id` of a gossip option the gateway synthesized rather than imported. No
+/// `game_gossip_option` row backs it, so a package keying on `row_id` can never match one.
 pub const SYNTHESIZED_ROW_ID: u32 = u32::MAX;
 
-/// The menu the NPC actually shows: the condition-filtered imported options, then the flag-derived
-/// lines the dump left out. A vendor whose imported menu has no `action=VENDOR` row would otherwise
-/// have unreachable stock (Orphan Matron Nightingale), and an innkeeper without an `action=INNKEEPER`
-/// row could not be bound to (Katie Hunter) — the imported list used to suppress the synthesis wholly.
-/// The trailing "Farewell." is NOT here; `build_gossip_message` appends it at render.
+/// The menu the NPC shows: the condition-filtered imported options, then the flag-derived lines the
+/// dump left out — a vendor whose imported menu has no `action=VENDOR` row has unreachable stock
+/// otherwise. The trailing "Farewell." is appended later, by `build_gossip_message`.
 pub fn gossip_menu_options(
     imported: Vec<GossipOptionView>,
     is_vendor: bool,

@@ -80,9 +80,7 @@ pub(crate) fn bank_access_gate(ctx: &ReducerContext, player_guid: u64) -> Result
     flagged_npc_in_reach_gate(ctx, player_guid, npc_flags::BANKER, "banker", "use the bank")
 }
 
-/// The hearth-bind trust gate: binding a home needs a live INNKEEPER npc in reach. The bind carries
-/// no npc guid — the client sends only "bind me" — so like the bank it searches the player's own
-/// partition rather than validating a named target.
+/// The hearth-bind trust gate: binding a home needs a live INNKEEPER npc in reach.
 pub(crate) fn innkeeper_access_gate(ctx: &ReducerContext, player_guid: u64) -> Result<(), String> {
     use lyracore_shared::constants::npc_flags;
     flagged_npc_in_reach_gate(
@@ -95,8 +93,8 @@ pub(crate) fn innkeeper_access_gate(ctx: &ReducerContext, player_guid: u64) -> R
 }
 
 /// Is the player alive with a live NPC carrying `flag` inside the interaction radius? The gate for
-/// every interaction the client requests WITHOUT naming its NPC (`npc_interaction_gate` covers the
-/// ones that do name it), so the search is over the player's own partition.
+/// the interactions the client requests WITHOUT naming an NPC, so it searches the player's own
+/// partition — `npc_interaction_gate` covers the ones that do name a target.
 fn flagged_npc_in_reach_gate(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -589,8 +587,7 @@ mod tests {
         assert!(!banker_in_reach(false, BANKER, false, edge + 1.0)); // out of range
     }
 
-    /// HEARTH BIND: the same gate, keyed on INNKEEPER. The bind names no NPC, so an ungated
-    /// `gw_bind_home` would let a client hearth anywhere — a distant innkeeper must refuse.
+    /// HEARTH BIND: the same gate, keyed on INNKEEPER — a distant innkeeper must refuse the bind.
     #[test]
     fn innkeeper_in_reach_refuses_a_distant_or_wrong_kind_npc() {
         let edge = VENDOR_RANGE_SQ;
