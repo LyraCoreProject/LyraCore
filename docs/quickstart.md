@@ -185,14 +185,14 @@ It prints its progress as it goes:
 ```text
 · starting SpacetimeDB on 127.0.0.1:3000...
 · building the gateway...
-· publishing lyracore, lyracore-kalimdor, lyracore-realm...
+· publishing lyracore, lyracore-kalimdor, lyracore-instances, lyracore-realm...
 · no SpacetimeDB login found — minting a local identity from http://127.0.0.1:3000 (no spacetimedb.com account needed)...
 · claiming the operator identity...
 · starting the gateway on 127.0.0.1:8085...
 ✓ dev stack is up.
   spacetime  healthy   (PID 12345, 127.0.0.1:3000)
   gateway    healthy   (PID 12346, 127.0.0.1:8085)
-  databases  lyracore, lyracore-kalimdor, lyracore-realm published on http://127.0.0.1:3000
+  databases  lyracore, lyracore-kalimdor, lyracore-instances, lyracore-realm published on http://127.0.0.1:3000
 ```
 
 (Illustrative — the exact wording is the CLI's, and it lives in
@@ -203,8 +203,8 @@ What that actually did:
 1. Started SpacetimeDB on `127.0.0.1:3000` — **or reused one already listening there.** A node this
    CLI did not start is never recorded and never stopped by `dev down`.
 2. Built the gateway (`cargo build -p lyracore-gateway`).
-3. Published the **three fixture databases** — `lyracore`, `lyracore-kalimdor`
-   and `lyracore-realm` — always through `./lyracore publish`. Nothing in this path runs a bare
+3. Published the **four fixture databases** — `lyracore`, `lyracore-kalimdor`,
+   `lyracore-instances` and `lyracore-realm` — always through `./lyracore publish`. Nothing in this path runs a bare
    `spacetime publish`, and the command **refuses** to forward the destructive `-c` clear-publish.
    (`./lyracore dev up --single` publishes and runs `lyracore` alone; see below.)
 4. Got itself a **coordinator identity** — see below. The `minting` line appears only on a host with
@@ -227,10 +227,13 @@ with a pre-made character (`Tester`, Human Warrior, level 1), and a small demo p
 
 Your realm is not one database: all of Eastern Kingdoms — including Northshire Valley, where your
 character starts and where all the seeded content is — lives on `lyracore`, map 1 (Kalimdor) is on
-`lyracore-kalimdor`, and accounts and sessions are on `lyracore-realm`. Those are separate
+`lyracore-kalimdor`, every dungeon run (map 36, the Deadmines) is on `lyracore-instances`, and
+accounts and sessions are on `lyracore-realm`. Those are separate
 SpacetimeDB databases with separate writers, not zones in one process. Crossing between them is an
 escrowed character transfer, not a walk: the Kalimdor database is topology only — map 1 has no
 content at all, so it is a routing demonstration and a `dev status` line rather than a place to go.
+The instance pool is the opposite — walking into the Deadmines portal is a real crossing, which is
+why `./lyracore import` populates that database too.
 
 > The fixture used to carry a second Elwynn database and a **walkable seam** on the road to
 > Goldshire — a mid-session handoff between two databases serving one map. That region tier was
@@ -242,7 +245,7 @@ content at all, so it is a routing demonstration and a `dev status` line rather 
 Valley; the rest of Elwynn stays unpopulated until you run `./lyracore import` (which needs a
 cmangos world dump and your own client MPQs). Goldshire is not populated out of the box.
 
-If you would rather not deal with three databases (debugging something unrelated, or RAM is tight),
+If you would rather not deal with four databases (debugging something unrelated, or RAM is tight),
 `./lyracore dev up --single` brings up `lyracore` alone.
 
 ⚠ Because the fixture is sharded, **a schema change means republishing every fixture database**, not
@@ -368,16 +371,19 @@ One command, and it asks before it does anything:
 ./lyracore import --client-data /path/to/WoW-1.12.1/Data
 ```
 
-It prints the notice above in full and waits for you to type `yes`. Then it runs four stages: pull
-`classic-db` (checksum-verified against the pinned commit), confirm the client path, run the world
-ETL, and import the curated class-spell trainer offerings. Pass `--accept` to answer the consent
-question in advance for a scripted run, and leave `--client-data` off to be prompted for the path.
+It prints the notice above in full and waits for you to type `yes`. Then it pulls `classic-db`
+(checksum-verified against the pinned commit), confirms the client path, and runs the world ETL plus
+the curated class-spell trainer offerings **on every database the fixture populates** — `lyracore`,
+then `lyracore-instances`, which is the database that spawns a Deadmines run's population. Six
+stages on the sharded fixture, four under `--single`. Pass `--accept` to answer the consent question
+in advance for a scripted run, and leave `--client-data` off to be prompted for the path.
 
-**What to expect.** The pull is a few hundred megabytes of git history. The ETL itself is the long
+**What to expect.** The pull is a few hundred megabytes of git history. Each ETL is the long
 part — **tens of minutes**, most of it in the terrain and navigation passes, which rasterize the box
-cell by cell. It ends by printing an assertion per content family (`ok  live creature entities:
-2731`, and so on); a `FAIL` line names the family that came up short, which is the diagnostic you
-want. The stack must be up (`./lyracore dev up`) — the ETL writes through the running node.
+cell by cell, and the sharded fixture runs two of them. It ends by printing an assertion per content
+family (`ok  live creature entities: 2731`, and so on); a `FAIL` line names the family that came up
+short, which is the diagnostic you want. The stack must be up (`./lyracore dev up`) — the ETL writes
+through the running node.
 
 **It is optional, and it is one-way-ish.** Everything in §§1–5 works without it, and the wire smoke
 tests run against the fixture. The import clears and reloads whole content families, so running it
@@ -758,9 +764,9 @@ name matches nothing and still exits 1 — indistinguishable from "already stopp
 - [GitHub Issues](https://github.com/LyraCoreProject/LyraCore/issues) — the work queue. Run the
   offline checks (`cargo test` per crate) before proposing a change.
 - [`docs/danger-zones.md`](./danger-zones.md) — authoritative traps, tooling gotchas, and the
-  production (four-database) deploy procedure. `dev up` runs its own smaller three-database fixture
-  topology, which is the deliberate exception to §3; do not use it to launch or repair a production
-  realm.
+  production (four-database) deploy procedure. `dev up` runs its own four-database fixture
+  topology — the same tiers, on a loopback node — which is the deliberate exception to §3; do not
+  use it to launch or repair a production realm.
 - [`docs/region-sharding.md`](./region-sharding.md) — retired (#471): the removed region tier's
   design — seam menus, assignments, view merge — kept for reference.
 - [`docs/architecture.md`](./architecture.md) and [`docs/schema.md`](./schema.md) — how the module

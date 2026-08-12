@@ -499,7 +499,7 @@ pub(crate) fn resolve_equip_slot(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::items::tables::ItemTemplate;
 
@@ -677,7 +677,8 @@ mod tests {
 
     /// A bare `ItemTemplate` for the stat-sum tests: zero everything except the stat columns the test
     /// sets via the returned mutable handle. Keeps the pure stat arithmetic testable without a module.
-    fn blank_template(entry: u32) -> ItemTemplate {
+    // pub(crate): reused by `trade::tests` (#121) — the one 100-field template fixture.
+    pub(crate) fn blank_template(entry: u32) -> ItemTemplate {
         ItemTemplate {
             entry,
             class: 4,

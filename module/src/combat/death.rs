@@ -381,6 +381,8 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
     entities.guid().update(victim);
     disengage(ctx, victim_guid);
     crate::spell::break_channel(ctx, victim_guid);
+    // A live Trade Session dies with the victim — both windows hear `TradeCanceled` (#123).
+    crate::trade::cancel_trade_for(ctx, victim_guid);
     crate::items::apply_death_durability_loss(ctx, victim_guid);
     crate::hooks::fire_on_death(
         ctx,

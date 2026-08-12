@@ -14,6 +14,9 @@ pub mod aura_schedule_type;
 pub mod aura_type;
 pub mod begin_transfer_reducer;
 pub mod bot_invite_intent_type;
+pub mod breath_relay_event_type;
+pub mod breath_schedule_type;
+pub mod breath_state_type;
 pub mod buyback_entry_type;
 pub mod catalogue_fingerprint_type;
 pub mod channel_event_type;
@@ -61,12 +64,14 @@ pub mod debug_assert_chase_stops_at_column_reducer;
 pub mod debug_assert_floor_snap_reducer;
 pub mod debug_audit_class_kits_reducer;
 pub mod debug_audit_quest_chains_reducer;
+pub mod debug_auto_bank_item_reducer;
 pub mod debug_backfill_cell_ids_reducer;
 pub mod debug_backfill_go_grid_reducer;
 pub mod debug_begin_cast_reducer;
 pub mod debug_bench_collision_gate_reducer;
 pub mod debug_bench_los_reducer;
 pub mod debug_bind_home_reducer;
+pub mod debug_buy_bank_slot_reducer;
 pub mod debug_buy_item_reducer;
 pub mod debug_buy_trainer_spell_reducer;
 pub mod debug_cast_at_reducer;
@@ -74,6 +79,7 @@ pub mod debug_cast_spell_at_reducer;
 pub mod debug_cast_spell_reducer;
 pub mod debug_catalogue_fingerprint_reducer;
 pub mod debug_check_rest_at_reducer;
+pub mod debug_check_submerged_reducer;
 pub mod debug_clear_creatures_reducer;
 pub mod debug_compute_spell_reducer;
 pub mod debug_compute_swing_reducer;
@@ -199,6 +205,9 @@ pub mod game_areatrigger_teleport_table;
 pub mod game_aura_schedule_table;
 pub mod game_aura_table;
 pub mod game_bot_invite_intent_table;
+pub mod game_breath_relay_event_table;
+pub mod game_breath_schedule_table;
+pub mod game_breath_state_table;
 pub mod game_catalogue_fingerprint_table;
 pub mod game_channel_event_table;
 pub mod game_channel_member_table;
@@ -356,6 +365,9 @@ pub mod game_taunt_lock_table;
 pub mod game_teleport_event_table;
 pub mod game_terrain_chunk_table;
 pub mod game_threat_table;
+pub mod game_trade_event_table;
+pub mod game_trade_session_table;
+pub mod game_trade_slot_table;
 pub mod game_trainer_spell_table;
 pub mod game_transfer_in_table;
 pub mod game_transfer_out_table;
@@ -385,17 +397,24 @@ pub mod guid_range_type;
 pub mod gw_abandon_quest_reducer;
 pub mod gw_accept_group_invite_reducer;
 pub mod gw_accept_quest_reducer;
+pub mod gw_accept_trade_reducer;
 pub mod gw_add_friend_reducer;
 pub mod gw_add_ignore_reducer;
 pub mod gw_attack_reducer;
+pub mod gw_auto_bank_item_reducer;
+pub mod gw_begin_trade_reducer;
 pub mod gw_bind_home_reducer;
+pub mod gw_busy_trade_reducer;
+pub mod gw_buy_bank_slot_reducer;
 pub mod gw_buy_item_reducer;
 pub mod gw_buyback_item_reducer;
 pub mod gw_cancel_aura_reducer;
 pub mod gw_cancel_cast_reducer;
+pub mod gw_cancel_trade_reducer;
 pub mod gw_cast_at_reducer;
 pub mod gw_cast_spell_at_reducer;
 pub mod gw_cast_spell_reducer;
+pub mod gw_clear_trade_item_reducer;
 pub mod gw_client_command_reducer;
 pub mod gw_del_friend_reducer;
 pub mod gw_del_ignore_reducer;
@@ -412,6 +431,8 @@ pub mod gw_group_leave_reducer;
 pub mod gw_group_loot_method_reducer;
 pub mod gw_group_uninvite_reducer;
 pub mod gw_heartbeat_reducer;
+pub mod gw_ignore_trade_reducer;
+pub mod gw_initiate_trade_reducer;
 pub mod gw_inspect_reducer;
 pub mod gw_join_channel_reducer;
 pub mod gw_learn_talent_reducer;
@@ -443,13 +464,17 @@ pub mod gw_send_roll_reducer;
 pub mod gw_send_whisper_reducer;
 pub mod gw_set_action_button_reducer;
 pub mod gw_set_faction_at_war_reducer;
+pub mod gw_set_sheathed_reducer;
 pub mod gw_set_target_reducer;
+pub mod gw_set_trade_gold_reducer;
+pub mod gw_set_trade_item_reducer;
 pub mod gw_skin_reducer;
 pub mod gw_spirit_res_reducer;
 pub mod gw_stop_attack_reducer;
 pub mod gw_take_loot_reducer;
 pub mod gw_trainer_buy_reducer;
 pub mod gw_turn_in_quest_reducer;
+pub mod gw_unaccept_trade_reducer;
 pub mod gw_unequip_item_reducer;
 pub mod gw_use_gameobject_reducer;
 pub mod gw_use_item_reducer;
@@ -575,9 +600,13 @@ pub mod teleport_event_type;
 pub mod terrain_chunk_type;
 pub mod threat_entry_type;
 pub mod tick_auras_reducer;
+pub mod tick_breath_reducer;
 pub mod tick_creatures_reducer;
 pub mod tick_ground_areas_reducer;
 pub mod tick_melee_reducer;
+pub mod trade_event_type;
+pub mod trade_session_type;
+pub mod trade_slot_type;
 pub mod trainer_spell_type;
 pub mod transfer_in_type;
 pub mod transfer_out_type;
@@ -595,6 +624,9 @@ pub use aura_schedule_type::AuraSchedule;
 pub use aura_type::Aura;
 pub use begin_transfer_reducer::begin_transfer;
 pub use bot_invite_intent_type::BotInviteIntent;
+pub use breath_relay_event_type::BreathRelayEvent;
+pub use breath_schedule_type::BreathSchedule;
+pub use breath_state_type::BreathState;
 pub use buyback_entry_type::BuybackEntry;
 pub use catalogue_fingerprint_type::CatalogueFingerprint;
 pub use channel_event_type::ChannelEvent;
@@ -642,12 +674,14 @@ pub use debug_assert_chase_stops_at_column_reducer::debug_assert_chase_stops_at_
 pub use debug_assert_floor_snap_reducer::debug_assert_floor_snap;
 pub use debug_audit_class_kits_reducer::debug_audit_class_kits;
 pub use debug_audit_quest_chains_reducer::debug_audit_quest_chains;
+pub use debug_auto_bank_item_reducer::debug_auto_bank_item;
 pub use debug_backfill_cell_ids_reducer::debug_backfill_cell_ids;
 pub use debug_backfill_go_grid_reducer::debug_backfill_go_grid;
 pub use debug_begin_cast_reducer::debug_begin_cast;
 pub use debug_bench_collision_gate_reducer::debug_bench_collision_gate;
 pub use debug_bench_los_reducer::debug_bench_los;
 pub use debug_bind_home_reducer::debug_bind_home;
+pub use debug_buy_bank_slot_reducer::debug_buy_bank_slot;
 pub use debug_buy_item_reducer::debug_buy_item;
 pub use debug_buy_trainer_spell_reducer::debug_buy_trainer_spell;
 pub use debug_cast_at_reducer::debug_cast_at;
@@ -655,6 +689,7 @@ pub use debug_cast_spell_at_reducer::debug_cast_spell_at;
 pub use debug_cast_spell_reducer::debug_cast_spell;
 pub use debug_catalogue_fingerprint_reducer::debug_catalogue_fingerprint;
 pub use debug_check_rest_at_reducer::debug_check_rest_at;
+pub use debug_check_submerged_reducer::debug_check_submerged;
 pub use debug_clear_creatures_reducer::debug_clear_creatures;
 pub use debug_compute_spell_reducer::debug_compute_spell;
 pub use debug_compute_swing_reducer::debug_compute_swing;
@@ -780,6 +815,9 @@ pub use game_areatrigger_teleport_table::*;
 pub use game_aura_schedule_table::*;
 pub use game_aura_table::*;
 pub use game_bot_invite_intent_table::*;
+pub use game_breath_relay_event_table::*;
+pub use game_breath_schedule_table::*;
+pub use game_breath_state_table::*;
 pub use game_catalogue_fingerprint_table::*;
 pub use game_channel_event_table::*;
 pub use game_channel_member_table::*;
@@ -937,6 +975,9 @@ pub use game_taunt_lock_table::*;
 pub use game_teleport_event_table::*;
 pub use game_terrain_chunk_table::*;
 pub use game_threat_table::*;
+pub use game_trade_event_table::*;
+pub use game_trade_session_table::*;
+pub use game_trade_slot_table::*;
 pub use game_trainer_spell_table::*;
 pub use game_transfer_in_table::*;
 pub use game_transfer_out_table::*;
@@ -966,17 +1007,24 @@ pub use guid_range_type::GuidRange;
 pub use gw_abandon_quest_reducer::gw_abandon_quest;
 pub use gw_accept_group_invite_reducer::gw_accept_group_invite;
 pub use gw_accept_quest_reducer::gw_accept_quest;
+pub use gw_accept_trade_reducer::gw_accept_trade;
 pub use gw_add_friend_reducer::gw_add_friend;
 pub use gw_add_ignore_reducer::gw_add_ignore;
 pub use gw_attack_reducer::gw_attack;
+pub use gw_auto_bank_item_reducer::gw_auto_bank_item;
+pub use gw_begin_trade_reducer::gw_begin_trade;
 pub use gw_bind_home_reducer::gw_bind_home;
+pub use gw_busy_trade_reducer::gw_busy_trade;
+pub use gw_buy_bank_slot_reducer::gw_buy_bank_slot;
 pub use gw_buy_item_reducer::gw_buy_item;
 pub use gw_buyback_item_reducer::gw_buyback_item;
 pub use gw_cancel_aura_reducer::gw_cancel_aura;
 pub use gw_cancel_cast_reducer::gw_cancel_cast;
+pub use gw_cancel_trade_reducer::gw_cancel_trade;
 pub use gw_cast_at_reducer::gw_cast_at;
 pub use gw_cast_spell_at_reducer::gw_cast_spell_at;
 pub use gw_cast_spell_reducer::gw_cast_spell;
+pub use gw_clear_trade_item_reducer::gw_clear_trade_item;
 pub use gw_client_command_reducer::gw_client_command;
 pub use gw_del_friend_reducer::gw_del_friend;
 pub use gw_del_ignore_reducer::gw_del_ignore;
@@ -993,6 +1041,8 @@ pub use gw_group_leave_reducer::gw_group_leave;
 pub use gw_group_loot_method_reducer::gw_group_loot_method;
 pub use gw_group_uninvite_reducer::gw_group_uninvite;
 pub use gw_heartbeat_reducer::gw_heartbeat;
+pub use gw_ignore_trade_reducer::gw_ignore_trade;
+pub use gw_initiate_trade_reducer::gw_initiate_trade;
 pub use gw_inspect_reducer::gw_inspect;
 pub use gw_join_channel_reducer::gw_join_channel;
 pub use gw_learn_talent_reducer::gw_learn_talent;
@@ -1024,13 +1074,17 @@ pub use gw_send_roll_reducer::gw_send_roll;
 pub use gw_send_whisper_reducer::gw_send_whisper;
 pub use gw_set_action_button_reducer::gw_set_action_button;
 pub use gw_set_faction_at_war_reducer::gw_set_faction_at_war;
+pub use gw_set_sheathed_reducer::gw_set_sheathed;
 pub use gw_set_target_reducer::gw_set_target;
+pub use gw_set_trade_gold_reducer::gw_set_trade_gold;
+pub use gw_set_trade_item_reducer::gw_set_trade_item;
 pub use gw_skin_reducer::gw_skin;
 pub use gw_spirit_res_reducer::gw_spirit_res;
 pub use gw_stop_attack_reducer::gw_stop_attack;
 pub use gw_take_loot_reducer::gw_take_loot;
 pub use gw_trainer_buy_reducer::gw_trainer_buy;
 pub use gw_turn_in_quest_reducer::gw_turn_in_quest;
+pub use gw_unaccept_trade_reducer::gw_unaccept_trade;
 pub use gw_unequip_item_reducer::gw_unequip_item;
 pub use gw_use_gameobject_reducer::gw_use_gameobject;
 pub use gw_use_item_reducer::gw_use_item;
@@ -1156,9 +1210,13 @@ pub use teleport_event_type::TeleportEvent;
 pub use terrain_chunk_type::TerrainChunk;
 pub use threat_entry_type::ThreatEntry;
 pub use tick_auras_reducer::tick_auras;
+pub use tick_breath_reducer::tick_breath;
 pub use tick_creatures_reducer::tick_creatures;
 pub use tick_ground_areas_reducer::tick_ground_areas;
 pub use tick_melee_reducer::tick_melee;
+pub use trade_event_type::TradeEvent;
+pub use trade_session_type::TradeSession;
+pub use trade_slot_type::TradeSlot;
 pub use trainer_spell_type::TrainerSpell;
 pub use transfer_in_type::TransferIn;
 pub use transfer_out_type::TransferOut;
@@ -1242,6 +1300,10 @@ pub enum Reducer {
     },
     DebugAuditClassKits,
     DebugAuditQuestChains,
+    DebugAutoBankItem {
+        character_guid: u64,
+        slot: u8,
+    },
     DebugBackfillCellIds,
     DebugBackfillGoGrid,
     DebugBeginCast {
@@ -1270,6 +1332,10 @@ pub enum Reducer {
     },
     DebugBindHome {
         character_guid: u64,
+    },
+    DebugBuyBankSlot {
+        character_guid: u64,
+        banker_guid: u64,
     },
     DebugBuyItem {
         character_guid: u64,
@@ -1306,6 +1372,9 @@ pub enum Reducer {
         map_id: u32,
         x: f32,
         y: f32,
+    },
+    DebugCheckSubmerged {
+        guid: u64,
     },
     DebugClearCreatures {
         map_id: u32,
@@ -1770,6 +1839,9 @@ pub enum Reducer {
         giver_guid: u64,
         quest_entry: u32,
     },
+    GwAcceptTrade {
+        actor_guid: u64,
+    },
     GwAddFriend {
         actor_guid: u64,
         target_guid: u64,
@@ -1782,8 +1854,22 @@ pub enum Reducer {
         actor_guid: u64,
         target_guid: u64,
     },
+    GwAutoBankItem {
+        actor_guid: u64,
+        slot: u8,
+    },
+    GwBeginTrade {
+        actor_guid: u64,
+    },
     GwBindHome {
         actor_guid: u64,
+    },
+    GwBusyTrade {
+        actor_guid: u64,
+    },
+    GwBuyBankSlot {
+        actor_guid: u64,
+        banker_guid: u64,
     },
     GwBuyItem {
         actor_guid: u64,
@@ -1803,6 +1889,9 @@ pub enum Reducer {
     GwCancelCast {
         actor_guid: u64,
     },
+    GwCancelTrade {
+        actor_guid: u64,
+    },
     GwCastAt {
         actor_guid: u64,
         spell_id: u32,
@@ -1820,6 +1909,10 @@ pub enum Reducer {
         x: f32,
         y: f32,
         z: f32,
+    },
+    GwClearTradeItem {
+        actor_guid: u64,
+        trade_slot: u8,
     },
     GwClientCommand {
         actor_guid: u64,
@@ -1885,6 +1978,13 @@ pub enum Reducer {
         target_guid: u64,
     },
     GwHeartbeat,
+    GwIgnoreTrade {
+        actor_guid: u64,
+    },
+    GwInitiateTrade {
+        actor_guid: u64,
+        target_guid: u64,
+    },
     GwInspect {
         actor_guid: u64,
         target_guid: u64,
@@ -2027,9 +2127,22 @@ pub enum Reducer {
         reputation_index: u32,
         at_war: bool,
     },
+    GwSetSheathed {
+        actor_guid: u64,
+        state: u8,
+    },
     GwSetTarget {
         actor_guid: u64,
         target_guid: u64,
+    },
+    GwSetTradeGold {
+        actor_guid: u64,
+        copper: u32,
+    },
+    GwSetTradeItem {
+        actor_guid: u64,
+        trade_slot: u8,
+        inv_slot: u8,
     },
     GwSkin {
         actor_guid: u64,
@@ -2056,6 +2169,9 @@ pub enum Reducer {
         giver_guid: u64,
         quest_entry: u32,
         reward_index: u32,
+    },
+    GwUnacceptTrade {
+        actor_guid: u64,
     },
     GwUnequipItem {
         actor_guid: u64,
@@ -2309,6 +2425,9 @@ pub enum Reducer {
     TickAuras {
         schedule: AuraSchedule,
     },
+    TickBreath {
+        schedule: BreathSchedule,
+    },
     TickCreatures {
         schedule: CreatureMoveSchedule,
     },
@@ -2343,12 +2462,14 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugAssertFloorSnap { .. } => "debug_assert_floor_snap",
             Reducer::DebugAuditClassKits => "debug_audit_class_kits",
             Reducer::DebugAuditQuestChains => "debug_audit_quest_chains",
+            Reducer::DebugAutoBankItem { .. } => "debug_auto_bank_item",
             Reducer::DebugBackfillCellIds => "debug_backfill_cell_ids",
             Reducer::DebugBackfillGoGrid => "debug_backfill_go_grid",
             Reducer::DebugBeginCast { .. } => "debug_begin_cast",
             Reducer::DebugBenchCollisionGate { .. } => "debug_bench_collision_gate",
             Reducer::DebugBenchLos { .. } => "debug_bench_los",
             Reducer::DebugBindHome { .. } => "debug_bind_home",
+            Reducer::DebugBuyBankSlot { .. } => "debug_buy_bank_slot",
             Reducer::DebugBuyItem { .. } => "debug_buy_item",
             Reducer::DebugBuyTrainerSpell { .. } => "debug_buy_trainer_spell",
             Reducer::DebugCastAt { .. } => "debug_cast_at",
@@ -2356,6 +2477,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugCastSpellAt { .. } => "debug_cast_spell_at",
             Reducer::DebugCatalogueFingerprint => "debug_catalogue_fingerprint",
             Reducer::DebugCheckRestAt { .. } => "debug_check_rest_at",
+            Reducer::DebugCheckSubmerged { .. } => "debug_check_submerged",
             Reducer::DebugClearCreatures { .. } => "debug_clear_creatures",
             Reducer::DebugComputeSpell { .. } => "debug_compute_spell",
             Reducer::DebugComputeSwing { .. } => "debug_compute_swing",
@@ -2464,17 +2586,24 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwAbandonQuest { .. } => "gw_abandon_quest",
             Reducer::GwAcceptGroupInvite { .. } => "gw_accept_group_invite",
             Reducer::GwAcceptQuest { .. } => "gw_accept_quest",
+            Reducer::GwAcceptTrade { .. } => "gw_accept_trade",
             Reducer::GwAddFriend { .. } => "gw_add_friend",
             Reducer::GwAddIgnore { .. } => "gw_add_ignore",
             Reducer::GwAttack { .. } => "gw_attack",
+            Reducer::GwAutoBankItem { .. } => "gw_auto_bank_item",
+            Reducer::GwBeginTrade { .. } => "gw_begin_trade",
             Reducer::GwBindHome { .. } => "gw_bind_home",
+            Reducer::GwBusyTrade { .. } => "gw_busy_trade",
+            Reducer::GwBuyBankSlot { .. } => "gw_buy_bank_slot",
             Reducer::GwBuyItem { .. } => "gw_buy_item",
             Reducer::GwBuybackItem { .. } => "gw_buyback_item",
             Reducer::GwCancelAura { .. } => "gw_cancel_aura",
             Reducer::GwCancelCast { .. } => "gw_cancel_cast",
+            Reducer::GwCancelTrade { .. } => "gw_cancel_trade",
             Reducer::GwCastAt { .. } => "gw_cast_at",
             Reducer::GwCastSpell { .. } => "gw_cast_spell",
             Reducer::GwCastSpellAt { .. } => "gw_cast_spell_at",
+            Reducer::GwClearTradeItem { .. } => "gw_clear_trade_item",
             Reducer::GwClientCommand { .. } => "gw_client_command",
             Reducer::GwDelFriend { .. } => "gw_del_friend",
             Reducer::GwDelIgnore { .. } => "gw_del_ignore",
@@ -2491,6 +2620,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwGroupLootMethod { .. } => "gw_group_loot_method",
             Reducer::GwGroupUninvite { .. } => "gw_group_uninvite",
             Reducer::GwHeartbeat => "gw_heartbeat",
+            Reducer::GwIgnoreTrade { .. } => "gw_ignore_trade",
+            Reducer::GwInitiateTrade { .. } => "gw_initiate_trade",
             Reducer::GwInspect { .. } => "gw_inspect",
             Reducer::GwJoinChannel { .. } => "gw_join_channel",
             Reducer::GwLearnTalent { .. } => "gw_learn_talent",
@@ -2521,13 +2652,17 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwSendWhisper { .. } => "gw_send_whisper",
             Reducer::GwSetActionButton { .. } => "gw_set_action_button",
             Reducer::GwSetFactionAtWar { .. } => "gw_set_faction_at_war",
+            Reducer::GwSetSheathed { .. } => "gw_set_sheathed",
             Reducer::GwSetTarget { .. } => "gw_set_target",
+            Reducer::GwSetTradeGold { .. } => "gw_set_trade_gold",
+            Reducer::GwSetTradeItem { .. } => "gw_set_trade_item",
             Reducer::GwSkin { .. } => "gw_skin",
             Reducer::GwSpiritRes { .. } => "gw_spirit_res",
             Reducer::GwStopAttack { .. } => "gw_stop_attack",
             Reducer::GwTakeLoot { .. } => "gw_take_loot",
             Reducer::GwTrainerBuy { .. } => "gw_trainer_buy",
             Reducer::GwTurnInQuest { .. } => "gw_turn_in_quest",
+            Reducer::GwUnacceptTrade { .. } => "gw_unaccept_trade",
             Reducer::GwUnequipItem { .. } => "gw_unequip_item",
             Reducer::GwUseGameobject { .. } => "gw_use_gameobject",
             Reducer::GwUseItem { .. } => "gw_use_item",
@@ -2583,6 +2718,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::StampImportMeta { .. } => "stamp_import_meta",
             Reducer::SyncGroupMirror { .. } => "sync_group_mirror",
             Reducer::TickAuras { .. } => "tick_auras",
+            Reducer::TickBreath { .. } => "tick_breath",
             Reducer::TickCreatures { .. } => "tick_creatures",
             Reducer::TickGroundAreas { .. } => "tick_ground_areas",
             Reducer::TickMelee { .. } => "tick_melee",
@@ -2720,6 +2856,13 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugAuditQuestChains => __sats::bsatn::to_vec(
                 &debug_audit_quest_chains_reducer::DebugAuditQuestChainsArgs {},
             ),
+            Reducer::DebugAutoBankItem {
+                character_guid,
+                slot,
+            } => __sats::bsatn::to_vec(&debug_auto_bank_item_reducer::DebugAutoBankItemArgs {
+                character_guid: character_guid.clone(),
+                slot: slot.clone(),
+            }),
             Reducer::DebugBackfillCellIds => {
                 __sats::bsatn::to_vec(&debug_backfill_cell_ids_reducer::DebugBackfillCellIdsArgs {})
             }
@@ -2778,6 +2921,13 @@ impl __sdk::Reducer for Reducer {
                     character_guid: character_guid.clone(),
                 })
             }
+            Reducer::DebugBuyBankSlot {
+                character_guid,
+                banker_guid,
+            } => __sats::bsatn::to_vec(&debug_buy_bank_slot_reducer::DebugBuyBankSlotArgs {
+                character_guid: character_guid.clone(),
+                banker_guid: banker_guid.clone(),
+            }),
             Reducer::DebugBuyItem {
                 character_guid,
                 vendor_guid,
@@ -2842,6 +2992,11 @@ impl __sdk::Reducer for Reducer {
                     map_id: map_id.clone(),
                     x: x.clone(),
                     y: y.clone(),
+                })
+            }
+            Reducer::DebugCheckSubmerged { guid } => {
+                __sats::bsatn::to_vec(&debug_check_submerged_reducer::DebugCheckSubmergedArgs {
+                    guid: guid.clone(),
                 })
             }
             Reducer::DebugClearCreatures { map_id } => {
@@ -3687,6 +3842,11 @@ impl __sdk::Reducer for Reducer {
                 giver_guid: giver_guid.clone(),
                 quest_entry: quest_entry.clone(),
             }),
+            Reducer::GwAcceptTrade { actor_guid } => {
+                __sats::bsatn::to_vec(&gw_accept_trade_reducer::GwAcceptTradeArgs {
+                    actor_guid: actor_guid.clone(),
+                })
+            }
             Reducer::GwAddFriend {
                 actor_guid,
                 target_guid,
@@ -3708,11 +3868,34 @@ impl __sdk::Reducer for Reducer {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
             }),
+            Reducer::GwAutoBankItem { actor_guid, slot } => {
+                __sats::bsatn::to_vec(&gw_auto_bank_item_reducer::GwAutoBankItemArgs {
+                    actor_guid: actor_guid.clone(),
+                    slot: slot.clone(),
+                })
+            }
+            Reducer::GwBeginTrade { actor_guid } => {
+                __sats::bsatn::to_vec(&gw_begin_trade_reducer::GwBeginTradeArgs {
+                    actor_guid: actor_guid.clone(),
+                })
+            }
             Reducer::GwBindHome { actor_guid } => {
                 __sats::bsatn::to_vec(&gw_bind_home_reducer::GwBindHomeArgs {
                     actor_guid: actor_guid.clone(),
                 })
             }
+            Reducer::GwBusyTrade { actor_guid } => {
+                __sats::bsatn::to_vec(&gw_busy_trade_reducer::GwBusyTradeArgs {
+                    actor_guid: actor_guid.clone(),
+                })
+            }
+            Reducer::GwBuyBankSlot {
+                actor_guid,
+                banker_guid,
+            } => __sats::bsatn::to_vec(&gw_buy_bank_slot_reducer::GwBuyBankSlotArgs {
+                actor_guid: actor_guid.clone(),
+                banker_guid: banker_guid.clone(),
+            }),
             Reducer::GwBuyItem {
                 actor_guid,
                 vendor_guid,
@@ -3742,6 +3925,11 @@ impl __sdk::Reducer for Reducer {
             }),
             Reducer::GwCancelCast { actor_guid } => {
                 __sats::bsatn::to_vec(&gw_cancel_cast_reducer::GwCancelCastArgs {
+                    actor_guid: actor_guid.clone(),
+                })
+            }
+            Reducer::GwCancelTrade { actor_guid } => {
+                __sats::bsatn::to_vec(&gw_cancel_trade_reducer::GwCancelTradeArgs {
                     actor_guid: actor_guid.clone(),
                 })
             }
@@ -3777,6 +3965,13 @@ impl __sdk::Reducer for Reducer {
                 x: x.clone(),
                 y: y.clone(),
                 z: z.clone(),
+            }),
+            Reducer::GwClearTradeItem {
+                actor_guid,
+                trade_slot,
+            } => __sats::bsatn::to_vec(&gw_clear_trade_item_reducer::GwClearTradeItemArgs {
+                actor_guid: actor_guid.clone(),
+                trade_slot: trade_slot.clone(),
             }),
             Reducer::GwClientCommand {
                 actor_guid,
@@ -3888,6 +4083,18 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwHeartbeat => {
                 __sats::bsatn::to_vec(&gw_heartbeat_reducer::GwHeartbeatArgs {})
             }
+            Reducer::GwIgnoreTrade { actor_guid } => {
+                __sats::bsatn::to_vec(&gw_ignore_trade_reducer::GwIgnoreTradeArgs {
+                    actor_guid: actor_guid.clone(),
+                })
+            }
+            Reducer::GwInitiateTrade {
+                actor_guid,
+                target_guid,
+            } => __sats::bsatn::to_vec(&gw_initiate_trade_reducer::GwInitiateTradeArgs {
+                actor_guid: actor_guid.clone(),
+                target_guid: target_guid.clone(),
+            }),
             Reducer::GwInspect {
                 actor_guid,
                 target_guid,
@@ -4142,12 +4349,33 @@ impl __sdk::Reducer for Reducer {
                 reputation_index: reputation_index.clone(),
                 at_war: at_war.clone(),
             }),
+            Reducer::GwSetSheathed { actor_guid, state } => {
+                __sats::bsatn::to_vec(&gw_set_sheathed_reducer::GwSetSheathedArgs {
+                    actor_guid: actor_guid.clone(),
+                    state: state.clone(),
+                })
+            }
             Reducer::GwSetTarget {
                 actor_guid,
                 target_guid,
             } => __sats::bsatn::to_vec(&gw_set_target_reducer::GwSetTargetArgs {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
+            }),
+            Reducer::GwSetTradeGold { actor_guid, copper } => {
+                __sats::bsatn::to_vec(&gw_set_trade_gold_reducer::GwSetTradeGoldArgs {
+                    actor_guid: actor_guid.clone(),
+                    copper: copper.clone(),
+                })
+            }
+            Reducer::GwSetTradeItem {
+                actor_guid,
+                trade_slot,
+                inv_slot,
+            } => __sats::bsatn::to_vec(&gw_set_trade_item_reducer::GwSetTradeItemArgs {
+                actor_guid: actor_guid.clone(),
+                trade_slot: trade_slot.clone(),
+                inv_slot: inv_slot.clone(),
             }),
             Reducer::GwSkin {
                 actor_guid,
@@ -4195,6 +4423,11 @@ impl __sdk::Reducer for Reducer {
                 quest_entry: quest_entry.clone(),
                 reward_index: reward_index.clone(),
             }),
+            Reducer::GwUnacceptTrade { actor_guid } => {
+                __sats::bsatn::to_vec(&gw_unaccept_trade_reducer::GwUnacceptTradeArgs {
+                    actor_guid: actor_guid.clone(),
+                })
+            }
             Reducer::GwUnequipItem {
                 actor_guid,
                 from_slot,
@@ -4648,6 +4881,11 @@ impl __sdk::Reducer for Reducer {
                     schedule: schedule.clone(),
                 })
             }
+            Reducer::TickBreath { schedule } => {
+                __sats::bsatn::to_vec(&tick_breath_reducer::TickBreathArgs {
+                    schedule: schedule.clone(),
+                })
+            }
             Reducer::TickCreatures { schedule } => {
                 __sats::bsatn::to_vec(&tick_creatures_reducer::TickCreaturesArgs {
                     schedule: schedule.clone(),
@@ -4680,6 +4918,9 @@ pub struct DbUpdate {
     game_aura: __sdk::TableUpdate<Aura>,
     game_aura_schedule: __sdk::TableUpdate<AuraSchedule>,
     game_bot_invite_intent: __sdk::TableUpdate<BotInviteIntent>,
+    game_breath_relay_event: __sdk::TableUpdate<BreathRelayEvent>,
+    game_breath_schedule: __sdk::TableUpdate<BreathSchedule>,
+    game_breath_state: __sdk::TableUpdate<BreathState>,
     game_catalogue_fingerprint: __sdk::TableUpdate<CatalogueFingerprint>,
     game_channel_event: __sdk::TableUpdate<ChannelEvent>,
     game_channel_member: __sdk::TableUpdate<ChannelMember>,
@@ -4824,6 +5065,9 @@ pub struct DbUpdate {
     game_teleport_event: __sdk::TableUpdate<TeleportEvent>,
     game_terrain_chunk: __sdk::TableUpdate<TerrainChunk>,
     game_threat: __sdk::TableUpdate<ThreatEntry>,
+    game_trade_event: __sdk::TableUpdate<TradeEvent>,
+    game_trade_session: __sdk::TableUpdate<TradeSession>,
+    game_trade_slot: __sdk::TableUpdate<TradeSlot>,
     game_trainer_spell: __sdk::TableUpdate<TrainerSpell>,
     game_transfer_in: __sdk::TableUpdate<TransferIn>,
     game_transfer_out: __sdk::TableUpdate<TransferOut>,
@@ -4865,6 +5109,15 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_bot_invite_intent" => db_update.game_bot_invite_intent.append(
                     game_bot_invite_intent_table::parse_table_update(table_update)?,
                 ),
+                "game_breath_relay_event" => db_update.game_breath_relay_event.append(
+                    game_breath_relay_event_table::parse_table_update(table_update)?,
+                ),
+                "game_breath_schedule" => db_update.game_breath_schedule.append(
+                    game_breath_schedule_table::parse_table_update(table_update)?,
+                ),
+                "game_breath_state" => db_update
+                    .game_breath_state
+                    .append(game_breath_state_table::parse_table_update(table_update)?),
                 "game_catalogue_fingerprint" => db_update.game_catalogue_fingerprint.append(
                     game_catalogue_fingerprint_table::parse_table_update(table_update)?,
                 ),
@@ -5301,6 +5554,15 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_threat" => db_update
                     .game_threat
                     .append(game_threat_table::parse_table_update(table_update)?),
+                "game_trade_event" => db_update
+                    .game_trade_event
+                    .append(game_trade_event_table::parse_table_update(table_update)?),
+                "game_trade_session" => db_update
+                    .game_trade_session
+                    .append(game_trade_session_table::parse_table_update(table_update)?),
+                "game_trade_slot" => db_update
+                    .game_trade_slot
+                    .append(game_trade_slot_table::parse_table_update(table_update)?),
                 "game_trainer_spell" => db_update
                     .game_trainer_spell
                     .append(game_trainer_spell_table::parse_table_update(table_update)?),
@@ -5384,6 +5646,21 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_bot_invite_intent,
             )
             .with_updates_by_pk(|row| &row.id);
+        diff.game_breath_relay_event = cache
+            .apply_diff_to_table::<BreathRelayEvent>(
+                "game_breath_relay_event",
+                &self.game_breath_relay_event,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_breath_schedule = cache
+            .apply_diff_to_table::<BreathSchedule>(
+                "game_breath_schedule",
+                &self.game_breath_schedule,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.game_breath_state = cache
+            .apply_diff_to_table::<BreathState>("game_breath_state", &self.game_breath_state)
+            .with_updates_by_pk(|row| &row.entity_guid);
         diff.game_catalogue_fingerprint = cache
             .apply_diff_to_table::<CatalogueFingerprint>(
                 "game_catalogue_fingerprint",
@@ -5984,6 +6261,15 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_threat = cache
             .apply_diff_to_table::<ThreatEntry>("game_threat", &self.game_threat)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_trade_event = cache
+            .apply_diff_to_table::<TradeEvent>("game_trade_event", &self.game_trade_event)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_trade_session = cache
+            .apply_diff_to_table::<TradeSession>("game_trade_session", &self.game_trade_session)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_trade_slot = cache
+            .apply_diff_to_table::<TradeSlot>("game_trade_slot", &self.game_trade_slot)
+            .with_updates_by_pk(|row| &row.id);
         diff.game_trainer_spell = cache
             .apply_diff_to_table::<TrainerSpell>("game_trainer_spell", &self.game_trainer_spell)
             .with_updates_by_pk(|row| &row.id);
@@ -6044,6 +6330,15 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_bot_invite_intent" => db_update
                     .game_bot_invite_intent
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_breath_relay_event" => db_update
+                    .game_breath_relay_event
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_breath_schedule" => db_update
+                    .game_breath_schedule
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_breath_state" => db_update
+                    .game_breath_state
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_catalogue_fingerprint" => db_update
                     .game_catalogue_fingerprint
@@ -6476,6 +6771,15 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_threat" => db_update
                     .game_threat
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_trade_event" => db_update
+                    .game_trade_event
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_trade_session" => db_update
+                    .game_trade_session
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_trade_slot" => db_update
+                    .game_trade_slot
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_trainer_spell" => db_update
                     .game_trainer_spell
@@ -6541,6 +6845,15 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_bot_invite_intent" => db_update
                     .game_bot_invite_intent
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_breath_relay_event" => db_update
+                    .game_breath_relay_event
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_breath_schedule" => db_update
+                    .game_breath_schedule
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_breath_state" => db_update
+                    .game_breath_state
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_catalogue_fingerprint" => db_update
                     .game_catalogue_fingerprint
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -6973,6 +7286,15 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_threat" => db_update
                     .game_threat
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_trade_event" => db_update
+                    .game_trade_event
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_trade_session" => db_update
+                    .game_trade_session
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_trade_slot" => db_update
+                    .game_trade_slot
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_trainer_spell" => db_update
                     .game_trainer_spell
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -7023,6 +7345,9 @@ pub struct AppliedDiff<'r> {
     game_aura: __sdk::TableAppliedDiff<'r, Aura>,
     game_aura_schedule: __sdk::TableAppliedDiff<'r, AuraSchedule>,
     game_bot_invite_intent: __sdk::TableAppliedDiff<'r, BotInviteIntent>,
+    game_breath_relay_event: __sdk::TableAppliedDiff<'r, BreathRelayEvent>,
+    game_breath_schedule: __sdk::TableAppliedDiff<'r, BreathSchedule>,
+    game_breath_state: __sdk::TableAppliedDiff<'r, BreathState>,
     game_catalogue_fingerprint: __sdk::TableAppliedDiff<'r, CatalogueFingerprint>,
     game_channel_event: __sdk::TableAppliedDiff<'r, ChannelEvent>,
     game_channel_member: __sdk::TableAppliedDiff<'r, ChannelMember>,
@@ -7167,6 +7492,9 @@ pub struct AppliedDiff<'r> {
     game_teleport_event: __sdk::TableAppliedDiff<'r, TeleportEvent>,
     game_terrain_chunk: __sdk::TableAppliedDiff<'r, TerrainChunk>,
     game_threat: __sdk::TableAppliedDiff<'r, ThreatEntry>,
+    game_trade_event: __sdk::TableAppliedDiff<'r, TradeEvent>,
+    game_trade_session: __sdk::TableAppliedDiff<'r, TradeSession>,
+    game_trade_slot: __sdk::TableAppliedDiff<'r, TradeSlot>,
     game_trainer_spell: __sdk::TableAppliedDiff<'r, TrainerSpell>,
     game_transfer_in: __sdk::TableAppliedDiff<'r, TransferIn>,
     game_transfer_out: __sdk::TableAppliedDiff<'r, TransferOut>,
@@ -7215,6 +7543,21 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<BotInviteIntent>(
             "game_bot_invite_intent",
             &self.game_bot_invite_intent,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<BreathRelayEvent>(
+            "game_breath_relay_event",
+            &self.game_breath_relay_event,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<BreathSchedule>(
+            "game_breath_schedule",
+            &self.game_breath_schedule,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<BreathState>(
+            "game_breath_state",
+            &self.game_breath_state,
             event,
         );
         callbacks.invoke_table_row_callbacks::<CatalogueFingerprint>(
@@ -7899,6 +8242,21 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<ThreatEntry>(
             "game_threat",
             &self.game_threat,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<TradeEvent>(
+            "game_trade_event",
+            &self.game_trade_event,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<TradeSession>(
+            "game_trade_session",
+            &self.game_trade_session,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<TradeSlot>(
+            "game_trade_slot",
+            &self.game_trade_slot,
             event,
         );
         callbacks.invoke_table_row_callbacks::<TrainerSpell>(
@@ -8614,6 +8972,9 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_aura_table::register_table(client_cache);
         game_aura_schedule_table::register_table(client_cache);
         game_bot_invite_intent_table::register_table(client_cache);
+        game_breath_relay_event_table::register_table(client_cache);
+        game_breath_schedule_table::register_table(client_cache);
+        game_breath_state_table::register_table(client_cache);
         game_catalogue_fingerprint_table::register_table(client_cache);
         game_channel_event_table::register_table(client_cache);
         game_channel_member_table::register_table(client_cache);
@@ -8758,6 +9119,9 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_teleport_event_table::register_table(client_cache);
         game_terrain_chunk_table::register_table(client_cache);
         game_threat_table::register_table(client_cache);
+        game_trade_event_table::register_table(client_cache);
+        game_trade_session_table::register_table(client_cache);
+        game_trade_slot_table::register_table(client_cache);
         game_trainer_spell_table::register_table(client_cache);
         game_transfer_in_table::register_table(client_cache);
         game_transfer_out_table::register_table(client_cache);
@@ -8777,6 +9141,9 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_aura",
         "game_aura_schedule",
         "game_bot_invite_intent",
+        "game_breath_relay_event",
+        "game_breath_schedule",
+        "game_breath_state",
         "game_catalogue_fingerprint",
         "game_channel_event",
         "game_channel_member",
@@ -8921,6 +9288,9 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_teleport_event",
         "game_terrain_chunk",
         "game_threat",
+        "game_trade_event",
+        "game_trade_session",
+        "game_trade_slot",
         "game_trainer_spell",
         "game_transfer_in",
         "game_transfer_out",

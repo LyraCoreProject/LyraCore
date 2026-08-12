@@ -438,6 +438,19 @@ impl Coordinator {
         )
     }
 
+    /// Draw or stow the player's weapons (`CMSG_SETSHEATHED`). [#101]
+    pub fn set_sheathed(&self, _account_id: u64, actor_guid: u64, state: u8) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("set_sheathed: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_set_sheathed",
+            gw_set_sheathed_then(actor_guid, state)
+        )
+    }
+
     /// Cast a spell (`CMSG_CAST_SPELL`, aura tracer) over the coordinator connection so the module
     /// attributes the cast to the caller. `target_guid` is the client's selected unit (0 = none/self →
     /// the module substitutes the caster), threaded so target-keyed effects see the real target.
@@ -695,6 +708,136 @@ impl Coordinator {
             coord.conn.reducers,
             "gw_group_invite",
             gw_group_invite_then(actor_guid, target_guid)
+        )
+    }
+
+    /// `CMSG_INITIATE_TRADE` — `target_guid` is the client's targeted player (#120).
+    pub fn initiate_trade(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("initiate_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_initiate_trade",
+            gw_initiate_trade_then(actor_guid, target_guid)
+        )
+    }
+
+    /// `CMSG_BEGIN_TRADE` (#120).
+    pub fn begin_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("begin_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_begin_trade",
+            gw_begin_trade_then(actor_guid)
+        )
+    }
+
+    /// `CMSG_CANCEL_TRADE` (#120).
+    pub fn cancel_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("cancel_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_cancel_trade",
+            gw_cancel_trade_then(actor_guid)
+        )
+    }
+
+    /// `CMSG_SET_TRADE_ITEM` (#121).
+    pub fn set_trade_item(&self, _account_id: u64, actor_guid: u64, trade_slot: u8, inv_slot: u8) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("set_trade_item: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_set_trade_item",
+            gw_set_trade_item_then(actor_guid, trade_slot, inv_slot)
+        )
+    }
+
+    /// `CMSG_CLEAR_TRADE_ITEM` (#121).
+    pub fn clear_trade_item(&self, _account_id: u64, actor_guid: u64, trade_slot: u8) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("clear_trade_item: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_clear_trade_item",
+            gw_clear_trade_item_then(actor_guid, trade_slot)
+        )
+    }
+
+    /// `CMSG_SET_TRADE_GOLD` (#121).
+    pub fn set_trade_gold(&self, _account_id: u64, actor_guid: u64, copper: u32) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("set_trade_gold: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_set_trade_gold",
+            gw_set_trade_gold_then(actor_guid, copper)
+        )
+    }
+
+    /// `CMSG_ACCEPT_TRADE` (#122).
+    pub fn accept_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("accept_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_accept_trade",
+            gw_accept_trade_then(actor_guid)
+        )
+    }
+
+    /// `CMSG_UNACCEPT_TRADE` (#122).
+    pub fn unaccept_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("unaccept_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_unaccept_trade",
+            gw_unaccept_trade_then(actor_guid)
+        )
+    }
+
+    /// `CMSG_BUSY_TRADE` (#123).
+    pub fn busy_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("busy_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_busy_trade",
+            gw_busy_trade_then(actor_guid)
+        )
+    }
+
+    /// `CMSG_IGNORE_TRADE` (#123).
+    pub fn ignore_trade(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("ignore_trade: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_ignore_trade",
+            gw_ignore_trade_then(actor_guid)
         )
     }
 
@@ -1017,6 +1160,20 @@ impl Coordinator {
         )
     }
 
+    /// Buy the next bank bag slot from `banker_guid` (`CMSG_BUY_BANK_SLOT`) over the coordinator
+    /// connection. A refusal carries the module's `[N]` `SMSG_BUY_BANK_SLOT_RESULT` code tag.
+    pub fn buy_bank_slot(&self, _account_id: u64, actor_guid: u64, banker_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("buy_bank_slot: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_buy_bank_slot",
+            gw_buy_bank_slot_then(actor_guid, banker_guid)
+        )
+    }
+
     pub fn learn_talent(&self, _account_id: u64,
         actor_guid: u64, talent_id: u32) -> Result<()> {
         if actor_guid == 0 {
@@ -1240,6 +1397,21 @@ impl Coordinator {
             coord.conn.reducers,
             "gw_move_item",
             gw_move_item_then(actor_guid, from_slot, to_slot)
+        )
+    }
+
+    /// Auto-bank/auto-store-bank the item in `slot` (`CMSG_AUTOBANK_ITEM`/`CMSG_AUTOSTORE_BANK_ITEM`)
+    /// over the coordinator connection. The module infers deposit vs. withdraw from `slot` and
+    /// resolves the receiving free slot itself.
+    pub fn auto_bank_item(&self, _account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("auto_bank_item: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_auto_bank_item",
+            gw_auto_bank_item_then(actor_guid, slot)
         )
     }
 

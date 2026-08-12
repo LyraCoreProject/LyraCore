@@ -120,6 +120,9 @@ INCLUDE_CREATURES="${INCLUDE_CREATURES-}"
 # Overridable so the SAME ETL can load a second shard: the instances database spawns Deadmines itself
 # from map-36 `game_creature_spawn` rows, so it needs its own copy of them —
 # `DB=lyracore-instances bash importer/scripts/import-world.sh`. Defaults to the world/realm database.
+# That second pass is no longer an advanced-path extra: since LyraCore#108 the `lyracore dev up`
+# fixture routes map 36 to `lyracore-instances`, and `lyracore import` runs this script once per
+# database it populates — the default shard, then the pool — with DB changed and NOTHING else.
 DB="${DB:-lyracore}"
 # Which SpacetimeDB node every `spacetime sql`/`spacetime call` below targets. Bare `spacetime sql`
 # (no --server) inherits the CLI's AMBIENT default server, which on a fresh machine is maincloud —
@@ -141,6 +144,12 @@ call_q() { spacetime call --server "$SPACETIME_SERVER" "$DB" "$@"; }
 # Whole extra maps folded into the SAME clear+reload run (--include-map). Map 0's canonical run carries
 # the Deadmines interior (36); another continent gets none by default — its own instanced maps belong
 # to the instances database, not to a continent shard.
+# 36 STAYS in the map-0 default even though the sharded fixture now routes map 36 off this database
+# (LyraCore#108). Two reasons, either one sufficient: `dev up --single` is one database that has to
+# host its own dungeons, and this script has no idea which topology it is loading; and the pool's own
+# pass IS a map-0 run — it is this same default flag set with DB changed, so dropping 36 here would
+# empty the Deadmines everywhere at once. On the sharded world shard the map-36 rows are simply never
+# routed to.
 [ "$MAP" = 0 ] && INCLUDE_MAPS="${INCLUDE_MAPS-36}"
 INCLUDE_MAPS="${INCLUDE_MAPS-}"
 # --center: the point the terrain interpolate self-check and the nav walkability self-check sample. It

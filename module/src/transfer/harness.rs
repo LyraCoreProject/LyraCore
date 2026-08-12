@@ -603,6 +603,8 @@ fn fixture_character(guid: u64, name: &str) -> crate::character::Character {
         // mismatch rather than two defaults comparing equal.
         pending_godmode: true,
         pending_run_speed_mult_bp: 30_000,
+        // Distinguishable from the column default so a slot count that fails to travel shows up.
+        bank_bag_slots: 3,
     }
 }
 
@@ -691,6 +693,10 @@ fn a_populated_character_crosses_a_database_with_every_row_and_value() {
             "the `.speed` multiplier did not travel (work-item 289)"
         );
         assert_eq!(c.respec_count, want.respec_count);
+        assert_eq!(
+            c.bank_bag_slots, want.bank_bag_slots,
+            "the purchased bank bag slots did not travel"
+        );
         assert_eq!(c.home_map, want.home_map);
         assert_eq!(c.home_x, want.home_x);
         assert_eq!(c.zone_id, want.zone_id);

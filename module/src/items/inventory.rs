@@ -34,6 +34,10 @@ pub(crate) fn apply_item_split(
     count: u32,
     to_slot: u8,
 ) -> Result<(), String> {
+    // The bank is a place, not a portable bag: either endpoint in bank space needs an open bank.
+    if is_bank_slot(slot) || is_bank_slot(to_slot) {
+        super::economy::bank_access_gate(ctx, player_guid)?;
+    }
     let instances = ctx.db.game_item_instance();
     let mut inst =
         item_in_slot(ctx, player_guid, slot).ok_or_else(|| format!("no item in slot {slot}"))?;
@@ -97,6 +101,10 @@ pub(crate) fn apply_item_move(
 ) -> Result<(), String> {
     if from_slot == to_slot {
         return Ok(());
+    }
+    // The bank is a place, not a portable bag: either endpoint in bank space needs an open bank.
+    if is_bank_slot(from_slot) || is_bank_slot(to_slot) {
+        super::economy::bank_access_gate(ctx, player_guid)?;
     }
     let instances = ctx.db.game_item_instance();
     let mut src = item_in_slot(ctx, player_guid, from_slot)
@@ -293,14 +301,35 @@ const MAX_BAG_SIZE: u8 = 18;
 const BAG_CONTENT_END: u8 = BAG_CONTENT_OFFSET + BAG_SLOT_COUNT * MAX_BAG_SIZE; // 192
 
 /// The anti-dupe destination-slot gate shared by `apply_item_move` and `apply_item_split`: a valid
-/// destination is either the flat equip+bag-equip+backpack range (0..=38) or a bag-content slot
-/// (120..=191). Anything else (39..=119 = bank/keyring we don't model, or 192..255) is an
-/// inventory-overflow dupe vector from a modified client and is rejected. Extracted (pure code-motion,
-/// deduplicating the two identical inline expressions) so the slot-range boundaries are unit-tested
-/// without a live module.
+/// destination is the flat equip+bag-equip+backpack range (0..=38), the base bank range (39..=62), or
+/// a bag-content slot (120..=191). Anything else (the bank-bag/buyback/keyring ordinals 63..=119 we
+/// don't model, or 192..255) is an inventory-overflow dupe vector from a modified client and is
+/// rejected. Extracted (pure code-motion, deduplicating the two identical inline expressions) so the
+/// slot-range boundaries are unit-tested without a live module.
 pub(crate) fn valid_dest_slot(to_slot: u8) -> bool {
     to_slot < BACKPACK_SLOT_END // 0..=38 (equip + bag-equip + backpack)
+        || is_bank_slot(to_slot) // 39..=62 (the 24 base bank slots)
         || (BAG_CONTENT_OFFSET..BAG_CONTENT_END).contains(&to_slot) // 120..=191
+}
+
+/// First base bank slot (vanilla `ItemSlot::Bank1`).
+const BANK_SLOT_START: u8 = 39;
+/// Last base bank slot (`ItemSlot::Bank24`), 24 slots in total.
+const BANK_SLOT_END_INCL: u8 = 62;
+
+/// Whether a slot is one of the 24 base bank slots. Bank bag slots (63..=68) are NOT bank storage
+/// here — their contents have no slot addresses, so they stay refused everywhere.
+pub(crate) fn is_bank_slot(slot: u8) -> bool {
+    (BANK_SLOT_START..=BANK_SLOT_END_INCL).contains(&slot)
+}
+
+/// Whether a slot is CARRIED — equipment, bag-equip, backpack, or bag content — as opposed to merely
+/// owned. Bank slots are owned but not carried: they don't count for collect quests, aren't consumed
+/// on turn-in, aren't fired as ammo, and never receive auto-stored loot. Stated as the carried ranges
+/// rather than "not the bank", so the bank-bag region stays uncarried when it opens.
+pub(crate) fn is_carried_slot(slot: u8) -> bool {
+    slot < BACKPACK_SLOT_END // 0..=38 (equip + bag-equip + backpack)
+        || (BAG_CONTENT_OFFSET..BAG_CONTENT_END).contains(&slot) // 120..=191
 }
 
 #[allow(dead_code)] // core kept for a future gw_split_item twin (#483 deleted the sender-path reducer)
@@ -373,14 +402,29 @@ pub(crate) fn valid_split_count(count: u32, stack_count: u32) -> bool {
 /// is full. Collects the owner's occupied slots into a set ONCE (#387 smalls: was one `by_owner_guid`
 /// index scan PER CANDIDATE slot — up to 16 full scans for a nearly-full backpack) then does a plain
 /// membership check per candidate. Vanilla auto-store fills the first free bag slot.
-pub(crate) fn first_free_backpack_slot(ctx: &ReducerContext, player_guid: u64) -> Option<u8> {
-    let occupied: std::collections::HashSet<u8> = ctx
-        .db
+/// The occupied-slot set behind the two backpack probes below — one spelling of the scan.
+fn occupied_slots(ctx: &ReducerContext, player_guid: u64) -> std::collections::HashSet<u8> {
+    ctx.db
         .game_item_instance()
         .by_owner_guid()
         .filter(&player_guid)
         .map(|i| i.slot)
-        .collect();
+        .collect()
+}
+
+/// How many loose backpack slots (23..=38) are open — the Trade Commit's net-bag-space input
+/// (#122). Backpack ONLY, matching `deliver_traded_item`'s allocation: equipped-bag room is
+/// invisible to trade until the gateway models sub-bags at all (`handlers/item.rs`'s gap), so a
+/// full-backpack/empty-bags player refuses conservatively rather than mis-delivering.
+pub(crate) fn count_free_backpack_slots(ctx: &ReducerContext, player_guid: u64) -> u32 {
+    let occupied = occupied_slots(ctx, player_guid);
+    (starter_item::BACKPACK_SLOT_0..BACKPACK_SLOT_END)
+        .filter(|slot| !occupied.contains(slot))
+        .count() as u32
+}
+
+pub(crate) fn first_free_backpack_slot(ctx: &ReducerContext, player_guid: u64) -> Option<u8> {
+    let occupied = occupied_slots(ctx, player_guid);
     (starter_item::BACKPACK_SLOT_0..BACKPACK_SLOT_END).find(|slot| !occupied.contains(slot))
 }
 
@@ -429,12 +473,134 @@ pub(crate) fn first_free_bag_slot(ctx: &ReducerContext, player_guid: u64) -> Opt
     None
 }
 
+/// First bank slot (39..=62) not occupied by any of the player's items, or `None` if the bank is
+/// full. Same one-scan shape as `first_free_backpack_slot` — collect the owner's occupied slots
+/// once, then a plain membership check per candidate.
+pub(crate) fn first_free_bank_slot(ctx: &ReducerContext, player_guid: u64) -> Option<u8> {
+    let occupied: std::collections::HashSet<u8> = ctx
+        .db
+        .game_item_instance()
+        .by_owner_guid()
+        .filter(&player_guid)
+        .map(|i| i.slot)
+        .collect();
+    (BANK_SLOT_START..=BANK_SLOT_END_INCL).find(|slot| !occupied.contains(slot))
+}
+
+/// Shared auto-bank/auto-store-bank core for the player + debug paths (right-click to bank, right-
+/// click to withdraw): the direction is inferred from `slot` itself rather than taken as an argument
+/// — a bank slot withdraws to the first free carry slot (backpack, then bag space, the same fallback
+/// `store_item` uses for loot); anything else deposits to the first free bank slot. Delegates the
+/// placement to `apply_item_move`, so both directions get the banker-proximity gate for free.
+pub(crate) fn apply_auto_bank_item(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    slot: u8,
+) -> Result<(), String> {
+    let to_slot = if is_bank_slot(slot) {
+        first_free_backpack_slot(ctx, player_guid)
+            .or_else(|| first_free_bag_slot(ctx, player_guid))
+            .ok_or_else(|| "inventory full".to_string())?
+    } else {
+        first_free_bank_slot(ctx, player_guid).ok_or_else(|| "bank full".to_string())?
+    };
+    apply_item_move(ctx, player_guid, slot, to_slot)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        bag_content_decompose, equip_slot, valid_dest_slot, valid_split_count,
-        valid_split_dest_slot,
+        bag_content_decompose, equip_slot, is_bank_slot, is_carried_slot, valid_dest_slot,
+        valid_split_count, valid_split_dest_slot, BANK_SLOT_END_INCL, BANK_SLOT_START,
     };
+    use crate::test_scan::code_of;
+
+    /// BANK SLOT RANGE: exactly the 24 base bank slots (39..=62). The bank-bag ordinals just past them
+    /// (63..=68) are not bank storage in this model.
+    #[test]
+    fn is_bank_slot_covers_the_24_base_slots_only() {
+        for slot in BANK_SLOT_START..=BANK_SLOT_END_INCL {
+            assert!(is_bank_slot(slot), "slot {slot} is a base bank slot");
+        }
+        for slot in [0u8, 38, 63, 68, 119, 120, 191, 192, 255] {
+            assert!(!is_bank_slot(slot), "slot {slot} is not a base bank slot");
+        }
+    }
+
+    /// BANK ACCESS GATE WIRING: both mutation paths must consult `bank_access_gate` when either
+    /// endpoint is a bank slot, or the bank becomes a portable 24-slot bag. There is no
+    /// `ReducerContext` harness in this crate, so the call's PRESENCE is pinned by a source scan; the
+    /// gate's own decision is asserted directly on `economy::banker_in_reach`.
+    #[test]
+    fn both_mutation_paths_gate_bank_endpoints_on_an_open_bank() {
+        let src = include_str!("inventory.rs");
+        for signature in [
+            "pub(crate) fn apply_item_move(",
+            "pub(crate) fn apply_item_split(",
+        ] {
+            let body = code_of(src, signature);
+            assert!(
+                body.contains("bank_access_gate(ctx, player_guid)?"),
+                "`{signature}` must refuse a bank endpoint without an open bank"
+            );
+            assert!(
+                body.contains("is_bank_slot(to_slot)"),
+                "`{signature}` must test its destination slot for bank space"
+            );
+        }
+    }
+
+    /// FREE-BANK-SLOT SEARCH SHAPE: like `first_free_backpack_slot`, `first_free_bank_slot` must
+    /// collect the owner's occupied slots into a set ONCE rather than re-scanning per candidate slot.
+    /// There is no `ReducerContext` harness in this crate, so the shape is pinned by a source scan.
+    #[test]
+    fn first_free_bank_slot_scans_the_owners_rows_once() {
+        let src = include_str!("inventory.rs");
+        let body = code_of(src, "pub(crate) fn first_free_bank_slot(");
+        assert_eq!(
+            body.matches("by_owner_guid()").count(),
+            1,
+            "first_free_bank_slot must collect the owner's rows once, not scan per candidate slot"
+        );
+    }
+
+    /// AUTO-BANK DIRECTION INFERENCE: `apply_auto_bank_item` decides deposit vs. withdraw from the
+    /// SOURCE slot alone. Pinned by source scan (no `ReducerContext` harness): a bank source resolves
+    /// against the carry-space search pair; anything else resolves against the bank search.
+    #[test]
+    fn apply_auto_bank_item_infers_direction_from_the_source_slot() {
+        let src = include_str!("inventory.rs");
+        let body = code_of(src, "pub(crate) fn apply_auto_bank_item(");
+        assert!(
+            body.contains("is_bank_slot(slot)"),
+            "must branch on whether the source is a bank slot"
+        );
+        assert!(
+            body.contains("first_free_backpack_slot(ctx, player_guid)")
+                && body.contains("first_free_bag_slot(ctx, player_guid)"),
+            "withdraw must fall back from the backpack to bag space, like loot auto-store"
+        );
+        assert!(
+            body.contains("first_free_bank_slot(ctx, player_guid)"),
+            "deposit must resolve against the free-bank-slot search"
+        );
+    }
+
+    /// CARRIED-SLOT PREDICATE: equipment, bag-equip, backpack, and bag-content slots are carried; the
+    /// base bank range is owned but not carried, and so is every slot past it (the bank-bag region and
+    /// the unaddressed tail).
+    #[test]
+    fn is_carried_slot_admits_the_two_carry_regions_only() {
+        for slot in [0u8, 18, 19, 22, 23, 38, 120, 191] {
+            assert!(is_carried_slot(slot), "slot {slot} is carried");
+        }
+        for slot in BANK_SLOT_START..=BANK_SLOT_END_INCL {
+            assert!(!is_carried_slot(slot), "bank slot {slot} is not carried");
+        }
+        for slot in [63u8, 68, 119, 192, 255] {
+            assert!(!is_carried_slot(slot), "slot {slot} is not carry space");
+        }
+    }
 
     /// SPLIT COUNT GATE: `count == 0` and `count == stack_count` (splitting off nothing, or the whole
     /// stack — that's a move) are rejected; every count strictly between 0 and the stack passes.
@@ -453,16 +619,22 @@ mod tests {
     }
 
     /// ANTI-DUPE DESTINATION-SLOT GATE (`apply_item_move` / `apply_item_split`): the equip+bag-equip+
-    /// backpack range (0..=38) and the bag-content range (120..=191) are valid; the unmodeled bank/keyring
-    /// gap (39..=119) and anything past the bag-content region (192+) are rejected.
+    /// backpack range (0..=38), the base bank range (39..=62), and the bag-content range (120..=191) are
+    /// valid; the unmodeled bank-bag/buyback/keyring gap (63..=119) and anything past the bag-content
+    /// region (192+) are rejected.
     #[test]
-    fn valid_dest_slot_admits_the_two_modeled_ranges_only() {
+    fn valid_dest_slot_admits_the_three_modeled_ranges_only() {
         // Inside 0..=38 (equip 0..=18, bag-equip 19..=22, backpack 23..=38).
         for slot in [0u8, 18, 19, 22, 23, 38] {
             assert!(valid_dest_slot(slot), "slot {slot} is in the 0..=38 range");
         }
-        // The exclusive boundary just past 38, and the unmodeled bank/keyring gap.
-        assert!(!valid_dest_slot(39));
+        // The 24 base bank slots.
+        for slot in BANK_SLOT_START..=BANK_SLOT_END_INCL {
+            assert!(valid_dest_slot(slot), "bank slot {slot} is a valid dest");
+        }
+        // Bank bag slots and the rest of the unmodeled gap stay refused.
+        assert!(!valid_dest_slot(63));
+        assert!(!valid_dest_slot(68));
         assert!(!valid_dest_slot(119));
         // Inside the bag-content region 120..=191.
         assert!(valid_dest_slot(120));
@@ -490,15 +662,16 @@ mod tests {
                 "slot {slot} is in the equipment region and must be refused as a split destination"
             );
         }
-        // Bag-equip, backpack, and bag-content slots (non-equipment) stay valid split destinations.
-        for slot in [19u8, 22, 23, 38, 120, 191] {
+        // Bag-equip, backpack, bank, and bag-content slots (non-equipment) stay valid split destinations.
+        for slot in [19u8, 22, 23, 38, 39, 62, 120, 191] {
             assert!(
                 valid_split_dest_slot(slot),
                 "slot {slot} is outside the equipment region and should remain a valid split destination"
             );
         }
         // The already-invalid ranges stay invalid.
-        assert!(!valid_split_dest_slot(39));
+        assert!(!valid_split_dest_slot(63));
+        assert!(!valid_split_dest_slot(119));
         assert!(!valid_split_dest_slot(192));
     }
 
