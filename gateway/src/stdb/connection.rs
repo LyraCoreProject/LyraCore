@@ -416,6 +416,11 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // this fixes — the relay path for the live SET_FACTION_STANDING update subscribes per-player
         // separately in subscriptions.rs, but the coordinator's own read cache needs its own sub too).
         "SELECT * FROM game_player_reputation",
+        // Mail. Subscribed on EVERY connection in the set, because the mailbox has two planes:
+        // realm-core is authoritative on a sharded realm, and a single-database gateway reads its
+        // own copy. The gateway answers `CMSG_GET_MAIL_LIST` from this cache — mail is a poll, so
+        // there is no relay and no per-player subscription to arm.
+        "SELECT * FROM game_mail",
         // Friends/ignore: every character's contact rows, so the coordinator can
         // build any player's SMSG_FRIEND_LIST/SMSG_IGNORE_LIST (RLS-bypassed, like game_character).
         "SELECT * FROM game_character_contact",

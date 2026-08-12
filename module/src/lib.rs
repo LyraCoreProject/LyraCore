@@ -272,6 +272,9 @@ mod instance;
 mod items;
 mod load;
 mod loot;
+/// Mail: the durable `game_mail` row, its sweeps, and the shared insert core. Realm-core is
+/// authoritative; a single-database gateway reads and writes its own copy through the same rules.
+mod mail;
 /// Batched movement republish (#461): the PRIVATE `game_entity_motion_pending` staging table that
 /// `movement_update` writes, and the 20 Hz `publish_motion` tick that drains it into the public
 /// `game_entity_motion` relay in one transaction.
@@ -338,6 +341,7 @@ pub use instance::*;
 pub use items::*;
 pub use load::*;
 pub use loot::*;
+pub use mail::Mail; // re-exported for the gateway schema-parity test
 pub use motion::*;
 pub use quest::*;
 pub use realm_core::*;

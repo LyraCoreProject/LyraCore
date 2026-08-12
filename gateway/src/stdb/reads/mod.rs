@@ -7,6 +7,7 @@
 
 mod account;
 mod items;
+mod mail;
 mod npc_vendor;
 mod party;
 mod quest;

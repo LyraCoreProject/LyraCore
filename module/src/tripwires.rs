@@ -799,7 +799,10 @@ mod gc_reap_tripwire {
     ///   creature legs onto the in-place `game_creature_spline` row, updated rather than
     ///   inserted/reaped); the table stays in the schema, empty, rather than as a separate
     ///   destructive migration to drop it. See the comment atop `reap_movement_events` in `gc.rs`.
-    const EXEMPT_ACCESSORS: &[&str] = &["game_creature_move_event"];
+    /// - `game_mail`: DURABLE state that merely carries a `created_at` for the client's expiry
+    ///   countdown. Reaping it would destroy mail, and the design declines an expiry reaper,
+    ///   because nothing should silently delete an attachment a player can still collect.
+    const EXEMPT_ACCESSORS: &[&str] = &["game_creature_move_event", "game_mail"];
 
     /// `gc.rs` actually reaps `accessor` — via the shared `reap!(accessor)` macro invocation, or a
     /// direct `ctx.db.accessor()` call (the shape of the ad-hoc blocks: `game_group_invite`'s own

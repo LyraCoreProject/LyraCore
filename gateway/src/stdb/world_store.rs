@@ -488,6 +488,14 @@ impl WorldStore for Coordinator {
         self.npc_refuses_interaction(npc_guid, player_guid)
     }
 
+    fn mail_list(&self, recipient_guid: u64) -> Result<Vec<codec::MailView>> {
+        self.mail_list(recipient_guid)
+    }
+
+    fn mailbox_in_range(&self, mailbox_guid: u64, player_guid: u64) -> Result<bool> {
+        self.mailbox_in_range(mailbox_guid, player_guid)
+    }
+
     fn buy_item(
         &self,
         account_id: u64,

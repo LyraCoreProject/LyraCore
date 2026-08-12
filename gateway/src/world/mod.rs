@@ -35,6 +35,7 @@ mod coalesce;
 mod handlers;
 pub mod login_queue;
 pub mod loot;
+pub mod mail;
 pub mod packet_lint;
 pub mod party;
 mod social;
@@ -43,7 +44,7 @@ pub mod transfer;
 pub mod whisper;
 use coalesce::CoalesceState;
 use handlers::{
-    handle_char, handle_combat, handle_item, handle_loot, handle_query, handle_quest,
+    handle_char, handle_combat, handle_item, handle_loot, handle_mail, handle_query, handle_quest,
     handle_trainer, handle_vendor,
 };
 use login_queue::{Admission, LoginQueue};
@@ -1172,6 +1173,9 @@ fn dispatch<St: WorldStore + ?Sized>(
         return Ok(());
     };
     let Some(msg) = handle_query(tx, store, conn, msg)? else {
+        return Ok(());
+    };
+    let Some(msg) = handle_mail(tx, store, conn, msg)? else {
         return Ok(());
     };
     // Phase 5/6 (§6): MSG_MOVE_* -> movement_update (persist + relay). The relayed peer events

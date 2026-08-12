@@ -12,6 +12,7 @@ pub mod env;
 pub mod group;
 pub mod instance;
 pub mod loot_roll;
+pub mod mail;
 pub mod nav;
 pub mod opcodes;
 pub mod packing;
