@@ -57,6 +57,8 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &["game_transfer_out"];
 /// - `game_rest_state_event` — a one-shot relay row with a GC TTL; the DURABLE rest state
 ///   (`resting` / `rested_xp` / `rested_since_micros`) lives on the character row and travels in
 ///   `character_row`.
+/// - `game_breath_relay_event` — a one-shot timer/damage relay with a GC TTL; private breath
+///   state is re-armed from movement after arrival, so carrying a packet would replay stale UI.
 /// - `game_group_invite` — a 2-minute dialog whose inviter is by definition not transferring.
 /// - `game_pet_command` — the live pet's stay/follow/aggressive state; the pet is a
 ///   `game_world_entity`, which does not cross, so its command row has nothing to attach to.
@@ -76,6 +78,7 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &["game_transfer_out"];
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_rest_state_event",
+    "game_breath_relay_event",
     "game_group_invite",
     "game_group_member",
     "game_pet_command",

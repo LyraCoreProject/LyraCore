@@ -287,6 +287,9 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // Rest-state flips: same shape — `world_view::
         // rest_state_appeared` relays each row to its owner's session only. TTL-reaped.
         "SELECT * FROM game_rest_state_event",
+        // Breath timer edges and server-resolved drowning hits: self-only relay, with the same
+        // owner-session audience as rest state. The bar counts down client-side between edges.
+        "SELECT * FROM game_breath_relay_event",
         // Ground-area spell visuals: `world_view::dynobj_appeared`
         // relays instance-gated CREATE/DESTROY. Short-lived rows (the area's duration).
         "SELECT * FROM game_dynamic_object",

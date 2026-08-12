@@ -21,6 +21,7 @@ pub mod update_mask;
 
 // Packet-family submodules (pure code-motion out of the old monolithic body).
 mod char;
+mod breath;
 mod combat;
 mod corpse;
 mod entity;
@@ -45,6 +46,7 @@ pub use social::{
 // Re-export the family submodules so every previously-public symbol stays reachable as
 // `crate::codec::<sym>` (≈50 external call sites depend on this).
 pub use char::*;
+pub use breath::*;
 pub use combat::*;
 pub use corpse::*;
 pub use entity::*;
