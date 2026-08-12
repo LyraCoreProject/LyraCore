@@ -925,6 +925,7 @@ pub fn debug_engage(
         last_swing_ms: 0,
         ranged_spell_id: 0,
         last_offhand_swing_ms: 0,
+        rout_ends_ms: 0,
     };
     if melee.attacker_guid().find(attacker_guid).is_some() {
         melee.attacker_guid().update(row);

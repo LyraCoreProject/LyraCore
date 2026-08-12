@@ -10,7 +10,7 @@
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use crate::{
-    game_creature_spawn, game_creature_template, game_item_instance, game_item_template, game_spell,
+    game_creature_spawn, game_item_instance, game_item_template, game_spell,
     game_spell_cast_event, game_world_entity, SpellCastEvent, WorldEntity,
 };
 
@@ -161,6 +161,7 @@ fn aggro_pass(ctx: &ReducerContext) {
             last_swing_ms: 0,   // swing back immediately
             ranged_spell_id: 0, // creatures retaliate in melee
             last_offhand_swing_ms: 0,
+            rout_ends_ms: 0,
         });
     }
 }
@@ -326,19 +327,12 @@ fn resolve_swing(ctx: &ReducerContext) {
             continue;
         }
 
-        // A ROUTING creature (low-HP flee-eligible humanoid) is RUNNING, not fighting — skip its swing so it
-        // doesn't trade blows while it routs. Like the CC gate above, the engagement ROW is LEFT INTACT:
-        // fleeing is a SHARED combat state (the flee pass keeps both sides in combat), the runner just stops
-        // attacking while it flees. Mirrors the flee pass's creature_will_flee gate (same who-flees rule).
-        if !attacker.is_player()
-            && crate::creatures::should_flee(attacker.health, attacker.max_health)
-            && ctx
-                .db
-                .game_creature_template()
-                .entry()
-                .find(attacker.entry)
-                .is_some_and(|t| crate::creatures::flee_eligible(t.creature_type))
-        {
+        // A creature inside its ROUT window is RUNNING, not fighting — skip its swing while it routs. Like
+        // the CC gate above, the engagement ROW is LEFT INTACT: routing is a SHARED combat state (the flee
+        // pass keeps both sides in combat). Once the window closes the same creature swings again at
+        // whatever health it has left, and a low-HP humanoid whose rout never started (frozen, feared)
+        // keeps swinging throughout — both follow from the one shared predicate.
+        if !attacker.is_player() && crate::creatures::tick::creature_is_routing(ctx, &attacker) {
             continue;
         }
 

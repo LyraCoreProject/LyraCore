@@ -147,10 +147,10 @@ fn pass_aggro(
         {
             continue;
         }
-        // Don't re-arm a near-dead creature that WILL flee — otherwise a creature that just fled (and
-        // was disengaged) gets re-aggroed the very next tick before regen heals it back above the flee
-        // threshold, pinning it in place. Skip it until it recovers.
-        if creature_will_flee(ctx, &c) {
+        // Don't re-arm a near-dead creature that would rout the moment it engaged: it would be pulled
+        // straight back into a fight it is trying to leave. Eligibility, not `creature_is_routing` — a
+        // creature reaching here has no engagement row, so it cannot be routing yet.
+        if rout_eligible(ctx, &c) {
             continue;
         }
         // Crowd control: an ACTION-blocked creature (stun/poly/fear) cannot ACT — it doesn't aggro on
@@ -188,6 +188,7 @@ fn pass_aggro(
                 last_swing_ms: 0,   // swing on the next melee tick
                 ranged_spell_id: 0, // creature melee aggro
                 last_offhand_swing_ms: 0,
+                rout_ends_ms: 0,
             });
         }
         // Point the creature at its target (the established target_guid pattern), so observers see
@@ -257,7 +258,7 @@ fn pass_assist(
             || n.dead
             || n.owner_guid != 0
             || melee.attacker_guid().find(n.guid).is_some()
-            || creature_will_flee(ctx, &n)
+            || rout_eligible(ctx, &n)
         {
             continue;
         }
@@ -295,6 +296,7 @@ fn pass_assist(
                 last_swing_ms: 0,   // swing on the next melee tick
                 ranged_spell_id: 0, // assist aggro is melee
                 last_offhand_swing_ms: 0,
+                rout_ends_ms: 0,
             });
         }
         if let Some(mut c) = entities.guid().find(neighbor) {

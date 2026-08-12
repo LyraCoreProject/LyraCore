@@ -194,6 +194,13 @@ pub struct MeleeAttack {
     /// `-c` wipe). [entity]
     #[default(0)]
     pub last_offhand_swing_ms: u32,
+    /// The low-HP ROUT clock for this engagement: 0 = no rout has started; otherwise the wall-clock ms
+    /// at which the rout window closes. A value in the past means the rout is over AND spent, which is
+    /// what makes a rout once-per-engagement — the row dies on disengage, so the next fight rearms it
+    /// with no cleanup path. Read through `ai::rout_window_open` / `ai::may_start_rout`.
+    /// END-appended + `#[default(0)]` → adding it auto-migrates existing rows (no `-c` wipe). [entity]
+    #[default(0)]
+    pub rout_ends_ms: u32,
 }
 
 /// A logged melee swing to relay as `SMSG_ATTACKERSTATEUPDATE`. Broadcast (public, no RLS), like
@@ -398,6 +405,7 @@ pub(crate) fn apply_start_attack(
         last_swing_ms: 0,
         ranged_spell_id: 0, // melee auto-attack
         last_offhand_swing_ms: 0,
+        rout_ends_ms: 0,
     };
     if melee.attacker_guid().find(attacker.guid).is_some() {
         melee.attacker_guid().update(row);
@@ -502,6 +510,7 @@ pub(crate) fn apply_start_ranged_attack(
         last_swing_ms: first_swing_seed,
         ranged_spell_id: spell_id,
         last_offhand_swing_ms: 0,
+        rout_ends_ms: 0,
     };
     if melee.attacker_guid().find(attacker.guid).is_some() {
         melee.attacker_guid().update(row);

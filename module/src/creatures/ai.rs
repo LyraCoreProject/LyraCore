@@ -49,6 +49,32 @@ pub fn flee_eligible(creature_type: u8) -> bool {
     creature_type == crate::spell::HUMANOID_TYPE
 }
 
+/// How long a rout runs (ms) before the creature turns and fights again. Seeded at cmangos'
+/// `CreatureFamilyFleeDelay` default; a calibration knob for live observation.
+pub(crate) const ROUT_DURATION_MS: u32 = 10_000;
+
+/// Is a rout still running, given the wall-clock ms its window closes at? `0` is the never-started
+/// sentinel, so it is never open; a close time at or before `now_ms` means the rout is over AND spent
+/// (the same field is what forbids a second rout). Pure — unit-tested.
+pub fn rout_window_open(now_ms: u32, rout_ends_ms: u32) -> bool {
+    rout_ends_ms != 0 && now_ms < rout_ends_ms
+}
+
+/// May a rout START now? Only for a flee-eligible creature (`eligible` = the HP threshold plus the
+/// per-type gate) whose engagement has never stamped a window. A spent clock — open or long closed —
+/// blocks every later rout in that engagement, which is what makes the rout once-per-engagement.
+/// Pure — unit-tested.
+pub fn may_start_rout(eligible: bool, rout_ends_ms: u32) -> bool {
+    eligible && rout_ends_ms == 0
+}
+
+/// The wall-clock ms at which a rout stamped at `now_ms` closes. Never 0: that value is the
+/// never-started sentinel, so a window that wraps the u32 clock onto it would hand out a second rout.
+/// Pure — unit-tested.
+pub fn rout_close_ms(now_ms: u32) -> u32 {
+    now_ms.wrapping_add(ROUT_DURATION_MS).max(1)
+}
+
 /// cmangos "wounded slowdown" — the mechanic that makes a fleeing (definitionally low-HP) mob
 /// CATCHABLE. A creature under 30% HP moves slower: factor `1 − ((30 − min(hp%,30)) × 1.67)/100`,
 /// floored ~0.5 (×1.0 at ≥30% HP, ×0.75 at 15%, ×0.67 at 10%, ~×0.5 near death). Applied to the flee
@@ -1373,6 +1399,39 @@ mod tests {
         assert!(!leg_in_flight(600, 600)); // exactly at ETA → arrived
         assert!(!leg_in_flight(700, 600)); // past ETA
         assert!(!leg_in_flight(100, 0)); // fresh / no leg
+    }
+
+    #[test]
+    fn rout_window_open_covers_the_whole_clock_lifecycle() {
+        // Never started (the zero sentinel) → not routing, at any `now`.
+        assert!(!rout_window_open(0, 0));
+        assert!(!rout_window_open(50_000, 0));
+        // Open: the close time is still ahead.
+        assert!(rout_window_open(50_000, 60_000));
+        // Just closed (exactly at the close time) and closed long ago → over.
+        assert!(!rout_window_open(60_000, 60_000));
+        assert!(!rout_window_open(600_000, 60_000));
+    }
+
+    #[test]
+    fn a_rout_starts_once_per_engagement_and_only_when_eligible() {
+        // Eligible with an unstarted clock → the rout starts.
+        assert!(may_start_rout(true, 0));
+        // Eligible but the clock is already spent (a window that closed) → never a second rout, at
+        // any health. An open window is not a start either — the rout is already running.
+        assert!(!may_start_rout(true, 60_000));
+        // Ineligible (a BEAST, or above the HP threshold) never starts one.
+        assert!(!may_start_rout(false, 0));
+        assert!(!may_start_rout(false, 60_000));
+    }
+
+    #[test]
+    fn a_rout_window_never_stamps_the_never_started_sentinel() {
+        // The close time is the stamp instant plus the duration.
+        assert_eq!(rout_close_ms(50_000), 50_000 + ROUT_DURATION_MS);
+        // A stamp that wraps the u32 clock exactly onto 0 would read as "never started" and hand out
+        // a second rout, so it is nudged off the sentinel.
+        assert_eq!(rout_close_ms(u32::MAX - ROUT_DURATION_MS + 1), 1);
     }
 
     #[test]

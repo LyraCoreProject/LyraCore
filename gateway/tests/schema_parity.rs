@@ -638,7 +638,7 @@ parity_test!(parity_game_combat_event, "game_combat_event", lyracore_module::Com
     grid_y,
 });
 parity_test!(parity_game_melee_attack, "game_melee_attack", lyracore_module::MeleeAttack, bindings::melee_attack_type::MeleeAttack, {
-    attacker_guid, target_guid, last_swing_ms, ranged_spell_id, last_offhand_swing_ms,
+    attacker_guid, target_guid, last_swing_ms, ranged_spell_id, last_offhand_swing_ms, rout_ends_ms,
 });
 parity_test!(parity_game_spell_cast_event, "game_spell_cast_event", lyracore_module::SpellCastEvent, bindings::spell_cast_event_type::SpellCastEvent, {
     id, caster_guid, spell_id, created_at, target_guid, cast_time_ms, is_completion, damage,

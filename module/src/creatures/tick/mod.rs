@@ -971,18 +971,13 @@ fn movable_creature(ctx: &ReducerContext, guid: u64, scope: &TickScope) -> Optio
     Some(c)
 }
 
-/// Will this creature ACTUALLY flee at low HP? Combines the HP threshold (`should_flee`) with the
-/// per-TYPE eligibility gate (`flee_eligible` — only HUMANOIDS rout; BEASTS/undead/elementals fight to
-/// the death). The ONE place the "who flees" rule is encoded, so every flee site agrees: the aggro-rearm
-/// skip, the assist skip, the chase→flee divert, AND the flee leg. Without gating the first three too, a
-/// non-eligible near-dead BEAST would be diverted out of chasing yet never actually flee — standing
-/// FROZEN instead of fighting to the death. A missing template ⇒ not eligible ⇒ won't flee (safe
-/// default). [server]
-///
-/// Lives here (not `movement.rs` or `sense.rs`) because BOTH need it: the aggro-rearm skip and the
-/// assist skip (`sense.rs`) and the chase→flee divert and the flee leg itself (`movement.rs`) all call
-/// it — a private ancestor item, automatically visible to both descendant submodules.
-fn creature_will_flee(ctx: &ReducerContext, c: &WorldEntity) -> bool {
+/// May this creature rout at all? The HP threshold (`should_flee`) plus the per-TYPE gate
+/// (`flee_eligible` — only HUMANOIDS rout; BEASTS/undead/elementals fight to the death). It decides
+/// whether a rout may START, never whether one is running — that is `creature_is_routing`. The two
+/// non-engaged sites (aggro re-arm, assist) ask THIS question: they act on creatures with no engagement
+/// row, which therefore have no rout clock to read. A missing template ⇒ not eligible (safe default).
+/// [server]
+fn rout_eligible(ctx: &ReducerContext, c: &WorldEntity) -> bool {
     should_flee(c.health, c.max_health)
         && ctx
             .db
@@ -990,6 +985,26 @@ fn creature_will_flee(ctx: &ReducerContext, c: &WorldEntity) -> bool {
             .entry()
             .find(c.entry)
             .is_some_and(|t| flee_eligible(t.creature_type))
+}
+
+/// Is this creature ACTIVELY routing — eligible, inside an open rout window on its own engagement row,
+/// and able to move? The ONE place that question is answered, so the three engaged sites agree: the
+/// chase→rout divert, the rout leg itself, and the swing pass. If only some of them knew about the
+/// window, a creature would be diverted out of chasing yet never routed — standing FROZEN instead of
+/// fighting. A spent window means not routing, so a creature that has used its rout chases and swings
+/// like any other attacker. CC counts as not routing for the same reason: the rout leg is suppressed for
+/// a rooted/stunned/feared creature, so it must keep swinging rather than stand silent. [server]
+///
+/// `pub(crate)` because the swing pass in `combat::swing` is one of the three sites.
+pub(crate) fn creature_is_routing(ctx: &ReducerContext, c: &WorldEntity) -> bool {
+    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+    ctx.db
+        .game_melee_attack()
+        .attacker_guid()
+        .find(c.guid)
+        .is_some_and(|row| rout_window_open(now_ms, row.rout_ends_ms))
+        && rout_eligible(ctx, c)
+        && !crate::spell::is_self_movement_suppressed(ctx, c.guid)
 }
 
 /// SPLINE ADVANCE — the FIRST pass each tick. Interpolates every active creature spline: moves the
