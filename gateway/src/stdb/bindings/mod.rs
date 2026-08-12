@@ -2300,6 +2300,8 @@ pub enum Reducer {
         generation_id: u64,
         map_id: u32,
         expected_chunks: u32,
+        expected_bytes: u64,
+        manifest_digest_hex: String,
     },
     StampImportMeta {
         family: String,
@@ -4578,10 +4580,14 @@ impl __sdk::Reducer for Reducer {
                 generation_id,
                 map_id,
                 expected_chunks,
+                expected_bytes,
+                manifest_digest_hex,
             } => __sats::bsatn::to_vec(&stage_vmap_generation_reducer::StageVmapGenerationArgs {
                 generation_id: generation_id.clone(),
                 map_id: map_id.clone(),
                 expected_chunks: expected_chunks.clone(),
+                expected_bytes: expected_bytes.clone(),
+                manifest_digest_hex: manifest_digest_hex.clone(),
             }),
             Reducer::StampImportMeta {
                 family,

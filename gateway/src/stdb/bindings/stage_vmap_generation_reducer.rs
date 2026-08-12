@@ -10,6 +10,8 @@ pub(super) struct StageVmapGenerationArgs {
     pub generation_id: u64,
     pub map_id: u32,
     pub expected_chunks: u32,
+    pub expected_bytes: u64,
+    pub manifest_digest_hex: String,
 }
 
 impl From<StageVmapGenerationArgs> for super::Reducer {
@@ -18,6 +20,8 @@ impl From<StageVmapGenerationArgs> for super::Reducer {
             generation_id: args.generation_id,
             map_id: args.map_id,
             expected_chunks: args.expected_chunks,
+            expected_bytes: args.expected_bytes,
+            manifest_digest_hex: args.manifest_digest_hex,
         }
     }
 }
@@ -42,8 +46,17 @@ pub trait stage_vmap_generation {
         generation_id: u64,
         map_id: u32,
         expected_chunks: u32,
+        expected_bytes: u64,
+        manifest_digest_hex: String,
     ) -> __sdk::Result<()> {
-        self.stage_vmap_generation_then(generation_id, map_id, expected_chunks, |_, _| {})
+        self.stage_vmap_generation_then(
+            generation_id,
+            map_id,
+            expected_chunks,
+            expected_bytes,
+            manifest_digest_hex,
+            |_, _| {},
+        )
     }
 
     /// Request that the remote module invoke the reducer `stage_vmap_generation` to run as soon as possible,
@@ -57,6 +70,8 @@ pub trait stage_vmap_generation {
         generation_id: u64,
         map_id: u32,
         expected_chunks: u32,
+        expected_bytes: u64,
+        manifest_digest_hex: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -70,6 +85,8 @@ impl stage_vmap_generation for super::RemoteReducers {
         generation_id: u64,
         map_id: u32,
         expected_chunks: u32,
+        expected_bytes: u64,
+        manifest_digest_hex: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -80,6 +97,8 @@ impl stage_vmap_generation for super::RemoteReducers {
                 generation_id,
                 map_id,
                 expected_chunks,
+                expected_bytes,
+                manifest_digest_hex,
             },
             callback,
         )

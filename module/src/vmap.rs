@@ -17,6 +17,7 @@ const STAGING: u8 = 0;
 const VERIFIED: u8 = 1;
 const ACTIVE: u8 = 2;
 const DISCARDED: u8 = 3;
+const MANIFEST_DOMAIN: &[u8] = b"lyracore-vmap-manifest-v1";
 
 fn require_staging(state: u8) -> Result<(), String> {
     (state == STAGING)
@@ -36,6 +37,46 @@ fn require_verified(state: u8) -> Result<(), String> {
         .ok_or_else(|| "only a verified vmap generation can be activated".to_string())
 }
 
+/// Hash the canonical, transport-independent stream of staged shards. The importer makes this
+/// same sequence while it drains its sorted disk spool: cell key, per-cell ordinal, blob length,
+/// then the exact packed bytes. Keeping it here makes verification reject a complete-but-wrong
+/// upload rather than trusting transport progress as data integrity.
+fn manifest_digest<'a>(chunks: impl IntoIterator<Item = (u64, u32, &'a [u8])>) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(MANIFEST_DOMAIN);
+    for (key, shard_ordinal, blob) in chunks {
+        hasher.update(&key.to_le_bytes());
+        hasher.update(&shard_ordinal.to_le_bytes());
+        hasher.update(&(blob.len() as u32).to_le_bytes());
+        hasher.update(blob);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+/// Refuse a staged stream whose content is not exactly the immutable manifest accepted at stage
+/// time. This is deliberately pure so the reducer contract has a small, headless test seam.
+fn require_manifest<'a>(
+    expected_bytes: u64,
+    expected_digest: &[u8],
+    chunks: impl IntoIterator<Item = (u64, u32, &'a [u8])>,
+) -> Result<(), String> {
+    let chunks: Vec<_> = chunks.into_iter().collect();
+    let actual_bytes = chunks.iter().try_fold(0u64, |total, (_, _, blob)| {
+        total
+            .checked_add(blob.len() as u64)
+            .ok_or_else(|| "vmap generation byte count overflow".to_string())
+    })?;
+    if actual_bytes != expected_bytes {
+        return Err(format!(
+            "vmap generation has {actual_bytes}/{expected_bytes} manifest bytes"
+        ));
+    }
+    if manifest_digest(chunks) != expected_digest {
+        return Err("vmap generation manifest digest does not match staged chunks".to_string());
+    }
+    Ok(())
+}
+
 /// Map-scoped import lifecycle. The operator supplies `id`, making retries and importer resume
 /// deterministic without needing a reducer return value to discover an auto-incremented key.
 #[table(accessor = game_vmap_generation, index(accessor = by_map_state, btree(columns = [map_id, state])))]
@@ -46,6 +87,10 @@ pub struct VmapGeneration {
     pub state: u8,
     pub expected_chunks: u32,
     pub accepted_chunks: u32,
+    /// Immutable byte total of all packed shard blobs in this generation's manifest.
+    pub expected_bytes: u64,
+    /// Immutable 32-byte BLAKE3 digest of the canonical manifest stream.
+    pub manifest_digest: Vec<u8>,
 }
 
 /// A staged chunk belongs to exactly one generation. `shard_ordinal` is stable within one cell,
@@ -126,10 +171,19 @@ pub fn stage_vmap_generation(
     generation_id: u64,
     map_id: u32,
     expected_chunks: u32,
+    expected_bytes: u64,
+    manifest_digest_hex: String,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     if expected_chunks == 0 {
         return Err("vmap generation needs at least one expected chunk".to_string());
+    }
+    if expected_bytes == 0 {
+        return Err("vmap generation needs at least one expected byte".to_string());
+    }
+    let manifest_digest = hex_decode(&manifest_digest_hex)?;
+    if manifest_digest.len() != 32 {
+        return Err("vmap generation manifest digest must be 32 bytes of hex".to_string());
     }
     let generations = ctx.db.game_vmap_generation();
     match generations.id().find(generation_id) {
@@ -140,12 +194,16 @@ pub fn stage_vmap_generation(
                 state: STAGING,
                 expected_chunks,
                 accepted_chunks: 0,
+                expected_bytes,
+                manifest_digest,
             });
             Ok(())
         }
         Some(row)
             if row.map_id == map_id
                 && row.expected_chunks == expected_chunks
+                && row.expected_bytes == expected_bytes
+                && row.manifest_digest == manifest_digest
                 && row.state == STAGING =>
         {
             Ok(())
@@ -224,14 +282,23 @@ pub fn verify_vmap_generation(ctx: &ReducerContext, generation_id: u64) -> Resul
     let mut generation = generation(ctx, generation_id)?;
     require_staging(generation.state)?;
     require_complete(generation.expected_chunks, generation.accepted_chunks)?;
-    for chunk in ctx
+    let mut staged: Vec<VmapGenerationChunk> = ctx
         .db
         .game_vmap_generation_chunk()
         .by_generation()
         .filter(&generation_id)
-    {
+        .collect();
+    staged.sort_unstable_by_key(|chunk| (chunk.key, chunk.shard_ordinal));
+    for chunk in &staged {
         decode(&chunk.blob).map_err(|err| format!("invalid staged vmap chunk: {err:?}"))?;
     }
+    require_manifest(
+        generation.expected_bytes,
+        &generation.manifest_digest,
+        staged
+            .iter()
+            .map(|chunk| (chunk.key, chunk.shard_ordinal, chunk.blob.as_slice())),
+    )?;
     generation.state = VERIFIED;
     ctx.db.game_vmap_generation().id().update(generation);
     Ok(())
@@ -558,6 +625,26 @@ mod tests {
         assert_ne!(STAGING, VERIFIED);
         assert_ne!(VERIFIED, ACTIVE);
         assert_ne!(ACTIVE, DISCARDED);
+    }
+
+    #[test]
+    fn manifest_requires_exact_bytes_digest_and_canonical_order() {
+        let first = [0x01, 0x02];
+        let second = [0x03];
+        let canonical = [(7, 0, first.as_slice()), (9, 0, second.as_slice())];
+        let digest = manifest_digest(canonical);
+
+        assert!(require_manifest(3, &digest, canonical).is_ok());
+        assert!(require_manifest(2, &digest, canonical).is_err(), "byte truncation is refused");
+        assert!(
+            require_manifest(3, &digest, [(9, 0, second.as_slice()), (7, 0, first.as_slice())])
+                .is_err(),
+            "the same chunks in a different order have a different manifest"
+        );
+        assert!(
+            require_manifest(3, &[0; 32], canonical).is_err(),
+            "a different digest is refused"
+        );
     }
 
     #[test]

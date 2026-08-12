@@ -12,6 +12,8 @@ pub struct VmapGeneration {
     pub state: u8,
     pub expected_chunks: u32,
     pub accepted_chunks: u32,
+    pub expected_bytes: u64,
+    pub manifest_digest: Vec<u8>,
 }
 
 impl __sdk::InModule for VmapGeneration {
@@ -27,6 +29,8 @@ pub struct VmapGenerationCols {
     pub state: __sdk::__query_builder::Col<VmapGeneration, u8>,
     pub expected_chunks: __sdk::__query_builder::Col<VmapGeneration, u32>,
     pub accepted_chunks: __sdk::__query_builder::Col<VmapGeneration, u32>,
+    pub expected_bytes: __sdk::__query_builder::Col<VmapGeneration, u64>,
+    pub manifest_digest: __sdk::__query_builder::Col<VmapGeneration, Vec<u8>>,
 }
 
 impl __sdk::__query_builder::HasCols for VmapGeneration {
@@ -38,6 +42,8 @@ impl __sdk::__query_builder::HasCols for VmapGeneration {
             state: __sdk::__query_builder::Col::new(table_name, "state"),
             expected_chunks: __sdk::__query_builder::Col::new(table_name, "expected_chunks"),
             accepted_chunks: __sdk::__query_builder::Col::new(table_name, "accepted_chunks"),
+            expected_bytes: __sdk::__query_builder::Col::new(table_name, "expected_bytes"),
+            manifest_digest: __sdk::__query_builder::Col::new(table_name, "manifest_digest"),
         }
     }
 }
