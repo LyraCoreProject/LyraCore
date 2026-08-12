@@ -114,8 +114,8 @@ impl Coordinator {
     }
 
     /// [`movement_update`](Self::movement_update) without waiting on the completion channel.
-    /// `on_done` receives the module's outcome immediately (the batch flush task owns delivery) —
-    /// movement runs on the session's socket-reader thread and must never block on a round-trip.
+    /// Individual shared-batch reducer outcomes are logged module-side and intentionally not
+    /// returned to the socket-reader thread, which must never block on a round-trip.
     #[allow(clippy::too_many_arguments)]
     pub fn movement_update_nowait(
         &self,
@@ -128,7 +128,6 @@ impl Coordinator {
         z: f32,
         o: f32,
         move_time_ms: u32,
-        on_done: impl Fn(std::result::Result<(), String>) + Send + Sync + 'static,
     ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("movement_update_nowait: actor_guid unresolved"));
@@ -136,7 +135,7 @@ impl Coordinator {
         // Push onto the shard's batch — ONE gw_movement_batch transaction per 40ms
         // tick carries the whole realm's heartbeats instead of one transaction each (the
         // measured 92%-writer wall). Per-move rejection logging moved module-side (the batch
-        // reducer logs and skips), so completion is immediate here.
+        // reducer logs and skips), so no per-entry completion exists here.
         self.0.motion_batch.lock().unwrap().push(GwMove {
             actor_guid,
             opcode,
@@ -147,7 +146,6 @@ impl Coordinator {
             o,
             move_time_ms,
         });
-        on_done(Ok(()));
         Ok(())
     }
 

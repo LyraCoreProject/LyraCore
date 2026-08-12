@@ -293,8 +293,9 @@ pub trait WorldStore: Send + Sync {
 
     /// Movement, submitted WITHOUT waiting for the module's completion.
     ///
-    /// The outcome lands in `feedback` instead, and the session applies it on its next packet. The
-    /// default implementation forwards to the blocking `movement_update`, so mock stores and any
+    /// `feedback` models submission/backpressure only. Shared movement batches cannot return a
+    /// per-entry reducer verdict; the session checks the coordinator entity cache before calling.
+    /// The default implementation forwards to the blocking `movement_update`, so mock stores and any
     /// future `WorldStore` keep working unchanged — only the live `Coordinator` overrides it.
     fn movement_update_nowait(
         &self,
@@ -304,11 +305,8 @@ pub trait WorldStore: Send + Sync {
         info: &MovementInfo,
         _feedback: &std::sync::Arc<MovementFeedback>,
     ) -> Result<()> {
-        // Returns the error INLINE and deliberately does not also record it in `feedback` — doing
-        // both would count one failure twice (once here, once when the caller drains the slot on the
-        // next packet), which is exactly what
-        // `a_movement_packet_for_a_despawned_entity_never_kills_the_session` caught. A store that
-        // answers synchronously has no deferred verdict to report.
+        // Synchronous stores return their transport/reducer failure inline. Shared batches do not
+        // have an equivalent per-entry result channel.
         self.movement_update(account_id, self_guid, opcode, info)
     }
 
