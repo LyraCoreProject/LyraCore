@@ -186,6 +186,41 @@ separate, resolvable convention and are unaffected by this.
 
 ## 3. Deploy + verify procedure (use exactly this)
 
+### SpacetimeDB standalone is a supervised production dependency
+
+The gateway only recovers a coordinator connection when a healthy standalone node comes back. Run
+that node under the committed `deploy/systemd/spacetimedb-standalone.service` unit, rather than in
+`nohup`, `screen`, or a login shell. The unit restarts **every** standalone exit, gives every
+restart `524288` file descriptors, and appends standalone stderr to
+`/var/log/lyracore/spacetimedb-standalone.log`.
+
+Install the exact 2.7.1 `spacetimedb-standalone` binary at
+`/opt/lyracore/spacetimedb/spacetimedb-standalone`, then install and enable the unit as root. The
+directories are deliberately owned by the non-login `lyracore` service account: the database data
+and error log must survive both an executable upgrade and a standalone crash.
+
+```bash
+sudo useradd --system --home-dir /var/lib/lyracore --shell /usr/sbin/nologin lyracore  # once
+sudo install -d -o lyracore -g lyracore /opt/lyracore/spacetimedb /var/lib/lyracore/spacetimedb /var/log/lyracore
+sudo install -o lyracore -g lyracore -m 0755 /path/to/spacetimedb-standalone /opt/lyracore/spacetimedb/spacetimedb-standalone
+sudo install -o root -g root -m 0644 deploy/systemd/spacetimedb-standalone.service /etc/systemd/system/spacetimedb-standalone.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now spacetimedb-standalone
+```
+
+Inspect the service and its durable stderr capture with:
+
+```bash
+sudo systemctl status spacetimedb-standalone
+sudo journalctl -u spacetimedb-standalone --no-pager -n 100
+sudo tail -n 100 /var/log/lyracore/spacetimedb-standalone.log
+```
+
+After replacing the standalone binary, run `sudo systemctl restart spacetimedb-standalone` and
+repeat those inspections. Do not delete `/var/lib/lyracore/spacetimedb` during an upgrade: it is the
+node's persistent database state. The unit binds standalone to loopback; expose it only through the
+separately configured front door, never by changing this service's listen address casually.
+
 `lyracore dev up` is the one deliberate exception to the production topology below: it is a
 contributor fixture on a loopback node, four databases since #108 (`lyracore`, `lyracore-kalimdor`,
 `lyracore-instances`, `lyracore-realm`) and one under `dev up --single`. It **owns** the topology

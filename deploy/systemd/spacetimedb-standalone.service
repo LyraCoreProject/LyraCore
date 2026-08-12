@@ -1,0 +1,18 @@
+[Unit]
+Description=LyraCore SpacetimeDB standalone
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=lyracore
+Group=lyracore
+WorkingDirectory=/var/lib/lyracore/spacetimedb
+ExecStart=/opt/lyracore/spacetimedb/spacetimedb-standalone start --listen-addr 127.0.0.1:3000 --data-dir /var/lib/lyracore/spacetimedb --non-interactive
+Restart=always
+RestartSec=2s
+LimitNOFILE=524288
+StandardError=append:/var/log/lyracore/spacetimedb-standalone.log
+
+[Install]
+WantedBy=multi-user.target
