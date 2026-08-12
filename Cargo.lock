@@ -1790,6 +1790,7 @@ dependencies = [
  "blake3",
  "flate2",
  "lyracore-shared",
+ "serde_json",
  "wow-adt",
  "wow-m2",
  "wow-mpq",

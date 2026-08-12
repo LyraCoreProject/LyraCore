@@ -18,6 +18,7 @@
 use anyhow::{bail, Context, Result};
 use lyracore_shared::terrain::cell_key;
 use lyracore_shared::vmap::{encode, TriClass, VmapTri, HEADER_BYTES, TRI_BYTES};
+#[cfg(test)]
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -71,6 +72,7 @@ fn apply_full(
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 fn placement_tris(p: &Placement, mesh: &Mesh, conv: crate::nav::Convention) -> Vec<VmapTri> {
     let pos_w = crate::nav::place_pos(p.position);
     let transform = |t: &Tri| -> [[f32; 3]; 3] {
@@ -299,38 +301,91 @@ impl Drop for VmapSpool {
     }
 }
 
-fn owns_map(sql_output: &str, map_id: u32) -> bool {
-    sql_output
-        .split(|c: char| !c.is_ascii_digit())
-        .filter_map(|token| token.parse::<u32>().ok())
-        .any(|candidate| candidate == map_id)
+fn sql_has_map(sql_output: &str, map_id: u32) -> Result<bool> {
+    let value: serde_json::Value = serde_json::from_str(sql_output)
+        .context("parse JSON SQL map-ownership response")?;
+    fn visit(value: &serde_json::Value, map_id: u32) -> bool {
+        match value {
+            serde_json::Value::Object(object) => object.iter().any(|(key, value)| {
+                (key == "map_id" && value.as_u64() == Some(map_id as u64))
+                    || visit(value, map_id)
+            }),
+            serde_json::Value::Array(values) => values.iter().any(|value| visit(value, map_id)),
+            _ => false,
+        }
+    }
+    Ok(visit(&value, map_id))
+}
+
+fn sql_query(args: &crate::Args, query: &str) -> Result<String> {
+    let out = Command::new("spacetime")
+        .args(["sql", "--format", "json", "-s", &args.server, &args.db, query])
+        .output()
+        .with_context(|| format!("run vmap SQL query: {query}"))?;
+    if !out.status.success() {
+        bail!("vmap SQL query failed: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+fn accepted_chunk_ids(args: &crate::Args, generation_id: u64) -> Result<std::collections::HashSet<(u64, u32)>> {
+    let output = sql_query(
+        args,
+        &format!(
+            "SELECT key, shard_ordinal FROM game_vmap_generation_receipt WHERE generation_id = {generation_id}"
+        ),
+    )?;
+    let value: serde_json::Value = serde_json::from_str(&output)
+        .context("parse JSON SQL vmap generation-chunk response")?;
+    fn visit(value: &serde_json::Value, accepted: &mut std::collections::HashSet<(u64, u32)>) {
+        match value {
+            serde_json::Value::Object(object) => {
+                if let (Some(key), Some(ordinal)) = (
+                    object.get("key").and_then(serde_json::Value::as_u64),
+                    object.get("shard_ordinal").and_then(serde_json::Value::as_u64),
+                ) {
+                    if let Ok(ordinal) = u32::try_from(ordinal) {
+                        accepted.insert((key, ordinal));
+                    }
+                }
+                for value in object.values() {
+                    visit(value, accepted);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    visit(value, accepted);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut accepted = std::collections::HashSet::new();
+    visit(&value, &mut accepted);
+    Ok(accepted)
+}
+
+fn active_generation_status(args: &crate::Args, map_id: u32) -> Result<()> {
+    let output = sql_query(
+        args,
+        &format!(
+            "SELECT id, map_id, state, expected_chunks, accepted_chunks, expected_bytes, manifest_digest, source_identity, selection_identity FROM game_vmap_generation WHERE map_id = {map_id} AND state = 2"
+        ),
+    )?;
+    println!("vmap active-generation status for map {map_id}:\n{}", output.trim());
+    Ok(())
 }
 
 /// A vmap generation follows already-owned spatial data. Fail before opening client archives when
 /// this database cannot authoritatively serve the requested map.
 fn preflight_map_ownership(args: &crate::Args, map_id: u32) -> Result<()> {
     let query = |table: &str| -> Result<String> {
-        let out = Command::new("spacetime")
-            .args([
-                "sql",
-                "-s",
-                &args.server,
-                &args.db,
-                &format!("SELECT map_id FROM {table}"),
-            ])
-            .output()
-            .with_context(|| format!("query {table} map ownership"))?;
-        if !out.status.success() {
-            bail!(
-                "{table} ownership query failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        }
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        sql_query(args, &format!("SELECT map_id FROM {table}"))
+            .with_context(|| format!("query {table} map ownership"))
     };
     let terrain = query("game_terrain_chunk")?;
     let nav = query("game_nav_chunk")?;
-    if owns_map(&terrain, map_id) && owns_map(&nav, map_id) {
+    if sql_has_map(&terrain, map_id)? && sql_has_map(&nav, map_id)? {
         Ok(())
     } else {
         bail!("target database {} does not own complete spatial map {map_id} (terrain and nav ownership are both required)", args.db)
@@ -339,6 +394,12 @@ fn preflight_map_ownership(args: &crate::Args, map_id: u32) -> Result<()> {
 
 pub(crate) fn run(args: &crate::Args) -> Result<()> {
     let map_id = args.map as u32;
+    if args.vmap_status {
+        if args.vmap.is_none() {
+            return active_generation_status(args, map_id);
+        }
+        bail!("--vmap-status is a standalone status command; omit --vmap");
+    }
     preflight_map_ownership(args, map_id)?;
     let data_dir = Path::new(args.vmap.as_ref().expect("caller checked"));
     let mut chain = crate::collision::open_geometry_chain(data_dir)?;
@@ -351,6 +412,10 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
             bail!("slice cell index {c} outside the map square — check --box/--center/--radius");
         }
     }
+    let source_identity = format!("client-data-path:{}", data_dir.display());
+    let selection_identity = format!(
+        "map={map_id};cell_x={cell_x_min}..{cell_x_max};cell_y={cell_y_min}..{cell_y_max}"
+    );
 
     // Pass 1: parse tiles — heights (unused here) + deduped placements.
     let scan = crate::nav::scan_tiles(
@@ -463,13 +528,22 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
                 &expected_chunks,
                 &expected_bytes,
                 &manifest,
+                &source_identity,
+                &selection_identity,
             ],
         )?;
+        let accepted = accepted_chunk_ids(args, generation_id)?;
         let mut batches = 0usize;
+        let mut skipped = 0usize;
         let mut current = String::new();
         for &key in &keys {
             let mut ordinal = 0u32;
             spool.for_each_shard(key, |blob| {
+                if accepted.contains(&(key, ordinal)) {
+                    skipped += 1;
+                    ordinal += 1;
+                    return Ok(());
+                }
                 let cell_x = ((key >> 16) & 0xFFFF) as u16;
                 let cell_y = (key & 0xFFFF) as u16;
                 let hex: String = blob.iter().map(|b| format!("{b:02x}")).collect();
@@ -509,7 +583,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
             "activate_vmap_generation",
             &[&generation_id.to_string()],
         )?;
-        println!("vmap: activated generation {generation_id} after {batches} resumable batch(es)");
+        println!("vmap: activated generation {generation_id} after {batches} batch(es), skipping {skipped} already-accepted shard row(s)");
     }
     println!("vmap: map {map_id} — {world_tris} world tris ({wmo_tris} WMO, {m2_tris} M2) across {} cells, {total_bytes} packed bytes ({:.1} KB, {shard_rows} shard row(s))", spool.keys()?.len(), total_bytes as f64 / 1024.0);
     println!("vmap: manifest {manifest} generation {generation_id}");
@@ -774,9 +848,10 @@ mod tests {
 
     #[test]
     fn ownership_parser_accepts_the_requested_map_and_rejects_another() {
-        let rows = "map_id\n0\n36\n";
-        assert!(owns_map(rows, 0));
-        assert!(owns_map(rows, 36));
-        assert!(!owns_map(rows, 1));
+        let rows = r#"[{"map_id":0},{"map_id":36}]"#;
+        assert!(sql_has_map(rows, 0).unwrap());
+        assert!(sql_has_map(rows, 36).unwrap());
+        assert!(!sql_has_map(rows, 1).unwrap());
+        assert!(!sql_has_map(r#"{"rows":"0 rows"}"#, 0).unwrap());
     }
 }

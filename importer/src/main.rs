@@ -915,6 +915,7 @@ pub(crate) struct Args {
     pub(crate) dump_collision: Option<String>, // client Data/ dir: 240 spike, WMO/M2 collision dry-run (see collision.rs)
     pub(crate) nav: Option<String>, // client Data/ dir: 241 nav-grid rasterizer (see nav.rs)
     pub(crate) vmap: Option<String>, // client Data/ dir: #520/#521 exact vmap triangle extract+pack+import (see vmap.rs)
+    pub(crate) vmap_status: bool, // print active-generation provenance/status without opening client data
     pack_client: Option<String>, // client Data/ dir for the --pack-client packager (see pack_client.rs)
     print_extents: bool, // with --dump: print the operator's own spawn bbox for --map and exit (work-item 206)
     spells: bool, // with --dbc: import Spell.dbc → game_spell/game_spell_effect (see spell.rs)
@@ -963,6 +964,7 @@ fn parse_args() -> Result<Args> {
         dump_collision: None,
         nav: None,
         vmap: None,
+        vmap_status: false,
         terrain: None,
         print_extents: false,
         spells: false,
@@ -997,6 +999,7 @@ fn parse_args() -> Result<Args> {
             }
             "--nav" => a.nav = Some(it.next().context("--nav needs the client Data/ dir")?),
             "--vmap" => a.vmap = Some(it.next().context("--vmap needs the client Data/ dir")?),
+            "--vmap-status" => a.vmap_status = true,
             "--dbc" => a.dbc = Some(it.next().context("--dbc needs the client Data/ dir")?),
             "--pack-client" => {
                 a.pack_client = Some(
@@ -1166,6 +1169,7 @@ fn parse_args() -> Result<Args> {
         && a.dump_collision.is_none()
         && a.nav.is_none()
         && a.vmap.is_none()
+        && !a.vmap_status
     {
         bail!("need an input: --dump <classic-db .sql[.gz]>, --dbc <client Data/ dir>, --terrain <client Data/ dir>, or --pack-client <client Data/ dir>");
     }
@@ -4581,7 +4585,7 @@ fn main() -> Result<()> {
     }
 
     // `--vmap` → the #520/#521 exact vmap triangle extract + pack + import (see vmap.rs).
-    if args.vmap.is_some() {
+    if args.vmap.is_some() || args.vmap_status {
         return vmap::run(&args);
     }
 
@@ -6234,6 +6238,7 @@ mod tests {
             dump_collision: None,
             nav: None,
             vmap: None,
+            vmap_status: false,
             print_extents: false,
             spells: false,
             talents: false,

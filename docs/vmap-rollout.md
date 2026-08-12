@@ -31,6 +31,12 @@ checking generations. A successful import is data-plane evidence, not permission
    Record its generation id, source/selection identity, chunk count, byte count, and digest. The two
    manifests must match exactly. Record that no map-0 active or staging generation exists on
    `lyracore-world-1`.
+
+   ```bash
+   lyracore-importer --vmap-status --map 0 --server "$SPACETIME_SERVER" --db lyracore
+   lyracore-importer --vmap-status --map 0 --server "$SPACETIME_SERVER" --db lyracore-instances
+   lyracore-importer --vmap-status --map 0 --server "$SPACETIME_SERVER" --db lyracore-world-1
+   ```
 3. Confirm the gate remains off on every shard before probe testing:
 
    ```bash
@@ -45,11 +51,10 @@ checking generations. A successful import is data-plane evidence, not permission
 ## Geometry-probe readiness
 
 Issue #184 requires ray and floor evidence before exact-vmap consumption is enabled. The current
-`debug_vmap_ray` and `debug_floor_probe` reducers call the same `vmap_enabled` gate as gameplay;
-they cannot provide that evidence while the gate is off. Therefore this rollout is **blocked** until
-a read-only active-generation probe surface exists, or the issue acceptance is explicitly revised
-by the maintainer. Do not use a temporary `debug_set_vmap_enabled true` change as a substitute: it
-already enables the behavior this checklist is meant to accept.
+`debug_vmap_ray` and `debug_floor_probe` reducers read the active generation directly and do not
+require `vmap_enabled`; use them while the gameplay gate remains off. Do not use a temporary
+`debug_set_vmap_enabled true` change as a substitute: it already enables the behavior this checklist
+is meant to accept.
 
 After that prerequisite is met, select coordinates from the imported canonical slice: at least one
 ray that crosses a WMO wall and one elevated model floor whose terrain height differs. Keep exact
