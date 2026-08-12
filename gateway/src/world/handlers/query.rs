@@ -139,28 +139,29 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                 }
                 WorldState::CharSelect => Vec::new(),
             };
-            // Imported options (condition-filtered) take FULL precedence over the flag-derived
-            // synthesis when present — see `codec::build_gossip_message`'s doc comment.
-            let imported = filtered_gossip_options(store, npc, player_guid)?;
             // A vendor that ALSO has the gossip bit gets a "browse goods" menu entry (rank-vendor #6);
             // having stock is the is-vendor signal, so no npc_flags read is needed. An innkeeper gets a
-            // "Make this inn your home." entry (hearthstone bind) — that one DOES need the npc_flags read.
-            // (Both are ignored once `imported` is nonempty — fallback-only signals.)
+            // "Make this inn your home." entry (hearthstone bind) — that one DOES need the npc_flags
+            // read. Both are APPENDED to the imported options rather than replaced by them: a dump menu
+            // that omits the row would otherwise strand the NPC's stock or its bind.
             let is_vendor = !store.vendor_items(npc)?.is_empty();
             let is_innkeeper = store.npc_is_innkeeper(npc)?;
+            let options = codec::gossip_menu_options(
+                filtered_gossip_options(store, npc, player_guid)?,
+                is_vendor,
+                is_innkeeper,
+            );
+            // Snapshot what this client is about to look at — the select handler resolves the clicked
+            // POSITION against this, never against a fresh read (see `GossipMenuSnapshot`).
+            conn.gossip_menu = Some(GossipMenuSnapshot {
+                npc_guid: npc,
+                options: options.iter().map(|o| (o.row_id, o.action)).collect(),
+            });
             let title_text_id = store.npc_gossip_text_id(npc);
-            let imported_opt = (!imported.is_empty()).then_some(imported.as_slice());
             send(
                 tx,
                 Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(Box::new(
-                    codec::build_gossip_message(
-                        npc,
-                        title_text_id,
-                        quests,
-                        imported_opt,
-                        is_vendor,
-                        is_innkeeper,
-                    ),
+                    codec::build_gossip_message(npc, title_text_id, quests, &options),
                 ))),
             )?;
         }
@@ -176,92 +177,66 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                 ))),
             )?;
         }
-        // The player clicked a gossip option. Imported menus route by ACTION (vendor →
-        // inventory, innkeeper → bind_home, trainer → SMSG_TRAINER_LIST, everything else including the
-        // trailing Farewell → SMSG_GOSSIP_COMPLETE; submenu navigation is deferred, `action_menu_id`
-        // stays inert). The fallback (no imported options) keeps the pre-import vendor/innkeeper synthesis
-        // byte-identical: option 0 on a stocked vendor is "browse goods" → the RAW SMSG_LIST_INVENTORY;
-        // any other option (or a non-vendor NPC's "Farewell") closes the window.
+        // The player clicked a gossip option. The click carries a POSITION, resolved against the
+        // snapshot HELLO took (`GossipMenuSnapshot`), then routed by ACTION: vendor → inventory,
+        // innkeeper → bind_home, trainer → SMSG_TRAINER_LIST, banker → SMSG_SHOW_BANK, everything else
+        // including the trailing Farewell → SMSG_GOSSIP_COMPLETE. Submenu navigation is deferred
+        // (`action_menu_id` stays inert).
         ClientOpcodeMessage::CMSG_GOSSIP_SELECT_OPTION(c) => {
             let npc = c.guid.guid();
             let player_guid = match &conn.state {
                 WorldState::InWorld(iw) => iw.self_guid,
                 WorldState::CharSelect => 0,
             };
-            // CRITICAL: re-derive with the IDENTICAL filter HELLO used (same helper, same player_guid)
-            // — the position the client echoes back was assigned against THAT filtered list, so a
-            // divergent filter here would route the wrong option (the "HELLO/SELECT_OPTION alignment"
-            // trap — see the mock test of the same name).
-            let imported = filtered_gossip_options(store, npc, player_guid)?;
-            // STABLE option identity: resolve the clicked index → its game_gossip_option.row_id
-            // BEFORE notifying the module, so a package handler keys on the row_id (immune to menu
-            // position) not the volatile index. u32::MAX = the trailing Farewell / a synthesized line /
-            // an out-of-range stale click (none of which is a package's minted option).
-            let option_row_id = imported
-                .get(c.gossip_list_id as usize)
-                .map(|o| o.row_id)
-                .unwrap_or(u32::MAX);
+            // A click naming an NPC other than the one the open menu belongs to is stale (the client
+            // sends HELLO before it can show a menu), so it selects nothing.
+            let clicked = conn
+                .gossip_menu
+                .as_ref()
+                .filter(|snap| snap.npc_guid == npc)
+                .and_then(|snap| snap.options.get(c.gossip_list_id as usize))
+                .copied();
+            // STABLE option identity: the module is notified with the clicked row's
+            // `game_gossip_option.row_id`, so a package handler keys on that (immune to menu position)
+            // rather than the volatile index. `SYNTHESIZED_ROW_ID` = the trailing Farewell, a gateway-
+            // synthesized line, or a stale click — none of which is a package's minted option.
+            let option_row_id = clicked.map_or(codec::SYNTHESIZED_ROW_ID, |(row_id, _)| row_id);
             // Notify the module (the on_gossip_select hook chokepoint) — best-effort,
             // so a module hiccup never blocks the gossip reply below.
             let _ = store.gossip_select(conn.account_id, self_guid, npc, c.gossip_list_id, option_row_id);
-            if !imported.is_empty() {
-                use lyracore_shared::constants::gossip_option;
-                match imported.get(c.gossip_list_id as usize) {
-                    Some(opt) if opt.action == gossip_option::VENDOR => {
-                        let items = store.vendor_items(npc)?;
-                        let (opcode, body) = codec::build_list_inventory_raw(npc, &items);
-                        send(tx, Outbound::Raw { opcode, body })?;
-                    }
-                    Some(opt) if opt.action == gossip_option::INNKEEPER => {
-                        // Bind failure (not in world) is per-action; close the window either way (the
-                        // post-bind SMSG_BINDPOINTUPDATE confirmation is cosmetic — sent fresh at next
-                        // login; the recall is server-authoritative regardless).
-                        let _ = store.bind_home(conn.account_id, social::self_guid(conn).unwrap_or(0));
-                        send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
-                    }
-                    Some(opt) if opt.action == gossip_option::TRAINER => {
-                        let spells = store.trainer_list(player_guid, npc)?;
-                        let list = codec::build_trainer_list(
-                            npc,
-                            &spells,
-                            "I can teach you a thing or two.",
-                        );
-                        send(
-                            tx,
-                            Outbound::One(ServerOpcodeMessage::SMSG_TRAINER_LIST(Box::new(list))),
-                        )?;
-                    }
-                    Some(opt) if opt.action == gossip_option::UNLEARNTALENTS => {
-                        // Respec (#516). Errors (out of range / not enough gold) are per-action —
-                        // the window closes either way, same as bind_home above.
-                        let _ = store.reset_talents(conn.account_id, player_guid, npc);
-                        send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
-                    }
-                    Some(opt) if opt.action == gossip_option::BANKER => {
-                        super::send_show_bank(tx, npc)?;
-                    }
-                    // TAXI/plain-GOSSIP/submenu-link, the trailing Farewell, or an out-of-range
-                    // index (a stale click racing a condition change) — close the window. Submenu
-                    // navigation (`action_menu_id`) is deferred.
-                    _ => send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?,
-                }
-            } else {
-                // Fallback (pre-import, byte-identical): vendor/innkeeper synthesis.
-                let items = store.vendor_items(npc)?;
-                let is_vendor = !items.is_empty();
-                if is_vendor && c.gossip_list_id == codec::GOSSIP_OPTION_VENDOR {
+            use lyracore_shared::constants::gossip_option;
+            match clicked.map(|(_, action)| action) {
+                Some(gossip_option::VENDOR) => {
+                    let items = store.vendor_items(npc)?;
                     let (opcode, body) = codec::build_list_inventory_raw(npc, &items);
                     send(tx, Outbound::Raw { opcode, body })?;
-                } else if c.gossip_list_id == codec::gossip_option_innkeeper(is_vendor)
-                    && store.npc_is_innkeeper(npc)?
-                {
-                    // "Make this inn your home." → bind the caller's hearthstone home to their current
-                    // position (the module recall target).
+                }
+                Some(gossip_option::INNKEEPER) => {
+                    // Bind failure (not in world) is per-action; close the window either way (the
+                    // post-bind SMSG_BINDPOINTUPDATE confirmation is cosmetic — sent fresh at next
+                    // login; the recall is server-authoritative regardless).
                     let _ = store.bind_home(conn.account_id, social::self_guid(conn).unwrap_or(0));
                     send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
-                } else {
+                }
+                Some(gossip_option::TRAINER) => {
+                    let spells = store.trainer_list(player_guid, npc)?;
+                    let list =
+                        codec::build_trainer_list(npc, &spells, "I can teach you a thing or two.");
+                    send(
+                        tx,
+                        Outbound::One(ServerOpcodeMessage::SMSG_TRAINER_LIST(Box::new(list))),
+                    )?;
+                }
+                Some(gossip_option::UNLEARNTALENTS) => {
+                    // Respec (#516). Errors (out of range / not enough gold) are per-action —
+                    // the window closes either way, same as bind_home above.
+                    let _ = store.reset_talents(conn.account_id, player_guid, npc);
                     send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
                 }
+                Some(gossip_option::BANKER) => super::send_show_bank(tx, npc)?,
+                // TAXI/plain-GOSSIP/submenu-link, the trailing Farewell, or a click with no live
+                // snapshot behind it — close the window.
+                _ => send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?,
             }
         }
         // Item template resolution (items slice-1): the client queries an item it has encountered

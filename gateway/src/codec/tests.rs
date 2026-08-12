@@ -1905,13 +1905,12 @@ fn player_create_equips_mainhand_renders_visible_item() {
 
 #[test]
 fn gossip_message_echoes_guid_with_a_greeting_option() {
+    let menu = |is_vendor, is_innkeeper| gossip_menu_options(Vec::new(), is_vendor, is_innkeeper);
     let m = build_gossip_message(
         0xF130_0000_0000_0001,
         GOSSIP_GREETING_TEXT_ID,
         Vec::new(),
-        None,
-        false,
-        false,
+        &menu(false, false),
     );
     assert_eq!(m.guid.guid(), 0xF130_0000_0000_0001); // echoes the NPC the player talked to
     assert_eq!(m.title_text_id, GOSSIP_GREETING_TEXT_ID); // resolved via CMSG_NPC_TEXT_QUERY
@@ -1926,17 +1925,15 @@ fn gossip_message_echoes_guid_with_a_greeting_option() {
     assert_eq!(m.gossips.len(), 1); // non-vendor: one clickable line so the window isn't empty
     assert_eq!(m.gossips[0].message, "Farewell.");
     assert!(!m.gossips[0].coded);
-    // A vendor NPC gets a "browse goods" option FIRST (index 0 = GOSSIP_OPTION_VENDOR), then Farewell.
+    // A vendor NPC gets a "browse goods" option FIRST (index 0), then Farewell.
     let v = build_gossip_message(
         0xF130_0000_0000_0001,
         GOSSIP_GREETING_TEXT_ID,
         Vec::new(),
-        None,
-        true,
-        false,
+        &menu(true, false),
     );
     assert_eq!(v.gossips.len(), 2);
-    assert_eq!(v.gossips[0].id, GOSSIP_OPTION_VENDOR);
+    assert_eq!(v.gossips[0].id, 0);
     assert_eq!(v.gossips[0].item_icon, 1); // vendor bag icon
     assert_eq!(v.gossips[1].message, "Farewell.");
     assert!(m.quests.is_empty()); // a plain gossip NPC (no quests passed) is unchanged
@@ -1962,89 +1959,68 @@ fn gossip_message_echoes_guid_with_a_greeting_option() {
         "the VENDOR (0x4) bit still passes — no regression"
     );
 
-    // Innkeeper "make home" option lands at the index `gossip_option_innkeeper` reports, and each id
-    // matches its position (the value the client echoes back). Non-vendor innkeeper → slot 0.
+    // Innkeeper "make home" lands at slot 0 on a non-vendor, and each id matches its position (the
+    // value the client echoes back).
     let inn = build_gossip_message(
         0xF130_0000_0000_0001,
         GOSSIP_GREETING_TEXT_ID,
         Vec::new(),
-        None,
-        false,
-        true,
+        &menu(false, true),
     );
-    let i0 = gossip_option_innkeeper(false) as usize;
-    assert_eq!(inn.gossips[i0].message, "Make this inn your home.");
-    assert_eq!(inn.gossips[i0].id, i0 as u32);
+    assert_eq!(inn.gossips[0].message, "Make this inn your home.");
+    assert_eq!(inn.gossips[0].id, 0);
     // Vendor + innkeeper → browse goods (0), make home (1), Farewell (2).
     let both = build_gossip_message(
         0xF130_0000_0000_0001,
         GOSSIP_GREETING_TEXT_ID,
         Vec::new(),
-        None,
-        true,
-        true,
+        &menu(true, true),
     );
-    let i1 = gossip_option_innkeeper(true) as usize;
     assert_eq!(both.gossips.len(), 3);
-    assert_eq!(both.gossips[i1].message, "Make this inn your home.");
-    assert_eq!(both.gossips[i1].id, i1 as u32);
+    assert_eq!(both.gossips[1].message, "Make this inn your home.");
+    assert_eq!(both.gossips[1].id, 1);
 }
 
-/// Byte-parity pin: passing `None` (the pre-import call shape) must produce EXACTLY the
-/// same gossip window as before the option-import feature existed — the fallback path must never
-/// silently diverge from the pre-import vendor/innkeeper synthesis.
+/// Byte-parity pin: an NPC with NO imported options must produce EXACTLY the same gossip window as
+/// before the option-import feature existed — the flag-derived synthesis must never silently diverge.
 #[test]
-fn gossip_message_fallback_is_byte_identical_to_pre_217() {
+fn gossip_message_with_no_imports_is_byte_identical_to_pre_217() {
     let guid = 0xF130_0000_0000_0042u64;
-    let none_path = build_gossip_message(guid, 4, Vec::new(), None, true, true);
-    let empty_slice_path = build_gossip_message(guid, 4, Vec::new(), Some(&[]), true, true);
-    assert_eq!(
-        none_path, empty_slice_path,
-        "None and an empty imported slice must render identically"
+    let m = build_gossip_message(
+        guid,
+        4,
+        Vec::new(),
+        &gossip_menu_options(Vec::new(), true, true),
     );
-    assert_eq!(none_path.gossips.len(), 3); // vendor + innkeeper + Farewell, exactly as pre-import
-    assert_eq!(
-        none_path.gossips[0].message,
-        "I'd like to browse your goods."
-    );
-    assert_eq!(none_path.gossips[1].message, "Make this inn your home.");
-    assert_eq!(none_path.gossips[2].message, "Farewell.");
+    assert_eq!(m.gossips.len(), 3); // vendor + innkeeper + Farewell, exactly as pre-import
+    assert_eq!(m.gossips[0].message, "I'd like to browse your goods.");
+    assert_eq!(m.gossips[1].message, "Make this inn your home.");
+    assert_eq!(m.gossips[2].message, "Farewell.");
 }
 
 #[test]
-fn gossip_message_imported_options_take_precedence_and_get_a_trailing_farewell() {
-    // An imported innkeeper NPC: browse goods + make-home + chat options,
-    // rendered VERBATIM from the dump (not the hardcoded fallback strings) — the vendor/innkeeper flags
-    // are ignored entirely once options are imported.
+fn gossip_message_renders_imported_options_verbatim_with_a_trailing_farewell() {
+    use lyracore_shared::constants::gossip_option;
+    // An imported innkeeper NPC whose menu already covers both flags: browse goods + make-home + chat,
+    // rendered VERBATIM from the dump. Nothing is synthesized on top.
+    let opt = |icon, text: &str, action| GossipOptionView {
+        icon,
+        text: text.into(),
+        action,
+        ..Default::default()
+    };
     let opts = vec![
-        GossipOptionView {
-            icon: 0,
-            text: "Care for a chat?".into(),
-            action: lyracore_shared::constants::gossip_option::GOSSIP,
-            ..Default::default()
-        },
-        GossipOptionView {
-            icon: 1,
-            text: "Let me see your goods.".into(),
-            action: lyracore_shared::constants::gossip_option::VENDOR,
-            ..Default::default()
-        },
-        GossipOptionView {
-            icon: 0,
-            text: "I'd like to stay here a while.".into(),
-            action: lyracore_shared::constants::gossip_option::INNKEEPER,
-            ..Default::default()
-        },
+        opt(0, "Care for a chat?", gossip_option::GOSSIP),
+        opt(1, "Let me see your goods.", gossip_option::VENDOR),
+        opt(0, "I'd like to stay here a while.", gossip_option::INNKEEPER),
     ];
     let m = build_gossip_message(
         1,
         GOSSIP_GREETING_TEXT_ID,
         Vec::new(),
-        Some(&opts),
-        true,
-        true,
+        &gossip_menu_options(opts, true, true),
     );
-    assert_eq!(m.gossips.len(), 4, "3 imported + a trailing Farewell"); // never the flag-derived synthesis
+    assert_eq!(m.gossips.len(), 4, "3 imported + a trailing Farewell");
     assert_eq!(m.gossips[0].message, "Care for a chat?");
     assert_eq!(m.gossips[0].id, 0);
     assert_eq!(m.gossips[1].message, "Let me see your goods.");
@@ -2052,6 +2028,41 @@ fn gossip_message_imported_options_take_precedence_and_get_a_trailing_farewell()
     assert_eq!(m.gossips[2].message, "I'd like to stay here a while.");
     assert_eq!(m.gossips[3].message, "Farewell.");
     assert_eq!(m.gossips[3].id, 3);
+}
+
+/// LIVE VICTIMS of the old imports-suppress-synthesis rule: Orphan Matron Nightingale (stock, no
+/// vendor row in her menu) and Katie Hunter (innkeeper, no bind row). The synthesized line must be
+/// APPENDED to an imported menu that lacks it, and never duplicate one that has it.
+#[test]
+fn gossip_menu_options_appends_only_the_missing_flag_lines() {
+    use lyracore_shared::constants::gossip_option;
+    let chat = GossipOptionView {
+        row_id: 7,
+        text: "Care for a chat?".into(),
+        action: gossip_option::GOSSIP,
+        ..Default::default()
+    };
+    // Vendor with stock but no vendor row → browse-goods appended, marked as synthesized.
+    let merged = gossip_menu_options(vec![chat.clone()], true, false);
+    assert_eq!(merged.len(), 2);
+    assert_eq!(merged[0].row_id, 7, "the imported row keeps its identity");
+    assert_eq!(merged[1].text, "I'd like to browse your goods.");
+    assert_eq!(merged[1].action, gossip_option::VENDOR);
+    assert_eq!(merged[1].row_id, SYNTHESIZED_ROW_ID);
+    // Innkeeper with no bind row → make-home appended.
+    let merged = gossip_menu_options(vec![chat.clone()], false, true);
+    assert_eq!(merged.len(), 2);
+    assert_eq!(merged[1].action, gossip_option::INNKEEPER);
+    // A menu that already carries the row is untouched — no duplicate line.
+    let has_vendor = GossipOptionView {
+        row_id: 9,
+        text: "Let me see your goods.".into(),
+        action: gossip_option::VENDOR,
+        ..Default::default()
+    };
+    let merged = gossip_menu_options(vec![chat, has_vendor], true, false);
+    assert_eq!(merged.len(), 2);
+    assert_eq!(merged[1].text, "Let me see your goods.");
 }
 
 #[test]
@@ -2300,12 +2311,13 @@ fn list_inventory_raw_body_is_exact_vanilla_layout() {
         "raw SMSG_LIST_INVENTORY body must match the vanilla layout byte-for-byte"
     );
 
-    // An empty stock is just the vendor guid + a zero count.
+    // An empty stock is the vendor guid + a zero count + the error byte the client reads INSTEAD of
+    // an item block. Without that trailing byte it parses past the end and shows no window at all.
     let (_op, empty) = build_list_inventory_raw(vendor_guid, &[]);
     assert_eq!(
         empty,
-        vec![0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0xF1, 0x00],
-        "empty vendor body is guid + count 0"
+        vec![0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0xF1, 0x00, 0x00],
+        "empty vendor body is guid + count 0 + error byte"
     );
 }
 

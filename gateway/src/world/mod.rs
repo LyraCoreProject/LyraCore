@@ -318,6 +318,16 @@ pub enum WorldState {
     InWorld(InWorld),
 }
 
+/// The gossip menu one client is currently looking at — see `WorldConn::gossip_menu`. `options` is
+/// indexed by the `gossip_list_id` the client echoes back; an index past the end is the trailing
+/// Farewell line (or a stale click), which just closes the window.
+pub struct GossipMenuSnapshot {
+    pub npc_guid: u64,
+    /// `(game_gossip_option.row_id, action)` per menu position. `row_id` is
+    /// `codec::SYNTHESIZED_ROW_ID` for the vendor/innkeeper lines the gateway added itself.
+    pub options: Vec<(u32, u32)>,
+}
+
 /// State that exists only while the player is in the world (the `InWorld` variant payload).
 pub struct InWorld {
     /// The selected character's guid (names `SMSG_ATTACKSTART`/`SMSG_ATTACKSTOP`).
@@ -356,6 +366,12 @@ pub struct WorldConn {
     /// tear it down on a state transition, and keeping it here avoids re-plumbing it through
     /// `enter_world`.
     move_coalesce: CoalesceState,
+    /// The gossip menu last sent to this client: the NPC guid plus one `(row_id, action)` per menu
+    /// position. `CMSG_GOSSIP_SELECT_OPTION` carries only a POSITION, and that position was assigned
+    /// against a per-player condition-filtered list — re-deriving the list at select time reads
+    /// whatever the quest state is NOW, so a quest accepted while the window was open shifts every
+    /// index under the click. The snapshot is what the player is actually looking at.
+    pub(crate) gossip_menu: Option<GossipMenuSnapshot>,
     /// Non-blocking movement submit state: outstanding submissions and
     /// the module's deferred verdict. `Arc` because the SDK completion callback outlives this call.
     move_feedback: std::sync::Arc<MovementFeedback>,
@@ -649,6 +665,7 @@ pub fn world_handshake_with_queue<S: Read + Write, St: WorldStore + ?Sized>(
             decrypt,
             state: WorldState::CharSelect,
             move_coalesce: CoalesceState::default(),
+            gossip_menu: None,
             move_feedback: std::sync::Arc::new(MovementFeedback::default()),
             move_submit_dropped: 0,
             home: None,                     // resolved at CMSG_PLAYER_LOGIN
