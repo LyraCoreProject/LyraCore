@@ -16,6 +16,8 @@ pub struct MailEscrow {
     pub postage: u32,
     pub created_micros: i64,
     pub delivered: bool,
+    pub payout: bool,
+    pub mail_id: u64,
 }
 
 impl __sdk::InModule for MailEscrow {
@@ -35,6 +37,8 @@ pub struct MailEscrowCols {
     pub postage: __sdk::__query_builder::Col<MailEscrow, u32>,
     pub created_micros: __sdk::__query_builder::Col<MailEscrow, i64>,
     pub delivered: __sdk::__query_builder::Col<MailEscrow, bool>,
+    pub payout: __sdk::__query_builder::Col<MailEscrow, bool>,
+    pub mail_id: __sdk::__query_builder::Col<MailEscrow, u64>,
 }
 
 impl __sdk::__query_builder::HasCols for MailEscrow {
@@ -50,6 +54,8 @@ impl __sdk::__query_builder::HasCols for MailEscrow {
             postage: __sdk::__query_builder::Col::new(table_name, "postage"),
             created_micros: __sdk::__query_builder::Col::new(table_name, "created_micros"),
             delivered: __sdk::__query_builder::Col::new(table_name, "delivered"),
+            payout: __sdk::__query_builder::Col::new(table_name, "payout"),
+            mail_id: __sdk::__query_builder::Col::new(table_name, "mail_id"),
         }
     }
 }

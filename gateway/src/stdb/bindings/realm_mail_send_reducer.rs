@@ -11,7 +11,7 @@ pub(super) struct RealmMailSendArgs {
     pub recipient_guid: u64,
     pub subject: String,
     pub body: String,
-    pub postage: u32,
+    pub money: u32,
 }
 
 impl From<RealmMailSendArgs> for super::Reducer {
@@ -21,7 +21,7 @@ impl From<RealmMailSendArgs> for super::Reducer {
             recipient_guid: args.recipient_guid,
             subject: args.subject,
             body: args.body,
-            postage: args.postage,
+            money: args.money,
         }
     }
 }
@@ -47,16 +47,9 @@ pub trait realm_mail_send {
         recipient_guid: u64,
         subject: String,
         body: String,
-        postage: u32,
+        money: u32,
     ) -> __sdk::Result<()> {
-        self.realm_mail_send_then(
-            sender_guid,
-            recipient_guid,
-            subject,
-            body,
-            postage,
-            |_, _| {},
-        )
+        self.realm_mail_send_then(sender_guid, recipient_guid, subject, body, money, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `realm_mail_send` to run as soon as possible,
@@ -71,7 +64,7 @@ pub trait realm_mail_send {
         recipient_guid: u64,
         subject: String,
         body: String,
-        postage: u32,
+        money: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -86,7 +79,7 @@ impl realm_mail_send for super::RemoteReducers {
         recipient_guid: u64,
         subject: String,
         body: String,
-        postage: u32,
+        money: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -98,7 +91,7 @@ impl realm_mail_send for super::RemoteReducers {
                 recipient_guid,
                 subject,
                 body,
-                postage,
+                money,
             },
             callback,
         )

@@ -535,14 +535,16 @@ pub mod ranged_impact_reducer;
 pub mod ranged_impact_schedule_type;
 pub mod realm_group_op_reducer;
 pub mod realm_loot_op_reducer;
-pub mod realm_mail_charge_postage_reducer;
 pub mod realm_mail_commit_reducer;
 pub mod realm_mail_confirm_delivery_reducer;
 pub mod realm_mail_delete_reducer;
 pub mod realm_mail_fence_reducer;
 pub mod realm_mail_mark_read_reducer;
+pub mod realm_mail_payout_reducer;
 pub mod realm_mail_send_reducer;
 pub mod realm_mail_settle_reducer;
+pub mod realm_mail_take_money_fence_reducer;
+pub mod realm_mail_take_money_reducer;
 pub mod realm_type;
 pub mod realm_whisper_reducer;
 pub mod reap_gateway_leases_reducer;
@@ -1138,14 +1140,16 @@ pub use ranged_impact_reducer::ranged_impact;
 pub use ranged_impact_schedule_type::RangedImpactSchedule;
 pub use realm_group_op_reducer::realm_group_op;
 pub use realm_loot_op_reducer::realm_loot_op;
-pub use realm_mail_charge_postage_reducer::realm_mail_charge_postage;
 pub use realm_mail_commit_reducer::realm_mail_commit;
 pub use realm_mail_confirm_delivery_reducer::realm_mail_confirm_delivery;
 pub use realm_mail_delete_reducer::realm_mail_delete;
 pub use realm_mail_fence_reducer::realm_mail_fence;
 pub use realm_mail_mark_read_reducer::realm_mail_mark_read;
+pub use realm_mail_payout_reducer::realm_mail_payout;
 pub use realm_mail_send_reducer::realm_mail_send;
 pub use realm_mail_settle_reducer::realm_mail_settle;
+pub use realm_mail_take_money_fence_reducer::realm_mail_take_money_fence;
+pub use realm_mail_take_money_reducer::realm_mail_take_money;
 pub use realm_type::Realm;
 pub use realm_whisper_reducer::realm_whisper;
 pub use reap_gateway_leases_reducer::reap_gateway_leases;
@@ -2243,10 +2247,6 @@ pub enum Reducer {
         deadline_micros: i64,
         recipients: Vec<u64>,
     },
-    RealmMailChargePostage {
-        sender_guid: u64,
-        copper: u32,
-    },
     RealmMailCommit {
         escrow_id: u64,
         sender_guid: u64,
@@ -2275,15 +2275,31 @@ pub enum Reducer {
         recipient_guid: u64,
         mail_id: u64,
     },
+    RealmMailPayout {
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        amount: u32,
+    },
     RealmMailSend {
         sender_guid: u64,
         recipient_guid: u64,
         subject: String,
         body: String,
-        postage: u32,
+        money: u32,
     },
     RealmMailSettle {
         escrow_id: u64,
+    },
+    RealmMailTakeMoney {
+        recipient_guid: u64,
+        mail_id: u64,
+    },
+    RealmMailTakeMoneyFence {
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        expect_money: u32,
     },
     RealmWhisper {
         sender_guid: u64,
@@ -2621,14 +2637,16 @@ impl __sdk::Reducer for Reducer {
             Reducer::RangedImpact { .. } => "ranged_impact",
             Reducer::RealmGroupOp { .. } => "realm_group_op",
             Reducer::RealmLootOp { .. } => "realm_loot_op",
-            Reducer::RealmMailChargePostage { .. } => "realm_mail_charge_postage",
             Reducer::RealmMailCommit { .. } => "realm_mail_commit",
             Reducer::RealmMailConfirmDelivery { .. } => "realm_mail_confirm_delivery",
             Reducer::RealmMailDelete { .. } => "realm_mail_delete",
             Reducer::RealmMailFence { .. } => "realm_mail_fence",
             Reducer::RealmMailMarkRead { .. } => "realm_mail_mark_read",
+            Reducer::RealmMailPayout { .. } => "realm_mail_payout",
             Reducer::RealmMailSend { .. } => "realm_mail_send",
             Reducer::RealmMailSettle { .. } => "realm_mail_settle",
+            Reducer::RealmMailTakeMoney { .. } => "realm_mail_take_money",
+            Reducer::RealmMailTakeMoneyFence { .. } => "realm_mail_take_money_fence",
             Reducer::RealmWhisper { .. } => "realm_whisper",
             Reducer::ReapGatewayLeases { .. } => "reap_gateway_leases",
             Reducer::ReapInstances { .. } => "reap_instances",
@@ -4501,15 +4519,6 @@ impl __sdk::Reducer for Reducer {
                 deadline_micros: deadline_micros.clone(),
                 recipients: recipients.clone(),
             }),
-            Reducer::RealmMailChargePostage {
-                sender_guid,
-                copper,
-            } => __sats::bsatn::to_vec(
-                &realm_mail_charge_postage_reducer::RealmMailChargePostageArgs {
-                    sender_guid: sender_guid.clone(),
-                    copper: copper.clone(),
-                },
-            ),
             Reducer::RealmMailCommit {
                 escrow_id,
                 sender_guid,
@@ -4561,24 +4570,55 @@ impl __sdk::Reducer for Reducer {
                 recipient_guid: recipient_guid.clone(),
                 mail_id: mail_id.clone(),
             }),
+            Reducer::RealmMailPayout {
+                escrow_id,
+                payee_guid,
+                mail_id,
+                amount,
+            } => __sats::bsatn::to_vec(&realm_mail_payout_reducer::RealmMailPayoutArgs {
+                escrow_id: escrow_id.clone(),
+                payee_guid: payee_guid.clone(),
+                mail_id: mail_id.clone(),
+                amount: amount.clone(),
+            }),
             Reducer::RealmMailSend {
                 sender_guid,
                 recipient_guid,
                 subject,
                 body,
-                postage,
+                money,
             } => __sats::bsatn::to_vec(&realm_mail_send_reducer::RealmMailSendArgs {
                 sender_guid: sender_guid.clone(),
                 recipient_guid: recipient_guid.clone(),
                 subject: subject.clone(),
                 body: body.clone(),
-                postage: postage.clone(),
+                money: money.clone(),
             }),
             Reducer::RealmMailSettle { escrow_id } => {
                 __sats::bsatn::to_vec(&realm_mail_settle_reducer::RealmMailSettleArgs {
                     escrow_id: escrow_id.clone(),
                 })
             }
+            Reducer::RealmMailTakeMoney {
+                recipient_guid,
+                mail_id,
+            } => __sats::bsatn::to_vec(&realm_mail_take_money_reducer::RealmMailTakeMoneyArgs {
+                recipient_guid: recipient_guid.clone(),
+                mail_id: mail_id.clone(),
+            }),
+            Reducer::RealmMailTakeMoneyFence {
+                escrow_id,
+                payee_guid,
+                mail_id,
+                expect_money,
+            } => __sats::bsatn::to_vec(
+                &realm_mail_take_money_fence_reducer::RealmMailTakeMoneyFenceArgs {
+                    escrow_id: escrow_id.clone(),
+                    payee_guid: payee_guid.clone(),
+                    mail_id: mail_id.clone(),
+                    expect_money: expect_money.clone(),
+                },
+            ),
             Reducer::RealmWhisper {
                 sender_guid,
                 target_guid,

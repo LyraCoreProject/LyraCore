@@ -783,6 +783,16 @@ fn post<St: WorldStore + ?Sized>(
     store: &St,
     to: &str,
 ) -> std::result::Result<(), mail::SendRefusal> {
+    post_money(store, to, 0)
+}
+
+/// The same letter with `money` copper attached — the coin the recipient takes out, on top of the
+/// postage.
+fn post_money<St: WorldStore + ?Sized>(
+    store: &St,
+    to: &str,
+    money: u32,
+) -> std::result::Result<(), mail::SendRefusal> {
     mail::send(
         store,
         Some(GINGER),
@@ -790,6 +800,7 @@ fn post<St: WorldStore + ?Sized>(
         to,
         "Your sword".into(),
         "left it at the inn".into(),
+        money,
     )
 }
 
@@ -844,11 +855,12 @@ fn a_letter_crosses_a_database_boundary_to_a_recipient_homed_on_another_shard() 
 
     let log = calls.lock().unwrap().clone();
     assert!(
-        log.contains(&("lyracore-realm".to_string(), "mail_send".to_string())),
+        log.contains(&("lyracore-realm".to_string(), "mail_commit".to_string())),
         "the row must be written on the authority; calls were {log:?}"
     );
     assert!(
-        !log.contains(&("world".to_string(), "mail_send".to_string())),
+        !log.iter()
+            .any(|(shard, call)| shard == "world" && (call == "mail_commit" || call == "mail_send")),
         "a row written on the sender's own shard is invisible to a recipient homed elsewhere — the \
          exact bug the plane decision removes. Calls were {log:?}"
     );
@@ -856,6 +868,11 @@ fn a_letter_crosses_a_database_boundary_to_a_recipient_homed_on_another_shard() 
 
 /// **AC: postage is debited at send** — out of the purse on the SENDER's own shard, because
 /// realm-core holds none.
+///
+/// Re-cut from #145's version, which asserted a bare `mail_charge_postage` call. That reducer is
+/// gone: postage now rides the escrow fence alongside the attached coin, so the sender pays for the
+/// whole letter in ONE debit instead of two calls that could half-land. What the test still pins is
+/// the thing that mattered — WHICH database the purse is on.
 #[test]
 fn postage_is_debited_from_the_senders_own_shard_at_send() {
     let (_realm, world, _instances, calls) = sharded_send();
@@ -868,14 +885,11 @@ fn postage_is_debited_from_the_senders_own_shard_at_send() {
     );
     let log = calls.lock().unwrap().clone();
     assert!(
-        log.contains(&("world".to_string(), "mail_charge_postage".to_string())),
+        log.contains(&("world".to_string(), "mail_fence".to_string())),
         "the purse is on the sender's shard; calls were {log:?}"
     );
     assert!(
-        !log.contains(&(
-            "lyracore-realm".to_string(),
-            "mail_charge_postage".to_string()
-        )),
+        !log.contains(&("lyracore-realm".to_string(), "mail_fence".to_string())),
         "realm-core holds no characters and no purse; calls were {log:?}"
     );
 }
@@ -944,6 +958,7 @@ fn the_faction_gate_refuses_in_both_directions() {
         "Trin",
         "Hail".into(),
         "".into(),
+        0,
     )
     .expect_err("a Horde sender cannot write to an Alliance recipient either");
     assert_eq!(refusal, mail::SendRefusal::NotYourTeam);
@@ -1011,6 +1026,7 @@ fn sending_is_refused_at_character_select_and_away_from_a_mailbox() {
         "Trin",
         "Hi".into(),
         "".into(),
+        0,
     )
     .expect_err("character select drives no mailbox");
     assert!(
@@ -1025,6 +1041,7 @@ fn sending_is_refused_at_character_select_and_away_from_a_mailbox() {
         "Trin",
         "Hi".into(),
         "".into(),
+        0,
     )
     .expect_err("a mailbox out of reach refuses");
     assert!(
@@ -1065,29 +1082,31 @@ fn both_planes_produce_the_same_row_for_the_same_letter() {
 
 /// **AC: the debit and the row insert are ONE transaction wherever they can be.**
 ///
-/// On a single database the gateway passes the real postage INTO the write, so the module charges
-/// and inserts in one reducer. On a sharded realm the purse is on another database entirely, so one
-/// transaction is not reachable: the postage is charged on the sender's shard FIRST (an atomic
-/// refusal — nothing is charged when it fails) and the write carries 0.
+/// Re-cut from #145's version, which pinned "the write call carries the postage on one database and
+/// 0 when sharded". That sequence is gone with `mail_charge_postage`: the sharded plane now fences
+/// the whole cost, so what the two planes share is the AMOUNT the sender pays, not the argument
+/// list. The property worth pinning is unchanged and now stated directly — the purse goes down by
+/// postage plus attached coin exactly once, whichever plane ran.
 #[test]
-fn the_postage_rides_the_write_on_one_database_and_a_prior_debit_when_sharded() {
-    let (realm, world, _instances, _calls) = sharded_send();
+fn the_whole_cost_leaves_the_purse_once_on_either_plane() {
+    let (_realm, world, _instances, calls) = sharded_send();
     let single = unsharded_send();
+    let attached = 100;
+    let cost = lyracore_shared::mail::total_cost(attached);
 
-    post(world.as_ref(), "Trin").expect("realm plane");
-    post(single.as_ref(), "Trin").expect("fallback plane");
+    post_money(world.as_ref(), "Trin", attached).expect("realm plane");
+    post_money(single.as_ref(), "Trin", attached).expect("fallback plane");
 
-    assert_eq!(
-        single.sent_mail.lock().unwrap()[0].4,
-        lyracore_shared::mail::postage(),
-        "one database: the debit rides the same call that writes the row"
+    assert_eq!(world.purses.lock().unwrap()[0].1, PURSE - cost);
+    assert_eq!(single.purses.lock().unwrap()[0].1, PURSE - cost);
+    // One database: one call does the debit and the insert together, and nothing is fenced.
+    assert_eq!(single.sent_mail.lock().unwrap()[0].4, attached);
+    assert!(single.mail_escrows.lock().unwrap().is_empty());
+    let log = calls.lock().unwrap().clone();
+    assert!(
+        !log.iter().any(|(_, call)| call == "mail_send"),
+        "a sharded send has no one-transaction path to take; calls were {log:?}"
     );
-    assert_eq!(
-        realm.sent_mail.lock().unwrap()[0].4,
-        0,
-        "sharded: realm-core has no purse to charge, so the debit already happened on the shard"
-    );
-    assert!(world.sent_mail.lock().unwrap().is_empty());
 }
 
 /// **AC: a sent letter's body is readable by the recipient through the item-text query.** The whole
@@ -1274,4 +1293,439 @@ fn a_refused_mail_opcode_costs_a_packet_and_never_the_session() {
 
     drop(client);
     server.join().unwrap();
+}
+
+// ---------------------------------------------------------------------------------------------
+//  Copper attachments: the debit at send, the take, and the drive that carries them across a
+//  database boundary.
+// ---------------------------------------------------------------------------------------------
+
+/// The copper a fixture letter carries.
+const ATTACHED: u32 = 100;
+
+/// The escrow steps a drive takes, in order, on whichever database ran each — the sequence the
+/// safety argument is made of.
+fn escrow_steps(calls: &ShardCallLog) -> Vec<(String, String)> {
+    calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, call)| {
+            matches!(
+                call.as_str(),
+                "mail_fence"
+                    | "mail_commit"
+                    | "mail_take_money_fence"
+                    | "mail_payout"
+                    | "mail_confirm_delivery"
+                    | "mail_settle"
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+/// **AC: copper attached to a mail is debited at send, alongside the postage** — and it arrives in
+/// the recipient's row, ready to be taken.
+#[test]
+fn attached_copper_leaves_the_senders_purse_at_send_and_rides_the_letter() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+
+    post_money(world.as_ref(), "Trin", ATTACHED).expect("the send goes through");
+
+    assert_eq!(
+        world.purses.lock().unwrap()[0].1,
+        PURSE - lyracore_shared::mail::total_cost(ATTACHED),
+        "one debit for the postage AND the coin"
+    );
+    let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+    assert_eq!(trins[0].money, ATTACHED);
+}
+
+/// **AC: a sender who cannot afford postage plus attachment is refused and charged nothing.** The
+/// affordability check is the fence itself, so there is no window where the postage went and the
+/// coin did not.
+#[test]
+fn a_sender_who_cannot_afford_the_attachment_is_refused_and_charged_nothing() {
+    let (_realm, world, _instances, calls) = sharded_send();
+    let barely = lyracore_shared::mail::total_cost(ATTACHED) - 1;
+    *world.purses.lock().unwrap() = vec![(GINGER, barely)];
+
+    let refusal = post_money(world.as_ref(), "Trin", ATTACHED)
+        .expect_err("the postage alone is affordable, the letter is not");
+    assert!(matches!(refusal, mail::SendRefusal::NotEnoughMoney(_)));
+
+    assert_eq!(world.purses.lock().unwrap()[0].1, barely, "charged nothing");
+    assert!(mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX)
+        .unwrap()
+        .is_empty());
+    let log = calls.lock().unwrap().clone();
+    assert!(
+        !log.iter().any(|(_, call)| call == "mail_commit"),
+        "a refused fence must never reach the commit; calls were {log:?}"
+    );
+}
+
+/// **AC: `CMSG_MAIL_TAKE_MONEY` credits the recipient's purse and clears the amount from the row —
+/// and the mail stays readable.**
+#[test]
+fn taking_a_mails_money_credits_the_purse_and_leaves_the_letter_readable() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
+    post_money(world.as_ref(), "Trin", ATTACHED).expect("the send goes through");
+    let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
+
+    mail::take_money(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("the take goes through");
+
+    assert_eq!(world.purses.lock().unwrap()[1].1, ATTACHED);
+    let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+    assert_eq!(trins.len(), 1, "a mail emptied of money is still a letter");
+    assert_eq!(trins[0].money, 0);
+    assert_eq!(
+        mail::letter_body(world.as_ref(), Some(TRIN), mail_id).unwrap(),
+        Some("left it at the inn".to_string())
+    );
+}
+
+/// **AC: taking money twice from one mail credits it once.**
+#[test]
+fn taking_the_money_twice_credits_the_purse_once() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
+    post_money(world.as_ref(), "Trin", ATTACHED).expect("the send goes through");
+    let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
+
+    mail::take_money(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("the first take");
+    let err = mail::take_money(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
+        .expect_err("there is nothing left in it");
+
+    assert!(err.to_string().contains("nothing to take"), "got {err}");
+    assert_eq!(world.purses.lock().unwrap()[1].1, ATTACHED);
+}
+
+/// **AC: taking is refused for a mail the caller is not the recipient of.** The mail id rides a
+/// client packet, so this is an authorization boundary — and it answers the same as a mail that
+/// does not exist, so a crafted id learns nothing.
+#[test]
+fn taking_money_from_somebody_elses_mail_is_refused() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
+    post_money(world.as_ref(), "Trin", ATTACHED).expect("the send goes through");
+    let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
+
+    let theft = mail::take_money(world.as_ref(), Some(GINGER), MAILBOX, mail_id)
+        .expect_err("Ginger wrote it, they cannot empty it");
+    let phantom = mail::take_money(world.as_ref(), Some(GINGER), MAILBOX, mail_id + 999)
+        .expect_err("no such mail");
+
+    assert_eq!(
+        theft.to_string(),
+        phantom.to_string(),
+        "'not yours' and 'no such mail' must read the same, or a crafted id enumerates mailboxes"
+    );
+    assert_eq!(
+        world.purses.lock().unwrap()[0].1,
+        PURSE - lyracore_shared::mail::total_cost(ATTACHED)
+    );
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].money,
+        ATTACHED,
+        "and the copper is still in the letter"
+    );
+}
+
+/// **AC: both planes behave identically, through one shared core.** Same letter, same take; the
+/// only difference is whether a realm handle exists — and on one database none of the escrow is
+/// touched, because there the whole thing is one transaction.
+#[test]
+fn both_planes_attach_and_take_the_same_copper() {
+    let (_realm, world, _instances, calls) = sharded_send();
+    let single = unsharded_send();
+    for store in [&world, &single] {
+        *store.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
+    }
+
+    for store in [world.as_ref(), single.as_ref()] {
+        post_money(store, "Trin", ATTACHED).expect("posted");
+        let mail_id = mail::open_mailbox(store, Some(TRIN), MAILBOX).unwrap()[0].id;
+        mail::take_money(store, Some(TRIN), MAILBOX, mail_id).expect("taken");
+    }
+
+    assert_eq!(
+        world.purses.lock().unwrap().clone(),
+        single.purses.lock().unwrap().clone(),
+        "the two planes must move the same copper"
+    );
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap(),
+        mail::open_mailbox(single.as_ref(), Some(TRIN), MAILBOX).unwrap(),
+    );
+    assert!(
+        single.mail_escrows.lock().unwrap().is_empty()
+            && single.mail_receipts.lock().unwrap().is_empty(),
+        "the single-database plane must not route through the escrow — it HAS the transaction"
+    );
+    assert!(!escrow_steps(&calls).is_empty(), "and the sharded one must");
+}
+
+/// **The drive, in order.** Fence on the sender's shard, commit on realm-core, then attest and
+/// settle back on the shard. Any other order either destroys a fence whose letter never arrived or
+/// delivers one nobody paid for.
+#[test]
+fn a_sharded_send_drives_fence_then_commit_then_confirm_then_settle() {
+    let (_realm, world, _instances, calls) = sharded_send();
+
+    post_money(world.as_ref(), "Trin", ATTACHED).expect("the send goes through");
+
+    assert_eq!(
+        escrow_steps(&calls),
+        vec![
+            ("world".into(), "mail_fence".into()),
+            ("lyracore-realm".into(), "mail_commit".into()),
+            ("world".into(), "mail_confirm_delivery".into()),
+            ("world".into(), "mail_settle".into()),
+        ]
+    );
+}
+
+/// **The take's drive, in order** — the same four steps with the databases swapped, because the
+/// copper starts in a mail row on realm-core and ends in a purse on the shard.
+#[test]
+fn a_sharded_take_drives_the_same_four_steps_the_other_way() {
+    let (_realm, world, _instances, calls) = sharded_send();
+    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
+    post_money(world.as_ref(), "Trin", ATTACHED).expect("posted");
+    let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
+    calls.lock().unwrap().clear();
+
+    mail::take_money(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("taken");
+
+    assert_eq!(
+        escrow_steps(&calls),
+        vec![
+            ("lyracore-realm".into(), "mail_take_money_fence".into()),
+            ("world".into(), "mail_payout".into()),
+            ("lyracore-realm".into(), "mail_confirm_delivery".into()),
+            ("lyracore-realm".into(), "mail_settle".into()),
+        ]
+    );
+}
+
+/// **Interrupted after the fence: the gold is with exactly one owner, and the next mailbox visit
+/// rescues it.** The copper has left the purse and no letter exists, so it is held in the fence —
+/// never refunded, because the shard cannot ask realm-core whether the letter arrived.
+#[test]
+fn a_send_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit() {
+    let (realm, world, _instances, _calls) = sharded_send();
+    *realm.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
+
+    let refusal = post_money(world.as_ref(), "Trin", ATTACHED)
+        .expect_err("realm-core never answered the commit");
+    assert!(matches!(refusal, mail::SendRefusal::Internal(_)));
+    assert_eq!(
+        world.purses.lock().unwrap()[0].1,
+        PURSE - lyracore_shared::mail::total_cost(ATTACHED),
+        "the sender has PAID, and nothing refunds a fence"
+    );
+    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "held");
+    assert!(mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX)
+        .unwrap()
+        .is_empty());
+
+    // realm-core comes back, and Ginger opens their mailbox.
+    *realm.mail_kill_at.lock().unwrap() = None;
+    mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+
+    let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+    assert_eq!(trins.len(), 1, "the letter finally landed — exactly once");
+    assert_eq!(trins[0].money, ATTACHED);
+    assert!(world.mail_escrows.lock().unwrap().is_empty(), "and settled");
+    assert_eq!(
+        world.purses.lock().unwrap()[0].1,
+        PURSE - lyracore_shared::mail::total_cost(ATTACHED),
+        "debited once across the whole episode"
+    );
+}
+
+/// **Interrupted after the commit.** The letter is durable, the fence still stands — the re-drive's
+/// commit replays into its receipt, so the recipient gets one letter and not two.
+#[test]
+fn a_send_killed_after_the_commit_re_drives_into_one_letter() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+    *world.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
+
+    post_money(world.as_ref(), "Trin", ATTACHED).expect_err("the attestation never landed");
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "still fenced");
+
+    *world.mail_kill_at.lock().unwrap() = None;
+    mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX)
+            .unwrap()
+            .len(),
+        1,
+        "one letter — the replayed commit found its receipt"
+    );
+    assert!(world.mail_escrows.lock().unwrap().is_empty());
+    assert_eq!(
+        world.purses.lock().unwrap()[0].1,
+        PURSE - lyracore_shared::mail::total_cost(ATTACHED)
+    );
+}
+
+/// **A take interrupted before the payout.** The copper is out of the mail row and held on
+/// realm-core; the next mailbox visit pays it into the purse, once.
+#[test]
+fn a_take_killed_before_the_payout_is_re_driven_at_the_next_mailbox_visit() {
+    let (realm, world, _instances, _calls) = sharded_send();
+    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
+    post_money(world.as_ref(), "Trin", ATTACHED).expect("posted");
+    let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
+    *world.mail_kill_at.lock().unwrap() = Some("mail_payout".into());
+
+    mail::take_money(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
+        .expect_err("the purse was never credited");
+    assert_eq!(world.purses.lock().unwrap()[1].1, 0);
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].money,
+        0,
+        "the copper has left the row"
+    );
+    assert_eq!(realm.mail_escrows.lock().unwrap().len(), 1, "and is held");
+
+    *world.mail_kill_at.lock().unwrap() = None;
+    mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+
+    assert_eq!(world.purses.lock().unwrap()[1].1, ATTACHED, "paid, once");
+    assert!(realm.mail_escrows.lock().unwrap().is_empty(), "and settled");
+}
+
+/// **A take interrupted after the payout.** The purse holds the copper and the fence still stands;
+/// the re-drive's payout replays into its receipt, so nobody is paid twice.
+#[test]
+fn a_take_killed_after_the_payout_re_drives_into_one_credit() {
+    let (realm, world, _instances, _calls) = sharded_send();
+    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, 0)];
+    post_money(world.as_ref(), "Trin", ATTACHED).expect("posted");
+    let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
+    *realm.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
+
+    mail::take_money(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
+        .expect_err("the attestation never landed, so the click is reported as failed");
+    assert_eq!(
+        world.purses.lock().unwrap()[1].1,
+        ATTACHED,
+        "but the purse WAS credited — which is exactly why the re-drive must not credit it again"
+    );
+    assert_eq!(realm.mail_escrows.lock().unwrap().len(), 1, "still fenced");
+
+    *realm.mail_kill_at.lock().unwrap() = None;
+    mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+
+    assert_eq!(world.purses.lock().unwrap()[1].1, ATTACHED, "credited once");
+    assert!(realm.mail_escrows.lock().unwrap().is_empty());
+}
+
+/// **Delete-last, from the gateway's side.** A settle driven while the delivery is unattested is
+/// refused, so a drive that skipped the attestation cannot destroy a fence — the guard that makes
+/// "the copper is nowhere" unreachable.
+#[test]
+fn a_settle_without_an_attestation_is_refused_and_the_fence_survives() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+    *world.mail_kill_at.lock().unwrap() = Some("mail_confirm_delivery".into());
+    post_money(world.as_ref(), "Trin", ATTACHED).expect_err("no attestation");
+
+    let escrow_id = world.mail_escrows.lock().unwrap()[0].1.escrow_id;
+    let err = world.mail_settle(escrow_id).expect_err("not attested");
+
+    assert!(err.to_string().contains("not attested"), "got {err}");
+    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "still held");
+}
+
+/// **A refused take never reaches the fence.** The mailbox gate and character select both stop it
+/// before any copper moves.
+#[test]
+fn taking_money_is_refused_at_character_select_and_away_from_a_mailbox() {
+    let (_realm, world, _instances, calls) = sharded_send();
+    post_money(world.as_ref(), "Trin", ATTACHED).expect("posted");
+    let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
+    calls.lock().unwrap().clear();
+
+    assert!(mail::take_money(world.as_ref(), None, MAILBOX, mail_id)
+        .unwrap_err()
+        .to_string()
+        .contains("not in world"));
+    assert!(
+        mail::take_money(world.as_ref(), Some(TRIN), FAR_MAILBOX, mail_id)
+            .unwrap_err()
+            .to_string()
+            .contains("not at mailbox")
+    );
+
+    assert!(escrow_steps(&calls).is_empty(), "no copper moved");
+}
+
+/// **AC over the real wire: `CMSG_MAIL_TAKE_MONEY` acks and the purse grows.** The one-database
+/// dispatch, end to end.
+#[test]
+fn taking_money_over_the_wire_acks_and_credits_the_purse() {
+    use wow_world_messages::vanilla::{
+        SMSG_SEND_MAIL_RESULT_MailAction, SMSG_SEND_MAIL_RESULT_MailResultTwo,
+    };
+    let store = seated_sender();
+    *store.mails.lock().unwrap() = vec![(
+        1,
+        codec::MailView {
+            id: 7,
+            sender_guid: TRIN,
+            subject: "For you".into(),
+            money: ATTACHED,
+            created_at_secs: 1_000,
+            ..Default::default()
+        },
+    )];
+
+    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..10 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    wow_world_messages::vanilla::CMSG_MAIL_TAKE_MONEY {
+        mailbox: Guid::new(MAILBOX),
+        mail_id: 7,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(m) => {
+            assert_eq!(m.mail_id, 7);
+            match m.action {
+                SMSG_SEND_MAIL_RESULT_MailAction::MoneyTaken { result2 } => {
+                    assert_eq!(result2, SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok)
+                }
+                other => panic!("expected the MoneyTaken action, got {other:?}"),
+            }
+        }
+        other => panic!("expected SMSG_SEND_MAIL_RESULT, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.purses.lock().unwrap()[0].1, PURSE + ATTACHED);
+    assert_eq!(store.mails.lock().unwrap()[0].1.money, 0);
 }

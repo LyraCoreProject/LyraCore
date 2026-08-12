@@ -41,6 +41,37 @@ impl Coordinator {
         Ok(mails)
     }
 
+    /// Every mail escrow this database is holding for `sender_guid` — the fences a drive filed and
+    /// never finished.
+    ///
+    /// The one module→gateway data flow the escrow adds, and it exists for the same reason
+    /// `escrowed_transfer` does: the gateway is the only component that can see both databases, so
+    /// re-driving a stalled fence means re-deriving the whole letter from its row. A fresh drive
+    /// reads nothing. Private table, read through the owner token.
+    ///
+    /// Keyed by `sender_guid`, which on a payout escrow is the PAYEE — the character owed the
+    /// copper either way, and the one whose session is about to re-drive it.
+    pub fn mail_escrows_of(&self, sender_guid: u64) -> Result<Vec<crate::world::mail::HeldEscrow>> {
+        let guard = self.0.coord();
+        Ok(guard
+            .conn
+            .db
+            .game_mail_escrow()
+            .iter()
+            .filter(|e| e.sender_guid == sender_guid)
+            .map(|e| crate::world::mail::HeldEscrow {
+                escrow_id: e.escrow_id,
+                recipient_guid: e.recipient_guid,
+                subject: e.subject,
+                body: e.body,
+                money: e.money,
+                postage: e.postage,
+                payout: e.payout,
+                mail_id: e.mail_id,
+            })
+            .collect())
+    }
+
     /// Is `player_guid` standing at the mailbox `mailbox_guid` names?
     ///
     /// A PK lookup on `game_gameobject`, then the same map/instance/range check

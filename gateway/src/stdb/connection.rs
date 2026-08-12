@@ -425,6 +425,12 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // own copy. The gateway answers `CMSG_GET_MAIL_LIST` from this cache — mail is a poll, so
         // there is no relay and no per-player subscription to arm.
         "SELECT * FROM game_mail",
+        // The mail ESCROW ledger, and the `game_transfer_out` precedent verbatim: the gateway is
+        // the only component that can see both databases, so a fence its predecessor abandoned is
+        // re-derived from this row and driven forward. Private, read through the owner token. Every
+        // connection in the set, because a letter fences on the sender's shard and a take fences on
+        // realm-core, and a single-database gateway simply never has a row here.
+        "SELECT * FROM game_mail_escrow",
         // Friends/ignore: every character's contact rows, so the coordinator can
         // build any player's SMSG_FRIEND_LIST/SMSG_IGNORE_LIST (RLS-bypassed, like game_character).
         "SELECT * FROM game_character_contact",
