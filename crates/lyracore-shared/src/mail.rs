@@ -69,6 +69,11 @@ pub fn not_at_mailbox(mailbox_guid: u64) -> String {
     format!("mail: not at mailbox {mailbox_guid}")
 }
 
+/// A mark-as-read or delete named a `mail_id` that either does not exist or is not the caller's —
+/// deliberately the SAME text for both, the way `letter_body`'s read already answers `None` for
+/// either: a crafted id must not be a way to learn which mail ids belong to somebody else.
+pub const NOT_YOUR_MAIL: &str = "mail: not addressed to you";
+
 #[cfg(test)]
 mod tests {
     use super::*;

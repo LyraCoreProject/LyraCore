@@ -529,6 +529,8 @@ pub mod ranged_impact_reducer;
 pub mod ranged_impact_schedule_type;
 pub mod realm_group_op_reducer;
 pub mod realm_loot_op_reducer;
+pub mod realm_mail_delete_reducer;
+pub mod realm_mail_mark_read_reducer;
 pub mod realm_type;
 pub mod realm_whisper_reducer;
 pub mod reap_gateway_leases_reducer;
@@ -1117,6 +1119,8 @@ pub use ranged_impact_reducer::ranged_impact;
 pub use ranged_impact_schedule_type::RangedImpactSchedule;
 pub use realm_group_op_reducer::realm_group_op;
 pub use realm_loot_op_reducer::realm_loot_op;
+pub use realm_mail_delete_reducer::realm_mail_delete;
+pub use realm_mail_mark_read_reducer::realm_mail_mark_read;
 pub use realm_type::Realm;
 pub use realm_whisper_reducer::realm_whisper;
 pub use reap_gateway_leases_reducer::reap_gateway_leases;
@@ -2213,6 +2217,14 @@ pub enum Reducer {
         deadline_micros: i64,
         recipients: Vec<u64>,
     },
+    RealmMailDelete {
+        recipient_guid: u64,
+        mail_id: u64,
+    },
+    RealmMailMarkRead {
+        recipient_guid: u64,
+        mail_id: u64,
+    },
     RealmWhisper {
         sender_guid: u64,
         target_guid: u64,
@@ -2546,6 +2558,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::RangedImpact { .. } => "ranged_impact",
             Reducer::RealmGroupOp { .. } => "realm_group_op",
             Reducer::RealmLootOp { .. } => "realm_loot_op",
+            Reducer::RealmMailDelete { .. } => "realm_mail_delete",
+            Reducer::RealmMailMarkRead { .. } => "realm_mail_mark_read",
             Reducer::RealmWhisper { .. } => "realm_whisper",
             Reducer::ReapGatewayLeases { .. } => "reap_gateway_leases",
             Reducer::ReapInstances { .. } => "reap_instances",
@@ -4416,6 +4430,20 @@ impl __sdk::Reducer for Reducer {
                 vote: vote.clone(),
                 deadline_micros: deadline_micros.clone(),
                 recipients: recipients.clone(),
+            }),
+            Reducer::RealmMailDelete {
+                recipient_guid,
+                mail_id,
+            } => __sats::bsatn::to_vec(&realm_mail_delete_reducer::RealmMailDeleteArgs {
+                recipient_guid: recipient_guid.clone(),
+                mail_id: mail_id.clone(),
+            }),
+            Reducer::RealmMailMarkRead {
+                recipient_guid,
+                mail_id,
+            } => __sats::bsatn::to_vec(&realm_mail_mark_read_reducer::RealmMailMarkReadArgs {
+                recipient_guid: recipient_guid.clone(),
+                mail_id: mail_id.clone(),
             }),
             Reducer::RealmWhisper {
                 sender_guid,

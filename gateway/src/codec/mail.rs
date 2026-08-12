@@ -8,8 +8,9 @@
 
 use lyracore_shared::mail as mail_rules;
 use wow_world_messages::vanilla::{
-    Gold, MSG_QUERY_NEXT_MAIL_TIME_Server, Mail, Mail_MailType, SMSG_ITEM_TEXT_QUERY_RESPONSE,
-    SMSG_MAIL_LIST_RESULT,
+    Gold, MSG_QUERY_NEXT_MAIL_TIME_Server, Mail, Mail_MailType, SMSG_SEND_MAIL_RESULT_MailAction,
+    SMSG_SEND_MAIL_RESULT_MailResultTwo, SMSG_ITEM_TEXT_QUERY_RESPONSE, SMSG_MAIL_LIST_RESULT,
+    SMSG_SEND_MAIL_RESULT,
 };
 
 /// One `game_mail` row, flattened for the codec. The attachment columns are carried even though
@@ -88,6 +89,25 @@ pub fn build_item_text_response(item_text_id: u32, text: String) -> SMSG_ITEM_TE
     SMSG_ITEM_TEXT_QUERY_RESPONSE { item_text_id, text }
 }
 
+/// Answer `CMSG_MAIL_DELETE` with `SMSG_SEND_MAIL_RESULT` — the wire's only ack for this opcode, so
+/// both a successful delete AND a refused one (not the caller's mail, or a stale gate) reply through
+/// it rather than through a family of specific `MailResultTwo` variants: none of them names "not your
+/// mail", and `ErrInternalError` is mangoszero's own generic bucket for exactly that ("Mail database
+/// error"). `CMSG_MAIL_MARK_AS_READ` gets no wire reply at all — vanilla sends none, the client
+/// already flipped its own display — so there is no sibling builder for it.
+pub fn build_mail_delete_result(mail_id: u32, ok: bool) -> SMSG_SEND_MAIL_RESULT {
+    SMSG_SEND_MAIL_RESULT {
+        mail_id,
+        action: SMSG_SEND_MAIL_RESULT_MailAction::Deleted {
+            result2: if ok {
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
+            } else {
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+            },
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,5 +165,27 @@ mod tests {
     fn the_mail_poll_packet_carries_the_shared_unread_signal() {
         assert_eq!(build_next_mail_time(true).unread_mails, 0.0);
         assert!(build_next_mail_time(false).unread_mails < 0.0);
+    }
+
+    /// A successful delete answers `Ok`; a refused one answers `ErrInternalError` — the generic
+    /// bucket, because none of `MailResultTwo`'s named variants means "not your mail". Both carry
+    /// the mail id back so the client's window drops the right row either way.
+    #[test]
+    fn a_delete_result_carries_the_mail_id_and_the_generic_error_on_refusal() {
+        match build_mail_delete_result(7, true).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::Deleted { result2 } => {
+                assert_eq!(result2, SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok)
+            }
+            other => panic!("expected the Deleted action, got {other:?}"),
+        }
+        let refused = build_mail_delete_result(7, false);
+        assert_eq!(refused.mail_id, 7);
+        match refused.action {
+            SMSG_SEND_MAIL_RESULT_MailAction::Deleted { result2 } => assert_eq!(
+                result2,
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+            ),
+            other => panic!("expected the Deleted action, got {other:?}"),
+        }
     }
 }

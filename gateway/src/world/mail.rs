@@ -94,6 +94,41 @@ pub(crate) fn letter_body<St: WorldStore + ?Sized>(
         .map(|m| m.body))
 }
 
+/// Flip mail `mail_id`'s read state for the session standing at `mailbox_guid`.
+///
+/// Same gate as [`open_mailbox`] (in world, at the named mailbox — vanilla's `CMSG_MAIL_MARK_AS_READ`
+/// carries a mailbox guid too), then the SAME plane routing [`mail_of`] takes: whichever handle owns
+/// the rows gets the write, so the write can never target a different database than the read that
+/// will show it next. Authorization is the row lookup itself, on the plane that runs it — no
+/// separate ownership check here, because a mail addressed to someone else simply isn't found there.
+pub(crate) fn mark_read<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: Option<u64>,
+    mailbox_guid: u64,
+    mail_id: u64,
+) -> Result<()> {
+    let self_guid = at_mailbox(store, self_guid, mailbox_guid)?;
+    match store.realm_store() {
+        Some(realm) => realm.mail_mark_read(self_guid, mail_id),
+        None => store.mail_mark_read(self_guid, mail_id),
+    }
+}
+
+/// Delete mail `mail_id` for the session standing at `mailbox_guid`. Same gate and plane routing as
+/// [`mark_read`]; see that function's doc for both.
+pub(crate) fn delete<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: Option<u64>,
+    mailbox_guid: u64,
+    mail_id: u64,
+) -> Result<()> {
+    let self_guid = at_mailbox(store, self_guid, mailbox_guid)?;
+    match store.realm_store() {
+        Some(realm) => realm.mail_delete(self_guid, mail_id),
+        None => store.mail_delete(self_guid, mail_id),
+    }
+}
+
 /// The gate every mailbox-addressed opcode opens with: in world, and standing at the gameobject the
 /// client named. Answers the caller's own guid so the read below cannot accidentally use another.
 fn at_mailbox<St: WorldStore + ?Sized>(

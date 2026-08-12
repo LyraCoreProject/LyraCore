@@ -1,7 +1,8 @@
-//! Mail family: open the mailbox window, answer the client's mail poll, and serve a letter's body.
+//! Mail family: open the mailbox window, answer the client's mail poll, serve a letter's body, and
+//! mark a mail read or delete it.
 //!
-//! Read path only — sending, attachments, take, mark-read, delete and return are later
-//! slices, and their opcodes fall through to the next handler until they land.
+//! Sending, attachments, take and return are later slices, and their opcodes fall through to the
+//! next handler until they land.
 //!
 //! Every failure is per-action: log, and either answer the packet the client is blocked on or send
 //! nothing. Nothing here tears a session down, matching the vendor/loot/combat arms.
@@ -75,6 +76,45 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                         body.unwrap_or_default(),
                     )),
                 )),
+            )?;
+        }
+        // Flip a mail's read state. Vanilla sends NO reply for this opcode — the client already
+        // flipped its own display — so success and a refusal both answer with silence; only the
+        // next CMSG_GET_MAIL_LIST shows the truth. A crafted id (someone else's mail, or a stale
+        // one) is refused the same as a genuine miss — never trust a client-supplied mail id.
+        ClientOpcodeMessage::CMSG_MAIL_MARK_AS_READ(c) => {
+            let self_guid = social::self_guid(conn);
+            if let Err(e) =
+                mail::mark_read(store, self_guid, c.mailbox.guid(), u64::from(c.mail_id))
+            {
+                log::debug!(
+                    "world: mail mark-as-read refused (account {}): {e}",
+                    conn.account_id
+                );
+            }
+        }
+        // Delete a mail — destroys any attachment it still holds, as vanilla does (the confirmation
+        // prompt is client-side). Unlike the read-only arms above, `CMSG_MAIL_DELETE` has a real
+        // ack (`SMSG_SEND_MAIL_RESULT`/Deleted), so both outcomes reply through it, matching the
+        // vendor/loot arms' "a failed action still answers" rule.
+        ClientOpcodeMessage::CMSG_MAIL_DELETE(c) => {
+            let self_guid = social::self_guid(conn);
+            let ok = match mail::delete(store, self_guid, c.mailbox_id.guid(), u64::from(c.mail_id))
+            {
+                Ok(()) => true,
+                Err(e) => {
+                    log::debug!(
+                        "world: mail delete refused (account {}): {e}",
+                        conn.account_id
+                    );
+                    false
+                }
+            };
+            send(
+                tx,
+                Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
+                    codec::build_mail_delete_result(c.mail_id, ok),
+                ))),
             )?;
         }
         other => return Ok(Some(other)),

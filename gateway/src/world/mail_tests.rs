@@ -404,6 +404,295 @@ fn a_seeded_mail_reaches_the_client_as_a_mail_list_row() {
     server.join().unwrap();
 }
 
+// ---------------------------------------------------------------------------------------------
+//  Mark-as-read and delete — the routing tests, same shape as the read path above.
+// ---------------------------------------------------------------------------------------------
+
+/// **AC: `CMSG_MAIL_MARK_AS_READ` flips the row's read state, and the next list reflects it.**
+#[test]
+fn mark_read_flips_the_row_and_the_next_list_shows_it() {
+    let (_realm, world, _calls) = sharded_mailbox();
+
+    mail::mark_read(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("Ginger owns mail 1");
+
+    let mails = mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+    assert!(mails[0].was_read, "the next list read must show the flip");
+}
+
+/// **AC: a read mail no longer counts toward the unread poll answer.**
+#[test]
+fn a_read_mail_no_longer_lights_the_unread_poll() {
+    let (_realm, world, _calls) = sharded_mailbox();
+    assert!(mail::has_unread(world.as_ref(), Some(GINGER)).unwrap());
+
+    mail::mark_read(world.as_ref(), Some(GINGER), MAILBOX, 1).unwrap();
+
+    assert!(
+        !mail::has_unread(world.as_ref(), Some(GINGER)).unwrap(),
+        "the poll must derive from the SAME read the list uses, so marking read is visible to it too"
+    );
+}
+
+/// **AC: `CMSG_MAIL_DELETE` removes the row; the next list no longer shows it.**
+#[test]
+fn delete_removes_the_row_and_the_next_list_no_longer_shows_it() {
+    let (_realm, world, _calls) = sharded_mailbox();
+
+    mail::delete(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("Ginger owns mail 1");
+
+    let mails = mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+    assert!(
+        mails.is_empty(),
+        "a deleted mail must be gone from the next list read"
+    );
+}
+
+/// **AC: both are refused for a mail the caller is not the recipient of.** A crafted id naming
+/// somebody else's mail must not be distinguishable from a nonexistent one — the same
+/// non-distinction the letter-body read already takes.
+#[test]
+fn both_are_refused_for_a_mail_the_caller_does_not_own() {
+    let (_realm, world, _calls) = sharded_mailbox();
+
+    // Mail 2 is Trin's — Ginger names it anyway.
+    let err = mail::mark_read(world.as_ref(), Some(GINGER), MAILBOX, 2)
+        .expect_err("mail 2 is not Ginger's");
+    assert!(
+        err.to_string().contains("not addressed to you"),
+        "got {err}"
+    );
+    let err =
+        mail::delete(world.as_ref(), Some(GINGER), MAILBOX, 2).expect_err("mail 2 is not Ginger's");
+    assert!(
+        err.to_string().contains("not addressed to you"),
+        "got {err}"
+    );
+
+    // Neither refusal touched the row: Trin's mail is untouched and still listed for Trin.
+    let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+    assert_eq!(
+        trins.len(),
+        1,
+        "a refused cross-owner action must not mutate the other mailbox"
+    );
+    assert!(!trins[0].was_read);
+}
+
+/// **AC: both work identically on the realm plane and the single-database fallback.** Same write,
+/// same before/after list, through the shared core — not two code paths that happen to agree.
+#[test]
+fn both_write_ops_behave_identically_on_the_realm_plane_and_the_fallback() {
+    let (_realm, world, _calls) = sharded_mailbox();
+    let single = unsharded_mailbox();
+
+    mail::mark_read(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("sharded plane");
+    mail::mark_read(single.as_ref(), Some(GINGER), MAILBOX, 1).expect("fallback plane");
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).unwrap(),
+        mail::open_mailbox(single.as_ref(), Some(GINGER), MAILBOX).unwrap(),
+        "both planes must show the same mark-read result"
+    );
+}
+
+/// **AC: mail write ops reach the AUTHORITY, never the player's own shard, on a sharded gateway** —
+/// the write half of `a_sharded_mailbox_is_read_from_realm_core_and_never_from_the_players_own_shard`.
+#[test]
+fn a_sharded_mailbox_write_lands_on_realm_core_and_never_on_the_players_own_shard() {
+    let (_realm, world, calls) = sharded_mailbox();
+
+    mail::mark_read(world.as_ref(), Some(GINGER), MAILBOX, 1).unwrap();
+    mail::delete(world.as_ref(), Some(TRIN), MAILBOX, 2).unwrap();
+
+    let log = calls.lock().unwrap().clone();
+    assert!(log.contains(&("lyracore-realm".to_string(), "mail_mark_read".to_string())));
+    assert!(log.contains(&("lyracore-realm".to_string(), "mail_delete".to_string())));
+    assert!(!log.iter().any(
+        |(shard, call)| shard == "world" && (call == "mail_mark_read" || call == "mail_delete")
+    ));
+}
+
+/// **AC: both are refused the same way the read path is — not in world, or not at the named
+/// mailbox — before touching any row.** Mirrors `every_mail_read_is_refused_at_character_select`
+/// and `a_mailbox_the_player_is_not_standing_at_is_refused`.
+#[test]
+fn both_write_ops_are_gated_like_the_read_path() {
+    let (_realm, world, calls) = sharded_mailbox();
+
+    let err = mail::mark_read(world.as_ref(), None, MAILBOX, 1).unwrap_err();
+    assert!(err.to_string().contains("not in world"), "got {err}");
+    let err = mail::delete(world.as_ref(), Some(GINGER), FAR_MAILBOX, 1).unwrap_err();
+    assert!(err.to_string().contains("not at mailbox"), "got {err}");
+
+    let log = calls.lock().unwrap().clone();
+    assert!(
+        !log.iter()
+            .any(|(_, call)| call == "mail_mark_read" || call == "mail_delete"),
+        "a gate refusal must never reach the write; calls were {log:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+//  Dispatch: mark-as-read and delete over the real wire.
+// ---------------------------------------------------------------------------------------------
+
+/// **AC: `CMSG_MAIL_MARK_AS_READ` gets NO wire reply** (vanilla sends none — the client already
+/// flipped its own display), but the session survives and the NEXT list read shows the flip.
+#[test]
+fn mark_as_read_sends_no_reply_but_the_next_list_shows_it() {
+    let store = seated_store();
+
+    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..10 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    wow_world_messages::vanilla::CMSG_MAIL_MARK_AS_READ {
+        mailbox: Guid::new(MAILBOX),
+        mail_id: 1,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    // No reply for mark-as-read — assert by racing the NEXT packet, which must be the poll answer
+    // below, not a stray SMSG this opcode was never supposed to send.
+    wow_world_messages::vanilla::CMSG_GET_MAIL_LIST {
+        mailbox: Guid::new(MAILBOX),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_MAIL_LIST_RESULT(m) => {
+            assert!(m.mails[0].message_id == 1, "still the same mail, now read");
+        }
+        other => {
+            panic!("expected the mail list (mark-as-read sends no reply of its own), got {other}")
+        }
+    }
+
+    drop(client);
+    server.join().unwrap();
+}
+
+/// **AC: `CMSG_MAIL_DELETE` removes the row and acks `SMSG_SEND_MAIL_RESULT`/Deleted.**
+#[test]
+fn delete_acks_with_send_mail_result_and_the_next_list_is_empty() {
+    let store = seated_store();
+
+    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..10 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    wow_world_messages::vanilla::CMSG_MAIL_DELETE {
+        mailbox_id: Guid::new(MAILBOX),
+        mail_id: 1,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(m) => {
+            assert_eq!(m.mail_id, 1);
+            match m.action {
+                wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailAction::Deleted {
+                    result2,
+                } => {
+                    assert_eq!(
+                        result2,
+                        wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
+                    );
+                }
+                other => panic!("expected the Deleted action, got {other:?}"),
+            }
+        }
+        other => panic!("expected SMSG_SEND_MAIL_RESULT, got {other}"),
+    }
+
+    wow_world_messages::vanilla::CMSG_GET_MAIL_LIST {
+        mailbox: Guid::new(MAILBOX),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_MAIL_LIST_RESULT(m) => assert!(m.mails.is_empty()),
+        other => panic!("expected the mail list, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+}
+
+/// **AC: a refused delete (not the caller's mail) still acks — with the generic error — and never
+/// tears the session down.**
+#[test]
+fn a_refused_delete_still_acks_and_never_kills_the_session() {
+    let store = seated_store();
+    // Mail 1 belongs to guid 1 (the seated warrior) in the base fixture; retarget it to someone
+    // else so THIS session's delete is the not-your-mail refusal.
+    store.mails.lock().unwrap()[0].0 = 999;
+
+    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..10 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    wow_world_messages::vanilla::CMSG_MAIL_DELETE {
+        mailbox_id: Guid::new(MAILBOX),
+        mail_id: 1,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(m) => match m.action {
+            wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailAction::Deleted { result2 } => {
+                assert_eq!(
+                    result2,
+                    wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+                );
+            }
+            other => panic!("expected the Deleted action, got {other:?}"),
+        },
+        other => panic!("expected SMSG_SEND_MAIL_RESULT, got {other}"),
+    }
+
+    // The session survives: the next opcode is still answered.
+    ClientOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME(_) => {}
+        other => panic!("expected the mail-time poll, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+}
+
 /// **AC: a refused mail opcode is never session-fatal.** A mail poll at character select, and a
 /// mailbox the player is not standing at: the session survives both, and the poll is still
 /// answered (a dropped reply leaves a stale envelope lit).
