@@ -162,7 +162,9 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
 Several verification tools are **maintainer-side and not included in this repository**: the
 wire-protocol test suite (a headless client that speaks the real 5875 protocol — SRP6 plus the
 encrypted world stream — and decodes SMSG through gtker), the cross-shard catalogue check, and the
-capacity benchmark. (The world-import ETL is **not** one of these: `importer/scripts/` — including
+capacity benchmark. `lyracore-deploy`, which the CLI's production-realm refusal names (distinct from
+the PID-identity refusal in [`development-cli.md`](./development-cli.md)), is maintainer-side too;
+§3 below is the deploy procedure available here and does the same work by hand. (The world-import ETL is **not** one of these: `importer/scripts/` — including
 `import-world.sh`, the ETL that builds a full zone from operator-supplied data — ships in this
 repository; see [`data-ingestion.md`](./data-ingestion.md).) The traps above are written so they
 still apply if you build equivalent tooling of your own; where one of them names a script that is
