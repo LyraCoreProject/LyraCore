@@ -8,6 +8,7 @@ use crate::game_npc_vendor;
 use crate::game_world_entity;
 use crate::WorldEntity; // npc_interaction_gate's return type
 
+use super::inventory::is_carried_slot;
 use super::ops::store_item;
 use super::rules::{buy_cost, equip_slot, repair_cost, sell_value};
 use super::tables::{
@@ -135,6 +136,10 @@ pub(crate) fn apply_item_sell(
     // window can't target worn gear, so a client must not be able to sell items off the body.
     if inst.slot <= equip_slot::END {
         return Err("cannot sell an equipped item".to_string());
+    }
+    // Selling is a bag-only action: an item sitting in the bank is out of the vendor window's reach.
+    if !is_carried_slot(inst.slot) {
+        return Err("cannot sell a banked item".to_string());
     }
     let tmpl = ctx
         .db

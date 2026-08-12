@@ -303,6 +303,20 @@ pub(crate) fn valid_dest_slot(to_slot: u8) -> bool {
         || (BAG_CONTENT_OFFSET..BAG_CONTENT_END).contains(&to_slot) // 120..=191
 }
 
+/// First base bank slot (vanilla `ItemSlot::Bank1`).
+const BANK_SLOT_START: u8 = 39;
+/// Last base bank slot (`ItemSlot::Bank24`), 24 slots in total.
+const BANK_SLOT_END_INCL: u8 = 62;
+
+/// Whether a slot is CARRIED — equipment, bag-equip, backpack, or bag content — as opposed to merely
+/// owned. Bank slots are owned but not carried: they don't count for collect quests, aren't consumed
+/// on turn-in, aren't fired as ammo, and never receive auto-stored loot. Stated as the carried ranges
+/// rather than "not the bank", so the bank-bag region stays uncarried when it opens.
+pub(crate) fn is_carried_slot(slot: u8) -> bool {
+    slot < BACKPACK_SLOT_END // 0..=38 (equip + bag-equip + backpack)
+        || (BAG_CONTENT_OFFSET..BAG_CONTENT_END).contains(&slot) // 120..=191
+}
+
 #[allow(dead_code)] // core kept for a future gw_split_item twin (#483 deleted the sender-path reducer)
 /// The destination-slot gate for `apply_item_split` ONLY: everything `valid_dest_slot` admits, MINUS
 /// the equipment region (0..=`equip_slot::END`, i.e. 0..=18). A split can never legitimately place an
@@ -432,9 +446,25 @@ pub(crate) fn first_free_bag_slot(ctx: &ReducerContext, player_guid: u64) -> Opt
 #[cfg(test)]
 mod tests {
     use super::{
-        bag_content_decompose, equip_slot, valid_dest_slot, valid_split_count,
-        valid_split_dest_slot,
+        bag_content_decompose, equip_slot, is_carried_slot, valid_dest_slot, valid_split_count,
+        valid_split_dest_slot, BANK_SLOT_END_INCL, BANK_SLOT_START,
     };
+
+    /// CARRIED-SLOT PREDICATE: equipment, bag-equip, backpack, and bag-content slots are carried; the
+    /// base bank range is owned but not carried, and so is every slot past it (the bank-bag region and
+    /// the unaddressed tail).
+    #[test]
+    fn is_carried_slot_admits_the_two_carry_regions_only() {
+        for slot in [0u8, 18, 19, 22, 23, 38, 120, 191] {
+            assert!(is_carried_slot(slot), "slot {slot} is carried");
+        }
+        for slot in BANK_SLOT_START..=BANK_SLOT_END_INCL {
+            assert!(!is_carried_slot(slot), "bank slot {slot} is not carried");
+        }
+        for slot in [63u8, 68, 119, 192, 255] {
+            assert!(!is_carried_slot(slot), "slot {slot} is not carry space");
+        }
+    }
 
     /// SPLIT COUNT GATE: `count == 0` and `count == stack_count` (splitting off nothing, or the whole
     /// stack — that's a move) are rejected; every count strictly between 0 and the stack passes.
