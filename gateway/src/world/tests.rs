@@ -627,6 +627,7 @@ impl InMemoryStore {
 
     /// The module's `insert_mail`: the row both write paths reach, so a letter written by the
     /// single-database send and one written by the escrow's commit cannot differ.
+    #[allow(clippy::too_many_arguments)]
     fn write_mail(
         &self,
         sender_guid: u64,
@@ -634,6 +635,7 @@ impl InMemoryStore {
         subject: String,
         body: String,
         money: u32,
+        cod: u32,
         item: &mail::AttachedItem,
     ) {
         let mut mails = self.mails.lock().unwrap();
@@ -646,6 +648,7 @@ impl InMemoryStore {
                 subject,
                 body,
                 money,
+                cod,
                 item_entry: item.entry,
                 item_stack_count: item.stack_count,
                 item_durability: item.durability,
@@ -1130,7 +1133,8 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
     /// Models the module's `apply_return`: the SAME row, re-addressed to whoever sent it, with
-    /// whatever it still carries (or nothing) travelling unchanged.
+    /// whatever it still carries (or nothing) travelling unchanged — except the cash-on-delivery
+    /// price, which is dropped, because the row is going back to whoever set it.
     fn mail_return(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
         self.rec("mail_return");
         let mut mails = self.mails.lock().unwrap();
@@ -1142,6 +1146,7 @@ impl WorldStore for InMemoryStore {
                 let sender = m.sender_guid;
                 m.sender_guid = recipient_guid;
                 m.was_read = false;
+                m.cod = 0;
                 *to = sender;
                 Ok(())
             }
@@ -1151,6 +1156,7 @@ impl WorldStore for InMemoryStore {
     /// Models the module's `apply_send`: the postage plus the attached coin leave the purse and the
     /// row is written, in ONE call — the single-database plane's one transaction. The id is
     /// per-database, as the module's `auto_inc` is.
+    #[allow(clippy::too_many_arguments)]
     fn mail_send(
         &self,
         sender_guid: u64,
@@ -1158,6 +1164,7 @@ impl WorldStore for InMemoryStore {
         subject: String,
         body: String,
         money: u32,
+        cod: u32,
         item_guid: u64,
     ) -> Result<()> {
         self.rec("mail_send");
@@ -1170,15 +1177,23 @@ impl WorldStore for InMemoryStore {
             body.clone(),
             money,
         ));
-        self.write_mail(sender_guid, recipient_guid, subject, body, money, &item);
+        self.write_mail(
+            sender_guid,
+            recipient_guid,
+            subject,
+            body,
+            money,
+            cod,
+            &item,
+        );
         Ok(())
     }
 
-    /// Models the module's `apply_take_item`: the grant and the clear are one transaction, so a
-    /// full bag leaves the item in the letter and a second take finds an empty one.
+    /// Models the module's `apply_take_item`: the COD debit, the grant, the clear and the seller's
+    /// payout row are ONE transaction, so a full bag or a price the taker cannot pay leaves the
+    /// letter exactly as it was, and a second take finds an empty one.
     fn mail_take_item(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
-        self.rec("mail_take_item");
-        let item = {
+        let (item, settlement) = {
             let mails = self.mails.lock().unwrap();
             let Some((_, m)) = mails
                 .iter()
@@ -1189,15 +1204,35 @@ impl WorldStore for InMemoryStore {
             if m.item_entry == 0 {
                 return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
             }
-            mail::AttachedItem {
-                entry: m.item_entry,
-                stack_count: m.item_stack_count,
-                durability: m.item_durability,
-                enchant_id: m.item_enchant_id,
-                soulbound: m.item_soulbound,
-            }
+            (
+                mail::AttachedItem {
+                    entry: m.item_entry,
+                    stack_count: m.item_stack_count,
+                    durability: m.item_durability,
+                    enchant_id: m.item_enchant_id,
+                    soulbound: m.item_soulbound,
+                },
+                lyracore_shared::mail::cod_settlement(
+                    m.cod,
+                    m.sender_guid,
+                    &m.subject,
+                    recipient_guid,
+                ),
+            )
         };
-        self.store_snapshot(recipient_guid, &item)?;
+        self.rec("mail_take_item");
+        if let Some(s) = &settlement {
+            self.debit(s.payer_guid, s.copper)
+                .map_err(|_| anyhow!(lyracore_shared::mail::COD_NOT_AFFORDABLE))?;
+        }
+        if let Err(e) = self.store_snapshot(recipient_guid, &item) {
+            // The fake cannot roll back, so it undoes the one write it made — the real module gets
+            // this from the transaction, and asserting on it is the point of the full-bag test.
+            if let Some(s) = &settlement {
+                self.credit(s.payer_guid, s.copper);
+            }
+            return Err(e);
+        }
         let mut mails = self.mails.lock().unwrap();
         if let Some((_, m)) = mails
             .iter_mut()
@@ -1208,6 +1243,19 @@ impl WorldStore for InMemoryStore {
             m.item_durability = 0;
             m.item_enchant_id = 0;
             m.item_soulbound = false;
+            m.cod = 0;
+        }
+        drop(mails);
+        if let Some(s) = settlement {
+            self.write_mail(
+                s.payer_guid,
+                s.payee_guid,
+                s.subject,
+                String::new(),
+                s.copper,
+                0,
+                &mail::AttachedItem::default(),
+            );
         }
         Ok(())
     }
@@ -1250,6 +1298,8 @@ impl WorldStore for InMemoryStore {
         money: u32,
         postage: u32,
         item_guid: u64,
+        cod: u32,
+        cod_source_mail_id: u64,
     ) -> Result<()> {
         self.rec("mail_fence");
         self.mail_kill("mail_fence")?;
@@ -1272,8 +1322,9 @@ impl WorldStore for InMemoryStore {
                 money,
                 postage,
                 payout: false,
-                mail_id: 0,
+                mail_id: cod_source_mail_id,
                 item,
+                cod,
             },
         ));
         self.attested.lock().unwrap().push((escrow_id, false));
@@ -1289,6 +1340,8 @@ impl WorldStore for InMemoryStore {
         body: String,
         money: u32,
         item: mail::AttachedItem,
+        cod: u32,
+        cod_source_mail_id: u64,
     ) -> Result<()> {
         self.rec("mail_commit");
         self.mail_kill("mail_commit")?;
@@ -1305,7 +1358,29 @@ impl WorldStore for InMemoryStore {
             body.clone(),
             money,
         ));
-        self.write_mail(sender_guid, recipient_guid, subject, body, money, &item);
+        self.write_mail(
+            sender_guid,
+            recipient_guid,
+            subject,
+            body,
+            money,
+            cod,
+            &item,
+        );
+        // The price stops being owed in the SAME call that delivers the payment for it — the
+        // module clears it inside the commit's transaction, which is what makes a COD take charge
+        // once however the drive is interrupted.
+        if cod_source_mail_id != 0 {
+            if let Some((_, m)) = self
+                .mails
+                .lock()
+                .unwrap()
+                .iter_mut()
+                .find(|(_, m)| m.id == cod_source_mail_id)
+            {
+                m.cod = 0;
+            }
+        }
         Ok(())
     }
     /// Models `mail_escrow::apply_take_fence`: the copper leaves the ROW into a fence here.
@@ -1357,6 +1432,7 @@ impl WorldStore for InMemoryStore {
                 payout: true,
                 mail_id,
                 item: mail::AttachedItem::default(),
+                cod: 0,
             },
         ));
         self.attested.lock().unwrap().push((escrow_id, false));
@@ -1423,6 +1499,7 @@ impl WorldStore for InMemoryStore {
                 payout: true,
                 mail_id,
                 item,
+                cod: 0,
             },
         ));
         self.attested.lock().unwrap().push((escrow_id, false));

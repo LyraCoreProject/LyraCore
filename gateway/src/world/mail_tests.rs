@@ -18,6 +18,8 @@ const MAILBOX: u64 = 0xF110_0000_0000_0042;
 const FAR_MAILBOX: u64 = 0xF110_0000_0000_0099;
 /// The wire's "no item attached" — every letter in these fixtures unless it says otherwise.
 const NO_ITEM: u64 = 0;
+/// The wire's "no cash on delivery" — likewise.
+const NO_COD: u32 = 0;
 
 fn mail(id: u64, from: u64, subject: &str, body: &str) -> codec::MailView {
     codec::MailView {
@@ -1113,6 +1115,7 @@ fn post_money<St: WorldStore + ?Sized>(
         "Your sword".into(),
         "left it at the inn".into(),
         money,
+        NO_COD,
         NO_ITEM,
     )
 }
@@ -1272,6 +1275,7 @@ fn the_faction_gate_refuses_in_both_directions() {
         "Hail".into(),
         "".into(),
         0,
+        NO_COD,
         NO_ITEM,
     )
     .expect_err("a Horde sender cannot write to an Alliance recipient either");
@@ -1341,6 +1345,7 @@ fn sending_is_refused_at_character_select_and_away_from_a_mailbox() {
         "Hi".into(),
         "".into(),
         0,
+        NO_COD,
         NO_ITEM,
     )
     .expect_err("character select drives no mailbox");
@@ -1357,6 +1362,7 @@ fn sending_is_refused_at_character_select_and_away_from_a_mailbox() {
         "Hi".into(),
         "".into(),
         0,
+        NO_COD,
         NO_ITEM,
     )
     .expect_err("a mailbox out of reach refuses");
@@ -2104,6 +2110,7 @@ fn post_item<St: WorldStore + ?Sized>(
         "Your sword".into(),
         "left it at the inn".into(),
         0,
+        NO_COD,
         SWORD_GUID,
     )
 }
@@ -2520,4 +2527,566 @@ fn an_item_take_killed_after_the_payout_re_drives_into_one_item() {
     );
     assert_eq!(claimable_swords(&[&world], &realm), 1);
     assert!(realm.mail_escrows.lock().unwrap().is_empty());
+}
+
+// =============================================================================================
+//  Cash on delivery
+// =============================================================================================
+//
+// A COD take moves value BOTH ways in one click: the item out of the letter and the price out of
+// the buyer's purse. The assertions below are always the pair — where the item is, and where the
+// copper is — because a test that only checks one of them passes for a buyer who paid for nothing.
+
+/// What Ginger asks Trin for the sword.
+const COD: u32 = 250;
+
+/// Post the fixture letter with the sword attached, at `cod` copper cash on delivery.
+fn post_cod<St: WorldStore + ?Sized>(
+    store: &St,
+    to: &str,
+    cod: u32,
+) -> std::result::Result<(), mail::SendRefusal> {
+    mail::send(
+        store,
+        Some(GINGER),
+        MAILBOX,
+        to,
+        "Your sword".into(),
+        "250 and it is yours".into(),
+        0,
+        cod,
+        SWORD_GUID,
+    )
+}
+
+/// Ginger's priced letter, delivered to Trin, who has a purse to pay out of. Returns the topology
+/// plus the mail id.
+fn delivered_cod() -> (
+    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<InMemoryStore>,
+    ShardCallLog,
+    u64,
+) {
+    let (realm, world, _instances, calls) = sharded_send();
+    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, PURSE)];
+    give_item(&world, GINGER, SWORD_GUID, sword());
+    post_cod(world.as_ref(), "Trin", COD).expect("posted");
+    let mail_id = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
+    calls.lock().unwrap().clear();
+    (realm, world, calls, mail_id)
+}
+
+/// The same priced letter on one database — `lyracore dev up`'s gateway, where the whole take is
+/// one transaction.
+fn delivered_cod_unsharded() -> (std::sync::Arc<InMemoryStore>, u64) {
+    let single = unsharded_send();
+    *single.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, PURSE)];
+    give_item(&single, GINGER, SWORD_GUID, sword());
+    post_cod(single.as_ref(), "Trin", COD).expect("posted");
+    let mail_id = mail::open_mailbox(single.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
+    (single, mail_id)
+}
+
+/// One character's purse on one database, by guid rather than by fixture position.
+fn purse_of(store: &InMemoryStore, guid: u64) -> u32 {
+    store
+        .purses
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(g, _)| *g == guid)
+        .map(|(_, m)| *m)
+        .unwrap_or(0)
+}
+
+/// **AC: the price is in the recipient's list BEFORE they take anything.** A buyer who cannot see
+/// what they are being asked for is being asked to buy blind.
+#[test]
+fn a_cod_price_is_listed_before_the_recipient_takes_anything() {
+    let (_realm, world, _calls, _mail_id) = delivered_cod();
+
+    let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+
+    assert_eq!(trins[0].cod, COD);
+    assert_eq!(
+        trins[0].item_entry,
+        sword().entry,
+        "and it is still theirs to buy"
+    );
+    assert_eq!(purse_of(&world, TRIN), PURSE, "looking costs nothing");
+}
+
+/// **AC: taking the item debits the taker by exactly the price, and the copper reaches the seller
+/// as a mail they can take from.** The whole point of COD, and neither of them had to be online for
+/// the other's half.
+#[test]
+fn taking_a_priced_item_debits_the_buyer_and_posts_the_copper_to_the_seller() {
+    let (realm, world, _calls, mail_id) = delivered_cod();
+
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("Trin can afford it");
+
+    assert_eq!(world.bags_of(TRIN), vec![sword()], "the buyer has the item");
+    assert_eq!(
+        purse_of(&world, TRIN),
+        PURSE - COD,
+        "and paid exactly the price"
+    );
+    let sellers =
+        mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+    assert_eq!(sellers.len(), 1, "one payment mail");
+    assert_eq!(sellers[0].money, COD, "carrying the price");
+    assert_eq!(sellers[0].sender_guid, TRIN, "from the buyer");
+
+    // And the seller takes it out, which is the half that makes the sale real.
+    mail::take_money(world.as_ref(), Some(GINGER), MAILBOX, sellers[0].id).expect("paid");
+    assert_eq!(
+        purse_of(&world, GINGER),
+        PURSE - lyracore_shared::mail::total_cost(0) + COD,
+        "the seller is up the price, less the postage they paid to post the sword"
+    );
+    assert!(realm.mail_escrows.lock().unwrap().is_empty(), "settled");
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+}
+
+/// **AC: a taker who cannot afford the price is refused, the item stays in the mail, and no copper
+/// moves.** The refusal is `ErrNotEnoughMoney`, not a generic error — a player told the mailbox is
+/// broken cannot act on it, and a player told to bring gold can.
+#[test]
+fn a_buyer_who_cannot_afford_the_price_is_refused_and_nothing_moves() {
+    let (realm, world, _calls, mail_id) = delivered_cod();
+    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, COD - 1)];
+
+    let refusal = mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
+        .expect_err("one copper short");
+
+    assert!(
+        matches!(refusal, mail::TakeItemRefusal::CannotAffordCod(_)),
+        "the buyer must be told to bring gold: {refusal}"
+    );
+    assert_eq!(purse_of(&world, TRIN), COD - 1, "charged nothing");
+    assert!(world.bags_of(TRIN).is_empty());
+    let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap();
+    assert_eq!(
+        trins[0].item_entry,
+        sword().entry,
+        "the item is still in the mail"
+    );
+    assert_eq!(trins[0].cod, COD, "and still owed");
+    assert!(
+        mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX)
+            .unwrap()
+            .is_empty(),
+        "and the seller was paid nothing"
+    );
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+}
+
+/// **AC: a refused COD take leaves the buyer able to RETURN the mail instead.** Being unable to
+/// afford a purchase must not trap the item in a mailbox forever.
+#[test]
+fn a_buyer_who_refuses_the_price_can_return_the_mail_instead() {
+    let (realm, world, _calls, mail_id) = delivered_cod();
+    *world.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, COD - 1)];
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect_err("cannot pay");
+
+    mail::return_to_sender(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("declined");
+
+    assert!(mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX)
+        .unwrap()
+        .is_empty());
+    let back = mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).unwrap();
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0].item_entry, sword().entry, "the sword went home");
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+}
+
+/// **AC: returning a priced mail must not make its own sender pay their own price.** The return
+/// re-addresses the row to whoever SET the price, so a price that travelled would bill the seller
+/// to get their own item back — and pay it to the buyer who declined.
+#[test]
+fn a_returned_priced_mail_does_not_charge_its_own_sender() {
+    let (_realm, world, _calls, mail_id) = delivered_cod();
+    mail::return_to_sender(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("declined");
+    let back = mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).unwrap();
+    assert_eq!(
+        back[0].cod, 0,
+        "the price does not travel home with the item"
+    );
+    let before = purse_of(&world, GINGER);
+
+    mail::take_item(world.as_ref(), Some(GINGER), MAILBOX, back[0].id).expect("their own sword");
+
+    assert_eq!(purse_of(&world, GINGER), before, "and nobody was charged");
+    assert_eq!(
+        purse_of(&world, TRIN),
+        PURSE,
+        "least of all paid to the buyer who refused it"
+    );
+    assert_eq!(world.bags_of(GINGER), vec![sword()]);
+}
+
+/// **AC: taking a COD mail twice charges once.** The second click finds a letter with nothing in
+/// it, because the price and the item were cleared in the same transaction that paid the seller.
+#[test]
+fn taking_a_priced_mail_twice_charges_once() {
+    let (realm, world, _calls, mail_id) = delivered_cod();
+
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("bought");
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
+        .expect_err("there is nothing left in it");
+
+    assert_eq!(purse_of(&world, TRIN), PURSE - COD, "debited once");
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX)
+            .unwrap()
+            .len(),
+        1,
+        "and the seller was paid once"
+    );
+    assert_eq!(world.bags_of(TRIN), vec![sword()]);
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+}
+
+/// **AC: both planes settle the same COD, through one shared core.** Same letter, same purchase;
+/// the only difference is whether a realm handle exists — and on one database none of the escrow is
+/// touched, because there the whole thing is one transaction.
+#[test]
+fn both_planes_settle_the_same_cod() {
+    let (_realm, world, _calls, sharded_id) = delivered_cod();
+    let (single, single_id) = delivered_cod_unsharded();
+
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, sharded_id).expect("sharded");
+    mail::take_item(single.as_ref(), Some(TRIN), MAILBOX, single_id).expect("one database");
+
+    assert_eq!(
+        purse_of(&world, TRIN),
+        purse_of(&single, TRIN),
+        "the two planes must charge the same buyer the same price"
+    );
+    assert_eq!(world.bags_of(TRIN), single.bags_of(TRIN));
+    let sharded_seller = mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).unwrap();
+    let single_seller = mail::open_mailbox(single.as_ref(), Some(GINGER), MAILBOX).unwrap();
+    assert_eq!(sharded_seller.len(), single_seller.len());
+    assert_eq!(sharded_seller[0].money, single_seller[0].money);
+    assert_eq!(sharded_seller[0].subject, single_seller[0].subject);
+    assert!(
+        single.mail_escrows.lock().unwrap().is_empty()
+            && single.mail_receipts.lock().unwrap().is_empty(),
+        "the single-database plane must not route through the escrow — it HAS the transaction"
+    );
+}
+
+/// **The drive, in order: the buyer PAYS before the item is fenced.** Past the item fence the
+/// letter is empty, so a payment that failed afterwards would leave the item in flight for a
+/// purchase nobody made. Paying first is what makes an unaffordable price a clean refusal.
+#[test]
+fn a_sharded_cod_take_pays_before_it_fences_the_item() {
+    let (_realm, world, calls, mail_id) = delivered_cod();
+
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("bought");
+
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, what)| what.starts_with("mail_fence")
+                || what.starts_with("mail_commit")
+                || what.starts_with("mail_take_item")
+                || what.starts_with("mail_item_payout"))
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![
+            ("world".into(), "mail_fence".into()),
+            ("lyracore-realm".into(), "mail_commit".into()),
+            ("lyracore-realm".into(), "mail_take_item_fence".into()),
+            ("world".into(), "mail_item_payout".into()),
+        ],
+        "the payment's four steps run to completion BEFORE the item's first one"
+    );
+}
+
+/// **A full bag refuses before the buyer is charged.** The room probe runs first, so a purchase
+/// that has nowhere to land costs nothing — the same reason it runs before the item fence.
+#[test]
+fn a_full_bag_refuses_a_priced_take_before_any_copper_moves() {
+    let (realm, world, _calls, mail_id) = delivered_cod();
+    world
+        .bags_full
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let refusal = mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
+        .expect_err("nowhere to put it");
+
+    assert!(matches!(refusal, mail::TakeItemRefusal::BagsFull(_)));
+    assert_eq!(purse_of(&world, TRIN), PURSE, "charged nothing");
+    assert!(
+        mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX)
+            .unwrap()
+            .is_empty(),
+        "and the seller was paid nothing"
+    );
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].cod,
+        COD,
+        "still owed"
+    );
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+//  Interruption — executed at every step of both legs
+// ---------------------------------------------------------------------------------------------
+//
+// Two invariants at every crash point, and they are the whole ticket: the item has exactly one
+// owner (`claimable_swords`), and the copper has exactly one — the buyer's purse, a fence, or the
+// seller's mailbox, never two of them and never none.
+
+/// The copper a priced sale has moved, wherever it is. `PURSE` before the payment, `PURSE - COD`
+/// after — and the difference is either fenced or sitting in the seller's mailbox.
+fn assert_the_price_is_in_exactly_one_place(world: &InMemoryStore, realm: &InMemoryStore) {
+    let purse = purse_of(world, TRIN);
+    assert!(
+        purse == PURSE || purse == PURSE - COD,
+        "the buyer's purse went somewhere it should not ({purse}): the payment debits it once and \
+         nothing credits it back"
+    );
+    let fenced: u32 = world
+        .mail_escrows
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, e)| e.money)
+        .sum();
+    let paid: u32 = realm
+        .mails
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(to, _)| *to == GINGER)
+        .map(|(_, m)| m.money)
+        .sum();
+    if purse == PURSE - COD {
+        assert!(
+            fenced == COD || paid == COD,
+            "the buyer has paid, nothing is fenced and the seller has nothing — the copper is \
+             nowhere, which is the one unrecoverable outcome"
+        );
+    }
+    assert!(
+        paid <= COD,
+        "the seller was paid {paid} for one sale priced at {COD} — a replayed commit must pay once"
+    );
+}
+
+/// **Killed before the payment lands.** The buyer's copper is out of their purse and held in a
+/// fence; the item is untouched in the letter and the price is still owed, so nothing has been
+/// bought. The next mailbox visit rolls the payment forward.
+#[test]
+fn a_cod_payment_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit() {
+    let (realm, world, _calls, mail_id) = delivered_cod();
+    *realm.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
+
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
+        .expect_err("realm-core never answered the payment");
+    assert_eq!(purse_of(&world, TRIN), PURSE - COD, "the buyer has PAID");
+    assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "held");
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].item_entry,
+        sword().entry,
+        "and the item is still in the letter"
+    );
+    assert_the_price_is_in_exactly_one_place(&world, &realm);
+
+    *realm.mail_kill_at.lock().unwrap() = None;
+    mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).unwrap()[0].money,
+        COD,
+        "the seller is paid, once"
+    );
+    assert!(world.mail_escrows.lock().unwrap().is_empty(), "and settled");
+    assert_the_price_is_in_exactly_one_place(&world, &realm);
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+}
+
+/// **A second click while the first payment is still fenced resumes it — it does not buy twice.**
+/// The escrow id is re-derived from the held fence, so the replayed fence debits nothing; a fresh
+/// id would charge the buyer again for one purchase.
+#[test]
+fn a_second_click_resumes_a_held_payment_rather_than_charging_twice() {
+    let (realm, world, _calls, mail_id) = delivered_cod();
+    *realm.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect_err("never committed");
+    *realm.mail_kill_at.lock().unwrap() = None;
+
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("the second click lands");
+
+    assert_eq!(purse_of(&world, TRIN), PURSE - COD, "charged once");
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX)
+            .unwrap()
+            .len(),
+        1,
+        "and the seller was paid once"
+    );
+    assert_eq!(world.bags_of(TRIN), vec![sword()]);
+    assert!(world.mail_escrows.lock().unwrap().is_empty());
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+}
+
+/// **Killed after the payment committed but before the item moved.** The seller is paid and the
+/// price is settled, so the item is now the buyer's for the asking — the next click hands it over
+/// and charges nothing, which is the ordering's whole reason for paying first.
+#[test]
+fn a_cod_take_killed_after_the_payment_hands_the_item_over_for_free_on_the_next_click() {
+    let (realm, world, _calls, mail_id) = delivered_cod();
+    *realm.mail_kill_at.lock().unwrap() = Some("mail_take_item_fence".into());
+
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
+        .expect_err("the item was never fenced");
+    assert_eq!(purse_of(&world, TRIN), PURSE - COD, "paid");
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].cod,
+        0,
+        "and the price is settled, so a retry must not charge again"
+    );
+    assert_the_price_is_in_exactly_one_place(&world, &realm);
+
+    *realm.mail_kill_at.lock().unwrap() = None;
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id).expect("the retry lands");
+
+    assert_eq!(purse_of(&world, TRIN), PURSE - COD, "charged once in total");
+    assert_eq!(world.bags_of(TRIN), vec![sword()]);
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+}
+
+/// **Killed between the item's fence and its payout.** The buyer has paid and the item is held in
+/// an escrow — claimable by nobody, which is exactly what a fence is for — and the next mailbox
+/// visit grants it, once.
+#[test]
+fn a_cod_take_killed_before_the_item_payout_is_re_driven_at_the_next_mailbox_visit() {
+    let (realm, world, _calls, mail_id) = delivered_cod();
+    *world.mail_kill_at.lock().unwrap() = Some("mail_item_payout".into());
+
+    mail::take_item(world.as_ref(), Some(TRIN), MAILBOX, mail_id)
+        .expect_err("the bags were never granted");
+    assert_eq!(purse_of(&world, TRIN), PURSE - COD, "paid");
+    assert_eq!(claimable_swords(&[&world], &realm), 0, "held, not lost");
+    assert_eq!(realm.mail_escrows.lock().unwrap().len(), 1);
+    assert_the_price_is_in_exactly_one_place(&world, &realm);
+
+    *world.mail_kill_at.lock().unwrap() = None;
+    mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+
+    assert_eq!(world.bags_of(TRIN), vec![sword()], "granted, once");
+    assert_eq!(purse_of(&world, TRIN), PURSE - COD, "and charged once");
+    assert!(realm.mail_escrows.lock().unwrap().is_empty(), "settled");
+    assert_eq!(claimable_swords(&[&world], &realm), 1);
+}
+
+/// **A priced letter's own SEND, interrupted.** The price rides the fence, so the re-drive commits
+/// the same letter the first drive would have — a price lost in transit is an item given away.
+#[test]
+fn a_priced_send_killed_before_the_commit_re_drives_with_its_price_intact() {
+    let (realm, world, _instances, _calls) = sharded_send();
+    give_item(&world, GINGER, SWORD_GUID, sword());
+    *realm.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
+
+    post_cod(world.as_ref(), "Trin", COD).expect_err("realm-core never answered");
+    *realm.mail_kill_at.lock().unwrap() = None;
+    mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+
+    let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap();
+    assert_eq!(trins.len(), 1);
+    assert_eq!(trins[0].cod, COD, "the price survived the re-drive");
+    assert_eq!(trins[0].item_entry, sword().entry);
+}
+
+/// **A price with nothing attached is dropped at send.** There is nothing to pay for, so a letter
+/// that charged for it would be a way to bill a stranger for an empty envelope.
+#[test]
+fn a_price_on_a_letter_with_no_attachment_is_dropped() {
+    let (_realm, world, _instances, _calls) = sharded_send();
+
+    mail::send(
+        world.as_ref(),
+        Some(GINGER),
+        MAILBOX,
+        "Trin",
+        "Nothing".into(),
+        "".into(),
+        0,
+        COD,
+        NO_ITEM,
+    )
+    .expect("posted");
+
+    assert_eq!(
+        mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].cod,
+        0
+    );
+}
+
+/// **AC over the real wire: a COD take the buyer cannot afford answers `ErrNotEnoughMoney`.** The
+/// one-database dispatch, end to end — and the client renders that as "bring gold" rather than as a
+/// broken mailbox.
+#[test]
+fn a_refused_priced_take_reaches_the_client_as_not_enough_money() {
+    use wow_world_messages::vanilla::{
+        SMSG_SEND_MAIL_RESULT_MailAction, SMSG_SEND_MAIL_RESULT_MailResult,
+    };
+    let store = seated_sender();
+    *store.mails.lock().unwrap() = vec![(
+        1,
+        codec::MailView {
+            id: 7,
+            sender_guid: TRIN,
+            subject: "Your sword".into(),
+            item_entry: sword().entry,
+            item_stack_count: 1,
+            cod: PURSE + 1,
+            created_at_secs: 1_000,
+            ..Default::default()
+        },
+    )];
+
+    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..10 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    wow_world_messages::vanilla::CMSG_MAIL_TAKE_ITEM {
+        mailbox: Guid::new(MAILBOX),
+        mail_id: 7,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(m) => match m.action {
+            SMSG_SEND_MAIL_RESULT_MailAction::ItemTaken { result } => assert_eq!(
+                result,
+                SMSG_SEND_MAIL_RESULT_MailResult::ErrNotEnoughMoney {
+                    item: 0,
+                    item_count: 0
+                }
+            ),
+            other => panic!("expected the ItemTaken action, got {other:?}"),
+        },
+        other => panic!("expected SMSG_SEND_MAIL_RESULT, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.purses.lock().unwrap()[0].1, PURSE, "charged nothing");
+    assert_eq!(store.mails.lock().unwrap()[0].1.item_entry, sword().entry);
 }

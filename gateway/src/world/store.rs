@@ -826,6 +826,9 @@ pub trait WorldStore: Send + Sync {
     ///
     /// Every gate that decides who may write to whom has already run in `world::mail` — realm-core
     /// can answer none of them — so `sender_guid` must be the guid the socket authenticated.
+    ///
+    /// `cod` is the price the RECIPIENT will owe for the attachment. It costs the sender nothing
+    /// and is not part of the debit; it only rides the row until somebody takes the item.
     #[allow(clippy::too_many_arguments)]
     fn mail_send(
         &self,
@@ -834,6 +837,7 @@ pub trait WorldStore: Send + Sync {
         subject: String,
         body: String,
         money: u32,
+        cod: u32,
         item_guid: u64,
     ) -> Result<()>;
 
@@ -863,6 +867,10 @@ pub trait WorldStore: Send + Sync {
     ///
     /// Always the SENDER's own handle: the purse is `game_world_entity.money`, on the shard they
     /// are standing on. `Err` is the atomic affordability refusal — a refused send costs nothing.
+    ///
+    /// A COD PAYMENT is fenced through here too, because it is a letter out of a purse like any
+    /// other: `cod_source_mail_id` names the mail whose price it pays (0 for an ordinary letter),
+    /// and it rides the fence so a re-drive can settle that price without re-deriving anything.
     #[allow(clippy::too_many_arguments)]
     fn mail_fence(
         &self,
@@ -874,12 +882,18 @@ pub trait WorldStore: Send + Sync {
         _money: u32,
         _postage: u32,
         _item_guid: u64,
+        _cod: u32,
+        _cod_source_mail_id: u64,
     ) -> Result<()> {
         anyhow::bail!("mail_fence: this store models no escrow")
     }
 
     /// **Escrow step 2 (send)** — write the mail row and its receipt under `escrow_id`, on the
     /// database THIS handle names (realm-core). Idempotent: a replay writes nothing.
+    ///
+    /// `cod_source_mail_id` (0 for an ordinary letter) is the mail this one PAYS FOR: its price is
+    /// settled in the same transaction as the payout row, which is what makes a COD take charge
+    /// once however the drive is interrupted.
     #[allow(clippy::too_many_arguments)]
     fn mail_commit(
         &self,
@@ -890,6 +904,8 @@ pub trait WorldStore: Send + Sync {
         _body: String,
         _money: u32,
         _item: mail::AttachedItem,
+        _cod: u32,
+        _cod_source_mail_id: u64,
     ) -> Result<()> {
         anyhow::bail!("mail_commit: this store models no escrow")
     }

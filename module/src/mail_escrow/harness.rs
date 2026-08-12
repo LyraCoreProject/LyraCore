@@ -54,6 +54,7 @@ struct XEscrow {
     payout: bool,
     mail_id: u64,
     item: ItemSnapshot,
+    cod: u32,
 }
 
 /// `game_mail_escrow` on ONE database. Its own struct because both fakes hold one: a letter fences
@@ -111,6 +112,7 @@ impl EscrowLedger for FakeLedger {
             item_durability: e.item.durability,
             item_enchant_id: e.item.enchant_id,
             item_soulbound: e.item.soulbound,
+            cod: e.cod,
         })
     }
     fn file_escrow(&mut self, row: MailEscrow) {
@@ -129,6 +131,7 @@ impl EscrowLedger for FakeLedger {
                 payout: row.payout,
                 mail_id: row.mail_id,
                 item,
+                cod: row.cod,
             },
         );
     }
@@ -344,6 +347,7 @@ struct XMail {
     subject: String,
     body: String,
     money: u32,
+    cod: u32,
     item: ItemSnapshot,
 }
 
@@ -475,9 +479,17 @@ impl DeliverySink for FakeMailPlane {
             subject: letter.subject.clone(),
             body: letter.body.clone(),
             money: letter.money,
+            cod: letter.cod,
             item: item.clone(),
         });
         id
+    }
+    /// The mail plane's own `clear_mail_cod`: the price stops being owed in the same transaction
+    /// that delivers the payment for it.
+    fn settle_cod(&mut self, mail_id: u64) {
+        if let Some(m) = self.mails.borrow_mut().iter_mut().find(|m| m.id == mail_id) {
+            m.cod = 0;
+        }
     }
     fn file_receipt(&mut self, row: MailDelivery) {
         self.receipts
@@ -505,6 +517,8 @@ const COST: u32 = MONEY + POSTAGE;
 /// that carries none.
 const ITEM_GUID: u64 = 0x4000_0000_0000_0011;
 const NO_ITEM: u64 = 0;
+/// An ordinary letter settles nobody's cash-on-delivery price.
+const NO_COD_MAIL: u64 = 0;
 
 /// A DAMAGED, ENCHANTED weapon — every column mailing must not launder, set to something a
 /// template-based re-grant would get wrong. Reserved entry, per the fixture-id rule.
@@ -525,6 +539,7 @@ fn letter() -> Letter {
         body: "left it at the inn".into(),
         money: MONEY,
         postage: POSTAGE,
+        cod: 0,
     }
 }
 
@@ -558,7 +573,7 @@ fn drive(
     if killed == Killed::BeforeFence {
         return Ok(());
     }
-    apply_fence(shard, escrow_id, SENDER, letter(), item_guid)?;
+    apply_fence(shard, escrow_id, SENDER, letter(), item_guid, NO_COD_MAIL)?;
     check(shard, plane);
     if killed == Killed::AfterFence {
         return Ok(());
@@ -570,7 +585,7 @@ fn drive(
         .escrow(escrow_id)
         .map(|e| e.item())
         .unwrap_or_default();
-    apply_commit(plane, escrow_id, SENDER, &letter(), &item)?;
+    apply_commit(plane, escrow_id, SENDER, &letter(), &item, NO_COD_MAIL)?;
     check(shard, plane);
     if killed == Killed::AfterCommit {
         return Ok(());
@@ -694,7 +709,7 @@ fn the_first_fence_arms_the_reaper() {
     let (mut shard, _plane) = fixture();
     assert!(!shard.ledger.reaper_armed.get());
 
-    apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM).expect("fenced");
+    apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM, NO_COD_MAIL).expect("fenced");
 
     assert!(shard.ledger.reaper_armed.get());
 }
@@ -812,8 +827,8 @@ fn a_driver_killed_before_the_fence_costs_the_sender_nothing() {
 fn a_replayed_fence_debits_the_purse_once() {
     let (mut shard, _plane) = fixture();
 
-    apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM).expect("first");
-    apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM)
+    apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM, NO_COD_MAIL).expect("first");
+    apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM, NO_COD_MAIL)
         .expect("replay is a no-op, not an error");
 
     assert_eq!(shard.purse_of(SENDER), PURSE - COST);
@@ -826,9 +841,10 @@ fn a_replayed_fence_debits_the_purse_once() {
 fn an_escrow_id_reused_for_another_sender_is_refused() {
     let (mut shard, _plane) = fixture();
     shard.purses.borrow_mut().insert(99, PURSE);
-    apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM).expect("first");
+    apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM, NO_COD_MAIL).expect("first");
 
-    let err = apply_fence(&mut shard, ESCROW, 99, letter(), NO_ITEM).expect_err("the id is taken");
+    let err = apply_fence(&mut shard, ESCROW, 99, letter(), NO_ITEM, NO_COD_MAIL)
+        .expect_err("the id is taken");
 
     assert!(err.contains("already fenced"), "{err}");
     assert_eq!(shard.purse_of(99), PURSE, "the second sender paid nothing");
@@ -846,6 +862,7 @@ fn a_replayed_commit_produces_one_mail_and_not_two() {
         SENDER,
         &letter(),
         &ItemSnapshot::default(),
+        NO_COD_MAIL,
     )
     .expect("first");
     apply_commit(
@@ -854,6 +871,7 @@ fn a_replayed_commit_produces_one_mail_and_not_two() {
         SENDER,
         &letter(),
         &ItemSnapshot::default(),
+        NO_COD_MAIL,
     )
     .expect("replay");
     apply_commit(
@@ -862,6 +880,7 @@ fn a_replayed_commit_produces_one_mail_and_not_two() {
         SENDER,
         &letter(),
         &ItemSnapshot::default(),
+        NO_COD_MAIL,
     )
     .expect("replay again");
 
@@ -873,7 +892,7 @@ fn a_replayed_commit_produces_one_mail_and_not_two() {
 #[test]
 fn re_fencing_an_id_for_a_different_amount_is_refused() {
     let (mut shard, _plane) = fixture();
-    apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM).expect("first");
+    apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM, NO_COD_MAIL).expect("first");
 
     let err = apply_fence(
         &mut shard,
@@ -884,6 +903,7 @@ fn re_fencing_an_id_for_a_different_amount_is_refused() {
             ..letter()
         },
         NO_ITEM,
+        NO_COD_MAIL,
     )
     .expect_err("a different letter under the same id");
 
@@ -904,6 +924,7 @@ fn an_escrow_id_that_already_delivered_to_another_recipient_is_refused() {
         SENDER,
         &letter(),
         &ItemSnapshot::default(),
+        NO_COD_MAIL,
     )
     .expect("first letter");
 
@@ -916,6 +937,7 @@ fn an_escrow_id_that_already_delivered_to_another_recipient_is_refused() {
             ..letter()
         },
         &ItemSnapshot::default(),
+        NO_COD_MAIL,
     )
     .expect_err("the id belongs to another letter");
 
@@ -929,8 +951,16 @@ fn an_escrow_id_that_already_delivered_to_another_recipient_is_refused() {
 fn escrow_id_zero_is_reserved_on_both_planes() {
     let (mut shard, mut plane) = fixture();
 
-    apply_fence(&mut shard, 0, SENDER, letter(), NO_ITEM).expect_err("reserved");
-    apply_commit(&mut plane, 0, SENDER, &letter(), &ItemSnapshot::default()).expect_err("reserved");
+    apply_fence(&mut shard, 0, SENDER, letter(), NO_ITEM, NO_COD_MAIL).expect_err("reserved");
+    apply_commit(
+        &mut plane,
+        0,
+        SENDER,
+        &letter(),
+        &ItemSnapshot::default(),
+        NO_COD_MAIL,
+    )
+    .expect_err("reserved");
 
     assert_eq!(shard.purse_of(SENDER), PURSE);
     assert!(plane.mailbox_of(RECIPIENT).is_empty());
@@ -946,7 +976,8 @@ fn escrow_id_zero_is_reserved_on_both_planes() {
 fn an_unaffordable_letter_fences_nothing() {
     let mut shard = FakeShard::with_purse(SENDER, COST - 1);
 
-    let err = apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM).expect_err("cannot pay");
+    let err = apply_fence(&mut shard, ESCROW, SENDER, letter(), NO_ITEM, NO_COD_MAIL)
+        .expect_err("cannot pay");
 
     assert!(
         err.contains(lyracore_shared::mail::NOT_ENOUGH_MONEY),
@@ -1041,6 +1072,7 @@ fn the_reaper_judges_each_fence_on_its_own_evidence() {
             ..letter()
         },
         NO_ITEM,
+        NO_COD_MAIL,
     )
     .expect("a second, unattested fence");
 
@@ -1409,7 +1441,7 @@ fn a_soulbound_item_is_refused_at_send_and_stays_in_the_senders_bags() {
         },
     );
 
-    let err = apply_fence(&mut shard, ESCROW, SENDER, letter(), ITEM_GUID)
+    let err = apply_fence(&mut shard, ESCROW, SENDER, letter(), ITEM_GUID, NO_COD_MAIL)
         .expect_err("a bound item is not mailable");
 
     assert!(
@@ -1443,7 +1475,7 @@ fn attaching_an_item_the_sender_does_not_own_fences_nothing() {
     let (mut shard, _plane) = fixture();
     shard.give_item(RECIPIENT, ITEM_GUID, sword());
 
-    let err = apply_fence(&mut shard, ESCROW, SENDER, letter(), ITEM_GUID)
+    let err = apply_fence(&mut shard, ESCROW, SENDER, letter(), ITEM_GUID, NO_COD_MAIL)
         .expect_err("it is not the sender's");
 
     assert!(err.contains(lyracore_shared::mail::NOT_YOUR_ITEM), "{err}");
@@ -1458,10 +1490,17 @@ fn attaching_an_item_the_sender_does_not_own_fences_nothing() {
 #[test]
 fn a_fenced_item_cannot_be_attached_to_a_second_letter() {
     let (mut shard, _plane) = item_fixture();
-    apply_fence(&mut shard, ESCROW, SENDER, letter(), ITEM_GUID).expect("fenced");
+    apply_fence(&mut shard, ESCROW, SENDER, letter(), ITEM_GUID, NO_COD_MAIL).expect("fenced");
 
-    let err = apply_fence(&mut shard, ESCROW + 1, SENDER, letter(), ITEM_GUID)
-        .expect_err("it is in flight, so it is nobody's");
+    let err = apply_fence(
+        &mut shard,
+        ESCROW + 1,
+        SENDER,
+        letter(),
+        ITEM_GUID,
+        NO_COD_MAIL,
+    )
+    .expect_err("it is in flight, so it is nobody's");
 
     assert!(err.contains(lyracore_shared::mail::NOT_YOUR_ITEM), "{err}");
     assert!(shard.bags_of(SENDER).is_empty());
@@ -1784,4 +1823,210 @@ fn an_item_payout_to_a_character_who_is_not_live_here_leaves_the_fence_holding_i
 
     assert!(err.contains(lyracore_shared::mail::NOT_IN_WORLD), "{err}");
     assert_eq!(plane.fenced_items(), 1, "still held, not lost");
+}
+
+// -------------------------------------------------------------------------------------------
+//  Cash on delivery — the payment leg, which is the SEND protocol pointed the other way
+// -------------------------------------------------------------------------------------------
+//
+// A COD take is two moves: the buyer's payment (a letter out of their purse, fenced on their own
+// shard) and the item (a take out of the mail row, fenced on the plane). Only the payment is new
+// here, and it is `apply_fence`/`apply_commit` unchanged bar one argument — the mail whose price
+// the commit settles, in the same transaction as the payout row.
+
+/// The COD price on the fixture letter, and what the buyer pays for it.
+const COD: u32 = 250;
+/// The buyer's escrow id for the payment leg.
+const PAYMENT: u64 = 0x5EED_0003;
+
+/// A priced letter sitting in RECIPIENT's mailbox, plus RECIPIENT's own shard with a purse to pay
+/// out of. Returns `(the buyer's shard, the mail plane, the priced mail's id)`.
+fn priced_mail_fixture() -> (FakeShard, FakeMailPlane, u64) {
+    let mut plane = FakeMailPlane::default();
+    apply_commit(
+        &mut plane,
+        ESCROW,
+        SENDER,
+        &Letter {
+            money: 0,
+            cod: COD,
+            ..letter()
+        },
+        &sword(),
+        NO_COD_MAIL,
+    )
+    .expect("the seller's letter is delivered");
+    let mail_id = plane.mailbox_of(RECIPIENT)[0].id;
+    (FakeShard::with_purse(RECIPIENT, PURSE), plane, mail_id)
+}
+
+/// The payment leg, as the gateway drives it. `killed` is the crash point, exactly as [`drive`]'s
+/// is.
+fn drive_payment(
+    shard: &mut FakeShard,
+    plane: &mut FakeMailPlane,
+    mail_id: u64,
+    killed: Killed,
+) -> Result<(), String> {
+    let payment = Letter {
+        recipient_guid: SENDER,
+        subject: "COD Payment: Your sword".into(),
+        body: String::new(),
+        money: COD,
+        postage: 0,
+        cod: 0,
+    };
+    if killed == Killed::BeforeFence {
+        return Ok(());
+    }
+    apply_fence(shard, PAYMENT, RECIPIENT, payment.clone(), NO_ITEM, mail_id)?;
+    if killed == Killed::AfterFence {
+        return Ok(());
+    }
+    apply_commit(
+        plane,
+        PAYMENT,
+        RECIPIENT,
+        &payment,
+        &ItemSnapshot::default(),
+        mail_id,
+    )?;
+    if killed == Killed::AfterCommit {
+        return Ok(());
+    }
+    apply_confirm(shard, PAYMENT)?;
+    if killed == Killed::AfterConfirm {
+        return Ok(());
+    }
+    apply_settle(shard, PAYMENT)
+}
+
+/// **The COD copper is in exactly one place at every step.** It leaves the buyer's purse into the
+/// fence and lands in the seller's mailbox; the only overlap is between the commit and its settle,
+/// which is delete-last and not a duplicate anybody can spend.
+fn assert_the_payment_is_in_exactly_one_place(shard: &FakeShard, plane: &FakeMailPlane) {
+    let purse = shard.purse_of(RECIPIENT);
+    assert!(
+        purse == PURSE || purse == PURSE - COD,
+        "the buyer's purse went somewhere it should not ({purse}): the payment debits it once and \
+         nothing credits it back"
+    );
+    let paid = plane.money_in_mailbox(SENDER);
+    assert!(
+        paid == 0 || paid == COD,
+        "the seller was paid {paid}, which is neither nothing nor the price — a replayed commit \
+         must write one payment"
+    );
+    if purse == PURSE - COD {
+        assert!(
+            shard.fenced_copper() == COD || paid == COD,
+            "the buyer has paid, the fence is gone and the seller has nothing — the copper is \
+             nowhere, which is what delete-last exists to make unreachable"
+        );
+    }
+}
+
+/// **The whole COD payment: the buyer is debited, the seller gets a mail they can take from, and
+/// the price stops being owed.** All three, or none — the settle rides the payout's own
+/// transaction.
+#[test]
+fn a_cod_payment_debits_the_buyer_pays_the_seller_and_settles_the_price() {
+    let (mut shard, mut plane, mail_id) = priced_mail_fixture();
+
+    drive_payment(&mut shard, &mut plane, mail_id, Killed::Never).expect("the payment completes");
+
+    assert_eq!(shard.purse_of(RECIPIENT), PURSE - COD, "debited once");
+    let seller = plane.mailbox_of(SENDER);
+    assert_eq!(seller.len(), 1, "one payment mail");
+    assert_eq!(seller[0].money, COD, "carrying the price");
+    assert_eq!(seller[0].sender_guid, RECIPIENT, "from the buyer");
+    assert_eq!(
+        plane.mailbox_of(RECIPIENT)[0].cod,
+        0,
+        "and the price is no longer owed — a second click charges nothing"
+    );
+    assert!(!shard.has_fence(PAYMENT), "settled");
+    assert_the_payment_is_in_exactly_one_place(&shard, &plane);
+}
+
+/// **Killed at every point, then re-driven under the same escrow id.** Whatever the crash point,
+/// the buyer pays once, the seller is paid once and the price is settled once — the escrow id is
+/// the idempotency key on both databases, which is what makes a resumed click safe.
+#[test]
+fn a_cod_payment_killed_at_any_step_re_drives_into_one_charge_and_one_payout() {
+    for killed in [
+        Killed::AfterFence,
+        Killed::AfterCommit,
+        Killed::AfterConfirm,
+    ] {
+        let (mut shard, mut plane, mail_id) = priced_mail_fixture();
+
+        drive_payment(&mut shard, &mut plane, mail_id, killed).expect("the drive reaches its end");
+        assert_the_payment_is_in_exactly_one_place(&shard, &plane);
+        assert_eq!(
+            shard.purse_of(RECIPIENT),
+            PURSE - COD,
+            "{killed:?}: past the fence the buyer has PAID, and nothing refunds a fence"
+        );
+
+        drive_payment(&mut shard, &mut plane, mail_id, Killed::Never)
+            .unwrap_or_else(|e| panic!("{killed:?}: the re-drive completes: {e}"));
+
+        assert_eq!(
+            shard.purse_of(RECIPIENT),
+            PURSE - COD,
+            "{killed:?}: charged once"
+        );
+        assert_eq!(
+            plane.mailbox_of(SENDER).len(),
+            1,
+            "{killed:?}: paid once — the replayed commit found its receipt"
+        );
+        assert_eq!(plane.mailbox_of(RECIPIENT)[0].cod, 0, "{killed:?}: settled");
+        assert!(
+            !shard.has_fence(PAYMENT),
+            "{killed:?}: and the fence is gone"
+        );
+    }
+}
+
+/// **Interrupted before the commit, the price is still owed.** The buyer's copper is held in the
+/// fence, so a click that never reached the seller has not silently bought anything — and the item
+/// is still in the letter, which is what leaves the buyer free to return it instead.
+#[test]
+fn a_cod_payment_that_never_committed_leaves_the_price_owed_and_the_item_in_the_letter() {
+    let (mut shard, mut plane, mail_id) = priced_mail_fixture();
+
+    drive_payment(&mut shard, &mut plane, mail_id, Killed::AfterFence).expect("the fence lands");
+
+    assert_eq!(shard.fenced_copper(), COD, "held, not lost");
+    assert!(
+        plane.mailbox_of(SENDER).is_empty(),
+        "the seller has nothing yet"
+    );
+    assert_eq!(plane.mailbox_of(RECIPIENT)[0].cod, COD, "still owed");
+    assert_eq!(plane.items_in_mailbox(RECIPIENT), vec![sword()]);
+}
+
+/// A buyer who cannot afford the price is refused before anything moves, and the letter is exactly
+/// as it was — the refusal a player answers by returning the mail instead.
+#[test]
+fn a_buyer_who_cannot_afford_the_price_is_refused_and_nothing_moves() {
+    let (mut plane, mail_id) = {
+        let (_, plane, mail_id) = priced_mail_fixture();
+        (plane, mail_id)
+    };
+    let mut shard = FakeShard::with_purse(RECIPIENT, COD - 1);
+
+    let err = drive_payment(&mut shard, &mut plane, mail_id, Killed::Never)
+        .expect_err("the purse cannot cover the price");
+
+    assert!(
+        err.contains(lyracore_shared::mail::NOT_ENOUGH_MONEY),
+        "{err}"
+    );
+    assert_eq!(shard.purse_of(RECIPIENT), COD - 1, "charged nothing");
+    assert_eq!(shard.fenced_copper(), 0, "and nothing fenced");
+    assert_eq!(plane.mailbox_of(RECIPIENT)[0].cod, COD, "still owed");
+    assert_eq!(plane.items_in_mailbox(RECIPIENT), vec![sword()]);
 }

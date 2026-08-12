@@ -74,8 +74,16 @@
 //! # Scope
 //!
 //! Copper and ONE item cross here: the whole cost of a sharded send (the attached coin AND the
-//! postage, in one debit) plus the attachment, and the take of either back out. COD and
-//! return-to-sender are later slices and add no step — they re-drive these four. [server]
+//! postage, in one debit) plus the attachment, and the take of either back out. Return-to-sender
+//! adds nothing — the row never leaves its plane.
+//!
+//! **Cash on delivery adds no step either.** A COD take is two of the moves above, in order: the
+//! buyer's payment is a LETTER out of their purse to the seller (the first protocol above,
+//! unchanged), and the item is a TAKE out of the mail row (the second, unchanged). The one thing
+//! COD adds is which mail the payment settles — [`apply_commit`]'s `cod_mail_id`, cleared in the
+//! same transaction as the payout row, so the price stops being owed exactly when the seller is
+//! paid. The rejected alternative was a third protocol that moved both at once: nothing can, and
+//! two ordered forward moves need no rollback arm, which this design does not have. [server]
 
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration};
 
@@ -149,7 +157,8 @@ pub struct MailEscrow {
     /// fence auto-migrates as the only direction that existed when it was filed.
     #[default(false)]
     pub payout: bool,
-    /// The `game_mail` row a payout came out of. 0 for a letter, which has no mail row yet.
+    /// The `game_mail` row this fence is about: the one a payout came out of, or — on a COD payment
+    /// — the one whose price it settles. 0 for an ordinary letter, which has no mail row yet.
     /// Suffixed `u64` deliberately: an untyped `0` is encoded as a u32 and the schema extraction
     /// refuses the column ("data too short for u64").
     #[default(0u64)]
@@ -172,6 +181,13 @@ pub struct MailEscrow {
     pub item_enchant_id: u32,
     #[default(false)]
     pub item_soulbound: bool,
+    /// The cash-on-delivery price the LETTER this fence is carrying will ask its recipient for. It
+    /// costs the sender nothing, so it is not part of `money` and not part of the debit — it rides
+    /// here only so a re-drive can commit the same letter the first drive would have. 0 on a payout
+    /// fence, which is itself the settlement of somebody else's price. END-appended with a typed
+    /// default, so a letter fenced before this migration auto-migrates as unpriced.
+    #[default(0u32)]
+    pub cod: u32,
 }
 
 impl MailEscrow {
@@ -265,6 +281,9 @@ pub(crate) struct Letter {
     pub money: u32,
     /// Copper the post office keeps.
     pub postage: u32,
+    /// Copper the RECIPIENT will owe for the attachment. Not part of [`Self::fenced_copper`]: it
+    /// moves the other way, later, and only if they take the item.
+    pub cod: u32,
 }
 
 impl Letter {
@@ -522,6 +541,9 @@ pub(crate) trait DeliverySink {
         letter: &Letter,
         item: &crate::mail::ItemSnapshot,
     ) -> u64;
+    /// Mark a mail's cash-on-delivery price as settled. A no-op for id 0 (every ordinary letter)
+    /// and for a mail this database does not hold.
+    fn settle_cod(&mut self, mail_id: u64);
     fn file_receipt(&mut self, row: MailDelivery);
     fn now_micros(&self) -> i64;
 }
@@ -702,8 +724,12 @@ impl DeliverySink for CtxDb<'_> {
             letter.subject.clone(),
             letter.body.clone(),
             letter.money,
+            letter.cod,
             item,
         )
+    }
+    fn settle_cod(&mut self, mail_id: u64) {
+        crate::mail::clear_mail_cod(self.ctx, mail_id);
     }
     fn file_receipt(&mut self, row: MailDelivery) {
         self.ctx.db.game_mail_delivery().insert(row);
@@ -724,13 +750,17 @@ impl DeliverySink for CtxDb<'_> {
 /// that crashed without learning whether its call landed simply calls again — and the replay arm
 /// returns BEFORE the detach, because the second time round the item row is already gone.
 ///
-/// `item_guid` 0 is a letter with no attachment.
+/// `item_guid` 0 is a letter with no attachment. `mail_id` is the mail whose COD price this fence
+/// is PAYING (0 for an ordinary letter) — a COD payment is a letter out of a purse like any other,
+/// so it reuses this step rather than adding one, and the id rides along so the commit that
+/// delivers the payment can settle the price in the same transaction.
 pub(crate) fn apply_fence<S: FenceSink>(
     sink: &mut S,
     escrow_id: u64,
     sender_guid: u64,
     letter: Letter,
     item_guid: u64,
+    mail_id: u64,
 ) -> Result<(), String> {
     if escrow_id == 0 {
         return Err("escrow_id 0 is reserved (it is the \"no escrow\" sentinel)".to_string());
@@ -783,12 +813,13 @@ pub(crate) fn apply_fence<S: FenceSink>(
         created_micros,
         delivered: false,
         payout: false,
-        mail_id: 0,
+        mail_id,
         item_entry: item.entry,
         item_stack_count: item.stack_count,
         item_durability: item.durability,
         item_enchant_id: item.enchant_id,
         item_soulbound: item.soulbound,
+        cod: letter.cod,
     });
     sink.arm_reaper();
     log::info!(
@@ -803,12 +834,18 @@ pub(crate) fn apply_fence<S: FenceSink>(
 /// The escrow evidence is the CALL, not a local row: the fence is on another database and this one
 /// has never heard of it. That is not a weakening — the reducer is operator-gated, so it is exactly
 /// as forgeable as any other mail write.
+///
+/// `cod_mail_id` (0 for an ordinary letter) is the mail this letter PAYS FOR. Settling that price
+/// happens in the same transaction as the payout row and its receipt, and that is the whole of
+/// "taking a COD mail twice charges once" on a sharded realm: the taker's copper reaches the seller
+/// and the price stops being owed atomically, or neither does.
 pub(crate) fn apply_commit<S: DeliverySink>(
     sink: &mut S,
     escrow_id: u64,
     sender_guid: u64,
     letter: &Letter,
     item: &crate::mail::ItemSnapshot,
+    cod_mail_id: u64,
 ) -> Result<(), String> {
     if escrow_id == 0 {
         return Err("escrow_id 0 is reserved (it is the \"no escrow\" sentinel)".to_string());
@@ -827,6 +864,9 @@ pub(crate) fn apply_commit<S: DeliverySink>(
         CommitPlan::Deliver => {}
     }
     let mail_id = sink.deliver(sender_guid, letter, item);
+    if cod_mail_id != 0 {
+        sink.settle_cod(cod_mail_id);
+    }
     let created_micros = sink.now_micros();
     // The receipt goes in the SAME transaction as the mail row. Split, a crash between them makes
     // the mail row invisible to the next replay and the letter arrives twice.
@@ -916,6 +956,7 @@ pub(crate) fn apply_take_fence<S: TakeFenceSink>(
         item_durability: 0,
         item_enchant_id: 0,
         item_soulbound: false,
+        cod: 0,
     });
     sink.arm_reaper();
     log::info!(
@@ -999,6 +1040,7 @@ pub(crate) fn apply_take_item_fence<S: TakeFenceSink>(
         item_durability: item.durability,
         item_enchant_id: item.enchant_id,
         item_soulbound: item.soulbound,
+        cod: 0,
     });
     sink.arm_reaper();
     log::info!(
@@ -1200,6 +1242,8 @@ pub fn realm_mail_fence(
     money: u32,
     postage: u32,
     item_guid: u64,
+    cod: u32,
+    mail_id: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     apply_fence(
@@ -1212,8 +1256,10 @@ pub fn realm_mail_fence(
             body,
             money,
             postage,
+            cod,
         },
         item_guid,
+        mail_id,
     )
 }
 
@@ -1238,6 +1284,8 @@ pub fn realm_mail_commit(
     item_durability: u32,
     item_enchant_id: u32,
     item_soulbound: bool,
+    cod: u32,
+    cod_mail_id: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     apply_commit(
@@ -1252,6 +1300,7 @@ pub fn realm_mail_commit(
             body,
             money,
             postage: 0,
+            cod,
         },
         &crate::mail::ItemSnapshot {
             entry: item_entry,
@@ -1260,6 +1309,7 @@ pub fn realm_mail_commit(
             enchant_id: item_enchant_id,
             soulbound: item_soulbound,
         },
+        cod_mail_id,
     )
 }
 
@@ -1429,6 +1479,7 @@ mod tests {
             body: String::new(),
             money,
             postage,
+            cod: 0,
         };
         assert_eq!(letter(0, 30).fenced_copper(), 30);
         assert_eq!(letter(100, 30).fenced_copper(), 130);
@@ -1591,23 +1642,25 @@ mod tests {
                   &mut self, sender_guid: u64, letter: &Letter, item: \
                   &crate::mail::ItemSnapshot, ) -> u64 { crate::mail::insert_mail( self.ctx, \
                   letter.recipient_guid, sender_guid, letter.subject.clone(), \
-                  letter.body.clone(), letter.money, item, ) } fn file_receipt(&mut self, row: \
-                  MailDelivery) { self.ctx.db.game_mail_delivery().insert(row); } fn \
-                  now_micros(&self) -> i64 { self.ctx.timestamp.to_micros_since_unix_epoch() } }",
+                  letter.body.clone(), letter.money, letter.cod, item, ) } fn settle_cod(&mut \
+                  self, mail_id: u64) { crate::mail::clear_mail_cod(self.ctx, mail_id); } fn \
+                  file_receipt(&mut self, row: MailDelivery) { \
+                  self.ctx.db.game_mail_delivery().insert(row); } fn now_micros(&self) -> i64 { \
+                  self.ctx.timestamp.to_micros_since_unix_epoch() } }",
             ),
             (
                 "pub fn realm_mail_fence(",
                 "{ require_operator(ctx)?; apply_fence( &mut CtxDb { ctx }, escrow_id, \
-                  sender_guid, Letter { recipient_guid, subject, body, money, postage, }, \
-                  item_guid, ) }",
+                  sender_guid, Letter { recipient_guid, subject, body, money, postage, cod, }, \
+                  item_guid, mail_id, ) }",
             ),
             (
                 "pub fn realm_mail_commit(",
                 "{ require_operator(ctx)?; apply_commit( &mut CtxDb { ctx }, escrow_id, \
-                  sender_guid, &Letter { recipient_guid, subject, body, money, postage: 0, }, \
-                  &crate::mail::ItemSnapshot { entry: item_entry, stack_count: item_stack_count, \
-                  durability: item_durability, enchant_id: item_enchant_id, soulbound: \
-                  item_soulbound, }, ) }",
+                  sender_guid, &Letter { recipient_guid, subject, body, money, postage: 0, cod, \
+                  }, &crate::mail::ItemSnapshot { entry: item_entry, stack_count: \
+                  item_stack_count, durability: item_durability, enchant_id: item_enchant_id, \
+                  soulbound: item_soulbound, }, cod_mail_id, ) }",
             ),
             (
                 "pub fn realm_mail_take_money_fence(",

@@ -2153,6 +2153,8 @@ pub enum Reducer {
         item_durability: u32,
         item_enchant_id: u32,
         item_soulbound: bool,
+        cod: u32,
+        cod_mail_id: u64,
     },
     RealmMailConfirmDelivery {
         escrow_id: u64,
@@ -2170,6 +2172,8 @@ pub enum Reducer {
         money: u32,
         postage: u32,
         item_guid: u64,
+        cod: u32,
+        mail_id: u64,
     },
     RealmMailItemPayout {
         escrow_id: u64,
@@ -2204,6 +2208,7 @@ pub enum Reducer {
         subject: String,
         body: String,
         money: u32,
+        cod: u32,
         item_guid: u64,
     },
     RealmMailSettle {
@@ -4347,6 +4352,8 @@ impl __sdk::Reducer for Reducer {
                 item_durability,
                 item_enchant_id,
                 item_soulbound,
+                cod,
+                cod_mail_id,
             } => __sats::bsatn::to_vec(&realm_mail_commit_reducer::RealmMailCommitArgs {
                 escrow_id: escrow_id.clone(),
                 sender_guid: sender_guid.clone(),
@@ -4359,6 +4366,8 @@ impl __sdk::Reducer for Reducer {
                 item_durability: item_durability.clone(),
                 item_enchant_id: item_enchant_id.clone(),
                 item_soulbound: item_soulbound.clone(),
+                cod: cod.clone(),
+                cod_mail_id: cod_mail_id.clone(),
             }),
             Reducer::RealmMailConfirmDelivery { escrow_id } => __sats::bsatn::to_vec(
                 &realm_mail_confirm_delivery_reducer::RealmMailConfirmDeliveryArgs {
@@ -4381,6 +4390,8 @@ impl __sdk::Reducer for Reducer {
                 money,
                 postage,
                 item_guid,
+                cod,
+                mail_id,
             } => __sats::bsatn::to_vec(&realm_mail_fence_reducer::RealmMailFenceArgs {
                 escrow_id: escrow_id.clone(),
                 sender_guid: sender_guid.clone(),
@@ -4390,6 +4401,8 @@ impl __sdk::Reducer for Reducer {
                 money: money.clone(),
                 postage: postage.clone(),
                 item_guid: item_guid.clone(),
+                cod: cod.clone(),
+                mail_id: mail_id.clone(),
             }),
             Reducer::RealmMailItemPayout {
                 escrow_id,
@@ -4446,6 +4459,7 @@ impl __sdk::Reducer for Reducer {
                 subject,
                 body,
                 money,
+                cod,
                 item_guid,
             } => __sats::bsatn::to_vec(&realm_mail_send_reducer::RealmMailSendArgs {
                 sender_guid: sender_guid.clone(),
@@ -4453,6 +4467,7 @@ impl __sdk::Reducer for Reducer {
                 subject: subject.clone(),
                 body: body.clone(),
                 money: money.clone(),
+                cod: cod.clone(),
                 item_guid: item_guid.clone(),
             }),
             Reducer::RealmMailSettle { escrow_id } => {

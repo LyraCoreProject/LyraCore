@@ -58,6 +58,64 @@ pub fn total_cost(attached_money: u32) -> u32 {
 /// other gate is answered by the gateway, which is the only party that can see the whole realm.
 pub const NOT_ENOUGH_MONEY: &str = "mail: not enough money for postage";
 
+/// The taker cannot pay the cash-on-delivery price. Its own text, not [`NOT_ENOUGH_MONEY`]'s: the
+/// player is being told about a purchase they can decline, and the item is still in the letter for
+/// them to return instead.
+pub const COD_NOT_AFFORDABLE: &str = "mail: not enough money for the cash on delivery";
+
+/// The cash-on-delivery price a letter is actually sent with.
+///
+/// A price with nothing attached is meaningless — there is nothing to pay for — so it is dropped
+/// rather than refused. The 1.12 client only offers the COD field with an item in the slot, so
+/// reaching this with `false` is a crafted packet, and silently charging nobody is the harmless
+/// answer; a refusal would need a wire error variant vanilla has no text for.
+pub fn cod_at_send(cod: u32, has_attachment: bool) -> u32 {
+    if has_attachment {
+        cod
+    } else {
+        0
+    }
+}
+
+/// **The COD settlement: who is debited, and what the payout carries.** The whole decision surface
+/// of a COD take, as a value — so both planes settle identically and neither has to be running to
+/// test the rule.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CodSettlement {
+    /// The taker. Debited exactly `copper`, in the same transaction that grants them the item.
+    pub payer_guid: u64,
+    /// Whoever wrote the letter. The copper reaches them as a new mail they take from, which is
+    /// what makes COD work across a logout.
+    pub payee_guid: u64,
+    pub copper: u32,
+    /// The payout mail's subject, so the seller can tell which sale paid. vmangos/mangoszero both
+    /// title it this way.
+    pub subject: String,
+}
+
+/// The settlement a take owes, or `None` when it owes nothing.
+///
+/// `None` for a price of 0 (every non-COD mail) and for a letter whose sender is the taker — a
+/// self-addressed mail cannot be sent, but a RETURNED one is briefly addressed back to its writer,
+/// and charging somebody their own COD is the one outcome that would turn a refused purchase into a
+/// tax on the seller.
+pub fn cod_settlement(
+    cod: u32,
+    sender_guid: u64,
+    subject: &str,
+    taker_guid: u64,
+) -> Option<CodSettlement> {
+    if cod == 0 || sender_guid == taker_guid {
+        return None;
+    }
+    Some(CodSettlement {
+        payer_guid: taker_guid,
+        payee_guid: sender_guid,
+        copper: cod,
+        subject: format!("COD Payment: {subject}"),
+    })
+}
+
 /// No character on the realm answers to the typed name.
 pub fn no_recipient_named(name: &str) -> String {
     format!("mail: no character named {name}")
@@ -179,6 +237,34 @@ mod tests {
     fn attached_money_adds_to_the_postage_and_the_total_saturates() {
         assert_eq!(total_cost(100), 130);
         assert_eq!(total_cost(u32::MAX), u32::MAX);
+    }
+
+    /// **The settlement names the payer, the payee and the amount.** The taker pays, the writer of
+    /// the letter is paid, and the copper is exactly the price — a rounding or a fee here is money
+    /// minted or burned between two players.
+    #[test]
+    fn a_cod_take_debits_the_taker_and_pays_the_letters_sender() {
+        let s = cod_settlement(250, 11, "Your sword", 22).expect("a priced letter settles");
+        assert_eq!(s.payer_guid, 22, "the taker pays");
+        assert_eq!(s.payee_guid, 11, "the seller is paid");
+        assert_eq!(s.copper, 250, "exactly the price, no fee either way");
+        assert_eq!(s.subject, "COD Payment: Your sword");
+    }
+
+    /// A letter with no price settles nothing, and neither does one whose sender is the taker —
+    /// which is what stops a returned COD mail charging its writer their own price.
+    #[test]
+    fn a_free_letter_and_a_self_addressed_one_settle_nothing() {
+        assert_eq!(cod_settlement(0, 11, "Your sword", 22), None);
+        assert_eq!(cod_settlement(250, 11, "Your sword", 11), None);
+    }
+
+    /// A price with nothing attached buys nothing, so it is dropped at send rather than left to
+    /// charge the recipient for an empty letter.
+    #[test]
+    fn a_cod_price_needs_an_attachment_to_survive_the_send() {
+        assert_eq!(cod_at_send(250, true), 250);
+        assert_eq!(cod_at_send(250, false), 0);
     }
 
     /// The countdown starts at the full stamp and never goes negative.

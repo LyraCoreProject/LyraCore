@@ -84,6 +84,7 @@ impl Coordinator {
                     enchant_id: e.item_enchant_id,
                     soulbound: e.item_soulbound,
                 },
+                cod: e.cod,
             })
             .collect())
     }

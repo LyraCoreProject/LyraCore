@@ -1575,12 +1575,21 @@ impl Coordinator {
         subject: String,
         body: String,
         money: u32,
+        cod: u32,
         item_guid: u64,
     ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_send",
-            realm_mail_send_then(sender_guid, recipient_guid, subject, body, money, item_guid)
+            realm_mail_send_then(
+                sender_guid,
+                recipient_guid,
+                subject,
+                body,
+                money,
+                cod,
+                item_guid
+            )
         )
     }
 
@@ -1628,6 +1637,8 @@ impl Coordinator {
         money: u32,
         postage: u32,
         item_guid: u64,
+        cod: u32,
+        cod_source_mail_id: u64,
     ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -1640,7 +1651,9 @@ impl Coordinator {
                 body,
                 money,
                 postage,
-                item_guid
+                item_guid,
+                cod,
+                cod_source_mail_id
             )
         )
     }
@@ -1657,6 +1670,8 @@ impl Coordinator {
         body: String,
         money: u32,
         item: crate::world::mail::AttachedItem,
+        cod: u32,
+        cod_source_mail_id: u64,
     ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -1672,7 +1687,9 @@ impl Coordinator {
                 item.stack_count,
                 item.durability,
                 item.enchant_id,
-                item.soulbound
+                item.soulbound,
+                cod,
+                cod_source_mail_id
             )
         )
     }

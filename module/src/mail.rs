@@ -21,8 +21,14 @@
 //! # What is here, and what is not
 //!
 //! Here now: the table and its sweeps, the read path's seeder, mark-read, delete, sending a letter
-//! with copper and ONE item attached, taking either back out, and returning a mail to its sender.
-//! COD is a later slice.
+//! with copper and ONE item attached, taking either back out, returning a mail to its sender, and
+//! cash on delivery.
+//!
+//! **Cash on delivery is two moves, not one.** The price rides the row from send; taking the
+//! ATTACHMENT debits the taker and posts the copper back to whoever wrote the letter. On this plane
+//! all of it is one transaction ([`apply_take_item`]); on a sharded realm the payment is a letter
+//! out of the taker's purse and rides [`crate::mail_escrow`] like any other. Nothing charges for
+//! taking the COPPER out of a mail — a price buys the item.
 //!
 //! **An attachment is a SNAPSHOT, not a row.** At send the sender's `game_item_instance` is deleted
 //! and its state copied into the mail row ([`ItemSnapshot`]); at take a fresh instance is created
@@ -78,7 +84,9 @@ pub struct Mail {
     pub item_durability: u32,
     pub item_enchant_id: u32,
     pub item_soulbound: bool,
-    /// Attached copper, and the cash-on-delivery price the taker owes. Both slices later.
+    /// Attached copper the recipient takes out, and the cash-on-delivery price they owe before the
+    /// ATTACHMENT is handed over. The two move in opposite directions and are independent: a letter
+    /// can carry coin, a price, both or neither.
     pub money: u32,
     pub cod: u32,
     pub was_read: bool,
@@ -126,6 +134,20 @@ pub(crate) struct ItemSnapshot {
 impl ItemSnapshot {
     pub(crate) fn is_empty(&self) -> bool {
         self.entry == 0
+    }
+}
+
+impl Mail {
+    /// The attachment this row is carrying. One projection, so the take path and the fence cannot
+    /// disagree about which columns make up an attachment.
+    pub(crate) fn snapshot(&self) -> ItemSnapshot {
+        ItemSnapshot {
+            entry: self.item_entry,
+            stack_count: self.item_stack_count,
+            durability: self.item_durability,
+            enchant_id: self.item_enchant_id,
+            soulbound: self.item_soulbound,
+        }
     }
 }
 
@@ -233,6 +255,7 @@ pub(crate) fn grant_snapshot(
 
 /// Insert one mail. The shared insert core: whichever plane holds the rows, this is the shape they
 /// take, so a seeded mail and a sent one can never differ in the columns the list read projects.
+#[allow(clippy::too_many_arguments)] // a row's columns, not a call's parameters
 pub(crate) fn insert_mail(
     ctx: &ReducerContext,
     recipient_guid: u64,
@@ -240,6 +263,7 @@ pub(crate) fn insert_mail(
     subject: String,
     body: String,
     money: u32,
+    cod: u32,
     item: &ItemSnapshot,
 ) -> u64 {
     ctx.db
@@ -256,7 +280,7 @@ pub(crate) fn insert_mail(
             item_enchant_id: item.enchant_id,
             item_soulbound: item.soulbound,
             money,
-            cod: 0,
+            cod,
             was_read: false,
             created_at: ctx.timestamp,
         })
@@ -299,6 +323,7 @@ pub fn debug_seed_mail(
         subject,
         body,
         money,
+        0,
         &ItemSnapshot::default(),
     );
     spacetimedb::log::info!(
@@ -308,27 +333,30 @@ pub fn debug_seed_mail(
     Ok(())
 }
 
-/// Take `copper` out of `sender_guid`'s purse, or refuse and take nothing.
+/// Take `copper` out of `payer_guid`'s purse, or refuse and take nothing. `unaffordable` is the
+/// refusal text, because the postage and the cash-on-delivery price are different mistakes to a
+/// player even though they are one debit to this function.
 ///
 /// Reads the LIVE entity (`game_world_entity.money`), the way `trainer::buy` does: the durable
 /// `game_character.money` is a mirror the logout persist writes, so debiting the row instead would
-/// be overwritten by the sender's own session. Through `acting_entity_by_guid`, so a character
+/// be overwritten by the payer's own session. Through `acting_entity_by_guid`, so a character
 /// mid-transfer reads as absent rather than paying out of a purse that is in flight.
 ///
-/// The refusal is the whole "a sender who cannot afford postage is charged nothing" guarantee: it
-/// happens before any write, in the same transaction as the debit that would follow.
-pub(crate) fn charge_postage(
+/// The refusal is the whole "a payer who cannot afford it is charged nothing" guarantee: it happens
+/// before any write, in the same transaction as the debit that would follow.
+pub(crate) fn debit_purse(
     ctx: &ReducerContext,
-    sender_guid: u64,
+    payer_guid: u64,
     copper: u32,
+    unaffordable: &str,
 ) -> Result<(), String> {
-    let mut sender = crate::helpers::acting_entity_by_guid(ctx, sender_guid)
+    let mut payer = crate::helpers::acting_entity_by_guid(ctx, payer_guid)
         .ok_or_else(|| lyracore_shared::mail::NOT_IN_WORLD.to_string())?;
-    if sender.money < copper {
-        return Err(lyracore_shared::mail::NOT_ENOUGH_MONEY.to_string());
+    if payer.money < copper {
+        return Err(unaffordable.to_string());
     }
-    sender.money -= copper;
-    ctx.db.game_world_entity().guid().update(sender);
+    payer.money -= copper;
+    ctx.db.game_world_entity().guid().update(payer);
     Ok(())
 }
 
@@ -351,6 +379,11 @@ pub(crate) fn charge_postage(
 /// `tests::the_single_database_money_paths_never_reach_the_escrow`.
 /// The attachment is snapshotted BEFORE the debit and in the same transaction, so a send refused
 /// for either reason costs the sender neither the coin nor the item.
+///
+/// `cod` is the price the RECIPIENT will owe for the attachment; it costs the sender nothing here
+/// and is not part of the debit. The gateway has already dropped a price with nothing attached
+/// (`lyracore_shared::mail::cod_at_send`).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_send(
     ctx: &ReducerContext,
     sender_guid: u64,
@@ -358,10 +391,16 @@ pub(crate) fn apply_send(
     subject: String,
     body: String,
     money: u32,
+    cod: u32,
     item_guid: u64,
 ) -> Result<(), String> {
     let item = detach_item(ctx, sender_guid, item_guid)?;
-    charge_postage(ctx, sender_guid, lyracore_shared::mail::total_cost(money))?;
+    debit_purse(
+        ctx,
+        sender_guid,
+        lyracore_shared::mail::total_cost(money),
+        lyracore_shared::mail::NOT_ENOUGH_MONEY,
+    )?;
     insert_mail(
         ctx,
         recipient_guid,
@@ -369,6 +408,7 @@ pub(crate) fn apply_send(
         subject,
         body,
         money,
+        cod,
         &item,
     );
     Ok(())
@@ -436,18 +476,11 @@ pub(crate) fn plan_take_item(row: Option<(u64, u32)>, caller_guid: u64) -> TakeI
 /// The named mail's `(recipient_guid, attachment)`. [`mail_money`]'s twin, and the read behind both
 /// item takes, so neither can invent its own idea of who owns a row.
 pub(crate) fn mail_item(ctx: &ReducerContext, mail_id: u64) -> Option<(u64, ItemSnapshot)> {
-    ctx.db.game_mail().id().find(mail_id).map(|m| {
-        (
-            m.recipient_guid,
-            ItemSnapshot {
-                entry: m.item_entry,
-                stack_count: m.item_stack_count,
-                durability: m.item_durability,
-                enchant_id: m.item_enchant_id,
-                soulbound: m.item_soulbound,
-            },
-        )
-    })
+    ctx.db
+        .game_mail()
+        .id()
+        .find(mail_id)
+        .map(|m| (m.recipient_guid, m.snapshot()))
 }
 
 /// Empty a mail of its attachment, leaving the letter readable until the recipient deletes it.
@@ -462,6 +495,19 @@ pub(crate) fn clear_mail_item(ctx: &ReducerContext, mail_id: u64) {
             item_soulbound: false,
             ..row
         });
+    }
+}
+
+/// Mark a mail's cash-on-delivery price as settled — the ONE write that makes "taking a COD mail
+/// twice charges once" true, so it belongs in the same transaction as the payout it settles.
+///
+/// The rejected alternative was a `cod_paid: bool` beside the price: it keeps the number for the
+/// window to render, and the window has nothing left to render once the attachment is gone.
+pub(crate) fn clear_mail_cod(ctx: &ReducerContext, mail_id: u64) {
+    let mails = ctx.db.game_mail();
+    if let Some(mut row) = mails.id().find(mail_id) {
+        row.cod = 0;
+        mails.id().update(row);
     }
 }
 
@@ -504,26 +550,64 @@ pub(crate) fn apply_take_money(
     Ok(())
 }
 
-/// Take a mail's item into the recipient's bags, in ONE transaction. **The single-database plane
-/// only**, for the same reason as [`apply_take_money`].
+/// Take a mail's item into the recipient's bags, paying any cash-on-delivery price for it, in ONE
+/// transaction. **The single-database plane only**, for the same reason as [`apply_take_money`].
 ///
-/// The grant runs BEFORE the clear, and both are one transaction — which is what makes the full-bag
-/// case safe: [`grant_snapshot`]'s `Err` rolls the clear back, so the item stays in the letter
-/// rather than being destroyed by a take that could not land it.
+/// The grant runs BEFORE the clear, and everything here is one transaction — which is what makes
+/// the full-bag case safe: [`grant_snapshot`]'s `Err` rolls the clear AND the debit back, so the
+/// item stays in the letter and the taker keeps their gold.
+///
+/// # Cash on delivery
+///
+/// The debit, the grant and the seller's payout mail are the same transaction, so no partial
+/// outcome exists: nobody gets an item nobody paid for, and nobody pays for one that never arrived.
+/// The debit goes FIRST because it is the refusal a player can act on — a taker who cannot afford
+/// the price is told so with the item untouched, free to return the mail instead. Clearing the
+/// price is what makes a second click charge nothing.
 pub(crate) fn apply_take_item(
     ctx: &ReducerContext,
     recipient_guid: u64,
     mail_id: u64,
 ) -> Result<(), String> {
-    let row = mail_item(ctx, mail_id);
-    match plan_take_item(row.as_ref().map(|(to, i)| (*to, i.entry)), recipient_guid) {
+    let row = ctx.db.game_mail().id().find(mail_id);
+    match plan_take_item(
+        row.as_ref().map(|m| (m.recipient_guid, m.item_entry)),
+        recipient_guid,
+    ) {
         TakeItem::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string()),
         TakeItem::NothingToTake => return Err(lyracore_shared::mail::NOTHING_TO_TAKE.to_string()),
         TakeItem::Take => {}
     }
-    let (_, snapshot) = row.expect("Take is only reachable with a row");
-    grant_snapshot(ctx, recipient_guid, &snapshot)?;
+    let row = row.expect("Take is only reachable with a row");
+    let settlement = lyracore_shared::mail::cod_settlement(
+        row.cod,
+        row.sender_guid,
+        &row.subject,
+        row.recipient_guid,
+    );
+    if let Some(s) = &settlement {
+        debit_purse(
+            ctx,
+            s.payer_guid,
+            s.copper,
+            lyracore_shared::mail::COD_NOT_AFFORDABLE,
+        )?;
+    }
+    grant_snapshot(ctx, recipient_guid, &row.snapshot())?;
     clear_mail_item(ctx, mail_id);
+    if let Some(s) = settlement {
+        clear_mail_cod(ctx, mail_id);
+        insert_mail(
+            ctx,
+            s.payee_guid,
+            s.payer_guid,
+            s.subject,
+            String::new(),
+            s.copper,
+            0,
+            &ItemSnapshot::default(),
+        );
+    }
     Ok(())
 }
 
@@ -596,8 +680,10 @@ pub(crate) fn plan_return(recipient_guid: Option<u64>, caller_guid: u64) -> Retu
 /// those already cleared the attachment/money columns before this ever runs. `was_read` resets —
 /// the letter is new mail to the original sender.
 ///
-/// COD has no send path yet (`cod` is always 0 today); a genuine returned COD mail needs its own
-/// rule once COD exists, not this one.
+/// **The price does NOT travel.** A returned COD mail is addressed back to the character who set
+/// the price, so carrying it would charge them their own asking price to get their own item back —
+/// and pay it to the buyer who declined. Vanilla clears it here too. Declining a purchase must cost
+/// the seller the sale and nothing else.
 pub(crate) fn apply_return(
     ctx: &ReducerContext,
     recipient_guid: u64,
@@ -614,6 +700,7 @@ pub(crate) fn apply_return(
         recipient_guid: row.sender_guid,
         sender_guid: recipient_guid,
         was_read: false,
+        cod: 0,
         ..row
     });
     Ok(())
@@ -658,6 +745,7 @@ pub fn realm_mail_mark_read(
 /// A sharded realm calls [`crate::mail_escrow::realm_mail_fence`] and friends instead; the postage
 /// rides that fence, which is why no separate postage reducer exists any more.
 #[reducer]
+#[allow(clippy::too_many_arguments)] // a reducer's arguments are the wire
 pub fn realm_mail_send(
     ctx: &ReducerContext,
     sender_guid: u64,
@@ -665,6 +753,7 @@ pub fn realm_mail_send(
     subject: String,
     body: String,
     money: u32,
+    cod: u32,
     item_guid: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -675,6 +764,7 @@ pub fn realm_mail_send(
         subject,
         body,
         money,
+        cod,
         item_guid,
     )
 }
@@ -852,6 +942,7 @@ mod tests {
                 body: String::new(),
                 money,
                 postage: lyracore_shared::mail::postage(),
+                cod: 0,
             };
             assert_eq!(
                 lyracore_shared::mail::total_cost(money),
@@ -919,6 +1010,24 @@ mod tests {
                  was:\n{body}"
             );
         }
+    }
+
+    /// **A returned COD mail must not charge its own writer.** The return re-addresses the row to
+    /// the character who SET the price, so a price that travelled would bill the seller their own
+    /// asking price to get their own item back — and pay it to the buyer who declined.
+    ///
+    /// A source scan because the body needs a `ReducerContext` to execute, and because the fact is
+    /// one field in an update literal: exactly the line a later edit deletes as redundant.
+    #[test]
+    fn a_returned_mail_carries_no_cash_on_delivery_price() {
+        let body = code_of(include_str!("mail.rs"), "pub(crate) fn apply_return(");
+        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            normalized.contains("cod: 0,"),
+            "`apply_return` no longer zeroes the COD price. Returning a priced mail sends it back \
+             to whoever set the price, so a price that survives is charged to the seller and paid \
+             to the buyer who refused it. Body was:\n{body}"
+        );
     }
 
     // ---- `realm_mail_mark_read` / `realm_mail_delete`'s operator gate ----
