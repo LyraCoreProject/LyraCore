@@ -102,6 +102,24 @@ pub(crate) fn on_comment_line(content: &str, byte_idx: usize) -> bool {
     content[line_start..byte_idx].trim_start().starts_with("//")
 }
 
+/// `byte_idx` sits inside an ordinary double-quoted string literal on its line. Source scanners
+/// must not treat assertion needles as live table reads.
+fn in_string_literal(content: &str, byte_idx: usize) -> bool {
+    let line_start = content[..byte_idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let bytes = content[line_start..byte_idx].as_bytes();
+    let mut in_string = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' if in_string => i += 1,
+            b'"' => in_string = !in_string,
+            _ => {}
+        }
+        i += 1;
+    }
+    in_string
+}
+
 /// 1-based line number of `byte_idx`.
 pub(crate) fn line_of(content: &str, byte_idx: usize) -> usize {
     content[..byte_idx].matches('\n').count() + 1
@@ -148,7 +166,7 @@ pub(crate) fn raw_table_reads(
     for accessor in accessors {
         let call = format!("{accessor}()");
         for (idx, _) in content.match_indices(&call) {
-            if on_comment_line(content, idx) {
+            if on_comment_line(content, idx) || in_string_literal(content, idx) {
                 continue;
             }
             if opens(content, idx + call.len()) {
@@ -157,7 +175,7 @@ pub(crate) fn raw_table_reads(
         }
         let bind = format!("ctx.db.{accessor}();");
         for (idx, _) in content.match_indices(&bind) {
-            if on_comment_line(content, idx) {
+            if on_comment_line(content, idx) || in_string_literal(content, idx) {
                 continue;
             }
             // Walk back over `let [mut] NAME =` on the same line to name the handle.
@@ -182,7 +200,10 @@ pub(crate) fn raw_table_reads(
     }
     for (name, accessor) in &handles {
         for (idx, _) in content.match_indices(name.as_str()) {
-            if on_comment_line(content, idx) || !is_standalone_ident(content, idx, name) {
+            if on_comment_line(content, idx)
+                || in_string_literal(content, idx)
+                || !is_standalone_ident(content, idx, name)
+            {
                 continue;
             }
             if opens(content, idx + name.len()) {
@@ -352,6 +373,20 @@ mod tests {
         assert!(
             !code.contains("this IS a comment"),
             "the real trailing comment on the next line must still be stripped. Got:\n{code}"
+        );
+    }
+
+    #[test]
+    fn raw_table_reads_ignores_a_table_scan_named_inside_a_string_literal() {
+        let src = r#"fn f() {
+    assert!(!tick.contains("game_world_entity().iter()"));
+}"#;
+        let found = raw_table_reads(src, &["game_world_entity"], |content, byte_idx| {
+            content[byte_idx..].starts_with(".iter()")
+        });
+        assert!(
+            found.is_empty(),
+            "an assertion's forbidden-pattern needle is not a live table read: {found:?}"
         );
     }
 
