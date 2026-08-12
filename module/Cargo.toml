@@ -21,6 +21,7 @@ crate-type = ["cdylib", "rlib"]
 debug_reducers = []
 
 [dependencies]
+blake3 = "1"
 # `unstable` enables row-level-security visibility filters (client_visibility_filter / Filter),
 # which the design uses to pin per-owner tables (character, movement_event) to their owner.
 # Pinned exactly (not "2.5") — the SpacetimeDB CLI/SDK/module-crate contract is a single unit (see

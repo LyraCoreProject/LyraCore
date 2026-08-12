@@ -54,8 +54,8 @@ publish presents as an unrelated mid-session hang, not a loud "no such table".
 
 ## 2. Inventory
 
-**159 tables** — 150 of them in `module/src/**`, the remaining 9 contributed by extension packages
-compiled into the same module. **103 public, 56 private.**
+**161 tables** — 152 of them in `module/src/**`, the remaining 9 contributed by extension packages
+compiled into the same module. **103 public, 58 private.**
 
 | Domain | Tables | Public | Where |
 |---|---:|---:|---|
@@ -78,6 +78,7 @@ compiled into the same module. **103 public, 56 private.**
 | Realm-core | 2 | 0 | `realm_core.rs` |
 | Config / static data / diagnostics | 20 | 19 | `config.rs`, `gm.rs`, `faction.rs`, `skilldata.rs`, `stats.rs`, `action_bar.rs`, `import_meta.rs`, `debug.rs` |
 | GC | 1 | 0 | `gc.rs` |
+| Exact vmap generations | 2 | 0 | `vmap.rs` |
 | Extension packages | 9 | 2 | compiled into the module; maintained outside this repository |
 
 Two shapes recur and are worth naming:

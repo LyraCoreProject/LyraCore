@@ -1390,7 +1390,7 @@ pub(crate) fn blink_forward(ctx: &ReducerContext, caster_guid: u64, dist_yd: f32
     let Some(caster) = entities.guid().find(caster_guid) else {
         return;
     };
-    if crate::vmap::vmap_enabled(ctx) {
+    if crate::vmap::vmap_enabled(ctx, caster.map_id) {
         let (fx, fy) = blink_dest(caster.x, caster.y, caster.orientation, dist_yd);
         let a = [caster.x, caster.y, caster.z];
         let b = [fx, fy, caster.z];

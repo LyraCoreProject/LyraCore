@@ -766,6 +766,16 @@ pub(crate) fn load_meshes(
     Ok(meshes)
 }
 
+/// Load one collision mesh for the streaming vmap importer. Keeping this small interface avoids
+/// retaining every unique model of a production-sized selection at once.
+pub(crate) fn load_mesh(chain: &mut PatchChain, placement: &Placement) -> Result<Mesh> {
+    if placement.is_wmo {
+        Ok(Mesh::Wmo(wmo_tris(chain, &placement.name)?))
+    } else {
+        Ok(Mesh::M2(m2_tris(chain, &placement.name)))
+    }
+}
+
 /// Pass 3: calibrate the rotation convention against MODF bounds (WMOs only), capped sample.
 pub(crate) fn calibrate_from_placements(
     chain: &mut PatchChain,

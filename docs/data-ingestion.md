@@ -11,6 +11,10 @@ implementation-status statements are not — this began life as a planning docum
 > and the schema decisions remains exactly the design that was implemented. See
 > [`danger-zones.md`](./danger-zones.md) §2 for the traps a content import can spring.
 
+Exact collision geometry has an additional shard-ownership and live-acceptance contract: see
+[`vmap-rollout.md`](./vmap-rollout.md). Its importer preflight admits map 0 only on shards that own
+both its terrain and nav data; importing never enables collision consumption.
+
 How real vanilla 1.12.1 content reaches the SpacetimeDB backend. Captured from the 2026-06-17
 data-research pass so the implementation carries the reasoning, not just the conclusion.
 

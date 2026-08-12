@@ -77,11 +77,11 @@ mod ct {
                                    // both are now confirmed, along with every other const here.
     pub const PICKPOCKET_LOOT_ID: usize = 57; // → pickpocketing_loot_template.entry (0 = no table)
     pub const SKIN_LOOT_ID: usize = 58; // → skinning_loot_template.entry (0 = no table)
-    // Trainer service block: TrainerType, TrainerSpell, TrainerClass, TrainerRace, TrainerTemplateId
-    // run 71..75, bracketed by the verified `SKIN_LOOT_ID` and `GOSSIP_MENU_ID` anchors. Enumerated
-    // from the pinned dump's own CREATE TABLE — mangos-classic master has since gained
-    // DisplayIdProbability1-4 and five stat multipliers, so its order is 4 columns out here and 9 at
-    // `LootId`. TrainerSpell/TrainerRace/TrainerTemplateId are not ingested: no consumer.
+                                        // Trainer service block: TrainerType, TrainerSpell, TrainerClass, TrainerRace, TrainerTemplateId
+                                        // run 71..75, bracketed by the verified `SKIN_LOOT_ID` and `GOSSIP_MENU_ID` anchors. Enumerated
+                                        // from the pinned dump's own CREATE TABLE — mangos-classic master has since gained
+                                        // DisplayIdProbability1-4 and five stat multipliers, so its order is 4 columns out here and 9 at
+                                        // `LootId`. TrainerSpell/TrainerRace/TrainerTemplateId are not ingested: no consumer.
     pub const TRAINER_TYPE: usize = 71; // cmangos enum: CLASS 0 · MOUNTS 1 · TRADESKILLS 2 · PETS 3
     pub const TRAINER_CLASS: usize = 73; // class ID (1..11), NOT a mask; 0 = serves every class
     pub const GOSSIP_MENU_ID: usize = 77; // creature_template.GossipMenuId
@@ -915,6 +915,7 @@ pub(crate) struct Args {
     pub(crate) dump_collision: Option<String>, // client Data/ dir: 240 spike, WMO/M2 collision dry-run (see collision.rs)
     pub(crate) nav: Option<String>, // client Data/ dir: 241 nav-grid rasterizer (see nav.rs)
     pub(crate) vmap: Option<String>, // client Data/ dir: #520/#521 exact vmap triangle extract+pack+import (see vmap.rs)
+    pub(crate) vmap_status: bool, // print active-generation provenance/status without opening client data
     pack_client: Option<String>, // client Data/ dir for the --pack-client packager (see pack_client.rs)
     print_extents: bool, // with --dump: print the operator's own spawn bbox for --map and exit (work-item 206)
     spells: bool, // with --dbc: import Spell.dbc → game_spell/game_spell_effect (see spell.rs)
@@ -963,6 +964,7 @@ fn parse_args() -> Result<Args> {
         dump_collision: None,
         nav: None,
         vmap: None,
+        vmap_status: false,
         terrain: None,
         print_extents: false,
         spells: false,
@@ -997,6 +999,7 @@ fn parse_args() -> Result<Args> {
             }
             "--nav" => a.nav = Some(it.next().context("--nav needs the client Data/ dir")?),
             "--vmap" => a.vmap = Some(it.next().context("--vmap needs the client Data/ dir")?),
+            "--vmap-status" => a.vmap_status = true,
             "--dbc" => a.dbc = Some(it.next().context("--dbc needs the client Data/ dir")?),
             "--pack-client" => {
                 a.pack_client = Some(
@@ -1166,6 +1169,7 @@ fn parse_args() -> Result<Args> {
         && a.dump_collision.is_none()
         && a.nav.is_none()
         && a.vmap.is_none()
+        && !a.vmap_status
     {
         bail!("need an input: --dump <classic-db .sql[.gz]>, --dbc <client Data/ dir>, --terrain <client Data/ dir>, or --pack-client <client Data/ dir>");
     }
@@ -1224,8 +1228,16 @@ fn parse_args() -> Result<Args> {
 /// One `spacetime call` as the CLI identity (the module owner after a local publish) — the shared
 /// path for every reducer-based loader (spawns, gameobjects, terrain).
 pub(crate) fn call_reducer(args: &Args, reducer: &str, payload: &str) -> Result<()> {
-    let out = Command::new("spacetime")
-        .args(["call", "-s", &args.server, &args.db, reducer, payload])
+    call_reducer_args(args, reducer, &[payload])
+}
+
+/// Reducer call with separate positional arguments (generation lifecycle reducers carry both
+/// immutable manifest metadata and a packed batch).
+pub(crate) fn call_reducer_args(args: &Args, reducer: &str, values: &[&str]) -> Result<()> {
+    let mut command = Command::new("spacetime");
+    command.args(["call", "-s", &args.server, &args.db, reducer]);
+    command.args(values);
+    let out = command
         .output()
         .with_context(|| format!("run spacetime call {reducer}"))?;
     if !out.status.success() {
@@ -4573,7 +4585,7 @@ fn main() -> Result<()> {
     }
 
     // `--vmap` → the #520/#521 exact vmap triangle extract + pack + import (see vmap.rs).
-    if args.vmap.is_some() {
+    if args.vmap.is_some() || args.vmap_status {
         return vmap::run(&args);
     }
 
@@ -5636,7 +5648,8 @@ mod tests {
         // mangos type 12 = CONDITION_ACTIVE_GAME_EVENT, the one condition that fails CLOSED.
         let entry = 322u64;
         let menu_id = 922u64;
-        let option = format!("({menu_id},0,0,'What is Children'' Week?',1,0,0,0,0,0,'NULL',12,0,0)");
+        let option =
+            format!("({menu_id},0,0,'What is Children'' Week?',1,0,0,0,0,0,'NULL',12,0,0)");
         let dump = format!(
             "x INSERT INTO `creature_template` VALUES {}; \
              INSERT INTO `gossip_menu_option` VALUES {option}; y",
@@ -6030,7 +6043,10 @@ mod tests {
         let trailing: std::collections::HashMap<&str, (&str, &str)> = values
             .split("),(")
             .map(|t| {
-                let t = t.trim_start_matches('(').trim_end_matches(';').trim_end_matches(')');
+                let t = t
+                    .trim_start_matches('(')
+                    .trim_end_matches(';')
+                    .trim_end_matches(')');
                 let f: Vec<&str> = t.split(',').collect();
                 (f[0], (f[f.len() - 2], f[f.len() - 1]))
             })
@@ -6222,6 +6238,7 @@ mod tests {
             dump_collision: None,
             nav: None,
             vmap: None,
+            vmap_status: false,
             print_extents: false,
             spells: false,
             talents: false,
