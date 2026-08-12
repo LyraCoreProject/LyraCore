@@ -672,6 +672,10 @@ parity_test!(parity_game_player_reputation, "game_player_reputation", lyracore_m
 parity_test!(parity_game_character_contact, "game_character_contact", lyracore_module::ContactEntry, bindings::contact_entry_type::ContactEntry, {
     id, owner_guid, owner_identity, target_guid, is_ignore,
 });
+parity_test!(parity_game_mail, "game_mail", lyracore_module::Mail, bindings::mail_type::Mail, {
+    id, recipient_guid, sender_guid, subject, body, item_entry, item_stack_count, item_durability,
+    item_enchant_id, item_soulbound, money, cod, was_read, created_at,
+});
 parity_test!(parity_game_faction, "game_faction", lyracore_module::Faction, bindings::faction_type::Faction, {
     faction_id, reputation_index, base_standing,
 });
@@ -771,6 +775,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_aura",
     "game_player_reputation",
     "game_character_contact",
+    "game_mail",
     "game_faction",
     "game_faction_template",
 ];

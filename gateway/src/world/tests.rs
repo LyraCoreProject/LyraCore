@@ -18,6 +18,11 @@ mod whisper_tests;
 #[path = "loot_tests.rs"]
 mod loot_tests;
 
+/// The mailbox read-path routing tests. A sibling of the modules above for the same reason — it
+/// reaches `InMemoryStore` (and `party_tests`' fixture characters) without widening anything.
+#[path = "mail_tests.rs"]
+mod mail_tests;
+
 /// The inbound FRAMING boundary — malformed, truncated, oversized and unsupported packets
 /// driven as raw bytes over a real cipher. A sibling of the modules above for the same reason (it
 /// reaches `InMemoryStore` and `client_handshake`), kept separate because it is the only file here
@@ -415,6 +420,14 @@ struct InMemoryStore {
     /// When set, `contact_lists` fails with this message on THIS shard — the
     /// unreachable-database arm of the realm-wide ignore-list union.
     contact_lists_error: Option<String>,
+    /// The mail rows on THIS database, as `(recipient_guid, row)`. The realm handle owns them on a
+    /// sharded gateway and a world shard's staying empty is how a test tells "the mailbox read went
+    /// to the authority" from "it quietly went back to being shard-local"; on a single-database
+    /// gateway the one handle owns them instead. Same fixture either way — that is the point.
+    mails: std::sync::Mutex<Vec<(u64, codec::MailView)>>,
+    /// Gameobject guids that ARE a mailbox within reach on this shard. Empty (derive-Default)
+    /// refuses every mailbox, which is the wrong-map / out-of-range / not-a-mailbox arm.
+    mailboxes: Vec<u64>,
     /// When set, `realm_group_op(ACCEPT, …)` fails with this message. INJECTED because a real
     /// one cannot be staged synchronously: every accept-time refusal the module has (already grouped,
     /// party full, the inviter no longer leads) needs the party to change BETWEEN the invite and the
@@ -977,6 +990,21 @@ impl WorldStore for InMemoryStore {
     }
     fn npc_refuses_interaction(&self, _npc_guid: u64, _player_guid: u64) -> Result<bool> {
         Ok(self.npc_refuses) // default false — every existing fixture NPC keeps interacting
+    }
+    fn mail_list(&self, recipient_guid: u64) -> Result<Vec<codec::MailView>> {
+        self.rec("mail_list");
+        Ok(self
+            .mails
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(to, _)| *to == recipient_guid)
+            .map(|(_, m)| m.clone())
+            .collect())
+    }
+    fn mailbox_in_range(&self, mailbox_guid: u64, _player_guid: u64) -> Result<bool> {
+        self.rec("mailbox_in_range");
+        Ok(self.mailboxes.contains(&mailbox_guid))
     }
     fn trainer_serves(&self, _player_guid: u64, _trainer_guid: u64) -> Result<bool> {
         Ok(!self.trainer_refuses_class) // default true — every existing fixture trainer serves
