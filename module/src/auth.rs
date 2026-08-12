@@ -903,6 +903,7 @@ pub fn create_character(
         rested_since_micros: 0, // 196: live-accrual clock idle
         pending_godmode: false, // 289: GM playtest carry — off until `.god` + a map change
         pending_run_speed_mult_bp: crate::world::RUN_SPEED_BP_1X, // 289: 1× until `.speed` + a map change
+        bank_bag_slots: 0,                                        // none bought yet
     };
 
     // `try_insert` rather than `insert`: if a same-name character was created between the find()

@@ -234,7 +234,9 @@ include!(concat!(env!("OUT_DIR"), "/package_registries.rs"));
 mod action_bar;
 mod actor;
 mod auth;
+mod breath_relay;
 mod bridge;
+mod breath;
 mod character;
 mod chat;
 mod combat;
@@ -301,6 +303,7 @@ pub mod terrain;
 #[cfg(test)]
 mod test_scan;
 mod threat;
+mod trade;
 mod trainer;
 mod transfer;
 /// Exact per-cell vmap collision-triangle store + LoS/collision ray queries (issue #521, part of
@@ -318,6 +321,8 @@ mod xp;
 
 pub use action_bar::*;
 pub use auth::*;
+pub use breath::*;
+pub use breath_relay::BreathRelayEvent; // gateway schema-parity relay (#141)
 pub use bridge::*;
 pub use character::*;
 pub use chat::*;
@@ -353,6 +358,7 @@ pub use spell::*;
 pub use stats::*;
 pub use talent::*;
 pub use threat::*;
+pub use trade::*;
 pub use trainer::*;
 pub use transfer::TransferOut; // re-exported for the gateway schema-parity test (#19)
 pub use world::*;

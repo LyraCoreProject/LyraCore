@@ -187,11 +187,13 @@ separate, resolvable convention and are unaffected by this.
 ## 3. Deploy + verify procedure (use exactly this)
 
 `lyracore dev up` is the one deliberate exception to the production topology below: it is a
-**single-database** contributor fixture, and it publishes only `lyracore`. It explicitly unsets the
-inherited topology variables (`LYRACORE_SHARD_MAP`, `LYRACORE_SHARD_MAP_FILE`, `LYRACORE_REALM_CORE`)
-for the gateway it launches, so having the recipe below exported in your
-shell cannot turn the fixture into a four-database gateway pointed at databases it never published.
-It also never adopts or stops a SpacetimeDB node it did not start.
+contributor fixture on a loopback node, four databases since #108 (`lyracore`, `lyracore-kalimdor`,
+`lyracore-instances`, `lyracore-realm`) and one under `dev up --single`. It **owns** the topology
+variables rather than inheriting them — `LYRACORE_SHARD_MAP`, `LYRACORE_SHARD_MAP_FILE` and
+`LYRACORE_REALM_CORE` are set to the fixture's own values in the sharded mode and actively unset in
+`--single` — so having the recipe below exported in your shell cannot turn the fixture into a
+gateway pointed at databases it never published. It also never adopts or stops a SpacetimeDB node it
+did not start.
 
 Its listeners are loopback-only unless you ask otherwise: `lyracore dev up --lan <private IP>`
 moves **the logon and world listeners alone** to that address (and makes the realm list advertise
@@ -199,9 +201,11 @@ it, via `LYRACORE_REALM_ADDRESS`) so a client on your LAN can connect. Spacetime
 `127.0.0.1:3000` in every mode, and only RFC1918 addresses are accepted — `0.0.0.0` and public
 addresses are refused rather than bound.
 
-**Do not use it to launch or repair a production/sharded realm** — it has no notion of the other
-three databases, so it would leave them un-republished after a schema change, which is exactly the
-partial-publish failure §1.2 warns about. The multi-database recipe below stays authoritative there.
+**Do not use it to launch or repair a production/sharded realm** — its database list is the
+fixture's, not production's (`lyracore-kalimdor` where production has `lyracore-world-1` and every
+world shard after it), so it would leave those un-republished after a schema change, which is exactly
+the partial-publish failure §1.2 warns about. The multi-database recipe below stays authoritative
+there.
 
 ```bash
 cd <repo-root>

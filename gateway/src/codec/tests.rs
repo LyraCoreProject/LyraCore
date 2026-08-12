@@ -5,7 +5,9 @@
 use super::*;
 // Only the loot byte-match test needs gtker's typed loot response (the runtime path is raw).
 use wow_world_messages::vanilla::ServerMessage;
-use wow_world_messages::vanilla::{SMSG_LOOT_RESPONSE_LootMethod, SMSG_LOOT_RESPONSE};
+use wow_world_messages::vanilla::{
+    EnvironmentalDamageType, SMSG_LOOT_RESPONSE_LootMethod, SMSG_LOOT_RESPONSE, TimerType,
+};
 // Group loot methods: the vote-kind byte constants + wire RollVote enum.
 use lyracore_shared::loot_roll::vote_kind;
 use wow_world_messages::vanilla::RollVote;
@@ -753,6 +755,46 @@ fn attack_start_carries_attacker_and_victim() {
 }
 
 #[test]
+fn breath_mirror_timer_edges_roundtrip_on_the_vanilla_wire() {
+    let start = build_breath_timer_start(57_000, 60_000);
+    let mut start_bytes = Vec::new();
+    start.write_unencrypted_server(&mut start_bytes).unwrap();
+    match ServerOpcodeMessage::read_unencrypted(&mut start_bytes.as_slice()).unwrap() {
+        ServerOpcodeMessage::SMSG_START_MIRROR_TIMER(msg) => {
+            assert_eq!(msg.timer, TimerType::Breath);
+            assert_eq!(msg.time_remaining, 57_000);
+            assert_eq!(msg.duration, 60_000);
+            assert_eq!(msg.scale, u32::MAX, "wire bits for signed -1 drain scale");
+            assert!(!msg.is_frozen);
+        }
+        other => panic!("expected SMSG_START_MIRROR_TIMER, got {other}"),
+    }
+
+    let stop = build_breath_timer_stop();
+    let mut stop_bytes = Vec::new();
+    stop.write_unencrypted_server(&mut stop_bytes).unwrap();
+    match ServerOpcodeMessage::read_unencrypted(&mut stop_bytes.as_slice()).unwrap() {
+        ServerOpcodeMessage::SMSG_STOP_MIRROR_TIMER(msg) => assert_eq!(msg.timer, TimerType::Breath),
+        other => panic!("expected SMSG_STOP_MIRROR_TIMER, got {other}"),
+    }
+}
+
+#[test]
+fn drowning_damage_log_roundtrips_with_the_actual_damage() {
+    let msg = build_drowning_damage_log(0xF00D, 19);
+    let mut bytes = Vec::new();
+    msg.write_unencrypted_server(&mut bytes).unwrap();
+    match ServerOpcodeMessage::read_unencrypted(&mut bytes.as_slice()).unwrap() {
+        ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(log) => {
+            assert_eq!(log.guid.guid(), 0xF00D);
+            assert_eq!(log.damage_type, EnvironmentalDamageType::Drowning);
+            assert_eq!(log.damage, 19);
+        }
+        other => panic!("expected SMSG_ENVIRONMENTAL_DAMAGE_LOG, got {other}"),
+    }
+}
+
+#[test]
 fn attacker_state_update_is_one_physical_normal_swing() {
     let player = 1u64;
     let chicken = (0xF130u64 << 48) | (620u64 << 24) | 1;
@@ -1481,6 +1523,38 @@ fn item_query_response_bop_template_carries_bonding_pickup() {
     }
 }
 
+/// Sheathe posture is a RAW passthrough, not a remap: a shield's dump byte (Dented Buckler,
+/// entry 1166, `sheath=4`) must reach the wire as 4. gtker names that variant `LargeWeaponRight`,
+/// which is why the assertion pins `as_int()` too — the name is noise, the byte is the contract.
+/// Pairs with the entry-25 (`sheath=3`) leg in `item_query_response_maps_worn_shortsword_and_serializes`.
+#[test]
+fn item_query_response_shield_carries_its_own_sheathe_byte() {
+    let t = ItemTemplateView {
+        entry: 1166,
+        class: 4,           // Armor
+        subclass: 6,        // Shield
+        inventory_type: 14, // Shield
+        sheath: 4,          // the REAL dump value for entry 1166
+        name: "Dented Buckler".to_string(),
+        ..worn_shortsword()
+    };
+    let msg = build_item_query_response(t.entry, Some(&t));
+    let mut buf = Vec::new();
+    msg.write_unencrypted_server(&mut buf).unwrap();
+    match ServerOpcodeMessage::read_unencrypted(&mut buf.as_slice()).unwrap() {
+        ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(m) => {
+            let found = m.found.expect("Dented Buckler must be found");
+            assert_eq!(
+                found.sheathe_type.as_int(),
+                4,
+                "shield sheath byte must ride through unremapped"
+            );
+            assert_eq!(found.sheathe_type, SheatheType::LargeWeaponRight);
+        }
+        other => panic!("expected SMSG_ITEM_QUERY_SINGLE_RESPONSE, got {other}"),
+    }
+}
+
 /// The default (unbound) template — every item that predates these columns — must still carry
 /// `bonding=0` (NoBind), baseline-safe: an unbound item's tooltip renders no binding line.
 #[test]
@@ -1751,6 +1825,44 @@ fn skill_block_reads_learned_rows_override_and_append() {
             );
         }
         other => panic!("expected a Player CreateObject2, got {other:?}"),
+    }
+}
+
+#[test]
+fn create_object_carries_the_sheath_state_for_player_and_creature() {
+    // #101: the CREATE is how a peer entering AOI range learns a unit's sheath state. Omit
+    // UNIT_FIELD_BYTES_2 and everyone who walks up to a player with a drawn sword sees them
+    // empty-handed until the next toggle. Byte 0 is the state; bytes 1-3 ride along untouched.
+    let mut e = warrior_entity();
+    e.unit_bytes_2 = 0xAB_CD_EF_01; // MELEE in byte 0, neighbours occupied
+    let msg = build_create_object(&e, CreateKind::SelfPlayer, &[], &[]).unwrap();
+    match &msg.objects[0] {
+        Object::CreateObject2 {
+            mask2: UpdateMask::Player(p),
+            ..
+        } => assert_eq!(
+            p.unit_bytes_2(),
+            Some((0x01, 0xEF, 0xCD, 0xAB)),
+            "player CREATE must carry UNIT_FIELD_BYTES_2 with the sheath state in byte 0"
+        ),
+        other => panic!("expected a Player CreateObject2, got {other:?}"),
+    }
+
+    // Same field on the Unit branch — a creature draws its weapon on engage too.
+    let mut c = warrior_entity();
+    c.type_mask = lyracore_shared::constants::type_mask::CREATURE;
+    c.unit_bytes_2 = 1;
+    let msg = build_create_object(&c, CreateKind::Peer, &[], &[]).unwrap();
+    match &msg.objects[0] {
+        Object::CreateObject2 {
+            mask2: UpdateMask::Unit(u),
+            ..
+        } => assert_eq!(
+            u.unit_bytes_2(),
+            Some((1, 0, 0, 0)),
+            "creature CREATE must carry the sheath state too"
+        ),
+        other => panic!("expected a Unit CreateObject2, got {other:?}"),
     }
 }
 
@@ -2510,8 +2622,14 @@ fn aura_duration_carries_the_slot_and_remaining_window() {
 fn login_sequence_dedupes_known_spells_and_builds_the_action_bar() {
     // ATTACK_SPELL (6603) is always granted first; a duplicate of it (and of a learned id) must not
     // appear twice in either the spellbook or the action bar.
-    let msgs =
-        login_sequence_messages(&warrior_entity(), &[6603, 100, 100, 200], &[], &[]).unwrap();
+    let msgs = login_sequence_messages(
+        &warrior_entity(),
+        &[6603, 100, 100, 200],
+        &[],
+        &[],
+        WorldEntry::FreshLogin,
+    )
+    .unwrap();
     let spells = msgs
         .iter()
         .find_map(|m| match m {
@@ -2541,12 +2659,48 @@ fn login_sequence_dedupes_known_spells_and_builds_the_action_bar() {
 }
 
 #[test]
+fn login_sequence_sends_verify_world_at_fresh_login_only() {
+    // A fresh login starts with SMSG_LOGIN_VERIFY_WORLD; a world-port re-entry must not carry it
+    // (a resend commands a second map load). Everything else is identical.
+    let fresh =
+        login_sequence_messages(&warrior_entity(), &[], &[], &[], WorldEntry::FreshLogin).unwrap();
+    assert!(
+        matches!(
+            fresh.first(),
+            Some(ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(_))
+        ),
+        "a fresh login's sequence must START with SMSG_LOGIN_VERIFY_WORLD"
+    );
+
+    let port =
+        login_sequence_messages(&warrior_entity(), &[], &[], &[], WorldEntry::WorldPort).unwrap();
+    assert!(
+        !port
+            .iter()
+            .any(|m| matches!(m, ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(_))),
+        "a world-port re-entry must never resend SMSG_LOGIN_VERIFY_WORLD"
+    );
+    assert_eq!(
+        port.len(),
+        fresh.len() - 1,
+        "the ONLY difference between the two sequences is the dropped verify-world"
+    );
+}
+
+#[test]
 fn login_sequence_caps_the_action_bar_at_120_slots_but_not_the_spellbook() {
     // 130 distinct learned spells (+ the always-granted ATTACK_SPELL) push the known-spell count past
     // the fixed 120-slot action bar array; SMSG_INITIAL_SPELLS must still list every one of them, while
     // SMSG_ACTION_BUTTONS truncates to the first 120 (no out-of-bounds write into the fixed array).
     let learned: Vec<u32> = (1000..1130).collect(); // 130 unique ids
-    let msgs = login_sequence_messages(&warrior_entity(), &learned, &[], &[]).unwrap();
+    let msgs = login_sequence_messages(
+        &warrior_entity(),
+        &learned,
+        &[],
+        &[],
+        WorldEntry::FreshLogin,
+    )
+    .unwrap();
     let spells = msgs
         .iter()
         .find_map(|m| match m {
@@ -2585,7 +2739,8 @@ fn login_sequence_folds_reputation_by_index_and_ignores_out_of_range_slots() {
     // SET_FACTION_STANDING relay uses (0..63); an index >= 64 has no slot and must be dropped
     // silently rather than panicking (a corrupt/import-drifted row must never crash login).
     let reps = [(5, 100, false), (63, -250, true), (64, 999, false)];
-    let msgs = login_sequence_messages(&warrior_entity(), &[], &reps, &[]).unwrap();
+    let msgs = login_sequence_messages(&warrior_entity(), &[], &reps, &[], WorldEntry::FreshLogin)
+        .unwrap();
     let factions = msgs
         .iter()
         .find_map(|m| match m {
@@ -2635,7 +2790,14 @@ fn login_sequence_folds_reputation_by_index_and_ignores_out_of_range_slots() {
 /// fallback branch it must leave alone).
 #[test]
 fn login_sequence_empty_player_actions_is_byte_identical_to_the_pre_212_synth() {
-    let msgs = login_sequence_messages(&warrior_entity(), &[100, 200], &[], &[]).unwrap();
+    let msgs = login_sequence_messages(
+        &warrior_entity(),
+        &[100, 200],
+        &[],
+        &[],
+        WorldEntry::FreshLogin,
+    )
+    .unwrap();
     let bar = msgs
         .iter()
         .find_map(|m| match m {
@@ -2661,7 +2823,14 @@ fn login_sequence_builds_the_bar_from_imported_player_actions_packing_the_type_b
         (1u8, 78u32, 0u8),   // button 1: Heroic Strike, type 0
         (5u8, 1234u32, 4u8), // button 5: some non-spell action, type 4 — must pack into the high byte
     ];
-    let msgs = login_sequence_messages(&warrior_entity(), &[100, 200], &[], &rows).unwrap();
+    let msgs = login_sequence_messages(
+        &warrior_entity(),
+        &[100, 200],
+        &[],
+        &rows,
+        WorldEntry::FreshLogin,
+    )
+    .unwrap();
     let bar = msgs
         .iter()
         .find_map(|m| match m {
@@ -2687,7 +2856,8 @@ fn login_sequence_builds_the_bar_from_imported_player_actions_packing_the_type_b
 #[test]
 fn login_sequence_drops_an_out_of_range_imported_button() {
     let rows = [(255u8, 999u32, 0u8)];
-    let msgs = login_sequence_messages(&warrior_entity(), &[], &[], &rows).unwrap();
+    let msgs = login_sequence_messages(&warrior_entity(), &[], &[], &rows, WorldEntry::FreshLogin)
+        .unwrap();
     let bar = msgs
         .iter()
         .find_map(|m| match m {
@@ -3070,6 +3240,56 @@ fn buy_failed_maps_module_err_strings_to_the_closest_buy_result() {
         assert_eq!(msg.result, expected, "err {err:?} must map to {expected:?}");
         assert_eq!(msg.guid.guid(), 42);
         assert_eq!(msg.item, 25);
+    }
+}
+
+/// `lyracore_shared::bank::result`'s constants exist so the module can tag a refusal without a
+/// dependency on the wire crate; they must never drift from gtker's own `BuyBankSlotResult::as_int`
+/// numbering, or `parse_buy_bank_slot_result` silently relays the wrong client-visible result.
+#[test]
+fn bank_result_constants_match_gtker_buy_bank_slot_result() {
+    use lyracore_shared::bank::result;
+    assert_eq!(
+        BuyBankSlotResult::FailedTooMany.as_int(),
+        result::FAILED_TOO_MANY as u32
+    );
+    assert_eq!(
+        BuyBankSlotResult::InsufficientFunds.as_int(),
+        result::INSUFFICIENT_FUNDS as u32
+    );
+    assert_eq!(
+        BuyBankSlotResult::NotBanker.as_int(),
+        result::NOT_BANKER as u32
+    );
+    assert_eq!(BuyBankSlotResult::Ok.as_int(), result::OK as u32);
+}
+
+#[test]
+fn buy_bank_slot_result_parses_the_leading_bracketed_code_not_the_prose() {
+    let cases: [(&str, BuyBankSlotResult); 5] = [
+        (
+            "[0] no bank bag slots left to buy",
+            BuyBankSlotResult::FailedTooMany,
+        ),
+        (
+            "[1] not enough money (need 1000)",
+            BuyBankSlotResult::InsufficientFunds,
+        ),
+        ("[2] target is not a banker", BuyBankSlotResult::NotBanker),
+        // Prose alone (no bracket) must not accidentally match a keyword — the fallback is
+        // the generic refusal, not a guess at intent.
+        (
+            "insufficient funds but no bracket tag",
+            BuyBankSlotResult::NotBanker,
+        ),
+        ("[9] unknown future code", BuyBankSlotResult::NotBanker),
+    ];
+    for (err, expected) in cases {
+        assert_eq!(
+            parse_buy_bank_slot_result(err),
+            expected,
+            "err {err:?} must map to {expected:?}"
+        );
     }
 }
 

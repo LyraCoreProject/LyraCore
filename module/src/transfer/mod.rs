@@ -869,6 +869,11 @@ pub fn begin_transfer(
     cross_database: bool,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    // Trade teardown BEFORE the escrow write flips the in-transit fence (#123): the partner's
+    // `TradeCanceled` still addresses a resolvable character, and the not_transported sweep then
+    // has no session left to silently drop. Shard-side concern, so it lives here in the reducer
+    // wrapper, not in the sink-abstracted `apply_begin` the harness executes.
+    crate::trade::cancel_trade_for(ctx, character_guid);
     apply_begin(
         &mut CtxShard { ctx },
         transfer_id,

@@ -82,6 +82,11 @@ pub mod idx {
     pub const UNIT_NATIVEDISPLAYID: u16 = 132;
     /// `UNIT_FIELD_BYTES_1` — packed; byte 3 carries the vis-ghost flag (4×u8).
     pub const UNIT_BYTES_1: u16 = 138;
+    /// `UNIT_FIELD_BYTES_2` — packed; BYTE 0 is the sheath state (0 stowed / 1 melee / 2 ranged), the
+    /// field `CMSG_SETSHEATHED` drives. Vanilla 1.12 index 164, cross-checked against gtker
+    /// `set_unit_bytes_2 → set_bytes(164, …)`. NOT `PLAYER_BYTES_2` (194) — different field, and
+    /// gtker labels this setter's params with PLAYER_BYTES_2's names, which is a red herring. [#101]
+    pub const UNIT_BYTES_2: u16 = 164;
     /// `UNIT_FIELD_STAT0..4` — STR, AGI, STA, INT, SPI (add 0..4).
     pub const UNIT_STAT0: u16 = 150;
 
