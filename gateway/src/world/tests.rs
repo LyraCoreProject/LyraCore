@@ -195,6 +195,9 @@ struct InMemoryStore {
     combat_until_ms: u64,
     /// Tracks whether `logout` was called (entity removal path taken).
     logout_called: std::sync::atomic::AtomicBool,
+    /// When set, teardown cannot reach the database after a session-fatal transport loss.
+    /// The world session must still close and relinquish its admission seat.
+    logout_error: Option<String>,
     /// Recorded `delete_character` calls: (account_id, character_guid).
     deleted: std::sync::Mutex<Vec<(u64, u64)>>,
     /// When set, `delete_character` returns this outcome instead of `Success`.
@@ -525,6 +528,11 @@ struct InMemoryStore {
     /// Recorded `set_target` target guids — CMSG_SET_SELECTION. (`rec("set_target")` already
     /// pins the per-shard call NAME; this pins the ARGUMENT actually threaded through.)
     selected_targets: std::sync::Mutex<Vec<u64>>,
+    /// When set, `set_target` fails before the reducer can complete. This models the call pipe
+    /// whose transport dies while an admitted world session is in flight.
+    set_target_error: Option<String>,
+    /// Whether the in-world relay registration was torn down when the session ended.
+    relay_stopped: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Recorded `cancel_aura` spell ids — CMSG_CANCEL_AURA.
     cancelled_auras: std::sync::Mutex<Vec<u32>>,
     /// Recorded `cancel_cast` self_guids — CMSG_CANCEL_CAST.
@@ -938,13 +946,22 @@ impl WorldStore for InMemoryStore {
             .unwrap()
             .push((self_guid, login_map, login_x, login_y));
         *self.session_depth.lock().unwrap() = Some(tx.depth_handle());
-        Ok(PlayerSubscriptions::empty())
+        match &self.relay_stopped {
+            Some(stopped) => Ok(PlayerSubscriptions::with_teardown({
+                let stopped = stopped.clone();
+                move || stopped.store(true, std::sync::atomic::Ordering::SeqCst)
+            })),
+            None => Ok(PlayerSubscriptions::empty()),
+        }
     }
     fn logout(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
         self.rec("logout");
         self.logout_called
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        Ok(())
+        match &self.logout_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
     }
     fn character_by_guid(&self, guid: u64) -> Result<Option<codec::CharacterView>> {
         Ok(self.characters.iter().find(|c| c.guid == guid).cloned())
@@ -1323,6 +1340,9 @@ impl WorldStore for InMemoryStore {
     }
     fn set_target(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
         self.rec("set_target");
+        if let Some(e) = &self.set_target_error {
+            return Err(anyhow!("{e}"));
+        }
         self.selected_targets.lock().unwrap().push(target_guid);
         Ok(())
     }
@@ -7504,6 +7524,72 @@ fn spirit_healer_activate_dispatches_and_confirms_the_healer_guid() {
 }
 
 // ── Targeting/aura dispatch (CMSG_SET_SELECTION / CMSG_CANCEL_AURA / CMSG_CANCEL_CAST) ─────────────
+
+#[test]
+fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
+    let relay_stopped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let store = std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(warrior_entity()),
+        set_target_error: Some("transport disconnected".into()),
+        // The same dead transport makes leave-world cleanup unreachable. Teardown is best-effort,
+        // but the client session and its admission seat must not wait for that reducer.
+        logout_error: Some("transport disconnected".into()),
+        relay_stopped: Some(relay_stopped.clone()),
+        ..tester_store(7)
+    });
+    let queue = std::sync::Arc::new(LoginQueue::new(1, 0));
+    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let server_store = store.clone();
+    let server_queue = queue.clone();
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = run_world_session_with_queue(
+            server_end,
+            server_store.as_ref(),
+            server_queue.as_ref(),
+        );
+        result_tx.send(result).unwrap();
+    });
+
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..10 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+    assert_eq!(queue.active(), 1, "the admitted session holds the only seat");
+
+    CMSG_SET_SELECTION {
+        target: Guid::new(321),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+
+    let err = result_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("transport loss must end the session promptly")
+        .expect_err("a disconnected reducer transport must end the world session");
+    assert!(format!("{err:#}").contains("transport disconnected"));
+    assert!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).is_err(),
+        "the world socket closes after the fatal reducer result"
+    );
+    assert!(
+        store
+            .logout_called
+            .load(std::sync::atomic::Ordering::SeqCst),
+        "teardown still attempts leave-world cleanup"
+    );
+    assert!(
+        relay_stopped.load(std::sync::atomic::Ordering::SeqCst),
+        "session teardown removes local relays"
+    );
+    assert_eq!(queue.active(), 0, "the ended session released its seat");
+    assert_eq!(queue.request(), Admission::Admitted, "one replacement session is admitted");
+    assert!(matches!(queue.request(), Admission::Queued(_)), "only one seat was released");
+    drop(client);
+}
 
 #[test]
 fn set_selection_dispatches_set_target_with_the_wire_guid() {

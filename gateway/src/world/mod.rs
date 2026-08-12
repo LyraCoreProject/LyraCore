@@ -965,6 +965,17 @@ pub fn run_world_session<S: DuplexStream, St: WorldStore + ?Sized>(
     run_world_session_with_queue(stream, store, &LoginQueue::unlimited())
 }
 
+/// A successful handshake owns one seat until its writer has stopped.
+struct AdmissionSeat<'a> {
+    queue: &'a LoginQueue,
+}
+
+impl Drop for AdmissionSeat<'_> {
+    fn drop(&mut self) {
+        self.queue.depart();
+    }
+}
+
 /// Drive one world connection: handshake (synchronous, sole writer), then split into a reader
 /// (this thread, owns `DecrypterHalf`) and a writer thread (owns `EncrypterHalf` + a socket clone)
 /// bridged by an mpsc channel. The reader handles requests and pushes responses; the per-player
@@ -977,7 +988,7 @@ pub fn run_world_session<S: DuplexStream, St: WorldStore + ?Sized>(
 /// costs nothing but ITS OWN thread (the listener in `run` spawns one `spawn_blocking` task per
 /// accepted socket, so a queued connection never holds up anyone else's accept or handshake). Once
 /// admitted (`Ok(Some(..))`), this connection holds a seat in `queue` for the rest of the function —
-/// released in the teardown below exactly once, no matter which branch got there.
+/// released by its [`AdmissionSeat`] exactly once, no matter which branch got there.
 pub fn run_world_session_with_queue<S: DuplexStream, St: WorldStore + ?Sized>(
     mut stream: S,
     store: &St,
@@ -986,6 +997,7 @@ pub fn run_world_session_with_queue<S: DuplexStream, St: WorldStore + ?Sized>(
     let Some((mut conn, encrypt)) = world_handshake_with_queue(&mut stream, store, queue)? else {
         return Ok(());
     };
+    let seat = AdmissionSeat { queue };
 
     let wsock = stream
         .try_clone()
@@ -1073,13 +1085,10 @@ pub fn run_world_session_with_queue<S: DuplexStream, St: WorldStore + ?Sized>(
     if let Err(e) = conn.leave_world(store) {
         log::warn!("logout for account {} failed: {e:#}", conn.account_id);
     }
-    // Release this connection's seat unconditionally — reaching this line at all means
-    // `world_handshake_with_queue` returned `Ok(Some(..))`, which is exactly the one case where it
-    // guarantees a seat is held and NOT already departed (its own internal failure path departs
-    // before ever returning `Some`). A no-op for the unlimited queue.
-    queue.depart();
     drop(tx);
     let _ = writer.join();
+    // The seat covers relay shutdown and releases exactly once after the writer stops.
+    drop(seat);
     result
 }
 

@@ -64,6 +64,16 @@ impl PlayerSubscriptions {
         }
     }
 
+    /// The closure must run once when the owning session unregisters its relays.
+    #[cfg(test)]
+    pub fn with_teardown(teardown: impl FnOnce() + Send + 'static) -> Self {
+        Self {
+            teardowns: vec![Box::new(teardown)],
+            viewer: None,
+            view: None,
+        }
+    }
+
     /// Drive the shared AOI index from the player's movement: on a cell crossing, move the
     /// viewer's anchor and relay the CREATE/DESTROY delta the move implies.
     ///

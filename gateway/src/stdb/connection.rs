@@ -7,6 +7,7 @@ use crate::config::{GatewayConfig, ShardMap};
 use anyhow::{anyhow, Context, Result};
 use spacetimedb_sdk::{DbContext, SubscriptionHandle as _, Table};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -54,10 +55,98 @@ pub(crate) struct LiveConn {
     /// gateway reads through. Player verbs go through the module's operator-gated `gw_*` surface
     /// over the call pipes, with the actor named by guid.
     pub(crate) conn: DbConnection,
+    /// Completes reducer waits as soon as this connection's transport dies. It belongs to the
+    /// connection generation, so a watchdog replacement cannot fail calls on the fresh socket.
+    pub(crate) reducer_completion: Arc<ReducerCompletion>,
     /// Keeps the SDK message-pump thread alive for the connection's lifetime.
     _pump: std::thread::JoinHandle<()>,
     /// Keeps the privileged subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
+}
+
+impl LiveConn {
+    /// A reducer connection is usable only while both its transport and its liveness subscription
+    /// are alive. A module republish can invalidate the latter without closing the socket.
+    fn is_healthy(&self) -> bool {
+        self.conn.is_active() && self._sub.is_active()
+    }
+}
+
+/// One replaceable reducer-only connection. Reconnection happens off the watchdog thread; this
+/// flag prevents a slow or unavailable node from spawning another repair attempt every poll.
+struct CallPipe {
+    live: RwLock<LiveConn>,
+    reconnecting: AtomicBool,
+}
+
+/// One-shot completion registry for calls sent through one SDK connection.
+///
+/// A reducer callback and the SDK disconnect callback may race. Removing the sender while
+/// holding this lock makes whichever signal arrives first the caller-visible outcome.
+pub(crate) struct ReducerCompletion {
+    next_id: AtomicU64,
+    state: Mutex<ReducerCompletionState>,
+}
+
+struct ReducerCompletionState {
+    connected: bool,
+    pending: HashMap<u64, std::sync::mpsc::Sender<std::result::Result<(), String>>>,
+}
+
+impl ReducerCompletion {
+    fn connected() -> Self {
+        Self {
+            next_id: AtomicU64::new(0),
+            state: Mutex::new(ReducerCompletionState {
+                connected: true,
+                pending: HashMap::new(),
+            }),
+        }
+    }
+
+    pub(crate) fn register(
+        &self,
+        tx: std::sync::mpsc::Sender<std::result::Result<(), String>>,
+    ) -> std::result::Result<u64, String> {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if !state.connected {
+            return Err("transport disconnected".to_string());
+        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        state.pending.insert(id, tx);
+        Ok(id)
+    }
+
+    pub(crate) fn finish(&self, id: u64, result: std::result::Result<(), String>) {
+        if let Some(tx) = self
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .pending
+            .remove(&id)
+        {
+            let _ = tx.send(result);
+        }
+    }
+
+    pub(crate) fn cancel(&self, id: u64) {
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .pending
+            .remove(&id);
+    }
+
+    fn disconnect(&self) {
+        let pending = {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            state.connected = false;
+            std::mem::take(&mut state.pending)
+        };
+        for (_, tx) in pending {
+            let _ = tx.send(Err("transport disconnected".to_string()));
+        }
+    }
 }
 
 pub(crate) struct CoordinatorInner {
@@ -79,9 +168,9 @@ pub(crate) struct CoordinatorInner {
     /// calls stop serializing on one websocket (measured wall: ~1000 seats/pipe). Each pipe
     /// carries one tiny liveness subscription (`game_config`, 1 row), never the coordinator set.
     /// Empty when `LYRACORE_CALL_PIPES` <= 1 — calls then ride `coord()` exactly as before.
-    /// Deliberate simplification: dead pipes don't self-heal — `call_pipe()` skips inactive ones and falls back to
-    /// the watchdogged `coord()`; extending the watchdog to rebuild pipes is the upgrade path.
-    call_pipes: Vec<RwLock<LiveConn>>,
+    /// Dead pipes are skipped immediately and rebuilt in the background. Until their replacement
+    /// lands, calls use another healthy pipe or the watchdogged coordinator connection.
+    call_pipes: Vec<CallPipe>,
     call_pipe_next: std::sync::atomic::AtomicUsize,
     /// The per-shard movement batch — the hot path pushes one `GwMove` per inbound
     /// heartbeat and the 40ms flush task sends the whole tick as ONE `gw_movement_batch`
@@ -130,32 +219,55 @@ impl CoordinatorInner {
             let start = self
                 .call_pipe_next
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            for k in 0..n {
-                let g = self.call_pipes[(start + k) % n]
+            if let Some(index) = select_active_call_pipe(n, start, |index| {
+                self.call_pipes[index]
+                    .live
+                    .read()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .is_healthy()
+            }) {
+                return self.call_pipes[index]
+                    .live
                     .read()
                     .unwrap_or_else(|p| p.into_inner());
-                if g.conn.is_active() {
-                    return g;
-                }
             }
-            log::warn!("call-pipe pool: every pipe inactive — falling back to the coordinator connection");
+            log::warn!(
+                "call-pipe pool: every pipe inactive — falling back to the coordinator connection"
+            );
         }
         self.coord()
     }
+}
 
+/// Return the round-robin pipe that is currently usable, or let the caller use its coordinator
+/// fallback when there is none. Kept independent of the SDK connection so recovery routing has a
+/// deterministic unit-test seam.
+fn select_active_call_pipe(
+    pipe_count: usize,
+    start: usize,
+    mut is_active: impl FnMut(usize) -> bool,
+) -> Option<usize> {
+    (0..pipe_count)
+        .map(|offset| (start + offset) % pipe_count)
+        .find(|&index| is_active(index))
 }
 
 /// Build one CALL-ONLY pipe — same connect shape as [`connect_blocking`] but subscribing a
 /// single one-row table (`game_config`) purely so the `LiveConn` subscription handle exists and
 /// its liveness signal works. Reducer calls need no cache.
 fn connect_call_pipe(uri: String, db_name: String, token: Option<String>) -> Result<LiveConn> {
+    let reducer_completion = Arc::new(ReducerCompletion::connected());
+    let disconnected = reducer_completion.clone();
     let conn = DbConnection::builder()
         .with_uri(&uri)
         .with_database_name(&db_name)
         .with_token(token)
         .on_connect(|_ctx, identity, _token| log::info!("call pipe connected as {identity}"))
         .on_connect_error(|_ctx, err| log::error!("call pipe connect error: {err}"))
-        .on_disconnect(|_ctx, err| log::warn!("call pipe connection closed: {err:?}"))
+        .on_disconnect(move |_ctx, err| {
+            log::warn!("call pipe connection closed: {err:?}");
+            disconnected.disconnect();
+        })
         .build()
         .map_err(|e| anyhow!("call pipe build/connect failed: {e}"))?;
     let pump = conn.run_threaded();
@@ -177,9 +289,67 @@ fn connect_call_pipe(uri: String, db_name: String, token: Option<String>) -> Res
     }
     Ok(LiveConn {
         conn,
+        reducer_completion,
         _pump: pump,
         _sub: sub,
     })
+}
+
+/// Start at most one reconnect for each failed call pipe. The coordinator watchdog owns this
+/// because it is already the one place that observes transport/subscription liveness for this
+/// shard. Building happens on a detached OS thread so a down node never stalls the watchdog's
+/// coordinator recovery or live callers.
+fn repair_dead_call_pipes(inner: &Arc<CoordinatorInner>) {
+    for (index, pipe) in inner.call_pipes.iter().enumerate() {
+        let is_healthy = pipe
+            .live
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_healthy();
+        let already_reconnecting = pipe.reconnecting.swap(true, Ordering::AcqRel);
+        if !call_pipe_needs_repair(is_healthy, already_reconnecting) {
+            if is_healthy {
+                pipe.reconnecting.store(false, Ordering::Release);
+            }
+            continue;
+        }
+
+        let repair = inner.clone();
+        let uri = inner.uri.clone();
+        let db_name = inner.db_name.clone();
+        let token = inner.token.clone();
+        std::thread::Builder::new()
+            .name(format!("stdb-call-pipe-reconnect-{index}"))
+            .spawn(move || {
+                match connect_call_pipe(uri, db_name, token) {
+                    Ok(fresh) => {
+                        let old = {
+                            let mut live = repair.call_pipes[index]
+                                .live
+                                .write()
+                                .unwrap_or_else(|p| p.into_inner());
+                            std::mem::replace(&mut *live, fresh)
+                        };
+                        log::info!("call pipe {index} reconnected");
+                        let _ = old.conn.disconnect();
+                        if let Err(e) = old._pump.join() {
+                            log::warn!("old call-pipe pump thread panicked on teardown: {e:?}");
+                        }
+                    }
+                    Err(e) => log::error!("call pipe {index} reconnect failed (will retry): {e:#}"),
+                }
+                repair.call_pipes[index]
+                    .reconnecting
+                    .store(false, Ordering::Release);
+            })
+            .expect("spawn call-pipe reconnect thread");
+    }
+}
+
+/// A repair is started exactly once for a failed pipe. This is separate from selection because a
+/// healthy coordinator remains available for reducer calls while the repair is in flight.
+fn call_pipe_needs_repair(is_healthy: bool, already_reconnecting: bool) -> bool {
+    !is_healthy && !already_reconnecting
 }
 
 /// The coordinator subscription set, as a pure function of ONE flag — so the property that
@@ -494,13 +664,18 @@ fn connect_blocking(
     token: Option<String>,
     sharded_tables: bool,
 ) -> Result<LiveConn> {
+    let reducer_completion = Arc::new(ReducerCompletion::connected());
+    let disconnected = reducer_completion.clone();
     let conn = DbConnection::builder()
         .with_uri(&uri)
         .with_database_name(&db_name)
         .with_token(token)
         .on_connect(|_ctx, identity, _token| log::info!("coordinator connected as {identity}"))
         .on_connect_error(|_ctx, err| log::error!("coordinator connect error: {err}"))
-        .on_disconnect(|_ctx, err| log::warn!("coordinator connection closed: {err:?}"))
+        .on_disconnect(move |_ctx, err| {
+            log::warn!("coordinator connection closed: {err:?}");
+            disconnected.disconnect();
+        })
         .build()
         .map_err(|e| anyhow!("coordinator build/connect failed: {e}"))?;
 
@@ -533,6 +708,7 @@ fn connect_blocking(
 
     Ok(LiveConn {
         conn,
+        reducer_completion,
         _pump: pump,
         _sub: sub,
     })
@@ -559,6 +735,10 @@ fn spawn_coordinator_watchdog(inner: Arc<CoordinatorInner>) -> std::thread::Join
         .name("stdb-coordinator-watchdog".into())
         .spawn(move || loop {
             std::thread::sleep(COORDINATOR_WATCHDOG_POLL);
+            // Pipe repair is independent of coordinator recovery: a healthy coordinator is the
+            // fallback while a failed reducer-only pipe reconnects, and must not prevent that
+            // pipe returning to the round-robin pool.
+            repair_dead_call_pipes(&inner);
             {
                 // ONE guard for both checks (so a swap can't land between them). Healthy → keep polling.
                 let live = inner.coord();
@@ -790,6 +970,17 @@ pub(crate) fn recv_reducer(
     }
 }
 
+pub(crate) fn recv_reducer_on(
+    rx: std::sync::mpsc::Receiver<std::result::Result<(), String>>,
+    what: &str,
+    completion: &ReducerCompletion,
+    call_id: u64,
+) -> Result<()> {
+    let result = recv_reducer(rx, what);
+    completion.cancel(call_id);
+    result
+}
+
 #[cfg(test)]
 mod coordinator_query_tests {
     use super::coordinator_queries;
@@ -866,7 +1057,10 @@ mod coordinator_query_tests {
 
 #[cfg(test)]
 mod recv_reducer_tests {
-    use super::recv_reducer;
+    use super::{recv_reducer, ReducerCompletion};
+    use std::sync::mpsc;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     #[test]
     fn a_completed_reducer_maps_to_ok() {
@@ -888,8 +1082,100 @@ mod recv_reducer_tests {
             "buy_item reducer failed: not enough copper"
         );
     }
+
+    #[test]
+    fn a_connection_death_completes_only_its_pending_reducer_waits() {
+        let dead = ReducerCompletion::connected();
+        let live = ReducerCompletion::connected();
+        let (dead_tx, dead_rx) = mpsc::channel();
+        let (live_tx, live_rx) = mpsc::channel();
+        dead.register(dead_tx).unwrap();
+        live.register(live_tx).unwrap();
+
+        dead.disconnect();
+
+        assert_eq!(
+            dead_rx.recv_timeout(Duration::from_millis(100)).unwrap(),
+            Err("transport disconnected".to_string())
+        );
+        assert!(live_rx.recv_timeout(Duration::from_millis(20)).is_err());
+    }
+
+    #[test]
+    fn reducer_completion_wins_or_loses_cleanly_against_disconnect() {
+        let completion = Arc::new(ReducerCompletion::connected());
+        let (tx, rx) = mpsc::channel();
+        let id = completion.register(tx).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+
+        let done = completion.clone();
+        let done_barrier = barrier.clone();
+        let done_thread = std::thread::spawn(move || {
+            done_barrier.wait();
+            done.finish(id, Ok(()));
+        });
+        let dropped = completion.clone();
+        let dropped_barrier = barrier.clone();
+        let disconnect_thread = std::thread::spawn(move || {
+            dropped_barrier.wait();
+            dropped.disconnect();
+        });
+        barrier.wait();
+        done_thread.join().unwrap();
+        disconnect_thread.join().unwrap();
+
+        match rx.recv_timeout(Duration::from_millis(100)).unwrap() {
+            Ok(()) => {}
+            Err(message) => assert_eq!(message, "transport disconnected"),
+        }
+        assert!(rx.recv_timeout(Duration::from_millis(20)).is_err());
+    }
 }
 
+#[cfg(test)]
+mod call_pipe_routing_tests {
+    use super::{call_pipe_needs_repair, select_active_call_pipe};
+
+    #[test]
+    fn a_dead_call_pipe_is_skipped_for_the_next_live_pipe() {
+        assert_eq!(
+            select_active_call_pipe(3, 0, |index| index == 1),
+            Some(1),
+            "a reducer must not be sent through the dead pipe selected by round-robin"
+        );
+    }
+
+    #[test]
+    fn a_repaired_call_pipe_rejoins_reducer_rotation() {
+        assert_eq!(
+            select_active_call_pipe(3, 0, |index| index == 0),
+            Some(0),
+            "once a pipe is live again, subsequent reducer traffic should use it"
+        );
+    }
+
+    #[test]
+    fn every_dead_call_pipe_routes_reducers_to_the_coordinator() {
+        assert_eq!(
+            select_active_call_pipe(3, 0, |_| false),
+            None,
+            "the watchdogged coordinator is the safe fallback while pipes reconnect"
+        );
+    }
+
+    #[test]
+    fn only_one_repair_attempt_is_started_for_a_dead_call_pipe() {
+        assert!(call_pipe_needs_repair(false, false));
+        assert!(
+            !call_pipe_needs_repair(false, true),
+            "a down node must not accumulate watchdog reconnect threads for the same pipe"
+        );
+        assert!(
+            !call_pipe_needs_repair(true, false),
+            "healthy pipes require no repair"
+        );
+    }
+}
 
 /// Fire a reducer over `$reducers` and block (≤10s) on its completion, mapping the outcome to
 /// `anyhow` (evaluates to `Result<()>`). Collapses the channel + status-flatten callback +
@@ -898,17 +1184,38 @@ mod recv_reducer_tests {
 /// send-error and timeout messages. The double-`Result` flattening (`InternalError` → `{e:?}`)
 /// lives here, so it is one edit instead of nine.
 macro_rules! call_reducer {
-    ($reducers:expr, $what:literal, $method:ident ( $($arg:expr),* $(,)? )) => {{
+    ($live:ident . conn . reducers, $what:literal, $method:ident ( $($arg:expr),* $(,)? )) => {{
+        call_reducer!(@call $live, $what, $method($($arg),*))
+    }};
+    ($owner:ident . 0 . call_pipe() . conn . reducers, $what:literal, $method:ident ( $($arg:expr),* $(,)? )) => {{
+        let live = $owner.0.call_pipe();
+        call_reducer!(@call live, $what, $method($($arg),*))
+    }};
+    ($owner:ident . coord() . conn . reducers, $what:literal, $method:ident ( $($arg:expr),* $(,)? )) => {{
+        let live = $owner.coord();
+        call_reducer!(@call live, $what, $method($($arg),*))
+    }};
+    (@call $live:ident, $what:literal, $method:ident ( $($arg:expr),* $(,)? )) => {{
         let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
-        $reducers
+        let completion = $live.reducer_completion.clone();
+        let call_id = completion
+            .register(tx)
+            .map_err(|e| anyhow!(concat!($what, " reducer transport disconnected: {}"), e))?;
+        let callback_completion = completion.clone();
+        $live
+            .conn
+            .reducers
             .$method($($arg,)* move |_ctx, status| {
-                let _ = tx.send(match status {
+                callback_completion.finish(call_id, match status {
                     Ok(inner) => inner,
                     Err(e) => Err(format!("{e:?}")),
                 });
             })
-            .map_err(|e| anyhow!(concat!("send ", $what, ": {}"), e))?;
-        recv_reducer(rx, $what)
+            .map_err(|e| {
+                completion.cancel(call_id);
+                anyhow!(concat!("send ", $what, ": {}"), e)
+            })?;
+        $crate::stdb::connection::recv_reducer_on(rx, $what, &completion, call_id)
     }};
 }
 pub(crate) use call_reducer;
@@ -928,7 +1235,6 @@ impl Coordinator {
             .count();
         n
     }
-
 }
 
 impl Coordinator {
@@ -977,7 +1283,10 @@ impl Coordinator {
                 })
                 .await;
                 match built {
-                    Ok(Ok(pipe)) => call_pipes.push(RwLock::new(pipe)),
+                    Ok(Ok(pipe)) => call_pipes.push(CallPipe {
+                        live: RwLock::new(pipe),
+                        reconnecting: AtomicBool::new(false),
+                    }),
                     Ok(Err(e)) => log::warn!("call pipe {i} failed to build (skipped): {e:#}"),
                     Err(e) => log::warn!("call pipe {i} join failed (skipped): {e:#}"),
                 }
@@ -1115,7 +1424,9 @@ impl Coordinator {
             .enforce()
             .map_err(|msg| anyhow!("{msg}"))?;
         ensure_guid_ranges(&conns, &map);
-        let world = Arc::new(super::world_view::WorldView::new(crate::config::aoi_enabled()));
+        let world = Arc::new(super::world_view::WorldView::new(
+            crate::config::aoi_enabled(),
+        ));
         let coordinator = Self(
             home,
             Arc::new(ShardSet {
@@ -1139,7 +1450,11 @@ impl Coordinator {
         // The load sampler: per-shard writer occupancy + session counts, sampled on a timer and recorded
         // onto realm-core so an operator can answer "which shard is hot" with `spacetime sql`
         // alone.
-        spawn_load_sampler(coordinator.clone(), cfg.stdb_uri.clone(), cfg.gateway_id.clone());
+        spawn_load_sampler(
+            coordinator.clone(),
+            cfg.stdb_uri.clone(),
+            cfg.gateway_id.clone(),
+        );
         Ok(coordinator)
     }
 
@@ -1164,15 +1479,10 @@ impl Coordinator {
         for (id, shard) in shards.iter().enumerate() {
             super::world_view::arm_shard(view.clone(), shard.clone(), id);
             let (hook_view, hook_shard) = (view.clone(), shard.clone());
-            shard
-                .0
-                .on_reconnect
-                .lock()
-                .unwrap()
-                .push(Arc::new(move || {
-                    super::world_view::arm_shard(hook_view.clone(), hook_shard.clone(), id);
-                    super::world_view::seed_from_caches(&hook_view);
-                }));
+            shard.0.on_reconnect.lock().unwrap().push(Arc::new(move || {
+                super::world_view::arm_shard(hook_view.clone(), hook_shard.clone(), id);
+                super::world_view::seed_from_caches(&hook_view);
+            }));
         }
         // The cross-shard whisper/group twins (#22) ride realm-core's connection — armed only
         // when realm-core is a DISTINCT database (a world shard's own `arm_shard` above already
@@ -1182,18 +1492,13 @@ impl Coordinator {
                 let world = self.clone();
                 super::world_view::arm_realm_private(view.clone(), realm.clone(), world.clone());
                 let (hook_view, hook_realm) = (view.clone(), realm.clone());
-                realm
-                    .0
-                    .on_reconnect
-                    .lock()
-                    .unwrap()
-                    .push(Arc::new(move || {
-                        super::world_view::arm_realm_private(
-                            hook_view.clone(),
-                            hook_realm.clone(),
-                            world.clone(),
-                        );
-                    }));
+                realm.0.on_reconnect.lock().unwrap().push(Arc::new(move || {
+                    super::world_view::arm_realm_private(
+                        hook_view.clone(),
+                        hook_realm.clone(),
+                        world.clone(),
+                    );
+                }));
             }
         }
         super::world_view::seed_from_caches(&view);
@@ -1369,8 +1674,6 @@ impl Coordinator {
         self.1.sessions.release(account_id, epoch)
     }
 }
-
-
 
 /// Why the SDK connection builds (`connect_blocking`, the call pipes) run on threads the
 /// runtime does NOT own.

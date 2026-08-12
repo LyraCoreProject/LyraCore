@@ -7,7 +7,7 @@ use spacetimedb_sdk::Identity;
 use std::time::Duration;
 
 use super::bindings::*;
-use super::connection::{call_reducer, recv_reducer, Coordinator};
+use super::connection::{call_reducer, recv_reducer_on, Coordinator};
 use super::views::entity_view;
 
 impl Coordinator {
@@ -311,8 +311,7 @@ impl Coordinator {
     /// Validate a `CMSG_INSPECT` request (target is a real in-world player, on the caller's map, in
     /// range, friendly) over the coordinator connection so the module resolves the caller from
     /// `ctx.sender`. `Err` (out of range / hostile / no such target) → the caller ignores it.
-    pub fn inspect(&self, _account_id: u64,
-        actor_guid: u64, target_guid: u64) -> Result<()> {
+    pub fn inspect(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("inspect: actor_guid unresolved"));
         }
@@ -340,8 +339,12 @@ impl Coordinator {
     }
 
     /// Enter an area trigger (`CMSG_AREATRIGGER`) — credit any active explore quest tied to `trigger_id`.
-    pub fn enter_areatrigger(&self, _account_id: u64,
-        actor_guid: u64, trigger_id: u32) -> Result<()> {
+    pub fn enter_areatrigger(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        trigger_id: u32,
+    ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("enter_areatrigger: actor_guid unresolved"));
         }
@@ -389,8 +392,13 @@ impl Coordinator {
     /// Relay a pet command-bar action (`CMSG_PET_ACTION`) over the coordinator connection so the module
     /// attributes it to the pet's owner. `data` is the raw packed action (flag<<24 | id); the module
     /// decodes stay/follow/attack/dismiss + passive/defensive/aggressive.
-    pub fn pet_command(&self, _account_id: u64,
-        actor_guid: u64, data: u32, target_guid: u64) -> Result<()> {
+    pub fn pet_command(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        data: u32,
+        target_guid: u64,
+    ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("pet_command: actor_guid unresolved"));
         }
@@ -452,8 +460,13 @@ impl Coordinator {
     /// Cast a spell (`CMSG_CAST_SPELL`, aura tracer) over the coordinator connection so the module
     /// attributes the cast to the caller. `target_guid` is the client's selected unit (0 = none/self →
     /// the module substitutes the caster), threaded so target-keyed effects see the real target.
-    pub fn cast_spell(&self, _account_id: u64,
-        actor_guid: u64, spell_id: u32, target_guid: u64) -> Result<()> {
+    pub fn cast_spell(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        spell_id: u32,
+        target_guid: u64,
+    ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("cast_spell: actor_guid unresolved"));
         }
@@ -491,8 +504,7 @@ impl Coordinator {
 
     /// Cancel one of the caller's own auras by spell id (`CMSG_CANCEL_AURA`) over the coordinator
     /// connection so the module attributes the removal to the caller.
-    pub fn cancel_aura(&self, _account_id: u64,
-        actor_guid: u64, spell_id: u32) -> Result<()> {
+    pub fn cancel_aura(&self, _account_id: u64, actor_guid: u64, spell_id: u32) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("cancel_aura: actor_guid unresolved"));
         }
@@ -538,8 +550,7 @@ impl Coordinator {
     }
 
     /// Join a chat channel (CMSG_JOIN_CHANNEL — the client auto-sends on zone-in).
-    pub fn join_channel(&self, _account_id: u64,
-        actor_guid: u64, channel: String) -> Result<()> {
+    pub fn join_channel(&self, _account_id: u64, actor_guid: u64, channel: String) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("join_channel: actor_guid unresolved"));
         }
@@ -552,8 +563,7 @@ impl Coordinator {
     }
 
     /// Leave a chat channel (CMSG_LEAVE_CHANNEL).
-    pub fn leave_channel(&self, _account_id: u64,
-        actor_guid: u64, channel: String) -> Result<()> {
+    pub fn leave_channel(&self, _account_id: u64, actor_guid: u64, channel: String) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("leave_channel: actor_guid unresolved"));
         }
@@ -603,8 +613,13 @@ impl Coordinator {
         )
     }
 
-    pub fn send_roll(&self, _account_id: u64,
-        actor_guid: u64, min_roll: u32, max_roll: u32) -> Result<()> {
+    pub fn send_roll(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        min_roll: u32,
+        max_roll: u32,
+    ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("send_roll: actor_guid unresolved"));
         }
@@ -636,8 +651,7 @@ impl Coordinator {
 
     /// `CMSG_MESSAGECHAT` Party (`/p`) — over the coordinator connection so the module
     /// attributes the line (and its group-membership check) to the caller.
-    pub fn party_chat(&self, _account_id: u64,
-        actor_guid: u64, message: String) -> Result<()> {
+    pub fn party_chat(&self, _account_id: u64, actor_guid: u64, message: String) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("party_chat: actor_guid unresolved"));
         }
@@ -664,20 +678,34 @@ impl Coordinator {
         // Raw-module-message plumbing: the GM console renders the module's own rejection text
         // ("permission denied", parse errors) verbatim, no "reducer failed" wrapper.
         let coord = self.0.call_pipe();
+        let completion = coord.reducer_completion.clone();
+        let call_id = completion
+            .register(tx)
+            .map_err(|e| anyhow!("gm_command reducer transport disconnected: {e}"))?;
+        let callback_completion = completion.clone();
         coord
             .conn
             .reducers
             .gw_gm_command_then(actor_guid, text, move |_ctx, status| {
-                let _ = tx.send(match status {
-                    Ok(inner) => inner,
-                    Err(e) => Err(format!("{e:?}")),
-                });
+                callback_completion.finish(
+                    call_id,
+                    match status {
+                        Ok(inner) => inner,
+                        Err(e) => Err(format!("{e:?}")),
+                    },
+                );
             })
-            .map_err(|e| anyhow!("send gw_gm_command: {e}"))?;
-        match rx.recv_timeout(Duration::from_secs(10)) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(e)) => Err(anyhow!("{e}")), // the RAW module message, no "reducer failed" wrapper
-            Err(_) => Err(anyhow!("gm_command timed out after 10s")),
+            .map_err(|e| {
+                completion.cancel(call_id);
+                anyhow!("send gw_gm_command: {e}")
+            })?;
+        match recv_reducer_on(rx, "gm_command", &completion, call_id) {
+            Ok(()) => Ok(()),
+            Err(e) if e.to_string().starts_with("gm_command reducer failed: ") => Err(anyhow!(e
+                .to_string()
+                .trim_start_matches("gm_command reducer failed: ")
+                .to_string())),
+            Err(e) => Err(e),
         }
     }
 
@@ -696,8 +724,7 @@ impl Coordinator {
     }
 
     /// `CMSG_GROUP_INVITE` — `target_guid` is already resolved by the gateway.
-    pub fn group_invite(&self, _account_id: u64,
-        actor_guid: u64, target_guid: u64) -> Result<()> {
+    pub fn group_invite(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("group_invite: actor_guid unresolved"));
         }
@@ -710,7 +737,12 @@ impl Coordinator {
     }
 
     /// `CMSG_INITIATE_TRADE` — `target_guid` is the client's targeted player (#120).
-    pub fn initiate_trade(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
+    pub fn initiate_trade(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        target_guid: u64,
+    ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("initiate_trade: actor_guid unresolved"));
         }
@@ -749,7 +781,13 @@ impl Coordinator {
     }
 
     /// `CMSG_SET_TRADE_ITEM` (#121).
-    pub fn set_trade_item(&self, _account_id: u64, actor_guid: u64, trade_slot: u8, inv_slot: u8) -> Result<()> {
+    pub fn set_trade_item(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        trade_slot: u8,
+        inv_slot: u8,
+    ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("set_trade_item: actor_guid unresolved"));
         }
@@ -762,7 +800,12 @@ impl Coordinator {
     }
 
     /// `CMSG_CLEAR_TRADE_ITEM` (#121).
-    pub fn clear_trade_item(&self, _account_id: u64, actor_guid: u64, trade_slot: u8) -> Result<()> {
+    pub fn clear_trade_item(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        trade_slot: u8,
+    ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("clear_trade_item: actor_guid unresolved"));
         }
@@ -880,8 +923,12 @@ impl Coordinator {
     }
 
     /// `CMSG_GROUP_UNINVITE` — the leader kicks `target_guid`.
-    pub fn group_uninvite(&self, _account_id: u64,
-        actor_guid: u64, target_guid: u64) -> Result<()> {
+    pub fn group_uninvite(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        target_guid: u64,
+    ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("group_uninvite: actor_guid unresolved"));
         }
@@ -938,8 +985,7 @@ impl Coordinator {
     }
 
     /// `CMSG_ADD_FRIEND` — `target_guid` is already resolved by the gateway.
-    pub fn add_friend(&self, _account_id: u64,
-        actor_guid: u64, target_guid: u64) -> Result<()> {
+    pub fn add_friend(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("add_friend: actor_guid unresolved"));
         }
@@ -952,8 +998,7 @@ impl Coordinator {
     }
 
     /// `CMSG_DEL_FRIEND`.
-    pub fn del_friend(&self, _account_id: u64,
-        actor_guid: u64, target_guid: u64) -> Result<()> {
+    pub fn del_friend(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("del_friend: actor_guid unresolved"));
         }
@@ -966,8 +1011,7 @@ impl Coordinator {
     }
 
     /// `CMSG_ADD_IGNORE` — `target_guid` is already resolved by the gateway.
-    pub fn add_ignore(&self, _account_id: u64,
-        actor_guid: u64, target_guid: u64) -> Result<()> {
+    pub fn add_ignore(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("add_ignore: actor_guid unresolved"));
         }
@@ -980,8 +1024,7 @@ impl Coordinator {
     }
 
     /// `CMSG_DEL_IGNORE`.
-    pub fn del_ignore(&self, _account_id: u64,
-        actor_guid: u64, target_guid: u64) -> Result<()> {
+    pub fn del_ignore(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("del_ignore: actor_guid unresolved"));
         }
@@ -1172,8 +1215,7 @@ impl Coordinator {
         )
     }
 
-    pub fn learn_talent(&self, _account_id: u64,
-        actor_guid: u64, talent_id: u32) -> Result<()> {
+    pub fn learn_talent(&self, _account_id: u64, actor_guid: u64, talent_id: u32) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("learn_talent: actor_guid unresolved"));
         }
@@ -1188,7 +1230,12 @@ impl Coordinator {
     /// Respec at a trainer (the "I wish to unlearn my talents." gossip option, #516) — clears every
     /// learned talent for the calling player's escalating gold cost. Rides the coordinator
     /// connection as `gw_reset_talents` (#483 deleted the per-player sender path).
-    pub fn reset_talents(&self, _account_id: u64, actor_guid: u64, trainer_guid: u64) -> Result<()> {
+    pub fn reset_talents(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        trainer_guid: u64,
+    ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("reset_talents: actor_guid unresolved"));
         }
@@ -1207,18 +1254,13 @@ impl Coordinator {
             return Err(anyhow!("fish: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
-            coord.conn.reducers,
-            "gw_fish",
-            gw_fish_then(actor_guid)
-        )
+        call_reducer!(coord.conn.reducers, "gw_fish", gw_fish_then(actor_guid))
     }
 
     /// Pick Lock: unlock the locked GameObject `go_guid` over the coordinator connection (so the
     /// module attributes the pick to the caller via ctx.sender). The module gates range / lock
     /// requirement / Lockpicking skill; on success it records the GO unlocked + climbs the skill.
-    pub fn pick_lock(&self, _account_id: u64,
-        actor_guid: u64, go_guid: u64) -> Result<()> {
+    pub fn pick_lock(&self, _account_id: u64, actor_guid: u64, go_guid: u64) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("pick_lock: actor_guid unresolved"));
         }
@@ -1294,8 +1336,13 @@ impl Coordinator {
         )
     }
 
-    pub fn buyback_item(&self, _account_id: u64,
-        actor_guid: u64, vendor_guid: u64, slot: u8) -> Result<()> {
+    pub fn buyback_item(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        vendor_guid: u64,
+        slot: u8,
+    ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("buyback_item: actor_guid unresolved"));
         }
@@ -1310,8 +1357,13 @@ impl Coordinator {
     /// Repair the item in inventory `slot` at REPAIR-NPC `npc_guid` (`CMSG_REPAIR_ITEM`) over the
     /// coordinator connection. The module gates the NPC + charges copper; the player's item +
     /// purse replicate back via subscription.
-    pub fn repair_item(&self, _account_id: u64,
-        actor_guid: u64, npc_guid: u64, slot: u8) -> Result<()> {
+    pub fn repair_item(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        npc_guid: u64,
+        slot: u8,
+    ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("repair_item: actor_guid unresolved"));
         }
@@ -1340,8 +1392,7 @@ impl Coordinator {
 
     /// Unequip the item in equipment `from_slot` to a free backpack slot (`CMSG_AUTOSTORE_BAG_ITEM`)
     /// over the coordinator connection. The module gates "is equipped" + "backpack has room".
-    pub fn unequip_item(&self, _account_id: u64,
-        actor_guid: u64, from_slot: u8) -> Result<()> {
+    pub fn unequip_item(&self, _account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("unequip_item: actor_guid unresolved"));
         }
@@ -1385,8 +1436,13 @@ impl Coordinator {
 
     /// Move (or swap) main-inventory `from_slot` → `to_slot` (`CMSG_SWAP_INV_ITEM`/`CMSG_SWAP_ITEM`)
     /// over the coordinator connection. The module's move primitive validates equip-slot transitions.
-    pub fn move_item(&self, _account_id: u64,
-        actor_guid: u64, from_slot: u8, to_slot: u8) -> Result<()> {
+    pub fn move_item(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        from_slot: u8,
+        to_slot: u8,
+    ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("move_item: actor_guid unresolved"));
         }
@@ -1460,8 +1516,7 @@ impl Coordinator {
 
     /// Abandon quest `quest_id` (`CMSG_QUESTLOG_REMOVE_QUEST`) over the coordinator connection. The
     /// module deletes the player's quest-log row; the quest-log relay then clears the slot.
-    pub fn abandon_quest(&self, _account_id: u64,
-        actor_guid: u64, quest_id: u32) -> Result<()> {
+    pub fn abandon_quest(&self, _account_id: u64, actor_guid: u64, quest_id: u32) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("abandon_quest: actor_guid unresolved"));
         }
@@ -1484,8 +1539,12 @@ impl Coordinator {
     }
 
     /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`, slice 5) over the coordinator connection.
-    pub fn reclaim_corpse(&self, _account_id: u64,
-        actor_guid: u64, corpse_guid: u64) -> Result<()> {
+    pub fn reclaim_corpse(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        corpse_guid: u64,
+    ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("reclaim_corpse: actor_guid unresolved"));
         }
@@ -1499,7 +1558,12 @@ impl Coordinator {
 
     /// Answer a pending resurrect offer (`CMSG_RESURRECT_RESPONSE`) over the coordinator connection.
     /// Rides the coordinator connection as `gw_respond_resurrect`.
-    pub fn resurrect_response(&self, _account_id: u64, actor_guid: u64, accept: bool) -> Result<()> {
+    pub fn resurrect_response(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        accept: bool,
+    ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("resurrect_response: actor_guid unresolved"));
         }
