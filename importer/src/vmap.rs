@@ -304,17 +304,43 @@ impl Drop for VmapSpool {
 fn sql_has_map(sql_output: &str, map_id: u32) -> Result<bool> {
     let value: serde_json::Value = serde_json::from_str(sql_output)
         .context("parse JSON SQL map-ownership response")?;
-    fn visit(value: &serde_json::Value, map_id: u32) -> bool {
-        match value {
-            serde_json::Value::Object(object) => object.iter().any(|(key, value)| {
-                (key == "map_id" && value.as_u64() == Some(map_id as u64))
-                    || visit(value, map_id)
-            }),
-            serde_json::Value::Array(values) => values.iter().any(|value| visit(value, map_id)),
-            _ => false,
+    Ok(sql_column_rows(&value, &["map_id"])
+        .iter()
+        .any(|row| row[0].as_u64() == Some(map_id as u64)))
+}
+
+/// SpacetimeDB JSON SQL returns a result set as `schema.elements` plus array rows, not JSON
+/// objects. Match columns by schema name so a query cannot mistake row-count text for ownership.
+fn sql_column_rows<'a>(value: &'a serde_json::Value, columns: &[&str]) -> Vec<Vec<&'a serde_json::Value>> {
+    let mut rows = Vec::new();
+    let Some(results) = value.as_array() else {
+        return rows;
+    };
+    for result in results {
+        let Some(elements) = result.pointer("/schema/elements").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        let indices: Option<Vec<usize>> = columns
+            .iter()
+            .map(|column| {
+                elements.iter().position(|element| {
+                    element.pointer("/name/some").and_then(serde_json::Value::as_str) == Some(*column)
+                })
+            })
+            .collect();
+        let Some(indices) = indices else {
+            continue;
+        };
+        for row in result.get("rows").and_then(serde_json::Value::as_array).into_iter().flatten() {
+            let Some(row) = row.as_array() else {
+                continue;
+            };
+            if let Some(values) = indices.iter().map(|&index| row.get(index)).collect::<Option<Vec<_>>>() {
+                rows.push(values);
+            }
         }
     }
-    Ok(visit(&value, map_id))
+    rows
 }
 
 fn sql_query(args: &crate::Args, query: &str) -> Result<String> {
@@ -337,31 +363,14 @@ fn accepted_chunk_ids(args: &crate::Args, generation_id: u64) -> Result<std::col
     )?;
     let value: serde_json::Value = serde_json::from_str(&output)
         .context("parse JSON SQL vmap generation-chunk response")?;
-    fn visit(value: &serde_json::Value, accepted: &mut std::collections::HashSet<(u64, u32)>) {
-        match value {
-            serde_json::Value::Object(object) => {
-                if let (Some(key), Some(ordinal)) = (
-                    object.get("key").and_then(serde_json::Value::as_u64),
-                    object.get("shard_ordinal").and_then(serde_json::Value::as_u64),
-                ) {
-                    if let Ok(ordinal) = u32::try_from(ordinal) {
-                        accepted.insert((key, ordinal));
-                    }
-                }
-                for value in object.values() {
-                    visit(value, accepted);
-                }
+    let mut accepted = std::collections::HashSet::new();
+    for row in sql_column_rows(&value, &["key", "shard_ordinal"]) {
+        if let (Some(key), Some(ordinal)) = (row[0].as_u64(), row[1].as_u64()) {
+            if let Ok(ordinal) = u32::try_from(ordinal) {
+                accepted.insert((key, ordinal));
             }
-            serde_json::Value::Array(values) => {
-                for value in values {
-                    visit(value, accepted);
-                }
-            }
-            _ => {}
         }
     }
-    let mut accepted = std::collections::HashSet::new();
-    visit(&value, &mut accepted);
     Ok(accepted)
 }
 
@@ -848,10 +857,10 @@ mod tests {
 
     #[test]
     fn ownership_parser_accepts_the_requested_map_and_rejects_another() {
-        let rows = r#"[{"map_id":0},{"map_id":36}]"#;
+        let rows = r#"[{"schema":{"elements":[{"name":{"some":"map_id"}}]},"rows":[[0],[36]]}]"#;
         assert!(sql_has_map(rows, 0).unwrap());
         assert!(sql_has_map(rows, 36).unwrap());
         assert!(!sql_has_map(rows, 1).unwrap());
-        assert!(!sql_has_map(r#"{"rows":"0 rows"}"#, 0).unwrap());
+        assert!(!sql_has_map(r#"[{"schema":{"elements":[{"name":{"some":"map_id"}}]},"rows":[]}]"#, 0).unwrap());
     }
 }
