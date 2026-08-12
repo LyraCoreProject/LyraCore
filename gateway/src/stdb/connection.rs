@@ -7,7 +7,7 @@ use crate::config::{GatewayConfig, ShardMap};
 use anyhow::{anyhow, Context, Result};
 use spacetimedb_sdk::{DbContext, SubscriptionHandle as _, Table};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -62,6 +62,21 @@ pub(crate) struct LiveConn {
     _pump: std::thread::JoinHandle<()>,
     /// Keeps the privileged subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
+}
+
+impl LiveConn {
+    /// A reducer connection is usable only while both its transport and its liveness subscription
+    /// are alive. A module republish can invalidate the latter without closing the socket.
+    fn is_healthy(&self) -> bool {
+        self.conn.is_active() && self._sub.is_active()
+    }
+}
+
+/// One replaceable reducer-only connection. Reconnection happens off the watchdog thread; this
+/// flag prevents a slow or unavailable node from spawning another repair attempt every poll.
+struct CallPipe {
+    live: RwLock<LiveConn>,
+    reconnecting: AtomicBool,
 }
 
 /// One-shot completion registry for calls sent through one SDK connection.
@@ -153,9 +168,9 @@ pub(crate) struct CoordinatorInner {
     /// calls stop serializing on one websocket (measured wall: ~1000 seats/pipe). Each pipe
     /// carries one tiny liveness subscription (`game_config`, 1 row), never the coordinator set.
     /// Empty when `LYRACORE_CALL_PIPES` <= 1 — calls then ride `coord()` exactly as before.
-    /// Deliberate simplification: dead pipes don't self-heal — `call_pipe()` skips inactive ones and falls back to
-    /// the watchdogged `coord()`; extending the watchdog to rebuild pipes is the upgrade path.
-    call_pipes: Vec<RwLock<LiveConn>>,
+    /// Dead pipes are skipped immediately and rebuilt in the background. Until their replacement
+    /// lands, calls use another healthy pipe or the watchdogged coordinator connection.
+    call_pipes: Vec<CallPipe>,
     call_pipe_next: std::sync::atomic::AtomicUsize,
     /// The per-shard movement batch — the hot path pushes one `GwMove` per inbound
     /// heartbeat and the 40ms flush task sends the whole tick as ONE `gw_movement_batch`
@@ -204,13 +219,17 @@ impl CoordinatorInner {
             let start = self
                 .call_pipe_next
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            for k in 0..n {
-                let g = self.call_pipes[(start + k) % n]
+            if let Some(index) = select_active_call_pipe(n, start, |index| {
+                self.call_pipes[index]
+                    .live
+                    .read()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .is_healthy()
+            }) {
+                return self.call_pipes[index]
+                    .live
                     .read()
                     .unwrap_or_else(|p| p.into_inner());
-                if g.conn.is_active() {
-                    return g;
-                }
             }
             log::warn!(
                 "call-pipe pool: every pipe inactive — falling back to the coordinator connection"
@@ -218,6 +237,19 @@ impl CoordinatorInner {
         }
         self.coord()
     }
+}
+
+/// Return the round-robin pipe that is currently usable, or let the caller use its coordinator
+/// fallback when there is none. Kept independent of the SDK connection so recovery routing has a
+/// deterministic unit-test seam.
+fn select_active_call_pipe(
+    pipe_count: usize,
+    start: usize,
+    mut is_active: impl FnMut(usize) -> bool,
+) -> Option<usize> {
+    (0..pipe_count)
+        .map(|offset| (start + offset) % pipe_count)
+        .find(|&index| is_active(index))
 }
 
 /// Build one CALL-ONLY pipe — same connect shape as [`connect_blocking`] but subscribing a
@@ -261,6 +293,63 @@ fn connect_call_pipe(uri: String, db_name: String, token: Option<String>) -> Res
         _pump: pump,
         _sub: sub,
     })
+}
+
+/// Start at most one reconnect for each failed call pipe. The coordinator watchdog owns this
+/// because it is already the one place that observes transport/subscription liveness for this
+/// shard. Building happens on a detached OS thread so a down node never stalls the watchdog's
+/// coordinator recovery or live callers.
+fn repair_dead_call_pipes(inner: &Arc<CoordinatorInner>) {
+    for (index, pipe) in inner.call_pipes.iter().enumerate() {
+        let is_healthy = pipe
+            .live
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_healthy();
+        let already_reconnecting = pipe.reconnecting.swap(true, Ordering::AcqRel);
+        if !call_pipe_needs_repair(is_healthy, already_reconnecting) {
+            if is_healthy {
+                pipe.reconnecting.store(false, Ordering::Release);
+            }
+            continue;
+        }
+
+        let repair = inner.clone();
+        let uri = inner.uri.clone();
+        let db_name = inner.db_name.clone();
+        let token = inner.token.clone();
+        std::thread::Builder::new()
+            .name(format!("stdb-call-pipe-reconnect-{index}"))
+            .spawn(move || {
+                match connect_call_pipe(uri, db_name, token) {
+                    Ok(fresh) => {
+                        let old = {
+                            let mut live = repair.call_pipes[index]
+                                .live
+                                .write()
+                                .unwrap_or_else(|p| p.into_inner());
+                            std::mem::replace(&mut *live, fresh)
+                        };
+                        log::info!("call pipe {index} reconnected");
+                        let _ = old.conn.disconnect();
+                        if let Err(e) = old._pump.join() {
+                            log::warn!("old call-pipe pump thread panicked on teardown: {e:?}");
+                        }
+                    }
+                    Err(e) => log::error!("call pipe {index} reconnect failed (will retry): {e:#}"),
+                }
+                repair.call_pipes[index]
+                    .reconnecting
+                    .store(false, Ordering::Release);
+            })
+            .expect("spawn call-pipe reconnect thread");
+    }
+}
+
+/// A repair is started exactly once for a failed pipe. This is separate from selection because a
+/// healthy coordinator remains available for reducer calls while the repair is in flight.
+fn call_pipe_needs_repair(is_healthy: bool, already_reconnecting: bool) -> bool {
+    !is_healthy && !already_reconnecting
 }
 
 /// The coordinator subscription set, as a pure function of ONE flag — so the property that
@@ -646,6 +735,10 @@ fn spawn_coordinator_watchdog(inner: Arc<CoordinatorInner>) -> std::thread::Join
         .name("stdb-coordinator-watchdog".into())
         .spawn(move || loop {
             std::thread::sleep(COORDINATOR_WATCHDOG_POLL);
+            // Pipe repair is independent of coordinator recovery: a healthy coordinator is the
+            // fallback while a failed reducer-only pipe reconnects, and must not prevent that
+            // pipe returning to the round-robin pool.
+            repair_dead_call_pipes(&inner);
             {
                 // ONE guard for both checks (so a swap can't land between them). Healthy → keep polling.
                 let live = inner.coord();
@@ -1039,6 +1132,51 @@ mod recv_reducer_tests {
     }
 }
 
+#[cfg(test)]
+mod call_pipe_routing_tests {
+    use super::{call_pipe_needs_repair, select_active_call_pipe};
+
+    #[test]
+    fn a_dead_call_pipe_is_skipped_for_the_next_live_pipe() {
+        assert_eq!(
+            select_active_call_pipe(3, 0, |index| index == 1),
+            Some(1),
+            "a reducer must not be sent through the dead pipe selected by round-robin"
+        );
+    }
+
+    #[test]
+    fn a_repaired_call_pipe_rejoins_reducer_rotation() {
+        assert_eq!(
+            select_active_call_pipe(3, 0, |index| index == 0),
+            Some(0),
+            "once a pipe is live again, subsequent reducer traffic should use it"
+        );
+    }
+
+    #[test]
+    fn every_dead_call_pipe_routes_reducers_to_the_coordinator() {
+        assert_eq!(
+            select_active_call_pipe(3, 0, |_| false),
+            None,
+            "the watchdogged coordinator is the safe fallback while pipes reconnect"
+        );
+    }
+
+    #[test]
+    fn only_one_repair_attempt_is_started_for_a_dead_call_pipe() {
+        assert!(call_pipe_needs_repair(false, false));
+        assert!(
+            !call_pipe_needs_repair(false, true),
+            "a down node must not accumulate watchdog reconnect threads for the same pipe"
+        );
+        assert!(
+            !call_pipe_needs_repair(true, false),
+            "healthy pipes require no repair"
+        );
+    }
+}
+
 /// Fire a reducer over `$reducers` and block (≤10s) on its completion, mapping the outcome to
 /// `anyhow` (evaluates to `Result<()>`). Collapses the channel + status-flatten callback +
 /// `recv_reducer` that every reducer wrapper otherwise repeats verbatim; the trailing completion
@@ -1145,7 +1283,10 @@ impl Coordinator {
                 })
                 .await;
                 match built {
-                    Ok(Ok(pipe)) => call_pipes.push(RwLock::new(pipe)),
+                    Ok(Ok(pipe)) => call_pipes.push(CallPipe {
+                        live: RwLock::new(pipe),
+                        reconnecting: AtomicBool::new(false),
+                    }),
                     Ok(Err(e)) => log::warn!("call pipe {i} failed to build (skipped): {e:#}"),
                     Err(e) => log::warn!("call pipe {i} join failed (skipped): {e:#}"),
                 }
