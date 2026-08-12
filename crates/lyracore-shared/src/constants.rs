@@ -232,10 +232,10 @@ pub mod start_human_warrior {
 /// through unchanged — this module documents what the values MEAN so the gateway dispatch and the
 /// importer agree without duplicating magic numbers). `[V]` — confirm against your own dump; only
 /// GOSSIP/BANKER/VENDOR/TAXI/TRAINER/INNKEEPER are read by the dispatcher today, the rest are
-/// inert (submenu/banker/taxi systems aren't wired up — work-item 217 scope note).
+/// inert (submenu/taxi aren't wired up — work-item 217 scope note).
 pub mod gossip_option {
     pub const GOSSIP: u32 = 1; // plain text / submenu link (submenu navigation deferred, work-item 217)
-    pub const BANKER: u32 = 2; // opens the bank (system 133, not wired — inert)
+    pub const BANKER: u32 = 2; // opens the bank window
     pub const VENDOR: u32 = 3; // opens the vendor window (routes to build_list_inventory_raw)
     pub const TAXI: u32 = 4; // flight master (system 136, not wired — inert)
     pub const TRAINER: u32 = 5; // opens SMSG_TRAINER_LIST

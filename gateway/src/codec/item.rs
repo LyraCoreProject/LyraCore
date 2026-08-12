@@ -277,6 +277,13 @@ pub fn build_buy_failed(vendor_guid: u64, item_entry: u32, err: &str) -> SMSG_BU
     }
 }
 
+/// Build `SMSG_SHOW_BANK` — opens the bank window, carrying the banker's guid.
+pub fn build_show_bank(banker_guid: u64) -> SMSG_SHOW_BANK {
+    SMSG_SHOW_BANK {
+        guid: Guid::new(banker_guid),
+    }
+}
+
 /// Build the item or container CREATE_OBJECT (items slice-1 / bag extension). A non-spatial object:
 /// NO living/position movement block — just `UPDATEFLAG_ALL`. Branches on `inst.container_slots`:
 /// - Regular items (0): `ObjectType::Item` + `UpdateMask::Item` (baseline-safe, byte-identical).
