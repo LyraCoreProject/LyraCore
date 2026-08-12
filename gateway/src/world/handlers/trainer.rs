@@ -29,8 +29,8 @@ pub(crate) fn handle_trainer<St: WorldStore + ?Sized>(
             {
                 return Ok(None);
             }
-            // ...and so does one that does not teach your class. Silent drop, not an empty window:
-            // an empty list is indistinguishable from a trainer whose offerings were never imported.
+            // Wrong class: silent drop, not an empty window — an empty list is indistinguishable
+            // from a trainer whose offerings were never imported.
             if !store
                 .trainer_serves(self_guid, trainer_guid)
                 .unwrap_or(true)

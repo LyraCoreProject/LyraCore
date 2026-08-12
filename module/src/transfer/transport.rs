@@ -80,6 +80,11 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_group_member",
     "game_pet_command",
     "game_character_shard",
+    // A Trade Session (+ its slot rows) is a live dialog with a partner who is by definition NOT
+    // transferring too — carrying it would import a negotiation the destination's partner copy
+    // cannot see. It dies with the source, exactly as the logout teardown would (#120).
+    "game_trade_session",
+    "game_trade_slot",
 ];
 
 // ===========================================================================================

@@ -1484,12 +1484,7 @@ pub(crate) fn apply_inspect(
 ) -> Result<(), String> {
     let target = crate::helpers::live_entity(ctx, target_guid)
         .map_err(|_| "no such inspect target".to_string())?;
-    let (dx, dy, dz) = (
-        target.x - inspector.x,
-        target.y - inspector.y,
-        target.z - inspector.z,
-    );
-    let dist_sq = dx * dx + dy * dy + dz * dz;
+    let dist_sq = crate::helpers::dist_sq(&inspector, &target);
     let friendly = ctx.db.game_faction_template().count() == 0
         || crate::faction::is_friendly(ctx, inspector.faction_template, target.faction_template);
     can_inspect(
@@ -1888,6 +1883,9 @@ pub(crate) fn remove_from_world(ctx: &ReducerContext, owner: Identity) {
     // shouldn't leave the player "attacking" or hold a target in combat). `disengage` removes both
     // its own attack and any attacks targeting it (future PvP).
     crate::combat::disengage(ctx, entity.guid);
+
+    // A live Trade Session dies with the leaver — the partner hears `TradeCanceled` (#120).
+    crate::trade::cancel_trade_for(ctx, entity.guid);
 
     // Clear the player's corpse on leaving the world (logout/disconnect) so a dead/ghost
     // player who quits doesn't leave an orphan body behind (corpse decay to bones rides the gc reaper). Idempotent.

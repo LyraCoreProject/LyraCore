@@ -179,20 +179,12 @@ pub(crate) fn validate_trainer_interaction(
     if trainer.map_id != caster.map_id || trainer.instance_id != caster.instance_id {
         return Err("trainer on another map".to_string());
     }
-    let (dx, dy, dz) = (
-        trainer.x - caster.x,
-        trainer.y - caster.y,
-        trainer.z - caster.z,
-    );
-    if dx * dx + dy * dy + dz * dz > TRAINER_RANGE_SQ {
+    if crate::helpers::dist_sq(&caster, &trainer) > TRAINER_RANGE_SQ {
         return Err("trainer out of range".to_string());
     }
-    // Class gate. It sits here rather than in `apply_trainer_buy` because this is the shared
-    // chokepoint: the respec path runs through it too, so one guard closes both wrong-class training
-    // and wrong-class respec. `lyracore_shared::trainer::serves` holds the rule and the reasoning.
-    //
-    // A trainer with no template row does not fire the gate — missing imported data never blocks an
-    // interaction that used to work.
+    // The class gate sits at this shared chokepoint so one guard closes both wrong-class training
+    // and wrong-class respec. No template row means no gate: missing imported data must not block
+    // an interaction that used to work.
     if ctx
         .db
         .game_creature_template()

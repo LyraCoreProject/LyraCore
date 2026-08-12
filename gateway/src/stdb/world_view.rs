@@ -266,7 +266,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         melee_disengaged(v, shard, row)
     });
 
-    // ---- game_resurrect_request / game_whisper_event / game_group_event -----------------------
+    // ---- game_resurrect_request / game_whisper_event / game_group_event / game_trade_event ----
     // The PRIVATE tier: every row is addressed to exactly one recipient, and on this feed the
     // gateway owns the guarantee RLS used to give. Delivery is recipient-keyed (the owner-session
     // lookup) + the explicit `private_recipient_audience` predicate — never a viewer fan.
@@ -284,6 +284,9 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
             group_event_appeared(v, &coord, row)
         });
     }
+    wire_insert(db.game_trade_event(), "game_trade_event.insert", &view, |v, row| {
+        trade_event_appeared(v, row)
+    });
 
     // ---- game_aura ------------------------------------------------------------------------------
     // The aura composite: array sync (visibility-gated), self-only duration/run-speed/armor,
@@ -950,6 +953,25 @@ fn whisper_appeared(view: &WorldView, row: &WhisperEvent) {
     let tx = viewer.tx.clone();
     enqueue(&tx, move || {
         super::subscriptions::whisper_event_outbound(&row)
+    });
+}
+
+/// A trade status landed → the `SMSG_TRADE_STATUS` packet to the row's RECIPIENT and nobody
+/// else (same shape as [`whisper_appeared`]) (#120).
+fn trade_event_appeared(view: &WorldView, row: &TradeEvent) {
+    let Some(session) = view.entities.session_of_owner(row.recipient_guid) else {
+        return;
+    };
+    let Some(viewer) = view.viewer(session) else {
+        return;
+    };
+    if !super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid) {
+        return;
+    }
+    let row = row.clone();
+    let tx = viewer.tx.clone();
+    enqueue(&tx, move || {
+        super::subscriptions::trade_event_outbound(&row)
     });
 }
 

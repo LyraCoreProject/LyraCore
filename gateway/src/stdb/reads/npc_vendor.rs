@@ -171,10 +171,8 @@ impl Coordinator {
         Ok(items)
     }
 
-    /// Does this trainer serve `player_guid`'s class? The module enforces the same rule on the buy,
-    /// and both sides call the one shared predicate, so what is offered and what is honoured agree.
-    /// Fail-open on every missing read — no trainer, no character (including a guid of 0), no
-    /// template — matching `npc_refuses_interaction`.
+    /// Does this trainer serve `player_guid`'s class? Fail-open on any missing read (trainer,
+    /// character, template), matching `npc_refuses_interaction`.
     pub fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool> {
         let guard = self.0.coord();
         let db = &guard.conn.db;

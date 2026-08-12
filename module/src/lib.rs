@@ -298,6 +298,7 @@ pub mod terrain;
 #[cfg(test)]
 mod test_scan;
 mod threat;
+mod trade;
 mod trainer;
 mod transfer;
 /// Exact per-cell vmap collision-triangle store + LoS/collision ray queries (issue #521, part of
@@ -349,6 +350,7 @@ pub use spell::*;
 pub use stats::*;
 pub use talent::*;
 pub use threat::*;
+pub use trade::*;
 pub use trainer::*;
 pub use transfer::TransferOut; // re-exported for the gateway schema-parity test (#19)
 pub use world::*;

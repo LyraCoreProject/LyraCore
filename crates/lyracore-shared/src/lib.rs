@@ -19,6 +19,7 @@ pub mod quest;
 pub mod region;
 pub mod spatial;
 pub mod terrain;
+pub mod trade;
 pub mod trainer;
 pub mod values_mask;
 pub mod vmap;
