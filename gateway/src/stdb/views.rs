@@ -125,6 +125,7 @@ pub(crate) fn entity_view(e: WorldEntity, zone_id: u32) -> crate::codec::EntityV
         next_level_xp: e.next_level_xp,
         money: e.money,
         unit_bytes_1: e.unit_bytes_1,
+        unit_bytes_2: e.unit_bytes_2,
         strength: e.strength,
         agility: e.agility,
         stamina: e.stamina,
@@ -179,6 +180,7 @@ pub(crate) fn go_view(go: GameObject, tmpl: &GameObjectTemplate) -> crate::codec
         rotation_1: go.rotation_1,
         rotation_2: go.rotation_2,
         rotation_3: go.rotation_3,
+        size: tmpl.size,
     }
 }
 
