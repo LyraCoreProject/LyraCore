@@ -7,8 +7,10 @@ use crate::{
     game_addon_message, game_bot_invite_intent, game_channel_event, game_chat_event,
     game_combat_event, game_emote_event, game_group_event, game_group_invite, game_levelup_event,
     game_movement_violation, game_roll_event, game_spell_cast_event, game_spell_impact_event,
-    game_teleport_event, game_whisper_event, game_xp_event, EVENT_TTL_MICROS, INVITE_TTL_MICROS,
+    game_teleport_event, game_trade_event, game_trade_session, game_whisper_event, game_xp_event,
+    EVENT_TTL_MICROS, INVITE_TTL_MICROS,
 };
+use crate::breath_relay::game_breath_relay_event;
 // `rest` isn't re-exported at crate scope (`mod rest;`, no `pub use rest::*;` in lib.rs) — every
 // other event table's accessor trait rides that glob, so this is the one accessor here needing its
 // own import.
@@ -81,6 +83,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_addon_message); // addon-bridge UI messages (184, RLS-scoped)
     reap!(game_roll_event); // /roll broadcast results
     reap!(game_group_event); // group invite/roster notifications (RLS-scoped)
+    reap!(game_trade_event); // trade-status relay rows (#120, RLS-scoped)
     reap!(game_bot_invite_intent); // bot-decided invites awaiting gateway pickup (issue #54)
     reap!(game_movement_violation); // recent anti-cheat diagnostics (issue #211)
                                     // Rest-area zzz/blue-bar relay rows (196). Caught missing by the #379 gc_reap_tripwire: this
@@ -89,6 +92,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
                                     // row behind. The durable rest state (`Character.resting`/`rested_xp`) lives elsewhere; this row
                                     // is only the one-shot PLAYER_BYTES_2 relay.
     reap!(game_rest_state_event);
+    reap!(game_breath_relay_event); // breath timer edges + drowning damage relay (#141)
 
     // Never-answered pending invites. Same id+created_at shape as the event tables, but on
     // the longer INVITE_TTL (a human is looking at the invite dialog). After that the row is dead
@@ -104,6 +108,23 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
             .collect();
         for id in stale {
             t.id().delete(id);
+        }
+    }
+
+    // Idle Trade Sessions (#123): `created_at` is bumped by every trade action, so the pure
+    // policy (`trade::session_is_stale`) measures idleness — a live negotiation is never reaped.
+    // Torn down THROUGH `cancel_trade_for`, never a bare delete, so both clients hear
+    // `TradeCanceled` instead of keeping stale windows open.
+    {
+        let sessions = ctx.db.game_trade_session();
+        let now = ctx.timestamp.to_micros_since_unix_epoch();
+        let stale: Vec<u64> = sessions
+            .iter()
+            .filter(|s| crate::trade::session_is_stale(s.created_at.to_micros_since_unix_epoch(), now))
+            .map(|s| s.initiator_guid)
+            .collect();
+        for guid in stale {
+            crate::trade::cancel_trade_for(ctx, guid);
         }
     }
 

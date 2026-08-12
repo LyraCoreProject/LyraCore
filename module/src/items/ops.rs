@@ -15,7 +15,7 @@ use crate::game_spell_effect; // Gate A reads the on-use spell's effect kinds (b
 use crate::game_start_item; // per-class starter loadout (CharStartOutfit via importer --dbc)
 use crate::game_world_entity; // gameobject (chest) loot source — apply_take_loot resolves it too
 
-use super::inventory::{first_free_backpack_slot, first_free_bag_slot};
+use super::inventory::{first_free_backpack_slot, first_free_bag_slot, is_carried_slot};
 use super::rules::{
     binds_on_grant, enchant_stat, equip_slot, meets_required_level, merge_amount,
     resolve_equip_slot, template_stat, EquipStat,
@@ -192,7 +192,10 @@ pub(crate) fn store_item(
         let mut partials: Vec<ItemInstance> = instances
             .by_owner_guid()
             .filter(&player_guid)
-            .filter(|i| i.entry == tmpl.entry && i.stack_count < max_stack)
+            // Carried stacks only — loot never merges into a banked stack.
+            .filter(|i| {
+                is_carried_slot(i.slot) && i.entry == tmpl.entry && i.stack_count < max_stack
+            })
             .collect();
         partials.sort_by_key(|i| i.slot);
         for mut inst in partials {
@@ -243,7 +246,8 @@ pub(crate) fn item_count(ctx: &ReducerContext, owner_guid: u64, item_entry: u32)
         .game_item_instance()
         .by_owner_guid()
         .filter(&owner_guid)
-        .filter(|i| i.entry == item_entry)
+        // Banked copies don't count toward a collect quest.
+        .filter(|i| is_carried_slot(i.slot) && i.entry == item_entry)
         .map(|i| i.stack_count)
         .sum()
 }
@@ -261,7 +265,8 @@ pub(crate) fn remove_items(
     let mut stacks: Vec<ItemInstance> = instances
         .by_owner_guid()
         .filter(&owner_guid)
-        .filter(|i| i.entry == item_entry)
+        // A turn-in consumes carried stacks only; the bank is never silently emptied.
+        .filter(|i| is_carried_slot(i.slot) && i.entry == item_entry)
         .collect();
     stacks.sort_by_key(|i| i.slot);
     for mut inst in stacks {
@@ -379,6 +384,10 @@ pub(crate) fn apply_item_use(
     let instances = ctx.db.game_item_instance();
     let mut inst =
         item_in_slot(ctx, player_guid, slot).ok_or_else(|| format!("no item in slot {slot}"))?;
+    // A banked item must be taken out before it can be used — the bank is not a second action bar.
+    if !is_carried_slot(inst.slot) {
+        return Err("cannot use a banked item".to_string());
+    }
     let tmpl = ctx
         .db
         .game_item_template()

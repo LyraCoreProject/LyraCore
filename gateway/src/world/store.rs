@@ -390,6 +390,10 @@ pub trait WorldStore: Send + Sync {
     /// masks. Fail-open on missing data.
     fn npc_refuses_interaction(&self, npc_guid: u64, player_guid: u64) -> Result<bool>;
 
+    /// Does this trainer serve `player_guid`'s class? Gates the window and the "train" gossip
+    /// option through the same predicate the module buys with. Fail-open on missing data.
+    fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool>;
+
     /// Buy `count` of `item_entry` from `vendor_guid` (`CMSG_BUY_ITEM`, Tier 2). The module gates
     /// the purchase on the vendor (stock / range / copper); a gameplay `Err` is per-action, not fatal.
     fn buy_item(
@@ -558,6 +562,16 @@ pub trait WorldStore: Send + Sync {
     /// covers drag-to-equip and drag-to-unequip. A gameplay `Err` is per-action, not session-fatal.
     fn move_item(&self, account_id: u64, self_guid: u64, from_slot: u8, to_slot: u8) -> Result<()>;
 
+    /// Auto-bank/auto-store-bank the item in `slot` (`CMSG_AUTOBANK_ITEM`/`CMSG_AUTOSTORE_BANK_ITEM`
+    /// — right-click to bank, right-click to withdraw). The module infers the direction from `slot`
+    /// and resolves the receiving free slot itself; a full destination (bank or carry space) is a
+    /// per-action `Err`.
+    fn auto_bank_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()>;
+
+    /// Buy the next bank bag slot from `banker_guid` (`CMSG_BUY_BANK_SLOT`). A refusal `Err` leads
+    /// with its `SMSG_BUY_BANK_SLOT_RESULT` code in brackets (the trainer `[N]` precedent).
+    fn buy_bank_slot(&self, account_id: u64, self_guid: u64, banker_guid: u64) -> Result<()>;
+
     /// Evaluate a quest giver's quests against the player for the overhead status icon + the quest
     /// menu (quests gateway slice). See `stdb::reads::quest_giver_evals`.
     fn quest_giver_evals(
@@ -673,6 +687,11 @@ pub trait WorldStore: Send + Sync {
 
     /// Stop the player's melee auto-attack (`CMSG_ATTACKSTOP`, combat C1).
     fn stop_attack(&self, account_id: u64, self_guid: u64) -> Result<()>;
+
+    /// Draw or stow the player's weapons (`CMSG_SETSHEATHED`, the `Z` key). `state` is 0 stowed /
+    /// 1 melee / 2 ranged; the module range-checks it. Writes `UNIT_FIELD_BYTES_2` byte 0, which is
+    /// what makes a drawn or stowed weapon visible to OTHER players. [#101]
+    fn set_sheathed(&self, account_id: u64, self_guid: u64, state: u8) -> Result<()>;
 
     /// Cast a spell (`CMSG_CAST_SPELL`, aura tracer). Self-cast; target ignored.
     fn cast_spell(&self, account_id: u64, self_guid: u64, spell_id: u32, target_guid: u64) -> Result<()>;
@@ -957,6 +976,33 @@ pub trait WorldStore: Send + Sync {
     /// Healer to res IN PLACE at 50% health/mana + a Resurrection Sickness debuff. `healer_guid` is the
     /// activated healer's guid (passed through to the confirm echo). The module gates on ghost state.
     fn spirit_healer_res(&self, account_id: u64, self_guid: u64, healer_guid: u64) -> Result<()>;
+
+    // --- Trade (#120). Every status — BeginTrade/OpenWindow to the parties, or a refusal back to
+    // the caller — rides the `game_trade_event` relay; these calls answer nothing synchronously,
+    // and an `Err` is only an unresolved actor (per-action, log + ignore).
+
+    /// `CMSG_INITIATE_TRADE` — propose a Trade Session against the targeted player.
+    fn initiate_trade(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
+    /// `CMSG_BEGIN_TRADE` — the proposed target's client answered; the module opens both windows.
+    fn begin_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    /// `CMSG_CANCEL_TRADE` — tear the caller's Trade Session down (`TradeCanceled` to both).
+    fn cancel_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    /// `CMSG_SET_TRADE_ITEM` — `inv_slot` is the ABSOLUTE inventory slot (the gateway maps the
+    /// client's (bag, slot) pair, the item-family convention) (#121).
+    fn set_trade_item(&self, account_id: u64, self_guid: u64, trade_slot: u8, inv_slot: u8) -> Result<()>;
+    /// `CMSG_CLEAR_TRADE_ITEM` (#121).
+    fn clear_trade_item(&self, account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()>;
+    /// `CMSG_SET_TRADE_GOLD` — `copper` is the offered amount (#121).
+    fn set_trade_gold(&self, account_id: u64, self_guid: u64, copper: u32) -> Result<()>;
+    /// `CMSG_ACCEPT_TRADE` — accept the current offer; dual-accept runs the atomic Trade Commit
+    /// module-side (#122).
+    fn accept_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    /// `CMSG_UNACCEPT_TRADE` — withdraw an accept; partner hears `BackToTrade` (#122).
+    fn unaccept_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    /// `CMSG_BUSY_TRADE` — decline a pending proposal as busy; initiator hears `Busy` (#123).
+    fn busy_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    /// `CMSG_IGNORE_TRADE` — decline via ignore; initiator hears `IgnoreYou` (#123).
+    fn ignore_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
 
     /// Find `owner_guid`'s corpse location `(map_id, x, y, z)` for `MSG_CORPSE_QUERY` (slice 5).
     fn corpse_location(&self, owner_guid: u64) -> Result<Option<(u32, f32, f32, f32)>>;

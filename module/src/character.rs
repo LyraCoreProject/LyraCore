@@ -170,4 +170,10 @@ pub struct Character {
     /// column existed). Gateway-subscribed → hand-synced in `character_type.rs` + widened parity.
     #[default(10000)]
     pub pending_run_speed_mult_bp: u32,
+    /// Bank bag slots bought at a banker (0..=6). Mirrors `WorldEntity.bank_bag_slots` while online
+    /// exactly as `money` does: the purchase writes the live entity, `persist_entity` writes it back
+    /// here. `#[default(0)]` + END-appended → auto-migrates existing characters to "owns none".
+    /// Gateway-subscribed (`game_character`) → hand-synced in `character_type.rs` + `schema_parity.rs`.
+    #[default(0)]
+    pub bank_bag_slots: u8,
 }

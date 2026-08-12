@@ -406,6 +406,11 @@ parity_test!(parity_game_group_member, "game_group_member", lyracore_module::Gro
 parity_test!(parity_game_group_event, "game_group_event", lyracore_module::GroupEvent, bindings::group_event_type::GroupEvent, {
     id, recipient_identity, kind, other_guid, other_name, created_at, payload, recipient_guid,
 });
+// The private per-recipient trade-status relay (#120) — the `game_group_event` shape minus the
+// name/payload columns (no trade status carries either).
+parity_test!(parity_game_trade_event, "game_trade_event", lyracore_module::TradeEvent, bindings::trade_event_type::TradeEvent, {
+    id, recipient_identity, kind, other_guid, created_at, recipient_guid, payload,
+});
 // A bot's serendipity invite DECISION, picked up by the coordinator's
 // `world::party::run_bot_invite` relay (`stdb/subscriptions.rs`) — not a client-facing table, but
 // the gateway decodes it off the wire the same as everything else here.
@@ -447,7 +452,7 @@ parity_test!(parity_game_character, "game_character", lyracore_module::Character
     first_login, online, money, rested_xp, last_logout_micros, home_map, home_zone, home_x,
     home_y, home_z, played_total_secs, session_start_micros, health, power, respec_count,
     death_expire_micros, pending_instance_id, gm_level, pending_ghost, resting, rested_since_micros,
-    pending_godmode, pending_run_speed_mult_bp,
+    pending_godmode, pending_run_speed_mult_bp, bank_bag_slots,
 });
 parity_test!(parity_game_world_entity, "game_world_entity", lyracore_module::WorldEntity, bindings::world_entity_type::WorldEntity, {
     guid, owner_identity, account_id, map_id, x, y, z, orientation, grid_x, grid_y,
@@ -460,7 +465,8 @@ parity_test!(parity_game_world_entity, "game_world_entity", lyracore_module::Wor
     stance, owner_guid, skinned, mana_regen_paused_until_ms, death_expire_micros, instance_id,
     run_speed_mult_bp, godmode, resting, cell,
     sheet_str_bonus, sheet_agi_bonus, sheet_sta_bonus, sheet_int_bonus, sheet_spi_bonus,
-    sheet_ap_base, sheet_ap_mods, sheet_dmg_min, sheet_dmg_max, sheet_crit_bp,
+    sheet_ap_base, sheet_ap_mods, sheet_dmg_min, sheet_dmg_max, sheet_crit_bp, unit_bytes_2,
+    bank_bag_slots,
 });
 // `game_config` became gateway-subscribed so the startup instance-hosting check can read
 // `hosts_instances` back instead of guessing. The generated binding was STALE when that subscription
@@ -474,7 +480,7 @@ parity_test!(parity_game_creature_template, "game_creature_template", lyracore_m
     entry, name, subname, display_id, level, health, faction_template, npc_flags, unit_flags,
     creature_type, creature_family, type_flags, rank, scale, base_attack_time_ms, money_min,
     money_max, max_level, max_level_health, aggro_range, damage_min, damage_max, armor,
-    pickpocket_loot_id, skin_loot_id,
+    pickpocket_loot_id, skin_loot_id, trainer_type, trainer_class,
 });
 parity_test!(parity_game_start_position, "game_start_position", lyracore_module::StartPosition, bindings::start_position_type::StartPosition, {
     race_class, race, class, map_id, zone_id, x, y, z, orientation, display_id,
@@ -601,7 +607,7 @@ parity_test!(parity_game_character_buyback, "game_character_buyback", lyracore_m
 });
 parity_test!(parity_game_gameobject_template, "game_gameobject_template", lyracore_module::GameObjectTemplate, bindings::game_object_template_type::GameObjectTemplate, {
     entry, type_id, display_id, name, data_0, data_1, gather_skill_line, respawn_secs,
-    gather_gray, lock_id,
+    gather_gray, lock_id, size,
 }, renames: {
     // Same `spacetime generate` (CLI 2.6.1) trailing-digit normalization as SpellEffect above.
     data0 => data_0, data1 => data_1,
@@ -619,6 +625,9 @@ parity_test!(parity_game_roll_event, "game_roll_event", lyracore_module::RollEve
 });
 parity_test!(parity_game_rest_state_event, "game_rest_state_event", lyracore_module::RestStateEvent, bindings::rest_state_event_type::RestStateEvent, {
     id, character_guid, player_bytes_2, created_at,
+});
+parity_test!(parity_game_breath_relay_event, "game_breath_relay_event", lyracore_module::BreathRelayEvent, bindings::breath_relay_event_type::BreathRelayEvent, {
+    id, character_guid, kind, time_remaining_ms, duration_ms, damage, created_at,
 });
 parity_test!(parity_game_dynamic_object, "game_dynamic_object", lyracore_module::DynamicObject, bindings::dynamic_object_type::DynamicObject, {
     guid, caster_guid, spell_id, map_id, instance_id, x, y, z, radius_yd,
@@ -714,6 +723,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_group",
     "game_group_member",
     "game_group_event",
+    "game_trade_event",
     "game_whisper_event",
     "game_loot_roll",
     "game_loot_roll_vote",
@@ -756,6 +766,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_character_talent",
     "game_roll_event",
     "game_rest_state_event",
+    "game_breath_relay_event",
     "game_dynamic_object",
     "game_combat_event",
     "game_melee_attack",

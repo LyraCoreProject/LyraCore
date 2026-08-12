@@ -37,11 +37,12 @@ use crate::{
     game_gameobject_pool_member, game_gameobject_template, game_graveyard, game_graveyard_zone,
     game_ground_area_schedule, game_instance_reaper_schedule, game_item_template,
     game_gateway_lease_reaper_schedule, game_melee_schedule, game_motion_publish_schedule,
+    game_breath_schedule,
     game_realm, game_spell, game_spell_effect,
     game_start_position, Account, AuraSchedule, Character, CreatureLoot, CreatureMoveSchedule,
     CreatureSpawn, CreatureTemplate, CreatureWaypoint, EventReaperSchedule, GameObject,
     GameObjectPool, GameObjectPoolMember, GameObjectTemplate, GraveyardLoc, GraveyardZone,
-    GroundAreaSchedule, ItemTemplate, MeleeSchedule, Realm, ServerConfig, Spell, SpellEffect,
+    BreathSchedule, GroundAreaSchedule, ItemTemplate, MeleeSchedule, Realm, ServerConfig, Spell, SpellEffect,
     StartPosition, EVENT_TTL_MICROS,
 };
 
@@ -212,6 +213,7 @@ fn seed_production_core(ctx: &ReducerContext) {
         rested_since_micros: 0, // 196
         pending_godmode: false, // 289: GM playtest carry — off until `.god` + a map change
         pending_run_speed_mult_bp: crate::world::RUN_SPEED_BP_1X, // 289: 1×
+        bank_bag_slots: 0,
     });
     // The seeded character goes through the same creation-time kit grant as `create_character`
     // (rows restamp to the real owner identity at establish_session, like its other owned rows).
@@ -287,6 +289,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         armor: 0,              // unmitigated — a demo critter needs no armor
         pickpocket_loot_id: 0, // not imported — the demo chicken has no pickpocket table
         skin_loot_id: 0,       // not imported — the demo chicken isn't a beast anyway
+        trainer_type: 0,   // not a trainer
+        trainer_class: 0,
     });
 
     // The live creature is a game_world_entity row of type Unit. Its GUID must carry HIGHGUID_UNIT
@@ -574,6 +578,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             respawn_secs: 0, // n/a (a CHEST has no respawn timer); 0 ⇒ the 3-min fallback if ever used
             gather_gray: 0,  // n/a (not a gather node) — the always-skill sentinel
             lock_id: 0,      // work-item 211: unlocked (seed/demo chest)
+            size: 0.0, // no dump size — the gateway renders this at 1.0
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 1,
@@ -608,6 +613,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             respawn_secs: 0,      // n/a (a GOOBER has no respawn timer)
             gather_gray: 0,       // n/a (not a gather node)
             lock_id: 0,           // work-item 211: unlocked (seed/demo goober)
+            size: 0.0,            // no dump size — the gateway renders this at 1.0
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 2,
@@ -648,6 +654,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             respawn_secs: 0, // 0 ⇒ the 3-min RESPAWN_WINDOW_MICROS fallback
             gather_gray: 0, // 0 ⇒ the always-skill sentinel (deterministic +1 every gather)
             lock_id: 0,  // work-item 211: gather nodes don't source a lockId this slice
+            size: 0.0, // no dump size — the ETL carries the real one
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 3,
@@ -682,6 +689,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             respawn_secs: 0, // 0 ⇒ the 3-min RESPAWN_WINDOW_MICROS fallback
             gather_gray: 0, // 0 ⇒ the always-skill sentinel (deterministic +1 every gather)
             lock_id: 0,  // work-item 211: gather nodes don't source a lockId this slice
+            size: 0.0, // no dump size — the ETL carries the real one
         });
     ctx.db.game_gameobject().insert(GameObject {
         guid: GO_HIGH | 4,
@@ -736,6 +744,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
                     respawn_secs: 300, // real vanilla mining-node window (5 min); reroll fires at timer-fire
                     gather_gray: 0,    // always-skill sentinel (deterministic +1 every gather)
                     lock_id: 0, // work-item 211: gather nodes don't source a lockId this slice
+                    size: 0.0,  // no dump size — the gateway renders this at 1.0
                 });
         }
     }
@@ -1335,6 +1344,11 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
 
     // Aura-expiry tick every 1s (tracer): drops auras whose timer elapsed (mirrors the melee tick).
     ctx.db.game_aura_schedule().insert(AuraSchedule {
+        scheduled_id: 0,
+        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(1_000_000)),
+    });
+
+    ctx.db.game_breath_schedule().insert(BreathSchedule {
         scheduled_id: 0,
         scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(1_000_000)),
     });

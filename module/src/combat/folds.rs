@@ -390,7 +390,9 @@ pub(crate) fn find_ammo(ctx: &ReducerContext, player_guid: u64) -> Option<ItemIn
         .by_owner_guid()
         .filter(&player_guid)
         .filter(|i| {
-            i.stack_count > 0
+            // Banked ammo is not loaded — only carried stacks fire.
+            crate::items::is_carried_slot(i.slot)
+                && i.stack_count > 0
                 && templates
                     .entry()
                     .find(i.entry)

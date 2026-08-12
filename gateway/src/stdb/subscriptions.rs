@@ -789,6 +789,27 @@ pub(crate) fn relay_rest_state(self_guid: u64, player_bytes_2: u32) -> Vec<Outbo
     vec![Outbound::Raw { opcode, body }]
 }
 
+/// Shared-dispatch recipient leg for a breath relay row. The owner-session lookup in
+/// `world_view::breath_relay_appeared` has already established the self-only audience.
+pub(crate) fn relay_breath_event(
+    character_guid: u64,
+    kind: u8,
+    time_remaining_ms: u32,
+    duration_ms: u32,
+    damage: u32,
+) -> Vec<Outbound> {
+    let msg = match kind {
+        0 => codec::build_breath_timer_start(time_remaining_ms, duration_ms),
+        1 => codec::build_breath_timer_stop(),
+        2 => codec::build_drowning_damage_log(character_guid, damage),
+        unknown => {
+            log::warn!("breath relay: dropping unknown kind {unknown} for {character_guid}");
+            return Vec::new();
+        }
+    };
+    vec![Outbound::One(msg)]
+}
+
 /// Swing log: the ONE body both legs run — the per-player `on_combat`
 /// callback sends what this returns; the shared dispatch enqueues it per viewer. Gated on the
 /// viewer's `created` set (no point animating an invisible attacker's swing — the victim's health
@@ -1419,6 +1440,121 @@ pub(crate) fn aura_delete_outbound(
     out
 }
 
+/// Trade-status relay (#120): `game_trade_event.kind` → the `SMSG_TRADE_STATUS` variant, to the
+/// row's recipient and nobody else (audience resolved by the caller, the `whisper_event_outbound`
+/// shape). The kind byte is `lyracore_shared::trade::event_kind` — NOT the vanilla discriminant;
+/// this match IS the wire mapping. An unknown kind (a newer module mid-rollout) drops with a warn
+/// rather than desyncing the window.
+pub(crate) fn trade_event_outbound(row: &TradeEvent) -> Vec<Outbound> {
+    use lyracore_shared::trade::event_kind as kind;
+    use wow_world_messages::vanilla::SMSG_TRADE_STATUS;
+    // The OFFER_* kinds carry a whole-side snapshot and decode to the fixed-444-byte extended
+    // status instead of a plain status (#121); `self_player` is the kind, not an inference.
+    if row.kind == kind::OFFER_SELF || row.kind == kind::OFFER_PARTNER {
+        // WIRE POLARITY (mangoszero `SendUpdateTrade`): the byte is `1 means traders data,
+        // 0 means own` — so the field is SET when the packet describes the PARTNER's side,
+        // despite the binding's `self_player` name. Live-client verification is #124's pass.
+        return match trade_offer_extended(row.kind == kind::OFFER_PARTNER, &row.payload) {
+            Some(msg) => vec![Outbound::One(
+                ServerOpcodeMessage::SMSG_TRADE_STATUS_EXTENDED(Box::new(msg)),
+            )],
+            None => {
+                log::warn!(
+                    "trade relay: unparseable offer payload {:?} (event {})",
+                    row.payload,
+                    row.id
+                );
+                Vec::new()
+            }
+        };
+    }
+    let status = match row.kind {
+        kind::BEGIN_TRADE => Some(SMSG_TRADE_STATUS::BeginTrade {
+            unknown1: wow_world_messages::Guid::new(row.other_guid),
+        }),
+        kind::OPEN_WINDOW => Some(SMSG_TRADE_STATUS::OpenWindow),
+        kind::TRADE_CANCELED => Some(SMSG_TRADE_STATUS::TradeCanceled),
+        kind::BUSY => Some(SMSG_TRADE_STATUS::Busy),
+        kind::NO_TARGET => Some(SMSG_TRADE_STATUS::NoTarget),
+        kind::TARGET_TO_FAR => Some(SMSG_TRADE_STATUS::TargetToFar),
+        kind::WRONG_FACTION => Some(SMSG_TRADE_STATUS::WrongFaction),
+        kind::YOU_DEAD => Some(SMSG_TRADE_STATUS::YouDead),
+        kind::TARGET_DEAD => Some(SMSG_TRADE_STATUS::TargetDead),
+        kind::IGNORE_YOU => Some(SMSG_TRADE_STATUS::IgnoreYou),
+        kind::TRADE_ACCEPT => Some(SMSG_TRADE_STATUS::TradeAccept),
+        kind::BACK_TO_TRADE => Some(SMSG_TRADE_STATUS::BackToTrade),
+        kind::TRADE_COMPLETE => Some(SMSG_TRADE_STATUS::TradeComplete),
+        // Commit refused on bag space (#122): the window closes with the inventory error;
+        // `target_error` says WHOSE bags — false = yours, true = the partner's.
+        kind::INV_FULL_SELF => Some(SMSG_TRADE_STATUS::CloseWindow {
+            inventory_result: wow_world_messages::vanilla::InventoryResult::InventoryFull,
+            item_limit_category_id: 0,
+            target_error: false,
+        }),
+        kind::INV_FULL_PARTNER => Some(SMSG_TRADE_STATUS::CloseWindow {
+            inventory_result: wow_world_messages::vanilla::InventoryResult::InventoryFull,
+            item_limit_category_id: 0,
+            target_error: true,
+        }),
+        kind::GOLD_FAIL_SELF => Some(SMSG_TRADE_STATUS::CloseWindow {
+            inventory_result: wow_world_messages::vanilla::InventoryResult::NotEnoughMoney,
+            item_limit_category_id: 0,
+            target_error: false,
+        }),
+        kind::GOLD_FAIL_PARTNER => Some(SMSG_TRADE_STATUS::CloseWindow {
+            inventory_result: wow_world_messages::vanilla::InventoryResult::NotEnoughMoney,
+            item_limit_category_id: 0,
+            target_error: true,
+        }),
+        other => {
+            log::warn!("trade relay: unknown kind {other} (event {})", row.id);
+            None
+        }
+    };
+    match status {
+        Some(s) => vec![Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS(
+            Box::new(s),
+        ))],
+        None => Vec::new(),
+    }
+}
+
+/// Decode an `OFFER_*` payload into the fixed-444-byte `SMSG_TRADE_STATUS_EXTENDED` (#121):
+/// counts are 7/7 (the cmangos constant), unused slots stay zeroed (`TradeSlot::default`), and
+/// every filled slot carries the module-resolved stack/durability/enchant fields. Fails closed
+/// with the payload decoder. `describes_partner` sets the wire's misnamed `self_player` byte —
+/// mangoszero: "1 means traders data, 0 means own".
+fn trade_offer_extended(
+    describes_partner: bool,
+    payload: &str,
+) -> Option<wow_world_messages::vanilla::SMSG_TRADE_STATUS_EXTENDED> {
+    use wow_world_messages::vanilla::{TradeSlot, SMSG_TRADE_STATUS_EXTENDED};
+    let (gold, views) = lyracore_shared::trade::decode_offer(payload)?;
+    let mut trade_slots = [TradeSlot::default(); 7];
+    for v in views {
+        let slot = trade_slots.get_mut(v.trade_slot as usize)?;
+        *slot = TradeSlot {
+            trade_slot_number: v.trade_slot,
+            item: v.entry,
+            display_id: v.display_id,
+            stack_count: v.stack_count,
+            enchantment: v.enchantment,
+            max_durability: v.max_durability,
+            durability: v.durability,
+            ..TradeSlot::default()
+        };
+    }
+    Some(SMSG_TRADE_STATUS_EXTENDED {
+        // `1 means traders data` — see the call-site polarity note.
+        self_player: describes_partner,
+        trade_slot_count1: 7,
+        trade_slot_count2: 7,
+        money_in_trade: wow_world_messages::vanilla::Gold::new(gold),
+        spell_on_lowest_slot: 0,
+        trade_slots,
+    })
+}
+
 /// Group / loot-roll / quest-share: the ONE kind-decode body both legs
 /// run. PRIVATE data — the audience (the row's recipient, and nobody else) is resolved by the
 /// caller (RLS on the per-player leg; the owner-session lookup + `private_recipient_audience` on
@@ -1974,6 +2110,13 @@ pub(crate) fn entity_update_to_outbound(
             let m = codec::build_unit_flags_values(new.guid, new.unit_flags);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
+        // Sheath relay (#101): UNIT_FIELD_BYTES_2 byte 0 flipping as a unit draws or stows its weapon.
+        // Any unit, not player-gated — a creature drawing on engage is the same wire field. Without
+        // this arm the server knows the state and no observer ever hears about it.
+        if old.unit_bytes_2 != new.unit_bytes_2 {
+            let m = codec::build_sheath_values(new.guid, new.unit_bytes_2);
+            out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+        }
         // Live XP-bar update (slice 1): players only (creatures never change xp; player-only fields).
         let xp_changed = old.xp != new.xp || old.next_level_xp != new.next_level_xp;
         if xp_changed && is_player {
@@ -1983,6 +2126,16 @@ pub(crate) fn entity_update_to_outbound(
         // Live purse update (slice 3): PLAYER_FIELD_COINAGE on money change (looting). Players only.
         if old.money != new.money && is_player {
             let m = codec::build_coinage_values(new.guid, new.money);
+            out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+        }
+        // Live bank bag slot count: PLAYER_BYTES_2 byte 2 on a purchase, so the bank window grows a
+        // slot without a relog. Scoped to byte 2 only — byte 3 (rest state) already relays through
+        // its own dedicated `game_rest_state_event` path and must not double-fire here.
+        const BANK_SLOT_BYTE: u32 = 0x00FF_0000;
+        if is_player
+            && (old.player_bytes_2 & BANK_SLOT_BYTE) != (new.player_bytes_2 & BANK_SLOT_BYTE)
+        {
+            let m = codec::build_bank_bag_slots_values(new.guid, new.player_bytes_2);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
         // Ghost transition (slice 5): PLAYER_FLAGS_GHOST + the UNIT_FIELD_BYTES_1 vis bit on Release Spirit
@@ -3424,6 +3577,154 @@ impl Coordinator {
 mod tests {
     use super::*;
 
+    /// The trade-status wire mapping (#120): every `lyracore_shared::trade::event_kind` the module
+    /// emits decodes to its `SMSG_TRADE_STATUS` variant — `BeginTrade` carrying the counterparty
+    /// guid the client needs to open the window — and an unknown kind (newer module mid-rollout)
+    /// drops rather than desyncing the trade window.
+    #[test]
+    fn trade_event_kinds_decode_to_their_trade_status_variants() {
+        use lyracore_shared::trade::event_kind as kind;
+        use wow_world_messages::vanilla::SMSG_TRADE_STATUS;
+
+        let event = |k: u8| TradeEvent {
+            id: 1,
+            recipient_identity: spacetimedb_sdk::Identity::from_byte_array([0u8; 32]),
+            kind: k,
+            other_guid: 77,
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            recipient_guid: 1,
+            payload: String::new(),
+        };
+        let status_of = |k: u8| -> SMSG_TRADE_STATUS {
+            let out = trade_event_outbound(&event(k));
+            assert_eq!(out.len(), 1, "kind {k} must decode to exactly one packet");
+            match &out[0] {
+                Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS(s)) => (**s).clone(),
+                Outbound::One(other) => panic!("kind {k}: expected SMSG_TRADE_STATUS, got {other}"),
+                _ => panic!("kind {k}: expected a single SMSG_TRADE_STATUS packet"),
+            }
+        };
+
+        assert_eq!(
+            status_of(kind::BEGIN_TRADE),
+            SMSG_TRADE_STATUS::BeginTrade {
+                unknown1: wow_world_messages::Guid::new(77)
+            },
+            "BeginTrade must carry the initiator guid off the row"
+        );
+        assert_eq!(status_of(kind::OPEN_WINDOW), SMSG_TRADE_STATUS::OpenWindow);
+        assert_eq!(status_of(kind::TRADE_CANCELED), SMSG_TRADE_STATUS::TradeCanceled);
+        assert_eq!(status_of(kind::BUSY), SMSG_TRADE_STATUS::Busy);
+        assert_eq!(status_of(kind::NO_TARGET), SMSG_TRADE_STATUS::NoTarget);
+        assert_eq!(status_of(kind::TARGET_TO_FAR), SMSG_TRADE_STATUS::TargetToFar);
+        assert_eq!(status_of(kind::WRONG_FACTION), SMSG_TRADE_STATUS::WrongFaction);
+        assert_eq!(status_of(kind::YOU_DEAD), SMSG_TRADE_STATUS::YouDead);
+        assert_eq!(status_of(kind::TARGET_DEAD), SMSG_TRADE_STATUS::TargetDead);
+        assert_eq!(status_of(kind::IGNORE_YOU), SMSG_TRADE_STATUS::IgnoreYou);
+        assert_eq!(status_of(kind::TRADE_ACCEPT), SMSG_TRADE_STATUS::TradeAccept);
+        assert_eq!(status_of(kind::BACK_TO_TRADE), SMSG_TRADE_STATUS::BackToTrade);
+        assert_eq!(status_of(kind::TRADE_COMPLETE), SMSG_TRADE_STATUS::TradeComplete);
+        // The bag-space refusal closes the window naming WHOSE bags overflowed.
+        let full_self = status_of(kind::INV_FULL_SELF);
+        let full_partner = status_of(kind::INV_FULL_PARTNER);
+        match (&full_self, &full_partner) {
+            (
+                SMSG_TRADE_STATUS::CloseWindow { target_error: false, inventory_result: a, .. },
+                SMSG_TRADE_STATUS::CloseWindow { target_error: true, inventory_result: b, .. },
+            ) => {
+                assert_eq!(*a, wow_world_messages::vanilla::InventoryResult::InventoryFull);
+                assert_eq!(*b, wow_world_messages::vanilla::InventoryResult::InventoryFull);
+            }
+            other => panic!("expected CloseWindow pair with flipped target_error, got {other:?}"),
+        }
+        // The purse-failure pair mirrors it with NotEnoughMoney.
+        match (&status_of(kind::GOLD_FAIL_SELF), &status_of(kind::GOLD_FAIL_PARTNER)) {
+            (
+                SMSG_TRADE_STATUS::CloseWindow { target_error: false, inventory_result: a, .. },
+                SMSG_TRADE_STATUS::CloseWindow { target_error: true, inventory_result: b, .. },
+            ) => {
+                assert_eq!(*a, wow_world_messages::vanilla::InventoryResult::NotEnoughMoney);
+                assert_eq!(*b, wow_world_messages::vanilla::InventoryResult::NotEnoughMoney);
+            }
+            other => panic!("expected NotEnoughMoney CloseWindow pair, got {other:?}"),
+        }
+
+        assert!(
+            trade_event_outbound(&event(200)).is_empty(),
+            "an unknown kind must drop, not guess a status"
+        );
+    }
+
+    /// The OFFER_* kinds decode to the fixed-444-byte extended status (#121): the polarity byte
+    /// comes from the KIND (never inferred), the window-visible item fields survive the payload
+    /// round-trip into the right wire slots, unused slots stay zeroed, and a malformed payload
+    /// drops the packet entirely.
+    #[test]
+    fn offer_events_decode_to_the_extended_status_with_the_kind_deciding_self_player() {
+        use lyracore_shared::trade::{encode_offer, event_kind as kind, OfferSlot};
+        use wow_world_messages::vanilla::SMSG_TRADE_STATUS_EXTENDED;
+
+        let payload = encode_offer(
+            1_2345,
+            &[OfferSlot {
+                trade_slot: 6,
+                entry: 6948,
+                display_id: 6418,
+                stack_count: 5,
+                enchantment: 2564,
+                durability: 34,
+                max_durability: 40,
+            }],
+        );
+        let event = |k: u8, p: &str| TradeEvent {
+            id: 1,
+            recipient_identity: spacetimedb_sdk::Identity::from_byte_array([0u8; 32]),
+            kind: k,
+            other_guid: 77,
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            recipient_guid: 1,
+            payload: p.to_string(),
+        };
+        let extended = |k: u8| -> SMSG_TRADE_STATUS_EXTENDED {
+            let out = trade_event_outbound(&event(k, &payload));
+            match out.first() {
+                Some(Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS_EXTENDED(m))) => {
+                    (**m).clone()
+                }
+                _ => panic!("kind {k}: expected one SMSG_TRADE_STATUS_EXTENDED"),
+            }
+        };
+
+        // Wire polarity (mangoszero): the `self_player` BYTE is "1 means traders data, 0 means
+        // own", so your OWN echo carries 0 and the partner's side carries 1.
+        let own = extended(kind::OFFER_SELF);
+        assert!(!own.self_player, "OFFER_SELF describes your own window: wire byte 0");
+        let theirs = extended(kind::OFFER_PARTNER);
+        assert!(theirs.self_player, "OFFER_PARTNER describes the partner's side: wire byte 1");
+
+        assert_eq!(own.money_in_trade.as_int(), 1_2345);
+        assert_eq!((own.trade_slot_count1, own.trade_slot_count2), (7, 7));
+        let s = &own.trade_slots[6];
+        assert_eq!(
+            (s.trade_slot_number, s.item, s.display_id, s.stack_count),
+            (6, 6948, 6418, 5)
+        );
+        assert_eq!(
+            (s.enchantment, s.durability, s.max_durability),
+            (2564, 34, 40)
+        );
+        assert_eq!(
+            own.trade_slots[0],
+            Default::default(),
+            "untouched slots stay zeroed"
+        );
+
+        assert!(
+            trade_event_outbound(&event(kind::OFFER_SELF, "not|a,valid,payload")).is_empty(),
+            "a malformed offer payload must drop the packet"
+        );
+    }
+
     /// A live-entity row with no pending change; tests clone it and mutate one field at a time.
     /// `type_mask` carries the PLAYER bit by default (most relayed fields are player-only).
     fn player_entity() -> WorldEntity {
@@ -3464,6 +3765,7 @@ mod tests {
             target_guid: 0,
             money: 0,
             unit_bytes_1: 0,
+            unit_bytes_2: 0,
             strength: 1,
             agility: 1,
             stamina: 1,
@@ -3499,6 +3801,7 @@ mod tests {
             sheet_dmg_min: 0,
             sheet_dmg_max: 0,
             sheet_crit_bp: 0,
+            bank_bag_slots: 0,
         }
     }
 
@@ -3520,6 +3823,27 @@ mod tests {
             vec![ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
                 codec::build_health_values(new.guid, 50)
             ))]
+        );
+    }
+
+    /// #101: a sheath change must relay, or drawing a weapon is invisible to everyone but the player
+    /// who did it. The state lives in BYTE 0 of `unit_bytes_2` — pin the decoded packet, and pin that
+    /// an unchanged row stays silent (the client re-sends its current state on every weapon swap, and
+    /// a relay per no-op is a broadcast amplifier on a busy cell).
+    #[test]
+    fn sheath_change_relays_and_a_no_op_stays_silent() {
+        let old = player_entity();
+        let mut new = old.clone();
+        new.unit_bytes_2 = 1; // SHEATH_STATE_MELEE — weapons drawn
+        assert_eq!(
+            entity_update_to_outbound(&old, &new),
+            vec![ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                codec::build_sheath_values(new.guid, 1)
+            ))]
+        );
+        assert!(
+            entity_update_to_outbound(&old, &old.clone()).is_empty(),
+            "an unchanged row must not relay a sheath packet"
         );
     }
 
@@ -3624,6 +3948,46 @@ mod tests {
                 codec::build_target_values(new.guid, 0xDEAD_BEEF)
             ))]
         );
+    }
+
+    #[test]
+    fn bank_bag_slot_purchase_relays_and_the_rest_byte_survives() {
+        // A bought bank bag slot lands in byte 2 of PLAYER_BYTES_2; the relay must carry the FULL
+        // field (a partial VALUES overwrites the whole u32) so byte 0 (facial hair) and byte 3 (rest
+        // state — HAZARD: a zero byte 3 crashes the 5875 client's XP bar) ride along unchanged.
+        let mut old = player_entity();
+        old.player_bytes_2 = lyracore_shared::packing::player_bytes_2_with_rest(7, 0, false); // facial hair 7, 0 slots, NORMAL
+        let mut new = old.clone();
+        new.player_bytes_2 = lyracore_shared::packing::with_bank_bag_slots(old.player_bytes_2, 1);
+        let out = entity_update_to_outbound(&old, &new);
+        assert_eq!(
+            out,
+            vec![ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                codec::build_bank_bag_slots_values(new.guid, new.player_bytes_2)
+            ))]
+        );
+        let (facial_hair, _, bank_slots, rest) =
+            lyracore_shared::packing::unpack4(new.player_bytes_2);
+        assert_eq!(
+            facial_hair, 7,
+            "facial hair (byte 0) must survive the purchase"
+        );
+        assert_eq!(bank_slots, 1);
+        assert_eq!(
+            rest,
+            lyracore_shared::packing::REST_STATE_NORMAL,
+            "rest state (byte 3) must stay a valid non-zero value"
+        );
+    }
+
+    #[test]
+    fn a_rest_state_flip_alone_does_not_relay_the_bank_slot_packet() {
+        // Byte 3 changing (rest flip) must NOT trip the byte-2-scoped bank slot relay — that byte
+        // already relays through its own dedicated `game_rest_state_event` path.
+        let old = player_entity();
+        let mut new = old.clone();
+        new.player_bytes_2 = lyracore_shared::packing::player_bytes_2_with_rest(0, 0, true); // RESTED
+        assert!(entity_update_to_outbound(&old, &new).is_empty());
     }
 
     #[test]

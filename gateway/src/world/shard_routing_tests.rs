@@ -309,7 +309,8 @@ fn a_world_port_keeps_the_pin_when_the_home_shard_still_owns_the_new_map() {
     MSG_MOVE_WORLDPORT_ACK {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..10 {
+    // 9, not 10: the re-entry sequence omits SMSG_LOGIN_VERIFY_WORLD.
+    for _ in 0..9 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     drop(client);
@@ -331,6 +332,109 @@ fn a_world_port_keeps_the_pin_when_the_home_shard_still_owns_the_new_map() {
             .count(),
         2,
         "the re-entry re-subscribed on the home shard, not the default one: {log:?}"
+    );
+}
+
+#[test]
+fn a_spurious_worldport_ack_is_ignored_on_a_session_pinned_off_the_default_shard() {
+    // The gate reads the live entity through the handler's `store`, which `on_home_shard!` has
+    // already routed home. If either stops holding, the stray ack re-runs the world entry.
+    let calls: ShardCallLog = Default::default();
+    let home = std::sync::Arc::new(InMemoryStore {
+        shard: "instances".into(),
+        calls: calls.clone(),
+        login_entity: Some(warrior_entity()),
+        // The live entity IS in the world on the home shard — the ack is spurious.
+        entity_in_world: true,
+        ..Default::default()
+    });
+    let world = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        username: "TESTER".into(),
+        session: Some(WorldSession {
+            account_id: 7,
+            session_key: K,
+        }),
+        characters: vec![codec::CharacterView {
+            guid: 1,
+            name: "Tester".into(),
+            race: 1,
+            class: 1,
+            level: 1,
+            ..Default::default()
+        }],
+        login_entity: Some(warrior_entity()),
+        // The default handle has NO entity for this guid (it lives on `instances`) — a
+        // default-shard read here would wrongly answer "absent" and re-enter.
+        entity_in_world: false,
+        home: Some(home.clone()),
+        ..Default::default()
+    });
+
+    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let server_store = world.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..10 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    // The stray ack: no teleport despawned the entity — it must be dropped, not answered.
+    MSG_MOVE_WORLDPORT_ACK {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drop(client); // EOF right after — the session loop consumes the ack, then tears down
+    server.join().unwrap();
+
+    assert_eq!(
+        home.login_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "a spurious ack on a pinned session must be ignored — the world entry ran again"
+    );
+    assert_eq!(
+        home.subscribed.lock().unwrap().len(),
+        1,
+        "a spurious ack must not tear down and re-register the session's subscriptions"
+    );
+}
+
+#[test]
+fn a_spurious_worldport_ack_is_ignored_on_the_default_shard() {
+    // The single-database twin of the test above — the `entity_in_world: true` ignore path was
+    // untested before these two.
+    let store = std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(warrior_entity()),
+        entity_in_world: true,
+        ..tester_store(7)
+    });
+    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..10 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+    MSG_MOVE_WORLDPORT_ACK {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    drop(client);
+    server.join().unwrap();
+
+    assert_eq!(
+        store.login_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "a spurious ack with the entity live must be ignored"
     );
 }
 
