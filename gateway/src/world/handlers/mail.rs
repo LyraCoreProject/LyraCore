@@ -1,9 +1,8 @@
 //! Mail family: open the mailbox window, answer the client's mail poll, serve a letter's body, mark
-//! a mail read or delete it, post a letter with copper and one item attached, and take either back
-//! out.
+//! a mail read or delete it, post a letter with copper and one item attached, take either back
+//! out, and return a mail to its sender.
 //!
-//! Return-to-sender and COD are later slices, and their opcodes fall through to the next handler
-//! until they land.
+//! COD is a later slice, and its opcode falls through to the next handler until it lands.
 //!
 //! Every failure is per-action: log, and either answer the packet the client is blocked on or send
 //! nothing. Nothing here tears a session down, matching the vendor/loot/combat arms.
@@ -116,6 +115,34 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                 tx,
                 Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
                     codec::build_mail_delete_result(c.mail_id, ok),
+                ))),
+            )?;
+        }
+        // Return a mail to whoever sent it. The row is re-addressed in place — no escrow, since it
+        // never leaves the plane that already holds it — so this is [`mail::delete`]'s twin down to
+        // the authorization: a mail id is client-supplied, and "not yours" reads the same as "no
+        // such mail". Acks through `SMSG_SEND_MAIL_RESULT`/ReturnedToSender either way.
+        ClientOpcodeMessage::CMSG_MAIL_RETURN_TO_SENDER(c) => {
+            let self_guid = social::self_guid(conn);
+            let ok = match mail::return_to_sender(
+                store,
+                self_guid,
+                c.mailbox_id.guid(),
+                u64::from(c.mail_id),
+            ) {
+                Ok(()) => true,
+                Err(e) => {
+                    log::debug!(
+                        "world: mail return refused (account {}): {e}",
+                        conn.account_id
+                    );
+                    false
+                }
+            };
+            send(
+                tx,
+                Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
+                    codec::build_mail_return_result(c.mail_id, ok),
                 ))),
             )?;
         }

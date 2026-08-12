@@ -534,6 +534,316 @@ fn both_write_ops_are_gated_like_the_read_path() {
 }
 
 // ---------------------------------------------------------------------------------------------
+//  Return-to-sender — the routing tests, same shape as mark-read/delete above.
+//
+//  No escrow anywhere here: the row is re-addressed in place on whichever plane already holds it,
+//  so a return never crosses a database boundary the way a sharded send or take does.
+// ---------------------------------------------------------------------------------------------
+
+/// **AC: the mail leaves the recipient's list and arrives addressed to the original sender.**
+#[test]
+fn returning_a_mail_moves_it_from_the_recipients_list_to_the_senders() {
+    let (_realm, world, _calls) = sharded_mailbox();
+
+    mail::return_to_sender(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("Ginger owns mail 1");
+
+    let gingers =
+        mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
+    assert!(
+        gingers.is_empty(),
+        "the mail must leave the recipient's list"
+    );
+
+    // Mail 1 was sent by VIM. The write reached whichever plane owns the rows, so a read scoped to
+    // VIM — the read every other mail op in this file also uses — shows the re-addressed row.
+    let vims = mail::mail_of(world.as_ref(), VIM).expect("read whatever plane owns the rows");
+    assert_eq!(vims.len(), 1);
+    assert_eq!(
+        vims[0].sender_guid, GINGER,
+        "the original recipient is now the sender"
+    );
+}
+
+/// **AC: the item snapshot and the copper survive the return unchanged.**
+#[test]
+fn returning_a_mail_carries_its_attachment_and_copper_unchanged() {
+    let world = unsharded_mailbox();
+    *world.mails.lock().unwrap() = vec![(
+        GINGER,
+        codec::MailView {
+            id: 1,
+            sender_guid: VIM,
+            subject: "A gift".into(),
+            body: "enjoy".into(),
+            item_entry: 5_090_001,
+            item_stack_count: 3,
+            item_durability: 40,
+            item_enchant_id: 7,
+            money: 250,
+            created_at_secs: 1_000,
+            ..Default::default()
+        },
+    )];
+
+    mail::return_to_sender(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("Ginger owns mail 1");
+
+    let vims = mail::mail_of(world.as_ref(), VIM).unwrap();
+    assert_eq!(vims.len(), 1);
+    assert_eq!(vims[0].sender_guid, GINGER);
+    assert_eq!(vims[0].item_entry, 5_090_001);
+    assert_eq!(vims[0].item_stack_count, 3);
+    assert_eq!(vims[0].item_durability, 40);
+    assert_eq!(vims[0].item_enchant_id, 7);
+    assert_eq!(
+        vims[0].money, 250,
+        "the attached copper must ride the return unchanged"
+    );
+}
+
+/// **AC: returning a mail whose attachment was already taken returns what is LEFT, never a copy of
+/// what was taken.** The take clears the row's attachment columns before this ever runs — the
+/// duplication case: a naive "re-derive the original letter" implementation would hand the item
+/// back a second time instead of re-addressing the now-empty row.
+#[test]
+fn returning_an_already_taken_mail_does_not_duplicate_the_attachment() {
+    let world = unsharded_mailbox();
+    *world.mails.lock().unwrap() = vec![(
+        GINGER,
+        codec::MailView {
+            id: 1,
+            sender_guid: VIM,
+            subject: "A gift".into(),
+            item_entry: 5_090_001,
+            item_stack_count: 1,
+            money: 100,
+            created_at_secs: 1_000,
+            ..Default::default()
+        },
+    )];
+
+    mail::take_item(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("Ginger takes the item");
+    assert_eq!(
+        world.bags_of(GINGER).len(),
+        1,
+        "exactly one copy landed in the taker's bags"
+    );
+
+    mail::return_to_sender(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("still Ginger's mail");
+
+    let vims = mail::mail_of(world.as_ref(), VIM).unwrap();
+    assert_eq!(vims.len(), 1);
+    assert_eq!(
+        vims[0].item_entry, 0,
+        "the already-taken item must not come back as a second copy"
+    );
+    assert_eq!(
+        vims[0].money, 100,
+        "the untouched copper still rides the return"
+    );
+    assert_eq!(
+        world.bags_of(GINGER).len(),
+        1,
+        "the return must not put a second copy in the taker's own bags either"
+    );
+}
+
+/// **AC: returning is refused for anyone who is not the mail's recipient** — a mail id is
+/// client-supplied, so this is the authorization boundary and not a sanity check. Mirrors
+/// `both_are_refused_for_a_mail_the_caller_does_not_own`.
+#[test]
+fn returning_a_mail_is_refused_for_a_caller_who_does_not_own_it() {
+    let (_realm, world, _calls) = sharded_mailbox();
+
+    // Mail 2 is Trin's — Ginger names it anyway.
+    let err = mail::return_to_sender(world.as_ref(), Some(GINGER), MAILBOX, 2)
+        .expect_err("mail 2 is not Ginger's");
+    assert!(
+        err.to_string().contains("not addressed to you"),
+        "got {err}"
+    );
+
+    let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
+    assert_eq!(
+        trins.len(),
+        1,
+        "a refused return must not touch a row it does not own"
+    );
+}
+
+/// **AC: the removal and the repost are one write, and both planes behave identically through one
+/// shared core.** Mirrors `both_write_ops_behave_identically_on_the_realm_plane_and_the_fallback`.
+#[test]
+fn returning_a_mail_behaves_identically_on_the_realm_plane_and_the_fallback() {
+    let (_realm, world, _calls) = sharded_mailbox();
+    let single = unsharded_mailbox();
+
+    mail::return_to_sender(world.as_ref(), Some(GINGER), MAILBOX, 1).expect("sharded plane");
+    mail::return_to_sender(single.as_ref(), Some(GINGER), MAILBOX, 1).expect("fallback plane");
+
+    assert_eq!(
+        mail::mail_of(world.as_ref(), VIM).unwrap(),
+        mail::mail_of(single.as_ref(), VIM).unwrap(),
+        "both planes must produce the same returned row"
+    );
+}
+
+/// **AC: a return reaches the AUTHORITY, never the player's own shard, on a sharded gateway** —
+/// mirrors `a_sharded_mailbox_write_lands_on_realm_core_and_never_on_the_players_own_shard`. There
+/// is no escrow step to look for: the row is re-addressed on realm-core directly, the same single
+/// call `mail_mark_read`/`mail_delete` make.
+#[test]
+fn a_sharded_return_lands_on_realm_core_and_never_on_the_players_own_shard() {
+    let (_realm, world, calls) = sharded_mailbox();
+
+    mail::return_to_sender(world.as_ref(), Some(GINGER), MAILBOX, 1).unwrap();
+
+    let log = calls.lock().unwrap().clone();
+    assert!(log.contains(&("lyracore-realm".to_string(), "mail_return".to_string())));
+    assert!(
+        !log.iter()
+            .any(|(shard, call)| shard == "world" && call == "mail_return"),
+        "the write must never land on the player's own shard; calls were {log:?}"
+    );
+}
+
+/// **AC: returning is gated the same way mark-read/delete are** — mirrors
+/// `both_write_ops_are_gated_like_the_read_path`.
+#[test]
+fn returning_a_mail_is_gated_like_the_read_path() {
+    let (_realm, world, calls) = sharded_mailbox();
+
+    let err = mail::return_to_sender(world.as_ref(), None, MAILBOX, 1).unwrap_err();
+    assert!(err.to_string().contains("not in world"), "got {err}");
+    let err = mail::return_to_sender(world.as_ref(), Some(GINGER), FAR_MAILBOX, 1).unwrap_err();
+    assert!(err.to_string().contains("not at mailbox"), "got {err}");
+
+    let log = calls.lock().unwrap().clone();
+    assert!(
+        !log.iter().any(|(_, call)| call == "mail_return"),
+        "a gate refusal must never reach the write; calls were {log:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+//  Dispatch: return-to-sender over the real wire.
+// ---------------------------------------------------------------------------------------------
+
+/// **AC: `CMSG_MAIL_RETURN_TO_SENDER` acks with `SMSG_SEND_MAIL_RESULT`/ReturnedToSender, and the
+/// next list read no longer shows the mail.**
+#[test]
+fn return_acks_with_send_mail_result_and_the_next_list_is_empty() {
+    let store = seated_store();
+
+    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..10 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    wow_world_messages::vanilla::CMSG_MAIL_RETURN_TO_SENDER {
+        mailbox_id: Guid::new(MAILBOX),
+        mail_id: 1,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(m) => {
+            assert_eq!(m.mail_id, 1);
+            match m.action {
+                wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailAction::ReturnedToSender {
+                    result2,
+                } => {
+                    assert_eq!(
+                        result2,
+                        wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
+                    );
+                }
+                other => panic!("expected the ReturnedToSender action, got {other:?}"),
+            }
+        }
+        other => panic!("expected SMSG_SEND_MAIL_RESULT, got {other}"),
+    }
+
+    wow_world_messages::vanilla::CMSG_GET_MAIL_LIST {
+        mailbox: Guid::new(MAILBOX),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_MAIL_LIST_RESULT(m) => assert!(m.mails.is_empty()),
+        other => panic!("expected the mail list, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+}
+
+/// **AC: a refused return (not the caller's mail) still acks — with the generic error — and never
+/// tears the session down.** Mirrors `a_refused_delete_still_acks_and_never_kills_the_session`.
+#[test]
+fn a_refused_return_still_acks_and_never_kills_the_session() {
+    let store = seated_store();
+    // Mail 1 belongs to guid 1 (the seated warrior) in the base fixture; retarget it so THIS
+    // session's return is the not-your-mail refusal.
+    store.mails.lock().unwrap()[0].0 = 999;
+
+    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..10 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    wow_world_messages::vanilla::CMSG_MAIL_RETURN_TO_SENDER {
+        mailbox_id: Guid::new(MAILBOX),
+        mail_id: 1,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(m) => match m.action {
+            wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailAction::ReturnedToSender {
+                result2,
+            } => {
+                assert_eq!(
+                    result2,
+                    wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+                );
+            }
+            other => panic!("expected the ReturnedToSender action, got {other:?}"),
+        },
+        other => panic!("expected SMSG_SEND_MAIL_RESULT, got {other}"),
+    }
+
+    // The session survives: the next opcode is still answered.
+    ClientOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME(_) => {}
+        other => panic!("expected the mail-time poll, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+}
+
+// ---------------------------------------------------------------------------------------------
 //  Dispatch: mark-as-read and delete over the real wire.
 // ---------------------------------------------------------------------------------------------
 

@@ -113,6 +113,22 @@ pub fn build_mail_delete_result(mail_id: u32, ok: bool) -> SMSG_SEND_MAIL_RESULT
     }
 }
 
+/// Answer `CMSG_MAIL_RETURN_TO_SENDER` with `SMSG_SEND_MAIL_RESULT`/ReturnedToSender —
+/// [`build_mail_delete_result`]'s twin, same generic-bucket refusal for the same reason:
+/// `MailResultTwo` has no variant naming "not your mail".
+pub fn build_mail_return_result(mail_id: u32, ok: bool) -> SMSG_SEND_MAIL_RESULT {
+    SMSG_SEND_MAIL_RESULT {
+        mail_id,
+        action: SMSG_SEND_MAIL_RESULT_MailAction::ReturnedToSender {
+            result2: if ok {
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
+            } else {
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+            },
+        },
+    }
+}
+
 /// Answer `CMSG_MAIL_TAKE_MONEY` with `SMSG_SEND_MAIL_RESULT`/MoneyTaken — the ack that closes the
 /// client's spinner and makes it re-read the mail.
 ///
@@ -358,6 +374,27 @@ mod tests {
                 }
             ),
             other => panic!("expected the ItemTaken action, got {other:?}"),
+        }
+    }
+
+    /// A successful return answers `Ok` on the ReturnedToSender action; a refused one answers
+    /// `ErrInternalError`, [`build_mail_delete_result`]'s twin. Both carry the mail id back.
+    #[test]
+    fn a_return_result_carries_the_mail_id_and_the_generic_error_on_refusal() {
+        match build_mail_return_result(7, true).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::ReturnedToSender { result2 } => {
+                assert_eq!(result2, SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok)
+            }
+            other => panic!("expected the ReturnedToSender action, got {other:?}"),
+        }
+        let refused = build_mail_return_result(7, false);
+        assert_eq!(refused.mail_id, 7);
+        match refused.action {
+            SMSG_SEND_MAIL_RESULT_MailAction::ReturnedToSender { result2 } => assert_eq!(
+                result2,
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+            ),
+            other => panic!("expected the ReturnedToSender action, got {other:?}"),
         }
     }
 

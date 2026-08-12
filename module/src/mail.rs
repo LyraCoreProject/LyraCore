@@ -21,8 +21,8 @@
 //! # What is here, and what is not
 //!
 //! Here now: the table and its sweeps, the read path's seeder, mark-read, delete, sending a letter
-//! with copper and ONE item attached, and taking either back out. Return-to-sender and COD are
-//! later slices.
+//! with copper and ONE item attached, taking either back out, and returning a mail to its sender.
+//! COD is a later slice.
 //!
 //! **An attachment is a SNAPSHOT, not a row.** At send the sender's `game_item_instance` is deleted
 //! and its state copied into the mail row ([`ItemSnapshot`]); at take a fresh instance is created
@@ -569,6 +569,56 @@ pub(crate) fn apply_delete(
     Ok(())
 }
 
+/// What a `CMSG_MAIL_RETURN_TO_SENDER` must do. [`TakeItem`]'s shape: the caller's guid must match
+/// the row's recipient, and a crafted id must not read any differently than a nonexistent one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ReturnPlan {
+    /// No such mail, or it is not the caller's.
+    NotYours,
+    /// Re-address it to whoever sent it.
+    Return,
+}
+
+/// `recipient_guid` is the named mail's `recipient_guid`, or `None` when no such row exists.
+pub(crate) fn plan_return(recipient_guid: Option<u64>, caller_guid: u64) -> ReturnPlan {
+    match recipient_guid {
+        Some(r) if r == caller_guid => ReturnPlan::Return,
+        _ => ReturnPlan::NotYours,
+    }
+}
+
+/// Return `mail_id` to whoever sent it: the SAME row, re-addressed in place. Never the escrow —
+/// the row does not leave the plane that already holds it, so there is nothing to move across a
+/// database boundary, only sender/recipient to swap.
+///
+/// Whatever the row still carries travels unchanged, including nothing at all: a mail already
+/// emptied by [`apply_take_item`] or [`apply_take_money`] has nothing left to duplicate, because
+/// those already cleared the attachment/money columns before this ever runs. `was_read` resets —
+/// the letter is new mail to the original sender.
+///
+/// COD has no send path yet (`cod` is always 0 today); a genuine returned COD mail needs its own
+/// rule once COD exists, not this one.
+pub(crate) fn apply_return(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    mail_id: u64,
+) -> Result<(), String> {
+    let mails = ctx.db.game_mail();
+    let row = mails.id().find(mail_id);
+    match plan_return(row.as_ref().map(|m| m.recipient_guid), recipient_guid) {
+        ReturnPlan::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string()),
+        ReturnPlan::Return => {}
+    }
+    let row = row.expect("Return is only reachable with a row");
+    mails.id().update(Mail {
+        recipient_guid: row.sender_guid,
+        sender_guid: recipient_guid,
+        was_read: false,
+        ..row
+    });
+    Ok(())
+}
+
 /// The mail write surface's entry point (the mark-read/delete slice) — the first `realm_mail_*`
 /// reducer. Mirrors [`crate::chat::realm_whisper`]'s shape and its reason: mail is
 /// addressed by guid on a database that may hold no live entity for the caller, so this reducer
@@ -689,6 +739,18 @@ pub fn realm_mail_delete(
     apply_delete(ctx, recipient_guid, mail_id)
 }
 
+/// [`realm_mail_delete`]'s twin for return-to-sender. Same trust boundary, same one-reducer-both-
+/// planes shape — the row never crosses a database, so returning it needs no escrow.
+#[reducer]
+pub fn realm_mail_return(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    mail_id: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    apply_return(ctx, recipient_guid, mail_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -757,6 +819,16 @@ mod tests {
             ..Default::default()
         }
         .is_empty());
+    }
+
+    /// **The authorization boundary on a return.** A mail id is client-supplied, so the row lookup
+    /// scoped to the caller is the only thing between a crafted packet and re-addressing someone
+    /// else's mail — "no such mail" and "not yours" answer the same, leaking no id.
+    #[test]
+    fn returning_a_mail_is_refused_for_a_caller_who_is_not_the_recipient() {
+        assert_eq!(plan_return(Some(7), 7), ReturnPlan::Return);
+        assert_eq!(plan_return(Some(7), 8), ReturnPlan::NotYours);
+        assert_eq!(plan_return(None, 7), ReturnPlan::NotYours);
     }
 
     /// A credit saturates rather than wrapping — the mirror of the debit's saturation, and the
@@ -871,6 +943,7 @@ mod tests {
         for signature in [
             "pub fn realm_mail_mark_read(",
             "pub fn realm_mail_delete(",
+            "pub fn realm_mail_return(",
             "pub fn realm_mail_send(",
             "pub fn realm_mail_take_money(",
             "pub fn realm_mail_take_item(",

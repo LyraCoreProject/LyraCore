@@ -188,6 +188,28 @@ pub(crate) fn delete<St: WorldStore + ?Sized>(
     }
 }
 
+/// Return mail `mail_id` to whoever sent it, for the session standing at `mailbox_guid`.
+/// [`delete`]'s twin, and the SAME plane routing: the row is re-addressed on whichever handle
+/// already owns it, never moved.
+///
+/// **No escrow, and none is needed.** A sharded send or take crosses a database boundary that no
+/// transaction spans — a purse on one shard, the mail row on realm-core — which is what the escrow
+/// exists for. A return touches only the row's own `sender_guid`/`recipient_guid` columns, on the
+/// database that already holds it; that is a single-row update on one plane, exactly like
+/// [`mark_read`] and [`delete`], so it goes through the same one-call routing they do.
+pub(crate) fn return_to_sender<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: Option<u64>,
+    mailbox_guid: u64,
+    mail_id: u64,
+) -> Result<()> {
+    let self_guid = at_mailbox(store, self_guid, mailbox_guid)?;
+    match store.realm_store() {
+        Some(realm) => realm.mail_return(self_guid, mail_id),
+        None => store.mail_return(self_guid, mail_id),
+    }
+}
+
 /// Post one letter from the session standing at `mailbox_guid` to the character called
 /// `recipient_name`.
 ///

@@ -810,6 +810,13 @@ pub trait WorldStore: Send + Sync {
     /// carries, as vanilla does after its (client-side) confirmation prompt.
     fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
 
+    /// Return `mail_id` to whoever sent it, on the database THIS handle names — same two-plane
+    /// routing as [`mail_delete`](Self::mail_delete). The row is re-addressed IN PLACE: it never
+    /// leaves the plane that already holds it, so there is no sharded variant and no escrow, unlike
+    /// [`mail_send`](Self::mail_send) and the takes below. `Err` when `mail_id` does not exist or
+    /// is not `recipient_guid`'s.
+    fn mail_return(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
+
     /// Write one sent letter on the database THIS handle names, charging the sender the postage
     /// plus the attached `money` in the SAME transaction.
     ///

@@ -1549,6 +1549,17 @@ impl Coordinator {
         )
     }
 
+    /// `realm_mail_return` — [`mail_delete`](Self::mail_delete)'s twin for return-to-sender: the row
+    /// is re-addressed in place, on the database THIS handle points at. No sharded variant — the row
+    /// never leaves the plane that already holds it.
+    pub fn mail_return(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_mail_return",
+            realm_mail_return_then(recipient_guid, mail_id)
+        )
+    }
+
     /// `realm_mail_send` — write one sent letter against the database THIS handle points at, and
     /// charge the sender for it in the same transaction. Same trust shape as the two above, and the
     /// guid it carries is the one the socket authenticated: every gate deciding who may write to
