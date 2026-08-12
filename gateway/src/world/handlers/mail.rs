@@ -1,8 +1,9 @@
 //! Mail family: open the mailbox window, answer the client's mail poll, serve a letter's body, mark
-//! a mail read or delete it, post a letter with copper attached, and take that copper out.
+//! a mail read or delete it, post a letter with copper and one item attached, and take either back
+//! out.
 //!
-//! Item attachments, return-to-sender and COD are later slices, and their opcodes fall through to
-//! the next handler until they land.
+//! Return-to-sender and COD are later slices, and their opcodes fall through to the next handler
+//! until they land.
 //!
 //! Every failure is per-action: log, and either answer the packet the client is blocked on or send
 //! nothing. Nothing here tears a session down, matching the vendor/loot/combat arms.
@@ -143,9 +144,36 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                 ))),
             )?;
         }
-        // Post a letter. `item` and `cash_on_delivery_amount` ride this packet too and are
-        // deliberately ignored here — those are later slices, and a letter that silently ate an
-        // item would be the worst way to learn that. Every refusal answers with its OWN
+        // Take a mail's attached item into the bags. A full bag answers `ErrEquipError` and the
+        // item STAYS in the letter — the case where a naive implementation destroys it — while
+        // every other refusal reads the same, so a crafted mail id learns nothing.
+        ClientOpcodeMessage::CMSG_MAIL_TAKE_ITEM(c) => {
+            let self_guid = social::self_guid(conn);
+            let outcome =
+                match mail::take_item(store, self_guid, c.mailbox.guid(), u64::from(c.mail_id)) {
+                    Ok(taken) => Ok(taken),
+                    Err(e) => {
+                        log::debug!(
+                            "world: mail take-item refused (account {}): {e}",
+                            conn.account_id
+                        );
+                        Err(match e {
+                            mail::TakeItemRefusal::BagsFull(_) => {
+                                codec::MailTakeItemError::BagsFull
+                            }
+                            mail::TakeItemRefusal::Other(_) => codec::MailTakeItemError::Other,
+                        })
+                    }
+                };
+            send(
+                tx,
+                Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
+                    codec::build_mail_take_item_result(c.mail_id, outcome),
+                ))),
+            )?;
+        }
+        // Post a letter. `cash_on_delivery_amount` rides this packet too and is deliberately
+        // ignored here — COD is a later slice. Every refusal answers with its OWN
         // `MailResultTwo`, never a generic internal error: the client renders each as distinct
         // on-screen text, which is all the player gets to work with.
         //
@@ -162,6 +190,7 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                 c.subject.clone(),
                 c.body.clone(),
                 c.money.as_int(),
+                c.item.guid(),
             ) {
                 Ok(()) => Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok),
                 Err(e) => {
@@ -182,6 +211,16 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                         }
                         mail::SendRefusal::NotEnoughMoney(_) => {
                             Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrNotEnoughMoney)
+                        }
+                        // A bound item and one that is not the sender's are different mistakes, so
+                        // the client is told which: vanilla has no "soulbound" mail line, and
+                        // `ErrCantSendWrappedCod` is mangoszero's nearest — it renders as a refusal
+                        // about the attachment rather than about the letter.
+                        mail::SendRefusal::AttachmentSoulbound(_) => {
+                            Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrCantSendWrappedCod)
+                        }
+                        mail::SendRefusal::AttachmentInvalid(_) => {
+                            Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrMailAttachmentInvalid)
                         }
                         mail::SendRefusal::Internal(_) => {
                             Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError)

@@ -678,7 +678,8 @@ parity_test!(parity_game_mail, "game_mail", lyracore_module::Mail, bindings::mai
 });
 parity_test!(parity_game_mail_escrow, "game_mail_escrow", lyracore_module::MailEscrow, bindings::mail_escrow_type::MailEscrow, {
     escrow_id, sender_guid, recipient_guid, subject, body, money, postage, created_micros,
-    delivered, payout, mail_id,
+    delivered, payout, mail_id, item_entry, item_stack_count, item_durability, item_enchant_id,
+    item_soulbound,
 });
 parity_test!(parity_game_faction, "game_faction", lyracore_module::Faction, bindings::faction_type::Faction, {
     faction_id, reputation_index, base_standing,

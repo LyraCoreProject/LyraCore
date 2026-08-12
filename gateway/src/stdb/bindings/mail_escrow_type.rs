@@ -18,6 +18,11 @@ pub struct MailEscrow {
     pub delivered: bool,
     pub payout: bool,
     pub mail_id: u64,
+    pub item_entry: u32,
+    pub item_stack_count: u32,
+    pub item_durability: u32,
+    pub item_enchant_id: u32,
+    pub item_soulbound: bool,
 }
 
 impl __sdk::InModule for MailEscrow {
@@ -39,6 +44,11 @@ pub struct MailEscrowCols {
     pub delivered: __sdk::__query_builder::Col<MailEscrow, bool>,
     pub payout: __sdk::__query_builder::Col<MailEscrow, bool>,
     pub mail_id: __sdk::__query_builder::Col<MailEscrow, u64>,
+    pub item_entry: __sdk::__query_builder::Col<MailEscrow, u32>,
+    pub item_stack_count: __sdk::__query_builder::Col<MailEscrow, u32>,
+    pub item_durability: __sdk::__query_builder::Col<MailEscrow, u32>,
+    pub item_enchant_id: __sdk::__query_builder::Col<MailEscrow, u32>,
+    pub item_soulbound: __sdk::__query_builder::Col<MailEscrow, bool>,
 }
 
 impl __sdk::__query_builder::HasCols for MailEscrow {
@@ -56,6 +66,11 @@ impl __sdk::__query_builder::HasCols for MailEscrow {
             delivered: __sdk::__query_builder::Col::new(table_name, "delivered"),
             payout: __sdk::__query_builder::Col::new(table_name, "payout"),
             mail_id: __sdk::__query_builder::Col::new(table_name, "mail_id"),
+            item_entry: __sdk::__query_builder::Col::new(table_name, "item_entry"),
+            item_stack_count: __sdk::__query_builder::Col::new(table_name, "item_stack_count"),
+            item_durability: __sdk::__query_builder::Col::new(table_name, "item_durability"),
+            item_enchant_id: __sdk::__query_builder::Col::new(table_name, "item_enchant_id"),
+            item_soulbound: __sdk::__query_builder::Col::new(table_name, "item_soulbound"),
         }
     }
 }

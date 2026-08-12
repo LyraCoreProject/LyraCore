@@ -64,6 +64,12 @@ pub(crate) enum SendRefusal {
     /// The postage debit refused. The gates above already established the sender is in world with a
     /// live entity, so this is affordability and nothing else.
     NotEnoughMoney(String),
+    /// The attached item is not the sender's, or does not exist. One variant for both, because the
+    /// module answers one verdict for both: an item guid is client-supplied.
+    AttachmentInvalid(String),
+    /// The attached instance has bound to its owner. Its own variant so the client renders its own
+    /// line — "soulbound" and "not yours" are different mistakes and a player must be able to tell.
+    AttachmentSoulbound(String),
     /// The row insert failed after the gates passed — an unreachable database, not a rule. The one
     /// refusal that is genuinely internal.
     Internal(String),
@@ -72,9 +78,11 @@ pub(crate) enum SendRefusal {
 impl std::fmt::Display for SendRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoMailbox(e) | Self::RecipientNotFound(e) | Self::NotEnoughMoney(e) => {
-                f.write_str(e)
-            }
+            Self::NoMailbox(e)
+            | Self::RecipientNotFound(e)
+            | Self::NotEnoughMoney(e)
+            | Self::AttachmentInvalid(e)
+            | Self::AttachmentSoulbound(e) => f.write_str(e),
             Self::CannotSendToSelf => f.write_str(mail_rules::CANNOT_SEND_TO_SELF),
             Self::NotYourTeam => f.write_str(mail_rules::NOT_YOUR_TEAM),
             Self::Internal(e) => f.write_str(e),
@@ -190,11 +198,16 @@ pub(crate) fn delete<St: WorldStore + ?Sized>(
 /// in world and at the named mailbox; the recipient exists realm-wide; not yourself; same faction.
 /// The module answers affordability, which is the one question it has the state for.
 ///
-/// # The copper
+/// # The copper and the item
 ///
 /// `money` travels WITH the letter and the recipient takes it out; the postage is what the post
 /// office keeps. Both leave the purse in ONE debit at send — the sender cannot afford one without
 /// the other, and a refused send costs nothing.
+///
+/// `item_guid` (0 for none) is the ONE attachment the vanilla wire carries. It is client-supplied,
+/// so nothing here trusts it: the module resolves it, refuses it if it is not the sender's or if it
+/// has bound, and otherwise DELETES the instance into a snapshot on the letter — in the same
+/// transaction as the debit, so a refused send costs the sender neither the coin nor the item.
 ///
 /// # Homonyms: refused, not guessed
 ///
@@ -202,9 +215,12 @@ pub(crate) fn delete<St: WorldStore + ?Sized>(
 /// ([`party::resolve_all_by_name`]). Whisper disambiguates by picking the candidate that is ONLINE,
 /// and mail cannot borrow that rule: reaching a character who is offline is the entire point of a
 /// mailbox. So after the faction filter, a name that still names more than one person is REFUSED.
-/// The rejected alternative is first-hit-wins, which silently posts a letter — and, once the
-/// attachment slices land, an item and a purse of gold — to a stranger who can simply take it. A
-/// refusal costs the sender a retry; a misdelivery is unrecoverable.
+/// The rejected alternative is first-hit-wins, which silently posts an item and a purse of gold to
+/// a stranger who can simply take it. A refusal costs the sender a retry; a misdelivery is
+/// unrecoverable.
+// The gates and the letter are one call deliberately: splitting them into a struct would put the
+// item guid somewhere a caller could forget to fill in.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn send<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
@@ -213,6 +229,7 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
     subject: String,
     body: String,
     money: u32,
+    item_guid: u64,
 ) -> std::result::Result<(), SendRefusal> {
     let sender_guid = at_mailbox(store, self_guid, mailbox_guid)
         .map_err(|e| SendRefusal::NoMailbox(e.to_string()))?;
@@ -260,7 +277,7 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
         // One database: the purse and the row are both on it, so the debit and the insert are one
         // transaction — the property the design asks for, and the only plane that can have it.
         None => store
-            .mail_send(sender_guid, recipient_guid, subject, body, money)
+            .mail_send(sender_guid, recipient_guid, subject, body, money, item_guid)
             .map_err(refusal_from_module),
         // Sharded: realm-core holds no purse, so no transaction covers both. The escrow does
         // instead — fence the whole cost on the sender's shard, commit the row on realm-core,
@@ -276,12 +293,26 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
                     body.clone(),
                     money,
                     mail_rules::postage(),
+                    item_guid,
                 )
                 .map_err(refusal_from_module)?;
+            // The fence is where the item stopped being a row and became a snapshot, so the
+            // attachment the commit writes is read back off the fence rather than re-derived — one
+            // source, and the same one `redrive` reads.
+            let item = held_attachment(store, sender_guid, escrow_id)
+                .map_err(|e| SendRefusal::Internal(format!("{e:#}")))?;
             // Past the fence the sender has PAID. Every failure from here is recoverable and none
             // is refundable, so it is reported as internal and the fence is left for a re-drive.
             drive(store, escrow_id, || {
-                realm.mail_commit(escrow_id, sender_guid, recipient_guid, subject, body, money)
+                realm.mail_commit(
+                    escrow_id,
+                    sender_guid,
+                    recipient_guid,
+                    subject,
+                    body,
+                    money,
+                    item.clone(),
+                )
             })
             .map_err(|e| SendRefusal::Internal(format!("{e:#}")))
         }
@@ -309,6 +340,50 @@ where
     source.mail_settle(escrow_id)
 }
 
+/// The ONE item a letter carries, as the gateway moves it between databases. The mail row's own
+/// attachment columns and the escrow row's, which are the same five columns: entry, stack,
+/// durability, enchant and bind state. `entry` 0 is "no attachment".
+///
+/// Every column is here because mailing must not launder value — a re-grant from the template alone
+/// would hand back a repaired, unenchanted item.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AttachedItem {
+    pub entry: u32,
+    pub stack_count: u32,
+    pub durability: u32,
+    pub enchant_id: u32,
+    pub soulbound: bool,
+}
+
+impl AttachedItem {
+    pub fn is_empty(&self) -> bool {
+        self.entry == 0
+    }
+}
+
+/// The attachment a fence is holding, read back off the escrow ROW rather than re-derived from what
+/// the caller thought it was sending — `transfer`'s "read the escrow back rather than trusting the
+/// plan", for the identical reason: the row on disk is what actually landed.
+///
+/// A missing row is an `Err`, never an empty attachment: committing a letter with no item while the
+/// fence holds one would strand the item and tell the sender it went.
+fn held_attachment<St: WorldStore + ?Sized>(
+    store: &St,
+    sender_guid: u64,
+    escrow_id: u64,
+) -> Result<AttachedItem> {
+    store
+        .mail_escrows_of(sender_guid)?
+        .into_iter()
+        .find(|e| e.escrow_id == escrow_id)
+        .map(|e| e.item)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "mail escrow {escrow_id}: the fence reported success but no row is readable —                  refusing to commit a letter whose attachment cannot be confirmed"
+            )
+        })
+}
+
 /// One escrow row the gateway is holding, flattened for the drive. Everything a re-drive needs is
 /// here, because a fence carries its own letter.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -324,6 +399,8 @@ pub struct HeldEscrow {
     /// is the destination, and nothing else about the row does.
     pub payout: bool,
     pub mail_id: u64,
+    /// The attachment in flight. Empty when the fence carries only coin.
+    pub item: AttachedItem,
 }
 
 /// Finish every escrow left standing for `self_guid`, on both planes.
@@ -357,6 +434,7 @@ pub(crate) fn redrive<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
                 held.subject.clone(),
                 held.body.clone(),
                 held.money,
+                held.item.clone(),
             )
         });
         log_redrive("send", held.escrow_id, outcome);
@@ -366,8 +444,14 @@ pub(crate) fn redrive<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
         if !held.payout {
             continue;
         }
+        // Which payout depends on WHAT the fence is holding, and nothing else: a take fence carries
+        // either a mail row's copper or its item, never both — the two opcodes are separate clicks.
         let outcome = drive(realm.as_ref(), held.escrow_id, || {
-            store.mail_payout(held.escrow_id, self_guid, held.mail_id, held.money)
+            if held.item.is_empty() {
+                store.mail_payout(held.escrow_id, self_guid, held.mail_id, held.money)
+            } else {
+                store.mail_item_payout(held.escrow_id, self_guid, held.mail_id, held.item.clone())
+            }
         });
         log_redrive("take", held.escrow_id, outcome);
     }
@@ -424,6 +508,103 @@ pub(crate) fn take_money<St: WorldStore + ?Sized>(
     })
 }
 
+/// Why an item take was refused, in the client's own vocabulary.
+///
+/// Only the full-bag arm gets its own variant: `MailResultTwo::ErrEquipError` is the one the client
+/// renders as "make room", and it is the refusal a player can actually act on. Everything else —
+/// not your mail, nothing in it, an unreachable database — reads the same on the wire, so a crafted
+/// mail id learns nothing from the answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TakeItemRefusal {
+    BagsFull(String),
+    Other(String),
+}
+
+impl std::fmt::Display for TakeItemRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BagsFull(e) | Self::Other(e) => f.write_str(e),
+        }
+    }
+}
+
+fn take_item_refusal(e: anyhow::Error) -> TakeItemRefusal {
+    let text = format!("{e:#}");
+    if text.contains(mail_rules::INVENTORY_FULL) {
+        TakeItemRefusal::BagsFull(text)
+    } else {
+        TakeItemRefusal::Other(text)
+    }
+}
+
+/// Take mail `mail_id`'s attached item into the bags of the session standing at `mailbox_guid`.
+///
+/// [`take_money`]'s twin, and the same authorization: the row lookup scoped to the caller, run on
+/// whichever plane owns the row. A mail id arrives from the client, so nothing here may trust it.
+///
+/// # The full bag, and why the sharded plane probes first
+///
+/// One database does the whole take in one transaction, so a full bag rolls the clear back and the
+/// item simply stays in the letter. Two databases cannot have that: the fence empties the letter
+/// before the taker's shard is asked, so a full bag found afterwards would leave the item held in
+/// an escrow rather than in the mail. So the sharded path asks the taker's shard for room BEFORE it
+/// fences ([`WorldStore::mail_item_room`]). The probe is advisory — a bag filled in between leaves
+/// the item held and re-driven at the next mailbox visit, never destroyed — but it is what makes
+/// the ordinary full-bag click a clean refusal with the item still in the mail.
+pub(crate) fn take_item<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: Option<u64>,
+    mailbox_guid: u64,
+    mail_id: u64,
+) -> std::result::Result<(u32, u32), TakeItemRefusal> {
+    let self_guid = at_mailbox(store, self_guid, mailbox_guid).map_err(take_item_refusal)?;
+    // The snapshot is read here on BOTH planes: the wire's success arm names the item and stack the
+    // client just gained, and the sharded drive has to carry the snapshot to the other database
+    // anyway. The read is already scoped to the reader, so a crafted mail id finds nothing.
+    let item = mail_of(store, self_guid)
+        .map_err(take_item_refusal)?
+        .into_iter()
+        .find(|m| m.id == mail_id)
+        .map(|m| AttachedItem {
+            entry: m.item_entry,
+            stack_count: m.item_stack_count,
+            durability: m.item_durability,
+            enchant_id: m.item_enchant_id,
+            soulbound: m.item_soulbound,
+        })
+        .ok_or_else(|| TakeItemRefusal::Other(mail_rules::NOT_YOUR_MAIL.to_string()))?;
+    if item.is_empty() {
+        return Err(TakeItemRefusal::Other(
+            mail_rules::NOTHING_TO_TAKE.to_string(),
+        ));
+    }
+    let taken = (item.entry, item.stack_count);
+    let Some(realm) = store.realm_store() else {
+        // One database: the grant and the clear are one transaction, so a full bag refuses itself
+        // and the item stays in the letter with no protocol at all.
+        store
+            .mail_take_item(self_guid, mail_id)
+            .map_err(take_item_refusal)?;
+        return Ok(taken);
+    };
+    // Sharded: ask for room BEFORE fencing. Past the fence the letter is empty, so a full bag found
+    // afterwards would leave the item held in an escrow rather than in the mail.
+    store.mail_item_room(self_guid).map_err(take_item_refusal)?;
+    let escrow_id = next_escrow_id();
+    // The fence refuses if the row disagrees with what was read — a stale read that fenced one item
+    // and granted another would mint the difference.
+    realm
+        .mail_take_item_fence(escrow_id, self_guid, mail_id, item.entry)
+        .map_err(take_item_refusal)?;
+    // Past the fence the item has left the letter. A failure here is reported — the player's click
+    // did not land — but the fence keeps the item, and the next mailbox visit re-drives it.
+    drive(realm.as_ref(), escrow_id, || {
+        store.mail_item_payout(escrow_id, self_guid, mail_id, item.clone())
+    })
+    .map_err(take_item_refusal)?;
+    Ok(taken)
+}
+
 /// The next caller-chosen escrow id.
 ///
 /// Caller-chosen is the requirement: it is the idempotency key on both databases, so it must be
@@ -450,13 +631,18 @@ fn next_escrow_id() -> u64 {
 
 /// Read a module-side failure into the refusal the client is shown.
 ///
-/// Affordability is the only rule the module owns on this path, and it answers with the shared text
-/// both halves compile against (`ERR_ATTACK_TARGET_DEAD`'s convention), so the mapping cannot drift.
-/// Anything else really is internal — an unreachable database, not a rule.
+/// Affordability and the attachment verdict are the rules the module owns on this path, and each
+/// answers with the shared text both halves compile against (`ERR_ATTACK_TARGET_DEAD`'s
+/// convention), so the mapping cannot drift. Anything else really is internal — an unreachable
+/// database, not a rule.
 fn refusal_from_module(e: anyhow::Error) -> SendRefusal {
     let text = format!("{e:#}");
     if text.contains(mail_rules::NOT_ENOUGH_MONEY) {
         SendRefusal::NotEnoughMoney(text)
+    } else if text.contains(mail_rules::ITEM_IS_SOULBOUND) {
+        SendRefusal::AttachmentSoulbound(text)
+    } else if text.contains(mail_rules::NOT_YOUR_ITEM) {
+        SendRefusal::AttachmentInvalid(text)
     } else {
         SendRefusal::Internal(text)
     }

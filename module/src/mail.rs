@@ -21,9 +21,15 @@
 //! # What is here, and what is not
 //!
 //! Here now: the table and its sweeps, the read path's seeder, mark-read, delete, sending a letter
-//! with COPPER attached, and taking that copper out. Item attachments, return-to-sender and COD are
-//! later slices — the item columns exist because the wire has exactly one item block per mail and a
-//! later slice must not migrate them in, not because anything writes them yet.
+//! with copper and ONE item attached, and taking either back out. Return-to-sender and COD are
+//! later slices.
+//!
+//! **An attachment is a SNAPSHOT, not a row.** At send the sender's `game_item_instance` is deleted
+//! and its state copied into the mail row ([`ItemSnapshot`]); at take a fresh instance is created
+//! carrying that state back. The item guid does not survive, and that is accepted — the recipient's
+//! client learns the new one from the normal item create. Re-owning the row in place would be the
+//! obvious alternative and is rejected: the gateway's item-update relay only notifies the NEW owner,
+//! so it leaves a ghost item in the sender's bags until relog.
 //!
 //! **Both money paths in this file are the SINGLE-DATABASE plane.** On a sharded realm the purse is
 //! on the sender's (or taker's) own shard and the mail row is on realm-core, so no transaction
@@ -37,6 +43,8 @@
 
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
+use crate::game_item_instance;
+use crate::game_item_template;
 use crate::game_world_entity;
 
 /// One piece of mail, addressed by recipient GUID — the one realm-wide name a character has (a
@@ -50,7 +58,7 @@ use crate::game_world_entity;
 /// `game_item_instance` row — mailing must not repair an item, strip its enchant or launder a
 /// soulbound one, and a snapshot is what survives a database boundary. One attachment, because
 /// vanilla's `CMSG_SEND_MAIL` carries exactly one item guid and the `Mail` wire struct has exactly
-/// one item block. All zero until the send slice writes them. [entity]
+/// one item block. All zero when the letter carries no item. [entity]
 #[table(accessor = game_mail, public, index(accessor = by_recipient, btree(columns = [recipient_guid])))]
 pub struct Mail {
     #[primary_key]
@@ -98,6 +106,131 @@ crate::character_owned!(transfer, fn sweep_transfer_game_mail(ctx, character_gui
     remint = id,
 });
 
+/// One item's state, detached from the row that held it — every column mailing must not launder.
+///
+/// Durability and the enchant are here because a template-based re-grant would reset the first and
+/// drop the second: a free repair, and an enchant-laundering exploit. `soulbound` is here because a
+/// bind state that reset would make the mailbox a way to unbind gear. The guid is deliberately NOT
+/// here (see the module doc).
+///
+/// `entry == 0` is "no attachment", the same sentinel the mail row's own columns carry.
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub(crate) struct ItemSnapshot {
+    pub entry: u32,
+    pub stack_count: u32,
+    pub durability: u32,
+    pub enchant_id: u32,
+    pub soulbound: bool,
+}
+
+impl ItemSnapshot {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entry == 0
+    }
+}
+
+/// **The mailable-or-refused verdict.** Pure, so the authorization boundary and the bind rule are
+/// testable without a database — and shared, so the single-database send and the fence that starts
+/// the sharded one cannot answer differently.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Attach {
+    /// The sender attached nothing (`item_guid` 0) — a text-and-coin letter.
+    Nothing,
+    /// No such instance, or it belongs to somebody else. One verdict for both, like
+    /// [`TakeMoney::NotYours`]: an item guid is client-supplied, so a refusal must not be a way to
+    /// probe which guids exist.
+    NotYours,
+    /// The instance has bound to its owner. Refused with its own line, and it stays in the bags —
+    /// an unworn bind-on-equip item is UNBOUND and passes here.
+    Soulbound,
+    /// Take it out of the bags and into the letter.
+    Detach,
+}
+
+/// `owned` is the `(owner_guid, soulbound)` of the named instance, or `None` when no such row
+/// exists on this database.
+pub(crate) fn plan_attach(item_guid: u64, owned: Option<(u64, bool)>, sender_guid: u64) -> Attach {
+    if item_guid == 0 {
+        return Attach::Nothing;
+    }
+    match owned {
+        None => Attach::NotYours,
+        Some((owner_guid, _)) if owner_guid != sender_guid => Attach::NotYours,
+        Some((_, true)) => Attach::Soulbound,
+        Some(_) => Attach::Detach,
+    }
+}
+
+/// Take `item_guid` out of `sender_guid`'s bags and into a snapshot, or refuse and take nothing.
+///
+/// The DELETE is what makes the attachment unreachable everywhere else at once: no vendor, equip,
+/// use, loot, trade or second mail has to learn a new "in flight" rule, because every one of them
+/// resolves an item through this same table and now finds no row. The rejected alternative — a
+/// `fenced: bool` on the instance — reads as the smaller change and is the larger one, and the one
+/// path that forgot the flag would be the dupe.
+pub(crate) fn detach_item(
+    ctx: &ReducerContext,
+    sender_guid: u64,
+    item_guid: u64,
+) -> Result<ItemSnapshot, String> {
+    let items = ctx.db.game_item_instance();
+    let owned = items.guid().find(item_guid);
+    match plan_attach(
+        item_guid,
+        owned.as_ref().map(|i| (i.owner_guid, i.soulbound)),
+        sender_guid,
+    ) {
+        Attach::Nothing => return Ok(ItemSnapshot::default()),
+        Attach::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_ITEM.to_string()),
+        Attach::Soulbound => return Err(lyracore_shared::mail::ITEM_IS_SOULBOUND.to_string()),
+        Attach::Detach => {}
+    }
+    let inst = owned.expect("Detach is only reachable with a row");
+    let snapshot = ItemSnapshot {
+        entry: inst.entry,
+        stack_count: inst.stack_count,
+        durability: inst.durability,
+        enchant_id: inst.enchant_id,
+        soulbound: inst.soulbound,
+    };
+    items.guid().delete(item_guid);
+    Ok(snapshot)
+}
+
+/// Re-create a snapshotted item in `payee_guid`'s bags, through the item module's OWN storage path.
+///
+/// Bag-space search, bag-family rules and the full-bag refusal are all
+/// [`crate::items::store_instance_state`]'s, deliberately: a second copy here would drift, and the
+/// full-bag case is the one where a naive implementation destroys the item. The `Err` rolls the
+/// caller's whole transaction back, so a refused take leaves the letter holding its attachment.
+pub(crate) fn grant_snapshot(
+    ctx: &ReducerContext,
+    payee_guid: u64,
+    snapshot: &ItemSnapshot,
+) -> Result<(), String> {
+    if snapshot.is_empty() {
+        return Err(lyracore_shared::mail::NOTHING_TO_TAKE.to_string());
+    }
+    let payee = crate::helpers::acting_entity_by_guid(ctx, payee_guid)
+        .ok_or_else(|| lyracore_shared::mail::NOT_IN_WORLD.to_string())?;
+    let tmpl = ctx
+        .db
+        .game_item_template()
+        .entry()
+        .find(snapshot.entry)
+        .ok_or_else(|| format!("mail: no template for attached item {}", snapshot.entry))?;
+    crate::items::store_instance_state(
+        ctx,
+        payee_guid,
+        payee.owner_identity,
+        &tmpl,
+        snapshot.stack_count,
+        snapshot.durability,
+        snapshot.enchant_id,
+        snapshot.soulbound,
+    )
+}
+
 /// Insert one mail. The shared insert core: whichever plane holds the rows, this is the shape they
 /// take, so a seeded mail and a sent one can never differ in the columns the list read projects.
 pub(crate) fn insert_mail(
@@ -107,6 +240,7 @@ pub(crate) fn insert_mail(
     subject: String,
     body: String,
     money: u32,
+    item: &ItemSnapshot,
 ) -> u64 {
     ctx.db
         .game_mail()
@@ -116,11 +250,11 @@ pub(crate) fn insert_mail(
             sender_guid,
             subject,
             body,
-            item_entry: 0,
-            item_stack_count: 0,
-            item_durability: 0,
-            item_enchant_id: 0,
-            item_soulbound: false,
+            item_entry: item.entry,
+            item_stack_count: item.stack_count,
+            item_durability: item.durability,
+            item_enchant_id: item.enchant_id,
+            item_soulbound: item.soulbound,
             money,
             cod: 0,
             was_read: false,
@@ -158,7 +292,15 @@ pub fn debug_seed_mail(
     money: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let id = insert_mail(ctx, recipient_guid, sender_guid, subject, body, money);
+    let id = insert_mail(
+        ctx,
+        recipient_guid,
+        sender_guid,
+        subject,
+        body,
+        money,
+        &ItemSnapshot::default(),
+    );
     spacetimedb::log::info!(
         "debug_seed_mail: mail {id} to {recipient_guid} from {sender_guid} (unread now: {})",
         has_unread(ctx, recipient_guid)
@@ -207,6 +349,8 @@ pub(crate) fn charge_postage(
 /// where they can, it is strictly worse — four transactions instead of one atomic write, plus a
 /// fence that can be interrupted where nothing could be. Pinned by
 /// `tests::the_single_database_money_paths_never_reach_the_escrow`.
+/// The attachment is snapshotted BEFORE the debit and in the same transaction, so a send refused
+/// for either reason costs the sender neither the coin nor the item.
 pub(crate) fn apply_send(
     ctx: &ReducerContext,
     sender_guid: u64,
@@ -214,9 +358,19 @@ pub(crate) fn apply_send(
     subject: String,
     body: String,
     money: u32,
+    item_guid: u64,
 ) -> Result<(), String> {
+    let item = detach_item(ctx, sender_guid, item_guid)?;
     charge_postage(ctx, sender_guid, lyracore_shared::mail::total_cost(money))?;
-    insert_mail(ctx, recipient_guid, sender_guid, subject, body, money);
+    insert_mail(
+        ctx,
+        recipient_guid,
+        sender_guid,
+        subject,
+        body,
+        money,
+        &item,
+    );
     Ok(())
 }
 
@@ -256,6 +410,61 @@ pub(crate) fn mail_money(ctx: &ReducerContext, mail_id: u64) -> Option<(u64, u32
         .map(|m| (m.recipient_guid, m.money))
 }
 
+/// What a `CMSG_MAIL_TAKE_ITEM` must do. [`TakeMoney`]'s twin, and deliberately the same three
+/// arms: the mail id is client-supplied either way, so the authorization boundary and the
+/// take-twice rule are one rule pointed at two columns.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TakeItem {
+    /// No such mail, or it is not the caller's.
+    NotYours,
+    /// The letter carries no item — text-only, or one already taken. The mail stays readable.
+    NothingToTake,
+    /// Hand the snapshot to the caller and clear the row's attachment columns.
+    Take,
+}
+
+/// `row` is the `(recipient_guid, item_entry)` of the named mail, or `None` when no such row exists.
+pub(crate) fn plan_take_item(row: Option<(u64, u32)>, caller_guid: u64) -> TakeItem {
+    match row {
+        Some((recipient_guid, _)) if recipient_guid != caller_guid => TakeItem::NotYours,
+        Some((_, 0)) => TakeItem::NothingToTake,
+        Some(_) => TakeItem::Take,
+        None => TakeItem::NotYours,
+    }
+}
+
+/// The named mail's `(recipient_guid, attachment)`. [`mail_money`]'s twin, and the read behind both
+/// item takes, so neither can invent its own idea of who owns a row.
+pub(crate) fn mail_item(ctx: &ReducerContext, mail_id: u64) -> Option<(u64, ItemSnapshot)> {
+    ctx.db.game_mail().id().find(mail_id).map(|m| {
+        (
+            m.recipient_guid,
+            ItemSnapshot {
+                entry: m.item_entry,
+                stack_count: m.item_stack_count,
+                durability: m.item_durability,
+                enchant_id: m.item_enchant_id,
+                soulbound: m.item_soulbound,
+            },
+        )
+    })
+}
+
+/// Empty a mail of its attachment, leaving the letter readable until the recipient deletes it.
+pub(crate) fn clear_mail_item(ctx: &ReducerContext, mail_id: u64) {
+    let mails = ctx.db.game_mail();
+    if let Some(row) = mails.id().find(mail_id) {
+        mails.id().update(Mail {
+            item_entry: 0,
+            item_stack_count: 0,
+            item_durability: 0,
+            item_enchant_id: 0,
+            item_soulbound: false,
+            ..row
+        });
+    }
+}
+
 /// Empty a mail of its copper, leaving the letter readable until the recipient deletes it.
 pub(crate) fn clear_mail_money(ctx: &ReducerContext, mail_id: u64) {
     let mails = ctx.db.game_mail();
@@ -292,6 +501,29 @@ pub(crate) fn apply_take_money(
     taker.money = credited(taker.money, money);
     ctx.db.game_world_entity().guid().update(taker);
     clear_mail_money(ctx, mail_id);
+    Ok(())
+}
+
+/// Take a mail's item into the recipient's bags, in ONE transaction. **The single-database plane
+/// only**, for the same reason as [`apply_take_money`].
+///
+/// The grant runs BEFORE the clear, and both are one transaction — which is what makes the full-bag
+/// case safe: [`grant_snapshot`]'s `Err` rolls the clear back, so the item stays in the letter
+/// rather than being destroyed by a take that could not land it.
+pub(crate) fn apply_take_item(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    mail_id: u64,
+) -> Result<(), String> {
+    let row = mail_item(ctx, mail_id);
+    match plan_take_item(row.as_ref().map(|(to, i)| (*to, i.entry)), recipient_guid) {
+        TakeItem::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string()),
+        TakeItem::NothingToTake => return Err(lyracore_shared::mail::NOTHING_TO_TAKE.to_string()),
+        TakeItem::Take => {}
+    }
+    let (_, snapshot) = row.expect("Take is only reachable with a row");
+    grant_snapshot(ctx, recipient_guid, &snapshot)?;
+    clear_mail_item(ctx, mail_id);
     Ok(())
 }
 
@@ -383,9 +615,30 @@ pub fn realm_mail_send(
     subject: String,
     body: String,
     money: u32,
+    item_guid: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    apply_send(ctx, sender_guid, recipient_guid, subject, body, money)
+    apply_send(
+        ctx,
+        sender_guid,
+        recipient_guid,
+        subject,
+        body,
+        money,
+        item_guid,
+    )
+}
+
+/// Take a mail's attached item into `recipient_guid`'s bags. **The single-database plane's whole
+/// take**, and the item twin of [`realm_mail_take_money`] down to the trust boundary.
+#[reducer]
+pub fn realm_mail_take_item(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    mail_id: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    apply_take_item(ctx, recipient_guid, mail_id)
 }
 
 /// Take a mail's copper into `recipient_guid`'s purse. **The single-database plane's whole take.**
@@ -401,6 +654,27 @@ pub fn realm_mail_take_money(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     apply_take_money(ctx, recipient_guid, mail_id)
+}
+
+/// Has `payee_guid` room in their bags for one more item? A READ dressed as a reducer, because the
+/// gateway cannot answer it without a second copy of the bag-space search.
+///
+/// **A sharded item take probes here BEFORE it fences.** The fence is a one-way move, so a full bag
+/// discovered afterwards would strand the item in an escrow instead of leaving it in the letter.
+/// The probe is advisory — a bag filled between the probe and the grant leaves the item held and
+/// re-driven, never destroyed — but it is what makes the ordinary full-bag click a clean refusal
+/// with the item still in the mail. The single-database plane needs none of this: there the grant
+/// and the clear are one transaction, so the refusal rolls itself back.
+#[reducer]
+pub fn realm_mail_item_room(ctx: &ReducerContext, payee_guid: u64) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    if crate::helpers::acting_entity_by_guid(ctx, payee_guid).is_none() {
+        return Err(lyracore_shared::mail::NOT_IN_WORLD.to_string());
+    }
+    if !crate::items::has_free_slot(ctx, payee_guid) {
+        return Err(lyracore_shared::mail::INVENTORY_FULL.to_string());
+    }
+    Ok(())
 }
 
 /// [`realm_mail_mark_read`]'s twin for delete. Same trust boundary, same one-reducer-both-planes
@@ -435,6 +709,54 @@ mod tests {
     #[test]
     fn a_mail_already_emptied_of_money_has_nothing_left_to_take() {
         assert_eq!(plan_take_money(Some((7, 0)), 7), TakeMoney::NothingToTake);
+    }
+
+    /// **The mailable-or-refused verdict, and the authorization boundary on an attachment.** An
+    /// item guid is client-supplied, so "not yours" and "no such guid" answer identically — a
+    /// crafted packet must not be able to mail someone else's gear, nor to learn which guids exist.
+    #[test]
+    fn attaching_an_item_the_sender_does_not_own_is_refused() {
+        assert_eq!(plan_attach(4, Some((7, false)), 7), Attach::Detach);
+        assert_eq!(plan_attach(4, Some((8, false)), 7), Attach::NotYours);
+        assert_eq!(plan_attach(4, None, 7), Attach::NotYours);
+    }
+
+    /// **A bound instance is refused; an unworn bind-on-equip one is not.** The verdict reads the
+    /// INSTANCE's `soulbound`, never the template's `bonding` — a BoE item that has never been
+    /// equipped is unbound and is exactly the drop a player mails to an alt.
+    #[test]
+    fn a_soulbound_instance_is_refused_and_an_unworn_bind_on_equip_item_is_mailable() {
+        assert_eq!(plan_attach(4, Some((7, true)), 7), Attach::Soulbound);
+        assert_eq!(plan_attach(4, Some((7, false)), 7), Attach::Detach);
+    }
+
+    /// Guid 0 is the wire's "no item attached", not a guid to look up. A letter with no attachment
+    /// must not be refused as "you do not own item 0".
+    #[test]
+    fn item_guid_zero_means_no_attachment_rather_than_a_missing_item() {
+        assert_eq!(plan_attach(0, None, 7), Attach::Nothing);
+        assert_eq!(plan_attach(0, Some((8, true)), 7), Attach::Nothing);
+    }
+
+    /// **The authorization boundary on an item take**, and the take-twice rule — [`plan_take_money`]'s
+    /// twin, pinned separately because the two read different columns and could drift apart.
+    #[test]
+    fn taking_an_item_is_refused_for_a_mail_the_caller_is_not_the_recipient_of() {
+        assert_eq!(plan_take_item(Some((7, 509_0001)), 7), TakeItem::Take);
+        assert_eq!(plan_take_item(Some((7, 509_0001)), 8), TakeItem::NotYours);
+        assert_eq!(plan_take_item(None, 7), TakeItem::NotYours);
+        assert_eq!(plan_take_item(Some((7, 0)), 7), TakeItem::NothingToTake);
+    }
+
+    /// A snapshot with no entry is the empty attachment every text-only letter carries.
+    #[test]
+    fn an_attachment_with_no_entry_is_empty() {
+        assert!(ItemSnapshot::default().is_empty());
+        assert!(!ItemSnapshot {
+            entry: 509_0001,
+            ..Default::default()
+        }
+        .is_empty());
     }
 
     /// A credit saturates rather than wrapping — the mirror of the debit's saturation, and the
@@ -515,6 +837,7 @@ mod tests {
         for signature in [
             "pub(crate) fn apply_send(",
             "pub(crate) fn apply_take_money(",
+            "pub(crate) fn apply_take_item(",
         ] {
             let body = code_of(include_str!("mail.rs"), signature);
             assert!(
@@ -550,6 +873,8 @@ mod tests {
             "pub fn realm_mail_delete(",
             "pub fn realm_mail_send(",
             "pub fn realm_mail_take_money(",
+            "pub fn realm_mail_take_item(",
+            "pub fn realm_mail_item_room(",
         ] {
             let body = code_of(include_str!("mail.rs"), signature);
             let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
