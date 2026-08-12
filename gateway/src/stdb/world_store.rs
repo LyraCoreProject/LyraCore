@@ -507,6 +507,10 @@ impl WorldStore for Coordinator {
         self.trainer_serves(player_guid, trainer_guid)
     }
 
+    fn mail_return(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.mail_return(recipient_guid, mail_id)
+    }
+
     fn mail_send(
         &self,
         sender_guid: u64,

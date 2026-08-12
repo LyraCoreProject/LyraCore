@@ -543,6 +543,7 @@ pub mod realm_mail_item_payout_reducer;
 pub mod realm_mail_item_room_reducer;
 pub mod realm_mail_mark_read_reducer;
 pub mod realm_mail_payout_reducer;
+pub mod realm_mail_return_reducer;
 pub mod realm_mail_send_reducer;
 pub mod realm_mail_settle_reducer;
 pub mod realm_mail_take_item_fence_reducer;
@@ -1152,6 +1153,7 @@ pub use realm_mail_item_payout_reducer::realm_mail_item_payout;
 pub use realm_mail_item_room_reducer::realm_mail_item_room;
 pub use realm_mail_mark_read_reducer::realm_mail_mark_read;
 pub use realm_mail_payout_reducer::realm_mail_payout;
+pub use realm_mail_return_reducer::realm_mail_return;
 pub use realm_mail_send_reducer::realm_mail_send;
 pub use realm_mail_settle_reducer::realm_mail_settle;
 pub use realm_mail_take_item_fence_reducer::realm_mail_take_item_fence;
@@ -2308,6 +2310,10 @@ pub enum Reducer {
         mail_id: u64,
         amount: u32,
     },
+    RealmMailReturn {
+        recipient_guid: u64,
+        mail_id: u64,
+    },
     RealmMailSend {
         sender_guid: u64,
         recipient_guid: u64,
@@ -2683,6 +2689,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::RealmMailItemRoom { .. } => "realm_mail_item_room",
             Reducer::RealmMailMarkRead { .. } => "realm_mail_mark_read",
             Reducer::RealmMailPayout { .. } => "realm_mail_payout",
+            Reducer::RealmMailReturn { .. } => "realm_mail_return",
             Reducer::RealmMailSend { .. } => "realm_mail_send",
             Reducer::RealmMailSettle { .. } => "realm_mail_settle",
             Reducer::RealmMailTakeItem { .. } => "realm_mail_take_item",
@@ -4658,6 +4665,13 @@ impl __sdk::Reducer for Reducer {
                 payee_guid: payee_guid.clone(),
                 mail_id: mail_id.clone(),
                 amount: amount.clone(),
+            }),
+            Reducer::RealmMailReturn {
+                recipient_guid,
+                mail_id,
+            } => __sats::bsatn::to_vec(&realm_mail_return_reducer::RealmMailReturnArgs {
+                recipient_guid: recipient_guid.clone(),
+                mail_id: mail_id.clone(),
             }),
             Reducer::RealmMailSend {
                 sender_guid,

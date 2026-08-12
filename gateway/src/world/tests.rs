@@ -1169,6 +1169,25 @@ impl WorldStore for InMemoryStore {
         }
         Ok(())
     }
+    /// Models the module's `apply_return`: the SAME row, re-addressed to whoever sent it, with
+    /// whatever it still carries (or nothing) travelling unchanged.
+    fn mail_return(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_return");
+        let mut mails = self.mails.lock().unwrap();
+        match mails
+            .iter_mut()
+            .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
+        {
+            Some((to, m)) => {
+                let sender = m.sender_guid;
+                m.sender_guid = recipient_guid;
+                m.was_read = false;
+                *to = sender;
+                Ok(())
+            }
+            None => Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL)),
+        }
+    }
     /// Models the module's `apply_send`: the postage plus the attached coin leave the purse and the
     /// row is written, in ONE call — the single-database plane's one transaction. The id is
     /// per-database, as the module's `auto_inc` is.

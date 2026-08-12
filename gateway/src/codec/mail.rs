@@ -26,6 +26,11 @@ pub struct MailView {
     pub item_entry: u32,
     pub item_stack_count: u32,
     pub item_durability: u32,
+    /// The attached item's TEMPLATE max durability (`game_item_template.max_durability`), not the
+    /// row's own snapshot — the mail row only ever snapshots CURRENT durability. Read separately so
+    /// a damaged attachment previews damaged instead of `max_durability == item_durability` always
+    /// reading as pristine. 0 for no attachment, the same sentinel `item_durability` uses.
+    pub max_durability: u32,
     pub item_enchant_id: u32,
     /// Not sent on the wire — the client shows no bind state in the mail window. Carried because
     /// the sharded take hands the whole snapshot to the other database, and a bind state dropped in
@@ -67,7 +72,7 @@ pub fn build_mail_list(mails: &[MailView], now_secs: i64) -> SMSG_MAIL_LIST_RESU
                 item_suffix_factor: 0,
                 item_stack_size: m.item_stack_count.min(u8::MAX as u32) as u8,
                 item_spell_charges: 0,
-                max_durability: m.item_durability,
+                max_durability: m.max_durability,
                 durability: m.item_durability,
                 money: Gold::new(m.money),
                 cash_on_delivery_amount: m.cod,
@@ -104,6 +109,22 @@ pub fn build_mail_delete_result(mail_id: u32, ok: bool) -> SMSG_SEND_MAIL_RESULT
     SMSG_SEND_MAIL_RESULT {
         mail_id,
         action: SMSG_SEND_MAIL_RESULT_MailAction::Deleted {
+            result2: if ok {
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
+            } else {
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+            },
+        },
+    }
+}
+
+/// Answer `CMSG_MAIL_RETURN_TO_SENDER` with `SMSG_SEND_MAIL_RESULT`/ReturnedToSender —
+/// [`build_mail_delete_result`]'s twin, same generic-bucket refusal for the same reason:
+/// `MailResultTwo` has no variant naming "not your mail".
+pub fn build_mail_return_result(mail_id: u32, ok: bool) -> SMSG_SEND_MAIL_RESULT {
+    SMSG_SEND_MAIL_RESULT {
+        mail_id,
+        action: SMSG_SEND_MAIL_RESULT_MailAction::ReturnedToSender {
             result2: if ok {
                 SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
             } else {
@@ -319,6 +340,27 @@ mod tests {
         );
     }
 
+    /// **A damaged attachment must preview damaged.** The row snapshots only CURRENT durability, so
+    /// `max_durability` on the wire has to come from the view's own template-derived field, never
+    /// from `item_durability` — sending the current value for both always renders the icon at full
+    /// bars, hiding the damage the mail window exists to show.
+    #[test]
+    fn a_damaged_attachment_previews_with_its_templates_max_durability_not_its_current_one() {
+        let mut m = view(1, "well-used");
+        m.item_entry = 5_090_001;
+        m.item_durability = 10;
+        m.max_durability = 40;
+        let wire = &build_mail_list(&[m], 1_000).mails[0];
+        assert_eq!(
+            wire.durability, 10,
+            "the current durability rides unchanged"
+        );
+        assert_eq!(
+            wire.max_durability, 40,
+            "max_durability must be the TEMPLATE's, not a copy of the current value"
+        );
+    }
+
     /// A take answers through the ItemTaken action, whose success arm names the item and stack the
     /// client just gained — that pair is what makes the mail window drop the right attachment.
     #[test]
@@ -358,6 +400,27 @@ mod tests {
                 }
             ),
             other => panic!("expected the ItemTaken action, got {other:?}"),
+        }
+    }
+
+    /// A successful return answers `Ok` on the ReturnedToSender action; a refused one answers
+    /// `ErrInternalError`, [`build_mail_delete_result`]'s twin. Both carry the mail id back.
+    #[test]
+    fn a_return_result_carries_the_mail_id_and_the_generic_error_on_refusal() {
+        match build_mail_return_result(7, true).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::ReturnedToSender { result2 } => {
+                assert_eq!(result2, SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok)
+            }
+            other => panic!("expected the ReturnedToSender action, got {other:?}"),
+        }
+        let refused = build_mail_return_result(7, false);
+        assert_eq!(refused.mail_id, 7);
+        match refused.action {
+            SMSG_SEND_MAIL_RESULT_MailAction::ReturnedToSender { result2 } => assert_eq!(
+                result2,
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+            ),
+            other => panic!("expected the ReturnedToSender action, got {other:?}"),
         }
     }
 

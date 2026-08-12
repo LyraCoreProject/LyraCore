@@ -16,9 +16,8 @@ impl Coordinator {
     /// per-owner read here (`player_items`, `player_skills`).
     pub fn mail_list(&self, recipient_guid: u64) -> Result<Vec<crate::codec::MailView>> {
         let guard = self.0.coord();
-        let mut mails: Vec<crate::codec::MailView> = guard
-            .conn
-            .db
+        let db = &guard.conn.db;
+        let mut mails: Vec<crate::codec::MailView> = db
             .game_mail()
             .iter()
             .filter(|m| m.recipient_guid == recipient_guid)
@@ -30,6 +29,15 @@ impl Coordinator {
                 item_entry: m.item_entry,
                 item_stack_count: m.item_stack_count,
                 item_durability: m.item_durability,
+                // The row only ever snapshots CURRENT durability (mail.rs's `ItemSnapshot`); the
+                // true max lives on the attachment's own template, the same read `player_items`
+                // joins for. 0 for no attachment — `entry().find(0)` finds nothing.
+                max_durability: db
+                    .game_item_template()
+                    .entry()
+                    .find(&m.item_entry)
+                    .map(|t| t.max_durability)
+                    .unwrap_or(0),
                 item_enchant_id: m.item_enchant_id,
                 item_soulbound: m.item_soulbound,
                 money: m.money,
