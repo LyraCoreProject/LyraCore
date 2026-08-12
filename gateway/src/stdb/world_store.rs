@@ -488,6 +488,10 @@ impl WorldStore for Coordinator {
         self.npc_refuses_interaction(npc_guid, player_guid)
     }
 
+    fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool> {
+        self.trainer_serves(player_guid, trainer_guid)
+    }
+
     fn buy_item(
         &self,
         account_id: u64,

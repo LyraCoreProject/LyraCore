@@ -72,12 +72,18 @@ mod ct {
     pub const MAX_LOOT_GOLD: usize = 55;
     pub const LOOT_ID: usize = 56; // → creature_loot_template.entry (0 = no loot table)
                                    // Loot-family completeness (work-item 210): PickpocketLootId/SkinLootId sit IMMEDIATELY after LootId
-                                   // in every mangos-family creature_template schema (LootId, PickpocketLootId, SkinLootId are
-                                   // consecutive columns) — `[V]` confirm this against your own ClassicDB_1_12_1_z2815 dump before
-                                   // trusting it (unlike every other `ct::` const, these two were not hand-verified against a real
-                                   // dump row in this pass).
-    pub const PICKPOCKET_LOOT_ID: usize = 57; // [V] → pickpocketing_loot_template.entry (0 = no table)
-    pub const SKIN_LOOT_ID: usize = 58; // [V] → skinning_loot_template.entry (0 = no table)
+                                   // (LootId, PickpocketLootId, SkinningLootId are consecutive columns). These two carried a `[V]`
+                                   // "confirm against your own dump" caveat until the pinned dump's DDL was enumerated directly —
+                                   // both are now confirmed, along with every other const here.
+    pub const PICKPOCKET_LOOT_ID: usize = 57; // → pickpocketing_loot_template.entry (0 = no table)
+    pub const SKIN_LOOT_ID: usize = 58; // → skinning_loot_template.entry (0 = no table)
+    // Trainer service block: TrainerType, TrainerSpell, TrainerClass, TrainerRace, TrainerTemplateId
+    // run 71..75, bracketed by the verified `SKIN_LOOT_ID` and `GOSSIP_MENU_ID` anchors. Enumerated
+    // from the pinned dump's own CREATE TABLE — mangos-classic master has since gained
+    // DisplayIdProbability1-4 and five stat multipliers, so its order is 4 columns out here and 9 at
+    // `LootId`. TrainerSpell/TrainerRace/TrainerTemplateId are not ingested: no consumer.
+    pub const TRAINER_TYPE: usize = 71; // cmangos enum: CLASS 0 · MOUNTS 1 · TRADESKILLS 2 · PETS 3
+    pub const TRAINER_CLASS: usize = 73; // class ID (1..11), NOT a mask; 0 = serves every class
     pub const GOSSIP_MENU_ID: usize = 77; // creature_template.GossipMenuId
 }
 mod gm {
@@ -3476,6 +3482,10 @@ fn build_dump_plan(
     // etc.). Their spawns are in the box but should never appear in regular gameplay — skip template
     // AND suppress their spawns from the packed payload below.
     let mut excluded_entries: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    // How many imported templates carry a nonzero `trainer_class`. Reported below so an operator can
+    // confirm the columns populated: a wrong index reads a real neighbouring cell, which is the one
+    // failure mode here that produces plausible data instead of an error.
+    let mut class_trainer_count: usize = 0;
     for row in parse_table(dump, "creature_template") {
         let entry: u64 = field(&row, ct::ENTRY).parse().unwrap_or(0);
         if !entries.contains(&entry) {
@@ -3561,8 +3571,19 @@ fn build_dump_plan(
         // `aggro_range` (proximity aggro) has no cmangos source column, so emit 0 (passive —
         // retaliate-only, the column default); aggression tuning is a separate content pass.
         // `pickpocket_loot_id`/`skin_loot_id` (work-item 210) are END-appended after `armor`.
+        // Trainer service columns, END-appended after `skin_loot_id`. Both parse to `u8` and fall to
+        // 0 on an absent or unparseable cell; for `trainer_class` that 0 is the fail-open "serves
+        // everyone" value. Not `num_or_zero`: it only rewrites an EMPTY cell and would splice a
+        // non-numeric one into the INSERT, aborting the statement.
+        let trainer_type_val: u8 = field(&row, ct::TRAINER_TYPE).parse().unwrap_or(0);
+        let trainer_class_val: u8 = field(&row, ct::TRAINER_CLASS).parse().unwrap_or(0);
+        if trainer_class_val != 0 {
+            class_trainer_count += 1;
+        }
         templates.push(format!(
-            "({entry},{name},{subname},{display},{level},{health},{faction},{npc},{unit},{ctype},{family},{tflags},{rank},{scale},{bat},{mmin},{mmax},{maxlvl},{maxhp},0,{dmin},{dmax},{armor},{pploot},{skinloot})",
+            "({entry},{name},{subname},{display},{level},{health},{faction},{npc},{unit},{ctype},{family},{tflags},{rank},{scale},{bat},{mmin},{mmax},{maxlvl},{maxhp},0,{dmin},{dmax},{armor},{pploot},{skinloot},{ttype},{tclass})",
+            ttype = trainer_type_val,
+            tclass = trainer_class_val,
             armor = num_or_zero(ct::ARMOR),
             dmin = dmg_min,
             dmax = dmg_max,
@@ -3793,7 +3814,7 @@ fn build_dump_plan(
     }
 
     eprintln!(
-        "mapped: {} templates, {} spawns ({} excluded), {} waypoints",
+        "mapped: {} templates ({class_trainer_count} class-gated trainers), {} spawns ({} excluded), {} waypoints",
         templates.len(),
         spawns.len() - excluded_count,
         excluded_count,
@@ -3812,7 +3833,7 @@ fn build_dump_plan(
     if family_active(args, "creatures") {
         stmts.push("DELETE FROM game_creature_waypoint WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_template WHERE entry > 0".into());
-        push_insert(&mut stmts, "game_creature_template", "entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id", &templates);
+        push_insert(&mut stmts, "game_creature_template", "entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class", &templates);
         push_insert(
             &mut stmts,
             "game_creature_waypoint",
@@ -5419,9 +5440,23 @@ mod tests {
     /// Build a `creature_template` INSERT tuple wide enough to reach `ct::GOSSIP_MENU_ID` (col 77):
     /// entry at col 0, gossip_menu_id at col 77, everything else `0`.
     fn creature_template_row(entry: u64, gossip_menu_id: u64) -> String {
+        creature_template_row_with_trainer(entry, gossip_menu_id, 0, 0)
+    }
+
+    /// `creature_template_row` plus `TrainerType` (71) and `TrainerClass` (73). Both sit below
+    /// `ct::GOSSIP_MENU_ID`, so the row is already wide enough. The gap between them is
+    /// `TrainerSpell`, which is not ingested.
+    fn creature_template_row_with_trainer(
+        entry: u64,
+        gossip_menu_id: u64,
+        trainer_type: u64,
+        trainer_class: u64,
+    ) -> String {
         let mut cols = vec!["0".to_string(); ct::GOSSIP_MENU_ID + 1];
         cols[ct::ENTRY] = entry.to_string();
         cols[ct::GOSSIP_MENU_ID] = gossip_menu_id.to_string();
+        cols[ct::TRAINER_TYPE] = trainer_type.to_string();
+        cols[ct::TRAINER_CLASS] = trainer_class.to_string();
         format!("({})", cols.join(","))
     }
 
@@ -5834,6 +5869,79 @@ mod tests {
         m0.include_maps = vec![36];
         assert!(creature_row_kept(&m0, 36, -16.4, -383.07, -33.35, 644));
         assert!(map_in_run(&m0, 0) && map_in_run(&m0, 36) && !map_in_run(&m0, 1));
+    }
+
+    /// The trainer columns land from the indices they are actually written at, with `TrainerSpell`
+    /// skipped between them.
+    ///
+    /// This is the only automated guard on those indices. A wrong one reads a real neighbouring cell
+    /// and produces plausible data rather than an error, so the fixture gives type and class
+    /// different values and poisons every neighbour.
+    #[test]
+    fn trainer_type_and_class_import_from_their_own_columns() {
+        // Paladin trainer: type 0 (CLASS) / class 2. Type stays at the enum's 0, so the class cell
+        // alone carries the signal — the same shape the live gate keys on.
+        let mut paladin = vec!["0".to_string(); ct::GOSSIP_MENU_ID + 1];
+        paladin[ct::ENTRY] = "925".to_string();
+        paladin[ct::TRAINER_TYPE] = "0".to_string();
+        paladin[ct::TRAINER_CLASS] = "2".to_string();
+        // Poison every neighbour so a slipped index reads a rejected value, not a plausible 0. Note
+        // 71+1 and 73-1 are the same cell: the two ingested columns are not adjacent.
+        paladin[70] = "66".to_string(); // MovementType — one before TrainerType
+        paladin[72] = "7".to_string(); // TrainerSpell — between the two we ingest
+        paladin[74] = "9".to_string(); // TrainerRace  — one after TrainerClass
+        let dump = format!(
+            "x INSERT INTO `creature` VALUES \
+             (1,925,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0),\
+             (2,11867,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0),\
+             (3,620,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES ({}),{},{}; y",
+            paladin.join(","),
+            // Weapon master: TRADESKILLS (2) with NO class — serves everyone.
+            creature_template_row_with_trainer(11867, 0, 2, 0),
+            // A plain critter: both cells 0, the overwhelming majority of the dump.
+            creature_template_row_with_trainer(620, 0, 0, 0),
+        );
+        let args = test_args();
+        let plan = build_dump_plan(&dump, &args, &None, &None).expect("build_dump_plan");
+        let insert = plan
+            .stmts
+            .iter()
+            .find(|s| s.starts_with("INSERT INTO game_creature_template"))
+            .unwrap_or_else(|| panic!("template insert present: {:?}", plan.stmts));
+        // The two columns are named, and END-appended after skin_loot_id (the migration rule).
+        assert!(
+            insert.contains("skin_loot_id,trainer_type,trainer_class"),
+            "trainer columns are named and end-appended: {insert}"
+        );
+        // Every emitted tuple, keyed by entry -> its last two cells.
+        let values = insert
+            .split_once(" VALUES ")
+            .expect("the insert names its columns then VALUES")
+            .1;
+        let trailing: std::collections::HashMap<&str, (&str, &str)> = values
+            .split("),(")
+            .map(|t| {
+                let t = t.trim_start_matches('(').trim_end_matches(';').trim_end_matches(')');
+                let f: Vec<&str> = t.split(',').collect();
+                (f[0], (f[f.len() - 2], f[f.len() - 1]))
+            })
+            .collect();
+        assert_eq!(
+            trailing.get("925"),
+            Some(&("0", "2")),
+            "the Paladin trainer imports type 0 / class 2 — a slipped index would read 66, 7 or 9: {insert}"
+        );
+        assert_eq!(
+            trailing.get("11867"),
+            Some(&("2", "0")),
+            "the weapon master imports TRADESKILLS with class 0 (serves everyone): {insert}"
+        );
+        assert_eq!(
+            trailing.get("620"),
+            Some(&("0", "0")),
+            "an ordinary creature imports 0/0 — the fail-open default: {insert}"
+        );
     }
 
     #[test]

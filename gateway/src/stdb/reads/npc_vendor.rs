@@ -171,6 +171,28 @@ impl Coordinator {
         Ok(items)
     }
 
+    /// Does this trainer serve `player_guid`'s class? The module enforces the same rule on the buy,
+    /// and both sides call the one shared predicate, so what is offered and what is honoured agree.
+    /// Fail-open on every missing read — no trainer, no character (including a guid of 0), no
+    /// template — matching `npc_refuses_interaction`.
+    pub fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool> {
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        let (Some(trainer), Some(player)) = (
+            db.game_world_entity().guid().find(&trainer_guid),
+            db.game_character().guid().find(&player_guid),
+        ) else {
+            return Ok(true);
+        };
+        Ok(db
+            .game_creature_template()
+            .entry()
+            .find(&trainer.entry)
+            .is_none_or(|t| {
+                lyracore_shared::trainer::serves(player.class, t.trainer_type, t.trainer_class)
+            }))
+    }
+
     /// The spells trainer `trainer_guid` teaches, folded with `player_guid`'s level + known-state so the
     /// codec can render each Green/Red/Gray. The trainer's creature-template `entry` keys the list (like
     /// the vendor stock); `known` = a `game_player_spell` row (the one castability source). A missing

@@ -16,7 +16,8 @@
 use spacetimedb::{table, ReducerContext};
 
 use crate::{
-    game_player_skill, game_spell_chain, game_spell_effect, game_world_entity, WorldEntity,
+    game_creature_template, game_player_skill, game_spell_chain, game_spell_effect,
+    game_world_entity, WorldEntity,
 };
 
 /// Max distance to train at a trainer: (10 yd)² — same as the vendor/quest/loot interaction range. The
@@ -153,7 +154,8 @@ pub(crate) fn resolve_learn_target(ctx: &ReducerContext, spell_id: u32) -> u32 {
 }
 
 /// Resolve + validate a trainer interaction: `trainer_guid` must be a real in-range TRAINER on `caster`'s
-/// own map+instance. Shared by [`apply_trainer_buy`] and `talent::do_reset_talents` (the respec path,
+/// own map+instance, and one that SERVES `caster`'s class — a Paladin trainer refuses a Warrior
+/// outright. Shared by [`apply_trainer_buy`] and `talent::do_reset_talents` (the respec path,
 /// which is trainer-gated identically — its own comment used to read "Same gates as apply_trainer_buy")
 /// (issue #372). Returns the resolved trainer entity.
 ///
@@ -184,6 +186,23 @@ pub(crate) fn validate_trainer_interaction(
     );
     if dx * dx + dy * dy + dz * dz > TRAINER_RANGE_SQ {
         return Err("trainer out of range".to_string());
+    }
+    // Class gate. It sits here rather than in `apply_trainer_buy` because this is the shared
+    // chokepoint: the respec path runs through it too, so one guard closes both wrong-class training
+    // and wrong-class respec. `lyracore_shared::trainer::serves` holds the rule and the reasoning.
+    //
+    // A trainer with no template row does not fire the gate — missing imported data never blocks an
+    // interaction that used to work.
+    if ctx
+        .db
+        .game_creature_template()
+        .entry()
+        .find(trainer.entry)
+        .is_some_and(|t| {
+            !lyracore_shared::trainer::serves(caster.class(), t.trainer_type, t.trainer_class)
+        })
+    {
+        return Err("trainer does not teach your class".to_string());
     }
     Ok(trainer)
 }

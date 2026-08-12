@@ -93,6 +93,21 @@ pub struct CreatureTemplate {
     pub pickpocket_loot_id: u32,
     #[default(0u32)]
     pub skin_loot_id: u32,
+
+    // Which class a trainer serves. `creature_template.TrainerType`/`TrainerClass`, columns 71/73 —
+    // verified against the DDL of the dump `importer/scripts/classic-db.lock` pins, along with every
+    // other `ct::` anchor.
+    //
+    // `trainer_type` is CLASS 0 · MOUNTS 1 · TRADESKILLS 2 · PETS 3. 0 is a real value AND this
+    // column's default, so most templates read CLASS without being trainers at all — never gate on
+    // it alone (danger-zones §1.2: a default that is a valid value).
+    //
+    // `trainer_class` is a class ID, not a mask; 0 means "serves everyone", which is what keeps the
+    // gate fail-open on a world that has not been re-imported.
+    #[default(0u8)]
+    pub trainer_type: u8,
+    #[default(0u8)]
+    pub trainer_class: u8,
 }
 
 /// Beast-family reference data, keyed by the family id that `CreatureTemplate.creature_family`
