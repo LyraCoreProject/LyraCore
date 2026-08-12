@@ -235,8 +235,7 @@ pub fn debug_vmap_ray(
     let enabled = crate::vmap::vmap_enabled(ctx, map);
     let a = [x0, y0, z0];
     let b = [x1, y1, z1];
-    let los = crate::vmap::los_ray(ctx, map, a, b);
-    let collision = crate::vmap::collision_ray(ctx, map, a, b);
+    let (los, collision) = crate::vmap::probe_rays(ctx, map, a, b);
     log::info!(
         "vmap ray ({x0:.1},{y0:.1},{z0:.1})->({x1:.1},{y1:.1},{z1:.1}) map {map}: vmap_enabled={enabled} los={los:?} collision={collision:?}"
     );
@@ -250,7 +249,7 @@ pub fn debug_vmap_ray(
 pub fn debug_floor_probe(ctx: &ReducerContext, map: u32, x: f32, y: f32, probe_z: f32) {
     let enabled = crate::vmap::vmap_enabled(ctx, map);
     let ground = crate::terrain::ground_z(ctx, map, x, y);
-    let floor = crate::vmap::floor_z(ctx, map, x, y, probe_z);
+    let floor = crate::vmap::probe_floor_z(ctx, map, x, y, probe_z);
     let snapped = crate::terrain::snap_z(ctx, map, x, y, probe_z);
     log::info!(
         "floor probe ({x:.1},{y:.1}) map {map} probe_z={probe_z:.2}: vmap_enabled={enabled} ground_z={ground:?} floor_z={floor:?} snap_z={snapped:.2}"

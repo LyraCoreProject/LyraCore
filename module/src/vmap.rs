@@ -484,6 +484,23 @@ pub fn collision_ray(
     lyracore_shared::vmap::cast_ray(&mut fetcher(ctx, map_id), a, b, RayFlavor::Collision)
 }
 
+/// Operator-only geometry read: consults a verified active generation but deliberately ignores
+/// the gameplay kill-switch. Debug probes use this to establish collision evidence before an
+/// operator chooses to enable live consumption.
+pub fn probe_rays(
+    ctx: &ReducerContext,
+    map_id: u32,
+    a: [f32; 3],
+    b: [f32; 3],
+) -> (Option<[f32; 3]>, Option<[f32; 3]>) {
+    let mut los_fetcher = fetcher(ctx, map_id);
+    let los = lyracore_shared::vmap::cast_ray(&mut los_fetcher, a, b, RayFlavor::Los);
+    let mut collision_fetcher = fetcher(ctx, map_id);
+    let collision =
+        lyracore_shared::vmap::cast_ray(&mut collision_fetcher, a, b, RayFlavor::Collision);
+    (los, collision)
+}
+
 // ===========================================================================================
 //  Model floor heights (#526) — a down-ray probe over the same collision-class triangle store,
 //  so creature Z-placement/movement can stand on model floors (bridges, WMO interiors like
@@ -509,6 +526,22 @@ pub fn floor_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32, probe_z: f32) 
     let top = [x, y, probe_z + FLOOR_PROBE_UP_YD];
     let bottom = [x, y, probe_z - FLOOR_PROBE_DOWN_YD];
     collision_ray(ctx, map_id, top, bottom).map(|hit| hit[2])
+}
+
+/// Read-only model-floor probe for a verified active generation, independent of the gameplay
+/// gate. See [`probe_rays`] for why diagnostics must not flip that gate.
+pub fn probe_floor_z(
+    ctx: &ReducerContext,
+    map_id: u32,
+    x: f32,
+    y: f32,
+    probe_z: f32,
+) -> Option<f32> {
+    let top = [x, y, probe_z + FLOOR_PROBE_UP_YD];
+    let bottom = [x, y, probe_z - FLOOR_PROBE_DOWN_YD];
+    let mut fetcher = fetcher(ctx, map_id);
+    lyracore_shared::vmap::cast_ray(&mut fetcher, top, bottom, RayFlavor::Collision)
+        .map(|hit| hit[2])
 }
 
 // ===========================================================================================
@@ -635,10 +668,17 @@ mod tests {
         let digest = manifest_digest(canonical);
 
         assert!(require_manifest(3, &digest, canonical).is_ok());
-        assert!(require_manifest(2, &digest, canonical).is_err(), "byte truncation is refused");
         assert!(
-            require_manifest(3, &digest, [(9, 0, second.as_slice()), (7, 0, first.as_slice())])
-                .is_err(),
+            require_manifest(2, &digest, canonical).is_err(),
+            "byte truncation is refused"
+        );
+        assert!(
+            require_manifest(
+                3,
+                &digest,
+                [(9, 0, second.as_slice()), (7, 0, first.as_slice())]
+            )
+            .is_err(),
             "the same chunks in a different order have a different manifest"
         );
         assert!(
