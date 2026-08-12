@@ -82,6 +82,7 @@ use wow_world_messages::vanilla::{
     CMSG_AUTOEQUIP_ITEM,
     // Inventory + death/resurrection dispatch tests.
     CMSG_AUTOSTORE_BAG_ITEM,
+    CMSG_BANKER_ACTIVATE,
     CMSG_BUYBACK_ITEM,
     CMSG_BUY_ITEM,
     CMSG_CANCEL_AURA,
@@ -3938,6 +3939,79 @@ fn buy_item_err_sends_smsg_buy_failed() {
             );
         }
         other => panic!("expected SMSG_BUY_FAILED, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+// ── Bank ──────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn banker_activate_sends_smsg_show_bank_with_the_banker_guid() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_BANKER_ACTIVATE {
+        guid: Guid::new(77),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SHOW_BANK(p) => assert_eq!(p.guid.guid(), 77),
+        other => panic!("expected SMSG_SHOW_BANK, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn banker_activate_on_a_standing_refusing_banker_sends_no_reply() {
+    // CMSG_PLAYED_TIME (the sentinel below) only replies once `character_by_guid` resolves the
+    // caller's own guid, so give the store a character row for guid 1 (quest_store() has none) —
+    // same setup as `inspect_refused_target_sends_no_reply`.
+    let store = std::sync::Arc::new(InMemoryStore {
+        npc_refuses: true,
+        characters: vec![codec::CharacterView {
+            guid: 1,
+            ..Default::default()
+        }],
+        ..quest_store()
+    });
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_BANKER_ACTIVATE {
+        guid: Guid::new(77),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    // Sentinel: a follow-up request with a guaranteed reply. If the refused activate had wrongly
+    // produced an SMSG_SHOW_BANK, it would arrive first and this match would fail.
+    CMSG_PLAYED_TIME {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_PLAYED_TIME(_) => {} // no SMSG_SHOW_BANK for the refused banker
+        other => panic!("expected SMSG_PLAYED_TIME (no SMSG_SHOW_BANK for refused banker), got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn gossip_select_on_an_imported_banker_option_opens_the_bank_window() {
+    use lyracore_shared::constants::gossip_option;
+    let mut s = quest_store();
+    s.gossip_opts = vec![opt(0, "I would like to check my deposit box.", gossip_option::BANKER)];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_GOSSIP_SELECT_OPTION {
+        guid: Guid::new(90),
+        gossip_list_id: 0,
+        unknown: None,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SHOW_BANK(p) => assert_eq!(p.guid.guid(), 90),
+        other => panic!("expected SMSG_SHOW_BANK, got {other}"),
     }
     drop(client);
     server.join().unwrap();

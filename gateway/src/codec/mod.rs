@@ -258,6 +258,8 @@ use wow_world_messages::vanilla::{
     // (`build_faction_standing_raw`). Re-importing the typed pair would resurrect the McBride
     // client-crash (see `update_mask.rs`'s note).
     SMSG_SET_REST_START,
+    // Banker activate + the BANKER gossip option: opens the bank window.
+    SMSG_SHOW_BANK,
     // Floating spell damage number (the per-cast non-melee damage log).
     SMSG_SPELLNONMELEEDAMAGELOG,
     SMSG_SPELL_COOLDOWN,
