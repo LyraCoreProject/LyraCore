@@ -629,6 +629,7 @@ pub fn build_creature_entity(
         sheet_dmg_min: 0,
         sheet_dmg_max: 0,
         sheet_crit_bp: 0,
+        bank_bag_slots: 0, // a creature owns no bank slots
     }
 }
 
@@ -718,7 +719,8 @@ pub fn build_player_entity(
         xp: character.xp,
         next_level_xp: character.next_level_xp,
         target_guid: 0,
-        money: character.money, // load the persisted purse
+        money: character.money,                   // load the persisted purse
+        bank_bag_slots: character.bank_bag_slots, // and the slots bought with it
         // Warriors start in Battle Stance (form 17 in UNIT_FIELD_BYTES_1[2]) so the action bar
         // shows the stance bar from login without requiring a manual stance cast. RAGE = Warrior.
         unit_bytes_1: if power_type == packing::power_type::RAGE {

@@ -867,6 +867,22 @@ pub fn debug_buy_item(
     crate::actor::buy_item(ctx, character_guid, vendor_guid, item_entry, count)
 }
 
+/// Buy the next bank bag slot for `character_guid` at `banker_guid` — drives the purchase by explicit
+/// guid, via the shared `apply_buy_bank_slot`. Refusals carry the same `[N]` wire code the gateway
+/// reducer returns.
+#[reducer]
+pub fn debug_buy_bank_slot(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    banker_guid: u64,
+) -> Result<(), String> {
+    crate::items::buy_bank_slot_result(crate::items::apply_buy_bank_slot(
+        ctx,
+        character_guid,
+        banker_guid,
+    ))
+}
+
 /// Split `count` units off `character_guid`'s stack in `slot` into the empty `to_slot` — drives the
 /// player `split_item` path by explicit guid, via the shared `apply_item_split`.
 #[reducer]

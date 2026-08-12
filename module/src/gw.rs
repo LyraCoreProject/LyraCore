@@ -817,6 +817,23 @@ pub fn gw_repair_item(
     crate::items::apply_player_repair(ctx, actor_guid, npc_guid, slot)
 }
 
+/// [`crate::items::apply_buy_bank_slot`] with the buyer named by guid. A refusal leads with its
+/// `SMSG_BUY_BANK_SLOT_RESULT` code in brackets so the relay maps it by code, not by prose.
+#[reducer]
+pub fn gw_buy_bank_slot(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    banker_guid: u64,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    actor(ctx, actor_guid)?;
+    crate::items::buy_bank_slot_result(crate::items::apply_buy_bank_slot(
+        ctx,
+        actor_guid,
+        banker_guid,
+    ))
+}
+
 /// [`crate::professions::apply_disenchant`] with the enchanter named by guid.
 #[reducer]
 pub fn gw_disenchant(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Result<(), String> {

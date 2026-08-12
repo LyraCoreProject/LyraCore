@@ -3507,6 +3507,7 @@ mod tests {
             sheet_dmg_min: 0,
             sheet_dmg_max: 0,
             sheet_crit_bp: 0,
+            bank_bag_slots: 0,
         }
     }
 
