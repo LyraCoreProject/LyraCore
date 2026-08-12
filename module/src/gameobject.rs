@@ -107,6 +107,11 @@ pub struct GameObjectTemplate {
     // default-migrated, and any type this slice doesn't source a lockId for).
     #[default(0u32)]
     pub lock_id: u32,
+    // END-APPENDED. The cmangos `gameobject_template.size` the client renders this prop at
+    // (OBJECT_FIELD_SCALE_X). 0 = no size stored, which the gateway renders as 1.0. Read by the
+    // gateway, so it is hand-synced into `game_object_template_type.rs` (unlike `lock_id` above).
+    #[default(0f32)]
+    pub size: f32,
 }
 
 /// Lock.dbc → `game_lock` (work-item 211: the DATA half of open-lock; work-item 119 is the system half

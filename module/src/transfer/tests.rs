@@ -1977,8 +1977,11 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                  }) .collect() } }",
             ),
             (
+                // The one deliberate pre-body line: trade teardown BEFORE the escrow write flips
+                // the in-transit fence (#123) — see the comment at the call site.
                 "pub fn begin_transfer(",
-                "{ require_operator(ctx)?; apply_begin( &mut CtxShard { ctx }, transfer_id, character_guid, \
+                "{ require_operator(ctx)?; crate::trade::cancel_trade_for(ctx, character_guid); \
+                 apply_begin( &mut CtxShard { ctx }, transfer_id, character_guid, \
                  Destination { map_id: dest_map_id, instance_id: dest_instance_id, x: dest_x, y: dest_y, z: \
                  dest_z, o: dest_o, }, cross_database, ) }",
             ),

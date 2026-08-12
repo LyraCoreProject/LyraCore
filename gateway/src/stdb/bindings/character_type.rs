@@ -51,6 +51,7 @@ pub struct Character {
     pub rested_since_micros: u64,
     pub pending_godmode: bool,
     pub pending_run_speed_mult_bp: u32,
+    pub bank_bag_slots: u8,
 }
 
 impl __sdk::InModule for Character {
@@ -105,6 +106,7 @@ pub struct CharacterCols {
     pub rested_since_micros: __sdk::__query_builder::Col<Character, u64>,
     pub pending_godmode: __sdk::__query_builder::Col<Character, bool>,
     pub pending_run_speed_mult_bp: __sdk::__query_builder::Col<Character, u32>,
+    pub bank_bag_slots: __sdk::__query_builder::Col<Character, u8>,
 }
 
 impl __sdk::__query_builder::HasCols for Character {
@@ -170,6 +172,7 @@ impl __sdk::__query_builder::HasCols for Character {
                 table_name,
                 "pending_run_speed_mult_bp",
             ),
+            bank_bag_slots: __sdk::__query_builder::Col::new(table_name, "bank_bag_slots"),
         }
     }
 }
