@@ -19,6 +19,9 @@ pub(crate) trait VendorActionStore: Send + Sync {
         item_entry: u32,
         count: u32,
     ) -> Result<()>;
+
+    /// The player's buyback ring, newest-first: `(item_entry, stack_count, price)` per entry (≤12).
+    fn buyback_slots(&self, player_guid: u64) -> Vec<(u32, u32, u32)>;
 }
 
 impl VendorActionStore for crate::stdb::Coordinator {
@@ -42,7 +45,19 @@ impl VendorActionStore for crate::stdb::Coordinator {
             self, account_id, self_guid, vendor_guid, item_entry, count,
         )
     }
+
+    fn buyback_slots(&self, player_guid: u64) -> Vec<(u32, u32, u32)> {
+        crate::stdb::Coordinator::buyback_ring(self, player_guid)
+    }
 }
+
+/// Wire slot of the first buyback tab entry (`BuybackSlot::Slot1`); the 12 ring entries render at
+/// base + i and a client's slot enum parses back with − base. Both directions share this.
+pub(crate) const BUYBACK_WIRE_SLOT_BASE: u16 = 69;
+
+/// The ring the client can hold. Slots past the ring's end render cleared, so evictions and shifts
+/// need no memory of what the tab showed before.
+const BUYBACK_SLOTS: u16 = 12;
 
 /// Who is asking. `self_guid` is `None` before world entry — the character-select state has no
 /// actor, so gates that need one are skipped rather than run against a placeholder.
@@ -167,6 +182,70 @@ pub(crate) fn dispatch_vendor_action<St: VendorActionStore + ?Sized>(
     }
 }
 
+/// Rebuild the buyback-tab view: a synthesized ITEM object per ring entry (fabricated guid
+/// 0x4090…|slot — a client-only object, never a real instance) and ONE raw VALUES update carrying
+/// all 12 VendorBuyback INV_SLOT pointers + BUYBACK_PRICE/TIMESTAMP arrays (those arrays are
+/// gtker-walled past slot 0 → the shared raw encoder). Cleared slots write guid 0 / price 0.
+pub(crate) fn build_buyback_view<St: VendorActionStore + ?Sized>(
+    store: &St,
+    self_guid: u64,
+) -> Vec<Outbound> {
+    let ring = store.buyback_slots(self_guid);
+    log::debug!("buyback view: guid={self_guid} ring_len={}", ring.len());
+    render_buyback_view(self_guid, &ring)
+}
+
+/// World-entry replay of the persisted ring. An empty ring renders NOTHING: the client's descriptor
+/// fields start zeroed, so a ring-less login stays byte-identical to one with no buyback tab at all.
+/// In-session refreshes always render — a ring that just became empty must clear the tab.
+pub(crate) fn build_buyback_view_replay<St: VendorActionStore + ?Sized>(
+    store: &St,
+    self_guid: u64,
+) -> Vec<Outbound> {
+    let ring = store.buyback_slots(self_guid);
+    log::debug!("buyback view: guid={self_guid} ring_len={}", ring.len());
+    if ring.is_empty() {
+        return Vec::new();
+    }
+    render_buyback_view(self_guid, &ring)
+}
+
+fn render_buyback_view(self_guid: u64, ring: &[(u32, u32, u32)]) -> Vec<Outbound> {
+    let mut outbound = Vec::new();
+    let mut mask = codec::update_mask::UpdateMaskValues::new();
+    for i in 0..BUYBACK_SLOTS {
+        let wire_slot = BUYBACK_WIRE_SLOT_BASE + i;
+        let (fab_guid, price) = match ring.get(i as usize) {
+            Some(&(entry, count, price)) => {
+                let fab_guid = 0x4090_0000_0000_0000u64 | u64::from(i);
+                let view = codec::ItemInstanceView {
+                    guid: fab_guid,
+                    entry,
+                    owner_guid: self_guid,
+                    slot: wire_slot as u8,
+                    stack_count: count,
+                    durability: 0,
+                    max_durability: 0,
+                    container_slots: 0,
+                };
+                outbound.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                    Box::new(codec::build_item_create_object(&view)),
+                )));
+                (fab_guid, price)
+            }
+            None => (0, 0),
+        };
+        // PLAYER_FIELD_INV_SLOT guid pair for the buyback wire slot (base 486, 2 words/slot);
+        // BUYBACK_PRICE_1 = 1226, BUYBACK_TIMESTAMP_1 = 1238 (5875 indices via gtker impls).
+        mask.set_u64(486 + wire_slot * 2, fab_guid);
+        mask.set_u32(1226 + i, price);
+        mask.set_u32(1238 + i, 0);
+    }
+    let (opcode, body) = codec::build_values_update_raw(self_guid, &mask);
+    outbound.push(Outbound::Raw { opcode, body });
+    outbound
+}
+
 /// Vendor family (Tier 2): sell/buyback/repair, awaiting migration to the seam above.
 /// Forwards to the module reducers; a gameplay `Err` (no stock / no copper / out of range)
 /// is per-action — log + ignore like the combat/loot arms, never tear the session down.
@@ -200,7 +279,7 @@ pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
                             inst.slot,
                         ) {
                             // Reflect the new ring in the buyback tab immediately.
-                            Ok(()) => push_buyback_view(tx, store, self_guid, false)?,
+                            Ok(()) => push_buyback_view(tx, store, self_guid)?,
                             Err(e) => log::debug!(
                                 "world: sell_item ignored (account {}): {e}",
                                 conn.account_id
@@ -217,12 +296,15 @@ pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
         // Re-buy the last-sold item from a vendor's buyback tab. CMSG_BUYBACK_ITEM carries the vendor
         // guid + a BuybackSlot enum (69–81). Map to 0-based slot index and call the module reducer.
         ClientOpcodeMessage::CMSG_BUYBACK_ITEM(c) => {
-            let slot = c.slot.as_int().saturating_sub(69) as u8;
+            let slot = c
+                .slot
+                .as_int()
+                .saturating_sub(BUYBACK_WIRE_SLOT_BASE.into()) as u8;
             match store.buyback_item(conn.account_id, social::self_guid(conn).unwrap_or(0), c.guid.guid(), slot) {
                 // The re-bought item's bag CREATE rides the item relay; refresh the tab view.
                 Ok(()) => {
                     if let WorldState::InWorld(iw) = &conn.state {
-                        push_buyback_view(tx, store, iw.self_guid, false)?;
+                        push_buyback_view(tx, store, iw.self_guid)?;
                     }
                 }
                 Err(e) => log::debug!(
@@ -322,6 +404,7 @@ mod tests {
         stock_error: Option<String>,
         gate_error: Option<String>,
         buy_error: Option<String>,
+        ring: Vec<(u32, u32, u32)>,
     }
 
     impl VendorActionStore for InMemoryVendorActions {
@@ -360,6 +443,10 @@ mod tests {
                 Some(error) => Err(anyhow::anyhow!("{error}")),
                 None => Ok(()),
             }
+        }
+
+        fn buyback_slots(&self, _player_guid: u64) -> Vec<(u32, u32, u32)> {
+            self.ring.clone()
         }
     }
 
@@ -571,6 +658,122 @@ mod tests {
             VendorActionOutcome::Handled { outbound } if outbound.len() == 1
         ));
         assert!(actions.gate_requests.lock().unwrap().is_empty());
+    }
+
+    const PLAYER_GUID: u64 = 42;
+
+    /// The descriptor half of the tab, rebuilt from the ring independently of the seam so the
+    /// fabricated guids and the price/timestamp indices are pinned, not just echoed.
+    fn expected_values_update(ring: &[(u32, u32, u32)]) -> (u16, Vec<u8>) {
+        let mut mask = codec::update_mask::UpdateMaskValues::new();
+        for i in 0..12u16 {
+            let (fab_guid, price) = match ring.get(i as usize) {
+                Some(&(_, _, price)) => (0x4090_0000_0000_0000u64 | u64::from(i), price),
+                None => (0, 0),
+            };
+            mask.set_u64(486 + (69 + i) * 2, fab_guid);
+            mask.set_u32(1226 + i, price);
+            mask.set_u32(1238 + i, 0);
+        }
+        codec::build_values_update_raw(PLAYER_GUID, &mask)
+    }
+
+    fn expected_create(i: u16, entry: u32, stack_count: u32) -> ServerOpcodeMessage {
+        ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_item_create_object(
+            &codec::ItemInstanceView {
+                guid: 0x4090_0000_0000_0000u64 | u64::from(i),
+                entry,
+                owner_guid: PLAYER_GUID,
+                slot: 69 + i as u8,
+                stack_count,
+                durability: 0,
+                max_durability: 0,
+                container_slots: 0,
+            },
+        )))
+    }
+
+    fn assert_renders_ring(outbound: &[Outbound], ring: &[(u32, u32, u32)]) {
+        assert_eq!(outbound.len(), ring.len() + 1);
+        for (i, &(entry, count, _)) in ring.iter().enumerate() {
+            let expected = expected_create(i as u16, entry, count);
+            assert!(
+                matches!(&outbound[i], Outbound::One(message) if *message == expected),
+                "ring slot {i} did not render its fabricated item"
+            );
+        }
+        let (expected_opcode, expected_body) = expected_values_update(ring);
+        assert!(matches!(
+            outbound.last().unwrap(),
+            Outbound::Raw { opcode, body } if *opcode == expected_opcode && *body == expected_body
+        ));
+    }
+
+    #[test]
+    fn the_buyback_view_renders_one_fabricated_item_per_ring_entry_plus_the_descriptor_update() {
+        let ring = vec![(2589, 5, 120), (4540, 1, 30)];
+        let actions = InMemoryVendorActions {
+            ring: ring.clone(),
+            ..Default::default()
+        };
+
+        let outbound = build_buyback_view(&actions, PLAYER_GUID);
+
+        assert_renders_ring(&outbound, &ring);
+    }
+
+    #[test]
+    fn a_full_ring_renders_all_thirteen_wire_slots_from_the_shared_base() {
+        let ring: Vec<(u32, u32, u32)> = (0..12).map(|i| (100 + i, 1, 10 * i)).collect();
+        let actions = InMemoryVendorActions {
+            ring: ring.clone(),
+            ..Default::default()
+        };
+
+        let outbound = build_buyback_view(&actions, PLAYER_GUID);
+
+        assert_renders_ring(&outbound, &ring);
+    }
+
+    #[test]
+    fn an_in_session_refresh_of_an_emptied_ring_still_clears_the_tab() {
+        let actions = InMemoryVendorActions::default();
+
+        let outbound = build_buyback_view(&actions, PLAYER_GUID);
+
+        assert_renders_ring(&outbound, &[]);
+    }
+
+    #[test]
+    fn a_login_replay_of_an_empty_ring_emits_nothing() {
+        let actions = InMemoryVendorActions::default();
+
+        assert!(build_buyback_view_replay(&actions, PLAYER_GUID).is_empty());
+    }
+
+    #[test]
+    fn a_login_replay_of_a_persisted_ring_renders_it_like_an_in_session_refresh() {
+        let ring = vec![(2589, 5, 120)];
+        let actions = InMemoryVendorActions {
+            ring: ring.clone(),
+            ..Default::default()
+        };
+
+        let outbound = build_buyback_view_replay(&actions, PLAYER_GUID);
+
+        assert_renders_ring(&outbound, &ring);
+    }
+
+    #[test]
+    fn the_wire_slot_base_parses_the_clients_buyback_slots_back_to_ring_indices() {
+        use wow_world_messages::vanilla::BuybackSlot;
+
+        for (slot, expected) in [(BuybackSlot::Slot1, 0u32), (BuybackSlot::Slot13, 12)] {
+            assert_eq!(
+                slot.as_int().saturating_sub(BUYBACK_WIRE_SLOT_BASE.into()),
+                expected
+            );
+        }
     }
 
     #[test]

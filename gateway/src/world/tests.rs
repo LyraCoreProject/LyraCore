@@ -202,6 +202,9 @@ struct InMemoryStore {
     moves: std::sync::Mutex<Vec<MoveRecord>>,
     /// Vendor stock returned by `vendor_items` (empty by default).
     vendor_stock: Vec<codec::VendorItemView>,
+    /// The player's buyback ring as `(item_entry, stack_count, price)`; empty by default, so a
+    /// fixture login replays no buyback tab.
+    buyback_ring: Vec<(u32, u32, u32)>,
     /// 195: `npc_refuses_interaction` return — false (derive-Default) keeps every fixture NPC open.
     npc_refuses: bool,
     /// Spelled as a refusal so derive-Default (false) keeps every fixture trainer serving; the
@@ -1993,9 +1996,6 @@ impl WorldStore for InMemoryStore {
     fn player_actions(&self, _player_guid: u64) -> Result<Vec<(u8, u32, u8)>> {
         Ok(self.player_actions.clone())
     }
-    fn buyback_ring(&self, _player_guid: u64) -> Vec<(u32, u32, u32)> {
-        Vec::new()
-    }
     fn resolve_learn_target(&self, spell_id: u32) -> u32 {
         spell_id // mock: self-contained ranks (no wrapper table in the mock store)
     }
@@ -2825,6 +2825,10 @@ impl VendorActionStore for InMemoryStore {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
         }
+    }
+
+    fn buyback_slots(&self, _player_guid: u64) -> Vec<(u32, u32, u32)> {
+        self.buyback_ring.clone()
     }
 }
 
@@ -6570,6 +6574,30 @@ fn who_reply_lists_every_online_player_with_level_and_zone() {
         }
         other => panic!("expected SMSG_WHO, got {other}"),
     }
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn login_replays_a_persisted_buyback_ring_after_the_login_sequence() {
+    // The ring survives logout, so world entry rebuilds the tab: one fabricated item CREATE per
+    // entry, then the raw descriptor update. (An EMPTY ring emits nothing — every other login test
+    // reads the login sequence and then EOF, which is that case.)
+    let store = std::sync::Arc::new(InMemoryStore {
+        buyback_ring: vec![(2589, 5, 120), (4540, 1, 30)],
+        ..quest_store()
+    });
+    let (mut client, _c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    for _ in 0..2 {
+        match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(_) => {}
+            other => panic!("expected a fabricated buyback item CREATE, got {other}"),
+        }
+    }
+    // The descriptor update is a hand-rolled partial VALUES mask gtker cannot decode; the frame is
+    // consumed either way, and EOF after it proves nothing else was sent.
+    let _ = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec);
+    assert!(ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).is_err());
     drop(client);
     server.join().unwrap();
 }
