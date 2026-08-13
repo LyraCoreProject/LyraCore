@@ -30,22 +30,8 @@ pub(crate) use quest::handle_quest;
 pub(crate) use trade::handle_trade;
 pub(crate) use trainer::handle_trainer;
 pub(crate) use vendor::{
-    dispatch_vendor_action, handle_vendor, VendorActionOutcome, VendorActionPlayer,
-    VendorActionStore,
+    dispatch_vendor_action, VendorActionOutcome, VendorActionPlayer, VendorActionStore,
 };
-
-/// Push the seam's buyback-tab view down the socket for the legacy sell/buyback arms, which still
-/// write to `tx` directly. The view itself is built by the seam — this only carries it.
-fn push_buyback_view<St: WorldStore + ?Sized>(
-    tx: &SessionTx,
-    store: &St,
-    self_guid: u64,
-) -> Result<()> {
-    for message in vendor::build_buyback_view(store, self_guid) {
-        send(tx, message)?;
-    }
-    Ok(())
-}
 
 /// Open the bank window for `banker_guid`. Single chokepoint for `CMSG_BANKER_ACTIVATE` and the
 /// BANKER gossip option, so the two entry points cannot drift apart.

@@ -1,6 +1,7 @@
 //! `WorldStore`: the broad storage/coordination seam used by the world session. Deep protocol
-//! families may add focused supertraits such as [`ItemActionStore`] so their wire mapping and
-//! failure policy can be tested without implementing this entire interface. Kept as one broad
+//! families may add focused supertraits such as [`ItemActionStore`] and [`VendorActionStore`] so
+//! their wire mapping and failure policy can be tested without implementing this entire interface —
+//! a migrated family's operations live only on its own trait, never here. Kept as one broad
 //! trait for the remaining session operations (only two implementors); the section markers below
 //! are load-bearing navigation, not a split.
 
@@ -385,10 +386,6 @@ pub trait WorldStore: ItemActionStore + VendorActionStore + Send + Sync {
     /// viewer who currently needs it, or who already owns a per-member reserved clone of it).
     fn corpse_loot(&self, corpse_guid: u64, viewer_guid: u64) -> Result<Vec<codec::LootItemView>>;
 
-    /// Read a vendor's stock for `SMSG_LIST_INVENTORY` (Tier 2 / vendors): resolve the vendor's
-    /// creature entry from its entity row, join `game_npc_vendor` × `game_item_template`.
-    fn vendor_items(&self, vendor_guid: u64) -> Result<Vec<codec::VendorItemView>>;
-
     /// Standing-derived reaction gate: does this NPC refuse `player_guid` its
     /// interaction WINDOW (gossip/vendor/trainer/questgiver)? Rep-bar factions refuse at
     /// Unfriendly-or-below standing; bar-less factions fall back to the FactionTemplate hostility
@@ -398,38 +395,6 @@ pub trait WorldStore: ItemActionStore + VendorActionStore + Send + Sync {
     /// Does this trainer serve `player_guid`'s class? Gates the window and the "train" gossip
     /// option through the same predicate the module buys with. Fail-open on missing data.
     fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool>;
-
-    /// Buy `count` of `item_entry` from `vendor_guid` (`CMSG_BUY_ITEM`, Tier 2). The module gates
-    /// the purchase on the vendor (stock / range / copper); a gameplay `Err` is per-action, not fatal.
-    fn buy_item(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        vendor_guid: u64,
-        item_entry: u32,
-        count: u32,
-    ) -> Result<()>;
-
-    /// Sell the item in inventory `slot` back to `vendor_guid` (`CMSG_SELL_ITEM`, Tier 2). The gateway
-    /// resolves the client's item-instance guid to its slot first (the reducer takes the slot) and
-    /// passes the vendor guid the client named so the module can range-gate the sale (like buy).
-    fn sell_item(&self, account_id: u64, self_guid: u64, vendor_guid: u64, slot: u8) -> Result<()>;
-
-    /// Re-purchase item in buyback ring slot `slot` (0-based) from vendor (`CMSG_BUYBACK_ITEM`). The
-    /// gateway maps `BuybackSlot.as_int() - 69` before calling; the module gates range + copper.
-    fn buyback_item(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        vendor_guid: u64,
-        slot: u8,
-    ) -> Result<()>;
-
-    /// Repair the item with the given inventory `slot` at REPAIR-NPC `npc_guid` (`CMSG_REPAIR_ITEM`).
-    /// The gateway resolves the client's item-instance guid to its slot first (the reducer takes the
-    /// slot); the module gates the NPC (REPAIR flag / range) and charges copper. `slot == u8::MAX`
-    /// repairs the whole body. A gameplay `Err` (out of range / too poor) is per-action, not fatal.
-    fn repair_item(&self, account_id: u64, self_guid: u64, npc_guid: u64, slot: u8) -> Result<()>;
 
     /// The spells a class trainer (`trainer_guid`) teaches, each pre-folded with the player's level +
     /// known-state for the `SMSG_TRAINER_LIST` Green/Red/Gray rendering (`CMSG_TRAINER_LIST`).

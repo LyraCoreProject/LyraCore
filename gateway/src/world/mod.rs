@@ -46,7 +46,7 @@ use coalesce::CoalesceState;
 use handlers::{
     dispatch_item_action, dispatch_vendor_action, handle_bank, handle_char, handle_combat,
     handle_loot, handle_mail, handle_query, handle_quest, handle_trade, handle_trainer,
-    handle_vendor, ItemActionOutcome, ItemActionPlayer, VendorActionOutcome, VendorActionPlayer,
+    ItemActionOutcome, ItemActionPlayer, VendorActionOutcome, VendorActionPlayer,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
@@ -1192,9 +1192,6 @@ fn dispatch<St: WorldStore + ?Sized>(
             return Ok(());
         }
         VendorActionOutcome::PassThrough(msg) => msg,
-    };
-    let Some(msg) = handle_vendor(tx, store, conn, msg)? else {
-        return Ok(());
     };
     let Some(msg) = handle_bank(tx, store, conn, msg)? else {
         return Ok(());

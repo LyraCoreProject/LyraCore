@@ -200,7 +200,7 @@ struct InMemoryStore {
     characters: Vec<codec::CharacterView>,
     login_entity: Option<codec::EntityView>,
     moves: std::sync::Mutex<Vec<MoveRecord>>,
-    /// Vendor stock returned by `vendor_items` (empty by default).
+    /// Vendor stock the seam's `vendor_stock` read returns (empty by default).
     vendor_stock: Vec<codec::VendorItemView>,
     /// The player's buyback ring as `(item_entry, stack_count, price)`; empty by default, so a
     /// fixture login replays no buyback tab.
@@ -310,7 +310,7 @@ struct InMemoryStore {
     money_looted: std::sync::Mutex<Vec<u64>>,
     /// Recorded `skin_corpse` targets (the empty-loot-window skinning fallback).
     skinned: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `buyback_item` calls: (vendor_guid, slot) — pins the 69→0 slot mapping.
+    /// Recorded `vendor_buyback` calls: (vendor_guid, slot) — pins the 69→0 slot mapping.
     bought_back: std::sync::Mutex<Vec<(u64, u8)>>,
     /// What `talent_grant_spell` returns (0 = passive talent → no SMSG_LEARNED_SPELL push).
     talent_grant: u32,
@@ -568,12 +568,6 @@ struct InMemoryStore {
     /// Recorded `unequip_item` slots — the CMSG_AUTOSTORE_BAG_ITEM (right-click an equipped
     /// item) dispatch.
     unequipped_slots: std::sync::Mutex<Vec<u8>>,
-    /// Recorded `sell_item` calls — `(vendor_guid, slot)`, AFTER the gateway resolves the
-    /// wire's item INSTANCE guid to an inventory slot via `player_items`.
-    sold_items: std::sync::Mutex<Vec<(u64, u8)>>,
-    /// Recorded `repair_item` calls — `(npc_guid, slot)`. `slot == u8::MAX` is the
-    /// "repair all" fixture (item guid 0 on the wire).
-    repaired_items: std::sync::Mutex<Vec<(u64, u8)>>,
     /// Trainer rows `trainer_list` returns for ANY (player, trainer) pair — the
     /// CMSG_TRAINER_LIST fixture. Empty by default (an empty trainer window).
     trainer_spells: Vec<codec::TrainerSpellView>,
@@ -606,10 +600,6 @@ struct InMemoryStore {
     /// This shard's bags have no room — the fixture behind the full-bag refusal on a take.
     /// Atomic so a test can flip it AFTER the fixture is wrapped in an `Arc`, like `purses`.
     bags_full: std::sync::atomic::AtomicBool,
-    /// What `player_items` returns for ANY owner guid — the CMSG_SELL_ITEM/CMSG_REPAIR_ITEM
-    /// item-instance-guid → inventory-slot resolution fixture. Empty by default (no items), matching
-    /// every earlier test that never sets this.
-    player_items_fixture: Vec<codec::ItemInstanceView>,
     /// Recorded `initiate_trade` calls — `(self_guid, target_guid)` off CMSG_INITIATE_TRADE (#120).
     initiated_trades: std::sync::Mutex<Vec<(u64, u64)>>,
     /// Recorded `begin_trade` self_guids — CMSG_BEGIN_TRADE (#120).
@@ -1168,7 +1158,8 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
     fn player_items(&self, _owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
-        Ok(self.player_items_fixture.clone())
+        // No fixture owns items: the login sequence spawns no item CREATEs for any test store.
+        Ok(Vec::new())
     }
     fn player_skills(&self, _character_guid: u64) -> Result<Vec<(u32, u16, u16)>> {
         Ok(Vec::new())
@@ -1186,9 +1177,6 @@ impl WorldStore for InMemoryStore {
             .get(&viewer_guid)
             .cloned()
             .unwrap_or_default())
-    }
-    fn vendor_items(&self, _vendor_guid: u64) -> Result<Vec<codec::VendorItemView>> {
-        Ok(self.vendor_stock.clone())
     }
     fn npc_refuses_interaction(&self, _npc_guid: u64, _player_guid: u64) -> Result<bool> {
         Ok(self.npc_refuses) // default false — every existing fixture NPC keeps interacting
@@ -1714,58 +1702,6 @@ impl WorldStore for InMemoryStore {
     }
     fn trainer_serves(&self, _player_guid: u64, _trainer_guid: u64) -> Result<bool> {
         Ok(!self.trainer_refuses_class) // default true — every existing fixture trainer serves
-    }
-    fn buy_item(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _vendor_guid: u64,
-        _item_entry: u32,
-        _count: u32,
-    ) -> Result<()> {
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
-    }
-    fn sell_item(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        vendor_guid: u64,
-        slot: u8,
-    ) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.sold_items.lock().unwrap().push((vendor_guid, slot));
-        Ok(())
-    }
-    fn buyback_item(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        vendor_guid: u64,
-        slot: u8,
-    ) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.bought_back.lock().unwrap().push((vendor_guid, slot));
-        Ok(())
-    }
-    fn repair_item(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        npc_guid: u64,
-        slot: u8,
-    ) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.repaired_items.lock().unwrap().push((npc_guid, slot));
-        Ok(())
     }
     fn trainer_list(
         &self,
@@ -2842,28 +2778,26 @@ impl VendorActionStore for InMemoryStore {
         &self,
         _account_id: u64,
         _self_guid: u64,
-        npc_guid: u64,
-        slot: u8,
+        _npc_guid: u64,
+        _slot: u8,
     ) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
+        match &self.trade_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
         }
-        self.repaired_items.lock().unwrap().push((npc_guid, slot));
-        Ok(())
     }
 
     fn vendor_sell(
         &self,
         _account_id: u64,
         _self_guid: u64,
-        vendor_guid: u64,
-        slot: u8,
+        _vendor_guid: u64,
+        _slot: u8,
     ) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
+        match &self.trade_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
         }
-        self.sold_items.lock().unwrap().push((vendor_guid, slot));
-        Ok(())
     }
 
     fn vendor_buyback(
@@ -4411,12 +4345,9 @@ fn eval(quest_id: u32, role: u8, active: bool, complete: bool) -> codec::GiverQu
 /// Spin up a world session over a socket pair, handshake as TESTER, enter the world as `guid`, and
 /// drain the login sequence — 10 fixed messages (LYRACORE_QUEST_LOG off in tests → no quest-log update
 /// appended) plus one SMSG_UPDATE_OBJECT CREATE per `player_items()` row (`enter_world` inserts
-/// one per owned item BEFORE the self-spawn CREATE — see its doc comment in `mod.rs`). Every
-/// earlier test leaves `player_items_fixture` empty, so this reads exactly the same 10 messages
-/// as before; only a test that seeds items (the CMSG_SELL_ITEM/CMSG_REPAIR_ITEM guid→slot ones)
-/// needs the extra drain, and getting it wrong here manifests as the CLIENT closing with unread
-/// bytes still queued — which the kernel reports back to the SERVER thread's next read as
-/// ECONNRESET, not a clean EOF.
+/// one per owned item BEFORE the self-spawn CREATE — see its doc comment in `mod.rs`). Draining one
+/// message too few manifests as the CLIENT closing with unread bytes still queued — which the kernel
+/// reports back to the SERVER thread's next read as ECONNRESET, not a clean EOF.
 /// Returns the client socket + encrypted halves + the server join handle for the test to drive.
 fn enter_world(
     store: std::sync::Arc<InMemoryStore>,
@@ -6931,35 +6862,6 @@ fn list_inventory_opens_the_vendor_window_over_the_socket() {
 }
 
 #[test]
-fn list_inventory_on_a_standing_refusing_vendor_sends_no_reply() {
-    let store = std::sync::Arc::new(InMemoryStore {
-        npc_refuses: true,
-        characters: vec![codec::CharacterView {
-            guid: 1,
-            ..Default::default()
-        }],
-        ..quest_store()
-    });
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    CMSG_LIST_INVENTORY {
-        guid: Guid::new(80),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    // Sentinel: a follow-up request with a guaranteed reply — a wrongly sent vendor window
-    // would arrive ahead of it.
-    CMSG_PLAYED_TIME {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_PLAYED_TIME(_) => {}
-        other => panic!("expected SMSG_PLAYED_TIME (refused vendor answers nothing), got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-}
-
-#[test]
 fn gossip_select_on_a_vendor_opens_the_inventory_window() {
     // Option 0 on a stocked NPC is "browse goods" → the RAW SMSG_LIST_INVENTORY, same as the
     // direct CMSG_LIST_INVENTORY path.
@@ -8180,10 +8082,10 @@ fn parse_blob(blob: &[u8]) -> (u64, FakeChar) {
 }
 
 // ── Inventory dispatch (CMSG_SWAP_INV_ITEM / CMSG_AUTOSTORE_BAG_ITEM / CMSG_SWAP_ITEM /
-// CMSG_SELL_ITEM / CMSG_REPAIR_ITEM / CMSG_TRAINER_LIST) ───────────────────────────────────────────
+// CMSG_TRAINER_LIST) ──────────────────────────────────────────────────────────────────────────────
 //
-// The 2026-08-10 thermo review found these 13 opcodes with zero offline coverage — first-hour
-// gameplay (moving items around the backpack, selling/repairing at a vendor, dying and coming back)
+// The 2026-08-10 thermo review found these opcodes with zero offline coverage — first-hour
+// gameplay (moving items around the backpack, dying and coming back)
 // with no wire-to-store test. Each test below drives `enter_world` + a real CMSG frame and asserts
 // either the fake `WorldStore` recorded the RIGHT call+args, or the client got the RIGHT SMSG — the
 // same shape as `use_item_without_start_quest_falls_through_to_the_ordinary_use_path` above.
@@ -8307,121 +8209,6 @@ fn swap_item_across_containers_is_unsupported_and_does_not_move() {
     drop(client);
     server.join().unwrap();
     assert!(store.moved_items.lock().unwrap().is_empty());
-}
-
-#[test]
-fn sell_item_resolves_the_instance_guid_to_its_slot_before_dispatch() {
-    // CMSG_SELL_ITEM carries the item's INSTANCE guid, not a slot — the seam must resolve it via
-    // vendor_item_slot() before calling the module's slot-based sell_item.
-    let mut s = quest_store();
-    s.item_slots = vec![(0x4000_0000_0000_0099, 30)];
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_SELL_ITEM {
-        vendor: Guid::new(555),
-        item: Guid::new(0x4000_0000_0000_0099),
-        amount: 1,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    // 248: a successful sell also pushes the refreshed buyback tab (one raw VALUES frame) — drain it
-    // tolerantly, same as `buyback_maps_the_wire_slot_enum_to_zero_based_ring_slots` above.
-    let _ = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec);
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(store.sold_items.lock().unwrap().as_slice(), &[(555, 30)]);
-}
-
-#[test]
-fn sell_item_for_an_unknown_guid_does_not_dispatch() {
-    // No fixture item matches this guid (already sold / never ours) — the seam must log + ignore
-    // rather than calling sell_item with a garbage slot.
-    let store = std::sync::Arc::new(quest_store()); // item_slots stays empty
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_SELL_ITEM {
-        vendor: Guid::new(555),
-        item: Guid::new(0x4000_0000_0000_0099),
-        amount: 1,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client); // no match → no sell_item call → no buyback-view push, no SMSG at all
-    server.join().unwrap();
-    assert!(store.sold_items.lock().unwrap().is_empty());
-}
-
-#[test]
-fn repair_item_resolves_the_instance_guid_to_its_slot_before_dispatch() {
-    let mut s = quest_store();
-    s.item_slots = vec![(0x4000_0000_0000_0042, 7)];
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_REPAIR_ITEM {
-        npc: Guid::new(200),
-        item: Guid::new(0x4000_0000_0000_0042),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client); // repair_item (Ok) sends no SMSG on this path
-    server.join().unwrap();
-    assert_eq!(store.repaired_items.lock().unwrap().as_slice(), &[(200, 7)]);
-}
-
-#[test]
-fn repair_item_guid_zero_is_repair_all_and_dispatches_the_whole_body_slot() {
-    // The client's REPAIR-ALL button sends item guid 0, which the gateway routes to the module's
-    // whole-body slot (u8::MAX) WITHOUT going through guid→slot resolution — no items are seeded
-    // here, so a wrongly-routed per-item lookup would find nothing and skip the call.
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_REPAIR_ITEM {
-        npc: Guid::new(200),
-        item: Guid::new(0),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(
-        store.repaired_items.lock().unwrap().as_slice(),
-        &[(200, u8::MAX)]
-    );
-}
-
-#[test]
-fn repair_all_err_is_relayed_as_a_system_chat_line_not_silently_swallowed() {
-    // #514: a rejected repair-all (NPC gate / range / not-enough-money) used to be logged at debug
-    // and dropped, so the player saw nothing at all. It must now reach the client as a self-only
-    // SMSG_MESSAGECHAT System line carrying the module's rejection text.
-    let mut s = quest_store();
-    s.trade_error = Some("not enough money to repair".into());
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_REPAIR_ITEM {
-        npc: Guid::new(200),
-        item: Guid::new(0),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_MESSAGECHAT(m) => {
-            assert!(
-                matches!(
-                    m.chat_type,
-                    wow_world_messages::vanilla::SMSG_MESSAGECHAT_ChatType::System { .. }
-                ),
-                "repair failure relays as a System chat line"
-            );
-            assert_eq!(m.message, "not enough money to repair");
-        }
-        other => panic!("expected SMSG_MESSAGECHAT, got {other}"),
-    }
-    assert!(
-        store.repaired_items.lock().unwrap().is_empty(),
-        "the failed repair never landed a fake success"
-    );
-    drop(client);
-    server.join().unwrap();
 }
 
 #[test]

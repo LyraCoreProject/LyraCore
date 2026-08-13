@@ -1,8 +1,8 @@
-//! Vendor family: open a vendor's inventory window + buy/sell. The vendor-action seam below owns
-//! the migrated opcodes; `handle_vendor` still carries the ones not yet moved across.
+//! Vendor family: opening a vendor's inventory window, buy/sell/buyback/repair, and the buyback-tab
+//! view. Every vendor opcode enters through `dispatch_vendor_action`; the gossip Browse-goods click
+//! and the world-entry ring replay call the shared builders here rather than reaching for the store.
 
 use super::super::*;
-use super::push_buyback_view;
 
 /// Durable reads and requests the vendor family needs, in the seam's own vocabulary so it can be
 /// exercised without the broad `WorldStore`.
@@ -397,41 +397,6 @@ fn render_buyback_view(self_guid: u64, ring: &[(u32, u32, u32)]) -> Vec<Outbound
     let (opcode, body) = codec::build_values_update_raw(self_guid, &mask);
     outbound.push(Outbound::Raw { opcode, body });
     outbound
-}
-
-/// Vendor family (Tier 2): buyback, awaiting migration to the seam above.
-/// Forwards to the module reducers; a gameplay `Err` (no stock / no copper / out of range)
-/// is per-action — log + ignore like the combat/loot arms, never tear the session down.
-pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
-    tx: &SessionTx,
-    store: &St,
-    conn: &mut WorldConn,
-    msg: ClientOpcodeMessage,
-) -> Result<Option<ClientOpcodeMessage>> {
-    match msg {
-        // Re-buy the last-sold item from a vendor's buyback tab. CMSG_BUYBACK_ITEM carries the vendor
-        // guid + a BuybackSlot enum (69–81). Map to 0-based slot index and call the module reducer.
-        ClientOpcodeMessage::CMSG_BUYBACK_ITEM(c) => {
-            let slot = c
-                .slot
-                .as_int()
-                .saturating_sub(BUYBACK_WIRE_SLOT_BASE.into()) as u8;
-            match store.buyback_item(conn.account_id, social::self_guid(conn).unwrap_or(0), c.guid.guid(), slot) {
-                // The re-bought item's bag CREATE rides the item relay; refresh the tab view.
-                Ok(()) => {
-                    if let WorldState::InWorld(iw) = &conn.state {
-                        push_buyback_view(tx, store, iw.self_guid)?;
-                    }
-                }
-                Err(e) => log::debug!(
-                    "world: buyback_item ignored (account {}): {e}",
-                    conn.account_id
-                ),
-            }
-        }
-        other => return Ok(Some(other)),
-    }
-    Ok(None)
 }
 
 #[cfg(test)]
