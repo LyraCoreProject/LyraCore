@@ -29,6 +29,9 @@ pub(crate) trait VendorActionStore: Send + Sync {
 
     fn vendor_repair(&self, account_id: u64, self_guid: u64, npc_guid: u64, slot: u8)
         -> Result<()>;
+
+    fn vendor_sell(&self, account_id: u64, self_guid: u64, vendor_guid: u64, slot: u8)
+        -> Result<()>;
 }
 
 impl VendorActionStore for crate::stdb::Coordinator {
@@ -69,6 +72,16 @@ impl VendorActionStore for crate::stdb::Coordinator {
         slot: u8,
     ) -> Result<()> {
         crate::stdb::Coordinator::repair_item(self, account_id, self_guid, npc_guid, slot)
+    }
+
+    fn vendor_sell(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        vendor_guid: u64,
+        slot: u8,
+    ) -> Result<()> {
+        crate::stdb::Coordinator::sell_item(self, account_id, self_guid, vendor_guid, slot)
     }
 }
 
@@ -240,6 +253,36 @@ pub(crate) fn dispatch_vendor_action<St: VendorActionStore + ?Sized>(
                 Err(e) => Err(e),
             }
         }
+        // CMSG_SELL_ITEM carries the item INSTANCE guid; the module's sell takes the inventory
+        // SLOT. An unmatched guid (already sold / not ours) is a silent no-op, same as repair.
+        ClientOpcodeMessage::CMSG_SELL_ITEM(c) => {
+            let Some(self_guid) = player.self_guid else {
+                return Ok(VendorActionOutcome::Handled {
+                    outbound: Vec::new(),
+                });
+            };
+            let Some(slot) = store.vendor_item_slot(c.item.guid()) else {
+                return Ok(VendorActionOutcome::Handled {
+                    outbound: Vec::new(),
+                });
+            };
+            match store.vendor_sell(player.account_id, self_guid, c.vendor.guid(), slot) {
+                // Reflect the new ring in the buyback tab immediately.
+                Ok(()) => Ok(VendorActionOutcome::Handled {
+                    outbound: build_buyback_view(store, self_guid),
+                }),
+                Err(e) if classify_vendor_action_error(&e) == VendorActionErrorClass::GameplayRefusal => {
+                    log::debug!(
+                        "world: sell_item ignored (account {}): {e}",
+                        player.account_id
+                    );
+                    Ok(VendorActionOutcome::Handled {
+                        outbound: Vec::new(),
+                    })
+                }
+                Err(e) => Err(e),
+            }
+        }
         other => Ok(VendorActionOutcome::PassThrough(other)),
     }
 }
@@ -308,7 +351,7 @@ fn render_buyback_view(self_guid: u64, ring: &[(u32, u32, u32)]) -> Vec<Outbound
     outbound
 }
 
-/// Vendor family (Tier 2): sell/buyback, awaiting migration to the seam above.
+/// Vendor family (Tier 2): buyback, awaiting migration to the seam above.
 /// Forwards to the module reducers; a gameplay `Err` (no stock / no copper / out of range)
 /// is per-action — log + ignore like the combat/loot arms, never tear the session down.
 pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
@@ -318,43 +361,6 @@ pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
     msg: ClientOpcodeMessage,
 ) -> Result<Option<ClientOpcodeMessage>> {
     match msg {
-        // Sell an item back to a vendor. CMSG_SELL_ITEM carries the item's INSTANCE guid, but the
-        // module's `sell_item` takes the inventory SLOT — so resolve guid → slot from the player's
-        // own items, then call. An unmatched guid (already sold / not ours) is logged + ignored.
-        ClientOpcodeMessage::CMSG_SELL_ITEM(c) => {
-            let self_guid = match &conn.state {
-                WorldState::InWorld(iw) => Some(iw.self_guid),
-                WorldState::CharSelect => None,
-            };
-            if let Some(self_guid) = self_guid {
-                let item_guid = c.item.guid();
-                match store
-                    .player_items(self_guid)?
-                    .into_iter()
-                    .find(|i| i.guid == item_guid)
-                {
-                    Some(inst) => {
-                        match store.sell_item(
-                            conn.account_id,
-                            self_guid,
-                            c.vendor.guid(),
-                            inst.slot,
-                        ) {
-                            // Reflect the new ring in the buyback tab immediately.
-                            Ok(()) => push_buyback_view(tx, store, self_guid)?,
-                            Err(e) => log::debug!(
-                                "world: sell_item ignored (account {}): {e}",
-                                conn.account_id
-                            ),
-                        }
-                    }
-                    None => log::debug!(
-                        "world: sell_item for unknown item guid {item_guid} (account {})",
-                        conn.account_id
-                    ),
-                }
-            }
-        }
         // Re-buy the last-sold item from a vendor's buyback tab. CMSG_BUYBACK_ITEM carries the vendor
         // guid + a BuybackSlot enum (69–81). Map to 0-based slot index and call the module reducer.
         ClientOpcodeMessage::CMSG_BUYBACK_ITEM(c) => {
@@ -385,7 +391,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
-        Guid, CMSG_BUY_ITEM, CMSG_LIST_INVENTORY, CMSG_PING, CMSG_REPAIR_ITEM,
+        Guid, CMSG_BUY_ITEM, CMSG_LIST_INVENTORY, CMSG_PING, CMSG_REPAIR_ITEM, CMSG_SELL_ITEM,
     };
 
     #[derive(Default)]
@@ -394,6 +400,7 @@ mod tests {
         gate_requests: Mutex<Vec<(u64, u64)>>,
         buy_requests: Mutex<Vec<(u64, u64, u64, u32, u32)>>,
         repair_requests: Mutex<Vec<(u64, u64, u64, u8)>>,
+        sell_requests: Mutex<Vec<(u64, u64, u64, u8)>>,
         stock: Vec<codec::VendorItemView>,
         refuses: bool,
         stock_error: Option<String>,
@@ -402,6 +409,7 @@ mod tests {
         ring: Vec<(u32, u32, u32)>,
         item_slots: Vec<(u64, u8)>,
         repair_error: Option<String>,
+        sell_error: Option<String>,
     }
 
     impl VendorActionStore for InMemoryVendorActions {
@@ -469,10 +477,28 @@ mod tests {
                 None => Ok(()),
             }
         }
+
+        fn vendor_sell(
+            &self,
+            account_id: u64,
+            self_guid: u64,
+            vendor_guid: u64,
+            slot: u8,
+        ) -> Result<()> {
+            self.sell_requests
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid, vendor_guid, slot));
+            match &self.sell_error {
+                Some(error) => Err(anyhow::anyhow!("{error}")),
+                None => Ok(()),
+            }
+        }
     }
 
     const VENDOR: u64 = 0xF130_0000_0000_0777;
     const NPC: u64 = 0xF130_0000_0000_0200;
+    const ITEM: u64 = 0x4000_0000_0000_0099;
 
     fn player() -> VendorActionPlayer {
         VendorActionPlayer {
@@ -601,6 +627,14 @@ mod tests {
                 },
                 repair_item(0),
             ),
+            (
+                InMemoryVendorActions {
+                    item_slots: vec![(ITEM, 30)],
+                    sell_error: Some("sell_item reducer transport disconnected".into()),
+                    ..Default::default()
+                },
+                sell_item(ITEM),
+            ),
         ] {
             let error = match dispatch_vendor_action(&actions, player(), msg) {
                 Err(error) => error,
@@ -623,6 +657,14 @@ mod tests {
         ClientOpcodeMessage::CMSG_REPAIR_ITEM(Box::new(CMSG_REPAIR_ITEM {
             npc: Guid::new(NPC),
             item: Guid::new(item_guid),
+        }))
+    }
+
+    fn sell_item(item_guid: u64) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_SELL_ITEM(Box::new(CMSG_SELL_ITEM {
+            vendor: Guid::new(VENDOR),
+            item: Guid::new(item_guid),
+            amount: 1,
         }))
     }
 
@@ -742,6 +784,76 @@ mod tests {
                     [Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(m))]
                         if **m == expected)
         ));
+    }
+
+    #[test]
+    fn selling_an_item_resolves_its_guid_to_the_durable_slot_and_returns_the_buyback_view() {
+        let ring = vec![(2589, 1, 120)];
+        let actions = InMemoryVendorActions {
+            item_slots: vec![(ITEM, 30)],
+            ring: ring.clone(),
+            ..Default::default()
+        };
+
+        let outcome = dispatch_vendor_action(&actions, player(), sell_item(ITEM)).unwrap();
+
+        assert_eq!(
+            actions.sell_requests.lock().unwrap().as_slice(),
+            &[(7, 42, VENDOR, 30)]
+        );
+        match outcome {
+            VendorActionOutcome::Handled { outbound } => assert_renders_ring(&outbound, &ring),
+            VendorActionOutcome::PassThrough(_) => panic!("a sale must be handled"),
+        }
+    }
+
+    #[test]
+    fn selling_an_unknown_item_guid_is_a_harmless_no_op() {
+        let actions = InMemoryVendorActions::default();
+
+        let outcome = dispatch_vendor_action(&actions, player(), sell_item(0x99)).unwrap();
+
+        assert!(matches!(
+            outcome,
+            VendorActionOutcome::Handled { outbound } if outbound.is_empty()
+        ));
+        assert!(actions.sell_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_rejected_sale_is_silent_and_non_fatal() {
+        let actions = InMemoryVendorActions {
+            item_slots: vec![(ITEM, 30)],
+            sell_error: Some("that item cannot be sold".into()),
+            ..Default::default()
+        };
+
+        let outcome = dispatch_vendor_action(&actions, player(), sell_item(ITEM)).unwrap();
+
+        assert!(matches!(
+            outcome,
+            VendorActionOutcome::Handled { outbound } if outbound.is_empty()
+        ));
+    }
+
+    #[test]
+    fn a_seller_without_an_actor_is_a_harmless_no_op() {
+        let actions = InMemoryVendorActions {
+            item_slots: vec![(ITEM, 30)],
+            ..Default::default()
+        };
+        let player = VendorActionPlayer {
+            account_id: 7,
+            self_guid: None,
+        };
+
+        let outcome = dispatch_vendor_action(&actions, player, sell_item(ITEM)).unwrap();
+
+        assert!(matches!(
+            outcome,
+            VendorActionOutcome::Handled { outbound } if outbound.is_empty()
+        ));
+        assert!(actions.sell_requests.lock().unwrap().is_empty());
     }
 
     #[test]

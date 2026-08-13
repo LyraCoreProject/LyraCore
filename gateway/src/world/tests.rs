@@ -2851,6 +2851,20 @@ impl VendorActionStore for InMemoryStore {
         self.repaired_items.lock().unwrap().push((npc_guid, slot));
         Ok(())
     }
+
+    fn vendor_sell(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        vendor_guid: u64,
+        slot: u8,
+    ) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.sold_items.lock().unwrap().push((vendor_guid, slot));
+        Ok(())
+    }
 }
 
 impl ItemActionStore for InMemoryStore {
@@ -8283,14 +8297,10 @@ fn swap_item_across_containers_is_unsupported_and_does_not_move() {
 
 #[test]
 fn sell_item_resolves_the_instance_guid_to_its_slot_before_dispatch() {
-    // CMSG_SELL_ITEM carries the item's INSTANCE guid, not a slot — the gateway must resolve it via
-    // player_items() before calling the module's slot-based sell_item.
+    // CMSG_SELL_ITEM carries the item's INSTANCE guid, not a slot — the seam must resolve it via
+    // vendor_item_slot() before calling the module's slot-based sell_item.
     let mut s = quest_store();
-    s.player_items_fixture = vec![codec::ItemInstanceView {
-        guid: 0x4000_0000_0000_0099,
-        slot: 30,
-        ..Default::default()
-    }];
+    s.item_slots = vec![(0x4000_0000_0000_0099, 30)];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_SELL_ITEM {
@@ -8310,9 +8320,9 @@ fn sell_item_resolves_the_instance_guid_to_its_slot_before_dispatch() {
 
 #[test]
 fn sell_item_for_an_unknown_guid_does_not_dispatch() {
-    // No fixture item matches this guid (already sold / never ours) — the gateway must log + ignore
+    // No fixture item matches this guid (already sold / never ours) — the seam must log + ignore
     // rather than calling sell_item with a garbage slot.
-    let store = std::sync::Arc::new(quest_store()); // player_items_fixture stays empty
+    let store = std::sync::Arc::new(quest_store()); // item_slots stays empty
     let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
     CMSG_SELL_ITEM {
         vendor: Guid::new(555),
