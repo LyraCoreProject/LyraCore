@@ -10,6 +10,13 @@ pub(crate) trait VendorActionStore: Send + Sync {
     fn vendor_stock(&self, vendor_guid: u64) -> Result<Vec<codec::VendorItemView>>;
 
     fn vendor_refuses_interaction(&self, vendor_guid: u64, player_guid: u64) -> Result<bool>;
+
+    /// Bag slot of the item instance with `item_guid`. Item guids are globally unique, so no
+    /// owner check is needed here — the module reducer enforces ownership on the repair call.
+    fn vendor_item_slot(&self, item_guid: u64) -> Option<u8>;
+
+    fn vendor_repair(&self, account_id: u64, self_guid: u64, npc_guid: u64, slot: u8)
+        -> Result<()>;
 }
 
 impl VendorActionStore for crate::stdb::Coordinator {
@@ -19,6 +26,20 @@ impl VendorActionStore for crate::stdb::Coordinator {
 
     fn vendor_refuses_interaction(&self, vendor_guid: u64, player_guid: u64) -> Result<bool> {
         crate::stdb::Coordinator::npc_refuses_interaction(self, vendor_guid, player_guid)
+    }
+
+    fn vendor_item_slot(&self, item_guid: u64) -> Option<u8> {
+        crate::stdb::Coordinator::item_slot_by_guid(self, 0, item_guid)
+    }
+
+    fn vendor_repair(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        npc_guid: u64,
+        slot: u8,
+    ) -> Result<()> {
+        crate::stdb::Coordinator::repair_item(self, account_id, self_guid, npc_guid, slot)
     }
 }
 
@@ -97,11 +118,52 @@ pub(crate) fn dispatch_vendor_action<St: VendorActionStore + ?Sized>(
                 outbound: vec![Outbound::Raw { opcode, body }],
             })
         }
+        // CMSG_REPAIR_ITEM carries the item INSTANCE guid, but the module's repair takes the
+        // inventory SLOT; guid 0 means repair-all, routed to the whole-body slot instead of a
+        // guid lookup. An unmatched guid (already sold / not ours) is a silent no-op.
+        ClientOpcodeMessage::CMSG_REPAIR_ITEM(c) => {
+            let Some(self_guid) = player.self_guid else {
+                return Ok(VendorActionOutcome::Handled {
+                    outbound: Vec::new(),
+                });
+            };
+            let item_guid = c.item.guid();
+            let slot = if item_guid == 0 {
+                Some(u8::MAX)
+            } else {
+                store.vendor_item_slot(item_guid)
+            };
+            let Some(slot) = slot else {
+                return Ok(VendorActionOutcome::Handled {
+                    outbound: Vec::new(),
+                });
+            };
+            match store.vendor_repair(player.account_id, self_guid, c.npc.guid(), slot) {
+                Ok(()) => Ok(VendorActionOutcome::Handled {
+                    outbound: Vec::new(),
+                }),
+                Err(e)
+                    if classify_vendor_action_error(&e)
+                        == VendorActionErrorClass::GameplayRefusal =>
+                {
+                    log::debug!(
+                        "world: repair_item ignored (account {}): {e}",
+                        player.account_id
+                    );
+                    Ok(VendorActionOutcome::Handled {
+                        outbound: vec![Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(
+                            Box::new(codec::build_gm_system_message(e.to_string())),
+                        ))],
+                    })
+                }
+                Err(e) => Err(e),
+            }
+        }
         other => Ok(VendorActionOutcome::PassThrough(other)),
     }
 }
 
-/// Vendor family (Tier 2): buy/sell/buyback/repair, awaiting migration to the seam above.
+/// Vendor family (Tier 2): buy/sell/buyback, awaiting migration to the seam above.
 /// Buy/sell forward to the module reducers; a gameplay `Err` (no stock / no copper / out of range)
 /// is per-action — log + ignore like the combat/loot arms, never tear the session down.
 pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
@@ -192,76 +254,6 @@ pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
                 ),
             }
         }
-        // Repair an item at an armorer. CMSG_REPAIR_ITEM carries the NPC guid + the item INSTANCE guid;
-        // the module's repair_item takes the inventory SLOT, so resolve guid → slot from the player's
-        // own items (like CMSG_SELL_ITEM). An unmatched guid is logged + ignored; a gameplay Err
-        // (out of range / too poor / NPC can't repair) is per-action, never session-fatal — but unlike
-        // the earlier debug-log-and-swallow, it's ALSO relayed to the player as a self-only system chat
-        // line (`SMSG_MESSAGECHAT` System, like the GM dot-command error path) so a rejected repair
-        // isn't indistinguishable from a client that never sent the packet (#514). This does NOT by
-        // itself close #514: it only turns 3 of the issue's 4 candidate causes (NPC-gate rejection,
-        // a cost that exceeds the player's purse, the module's own error paths) from a silent no-op
-        // into a diagnosable, visible one — a real "not enough money" now reads as exactly that
-        // instead of nothing happening. Whether `rules::repair_cost`'s 1-copper-per-point proxy
-        // actually OVER-charges relative to the client's own DBC-driven estimate (issue candidate
-        // cause 2) is unconfirmed without a live cost comparison, and cause 3 (does the button even
-        // send the packet) is `needs-live-eyeball` in the issue itself — neither is guessable
-        // headlessly, so neither is touched here. The client's per-item clicks carry the item guid;
-        // the REPAIR-ALL button sends guid 0 (a live-verified finding — the earlier "no repair-all
-        // bit" claim here was wrong) → the module's whole-body slot u8::MAX.
-        ClientOpcodeMessage::CMSG_REPAIR_ITEM(c) => {
-            let self_guid = match &conn.state {
-                WorldState::InWorld(iw) => Some(iw.self_guid),
-                WorldState::CharSelect => None,
-            };
-            if let Some(self_guid) = self_guid {
-                let item_guid = c.item.guid();
-                // Repair ALL: the 1.12 client's "repair all" button sends
-                // item guid 0 (the earlier per-item-only comment was wrong) — route it to the
-                // module's existing whole-body slot (u8::MAX, already implemented + charged).
-                if item_guid == 0 {
-                    if let Err(e) = store.repair_item(conn.account_id, self_guid, c.npc.guid(), u8::MAX) {
-                        log::debug!(
-                            "world: repair_all ignored (account {}): {e}",
-                            conn.account_id
-                        );
-                        send(
-                            tx,
-                            Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-                                codec::build_gm_system_message(e.to_string()),
-                            ))),
-                        )?;
-                    }
-                } else {
-                    match store
-                        .player_items(self_guid)?
-                        .into_iter()
-                        .find(|i| i.guid == item_guid)
-                    {
-                        Some(inst) => {
-                            if let Err(e) =
-                                store.repair_item(conn.account_id, self_guid, c.npc.guid(), inst.slot)
-                            {
-                                log::debug!(
-                                    "world: repair_item ignored (account {}): {e}",
-                                    conn.account_id
-                                );
-                                send(
-                                    tx,
-                                    Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-                                        codec::build_gm_system_message(e.to_string()),
-                                    ))),
-                                )?;
-                            }
-                        }
-                        None => log::debug!(
-                            "world: repair_item for unknown item guid {item_guid} (account {})",
-                            conn.account_id
-                        ),
-                    }
-                }
-            }
-        }
         other => return Ok(Some(other)),
     }
     Ok(None)
@@ -271,16 +263,19 @@ pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
 mod tests {
     use super::*;
     use std::sync::Mutex;
-    use wow_world_messages::vanilla::{Guid, CMSG_LIST_INVENTORY, CMSG_PING};
+    use wow_world_messages::vanilla::{Guid, CMSG_LIST_INVENTORY, CMSG_PING, CMSG_REPAIR_ITEM};
 
     #[derive(Default)]
     struct InMemoryVendorActions {
         stock_requests: Mutex<Vec<u64>>,
         gate_requests: Mutex<Vec<(u64, u64)>>,
+        repair_requests: Mutex<Vec<(u64, u64, u64, u8)>>,
         stock: Vec<codec::VendorItemView>,
         refuses: bool,
         stock_error: Option<String>,
         gate_error: Option<String>,
+        item_slots: Vec<(u64, u8)>,
+        repair_error: Option<String>,
     }
 
     impl VendorActionStore for InMemoryVendorActions {
@@ -302,9 +297,34 @@ mod tests {
                 None => Ok(self.refuses),
             }
         }
+
+        fn vendor_item_slot(&self, item_guid: u64) -> Option<u8> {
+            self.item_slots
+                .iter()
+                .find(|(g, _)| *g == item_guid)
+                .map(|&(_, s)| s)
+        }
+
+        fn vendor_repair(
+            &self,
+            account_id: u64,
+            self_guid: u64,
+            npc_guid: u64,
+            slot: u8,
+        ) -> Result<()> {
+            self.repair_requests
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid, npc_guid, slot));
+            match &self.repair_error {
+                Some(error) => Err(anyhow::anyhow!("{error}")),
+                None => Ok(()),
+            }
+        }
     }
 
     const VENDOR: u64 = 0xF130_0000_0000_0777;
+    const NPC: u64 = 0xF130_0000_0000_0200;
 
     fn player() -> VendorActionPlayer {
         VendorActionPlayer {
@@ -411,13 +431,97 @@ mod tests {
                 stock_error: Some("vendor_items reducer transport disconnected".into()),
                 ..Default::default()
             },
+            InMemoryVendorActions {
+                repair_error: Some("repair_item reducer transport disconnected".into()),
+                ..Default::default()
+            },
         ] {
-            let error = match dispatch_vendor_action(&actions, player(), list_inventory()) {
+            let msg = if actions.repair_error.is_some() {
+                repair_item(0)
+            } else {
+                list_inventory()
+            };
+            let error = match dispatch_vendor_action(&actions, player(), msg) {
                 Err(error) => error,
                 Ok(_) => panic!("a dead reducer transport must end the session"),
             };
             assert!(format!("{error:#}").contains("reducer transport disconnected"));
         }
+    }
+
+    fn repair_item(item_guid: u64) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_REPAIR_ITEM(Box::new(CMSG_REPAIR_ITEM {
+            npc: Guid::new(NPC),
+            item: Guid::new(item_guid),
+        }))
+    }
+
+    #[test]
+    fn repairing_one_item_resolves_its_guid_to_the_durable_slot() {
+        const ITEM: u64 = 0x4000_0000_0000_0042;
+        let actions = InMemoryVendorActions {
+            item_slots: vec![(ITEM, 7)],
+            ..Default::default()
+        };
+
+        let outcome = dispatch_vendor_action(&actions, player(), repair_item(ITEM)).unwrap();
+
+        assert!(matches!(
+            outcome,
+            VendorActionOutcome::Handled { outbound } if outbound.is_empty()
+        ));
+        assert_eq!(
+            actions.repair_requests.lock().unwrap().as_slice(),
+            &[(7, 42, NPC, 7)]
+        );
+    }
+
+    #[test]
+    fn repairing_item_guid_zero_dispatches_the_whole_body_slot() {
+        let actions = InMemoryVendorActions::default();
+
+        let outcome = dispatch_vendor_action(&actions, player(), repair_item(0)).unwrap();
+
+        assert!(matches!(
+            outcome,
+            VendorActionOutcome::Handled { outbound } if outbound.is_empty()
+        ));
+        assert_eq!(
+            actions.repair_requests.lock().unwrap().as_slice(),
+            &[(7, 42, NPC, u8::MAX)]
+        );
+    }
+
+    #[test]
+    fn repairing_an_unknown_item_guid_is_a_harmless_no_op() {
+        let actions = InMemoryVendorActions::default();
+
+        let outcome = dispatch_vendor_action(&actions, player(), repair_item(0x99)).unwrap();
+
+        assert!(matches!(
+            outcome,
+            VendorActionOutcome::Handled { outbound } if outbound.is_empty()
+        ));
+        assert!(actions.repair_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_rejected_repair_relays_the_same_private_system_message() {
+        let actions = InMemoryVendorActions {
+            repair_error: Some("not enough money to repair".into()),
+            ..Default::default()
+        };
+
+        let outcome = dispatch_vendor_action(&actions, player(), repair_item(0)).unwrap();
+
+        let expected = codec::build_gm_system_message("not enough money to repair".to_string());
+        assert!(matches!(
+            outcome,
+            VendorActionOutcome::Handled { outbound }
+                if matches!(outbound.as_slice(),
+                    [Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(m))]
+                        if **m == expected)
+        ));
     }
 
     #[test]

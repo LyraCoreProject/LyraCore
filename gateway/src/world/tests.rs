@@ -2812,6 +2812,27 @@ impl VendorActionStore for InMemoryStore {
     fn vendor_refuses_interaction(&self, _vendor_guid: u64, _player_guid: u64) -> Result<bool> {
         Ok(self.npc_refuses)
     }
+
+    fn vendor_item_slot(&self, item_guid: u64) -> Option<u8> {
+        self.item_slots
+            .iter()
+            .find(|(g, _)| *g == item_guid)
+            .map(|&(_, s)| s)
+    }
+
+    fn vendor_repair(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        npc_guid: u64,
+        slot: u8,
+    ) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.repaired_items.lock().unwrap().push((npc_guid, slot));
+        Ok(())
+    }
 }
 
 impl ItemActionStore for InMemoryStore {
@@ -8266,11 +8287,7 @@ fn sell_item_for_an_unknown_guid_does_not_dispatch() {
 #[test]
 fn repair_item_resolves_the_instance_guid_to_its_slot_before_dispatch() {
     let mut s = quest_store();
-    s.player_items_fixture = vec![codec::ItemInstanceView {
-        guid: 0x4000_0000_0000_0042,
-        slot: 7,
-        ..Default::default()
-    }];
+    s.item_slots = vec![(0x4000_0000_0000_0042, 7)];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
     CMSG_REPAIR_ITEM {
@@ -8286,9 +8303,9 @@ fn repair_item_resolves_the_instance_guid_to_its_slot_before_dispatch() {
 
 #[test]
 fn repair_item_guid_zero_is_repair_all_and_dispatches_the_whole_body_slot() {
-    // 252 live find: the client's REPAIR-ALL button sends item guid 0, which the gateway routes to
-    // the module's whole-body slot (u8::MAX) WITHOUT going through player_items() resolution — no
-    // items are seeded here, so a wrongly-routed per-item lookup would find nothing and skip the call.
+    // The client's REPAIR-ALL button sends item guid 0, which the gateway routes to the module's
+    // whole-body slot (u8::MAX) WITHOUT going through guid→slot resolution — no items are seeded
+    // here, so a wrongly-routed per-item lookup would find nothing and skip the call.
     let store = std::sync::Arc::new(quest_store());
     let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
     CMSG_REPAIR_ITEM {
