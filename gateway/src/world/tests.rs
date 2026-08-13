@@ -2812,6 +2812,20 @@ impl VendorActionStore for InMemoryStore {
     fn vendor_refuses_interaction(&self, _vendor_guid: u64, _player_guid: u64) -> Result<bool> {
         Ok(self.npc_refuses)
     }
+
+    fn vendor_buy(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _vendor_guid: u64,
+        _item_entry: u32,
+        _count: u32,
+    ) -> Result<()> {
+        match &self.trade_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
+    }
 }
 
 impl ItemActionStore for InMemoryStore {

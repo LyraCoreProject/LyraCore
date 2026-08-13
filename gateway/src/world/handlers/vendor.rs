@@ -10,6 +10,15 @@ pub(crate) trait VendorActionStore: Send + Sync {
     fn vendor_stock(&self, vendor_guid: u64) -> Result<Vec<codec::VendorItemView>>;
 
     fn vendor_refuses_interaction(&self, vendor_guid: u64, player_guid: u64) -> Result<bool>;
+
+    fn vendor_buy(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        vendor_guid: u64,
+        item_entry: u32,
+        count: u32,
+    ) -> Result<()>;
 }
 
 impl VendorActionStore for crate::stdb::Coordinator {
@@ -19,6 +28,19 @@ impl VendorActionStore for crate::stdb::Coordinator {
 
     fn vendor_refuses_interaction(&self, vendor_guid: u64, player_guid: u64) -> Result<bool> {
         crate::stdb::Coordinator::npc_refuses_interaction(self, vendor_guid, player_guid)
+    }
+
+    fn vendor_buy(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        vendor_guid: u64,
+        item_entry: u32,
+        count: u32,
+    ) -> Result<()> {
+        crate::stdb::Coordinator::buy_item(
+            self, account_id, self_guid, vendor_guid, item_entry, count,
+        )
     }
 }
 
@@ -97,12 +119,38 @@ pub(crate) fn dispatch_vendor_action<St: VendorActionStore + ?Sized>(
                 outbound: vec![Outbound::Raw { opcode, body }],
             })
         }
+        // Successful purchases carry no reply — the item/purse subscriptions deliver the row
+        // changes; only a rejection needs an explicit client-visible message.
+        ClientOpcodeMessage::CMSG_BUY_ITEM(c) => {
+            let vendor_guid = c.vendor.guid();
+            let item_entry = c.item;
+            let outbound = match store.vendor_buy(
+                player.account_id,
+                player.self_guid.unwrap_or(0),
+                vendor_guid,
+                item_entry,
+                c.amount as u32,
+            ) {
+                Ok(()) => Vec::new(),
+                Err(e) if classify_vendor_action_error(&e) == VendorActionErrorClass::GameplayRefusal => {
+                    log::debug!(
+                        "world: vendor_buy failed (account {}): {e}",
+                        player.account_id
+                    );
+                    vec![Outbound::One(ServerOpcodeMessage::SMSG_BUY_FAILED(
+                        Box::new(codec::build_buy_failed(vendor_guid, item_entry, &e.to_string())),
+                    ))]
+                }
+                Err(e) => return Err(e),
+            };
+            Ok(VendorActionOutcome::Handled { outbound })
+        }
         other => Ok(VendorActionOutcome::PassThrough(other)),
     }
 }
 
-/// Vendor family (Tier 2): buy/sell/buyback/repair, awaiting migration to the seam above.
-/// Buy/sell forward to the module reducers; a gameplay `Err` (no stock / no copper / out of range)
+/// Vendor family (Tier 2): sell/buyback/repair, awaiting migration to the seam above.
+/// Forwards to the module reducers; a gameplay `Err` (no stock / no copper / out of range)
 /// is per-action — log + ignore like the combat/loot arms, never tear the session down.
 pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
     tx: &SessionTx,
@@ -111,33 +159,6 @@ pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
     msg: ClientOpcodeMessage,
 ) -> Result<Option<ClientOpcodeMessage>> {
     match msg {
-        // Buy `amount` of an item ENTRY from the vendor. The module gates it (vendor stock / range /
-        // copper) and replicates the new item + purse via the player's subscription; a rejection is a
-        // transient per-action failure — logged and relayed to the buyer as SMSG_BUY_FAILED (red
-        // on-screen error) so they know *why* the purchase was refused, never session-fatal.
-        ClientOpcodeMessage::CMSG_BUY_ITEM(c) => {
-            let vendor_guid = c.vendor.guid();
-            let item_entry = c.item;
-            let self_guid = match &conn.state {
-                WorldState::InWorld(iw) => iw.self_guid,
-                WorldState::CharSelect => 0,
-            };
-            if let Err(e) = store.buy_item(
-                conn.account_id,
-                self_guid,
-                vendor_guid,
-                item_entry,
-                c.amount as u32,
-            ) {
-                log::debug!("world: buy_item failed (account {}): {e}", conn.account_id);
-                send(
-                    tx,
-                    Outbound::One(ServerOpcodeMessage::SMSG_BUY_FAILED(Box::new(
-                        codec::build_buy_failed(vendor_guid, item_entry, &e.to_string()),
-                    ))),
-                )?;
-            }
-        }
         // Sell an item back to a vendor. CMSG_SELL_ITEM carries the item's INSTANCE guid, but the
         // module's `sell_item` takes the inventory SLOT — so resolve guid → slot from the player's
         // own items, then call. An unmatched guid (already sold / not ours) is logged + ignored.
@@ -271,16 +292,18 @@ pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
 mod tests {
     use super::*;
     use std::sync::Mutex;
-    use wow_world_messages::vanilla::{Guid, CMSG_LIST_INVENTORY, CMSG_PING};
+    use wow_world_messages::vanilla::{Guid, CMSG_BUY_ITEM, CMSG_LIST_INVENTORY, CMSG_PING};
 
     #[derive(Default)]
     struct InMemoryVendorActions {
         stock_requests: Mutex<Vec<u64>>,
         gate_requests: Mutex<Vec<(u64, u64)>>,
+        buy_requests: Mutex<Vec<(u64, u64, u64, u32, u32)>>,
         stock: Vec<codec::VendorItemView>,
         refuses: bool,
         stock_error: Option<String>,
         gate_error: Option<String>,
+        buy_error: Option<String>,
     }
 
     impl VendorActionStore for InMemoryVendorActions {
@@ -300,6 +323,24 @@ mod tests {
             match &self.gate_error {
                 Some(error) => Err(anyhow::anyhow!("{error}")),
                 None => Ok(self.refuses),
+            }
+        }
+
+        fn vendor_buy(
+            &self,
+            account_id: u64,
+            self_guid: u64,
+            vendor_guid: u64,
+            item_entry: u32,
+            count: u32,
+        ) -> Result<()> {
+            self.buy_requests
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid, vendor_guid, item_entry, count));
+            match &self.buy_error {
+                Some(error) => Err(anyhow::anyhow!("{error}")),
+                None => Ok(()),
             }
         }
     }
@@ -402,22 +443,96 @@ mod tests {
 
     #[test]
     fn reducer_transport_failure_is_session_fatal() {
-        for actions in [
-            InMemoryVendorActions {
-                gate_error: Some("npc_refuses_interaction reducer transport disconnected".into()),
-                ..Default::default()
-            },
-            InMemoryVendorActions {
-                stock_error: Some("vendor_items reducer transport disconnected".into()),
-                ..Default::default()
-            },
+        for (actions, msg) in [
+            (
+                InMemoryVendorActions {
+                    gate_error: Some(
+                        "npc_refuses_interaction reducer transport disconnected".into(),
+                    ),
+                    ..Default::default()
+                },
+                list_inventory(),
+            ),
+            (
+                InMemoryVendorActions {
+                    stock_error: Some("vendor_items reducer transport disconnected".into()),
+                    ..Default::default()
+                },
+                list_inventory(),
+            ),
+            (
+                InMemoryVendorActions {
+                    buy_error: Some("buy_item reducer transport disconnected".into()),
+                    ..Default::default()
+                },
+                buy_item(2589, 1),
+            ),
         ] {
-            let error = match dispatch_vendor_action(&actions, player(), list_inventory()) {
+            let error = match dispatch_vendor_action(&actions, player(), msg) {
                 Err(error) => error,
                 Ok(_) => panic!("a dead reducer transport must end the session"),
             };
             assert!(format!("{error:#}").contains("reducer transport disconnected"));
         }
+    }
+
+    fn buy_item(item: u32, amount: u8) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_BUY_ITEM(Box::new(CMSG_BUY_ITEM {
+            vendor: Guid::new(VENDOR),
+            item,
+            amount,
+            unknown1: 1,
+        }))
+    }
+
+    #[test]
+    fn a_successful_purchase_requests_the_durable_buy_and_sends_no_packets() {
+        let actions = InMemoryVendorActions::default();
+
+        let outcome = dispatch_vendor_action(&actions, player(), buy_item(2589, 3)).unwrap();
+
+        assert!(
+            matches!(outcome, VendorActionOutcome::Handled { outbound } if outbound.is_empty())
+        );
+        assert_eq!(
+            actions.buy_requests.lock().unwrap().as_slice(),
+            &[(7, 42, VENDOR, 2589, 3)]
+        );
+    }
+
+    #[test]
+    fn a_rejected_purchase_sends_smsg_buy_failed() {
+        let actions = InMemoryVendorActions {
+            buy_error: Some("not enough money to buy that item".into()),
+            ..Default::default()
+        };
+
+        let outcome = dispatch_vendor_action(&actions, player(), buy_item(2589, 1)).unwrap();
+
+        assert!(matches!(
+            outcome,
+            VendorActionOutcome::Handled { outbound }
+                if matches!(
+                    outbound.as_slice(),
+                    [Outbound::One(ServerOpcodeMessage::SMSG_BUY_FAILED(_))]
+                )
+        ));
+    }
+
+    #[test]
+    fn a_buyer_without_an_actor_falls_back_to_the_legacy_zero_actor() {
+        let actions = InMemoryVendorActions::default();
+        let player = VendorActionPlayer {
+            account_id: 7,
+            self_guid: None,
+        };
+
+        dispatch_vendor_action(&actions, player, buy_item(2589, 1)).unwrap();
+
+        assert_eq!(
+            actions.buy_requests.lock().unwrap().as_slice(),
+            &[(7, 0, VENDOR, 2589, 1)]
+        );
     }
 
     #[test]
