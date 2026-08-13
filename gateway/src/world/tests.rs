@@ -5178,6 +5178,69 @@ fn equip_item_err_sends_smsg_inventory_change_failure() {
     server.join().unwrap();
 }
 
+#[test]
+fn item_action_before_player_login_is_handled_without_panicking() {
+    let store = std::sync::Arc::new(tester_store(7));
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
+
+    CMSG_AUTOEQUIP_ITEM {
+        source_bag: 255,
+        source_slot: 24,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+
+    server
+        .join()
+        .expect("an item action without a selected player must not panic")
+        .expect("the legacy zero-actor fallback remains a handled gameplay context");
+}
+
+#[test]
+fn item_reducer_transport_loss_ends_the_world_session() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(warrior_entity()),
+        trade_error: Some("equip_item reducer transport disconnected: channel closed".into()),
+        ..tester_store(7)
+    });
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        result_tx
+            .send(run_world_session(server_end, server_store.as_ref()))
+            .unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..10 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    CMSG_AUTOEQUIP_ITEM {
+        source_bag: 255,
+        source_slot: 24,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+
+    let error = result_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("transport loss must end the session promptly")
+        .expect_err("a disconnected item reducer transport must be session-fatal");
+    assert!(format!("{error:#}").contains("reducer transport disconnected"));
+    assert!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).is_err(),
+        "the socket closes instead of translating transport loss into gameplay feedback"
+    );
+}
+
 // ── Item-starts-quest ────────────────────────────────────────────────────────────────────────────
 
 #[test]

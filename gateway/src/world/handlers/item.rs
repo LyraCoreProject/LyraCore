@@ -1,4 +1,4 @@
-//! Item-action family: equip, use, and inventory operations.
+//! Item-action dispatcher: protocol mapping and feedback for equip, use, and inventory operations.
 
 use super::super::*;
 
@@ -58,19 +58,37 @@ pub(crate) enum ItemActionOutcome {
     PassThrough(ClientOpcodeMessage),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ItemActionErrorClass {
+    GameplayRefusal,
+    Fatal,
+}
+
+fn classify_item_action_error(error: &anyhow::Error) -> ItemActionErrorClass {
+    if error
+        .chain()
+        .any(|cause| cause.to_string().contains("reducer transport disconnected"))
+    {
+        ItemActionErrorClass::Fatal
+    } else {
+        ItemActionErrorClass::GameplayRefusal
+    }
+}
+
 fn inventory_action_outbound(
     account_id: u64,
     operation: &str,
     result: Result<()>,
-) -> Vec<ServerOpcodeMessage> {
+) -> Result<Vec<ServerOpcodeMessage>> {
     match result {
-        Ok(()) => Vec::new(),
-        Err(e) => {
+        Ok(()) => Ok(Vec::new()),
+        Err(e) if classify_item_action_error(&e) == ItemActionErrorClass::GameplayRefusal => {
             log::debug!("world: {operation} rejected (account {account_id}): {e}");
-            vec![ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
+            Ok(vec![ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
                 Box::new(codec::build_inventory_change_failure()),
-            )]
+            )])
         }
+        Err(e) => Err(e),
     }
 }
 
@@ -89,7 +107,7 @@ pub(crate) fn dispatch_item_action<St: ItemActionStore + ?Sized>(
                     player.self_guid.unwrap_or(0),
                     c.source_slot,
                 ),
-            );
+            )?;
             Ok(ItemActionOutcome::Handled { outbound })
         }
         ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(c) => {
@@ -115,7 +133,7 @@ pub(crate) fn dispatch_item_action<St: ItemActionStore + ?Sized>(
                     player.self_guid.unwrap_or(0),
                     c.source_slot,
                 ),
-            );
+            )?;
             Ok(ItemActionOutcome::Handled { outbound })
         }
         ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(c) => {
@@ -139,7 +157,7 @@ pub(crate) fn dispatch_item_action<St: ItemActionStore + ?Sized>(
                     c.source_slot.as_int(),
                     c.destination_slot.as_int(),
                 ),
-            );
+            )?;
             Ok(ItemActionOutcome::Handled { outbound })
         }
         ClientOpcodeMessage::CMSG_SWAP_ITEM(c)
@@ -154,7 +172,7 @@ pub(crate) fn dispatch_item_action<St: ItemActionStore + ?Sized>(
                     c.source_slot,
                     c.destionation_slot,
                 ),
-            );
+            )?;
             Ok(ItemActionOutcome::Handled { outbound })
         }
         ClientOpcodeMessage::CMSG_SWAP_ITEM(_) => {
@@ -183,7 +201,7 @@ pub(crate) fn dispatch_item_action<St: ItemActionStore + ?Sized>(
                     player.account_id,
                     "use_item",
                     store.use_item(player.account_id, player.self_guid.unwrap_or(0), c.bag_slot),
-                )
+                )?
             };
             Ok(ItemActionOutcome::Handled { outbound })
         }
@@ -403,6 +421,28 @@ mod tests {
     }
 
     #[test]
+    fn reducer_transport_failure_is_session_fatal() {
+        let actions = InMemoryItemActions {
+            equip_error: Some("equip_item reducer transport disconnected: channel closed".into()),
+            ..Default::default()
+        };
+
+        let error = match dispatch_item_action(
+            &actions,
+            player(),
+            ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(CMSG_AUTOEQUIP_ITEM {
+                source_bag: MAIN_BAG,
+                source_slot: 24,
+            }),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("a dead reducer transport must end the session"),
+        };
+
+        assert!(format!("{error:#}").contains("reducer transport disconnected"));
+    }
+
+    #[test]
     fn unequip_and_moves_map_main_bag_slots_to_durable_requests() {
         let actions = InMemoryItemActions::default();
         let unequip = dispatch_item_action(
@@ -524,15 +564,49 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_player_uses_the_legacy_zero_actor() {
+    fn unresolved_player_uses_the_legacy_zero_actor_for_every_durable_inventory_action() {
         let actions = InMemoryItemActions::default();
         let player = ItemActionPlayer {
             account_id: 7,
             self_guid: None,
         };
 
-        dispatch_item_action(&actions, player, use_item(MAIN_BAG)).unwrap();
+        for msg in [
+            ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(CMSG_AUTOEQUIP_ITEM {
+                source_bag: MAIN_BAG,
+                source_slot: 24,
+            }),
+            ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(CMSG_AUTOSTORE_BAG_ITEM {
+                source_bag: MAIN_BAG,
+                source_slot: 15,
+                destination_bag: MAIN_BAG,
+            }),
+            ClientOpcodeMessage::CMSG_SWAP_INV_ITEM(CMSG_SWAP_INV_ITEM {
+                source_slot: ItemSlot::MainHand,
+                destination_slot: ItemSlot::Inventory1,
+            }),
+            use_item(MAIN_BAG),
+        ] {
+            dispatch_item_action(&actions, player, msg).unwrap();
+        }
 
+        assert_eq!(
+            actions.equip_requests.lock().unwrap().as_slice(),
+            &[(7, 0, 24)]
+        );
+        assert_eq!(
+            actions.unequip_requests.lock().unwrap().as_slice(),
+            &[(7, 0, 15)]
+        );
+        assert_eq!(
+            actions.move_requests.lock().unwrap().as_slice(),
+            &[(
+                7,
+                0,
+                ItemSlot::MainHand.as_int(),
+                ItemSlot::Inventory1.as_int()
+            )]
+        );
         assert_eq!(
             actions.use_requests.lock().unwrap().as_slice(),
             &[(7, 0, 5)]
@@ -554,13 +628,4 @@ mod tests {
             ItemActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
         ));
     }
-}
-
-pub(crate) fn handle_item<St: WorldStore + ?Sized>(
-    _tx: &SessionTx,
-    _store: &St,
-    _conn: &mut WorldConn,
-    msg: ClientOpcodeMessage,
-) -> Result<Option<ClientOpcodeMessage>> {
-    Ok(Some(msg))
 }

@@ -1,8 +1,8 @@
-//! `WorldStore`: the storage/coordination seam `world/mod.rs` calls through so the handshake
-//! + crypto (and, via `handlers/`, every per-domain reducer call) can be unit-tested without a
-//! database or a real socket. Pure code-motion out of `mod.rs` (behind the `pub use` facade) —
-//! see `mod.rs`'s module doc for the full picture. Kept as ONE trait (only two implementors);
-//! the section markers below are load-bearing navigation, not a split.
+//! `WorldStore`: the broad storage/coordination seam used by the world session. Deep protocol
+//! families may add focused supertraits such as [`ItemActionStore`] so their wire mapping and
+//! failure policy can be tested without implementing this entire interface. Kept as one broad
+//! trait for the remaining session operations (only two implementors); the section markers below
+//! are load-bearing navigation, not a split.
 
 use super::handlers::ItemActionStore;
 use super::*;

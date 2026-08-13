@@ -50,7 +50,7 @@ pub(crate) fn handle_trade<St: WorldStore + ?Sized>(
         }
         // Offer mutations (#121). The (bag, slot) pair maps onto the module's absolute slots the
         // same way the item family does: only the main pseudo-bag (255) is modelled — items inside
-        // equipped sub-bags are logged + ignored, `handle_item`'s posture.
+        // equipped sub-bags are logged + ignored, matching the item-action dispatcher's posture.
         ClientOpcodeMessage::CMSG_SET_TRADE_ITEM(c) => {
             const MAIN_BAG: u8 = 255; // INVENTORY_SLOT_BAG_0
             if let Some(me) = self_guid(conn) {

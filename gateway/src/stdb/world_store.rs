@@ -1,6 +1,5 @@
-//! `Coordinator` IS the production [`WorldStore`] — the world session talks to the SpacetimeDB module
-//! through it. This replaces the former `WorldCoordinatorStore` newtype, which existed only to attach
-//! this impl to a `Coordinator` it wrapped 1:1 (an identity abstraction).
+//! `Coordinator` is the production [`WorldStore`]. Focused protocol-family supertraits are
+//! implemented beside their dispatchers; this file adapts the remaining broad world-session seam.
 //!
 //! Most methods forward to `Coordinator`'s like-named INHERENT method (defined by concern in
 //! `reads`/`reducers`/`subscriptions`/`connection`). Rust method resolution prefers inherent methods

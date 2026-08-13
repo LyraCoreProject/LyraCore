@@ -114,7 +114,8 @@ fn offer_mutations_dispatch_with_wire_arguments() {
 }
 
 /// **AC (#121): sub-bag items are out of scope, not mis-addressed** — a `CMSG_SET_TRADE_ITEM`
-/// from an equipped sub-bag is logged and IGNORED (the `handle_item` posture), never forwarded
+/// from an equipped sub-bag is logged and IGNORED (the item-action dispatcher posture), never
+/// forwarded
 /// with a bag-local slot number that would alias a main-bag slot.
 #[test]
 fn set_trade_item_from_a_sub_bag_is_ignored_not_misaddressed() {
