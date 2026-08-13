@@ -1,24 +1,9 @@
-//! The mailbox read path — the routing tests.
-//!
-//! What EXECUTES here is production `world::mail`, against the same in-memory multi-database
-//! topology the party, whisper and transfer tests use. What the fakes stand in for is named at each
-//! seam: a handle's `mails` is the `game_mail` rows on THAT database, and `mailboxes` is the answer
-//! the gameobject PK lookup would give on the shard the player is standing on.
-//!
-//! The load-bearing shape: the SAME fixture mail is seeded on realm-core in the sharded topology and
-//! on the single handle in the unsharded one, and both must render the same list — that is the
-//! two-plane equivalence, not two tests that happen to agree.
 
 use super::party_tests::{character, DORMANT, GINGER, TRIN, VIM};
 use super::*;
-
-/// The Goldshire mailbox, as the client names it in every mail packet.
 const MAILBOX: u64 = 0xF110_0000_0000_0042;
-/// A gameobject guid the player is NOT standing at (another map, out of range, or not a mailbox).
 const FAR_MAILBOX: u64 = 0xF110_0000_0000_0099;
-/// The wire's "no item attached" — every letter in these fixtures unless it says otherwise.
 const NO_ITEM: u64 = 0;
-/// The wire's "no cash on delivery" — likewise.
 const NO_COD: u32 = 0;
 
 fn mail(id: u64, from: u64, subject: &str, body: &str) -> codec::MailView {
@@ -31,9 +16,6 @@ fn mail(id: u64, from: u64, subject: &str, body: &str) -> codec::MailView {
         ..Default::default()
     }
 }
-
-/// The sharded topology: realm-core holds every mail, the open-world shard holds the mailbox
-/// Ginger is standing at, and the instance shard holds Vim. Returns `(realm, world, calls)`.
 fn sharded_mailbox() -> (
     std::sync::Arc<InMemoryStore>,
     std::sync::Arc<InMemoryStore>,
@@ -58,9 +40,6 @@ fn sharded_mailbox() -> (
     *realm.mails.lock().unwrap() = seeded_mail();
     (realm, world, calls)
 }
-
-/// The single-database gateway: no realm handle, the same rows and the same mailbox on the one
-/// database `lyracore dev up` publishes.
 fn unsharded_mailbox() -> std::sync::Arc<InMemoryStore> {
     let store = std::sync::Arc::new(InMemoryStore {
         shard: "lyracore".into(),
@@ -72,9 +51,6 @@ fn unsharded_mailbox() -> std::sync::Arc<InMemoryStore> {
     *store.mails.lock().unwrap() = seeded_mail();
     store
 }
-
-/// One mail to Ginger and one to somebody else, so "listed for its recipient" and "listed for
-/// nobody else" are the same fixture.
 fn seeded_mail() -> Vec<(u64, codec::MailView)> {
     vec![
         (GINGER, mail(1, VIM, "Your sword", "left it at the inn")),
@@ -82,7 +58,6 @@ fn seeded_mail() -> Vec<(u64, codec::MailView)> {
     ]
 }
 
-/// **AC: a seeded mail appears in the list for its recipient, and for nobody else.**
 #[test]
 fn a_seeded_mail_is_listed_for_its_recipient_and_for_nobody_else() {
     let (_realm, world, _calls) = sharded_mailbox();
@@ -100,9 +75,6 @@ fn a_seeded_mail_is_listed_for_its_recipient_and_for_nobody_else() {
     );
 }
 
-/// **AC: a player with no mail gets an empty list rather than no response.** An `Ok(vec![])` is
-/// what makes the handler send a packet; an `Err` would be silence, and silence is
-/// indistinguishable from a server that ignored the click.
 #[test]
 fn a_player_with_no_mail_gets_an_empty_list_and_not_a_refusal() {
     let (realm, world, _calls) = sharded_mailbox();
@@ -114,9 +86,6 @@ fn a_player_with_no_mail_gets_an_empty_list_and_not_a_refusal() {
     );
 }
 
-/// **AC: the mailbox read reaches the AUTHORITY.** Realm-core owns the rows on a sharded gateway;
-/// a read that quietly went shard-local would work for a character homed where the row happens to
-/// be and lose the mailbox for everyone else.
 #[test]
 fn a_sharded_mailbox_is_read_from_realm_core_and_never_from_the_players_own_shard() {
     let (_realm, world, calls) = sharded_mailbox();
@@ -135,8 +104,6 @@ fn a_sharded_mailbox_is_read_from_realm_core_and_never_from_the_players_own_shar
     );
 }
 
-/// **AC: the proximity gate runs on the shard the player is standing on.** Realm-core holds no
-/// gameobjects, so asking it would refuse every mailbox on a sharded realm.
 #[test]
 fn the_mailbox_proximity_gate_is_asked_of_the_players_own_shard() {
     let (_realm, world, calls) = sharded_mailbox();
@@ -154,8 +121,6 @@ fn the_mailbox_proximity_gate_is_asked_of_the_players_own_shard() {
     );
 }
 
-/// **AC: the same read produces the same list on both planes, through one shared core.** Same
-/// fixture, same reader; the only difference is whether a realm handle exists.
 #[test]
 fn the_realm_plane_and_the_single_database_fallback_render_the_same_mailbox() {
     let (_realm, world, calls) = sharded_mailbox();
@@ -172,9 +137,6 @@ fn the_realm_plane_and_the_single_database_fallback_render_the_same_mailbox() {
     );
 }
 
-/// **AC: the single-database fallback reads its OWN database.** With no realm handle there is
-/// nothing to route to, and a read that still looked for one would answer an empty mailbox on
-/// `lyracore dev up`.
 #[test]
 fn an_unsharded_gateway_reads_the_mailbox_on_its_own_database() {
     let single = unsharded_mailbox();
@@ -188,9 +150,6 @@ fn an_unsharded_gateway_reads_the_mailbox_on_its_own_database() {
     assert_eq!(mails[0].id, 1);
 }
 
-/// **AC: every mail opcode is refused when the player is not in world.** Character select drives no
-/// mailbox — and the refusal must not be a mailbox read that happens to find nothing, because a
-/// guid of 0 is a real recipient key.
 #[test]
 fn every_mail_read_is_refused_at_character_select() {
     let (_realm, world, calls) = sharded_mailbox();
@@ -212,9 +171,6 @@ fn every_mail_read_is_refused_at_character_select() {
     );
 }
 
-/// **AC: every mailbox-addressed opcode is refused away from the named mailbox.** The client passes
-/// the guid, so a crafted packet naming a gameobject the player is not standing at must not open
-/// the mailbox.
 #[test]
 fn a_mailbox_the_player_is_not_standing_at_is_refused() {
     let (_realm, world, calls) = sharded_mailbox();
@@ -230,9 +186,6 @@ fn a_mailbox_the_player_is_not_standing_at_is_refused() {
     );
 }
 
-/// **AC: the unread poll answers from the same read as the list.** The envelope and the window are
-/// one projection, so they cannot disagree — and the poll names no mailbox, which is why it is
-/// gated on being in world alone.
 #[test]
 fn the_unread_poll_follows_the_same_mailbox_the_window_lists() {
     let (realm, world, _calls) = sharded_mailbox();
@@ -248,9 +201,6 @@ fn the_unread_poll_follows_the_same_mailbox_the_window_lists() {
     assert!(!mail::has_unread(world.as_ref(), Some(GINGER)).unwrap());
 }
 
-/// **AC: `CMSG_ITEM_TEXT_QUERY` returns the letter's body** — and only to the character the mail is
-/// addressed to. The body rides this query rather than the list packet, so this read is the whole
-/// letter-reading path.
 #[test]
 fn a_letter_body_is_readable_by_its_recipient_and_by_nobody_else() {
     let (_realm, world, _calls) = sharded_mailbox();
@@ -270,9 +220,6 @@ fn a_letter_body_is_readable_by_its_recipient_and_by_nobody_else() {
     );
 }
 
-/// **AC: an empty body is never queried** — the list advertises text id 0 for it, which is the
-/// signal the client acts on. Pinned here (rather than only in the codec) because the id and the
-/// body come from the same row and a later slice must not split them.
 #[test]
 fn a_mail_with_no_body_advertises_text_id_zero() {
     let (realm, world, _calls) = sharded_mailbox();
@@ -287,15 +234,6 @@ fn a_mail_with_no_body_advertises_text_id_zero() {
     let ids: Vec<u32> = packet.mails.iter().map(|m| m.item_text_id).collect();
     assert_eq!(ids, vec![1, 0]);
 }
-
-// ---------------------------------------------------------------------------------------------
-//  Dispatch: the packets a real session actually gets back. `run_world_session` over a socket
-//  pair, driven with real encrypted opcodes — the routing tests above pin WHAT is read, these pin
-//  that the client is answered at all.
-// ---------------------------------------------------------------------------------------------
-
-/// The logged-in fixture: the warrior of the login tests (guid 1), standing at the mailbox, with
-/// one unread mail waiting.
 fn seated_store() -> std::sync::Arc<InMemoryStore> {
     let store = std::sync::Arc::new(InMemoryStore {
         login_entity: Some(warrior_entity()),
@@ -306,9 +244,6 @@ fn seated_store() -> std::sync::Arc<InMemoryStore> {
     store
 }
 
-/// **AC: a player with no mail gets an empty list rather than no response.** The client opened the
-/// mail frame itself (there is no `SMSG_SHOW_MAILBOX` in vanilla) and is waiting on this packet;
-/// silence and "you have no mail" would look identical.
 #[test]
 fn an_empty_mailbox_is_answered_with_an_empty_list_packet() {
     let store = seated_store();
@@ -343,8 +278,6 @@ fn an_empty_mailbox_is_answered_with_an_empty_list_packet() {
     server.join().unwrap();
 }
 
-/// **AC: a seeded mail reaches its recipient over the wire**, subject and sender intact, with the
-/// mail's own id doubling as the `item_text_id` the client queries the body with.
 #[test]
 fn a_seeded_mail_reaches_the_client_as_a_mail_list_row() {
     let store = seated_store();
@@ -377,9 +310,6 @@ fn a_seeded_mail_reaches_the_client_as_a_mail_list_row() {
         }
         other => panic!("expected the mail list, got {other}"),
     };
-
-    // The body rides the follow-up query the client sends on OPENING the letter, keyed by the id
-    // the list just advertised.
     wow_world_messages::vanilla::CMSG_ITEM_TEXT_QUERY {
         item_text_id: text_id,
         mail_id: 1,
@@ -394,8 +324,6 @@ fn a_seeded_mail_reaches_the_client_as_a_mail_list_row() {
         }
         other => panic!("expected the letter body, got {other}"),
     }
-
-    // And the poll behind the minimap envelope answers 0.0 while that mail is unread.
     ClientOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
@@ -408,11 +336,6 @@ fn a_seeded_mail_reaches_the_client_as_a_mail_list_row() {
     server.join().unwrap();
 }
 
-// ---------------------------------------------------------------------------------------------
-//  Mark-as-read and delete — the routing tests, same shape as the read path above.
-// ---------------------------------------------------------------------------------------------
-
-/// **AC: `CMSG_MAIL_MARK_AS_READ` flips the row's read state, and the next list reflects it.**
 #[test]
 fn mark_read_flips_the_row_and_the_next_list_shows_it() {
     let (_realm, world, _calls) = sharded_mailbox();
@@ -423,7 +346,6 @@ fn mark_read_flips_the_row_and_the_next_list_shows_it() {
     assert!(mails[0].was_read, "the next list read must show the flip");
 }
 
-/// **AC: a read mail no longer counts toward the unread poll answer.**
 #[test]
 fn a_read_mail_no_longer_lights_the_unread_poll() {
     let (_realm, world, _calls) = sharded_mailbox();
@@ -437,7 +359,6 @@ fn a_read_mail_no_longer_lights_the_unread_poll() {
     );
 }
 
-/// **AC: `CMSG_MAIL_DELETE` removes the row; the next list no longer shows it.**
 #[test]
 fn delete_removes_the_row_and_the_next_list_no_longer_shows_it() {
     let (_realm, world, _calls) = sharded_mailbox();
@@ -451,14 +372,9 @@ fn delete_removes_the_row_and_the_next_list_no_longer_shows_it() {
     );
 }
 
-/// **AC: both are refused for a mail the caller is not the recipient of.** A crafted id naming
-/// somebody else's mail must not be distinguishable from a nonexistent one — the same
-/// non-distinction the letter-body read already takes.
 #[test]
 fn both_are_refused_for_a_mail_the_caller_does_not_own() {
     let (_realm, world, _calls) = sharded_mailbox();
-
-    // Mail 2 is Trin's — Ginger names it anyway.
     let err = mail::mark_read(world.as_ref(), Some(GINGER), MAILBOX, 2)
         .expect_err("mail 2 is not Ginger's");
     assert!(
@@ -471,8 +387,6 @@ fn both_are_refused_for_a_mail_the_caller_does_not_own() {
         err.to_string().contains("not addressed to you"),
         "got {err}"
     );
-
-    // Neither refusal touched the row: Trin's mail is untouched and still listed for Trin.
     let trins = mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX).expect("the gate opens");
     assert_eq!(
         trins.len(),
@@ -482,8 +396,6 @@ fn both_are_refused_for_a_mail_the_caller_does_not_own() {
     assert!(!trins[0].was_read);
 }
 
-/// **AC: both work identically on the realm plane and the single-database fallback.** Same write,
-/// same before/after list, through the shared core — not two code paths that happen to agree.
 #[test]
 fn both_write_ops_behave_identically_on_the_realm_plane_and_the_fallback() {
     let (_realm, world, _calls) = sharded_mailbox();
@@ -498,8 +410,6 @@ fn both_write_ops_behave_identically_on_the_realm_plane_and_the_fallback() {
     );
 }
 
-/// **AC: mail write ops reach the AUTHORITY, never the player's own shard, on a sharded gateway** —
-/// the write half of `a_sharded_mailbox_is_read_from_realm_core_and_never_from_the_players_own_shard`.
 #[test]
 fn a_sharded_mailbox_write_lands_on_realm_core_and_never_on_the_players_own_shard() {
     let (_realm, world, calls) = sharded_mailbox();
@@ -515,9 +425,6 @@ fn a_sharded_mailbox_write_lands_on_realm_core_and_never_on_the_players_own_shar
     ));
 }
 
-/// **AC: both are refused the same way the read path is — not in world, or not at the named
-/// mailbox — before touching any row.** Mirrors `every_mail_read_is_refused_at_character_select`
-/// and `a_mailbox_the_player_is_not_standing_at_is_refused`.
 #[test]
 fn both_write_ops_are_gated_like_the_read_path() {
     let (_realm, world, calls) = sharded_mailbox();
@@ -535,14 +442,6 @@ fn both_write_ops_are_gated_like_the_read_path() {
     );
 }
 
-// ---------------------------------------------------------------------------------------------
-//  Return-to-sender — the routing tests, same shape as mark-read/delete above.
-//
-//  No escrow anywhere here: the row is re-addressed in place on whichever plane already holds it,
-//  so a return never crosses a database boundary the way a sharded send or take does.
-// ---------------------------------------------------------------------------------------------
-
-/// **AC: the mail leaves the recipient's list and arrives addressed to the original sender.**
 #[test]
 fn returning_a_mail_moves_it_from_the_recipients_list_to_the_senders() {
     let (_realm, world, _calls) = sharded_mailbox();
@@ -555,9 +454,6 @@ fn returning_a_mail_moves_it_from_the_recipients_list_to_the_senders() {
         gingers.is_empty(),
         "the mail must leave the recipient's list"
     );
-
-    // Mail 1 was sent by VIM. The write reached whichever plane owns the rows, so a read scoped to
-    // VIM — the read every other mail op in this file also uses — shows the re-addressed row.
     let vims = mail::mail_of(world.as_ref(), VIM).expect("read whatever plane owns the rows");
     assert_eq!(vims.len(), 1);
     assert_eq!(
@@ -566,7 +462,6 @@ fn returning_a_mail_moves_it_from_the_recipients_list_to_the_senders() {
     );
 }
 
-/// **AC: the item snapshot and the copper survive the return unchanged.**
 #[test]
 fn returning_a_mail_carries_its_attachment_and_copper_unchanged() {
     let world = unsharded_mailbox();
@@ -602,10 +497,6 @@ fn returning_a_mail_carries_its_attachment_and_copper_unchanged() {
     );
 }
 
-/// **AC: returning a mail whose attachment was already taken returns what is LEFT, never a copy of
-/// what was taken.** The take clears the row's attachment columns before this ever runs — the
-/// duplication case: a naive "re-derive the original letter" implementation would hand the item
-/// back a second time instead of re-addressing the now-empty row.
 #[test]
 fn returning_an_already_taken_mail_does_not_duplicate_the_attachment() {
     let world = unsharded_mailbox();
@@ -649,14 +540,9 @@ fn returning_an_already_taken_mail_does_not_duplicate_the_attachment() {
     );
 }
 
-/// **AC: returning is refused for anyone who is not the mail's recipient** — a mail id is
-/// client-supplied, so this is the authorization boundary and not a sanity check. Mirrors
-/// `both_are_refused_for_a_mail_the_caller_does_not_own`.
 #[test]
 fn returning_a_mail_is_refused_for_a_caller_who_does_not_own_it() {
     let (_realm, world, _calls) = sharded_mailbox();
-
-    // Mail 2 is Trin's — Ginger names it anyway.
     let err = mail::return_to_sender(world.as_ref(), Some(GINGER), MAILBOX, 2)
         .expect_err("mail 2 is not Ginger's");
     assert!(
@@ -672,8 +558,6 @@ fn returning_a_mail_is_refused_for_a_caller_who_does_not_own_it() {
     );
 }
 
-/// **AC: the removal and the repost are one write, and both planes behave identically through one
-/// shared core.** Mirrors `both_write_ops_behave_identically_on_the_realm_plane_and_the_fallback`.
 #[test]
 fn returning_a_mail_behaves_identically_on_the_realm_plane_and_the_fallback() {
     let (_realm, world, _calls) = sharded_mailbox();
@@ -689,10 +573,6 @@ fn returning_a_mail_behaves_identically_on_the_realm_plane_and_the_fallback() {
     );
 }
 
-/// **AC: a return reaches the AUTHORITY, never the player's own shard, on a sharded gateway** —
-/// mirrors `a_sharded_mailbox_write_lands_on_realm_core_and_never_on_the_players_own_shard`. There
-/// is no escrow step to look for: the row is re-addressed on realm-core directly, the same single
-/// call `mail_mark_read`/`mail_delete` make.
 #[test]
 fn a_sharded_return_lands_on_realm_core_and_never_on_the_players_own_shard() {
     let (_realm, world, calls) = sharded_mailbox();
@@ -708,8 +588,6 @@ fn a_sharded_return_lands_on_realm_core_and_never_on_the_players_own_shard() {
     );
 }
 
-/// **AC: returning is gated the same way mark-read/delete are** — mirrors
-/// `both_write_ops_are_gated_like_the_read_path`.
 #[test]
 fn returning_a_mail_is_gated_like_the_read_path() {
     let (_realm, world, calls) = sharded_mailbox();
@@ -726,12 +604,6 @@ fn returning_a_mail_is_gated_like_the_read_path() {
     );
 }
 
-// ---------------------------------------------------------------------------------------------
-//  Dispatch: return-to-sender over the real wire.
-// ---------------------------------------------------------------------------------------------
-
-/// **AC: `CMSG_MAIL_RETURN_TO_SENDER` acks with `SMSG_SEND_MAIL_RESULT`/ReturnedToSender, and the
-/// next list read no longer shows the mail.**
 #[test]
 fn return_acks_with_send_mail_result_and_the_next_list_is_empty() {
     let store = seated_store();
@@ -788,13 +660,9 @@ fn return_acks_with_send_mail_result_and_the_next_list_is_empty() {
     server.join().unwrap();
 }
 
-/// **AC: a refused return (not the caller's mail) still acks — with the generic error — and never
-/// tears the session down.** Mirrors `a_refused_delete_still_acks_and_never_kills_the_session`.
 #[test]
 fn a_refused_return_still_acks_and_never_kills_the_session() {
     let store = seated_store();
-    // Mail 1 belongs to guid 1 (the seated warrior) in the base fixture; retarget it so THIS
-    // session's return is the not-your-mail refusal.
     store.mails.lock().unwrap()[0].0 = 999;
 
     let (mut client, server_end) = UnixStream::pair().unwrap();
@@ -831,8 +699,6 @@ fn a_refused_return_still_acks_and_never_kills_the_session() {
         },
         other => panic!("expected SMSG_SEND_MAIL_RESULT, got {other}"),
     }
-
-    // The session survives: the next opcode is still answered.
     ClientOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
@@ -845,12 +711,6 @@ fn a_refused_return_still_acks_and_never_kills_the_session() {
     server.join().unwrap();
 }
 
-// ---------------------------------------------------------------------------------------------
-//  Dispatch: mark-as-read and delete over the real wire.
-// ---------------------------------------------------------------------------------------------
-
-/// **AC: `CMSG_MAIL_MARK_AS_READ` gets NO wire reply** (vanilla sends none — the client already
-/// flipped its own display), but the session survives and the NEXT list read shows the flip.
 #[test]
 fn mark_as_read_sends_no_reply_but_the_next_list_shows_it() {
     let store = seated_store();
@@ -875,8 +735,6 @@ fn mark_as_read_sends_no_reply_but_the_next_list_shows_it() {
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    // No reply for mark-as-read — assert by racing the NEXT packet, which must be the poll answer
-    // below, not a stray SMSG this opcode was never supposed to send.
     wow_world_messages::vanilla::CMSG_GET_MAIL_LIST {
         mailbox: Guid::new(MAILBOX),
     }
@@ -895,7 +753,6 @@ fn mark_as_read_sends_no_reply_but_the_next_list_shows_it() {
     server.join().unwrap();
 }
 
-/// **AC: `CMSG_MAIL_DELETE` removes the row and acks `SMSG_SEND_MAIL_RESULT`/Deleted.**
 #[test]
 fn delete_acks_with_send_mail_result_and_the_next_list_is_empty() {
     let store = seated_store();
@@ -952,13 +809,9 @@ fn delete_acks_with_send_mail_result_and_the_next_list_is_empty() {
     server.join().unwrap();
 }
 
-/// **AC: a refused delete (not the caller's mail) still acks — with the generic error — and never
-/// tears the session down.**
 #[test]
 fn a_refused_delete_still_acks_and_never_kills_the_session() {
     let store = seated_store();
-    // Mail 1 belongs to guid 1 (the seated warrior) in the base fixture; retarget it to someone
-    // else so THIS session's delete is the not-your-mail refusal.
     store.mails.lock().unwrap()[0].0 = 999;
 
     let (mut client, server_end) = UnixStream::pair().unwrap();
@@ -993,8 +846,6 @@ fn a_refused_delete_still_acks_and_never_kills_the_session() {
         },
         other => panic!("expected SMSG_SEND_MAIL_RESULT, got {other}"),
     }
-
-    // The session survives: the next opcode is still answered.
     ClientOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
@@ -1006,18 +857,6 @@ fn a_refused_delete_still_acks_and_never_kills_the_session() {
     drop(client);
     server.join().unwrap();
 }
-
-// ---------------------------------------------------------------------------------------------
-//  Sending a text-only letter — the gates, the postage, and the cross-database delivery.
-//
-//  Everything the gateway decides about a send runs here: realm-core holds no characters, no live
-//  entities and no gameobjects, so "may these two write to each other" is answered before any
-//  reducer. The module answers affordability alone, which the fake store models faithfully — an
-//  atomic debit that refuses for a purse that cannot pay.
-// ---------------------------------------------------------------------------------------------
-
-/// A Horde character. `party_tests::character` builds a Human, so this is the faction gate's other
-/// side.
 fn orc(guid: u64, name: &str) -> codec::CharacterView {
     codec::CharacterView {
         race: 2,
@@ -1028,12 +867,7 @@ fn orc(guid: u64, name: &str) -> codec::CharacterView {
 const GRUG: u64 = 20; // Horde, standing next to Ginger — the faction refusal
 const ECHO_WORLD: u64 = 30; // "Echo" on the open world …
 const ECHO_INSTANCES: u64 = 31; // … and "Echo" again on the instances shard: the homonym
-/// Ginger's purse, comfortably above the 30-copper postage.
 const PURSE: u32 = 500;
-
-/// The sharded send topology: realm-core owns the mail rows, Ginger and the local cast live on the
-/// open world, Vim lives on the instances shard — the boundary the plane decision exists to cross.
-/// Only Ginger carries a purse, because only Ginger sends.
 fn sharded_send() -> (
     std::sync::Arc<InMemoryStore>,
     std::sync::Arc<InMemoryStore>,
@@ -1078,9 +912,6 @@ fn sharded_send() -> (
     }
     (realm, world, instances, calls)
 }
-
-/// The same cast on one database — `lyracore dev up`'s gateway, where the purse and the mail row
-/// live together.
 fn unsharded_send() -> std::sync::Arc<InMemoryStore> {
     let store = std::sync::Arc::new(InMemoryStore {
         shard: "lyracore".into(),
@@ -1099,9 +930,6 @@ fn post<St: WorldStore + ?Sized>(
 ) -> std::result::Result<(), mail::SendRefusal> {
     post_money(store, to, 0)
 }
-
-/// The same letter with `money` copper attached — the coin the recipient takes out, on top of the
-/// postage.
 fn post_money<St: WorldStore + ?Sized>(
     store: &St,
     to: &str,
@@ -1120,7 +948,6 @@ fn post_money<St: WorldStore + ?Sized>(
     )
 }
 
-/// **AC: a letter to an online character on the same shard arrives in their list.**
 #[test]
 fn a_letter_to_a_character_on_the_same_shard_arrives_in_their_list() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -1134,8 +961,6 @@ fn a_letter_to_a_character_on_the_same_shard_arrives_in_their_list() {
     assert!(!trins[0].was_read, "a freshly posted letter is unread");
 }
 
-/// **AC: a letter to an OFFLINE character is waiting for them.** Nothing about the send gates on
-/// the recipient being logged in — that is the whole difference between mail and a whisper.
 #[test]
 fn a_letter_to_an_offline_character_is_waiting_in_their_mailbox() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -1150,10 +975,6 @@ fn a_letter_to_an_offline_character_is_waiting_in_their_mailbox() {
     );
 }
 
-/// **AC: a letter to a character homed on ANOTHER database arrives.** The required cross-shard test:
-/// Ginger is on the open world, Vim is inside the instance pool, and the letter still lands — read
-/// back from Vim's own handle, which routes to the same authority. This case is why realm-core owns
-/// the rows at all.
 #[test]
 fn a_letter_crosses_a_database_boundary_to_a_recipient_homed_on_another_shard() {
     let (_realm, world, instances, calls) = sharded_send();
@@ -1182,10 +1003,6 @@ fn a_letter_crosses_a_database_boundary_to_a_recipient_homed_on_another_shard() 
     );
 }
 
-/// **AC: postage is debited at send** — out of the purse on the SENDER's own shard, because
-/// realm-core holds none.
-///
-/// Postage and attached coin leave the sender's shard in one debit.
 #[test]
 fn postage_is_debited_from_the_senders_own_shard_at_send() {
     let (_realm, world, _instances, calls) = sharded_send();
@@ -1207,8 +1024,6 @@ fn postage_is_debited_from_the_senders_own_shard_at_send() {
     );
 }
 
-/// **AC: a sender who cannot afford the postage is refused and charged NOTHING** — and no row is
-/// written, so a failed send costs exactly nothing.
 #[test]
 fn a_sender_who_cannot_afford_the_postage_is_refused_and_charged_nothing() {
     let (_realm, world, _instances, calls) = sharded_send();
@@ -1228,9 +1043,6 @@ fn a_sender_who_cannot_afford_the_postage_is_refused_and_charged_nothing() {
     );
 }
 
-/// **AC: a non-existent recipient, yourself, and an opposing-faction recipient each produce their
-/// OWN refusal.** The variant is the whole diagnosability story for a letter that did not go, so a
-/// shared generic error would be the defect — none of these may collapse into another.
 #[test]
 fn each_refused_gate_produces_its_own_distinct_refusal() {
     let (_realm, world, _instances, calls) = sharded_send();
@@ -1256,9 +1068,6 @@ fn each_refused_gate_produces_its_own_distinct_refusal() {
     );
 }
 
-/// **AC: the faction gate reads the SHARED race→team mapping**, not a second copy. Pinned by
-/// driving a Horde SENDER: a mapping that had drifted to "everyone is Alliance" would let this
-/// through, and would also have to be wrong in `graveyard`'s corpse release to stay consistent.
 #[test]
 fn the_faction_gate_refuses_in_both_directions() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -1280,12 +1089,6 @@ fn the_faction_gate_refuses_in_both_directions() {
     assert!(lyracore_shared::faction::same_team(2, 2), "fixture sanity");
 }
 
-/// **AC: a name that resolves to SEVERAL characters is refused, never guessed.**
-///
-/// Character names are unique per database, not per realm. Whisper picks the online candidate; mail
-/// cannot, because reaching an offline character is the point of it. Refusing costs the sender a
-/// retry — first-hit-wins would silently post the letter (and, once the attachment slices land, an
-/// item and a purse of gold) to a stranger who can simply take it.
 #[test]
 fn a_homonym_recipient_is_refused_rather_than_guessed() {
     let (_realm, world, _instances, calls) = sharded_send();
@@ -1308,8 +1111,6 @@ fn a_homonym_recipient_is_refused_rather_than_guessed() {
         .any(|(_, call)| call == "mail_send"));
 }
 
-/// **AC: the sender's own list never shows the mail they sent.** A sent letter is the recipient's
-/// row and nobody else's — there is no outbox to take it back out of.
 #[test]
 fn the_senders_own_list_never_shows_the_mail_they_sent() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -1328,8 +1129,6 @@ fn the_senders_own_list_never_shows_the_mail_they_sent() {
     );
 }
 
-/// **AC: sending is refused from character select and away from a mailbox** — before any name is
-/// resolved and before any purse is touched.
 #[test]
 fn sending_is_refused_at_character_select_and_away_from_a_mailbox() {
     let (_realm, world, _instances, calls) = sharded_send();
@@ -1377,8 +1176,6 @@ fn sending_is_refused_at_character_select_and_away_from_a_mailbox() {
     );
 }
 
-/// **AC: both planes produce the same row for the same letter, through one shared core.** Same
-/// sender, same recipient, same text; the only difference is whether a realm handle exists.
 #[test]
 fn both_planes_produce_the_same_row_for_the_same_letter() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -1399,9 +1196,6 @@ fn both_planes_produce_the_same_row_for_the_same_letter() {
     );
 }
 
-/// **AC: the debit and the row insert are ONE transaction wherever they can be.**
-///
-/// Both planes debit postage plus attached coin exactly once.
 #[test]
 fn the_whole_cost_leaves_the_purse_once_on_either_plane() {
     let (_realm, world, _instances, calls) = sharded_send();
@@ -1414,7 +1208,6 @@ fn the_whole_cost_leaves_the_purse_once_on_either_plane() {
 
     assert_eq!(world.purses.lock().unwrap()[0].1, PURSE - cost);
     assert_eq!(single.purses.lock().unwrap()[0].1, PURSE - cost);
-    // One database: one call does the debit and the insert together, and nothing is fenced.
     assert_eq!(single.sent_mail.lock().unwrap()[0].4, attached);
     assert!(single.mail_escrows.lock().unwrap().is_empty());
     let log = calls.lock().unwrap().clone();
@@ -1424,9 +1217,6 @@ fn the_whole_cost_leaves_the_purse_once_on_either_plane() {
     );
 }
 
-/// **AC: a sent letter's body is readable by the recipient through the item-text query.** The whole
-/// point of a text-only mail: the list packet carries only an `item_text_id`, and the client comes
-/// back for the text with it.
 #[test]
 fn a_sent_letters_body_is_readable_through_the_item_text_query_path() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -1442,12 +1232,6 @@ fn a_sent_letters_body_is_readable_through_the_item_text_query_path() {
         Some("left it at the inn".to_string())
     );
 }
-
-// ---------------------------------------------------------------------------------------------
-//  Dispatch: sending over the real wire.
-// ---------------------------------------------------------------------------------------------
-
-/// The seated warrior (guid 1), standing at a mailbox with a purse, and two people to write to.
 fn seated_sender() -> std::sync::Arc<InMemoryStore> {
     let store = std::sync::Arc::new(InMemoryStore {
         login_entity: Some(warrior_entity()),
@@ -1463,8 +1247,6 @@ fn seated_sender() -> std::sync::Arc<InMemoryStore> {
     *store.purses.lock().unwrap() = vec![(1, PURSE)];
     store
 }
-
-/// Drive a logged-in session and post one letter, returning the `MailResultTwo` the client is told.
 fn send_over_the_wire(
     store: &std::sync::Arc<InMemoryStore>,
     receiver: &str,
@@ -1501,8 +1283,6 @@ fn send_over_the_wire(
         },
         other => panic!("expected SMSG_SEND_MAIL_RESULT, got {other}"),
     };
-
-    // The session survives either way — a refused send costs a red line and nothing more.
     ClientOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
@@ -1516,7 +1296,6 @@ fn send_over_the_wire(
     result2
 }
 
-/// **AC: `CMSG_SEND_MAIL` posts the letter and acks Ok**, and the row is the recipient's.
 #[test]
 fn a_letter_sent_over_the_wire_is_acked_ok_and_lands_in_the_recipients_mailbox() {
     let store = seated_sender();
@@ -1532,8 +1311,6 @@ fn a_letter_sent_over_the_wire_is_acked_ok_and_lands_in_the_recipients_mailbox()
     assert_eq!(store.purses.lock().unwrap()[0].1, PURSE - 30);
 }
 
-/// **AC: each refusal reaches the player as its OWN on-screen error**, over the real wire, and never
-/// as a generic internal one. This is the packet the whole gate split exists to produce.
 #[test]
 fn each_refused_send_reaches_the_client_as_its_own_wire_error() {
     use wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo as R;
@@ -1551,16 +1328,11 @@ fn each_refused_send_reaches_the_client_as_its_own_wire_error() {
             "a refused send charges nothing"
         );
     }
-
-    // And the affordability refusal, which the module owns rather than the gateway.
     let store = seated_sender();
     *store.purses.lock().unwrap() = vec![(1, 10)];
     assert_eq!(send_over_the_wire(&store, "Trin"), R::ErrNotEnoughMoney);
 }
 
-/// **AC: a refused mail opcode is never session-fatal.** A mail poll at character select, and a
-/// mailbox the player is not standing at: the session survives both, and the poll is still
-/// answered (a dropped reply leaves a stale envelope lit).
 #[test]
 fn a_refused_mail_opcode_costs_a_packet_and_never_the_session() {
     let store = seated_store();
@@ -1572,7 +1344,6 @@ fn a_refused_mail_opcode_costs_a_packet_and_never_the_session() {
     });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
-    // Still at character select — no self guid, so every gate refuses.
     ClientOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
@@ -1583,8 +1354,6 @@ fn a_refused_mail_opcode_costs_a_packet_and_never_the_session() {
         ),
         other => panic!("expected the mail-time poll, got {other}"),
     }
-
-    // The session is still alive: log in, then click a mailbox that is not there.
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
@@ -1596,8 +1365,6 @@ fn a_refused_mail_opcode_costs_a_packet_and_never_the_session() {
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    // No reply for a refused mailbox (vanilla has no mailbox-refusal packet) — but the session
-    // still answers the next opcode, which is what "per-action, never session-fatal" means.
     ClientOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
@@ -1609,17 +1376,7 @@ fn a_refused_mail_opcode_costs_a_packet_and_never_the_session() {
     drop(client);
     server.join().unwrap();
 }
-
-// ---------------------------------------------------------------------------------------------
-//  Copper attachments: the debit at send, the take, and the drive that carries them across a
-//  database boundary.
-// ---------------------------------------------------------------------------------------------
-
-/// The copper a fixture letter carries.
 const ATTACHED: u32 = 100;
-
-/// The escrow steps a drive takes, in order, on whichever database ran each — the sequence the
-/// safety argument is made of.
 fn escrow_steps(calls: &ShardCallLog) -> Vec<(String, String)> {
     calls
         .lock()
@@ -1640,8 +1397,6 @@ fn escrow_steps(calls: &ShardCallLog) -> Vec<(String, String)> {
         .collect()
 }
 
-/// **AC: copper attached to a mail is debited at send, alongside the postage** — and it arrives in
-/// the recipient's row, ready to be taken.
 #[test]
 fn attached_copper_leaves_the_senders_purse_at_send_and_rides_the_letter() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -1657,9 +1412,6 @@ fn attached_copper_leaves_the_senders_purse_at_send_and_rides_the_letter() {
     assert_eq!(trins[0].money, ATTACHED);
 }
 
-/// **AC: a sender who cannot afford postage plus attachment is refused and charged nothing.** The
-/// affordability check is the fence itself, so there is no window where the postage went and the
-/// coin did not.
 #[test]
 fn a_sender_who_cannot_afford_the_attachment_is_refused_and_charged_nothing() {
     let (_realm, world, _instances, calls) = sharded_send();
@@ -1681,8 +1433,6 @@ fn a_sender_who_cannot_afford_the_attachment_is_refused_and_charged_nothing() {
     );
 }
 
-/// **AC: `CMSG_MAIL_TAKE_MONEY` credits the recipient's purse and clears the amount from the row —
-/// and the mail stays readable.**
 #[test]
 fn taking_a_mails_money_credits_the_purse_and_leaves_the_letter_readable() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -1702,7 +1452,6 @@ fn taking_a_mails_money_credits_the_purse_and_leaves_the_letter_readable() {
     );
 }
 
-/// **AC: taking money twice from one mail credits it once.**
 #[test]
 fn taking_the_money_twice_credits_the_purse_once() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -1718,9 +1467,6 @@ fn taking_the_money_twice_credits_the_purse_once() {
     assert_eq!(world.purses.lock().unwrap()[1].1, ATTACHED);
 }
 
-/// **AC: taking is refused for a mail the caller is not the recipient of.** The mail id rides a
-/// client packet, so this is an authorization boundary — and it answers the same as a mail that
-/// does not exist, so a crafted id learns nothing.
 #[test]
 fn taking_money_from_somebody_elses_mail_is_refused() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -1749,9 +1495,6 @@ fn taking_money_from_somebody_elses_mail_is_refused() {
     );
 }
 
-/// **AC: both planes behave identically, through one shared core.** Same letter, same take; the
-/// only difference is whether a realm handle exists — and on one database none of the escrow is
-/// touched, because there the whole thing is one transaction.
 #[test]
 fn both_planes_attach_and_take_the_same_copper() {
     let (_realm, world, _instances, calls) = sharded_send();
@@ -1783,9 +1526,6 @@ fn both_planes_attach_and_take_the_same_copper() {
     assert!(!escrow_steps(&calls).is_empty(), "and the sharded one must");
 }
 
-/// **The drive, in order.** Fence on the sender's shard, commit on realm-core, then attest and
-/// settle back on the shard. Any other order either destroys a fence whose letter never arrived or
-/// delivers one nobody paid for.
 #[test]
 fn a_sharded_send_drives_fence_then_commit_then_confirm_then_settle() {
     let (_realm, world, _instances, calls) = sharded_send();
@@ -1803,8 +1543,6 @@ fn a_sharded_send_drives_fence_then_commit_then_confirm_then_settle() {
     );
 }
 
-/// **The take's drive, in order** — the same four steps with the databases swapped, because the
-/// copper starts in a mail row on realm-core and ends in a purse on the shard.
 #[test]
 fn a_sharded_take_drives_the_same_four_steps_the_other_way() {
     let (_realm, world, _instances, calls) = sharded_send();
@@ -1826,9 +1564,6 @@ fn a_sharded_take_drives_the_same_four_steps_the_other_way() {
     );
 }
 
-/// **Interrupted after the fence: the gold is with exactly one owner, and the next mailbox visit
-/// rescues it.** The copper has left the purse and no letter exists, so it is held in the fence —
-/// never refunded, because the shard cannot ask realm-core whether the letter arrived.
 #[test]
 fn a_send_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit() {
     let (realm, world, _instances, _calls) = sharded_send();
@@ -1846,8 +1581,6 @@ fn a_send_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit() {
     assert!(mail::open_mailbox(world.as_ref(), Some(TRIN), MAILBOX)
         .unwrap()
         .is_empty());
-
-    // realm-core comes back, and Ginger opens their mailbox.
     *realm.mail_kill_at.lock().unwrap() = None;
     mail::open_mailbox(world.as_ref(), Some(GINGER), MAILBOX).expect("the gate opens");
 
@@ -1862,8 +1595,6 @@ fn a_send_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit() {
     );
 }
 
-/// **Interrupted after the commit.** The letter is durable, the fence still stands — the re-drive's
-/// commit replays into its receipt, so the recipient gets one letter and not two.
 #[test]
 fn a_send_killed_after_the_commit_re_drives_into_one_letter() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -1895,8 +1626,6 @@ fn a_send_killed_after_the_commit_re_drives_into_one_letter() {
     );
 }
 
-/// **A take interrupted before the payout.** The copper is out of the mail row and held on
-/// realm-core; the next mailbox visit pays it into the purse, once.
 #[test]
 fn a_take_killed_before_the_payout_is_re_driven_at_the_next_mailbox_visit() {
     let (realm, world, _instances, _calls) = sharded_send();
@@ -1922,8 +1651,6 @@ fn a_take_killed_before_the_payout_is_re_driven_at_the_next_mailbox_visit() {
     assert!(realm.mail_escrows.lock().unwrap().is_empty(), "and settled");
 }
 
-/// **A take interrupted after the payout.** The purse holds the copper and the fence still stands;
-/// the re-drive's payout replays into its receipt, so nobody is paid twice.
 #[test]
 fn a_take_killed_after_the_payout_re_drives_into_one_credit() {
     let (realm, world, _instances, _calls) = sharded_send();
@@ -1948,9 +1675,6 @@ fn a_take_killed_after_the_payout_re_drives_into_one_credit() {
     assert!(realm.mail_escrows.lock().unwrap().is_empty());
 }
 
-/// **Delete-last, from the gateway's side.** A settle driven while the delivery is unattested is
-/// refused, so a drive that skipped the attestation cannot destroy a fence — the guard that makes
-/// "the copper is nowhere" unreachable.
 #[test]
 fn a_settle_without_an_attestation_is_refused_and_the_fence_survives() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -1964,8 +1688,6 @@ fn a_settle_without_an_attestation_is_refused_and_the_fence_survives() {
     assert_eq!(world.mail_escrows.lock().unwrap().len(), 1, "still held");
 }
 
-/// **A refused take never reaches the fence.** The mailbox gate and character select both stop it
-/// before any copper moves.
 #[test]
 fn taking_money_is_refused_at_character_select_and_away_from_a_mailbox() {
     let (_realm, world, _instances, calls) = sharded_send();
@@ -1987,8 +1709,6 @@ fn taking_money_is_refused_at_character_select_and_away_from_a_mailbox() {
     assert!(escrow_steps(&calls).is_empty(), "no copper moved");
 }
 
-/// **AC over the real wire: `CMSG_MAIL_TAKE_MONEY` acks and the purse grows.** The one-database
-/// dispatch, end to end.
 #[test]
 fn taking_money_over_the_wire_acks_and_credits_the_purse() {
     use wow_world_messages::vanilla::{
@@ -2044,20 +1764,7 @@ fn taking_money_over_the_wire_acks_and_credits_the_purse() {
     assert_eq!(store.purses.lock().unwrap()[0].1, PURSE + ATTACHED);
     assert_eq!(store.mails.lock().unwrap()[0].1.money, 0);
 }
-
-// =============================================================================================
-//  Item attachments
-// =============================================================================================
-//
-// Coin can be minted back; an item cannot, so every routing test below also asserts WHERE the item
-// is. `item_owners` counts the copies somebody could claim right now — bags plus mailbox — and it
-// must never exceed one, however the drive is interrupted.
-
-/// Ginger's item instance guid, as the client names it in `CMSG_SEND_MAIL`.
 const SWORD_GUID: u64 = 0x4000_0000_0000_0011;
-
-/// A DAMAGED, ENCHANTED weapon — every column mailing must not launder, set to something a
-/// template-based re-grant would get wrong. Reserved entry, per the fixture-id rule.
 fn sword() -> mail::AttachedItem {
     mail::AttachedItem {
         entry: 5_090_001,
@@ -2067,14 +1774,9 @@ fn sword() -> mail::AttachedItem {
         soulbound: false,
     }
 }
-
-/// Put `item` in `owner`'s bags on `shard`, as `game_item_instance` would.
 fn give_item(shard: &InMemoryStore, owner: u64, guid: u64, item: mail::AttachedItem) {
     shard.mail_items.lock().unwrap().push((guid, owner, item));
 }
-
-/// The attachments anyone could claim right now: in bags on either shard, or sitting in a mailbox.
-/// A fenced item is deliberately not counted — it is in nobody's reach, which is the point.
 fn claimable_swords(shards: &[&InMemoryStore], realm: &InMemoryStore) -> usize {
     let in_bags: usize = shards
         .iter()
@@ -2089,8 +1791,6 @@ fn claimable_swords(shards: &[&InMemoryStore], realm: &InMemoryStore) -> usize {
         .count();
     in_bags + in_mail
 }
-
-/// Post the fixture letter with the sword attached.
 fn post_item<St: WorldStore + ?Sized>(
     store: &St,
     to: &str,
@@ -2108,9 +1808,6 @@ fn post_item<St: WorldStore + ?Sized>(
     )
 }
 
-/// **AC: an attached item leaves the sender's bags at send and appears in the recipient's list with
-/// its stack, durability and enchant.** Every column is asserted, because the one that silently
-/// resets is a free repair or a laundered enchant.
 #[test]
 fn a_mailed_item_leaves_the_senders_bags_and_lists_with_its_state_intact() {
     let (realm, world, _instances, _calls) = sharded_send();
@@ -2139,8 +1836,6 @@ fn a_mailed_item_leaves_the_senders_bags_and_lists_with_its_state_intact() {
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
-/// **AC: both planes deliver the same attachment, through one shared core.** Same letter, same
-/// item; the only difference is whether a realm handle exists.
 #[test]
 fn the_realm_plane_and_the_single_database_fallback_deliver_the_same_attachment() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -2157,8 +1852,6 @@ fn the_realm_plane_and_the_single_database_fallback_deliver_the_same_attachment(
     assert!(single.bags_of(GINGER).is_empty());
 }
 
-/// **AC: a soulbound instance is refused at send, with its own client error, and stays in the
-/// bags.** Its own variant because "soulbound" and "not yours" are different mistakes.
 #[test]
 fn a_soulbound_attachment_is_refused_at_send_and_stays_in_the_senders_bags() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -2184,8 +1877,6 @@ fn a_soulbound_attachment_is_refused_at_send_and_stays_in_the_senders_bags() {
     assert!(world.mail_escrows.lock().unwrap().is_empty());
 }
 
-/// **AC: an unworn bind-on-equip item is mailable.** The verdict reads the INSTANCE's bind state,
-/// so the unworn drop a player passes to an alt goes through.
 #[test]
 fn an_unworn_bind_on_equip_attachment_is_mailable() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -2197,8 +1888,6 @@ fn an_unworn_bind_on_equip_attachment_is_mailable() {
     assert!(!trins[0].item_soulbound, "it arrives as unbound as it left");
 }
 
-/// **AC: attaching an item the sender does not own is refused.** The item guid is client-supplied,
-/// so this is the authorization boundary on a send — and a guid that names nothing reads the same.
 #[test]
 fn attaching_an_item_the_sender_does_not_own_is_refused() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -2213,9 +1902,6 @@ fn attaching_an_item_the_sender_does_not_own_is_refused() {
     assert!(world.mail_escrows.lock().unwrap().is_empty());
 }
 
-/// **A fenced item is reachable by nothing.** Its instance row is gone, so a second letter's
-/// attach finds no item — and every other path that reads a player's items resolves through that
-/// same table, which is why nothing else had to learn an in-flight rule.
 #[test]
 fn an_item_in_flight_cannot_be_attached_to_a_second_letter() {
     let (realm, world, _instances, _calls) = sharded_send();
@@ -2234,12 +1920,6 @@ fn an_item_in_flight_cannot_be_attached_to_a_second_letter() {
         "in flight is claimable by nobody"
     );
 }
-
-// ---------------------------------------------------------------------------------------------
-//  Taking it back out
-// ---------------------------------------------------------------------------------------------
-
-/// A letter with the sword, delivered to Trin. Returns the topology plus the mail id.
 fn delivered_item() -> (
     std::sync::Arc<InMemoryStore>,
     std::sync::Arc<InMemoryStore>,
@@ -2254,8 +1934,6 @@ fn delivered_item() -> (
     (realm, world, calls, mail_id)
 }
 
-/// **AC: `CMSG_MAIL_TAKE_ITEM` places it in the recipient's bags with stack, durability, enchant
-/// and bind state unchanged** — and the letter survives with nothing in it.
 #[test]
 fn taking_an_item_puts_it_in_the_takers_bags_with_its_state_unchanged() {
     let (realm, world, _calls, mail_id) = delivered_item();
@@ -2279,9 +1957,6 @@ fn taking_an_item_puts_it_in_the_takers_bags_with_its_state_unchanged() {
     assert!(realm.mail_escrows.lock().unwrap().is_empty(), "settled");
 }
 
-/// **The sharded take drives the same four steps the other way**, and probes the taker's own shard
-/// for room BEFORE it fences: past the fence the letter is empty, so a full bag found afterwards
-/// would strand the item in an escrow rather than leave it in the mail.
 #[test]
 fn a_sharded_item_take_probes_for_room_before_it_fences_anything() {
     let (_realm, world, calls, mail_id) = delivered_item();
@@ -2309,9 +1984,6 @@ fn a_sharded_item_take_probes_for_room_before_it_fences_anything() {
     );
 }
 
-/// **AC: a take into a full bag is refused with the equip-error variant and the item STAYS in the
-/// mail.** The case where a naive implementation destroys it — asserted on BOTH planes, because
-/// they reach the refusal by different routes (one transaction versus the pre-fence probe).
 #[test]
 fn a_take_into_a_full_bag_is_refused_and_the_item_stays_in_the_mail() {
     let (realm, world, _calls, mail_id) = delivered_item();
@@ -2341,8 +2013,6 @@ fn a_take_into_a_full_bag_is_refused_and_the_item_stays_in_the_mail() {
     assert_eq!(world.bags_of(TRIN), vec![sword()]);
 }
 
-/// The single-database plane reaches the same refusal through its ONE transaction: the grant fails,
-/// so the clear never happens and the item is still in the letter.
 #[test]
 fn a_take_into_a_full_bag_on_one_database_leaves_the_item_in_the_mail() {
     let single = unsharded_send();
@@ -2364,9 +2034,6 @@ fn a_take_into_a_full_bag_on_one_database_leaves_the_item_in_the_mail() {
     assert!(single.bags_of(TRIN).is_empty());
 }
 
-/// **AC: taking is refused for anyone who is not the mail's recipient.** The mail id is
-/// client-supplied, so this is an authorization boundary — and it reads the same as a mail that
-/// does not exist, so a crafted id learns nothing.
 #[test]
 fn taking_an_item_from_a_mail_the_caller_is_not_the_recipient_of_is_refused() {
     let (realm, world, _calls, mail_id) = delivered_item();
@@ -2387,8 +2054,6 @@ fn taking_an_item_from_a_mail_the_caller_is_not_the_recipient_of_is_refused() {
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
-/// Taking twice grants once: the fence and the clear are one transaction, so the second click
-/// finds a letter with nothing in it.
 #[test]
 fn taking_the_same_item_twice_grants_it_once() {
     let (realm, world, _calls, mail_id) = delivered_item();
@@ -2401,13 +2066,6 @@ fn taking_the_same_item_twice_grants_it_once() {
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
-// ---------------------------------------------------------------------------------------------
-//  Interruption — executed at every step, both directions
-// ---------------------------------------------------------------------------------------------
-
-/// **A send killed before the commit.** The item has left the bags and no letter exists, so it is
-/// held in the fence — never returned, because the shard cannot ask realm-core whether the letter
-/// arrived. The next mailbox visit rolls it forward.
 #[test]
 fn an_item_send_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit() {
     let (realm, world, _instances, _calls) = sharded_send();
@@ -2429,8 +2087,6 @@ fn an_item_send_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit(
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
-/// **A send killed after the commit.** The letter is durable and the fence still stands; the
-/// re-drive's commit replays into its receipt, so the item arrives once and not twice.
 #[test]
 fn an_item_send_killed_after_the_commit_re_drives_into_one_item() {
     let (realm, world, _instances, _calls) = sharded_send();
@@ -2459,8 +2115,6 @@ fn an_item_send_killed_after_the_commit_re_drives_into_one_item() {
     assert!(world.mail_escrows.lock().unwrap().is_empty());
 }
 
-/// **A send killed after the attestation.** The fence is attested, so even the re-drive's settle is
-/// all that is left to do — and the item is in the mailbox exactly once throughout.
 #[test]
 fn an_item_send_killed_after_the_attestation_settles_on_the_next_visit() {
     let (realm, world, _instances, _calls) = sharded_send();
@@ -2478,8 +2132,6 @@ fn an_item_send_killed_after_the_attestation_settles_on_the_next_visit() {
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
-/// **A take killed before the payout.** The item is out of the letter and held on realm-core; the
-/// next mailbox visit grants it into the bags, once.
 #[test]
 fn an_item_take_killed_before_the_payout_is_re_driven_at_the_next_mailbox_visit() {
     let (realm, world, _calls, mail_id) = delivered_item();
@@ -2498,8 +2150,6 @@ fn an_item_take_killed_before_the_payout_is_re_driven_at_the_next_mailbox_visit(
     assert!(realm.mail_escrows.lock().unwrap().is_empty(), "and settled");
 }
 
-/// **A take killed after the payout.** The bags hold it and the fence still stands; the re-drive's
-/// payout replays into its receipt, so the item is created once and not twice.
 #[test]
 fn an_item_take_killed_after_the_payout_re_drives_into_one_item() {
     let (realm, world, _calls, mail_id) = delivered_item();
@@ -2521,19 +2171,7 @@ fn an_item_take_killed_after_the_payout_re_drives_into_one_item() {
     assert_eq!(claimable_swords(&[&world], &realm), 1);
     assert!(realm.mail_escrows.lock().unwrap().is_empty());
 }
-
-// =============================================================================================
-//  Cash on delivery
-// =============================================================================================
-//
-// A COD take moves value BOTH ways in one click: the item out of the letter and the price out of
-// the buyer's purse. The assertions below are always the pair — where the item is, and where the
-// copper is — because a test that only checks one of them passes for a buyer who paid for nothing.
-
-/// What Ginger asks Trin for the sword.
 const COD: u32 = 250;
-
-/// Post the fixture letter with the sword attached, at `cod` copper cash on delivery.
 fn post_cod<St: WorldStore + ?Sized>(
     store: &St,
     to: &str,
@@ -2551,9 +2189,6 @@ fn post_cod<St: WorldStore + ?Sized>(
         SWORD_GUID,
     )
 }
-
-/// Ginger's priced letter, delivered to Trin, who has a purse to pay out of. Returns the topology
-/// plus the mail id.
 fn delivered_cod() -> (
     std::sync::Arc<InMemoryStore>,
     std::sync::Arc<InMemoryStore>,
@@ -2568,9 +2203,6 @@ fn delivered_cod() -> (
     calls.lock().unwrap().clear();
     (realm, world, calls, mail_id)
 }
-
-/// The same priced letter on one database — `lyracore dev up`'s gateway, where the whole take is
-/// one transaction.
 fn delivered_cod_unsharded() -> (std::sync::Arc<InMemoryStore>, u64) {
     let single = unsharded_send();
     *single.purses.lock().unwrap() = vec![(GINGER, PURSE), (TRIN, PURSE)];
@@ -2579,8 +2211,6 @@ fn delivered_cod_unsharded() -> (std::sync::Arc<InMemoryStore>, u64) {
     let mail_id = mail::open_mailbox(single.as_ref(), Some(TRIN), MAILBOX).unwrap()[0].id;
     (single, mail_id)
 }
-
-/// One character's purse on one database, by guid rather than by fixture position.
 fn purse_of(store: &InMemoryStore, guid: u64) -> u32 {
     store
         .purses
@@ -2592,8 +2222,6 @@ fn purse_of(store: &InMemoryStore, guid: u64) -> u32 {
         .unwrap_or(0)
 }
 
-/// **AC: the price is in the recipient's list BEFORE they take anything.** A buyer who cannot see
-/// what they are being asked for is being asked to buy blind.
 #[test]
 fn a_cod_price_is_listed_before_the_recipient_takes_anything() {
     let (_realm, world, _calls, _mail_id) = delivered_cod();
@@ -2609,9 +2237,6 @@ fn a_cod_price_is_listed_before_the_recipient_takes_anything() {
     assert_eq!(purse_of(&world, TRIN), PURSE, "looking costs nothing");
 }
 
-/// **AC: taking the item debits the taker by exactly the price, and the copper reaches the seller
-/// as a mail they can take from.** The whole point of COD, and neither of them had to be online for
-/// the other's half.
 #[test]
 fn taking_a_priced_item_debits_the_buyer_and_posts_the_copper_to_the_seller() {
     let (realm, world, _calls, mail_id) = delivered_cod();
@@ -2629,8 +2254,6 @@ fn taking_a_priced_item_debits_the_buyer_and_posts_the_copper_to_the_seller() {
     assert_eq!(sellers.len(), 1, "one payment mail");
     assert_eq!(sellers[0].money, COD, "carrying the price");
     assert_eq!(sellers[0].sender_guid, TRIN, "from the buyer");
-
-    // And the seller takes it out, which is the half that makes the sale real.
     mail::take_money(world.as_ref(), Some(GINGER), MAILBOX, sellers[0].id).expect("paid");
     assert_eq!(
         purse_of(&world, GINGER),
@@ -2641,9 +2264,6 @@ fn taking_a_priced_item_debits_the_buyer_and_posts_the_copper_to_the_seller() {
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
-/// **AC: a taker who cannot afford the price is refused, the item stays in the mail, and no copper
-/// moves.** The refusal is `ErrNotEnoughMoney`, not a generic error — a player told the mailbox is
-/// broken cannot act on it, and a player told to bring gold can.
 #[test]
 fn a_buyer_who_cannot_afford_the_price_is_refused_and_nothing_moves() {
     let (realm, world, _calls, mail_id) = delivered_cod();
@@ -2674,8 +2294,6 @@ fn a_buyer_who_cannot_afford_the_price_is_refused_and_nothing_moves() {
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
-/// **AC: a refused COD take leaves the buyer able to RETURN the mail instead.** Being unable to
-/// afford a purchase must not trap the item in a mailbox forever.
 #[test]
 fn a_buyer_who_refuses_the_price_can_return_the_mail_instead() {
     let (realm, world, _calls, mail_id) = delivered_cod();
@@ -2693,9 +2311,6 @@ fn a_buyer_who_refuses_the_price_can_return_the_mail_instead() {
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
-/// **AC: returning a priced mail must not make its own sender pay their own price.** The return
-/// re-addresses the row to whoever SET the price, so a price that travelled would bill the seller
-/// to get their own item back — and pay it to the buyer who declined.
 #[test]
 fn a_returned_priced_mail_does_not_charge_its_own_sender() {
     let (_realm, world, _calls, mail_id) = delivered_cod();
@@ -2718,8 +2333,6 @@ fn a_returned_priced_mail_does_not_charge_its_own_sender() {
     assert_eq!(world.bags_of(GINGER), vec![sword()]);
 }
 
-/// **AC: taking a COD mail twice charges once.** The second click finds a letter with nothing in
-/// it, because the price and the item were cleared in the same transaction that paid the seller.
 #[test]
 fn taking_a_priced_mail_twice_charges_once() {
     let (realm, world, _calls, mail_id) = delivered_cod();
@@ -2740,9 +2353,6 @@ fn taking_a_priced_mail_twice_charges_once() {
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
-/// **AC: both planes settle the same COD, through one shared core.** Same letter, same purchase;
-/// the only difference is whether a realm handle exists — and on one database none of the escrow is
-/// touched, because there the whole thing is one transaction.
 #[test]
 fn both_planes_settle_the_same_cod() {
     let (_realm, world, _calls, sharded_id) = delivered_cod();
@@ -2769,9 +2379,6 @@ fn both_planes_settle_the_same_cod() {
     );
 }
 
-/// **The drive, in order: the buyer PAYS before the item is fenced.** Past the item fence the
-/// letter is empty, so a payment that failed afterwards would leave the item in flight for a
-/// purchase nobody made. Paying first is what makes an unaffordable price a clean refusal.
 #[test]
 fn a_sharded_cod_take_pays_before_it_fences_the_item() {
     let (_realm, world, calls, mail_id) = delivered_cod();
@@ -2799,8 +2406,6 @@ fn a_sharded_cod_take_pays_before_it_fences_the_item() {
     );
 }
 
-/// **A full bag refuses before the buyer is charged.** The room probe runs first, so a purchase
-/// that has nowhere to land costs nothing — the same reason it runs before the item fence.
 #[test]
 fn a_full_bag_refuses_a_priced_take_before_any_copper_moves() {
     let (realm, world, _calls, mail_id) = delivered_cod();
@@ -2826,17 +2431,6 @@ fn a_full_bag_refuses_a_priced_take_before_any_copper_moves() {
     );
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
-
-// ---------------------------------------------------------------------------------------------
-//  Interruption — executed at every step of both legs
-// ---------------------------------------------------------------------------------------------
-//
-// Two invariants at every crash point, and they are the whole ticket: the item has exactly one
-// owner (`claimable_swords`), and the copper has exactly one — the buyer's purse, a fence, or the
-// seller's mailbox, never two of them and never none.
-
-/// The copper a priced sale has moved, wherever it is. `PURSE` before the payment, `PURSE - COD`
-/// after — and the difference is either fenced or sitting in the seller's mailbox.
 fn assert_the_price_is_in_exactly_one_place(world: &InMemoryStore, realm: &InMemoryStore) {
     let purse = purse_of(world, TRIN);
     assert!(
@@ -2872,9 +2466,6 @@ fn assert_the_price_is_in_exactly_one_place(world: &InMemoryStore, realm: &InMem
     );
 }
 
-/// **Killed before the payment lands.** The buyer's copper is out of their purse and held in a
-/// fence; the item is untouched in the letter and the price is still owed, so nothing has been
-/// bought. The next mailbox visit rolls the payment forward.
 #[test]
 fn a_cod_payment_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit() {
     let (realm, world, _calls, mail_id) = delivered_cod();
@@ -2904,9 +2495,6 @@ fn a_cod_payment_killed_before_the_commit_is_re_driven_at_the_next_mailbox_visit
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
-/// **A second click while the first payment is still fenced resumes it — it does not buy twice.**
-/// The escrow id is re-derived from the held fence, so the replayed fence debits nothing; a fresh
-/// id would charge the buyer again for one purchase.
 #[test]
 fn a_second_click_resumes_a_held_payment_rather_than_charging_twice() {
     let (realm, world, _calls, mail_id) = delivered_cod();
@@ -2929,9 +2517,6 @@ fn a_second_click_resumes_a_held_payment_rather_than_charging_twice() {
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
-/// **Killed after the payment committed but before the item moved.** The seller is paid and the
-/// price is settled, so the item is now the buyer's for the asking — the next click hands it over
-/// and charges nothing, which is the ordering's whole reason for paying first.
 #[test]
 fn a_cod_take_killed_after_the_payment_hands_the_item_over_for_free_on_the_next_click() {
     let (realm, world, _calls, mail_id) = delivered_cod();
@@ -2955,9 +2540,6 @@ fn a_cod_take_killed_after_the_payment_hands_the_item_over_for_free_on_the_next_
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
-/// **Killed between the item's fence and its payout.** The buyer has paid and the item is held in
-/// an escrow — claimable by nobody, which is exactly what a fence is for — and the next mailbox
-/// visit grants it, once.
 #[test]
 fn a_cod_take_killed_before_the_item_payout_is_re_driven_at_the_next_mailbox_visit() {
     let (realm, world, _calls, mail_id) = delivered_cod();
@@ -2979,8 +2561,6 @@ fn a_cod_take_killed_before_the_item_payout_is_re_driven_at_the_next_mailbox_vis
     assert_eq!(claimable_swords(&[&world], &realm), 1);
 }
 
-/// **A priced letter's own SEND, interrupted.** The price rides the fence, so the re-drive commits
-/// the same letter the first drive would have — a price lost in transit is an item given away.
 #[test]
 fn a_priced_send_killed_before_the_commit_re_drives_with_its_price_intact() {
     let (realm, world, _instances, _calls) = sharded_send();
@@ -2997,8 +2577,6 @@ fn a_priced_send_killed_before_the_commit_re_drives_with_its_price_intact() {
     assert_eq!(trins[0].item_entry, sword().entry);
 }
 
-/// **A price with nothing attached is dropped at send.** There is nothing to pay for, so a letter
-/// that charged for it would be a way to bill a stranger for an empty envelope.
 #[test]
 fn a_price_on_a_letter_with_no_attachment_is_dropped() {
     let (_realm, world, _instances, _calls) = sharded_send();
@@ -3022,9 +2600,6 @@ fn a_price_on_a_letter_with_no_attachment_is_dropped() {
     );
 }
 
-/// **AC over the real wire: a COD take the buyer cannot afford answers `ErrNotEnoughMoney`.** The
-/// one-database dispatch, end to end — and the client renders that as "bring gold" rather than as a
-/// broken mailbox.
 #[test]
 fn a_refused_priced_take_reaches_the_client_as_not_enough_money() {
     use wow_world_messages::vanilla::{

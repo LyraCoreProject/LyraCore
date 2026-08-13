@@ -2860,12 +2860,6 @@ fn handshake_succeeds_and_traffic_is_encrypted_both_ways() {
     server.join().unwrap();
 }
 
-/// Login-queue wiring: `world_handshake_with_queue` actually CONSULTS the [`LoginQueue`] gate
-/// rather than always admitting outright. A cap of 1 with the one seat already taken must send
-/// `AuthWaitQueue { queue_position: 1 }` as the FIRST response — not `AuthOk` — and only send
-/// `AuthOk` after the seat frees. This is the assertion that would FAIL if the gate check were
-/// ever deleted from `world_handshake_with_queue` (a behavioral mutation on the production path,
-/// not merely a structural "does this function exist" check).
 #[test]
 fn queued_handshake_sends_wait_queue_then_admits_once_a_seat_frees() {
     let store = std::sync::Arc::new(tester_store(42));
@@ -2919,9 +2913,6 @@ fn queued_handshake_sends_wait_queue_then_admits_once_a_seat_frees() {
     server.join().unwrap();
 }
 
-/// A socket that disconnects WHILE QUEUED must leave the line without ever taking a seat — the
-/// gate's own unit tests cover `LoginQueue::cancel` directly; this proves `world_handshake_with_queue`
-/// actually calls it on a clean hangup (rather than, say, leaking a phantom waiter forever).
 #[test]
 fn disconnecting_while_queued_leaves_the_line_without_taking_a_seat() {
     let store = std::sync::Arc::new(tester_store(7));
@@ -3240,9 +3231,6 @@ fn char_create_replies_success_then_name_in_use() {
     server.join().unwrap();
 }
 
-/// CMSG_CHAR_DELETE for an owned guid replies SMSG_CHAR_DELETE(success) and dispatches the
-/// (account_id, character_guid) to the store; a store-reported failure still replies (never
-/// session-fatal), same treatment as CMSG_CHAR_CREATE.
 #[test]
 fn char_delete_replies_success_and_dispatches_owned_guid() {
     let tester = codec::CharacterView {
@@ -3279,8 +3267,6 @@ fn char_delete_replies_success_and_dispatches_owned_guid() {
     server.join().unwrap();
 }
 
-/// A store-reported delete failure (e.g. NOT_OWNER/NO_SUCH_CHAR mapped module-side) still
-/// replies SMSG_CHAR_DELETE(failed) — the connection is NOT torn down.
 #[test]
 fn char_delete_failure_replies_failed_and_keeps_session_alive() {
     let store = std::sync::Arc::new(InMemoryStore {
@@ -3637,15 +3623,6 @@ fn inbound_movement_is_recorded_under_its_opcode() {
     assert_eq!(t, 12345);
 }
 
-/// The ACTUAL hang. `teleport_player` despawns the live entity the instant the
-/// portal's reducer commits, but the client keeps sending movement until `SMSG_TRANSFER_PENDING`
-/// reaches it — so every cross-map port has a window in which packets land on an entity that no
-/// longer exists, and the module answers "mover not in world". That answer used to propagate as a
-/// session-fatal desync and close the socket **while the client was on its loading screen**: no
-/// `MSG_MOVE_WORLDPORT_ACK` ever came back, the escrowed transfer that runs on that ack never ran,
-/// and the player hung forever. The window is milliseconds for an ordinary teleport and hundreds of
-/// milliseconds for a dungeon entry that spawns a 200-creature population — which is exactly why one
-/// player transferred fine and the party member behind her did not.
 #[test]
 fn a_movement_packet_for_a_despawned_entity_never_kills_the_session() {
     use wow_world_messages::vanilla::{
@@ -3771,9 +3748,6 @@ fn a_reappearing_entity_resets_the_movement_desync_tolerance() {
         "only movements sent while the entity was present may reach the shared batch");
 }
 
-/// The other side of the same gate: only a DESYNC is swallowed. A transport/reducer failure that
-/// means something else is still session-fatal, so the swallow above cannot quietly grow into
-/// "movement errors don't matter".
 #[test]
 fn a_movement_failure_that_is_not_a_desync_is_still_session_fatal() {
     use wow_world_messages::vanilla::{
@@ -3811,16 +3785,6 @@ fn a_movement_failure_that_is_not_a_desync_is_still_session_fatal() {
     assert!(format!("{err:#}").contains("timed out"), "{err:#}");
 }
 
-/// The OTHER half of the movement gate above, and the reason it is bounded rather than unconditional.
-/// A desync means the player's entity is gone for good (a schema-change publish tore down the
-/// coordinator subscription, or the row was deleted out from under this socket) — `is_desync_error`
-/// exists precisely because "no further action can EVER be served on this session", and the cure is
-/// a clean disconnect so the client relogs and re-materialises from durable state. Movement is by
-/// far the highest-frequency desync detector (~10 packets/s from any moving client), so swallowing
-/// it outright trades the loading-screen hang for a WORSE hang: a player walking around a frozen
-/// world forever, invisible to peers, never disconnected, with no error — unless they happen to
-/// swing at something. The port window is a handful of packets (the client stops sending the moment
-/// `SMSG_TRANSFER_PENDING` puts it on the loading screen), so tolerance must END.
 #[test]
 fn a_movement_desync_that_never_heals_still_ends_the_session() {
     use wow_world_messages::vanilla::{
@@ -3874,10 +3838,6 @@ fn a_movement_desync_that_never_heals_still_ends_the_session() {
     assert!(format!("{err:#}").contains("not in world"), "{err:#}");
 }
 
-/// A transfer that cannot be driven at `MSG_MOVE_WORLDPORT_ACK` used to close the
-/// socket with the client mid-load — an infinite loading bar, no message, no recourse. The entry
-/// must FAIL LOUDLY instead: the client is told the transfer is off (`SMSG_TRANSFER_ABORTED`,
-/// naming the map it is loading) before the session ends.
 #[test]
 fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_screen() {
     let xdb = FakeShardDb::with_character(
@@ -3934,14 +3894,6 @@ fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_scree
     );
 }
 
-/// The half the abort above misses: ROUTING is not the only step of a world-port that can
-/// fail. `route_home` may succeed (the transfer runs, the character is now durably on the
-/// destination shard) and the RE-ENTRY behind it still fail — `player_login` refused by the
-/// stranding guard, a subscription that could not be registered, a login batch that would not
-/// build. The client is on exactly the same loading screen, entered for exactly the same reason,
-/// and a bare `?` there closes the socket mid-load: the same infinite loading bar, from a window
-/// that is WIDER than the routing one (it spans the whole world entry). The abort must cover the
-/// whole world-port, not just its first step.
 #[test]
 fn a_world_port_whose_world_entry_fails_also_aborts_the_clients_loading_screen() {
     let xdb = FakeShardDb::with_character(
@@ -4001,12 +3953,6 @@ fn a_world_port_whose_world_entry_fails_also_aborts_the_clients_loading_screen()
     assert!(format!("{err:#}").contains("stranded"), "{err:#}");
 }
 
-/// The HARD requirement for movement coalescing: a peer-visibility test proving state-transition
-/// packets are NEVER delayed by the coalescer, driven through the real `dispatch` loop (not just the pure
-/// `CoalesceState` unit tests in `coalesce.rs`). Sequence: run-start, two same-vector heartbeats
-/// (held/superseded — the sub-yard intermediate at x=5.0 must drop ENTIRELY, rule 3), a turn
-/// (state change — must flush the pending heartbeat FIRST, then itself, undelayed), then a stop
-/// (state change — forwards immediately with no pending left to flush).
 #[test]
 fn movement_state_changes_forward_immediately_and_in_order_never_delayed() {
     use wow_world_messages::vanilla::{
@@ -4089,16 +4035,6 @@ fn movement_state_changes_forward_immediately_and_in_order_never_delayed() {
     );
 }
 
-/// Rule 2 (the robust flush-on-any-other-opcode): a non-movement CMSG must see the
-/// module's CURRENT position, so a pending coalesced heartbeat is flushed BEFORE any other opcode
-/// is dispatched — proven here by driving a real non-movement opcode (`CMSG_QUESTGIVER_STATUS_QUERY`,
-/// the same no-op sentinel other tests in this file use) and observing that only the LATEST held
-/// heartbeat lands in `store.moves`, never the two superseded intermediates — distinguishing "the
-/// query's dispatch flushed the pending packet" from "coalescing wasn't happening at all" (which
-/// would forward all three heartbeats individually, a different, observably larger count). No
-/// `store.moves` peek happens before the round-trip read below completes — reading the client's
-/// reply is itself the synchronization point proving the server-side dispatch (flush, then the
-/// query handler) already ran, so there's no race against the reader thread's async processing.
 #[test]
 fn non_movement_opcode_flushes_pending_heartbeat_before_being_handled() {
     use wow_world_messages::vanilla::{
@@ -4284,21 +4220,6 @@ fn enter_world(
     (client, c_enc, c_dec, server)
 }
 
-/// **Task B2 — the writer's half of the egress depth counter, at its call site.** The whole shed
-/// mechanism rests on the depth going back DOWN as packets reach the socket: without the writer's
-/// `fetch_sub` the counter only ever climbs, every session crosses `EGRESS_SHED_DEPTH` after ~512
-/// packets of ordinary play, and peer movement is then shed forever. That decrement lives inside the
-/// spawned writer loop, so this drives a real `run_world_session` and reads the real counter through
-/// the depth handle the fake store captures.
-///
-/// Deterministic without a sleep: the writer decrements BEFORE it writes, so anything the client has
-/// finished reading is already accounted for, and `enter_world` has read the whole login sequence by
-/// the time it returns. (Depth counts ITEMS, and the login sequence rides one `Outbound::Batch`, so
-/// the pre-drain peak here is small — the mutation this catches turns 0 into 1.)
-///
-/// What it does NOT catch: an increment/decrement pair that is wrong by the same amount in both
-/// places (both deleted reads as 0 too) — `the_egress_depth_counts_queued_items_and_rolls_back_a_\
-/// failed_send_b2` in `stdb::subscriptions` pins the increment side on its own.
 #[test]
 fn the_writer_drains_the_egress_depth_back_to_zero_b2() {
     let store = std::sync::Arc::new(quest_store());
@@ -4488,9 +4409,6 @@ fn add_ignore_by_name_replies_ignore_added() {
     server.join().unwrap();
 }
 
-/// `resolve_add_contact`'s error-string mapping, driven end-to-end through the
-/// existing `trade_error` mock: `add_friend`/`add_ignore` return the module's rejection text and the
-/// gateway must translate each needle into its `FriendResult`, distinctly for the friend vs ignore list.
 #[test]
 fn add_friend_maps_self_already_and_full_errors() {
     for (err, want) in [
@@ -4554,9 +4472,6 @@ fn add_ignore_maps_already_and_full_errors_to_the_ignore_variants() {
     }
 }
 
-/// `resolve_del_contact`'s Err path: removing a guid never on the list maps to NotFound (friend) /
-/// IgnoreNotFound (ignore) — distinctly from the Ok(Removed)/Ok(IgnoreRemoved) path already covered
-/// by `add_friend_by_name_then_friend_list_carries_online_presence`.
 #[test]
 fn del_friend_unknown_contact_replies_not_found() {
     let store = std::sync::Arc::new(quest_store());
@@ -6885,9 +6800,6 @@ fn gossip_select_on_an_imported_innkeeper_option_binds_home() {
     );
 }
 
-/// STABLE OPTION IDENTITY, the two-viewer case: the SAME dump row lands at a different menu
-/// position for two players whose quest state differs, and the module must be told the same
-/// `row_id` both times. The position alone is meaningless to a package handler.
 #[test]
 fn the_same_option_row_reaches_the_module_by_row_id_from_either_viewer() {
     use lyracore_shared::constants::{gossip_condition, gossip_option};
@@ -6947,9 +6859,6 @@ fn the_same_option_row_reaches_the_module_by_row_id_from_either_viewer() {
     );
 }
 
-/// The HELLO→SELECT index-shift race: the player's quest state changes while the window is open, so
-/// a re-derived menu would renumber under the click. The snapshot HELLO took is what the click
-/// resolves against, so it still selects the line the player actually saw.
 #[test]
 fn a_quest_taken_while_the_window_is_open_does_not_shift_the_click() {
     use lyracore_shared::constants::{gossip_condition, gossip_option};
@@ -6993,8 +6902,6 @@ fn a_quest_taken_while_the_window_is_open_does_not_shift_the_click() {
     );
 }
 
-/// A click with no open menu behind it (no HELLO, or one naming another NPC) selects nothing — it
-/// cannot be used to reach an option the player was never shown.
 #[test]
 fn a_select_with_no_open_menu_just_closes_the_window() {
     use lyracore_shared::constants::gossip_option;
@@ -7025,9 +6932,6 @@ fn a_select_with_no_open_menu_just_closes_the_window() {
     );
 }
 
-/// Orphan Matron Nightingale: stock, an imported menu, and no vendor row in it. The synthesized
-/// browse-goods line must be appended to the imported options and must open the inventory window —
-/// while the imports held full precedence her stock was unreachable in game.
 #[test]
 fn an_imported_menu_missing_its_vendor_row_still_reaches_the_stock() {
     use lyracore_shared::constants::gossip_option;
@@ -7059,8 +6963,6 @@ fn an_imported_menu_missing_its_vendor_row_still_reaches_the_stock() {
     server.join().unwrap();
 }
 
-/// Katie Hunter: the innkeeper flag with an imported menu that carries no bind row. The make-home
-/// line must be appended, and clicking it must bind.
 #[test]
 fn an_imported_menu_missing_its_bind_row_still_offers_the_hearth() {
     use lyracore_shared::constants::gossip_option;
@@ -8173,8 +8075,6 @@ fn trainer_list_replies_smsg_trainer_list_with_the_fixture_spells() {
     server.join().unwrap();
 }
 
-/// A wrong-class player gets no trainer window: not an empty one, not an error packet. The
-/// follow-up gossip reply is the probe — reading straight after the request would block forever.
 #[test]
 fn trainer_list_is_silently_dropped_for_a_player_the_trainer_does_not_serve() {
     let mut s = quest_store();
@@ -8213,8 +8113,6 @@ fn trainer_list_is_silently_dropped_for_a_player_the_trainer_does_not_serve() {
     server.join().unwrap();
 }
 
-/// The gossip menu of a trainer that does not serve this class keeps every other line and loses
-/// both training entries — the respec goes with the training because the module refuses both.
 #[test]
 fn gossip_hides_the_train_and_unlearn_options_for_a_class_the_trainer_does_not_serve() {
     use lyracore_shared::constants::gossip_option;
@@ -8266,8 +8164,6 @@ fn gossip_hides_the_train_and_unlearn_options_for_a_class_the_trainer_does_not_s
     server.join().unwrap();
 }
 
-/// The same menu with the default fixture (serves) keeps all four options, so the test above pins
-/// the class gate rather than some unrelated filter dropping those actions for everyone.
 #[test]
 fn gossip_keeps_the_train_and_unlearn_options_for_a_class_the_trainer_serves() {
     use lyracore_shared::constants::gossip_option;
