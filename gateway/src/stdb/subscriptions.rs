@@ -1673,9 +1673,10 @@ pub(crate) fn group_event_outbound(
         // module's `GiverKind::Party` — this relay never authorizes anything by itself).
         quest_share_kind::QUEST_SHARE => match row.payload.parse::<u32>() {
             Ok(quest_id) => match coord.quest_detail(quest_id) {
-                Ok(Some(detail)) => Some(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(Box::new(
-                    codec::build_quest_details(row.other_guid, &detail),
-                ))),
+                Ok(Some(detail)) => {
+                    let (opcode, body) = codec::build_quest_details_raw(row.other_guid, &detail);
+                    return vec![Outbound::Raw { opcode, body }];
+                }
                 Ok(None) => {
                     log::warn!("quest QUEST_SHARE relay: quest {quest_id} not loaded (event {})", row.id);
                     None

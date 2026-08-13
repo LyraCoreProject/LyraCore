@@ -54,7 +54,7 @@ pub(crate) struct ItemActionPlayer {
 }
 
 pub(crate) enum ItemActionOutcome {
-    Handled { outbound: Vec<ServerOpcodeMessage> },
+    Handled { outbound: Vec<Outbound> },
     PassThrough(ClientOpcodeMessage),
 }
 
@@ -79,13 +79,15 @@ fn inventory_action_outbound(
     account_id: u64,
     operation: &str,
     result: Result<()>,
-) -> Result<Vec<ServerOpcodeMessage>> {
+) -> Result<Vec<Outbound>> {
     match result {
         Ok(()) => Ok(Vec::new()),
         Err(e) if classify_item_action_error(&e) == ItemActionErrorClass::GameplayRefusal => {
             log::debug!("world: {operation} rejected (account {account_id}): {e}");
-            Ok(vec![ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
-                Box::new(codec::build_inventory_change_failure()),
+            Ok(vec![Outbound::One(
+                ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(
+                    codec::build_inventory_change_failure(),
+                )),
             )])
         }
         Err(e) => Err(e),
@@ -192,9 +194,8 @@ pub(crate) fn dispatch_item_action<St: ItemActionStore + ?Sized>(
                 store
                     .item_quest_detail(quest_id)?
                     .map_or_else(Vec::new, |detail| {
-                        vec![ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(
-                            Box::new(codec::build_quest_details(item_guid, &detail)),
-                        )]
+                        let (opcode, body) = codec::build_quest_details_raw(item_guid, &detail);
+                        vec![Outbound::Raw { opcode, body }]
                     })
             } else {
                 inventory_action_outbound(
@@ -341,7 +342,7 @@ mod tests {
         assert!(matches!(
             outcome,
             ItemActionOutcome::Handled { outbound }
-                if matches!(outbound.as_slice(), [ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(_)])
+                if matches!(outbound.as_slice(), [Outbound::One(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(_))])
         ));
     }
 
@@ -544,8 +545,9 @@ mod tests {
         assert!(matches!(
             outcome,
             ItemActionOutcome::Handled { outbound }
-                if matches!(outbound.as_slice(), [ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(detail)]
-                    if detail.guid.guid() == 0x4000_0000_0000_0099 && detail.quest_id == 1234)
+                if matches!(outbound.as_slice(), [Outbound::Raw { opcode: 0x0188, body }]
+                    if body[..8] == 0x4000_0000_0000_0099u64.to_le_bytes()
+                        && body[8..12] == 1234u32.to_le_bytes())
         ));
         assert!(actions.use_requests.lock().unwrap().is_empty());
     }

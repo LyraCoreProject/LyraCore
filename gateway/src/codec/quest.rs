@@ -2,7 +2,7 @@
 //! `SMSG_QUESTGIVER_*` messages — the `!`/`?` overhead status, the right-click quest menu, the quest
 //! details + accept screen, and the turn-in offer/complete screens. Unlike loot/vendor (raw-encoded
 //! past gtker version gaps), every quest packet here is a vanilla-complete gtker typed message, so
-//! these are thin view→message mappings.
+//! these are thin view→message mappings except for raw DETAILS reward triples, which gtker omits.
 //!
 //! The gameplay-meaningful piece is the PURE status logic ([`quest_giver_status`] / [`eval_status`]):
 //! given the giver's quests evaluated against the player's log, pick the vanilla overhead icon
@@ -295,27 +295,50 @@ pub fn build_quest_list(
     }
 }
 
-/// `SMSG_QUESTGIVER_QUEST_DETAILS` — the quest text + Accept screen for one quest.
+/// `SMSG_QUESTGIVER_QUEST_DETAILS` (0x0188) — the quest text + Accept screen.
 ///
-/// `auto_finish` is the `Bool32` mangos-zero names `ActivateAccept` — the real 5875 server hardcodes it
-/// `true` (`SendQuestGiverQuestDetails(pQuest, guid, true)`, `mz_player.cpp:16082` → `mz_gossip.cpp:547`),
-/// NOT `false`. It tells the client to arm/activate the Accept button on the details screen; sending `0`
-/// is the lone field that diverged from the authoritative server on this packet (every other field is
-/// byte-identical to mangos-zero). Match the reference: `true`.
-pub fn build_quest_details(giver_guid: u64, d: &QuestDetailView) -> SMSG_QUESTGIVER_QUEST_DETAILS {
-    SMSG_QUESTGIVER_QUEST_DETAILS {
-        guid: Guid::new(giver_guid),
-        quest_id: d.quest_id,
-        title: d.title.clone(),
-        details: d.details.clone(),
-        objectives: d.objectives_text.clone(),
-        auto_finish: true,
-        choice_item_rewards: reward_items(&d.choice_rewards),
-        item_rewards: reward_items(&d.rewards),
-        money_reward: Gold::new(d.money_reward),
-        reward_spell: 0,
-        emotes: Vec::<QuestDetailsEmote>::new(),
+/// This must be raw-encoded: gtker models its reward records as `(item, count)`, but the 1.12 wire
+/// contains `(item, count, display_id)` triples and always appends four `(emote, delay)` pairs. The
+/// truncated typed form desynchronizes clients as soon as a quest has an item reward.
+pub fn build_quest_details_raw(giver_guid: u64, d: &QuestDetailView) -> (u16, Vec<u8>) {
+    const SMSG_QUESTGIVER_QUEST_DETAILS: u16 = 0x0188;
+    const DETAILS_EMOTE_COUNT: u32 = 4;
+
+    let mut body = Vec::with_capacity(
+        12 + d.title.len()
+            + d.details.len()
+            + d.objectives_text.len()
+            + 1
+            + 1
+            + 1
+            + 4
+            + 4
+            + (d.choice_rewards.len() + d.rewards.len()) * 12
+            + 4
+            + 4
+            + 4
+            + (DETAILS_EMOTE_COUNT as usize) * 8,
+    );
+    body.extend_from_slice(&giver_guid.to_le_bytes());
+    body.extend_from_slice(&d.quest_id.to_le_bytes());
+    for text in [&d.title, &d.details, &d.objectives_text] {
+        body.extend_from_slice(text.as_bytes());
+        body.push(0);
     }
+    body.extend_from_slice(&1u32.to_le_bytes()); // ActivateAccept
+    for rewards in [&d.choice_rewards, &d.rewards] {
+        body.extend_from_slice(&(rewards.len() as u32).to_le_bytes());
+        for reward in rewards.iter() {
+            body.extend_from_slice(&reward.item_entry.to_le_bytes());
+            body.extend_from_slice(&reward.count.to_le_bytes());
+            body.extend_from_slice(&reward.display_id.to_le_bytes());
+        }
+    }
+    body.extend_from_slice(&d.money_reward.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes()); // reward spell
+    body.extend_from_slice(&DETAILS_EMOTE_COUNT.to_le_bytes());
+    body.resize(body.len() + DETAILS_EMOTE_COUNT as usize * 8, 0);
+    (SMSG_QUESTGIVER_QUEST_DETAILS, body)
 }
 
 /// `SMSG_QUESTGIVER_OFFER_REWARD` — the turn-in reward screen (shown when the player clicks a complete
@@ -639,20 +662,48 @@ mod tests {
 
         // DETAILS body: npc(8) + quest_id(4) + title("T\0"=2) + details("\0"=1) + objectives("\0"=1) = 16,
         // then auto_finish (Bool32) at byte 16.
-        let mut framed = Vec::new();
-        ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(Box::new(build_quest_details(100, &d)))
-            .write_unencrypted_server(&mut framed)
-            .unwrap();
-        assert_eq!(
-            u16::from_le_bytes([framed[2], framed[3]]),
-            0x0188,
-            "opcode == SMSG_QUESTGIVER_QUEST_DETAILS"
-        );
-        let body = &framed[4..];
+        let (opcode, body) = build_quest_details_raw(100, &d);
+        assert_eq!(opcode, 0x0188, "opcode == SMSG_QUESTGIVER_QUEST_DETAILS");
         assert_eq!(
             &body[16..20],
             &1u32.to_le_bytes(),
             "DETAILS auto_finish (ActivateAccept) must be 1"
+        );
+    }
+
+    #[test]
+    fn quest_details_raw_uses_display_triples_and_four_emotes() {
+        let d = QuestDetailView {
+            title: "T".into(),
+            details: String::new(),
+            objectives_text: String::new(),
+            choice_rewards: vec![QuestRewardView {
+                item_entry: 1234,
+                count: 2,
+                display_id: 55,
+            }],
+            rewards: vec![QuestRewardView {
+                item_entry: 5678,
+                count: 3,
+                display_id: 66,
+            }],
+            ..detail_view()
+        };
+        let (opcode, body) = build_quest_details_raw(100, &d);
+
+        assert_eq!(opcode, 0x0188);
+        // Guid + id + three CStrings take 16 bytes. DETAILS has display triples, unlike
+        // gtker's incomplete pair-only definition.
+        assert_eq!(&body[16..20], &1u32.to_le_bytes());
+        assert_eq!(&body[20..24], &1u32.to_le_bytes());
+        assert_eq!(&body[24..36], &[210, 4, 0, 0, 2, 0, 0, 0, 55, 0, 0, 0]);
+        assert_eq!(&body[36..40], &1u32.to_le_bytes());
+        assert_eq!(&body[40..52], &[46, 22, 0, 0, 3, 0, 0, 0, 66, 0, 0, 0]);
+        assert_eq!(&body[60..64], &4u32.to_le_bytes());
+        assert_eq!(
+            body.len(),
+            96,
+            "four zeroed emote/delay pairs follow the count"
         );
     }
 
@@ -791,14 +842,22 @@ mod tests {
         };
 
         // DETAILS: choice_item_rewards carries item+count (no icon field), ordered as given.
-        let det = build_quest_details(100, &d);
-        assert_eq!(det.choice_item_rewards.len(), 2);
-        assert_eq!(det.choice_item_rewards[0].item, 1234);
-        assert_eq!(det.choice_item_rewards[1].item, 5678);
-        assert_eq!(det.choice_item_rewards[1].item_count, 3);
-        // The guaranteed list is untouched (still the one item).
-        assert_eq!(det.item_rewards.len(), 1);
-        assert_eq!(det.item_rewards[0].item, 6078);
+        let (_, det) = build_quest_details_raw(100, &d);
+        // DETAILS uses 12-byte item/display triples and preserves choice order.
+        let choice_start = 12 + d.title.len() + d.details.len() + d.objectives_text.len() + 3 + 8;
+        assert_eq!(&det[choice_start..choice_start + 4], &1234u32.to_le_bytes());
+        assert_eq!(
+            &det[choice_start + 12..choice_start + 16],
+            &5678u32.to_le_bytes()
+        );
+        assert_eq!(
+            &det[choice_start + 24..choice_start + 28],
+            &1u32.to_le_bytes()
+        );
+        assert_eq!(
+            &det[choice_start + 28..choice_start + 32],
+            &6078u32.to_le_bytes()
+        );
 
         // OFFER: choice_item_rewards carries the display id (icon) too.
         let off = build_offer_reward(100, &d);

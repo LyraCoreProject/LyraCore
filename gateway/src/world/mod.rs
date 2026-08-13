@@ -1116,7 +1116,12 @@ fn handle_addon_message<St: WorldStore + ?Sized>(store: &St, conn: &WorldConn, t
         log::debug!("addon bridge: non-STC or malformed frame dropped: {text:?}");
         return;
     };
-    if let Err(e) = store.client_command(conn.account_id, social::self_guid(conn).unwrap_or(0), cmd.clone(), payload) {
+    if let Err(e) = store.client_command(
+        conn.account_id,
+        social::self_guid(conn).unwrap_or(0),
+        cmd.clone(),
+        payload,
+    ) {
         log::info!(
             "addon bridge: command {cmd:?} from account {} failed: {e:#}",
             conn.account_id
@@ -1190,8 +1195,8 @@ fn dispatch<St: WorldStore + ?Sized>(
         msg,
     )? {
         ItemActionOutcome::Handled { outbound } => {
-            if !outbound.is_empty() {
-                send(tx, Outbound::Batch(outbound))?;
+            for message in outbound {
+                send(tx, message)?;
             }
             return Ok(());
         }
