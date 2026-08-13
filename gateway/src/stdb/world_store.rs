@@ -862,10 +862,6 @@ impl WorldStore for Coordinator {
     fn player_reputations(&self, player_guid: u64) -> Result<Vec<(i32, i32, bool)>> {
         self.player_reputations(player_guid)
     }
-    fn buyback_ring(&self, player_guid: u64) -> Vec<(u32, u32, u32)> {
-        self.buyback_ring(player_guid)
-    }
-
     fn resolve_learn_target(&self, spell_id: u32) -> u32 {
         self.resolve_learn_target(spell_id)
     }

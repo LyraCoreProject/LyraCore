@@ -634,11 +634,6 @@ pub trait WorldStore: ItemActionStore + VendorActionStore + Send + Sync {
     /// this method existed).
     fn player_actions(&self, player_guid: u64) -> Result<Vec<(u8, u32, u8)>>;
 
-    /// The player's buyback ring, newest-first: `(item_entry, stack_count, price)` per entry
-    /// (≤12). Read by the gateway to rebuild the client's buyback-tab view after
-    /// sell/buyback and at login — the table itself is private (coordinator-only).
-    fn buyback_ring(&self, player_guid: u64) -> Vec<(u32, u32, u32)>;
-
     /// The rank a trainer offering actually teaches (LearnSpell wrapper → its trigger; a
     /// self-contained rank resolves to itself). Mirrors the module's buy-time resolution so
     /// SMSG_LEARNED_SPELL books the granted spell, never the wrapper.
