@@ -310,6 +310,30 @@ mod tests {
         }
     }
 
+    fn equip(source_bag: u8) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(CMSG_AUTOEQUIP_ITEM {
+            source_bag,
+            source_slot: 24,
+        })
+    }
+
+    fn unequip(source_slot: u8, destination_bag: u8) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(CMSG_AUTOSTORE_BAG_ITEM {
+            source_bag: MAIN_BAG,
+            source_slot,
+            destination_bag,
+        })
+    }
+
+    fn swap(source_bag: u8) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_SWAP_ITEM(CMSG_SWAP_ITEM {
+            source_bag,
+            source_slot: 23,
+            destination_bag: MAIN_BAG,
+            destionation_slot: 30,
+        })
+    }
+
     fn use_item(bag_index: u8) -> ClientOpcodeMessage {
         ClientOpcodeMessage::CMSG_USE_ITEM(Box::new(CMSG_USE_ITEM {
             bag_index,
@@ -338,6 +362,10 @@ mod tests {
         }
     }
 
+    fn handled_without_outbound(outcome: ItemActionOutcome) {
+        assert!(matches!(outcome, ItemActionOutcome::Handled { outbound } if outbound.is_empty()));
+    }
+
     fn inventory_failure(outcome: ItemActionOutcome) {
         assert!(matches!(
             outcome,
@@ -346,67 +374,149 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn equip_and_use_from_the_main_bag_request_the_actor_and_slot() {
-        let actions = InMemoryItemActions::default();
-        let equip = dispatch_item_action(
-            &actions,
-            player(),
-            ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(CMSG_AUTOEQUIP_ITEM {
-                source_bag: MAIN_BAG,
-                source_slot: 24,
-            }),
-        )
-        .unwrap();
-        let use_outcome = dispatch_item_action(&actions, player(), use_item(MAIN_BAG)).unwrap();
+    fn assert_no_durable_requests(actions: &InMemoryItemActions) {
+        assert!(actions.equip_requests.lock().unwrap().is_empty());
+        assert!(actions.unequip_requests.lock().unwrap().is_empty());
+        assert!(actions.move_requests.lock().unwrap().is_empty());
+        assert!(actions.use_requests.lock().unwrap().is_empty());
+    }
 
-        assert!(matches!(equip, ItemActionOutcome::Handled { outbound } if outbound.is_empty()));
-        assert!(
-            matches!(use_outcome, ItemActionOutcome::Handled { outbound } if outbound.is_empty())
-        );
+    // ── Equip ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn equip_from_the_main_bag_requests_the_durable_equip_for_the_actor_and_slot() {
+        let actions = InMemoryItemActions::default();
+
+        let outcome = dispatch_item_action(&actions, player(), equip(MAIN_BAG)).unwrap();
+
+        handled_without_outbound(outcome);
         assert_eq!(
             actions.equip_requests.lock().unwrap().as_slice(),
             &[(7, 42, 24)]
         );
+    }
+
+    #[test]
+    fn equip_refusal_returns_inventory_failure_without_ending_the_session() {
+        let actions = InMemoryItemActions {
+            equip_error: Some("required level not met".into()),
+            ..Default::default()
+        };
+
+        inventory_failure(dispatch_item_action(&actions, player(), equip(MAIN_BAG)).unwrap());
+    }
+
+    #[test]
+    fn equip_from_a_sub_bag_requests_no_durable_operation() {
+        let actions = InMemoryItemActions::default();
+
+        handled_without_outbound(dispatch_item_action(&actions, player(), equip(19)).unwrap());
+
+        assert_no_durable_requests(&actions);
+    }
+
+    // ── Unequip ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn unequip_of_an_equipped_slot_requests_the_durable_unequip() {
+        let actions = InMemoryItemActions::default();
+
+        let outcome = dispatch_item_action(&actions, player(), unequip(15, MAIN_BAG)).unwrap();
+
+        handled_without_outbound(outcome);
         assert_eq!(
-            actions.use_requests.lock().unwrap().as_slice(),
-            &[(7, 42, 5)]
+            actions.unequip_requests.lock().unwrap().as_slice(),
+            &[(7, 42, 15)]
         );
     }
 
     #[test]
-    fn inventory_refusals_are_handled_with_inventory_failure() {
+    fn unequip_refusal_returns_inventory_failure_without_ending_the_session() {
         let actions = InMemoryItemActions {
-            equip_error: Some("required level not met".into()),
             unequip_error: Some("backpack full".into()),
-            move_error: Some("cannot equip that there".into()),
-            use_error: Some("item is not usable".into()),
             ..Default::default()
         };
 
-        inventory_failure(
-            dispatch_item_action(
-                &actions,
-                player(),
-                ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(CMSG_AUTOEQUIP_ITEM {
-                    source_bag: MAIN_BAG,
-                    source_slot: 24,
-                }),
-            )
-            .unwrap(),
+        inventory_failure(dispatch_item_action(&actions, player(), unequip(15, MAIN_BAG)).unwrap());
+    }
+
+    #[test]
+    fn unequip_from_a_backpack_slot_requests_no_durable_operation() {
+        let actions = InMemoryItemActions::default();
+
+        handled_without_outbound(
+            dispatch_item_action(&actions, player(), unequip(24, MAIN_BAG)).unwrap(),
         );
-        inventory_failure(
+
+        assert_no_durable_requests(&actions);
+    }
+
+    #[test]
+    fn unequip_into_a_sub_bag_requests_no_durable_operation() {
+        let actions = InMemoryItemActions::default();
+
+        handled_without_outbound(
+            dispatch_item_action(&actions, player(), unequip(15, 19)).unwrap(),
+        );
+
+        assert_no_durable_requests(&actions);
+    }
+
+    #[test]
+    fn unequip_from_a_sub_bag_requests_no_durable_operation() {
+        let actions = InMemoryItemActions::default();
+
+        handled_without_outbound(
             dispatch_item_action(
                 &actions,
                 player(),
                 ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(CMSG_AUTOSTORE_BAG_ITEM {
-                    source_bag: MAIN_BAG,
-                    source_slot: 15,
+                    source_bag: 19,
+                    source_slot: 0,
                     destination_bag: MAIN_BAG,
                 }),
             )
             .unwrap(),
         );
+
+        assert_no_durable_requests(&actions);
+    }
+
+    // ── Same-container move ──────────────────────────────────────────────────
+
+    #[test]
+    fn move_maps_the_wire_slots_to_the_durable_move() {
+        let actions = InMemoryItemActions::default();
+
+        let outcome = dispatch_item_action(
+            &actions,
+            player(),
+            ClientOpcodeMessage::CMSG_SWAP_INV_ITEM(CMSG_SWAP_INV_ITEM {
+                source_slot: ItemSlot::MainHand,
+                destination_slot: ItemSlot::Inventory1,
+            }),
+        )
+        .unwrap();
+
+        handled_without_outbound(outcome);
+        assert_eq!(
+            actions.move_requests.lock().unwrap().as_slice(),
+            &[(
+                7,
+                42,
+                ItemSlot::MainHand.as_int(),
+                ItemSlot::Inventory1.as_int()
+            )]
+        );
+    }
+
+    #[test]
+    fn move_refusal_returns_inventory_failure_without_ending_the_session() {
+        let actions = InMemoryItemActions {
+            move_error: Some("cannot equip that there".into()),
+            ..Default::default()
+        };
+
         inventory_failure(
             dispatch_item_action(
                 &actions,
@@ -418,119 +528,77 @@ mod tests {
             )
             .unwrap(),
         );
+    }
+
+    // ── Same-container swap ──────────────────────────────────────────────────
+
+    #[test]
+    fn swap_within_the_main_bag_maps_both_slots_to_the_durable_move() {
+        let actions = InMemoryItemActions::default();
+
+        let outcome = dispatch_item_action(&actions, player(), swap(MAIN_BAG)).unwrap();
+
+        handled_without_outbound(outcome);
+        assert_eq!(
+            actions.move_requests.lock().unwrap().as_slice(),
+            &[(7, 42, 23, 30)]
+        );
+    }
+
+    #[test]
+    fn swap_refusal_returns_inventory_failure_without_ending_the_session() {
+        let actions = InMemoryItemActions {
+            move_error: Some("cannot equip that there".into()),
+            ..Default::default()
+        };
+
+        inventory_failure(dispatch_item_action(&actions, player(), swap(MAIN_BAG)).unwrap());
+    }
+
+    #[test]
+    fn cross_container_swap_requests_no_durable_operation() {
+        let actions = InMemoryItemActions::default();
+
+        handled_without_outbound(dispatch_item_action(&actions, player(), swap(19)).unwrap());
+
+        assert_no_durable_requests(&actions);
+    }
+
+    // ── Ordinary use ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn use_from_the_main_bag_requests_the_durable_use_for_the_actor_and_slot() {
+        let actions = InMemoryItemActions::default();
+
+        let outcome = dispatch_item_action(&actions, player(), use_item(MAIN_BAG)).unwrap();
+
+        handled_without_outbound(outcome);
+        assert_eq!(
+            actions.use_requests.lock().unwrap().as_slice(),
+            &[(7, 42, 5)]
+        );
+    }
+
+    #[test]
+    fn use_refusal_returns_inventory_failure_without_ending_the_session() {
+        let actions = InMemoryItemActions {
+            use_error: Some("item is not usable".into()),
+            ..Default::default()
+        };
+
         inventory_failure(dispatch_item_action(&actions, player(), use_item(MAIN_BAG)).unwrap());
     }
 
     #[test]
-    fn reducer_transport_failure_is_session_fatal() {
-        let actions = InMemoryItemActions {
-            equip_error: Some("equip_item reducer transport disconnected: channel closed".into()),
-            ..Default::default()
-        };
-
-        let error = match dispatch_item_action(
-            &actions,
-            player(),
-            ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(CMSG_AUTOEQUIP_ITEM {
-                source_bag: MAIN_BAG,
-                source_slot: 24,
-            }),
-        ) {
-            Err(error) => error,
-            Ok(_) => panic!("a dead reducer transport must end the session"),
-        };
-
-        assert!(format!("{error:#}").contains("reducer transport disconnected"));
-    }
-
-    #[test]
-    fn unequip_and_moves_map_main_bag_slots_to_durable_requests() {
+    fn use_from_a_sub_bag_requests_no_durable_operation() {
         let actions = InMemoryItemActions::default();
-        let unequip = dispatch_item_action(
-            &actions,
-            player(),
-            ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(CMSG_AUTOSTORE_BAG_ITEM {
-                source_bag: MAIN_BAG,
-                source_slot: 15,
-                destination_bag: MAIN_BAG,
-            }),
-        )
-        .unwrap();
-        let move_outcome = dispatch_item_action(
-            &actions,
-            player(),
-            ClientOpcodeMessage::CMSG_SWAP_INV_ITEM(CMSG_SWAP_INV_ITEM {
-                source_slot: ItemSlot::MainHand,
-                destination_slot: ItemSlot::Inventory1,
-            }),
-        )
-        .unwrap();
-        let swap = dispatch_item_action(
-            &actions,
-            player(),
-            ClientOpcodeMessage::CMSG_SWAP_ITEM(CMSG_SWAP_ITEM {
-                source_bag: MAIN_BAG,
-                source_slot: 23,
-                destination_bag: MAIN_BAG,
-                destionation_slot: 30,
-            }),
-        )
-        .unwrap();
 
-        assert!(matches!(unequip, ItemActionOutcome::Handled { outbound } if outbound.is_empty()));
-        assert!(
-            matches!(move_outcome, ItemActionOutcome::Handled { outbound } if outbound.is_empty())
-        );
-        assert!(matches!(swap, ItemActionOutcome::Handled { outbound } if outbound.is_empty()));
-        assert_eq!(
-            actions.unequip_requests.lock().unwrap().as_slice(),
-            &[(7, 42, 15)]
-        );
-        assert_eq!(
-            actions.move_requests.lock().unwrap().as_slice(),
-            &[
-                (
-                    7,
-                    42,
-                    ItemSlot::MainHand.as_int(),
-                    ItemSlot::Inventory1.as_int()
-                ),
-                (7, 42, 23, 30)
-            ]
-        );
+        handled_without_outbound(dispatch_item_action(&actions, player(), use_item(19)).unwrap());
+
+        assert_no_durable_requests(&actions);
     }
 
-    #[test]
-    fn unsupported_containers_are_handled_without_durable_requests() {
-        let actions = InMemoryItemActions::default();
-        for msg in [
-            ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(CMSG_AUTOEQUIP_ITEM {
-                source_bag: 19,
-                source_slot: 2,
-            }),
-            ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(CMSG_AUTOSTORE_BAG_ITEM {
-                source_bag: MAIN_BAG,
-                source_slot: 15,
-                destination_bag: 19,
-            }),
-            ClientOpcodeMessage::CMSG_SWAP_ITEM(CMSG_SWAP_ITEM {
-                source_bag: 19,
-                source_slot: 0,
-                destination_bag: MAIN_BAG,
-                destionation_slot: 23,
-            }),
-            use_item(19),
-        ] {
-            let outcome = dispatch_item_action(&actions, player(), msg).unwrap();
-            assert!(
-                matches!(outcome, ItemActionOutcome::Handled { outbound } if outbound.is_empty())
-            );
-        }
-        assert!(actions.equip_requests.lock().unwrap().is_empty());
-        assert!(actions.unequip_requests.lock().unwrap().is_empty());
-        assert!(actions.move_requests.lock().unwrap().is_empty());
-        assert!(actions.use_requests.lock().unwrap().is_empty());
-    }
+    // ── Item-starts-quest ────────────────────────────────────────────────────
 
     #[test]
     fn quest_start_use_returns_details_without_requesting_ordinary_use() {
@@ -561,9 +629,11 @@ mod tests {
 
         let outcome = dispatch_item_action(&actions, player(), use_item(MAIN_BAG)).unwrap();
 
-        assert!(matches!(outcome, ItemActionOutcome::Handled { outbound } if outbound.is_empty()));
+        handled_without_outbound(outcome);
         assert!(actions.use_requests.lock().unwrap().is_empty());
     }
+
+    // ── Player context and error classification ──────────────────────────────
 
     #[test]
     fn unresolved_player_uses_the_legacy_zero_actor_for_every_durable_inventory_action() {
@@ -574,19 +644,13 @@ mod tests {
         };
 
         for msg in [
-            ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(CMSG_AUTOEQUIP_ITEM {
-                source_bag: MAIN_BAG,
-                source_slot: 24,
-            }),
-            ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(CMSG_AUTOSTORE_BAG_ITEM {
-                source_bag: MAIN_BAG,
-                source_slot: 15,
-                destination_bag: MAIN_BAG,
-            }),
+            equip(MAIN_BAG),
+            unequip(15, MAIN_BAG),
             ClientOpcodeMessage::CMSG_SWAP_INV_ITEM(CMSG_SWAP_INV_ITEM {
                 source_slot: ItemSlot::MainHand,
                 destination_slot: ItemSlot::Inventory1,
             }),
+            swap(MAIN_BAG),
             use_item(MAIN_BAG),
         ] {
             dispatch_item_action(&actions, player, msg).unwrap();
@@ -602,12 +666,15 @@ mod tests {
         );
         assert_eq!(
             actions.move_requests.lock().unwrap().as_slice(),
-            &[(
-                7,
-                0,
-                ItemSlot::MainHand.as_int(),
-                ItemSlot::Inventory1.as_int()
-            )]
+            &[
+                (
+                    7,
+                    0,
+                    ItemSlot::MainHand.as_int(),
+                    ItemSlot::Inventory1.as_int()
+                ),
+                (7, 0, 23, 30)
+            ]
         );
         assert_eq!(
             actions.use_requests.lock().unwrap().as_slice(),
@@ -616,8 +683,47 @@ mod tests {
     }
 
     #[test]
+    fn unresolved_player_skips_quest_start_routing_and_requests_ordinary_use() {
+        let actions = InMemoryItemActions {
+            start_quest: Some((0x4000_0000_0000_0099, 1234)),
+            quest_detail: Some(quest_detail(1234)),
+            ..Default::default()
+        };
+        let player = ItemActionPlayer {
+            account_id: 7,
+            self_guid: None,
+        };
+
+        let outcome = dispatch_item_action(&actions, player, use_item(MAIN_BAG)).unwrap();
+
+        handled_without_outbound(outcome);
+        assert_eq!(
+            actions.use_requests.lock().unwrap().as_slice(),
+            &[(7, 0, 5)]
+        );
+    }
+
+    #[test]
+    fn reducer_transport_failure_is_session_fatal() {
+        let actions = InMemoryItemActions {
+            equip_error: Some("equip_item reducer transport disconnected: channel closed".into()),
+            ..Default::default()
+        };
+
+        let error = match dispatch_item_action(&actions, player(), equip(MAIN_BAG)) {
+            Err(error) => error,
+            Ok(_) => panic!("a dead reducer transport must end the session"),
+        };
+
+        assert!(format!("{error:#}").contains("reducer transport disconnected"));
+    }
+
+    // ── Pass-through ─────────────────────────────────────────────────────────
+
+    #[test]
     fn unrelated_opcodes_pass_through_to_the_next_dispatcher() {
         let actions = InMemoryItemActions::default();
+
         let outcome = dispatch_item_action(
             &actions,
             player(),
