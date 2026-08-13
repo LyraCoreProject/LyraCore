@@ -1,0 +1,11 @@
+[package]
+name = "tstl-piccolo-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+[dependencies]
+piccolo = "=0.3.3"
+getrandom = { version = "0.2.17", features = ["js"] }
+getrandom03 = { package = "getrandom", version = "0.3.4", features = ["wasm_js"] }
+
+[workspace]

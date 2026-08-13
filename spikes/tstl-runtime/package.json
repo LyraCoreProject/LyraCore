@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "scripts": { "build:54": "tstl -p tsconfig.lua54.json", "build:51": "tstl -p tsconfig.lua51.json" },
+  "devDependencies": { "typescript": "6.0.2", "typescript-to-lua": "1.37.1" }
+}

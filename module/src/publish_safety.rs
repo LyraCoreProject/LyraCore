@@ -1,25 +1,7 @@
-//! Deploy-safety tripwire (issue #223): the repo's hardest rule — **never `spacetime publish -c`**
-//! — had exactly ONE runtime enforcement (the sanctioned deploy script's argv flag-rejection loop)
-//! and otherwise lived in prose. Prose does not fail a build. Nothing would have gone red if `-c`
-//! were pasted onto the sanctioned deploy script's publish line, or onto any other script that
-//! embeds a publish command.
-//!
-//! `-c` clears the database: every account, character, item and quest row is destroyed, and login
-//! stays broken afterwards until the operator identity is re-claimed. It is the one unrecoverable
-//! mistake available in this repo's tooling, so it gets a scan of its own.
-//!
-//! Two things are pinned here:
-//!
-//! 1. No shell or Python file under `scripts/`, `tools/`, `adapters/` or `importer/` names
-//!    `spacetime publish` on a line that also carries a destructive flag.
-//! 2. The one sanctioned deploy script still rejects flag-shaped
-//!    arguments, and still passes both flags it exists to guarantee.
-//!
-//! Following `test_scan`'s principle: a scan that cannot find its target has lost its pin, not
-//! passed it. Every scan here therefore carries a sanity FLOOR, and the line-level extractor is
-//! separately proven against a synthetic fixture that contains a known-bad line — so this module
-//! can never go green by matching nothing.
+//! Deploy-safety scans for destructive publish flags and schema field-name collisions.
+//! Each scan includes a sanity floor so matching nothing cannot silently pass.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -247,6 +229,115 @@ fn read_repo(rel: &str) -> Option<String> {
     crate::test_scan::read_scanned(rel)
 }
 
+/// One pair of Rust fields which SpacetimeDB would publish under the same column name.
+#[derive(Debug, PartialEq, Eq)]
+struct SnakeCaseCollision {
+    table: String,
+    column: String,
+    fields: Vec<String>,
+}
+
+/// Approximate SpacetimeDB's field-name normalization for the publish preflight. Rust field names
+/// are already identifiers, so the dangerous transformations are word boundaries before capitals
+/// and digits (`rotation0` -> `rotation_0`) plus repeated underscores.
+fn publish_column_name(field: &str) -> String {
+    let mut out = String::new();
+    let mut previous_was_word = false;
+    let mut previous_was_underscore = false;
+    for ch in field.trim_start_matches("r#").chars() {
+        if ch == '_' {
+            if !out.is_empty() && !previous_was_underscore {
+                out.push('_');
+            }
+            previous_was_word = false;
+            previous_was_underscore = true;
+            continue;
+        }
+        if previous_was_word && (ch.is_ascii_uppercase() || ch.is_ascii_digit()) {
+            out.push('_');
+        }
+        out.push(ch.to_ascii_lowercase());
+        previous_was_word = ch.is_ascii_alphabetic();
+        previous_was_underscore = false;
+    }
+    out.trim_end_matches('_').to_string()
+}
+
+/// Blunt source preflight for public `#[table]` structs. This intentionally accepts the table
+/// declarations' ordinary one-field-per-line style; it is a deploy tripwire, not a Rust parser.
+fn table_field_collisions(src: &str) -> Vec<SnakeCaseCollision> {
+    let mut awaiting_table = false;
+    let mut table_attribute_depth = 0i32;
+    let mut table: Option<String> = None;
+    let mut fields: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut collisions = Vec::new();
+
+    for raw in src.lines() {
+        let line = raw.trim();
+        if table.is_none() {
+            if line.starts_with("#[table") {
+                table_attribute_depth =
+                    line.matches('[').count() as i32 - line.matches(']').count() as i32;
+                awaiting_table = table_attribute_depth == 0;
+                continue;
+            }
+            if table_attribute_depth > 0 {
+                table_attribute_depth +=
+                    line.matches('[').count() as i32 - line.matches(']').count() as i32;
+                awaiting_table = table_attribute_depth == 0;
+                continue;
+            }
+            if awaiting_table {
+                if let Some(rest) = line.strip_prefix("pub struct ") {
+                    let name = rest
+                        .split(|c: char| c == '{' || c.is_ascii_whitespace())
+                        .next()
+                        .unwrap_or("");
+                    table = Some(name.to_string());
+                    fields.clear();
+                    awaiting_table = false;
+                } else if !line.is_empty() && !line.starts_with("#[") {
+                    awaiting_table = false;
+                }
+            }
+            continue;
+        }
+
+        if line.starts_with('}') {
+            let table_name = table.take().expect("table is present");
+            for (column, names) in &fields {
+                if names.len() > 1 {
+                    collisions.push(SnakeCaseCollision {
+                        table: table_name.clone(),
+                        column: column.clone(),
+                        fields: names.clone(),
+                    });
+                }
+            }
+            fields.clear();
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("pub ") else {
+            continue;
+        };
+        let Some((name, _)) = rest.split_once(':') else {
+            continue;
+        };
+        let name = name.trim().to_string();
+        fields
+            .entry(publish_column_name(&name))
+            .or_default()
+            .push(name);
+    }
+    collisions
+}
+
+fn table_declaration_count(src: &str) -> usize {
+    src.lines()
+        .filter(|line| line.trim().starts_with("#[table"))
+        .count()
+}
+
 /// The publish-module.sh flag-rejection loop, verbatim, whitespace-collapsed. Pinned by exact shape
 /// rather than by `.contains("-*)")` so that rewording, re-scoping or gutting the guard fails here
 /// instead of silently narrowing what it refuses. If you changed this block on purpose, update the
@@ -261,6 +352,108 @@ const FLAG_REJECTION_LOOP: &str = "for db in \"${dbs[@]}\"; do \
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snake_case_preflight_names_both_fields_in_a_collision() {
+        // Assemble the marker so the repo-wide scan below does not mistake this fixture for a real
+        // module table declaration while reading this source file.
+        let fixture = [
+            "#[ta",
+            "ble]\npub struct BrokenRotation {\n",
+            "    pub rotation0: f32,\n",
+            "    pub rotation_0: f32,\n",
+            "}\n",
+        ]
+        .concat();
+        assert_eq!(
+            table_field_collisions(&fixture),
+            vec![SnakeCaseCollision {
+                table: "BrokenRotation".to_string(),
+                column: "rotation_0".to_string(),
+                fields: vec!["rotation0".to_string(), "rotation_0".to_string()],
+            }]
+        );
+    }
+
+    #[test]
+    fn snake_case_preflight_parses_multiline_table_attributes() {
+        let fixture = [
+            "#[ta",
+            "ble(\n",
+            "    accessor = broken_rotation,\n",
+            "    public\n",
+            ")]\n",
+            "pub struct BrokenRotation {\n",
+            "    pub rotation0: f32,\n",
+            "    pub rotation_0: f32,\n",
+            "}\n",
+        ]
+        .concat();
+        assert_eq!(table_field_collisions(&fixture).len(), 1);
+    }
+
+    #[test]
+    fn module_tables_have_unique_published_column_names() {
+        let src_root = repo_root().join("module/src");
+        let mut rust_files = Vec::new();
+        collect_rust_files(&src_root, &mut rust_files);
+        assert!(
+            rust_files.len() >= 50,
+            "found only {} Rust files under module/src; the snake-case publish preflight is looking at the wrong tree",
+            rust_files.len()
+        );
+        let mut failures = Vec::new();
+        let mut table_count = 0;
+        for path in rust_files {
+            let src = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("readable {}: {e}", path.display()));
+            table_count += table_declaration_count(&src);
+            for collision in table_field_collisions(&src) {
+                failures.push(format!(
+                    "{}: table `{}` fields `{}` publish as duplicate column `{}`",
+                    path.display(),
+                    collision.table,
+                    collision.fields.join("` and `"),
+                    collision.column
+                ));
+            }
+        }
+        assert!(
+            table_count >= 100,
+            "found only {table_count} #[table] declarations; the snake-case preflight parser lost its production surface"
+        );
+        assert!(
+            failures.is_empty(),
+            "SpacetimeDB snake_case field collision(s); refusing publish:\n  {}",
+            failures.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn sanctioned_cli_runs_the_column_collision_guard_before_publish() {
+        let cli = std::fs::read_to_string(repo_root().join("lyracore"))
+            .expect("the sanctioned CLI wrapper must be readable");
+        assert!(cli.contains("preflight | publish)"));
+        assert!(cli.contains("module_tables_have_unique_published_column_names"));
+        assert!(
+            cli.find("module_tables_have_unique_published_column_names")
+                .expect("collision guard invocation")
+                < cli.find("exec \"$binary\"").expect("CLI handoff")
+        );
+    }
+
+    fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in
+            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("readable {}: {e}", dir.display()))
+        {
+            let path = entry.expect("readable dir entry").path();
+            if path.is_dir() {
+                collect_rust_files(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                out.push(path);
+            }
+        }
+    }
 
     // ---- the shell comment stripper's own self-tests -------------------------------------------
 

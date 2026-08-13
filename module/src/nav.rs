@@ -211,24 +211,10 @@ pub fn has_los(ctx: &ReducerContext, map_id: u32, a: (f32, f32, f32), b: (f32, f
 /// not solve the zone. 244 owns the measured tuning.
 const LEG_MAX_EXPANSIONS: u32 = 4096;
 
-/// Nav-aware replacement for the `chase_step(cur → dest)` call sites: step toward the first
-/// string-pulled waypoint of a walkable path instead of straight through geometry. Falls back
-/// to the plain straight step (byte-identical trajectory) when nav is off, the direct line is
-/// already clear (the fast path returns `[dest]`), no path exists within the cap, or the
-/// destination itself is unwalkable (e.g. a wander point inside a wall — today's behavior).
+/// Steps toward a walkable path's first waypoint, then gates every result against geometry.
+/// A missing path may aim straight at the goal, but the commit gate stops it at obstructions.
 ///
-/// Issue #525 (decision #10 §10, builds on #523's `blink_forward` clamp): the committed step is
-/// then gated on the exact COLLISION ray (`vmap::collision_ray`, WMO + M2 doodads) — a step whose
-/// segment first-hits real geometry is truncated to just short of the hit (`GATE_CLEARANCE_YD`,
-/// same margin Blink uses) instead of walking through a column/cart the walk grid doesn't know
-/// about. `z` is the mover's current height (near-ground horizontal segment; walls are vertical
-/// planes so the exact height barely matters). Only pays the ray when
-/// `vmap::vmap_enabled` (per-map operator opt-in) — off, or a cell with no imported vmap chunk,
-/// reads as clear via the same missing-chunk contract every vmap/nav consumer uses, so nothing
-/// changes on an unimported map. A wall inside the clearance margin holds the mover at `cur`
-/// rather than stepping (a stuck-in-place creature, never a wall-clip).
-///
-/// PERF NOTE: this gate fires on every committed movement step for chase/return/wander/flee/
+/// PERF NOTE: the gate fires on every committed movement step for chase/return/wander/flee/
 /// pet-follow — the ~500ms movement tick, 8x more often than the ~4s sense tick `#522`'s benchmark
 /// (`debug_bench_los`) measured `vmap::los_ray` against. `debug_bench_collision_gate`
 /// (`debug/instance.rs`) is the companion harness for THIS path — run it against the same box
@@ -253,46 +239,60 @@ pub fn nav_step(
                 let wp = path[0];
                 crate::creatures::chase_step(cur.0, cur.1, wp.0, wp.1, max_step, 0.0)
             }
-            // Fast path ([dest]) or no path at all: the plain straight step.
-            _ => crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist),
+            // Fast path ([dest]): the direct line is already verified walkable.
+            Some(_) => {
+                crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
+            }
+            // Keep aiming at an unreachable goal; the commit gate truncates the move at geometry.
+            None => {
+                crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
+            }
         }
     };
-    collision_gate(ctx, map_id, cur, stepped, z)
+    step_gate(ctx, map_id, cur, stepped, z)
 }
 
-/// The margin `nav_step`'s collision gate stops short of a ray hit by — same value
+/// The margin `nav_step`'s step gate stops short of a ray hit by — same value
 /// `blink_forward`'s clamp uses (`BLINK_CLEARANCE_YD`), so a walked stop and a Blink stop land at
 /// the same distance from a wall.
 const GATE_CLEARANCE_YD: f32 = 1.0;
 
-/// #525: truncate (or hold) a committed `cur → stepped` move at the exact collision-ray hit
-/// point. No-op when the step is already a no-move, or vmap isn't consuming — mirrors
-/// `blink_forward`'s collision clamp (`spell::cast::targeting`) but for a walked step rather than
-/// a teleport.
-fn collision_gate(
+/// The single commit-point gate for every `nav_step` result.
+/// Exact vmap collision takes precedence; the obstruction grid is the fallback when nav is enabled.
+fn step_gate(
     ctx: &ReducerContext,
     map_id: u32,
     cur: (f32, f32),
     stepped: (f32, f32),
     z: f32,
 ) -> (f32, f32) {
-    if stepped == cur || !crate::vmap::vmap_enabled(ctx, map_id) {
+    if stepped == cur {
         return stepped;
     }
-    let a = [cur.0, cur.1, z];
-    let b = [stepped.0, stepped.1, z];
-    match crate::vmap::collision_ray(ctx, map_id, a, b) {
-        Some(hit) => {
-            let (dx, dy) = (hit[0] - cur.0, hit[1] - cur.1);
+    let hit = if crate::vmap::vmap_enabled(ctx, map_id) {
+        crate::vmap::collision_ray(ctx, map_id, [cur.0, cur.1, z], [stepped.0, stepped.1, z])
+            .map(|h| (h[0], h[1]))
+    } else if nav_enabled(ctx) {
+        lyracore_shared::nav::step_hit(
+            &mut fetcher(ctx, map_id),
+            (cur.0, cur.1, z),
+            (stepped.0, stepped.1, z),
+        )
+    } else {
+        None
+    };
+    match hit {
+        Some((hx, hy)) => {
+            let (dx, dy) = (hx - cur.0, hy - cur.1);
             let hit_dist = (dx * dx + dy * dy).sqrt();
             let land_dist = hit_dist - GATE_CLEARANCE_YD;
             if land_dist <= 0.0 {
-                cur // wall inside the clearance margin — hold in place
+                cur // hit inside the clearance margin — hold in place
             } else {
                 (cur.0 + dx / hit_dist * land_dist, cur.1 + dy / hit_dist * land_dist)
             }
         }
-        None => stepped, // clear ray (or no vmap data this cell) — the plain step stands
+        None => stepped, // clear (or no data under this segment) — the plain step stands
     }
 }
 

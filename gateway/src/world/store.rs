@@ -813,6 +813,192 @@ pub trait WorldStore: Send + Sync {
         Ok(false)
     }
 
+    /// Flip `mail_id`'s read state for `recipient_guid`, on the database THIS handle names.
+    ///
+    /// Called on the realm-core handle when there is one and on the session's own handle when there
+    /// is not — the SAME two-plane routing [`mail_list`](Self::mail_list) takes, because the write
+    /// and the read must never disagree about which database owns the rows. `Err` when `mail_id`
+    /// does not exist or is not `recipient_guid`'s — the gates ran in `world::mail` before this is
+    /// ever called, so a refusal here means a crafted id.
+    fn mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
+
+    /// Delete `mail_id` for `recipient_guid`, on the database THIS handle names — same two-plane
+    /// routing as [`mail_mark_read`](Self::mail_mark_read). Destroys any attachment the row still
+    /// carries, as vanilla does after its (client-side) confirmation prompt.
+    fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
+
+    /// Return `mail_id` to whoever sent it, on the database THIS handle names — same two-plane
+    /// routing as [`mail_delete`](Self::mail_delete). The row is re-addressed IN PLACE: it never
+    /// leaves the plane that already holds it, so there is no sharded variant and no escrow, unlike
+    /// [`mail_send`](Self::mail_send) and the takes below. `Err` when `mail_id` does not exist or
+    /// is not `recipient_guid`'s.
+    fn mail_return(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
+
+    /// Write one sent letter on the database THIS handle names, charging the sender the postage
+    /// plus the attached `money` in the SAME transaction.
+    ///
+    /// **The single-database gateway only**, where the purse and the row are on one database. A
+    /// sharded realm cannot have that transaction and drives [`mail_fence`](Self::mail_fence) and
+    /// friends instead.
+    ///
+    /// Every gate that decides who may write to whom has already run in `world::mail` — realm-core
+    /// can answer none of them — so `sender_guid` must be the guid the socket authenticated.
+    ///
+    /// `cod` is the price the RECIPIENT will owe for the attachment. It costs the sender nothing
+    /// and is not part of the debit; it only rides the row until somebody takes the item.
+    #[allow(clippy::too_many_arguments)]
+    fn mail_send(
+        &self,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        cod: u32,
+        item_guid: u64,
+    ) -> Result<()>;
+
+    /// Credit `mail_id`'s copper to `recipient_guid` and empty the row, in one transaction. The
+    /// single-database twin of [`mail_send`](Self::mail_send), and refused for a mail that is not
+    /// the caller's or has nothing left in it.
+    fn mail_take_money(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
+
+    /// Re-create `mail_id`'s attached item in `recipient_guid`'s bags and empty the row's
+    /// attachment columns, in one transaction. [`mail_take_money`](Self::mail_take_money)'s twin,
+    /// and refused for a mail that is not the caller's, one with no attachment, or a full bag —
+    /// where the refusal rolls the clear back, so the item stays in the letter.
+    fn mail_take_item(&self, recipient_guid: u64, mail_id: u64) -> Result<()>;
+
+    /// Has `payee_guid` room in their bags here for one more item?
+    ///
+    /// Asked of the TAKER's own handle, before a sharded item take fences anything: the fence is a
+    /// one-way move, so a full bag found afterwards would strand the item in an escrow instead of
+    /// leaving it in the letter. `Err` is the refusal. Answers `Ok` by default, so a store that
+    /// models no bags does not block a take it has no opinion on.
+    fn mail_item_room(&self, _payee_guid: u64) -> Result<()> {
+        Ok(())
+    }
+
+    /// **Escrow step 1 (send)** — take the postage plus the attached coin out of `sender_guid`'s
+    /// purse into a fence keyed by the caller-chosen `escrow_id`, on the database THIS handle names.
+    ///
+    /// Always the SENDER's own handle: the purse is `game_world_entity.money`, on the shard they
+    /// are standing on. `Err` is the atomic affordability refusal — a refused send costs nothing.
+    ///
+    /// A COD PAYMENT is fenced through here too, because it is a letter out of a purse like any
+    /// other: `cod_source_mail_id` names the mail whose price it pays (0 for an ordinary letter),
+    /// and it rides the fence so a re-drive can settle that price without re-deriving anything.
+    #[allow(clippy::too_many_arguments)]
+    fn mail_fence(
+        &self,
+        _escrow_id: u64,
+        _sender_guid: u64,
+        _recipient_guid: u64,
+        _subject: String,
+        _body: String,
+        _money: u32,
+        _postage: u32,
+        _item_guid: u64,
+        _cod: u32,
+        _cod_source_mail_id: u64,
+    ) -> Result<()> {
+        anyhow::bail!("mail_fence: this store models no escrow")
+    }
+
+    /// **Escrow step 2 (send)** — write the mail row and its receipt under `escrow_id`, on the
+    /// database THIS handle names (realm-core). Idempotent: a replay writes nothing.
+    ///
+    /// `cod_source_mail_id` (0 for an ordinary letter) is the mail this one PAYS FOR: its price is
+    /// settled in the same transaction as the payout row, which is what makes a COD take charge
+    /// once however the drive is interrupted.
+    #[allow(clippy::too_many_arguments)]
+    fn mail_commit(
+        &self,
+        _escrow_id: u64,
+        _sender_guid: u64,
+        _recipient_guid: u64,
+        _subject: String,
+        _body: String,
+        _money: u32,
+        _item: mail::AttachedItem,
+        _cod: u32,
+        _cod_source_mail_id: u64,
+    ) -> Result<()> {
+        anyhow::bail!("mail_commit: this store models no escrow")
+    }
+
+    /// **Escrow step 1 (take)** — take `mail_id`'s copper out of the row into a fence, on the
+    /// database that OWNS THE ROW. `expect_money` is the amount the caller is about to pay out; a
+    /// mismatch is refused rather than fenced, because the gateway carries that number across.
+    fn mail_take_money_fence(
+        &self,
+        _escrow_id: u64,
+        _payee_guid: u64,
+        _mail_id: u64,
+        _expect_money: u32,
+    ) -> Result<()> {
+        anyhow::bail!("mail_take_money_fence: this store models no escrow")
+    }
+
+    /// **Escrow step 2 (take)** — credit `amount` to `payee_guid` and file a receipt under
+    /// `escrow_id`, on the PAYEE's own handle. Idempotent: a replay credits nothing.
+    fn mail_payout(
+        &self,
+        _escrow_id: u64,
+        _payee_guid: u64,
+        _mail_id: u64,
+        _amount: u32,
+    ) -> Result<()> {
+        anyhow::bail!("mail_payout: this store models no escrow")
+    }
+
+    /// **Escrow step 1 (item take)** — take `mail_id`'s attachment out of the row into a fence, on
+    /// the database that OWNS THE ROW. `expect_entry` is the item the caller is about to grant; a
+    /// mismatch is refused rather than fenced, because the gateway carries the snapshot across.
+    fn mail_take_item_fence(
+        &self,
+        _escrow_id: u64,
+        _payee_guid: u64,
+        _mail_id: u64,
+        _expect_entry: u32,
+    ) -> Result<()> {
+        anyhow::bail!("mail_take_item_fence: this store models no escrow")
+    }
+
+    /// **Escrow step 2 (item take)** — re-create the fenced item in `payee_guid`'s bags and file a
+    /// receipt under `escrow_id`, on the PAYEE's own handle. Idempotent: a replay grants nothing.
+    /// `Err` on a full bag, which leaves the fence holding the item for the next re-drive.
+    fn mail_item_payout(
+        &self,
+        _escrow_id: u64,
+        _payee_guid: u64,
+        _mail_id: u64,
+        _item: mail::AttachedItem,
+    ) -> Result<()> {
+        anyhow::bail!("mail_item_payout: this store models no escrow")
+    }
+
+    /// **Escrow step 3** — attest, on the handle HOLDING the fence, that the other database
+    /// committed. The only thing that licenses step 4.
+    fn mail_confirm_delivery(&self, _escrow_id: u64) -> Result<()> {
+        anyhow::bail!("mail_confirm_delivery: this store models no escrow")
+    }
+
+    /// **Escrow step 4** — destroy the fence, on the handle holding it. Delete-last: it refuses
+    /// while unattested.
+    fn mail_settle(&self, _escrow_id: u64) -> Result<()> {
+        anyhow::bail!("mail_settle: this store models no escrow")
+    }
+
+    /// Every unfinished mail escrow this database holds for `sender_guid` (the payee, on a payout).
+    ///
+    /// The read that makes re-driving possible at all: a fence carries its whole letter, so a drive
+    /// abandoned by a dead gateway is resumable from the row. Empty by default, so a store that
+    /// models no escrow simply has nothing to re-drive.
+    fn mail_escrows_of(&self, _sender_guid: u64) -> Result<Vec<mail::HeldEscrow>> {
+        Ok(Vec::new())
+    }
+
     /// Read a corpse's lootable copper for `SMSG_LOOT_RESPONSE` (slice 3). 0 if the target is gone
     /// or not a corpse. Read-only — the actual take is `loot_money`.
     fn loot_target_money(&self, target_guid: u64) -> Result<u32>;

@@ -584,6 +584,12 @@ parity_test!(parity_game_transfer_out, "game_transfer_out", lyracore_module::Tra
 parity_test!(parity_game_spell_chain, "game_spell_chain", lyracore_module::SpellChain, bindings::spell_chain_type::SpellChain, {
     spell_id, prev_spell, first_spell, rank, req_spell,
 });
+// Generated even though the gateway does not currently subscribe to or read it. The binding was
+// stale once and therefore earns an explicit regression guard outside the subscribed-table
+// manifest below; recreating the old two-field binding must make this test fail to compile.
+parity_test!(parity_game_spell_group_rule, "game_spell_group_rule", lyracore_module::SpellGroupRule, bindings::spell_group_rule_type::SpellGroupRule, {
+    group_id, rule, rank_is_comparable,
+});
 parity_test!(parity_game_player_skill, "game_player_skill", lyracore_module::PlayerSkill, bindings::player_skill_type::PlayerSkill, {
     id, character_guid, owner_identity, skill_line, current, max_rank,
 });
@@ -676,6 +682,11 @@ parity_test!(parity_game_character_contact, "game_character_contact", lyracore_m
 parity_test!(parity_game_mail, "game_mail", lyracore_module::Mail, bindings::mail_type::Mail, {
     id, recipient_guid, sender_guid, subject, body, item_entry, item_stack_count, item_durability,
     item_enchant_id, item_soulbound, money, cod, was_read, created_at,
+});
+parity_test!(parity_game_mail_escrow, "game_mail_escrow", lyracore_module::MailEscrow, bindings::mail_escrow_type::MailEscrow, {
+    escrow_id, sender_guid, recipient_guid, subject, body, money, postage, created_micros,
+    delivered, payout, mail_id, item_entry, item_stack_count, item_durability, item_enchant_id,
+    item_soulbound, cod,
 });
 parity_test!(parity_game_faction, "game_faction", lyracore_module::Faction, bindings::faction_type::Faction, {
     faction_id, reputation_index, base_standing,
@@ -777,6 +788,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_player_reputation",
     "game_character_contact",
     "game_mail",
+    "game_mail_escrow",
     "game_faction",
     "game_faction_template",
 ];

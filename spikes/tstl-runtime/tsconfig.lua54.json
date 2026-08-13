@@ -1,0 +1,5 @@
+{
+  "compilerOptions": { "strict": true, "target": "ES2020", "rootDir": "src", "outDir": "generated/lua54" },
+  "tstl": { "luaTarget": "5.4", "luaLibImport": "inline", "noHeader": true },
+  "include": ["src/representative.ts"]
+}

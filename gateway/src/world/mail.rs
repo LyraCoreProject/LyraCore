@@ -1,45 +1,46 @@
-//! The mailbox READ path — the routing half of the mail slice, and the plane decision made once.
-//!
-//! # The two planes, and the one core between them
-//!
-//! `game_mail` is authoritative on **realm-core**: a mail is addressed to a character who may be
-//! offline or homed on another database, which is the read that made a cross-boundary whisper
-//! impossible. A gateway with no realm handle ([`WorldStore::realm_store`] → `None`) reads its own
-//! database instead — whisper's shape verbatim.
-//!
-//! What is deliberately NOT duplicated is the read itself. [`mail_of`] picks the plane and then
-//! every answer this module gives — the list, the unread poll, the letter body — is derived from
-//! that one `Vec<MailView>`. Two planes cannot drift into two different mailbox views because there
-//! is only one projection, and a mail cannot appear in the list but be missing from the poll.
-//!
-//! # The gates, and where each runs
-//!
-//! Realm-core has no gameobjects and no live entities, so the gates run here, before the read:
-//!
-//! - **in world** — a session at character select has no mailbox (`self_guid` is `None`);
-//! - **at the named mailbox** — the client passes the mailbox guid in every mail packet, so this is
-//!   a PK lookup plus a map/instance/range check on the session's OWN shard, where the gameobject
-//!   is. It must never scan `game_gameobject` (sharded → silent subset).
-//!
-//! Every refusal is per-action: the caller logs it and answers the packet the client is waiting on,
-//! or nothing at all. Nothing here is session-fatal.
-//!
-//! # Poll, not push
-//!
-//! There is no relay and no event table. The client asks (`CMSG_GET_MAIL_LIST`,
-//! `MSG_QUERY_NEXT_MAIL_TIME`), the gateway reads on demand. `SMSG_RECEIVED_MAIL` is out of scope
-//! for the whole feature — do not add a push path here.
+//! Mail routing and cross-database escrow driving.
+//! Sharded moves are fence → commit → attest → settle; local moves stay one transaction.
 
 use anyhow::Result;
 
-use super::WorldStore;
+use super::{party, WorldStore};
 use crate::codec::MailView;
+use lyracore_shared::mail as mail_rules;
 
-/// Every mail addressed to `self_guid`, read from whichever plane owns the rows.
-///
-/// The ONE read both planes take. Sharded → realm-core, which is the only database that can address
-/// a recipient who is offline or standing elsewhere. Unsharded → this handle, which already is the
-/// authority; there is nothing to route.
+struct EscrowIdRange {
+    next: std::sync::atomic::AtomicU64,
+    start: u64,
+    end: u64,
+}
+
+static ESCROW_ID_RANGE: std::sync::OnceLock<EscrowIdRange> = std::sync::OnceLock::new();
+const NO_COD_SOURCE: u64 = 0;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SendRefusal {
+    NoMailbox(String),
+    RecipientNotFound(String),
+    CannotSendToSelf,
+    NotYourTeam,
+    NotEnoughMoney(String),
+    AttachmentInvalid(String),
+    AttachmentSoulbound(String),
+    Internal(String),
+}
+
+impl std::fmt::Display for SendRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoMailbox(e)
+            | Self::RecipientNotFound(e)
+            | Self::NotEnoughMoney(e)
+            | Self::AttachmentInvalid(e)
+            | Self::AttachmentSoulbound(e) => f.write_str(e),
+            Self::CannotSendToSelf => f.write_str(mail_rules::CANNOT_SEND_TO_SELF),
+            Self::NotYourTeam => f.write_str(mail_rules::NOT_YOUR_TEAM),
+            Self::Internal(e) => f.write_str(e),
+        }
+    }
+}
 pub(crate) fn mail_of<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: u64,
@@ -49,25 +50,15 @@ pub(crate) fn mail_of<St: WorldStore + ?Sized>(
         None => store.mail_list(self_guid),
     }
 }
-
-/// The mailbox window's contents for a session standing at `mailbox_guid`.
-///
-/// `Err` is a refusal to answer at all — not in world, or not at that mailbox. An empty `Ok` is a
-/// player with no mail, which is a real answer and must still be sent.
 pub(crate) fn open_mailbox<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
     mailbox_guid: u64,
 ) -> Result<Vec<MailView>> {
     let self_guid = at_mailbox(store, self_guid, mailbox_guid)?;
+    redrive(store, self_guid);
     mail_of(store, self_guid)
 }
-
-/// Does the caller have unread mail? The answer behind the minimap envelope.
-///
-/// `MSG_QUERY_NEXT_MAIL_TIME` carries no mailbox guid — the client polls it from anywhere — so the
-/// only gate is being in world. Derived from the same list read, so the envelope can never disagree
-/// with what the mailbox window shows.
 pub(crate) fn has_unread<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
@@ -76,11 +67,6 @@ pub(crate) fn has_unread<St: WorldStore + ?Sized>(
         self_guid.ok_or_else(|| anyhow::anyhow!(lyracore_shared::mail::NOT_IN_WORLD))?;
     Ok(mail_of(store, self_guid)?.iter().any(|m| !m.was_read))
 }
-
-/// The body of the caller's mail `mail_id` — the answer to `CMSG_ITEM_TEXT_QUERY`.
-///
-/// `None` for a mail that is not the caller's: the list read is already scoped to the recipient, so
-/// a crafted packet naming someone else's mail finds nothing rather than reading their letter.
 pub(crate) fn letter_body<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
@@ -93,9 +79,420 @@ pub(crate) fn letter_body<St: WorldStore + ?Sized>(
         .find(|m| m.id == mail_id)
         .map(|m| m.body))
 }
+pub(crate) fn mark_read<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: Option<u64>,
+    mailbox_guid: u64,
+    mail_id: u64,
+) -> Result<()> {
+    let self_guid = at_mailbox(store, self_guid, mailbox_guid)?;
+    match store.realm_store() {
+        Some(realm) => realm.mail_mark_read(self_guid, mail_id),
+        None => store.mail_mark_read(self_guid, mail_id),
+    }
+}
+pub(crate) fn delete<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: Option<u64>,
+    mailbox_guid: u64,
+    mail_id: u64,
+) -> Result<()> {
+    let self_guid = at_mailbox(store, self_guid, mailbox_guid)?;
+    match store.realm_store() {
+        Some(realm) => realm.mail_delete(self_guid, mail_id),
+        None => store.mail_delete(self_guid, mail_id),
+    }
+}
+pub(crate) fn return_to_sender<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: Option<u64>,
+    mailbox_guid: u64,
+    mail_id: u64,
+) -> Result<()> {
+    let self_guid = at_mailbox(store, self_guid, mailbox_guid)?;
+    match store.realm_store() {
+        Some(realm) => realm.mail_return(self_guid, mail_id),
+        None => store.mail_return(self_guid, mail_id),
+    }
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn send<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: Option<u64>,
+    mailbox_guid: u64,
+    recipient_name: &str,
+    subject: String,
+    body: String,
+    money: u32,
+    cod: u32,
+    item_guid: u64,
+) -> std::result::Result<(), SendRefusal> {
+    let sender_guid = at_mailbox(store, self_guid, mailbox_guid)
+        .map_err(|e| SendRefusal::NoMailbox(e.to_string()))?;
+    if !party::live_anywhere(store, sender_guid) {
+        return Err(SendRefusal::NoMailbox(mail_rules::NOT_IN_WORLD.to_string()));
+    }
+    let candidates =
+        party::resolve_all_by_name(store, recipient_name).map_err(refusal_from_module)?;
+    if candidates.is_empty() {
+        return Err(SendRefusal::RecipientNotFound(
+            mail_rules::no_recipient_named(recipient_name),
+        ));
+    }
+    if candidates.contains(&sender_guid) {
+        return Err(SendRefusal::CannotSendToSelf);
+    }
+    let sender = party::character_anywhere(store, sender_guid)
+        .map_err(refusal_from_module)?
+        .ok_or_else(|| SendRefusal::Internal(mail_rules::NOT_IN_WORLD.to_string()))?;
+    let mut reachable = Vec::new();
+    for guid in candidates {
+        let Some(candidate) =
+            party::character_anywhere(store, guid).map_err(refusal_from_module)?
+        else {
+            continue;
+        };
+        if lyracore_shared::faction::same_team(sender.race, candidate.race) {
+            reachable.push(guid);
+        }
+    }
+    let recipient_guid = match reachable.as_slice() {
+        [] => return Err(SendRefusal::NotYourTeam),
+        [only] => *only,
+        _ => {
+            return Err(SendRefusal::RecipientNotFound(
+                mail_rules::ambiguous_recipient(recipient_name),
+            ))
+        }
+    };
+    let cod = mail_rules::cod_at_send(cod, item_guid != 0);
+    match store.realm_store() {
+        None => store
+            .mail_send(
+                sender_guid,
+                recipient_guid,
+                subject,
+                body,
+                money,
+                cod,
+                item_guid,
+            )
+            .map_err(refusal_from_module),
+        Some(realm) => {
+            let escrow_id =
+                next_escrow_id().map_err(|e| SendRefusal::Internal(format!("{e:#}")))?;
+            store
+                .mail_fence(
+                    escrow_id,
+                    sender_guid,
+                    recipient_guid,
+                    subject.clone(),
+                    body.clone(),
+                    money,
+                    mail_rules::postage(),
+                    item_guid,
+                    cod,
+                    NO_COD_SOURCE,
+                )
+                .map_err(refusal_from_module)?;
+            let item = held_attachment(store, sender_guid, escrow_id)
+                .map_err(|e| SendRefusal::Internal(format!("{e:#}")))?;
+            drive(store, escrow_id, || {
+                realm.mail_commit(
+                    escrow_id,
+                    sender_guid,
+                    recipient_guid,
+                    subject,
+                    body,
+                    money,
+                    item.clone(),
+                    cod,
+                    NO_COD_SOURCE,
+                )
+            })
+            .map_err(|e| SendRefusal::Internal(format!("{e:#}")))
+        }
+    }
+}
+fn drive<St, F>(source: &St, escrow_id: u64, commit: F) -> Result<()>
+where
+    St: WorldStore + ?Sized,
+    F: FnOnce() -> Result<()>,
+{
+    commit()?;
+    source.mail_confirm_delivery(escrow_id)?;
+    source.mail_settle(escrow_id)
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AttachedItem {
+    pub entry: u32,
+    pub stack_count: u32,
+    pub durability: u32,
+    pub enchant_id: u32,
+    pub soulbound: bool,
+}
 
-/// The gate every mailbox-addressed opcode opens with: in world, and standing at the gameobject the
-/// client named. Answers the caller's own guid so the read below cannot accidentally use another.
+impl AttachedItem {
+    pub fn is_empty(&self) -> bool {
+        self.entry == 0
+    }
+}
+fn held_attachment<St: WorldStore + ?Sized>(
+    store: &St,
+    sender_guid: u64,
+    escrow_id: u64,
+) -> Result<AttachedItem> {
+    store
+        .mail_escrows_of(sender_guid)?
+        .into_iter()
+        .find(|e| e.escrow_id == escrow_id)
+        .map(|e| e.item)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "mail escrow {escrow_id}: the fence reported success but no row is readable —                  refusing to commit a letter whose attachment cannot be confirmed"
+            )
+        })
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HeldEscrow {
+    pub escrow_id: u64,
+    pub recipient_guid: u64,
+    pub subject: String,
+    pub body: String,
+    pub money: u32,
+    pub postage: u32,
+    pub payout: bool,
+    pub mail_id: u64,
+    pub item: AttachedItem,
+    pub cod: u32,
+}
+pub(crate) fn redrive<St: WorldStore + ?Sized>(store: &St, self_guid: u64) {
+    let Some(realm) = store.realm_store() else {
+        return; // One database, one transaction, no fences to rescue.
+    };
+    for held in store.mail_escrows_of(self_guid).unwrap_or_default() {
+        if held.payout {
+            continue; // A payout fence never lives on a shard; ignore a stray rather than mis-drive it.
+        }
+        let outcome = drive(store, held.escrow_id, || {
+            realm.mail_commit(
+                held.escrow_id,
+                self_guid,
+                held.recipient_guid,
+                held.subject.clone(),
+                held.body.clone(),
+                held.money,
+                held.item.clone(),
+                held.cod,
+                held.mail_id,
+            )
+        });
+        log_redrive("send", held.escrow_id, outcome);
+    }
+    for held in realm.mail_escrows_of(self_guid).unwrap_or_default() {
+        if !held.payout {
+            continue;
+        }
+        let outcome = drive(realm.as_ref(), held.escrow_id, || {
+            if held.item.is_empty() {
+                store.mail_payout(held.escrow_id, self_guid, held.mail_id, held.money)
+            } else {
+                store.mail_item_payout(held.escrow_id, self_guid, held.mail_id, held.item.clone())
+            }
+        });
+        log_redrive("take", held.escrow_id, outcome);
+    }
+}
+
+fn log_redrive(kind: &str, escrow_id: u64, outcome: Result<()>) {
+    match outcome {
+        Ok(()) => log::info!("mail escrow {escrow_id}: abandoned {kind} re-driven to completion"),
+        Err(e) => log::warn!(
+            "mail escrow {escrow_id}: {kind} re-drive failed, the fence is still HELD: {e:#}"
+        ),
+    }
+}
+pub(crate) fn take_money<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: Option<u64>,
+    mailbox_guid: u64,
+    mail_id: u64,
+) -> Result<()> {
+    let self_guid = at_mailbox(store, self_guid, mailbox_guid)?;
+    let Some(realm) = store.realm_store() else {
+        return store.mail_take_money(self_guid, mail_id);
+    };
+    let amount = mail_of(store, self_guid)?
+        .into_iter()
+        .find(|m| m.id == mail_id)
+        .map(|m| m.money)
+        .ok_or_else(|| anyhow::anyhow!(mail_rules::NOT_YOUR_MAIL))?;
+    if amount == 0 {
+        anyhow::bail!(mail_rules::NOTHING_TO_TAKE);
+    }
+    let escrow_id = next_escrow_id()?;
+    realm.mail_take_money_fence(escrow_id, self_guid, mail_id, amount)?;
+    drive(realm.as_ref(), escrow_id, || {
+        store.mail_payout(escrow_id, self_guid, mail_id, amount)
+    })
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TakeItemRefusal {
+    BagsFull(String),
+    CannotAffordCod(String),
+    Other(String),
+}
+
+impl std::fmt::Display for TakeItemRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BagsFull(e) | Self::CannotAffordCod(e) | Self::Other(e) => f.write_str(e),
+        }
+    }
+}
+
+fn take_item_refusal(e: anyhow::Error) -> TakeItemRefusal {
+    let text = format!("{e:#}");
+    if text.contains(mail_rules::INVENTORY_FULL) {
+        TakeItemRefusal::BagsFull(text)
+    } else if text.contains(mail_rules::COD_NOT_AFFORDABLE)
+        || text.contains(mail_rules::NOT_ENOUGH_MONEY)
+    {
+        TakeItemRefusal::CannotAffordCod(text)
+    } else {
+        TakeItemRefusal::Other(text)
+    }
+}
+pub(crate) fn take_item<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: Option<u64>,
+    mailbox_guid: u64,
+    mail_id: u64,
+) -> std::result::Result<(u32, u32), TakeItemRefusal> {
+    let self_guid = at_mailbox(store, self_guid, mailbox_guid).map_err(take_item_refusal)?;
+    let row = mail_of(store, self_guid)
+        .map_err(take_item_refusal)?
+        .into_iter()
+        .find(|m| m.id == mail_id)
+        .ok_or_else(|| TakeItemRefusal::Other(mail_rules::NOT_YOUR_MAIL.to_string()))?;
+    let item = AttachedItem {
+        entry: row.item_entry,
+        stack_count: row.item_stack_count,
+        durability: row.item_durability,
+        enchant_id: row.item_enchant_id,
+        soulbound: row.item_soulbound,
+    };
+    if item.is_empty() {
+        return Err(TakeItemRefusal::Other(
+            mail_rules::NOTHING_TO_TAKE.to_string(),
+        ));
+    }
+    let taken = (item.entry, item.stack_count);
+    let Some(realm) = store.realm_store() else {
+        store
+            .mail_take_item(self_guid, mail_id)
+            .map_err(take_item_refusal)?;
+        return Ok(taken);
+    };
+    store.mail_item_room(self_guid).map_err(take_item_refusal)?;
+    pay_cod(store, realm.as_ref(), self_guid, &row).map_err(take_item_refusal)?;
+    let escrow_id = next_escrow_id().map_err(take_item_refusal)?;
+    realm
+        .mail_take_item_fence(escrow_id, self_guid, mail_id, item.entry)
+        .map_err(take_item_refusal)?;
+    drive(realm.as_ref(), escrow_id, || {
+        store.mail_item_payout(escrow_id, self_guid, mail_id, item.clone())
+    })
+    .map_err(take_item_refusal)?;
+    Ok(taken)
+}
+fn pay_cod<St: WorldStore + ?Sized>(
+    store: &St,
+    realm: &dyn WorldStore,
+    taker_guid: u64,
+    row: &MailView,
+) -> Result<()> {
+    let Some(settlement) =
+        mail_rules::cod_settlement(row.cod, row.sender_guid, &row.subject, taker_guid)
+    else {
+        return Ok(());
+    };
+    let escrow_id = store
+        .mail_escrows_of(taker_guid)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|e| !e.payout && e.mail_id == row.id)
+        .map(|e| e.escrow_id)
+        .map(Ok)
+        .unwrap_or_else(next_escrow_id)?;
+    store.mail_fence(
+        escrow_id,
+        settlement.payer_guid,
+        settlement.payee_guid,
+        settlement.subject.clone(),
+        String::new(),
+        settlement.copper,
+        0,
+        0,
+        0,
+        row.id,
+    )?;
+    drive(store, escrow_id, || {
+        realm.mail_commit(
+            escrow_id,
+            settlement.payer_guid,
+            settlement.payee_guid,
+            settlement.subject.clone(),
+            String::new(),
+            settlement.copper,
+            AttachedItem::default(),
+            0,
+            row.id,
+        )
+    })
+}
+fn next_escrow_id() -> Result<u64> {
+    use std::sync::atomic::Ordering;
+    #[cfg(test)]
+    if ESCROW_ID_RANGE.get().is_none() {
+        install_escrow_id_range(1, u64::MAX)?;
+    }
+    let range = ESCROW_ID_RANGE.get().ok_or_else(|| {
+        anyhow::anyhow!(
+        "mail escrow id range was not claimed; refusing instead of falling back to colliding ids"
+    )
+    })?;
+    let id = range.next.fetch_add(1, Ordering::Relaxed);
+    if id >= range.end {
+        anyhow::bail!("mail escrow id range is exhausted")
+    }
+    Ok(id)
+}
+pub(crate) fn install_escrow_id_range(next: u64, end: u64) -> Result<()> {
+    use std::sync::atomic::AtomicU64;
+    let requested_start = next.max(1);
+    let range = ESCROW_ID_RANGE.get_or_init(|| EscrowIdRange {
+        next: AtomicU64::new(requested_start),
+        start: requested_start,
+        end,
+    });
+    if range.start != requested_start || range.end != end {
+        anyhow::bail!("a different mail escrow id range is already installed")
+    }
+    Ok(())
+}
+fn refusal_from_module(e: anyhow::Error) -> SendRefusal {
+    let text = format!("{e:#}");
+    if text.contains(mail_rules::NOT_ENOUGH_MONEY) {
+        SendRefusal::NotEnoughMoney(text)
+    } else if text.contains(mail_rules::ITEM_IS_SOULBOUND) {
+        SendRefusal::AttachmentSoulbound(text)
+    } else if text.contains(mail_rules::NOT_YOUR_ITEM) {
+        SendRefusal::AttachmentInvalid(text)
+    } else {
+        SendRefusal::Internal(text)
+    }
+}
 fn at_mailbox<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: Option<u64>,
@@ -103,8 +500,6 @@ fn at_mailbox<St: WorldStore + ?Sized>(
 ) -> Result<u64> {
     let self_guid =
         self_guid.ok_or_else(|| anyhow::anyhow!(lyracore_shared::mail::NOT_IN_WORLD))?;
-    // The session's OWN handle, never the realm one: the mailbox is a gameobject, and realm-core
-    // holds none — asking it would refuse every mailbox on a sharded realm.
     if !store.mailbox_in_range(mailbox_guid, self_guid)? {
         anyhow::bail!(lyracore_shared::mail::not_at_mailbox(mailbox_guid));
     }

@@ -595,6 +595,12 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // own copy. The gateway answers `CMSG_GET_MAIL_LIST` from this cache — mail is a poll, so
         // there is no relay and no per-player subscription to arm.
         "SELECT * FROM game_mail",
+        // The mail ESCROW ledger, and the `game_transfer_out` precedent verbatim: the gateway is
+        // the only component that can see both databases, so a fence its predecessor abandoned is
+        // re-derived from this row and driven forward. Private, read through the owner token. Every
+        // connection in the set, because a letter fences on the sender's shard and a take fences on
+        // realm-core, and a single-database gateway simply never has a row here.
+        "SELECT * FROM game_mail_escrow",
         // Friends/ignore: every character's contact rows, so the coordinator can
         // build any player's SMSG_FRIEND_LIST/SMSG_IGNORE_LIST (RLS-bypassed, like game_character).
         "SELECT * FROM game_character_contact",
@@ -955,6 +961,102 @@ fn ensure_guid_ranges(conns: &HashMap<String, Arc<CoordinatorInner>>, map: &Shar
                  minted; do not force it."
             ),
         }
+    }
+}
+
+/// Claim this gateway's mail-escrow id range once and resume after the largest durable fence or
+/// receipt in it. We deliberately share realm-core's existing range registry: it already provides
+/// idempotent ownership plus a unique slot constraint. Escrow ids remain a separate keyspace
+/// because they are used only as keys in the mail ledgers, never as game GUIDs.
+///
+/// Failure is fail-closed. Installing the old process-time allocator would reintroduce the very
+/// collision this claim removes, so sharded sends refuse until a range can be claimed.
+fn ensure_mail_escrow_range(
+    conns: &HashMap<String, Arc<CoordinatorInner>>,
+    map: &ShardMap,
+    gateway_id: &str,
+) {
+    let Some(rc_name) = map.realm_core_db() else {
+        // The single-database plane never uses escrow; install a harmless local range for tests and
+        // for future same-plane callers without introducing a realm dependency.
+        if let Err(e) = crate::world::mail::install_escrow_id_range(1, u64::MAX) {
+            log::error!("could not install local mail escrow range: {e:#}");
+        }
+        return;
+    };
+    let Some(rc) = conns.get(rc_name) else { return };
+    let claimant = match mail_escrow_claimant(gateway_id) {
+        Ok(claimant) => claimant,
+        Err(e) => {
+            log::error!("could not create an exclusive mail escrow claimant: {e:#}");
+            return;
+        }
+    };
+    let desired = lyracore_shared::mail::escrow_range_mark(&claimant);
+    if let Err(e) = (|| -> Result<()> {
+        call_reducer!(
+            rc.coord().conn.reducers,
+            "claim_guid_range for mail escrow",
+            claim_guid_range_then(claimant.clone(), desired)
+        )?;
+        let row = (0..100)
+            .find_map(|_| {
+                let found = rc
+                    .coord()
+                    .conn
+                    .db
+                    .game_guid_range_registry()
+                    .shard_name()
+                    .find(&claimant);
+                if found.is_none() {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                found
+            })
+            .ok_or_else(|| anyhow!("mail escrow range claim published no registry row"))?;
+        let seen = conns.values().flat_map(|inner| {
+            let db = &inner.coord().conn.db;
+            db.game_mail_escrow()
+                .iter()
+                .map(|r| r.escrow_id)
+                .chain(db.game_mail_delivery().iter().map(|r| r.escrow_id))
+                .collect::<Vec<_>>()
+        });
+        let (next, end) = lyracore_shared::mail::resume_escrow_range(row.base, row.size, seen)
+            .ok_or_else(|| anyhow!("mail escrow id range is exhausted"))?;
+        crate::world::mail::install_escrow_id_range(next, end)?;
+        log::info!(
+            "gateway {gateway_id} mints mail escrow ids from claimed range [{}, {end})",
+            row.base
+        );
+        Ok(())
+    })() {
+        log::error!(
+            "could not claim mail escrow id range: {e:#}; sharded mail value moves will REFUSE"
+        );
+    }
+}
+
+fn mail_escrow_claimant(gateway_id: &str) -> Result<String> {
+    let mut nonce = [0u8; 16];
+    getrandom::fill(&mut nonce).map_err(|e| anyhow!("OS randomness unavailable: {e}"))?;
+    let nonce = nonce
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(format!("mail-escrow:{gateway_id}:{nonce}"))
+}
+
+#[cfg(test)]
+mod mail_escrow_claimant_tests {
+    use super::mail_escrow_claimant;
+
+    #[test]
+    fn live_gateway_processes_claim_distinct_ranges() {
+        let first = mail_escrow_claimant("gateway-a").unwrap();
+        let second = mail_escrow_claimant("gateway-a").unwrap();
+        assert_ne!(first, second);
+        assert!(first.starts_with("mail-escrow:gateway-a:"));
     }
 }
 
@@ -1424,6 +1526,7 @@ impl Coordinator {
             .enforce()
             .map_err(|msg| anyhow!("{msg}"))?;
         ensure_guid_ranges(&conns, &map);
+        ensure_mail_escrow_range(&conns, &map, &cfg.gateway_id);
         let world = Arc::new(super::world_view::WorldView::new(
             crate::config::aoi_enabled(),
         ));

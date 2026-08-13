@@ -386,6 +386,13 @@ fn resolve<'a>(names: &'a [String], indices: &[u32], name_id: u32) -> Result<&'a
 /// the cells its line crosses. Conservative direction: over-blocking by <1 cell.
 const RASTER_MARGIN: f32 = 0.35;
 
+/// Agent-body inset for walk cells; the obstruction/LoS grid retains the true footprint.
+const AGENT_RADIUS: f32 = 0.5;
+
+/// The walk-grid rasterization margin: sliver-catching plus the body inset. The candidate
+/// sub-cell window inflates by the same amount so every center inside the margin gets tested.
+const WALK_MARGIN: f32 = RASTER_MARGIN + AGENT_RADIUS;
+
 /// One world-space collision triangle with its AABB, plane, and origin kind. `z_at` is the
 /// exact-rasterization core: the triangle's z-interval over a 2D point (None = point outside
 /// the inflated footprint). A coarse M2 bounding triangle spanning trunk→canopy thus blocks
@@ -558,15 +565,17 @@ fn rasterize_cell(cell: &crate::terrain::CellRow, tris: &[&WorldTri]) -> Option<
     };
     for t in tris.iter() {
         // Walkability (all geometry): block a nav cell only when the triangle actually passes
-        // through the standing band above THAT cell's ground.
+        // through the standing band above THAT cell's ground. Footprint + window inflated by
+        // Cells within a body radius of geometry rasterize blocked, so
+        // the center line `find_leg`/`nav_step` walk keeps the body clear of wall corners.
         if let (Some((nx0, nx1)), Some((ny0, ny1))) = (
-            clamp_axis(t.lo[0], t.hi[0], cx, WALK_DIM),
-            clamp_axis(t.lo[1], t.hi[1], cy, WALK_DIM),
+            clamp_axis(t.lo[0] - WALK_MARGIN, t.hi[0] + WALK_MARGIN, cx, WALK_DIM),
+            clamp_axis(t.lo[1] - WALK_MARGIN, t.hi[1] + WALK_MARGIN, cy, WALK_DIM),
         ) {
             for ny in ny0..=ny1 {
                 for nx in nx0..=nx1 {
                     let (x, y) = (sub_center(cx, nx, WALK_DIM), sub_center(cy, ny, WALK_DIM));
-                    let Some((z_lo, z_hi)) = t.z_at(x, y, RASTER_MARGIN) else {
+                    let Some((z_lo, z_hi)) = t.z_at(x, y, WALK_MARGIN) else {
                         continue;
                     };
                     let g = ground[ny * WALK_DIM + nx];
@@ -872,12 +881,14 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     }
     let mut by_cell: HashMap<u64, Vec<usize>> = HashMap::new();
     for (i, t) in world_tris.iter().enumerate() {
-        // High world coord → LOW cell index; iterate the covered index rectangle.
+        // High world coord → LOW cell index; iterate the covered index rectangle, inflated by
+        // Include `WALK_MARGIN` so a triangle hugging a cell border reaches the neighbor.
+        // cell its inset walk footprint spills into.
         let (Some(cx0), Some(cx1), Some(cy0), Some(cy1)) = (
-            cell_index(t.hi[0]),
-            cell_index(t.lo[0]),
-            cell_index(t.hi[1]),
-            cell_index(t.lo[1]),
+            cell_index(t.hi[0] + WALK_MARGIN),
+            cell_index(t.lo[0] - WALK_MARGIN),
+            cell_index(t.hi[1] + WALK_MARGIN),
+            cell_index(t.lo[1] - WALK_MARGIN),
         ) else {
             continue; // off the map square (shouldn't happen inside the box)
         };
@@ -1011,4 +1022,54 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     }
     println!("nav: applied.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lyracore_shared::nav::{obs_top, walk_get};
+    use lyracore_shared::terrain::cell_index;
+
+    /// A flat 80.0-height cell at the same Northshire-ish coords the shared runtime tests use.
+    fn flat_cell() -> crate::terrain::CellRow {
+        crate::terrain::CellRow {
+            map_id: 0,
+            cell_x: cell_index(-8913.0).unwrap(),
+            cell_y: cell_index(-184.0).unwrap(),
+            liquid_level: 0.0,
+            has_liquid: false,
+            holes: 0,
+            area_id: 0,
+            heights: vec![80.0; 145],
+        }
+    }
+
+    #[test]
+    fn walk_grid_insets_by_the_agent_radius_but_obs_does_not() {
+        // A thin vertical WMO wall down the x = walk-nx-32 line must
+        // block one extra sub-cell on EACH side (the body inset — the corner-clip fix), while
+        // the obs/LoS grid keeps the true footprint (sight is a line, not a body).
+        let cell = flat_cell();
+        let (cx, cy) = (cell.cell_x, cell.cell_y);
+        let wall_x = sub_center(cx, 32, WALK_DIM);
+        let (y0, y1) = (sub_center(cy, 60, WALK_DIM), sub_center(cy, 3, WALK_DIM));
+        let wall = WorldTri::new(
+            [[wall_x, y0, 79.0], [wall_x, y1, 79.0], [wall_x, y0, 92.0]],
+            true,
+        );
+        let row = rasterize_cell(&cell, &[&wall]).expect("a wall dirties the cell");
+        // On the wall line: blocked.
+        assert!(!walk_get(&row.walk, 32, 32));
+        // One sub-cell out (0.52 yd — inside `WALK_MARGIN`): blocked ONLY by the agent-radius
+        // inset; the bare 0.35 yd `RASTER_MARGIN` left it walkable and the body clipped corners.
+        assert!(!walk_get(&row.walk, 31, 32));
+        assert!(!walk_get(&row.walk, 33, 32));
+        // Two sub-cells out (1.04 yd — outside the margin): walkable, the inset is bounded.
+        assert!(walk_get(&row.walk, 30, 32));
+        assert!(walk_get(&row.walk, 34, 32));
+        // Obs: only the wall's own column (ox=16) rises — no body inset on the sight grid.
+        assert!(obs_top(&row.obs, row.base_z, 16, 16).is_some());
+        assert!(obs_top(&row.obs, row.base_z, 15, 16).is_none());
+        assert!(obs_top(&row.obs, row.base_z, 17, 16).is_none());
+    }
 }

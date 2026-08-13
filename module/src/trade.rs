@@ -347,7 +347,13 @@ fn push_offer_events(ctx: &ReducerContext, session: &TradeSession, offerer_guid:
         partner,
         payload.clone(),
     );
-    push_trade_event_payload(ctx, partner, event_kind::OFFER_PARTNER, offerer_guid, payload);
+    push_trade_event_payload(
+        ctx,
+        partner,
+        event_kind::OFFER_PARTNER,
+        offerer_guid,
+        payload,
+    );
 }
 
 /// The accept-reset rule's impure half (#122): if either party had accepted, clear BOTH flags
@@ -402,8 +408,7 @@ pub(crate) fn apply_set_trade_item(
     if inv_slot >= lyracore_shared::constants::starter_item::BACKPACK_SLOT_0 + 16 {
         return Err("bag items cannot be traded yet".to_string());
     }
-    let inst =
-        crate::items::item_in_slot(ctx, actor.guid, inv_slot).ok_or("no item in slot")?;
+    let inst = crate::items::item_in_slot(ctx, actor.guid, inv_slot).ok_or("no item in slot")?;
     // `ItemInstance.soulbound` is the data model this check enforces (its doc names this work).
     // Refused with a CORRECTIVE echo, not an `Err`: an `Err` rolls the transaction back, so no
     // packet could reach the client and a locally-placed phantom would sit in its own pane. The
@@ -730,38 +735,11 @@ fn gather_commit_side(
             gold_offered,
             gold_balance: entity.money,
             items_offered: items.len() as u32,
-            free_bag_slots: crate::items::count_free_backpack_slots(ctx, entity.guid),
+            free_bag_slots: crate::items::count_free_inventory_slots(ctx, entity.guid),
             offers_soulbound,
         },
         items,
     )
-}
-
-/// Mint the received item on `receiver` — new guid (the giver's client watched the destroy),
-/// instance state COPIED (stack, durability, enchant: the #8 free-repair rule), soulbound stays
-/// false (soulbound never passes the gates). An `Err` here rolls the WHOLE commit back — the
-/// verdict guaranteed room, so a miss means concurrent mutation and nothing may move.
-fn deliver_traded_item(
-    ctx: &ReducerContext,
-    receiver: &WorldEntity,
-    inst: &crate::ItemInstance,
-    guid: u64,
-) -> Result<(), String> {
-    let slot = crate::items::first_free_backpack_slot(ctx, receiver.guid)
-        .ok_or("trade commit: receiver bags filled mid-transaction")?;
-    ctx.db.game_item_instance().insert(crate::ItemInstance {
-        guid,
-        entry: inst.entry,
-        owner_identity: receiver.owner_identity,
-        owner_guid: receiver.guid,
-        slot,
-        stack_count: inst.stack_count,
-        durability: inst.durability,
-        created_at: ctx.timestamp,
-        enchant_id: inst.enchant_id,
-        soulbound: false,
-    });
-    Ok(())
 }
 
 /// The Trade Commit (#122): re-validate presence/range, judge the pure [`commit_verdict`], then
@@ -838,11 +816,37 @@ fn run_trade_commit(
                 instances.guid().delete(inst.guid);
             }
             for inst in &acceptor_items {
-                deliver_traded_item(ctx, &partner, inst, partner_next)?;
+                let tmpl = ctx
+                    .db
+                    .game_item_template()
+                    .entry()
+                    .find(inst.entry)
+                    .ok_or_else(|| format!("trade commit: missing item template {}", inst.entry))?;
+                crate::items::store_instance_state(
+                    ctx,
+                    partner.guid,
+                    partner.owner_identity,
+                    &tmpl,
+                    Some(partner_next),
+                    &crate::items::ItemSnapshot::from(inst),
+                )?;
                 partner_next += 1;
             }
             for inst in &partner_items {
-                deliver_traded_item(ctx, acceptor, inst, acceptor_next)?;
+                let tmpl = ctx
+                    .db
+                    .game_item_template()
+                    .entry()
+                    .find(inst.entry)
+                    .ok_or_else(|| format!("trade commit: missing item template {}", inst.entry))?;
+                crate::items::store_instance_state(
+                    ctx,
+                    acceptor.guid,
+                    acceptor.owner_identity,
+                    &tmpl,
+                    Some(acceptor_next),
+                    &crate::items::ItemSnapshot::from(inst),
+                )?;
                 acceptor_next += 1;
             }
             // Gold, both legs through the ONE arithmetic the verdict already approved, applied
@@ -921,7 +925,11 @@ mod tests {
             Some(u32::MAX),
             "landing exactly on the cap is legal"
         );
-        assert_eq!(gold_after(u32::MAX - 10, 0, 11), None, "one past the cap refuses");
+        assert_eq!(
+            gold_after(u32::MAX - 10, 0, 11),
+            None,
+            "one past the cap refuses"
+        );
         assert_eq!(
             gold_after(u32::MAX, u32::MAX, u32::MAX),
             Some(u32::MAX),
@@ -1056,6 +1064,22 @@ mod tests {
                 durability: 34,
                 max_durability: 40,
             }
+        );
+    }
+
+    /// Trade and mail are the same snapshot move. Keeping the receiver insert in the item module
+    /// prevents their bind, stack-cap, template, and bag-search rules from drifting again.
+    #[test]
+    fn trade_delivers_through_the_shared_snapshot_move_path() {
+        let src = crate::test_scan::read_scanned("module/src/trade.rs")
+            .expect("module/src/trade.rs ships in every checkout");
+        assert!(
+            src.contains("crate::items::store_instance_state("),
+            "trade must recreate received items through the same snapshot path as mail"
+        );
+        assert!(
+            !src.contains(concat!("fn deliver_traded_", "item(")),
+            "the open-coded trade receiver insert must be removed"
         );
     }
 
