@@ -1874,6 +1874,7 @@ pub fn debug_seed_scenario_fixtures(ctx: &ReducerContext) {
     // reseeded, and the suite's combat-regen probe hard-failed on "unknown spell 50137").
     crate::seed::seed_regen_fixture(ctx);
     crate::seed::seed_pw_shield_fixture(ctx);
+    crate::seed::seed_stacking_probe_fixture(ctx);
     // row_count: quest 50900 (1) + how many of the 3 scenario NPC templates (questgiver 51003,
     // vendor 51004, weapon master 51005) are present after this call — an anchor-row proxy for the
     // fixture's full spread across quest/text/objective/reward/vendor/trainer tables, not an exact

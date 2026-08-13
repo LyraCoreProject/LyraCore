@@ -987,6 +987,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
                                  // only from debug_seed_scenario_fixtures, so every fresh shard agrees regardless of whether the
                                  // wire-suite harness ever ran against it (see seed::fixtures::seed_fixture_catalogue's doc).
     seed_fixture_catalogue(ctx);
+    seed_stacking_probe_fixture(ctx); // the live stacking-family probe's four family members
     seed_soul_shard_item(ctx); // Soul Shard item template (6265)
     seed_drain_soul_fixture(ctx); // Drain Soul (1120) channel — soul-shard generation
     seed_frost_armor_fixture(ctx); // Chilled (6136) + Frost Armor (168) — proc-on-being-hit-in-melee
@@ -1803,6 +1804,35 @@ mod tests {
             .map(|&(group_id, ..)| group_id)
             .collect();
         assert_eq!(comparable, vec![4]);
+    }
+
+    /// The live probe's premise: its two stamina buffs share one magnitude-compared family and its
+    /// two Blessings share the per-caster family. A membership or rule edit that breaks either pairing
+    /// would leave `docs/aura-stacking-probes.md` describing an outcome the module no longer produces.
+    #[test]
+    fn the_live_probe_fixture_spells_sit_in_the_families_the_probe_documents() {
+        let family_of = |spell_id: u32| {
+            SPELL_GROUPS
+                .iter()
+                .find(|&&(_, _, _, members)| members.contains(&spell_id))
+                .map(|&(group_id, rule, rank_is_comparable, _)| {
+                    (group_id, rule, rank_is_comparable)
+                })
+                .unwrap_or_else(|| panic!("probe spell {spell_id} is in no family"))
+        };
+        // Fortitude and Prayer of Fortitude: one family, strongest-wins, decided by magnitude rather
+        // than by rank number, and differently named so the same-name rank sweep stays out of it.
+        assert_eq!(family_of(1243), family_of(21562));
+        assert_eq!(
+            family_of(1243),
+            (2, crate::spell::stacking::RULE_EXCLUSIVE_STRONGER, false)
+        );
+        // Blessing of Might and Blessing of Wisdom: one family, one Blessing per paladin.
+        assert_eq!(family_of(19740), family_of(19742));
+        assert_eq!(
+            family_of(19740).1,
+            crate::spell::stacking::RULE_EXCLUSIVE_PER_CASTER
+        );
     }
 
     /// Eating replaces the active food buff even when the new meal is worse, so a strength gate would

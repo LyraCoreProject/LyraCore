@@ -104,7 +104,7 @@ pub(crate) fn on_comment_line(content: &str, byte_idx: usize) -> bool {
 
 /// `byte_idx` sits inside an ordinary double-quoted string literal on its line. Source scanners
 /// must not treat assertion needles as live table reads.
-fn in_string_literal(content: &str, byte_idx: usize) -> bool {
+pub(crate) fn in_string_literal(content: &str, byte_idx: usize) -> bool {
     let line_start = content[..byte_idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
     let bytes = content[line_start..byte_idx].as_bytes();
     let mut in_string = false;

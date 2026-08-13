@@ -281,6 +281,10 @@ families now compare effect magnitude, with an existing aura's stack count folde
 - **Expose Armor's magnitude**, which the client stores as a combo-point coefficient rather than a flat
   value. The policy tests use its 5-combo-point value.
 
+**How the families are checked on a live database:**
+[`aura-stacking-probes.md`](./aura-stacking-probes.md) — replacement, refusal, per-caster Blessings,
+and persisted `game_aura` rows, through the debug reducers on a development database.
+
 ## Where these questions landed
 
 The open questions this document originally posed have all been answered, and the answers are the
