@@ -1,4 +1,5 @@
 use super::*;
+use super::handlers::ItemActionStore;
 use std::os::unix::net::UnixStream;
 
 /// The client side of every real world-session test has a bounded read. A missing server packet is
@@ -1843,12 +1844,6 @@ impl WorldStore for InMemoryStore {
             None => Ok(()),
         }
     }
-    fn equip_item(&self, _account_id: u64, _self_guid: u64, _from_slot: u8) -> Result<()> {
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
-    }
     fn unequip_item(&self, _account_id: u64, _self_guid: u64, from_slot: u8) -> Result<()> {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
@@ -2767,6 +2762,15 @@ impl WorldStore for InMemoryStore {
             return Err(anyhow!("not on that list"));
         }
         Ok(())
+    }
+}
+
+impl ItemActionStore for InMemoryStore {
+    fn equip_item(&self, _account_id: u64, _self_guid: u64, _from_slot: u8) -> Result<()> {
+        match &self.trade_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
     }
 }
 
@@ -5036,6 +5040,16 @@ fn equip_item_err_sends_smsg_inventory_change_failure() {
     match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
         ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(_) => {} // correct feedback packet
         other => panic!("expected SMSG_INVENTORY_CHANGE_FAILURE, got {other}"),
+    }
+    CMSG_AUTOEQUIP_ITEM {
+        source_bag: 255,
+        source_slot: 25,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(_) => {}
+        other => panic!("expected a second SMSG_INVENTORY_CHANGE_FAILURE, got {other}"),
     }
     drop(client);
     server.join().unwrap();

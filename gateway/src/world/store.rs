@@ -5,8 +5,9 @@
 //! the section markers below are load-bearing navigation, not a split.
 
 use super::*;
+use super::handlers::ItemActionStore;
 
-pub trait WorldStore: Send + Sync {
+pub trait WorldStore: ItemActionStore + Send + Sync {
     /// Look up the shared session key K (+ account id) for an (already uppercased) account
     /// name. `None` when no live session exists for that account (reject the handshake).
     fn lookup_session(&self, account_name: &str) -> Result<Option<WorldSession>>;
@@ -509,11 +510,6 @@ pub trait WorldStore: Send + Sync {
     /// Spend a talent point on `talent_id` (`CMSG_LEARN_TALENT`). The module gates it (points available
     /// / max rank / prerequisites); a gameplay `Err` is per-action, not session-fatal.
     fn learn_talent(&self, account_id: u64, self_guid: u64, talent_id: u32) -> Result<()>;
-
-    /// Equip the item in main-inventory `from_slot` into its matching equipment slot
-    /// (`CMSG_AUTOEQUIP_ITEM`). The module resolves the target slot from the item's `inventory_type`
-    /// and validates the required-level gate; a gameplay `Err` is per-action, not session-fatal.
-    fn equip_item(&self, account_id: u64, self_guid: u64, from_slot: u8) -> Result<()>;
 
     /// Unequip the item in equipment `from_slot` (0..=18) into a free backpack slot (right-click an
     /// equipped item → `CMSG_AUTOSTORE_BAG_ITEM`). Errors (not equipped / backpack full) are per-action.

@@ -757,10 +757,6 @@ impl WorldStore for Coordinator {
         self.learn_talent(account_id, self_guid, talent_id)
     }
 
-    fn equip_item(&self, account_id: u64, self_guid: u64, from_slot: u8) -> Result<()> {
-        self.equip_item(account_id, self_guid, from_slot)
-    }
-
     fn unequip_item(&self, account_id: u64, self_guid: u64, from_slot: u8) -> Result<()> {
         self.unequip_item(account_id, self_guid, from_slot)
     }

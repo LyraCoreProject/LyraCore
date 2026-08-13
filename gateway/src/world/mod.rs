@@ -44,8 +44,9 @@ pub mod transfer;
 pub mod whisper;
 use coalesce::CoalesceState;
 use handlers::{
-    handle_bank, handle_char, handle_combat, handle_item, handle_loot, handle_mail, handle_query,
-    handle_quest, handle_trade, handle_trainer, handle_vendor,
+    dispatch_item_action, handle_bank, handle_char, handle_combat, handle_item, handle_loot,
+    handle_mail, handle_query, handle_quest, handle_trade, handle_trainer, handle_vendor,
+    ItemActionOutcome, ItemActionPlayer,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
@@ -1180,6 +1181,22 @@ fn dispatch<St: WorldStore + ?Sized>(
     };
     let Some(msg) = handle_trainer(tx, store, conn, msg)? else {
         return Ok(());
+    };
+    let msg = match dispatch_item_action(
+        store,
+        ItemActionPlayer {
+            account_id: conn.account_id,
+            self_guid: social::self_guid(conn),
+        },
+        msg,
+    )? {
+        ItemActionOutcome::Handled { outbound } => {
+            if !outbound.is_empty() {
+                send(tx, Outbound::Batch(outbound))?;
+            }
+            return Ok(());
+        }
+        ItemActionOutcome::PassThrough(msg) => msg,
     };
     let Some(msg) = handle_item(tx, store, conn, msg)? else {
         return Ok(());

@@ -23,7 +23,9 @@ mod vendor;
 pub(crate) use bank::handle_bank;
 pub(crate) use char::handle_char;
 pub(crate) use combat::handle_combat;
-pub(crate) use item::handle_item;
+pub(crate) use item::{
+    dispatch_item_action, handle_item, ItemActionOutcome, ItemActionPlayer, ItemActionStore,
+};
 pub(crate) use loot::handle_loot;
 pub(crate) use mail::handle_mail;
 pub(crate) use query::handle_query;
