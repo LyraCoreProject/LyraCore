@@ -44,8 +44,9 @@ pub mod transfer;
 pub mod whisper;
 use coalesce::CoalesceState;
 use handlers::{
-    handle_bank, handle_char, handle_combat, handle_item, handle_loot, handle_mail, handle_query,
-    handle_quest, handle_trade, handle_trainer, handle_vendor,
+    dispatch_item_action, handle_bank, handle_char, handle_combat, handle_loot, handle_mail,
+    handle_query, handle_quest, handle_trade, handle_trainer, handle_vendor, ItemActionOutcome,
+    ItemActionPlayer,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
@@ -1115,7 +1116,12 @@ fn handle_addon_message<St: WorldStore + ?Sized>(store: &St, conn: &WorldConn, t
         log::debug!("addon bridge: non-STC or malformed frame dropped: {text:?}");
         return;
     };
-    if let Err(e) = store.client_command(conn.account_id, social::self_guid(conn).unwrap_or(0), cmd.clone(), payload) {
+    if let Err(e) = store.client_command(
+        conn.account_id,
+        social::self_guid(conn).unwrap_or(0),
+        cmd.clone(),
+        payload,
+    ) {
         log::info!(
             "addon bridge: command {cmd:?} from account {} failed: {e:#}",
             conn.account_id
@@ -1142,9 +1148,8 @@ fn is_desync_error(e: &anyhow::Error) -> bool {
     s.contains("not in world") || s.contains("no live entity")
 }
 
-/// Route one decrypted client message. Threads it through the per-family `handle_*` free fns (the
-/// carve of the former dispatch god-match): each consumes its own opcodes (`Ok(None)`) or passes the
-/// message on (`Ok(Some(msg))`), so the disjoint-family chain ends in the movement-relay catch-all.
+/// Route one decrypted client message through the per-family handlers. Each stage either consumes
+/// its opcode or passes it onward, so the disjoint-family chain ends in the movement-relay catch-all.
 fn dispatch<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
@@ -1181,8 +1186,21 @@ fn dispatch<St: WorldStore + ?Sized>(
     let Some(msg) = handle_trainer(tx, store, conn, msg)? else {
         return Ok(());
     };
-    let Some(msg) = handle_item(tx, store, conn, msg)? else {
-        return Ok(());
+    let msg = match dispatch_item_action(
+        store,
+        ItemActionPlayer {
+            account_id: conn.account_id,
+            self_guid: social::self_guid(conn),
+        },
+        msg,
+    )? {
+        ItemActionOutcome::Handled { outbound } => {
+            for message in outbound {
+                send(tx, message)?;
+            }
+            return Ok(());
+        }
+        ItemActionOutcome::PassThrough(msg) => msg,
     };
     let Some(msg) = handle_quest(tx, store, conn, msg)? else {
         return Ok(());

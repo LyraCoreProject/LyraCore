@@ -1,6 +1,5 @@
-//! Per-domain dispatch handlers (code-motion of the former `world/mod.rs` dispatch match arms
-//! into files named after the same domains `codec/` uses), plus the couple of helpers each
-//! shared by two of them.
+//! Per-domain dispatch handlers and the deeper action dispatchers that own a complete protocol
+//! family, plus the couple of helpers shared by two handlers.
 
 use super::*;
 
@@ -23,7 +22,7 @@ mod vendor;
 pub(crate) use bank::handle_bank;
 pub(crate) use char::handle_char;
 pub(crate) use combat::handle_combat;
-pub(crate) use item::handle_item;
+pub(crate) use item::{dispatch_item_action, ItemActionOutcome, ItemActionPlayer, ItemActionStore};
 pub(crate) use loot::handle_loot;
 pub(crate) use mail::handle_mail;
 pub(crate) use query::handle_query;

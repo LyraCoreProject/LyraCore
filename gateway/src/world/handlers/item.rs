@@ -1,167 +1,633 @@
-//! Item-action family: equip / unequip / move items within the player's inventory. Pure
-//! code-motion out of `world/mod.rs`.
+//! Item-action dispatcher: protocol mapping and feedback for equip, use, and inventory operations.
 
 use super::super::*;
 
-/// Item-action family (inventory slice): equip / unequip / move items within the player's MAIN
-/// inventory container (`INVENTORY_SLOT_BAG_0` = 255 — equipment slots 0..=18 and the backpack 23..=38).
-/// The module owns all slot validation (equip rules, required-level, swap, full-backpack); the gateway
-/// only maps the client's (bag, slot) addressing onto the module's absolute-slot reducers and relays
-/// the resulting row changes back via the player's item subscription. Items inside equipped SUB-bags
-/// (bag 19..=22) aren't modelled yet → logged + ignored. Every reducer rejection is a transient
-/// per-action failure (logged, never session-fatal), exactly like the vendor buy/sell arms.
-pub(crate) fn handle_item<St: WorldStore + ?Sized>(
-    tx: &SessionTx,
-    store: &St,
-    conn: &mut WorldConn,
-    msg: ClientOpcodeMessage,
-) -> Result<Option<ClientOpcodeMessage>> {
-    const MAIN_BAG: u8 = 255; // INVENTORY_SLOT_BAG_0 — backpack + equipped slots share this pseudo-bag
-    const EQUIP_SLOT_END: u8 = 18; // EQUIPMENT_SLOT_END — last equipment slot (main-hand=15, off=16…)
-    match msg {
-        // Right-click a backpack item → auto-equip into its matching slot (module resolves the slot).
-        ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(c) => {
-            if c.source_bag == MAIN_BAG {
-                let self_guid = match &conn.state {
-                    WorldState::InWorld(iw) => iw.self_guid,
-                    WorldState::CharSelect => 0,
-                };
-                if let Err(e) = store.equip_item(conn.account_id, self_guid, c.source_slot) {
-                    log::debug!(
-                        "world: equip_item rejected (account {}): {e}",
-                        conn.account_id
-                    );
-                    send(
-                        tx,
-                        Outbound::One(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
-                            Box::new(codec::build_inventory_change_failure()),
-                        )),
-                    )?;
-                }
-            } else {
-                log::debug!(
-                    "world: autoequip from sub-bag {} unsupported (account {})",
-                    c.source_bag,
-                    conn.account_id
-                );
-            }
-        }
-        // Drag an item between two main-inventory slots — covers drag-to-equip, drag-to-unequip, and
-        // backpack rearrange (the module's move primitive validates equip-slot transitions).
-        ClientOpcodeMessage::CMSG_SWAP_INV_ITEM(c) => {
-            if let Err(e) = store.move_item(
-                conn.account_id,
-                social::self_guid(conn).unwrap_or(0),
-                c.source_slot.as_int(),
-                c.destination_slot.as_int(),
-            ) {
-                log::debug!(
-                    "world: move_item rejected (account {}): {e}",
-                    conn.account_id
-                );
-                send(
-                    tx,
-                    Outbound::One(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
-                        Box::new(codec::build_inventory_change_failure()),
-                    )),
-                )?;
-            }
-        }
-        // Right-click an equipped item → auto-store it into the first free backpack slot (unequip).
-        ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(c) => {
-            if c.source_bag == MAIN_BAG && c.source_slot <= EQUIP_SLOT_END {
-                if let Err(e) = store.unequip_item(conn.account_id, social::self_guid(conn).unwrap_or(0), c.source_slot) {
-                    log::debug!(
-                        "world: unequip_item rejected (account {}): {e}",
-                        conn.account_id
-                    );
-                    send(
-                        tx,
-                        Outbound::One(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
-                            Box::new(codec::build_inventory_change_failure()),
-                        )),
-                    )?;
-                }
-            } else {
-                log::debug!(
-                    "world: autostore (bag {} slot {}) unsupported (account {})",
-                    c.source_bag,
-                    c.source_slot,
-                    conn.account_id
-                );
-            }
-        }
-        // Right-click a consumable (food/drink/potion/bandage) → use it. Only the main bag (255) is
-        // modeled, so `bag_slot` is our flat inventory slot. The module applies the on-use effect + stack
-        // decrement; a per-action Err (not usable / empty) is logged, never session-fatal.
-        ClientOpcodeMessage::CMSG_USE_ITEM(c) => {
-            if c.bag_index == MAIN_BAG {
-                // Item-starts-quest: an item whose template carries `start_quest`
-                // opens that quest's DETAILS screen instead of the normal use/consume path — the item
-                // is NOT consumed (cmangos's "dropped tabard starts a quest" pattern). Checked BEFORE
-                // `use_item` so a start-quest item never falls through to the generic (usually
-                // rejected, "not consumable") use path. Needs the in-world player guid to resolve the
-                // slot's owner; a CharSelect use (shouldn't happen — items are in-world only) falls
-                // through to the ordinary path below, which errors harmlessly.
-                let self_guid = match &conn.state {
-                    WorldState::InWorld(iw) => Some(iw.self_guid),
-                    WorldState::CharSelect => None,
-                };
-                let start_quest = self_guid.and_then(|g| store.item_start_quest(g, c.bag_slot));
-                if let Some((item_guid, quest_id)) = start_quest {
-                    if let Some(detail) = store.quest_detail(quest_id)? {
-                        send(tx, {
-                            let (opcode, body) = codec::build_quest_details_raw(item_guid, &detail);
-                            Outbound::Raw { opcode, body }
-                        })?;
-                    }
-                } else if let Err(e) =
-                    store.use_item(conn.account_id, self_guid.unwrap_or(0), c.bag_slot)
-                {
-                    log::debug!(
-                        "world: use_item rejected (account {}): {e}",
-                        conn.account_id
-                    );
-                    send(
-                        tx,
-                        Outbound::One(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
-                            Box::new(codec::build_inventory_change_failure()),
-                        )),
-                    )?;
-                }
-            } else {
-                log::debug!(
-                    "world: use_item from sub-bag {} unsupported (account {})",
-                    c.bag_index,
-                    conn.account_id
-                );
-            }
-        }
-        // Cross-container swap. We only model the main inventory, so both ends must be bag 255.
-        // (NB: gtker's field is spelled `destionation_slot` — a typo in the generated struct.)
-        ClientOpcodeMessage::CMSG_SWAP_ITEM(c) => {
-            if c.source_bag == MAIN_BAG && c.destination_bag == MAIN_BAG {
-                if let Err(e) = store.move_item(conn.account_id, social::self_guid(conn).unwrap_or(0), c.source_slot, c.destionation_slot)
-                {
-                    log::debug!(
-                        "world: move_item (swap) rejected (account {}): {e}",
-                        conn.account_id
-                    );
-                    send(
-                        tx,
-                        Outbound::One(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
-                            Box::new(codec::build_inventory_change_failure()),
-                        )),
-                    )?;
-                }
-            } else {
-                log::debug!(
-                    "world: cross-bag swap unsupported (account {})",
-                    conn.account_id
-                );
-            }
-        }
-        other => return Ok(Some(other)),
+const MAIN_BAG: u8 = 255; // INVENTORY_SLOT_BAG_0 — backpack + equipped slots share this pseudo-bag
+const EQUIP_SLOT_END: u8 = 18; // EQUIPMENT_SLOT_END — last equipment slot (main-hand=15, off=16…)
+
+pub(crate) trait ItemActionStore: Send + Sync {
+    fn equip_item(&self, account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()>;
+    fn unequip_item(&self, account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()>;
+    fn move_item(&self, account_id: u64, actor_guid: u64, from_slot: u8, to_slot: u8)
+        -> Result<()>;
+    fn use_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<()>;
+    fn item_start_quest(&self, owner_guid: u64, slot: u8) -> Option<(u64, u32)>;
+    fn item_quest_detail(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>>;
+}
+
+impl ItemActionStore for crate::stdb::Coordinator {
+    fn equip_item(&self, account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()> {
+        crate::stdb::Coordinator::equip_item(self, account_id, actor_guid, from_slot)
     }
-    Ok(None)
+
+    fn unequip_item(&self, account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()> {
+        crate::stdb::Coordinator::unequip_item(self, account_id, actor_guid, from_slot)
+    }
+
+    fn move_item(
+        &self,
+        account_id: u64,
+        actor_guid: u64,
+        from_slot: u8,
+        to_slot: u8,
+    ) -> Result<()> {
+        crate::stdb::Coordinator::move_item(self, account_id, actor_guid, from_slot, to_slot)
+    }
+
+    fn use_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
+        crate::stdb::Coordinator::use_item(self, account_id, actor_guid, slot)
+    }
+
+    fn item_start_quest(&self, owner_guid: u64, slot: u8) -> Option<(u64, u32)> {
+        crate::stdb::Coordinator::item_start_quest(self, owner_guid, slot)
+    }
+
+    fn item_quest_detail(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>> {
+        crate::stdb::Coordinator::quest_detail(self, quest_id)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ItemActionPlayer {
+    pub(crate) account_id: u64,
+    pub(crate) self_guid: Option<u64>,
+}
+
+pub(crate) enum ItemActionOutcome {
+    Handled { outbound: Vec<Outbound> },
+    PassThrough(ClientOpcodeMessage),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ItemActionErrorClass {
+    GameplayRefusal,
+    Fatal,
+}
+
+fn classify_item_action_error(error: &anyhow::Error) -> ItemActionErrorClass {
+    if error
+        .chain()
+        .any(|cause| cause.to_string().contains("reducer transport disconnected"))
+    {
+        ItemActionErrorClass::Fatal
+    } else {
+        ItemActionErrorClass::GameplayRefusal
+    }
+}
+
+fn inventory_action_outbound(
+    account_id: u64,
+    operation: &str,
+    result: Result<()>,
+) -> Result<Vec<Outbound>> {
+    match result {
+        Ok(()) => Ok(Vec::new()),
+        Err(e) if classify_item_action_error(&e) == ItemActionErrorClass::GameplayRefusal => {
+            log::debug!("world: {operation} rejected (account {account_id}): {e}");
+            Ok(vec![Outbound::One(
+                ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(
+                    codec::build_inventory_change_failure(),
+                )),
+            )])
+        }
+        Err(e) => Err(e),
+    }
+}
+
+pub(crate) fn dispatch_item_action<St: ItemActionStore + ?Sized>(
+    store: &St,
+    player: ItemActionPlayer,
+    msg: ClientOpcodeMessage,
+) -> Result<ItemActionOutcome> {
+    match msg {
+        ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(c) if c.source_bag == MAIN_BAG => {
+            let outbound = inventory_action_outbound(
+                player.account_id,
+                "equip_item",
+                store.equip_item(
+                    player.account_id,
+                    player.self_guid.unwrap_or(0),
+                    c.source_slot,
+                ),
+            )?;
+            Ok(ItemActionOutcome::Handled { outbound })
+        }
+        ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(c) => {
+            log::debug!(
+                "world: autoequip from sub-bag {} unsupported (account {})",
+                c.source_bag,
+                player.account_id
+            );
+            Ok(ItemActionOutcome::Handled {
+                outbound: Vec::new(),
+            })
+        }
+        ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(c)
+            if c.source_bag == MAIN_BAG
+                && c.destination_bag == MAIN_BAG
+                && c.source_slot <= EQUIP_SLOT_END =>
+        {
+            let outbound = inventory_action_outbound(
+                player.account_id,
+                "unequip_item",
+                store.unequip_item(
+                    player.account_id,
+                    player.self_guid.unwrap_or(0),
+                    c.source_slot,
+                ),
+            )?;
+            Ok(ItemActionOutcome::Handled { outbound })
+        }
+        ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(c) => {
+            log::debug!(
+                "world: autostore (bag {} slot {}) unsupported (account {})",
+                c.source_bag,
+                c.source_slot,
+                player.account_id
+            );
+            Ok(ItemActionOutcome::Handled {
+                outbound: Vec::new(),
+            })
+        }
+        ClientOpcodeMessage::CMSG_SWAP_INV_ITEM(c) => {
+            let outbound = inventory_action_outbound(
+                player.account_id,
+                "move_item",
+                store.move_item(
+                    player.account_id,
+                    player.self_guid.unwrap_or(0),
+                    c.source_slot.as_int(),
+                    c.destination_slot.as_int(),
+                ),
+            )?;
+            Ok(ItemActionOutcome::Handled { outbound })
+        }
+        ClientOpcodeMessage::CMSG_SWAP_ITEM(c)
+            if c.source_bag == MAIN_BAG && c.destination_bag == MAIN_BAG =>
+        {
+            let outbound = inventory_action_outbound(
+                player.account_id,
+                "move_item (swap)",
+                store.move_item(
+                    player.account_id,
+                    player.self_guid.unwrap_or(0),
+                    c.source_slot,
+                    c.destionation_slot,
+                ),
+            )?;
+            Ok(ItemActionOutcome::Handled { outbound })
+        }
+        ClientOpcodeMessage::CMSG_SWAP_ITEM(_) => {
+            log::debug!(
+                "world: cross-bag swap unsupported (account {})",
+                player.account_id
+            );
+            Ok(ItemActionOutcome::Handled {
+                outbound: Vec::new(),
+            })
+        }
+        ClientOpcodeMessage::CMSG_USE_ITEM(c) if c.bag_index == MAIN_BAG => {
+            let start_quest = player
+                .self_guid
+                .and_then(|guid| store.item_start_quest(guid, c.bag_slot));
+            let outbound = if let Some((item_guid, quest_id)) = start_quest {
+                store
+                    .item_quest_detail(quest_id)?
+                    .map_or_else(Vec::new, |detail| {
+                        let (opcode, body) = codec::build_quest_details_raw(item_guid, &detail);
+                        vec![Outbound::Raw { opcode, body }]
+                    })
+            } else {
+                inventory_action_outbound(
+                    player.account_id,
+                    "use_item",
+                    store.use_item(player.account_id, player.self_guid.unwrap_or(0), c.bag_slot),
+                )?
+            };
+            Ok(ItemActionOutcome::Handled { outbound })
+        }
+        ClientOpcodeMessage::CMSG_USE_ITEM(c) => {
+            log::debug!(
+                "world: use_item from sub-bag {} unsupported (account {})",
+                c.bag_index,
+                player.account_id
+            );
+            Ok(ItemActionOutcome::Handled {
+                outbound: Vec::new(),
+            })
+        }
+        other => Ok(ItemActionOutcome::PassThrough(other)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use wow_world_messages::vanilla::{
+        ItemSlot, CMSG_AUTOEQUIP_ITEM, CMSG_AUTOSTORE_BAG_ITEM, CMSG_PING, CMSG_SWAP_INV_ITEM,
+        CMSG_SWAP_ITEM, CMSG_USE_ITEM,
+    };
+
+    #[derive(Default)]
+    struct InMemoryItemActions {
+        equip_requests: Mutex<Vec<(u64, u64, u8)>>,
+        unequip_requests: Mutex<Vec<(u64, u64, u8)>>,
+        move_requests: Mutex<Vec<(u64, u64, u8, u8)>>,
+        use_requests: Mutex<Vec<(u64, u64, u8)>>,
+        equip_error: Option<String>,
+        unequip_error: Option<String>,
+        move_error: Option<String>,
+        use_error: Option<String>,
+        start_quest: Option<(u64, u32)>,
+        quest_detail: Option<codec::QuestDetailView>,
+    }
+
+    impl ItemActionStore for InMemoryItemActions {
+        fn equip_item(&self, account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()> {
+            self.equip_requests
+                .lock()
+                .unwrap()
+                .push((account_id, actor_guid, from_slot));
+            self.equip_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+        }
+
+        fn unequip_item(&self, account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()> {
+            self.unequip_requests
+                .lock()
+                .unwrap()
+                .push((account_id, actor_guid, from_slot));
+            self.unequip_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+        }
+
+        fn move_item(
+            &self,
+            account_id: u64,
+            actor_guid: u64,
+            from_slot: u8,
+            to_slot: u8,
+        ) -> Result<()> {
+            self.move_requests
+                .lock()
+                .unwrap()
+                .push((account_id, actor_guid, from_slot, to_slot));
+            self.move_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+        }
+
+        fn use_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
+            self.use_requests
+                .lock()
+                .unwrap()
+                .push((account_id, actor_guid, slot));
+            self.use_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+        }
+
+        fn item_start_quest(&self, _owner_guid: u64, _slot: u8) -> Option<(u64, u32)> {
+            self.start_quest
+        }
+
+        fn item_quest_detail(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>> {
+            Ok(self
+                .quest_detail
+                .as_ref()
+                .filter(|detail| detail.quest_id == quest_id)
+                .cloned())
+        }
+    }
+
+    fn player() -> ItemActionPlayer {
+        ItemActionPlayer {
+            account_id: 7,
+            self_guid: Some(42),
+        }
+    }
+
+    fn use_item(bag_index: u8) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_USE_ITEM(Box::new(CMSG_USE_ITEM {
+            bag_index,
+            bag_slot: 5,
+            ..Default::default()
+        }))
+    }
+
+    fn quest_detail(quest_id: u32) -> codec::QuestDetailView {
+        codec::QuestDetailView {
+            quest_id,
+            quest_level: 1,
+            zone_or_sort: 12,
+            title: "A Threat Within".into(),
+            details: String::new(),
+            objectives_text: String::new(),
+            offer_reward_text: String::new(),
+            request_items_text: String::new(),
+            money_reward: 0,
+            reward_xp: 0,
+            next_quest_id: 0,
+            max_level_money_reward: 0,
+            rewards: Vec::new(),
+            choice_rewards: Vec::new(),
+            objectives: Vec::new(),
+        }
+    }
+
+    fn inventory_failure(outcome: ItemActionOutcome) {
+        assert!(matches!(
+            outcome,
+            ItemActionOutcome::Handled { outbound }
+                if matches!(outbound.as_slice(), [Outbound::One(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(_))])
+        ));
+    }
+
+    #[test]
+    fn equip_and_use_from_the_main_bag_request_the_actor_and_slot() {
+        let actions = InMemoryItemActions::default();
+        let equip = dispatch_item_action(
+            &actions,
+            player(),
+            ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(CMSG_AUTOEQUIP_ITEM {
+                source_bag: MAIN_BAG,
+                source_slot: 24,
+            }),
+        )
+        .unwrap();
+        let use_outcome = dispatch_item_action(&actions, player(), use_item(MAIN_BAG)).unwrap();
+
+        assert!(matches!(equip, ItemActionOutcome::Handled { outbound } if outbound.is_empty()));
+        assert!(
+            matches!(use_outcome, ItemActionOutcome::Handled { outbound } if outbound.is_empty())
+        );
+        assert_eq!(
+            actions.equip_requests.lock().unwrap().as_slice(),
+            &[(7, 42, 24)]
+        );
+        assert_eq!(
+            actions.use_requests.lock().unwrap().as_slice(),
+            &[(7, 42, 5)]
+        );
+    }
+
+    #[test]
+    fn inventory_refusals_are_handled_with_inventory_failure() {
+        let actions = InMemoryItemActions {
+            equip_error: Some("required level not met".into()),
+            unequip_error: Some("backpack full".into()),
+            move_error: Some("cannot equip that there".into()),
+            use_error: Some("item is not usable".into()),
+            ..Default::default()
+        };
+
+        inventory_failure(
+            dispatch_item_action(
+                &actions,
+                player(),
+                ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(CMSG_AUTOEQUIP_ITEM {
+                    source_bag: MAIN_BAG,
+                    source_slot: 24,
+                }),
+            )
+            .unwrap(),
+        );
+        inventory_failure(
+            dispatch_item_action(
+                &actions,
+                player(),
+                ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(CMSG_AUTOSTORE_BAG_ITEM {
+                    source_bag: MAIN_BAG,
+                    source_slot: 15,
+                    destination_bag: MAIN_BAG,
+                }),
+            )
+            .unwrap(),
+        );
+        inventory_failure(
+            dispatch_item_action(
+                &actions,
+                player(),
+                ClientOpcodeMessage::CMSG_SWAP_INV_ITEM(CMSG_SWAP_INV_ITEM {
+                    source_slot: ItemSlot::Inventory0,
+                    destination_slot: ItemSlot::MainHand,
+                }),
+            )
+            .unwrap(),
+        );
+        inventory_failure(dispatch_item_action(&actions, player(), use_item(MAIN_BAG)).unwrap());
+    }
+
+    #[test]
+    fn reducer_transport_failure_is_session_fatal() {
+        let actions = InMemoryItemActions {
+            equip_error: Some("equip_item reducer transport disconnected: channel closed".into()),
+            ..Default::default()
+        };
+
+        let error = match dispatch_item_action(
+            &actions,
+            player(),
+            ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(CMSG_AUTOEQUIP_ITEM {
+                source_bag: MAIN_BAG,
+                source_slot: 24,
+            }),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("a dead reducer transport must end the session"),
+        };
+
+        assert!(format!("{error:#}").contains("reducer transport disconnected"));
+    }
+
+    #[test]
+    fn unequip_and_moves_map_main_bag_slots_to_durable_requests() {
+        let actions = InMemoryItemActions::default();
+        let unequip = dispatch_item_action(
+            &actions,
+            player(),
+            ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(CMSG_AUTOSTORE_BAG_ITEM {
+                source_bag: MAIN_BAG,
+                source_slot: 15,
+                destination_bag: MAIN_BAG,
+            }),
+        )
+        .unwrap();
+        let move_outcome = dispatch_item_action(
+            &actions,
+            player(),
+            ClientOpcodeMessage::CMSG_SWAP_INV_ITEM(CMSG_SWAP_INV_ITEM {
+                source_slot: ItemSlot::MainHand,
+                destination_slot: ItemSlot::Inventory1,
+            }),
+        )
+        .unwrap();
+        let swap = dispatch_item_action(
+            &actions,
+            player(),
+            ClientOpcodeMessage::CMSG_SWAP_ITEM(CMSG_SWAP_ITEM {
+                source_bag: MAIN_BAG,
+                source_slot: 23,
+                destination_bag: MAIN_BAG,
+                destionation_slot: 30,
+            }),
+        )
+        .unwrap();
+
+        assert!(matches!(unequip, ItemActionOutcome::Handled { outbound } if outbound.is_empty()));
+        assert!(
+            matches!(move_outcome, ItemActionOutcome::Handled { outbound } if outbound.is_empty())
+        );
+        assert!(matches!(swap, ItemActionOutcome::Handled { outbound } if outbound.is_empty()));
+        assert_eq!(
+            actions.unequip_requests.lock().unwrap().as_slice(),
+            &[(7, 42, 15)]
+        );
+        assert_eq!(
+            actions.move_requests.lock().unwrap().as_slice(),
+            &[
+                (
+                    7,
+                    42,
+                    ItemSlot::MainHand.as_int(),
+                    ItemSlot::Inventory1.as_int()
+                ),
+                (7, 42, 23, 30)
+            ]
+        );
+    }
+
+    #[test]
+    fn unsupported_containers_are_handled_without_durable_requests() {
+        let actions = InMemoryItemActions::default();
+        for msg in [
+            ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(CMSG_AUTOEQUIP_ITEM {
+                source_bag: 19,
+                source_slot: 2,
+            }),
+            ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(CMSG_AUTOSTORE_BAG_ITEM {
+                source_bag: MAIN_BAG,
+                source_slot: 15,
+                destination_bag: 19,
+            }),
+            ClientOpcodeMessage::CMSG_SWAP_ITEM(CMSG_SWAP_ITEM {
+                source_bag: 19,
+                source_slot: 0,
+                destination_bag: MAIN_BAG,
+                destionation_slot: 23,
+            }),
+            use_item(19),
+        ] {
+            let outcome = dispatch_item_action(&actions, player(), msg).unwrap();
+            assert!(
+                matches!(outcome, ItemActionOutcome::Handled { outbound } if outbound.is_empty())
+            );
+        }
+        assert!(actions.equip_requests.lock().unwrap().is_empty());
+        assert!(actions.unequip_requests.lock().unwrap().is_empty());
+        assert!(actions.move_requests.lock().unwrap().is_empty());
+        assert!(actions.use_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn quest_start_use_returns_details_without_requesting_ordinary_use() {
+        let actions = InMemoryItemActions {
+            start_quest: Some((0x4000_0000_0000_0099, 1234)),
+            quest_detail: Some(quest_detail(1234)),
+            ..Default::default()
+        };
+
+        let outcome = dispatch_item_action(&actions, player(), use_item(MAIN_BAG)).unwrap();
+
+        assert!(matches!(
+            outcome,
+            ItemActionOutcome::Handled { outbound }
+                if matches!(outbound.as_slice(), [Outbound::Raw { opcode: 0x0188, body }]
+                    if body[..8] == 0x4000_0000_0000_0099u64.to_le_bytes()
+                        && body[8..12] == 1234u32.to_le_bytes())
+        ));
+        assert!(actions.use_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unavailable_quest_details_do_not_consume_the_start_quest_item() {
+        let actions = InMemoryItemActions {
+            start_quest: Some((99, 1234)),
+            ..Default::default()
+        };
+
+        let outcome = dispatch_item_action(&actions, player(), use_item(MAIN_BAG)).unwrap();
+
+        assert!(matches!(outcome, ItemActionOutcome::Handled { outbound } if outbound.is_empty()));
+        assert!(actions.use_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unresolved_player_uses_the_legacy_zero_actor_for_every_durable_inventory_action() {
+        let actions = InMemoryItemActions::default();
+        let player = ItemActionPlayer {
+            account_id: 7,
+            self_guid: None,
+        };
+
+        for msg in [
+            ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(CMSG_AUTOEQUIP_ITEM {
+                source_bag: MAIN_BAG,
+                source_slot: 24,
+            }),
+            ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(CMSG_AUTOSTORE_BAG_ITEM {
+                source_bag: MAIN_BAG,
+                source_slot: 15,
+                destination_bag: MAIN_BAG,
+            }),
+            ClientOpcodeMessage::CMSG_SWAP_INV_ITEM(CMSG_SWAP_INV_ITEM {
+                source_slot: ItemSlot::MainHand,
+                destination_slot: ItemSlot::Inventory1,
+            }),
+            use_item(MAIN_BAG),
+        ] {
+            dispatch_item_action(&actions, player, msg).unwrap();
+        }
+
+        assert_eq!(
+            actions.equip_requests.lock().unwrap().as_slice(),
+            &[(7, 0, 24)]
+        );
+        assert_eq!(
+            actions.unequip_requests.lock().unwrap().as_slice(),
+            &[(7, 0, 15)]
+        );
+        assert_eq!(
+            actions.move_requests.lock().unwrap().as_slice(),
+            &[(
+                7,
+                0,
+                ItemSlot::MainHand.as_int(),
+                ItemSlot::Inventory1.as_int()
+            )]
+        );
+        assert_eq!(
+            actions.use_requests.lock().unwrap().as_slice(),
+            &[(7, 0, 5)]
+        );
+    }
+
+    #[test]
+    fn unrelated_opcodes_pass_through_to_the_next_dispatcher() {
+        let actions = InMemoryItemActions::default();
+        let outcome = dispatch_item_action(
+            &actions,
+            player(),
+            ClientOpcodeMessage::CMSG_PING(CMSG_PING::default()),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            ItemActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
+        ));
+    }
 }

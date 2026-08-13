@@ -1,12 +1,13 @@
-//! `WorldStore`: the storage/coordination seam `world/mod.rs` calls through so the handshake
-//! + crypto (and, via `handlers/`, every per-domain reducer call) can be unit-tested without a
-//! database or a real socket. Pure code-motion out of `mod.rs` (behind the `pub use` facade) —
-//! see `mod.rs`'s module doc for the full picture. Kept as ONE trait (only two implementors);
-//! the section markers below are load-bearing navigation, not a split.
+//! `WorldStore`: the broad storage/coordination seam used by the world session. Deep protocol
+//! families may add focused supertraits such as [`ItemActionStore`] so their wire mapping and
+//! failure policy can be tested without implementing this entire interface. Kept as one broad
+//! trait for the remaining session operations (only two implementors); the section markers below
+//! are load-bearing navigation, not a split.
 
+use super::handlers::ItemActionStore;
 use super::*;
 
-pub trait WorldStore: Send + Sync {
+pub trait WorldStore: ItemActionStore + Send + Sync {
     /// Look up the shared session key K (+ account id) for an (already uppercased) account
     /// name. `None` when no live session exists for that account (reject the handshake).
     fn lookup_session(&self, account_name: &str) -> Result<Option<WorldSession>>;
@@ -360,7 +361,13 @@ pub trait WorldStore: Send + Sync {
 
     /// Forward a parsed addon-bridge command to the module's `client_command` reducer ON
     /// THE PLAYER'S CONNECTION — the handler runs with exactly the player's reducer authority.
-    fn client_command(&self, account_id: u64, self_guid: u64, cmd: String, payload: String) -> Result<()>;
+    fn client_command(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        cmd: String,
+        payload: String,
+    ) -> Result<()>;
 
     /// Read every item a character owns, for the login item spawns + inventory slots (items slice-1).
     fn player_items(&self, owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>>;
@@ -410,7 +417,13 @@ pub trait WorldStore: Send + Sync {
 
     /// Re-purchase item in buyback ring slot `slot` (0-based) from vendor (`CMSG_BUYBACK_ITEM`). The
     /// gateway maps `BuybackSlot.as_int() - 69` before calling; the module gates range + copper.
-    fn buyback_item(&self, account_id: u64, self_guid: u64, vendor_guid: u64, slot: u8) -> Result<()>;
+    fn buyback_item(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        vendor_guid: u64,
+        slot: u8,
+    ) -> Result<()>;
 
     /// Repair the item with the given inventory `slot` at REPAIR-NPC `npc_guid` (`CMSG_REPAIR_ITEM`).
     /// The gateway resolves the client's item-instance guid to its slot first (the reducer takes the
@@ -452,7 +465,13 @@ pub trait WorldStore: Send + Sync {
 
     /// Apply `enchant_id` to the item in `slot` (`CMSG_CAST_SPELL` for enchant spell). The module
     /// validates skill, consumes reagent dust, and stamps enchant_id on the item instance.
-    fn enchant_item_on_slot(&self, account_id: u64, self_guid: u64, slot: u8, enchant_id: u32) -> Result<()>;
+    fn enchant_item_on_slot(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        slot: u8,
+        enchant_id: u32,
+    ) -> Result<()>;
 
     /// Return the `grant_spell_id` for `talent_id` (0 = passive, no ability granted), so the gateway
     /// can push `SMSG_LEARNED_SPELL` for ability talents after a successful `learn_talent`.
@@ -478,7 +497,8 @@ pub trait WorldStore: Send + Sync {
     /// Persist one action-bar button (`CMSG_SET_ACTION_BUTTON`); action 0 clears the slot.
     fn set_action_button(
         &self,
-        account_id: u64, self_guid: u64,
+        account_id: u64,
+        self_guid: u64,
         button: u8,
         action: u32,
         action_type: u8,
@@ -488,7 +508,8 @@ pub trait WorldStore: Send + Sync {
     /// `reputation_index` is the client's 0..63 rep-array slot, NOT a faction id.
     fn set_faction_at_war(
         &self,
-        account_id: u64, self_guid: u64,
+        account_id: u64,
+        self_guid: u64,
         reputation_index: u32,
         at_war: bool,
     ) -> Result<()>;
@@ -509,20 +530,6 @@ pub trait WorldStore: Send + Sync {
     /// Spend a talent point on `talent_id` (`CMSG_LEARN_TALENT`). The module gates it (points available
     /// / max rank / prerequisites); a gameplay `Err` is per-action, not session-fatal.
     fn learn_talent(&self, account_id: u64, self_guid: u64, talent_id: u32) -> Result<()>;
-
-    /// Equip the item in main-inventory `from_slot` into its matching equipment slot
-    /// (`CMSG_AUTOEQUIP_ITEM`). The module resolves the target slot from the item's `inventory_type`
-    /// and validates the required-level gate; a gameplay `Err` is per-action, not session-fatal.
-    fn equip_item(&self, account_id: u64, self_guid: u64, from_slot: u8) -> Result<()>;
-
-    /// Unequip the item in equipment `from_slot` (0..=18) into a free backpack slot (right-click an
-    /// equipped item → `CMSG_AUTOSTORE_BAG_ITEM`). Errors (not equipped / backpack full) are per-action.
-    fn unequip_item(&self, account_id: u64, self_guid: u64, from_slot: u8) -> Result<()>;
-
-    /// Use the consumable in main-inventory `slot` (`CMSG_USE_ITEM`) — eat/drink/potion/bandage. The
-    /// module applies the item's on-use effect (flat heal for slice food) and decrements the stack.
-    /// (Using a Hearthstone routes through here too — the module recalls to the bound home.)
-    fn use_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()>;
 
     /// Bind the caller's hearthstone home to their current position (innkeeper gossip "Make this inn
     /// your home."). No args — the module resolves the caller via `ctx.sender`.
@@ -554,11 +561,6 @@ pub trait WorldStore: Send + Sync {
     /// 10+ by `filtered_gossip_options` — #516). Errors (out of range / not enough gold) are
     /// per-action; the caller just closes the gossip window either way.
     fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()>;
-
-    /// Move (or swap) the item in main-inventory `from_slot` to `to_slot` (`CMSG_SWAP_INV_ITEM`/
-    /// `CMSG_SWAP_ITEM`). The module's move primitive validates equip-slot transitions, so this also
-    /// covers drag-to-equip and drag-to-unequip. A gameplay `Err` is per-action, not session-fatal.
-    fn move_item(&self, account_id: u64, self_guid: u64, from_slot: u8, to_slot: u8) -> Result<()>;
 
     /// Auto-bank/auto-store-bank the item in `slot` (`CMSG_AUTOBANK_ITEM`/`CMSG_AUTOSTORE_BANK_ITEM`
     /// — right-click to bank, right-click to withdraw). The module infers the direction from `slot`
@@ -606,11 +608,6 @@ pub trait WorldStore: Send + Sync {
     /// Abandon an active quest (`CMSG_QUESTLOG_REMOVE_QUEST`). The module deletes the quest-log row;
     /// the relay clears the slot. The gateway resolves the client's log SLOT to the quest id first.
     fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()>;
-
-    /// Item-starts-quest: does the item in `owner_guid`'s inventory `slot` carry a
-    /// non-zero `start_quest`? `Some((item_guid, quest_id))` if so — `CMSG_USE_ITEM` opens the quest
-    /// details screen (item guid as giver) instead of consuming it. `None` for an ordinary item.
-    fn item_start_quest(&self, owner_guid: u64, slot: u8) -> Option<(u64, u32)>;
 
     /// Quest sharing: share `quest_id` with the caller's party (`CMSG_PUSHQUESTTOPARTY`).
     /// The module validates the sender is grouped + actively on the quest and pushes per-member
@@ -671,7 +668,13 @@ pub trait WorldStore: Send + Sync {
     /// Relay a pet command-bar action (`CMSG_PET_ACTION`). `data` is the raw packed action
     /// (flag<<24 | id): flag 0x07 = command (Stay/Follow/Attack/Dismiss), flag 0x06 = react state
     /// (Passive/Defensive/Aggressive). The module decodes + validates (all pet policy lives there).
-    fn pet_command(&self, account_id: u64, self_guid: u64, data: u32, target_guid: u64) -> Result<()>;
+    fn pet_command(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        data: u32,
+        target_guid: u64,
+    ) -> Result<()>;
 
     /// Start the player's RANGED auto-attack on `target_guid` with `spell_id` (75 Auto Shot / 5019 wand
     /// Shoot), from `CMSG_CAST_SPELL`. Requires a ranged weapon equipped (the module enforces it).
@@ -692,14 +695,21 @@ pub trait WorldStore: Send + Sync {
     fn set_sheathed(&self, account_id: u64, self_guid: u64, state: u8) -> Result<()>;
 
     /// Cast a spell (`CMSG_CAST_SPELL`, aura tracer). Self-cast; target ignored.
-    fn cast_spell(&self, account_id: u64, self_guid: u64, spell_id: u32, target_guid: u64) -> Result<()>;
+    fn cast_spell(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        spell_id: u32,
+        target_guid: u64,
+    ) -> Result<()>;
 
     /// Cast a GROUND-TARGETED spell at a clicked world point (`CMSG_CAST_SPELL` with a DEST_LOCATION
     /// target block — Flamestrike/Blizzard/Rain of Fire). `(x,y,z)` is the ground click; the module
     /// anchors the AoE/patch there.
     fn cast_spell_at(
         &self,
-        account_id: u64, self_guid: u64,
+        account_id: u64,
+        self_guid: u64,
         spell_id: u32,
         target_guid: u64,
         x: f32,
@@ -747,8 +757,13 @@ pub trait WorldStore: Send + Sync {
     fn leave_channel(&self, account_id: u64, self_guid: u64, channel: String) -> Result<()>;
 
     /// Speak into a joined channel (the CMSG_MESSAGECHAT Channel arm).
-    fn send_channel_message(&self, account_id: u64, self_guid: u64, channel: String, message: String)
-        -> Result<()>;
+    fn send_channel_message(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        channel: String,
+        message: String,
+    ) -> Result<()>;
 
     /// Speak (`CMSG_MESSAGECHAT`, social tier): broadcast a say/yell line. `chat_type` 0 = say, 1 = yell.
     fn send_chat(
@@ -774,10 +789,22 @@ pub trait WorldStore: Send + Sync {
 
     /// Broadcast a `/roll` result (`MSG_RANDOM_ROLL_Client`): pick a server-side random in
     /// `[min_roll, max_roll]` and fan the result to all nearby players as `MSG_RANDOM_ROLL_Server`.
-    fn send_roll(&self, account_id: u64, self_guid: u64, min_roll: u32, max_roll: u32) -> Result<()>;
+    fn send_roll(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        min_roll: u32,
+        max_roll: u32,
+    ) -> Result<()>;
 
     /// Whisper `message` privately to the player named `target_player` (`CMSG_MESSAGECHAT` Whisper).
-    fn send_whisper(&self, account_id: u64, self_guid: u64, target_player: String, message: String) -> Result<()>;
+    fn send_whisper(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_player: String,
+        message: String,
+    ) -> Result<()>;
 
     /// Party chat (`CMSG_MESSAGECHAT` Party, `/p`): deliver `message` to every OTHER
     /// current group member plus an echo to the caller, over the `game_group_event` relay (no
@@ -1057,7 +1084,13 @@ pub trait WorldStore: Send + Sync {
     fn cancel_trade(&self, account_id: u64, self_guid: u64) -> Result<()>;
     /// `CMSG_SET_TRADE_ITEM` — `inv_slot` is the ABSOLUTE inventory slot (the gateway maps the
     /// client's (bag, slot) pair, the item-family convention) (#121).
-    fn set_trade_item(&self, account_id: u64, self_guid: u64, trade_slot: u8, inv_slot: u8) -> Result<()>;
+    fn set_trade_item(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        trade_slot: u8,
+        inv_slot: u8,
+    ) -> Result<()>;
     /// `CMSG_CLEAR_TRADE_ITEM` (#121).
     fn clear_trade_item(&self, account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()>;
     /// `CMSG_SET_TRADE_GOLD` — `copper` is the offered amount (#121).
@@ -1134,12 +1167,20 @@ pub trait WorldStore: Send + Sync {
         loot_threshold: u8,
     ) -> Result<()>;
     /// `CMSG_LOOT_ROLL` — record the caller's need/greed/pass vote.
-    fn loot_roll(&self, account_id: u64, self_guid: u64, corpse_guid: u64, loot_slot: u32, vote: u8) -> Result<()>;
+    fn loot_roll(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        corpse_guid: u64,
+        loot_slot: u32,
+        vote: u8,
+    ) -> Result<()>;
     /// `CMSG_LOOT_MASTER_GIVE` — the master looter assigns an above-
     /// threshold row to `target_guid`.
     fn loot_master_give(
         &self,
-        account_id: u64, self_guid: u64,
+        account_id: u64,
+        self_guid: u64,
         corpse_guid: u64,
         loot_slot: u8,
         target_guid: u64,
@@ -1148,7 +1189,8 @@ pub trait WorldStore: Send + Sync {
     /// before the gateway's own gossip handling; failure never blocks the gossip reply.
     fn gossip_select(
         &self,
-        account_id: u64, self_guid: u64,
+        account_id: u64,
+        self_guid: u64,
         npc_guid: u64,
         option_id: u32,
         option_row_id: u32,
