@@ -32,6 +32,11 @@ pub(crate) trait VendorActionStore: Send + Sync {
 
     fn vendor_sell(&self, account_id: u64, self_guid: u64, vendor_guid: u64, slot: u8)
         -> Result<()>;
+
+    /// Re-purchase the ring entry at 0-based `slot` from `vendor_guid`. The gateway maps the wire
+    /// `BuybackSlot` enum via [`BUYBACK_WIRE_SLOT_BASE`] before calling.
+    fn vendor_buyback(&self, account_id: u64, self_guid: u64, vendor_guid: u64, slot: u8)
+        -> Result<()>;
 }
 
 impl VendorActionStore for crate::stdb::Coordinator {
@@ -82,6 +87,16 @@ impl VendorActionStore for crate::stdb::Coordinator {
         slot: u8,
     ) -> Result<()> {
         crate::stdb::Coordinator::sell_item(self, account_id, self_guid, vendor_guid, slot)
+    }
+
+    fn vendor_buyback(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        vendor_guid: u64,
+        slot: u8,
+    ) -> Result<()> {
+        crate::stdb::Coordinator::buyback_item(self, account_id, self_guid, vendor_guid, slot)
     }
 }
 
@@ -283,6 +298,39 @@ pub(crate) fn dispatch_vendor_action<St: VendorActionStore + ?Sized>(
                 Err(e) => Err(e),
             }
         }
+        // CMSG_BUYBACK_ITEM carries a wire BuybackSlot enum (69–81); map to the 0-based ring slot
+        // the module reducer takes. A successful re-buy rebuilds the whole tab so shifted and
+        // cleared entries appear immediately, but only once there is an actor to render it for.
+        ClientOpcodeMessage::CMSG_BUYBACK_ITEM(c) => {
+            let vendor_guid = c.guid.guid();
+            let slot = c
+                .slot
+                .as_int()
+                .saturating_sub(BUYBACK_WIRE_SLOT_BASE.into()) as u8;
+            match store.vendor_buyback(
+                player.account_id,
+                player.self_guid.unwrap_or(0),
+                vendor_guid,
+                slot,
+            ) {
+                Ok(()) => Ok(VendorActionOutcome::Handled {
+                    outbound: match player.self_guid {
+                        Some(self_guid) => build_buyback_view(store, self_guid),
+                        None => Vec::new(),
+                    },
+                }),
+                Err(e) if classify_vendor_action_error(&e) == VendorActionErrorClass::GameplayRefusal => {
+                    log::debug!(
+                        "world: buyback_item ignored (account {}): {e}",
+                        player.account_id
+                    );
+                    Ok(VendorActionOutcome::Handled {
+                        outbound: Vec::new(),
+                    })
+                }
+                Err(e) => Err(e),
+            }
+        }
         other => Ok(VendorActionOutcome::PassThrough(other)),
     }
 }
@@ -391,7 +439,8 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
-        Guid, CMSG_BUY_ITEM, CMSG_LIST_INVENTORY, CMSG_PING, CMSG_REPAIR_ITEM, CMSG_SELL_ITEM,
+        BuybackSlot, Guid, CMSG_BUYBACK_ITEM, CMSG_BUY_ITEM, CMSG_LIST_INVENTORY, CMSG_PING,
+        CMSG_REPAIR_ITEM, CMSG_SELL_ITEM,
     };
 
     #[derive(Default)]
@@ -410,6 +459,8 @@ mod tests {
         item_slots: Vec<(u64, u8)>,
         repair_error: Option<String>,
         sell_error: Option<String>,
+        buyback_requests: Mutex<Vec<(u64, u64, u64, u8)>>,
+        buyback_error: Option<String>,
     }
 
     impl VendorActionStore for InMemoryVendorActions {
@@ -490,6 +541,23 @@ mod tests {
                 .unwrap()
                 .push((account_id, self_guid, vendor_guid, slot));
             match &self.sell_error {
+                Some(error) => Err(anyhow::anyhow!("{error}")),
+                None => Ok(()),
+            }
+        }
+
+        fn vendor_buyback(
+            &self,
+            account_id: u64,
+            self_guid: u64,
+            vendor_guid: u64,
+            slot: u8,
+        ) -> Result<()> {
+            self.buyback_requests
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid, vendor_guid, slot));
+            match &self.buyback_error {
                 Some(error) => Err(anyhow::anyhow!("{error}")),
                 None => Ok(()),
             }
@@ -635,6 +703,13 @@ mod tests {
                 },
                 sell_item(ITEM),
             ),
+            (
+                InMemoryVendorActions {
+                    buyback_error: Some("buyback_item reducer transport disconnected".into()),
+                    ..Default::default()
+                },
+                buyback_item(BuybackSlot::Slot1),
+            ),
         ] {
             let error = match dispatch_vendor_action(&actions, player(), msg) {
                 Err(error) => error,
@@ -665,6 +740,13 @@ mod tests {
             vendor: Guid::new(VENDOR),
             item: Guid::new(item_guid),
             amount: 1,
+        }))
+    }
+
+    fn buyback_item(slot: BuybackSlot) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_BUYBACK_ITEM(Box::new(CMSG_BUYBACK_ITEM {
+            guid: Guid::new(VENDOR),
+            slot,
         }))
     }
 
@@ -982,8 +1064,6 @@ mod tests {
 
     #[test]
     fn the_wire_slot_base_parses_the_clients_buyback_slots_back_to_ring_indices() {
-        use wow_world_messages::vanilla::BuybackSlot;
-
         for (slot, expected) in [(BuybackSlot::Slot1, 0u32), (BuybackSlot::Slot13, 12)] {
             assert_eq!(
                 slot.as_int().saturating_sub(BUYBACK_WIRE_SLOT_BASE.into()),
@@ -1007,5 +1087,74 @@ mod tests {
             outcome,
             VendorActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
         ));
+    }
+
+    #[test]
+    fn buyback_wire_slots_map_to_zero_based_ring_slots_at_the_durable_call() {
+        let actions = InMemoryVendorActions::default();
+
+        dispatch_vendor_action(&actions, player(), buyback_item(BuybackSlot::Slot1)).unwrap();
+        dispatch_vendor_action(&actions, player(), buyback_item(BuybackSlot::Slot13)).unwrap();
+
+        assert_eq!(
+            actions.buyback_requests.lock().unwrap().as_slice(),
+            &[(7, 42, VENDOR, 0), (7, 42, VENDOR, 12)]
+        );
+    }
+
+    #[test]
+    fn a_successful_buyback_returns_the_full_rebuilt_view() {
+        let ring = vec![(2589, 5, 120), (4540, 1, 30)];
+        let actions = InMemoryVendorActions {
+            ring: ring.clone(),
+            ..Default::default()
+        };
+
+        let outcome =
+            dispatch_vendor_action(&actions, player(), buyback_item(BuybackSlot::Slot1)).unwrap();
+
+        let outbound = match outcome {
+            VendorActionOutcome::Handled { outbound } => outbound,
+            VendorActionOutcome::PassThrough(_) => panic!("buyback must be handled"),
+        };
+        assert_renders_ring(&outbound, &ring);
+    }
+
+    #[test]
+    fn a_buyback_without_an_actor_falls_back_to_the_legacy_zero_actor_and_renders_no_view() {
+        let actions = InMemoryVendorActions {
+            ring: vec![(2589, 5, 120)],
+            ..Default::default()
+        };
+        let player = VendorActionPlayer {
+            account_id: 7,
+            self_guid: None,
+        };
+
+        let outcome =
+            dispatch_vendor_action(&actions, player, buyback_item(BuybackSlot::Slot1)).unwrap();
+
+        assert!(
+            matches!(outcome, VendorActionOutcome::Handled { outbound } if outbound.is_empty())
+        );
+        assert_eq!(
+            actions.buyback_requests.lock().unwrap().as_slice(),
+            &[(7, 0, VENDOR, 0)]
+        );
+    }
+
+    #[test]
+    fn a_rejected_buyback_is_silent_and_non_fatal() {
+        let actions = InMemoryVendorActions {
+            buyback_error: Some("no such buyback slot".into()),
+            ..Default::default()
+        };
+
+        let outcome =
+            dispatch_vendor_action(&actions, player(), buyback_item(BuybackSlot::Slot1)).unwrap();
+
+        assert!(
+            matches!(outcome, VendorActionOutcome::Handled { outbound } if outbound.is_empty())
+        );
     }
 }

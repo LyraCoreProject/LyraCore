@@ -2865,6 +2865,20 @@ impl VendorActionStore for InMemoryStore {
         self.sold_items.lock().unwrap().push((vendor_guid, slot));
         Ok(())
     }
+
+    fn vendor_buyback(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        vendor_guid: u64,
+        slot: u8,
+    ) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.bought_back.lock().unwrap().push((vendor_guid, slot));
+        Ok(())
+    }
 }
 
 impl ItemActionStore for InMemoryStore {
