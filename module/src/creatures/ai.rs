@@ -822,6 +822,36 @@ mod tests {
         assert_eq!(next_after_resume, next_if_uninterrupted);
     }
 
+    /// The walk home has no upper bound on displacement: the return pass re-steps ONE tick of run per
+    /// firing (`nav_step` → this primitive), so a creature left far out chains legs to `RETURN_LEASH_SQ`
+    /// instead of single-legging and stalling.
+    #[test]
+    fn a_creature_displaced_far_from_home_steps_all_the_way_back() {
+        let (home_x, home_y) = (-100.0_f32, 250.0_f32);
+        let step = constants::speeds::RUN * MOVE_TICK_SECS; // one movement tick of run
+        let start = 300.0_f32; // far past anything the old spawn tether could leave behind
+        let dist_sq = |p: (f32, f32)| (p.0 - home_x).powi(2) + (p.1 - home_y).powi(2);
+        let mut pos = (home_x + start, home_y);
+        let mut prev_sq = dist_sq(pos);
+        let mut ticks = 0u32;
+        // The loop condition IS the return pass's gate: while it holds, wander skips the guid.
+        while dist_sq(pos) > RETURN_LEASH_SQ {
+            let next = chase_step(pos.0, pos.1, home_x, home_y, step, 0.0);
+            assert_ne!(next, pos, "return stalled after {ticks} ticks");
+            pos = next;
+            let now_sq = dist_sq(pos);
+            assert!(now_sq < prev_sq, "step {ticks} did not close the gap");
+            prev_sq = now_sq;
+            ticks += 1;
+            assert!(ticks < 10_000, "no arrival from {start} yd out");
+        }
+        // Derived, not hand-counted, so tuning any of the three constants can't fail this on arithmetic.
+        assert_eq!(
+            ticks,
+            ((start - RETURN_LEASH_SQ.sqrt()) / step).ceil() as u32
+        );
+    }
+
     #[test]
     fn stealth_detect_range_grows_with_level_advantage_and_clamps() {
         // Equal level → the small base detect radius.
