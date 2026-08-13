@@ -882,7 +882,7 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
         p.members.push((5, VIM));
     }
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = session_shard.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -892,9 +892,6 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     // (deleting `party::on_world_entry`) makes the party frame never arrive, and a blocking read on
     // a packet that will never come turns a test that must go RED into one that HANGS — which reads
     // as neither a pass nor a fail (`no_hang`'s lesson, applied at the socket instead of the thread).
-    client
-        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-        .unwrap();
     CMSG_PLAYER_LOGIN {
         guid: Guid::new(GINGER),
     }

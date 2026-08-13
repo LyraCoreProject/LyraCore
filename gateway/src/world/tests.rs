@@ -1,6 +1,34 @@
 use super::*;
 use std::os::unix::net::UnixStream;
 
+/// The client side of every real world-session test has a bounded read. A missing server packet is
+/// a test failure, never an indefinitely blocked test process.
+const WORLD_SESSION_READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn world_session_socket_pair() -> (UnixStream, UnixStream) {
+    let (client, server) = UnixStream::pair().expect("world-session socket pair must be created");
+    client
+        .set_read_timeout(Some(WORLD_SESSION_READ_DEADLINE))
+        .expect("world-session client read deadline must be configured");
+    (client, server)
+}
+
+#[test]
+fn world_session_socket_pair_times_out_when_the_server_writes_nothing() {
+    let (mut client, _server) = world_session_socket_pair();
+    let mut byte = [0];
+    let error = client
+        .read(&mut byte)
+        .expect_err("a silent server must hit the world-session read deadline");
+    assert!(
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ),
+        "a silent server must time out, got {error}"
+    );
+}
+
 /// The realm-wide party routing tests. A child module so they can reach
 /// `InMemoryStore` and its fake realm-core topology without widening anything, kept in their own
 /// file because this one is already the largest in the tree.
@@ -2183,7 +2211,7 @@ fn tester_store(account_id: u64) -> InMemoryStore {
 fn handshake_succeeds_and_traffic_is_encrypted_both_ways() {
     let store = std::sync::Arc::new(tester_store(42));
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         let mut s = server_end;
@@ -2231,7 +2259,7 @@ fn queued_handshake_sends_wait_queue_then_admits_once_a_seat_frees() {
     // Occupy the only seat directly — exactly what an already-connected world session holds.
     assert_eq!(queue.request(), Admission::Admitted);
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server_queue = queue.clone();
     let server = std::thread::spawn(move || {
@@ -2286,7 +2314,7 @@ fn disconnecting_while_queued_leaves_the_line_without_taking_a_seat() {
     let queue = std::sync::Arc::new(LoginQueue::new(1, 0));
     assert_eq!(queue.request(), Admission::Admitted); // occupy the only seat
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server_queue = queue.clone();
     let server = std::thread::spawn(move || {
@@ -2345,7 +2373,7 @@ fn a_restarted_gateway_completes_the_handshake_from_realm_state_alone() {
         session_key: K,
     };
     let handshake_once = |store: InMemoryStore| {
-        let (mut client, server_end) = UnixStream::pair().unwrap();
+        let (mut client, server_end) = world_session_socket_pair();
         let server = std::thread::spawn(move || {
             let mut s = server_end;
             let established = world_handshake(&mut s, &store)
@@ -2391,7 +2419,7 @@ fn a_gateway_that_cannot_reach_the_session_store_rejects_rather_than_guessing() 
         session: None,
         ..Default::default()
     };
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server = std::thread::spawn(move || {
         let mut s = server_end;
         assert!(
@@ -2424,7 +2452,7 @@ fn bad_proof_is_rejected() {
         ..Default::default()
     };
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server = std::thread::spawn(move || {
         let mut s = server_end;
         let conn = world_handshake(&mut s, &store).unwrap();
@@ -2466,7 +2494,7 @@ fn unknown_account_is_rejected_cleanly() {
         ..Default::default()
     };
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server = std::thread::spawn(move || {
         let mut s = server_end;
         assert!(world_handshake(&mut s, &store).unwrap().is_none());
@@ -2508,7 +2536,7 @@ fn char_enum_returns_the_seeded_character() {
         ..tester_store(7)
     });
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -2553,7 +2581,7 @@ fn char_create_replies_success_then_name_in_use() {
         characters: vec![tester],
         ..tester_store(7)
     });
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -2615,7 +2643,7 @@ fn char_delete_replies_success_and_dispatches_owned_guid() {
         characters: vec![tester],
         ..tester_store(7)
     });
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -2645,7 +2673,7 @@ fn char_delete_failure_replies_failed_and_keeps_session_alive() {
         delete_outcome: Some(codec::CharDeleteOutcome::Failed),
         ..tester_store(7)
     });
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -2744,7 +2772,7 @@ fn player_login_emits_sequence_then_self_create() {
         ..tester_store(7)
     });
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -2819,12 +2847,14 @@ fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
     ported.x = 100.0;
     ported.y = 200.0;
     let store = std::sync::Arc::new(InMemoryStore {
+        // A real cross-map teleport has despawned the old-map entity before its ack arrives.
+        entity_in_world: false,
         login_entity: Some(warrior_entity()),
         worldport_entity: Some(ported),
         ..tester_store(7)
     });
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -2908,7 +2938,7 @@ fn login_initialize_factions_carries_persisted_standing_at_its_reputation_index(
         ..tester_store(7)
     });
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -2958,7 +2988,7 @@ fn inbound_movement_is_recorded_under_its_opcode() {
         ..tester_store(7)
     });
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -3018,7 +3048,7 @@ fn a_movement_packet_for_a_despawned_entity_never_kills_the_session() {
         ..tester_store(7)
     });
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
 
@@ -3085,7 +3115,7 @@ fn a_reappearing_entity_resets_the_movement_desync_tolerance() {
         entity_presence: Some(present.clone()),
         ..tester_store(7)
     });
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
     let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -3142,7 +3172,7 @@ fn a_movement_failure_that_is_not_a_desync_is_still_session_fatal() {
         movement_error: Some("timed out after 10s".into()),
         ..tester_store(7)
     });
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
     let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -3190,7 +3220,7 @@ fn a_movement_desync_that_never_heals_still_ends_the_session() {
         entity_in_world: false,
         ..tester_store(7)
     });
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
     let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -3247,6 +3277,8 @@ fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_scree
         },
     );
     let store = std::sync::Arc::new(InMemoryStore {
+        // The world-port ack is only actionable after teleport_player removed the old entity.
+        entity_in_world: false,
         characters: vec![],
         login_entity: Some(warrior_entity()),
         xdb: Some(xdb),
@@ -3255,7 +3287,7 @@ fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_scree
         ..tester_store(7)
     });
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -3270,8 +3302,9 @@ fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_scree
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    let aborted = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec)
-        .expect("the client must receive SOMETHING — silence here is the hang this fixes");
+    let aborted = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).expect(
+        "the client must receive SMSG_TRANSFER_ABORTED — silence here is the loading-screen hang this fixes",
+    );
     match aborted {
         ServerOpcodeMessage::SMSG_TRANSFER_ABORTED(m) => {
             assert_eq!(
@@ -3311,6 +3344,8 @@ fn a_world_port_whose_world_entry_fails_also_aborts_the_clients_loading_screen()
         },
     );
     let store = std::sync::Arc::new(InMemoryStore {
+        // The world-port ack is only actionable after teleport_player removed the old entity.
+        entity_in_world: false,
         characters: vec![],
         login_entity: Some(warrior_entity()),
         xdb: Some(xdb),
@@ -3319,7 +3354,7 @@ fn a_world_port_whose_world_entry_fails_also_aborts_the_clients_loading_screen()
         ..tester_store(7)
     });
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
@@ -3615,7 +3650,7 @@ fn enter_world(
     DecrypterHalf,
     std::thread::JoinHandle<()>,
 ) {
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     // The login sequence ends with the quest-log VALUES packet IFF the player has quests (mirrors
     // `send_quest_log`'s skip-when-empty). Checked before `store` is moved into the server thread.
     let has_quest_log = store.player_quest_log(guid).is_ok_and(|s| !s.is_empty());
@@ -5017,9 +5052,6 @@ fn auto_shot_intercept_starts_the_ranged_attack_instead_of_casting() {
         );
         // Nothing else may follow on the activation path (the old phantom GO fired the shoot
         // animation instantly).
-        client
-            .set_read_timeout(Some(std::time::Duration::from_millis(250)))
-            .unwrap();
         let mut probe = [0u8; 1];
         assert!(
             client.read(&mut probe).map(|n| n == 0).unwrap_or(true),
@@ -5681,7 +5713,7 @@ fn attackswing_desync_error_is_session_fatal() {
     let mut s = quest_store();
     s.start_attack_error = Some("no live entity for guid 1".into());
     let store = std::sync::Arc::new(s);
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     // Roll enter_world by hand: the server thread must RETURN the session result (not unwrap it).
     let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
@@ -6862,14 +6894,6 @@ fn messagechat_whisper_to_an_unknown_player_replies_player_not_found() {
     s.whisper_error = Some("no player by that name".into());
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    // A READ DEADLINE. This test is the only witness that a REFUSED whisper
-    // answers at all, and the mutation it pins — dropping the reply from the dispatch arm — made it
-    // block forever on a packet that will never come instead of failing. A hang is neither a pass nor
-    // a fail (two mutations against the realm-wide party/whisper routing did exactly this); `no_hang`'s
-    // lesson, applied at the socket.
-    client
-        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-        .unwrap();
     CMSG_MESSAGECHAT {
         chat_type: CMSG_MESSAGECHAT_ChatType::Whisper {
             target_player: "Ghost".into(),
@@ -7776,7 +7800,7 @@ fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
         ..tester_store(7)
     });
     let queue = std::sync::Arc::new(LoginQueue::new(1, 0));
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server_queue = queue.clone();
     let (result_tx, result_rx) = std::sync::mpsc::channel();

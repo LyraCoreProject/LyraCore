@@ -49,7 +49,7 @@ fn framing_session() -> (
     std::thread::JoinHandle<Result<()>>,
 ) {
     let store = framing_store();
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server = std::thread::spawn(move || run_world_session(server_end, store.as_ref()));
     let (c_enc, c_dec) = client_handshake(&mut client, "TESTER", K);
     (client, c_enc, c_dec, server)
@@ -249,7 +249,7 @@ fn a_session_ending_in_a_framing_error_still_gives_its_seat_back() {
     let store = framing_store();
     let queue = std::sync::Arc::new(LoginQueue::new(1, 0));
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_queue = queue.clone();
     let server = std::thread::spawn(move || {
         run_world_session_with_queue(server_end, store.as_ref(), &server_queue)
@@ -296,7 +296,7 @@ fn a_session_that_dies_in_world_still_deletes_the_players_entity() {
     let store = std::sync::Arc::new(quest_store());
     let queue = std::sync::Arc::new(LoginQueue::unlimited());
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server_queue = queue.clone();
     let server = std::thread::spawn(move || {
@@ -349,7 +349,7 @@ fn a_session_that_dies_in_world_still_deletes_the_players_entity() {
 #[test]
 fn a_malformed_addon_envelope_is_dropped_and_the_session_keeps_serving() {
     let store = framing_store();
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server = std::thread::spawn(move || run_world_session(server_end, store.as_ref()));
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
 

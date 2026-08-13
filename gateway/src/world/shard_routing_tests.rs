@@ -21,12 +21,21 @@ pub(super) type ShardCallLog = std::sync::Arc<std::sync::Mutex<Vec<(String, Stri
 /// accounts, sessions, and the character list live) and `instances` (the shard that owns this
 /// character's location, i.e. what `home_shard` resolves to). Both write to one shared call log.
 pub(super) fn sharded_stores() -> (std::sync::Arc<InMemoryStore>, ShardCallLog) {
+    sharded_stores_with_home_entity(true)
+}
+
+/// Build the routed topology with an explicit answer for whether the old-map entity still exists.
+/// A genuine world-port ack follows `teleport_player`, which has removed it; ordinary routed
+/// sessions remain in-world and use the default constructor above.
+fn sharded_stores_with_home_entity(
+    home_entity_in_world: bool,
+) -> (std::sync::Arc<InMemoryStore>, ShardCallLog) {
     let calls: ShardCallLog = Default::default();
     // The character's post-world-port entity, for the re-entry test below.
     let mut ported = warrior_entity();
     ported.map_id = 1;
     let home = std::sync::Arc::new(InMemoryStore {
-        entity_in_world: true,
+        entity_in_world: home_entity_in_world,
         shard: "instances".into(),
         calls: calls.clone(),
         login_entity: Some(warrior_entity()),
@@ -80,7 +89,7 @@ pub(super) fn drive_routed_session(
     store: std::sync::Arc<InMemoryStore>,
     calls: ShardCallLog,
 ) -> Vec<(String, String)> {
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store;
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -297,8 +306,8 @@ fn a_world_port_keeps_the_pin_when_the_home_shard_still_owns_the_new_map() {
     // A world-port re-resolves routing (the new map may belong to another shard). When the shard
     // the session is ALREADY on still owns the destination it answers "no swap needed" — which must
     // KEEP the pin, not silently drop the session back to the default database.
-    let (store, calls) = sharded_stores();
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (store, calls) = sharded_stores_with_home_entity(false);
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -376,7 +385,7 @@ fn a_spurious_worldport_ack_is_ignored_on_a_session_pinned_off_the_default_shard
         ..Default::default()
     });
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = world.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -417,7 +426,7 @@ fn a_spurious_worldport_ack_is_ignored_on_the_default_shard() {
         entity_in_world: true,
         ..tester_store(7)
     });
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -451,7 +460,7 @@ fn a_logout_to_character_select_releases_the_home_shard_pin() {
     // would serve the character list off an instance shard (which, being empty, shows the player
     // no characters at all, and would create/delete rows on the wrong database).
     let (store, calls) = sharded_stores();
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -516,7 +525,7 @@ fn a_freshly_created_characters_first_login_transfers_off_the_default_shard() {
     // (`instances`) stands in for a start map that routes off `world`.
     let (store, calls) = sharded_stores();
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
