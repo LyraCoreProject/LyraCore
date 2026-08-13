@@ -537,5 +537,6 @@ local test harness needs it.
 | [`quickstart.md`](./quickstart.md) | The shortest path from a clean checkout to a running realm. |
 | [`development-cli.md`](./development-cli.md) | The `./lyracore` CLI: the pinned shim, and the build, preflight, publish and local-stack commands. |
 | [`data-ingestion.md`](./data-ingestion.md) | Where vanilla content comes from and the licensing firewall. |
+| [`aura-capacity-verification.md`](./aura-capacity-verification.md) | The live-stack procedure proving the 32-buff/16-debuff cap end to end: refusal, untouched survivors, the overflow log line, and the wire-level `SMSG_SPELL_FAILURE` relay. |
 
 **The work queue is GitHub Issues**, which is the single source of truth for what is open.
