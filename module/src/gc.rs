@@ -168,4 +168,13 @@ mod tests {
             "the shared event reaper must delete expired movement-violation diagnostics"
         );
     }
+
+    #[test]
+    fn lapsed_cc_diminishing_return_rows_are_reaped() {
+        let body = code_of(include_str!("gc.rs"), "pub fn reap_movement_events(");
+        assert!(
+            body.contains("stacking::sweep_dr_state(ctx)"),
+            "the shared event reaper must drop lapsed crowd-control diminishing-return rows"
+        );
+    }
 }

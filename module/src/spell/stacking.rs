@@ -239,6 +239,21 @@ pub(crate) fn dr_pre_level(prior: Option<DrWindow>, now_micros: i64) -> u8 {
     }
 }
 
+/// The row `bump_dr_level` writes after a successful application: the level advanced off the SAME
+/// `dr_pre_level` the decision was made from (capped at the immune step) and the PROVISIONAL window ending
+/// 15s after this application's own already-scaled expiry. Pure so the whole ladder is driven from
+/// production math in a test — the ctx-bound `bump_dr_level` is only the read/write around it.
+pub(crate) fn dr_bump(
+    prior: Option<DrWindow>,
+    now_micros: i64,
+    expires_at_micros: i64,
+) -> DrWindow {
+    DrWindow {
+        level: (dr_pre_level(prior, now_micros) + 1).min(3),
+        window_expires_micros: expires_at_micros + DR_WINDOW_MICROS,
+    }
+}
+
 /// Duration scale (basis points) for a CC application at `pre_level` (the level BEFORE this hit): 0 → 100%
 /// (fresh/reset), 1 → 50%, 2 → 25%, 3+ → `None` (immune — the 4th same-window hit is refused outright).
 pub(crate) fn dr_scale_bp(pre_level: u8) -> Option<u32> {
@@ -439,9 +454,9 @@ pub(crate) fn bump_dr_level(
         level: r.level,
         window_expires_micros: r.window_expires_micros,
     });
-    let pre_level = dr_pre_level(prior, now_micros);
-    let new_level = (pre_level + 1).min(3);
-    let new_window = expires_at_micros + DR_WINDOW_MICROS;
+    let bumped = dr_bump(prior, now_micros, expires_at_micros);
+    let new_level = bumped.level;
+    let new_window = bumped.window_expires_micros;
     match existing {
         Some(mut row) => {
             row.level = new_level;
@@ -815,6 +830,171 @@ mod tests {
             }
         );
         assert_eq!(dr_pre_level(Some(row_after_removal_3), t40_1), 0);
+    }
+
+    /// One player target's `(category)` DR state driven through the PRODUCTION policy fns — the
+    /// in-process twin of the live probe in `docs/cc-diminishing-returns.md`, so the ladder, the window
+    /// stamping and the level agreement are asserted without a `ReducerContext`.
+    struct DrProbe {
+        row: Option<DrWindow>,
+    }
+
+    impl DrProbe {
+        /// A CC application of `base_ms` base duration at `now`. Returns the aura expiry the caster would
+        /// observe, or `None` when the application is refused at the immune step.
+        fn apply(&mut self, now: i64, base_ms: i64) -> Option<i64> {
+            match resolve_dr(self.row, now) {
+                ApplyDecision::Refuse { reason } => {
+                    assert_eq!(reason, "immune");
+                    None // refused: `aura_apply` returns before `bump_dr_level`, so `self.row` is untouched
+                }
+                ApplyDecision::Apply {
+                    duration_scale_bp,
+                    evict,
+                } => {
+                    assert!(evict.is_empty(), "a DR decision never evicts another aura");
+                    let expires = now + base_ms * 1_000 * (duration_scale_bp as i64) / 10_000;
+                    self.row = Some(dr_bump(self.row, now, expires));
+                    Some(expires)
+                }
+            }
+        }
+
+        /// Removal by ANY path — natural expiry, dispel, or break-on-damage. Mirrors the one line
+        /// `dr_window_on_removal` writes around its row read; the call sites themselves are pinned by
+        /// `every_removal_path_stamps_the_window_at_the_actual_removal_time`.
+        fn remove(&mut self, at: i64) {
+            let row = self
+                .row
+                .as_mut()
+                .expect("a removed CC aura always has a DR row");
+            row.window_expires_micros = at + DR_WINDOW_MICROS;
+        }
+    }
+
+    /// The end-to-end player-target timeline the live probe reproduces, on Polymorph's 20s base: full,
+    /// half and quarter duration, a refused immune application, an early (break-on-damage) removal
+    /// stamping the window before the scheduled expiry would have, a natural expiry stamping it at the
+    /// reaper's observation instant, and a fresh chain once the window lapses.
+    #[test]
+    fn player_target_dr_timeline_end_to_end_on_a_twenty_second_control() {
+        const S: i64 = 1_000_000;
+        const POLY_MS: i64 = 20_000;
+        let mut probe = DrProbe { row: None };
+
+        // t=0 — first application: full duration, stored level 1.
+        let expiry_1 = probe
+            .apply(0, POLY_MS)
+            .expect("a fresh target is never immune");
+        assert_eq!(expiry_1, 20 * S);
+        let row_1 = probe.row.expect("a successful application persists a row");
+        assert_eq!(row_1.level, 1);
+        // The persisted window agrees with the observed expiry: provisional = this aura's expiry + 15s.
+        assert_eq!(row_1.window_expires_micros, expiry_1 + DR_WINDOW_MICROS);
+
+        // t=3 — RECAST while the first aura is still active (it expires at t=20). The still-live level is
+        // read as-is, so a refresh cannot bypass progression: 50%, stored level 2.
+        let expiry_2 = probe.apply(3 * S, POLY_MS).expect("level 1 still applies");
+        assert_eq!(expiry_2, 13 * S); // 3s + 50% of 20s
+        let row_2 = probe.row.expect("row persists");
+        assert_eq!(row_2.level, 2);
+        assert_eq!(row_2.window_expires_micros, expiry_2 + DR_WINDOW_MICROS);
+
+        // t=5 — EARLY removal (break-on-damage or dispel) seven seconds before the scheduled expiry. The
+        // window is re-stamped from the ACTUAL removal, which is strictly earlier than the provisional
+        // scheduled-expiry value; the level is untouched by a removal.
+        let provisional = row_2.window_expires_micros;
+        probe.remove(5 * S);
+        let row_3 = probe.row.expect("row persists");
+        assert_eq!(row_3.window_expires_micros, 5 * S + DR_WINDOW_MICROS);
+        assert!(row_3.window_expires_micros < provisional);
+        assert_eq!(row_3.level, 2);
+
+        // t=8 — third application inside the window: 25%, stored level 3.
+        let expiry_3 = probe.apply(8 * S, POLY_MS).expect("level 2 still applies");
+        assert_eq!(expiry_3, 13 * S); // 8s + 25% of 20s
+        assert_eq!(probe.row.expect("row persists").level, 3);
+
+        // t=10 — fourth application while the third aura is still active: refused as immune, and the
+        // persisted level AND window are left exactly as they were.
+        let before_immune = probe.row;
+        assert_eq!(probe.apply(10 * S, POLY_MS), None);
+        assert_eq!(probe.row, before_immune);
+
+        // t=13.2 — NATURAL expiry, observed by the aura reaper 200ms after the scheduled t=13. The window
+        // starts at that removal instant, not at the scheduled expiry.
+        let removed_at = 13 * S + S / 5;
+        assert!(removed_at >= expiry_3);
+        probe.remove(removed_at);
+        let row_4 = probe.row.expect("row persists");
+        assert_eq!(row_4.window_expires_micros, removed_at + DR_WINDOW_MICROS);
+        assert_eq!(row_4.level, 3);
+
+        // Still immune at the exact window boundary (t=28.2).
+        assert_eq!(probe.apply(row_4.window_expires_micros, POLY_MS), None);
+
+        // One microsecond later the window has lapsed: full duration again, and a FRESH chain (level 1).
+        let restart = row_4.window_expires_micros + 1;
+        let expiry_4 = probe
+            .apply(restart, POLY_MS)
+            .expect("a lapsed window is a fresh target");
+        assert_eq!(expiry_4 - restart, 20 * S);
+        assert_eq!(probe.row.expect("row persists").level, 1);
+    }
+
+    /// Every removal path stamps the window from the reducer's OWN timestamp — never from the aura's
+    /// scheduled `expires_at`, which is what would keep an early removal's window running too long.
+    #[test]
+    fn every_removal_path_stamps_the_window_at_the_actual_removal_time() {
+        for (source, signature) in [
+            (
+                include_str!("scheduler.rs"),
+                "pub fn tick_auras(", // natural expiry
+            ),
+            (
+                include_str!("effects.rs"),
+                "pub(crate) fn dispel_target(", // dispel
+            ),
+            (
+                include_str!("control.rs"),
+                "pub(crate) fn break_auras_on_damage(", // break on damage
+            ),
+        ] {
+            let body = crate::test_scan::code_of(source, signature);
+            assert!(
+                body.contains("dr_window_on_removal("),
+                "{signature} must start the DR window when it removes an aura"
+            );
+            assert!(
+                body.contains("ctx.timestamp.to_micros_since_unix_epoch()")
+                    || body.contains("now.to_micros_since_unix_epoch()"),
+                "{signature} must stamp the window from the removal instant"
+            );
+            assert!(
+                !body.contains("dr_window_on_removal(ctx, a.target_guid, category, expires"),
+                "{signature} must not stamp the window from the scheduled expiry"
+            );
+        }
+    }
+
+    /// The stored level advances only AFTER an aura row was actually placed or refreshed: a group or slot
+    /// refusal between the DR decision and the insert must leave the target's progression untouched.
+    #[test]
+    fn dr_level_advances_only_after_the_aura_is_placed() {
+        let aura_apply = crate::test_scan::code_of(
+            include_str!("cast/targeting.rs"),
+            "pub(crate) fn aura_apply(",
+        );
+        let decision = aura_apply
+            .find("resolve_dr_for_target(")
+            .expect("aura_apply resolves DR");
+        let insert = aura_apply
+            .find("auras.insert(Aura {")
+            .expect("aura_apply inserts the aura");
+        let bump = aura_apply
+            .find("bump_dr_level(")
+            .expect("aura_apply advances DR");
+        assert!(decision < insert && insert < bump);
     }
 
     /// Same double-poly scenario against a CREATURE target: `dr_category_for_effect` returns `None` for a

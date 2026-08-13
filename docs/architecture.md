@@ -499,6 +499,11 @@ The ladder, and the rule that no rung substitutes for another:
 **Live wire tests against a running stack are operator-gated in attended sessions.** Offline tests
 are unrestricted.
 
+Two rungs are recorded as reproducible probe documents rather than as tooling:
+[`vmap-rollout.md`](./vmap-rollout.md) for exact collision, and
+[`cc-diminishing-returns-probe.md`](./cc-diminishing-returns-probe.md) for crowd-control diminishing
+returns, whose persisted state and removal-time window only a live database can show.
+
 The build carries source-scan tripwire tests that fail on architectural drift rather than on
 behaviour, all in `module/src/tripwires.rs` (#379 pulled them out of `lib.rs`): no module code
 outside `region.rs`/`load.rs` may read a shard id (`:478`); no whole-table `.iter()` over a spatial
