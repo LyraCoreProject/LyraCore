@@ -1,5 +1,5 @@
-use super::*;
 use super::handlers::ItemActionStore;
+use super::*;
 use std::os::unix::net::UnixStream;
 
 /// The client side of every real world-session test has a bounded read. A missing server packet is
@@ -78,12 +78,12 @@ use shard_routing_tests::ShardCallLog;
 #[path = "transfer_tests.rs"]
 mod transfer_tests;
 
+#[path = "trade_tests.rs"]
+mod trade_tests;
 /// `SMSG_COMPRESSED_MOVES` corruption regressions, driven through the real `spawn_writer` +
 /// `wow_srp` cipher pair. A sibling of the modules above for the same reason.
 #[path = "wire_corruption_tests.rs"]
 mod wire_corruption_tests;
-#[path = "trade_tests.rs"]
-mod trade_tests;
 
 use wow_world_base::shared::friend_result_vanilla_tbc::FriendResult;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
@@ -103,8 +103,8 @@ use wow_world_messages::vanilla::{
     Object,
     Race,
     RollVote,
-    SpellCastTargets,
     SheathState,
+    SpellCastTargets,
     SpellCastTargets_SpellCastTargetFlags,
     SpellCastTargets_SpellCastTargetFlags_Item,
     SpellCastTargets_SpellCastTargetFlags_Unit,
@@ -1150,7 +1150,13 @@ impl WorldStore for InMemoryStore {
     fn use_gameobject(&self, _account_id: u64, _self_guid: u64, _go_guid: u64) -> Result<()> {
         Ok(())
     }
-    fn client_command(&self, _account_id: u64, _self_guid: u64, _cmd: String, _payload: String) -> Result<()> {
+    fn client_command(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _cmd: String,
+        _payload: String,
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -1731,14 +1737,26 @@ impl WorldStore for InMemoryStore {
         self.sold_items.lock().unwrap().push((vendor_guid, slot));
         Ok(())
     }
-    fn buyback_item(&self, _account_id: u64, _self_guid: u64, vendor_guid: u64, slot: u8) -> Result<()> {
+    fn buyback_item(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        vendor_guid: u64,
+        slot: u8,
+    ) -> Result<()> {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
         }
         self.bought_back.lock().unwrap().push((vendor_guid, slot));
         Ok(())
     }
-    fn repair_item(&self, _account_id: u64, _self_guid: u64, npc_guid: u64, slot: u8) -> Result<()> {
+    fn repair_item(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        npc_guid: u64,
+        slot: u8,
+    ) -> Result<()> {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
         }
@@ -1781,7 +1799,13 @@ impl WorldStore for InMemoryStore {
         self.disenchanted.lock().unwrap().push(slot);
         Ok(())
     }
-    fn enchant_item_on_slot(&self, _account_id: u64, _self_guid: u64, slot: u8, enchant_id: u32) -> Result<()> {
+    fn enchant_item_on_slot(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        slot: u8,
+        enchant_id: u32,
+    ) -> Result<()> {
         self.enchanted.lock().unwrap().push((slot, enchant_id));
         Ok(())
     }
@@ -1814,7 +1838,8 @@ impl WorldStore for InMemoryStore {
     }
     fn set_faction_at_war(
         &self,
-        _account_id: u64, _self_guid: u64,
+        _account_id: u64,
+        _self_guid: u64,
         _reputation_index: u32,
         _at_war: bool,
     ) -> Result<()> {
@@ -1822,7 +1847,8 @@ impl WorldStore for InMemoryStore {
     }
     fn set_action_button(
         &self,
-        _account_id: u64, _self_guid: u64,
+        _account_id: u64,
+        _self_guid: u64,
         _button: u8,
         _action: u32,
         _action_type: u8,
@@ -1843,16 +1869,6 @@ impl WorldStore for InMemoryStore {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
         }
-    }
-    fn use_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
-        self.used_items.lock().unwrap().push(slot);
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
-    }
-    fn item_start_quest(&self, _owner_guid: u64, _slot: u8) -> Option<(u64, u32)> {
-        self.item_start_quest_fixture
     }
     fn push_quest(&self, account_id: u64, _self_guid: u64, quest_id: u32) -> Result<()> {
         if let Some(e) = &self.push_quest_error {
@@ -1882,7 +1898,13 @@ impl WorldStore for InMemoryStore {
         Ok(self.gossip_opts.clone())
     }
     fn quest_status(&self, _guid: u64, quest_id: u32) -> (bool, bool) {
-        match self.quest_log.lock().unwrap().iter().find(|(id, _)| *id == quest_id) {
+        match self
+            .quest_log
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(id, _)| *id == quest_id)
+        {
             Some((_, rewarded)) => (true, *rewarded),
             None => (false, false),
         }
@@ -2021,7 +2043,13 @@ impl WorldStore for InMemoryStore {
             None => Ok(()),
         }
     }
-    fn pet_command(&self, _account_id: u64, _self_guid: u64, _data: u32, _target_guid: u64) -> Result<()> {
+    fn pet_command(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _data: u32,
+        _target_guid: u64,
+    ) -> Result<()> {
         Ok(())
     }
     fn start_ranged_attack(
@@ -2047,7 +2075,13 @@ impl WorldStore for InMemoryStore {
         self.sheathed.lock().unwrap().push((self_guid, state));
         Ok(())
     }
-    fn cast_spell(&self, _account_id: u64, _self_guid: u64, spell_id: u32, target_guid: u64) -> Result<()> {
+    fn cast_spell(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        spell_id: u32,
+        target_guid: u64,
+    ) -> Result<()> {
         if let Some(e) = &self.cast_spell_error {
             return Err(anyhow!("{e}"));
         }
@@ -2056,7 +2090,8 @@ impl WorldStore for InMemoryStore {
     }
     fn cast_spell_at(
         &self,
-        _account_id: u64, _self_guid: u64,
+        _account_id: u64,
+        _self_guid: u64,
         spell_id: u32,
         target_guid: u64,
         x: f32,
@@ -2102,7 +2137,8 @@ impl WorldStore for InMemoryStore {
     }
     fn send_channel_message(
         &self,
-        _account_id: u64, _self_guid: u64,
+        _account_id: u64,
+        _self_guid: u64,
         channel: String,
         message: String,
     ) -> Result<()> {
@@ -2146,10 +2182,22 @@ impl WorldStore for InMemoryStore {
         self.rec("send_emote");
         Ok(())
     }
-    fn send_roll(&self, _account_id: u64, _self_guid: u64, _min_roll: u32, _max_roll: u32) -> Result<()> {
+    fn send_roll(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _min_roll: u32,
+        _max_roll: u32,
+    ) -> Result<()> {
         Ok(())
     }
-    fn send_whisper(&self, _account_id: u64, _self_guid: u64, target_player: String, message: String) -> Result<()> {
+    fn send_whisper(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        target_player: String,
+        message: String,
+    ) -> Result<()> {
         // Recorded per SHARD, so a test can tell the pre-realm-core path (the
         // player-facing reducer on the player's own database, with the TYPED NAME still unresolved)
         // from the realm-core one (`realm_whispers`, by guid).
@@ -2220,12 +2268,7 @@ impl WorldStore for InMemoryStore {
             .push((self_guid, accept));
         Ok(())
     }
-    fn spirit_healer_res(
-        &self,
-        _account_id: u64,
-        self_guid: u64,
-        healer_guid: u64,
-    ) -> Result<()> {
+    fn spirit_healer_res(&self, _account_id: u64, self_guid: u64, healer_guid: u64) -> Result<()> {
         self.spirit_healer_calls
             .lock()
             .unwrap()
@@ -2345,7 +2388,13 @@ impl WorldStore for InMemoryStore {
         self.cancelled_trades.lock().unwrap().push(self_guid);
         Ok(())
     }
-    fn set_trade_item(&self, _account_id: u64, self_guid: u64, trade_slot: u8, inv_slot: u8) -> Result<()> {
+    fn set_trade_item(
+        &self,
+        _account_id: u64,
+        self_guid: u64,
+        trade_slot: u8,
+        inv_slot: u8,
+    ) -> Result<()> {
         self.rec("set_trade_item");
         self.set_trade_items
             .lock()
@@ -2594,7 +2643,8 @@ impl WorldStore for InMemoryStore {
     }
     fn loot_roll(
         &self,
-        _account_id: u64, _self_guid: u64,
+        _account_id: u64,
+        _self_guid: u64,
         corpse_guid: u64,
         loot_slot: u32,
         vote: u8,
@@ -2610,7 +2660,8 @@ impl WorldStore for InMemoryStore {
     }
     fn loot_master_give(
         &self,
-        _account_id: u64, _self_guid: u64,
+        _account_id: u64,
+        _self_guid: u64,
         corpse_guid: u64,
         loot_slot: u8,
         target_guid: u64,
@@ -2696,7 +2747,8 @@ impl WorldStore for InMemoryStore {
     }
     fn gossip_select(
         &self,
-        _account_id: u64, _self_guid: u64,
+        _account_id: u64,
+        _self_guid: u64,
         _npc_guid: u64,
         option_id: u32,
         option_row_id: u32,
@@ -2767,12 +2819,38 @@ impl ItemActionStore for InMemoryStore {
         Ok(())
     }
 
-    fn move_item(&self, _account_id: u64, _self_guid: u64, from_slot: u8, to_slot: u8) -> Result<()> {
+    fn move_item(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        from_slot: u8,
+        to_slot: u8,
+    ) -> Result<()> {
         if let Some(e) = &self.trade_error {
             return Err(anyhow!("{e}"));
         }
         self.moved_items.lock().unwrap().push((from_slot, to_slot));
         Ok(())
+    }
+
+    fn use_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
+        self.used_items.lock().unwrap().push(slot);
+        match &self.trade_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
+    }
+
+    fn item_start_quest(&self, _owner_guid: u64, _slot: u8) -> Option<(u64, u32)> {
+        self.item_start_quest_fixture
+    }
+
+    fn item_quest_detail(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>> {
+        Ok(self
+            .quest_details
+            .iter()
+            .find(|d| d.quest_id == quest_id)
+            .cloned())
     }
 }
 
@@ -3697,13 +3775,19 @@ fn a_movement_packet_for_a_despawned_entity_never_kills_the_session() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
     for _ in 0..100 {
-        if store.entity_presence_checks.load(std::sync::atomic::Ordering::SeqCst) != 0 {
+        if store
+            .entity_presence_checks
+            .load(std::sync::atomic::Ordering::SeqCst)
+            != 0
+        {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert_ne!(
-        store.entity_presence_checks.load(std::sync::atomic::Ordering::SeqCst),
+        store
+            .entity_presence_checks
+            .load(std::sync::atomic::Ordering::SeqCst),
         0,
         "the encrypted movement packet must reach the coordinator presence gate"
     );
@@ -3745,13 +3829,21 @@ fn a_reappearing_entity_resets_the_movement_desync_tolerance() {
     let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
     let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
     let info = |t| MovementInfo {
-        flags: MovementInfo_MovementFlags::empty(), timestamp: t,
-        position: Vector3d { x: -8950.0, y: -130.0, z: 83.0 }, orientation: 1.5, fall_time: 0.0,
+        flags: MovementInfo_MovementFlags::empty(),
+        timestamp: t,
+        position: Vector3d {
+            x: -8950.0,
+            y: -130.0,
+            z: 83.0,
+        },
+        orientation: 1.5,
+        fall_time: 0.0,
     };
     let send_tail = |start: u32, end: u32, client: &mut UnixStream, enc: &mut EncrypterHalf| {
         for t in start..end {
             let sent = if t % 2 == 0 {
-                MSG_MOVE_START_FORWARD_Client { info: info(t) }.write_encrypted_client(&mut *client, enc)
+                MSG_MOVE_START_FORWARD_Client { info: info(t) }
+                    .write_encrypted_client(&mut *client, enc)
             } else {
                 MSG_MOVE_STOP_Client { info: info(t) }.write_encrypted_client(&mut *client, enc)
             };
@@ -3760,7 +3852,13 @@ fn a_reappearing_entity_resets_the_movement_desync_tolerance() {
     };
     let wait_for_checks = |n| {
         for _ in 0..100 {
-            if store.entity_presence_checks.load(std::sync::atomic::Ordering::SeqCst) >= n { return; }
+            if store
+                .entity_presence_checks
+                .load(std::sync::atomic::Ordering::SeqCst)
+                >= n
+            {
+                return;
+            }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         panic!("the gateway did not check entity presence {n} times");
@@ -3769,19 +3867,36 @@ fn a_reappearing_entity_resets_the_movement_desync_tolerance() {
     send_tail(0, MOVE_DESYNC_TOLERANCE, &mut client, &mut c_enc);
     wait_for_checks(MOVE_DESYNC_TOLERANCE as usize);
     present.store(true, std::sync::atomic::Ordering::SeqCst);
-    MSG_MOVE_START_FORWARD_Client { info: info(MOVE_DESYNC_TOLERANCE) }
-        .write_encrypted_client(&mut client, &mut c_enc).unwrap();
+    MSG_MOVE_START_FORWARD_Client {
+        info: info(MOVE_DESYNC_TOLERANCE),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
     wait_for_checks(MOVE_DESYNC_TOLERANCE as usize + 1);
     present.store(false, std::sync::atomic::Ordering::SeqCst);
-    send_tail(MOVE_DESYNC_TOLERANCE + 1, MOVE_DESYNC_TOLERANCE * 2 + 1, &mut client, &mut c_enc);
+    send_tail(
+        MOVE_DESYNC_TOLERANCE + 1,
+        MOVE_DESYNC_TOLERANCE * 2 + 1,
+        &mut client,
+        &mut c_enc,
+    );
     wait_for_checks(MOVE_DESYNC_TOLERANCE as usize * 2 + 1);
     present.store(true, std::sync::atomic::Ordering::SeqCst);
-    MSG_MOVE_STOP_Client { info: info(MOVE_DESYNC_TOLERANCE * 2 + 1) }
-        .write_encrypted_client(&mut client, &mut c_enc).unwrap();
+    MSG_MOVE_STOP_Client {
+        info: info(MOVE_DESYNC_TOLERANCE * 2 + 1),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
     drop(client);
-    server.join().unwrap().expect("a restored entity must reset the tolerance before a later transfer tail arrives");
-    assert_eq!(store.moves.lock().unwrap().len(), 2,
-        "only movements sent while the entity was present may reach the shared batch");
+    server
+        .join()
+        .unwrap()
+        .expect("a restored entity must reset the tolerance before a later transfer tail arrives");
+    assert_eq!(
+        store.moves.lock().unwrap().len(),
+        2,
+        "only movements sent while the entity was present may reach the shared batch"
+    );
 }
 
 #[test]
@@ -4841,7 +4956,9 @@ fn banker_activate_on_a_standing_refusing_banker_sends_no_reply() {
         .unwrap();
     match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
         ServerOpcodeMessage::SMSG_PLAYED_TIME(_) => {} // no SMSG_SHOW_BANK for the refused banker
-        other => panic!("expected SMSG_PLAYED_TIME (no SMSG_SHOW_BANK for refused banker), got {other}"),
+        other => {
+            panic!("expected SMSG_PLAYED_TIME (no SMSG_SHOW_BANK for refused banker), got {other}")
+        }
     }
     drop(client);
     server.join().unwrap();
@@ -4851,7 +4968,11 @@ fn banker_activate_on_a_standing_refusing_banker_sends_no_reply() {
 fn gossip_select_on_an_imported_banker_option_opens_the_bank_window() {
     use lyracore_shared::constants::gossip_option;
     let mut s = quest_store();
-    s.gossip_opts = vec![opt(0, "I would like to check my deposit box.", gossip_option::BANKER)];
+    s.gossip_opts = vec![opt(
+        0,
+        "I would like to check my deposit box.",
+        gossip_option::BANKER,
+    )];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
@@ -7060,7 +7181,11 @@ fn gossip_hello_hides_unlearn_talents_below_level_10() {
     let mut s = quest_store_at_level(5);
     s.gossip_opts = vec![
         opt(0, "I require warrior training.", gossip_option::TRAINER),
-        opt(0, "I wish to unlearn my talents.", gossip_option::UNLEARNTALENTS),
+        opt(
+            0,
+            "I wish to unlearn my talents.",
+            gossip_option::UNLEARNTALENTS,
+        ),
     ];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
@@ -7092,7 +7217,11 @@ fn gossip_hello_shows_unlearn_talents_at_level_10_and_select_routes_to_reset_tal
     let mut s = quest_store_at_level(10);
     s.gossip_opts = vec![
         opt(0, "I require warrior training.", gossip_option::TRAINER),
-        opt(0, "I wish to unlearn my talents.", gossip_option::UNLEARNTALENTS),
+        opt(
+            0,
+            "I wish to unlearn my talents.",
+            gossip_option::UNLEARNTALENTS,
+        ),
     ];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
@@ -8359,11 +8488,8 @@ fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
     let server_queue = queue.clone();
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = run_world_session_with_queue(
-            server_end,
-            server_store.as_ref(),
-            server_queue.as_ref(),
-        );
+        let result =
+            run_world_session_with_queue(server_end, server_store.as_ref(), server_queue.as_ref());
         result_tx.send(result).unwrap();
     });
 
@@ -8374,7 +8500,11 @@ fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
     for _ in 0..10 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
-    assert_eq!(queue.active(), 1, "the admitted session holds the only seat");
+    assert_eq!(
+        queue.active(),
+        1,
+        "the admitted session holds the only seat"
+    );
 
     CMSG_SET_SELECTION {
         target: Guid::new(321),
@@ -8402,8 +8532,15 @@ fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
         "session teardown removes local relays"
     );
     assert_eq!(queue.active(), 0, "the ended session released its seat");
-    assert_eq!(queue.request(), Admission::Admitted, "one replacement session is admitted");
-    assert!(matches!(queue.request(), Admission::Queued(_)), "only one seat was released");
+    assert_eq!(
+        queue.request(),
+        Admission::Admitted,
+        "one replacement session is admitted"
+    );
+    assert!(
+        matches!(queue.request(), Admission::Queued(_)),
+        "only one seat was released"
+    );
     drop(client);
 }
 
