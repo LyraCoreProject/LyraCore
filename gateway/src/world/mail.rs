@@ -52,6 +52,10 @@ use super::{party, WorldStore};
 use crate::codec::MailView;
 use lyracore_shared::mail as mail_rules;
 
+static NEXT_ESCROW_ID: std::sync::OnceLock<std::sync::atomic::AtomicU64> =
+    std::sync::OnceLock::new();
+static ESCROW_ID_END: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
 /// An ordinary letter settles nobody's cash-on-delivery price — the escrow's "no source mail"
 /// sentinel, and the same 0 the module reads it as.
 const NO_COD_SOURCE: u64 = 0;
@@ -325,7 +329,8 @@ pub(crate) fn send<St: WorldStore + ?Sized>(
         // instead — fence the whole cost on the sender's shard, commit the row on realm-core,
         // settle last.
         Some(realm) => {
-            let escrow_id = next_escrow_id();
+            let escrow_id =
+                next_escrow_id().map_err(|e| SendRefusal::Internal(format!("{e:#}")))?;
             store
                 .mail_fence(
                     escrow_id,
@@ -554,7 +559,7 @@ pub(crate) fn take_money<St: WorldStore + ?Sized>(
     if amount == 0 {
         anyhow::bail!(mail_rules::NOTHING_TO_TAKE);
     }
-    let escrow_id = next_escrow_id();
+    let escrow_id = next_escrow_id()?;
     realm.mail_take_money_fence(escrow_id, self_guid, mail_id, amount)?;
     // Past the fence the copper has left the row. A failure here is reported — the player's click
     // did not land — but the fence keeps the copper, and the next mailbox visit re-drives it.
@@ -660,7 +665,7 @@ pub(crate) fn take_item<St: WorldStore + ?Sized>(
     // in flight. Paying first makes the refusal clean — the item is still in the mail, and they can
     // return it instead.
     pay_cod(store, realm.as_ref(), self_guid, &row).map_err(take_item_refusal)?;
-    let escrow_id = next_escrow_id();
+    let escrow_id = next_escrow_id().map_err(take_item_refusal)?;
     // The fence refuses if the row disagrees with what was read — a stale read that fenced one item
     // and granted another would mint the difference.
     realm
@@ -706,7 +711,8 @@ fn pay_cod<St: WorldStore + ?Sized>(
         .into_iter()
         .find(|e| !e.payout && e.mail_id == row.id)
         .map(|e| e.escrow_id)
-        .unwrap_or_else(next_escrow_id);
+        .map(Ok)
+        .unwrap_or_else(next_escrow_id)?;
     store.mail_fence(
         escrow_id,
         settlement.payer_guid,
@@ -738,26 +744,29 @@ fn pay_cod<St: WorldStore + ?Sized>(
 
 /// The next caller-chosen escrow id.
 ///
-/// Caller-chosen is the requirement: it is the idempotency key on both databases, so it must be
-/// stable across a retry of one drive — which a local holds — and distinct from every OTHER fence
-/// in flight. Seeding the counter from the process start time and bumping it makes two gateways
-/// collide only if they started in the same microsecond; if they ever did, the module's
-/// `IdCollision` guards refuse the second rather than paying it, so the failure is a refused send
-/// and not a lost purse. `auto_inc` cannot serve: it is per-database, and this key spans two.
-fn next_escrow_id() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: std::sync::OnceLock<AtomicU64> = std::sync::OnceLock::new();
-    NEXT.get_or_init(|| {
-        AtomicU64::new(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_micros() as u64)
-                // 0 is the module's "no escrow" sentinel, so never start there.
-                .unwrap_or(1)
-                .max(1),
-        )
-    })
-    .fetch_add(1, Ordering::Relaxed)
+/// Caller-chosen is the requirement: it is the idempotency key on both databases. Startup installs
+/// the durable realm-core claim and resumes beyond every fence/receipt already seen in that range.
+/// No claim (or exhaustion) refuses the operation; silently restoring the old process-time seed
+/// would make collisions possible again. `auto_inc` cannot serve because the key spans databases.
+fn next_escrow_id() -> Result<u64> {
+    use std::sync::atomic::Ordering;
+    let next = NEXT_ESCROW_ID.get().ok_or_else(|| {
+        anyhow::anyhow!(
+        "mail escrow id range was not claimed; refusing instead of falling back to colliding ids"
+    )
+    })?;
+    let id = next.fetch_add(1, Ordering::Relaxed);
+    if id >= *ESCROW_ID_END.get().unwrap_or(&0) {
+        anyhow::bail!("mail escrow id range is exhausted")
+    }
+    Ok(id)
+}
+
+/// Install the range realm-core assigned this gateway. Idempotent for reconnect/startup retries.
+pub(crate) fn install_escrow_id_range(next: u64, end: u64) {
+    use std::sync::atomic::AtomicU64;
+    let _ = ESCROW_ID_END.set(end);
+    let _ = NEXT_ESCROW_ID.set(AtomicU64::new(next.max(1)));
 }
 
 /// Read a module-side failure into the refusal the client is shown.

@@ -964,6 +964,71 @@ fn ensure_guid_ranges(conns: &HashMap<String, Arc<CoordinatorInner>>, map: &Shar
     }
 }
 
+/// Claim this gateway's mail-escrow id range once and resume after the largest durable fence or
+/// receipt in it. We deliberately share realm-core's existing range registry: it already provides
+/// idempotent ownership plus a unique slot constraint. Escrow ids remain a separate keyspace
+/// because they are used only as keys in the mail ledgers, never as game GUIDs.
+///
+/// Failure is fail-closed. Installing the old process-time allocator would reintroduce the very
+/// collision this claim removes, so sharded sends refuse until a range can be claimed.
+fn ensure_mail_escrow_range(
+    conns: &HashMap<String, Arc<CoordinatorInner>>,
+    map: &ShardMap,
+    gateway_id: &str,
+) {
+    let Some(rc_name) = map.realm_core_db() else {
+        // The single-database plane never uses escrow; install a harmless local range for tests and
+        // for future same-plane callers without introducing a realm dependency.
+        crate::world::mail::install_escrow_id_range(1, u64::MAX);
+        return;
+    };
+    let Some(rc) = conns.get(rc_name) else { return };
+    let claimant = format!("mail-escrow:{gateway_id}");
+    let desired = lyracore_shared::mail::escrow_range_mark(gateway_id);
+    if let Err(e) = (|| -> Result<()> {
+        call_reducer!(
+            rc.coord().conn.reducers,
+            "claim_guid_range for mail escrow",
+            claim_guid_range_then(claimant.clone(), desired)
+        )?;
+        let row = (0..100)
+            .find_map(|_| {
+                let found = rc
+                    .coord()
+                    .conn
+                    .db
+                    .game_guid_range_registry()
+                    .shard_name()
+                    .find(&claimant);
+                if found.is_none() {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                found
+            })
+            .ok_or_else(|| anyhow!("mail escrow range claim published no registry row"))?;
+        let seen = conns.values().flat_map(|inner| {
+            let db = &inner.coord().conn.db;
+            db.game_mail_escrow()
+                .iter()
+                .map(|r| r.escrow_id)
+                .chain(db.game_mail_delivery().iter().map(|r| r.escrow_id))
+                .collect::<Vec<_>>()
+        });
+        let (next, end) = lyracore_shared::mail::resume_escrow_range(row.base, row.size, seen)
+            .ok_or_else(|| anyhow!("mail escrow id range is exhausted"))?;
+        crate::world::mail::install_escrow_id_range(next, end);
+        log::info!(
+            "gateway {gateway_id} mints mail escrow ids from claimed range [{}, {end})",
+            row.base
+        );
+        Ok(())
+    })() {
+        log::error!(
+            "could not claim mail escrow id range: {e:#}; sharded mail value moves will REFUSE"
+        );
+    }
+}
+
 /// Block on a reducer-completion channel, mapping the outcome to `anyhow`.
 pub(crate) fn recv_reducer(
     rx: std::sync::mpsc::Receiver<std::result::Result<(), String>>,
@@ -1430,6 +1495,7 @@ impl Coordinator {
             .enforce()
             .map_err(|msg| anyhow!("{msg}"))?;
         ensure_guid_ranges(&conns, &map);
+        ensure_mail_escrow_range(&conns, &map, &cfg.gateway_id);
         let world = Arc::new(super::world_view::WorldView::new(
             crate::config::aoi_enabled(),
         ));

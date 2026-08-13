@@ -273,13 +273,17 @@ pub(crate) fn store_instance_state(
     player_guid: u64,
     owner_identity: Identity,
     tmpl: &ItemTemplate,
+    preallocated_guid: Option<u64>,
     stack_count: u32,
     durability: u32,
     enchant_id: u32,
     soulbound: bool,
 ) -> Result<(), String> {
     let slot = free_slot(ctx, player_guid)?;
-    let guid = next_item_guid(ctx, player_guid, slot);
+    // Trade allocates before deleting either side's outgoing rows: otherwise an emptied inventory
+    // can re-mint a guid deleted earlier in the same transaction and the item relay sees UPDATE
+    // instead of CREATE. Mail can safely allocate at insertion time.
+    let guid = preallocated_guid.unwrap_or_else(|| next_item_guid(ctx, player_guid, slot));
     ctx.db.game_item_instance().insert(ItemInstance {
         guid,
         entry: tmpl.entry,

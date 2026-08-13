@@ -246,6 +246,7 @@ pub(crate) fn grant_snapshot(
         payee_guid,
         payee.owner_identity,
         &tmpl,
+        None,
         snapshot.stack_count,
         snapshot.durability,
         snapshot.enchant_id,
