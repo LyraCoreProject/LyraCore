@@ -895,12 +895,87 @@ mod tests {
         assert!(compute_group_strength(true, 2, 1) > compute_group_strength(true, 1, 99_999));
     }
 
+    /// Every `.rs` file under `module/src`, so the scans below cannot be sidestepped by putting a
+    /// second aura path outside the spell module.
+    fn module_sources() -> Vec<std::path::PathBuf> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("module source directory is readable") {
+                let path = entry.expect("module source entry is readable").path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&crate::test_scan::repo_root().join("module/src"), &mut out);
+        out.sort();
+        out
+    }
+
+    /// `path` relative to the repo root, for a readable failure message.
+    fn rel(path: &std::path::Path) -> String {
+        path.strip_prefix(crate::test_scan::repo_root())
+            .unwrap_or(path)
+            .display()
+            .to_string()
+    }
+
+    /// Every live `game_aura` insert in `module/src`, as `file:line`.
+    fn aura_insert_sites() -> Vec<String> {
+        module_sources()
+            .iter()
+            .flat_map(|path| {
+                let source = std::fs::read_to_string(path).expect("module source is readable");
+                let file = rel(path);
+                crate::test_scan::raw_table_reads(&source, &["game_aura"], |content, idx| {
+                    content[idx..].trim_start().starts_with(".insert(")
+                })
+                .into_iter()
+                .map(move |(line, _)| format!("{file}:{line}"))
+                .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// Live (non-comment, non-string-literal) calls to or definitions of `name` in `source`.
+    fn live_calls(source: &str, name: &str) -> usize {
+        let needle = format!("{name}(");
+        source
+            .match_indices(needle.as_str())
+            .filter(|(idx, _)| {
+                !crate::test_scan::on_comment_line(source, *idx)
+                    && !crate::test_scan::in_string_literal(source, *idx)
+                    && crate::test_scan::is_standalone_ident(source, *idx, name)
+            })
+            .count()
+    }
+
+    /// The single-boundary guard. `raw_table_reads` follows both the inline `ctx.db.game_aura()`
+    /// call and this crate's dominant `let auras = ctx.db.game_aura();` handle idiom, and skips
+    /// comments and string literals — so this test's own needles never satisfy it.
     #[test]
     fn every_aura_entry_point_converges_on_the_authoritative_insertion_boundary() {
+        let sites = aura_insert_sites();
+        assert_eq!(
+            sites.len(),
+            1,
+            "a second game_aura insertion path bypasses aura_apply: {sites:?}"
+        );
+        assert!(
+            sites[0].starts_with("module/src/spell/cast/targeting.rs:"),
+            "the authoritative insertion site moved out of aura_apply: {sites:?}"
+        );
+
+        // The one insertion sits inside `aura_apply`, after the group, DR and slot decisions.
         let targeting = include_str!("cast/targeting.rs");
         let aura_apply = crate::test_scan::code_of(targeting, "pub(crate) fn aura_apply(");
         assert_eq!(
-            aura_apply.matches("auras.insert(Aura {").count(),
+            crate::test_scan::raw_table_reads(&aura_apply, &["game_aura"], |content, idx| {
+                content[idx..].trim_start().starts_with(".insert(")
+            })
+            .len(),
             1,
             "aura_apply must retain exactly one game_aura insertion site"
         );
@@ -908,47 +983,44 @@ mod tests {
         assert!(aura_apply.contains("resolve_dr_for_target("));
         assert!(aura_apply.contains("pick_aura_slot("));
 
-        fn rust_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-            for entry in std::fs::read_dir(dir).expect("spell source directory is readable") {
-                let path = entry.expect("spell source entry is readable").path();
-                if path.is_dir() {
-                    rust_sources(&path, out);
-                } else if path.extension().is_some_and(|ext| ext == "rs") {
-                    out.push(path);
-                }
-            }
+        // The three entry points: normal casts (`apply_effect`), linked debuffs
+        // (`apply_linked_debuff`) and passive/talent/racial grants (`apply_spell_auras`).
+        let resolve = include_str!("cast/resolve.rs");
+        for (source, signature) in [
+            (targeting, "pub(crate) fn apply_effect("),
+            (targeting, "pub(crate) fn apply_linked_debuff("),
+            (resolve, "pub(crate) fn apply_spell_auras("),
+        ] {
+            let body = crate::test_scan::code_of(source, signature);
+            assert!(
+                live_calls(&body, "aura_apply") >= 1,
+                "`{signature}` no longer reaches the aura-application boundary"
+            );
         }
-        let mut sources = Vec::new();
-        rust_sources(
-            &crate::test_scan::repo_root().join("module/src/spell"),
-            &mut sources,
-        );
-        let insertions: Vec<_> = sources
+        // …and nothing else calls it. One definition plus exactly three call sites; a fourth entry
+        // point must be routed through one of them or justified by moving this pin.
+        let calls: usize = module_sources()
             .iter()
-            .filter_map(|path| {
-                // This test's own assertion contains the needle as a string literal; it is not a
-                // production aura path, so exclude the file containing the tripwire itself.
-                if path.file_name().is_some_and(|name| name == "stacking.rs") {
-                    return None;
-                }
-                let source = std::fs::read_to_string(path).expect("spell source is readable");
-                source
-                    .contains("auras.insert(Aura {")
-                    .then(|| path.display().to_string())
+            .map(|path| {
+                let source = std::fs::read_to_string(path).expect("module source is readable");
+                live_calls(&source, "aura_apply")
             })
-            .collect();
+            .sum();
         assert_eq!(
-            insertions.len(),
-            1,
-            "a second game_aura insertion path bypasses aura_apply: {insertions:?}"
+            calls, 4,
+            "aura_apply gained or lost a caller — every aura entry point must converge here"
         );
 
-        // Normal casts and linked effects share `apply_effect`; passive/talent/racial application
-        // calls the same boundary from `apply_spell_auras`.
-        assert!(targeting.contains("aura_apply(\n            ctx,"));
-        let resolve = include_str!("cast/resolve.rs");
-        let passive = crate::test_scan::code_of(resolve, "pub(crate) fn apply_spell_auras(");
-        assert!(passive.contains("aura_apply("));
+        // A multi-effect spell calls the boundary once per effect; its own earlier effect must not
+        // be treated as a conflicting family member of the later ones.
+        let conflict = crate::test_scan::code_of(
+            include_str!("stacking.rs"),
+            "pub(crate) fn apply_group_conflict(",
+        );
+        assert!(
+            conflict.contains("a.spell_id != spell_id"),
+            "sibling effects of one spell must be excluded from their own family conflict"
+        );
     }
 
     /// `group_rule_from_u8` decodes the four documented rule bytes; an unrecognized byte is the safe
