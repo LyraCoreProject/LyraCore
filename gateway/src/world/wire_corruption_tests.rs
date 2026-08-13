@@ -49,7 +49,7 @@ fn movement_burst_over_a_real_cipher(n: usize) {
         }),
         ..Default::default()
     });
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         let mut s = server_end;
@@ -322,7 +322,7 @@ fn oversized_raw_body_ends_the_session_instead_of_wrapping_the_size_field() {
         }),
         ..Default::default()
     });
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         let mut s = server_end;
@@ -420,7 +420,7 @@ fn combat_cast_burst_over_a_real_cipher(n: usize) {
         }),
         ..Default::default()
     });
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         let mut s = server_end;

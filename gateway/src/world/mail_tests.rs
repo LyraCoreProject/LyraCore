@@ -310,7 +310,7 @@ fn an_empty_mailbox_is_answered_with_an_empty_list_packet() {
     let store = seated_store();
     store.mails.lock().unwrap().clear();
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -345,7 +345,7 @@ fn an_empty_mailbox_is_answered_with_an_empty_list_packet() {
 fn a_seeded_mail_reaches_the_client_as_a_mail_list_row() {
     let store = seated_store();
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
@@ -411,7 +411,7 @@ fn a_seeded_mail_reaches_the_client_as_a_mail_list_row() {
 fn a_refused_mail_opcode_costs_a_packet_and_never_the_session() {
     let store = seated_store();
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();

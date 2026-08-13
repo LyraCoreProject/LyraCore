@@ -507,19 +507,12 @@ fn a_real_session_routes_a_whisper_to_realm_core_as_its_own_character() {
     *session_shard.peers.lock().unwrap() = vec![session_shard.clone(), instances.clone()];
     *instances.peers.lock().unwrap() = vec![session_shard.clone(), instances.clone()];
 
-    let (mut client, server_end) = UnixStream::pair().unwrap();
+    let (mut client, server_end) = world_session_socket_pair();
     let server_store = session_shard.clone();
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.as_ref()).unwrap();
     });
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
-    // A READ DEADLINE, and it is the point rather than hygiene: the mutation this pins makes the
-    // expected packet never arrive, and a blocking read on a packet that will never come turns a
-    // test that must go RED into one that HANGS — neither a pass nor a fail (two of that
-    // adversarial review's mutations did exactly that).
-    client
-        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-        .unwrap();
     CMSG_PLAYER_LOGIN {
         guid: Guid::new(GINGER),
     }
