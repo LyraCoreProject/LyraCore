@@ -1844,13 +1844,6 @@ impl WorldStore for InMemoryStore {
             None => Ok(()),
         }
     }
-    fn unequip_item(&self, _account_id: u64, _self_guid: u64, from_slot: u8) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.unequipped_slots.lock().unwrap().push(from_slot);
-        Ok(())
-    }
     fn use_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
         self.used_items.lock().unwrap().push(slot);
         match &self.trade_error {
@@ -1902,13 +1895,6 @@ impl WorldStore for InMemoryStore {
             .lock()
             .unwrap()
             .push((account_id, self_guid, trainer_guid));
-        Ok(())
-    }
-    fn move_item(&self, _account_id: u64, _self_guid: u64, from_slot: u8, to_slot: u8) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.moved_items.lock().unwrap().push((from_slot, to_slot));
         Ok(())
     }
     fn auto_bank_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
@@ -2771,6 +2757,22 @@ impl ItemActionStore for InMemoryStore {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
         }
+    }
+
+    fn unequip_item(&self, _account_id: u64, _self_guid: u64, from_slot: u8) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.unequipped_slots.lock().unwrap().push(from_slot);
+        Ok(())
+    }
+
+    fn move_item(&self, _account_id: u64, _self_guid: u64, from_slot: u8, to_slot: u8) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.moved_items.lock().unwrap().push((from_slot, to_slot));
+        Ok(())
     }
 }
 

@@ -757,10 +757,6 @@ impl WorldStore for Coordinator {
         self.learn_talent(account_id, self_guid, talent_id)
     }
 
-    fn unequip_item(&self, account_id: u64, self_guid: u64, from_slot: u8) -> Result<()> {
-        self.unequip_item(account_id, self_guid, from_slot)
-    }
-
     fn use_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()> {
         self.use_item(account_id, self_guid, slot)
     }
@@ -791,10 +787,6 @@ impl WorldStore for Coordinator {
 
     fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()> {
         self.reset_talents(account_id, self_guid, trainer_guid)
-    }
-
-    fn move_item(&self, account_id: u64, self_guid: u64, from_slot: u8, to_slot: u8) -> Result<()> {
-        self.move_item(account_id, self_guid, from_slot, to_slot)
     }
 
     fn auto_bank_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()> {

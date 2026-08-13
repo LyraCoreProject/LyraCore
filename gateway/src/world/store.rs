@@ -511,10 +511,6 @@ pub trait WorldStore: ItemActionStore + Send + Sync {
     /// / max rank / prerequisites); a gameplay `Err` is per-action, not session-fatal.
     fn learn_talent(&self, account_id: u64, self_guid: u64, talent_id: u32) -> Result<()>;
 
-    /// Unequip the item in equipment `from_slot` (0..=18) into a free backpack slot (right-click an
-    /// equipped item → `CMSG_AUTOSTORE_BAG_ITEM`). Errors (not equipped / backpack full) are per-action.
-    fn unequip_item(&self, account_id: u64, self_guid: u64, from_slot: u8) -> Result<()>;
-
     /// Use the consumable in main-inventory `slot` (`CMSG_USE_ITEM`) — eat/drink/potion/bandage. The
     /// module applies the item's on-use effect (flat heal for slice food) and decrements the stack.
     /// (Using a Hearthstone routes through here too — the module recalls to the bound home.)
@@ -550,11 +546,6 @@ pub trait WorldStore: ItemActionStore + Send + Sync {
     /// 10+ by `filtered_gossip_options` — #516). Errors (out of range / not enough gold) are
     /// per-action; the caller just closes the gossip window either way.
     fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()>;
-
-    /// Move (or swap) the item in main-inventory `from_slot` to `to_slot` (`CMSG_SWAP_INV_ITEM`/
-    /// `CMSG_SWAP_ITEM`). The module's move primitive validates equip-slot transitions, so this also
-    /// covers drag-to-equip and drag-to-unequip. A gameplay `Err` is per-action, not session-fatal.
-    fn move_item(&self, account_id: u64, self_guid: u64, from_slot: u8, to_slot: u8) -> Result<()>;
 
     /// Auto-bank/auto-store-bank the item in `slot` (`CMSG_AUTOBANK_ITEM`/`CMSG_AUTOSTORE_BANK_ITEM`
     /// — right-click to bank, right-click to withdraw). The module infers the direction from `slot`
