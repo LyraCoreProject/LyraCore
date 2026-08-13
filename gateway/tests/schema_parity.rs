@@ -584,6 +584,12 @@ parity_test!(parity_game_transfer_out, "game_transfer_out", lyracore_module::Tra
 parity_test!(parity_game_spell_chain, "game_spell_chain", lyracore_module::SpellChain, bindings::spell_chain_type::SpellChain, {
     spell_id, prev_spell, first_spell, rank, req_spell,
 });
+// Generated even though the gateway does not currently subscribe to or read it. The binding was
+// stale once and therefore earns an explicit regression guard outside the subscribed-table
+// manifest below; recreating the old two-field binding must make this test fail to compile.
+parity_test!(parity_game_spell_group_rule, "game_spell_group_rule", lyracore_module::SpellGroupRule, bindings::spell_group_rule_type::SpellGroupRule, {
+    group_id, rule, rank_is_comparable,
+});
 parity_test!(parity_game_player_skill, "game_player_skill", lyracore_module::PlayerSkill, bindings::player_skill_type::PlayerSkill, {
     id, character_guid, owner_identity, skill_line, current, max_rank,
 });

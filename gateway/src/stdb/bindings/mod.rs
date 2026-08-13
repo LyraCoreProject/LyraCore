@@ -577,6 +577,7 @@ pub mod session_type;
 pub mod set_character_shard_reducer;
 pub mod set_gm_level_reducer;
 pub mod set_motion_tick_ms_reducer;
+pub mod set_realm_address_reducer;
 pub mod set_region_assignment_reducer;
 pub mod settle_loot_roll_reducer;
 pub mod shard_load_total_type;
@@ -1198,6 +1199,7 @@ pub use session_type::Session;
 pub use set_character_shard_reducer::set_character_shard;
 pub use set_gm_level_reducer::set_gm_level;
 pub use set_motion_tick_ms_reducer::set_motion_tick_ms;
+pub use set_realm_address_reducer::set_realm_address;
 pub use set_region_assignment_reducer::set_region_assignment;
 pub use settle_loot_roll_reducer::settle_loot_roll;
 pub use shard_load_total_type::ShardLoadTotal;
@@ -2429,6 +2431,9 @@ pub enum Reducer {
     SetMotionTickMs {
         tick_ms: u64,
     },
+    SetRealmAddress {
+        address: String,
+    },
     SetRegionAssignment {
         map_id: u32,
         region_id: u32,
@@ -2760,6 +2765,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::SetCharacterShard { .. } => "set_character_shard",
             Reducer::SetGmLevel { .. } => "set_gm_level",
             Reducer::SetMotionTickMs { .. } => "set_motion_tick_ms",
+            Reducer::SetRealmAddress { .. } => "set_realm_address",
             Reducer::SetRegionAssignment { .. } => "set_region_assignment",
             Reducer::SettleLootRoll { .. } => "settle_loot_roll",
             Reducer::StageVmapGeneration { .. } => "stage_vmap_generation",
@@ -4896,6 +4902,11 @@ impl __sdk::Reducer for Reducer {
             Reducer::SetMotionTickMs { tick_ms } => {
                 __sats::bsatn::to_vec(&set_motion_tick_ms_reducer::SetMotionTickMsArgs {
                     tick_ms: tick_ms.clone(),
+                })
+            }
+            Reducer::SetRealmAddress { address } => {
+                __sats::bsatn::to_vec(&set_realm_address_reducer::SetRealmAddressArgs {
+                    address: address.clone(),
                 })
             }
             Reducer::SetRegionAssignment {

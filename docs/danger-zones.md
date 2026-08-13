@@ -33,6 +33,8 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
      `data_0`/`data_1` AS GENERATED (with the underscore) — their gateway code uses the underscore
      names. The rule: match the COMMITTED (working) binding's field name, which is what the gateway
      code accesses; `cargo build` E0609 "no field X" tells you which way each one goes.
+     Regeneration also removes the explanatory `facing` / `facing_angle` comment from
+     `creature_spline_type.rs`; restore it from the committed binding after every regeneration.
      Regeneration needs a machine that can run `spacetimedb-standalone` — schema extraction shells
      out to it, so a sandbox without it cannot regenerate. Diff-review the regenerated tree before
      committing (it rewrites every file; drift deletions are expected and correct), then run the
