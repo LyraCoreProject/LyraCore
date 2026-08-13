@@ -1837,7 +1837,7 @@ mod effect_handler_tests {
         }
     }
 
-    /// Buff cap (issue #155's named vector, the debuff cap test's mirror image): 32 live buffs fully
+    /// Buff cap, the debuff cap test's mirror image: 32 live buffs fully
     /// occupy `[0, 32)`; a 33rd distinct buff gets `None` and the 32 existing entries are untouched.
     #[test]
     fn thirty_two_buffs_full_refuses_the_thirty_third_leaving_the_thirty_two_untouched() {
@@ -1852,7 +1852,7 @@ mod effect_handler_tests {
         }
     }
 
-    /// Range independence (issue #155): the buff and debuff ranges never compete for the same slots, in
+    /// Range independence: the buff and debuff ranges never compete for the same slots, in
     /// EITHER direction — a full buff range still has room for a distinct debuff, and a full debuff range
     /// still has room for a distinct buff. Each half is also covered inside the two full-range tests
     /// above (a full range's OWN polarity refuses); this test is the cross-polarity vector specifically.

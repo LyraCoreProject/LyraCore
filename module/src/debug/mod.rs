@@ -1014,7 +1014,7 @@ pub fn debug_cast_spell_at(
 
 /// Seed `count` SYNTHETIC filler auras directly into `target_guid`'s buff (`debuff=false`) or debuff
 /// (`debuff=true`) `UNIT_FIELD_AURA` range, at slots `[0, count)` / `[BUFF_SLOT_COUNT, BUFF_SLOT_COUNT +
-/// count)` — the harness lever for proving the 32-buff/16-debuff cap end to end (issue #155) without
+/// count)` — the harness lever for proving the 32-buff/16-debuff cap end to end without
 /// hunting down that many distinct real spells. This is SETUP: it writes `game_aura` rows directly and
 /// skips `apply_group_conflict`/`pick_aura_slot` entirely, on purpose — the probe's own cast (a real
 /// `debug_cast_at`/player cast against the now-full range) is what exercises the policy boundary under
