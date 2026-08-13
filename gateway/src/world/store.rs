@@ -4,10 +4,10 @@
 //! trait for the remaining session operations (only two implementors); the section markers below
 //! are load-bearing navigation, not a split.
 
-use super::handlers::ItemActionStore;
+use super::handlers::{ItemActionStore, VendorActionStore};
 use super::*;
 
-pub trait WorldStore: ItemActionStore + Send + Sync {
+pub trait WorldStore: ItemActionStore + VendorActionStore + Send + Sync {
     /// Look up the shared session key K (+ account id) for an (already uppercased) account
     /// name. `None` when no live session exists for that account (reject the handshake).
     fn lookup_session(&self, account_name: &str) -> Result<Option<WorldSession>>;

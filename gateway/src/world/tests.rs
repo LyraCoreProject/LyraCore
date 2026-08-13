@@ -1,4 +1,4 @@
-use super::handlers::ItemActionStore;
+use super::handlers::{ItemActionStore, VendorActionStore};
 use super::*;
 use std::os::unix::net::UnixStream;
 
@@ -138,6 +138,7 @@ use wow_world_messages::vanilla::{
     CMSG_GOSSIP_SELECT_OPTION,
     CMSG_INSPECT,
     CMSG_LEARN_TALENT,
+    CMSG_LIST_INVENTORY,
     CMSG_LOGOUT_REQUEST,
     CMSG_LOOT,
     CMSG_LOOT_MASTER_GIVE,
@@ -2800,6 +2801,16 @@ impl WorldStore for InMemoryStore {
             return Err(anyhow!("not on that list"));
         }
         Ok(())
+    }
+}
+
+impl VendorActionStore for InMemoryStore {
+    fn vendor_stock(&self, _vendor_guid: u64) -> Result<Vec<codec::VendorItemView>> {
+        Ok(self.vendor_stock.clone())
+    }
+
+    fn vendor_refuses_interaction(&self, _vendor_guid: u64, _player_guid: u64) -> Result<bool> {
+        Ok(self.npc_refuses)
     }
 }
 
@@ -6800,6 +6811,59 @@ fn learn_talent_rank_upgrade_supersedes_the_previous_rank_spell() {
         0x00A9,
         "the CHARACTER_POINTS1 VALUES push"
     );
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn list_inventory_opens_the_vendor_window_over_the_socket() {
+    let mut s = quest_store();
+    s.vendor_stock = vec![codec::VendorItemView {
+        item_entry: 4540,
+        display_id: 6353,
+        buy_price: 25,
+        ..Default::default()
+    }];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_LIST_INVENTORY {
+        guid: Guid::new(80),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let (op, body) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(op, codec::SMSG_LIST_INVENTORY_OPCODE);
+    assert_eq!(&body[0..8], &80u64.to_le_bytes());
+    assert_eq!(body[8], 1, "one stocked item");
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn list_inventory_on_a_standing_refusing_vendor_sends_no_reply() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        npc_refuses: true,
+        characters: vec![codec::CharacterView {
+            guid: 1,
+            ..Default::default()
+        }],
+        ..quest_store()
+    });
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_LIST_INVENTORY {
+        guid: Guid::new(80),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    // Sentinel: a follow-up request with a guaranteed reply — a wrongly sent vendor window
+    // would arrive ahead of it.
+    CMSG_PLAYED_TIME {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_PLAYED_TIME(_) => {}
+        other => panic!("expected SMSG_PLAYED_TIME (refused vendor answers nothing), got {other}"),
+    }
     drop(client);
     server.join().unwrap();
 }

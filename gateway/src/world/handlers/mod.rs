@@ -29,7 +29,10 @@ pub(crate) use query::handle_query;
 pub(crate) use quest::handle_quest;
 pub(crate) use trade::handle_trade;
 pub(crate) use trainer::handle_trainer;
-pub(crate) use vendor::handle_vendor;
+pub(crate) use vendor::{
+    dispatch_vendor_action, handle_vendor, VendorActionOutcome, VendorActionPlayer,
+    VendorActionStore,
+};
 
 /// Rebuild + push the buyback-tab view: a synthesized ITEM object per ring entry (fabricated
 /// guid 0x4090…|slot — a client-only object, never a real instance) and ONE raw VALUES update

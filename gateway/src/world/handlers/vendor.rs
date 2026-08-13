@@ -1,11 +1,107 @@
-//! Vendor family: open a vendor's inventory window + buy/sell. Pure code-motion out of
-//! `world/mod.rs`.
+//! Vendor family: open a vendor's inventory window + buy/sell. The vendor-action seam below owns
+//! the migrated opcodes; `handle_vendor` still carries the ones not yet moved across.
 
 use super::super::*;
 use super::push_buyback_view;
 
-/// Vendor family (Tier 2): open a vendor's inventory window + buy/sell. `CMSG_LIST_INVENTORY` reads
-/// the vendor's stock and replies RAW (gtker's typed `SMSG_LIST_INVENTORY` is the tbc/wrath shape).
+/// Durable reads and requests the vendor family needs, in the seam's own vocabulary so it can be
+/// exercised without the broad `WorldStore`.
+pub(crate) trait VendorActionStore: Send + Sync {
+    fn vendor_stock(&self, vendor_guid: u64) -> Result<Vec<codec::VendorItemView>>;
+
+    fn vendor_refuses_interaction(&self, vendor_guid: u64, player_guid: u64) -> Result<bool>;
+}
+
+impl VendorActionStore for crate::stdb::Coordinator {
+    fn vendor_stock(&self, vendor_guid: u64) -> Result<Vec<codec::VendorItemView>> {
+        crate::stdb::Coordinator::vendor_items(self, vendor_guid)
+    }
+
+    fn vendor_refuses_interaction(&self, vendor_guid: u64, player_guid: u64) -> Result<bool> {
+        crate::stdb::Coordinator::npc_refuses_interaction(self, vendor_guid, player_guid)
+    }
+}
+
+/// Who is asking. `self_guid` is `None` before world entry — the character-select state has no
+/// actor, so gates that need one are skipped rather than run against a placeholder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct VendorActionPlayer {
+    pub(crate) account_id: u64,
+    pub(crate) self_guid: Option<u64>,
+}
+
+pub(crate) enum VendorActionOutcome {
+    Handled { outbound: Vec<Outbound> },
+    PassThrough(ClientOpcodeMessage),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VendorActionErrorClass {
+    GameplayRefusal,
+    Fatal,
+}
+
+fn classify_vendor_action_error(error: &anyhow::Error) -> VendorActionErrorClass {
+    if error
+        .chain()
+        .any(|cause| cause.to_string().contains("reducer transport disconnected"))
+    {
+        VendorActionErrorClass::Fatal
+    } else {
+        VendorActionErrorClass::GameplayRefusal
+    }
+}
+
+/// The interaction gate fails open — missing standing data must not lock a player out of a vendor —
+/// but a dead reducer transport is not missing data and ends the session.
+fn refuses_interaction<St: VendorActionStore + ?Sized>(
+    store: &St,
+    player: VendorActionPlayer,
+    vendor_guid: u64,
+) -> Result<bool> {
+    let Some(self_guid) = player.self_guid else {
+        return Ok(false);
+    };
+    match store.vendor_refuses_interaction(vendor_guid, self_guid) {
+        Ok(refuses) => Ok(refuses),
+        Err(e) if classify_vendor_action_error(&e) == VendorActionErrorClass::GameplayRefusal => {
+            log::debug!(
+                "world: vendor {vendor_guid} interaction gate unavailable (account {}): {e}",
+                player.account_id
+            );
+            Ok(false)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+pub(crate) fn dispatch_vendor_action<St: VendorActionStore + ?Sized>(
+    store: &St,
+    player: VendorActionPlayer,
+    msg: ClientOpcodeMessage,
+) -> Result<VendorActionOutcome> {
+    match msg {
+        // A refusing NPC answers nothing at all; an empty stock still answers, or the client waits
+        // forever on the window it asked for. Replies RAW because gtker's typed
+        // SMSG_LIST_INVENTORY is the tbc/wrath shape.
+        ClientOpcodeMessage::CMSG_LIST_INVENTORY(c) => {
+            let vendor_guid = c.guid.guid();
+            if refuses_interaction(store, player, vendor_guid)? {
+                return Ok(VendorActionOutcome::Handled {
+                    outbound: Vec::new(),
+                });
+            }
+            let items = store.vendor_stock(vendor_guid)?;
+            let (opcode, body) = codec::build_list_inventory_raw(vendor_guid, &items);
+            Ok(VendorActionOutcome::Handled {
+                outbound: vec![Outbound::Raw { opcode, body }],
+            })
+        }
+        other => Ok(VendorActionOutcome::PassThrough(other)),
+    }
+}
+
+/// Vendor family (Tier 2): buy/sell/buyback/repair, awaiting migration to the seam above.
 /// Buy/sell forward to the module reducers; a gameplay `Err` (no stock / no copper / out of range)
 /// is per-action — log + ignore like the combat/loot arms, never tear the session down.
 pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
@@ -15,25 +111,6 @@ pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
     msg: ClientOpcodeMessage,
 ) -> Result<Option<ClientOpcodeMessage>> {
     match msg {
-        // Open the vendor window: read the NPC's stock (joined with the item templates) and send the
-        // RAW SMSG_LIST_INVENTORY. An empty stock still replies (a vendor with no items shows an
-        // empty window) so the client doesn't hang waiting on the open it requested.
-        ClientOpcodeMessage::CMSG_LIST_INVENTORY(c) => {
-            let vendor_guid = c.guid.guid();
-            // An Unfriendly-or-below (or mask-hostile) vendor refuses the window —
-            // silent drop, like the inspect/gameobject gates (vanilla NPCs just don't respond).
-            if let WorldState::InWorld(iw) = &conn.state {
-                if store
-                    .npc_refuses_interaction(vendor_guid, iw.self_guid)
-                    .unwrap_or(false)
-                {
-                    return Ok(None);
-                }
-            }
-            let items = store.vendor_items(vendor_guid)?;
-            let (opcode, body) = codec::build_list_inventory_raw(vendor_guid, &items);
-            send(tx, Outbound::Raw { opcode, body })?;
-        }
         // Buy `amount` of an item ENTRY from the vendor. The module gates it (vendor stock / range /
         // copper) and replicates the new item + purse via the player's subscription; a rejection is a
         // transient per-action failure — logged and relayed to the buyer as SMSG_BUY_FAILED (red
@@ -188,4 +265,195 @@ pub(crate) fn handle_vendor<St: WorldStore + ?Sized>(
         other => return Ok(Some(other)),
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use wow_world_messages::vanilla::{Guid, CMSG_LIST_INVENTORY, CMSG_PING};
+
+    #[derive(Default)]
+    struct InMemoryVendorActions {
+        stock_requests: Mutex<Vec<u64>>,
+        gate_requests: Mutex<Vec<(u64, u64)>>,
+        stock: Vec<codec::VendorItemView>,
+        refuses: bool,
+        stock_error: Option<String>,
+        gate_error: Option<String>,
+    }
+
+    impl VendorActionStore for InMemoryVendorActions {
+        fn vendor_stock(&self, vendor_guid: u64) -> Result<Vec<codec::VendorItemView>> {
+            self.stock_requests.lock().unwrap().push(vendor_guid);
+            match &self.stock_error {
+                Some(error) => Err(anyhow::anyhow!("{error}")),
+                None => Ok(self.stock.clone()),
+            }
+        }
+
+        fn vendor_refuses_interaction(&self, vendor_guid: u64, player_guid: u64) -> Result<bool> {
+            self.gate_requests
+                .lock()
+                .unwrap()
+                .push((vendor_guid, player_guid));
+            match &self.gate_error {
+                Some(error) => Err(anyhow::anyhow!("{error}")),
+                None => Ok(self.refuses),
+            }
+        }
+    }
+
+    const VENDOR: u64 = 0xF130_0000_0000_0777;
+
+    fn player() -> VendorActionPlayer {
+        VendorActionPlayer {
+            account_id: 7,
+            self_guid: Some(42),
+        }
+    }
+
+    fn list_inventory() -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_LIST_INVENTORY(CMSG_LIST_INVENTORY {
+            guid: Guid::new(VENDOR),
+        })
+    }
+
+    fn stock_item(item_entry: u32) -> codec::VendorItemView {
+        codec::VendorItemView {
+            item_entry,
+            display_id: 1234,
+            buy_price: 500,
+            max_durability: 0,
+            max_count: 0,
+            buy_count: 1,
+        }
+    }
+
+    #[test]
+    fn opening_a_vendor_returns_its_stock_as_the_raw_vendor_window() {
+        let actions = InMemoryVendorActions {
+            stock: vec![stock_item(2589), stock_item(4540)],
+            ..Default::default()
+        };
+
+        let outcome = dispatch_vendor_action(&actions, player(), list_inventory()).unwrap();
+
+        let expected = codec::build_list_inventory_raw(VENDOR, &actions.stock);
+        assert!(matches!(
+            outcome,
+            VendorActionOutcome::Handled { outbound }
+                if matches!(outbound.as_slice(), [Outbound::Raw { opcode, body }]
+                    if (*opcode, body.clone()) == expected)
+        ));
+        assert_eq!(actions.stock_requests.lock().unwrap().as_slice(), &[VENDOR]);
+        assert_eq!(
+            actions.gate_requests.lock().unwrap().as_slice(),
+            &[(VENDOR, 42)]
+        );
+    }
+
+    #[test]
+    fn a_refusing_vendor_answers_nothing_and_its_stock_is_never_read() {
+        let actions = InMemoryVendorActions {
+            refuses: true,
+            stock: vec![stock_item(2589)],
+            ..Default::default()
+        };
+
+        let outcome = dispatch_vendor_action(&actions, player(), list_inventory()).unwrap();
+
+        assert!(
+            matches!(outcome, VendorActionOutcome::Handled { outbound } if outbound.is_empty())
+        );
+        assert!(actions.stock_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_empty_stock_still_opens_the_window() {
+        let actions = InMemoryVendorActions::default();
+
+        let outcome = dispatch_vendor_action(&actions, player(), list_inventory()).unwrap();
+
+        let expected = codec::build_list_inventory_raw(VENDOR, &[]);
+        assert!(matches!(
+            outcome,
+            VendorActionOutcome::Handled { outbound }
+                if matches!(outbound.as_slice(), [Outbound::Raw { opcode, body }]
+                    if (*opcode, body.clone()) == expected)
+        ));
+    }
+
+    #[test]
+    fn an_unavailable_interaction_gate_still_opens_the_window() {
+        let actions = InMemoryVendorActions {
+            gate_error: Some("no standing row for that faction".into()),
+            stock: vec![stock_item(2589)],
+            ..Default::default()
+        };
+
+        let outcome = dispatch_vendor_action(&actions, player(), list_inventory()).unwrap();
+
+        assert!(matches!(
+            outcome,
+            VendorActionOutcome::Handled { outbound } if outbound.len() == 1
+        ));
+    }
+
+    #[test]
+    fn reducer_transport_failure_is_session_fatal() {
+        for actions in [
+            InMemoryVendorActions {
+                gate_error: Some("npc_refuses_interaction reducer transport disconnected".into()),
+                ..Default::default()
+            },
+            InMemoryVendorActions {
+                stock_error: Some("vendor_items reducer transport disconnected".into()),
+                ..Default::default()
+            },
+        ] {
+            let error = match dispatch_vendor_action(&actions, player(), list_inventory()) {
+                Err(error) => error,
+                Ok(_) => panic!("a dead reducer transport must end the session"),
+            };
+            assert!(format!("{error:#}").contains("reducer transport disconnected"));
+        }
+    }
+
+    #[test]
+    fn a_player_without_an_actor_skips_the_interaction_gate() {
+        let actions = InMemoryVendorActions {
+            refuses: true,
+            ..Default::default()
+        };
+        let player = VendorActionPlayer {
+            account_id: 7,
+            self_guid: None,
+        };
+
+        let outcome = dispatch_vendor_action(&actions, player, list_inventory()).unwrap();
+
+        assert!(matches!(
+            outcome,
+            VendorActionOutcome::Handled { outbound } if outbound.len() == 1
+        ));
+        assert!(actions.gate_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unrelated_opcodes_pass_through_to_the_next_dispatcher() {
+        let actions = InMemoryVendorActions::default();
+
+        let outcome = dispatch_vendor_action(
+            &actions,
+            player(),
+            ClientOpcodeMessage::CMSG_PING(CMSG_PING::default()),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            VendorActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
+        ));
+    }
 }
