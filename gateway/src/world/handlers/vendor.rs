@@ -75,6 +75,27 @@ fn refuses_interaction<St: VendorActionStore + ?Sized>(
     }
 }
 
+/// The one vendor-window-opening implementation, shared by the gated direct open below and the
+/// gossip Browse-goods click (`query.rs`), which does not run the gate — matching each path's
+/// pre-seam behavior. Replies RAW because gtker's typed SMSG_LIST_INVENTORY is the tbc/wrath shape.
+pub(crate) fn vendor_open_outbound<St: VendorActionStore + ?Sized>(
+    store: &St,
+    vendor_guid: u64,
+) -> Result<Vec<Outbound>> {
+    let items = store.vendor_stock(vendor_guid)?;
+    let (opcode, body) = codec::build_list_inventory_raw(vendor_guid, &items);
+    Ok(vec![Outbound::Raw { opcode, body }])
+}
+
+/// Stock presence is the is-vendor signal gossip HELLO synthesizes its Browse-goods row from —
+/// no `npc_flags` bit for it.
+pub(crate) fn vendor_has_stock<St: VendorActionStore + ?Sized>(
+    store: &St,
+    vendor_guid: u64,
+) -> Result<bool> {
+    Ok(!store.vendor_stock(vendor_guid)?.is_empty())
+}
+
 pub(crate) fn dispatch_vendor_action<St: VendorActionStore + ?Sized>(
     store: &St,
     player: VendorActionPlayer,
@@ -82,8 +103,7 @@ pub(crate) fn dispatch_vendor_action<St: VendorActionStore + ?Sized>(
 ) -> Result<VendorActionOutcome> {
     match msg {
         // A refusing NPC answers nothing at all; an empty stock still answers, or the client waits
-        // forever on the window it asked for. Replies RAW because gtker's typed
-        // SMSG_LIST_INVENTORY is the tbc/wrath shape.
+        // forever on the window it asked for.
         ClientOpcodeMessage::CMSG_LIST_INVENTORY(c) => {
             let vendor_guid = c.guid.guid();
             if refuses_interaction(store, player, vendor_guid)? {
@@ -91,10 +111,8 @@ pub(crate) fn dispatch_vendor_action<St: VendorActionStore + ?Sized>(
                     outbound: Vec::new(),
                 });
             }
-            let items = store.vendor_stock(vendor_guid)?;
-            let (opcode, body) = codec::build_list_inventory_raw(vendor_guid, &items);
             Ok(VendorActionOutcome::Handled {
-                outbound: vec![Outbound::Raw { opcode, body }],
+                outbound: vendor_open_outbound(store, vendor_guid)?,
             })
         }
         other => Ok(VendorActionOutcome::PassThrough(other)),
