@@ -251,24 +251,16 @@ pub(crate) fn dr_scale_bp(pre_level: u8) -> Option<u32> {
 }
 
 /// "Strength" for a stacking-group comparison: rank first (dominant), then the effect's own magnitude as
-/// the tiebreaker — per the work item's "rank first then primary-effect magnitude" rule. `magnitude` must
-/// already be non-negative (callers pass `abs()`'d, stack-multiplied values — see `apply_group_conflict`).
-/// NOTE (documented divergence / follow-up): this reads `rank` uniformly regardless of whether the two
-/// auras being compared share a spell NAME. That's correct for a same-family group (Fortitude rank1 vs
-/// rank2 — the intended use of "rank first") but would be WRONG for a genuinely cross-family
-/// EXCLUSIVE_STRONGER group (armor debuffs: Sunder's rank is Sunder's-own 1..5, Expose Armor's rank is
-/// Expose's-own 1..5 — the two numberings aren't comparable) IF `game_spell_chain` ever carries real rows
-/// for those ids with differing ranks. Today none of Sunder/Expose/Faerie Fire exist in the curated kit
-/// (no `game_spell` row → `rank_of` returns 0 for all three), so the comparison is magnitude-only in
-/// practice and the vector below (the 5-stack Sunder-vs-Expose calc) is unaffected. [V] — once work-item
-/// 102's real `spell_chain` data lands for these ids, gate `rank_of` on "shares the incoming spell's NAME"
-/// before reusing it across a multi-family group, or add a per-group "single-family" flag.
+/// the tiebreaker. `magnitude` must already be non-negative (callers pass `abs()`'d, stack-multiplied
+/// values — see `apply_group_conflict`). Reaching for this directly compares rank numbers that may
+/// belong to different spell chains; only `compute_group_strength` knows whether that is meaningful.
 pub(crate) fn compute_strength(rank: u8, magnitude: i32) -> i32 {
     (rank as i32) * 100_000 + magnitude.clamp(0, 99_999)
 }
 
-/// Strength with the group's comparison contract applied. Keeping this decision next to the
-/// formula makes a heterogeneous group safe even after real spell-chain rows are imported.
+/// Strength with the group's comparison contract applied. A group that mixes rank chains — armor
+/// debuffs, or any buff paired with its group-cast form — drops rank and compares magnitude alone,
+/// because one chain's rank number says nothing about another's.
 pub(crate) fn compute_group_strength(rank_is_comparable: bool, rank: u8, magnitude: i32) -> i32 {
     compute_strength(if rank_is_comparable { rank } else { 0 }, magnitude)
 }
@@ -584,49 +576,131 @@ mod tests {
         );
     }
 
-    /// Armor debuffs (EXCLUSIVE_STRONGER, verbatim vector, including the 5-STACK strength calc): Sunder
-    /// Armor (450/stack, real vanilla rank-5 value) at a single fresh stack (450) onto an existing Expose
-    /// Armor (real vanilla flat 2050) is WEAKER → Refuse. Expose (2050) onto an existing Sunder at its
-    /// hard 5-stack cap (450 × 5 = 2250 — the "5-stack strength calc") is ALSO weaker (2250 > 2050) →
-    /// Refuse. Neither displaces the other at these real values (armor debuffs aren't in the curated kit
-    /// today, so `rank_of` is 0 for both — a pure magnitude comparison, matching the vector).
+    /// The armor-debuff family is heterogeneous, so `rank_is_comparable` is false for it and the
+    /// comparison is magnitude only. Sunder Armor's magnitude is per-application: its ACTIVE STACK
+    /// COUNT decides whether Expose Armor displaces it, which is the whole point of the two vectors
+    /// below. Magnitudes are the real 1.12.1 values — Sunder rank 5 is 450 armor per stack and Expose
+    /// Armor rank 5 at five combo points is 2050.
     #[test]
-    fn armor_debuffs_exclusive_stronger_compares_magnitude_including_5_stack_sunder() {
-        const SUNDER_PER_STACK: i32 = 450; // real vanilla Sunder Armor rank-5 per-application armor reduction
-        const EXPOSE_FLAT: i32 = 2050; // real vanilla Expose Armor flat armor reduction
+    fn armor_debuff_strength_folds_sunders_active_stack_count() {
+        const SUNDER_PER_STACK: i32 = 450;
+        const EXPOSE_5_COMBO: i32 = 2050;
+        // The fold `apply_group_conflict` performs when it summarises an existing aura row.
+        fn armor_strength(rank: u8, amount: i32, stacks: u16) -> i32 {
+            compute_group_strength(
+                false,
+                rank,
+                amount.saturating_abs().saturating_mul(stacks.max(1) as i32),
+            )
+        }
 
-        // Sunder (fresh, 1 stack) onto an existing Expose: Expose (2050) is stronger → Refuse.
+        // ONE STACK: Sunder is worth 450, so Expose Armor's 2050 displaces it.
+        let sunder_1_stack = AuraSummary {
+            aura_id: 8,
+            caster_guid: 2,
+            strength: armor_strength(5, -450, 1),
+        };
+        assert_eq!(sunder_1_stack.strength, SUNDER_PER_STACK);
+        assert_eq!(
+            resolve_group_conflict(
+                1,
+                armor_strength(5, -EXPOSE_5_COMBO, 1),
+                GroupRule::ExclusiveStronger,
+                &[sunder_1_stack],
+            ),
+            ApplyDecision::Apply {
+                duration_scale_bp: 10_000,
+                evict: vec![8]
+            }
+        );
+
+        // FIVE STACKS: the same Sunder is worth 2250, so the same Expose Armor is refused.
+        let sunder_5_stack = AuraSummary {
+            aura_id: 8,
+            caster_guid: 2,
+            strength: armor_strength(5, -450, 5),
+        };
+        assert_eq!(sunder_5_stack.strength, SUNDER_PER_STACK * 5);
+        assert_eq!(
+            resolve_group_conflict(
+                1,
+                armor_strength(5, -EXPOSE_5_COMBO, 1),
+                GroupRule::ExclusiveStronger,
+                &[sunder_5_stack],
+            ),
+            ApplyDecision::Refuse { reason: "weaker" }
+        );
+
+        // A fresh single Sunder never displaces an established Expose Armor either.
         let expose_existing = AuraSummary {
             aura_id: 7,
             caster_guid: 1,
-            strength: compute_strength(0, EXPOSE_FLAT),
+            strength: armor_strength(5, -EXPOSE_5_COMBO, 1),
         };
         assert_eq!(
             resolve_group_conflict(
                 2,
-                compute_strength(0, SUNDER_PER_STACK),
+                armor_strength(5, -450, 1),
                 GroupRule::ExclusiveStronger,
                 &[expose_existing],
             ),
             ApplyDecision::Refuse { reason: "weaker" }
         );
+    }
 
-        // Expose onto an existing Sunder AT ITS 5-STACK CAP: 450 * 5 = 2250 > Expose's 2050 → Refuse.
-        let sunder_5_stack_strength = compute_strength(0, SUNDER_PER_STACK * 5);
-        assert_eq!(sunder_5_stack_strength, 2250);
-        let sunder_existing = AuraSummary {
-            aura_id: 8,
-            caster_guid: 2,
-            strength: sunder_5_stack_strength,
+    /// Fortitude mixes two rank chains, so it compares magnitude. A higher rank still replaces a lower
+    /// one (its magnitude is larger) and a lower rank is still refused. Magnitudes are the real 1.12.1
+    /// stamina values.
+    #[test]
+    fn fortitude_family_replaces_and_refuses_by_magnitude() {
+        const PW_FORT_R5: i32 = 43;
+        const PW_FORT_R6: i32 = 54;
+        let rank5 = AuraSummary {
+            aura_id: 42,
+            caster_guid: 200,
+            strength: compute_group_strength(false, 5, PW_FORT_R5),
         };
         assert_eq!(
             resolve_group_conflict(
-                1,
-                compute_strength(0, EXPOSE_FLAT),
+                100,
+                compute_group_strength(false, 6, PW_FORT_R6),
                 GroupRule::ExclusiveStronger,
-                &[sunder_existing],
+                &[rank5],
+            ),
+            ApplyDecision::Apply {
+                duration_scale_bp: 10_000,
+                evict: vec![42]
+            }
+        );
+
+        let rank6 = AuraSummary {
+            aura_id: 43,
+            caster_guid: 200,
+            strength: compute_group_strength(false, 6, PW_FORT_R6),
+        };
+        assert_eq!(
+            resolve_group_conflict(
+                100,
+                compute_group_strength(false, 5, PW_FORT_R5),
+                GroupRule::ExclusiveStronger,
+                &[rank6],
             ),
             ApplyDecision::Refuse { reason: "weaker" }
+        );
+
+        // Prayer of Fortitude rank 2 grants the same stamina as Power Word: Fortitude rank 6. Comparing
+        // the two chains' rank numbers instead would refuse it as "rank 2 versus rank 6".
+        assert_eq!(
+            resolve_group_conflict(
+                100,
+                compute_group_strength(false, 2, PW_FORT_R6),
+                GroupRule::ExclusiveStronger,
+                &[rank6],
+            ),
+            ApplyDecision::Apply {
+                duration_scale_bp: 10_000,
+                evict: vec![43]
+            }
         );
     }
 

@@ -1287,7 +1287,8 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     crate::talent::seed_talents(ctx);
 
     // Stacking-group starter set (work-item 192) — hand-authored until 102's cmangos `spell_group` SQL
-    // dump lands wholesale. Idempotent + shared with `debug_seed_spell_groups`.
+    // dump lands wholesale. Idempotent + shared with `debug_repair_after_publish`, which is how an
+    // already-migrated development database picks up reconciled rows (init does NOT re-run).
     seed_spell_groups(ctx);
 }
 
@@ -1428,103 +1429,30 @@ pub(crate) fn seed_createinfo_spells(ctx: &ReducerContext) {
 /// converges its small hand-authored fixture: rules are updated and missing memberships are added,
 /// while existing memberships are never duplicated or deleted.
 ///
-/// Every spell id below is a REAL vanilla id (derived from public spell-rank knowledge, licensing
-/// firewall — no bulk DBC data, same posture as `CREATEINFO_KIT`). `game_spell_group` carries NO foreign
-/// key to `game_spell` (SpacetimeDB has none to enforce, and the group/rule tables are deliberately
-/// reference-only), so seeding an id this sandbox doesn't have a `game_spell` header for yet is HARMLESS —
-/// it simply never matches any live aura until the spell itself is imported (`aura_apply`'s
-/// `apply_group_conflict` looks members up by spell_id off the live `game_aura` rows, not the reverse).
-/// Only Mark of the Wild (1126), Battle Shout (`tracer_spell::SPELL_ID` = 6673), and the synthetic Well
-/// Fed (50116) are in today's curated kit; every other id here is dark until 102 lands real spell data —
-/// exactly the "seed ONLY ids that exist in our curated kit or are harmless if absent" rule.
+/// Every spell id below is a REAL vanilla id (licensing firewall — no bulk data, same posture as
+/// `CREATEINFO_KIT`). Membership was reconciled id-by-id against `DBFilesClient/Spell.dbc` read out of a
+/// locally owned 1.12.1 client; the rule and comparability columns are not client-derived. See
+/// `docs/data-ingestion.md` ("Starter aura families") for the provenance record and what stays unverified.
 ///
-/// Every family is EXCLUSIVE_STRONGER except Blessings, which are EXCLUSIVE_PER_CASTER. Armor debuffs
-/// are intentionally marked rank-incomparable: their different spell chains share one
-/// effective-strength family, so only magnitude (including stacks) is meaningful.
+/// `game_spell_group` carries NO foreign key to `game_spell` (SpacetimeDB has none to enforce, and the
+/// group/rule tables are deliberately reference-only), so seeding an id this sandbox doesn't have a
+/// `game_spell` header for yet is HARMLESS — it simply never matches any live aura until the spell itself
+/// is imported (`aura_apply`'s `apply_group_conflict` looks members up by spell_id off the live
+/// `game_aura` rows, not the reverse). Only Mark of the Wild (1126), Battle Shout
+/// (`tracer_spell::SPELL_ID` = 6673), and the synthetic Well Fed (50116) are in today's curated kit.
+///
+/// `rank_is_comparable` is true for Battle Shout alone: it is the only family here built from a single
+/// rank chain. Every other family mixes chains whose rank numbers describe different spells — Prayer of
+/// Fortitude rank 1 carries Power Word: Fortitude rank 5's magnitude — so they compare effect magnitude,
+/// with an existing aura's stack count folded in.
 pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {
     use crate::spell::stacking::{
         game_spell_group, game_spell_group_rule, SpellGroup, SpellGroupRule,
-        RULE_EXCLUSIVE_PER_CASTER, RULE_EXCLUSIVE_STRONGER,
     };
     let groups = ctx.db.game_spell_group();
     let rules = ctx.db.game_spell_group_rule();
 
-    // (group_id, rule, rank_is_comparable, &[member spell_id, ...])
-    const GROUPS: &[(u32, u8, bool, &[u32])] = &[
-        // 1: Mark of the Wild / Gift of the Wild (Druid stat buff family).
-        (
-            1,
-            RULE_EXCLUSIVE_STRONGER,
-            true,
-            &[1126, 5232, 6756, 8907, 9884, 9885, 21849, 21850],
-        ),
-        // 2: Power Word: Fortitude / Prayer of Fortitude (Priest stamina buff family).
-        (
-            2,
-            RULE_EXCLUSIVE_STRONGER,
-            true,
-            &[1243, 1244, 1245, 2791, 10937, 10938, 21562, 21564],
-        ),
-        // 3: Paladin Blessings — per-caster exclusive (a paladin's OWN blessing replaces their prior
-        // one; another paladin's stands separately). Might/Wisdom/Kings/Salvation/Sanctuary/Light.
-        (
-            3,
-            RULE_EXCLUSIVE_PER_CASTER,
-            true,
-            &[
-                19740, 19834, 19835, 19836, 19837, 19838, // Might
-                19742, 19850, 19852, 19853, 19854, // Wisdom
-                20217, // Kings
-                1038,  // Salvation
-                20911, // Sanctuary
-                19977, 19978, 19979, // Light
-            ],
-        ),
-        // 4: Battle Shout family (rank 1 = `tracer_spell::SPELL_ID`, IN the curated kit).
-        (
-            4,
-            RULE_EXCLUSIVE_STRONGER,
-            true,
-            &[6673, 5242, 6192, 11549, 11550, 11551, 25289],
-        ),
-        // 5: Armor-debuff family (Sunder Armor / Expose Armor / Faerie Fire) — cross-spell, any caster.
-        (
-            5,
-            RULE_EXCLUSIVE_STRONGER,
-            false,
-            &[
-                7386, 7405, 8380, 11596, 11597, 8647, 8649, 8650, 11197, 11198, 770, 778, 9749,
-                9907,
-            ],
-        ),
-        // 6: Intellect (Arcane Intellect / Arcane Brilliance).
-        (
-            6,
-            RULE_EXCLUSIVE_STRONGER,
-            true,
-            &[1459, 1460, 1461, 10156, 10157, 23028],
-        ),
-        // 7: Spirit (Divine Spirit / Prayer of Spirit).
-        (
-            7,
-            RULE_EXCLUSIVE_STRONGER,
-            true,
-            &[14752, 14818, 14819, 27841, 27681],
-        ),
-        // 8: Shadow Protection (single + Prayer of).
-        (
-            8,
-            RULE_EXCLUSIVE_STRONGER,
-            true,
-            &[976, 10957, 10958, 27683],
-        ),
-        // 9: Well Fed (food buff family) — only the synthetic 50116 exists in this sandbox today; the
-        // group exists so future real "well fed" tiers (Well Rested food buffs) join it without a schema
-        // change.
-        (9, RULE_EXCLUSIVE_STRONGER, true, &[50116]),
-    ];
-
-    for &(group_id, rule, rank_is_comparable, members) in GROUPS {
+    for &(group_id, rule, rank_is_comparable, members) in SPELL_GROUPS {
         let rule_row = SpellGroupRule {
             group_id,
             rule,
@@ -1550,6 +1478,106 @@ pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {
         }
     }
 }
+
+/// The starter families themselves: `(group_id, rule, rank_is_comparable, members)`. A const rather
+/// than a local so the reconciliation tests read the rows instead of scanning this file's text.
+pub(crate) const SPELL_GROUPS: &[(u32, u8, bool, &[u32])] = {
+    use crate::spell::stacking::{
+        RULE_EXCLUSIVE, RULE_EXCLUSIVE_PER_CASTER, RULE_EXCLUSIVE_STRONGER,
+    };
+    &[
+        // 1: Mark of the Wild ranks 1-7 / Gift of the Wild ranks 1-2 (Druid stat buff family).
+        (
+            1,
+            RULE_EXCLUSIVE_STRONGER,
+            false,
+            &[1126, 5232, 6756, 5234, 8907, 9884, 9885, 21849, 21850],
+        ),
+        // 2: Power Word: Fortitude ranks 1-6 / Prayer of Fortitude ranks 1-2 (Priest stamina family).
+        (
+            2,
+            RULE_EXCLUSIVE_STRONGER,
+            false,
+            &[1243, 1244, 1245, 2791, 10937, 10938, 21562, 21564],
+        ),
+        // 3: Paladin Blessings — per-caster exclusive (a paladin's OWN blessing replaces their prior
+        // one; another paladin's stands separately). A Greater Blessing is the same buff as its single-
+        // target form, so it shares the family. Freedom/Protection/Sacrifice are deliberately absent:
+        // whether they share this exclusivity is a rule question no client table answers.
+        (
+            3,
+            RULE_EXCLUSIVE_PER_CASTER,
+            false,
+            &[
+                19740, 19834, 19835, 19836, 19837, 19838, 25291, // Might r1-7
+                19742, 19850, 19852, 19853, 19854, 25290, // Wisdom r1-6
+                20217, // Kings
+                1038,  // Salvation
+                20911, 20912, 20913, 20914, // Sanctuary r1-4
+                19977, 19978, 19979, // Light r1-3
+                25782, 25916, // Greater Might r1-2
+                25894, 25918, // Greater Wisdom r1-2
+                25890, // Greater Light
+                25895, // Greater Salvation
+                25898, // Greater Kings
+                25899, // Greater Sanctuary
+            ],
+        ),
+        // 4: Battle Shout ranks 1-7 (rank 1 = `tracer_spell::SPELL_ID`, IN the curated kit). One rank
+        // chain, so this is the only family whose rank numbers may be compared directly.
+        (
+            4,
+            RULE_EXCLUSIVE_STRONGER,
+            true,
+            &[6673, 5242, 6192, 11549, 11550, 11551, 25289],
+        ),
+        // 5: Armor-debuff family (Sunder Armor / Expose Armor / Faerie Fire, including the Feral form)
+        // — cross-spell, any caster.
+        (
+            5,
+            RULE_EXCLUSIVE_STRONGER,
+            false,
+            &[
+                7386, 7405, 8380, 11596, 11597, // Sunder Armor r1-5
+                8647, 8649, 8650, 11197, 11198, // Expose Armor r1-5
+                770, 778, 9749, 9907, // Faerie Fire r1-4
+                16857, 17390, 17391, 17392, // Faerie Fire (Feral) r1-4
+            ],
+        ),
+        // 6: Intellect (Arcane Intellect ranks 1-5 / Arcane Brilliance).
+        (
+            6,
+            RULE_EXCLUSIVE_STRONGER,
+            false,
+            &[1459, 1460, 1461, 10156, 10157, 23028],
+        ),
+        // 7: Spirit (Divine Spirit ranks 1-4 / Prayer of Spirit).
+        (
+            7,
+            RULE_EXCLUSIVE_STRONGER,
+            false,
+            &[14752, 14818, 14819, 27841, 27681],
+        ),
+        // 8: Shadow Protection ranks 1-3 / Prayer of Shadow Protection.
+        (
+            8,
+            RULE_EXCLUSIVE_STRONGER,
+            false,
+            &[976, 10957, 10958, 27683],
+        ),
+        // 9: Well Fed — the food buff family, plus this sandbox's synthetic 50116. Eating replaces the
+        // active food buff even when the new meal is worse, so this family is EXCLUSIVE, not
+        // EXCLUSIVE_STRONGER: a strength gate would refuse the meal instead of applying it.
+        (
+            9,
+            RULE_EXCLUSIVE,
+            false,
+            &[
+                50116, 19705, 19706, 19708, 19709, 19710, 19711, 24799, 24870, 25694, 25941,
+            ],
+        ),
+    ]
+};
 
 /// `(race, class, spell_id)` rows; 0 = wildcard. Kits verified against classic-db
 /// `playercreateinfo_spell` (race=1); everything else a class owns is trainer-taught.
@@ -1709,23 +1737,98 @@ mod tests {
         );
     }
 
+    /// The seeder converges an already-migrated database instead of skipping it: rules are updated in
+    /// place and only absent memberships are inserted, so re-running it duplicates nothing.
     #[test]
-    fn spell_group_starter_contains_every_paladin_blessing_rank_and_converges_existing_rows() {
+    fn spell_group_seeder_updates_rules_and_never_duplicates_memberships() {
         let body = crate::test_scan::code_of(
             include_str!("seed.rs"),
             "pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {",
         );
+        assert!(body.contains("rules.group_id().update(rule_row)"));
+        assert!(body.contains(".any(|row| row.spell_id == spell_id)"));
+    }
+
+    /// Every rank of every Blessing the starter set claims, checked against the 1.12.1 client's
+    /// `Spell.dbc` (see `docs/data-ingestion.md`). Ranks went missing here once already.
+    #[test]
+    fn blessing_family_carries_every_reconciled_rank() {
+        let blessings: Vec<u32> = SPELL_GROUPS
+            .iter()
+            .find(|&&(id, ..)| id == 3)
+            .expect("the Blessing family is gone")
+            .3
+            .to_vec();
         for spell_id in [
-            19740, 19834, 19835, 19836, 19837, 19838, 19742, 19850, 19852, 19853, 19854, 20217,
-            1038, 20911, 19977, 19978, 19979,
+            19740, 19834, 19835, 19836, 19837, 19838, 25291, // Might r1-7
+            19742, 19850, 19852, 19853, 19854, 25290, // Wisdom r1-6
+            20911, 20912, 20913, 20914, // Sanctuary r1-4
+            19977, 19978, 19979, // Light r1-3
+            20217, 1038, // Kings, Salvation
+            25782, 25916, 25894, 25918, 25890, 25895, 25898, 25899, // Greater Blessings
         ] {
             assert!(
-                body.contains(&spell_id.to_string()),
+                blessings.contains(&spell_id),
                 "Blessing rank {spell_id} is missing"
             );
         }
-        assert!(body.contains("rules.group_id().update(rule_row)"));
-        assert!(body.contains(".any(|row| row.spell_id == spell_id)"));
+    }
+
+    /// Mark of the Wild's rank 4 was absent from an otherwise complete chain, and Faerie Fire's Feral
+    /// cast was absent from the armor-debuff family. Both are client-verified members.
+    #[test]
+    fn reconciled_families_carry_the_ranks_that_were_missing() {
+        let members = |group_id: u32| -> Vec<u32> {
+            SPELL_GROUPS
+                .iter()
+                .find(|&&(id, ..)| id == group_id)
+                .unwrap_or_else(|| panic!("group {group_id} is gone"))
+                .3
+                .to_vec()
+        };
+        assert!(members(1).contains(&5234), "Mark of the Wild rank 4");
+        for feral in [16857, 17390, 17391, 17392] {
+            assert!(members(5).contains(&feral), "Faerie Fire (Feral) {feral}");
+        }
+    }
+
+    /// Rank numbers may only be compared inside one rank chain. Battle Shout is the only such family
+    /// here; every other one mixes chains, so a `true` anywhere else silently makes an unrelated rank
+    /// number outrank real effect magnitude.
+    #[test]
+    fn battle_shout_is_the_only_rank_comparable_family() {
+        let comparable: Vec<u32> = SPELL_GROUPS
+            .iter()
+            .filter(|&&(_, _, rank_is_comparable, _)| rank_is_comparable)
+            .map(|&(group_id, ..)| group_id)
+            .collect();
+        assert_eq!(comparable, vec![4]);
+    }
+
+    /// Eating replaces the active food buff even when the new meal is worse, so a strength gate would
+    /// refuse the application outright.
+    #[test]
+    fn well_fed_replaces_rather_than_comparing_strength() {
+        let (_, rule, _, members) = *SPELL_GROUPS
+            .iter()
+            .find(|&&(id, ..)| id == 9)
+            .expect("the Well Fed family is gone");
+        assert_eq!(rule, crate::spell::stacking::RULE_EXCLUSIVE);
+        assert!(members.contains(&19705), "the real Well Fed food buff");
+    }
+
+    /// One spell in two exclusive families would make the applied rule depend on membership iteration
+    /// order, which `apply_group_conflict` resolves by taking the first match.
+    #[test]
+    fn no_spell_belongs_to_two_families() {
+        let mut seen = std::collections::HashMap::new();
+        for &(group_id, _, _, members) in SPELL_GROUPS {
+            for &spell_id in members {
+                if let Some(other) = seen.insert(spell_id, group_id) {
+                    panic!("spell {spell_id} is in groups {other} and {group_id}");
+                }
+            }
+        }
     }
 
     /// REACHABILITY, which is idempotence's other half. `init` does not re-run on an auto-migrate
