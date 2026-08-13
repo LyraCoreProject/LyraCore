@@ -979,12 +979,20 @@ fn ensure_mail_escrow_range(
     let Some(rc_name) = map.realm_core_db() else {
         // The single-database plane never uses escrow; install a harmless local range for tests and
         // for future same-plane callers without introducing a realm dependency.
-        crate::world::mail::install_escrow_id_range(1, u64::MAX);
+        if let Err(e) = crate::world::mail::install_escrow_id_range(1, u64::MAX) {
+            log::error!("could not install local mail escrow range: {e:#}");
+        }
         return;
     };
     let Some(rc) = conns.get(rc_name) else { return };
-    let claimant = format!("mail-escrow:{gateway_id}");
-    let desired = lyracore_shared::mail::escrow_range_mark(gateway_id);
+    let claimant = match mail_escrow_claimant(gateway_id) {
+        Ok(claimant) => claimant,
+        Err(e) => {
+            log::error!("could not create an exclusive mail escrow claimant: {e:#}");
+            return;
+        }
+    };
+    let desired = lyracore_shared::mail::escrow_range_mark(&claimant);
     if let Err(e) = (|| -> Result<()> {
         call_reducer!(
             rc.coord().conn.reducers,
@@ -1016,7 +1024,7 @@ fn ensure_mail_escrow_range(
         });
         let (next, end) = lyracore_shared::mail::resume_escrow_range(row.base, row.size, seen)
             .ok_or_else(|| anyhow!("mail escrow id range is exhausted"))?;
-        crate::world::mail::install_escrow_id_range(next, end);
+        crate::world::mail::install_escrow_id_range(next, end)?;
         log::info!(
             "gateway {gateway_id} mints mail escrow ids from claimed range [{}, {end})",
             row.base
@@ -1026,6 +1034,29 @@ fn ensure_mail_escrow_range(
         log::error!(
             "could not claim mail escrow id range: {e:#}; sharded mail value moves will REFUSE"
         );
+    }
+}
+
+fn mail_escrow_claimant(gateway_id: &str) -> Result<String> {
+    let mut nonce = [0u8; 16];
+    getrandom::fill(&mut nonce).map_err(|e| anyhow!("OS randomness unavailable: {e}"))?;
+    let nonce = nonce
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(format!("mail-escrow:{gateway_id}:{nonce}"))
+}
+
+#[cfg(test)]
+mod mail_escrow_claimant_tests {
+    use super::mail_escrow_claimant;
+
+    #[test]
+    fn live_gateway_processes_claim_distinct_ranges() {
+        let first = mail_escrow_claimant("gateway-a").unwrap();
+        let second = mail_escrow_claimant("gateway-a").unwrap();
+        assert_ne!(first, second);
+        assert!(first.starts_with("mail-escrow:gateway-a:"));
     }
 }
 

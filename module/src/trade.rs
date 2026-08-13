@@ -828,10 +828,7 @@ fn run_trade_commit(
                     partner.owner_identity,
                     &tmpl,
                     Some(partner_next),
-                    inst.stack_count,
-                    inst.durability,
-                    inst.enchant_id,
-                    inst.soulbound,
+                    &crate::items::ItemSnapshot::from(inst),
                 )?;
                 partner_next += 1;
             }
@@ -848,10 +845,7 @@ fn run_trade_commit(
                     acceptor.owner_identity,
                     &tmpl,
                     Some(acceptor_next),
-                    inst.stack_count,
-                    inst.durability,
-                    inst.enchant_id,
-                    inst.soulbound,
+                    &crate::items::ItemSnapshot::from(inst),
                 )?;
                 acceptor_next += 1;
             }

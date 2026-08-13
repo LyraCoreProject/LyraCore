@@ -255,29 +255,41 @@ pub(crate) fn has_free_slot(ctx: &ReducerContext, player_guid: u64) -> bool {
     free_slot(ctx, player_guid).is_ok()
 }
 
-/// Put ONE item into `player_guid`'s bags carrying an exact recorded state — the same entry, stack,
-/// durability, enchant and bind state it had before it was taken away.
-///
-/// This is the other half of a snapshot move (mail today, trade next): the source deletes its
-/// `game_item_instance` row and records these columns, and this re-creates them. Re-granting from
-/// the TEMPLATE instead would hand back a repaired, unenchanted item — a free repair and an
-/// enchant-laundering exploit — which is the whole reason a snapshot exists.
-///
-/// One row into one free slot, never a merge into an existing partial stack: a merge would blend
-/// two instances' bind states, and the stack it merged into would silently absorb a soulbound one.
-/// Room is the item module's own [`free_slot`], so the full-bag refusal is the same one every other
-/// grant path answers with and the caller's transaction rolls back on it.
-#[allow(clippy::too_many_arguments)]
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub(crate) struct ItemSnapshot {
+    pub entry: u32,
+    pub stack_count: u32,
+    pub durability: u32,
+    pub enchant_id: u32,
+    pub soulbound: bool,
+}
+
+impl ItemSnapshot {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entry == 0
+    }
+}
+
+impl From<&ItemInstance> for ItemSnapshot {
+    fn from(item: &ItemInstance) -> Self {
+        Self {
+            entry: item.entry,
+            stack_count: item.stack_count,
+            durability: item.durability,
+            enchant_id: item.enchant_id,
+            soulbound: item.soulbound,
+        }
+    }
+}
+
+/// Recreates an exact item snapshot, applying only template grant-time constraints.
 pub(crate) fn store_instance_state(
     ctx: &ReducerContext,
     player_guid: u64,
     owner_identity: Identity,
     tmpl: &ItemTemplate,
     preallocated_guid: Option<u64>,
-    stack_count: u32,
-    durability: u32,
-    enchant_id: u32,
-    soulbound: bool,
+    snapshot: &ItemSnapshot,
 ) -> Result<(), String> {
     let slot = free_slot(ctx, player_guid)?;
     // Trade allocates before deleting either side's outgoing rows: otherwise an emptied inventory
@@ -292,13 +304,13 @@ pub(crate) fn store_instance_state(
         slot,
         // Clamped to the template's own stack cap: the snapshot is durable data that outlives a
         // template edit, and a row above the cap would render as an impossible stack.
-        stack_count: stack_count.max(1).min(tmpl.max_stack.max(1)),
-        durability,
+        stack_count: snapshot.stack_count.max(1).min(tmpl.max_stack.max(1)),
+        durability: snapshot.durability,
         created_at: ctx.timestamp,
-        enchant_id,
+        enchant_id: snapshot.enchant_id,
         // The recorded bind state, ORed with the template's grant-time rule — `store_item`'s
         // expression exactly, so an arriving item cannot end up less bound than a granted one.
-        soulbound: soulbound || binds_on_grant(tmpl.bonding),
+        soulbound: snapshot.soulbound || binds_on_grant(tmpl.bonding),
     });
     Ok(())
 }

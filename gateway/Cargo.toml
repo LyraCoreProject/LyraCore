@@ -32,6 +32,7 @@ wow_world_base = "0.3"
 spacetimedb-sdk = "=2.7.1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "io-util", "sync", "time"] }
 anyhow = "1"
+getrandom = "0.3"
 # #451: `getrlimit`/`setrlimit` (raise RLIMIT_NOFILE soft to hard at startup, `src/fd_limit.rs`) and
 # the `E*` errno constants the accept-loop policy classifies against (`src/accept.rs`). std exposes
 # neither — `io::ErrorKind` flattens EMFILE/ENFILE to `Uncategorized`, which is exactly the

@@ -1,4 +1,3 @@
-
 //! Delete-last transfer of mail value across databases, keyed by a caller-chosen escrow ID.
 
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration};
@@ -45,8 +44,8 @@ pub struct MailEscrow {
 
 impl MailEscrow {
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn item(&self) -> crate::mail::ItemSnapshot {
-        crate::mail::ItemSnapshot {
+    pub(crate) fn item(&self) -> crate::items::ItemSnapshot {
+        crate::items::ItemSnapshot {
             entry: self.item_entry,
             stack_count: self.item_stack_count,
             durability: self.item_durability,
@@ -221,7 +220,7 @@ pub(crate) trait FenceSink: EscrowLedger {
         &mut self,
         sender_guid: u64,
         item_guid: u64,
-    ) -> Result<crate::mail::ItemSnapshot, String>;
+    ) -> Result<crate::items::ItemSnapshot, String>;
 }
 pub(crate) trait ReapSink: EscrowLedger {
     fn escrows(&self) -> Vec<(u64, u64, i64, bool)>;
@@ -232,7 +231,7 @@ pub(crate) trait DeliverySink {
         &mut self,
         sender_guid: u64,
         letter: &Letter,
-        item: &crate::mail::ItemSnapshot,
+        item: &crate::items::ItemSnapshot,
     ) -> u64;
     fn settle_cod(&mut self, mail_id: u64);
     fn file_receipt(&mut self, row: MailDelivery);
@@ -241,7 +240,7 @@ pub(crate) trait DeliverySink {
 pub(crate) trait TakeFenceSink: EscrowLedger {
     fn mail(&self, mail_id: u64) -> Option<(u64, u32)>;
     fn clear_mail_money(&mut self, mail_id: u64);
-    fn mail_item(&self, mail_id: u64) -> Option<(u64, crate::mail::ItemSnapshot)>;
+    fn mail_item(&self, mail_id: u64) -> Option<(u64, crate::items::ItemSnapshot)>;
     fn clear_mail_item(&mut self, mail_id: u64);
 }
 pub(crate) trait PayoutSink {
@@ -250,7 +249,7 @@ pub(crate) trait PayoutSink {
     fn grant_item(
         &mut self,
         payee_guid: u64,
-        item: &crate::mail::ItemSnapshot,
+        item: &crate::items::ItemSnapshot,
     ) -> Result<(), String>;
     fn file_receipt(&mut self, row: MailDelivery);
     fn now_micros(&self) -> i64;
@@ -311,7 +310,7 @@ impl FenceSink for CtxDb<'_> {
         &mut self,
         sender_guid: u64,
         item_guid: u64,
-    ) -> Result<crate::mail::ItemSnapshot, String> {
+    ) -> Result<crate::items::ItemSnapshot, String> {
         crate::mail::detach_item(self.ctx, sender_guid, item_guid)
     }
 }
@@ -323,7 +322,7 @@ impl TakeFenceSink for CtxDb<'_> {
     fn clear_mail_money(&mut self, mail_id: u64) {
         crate::mail::clear_mail_money(self.ctx, mail_id);
     }
-    fn mail_item(&self, mail_id: u64) -> Option<(u64, crate::mail::ItemSnapshot)> {
+    fn mail_item(&self, mail_id: u64) -> Option<(u64, crate::items::ItemSnapshot)> {
         crate::mail::mail_item(self.ctx, mail_id)
     }
     fn clear_mail_item(&mut self, mail_id: u64) {
@@ -346,7 +345,7 @@ impl PayoutSink for CtxDb<'_> {
     fn grant_item(
         &mut self,
         payee_guid: u64,
-        item: &crate::mail::ItemSnapshot,
+        item: &crate::items::ItemSnapshot,
     ) -> Result<(), String> {
         crate::mail::grant_snapshot(self.ctx, payee_guid, item)
     }
@@ -377,7 +376,7 @@ impl DeliverySink for CtxDb<'_> {
         &mut self,
         sender_guid: u64,
         letter: &Letter,
-        item: &crate::mail::ItemSnapshot,
+        item: &crate::items::ItemSnapshot,
     ) -> u64 {
         crate::mail::insert_mail(
             self.ctx,
@@ -472,7 +471,7 @@ pub(crate) fn apply_commit<S: DeliverySink>(
     escrow_id: u64,
     sender_guid: u64,
     letter: &Letter,
-    item: &crate::mail::ItemSnapshot,
+    item: &crate::items::ItemSnapshot,
     cod_mail_id: u64,
 ) -> Result<(), String> {
     if escrow_id == 0 {
@@ -685,7 +684,7 @@ pub(crate) fn apply_item_payout<S: PayoutSink>(
     escrow_id: u64,
     payee_guid: u64,
     mail_id: u64,
-    item: &crate::mail::ItemSnapshot,
+    item: &crate::items::ItemSnapshot,
 ) -> Result<(), String> {
     if escrow_id == 0 {
         return Err("escrow_id 0 is reserved (it is the \"no escrow\" sentinel)".to_string());
@@ -837,7 +836,7 @@ pub fn realm_mail_commit(
             postage: 0,
             cod,
         },
-        &crate::mail::ItemSnapshot {
+        &crate::items::ItemSnapshot {
             entry: item_entry,
             stack_count: item_stack_count,
             durability: item_durability,
@@ -911,7 +910,7 @@ pub fn realm_mail_item_payout(
         escrow_id,
         payee_guid,
         mail_id,
-        &crate::mail::ItemSnapshot {
+        &crate::items::ItemSnapshot {
             entry: item_entry,
             stack_count: item_stack_count,
             durability: item_durability,
@@ -1062,7 +1061,7 @@ mod tests {
                   e) = crate::helpers::acting_entity_by_guid(self.ctx, sender_guid) { e.money = \
                   e.money.saturating_sub(amount); \
                   self.ctx.db.game_world_entity().guid().update(e); } } fn detach_item( &mut \
-                  self, sender_guid: u64, item_guid: u64, ) -> Result<crate::mail::ItemSnapshot, \
+                  self, sender_guid: u64, item_guid: u64, ) -> Result<crate::items::ItemSnapshot, \
                   String> { crate::mail::detach_item(self.ctx, sender_guid, item_guid) } }",
             ),
             (
@@ -1070,7 +1069,7 @@ mod tests {
                 "{ fn mail(&self, mail_id: u64) -> Option<(u64, u32)> { \
                   crate::mail::mail_money(self.ctx, mail_id) } fn clear_mail_money(&mut self, \
                   mail_id: u64) { crate::mail::clear_mail_money(self.ctx, mail_id); } fn \
-                  mail_item(&self, mail_id: u64) -> Option<(u64, crate::mail::ItemSnapshot)> { \
+                  mail_item(&self, mail_id: u64) -> Option<(u64, crate::items::ItemSnapshot)> { \
                   crate::mail::mail_item(self.ctx, mail_id) } fn clear_mail_item(&mut self, \
                   mail_id: u64) { crate::mail::clear_mail_item(self.ctx, mail_id); } }",
             ),
@@ -1082,7 +1081,7 @@ mod tests {
                   e) = crate::helpers::acting_entity_by_guid(self.ctx, payee_guid) else { return \
                   false; }; e.money = crate::mail::credited(e.money, amount); \
                   self.ctx.db.game_world_entity().guid().update(e); true } fn grant_item( &mut \
-                  self, payee_guid: u64, item: &crate::mail::ItemSnapshot, ) -> Result<(), \
+                  self, payee_guid: u64, item: &crate::items::ItemSnapshot, ) -> Result<(), \
                   String> { crate::mail::grant_snapshot(self.ctx, payee_guid, item) } fn \
                   file_receipt(&mut self, row: MailDelivery) { \
                   self.ctx.db.game_mail_delivery().insert(row); } fn now_micros(&self) -> i64 { \
@@ -1099,7 +1098,7 @@ mod tests {
                 "{ fn receipt(&self, escrow_id: u64) -> Option<MailDelivery> { \
                   self.ctx.db.game_mail_delivery().escrow_id().find(escrow_id) } fn deliver( \
                   &mut self, sender_guid: u64, letter: &Letter, item: \
-                  &crate::mail::ItemSnapshot, ) -> u64 { crate::mail::insert_mail( self.ctx, \
+                  &crate::items::ItemSnapshot, ) -> u64 { crate::mail::insert_mail( self.ctx, \
                   letter.recipient_guid, sender_guid, letter.subject.clone(), \
                   letter.body.clone(), letter.money, letter.cod, item, ) } fn settle_cod(&mut \
                   self, mail_id: u64) { crate::mail::clear_mail_cod(self.ctx, mail_id); } fn \
@@ -1117,7 +1116,7 @@ mod tests {
                 "pub fn realm_mail_commit(",
                 "{ require_operator(ctx)?; apply_commit( &mut CtxDb { ctx }, escrow_id, \
                   sender_guid, &Letter { recipient_guid, subject, body, money, postage: 0, cod, \
-                  }, &crate::mail::ItemSnapshot { entry: item_entry, stack_count: \
+                  }, &crate::items::ItemSnapshot { entry: item_entry, stack_count: \
                   item_stack_count, durability: item_durability, enchant_id: item_enchant_id, \
                   soulbound: item_soulbound, }, cod_mail_id, ) }",
             ),
@@ -1139,7 +1138,7 @@ mod tests {
             (
                 "pub fn realm_mail_item_payout(",
                 "{ require_operator(ctx)?; apply_item_payout( &mut CtxDb { ctx }, escrow_id, \
-                  payee_guid, mail_id, &crate::mail::ItemSnapshot { entry: item_entry, \
+                  payee_guid, mail_id, &crate::items::ItemSnapshot { entry: item_entry, \
                   stack_count: item_stack_count, durability: item_durability, enchant_id: \
                   item_enchant_id, soulbound: item_soulbound, }, ) }",
             ),

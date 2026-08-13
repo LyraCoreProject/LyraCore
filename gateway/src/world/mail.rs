@@ -7,9 +7,13 @@ use super::{party, WorldStore};
 use crate::codec::MailView;
 use lyracore_shared::mail as mail_rules;
 
-static NEXT_ESCROW_ID: std::sync::OnceLock<std::sync::atomic::AtomicU64> =
-    std::sync::OnceLock::new();
-static ESCROW_ID_END: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+struct EscrowIdRange {
+    next: std::sync::atomic::AtomicU64,
+    start: u64,
+    end: u64,
+}
+
+static ESCROW_ID_RANGE: std::sync::OnceLock<EscrowIdRange> = std::sync::OnceLock::new();
 const NO_COD_SOURCE: u64 = 0;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SendRefusal {
@@ -450,24 +454,32 @@ fn pay_cod<St: WorldStore + ?Sized>(
 fn next_escrow_id() -> Result<u64> {
     use std::sync::atomic::Ordering;
     #[cfg(test)]
-    if NEXT_ESCROW_ID.get().is_none() {
-        install_escrow_id_range(1, u64::MAX);
+    if ESCROW_ID_RANGE.get().is_none() {
+        install_escrow_id_range(1, u64::MAX)?;
     }
-    let next = NEXT_ESCROW_ID.get().ok_or_else(|| {
+    let range = ESCROW_ID_RANGE.get().ok_or_else(|| {
         anyhow::anyhow!(
         "mail escrow id range was not claimed; refusing instead of falling back to colliding ids"
     )
     })?;
-    let id = next.fetch_add(1, Ordering::Relaxed);
-    if id >= *ESCROW_ID_END.get().unwrap_or(&0) {
+    let id = range.next.fetch_add(1, Ordering::Relaxed);
+    if id >= range.end {
         anyhow::bail!("mail escrow id range is exhausted")
     }
     Ok(id)
 }
-pub(crate) fn install_escrow_id_range(next: u64, end: u64) {
+pub(crate) fn install_escrow_id_range(next: u64, end: u64) -> Result<()> {
     use std::sync::atomic::AtomicU64;
-    let _ = ESCROW_ID_END.set(end);
-    let _ = NEXT_ESCROW_ID.set(AtomicU64::new(next.max(1)));
+    let requested_start = next.max(1);
+    let range = ESCROW_ID_RANGE.get_or_init(|| EscrowIdRange {
+        next: AtomicU64::new(requested_start),
+        start: requested_start,
+        end,
+    });
+    if range.start != requested_start || range.end != end {
+        anyhow::bail!("a different mail escrow id range is already installed")
+    }
+    Ok(())
 }
 fn refusal_from_module(e: anyhow::Error) -> SendRefusal {
     let text = format!("{e:#}");

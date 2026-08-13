@@ -267,6 +267,7 @@ fn publish_column_name(field: &str) -> String {
 /// declarations' ordinary one-field-per-line style; it is a deploy tripwire, not a Rust parser.
 fn table_field_collisions(src: &str) -> Vec<SnakeCaseCollision> {
     let mut awaiting_table = false;
+    let mut table_attribute_depth = 0i32;
     let mut table: Option<String> = None;
     let mut fields: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut collisions = Vec::new();
@@ -275,7 +276,15 @@ fn table_field_collisions(src: &str) -> Vec<SnakeCaseCollision> {
         let line = raw.trim();
         if table.is_none() {
             if line.starts_with("#[table") {
-                awaiting_table = true;
+                table_attribute_depth =
+                    line.matches('[').count() as i32 - line.matches(']').count() as i32;
+                awaiting_table = table_attribute_depth == 0;
+                continue;
+            }
+            if table_attribute_depth > 0 {
+                table_attribute_depth +=
+                    line.matches('[').count() as i32 - line.matches(']').count() as i32;
+                awaiting_table = table_attribute_depth == 0;
                 continue;
             }
             if awaiting_table {
@@ -323,6 +332,12 @@ fn table_field_collisions(src: &str) -> Vec<SnakeCaseCollision> {
     collisions
 }
 
+fn table_declaration_count(src: &str) -> usize {
+    src.lines()
+        .filter(|line| line.trim().starts_with("#[table"))
+        .count()
+}
+
 /// The publish-module.sh flag-rejection loop, verbatim, whitespace-collapsed. Pinned by exact shape
 /// rather than by `.contains("-*)")` so that rewording, re-scoping or gutting the guard fails here
 /// instead of silently narrowing what it refuses. If you changed this block on purpose, update the
@@ -361,6 +376,23 @@ mod tests {
     }
 
     #[test]
+    fn snake_case_preflight_parses_multiline_table_attributes() {
+        let fixture = [
+            "#[ta",
+            "ble(\n",
+            "    accessor = broken_rotation,\n",
+            "    public\n",
+            ")]\n",
+            "pub struct BrokenRotation {\n",
+            "    pub rotation0: f32,\n",
+            "    pub rotation_0: f32,\n",
+            "}\n",
+        ]
+        .concat();
+        assert_eq!(table_field_collisions(&fixture).len(), 1);
+    }
+
+    #[test]
     fn module_tables_have_unique_published_column_names() {
         let src_root = repo_root().join("module/src");
         let mut rust_files = Vec::new();
@@ -371,9 +403,11 @@ mod tests {
             rust_files.len()
         );
         let mut failures = Vec::new();
+        let mut table_count = 0;
         for path in rust_files {
             let src = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("readable {}: {e}", path.display()));
+            table_count += table_declaration_count(&src);
             for collision in table_field_collisions(&src) {
                 failures.push(format!(
                     "{}: table `{}` fields `{}` publish as duplicate column `{}`",
@@ -384,6 +418,10 @@ mod tests {
                 ));
             }
         }
+        assert!(
+            table_count >= 100,
+            "found only {table_count} #[table] declarations; the snake-case preflight parser lost its production surface"
+        );
         assert!(
             failures.is_empty(),
             "SpacetimeDB snake_case field collision(s); refusing publish:\n  {}",
@@ -405,8 +443,8 @@ mod tests {
     }
 
     fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-        for entry in std::fs::read_dir(dir)
-            .unwrap_or_else(|e| panic!("readable {}: {e}", dir.display()))
+        for entry in
+            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("readable {}: {e}", dir.display()))
         {
             let path = entry.expect("readable dir entry").path();
             if path.is_dir() {

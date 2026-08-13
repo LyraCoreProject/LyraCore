@@ -6,6 +6,7 @@ use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 use crate::game_item_instance;
 use crate::game_item_template;
 use crate::game_world_entity;
+use crate::items::ItemSnapshot;
 #[table(accessor = game_mail, public, index(accessor = by_recipient, btree(columns = [recipient_guid])))]
 pub struct Mail {
     #[primary_key]
@@ -36,21 +37,6 @@ crate::character_owned!(transfer, fn sweep_transfer_game_mail(ctx, character_gui
     by = by_recipient,
     remint = id,
 });
-#[derive(Clone, Default, PartialEq, Eq, Debug)]
-pub(crate) struct ItemSnapshot {
-    pub entry: u32,
-    pub stack_count: u32,
-    pub durability: u32,
-    pub enchant_id: u32,
-    pub soulbound: bool,
-}
-
-impl ItemSnapshot {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.entry == 0
-    }
-}
-
 impl Mail {
     pub(crate) fn snapshot(&self) -> ItemSnapshot {
         ItemSnapshot {
@@ -98,13 +84,7 @@ pub(crate) fn detach_item(
         Attach::Detach => {}
     }
     let inst = owned.expect("Detach is only reachable with a row");
-    let snapshot = ItemSnapshot {
-        entry: inst.entry,
-        stack_count: inst.stack_count,
-        durability: inst.durability,
-        enchant_id: inst.enchant_id,
-        soulbound: inst.soulbound,
-    };
+    let snapshot = ItemSnapshot::from(&inst);
     items.guid().delete(item_guid);
     Ok(snapshot)
 }
@@ -124,17 +104,7 @@ pub(crate) fn grant_snapshot(
         .entry()
         .find(snapshot.entry)
         .ok_or_else(|| format!("mail: no template for attached item {}", snapshot.entry))?;
-    crate::items::store_instance_state(
-        ctx,
-        payee_guid,
-        payee.owner_identity,
-        &tmpl,
-        None,
-        snapshot.stack_count,
-        snapshot.durability,
-        snapshot.enchant_id,
-        snapshot.soulbound,
-    )
+    crate::items::store_instance_state(ctx, payee_guid, payee.owner_identity, &tmpl, None, snapshot)
 }
 #[allow(clippy::too_many_arguments)] // a row's columns, not a call's parameters
 pub(crate) fn insert_mail(

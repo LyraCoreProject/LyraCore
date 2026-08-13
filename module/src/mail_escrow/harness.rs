@@ -1,8 +1,7 @@
-
 //! In-memory interruption harness for the cross-database mail protocol.
 
 use super::*;
-use crate::mail::ItemSnapshot;
+use crate::items::ItemSnapshot;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 #[derive(Clone)]
