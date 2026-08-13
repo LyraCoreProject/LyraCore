@@ -122,6 +122,11 @@ fn send_questgiver_menu<St: WorldStore + ?Sized>(
         let turn_in = evals
             .iter()
             .find(|e| e.quest_id == detail.quest_id && e.role == codec::ROLE_END && e.active);
+        if turn_in.is_none() {
+            let (opcode, body) = codec::build_quest_details_raw(giver, &detail);
+            send(tx, Outbound::Raw { opcode, body })?;
+            return Ok(());
+        }
         let out = match turn_in {
             Some(e) if e.complete => ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(Box::new(
                 codec::build_offer_reward(giver, &detail),
@@ -129,9 +134,7 @@ fn send_questgiver_menu<St: WorldStore + ?Sized>(
             Some(_) => ServerOpcodeMessage::SMSG_QUESTGIVER_REQUEST_ITEMS(Box::new(
                 codec::build_request_items(giver, &detail, false),
             )),
-            None => ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(Box::new(
-                codec::build_quest_details(giver, &detail),
-            )),
+            None => unreachable!("new quests are handled by the raw DETAILS branch above"),
         };
         send(tx, Outbound::One(out))?;
     } else {

@@ -146,7 +146,6 @@ use wow_world_messages::vanilla::{
     PetReactState,
     Power,
     QuestCompletable,
-    QuestDetailsEmote,
     QuestGiverStatus,
     QuestItem,
     QuestItemRequirement,
@@ -250,7 +249,6 @@ use wow_world_messages::vanilla::{
     SMSG_PLAYED_TIME,
     SMSG_QUESTGIVER_OFFER_REWARD,
     SMSG_QUESTGIVER_QUEST_COMPLETE,
-    SMSG_QUESTGIVER_QUEST_DETAILS,
     SMSG_QUESTGIVER_QUEST_LIST,
     SMSG_QUESTGIVER_REQUEST_ITEMS,
     // Quests (gateway wire): the questgiver-dialog packets + their list/reward sub-structs (all

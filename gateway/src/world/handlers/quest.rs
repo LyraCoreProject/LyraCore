@@ -5,8 +5,9 @@ use super::super::*;
 use super::send_questgiver_menu;
 
 /// Quest-giver dialog family (quests gateway slice): the overhead `!`/`?` status, the right-click
-/// quest menu, the quest details + accept, and the turn-in offer/complete round-trip. Every reply is a
-/// gtker-typed `SMSG_QUESTGIVER_*` message (no raw encoder). Reads are evaluated against the player, so
+/// quest menu, the quest details + accept, and the turn-in offer/complete round-trip. Quest DETAILS is
+/// raw-encoded because its 1.12 reward triples are incomplete in gtker; the other replies are typed.
+/// Reads are evaluated against the player, so
 /// these need the in-world player guid — in CharSelect the opcodes pass through (a questgiver can only
 /// be clicked in-world). Reducer rejections (accept/turn-in gates) are per-action: logged, not fatal.
 pub(crate) fn handle_quest<St: WorldStore + ?Sized>(
@@ -49,12 +50,10 @@ pub(crate) fn handle_quest<St: WorldStore + ?Sized>(
         ClientOpcodeMessage::CMSG_QUESTGIVER_QUERY_QUEST(q) => {
             let giver = q.guid.guid();
             if let Some(detail) = store.quest_detail(q.quest_id)? {
-                send(
-                    tx,
-                    Outbound::One(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(
-                        Box::new(codec::build_quest_details(giver, &detail)),
-                    )),
-                )?;
+                send(tx, {
+                    let (opcode, body) = codec::build_quest_details_raw(giver, &detail);
+                    Outbound::Raw { opcode, body }
+                })?;
             }
         }
         // The client asks for a quest's full definition (it sends this for any quest id it sees in a

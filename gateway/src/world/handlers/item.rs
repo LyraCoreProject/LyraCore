@@ -110,12 +110,10 @@ pub(crate) fn handle_item<St: WorldStore + ?Sized>(
                 let start_quest = self_guid.and_then(|g| store.item_start_quest(g, c.bag_slot));
                 if let Some((item_guid, quest_id)) = start_quest {
                     if let Some(detail) = store.quest_detail(quest_id)? {
-                        send(
-                            tx,
-                            Outbound::One(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(
-                                Box::new(codec::build_quest_details(item_guid, &detail)),
-                            )),
-                        )?;
+                        send(tx, {
+                            let (opcode, body) = codec::build_quest_details_raw(item_guid, &detail);
+                            Outbound::Raw { opcode, body }
+                        })?;
                     }
                 } else if let Err(e) =
                     store.use_item(conn.account_id, self_guid.unwrap_or(0), c.bag_slot)
