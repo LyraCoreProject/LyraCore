@@ -49,6 +49,55 @@ pub fn flee_eligible(creature_type: u8) -> bool {
     creature_type == crate::spell::HUMANOID_TYPE
 }
 
+/// How long a rout runs (ms) before the creature turns and fights again. Seeded at cmangos'
+/// `CreatureFamilyFleeDelay` default; a calibration knob for live observation.
+pub(crate) const ROUT_DURATION_MS: u32 = 10_000;
+
+/// Is a rout still running, given the wall-clock ms its window closes at? `0` is the never-started
+/// sentinel, so it is never open; a close time at or before `now_ms` means the rout is over AND spent
+/// (the same field is what forbids a second rout). Pure — unit-tested.
+pub fn rout_window_open(now_ms: u32, rout_ends_ms: u32) -> bool {
+    rout_ends_ms != 0 && now_ms < rout_ends_ms
+}
+
+/// May a rout START now? Only for a flee-eligible creature (`eligible` = the HP threshold plus the
+/// per-type gate) whose engagement has never stamped a window. A spent clock — open or long closed —
+/// blocks every later rout in that engagement, which is what makes the rout once-per-engagement.
+/// Pure — unit-tested.
+pub fn may_start_rout(eligible: bool, rout_ends_ms: u32) -> bool {
+    eligible && rout_ends_ms == 0
+}
+
+/// The wall-clock ms at which a rout stamped at `now_ms` closes. Never 0: that value is the
+/// never-started sentinel, so a window that wraps the u32 clock onto it would hand out a second rout.
+/// Pure — unit-tested.
+pub fn rout_close_ms(now_ms: u32) -> u32 {
+    now_ms.wrapping_add(ROUT_DURATION_MS).max(1)
+}
+
+/// The wall-clock ms at which a leash refreshed at `now_ms` expires. Never 0: that is the
+/// never-refreshed sentinel, so a deadline wrapping the u32 clock onto it would re-seed the row.
+/// Pure — unit-tested.
+pub fn pursuit_deadline_ms(now_ms: u32) -> u32 {
+    now_ms.wrapping_add(crate::combat::PURSUIT_WINDOW_MS).max(1)
+}
+
+/// Is the target past the ABSOLUTE distance backstop from the creature? The one raw distance that still
+/// ends a fight, so no engagement can persist across a zone. Pure — unit-tested.
+pub fn beyond_combat_backstop(dist_sq: f32) -> bool {
+    dist_sq > crate::combat::COMBAT_BACKSTOP_SQ
+}
+
+/// Should this engagement EVADE? Only on an expired pursuit deadline AND a target outside
+/// `combat::LEASH_RADIUS_SQ` of the position remembered at the last damage exchange — distance alone no
+/// longer ends a fight (short of [`beyond_combat_backstop`]). `0` is the never-refreshed sentinel and
+/// never evades: an armed row must survive until the leash pass stamps its clock. Pure — unit-tested.
+pub fn should_evade(now_ms: u32, pursuit_ends_ms: u32, target_dist_sq: f32) -> bool {
+    pursuit_ends_ms != 0
+        && now_ms >= pursuit_ends_ms
+        && target_dist_sq > crate::combat::LEASH_RADIUS_SQ
+}
+
 /// cmangos "wounded slowdown" — the mechanic that makes a fleeing (definitionally low-HP) mob
 /// CATCHABLE. A creature under 30% HP moves slower: factor `1 − ((30 − min(hp%,30)) × 1.67)/100`,
 /// floored ~0.5 (×1.0 at ≥30% HP, ×0.75 at 15%, ×0.67 at 10%, ~×0.5 near death). Applied to the flee
@@ -155,8 +204,16 @@ pub fn aggro_radius(creature_level: u32, player_level: u32, template_aggro_range
 /// ceiling away from the player — without this margin a same-faction neighbor at the far edge of
 /// `ASSIST_RADIUS` from an edge-case aggroer would be wrongly excluded from the active set. Pure —
 /// unit-tested. [pure]
-pub fn combat_active_radius(template_aggro_max: f32) -> f32 {
-    MAX_AGGRO_RADIUS.max(template_aggro_max) + ASSIST_RADIUS
+/// `const fn` so `CHASE_LEASH_SQ` can be defined from it — a hand-copied 55 would be exactly the kind of
+/// silent staleness the live template scan above exists to prevent. Spelled as a comparison rather than
+/// `f32::max` (not const-callable); the NaN branch agrees with `max`'s.
+pub const fn combat_active_radius(template_aggro_max: f32) -> f32 {
+    let ceiling = if template_aggro_max > MAX_AGGRO_RADIUS {
+        template_aggro_max
+    } else {
+        MAX_AGGRO_RADIUS
+    };
+    ceiling + ASSIST_RADIUS
 }
 
 /// The SMALLEST integer `game_creature_template.aggro_range` override that could make
@@ -284,12 +341,12 @@ pub fn feared_flee_step(cx: f32, cy: f32, sx: f32, sy: f32, dist: f32, rand: u32
 /// the swing pass agree on the boundary by construction (no lockstep-by-comment).
 pub(crate) const CHASE_MELEE_SQ: f32 = crate::combat::MELEE_RANGE_SQ;
 
-/// Squared leash radius — a target beyond this is too far to chase (combat's leash pass disengages
-/// the creature). Aliases combat's `LEASH_RADIUS_SQ` ((45 yd)²) directly, for the same single-source
-/// reason as `CHASE_MELEE_SQ`. Lockstep with the combat const is now structural: chase-skip > leash
-/// would strand a mob that neither chases nor evades — a 31-35 yd Auto Shot pull would stand still and
-/// die without ever closing (097 review find).
-pub(crate) const CHASE_LEASH_SQ: f32 = crate::combat::LEASH_RADIUS_SQ;
+/// Squared chase cutoff — a target beyond this is too far to pursue. An engaged creature chases while its
+/// engagement is live, bounded by the active-cell radius (past it its own cell may be dormant); the
+/// pursuit timer, not this, ends the fight. Derived from `combat_active_radius(0.0)` so the two cannot
+/// drift, replacing the old lockstep with the evade constant that kept a mob from standing neither
+/// chasing nor evading.
+pub(crate) const CHASE_LEASH_SQ: f32 = combat_active_radius(0.0) * combat_active_radius(0.0);
 
 /// SPLINE chase: how recently the target must have moved (ms) for the chaser to treat it as MOVING. A
 /// mob only plants into attack stance (stops chasing to swing) when its target is STATIONARY — while the
@@ -720,16 +777,21 @@ mod tests {
     /// holds if a creature glued to a player by combat can never wander past the active-cell radius
     /// before the active set would have covered it anyway. `pass_chase`/`pass_flee` don't consult the
     /// active set at all (see their doc comments in tick.rs) — that's the primary guarantee — but this
-    /// pins the geometric invariant too: the chase LEASH (the farthest an engaged creature can drift
-    /// from its target before combat's own leash pass disengages it) must stay comfortably inside
-    /// `combat_active_radius`, so even a hypothetical future re-gate could never sleep a still-engaged
-    /// creature out from under its target.
+    /// pins the geometric invariant too: the chase cutoff (the farthest a target can be and still be
+    /// pursued) must stay inside `combat_active_radius`, so even a hypothetical future re-gate could
+    /// never sleep a still-engaged creature out from under its target.
+    ///
+    /// Distance no longer ends a fight, so the cutoff is no longer in lockstep with an evade constant: it
+    /// IS the active-cell radius, which is what keeps an engaged creature pursuing while its engagement
+    /// lives instead of freezing between a chase cutoff and an evade cutoff. Equality is inside, not on
+    /// the edge: `cell_is_active` brackets every point WITHIN the radius (`covering_cell_box`), and the
+    /// live radius takes the larger of this and the 100yd visibility floor.
     #[test]
     fn chase_leash_radius_stays_within_the_combat_active_radius() {
-        let leash_yd = CHASE_LEASH_SQ.sqrt();
-        assert!(
-            leash_yd < combat_active_radius(0.0),
-            "chase leash ({leash_yd}yd) must stay inside the active-cell radius"
+        assert_eq!(
+            CHASE_LEASH_SQ.sqrt(),
+            combat_active_radius(0.0),
+            "the chase cutoff must not exceed the active-cell radius"
         );
     }
 
@@ -758,6 +820,36 @@ mod tests {
         let next_after_resume = chase_step(frozen.0, frozen.1, home_x, home_y, 5.0, 0.0);
         let next_if_uninterrupted = chase_step(cont.0, cont.1, home_x, home_y, 5.0, 0.0);
         assert_eq!(next_after_resume, next_if_uninterrupted);
+    }
+
+    /// The walk home has no upper bound on displacement: the return pass re-steps ONE tick of run per
+    /// firing (`nav_step` → this primitive), so a creature left far out chains legs to `RETURN_LEASH_SQ`
+    /// instead of single-legging and stalling.
+    #[test]
+    fn a_creature_displaced_far_from_home_steps_all_the_way_back() {
+        let (home_x, home_y) = (-100.0_f32, 250.0_f32);
+        let step = constants::speeds::RUN * MOVE_TICK_SECS; // one movement tick of run
+        let start = 300.0_f32; // far past anything the old spawn tether could leave behind
+        let dist_sq = |p: (f32, f32)| (p.0 - home_x).powi(2) + (p.1 - home_y).powi(2);
+        let mut pos = (home_x + start, home_y);
+        let mut prev_sq = dist_sq(pos);
+        let mut ticks = 0u32;
+        // The loop condition IS the return pass's gate: while it holds, wander skips the guid.
+        while dist_sq(pos) > RETURN_LEASH_SQ {
+            let next = chase_step(pos.0, pos.1, home_x, home_y, step, 0.0);
+            assert_ne!(next, pos, "return stalled after {ticks} ticks");
+            pos = next;
+            let now_sq = dist_sq(pos);
+            assert!(now_sq < prev_sq, "step {ticks} did not close the gap");
+            prev_sq = now_sq;
+            ticks += 1;
+            assert!(ticks < 10_000, "no arrival from {start} yd out");
+        }
+        // Derived, not hand-counted, so tuning any of the three constants can't fail this on arithmetic.
+        assert_eq!(
+            ticks,
+            ((start - RETURN_LEASH_SQ.sqrt()) / step).ceil() as u32
+        );
     }
 
     #[test]
@@ -1373,6 +1465,102 @@ mod tests {
         assert!(!leg_in_flight(600, 600)); // exactly at ETA → arrived
         assert!(!leg_in_flight(700, 600)); // past ETA
         assert!(!leg_in_flight(100, 0)); // fresh / no leg
+    }
+
+    #[test]
+    fn rout_window_open_covers_the_whole_clock_lifecycle() {
+        // Never started (the zero sentinel) → not routing, at any `now`.
+        assert!(!rout_window_open(0, 0));
+        assert!(!rout_window_open(50_000, 0));
+        // Open: the close time is still ahead.
+        assert!(rout_window_open(50_000, 60_000));
+        // Just closed (exactly at the close time) and closed long ago → over.
+        assert!(!rout_window_open(60_000, 60_000));
+        assert!(!rout_window_open(600_000, 60_000));
+    }
+
+    #[test]
+    fn a_rout_starts_once_per_engagement_and_only_when_eligible() {
+        // Eligible with an unstarted clock → the rout starts.
+        assert!(may_start_rout(true, 0));
+        // Eligible but the clock is already spent (a window that closed) → never a second rout, at
+        // any health. An open window is not a start either — the rout is already running.
+        assert!(!may_start_rout(true, 60_000));
+        // Ineligible (a BEAST, or above the HP threshold) never starts one.
+        assert!(!may_start_rout(false, 0));
+        assert!(!may_start_rout(false, 60_000));
+    }
+
+    #[test]
+    fn a_rout_window_never_stamps_the_never_started_sentinel() {
+        // The close time is the stamp instant plus the duration.
+        assert_eq!(rout_close_ms(50_000), 50_000 + ROUT_DURATION_MS);
+        // A stamp that wraps the u32 clock exactly onto 0 would read as "never started" and hand out
+        // a second rout, so it is nudged off the sentinel.
+        assert_eq!(rout_close_ms(u32::MAX - ROUT_DURATION_MS + 1), 1);
+    }
+
+    #[test]
+    fn evade_needs_both_an_expired_deadline_and_a_target_that_left_the_leash() {
+        let near = crate::combat::LEASH_RADIUS_SQ - 1.0;
+        let far = crate::combat::LEASH_RADIUS_SQ + 1.0;
+        // Deadline still live: the fight continues at ANY distance inside the backstop — the whole
+        // point of the timer model (a kited mob keeps chasing while damage flows).
+        assert!(!should_evade(50_000, 60_000, near));
+        assert!(!should_evade(50_000, 60_000, far));
+        // Deadline expired but the target is still standing by the remembered spot → keep fighting.
+        assert!(!should_evade(60_000, 60_000, near));
+        // Expired AND the target left the leash radius → the only evading corner.
+        assert!(should_evade(60_000, 60_000, far));
+    }
+
+    #[test]
+    fn the_backstop_is_the_only_raw_distance_that_still_ends_a_fight() {
+        let backstop = crate::combat::COMBAT_BACKSTOP_SQ;
+        assert!(!beyond_combat_backstop(backstop)); // exactly at the drop distance is still combat
+        assert!(beyond_combat_backstop(backstop + 1.0));
+        // A target FAR outside the leash radius but inside the backstop never evades on distance while
+        // its deadline is live — the whole point of dropping the hard cap.
+        assert!(!should_evade(50_000, 60_000, backstop - 1.0));
+    }
+
+    #[test]
+    fn a_pursuit_deadline_never_stamps_the_never_refreshed_sentinel() {
+        assert_eq!(
+            pursuit_deadline_ms(50_000),
+            50_000 + crate::combat::PURSUIT_WINDOW_MS
+        );
+        // A deadline that wraps the u32 clock exactly onto 0 would read as "never refreshed" — a row
+        // the leash pass would re-seed for another full window — so it is nudged off the sentinel.
+        assert_eq!(
+            pursuit_deadline_ms(u32::MAX - crate::combat::PURSUIT_WINDOW_MS + 1),
+            1
+        );
+        // A stamped deadline is always in the future of the stamp, so a refresh always defers the evade.
+        assert!(!should_evade(
+            50_000,
+            pursuit_deadline_ms(50_000),
+            f32::INFINITY
+        ));
+    }
+
+    /// The tuning constants are only coherent together, so pin the relations rather than the values.
+    /// `const` blocks: every relation is between constants, so a bad calibration fails the BUILD rather
+    /// than waiting for the run (and clippy rejects a runtime assert over constants).
+    #[test]
+    fn the_leash_constants_hold_their_invariants() {
+        const {
+            // A rout must not outlive the engagement that carries it: a router whose pursuit window
+            // expired mid-rout would evade and heal to full — the reported bug, in timer form.
+            assert!(ROUT_DURATION_MS < crate::combat::PURSUIT_WINDOW_MS);
+            // The leash radius is the small radius around the remembered spot; the backstop is the far
+            // "across a zone" cutoff. Inverted, the backstop would be unreachable.
+            assert!(crate::combat::LEASH_RADIUS_SQ < crate::combat::COMBAT_BACKSTOP_SQ);
+            // The Auto Shot invariant, restated against the backstop: a pull from maximum ranged range
+            // must start inside the only distance that evades. The leash radius may sit below the pull
+            // range — the pursuit deadline, stamped on the pull, is what holds that engagement open.
+            assert!(crate::combat::RANGED_RANGE_SQ < crate::combat::COMBAT_BACKSTOP_SQ);
+        }
     }
 
     #[test]

@@ -53,6 +53,34 @@ pub(crate) fn enter_combat(ctx: &ReducerContext, guid: u64) {
     entities.guid().update(e);
 }
 
+/// Refresh the pursuit leash on the CREATURE side of a damage exchange: deadline to
+/// `now + PURSUIT_WINDOW_MS`, remembered position to wherever that creature stands. Fed both guids, so
+/// the creature's own damage refreshes it like the player's.
+///
+/// Called from the damage chokepoint (`apply_hit`), never from `enter_combat`: the creature tick
+/// re-stamps combat flags through that helper every 500ms, which would defer the deadline forever.
+/// [entity]
+pub(crate) fn refresh_leash(ctx: &ReducerContext, guid_a: u64, guid_b: u64) {
+    let melee = ctx.db.game_melee_attack();
+    let entities = ctx.db.game_world_entity();
+    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+    for guid in [guid_a, guid_b] {
+        // Only a CREATURE's own outgoing row is ever read by the leash pass; a player's is not.
+        let (Some(mut row), Some(e)) =
+            (melee.attacker_guid().find(guid), entities.guid().find(guid))
+        else {
+            continue;
+        };
+        if e.is_player() {
+            continue;
+        }
+        row.pursuit_ends_ms = crate::creatures::pursuit_deadline_ms(now_ms);
+        row.leash_x = e.x;
+        row.leash_y = e.y;
+        melee.attacker_guid().update(row);
+    }
+}
+
 /// Free every melee engagement touching `guid` — its own outgoing attack AND any attack on it.
 /// The canonical "leave combat" teardown. Collect-then-delete (never mutate while iterating).
 pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
@@ -194,6 +222,27 @@ pub struct MeleeAttack {
     /// `-c` wipe). [entity]
     #[default(0)]
     pub last_offhand_swing_ms: u32,
+    /// The low-HP ROUT clock for this engagement: 0 = no rout has started; otherwise the wall-clock ms
+    /// at which the rout window closes. A value in the past means the rout is over AND spent, which is
+    /// what makes a rout once-per-engagement — the row dies on disengage, so the next fight rearms it
+    /// with no cleanup path. Read through `ai::rout_window_open` / `ai::may_start_rout`.
+    /// END-appended + `#[default(0)]` → adding it auto-migrates existing rows (no `-c` wipe). [entity]
+    #[default(0)]
+    pub rout_ends_ms: u32,
+    /// The wall-clock ms past which the leash pass may evade this creature, re-stamped by every damage
+    /// exchange in either direction (`refresh_leash`). 0 = never refreshed, which never evades — the
+    /// leash pass seeds it instead, so a pull whose first shot has not landed cannot be evaded out from
+    /// under. Read through `ai::should_evade`.
+    /// END-appended + `#[default(0)]` → adding it auto-migrates existing rows (no `-c` wipe). [entity]
+    #[default(0)]
+    pub pursuit_ends_ms: u32,
+    /// Where the CREATURE stood at that refresh — the point the TARGET's distance is measured from.
+    /// Meaningless while `pursuit_ends_ms` is 0. 2D, like the wander/return-home math (z varies on
+    /// slopes). END-appended + `#[default(0.0)]` → auto-migrates existing rows. [entity]
+    #[default(0.0)]
+    pub leash_x: f32,
+    #[default(0.0)]
+    pub leash_y: f32,
 }
 
 /// A logged melee swing to relay as `SMSG_ATTACKERSTATEUPDATE`. Broadcast (public, no RLS), like
@@ -398,6 +447,10 @@ pub(crate) fn apply_start_attack(
         last_swing_ms: 0,
         ranged_spell_id: 0, // melee auto-attack
         last_offhand_swing_ms: 0,
+        rout_ends_ms: 0,
+        pursuit_ends_ms: 0,
+        leash_x: 0.0,
+        leash_y: 0.0,
     };
     if melee.attacker_guid().find(attacker.guid).is_some() {
         melee.attacker_guid().update(row);
@@ -502,6 +555,10 @@ pub(crate) fn apply_start_ranged_attack(
         last_swing_ms: first_swing_seed,
         ranged_spell_id: spell_id,
         last_offhand_swing_ms: 0,
+        rout_ends_ms: 0,
+        pursuit_ends_ms: 0,
+        leash_x: 0.0,
+        leash_y: 0.0,
     };
     if melee.attacker_guid().find(attacker.guid).is_some() {
         melee.attacker_guid().update(row);

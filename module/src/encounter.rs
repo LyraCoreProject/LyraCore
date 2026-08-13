@@ -456,9 +456,9 @@ pub fn open_door(ctx: &ReducerContext, go_entry: u32, instance_id: u64) -> Resul
 /// `game_encounter_spawn` tracking row so [`encounter_reset`]/[`sweep_encounter_state`] can tear
 /// everything down. Spawns via the shared `build_creature_entity`/`insert_creature_entity` path
 /// (so `on_creature_spawn` fires per add) at `instance_id`, spread on a 2 yd grid
-/// ([`wave_offset`]). Aggro/leash then ride the normal proximity-aggro + spawn-anchored leash
-/// passes — a per-wave leash RADIUS is not representable today (the engine's chase/return leashes
-/// are global consts anchored at the spawn row, i.e. the wave anchor); a custom radius needs a
+/// ([`wave_offset`]). Aggro/leash then ride the normal proximity-aggro + pursuit-timer leash
+/// passes — a per-wave leash RADIUS is not representable today (the engine's chase/leash radii are
+/// global consts, and the return anchor is the spawn row, i.e. the wave anchor); a custom radius needs a
 /// `CreatureSpawn` column (deferred, noted in the work item). Entries missing a template are
 /// skipped with a log line. Returns the spawned guids in `entries` order.
 pub fn spawn_wave(

@@ -12,6 +12,10 @@ pub struct MeleeAttack {
     pub last_swing_ms: u32,
     pub ranged_spell_id: u32,
     pub last_offhand_swing_ms: u32,
+    pub rout_ends_ms: u32,
+    pub pursuit_ends_ms: u32,
+    pub leash_x: f32,
+    pub leash_y: f32,
 }
 
 impl __sdk::InModule for MeleeAttack {
@@ -27,6 +31,10 @@ pub struct MeleeAttackCols {
     pub last_swing_ms: __sdk::__query_builder::Col<MeleeAttack, u32>,
     pub ranged_spell_id: __sdk::__query_builder::Col<MeleeAttack, u32>,
     pub last_offhand_swing_ms: __sdk::__query_builder::Col<MeleeAttack, u32>,
+    pub rout_ends_ms: __sdk::__query_builder::Col<MeleeAttack, u32>,
+    pub pursuit_ends_ms: __sdk::__query_builder::Col<MeleeAttack, u32>,
+    pub leash_x: __sdk::__query_builder::Col<MeleeAttack, f32>,
+    pub leash_y: __sdk::__query_builder::Col<MeleeAttack, f32>,
 }
 
 impl __sdk::__query_builder::HasCols for MeleeAttack {
@@ -41,6 +49,10 @@ impl __sdk::__query_builder::HasCols for MeleeAttack {
                 table_name,
                 "last_offhand_swing_ms",
             ),
+            rout_ends_ms: __sdk::__query_builder::Col::new(table_name, "rout_ends_ms"),
+            pursuit_ends_ms: __sdk::__query_builder::Col::new(table_name, "pursuit_ends_ms"),
+            leash_x: __sdk::__query_builder::Col::new(table_name, "leash_x"),
+            leash_y: __sdk::__query_builder::Col::new(table_name, "leash_y"),
         }
     }
 }

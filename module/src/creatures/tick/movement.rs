@@ -5,7 +5,7 @@
 //! `use movement::*;`).
 //!
 //! Shares the movement-leg grammar (`PendingLeg` / `leg_toward` / `drain_legs` / `movable_creature`),
-//! the one spline writer (`emit_creature_leg`), and `creature_will_flee` with `tick/mod.rs` and
+//! the one spline writer (`emit_creature_leg`), and `creature_is_routing` with `tick/mod.rs` and
 //! `sense.rs` — all defined in `tick/mod.rs` and reachable here as private ancestor items (Rust
 //! visibility: private == visible in the defining module + every descendant), no re-export needed.
 
@@ -113,8 +113,8 @@ pub(super) fn pass_patrol(ctx: &ReducerContext, active: &std::collections::HashS
 }
 
 
-/// Pass 7 — chase: an engaged creature whose target sits OUT of melee but within leash steps toward
-/// it (a run leg). Runs AFTER aggro (a creature aggroed this tick can start closing) and BEFORE regen
+/// Pass 7 — chase: an engaged creature whose target sits OUT of melee but inside the chase cutoff steps
+/// toward it (a run leg). Runs AFTER aggro (a creature aggroed this tick can start closing) and BEFORE regen
 /// (regen's in-combat gate then skips the still-engaged chaser, so the move isn't reverted).
 ///
 /// Work-item 230 classification: ALWAYS ACTIVE, no active-cell gate — the item calls this pass out by
@@ -187,9 +187,10 @@ pub(super) fn pass_chase(ctx: &ReducerContext, scope: &TickScope) -> usize {
     // Chase pass (vanilla creature AI: an engaged mob closes the gap on a target that ran out of
     // melee range). For each ALIVE creature that is the ATTACKER in a `game_melee_attack` row, look up
     // its target and the squared distance. Step it toward the target only when it's OUT of melee but
-    // still WITHIN leash (`CHASE_MELEE_SQ < dist² <= CHASE_LEASH_SQ`):
+    // still inside the chase cutoff (`CHASE_MELEE_SQ < dist² <= CHASE_LEASH_SQ`):
     //   - dist² <= melee  → already in range; `tick_melee` swings — chasing would walk onto the target.
-    //   - dist²  > leash  → combat's leash pass disengages it; we don't drag it home, so leave it.
+    //   - dist²  > cutoff → past the active-cell radius, so leave it: the engagement's own pursuit
+    //     timer ends the fight (distance does not), and the return pass walks it home afterwards.
     // The committed leg (below) stops ~4 yd short of a stationary target, landing just inside the 5-yd
     // melee band so the next swing connects; re-aimed toward the LIVE target on every veer (not a
     // 4s-stale snapshot) so it stays glued to a fleeing player.
@@ -218,11 +219,11 @@ pub(super) fn pass_chase(ctx: &ReducerContext, scope: &TickScope) -> usize {
         if crate::spell::is_self_movement_suppressed(ctx, c.guid) {
             continue;
         }
-        // A near-dead creature that WILL flee is diverted out of chasing — the flee pass (last) is its sole
-        // mover, so it never emits both a chase leg and a flee leg (same spline_id → client rejects the
-        // 2nd). A non-flee-eligible BEAST (`creature_will_flee` false) keeps chasing instead, so it runs the
-        // target down to the death rather than standing frozen at low HP.
-        if creature_will_flee(ctx, &c) {
+        // A creature ACTIVELY routing is diverted out of chasing — the flee pass (last) is its sole mover,
+        // so it never emits both a chase leg and a flee leg (same spline_id → client rejects the 2nd).
+        // Anything else keeps chasing: a non-eligible BEAST, and equally a humanoid whose rout window has
+        // closed, which is how a spent router walks back into melee instead of standing frozen at low HP.
+        if creature_is_routing(ctx, &c) {
             continue;
         }
         let Some(t) = entities.guid().find(row.target_guid) else {
@@ -230,7 +231,7 @@ pub(super) fn pass_chase(ctx: &ReducerContext, scope: &TickScope) -> usize {
         };
         let (dx, dy, dz) = (t.x - c.x, t.y - c.y, t.z - c.z);
         let dist_sq = dx * dx + dy * dy + dz * dz;
-        // Beyond leash → combat disengages it (don't chase).
+        // Past the active-cell radius → stop pursuing; the pursuit timer, not distance, ends the fight.
         if dist_sq > CHASE_LEASH_SQ {
             continue;
         }
@@ -621,10 +622,15 @@ pub(super) fn pass_wander(
     visited
 }
 
-/// Pass 11 — flee: a meleeing HUMANOID below ~15% HP routs — it runs one RUN tick away from its target
-/// each tick while STAYING in combat (a shared combat state; both sides keep their engagement). Runs LAST
-/// (after both regen passes): the still-engaged runner is skipped by regen's in-combat gate, so regen never
-/// re-writes (and reverts) the fled position this tick.
+/// Pass 11 — flee: a meleeing HUMANOID below ~15% HP routs — it runs away from its target while STAYING
+/// in combat (a shared combat state; both sides keep their engagement). Runs LAST (after both regen
+/// passes): the still-engaged runner is skipped by regen's in-combat gate, so regen never re-writes (and
+/// reverts) the fled position this tick.
+///
+/// The rout is BOUNDED and once per engagement: this pass stamps `MeleeAttack::rout_ends_ms` when a rout
+/// starts and runs the leg only while that window is open. When it closes the creature is an ordinary
+/// engaged attacker again — chase closes the gap, the swing pass resolves its blows — and it fights to
+/// the death at whatever health it has, with no evade and no heal.
 ///
 /// Work-item 230 classification: ALWAYS ACTIVE, no active-cell gate — every candidate must currently be
 /// the ATTACKER in a `game_melee_attack` row (combat-engaged; fleeing is a SHARED COMBAT STATE per the
@@ -636,12 +642,12 @@ pub(super) fn pass_wander(
 /// `pass_cast`) instead of `entities.iter()` + a per-row `.find(&c.guid)` gate. VERIFIED before
 /// switching: "fleeing" carries NO separate state on `WorldEntity` (no `is_fleeing`/`fleeing_since`
 /// field — `WorldEntity`'s only combat-adjacent fields are `dead`/`target_guid`/`unit_flags`); a
-/// creature's flee status is recomputed FRESH every tick from exactly two things — "is it the attacker
-/// in a melee row" and `creature_will_flee` (HP% + type). Since the melee row is that same necessary
-/// condition the old per-row `.find` already required, a creature whose melee row was ever deleted
-/// mid-flee could NEVER have re-qualified anyway (this pass never deletes it — see the ordering note
-/// above), so outer-looping the melee table instead of the entity table cannot miss a genuinely
-/// fleeing creature.
+/// creature's rout status comes from exactly two things — "is it the attacker in a melee row" and that
+/// row's eligibility + rout window. Since the melee row is that same necessary condition the old per-row
+/// `.find` already required, a creature whose melee row was ever deleted mid-rout could NEVER have
+/// re-qualified anyway (this pass never deletes it — see the ordering note above), so outer-looping the
+/// melee table instead of the entity table cannot miss a genuinely routing creature. It is also where
+/// the rout clock lives, so the state is in hand with no extra lookup.
 /// Work-item 229: gated per candidate on `scope.covers(c.instance_id)` (attacker's instance = the
 /// pair's — same construction argument as pass_cast/pass_chase).
 ///
@@ -653,30 +659,24 @@ pub(super) fn pass_flee(ctx: &ReducerContext, scope: &TickScope) -> usize {
     let mut visited = 0usize;
     let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
     let entities = ctx.db.game_world_entity();
-    // Flee pass (vanilla creature AI: a mob in melee that drops to ~15% HP runs away). For each ALIVE
-    // creature currently attacking (a `game_melee_attack` row keyed by its guid) whose HP is below the
-    // flee threshold AND flee-eligible, step it ONE RUN TICK directly away from its target while KEEPING the
-    // engagement live (it doesn't disengage — fleeing is a combat state). Moving x,y relays a position change
-    // to clients, same as a patrol leg.
+    // Flee pass (vanilla creature AI: a mob in melee that drops to ~15% HP routs for a bounded window).
+    // For each ALIVE creature currently attacking (a `game_melee_attack` row keyed by its guid) that is
+    // eligible and inside an open rout window, run one committed leg directly away from its target while
+    // KEEPING the engagement live (it doesn't disengage — routing is a combat state). Moving x,y relays a
+    // position change to clients, same as a patrol leg.
     //
-    // ORDERING — this MUST run LAST, after both regen passes. A fleeing creature is still engaged (its
-    // melee row is live until we disengage it here), so the regen passes' `in_combat` gate skips it —
-    // meaning regen never re-writes (and clobbers) the fled position this tick. If the flee ran BEFORE
-    // regen, disengaging would drop the creature out of `in_combat`, the health-regen pass would then
-    // re-write the whole row from its own snapshot and REVERT the move, pinning the runner in place
-    // (it never leaves aggro range, re-engages, and grinds the target down). Running flee last avoids
-    // that entirely. Snapshot the work first (collect (guid, nx, ny)), then mutate, so we never write
-    // the entity / melee tables while iterating them.
-    //
-    // The aggro pass already skipped `should_flee` creatures this tick, so a near-dead creature isn't
-    // re-armed before it flees. NOTE: a future regen tick heals a fled creature back above the
-    // threshold, after which the aggro pass may re-engage it — faithful (an escaped mob that recovers
-    // can re-engage); a persistent fear/leash state is a later refinement.
+    // ORDERING — this MUST run LAST, after both regen passes. A routing creature is still engaged, so the
+    // regen passes' `in_combat` gate skips it — meaning regen never re-writes (and clobbers) the fled
+    // position this tick. Were a rout ever to drop the engagement before regen ran, the health-regen pass
+    // would re-write the whole row from its own snapshot and REVERT the move, pinning the runner in place
+    // (it never leaves aggro range, re-engages, and grinds the target down). Snapshot the work first, then
+    // mutate, so we never write the entity / melee tables while iterating them.
     let melee_flee = ctx.db.game_melee_attack();
     // Snapshot-then-mutate (never write tables mid-iteration). EVERY eligible fleeing creature re-stamps
     // combat each tick (kept alive across the long committed leg); only those whose committed leg has
     // FINISHED get a fresh leg emitted.
     let mut to_restamp: Vec<(u64, u64)> = Vec::new(); // (creature_guid, target_guid)
+    let mut to_stamp: Vec<(u64, u32)> = Vec::new(); // (attacker_guid, rout window close ms)
     let mut to_flee: Vec<PendingLeg> = Vec::new();
     // Work-item 233: outer-loop the small melee-engaged table instead of every entity — `row.attacker_guid`
     // is by construction "currently a melee attacker", the exact gate the old `.find(&c.guid)` applied
@@ -697,18 +697,26 @@ pub(super) fn pass_flee(ctx: &ReducerContext, scope: &TickScope) -> usize {
             continue;
         }
         // Below the flee threshold AND flee-eligible. Fleeing is SELECTIVE in vanilla, not universal: only
-        // HUMANOIDS rout at low HP; BEASTS (wolves/boars) etc. fight to the death. The old pass fled EVERY
-        // near-dead creature, so a Northshire wolf (BEAST) ran away + dropped combat ("not all enemies
-        // should flee"). `creature_will_flee` is the shared gate every flee site uses (see its doc), so a
-        // non-eligible near-dead creature is never moved here and instead keeps chasing/swinging via the
-        // earlier passes (a missing template ⇒ not eligible ⇒ stands and fights — safe default).
-        if !creature_will_flee(ctx, &c) {
-            continue;
+        // HUMANOIDS rout at low HP; BEASTS (wolves/boars) etc. fight to the death. A non-eligible near-dead
+        // creature is never moved here and instead keeps chasing/swinging via the earlier passes (a missing
+        // template ⇒ not eligible ⇒ stands and fights — safe default).
+        let eligible = rout_eligible(ctx, &c);
+        // START the rout, or ride the one already running. This pass is the ONLY writer of the window, so
+        // "eligible and unstamped" is the single moment a rout begins; once the window closes the creature
+        // is a normal engaged attacker again (chase closes the gap, the swing pass resolves its blows) and
+        // no later health drop can start a second one.
+        let starting = may_start_rout(eligible, row.rout_ends_ms);
+        if !starting && !(eligible && rout_window_open(now_ms, row.rout_ends_ms)) {
+            continue; // not eligible, or the window is spent → it stands and fights
         }
-        // Run directly away from whoever it's fighting (the melee row's target).
+        // Run directly away from whoever it's fighting (the melee row's target). Resolved BEFORE the
+        // window is stamped, so a vanished target can never spend the rout without a leg being run.
         let Some(target) = entities.guid().find(row.target_guid) else {
             continue;
         };
+        if starting {
+            to_stamp.push((row.attacker_guid, rout_close_ms(now_ms)));
+        }
         // SHARED COMBAT STATE: re-stamp EVERY tick (even mid-leg) so combat doesn't drop during the long
         // committed run. (Was in the emit loop, which now fires only on re-roll.)
         to_restamp.push((c.guid, row.target_guid));
@@ -736,13 +744,20 @@ pub(super) fn pass_flee(ctx: &ReducerContext, scope: &TickScope) -> usize {
             duration_ms,
         });
     }
-    // Combat re-stamp EVERY tick for every fleeing creature (not just re-roll ticks) — fleeing is a
+    // Combat re-stamp EVERY tick for every routing creature (not just re-roll ticks) — routing is a
     // SHARED COMBAT STATE; without this the 6s combat-drop fires mid committed-leg and both sides untarget
-    // ("they get away or untarget each other and combat just ends"). The runner keeps fleeing until it
-    // dies (the player catches the wounded-slow mob) or hits the leash (the leash pass evades it).
+    // ("they get away or untarget each other and combat just ends"). The rout ends when its window closes,
+    // or sooner if the player catches the wounded-slow mob and kills it.
     for (guid, target_guid) in to_restamp {
         crate::combat::enter_combat(ctx, guid);
         crate::combat::enter_combat(ctx, target_guid);
+    }
+    // Stamp the newly started rout windows (re-find the LIVE row — the table was only read above).
+    for (attacker_guid, ends_ms) in to_stamp {
+        if let Some(mut row) = melee_flee.attacker_guid().find(attacker_guid) {
+            row.rout_ends_ms = ends_ms;
+            melee_flee.attacker_guid().update(row);
+        }
     }
     // Emit the committed RUN legs (only the finished-leg creatures reach here). The client interpolates
     // the whole ~28yd run; pass_advance_splines advances the authoritative position along it.
