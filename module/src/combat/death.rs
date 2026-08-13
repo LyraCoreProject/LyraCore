@@ -598,6 +598,10 @@ pub(crate) fn apply_hit(
         target.power = (target.power + rage_from_damage(dmg, false)).min(target.max_power);
     }
     entities.guid().update(target);
+    // Damage kept the fight alive: restart the pursuit deadline and re-remember where the creature
+    // stands. Both guids go in, so a creature hitting the player refreshes the leash just like the
+    // player hitting it. The lethal branch above already returned — a dead pair has no engagement left.
+    refresh_leash(ctx, attacker_guid, target_guid);
     if !weapon {
         // The surviving spell target is in combat too. Weapon callers stamp both sides at their own
         // tail (a swing that fired flags combat even on a miss), so this would be redundant for them.

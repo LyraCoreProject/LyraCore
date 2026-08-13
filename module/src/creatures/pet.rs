@@ -535,6 +535,9 @@ pub(crate) fn pass_pet(
                         ranged_spell_id: 0, // 0 = melee/no wand auto-shot; Firebolt is cast via pass_cast (game_creature_cast 416→3110), NOT this field
                         last_offhand_swing_ms: 0,
                         rout_ends_ms: 0,
+                        pursuit_ends_ms: 0,
+                        leash_x: 0.0,
+                        leash_y: 0.0,
                     });
                 } else if let Some(mut row) = melee.attacker_guid().find(pet_guid) {
                     // Re-point at the owner's current target WITHOUT resetting the swing cadence.

@@ -113,8 +113,8 @@ pub(super) fn pass_patrol(ctx: &ReducerContext, active: &std::collections::HashS
 }
 
 
-/// Pass 7 — chase: an engaged creature whose target sits OUT of melee but within leash steps toward
-/// it (a run leg). Runs AFTER aggro (a creature aggroed this tick can start closing) and BEFORE regen
+/// Pass 7 — chase: an engaged creature whose target sits OUT of melee but inside the chase cutoff steps
+/// toward it (a run leg). Runs AFTER aggro (a creature aggroed this tick can start closing) and BEFORE regen
 /// (regen's in-combat gate then skips the still-engaged chaser, so the move isn't reverted).
 ///
 /// Work-item 230 classification: ALWAYS ACTIVE, no active-cell gate — the item calls this pass out by
@@ -187,9 +187,10 @@ pub(super) fn pass_chase(ctx: &ReducerContext, scope: &TickScope) -> usize {
     // Chase pass (vanilla creature AI: an engaged mob closes the gap on a target that ran out of
     // melee range). For each ALIVE creature that is the ATTACKER in a `game_melee_attack` row, look up
     // its target and the squared distance. Step it toward the target only when it's OUT of melee but
-    // still WITHIN leash (`CHASE_MELEE_SQ < dist² <= CHASE_LEASH_SQ`):
+    // still inside the chase cutoff (`CHASE_MELEE_SQ < dist² <= CHASE_LEASH_SQ`):
     //   - dist² <= melee  → already in range; `tick_melee` swings — chasing would walk onto the target.
-    //   - dist²  > leash  → combat's leash pass disengages it; we don't drag it home, so leave it.
+    //   - dist²  > cutoff → past the active-cell radius, so leave it: the engagement's own pursuit
+    //     timer ends the fight (distance does not), and the return pass walks it home afterwards.
     // The committed leg (below) stops ~4 yd short of a stationary target, landing just inside the 5-yd
     // melee band so the next swing connects; re-aimed toward the LIVE target on every veer (not a
     // 4s-stale snapshot) so it stays glued to a fleeing player.
@@ -230,7 +231,7 @@ pub(super) fn pass_chase(ctx: &ReducerContext, scope: &TickScope) -> usize {
         };
         let (dx, dy, dz) = (t.x - c.x, t.y - c.y, t.z - c.z);
         let dist_sq = dx * dx + dy * dy + dz * dz;
-        // Beyond leash → combat disengages it (don't chase).
+        // Past the active-cell radius → stop pursuing; the pursuit timer, not distance, ends the fight.
         if dist_sq > CHASE_LEASH_SQ {
             continue;
         }

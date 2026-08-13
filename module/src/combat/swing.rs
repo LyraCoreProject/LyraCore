@@ -10,8 +10,8 @@
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use crate::{
-    game_creature_spawn, game_item_instance, game_item_template, game_spell,
-    game_spell_cast_event, game_world_entity, SpellCastEvent, WorldEntity,
+    game_item_instance, game_item_template, game_spell, game_spell_cast_event, game_world_entity,
+    SpellCastEvent, WorldEntity,
 };
 
 // Tables' pure formulas/consts and the sibling submodules' re-exports (`roll_swing`, `apply_hit`,
@@ -26,7 +26,8 @@ use super::*;
 ///    (player→7, creature→2). A creature target dies at 0 HP (DESTROY + free attackers + arm
 ///    respawn); a **player** target also dies at 0 HP (health=0 + `dead`, then release→ghost).
 ///
-/// A leash pass runs first: a creature whose target fled beyond `LEASH_RADIUS` evades.
+/// A leash pass runs first: a creature whose pursuit deadline expired with the target away from the
+/// remembered refresh position evades.
 ///
 /// Work-item 229 (per-instance ticks): DELIBERATELY LEFT GLOBAL — one schedule row, no `instance_id`
 /// scoping. Verified same-instance-by-construction: every pass here outer-loops `game_melee_attack`,
@@ -54,16 +55,24 @@ pub fn tick_melee(ctx: &ReducerContext, _schedule: MeleeSchedule) {
     resolve_swing(ctx);
 }
 
-/// Pass 0 — leash. A creature whose target has fled beyond LEASH_RADIUS evades: it drops ALL its combat
-/// (its own attack + anyone attacking it), heals to full, and resumes patrol next tick (its melee rows
-/// are gone). Classic "run too far → mob resets". Creatures don't chase yet, so there's no walk-home;
-/// the heal flows to clients via the on_update health-VALUES relay.
+/// Pass 0 — leash. A creature evades once its pursuit deadline has expired AND the target has left
+/// `LEASH_RADIUS_SQ` of the position remembered at the last damage exchange (`ai::should_evade`), or
+/// unconditionally past the absolute backstop. Evading drops ALL its combat and heals it to full (the
+/// on_update health-VALUES relay refills the bar); the return pass walks it home.
+///
+/// Distance alone does not end a fight: while damage keeps flowing the engagement is refreshed, so combat
+/// continues however far it travels from the creature's camp.
+///
+/// A row whose clock has never been stamped (freshly armed, or auto-migrated from before the field
+/// existed) is SEEDED here instead of judged — otherwise an engagement that never sees a damage exchange
+/// would never time out, and a max-range Auto Shot pull would evade before its first shot landed.
 fn leash_pass(ctx: &ReducerContext) {
     let melee = ctx.db.game_melee_attack();
     let entities = ctx.db.game_world_entity();
-    let spawns = ctx.db.game_creature_spawn();
+    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
 
     let mut evaders: Vec<u64> = Vec::new();
+    let mut seeds: Vec<(u64, f32, f32)> = Vec::new();
     for atk in melee.iter() {
         let (Some(attacker), Some(target)) = (
             entities.guid().find(atk.attacker_guid),
@@ -72,26 +81,37 @@ fn leash_pass(ctx: &ReducerContext) {
             continue;
         };
         // Only a creature's OWN engagement leashes (attacker is the creature, target is the player).
-        if !attacker.is_player() && !evaders.contains(&attacker.guid) {
-            let (dx, dy, dz) = (
-                target.x - attacker.x,
-                target.y - attacker.y,
-                target.z - attacker.z,
-            );
-            if dx * dx + dy * dy + dz * dz > LEASH_RADIUS_SQ {
-                evaders.push(attacker.guid);
-                continue;
-            }
-            // Home tether (work-item 046): pass_chase glues the creature to ~5 yd, so the
-            // target-distance check above never opens during a kite — measure the creature
-            // against its OWN spawn point instead. Spawn-less creatures (pets, purely dynamic
-            // spawns) have no tether. 2D like the wander/return home math (z varies on slopes).
-            if let Some(sp) = spawns.guid().find(attacker.guid) {
-                let (hx, hy) = (sp.x - attacker.x, sp.y - attacker.y);
-                if hx * hx + hy * hy > HOME_TETHER_RADIUS_SQ {
-                    evaders.push(attacker.guid);
-                }
-            }
+        if attacker.is_player() || evaders.contains(&attacker.guid) {
+            continue;
+        }
+        // The absolute backstop, on the raw creature→target distance: the only distance that still
+        // evades, so nothing stays in combat across a zone. 3D, as the old target cap was.
+        let (dx, dy, dz) = (
+            target.x - attacker.x,
+            target.y - attacker.y,
+            target.z - attacker.z,
+        );
+        if crate::creatures::beyond_combat_backstop(dx * dx + dy * dy + dz * dz) {
+            evaders.push(attacker.guid);
+            continue;
+        }
+        if atk.pursuit_ends_ms == 0 {
+            seeds.push((atk.attacker_guid, attacker.x, attacker.y));
+            continue;
+        }
+        // The target measured against the REMEMBERED position, never the creature against its spawn.
+        // 2D like the wander/return-home math (z varies on slopes).
+        let (rx, ry) = (target.x - atk.leash_x, target.y - atk.leash_y);
+        if crate::creatures::should_evade(now_ms, atk.pursuit_ends_ms, rx * rx + ry * ry) {
+            evaders.push(atk.attacker_guid);
+        }
+    }
+    for (creature, x, y) in seeds {
+        if let Some(mut row) = melee.attacker_guid().find(creature) {
+            row.pursuit_ends_ms = crate::creatures::pursuit_deadline_ms(now_ms);
+            row.leash_x = x;
+            row.leash_y = y;
+            melee.attacker_guid().update(row);
         }
     }
     for creature in evaders {
@@ -162,6 +182,9 @@ fn aggro_pass(ctx: &ReducerContext) {
             ranged_spell_id: 0, // creatures retaliate in melee
             last_offhand_swing_ms: 0,
             rout_ends_ms: 0,
+            pursuit_ends_ms: 0,
+            leash_x: 0.0,
+            leash_y: 0.0,
         });
     }
 }

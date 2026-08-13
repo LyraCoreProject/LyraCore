@@ -42,15 +42,16 @@ pub(crate) const WAND_PROJECTILE_SPEED: f32 = 20.0;
 // turn/pitch bits): forward|backward|strafe L/R|jumping|falling-far. Turning in place must NOT
 // count — vanilla keeps Auto Shot firing while you spin, but DEFERS shots while you move (097).
 pub(crate) const MOVE_MASK_MOVING: u32 = 0x1 | 0x2 | 0x4 | 0x8 | 0x2000 | 0x4000;
-// INVARIANT (097): must exceed RANGED_RANGE_SQ — with leash < ranged reach, an Auto Shot pull from the
-// outer band armed the wolf's retaliation and the very next 100ms tick leash-evaded it, deleting the
-// player's own engagement row before the 500ms first shot ever fired ("enters combat, leaves instantly,
-// re-press dead"). 45 yd > the 35 yd max pull; the 40 yd HOME tether below still stops kiting.
-pub(crate) const LEASH_RADIUS_SQ: f32 = 2025.0; // (45 yd)² — target beyond this → the creature evades
-                                                // Home tether (work-item 046): a creature dragged farther than this from its OWN spawn point evades
-                                                // even with the target glued to melee range (pass_chase keeps the target-distance leash from ever
-                                                // opening, so without this a mob chased a kiting player across the whole zone into Goldshire).
-pub(crate) const HOME_TETHER_RADIUS_SQ: f32 = 1600.0; // (40 yd)²
+// Leashing is a TIMER, not a distance cap: damage in either direction stamps `now + PURSUIT_WINDOW_MS`
+// and remembers where the creature stood, and only an expired deadline plus a target outside
+// LEASH_RADIUS_SQ of that spot evades (`ai::should_evade`). Calibration knobs — vanilla's `Pursuit` and
+// `LeashRadius` defaults.
+pub(crate) const PURSUIT_WINDOW_MS: u32 = 15_000;
+pub(crate) const LEASH_RADIUS_SQ: f32 = 900.0; // (30 yd)² — around the remembered refresh position
+                                               // The absolute backstop: the only raw distance that still ends a fight, at the ~90 yd drop retail
+                                               // shows, so nothing stays in combat across a zone. Must exceed RANGED_RANGE_SQ or a max-range Auto
+                                               // Shot pull evades before its first shot lands; asserted in `ai`'s test block.
+pub(crate) const COMBAT_BACKSTOP_SQ: f32 = 8100.0; // (90 yd)²
 /// Default melee interval (ms) for an unarmed player — vanilla's unarmed `UNIT_FIELD_BASEATTACKTIME`.
 /// Per-unit speed lives on `WorldEntity::base_attack_time_ms`; this is just the player default.
 pub const DEFAULT_ATTACK_TIME_MS: u32 = 2000;

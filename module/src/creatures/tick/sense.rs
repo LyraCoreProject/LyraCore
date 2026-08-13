@@ -189,6 +189,9 @@ fn pass_aggro(
                 ranged_spell_id: 0, // creature melee aggro
                 last_offhand_swing_ms: 0,
                 rout_ends_ms: 0,
+                pursuit_ends_ms: 0,
+                leash_x: 0.0,
+                leash_y: 0.0,
             });
         }
         // Point the creature at its target (the established target_guid pattern), so observers see
@@ -297,6 +300,9 @@ fn pass_assist(
                 ranged_spell_id: 0, // assist aggro is melee
                 last_offhand_swing_ms: 0,
                 rout_ends_ms: 0,
+                pursuit_ends_ms: 0,
+                leash_x: 0.0,
+                leash_y: 0.0,
             });
         }
         if let Some(mut c) = entities.guid().find(neighbor) {

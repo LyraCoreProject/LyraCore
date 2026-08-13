@@ -926,6 +926,9 @@ pub fn debug_engage(
         ranged_spell_id: 0,
         last_offhand_swing_ms: 0,
         rout_ends_ms: 0,
+        pursuit_ends_ms: 0,
+        leash_x: 0.0,
+        leash_y: 0.0,
     };
     if melee.attacker_guid().find(attacker_guid).is_some() {
         melee.attacker_guid().update(row);

@@ -60,6 +60,9 @@ pub(crate) fn arm_spell_retaliation(ctx: &ReducerContext, caster_guid: u64, targ
             ranged_spell_id: 0,         // creature retaliates in melee
             last_offhand_swing_ms: 0,
             rout_ends_ms: 0,
+            pursuit_ends_ms: 0,
+            leash_x: 0.0,
+            leash_y: 0.0,
         });
     }
 }
