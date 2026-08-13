@@ -1137,15 +1137,25 @@ mod tests {
     /// comments and string literals — so this test's own needles never satisfy it.
     #[test]
     fn every_aura_entry_point_converges_on_the_authoritative_insertion_boundary() {
+        // `debug::debug_fill_aura_slots` writes synthetic filler rows to stage a full aura range, so it
+        // must skip the very boundary the capacity probe exercises. It is the ONLY exempt site.
         let sites = aura_insert_sites();
+        let gameplay: Vec<_> = sites
+            .iter()
+            .filter(|s| !s.starts_with("module/src/debug/mod.rs:"))
+            .collect();
         assert_eq!(
-            sites.len(),
+            gameplay.len(),
             1,
             "a second game_aura insertion path bypasses aura_apply: {sites:?}"
         );
         assert!(
-            sites[0].starts_with("module/src/spell/cast/targeting.rs:"),
+            gameplay[0].starts_with("module/src/spell/cast/targeting.rs:"),
             "the authoritative insertion site moved out of aura_apply: {sites:?}"
+        );
+        assert!(
+            sites.len() <= 2,
+            "a second debug game_aura insertion path appeared: {sites:?}"
         );
 
         // The one insertion sits inside `aura_apply`, after the group, DR and slot decisions.
