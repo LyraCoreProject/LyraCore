@@ -1,10 +1,4 @@
-//! The race → team mapping, in the one place both halves of the server can reach it.
-//!
-//! It lived in `module/src/graveyard.rs` (a corpse releases to a graveyard its own faction serves)
-//! and stayed there while every faction question was asked inside a reducer. Mail asks the same
-//! question in the GATEWAY — realm-core holds no characters, so "may these two write to each
-//! other" is answered before any reducer runs — and a second copy of this table over there is the
-//! failure mode worth avoiding: two mappings agree until somebody adds a race to one of them.
+//! Shared race-to-team mapping for module and gateway faction checks.
 
 /// cmangos team-faction ids, as `game_graveyard_zone.faction` carries them (0 = both factions serve
 /// a zone; 469 = Alliance-only; 67 = Horde-only).
@@ -13,11 +7,7 @@ pub const TEAM_HORDE: u32 = 67;
 
 /// The team a `game_character.race` byte belongs to.
 ///
-/// Alliance races: Human(1)/Dwarf(3)/NightElf(4)/Gnome(7)/Draenei(11 — a TBC-era id some DBC builds
-/// still carry a placeholder row for); every other race byte — including an unrecognized one —
-/// defaults to ALLIANCE: the only content this sandbox has ever imported is Alliance-side
-/// (Elwynn/Westfall), so failing toward Alliance keeps the common path correct. A real Horde launch
-/// needs this list extended (and Horde-side content imported) before it matters.
+/// Unknown races default to Alliance, matching the currently imported Alliance-only content.
 pub fn team_for_race(race: u8) -> u32 {
     match race {
         2 | 5 | 6 | 8 => TEAM_HORDE, // Orc / Undead / Tauren / Troll
@@ -25,8 +15,7 @@ pub fn team_for_race(race: u8) -> u32 {
     }
 }
 
-/// Do two race bytes belong to the same team? The mail faction gate, and the shape any other
-/// cross-character gate should ask in rather than comparing two [`team_for_race`] calls itself.
+/// Whether two race bytes belong to the same team.
 pub fn same_team(race_a: u8, race_b: u8) -> bool {
     team_for_race(race_a) == team_for_race(race_b)
 }

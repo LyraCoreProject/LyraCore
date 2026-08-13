@@ -781,19 +781,8 @@ pub fn debug_assert_chase_stops_at_column(
     Ok(())
 }
 
-/// #102 done-when: server-side proof that a unit ordered to an UNREACHABLE goal (a point inside a
-/// wall — `find_leg` → None → the straight-step fallback) stops at the wall instead of beelining
-/// through it, on the GRID tier of the step gate (`nav_enabled` on, `vmap_enabled` off) — the
-/// headless substitute for a debug tick trace. Same shape as `debug_assert_chase_stops_at_column`
-/// (#525, which proves the vmap tier of the SAME gate), but the synthetic wall is a `NavChunk`:
-/// a walk-blocked line + a 20 yd obs column ridge at a known x-plane, built through the same
-/// `lyracore_shared::nav` codec the importer rasterizes with. Reads `character_guid` only to
-/// resolve a live map to test against, then calls `nav_step` as a pure query (`cur` short of the
-/// wall, `dest` ON the wall line so the goal cell is unwalkable and `find_leg` provably bails).
-/// Asserts the returned step advanced meaningfully (the gate isn't "gave up") AND stopped short
-/// of the wall's x-plane (the fallback isn't "walked through"). Force-sets both consumption flags
-/// for the probe, stashes any real nav row at the probe cell, and restores everything after —
-/// never leaves the database in a different state than it found it.
+/// Proves that an unreachable grid-tier goal cannot make a unit cross a synthetic wall.
+/// The probe restores the nav row and consumption flags it temporarily replaces.
 #[reducer]
 pub fn debug_assert_unreachable_goal_stops_at_wall(
     ctx: &ReducerContext,
@@ -814,7 +803,7 @@ pub fn debug_assert_unreachable_goal_stops_at_wall(
     let map_id = start.map_id;
 
     // Wall down the walk-nx=32 line (obs ox=16) of the cell at (1400, 1400) — same probe corner
-    // #525 uses; all positions derive from the cell so nothing straddles a cell boundary.
+    // All positions derive from the cell so nothing straddles a cell boundary.
     let (cx, cy) = (
         cell_index(1400.0).ok_or("probe corner off map")?,
         cell_index(1400.0).ok_or("probe corner off map")?,

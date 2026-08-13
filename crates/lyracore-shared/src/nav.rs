@@ -253,9 +253,8 @@ pub fn has_los(
     los_hit(fetch, a, b, false).is_none()
 }
 
-/// Committed-step gate ray (#102): `has_los`'s raymarch, but it RETURNS the first blocked
-/// sample so the caller can truncate the step just short of it, and the mover's own obs column
-/// is exempt (see `los_hit`). None = the step crosses no known obstruction.
+/// Returns the first blocked sample so a committed step can stop short of it.
+/// The mover's own obstruction column is exempt; `None` means the step is clear.
 pub fn step_hit(
     fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
     a: (f32, f32, f32),
@@ -634,7 +633,7 @@ mod runtime_tests {
         let from = (sub_center(cx, 16, OBS_DIM), sub_center(cy, 25, OBS_DIM));
         let to = at(10, 50);
         assert!(step_hit(&mut fetcher(), (from.0, from.1, z), (to.0, to.1, z)).is_none());
-        // …while `has_los` keeps the strict test (sight semantics unchanged by #102).
+        // `has_los` keeps the strict test so sight semantics remain unchanged.
         assert!(!has_los(
             &mut fetcher(),
             (from.0, from.1, z),
@@ -644,7 +643,7 @@ mod runtime_tests {
 
     #[test]
     fn no_path_fallback_straight_step_is_caught_by_the_gate() {
-        // #102 (c): a goal inside the wall makes `find_leg` bail (None) and the module falls back
+        // A goal inside the wall makes `find_leg` return `None`.
         // to a straight step AT the goal — the step-gate ray must hit at the wall column so the
         // committed move truncates short of it instead of walking into geometry.
         let z = 80.0;

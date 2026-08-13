@@ -1,26 +1,5 @@
-//! Deploy-safety tripwire (issue #223): the repo's hardest rule — **never `spacetime publish -c`**
-//! — had exactly ONE runtime enforcement (the sanctioned deploy script's argv flag-rejection loop)
-//! and otherwise lived in prose. Prose does not fail a build. Nothing would have gone red if `-c`
-//! were pasted onto the sanctioned deploy script's publish line, or onto any other script that
-//! embeds a publish command.
-//!
-//! `-c` clears the database: every account, character, item and quest row is destroyed, and login
-//! stays broken afterwards until the operator identity is re-claimed. It is the one unrecoverable
-//! mistake available in this repo's tooling, so it gets a scan of its own.
-//!
-//! Three things are pinned here:
-//!
-//! 1. No shell or Python file under `scripts/`, `tools/`, `adapters/` or `importer/` names
-//!    `spacetime publish` on a line that also carries a destructive flag.
-//! 2. The one sanctioned deploy script still rejects flag-shaped
-//!    arguments, and still passes both flags it exists to guarantee.
-//! 3. Every public `#[table]` struct has unique field names after SpacetimeDB's snake_case
-//!    normalization, so publish cannot create an undecodable duplicate-column row type (#106).
-//!
-//! Following `test_scan`'s principle: a scan that cannot find its target has lost its pin, not
-//! passed it. Every scan here therefore carries a sanity FLOOR, and the line-level extractor is
-//! separately proven against a synthetic fixture that contains a known-bad line — so this module
-//! can never go green by matching nothing.
+//! Deploy-safety scans for destructive publish flags and schema field-name collisions.
+//! Each scan includes a sanity floor so matching nothing cannot silently pass.
 
 use std::collections::BTreeMap;
 use std::io::Write;

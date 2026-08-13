@@ -1185,10 +1185,7 @@ fn a_letter_crosses_a_database_boundary_to_a_recipient_homed_on_another_shard() 
 /// **AC: postage is debited at send** — out of the purse on the SENDER's own shard, because
 /// realm-core holds none.
 ///
-/// Re-cut from #145's version, which asserted a bare `mail_charge_postage` call. That reducer is
-/// gone: postage now rides the escrow fence alongside the attached coin, so the sender pays for the
-/// whole letter in ONE debit instead of two calls that could half-land. What the test still pins is
-/// the thing that mattered — WHICH database the purse is on.
+/// Postage and attached coin leave the sender's shard in one debit.
 #[test]
 fn postage_is_debited_from_the_senders_own_shard_at_send() {
     let (_realm, world, _instances, calls) = sharded_send();
@@ -1404,11 +1401,7 @@ fn both_planes_produce_the_same_row_for_the_same_letter() {
 
 /// **AC: the debit and the row insert are ONE transaction wherever they can be.**
 ///
-/// Re-cut from #145's version, which pinned "the write call carries the postage on one database and
-/// 0 when sharded". That sequence is gone with `mail_charge_postage`: the sharded plane now fences
-/// the whole cost, so what the two planes share is the AMOUNT the sender pays, not the argument
-/// list. The property worth pinning is unchanged and now stated directly — the purse goes down by
-/// postage plus attached coin exactly once, whichever plane ran.
+/// Both planes debit postage plus attached coin exactly once.
 #[test]
 fn the_whole_cost_leaves_the_purse_once_on_either_plane() {
     let (_realm, world, _instances, calls) = sharded_send();

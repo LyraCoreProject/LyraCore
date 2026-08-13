@@ -339,7 +339,7 @@ pub use debug::*;
 pub use encounter::*;
 pub use exploration::CharacterExplored; // re-exported for the gateway schema-parity test (282)
 pub use rest::RestStateEvent; // re-exported for the gateway schema-parity test (#468 4c)
-pub use spell::stacking::SpellGroupRule; // gateway schema-parity regression guard (#170)
+pub use spell::stacking::SpellGroupRule; // Keeps this generated table in schema-parity coverage.
 pub use faction::*;
 pub use gameobject::*;
 pub use gw::*;

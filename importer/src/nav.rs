@@ -386,15 +386,10 @@ fn resolve<'a>(names: &'a [String], indices: &[u32], name_id: u32) -> Result<&'a
 /// the cells its line crosses. Conservative direction: over-blocking by <1 cell.
 const RASTER_MARGIN: f32 = 0.35;
 
-/// #102 (a): agent body radius (yd) the WALK grid is inset by at build time. `find_leg` plans a
-/// CENTER line and `nav_step` walks it, so a walkable cell must keep a body's half-width clear
-/// of geometry or the body clips wall corners the center-line misses. ~One walk sub-cell
-/// (0.52 yd) ≈ the vanilla humanoid bounding radius (~0.39 yd) rounded up to the grid quantum —
-/// conservative direction, same as `RASTER_MARGIN`. Walk-grid ONLY: the obs/LoS grid stays at
-/// the true footprint (sight is a line, not a body).
+/// Agent-body inset for walk cells; the obstruction/LoS grid retains the true footprint.
 const AGENT_RADIUS: f32 = 0.5;
 
-/// The walk-grid rasterization margin: sliver-catching plus the #102 body inset. The candidate
+/// The walk-grid rasterization margin: sliver-catching plus the body inset. The candidate
 /// sub-cell window inflates by the same amount so every center inside the margin gets tested.
 const WALK_MARGIN: f32 = RASTER_MARGIN + AGENT_RADIUS;
 
@@ -571,7 +566,7 @@ fn rasterize_cell(cell: &crate::terrain::CellRow, tris: &[&WorldTri]) -> Option<
     for t in tris.iter() {
         // Walkability (all geometry): block a nav cell only when the triangle actually passes
         // through the standing band above THAT cell's ground. Footprint + window inflated by
-        // `WALK_MARGIN` (#102 (a)): cells within a body radius of geometry rasterize blocked, so
+        // Cells within a body radius of geometry rasterize blocked, so
         // the center line `find_leg`/`nav_step` walk keeps the body clear of wall corners.
         if let (Some((nx0, nx1)), Some((ny0, ny1))) = (
             clamp_axis(t.lo[0] - WALK_MARGIN, t.hi[0] + WALK_MARGIN, cx, WALK_DIM),
@@ -887,7 +882,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     let mut by_cell: HashMap<u64, Vec<usize>> = HashMap::new();
     for (i, t) in world_tris.iter().enumerate() {
         // High world coord → LOW cell index; iterate the covered index rectangle, inflated by
-        // `WALK_MARGIN` (#102 (a)) so a tri hugging a cell border also reaches the neighbor
+        // Include `WALK_MARGIN` so a triangle hugging a cell border reaches the neighbor.
         // cell its inset walk footprint spills into.
         let (Some(cx0), Some(cx1), Some(cy0), Some(cy1)) = (
             cell_index(t.hi[0] + WALK_MARGIN),
@@ -1051,7 +1046,7 @@ mod tests {
 
     #[test]
     fn walk_grid_insets_by_the_agent_radius_but_obs_does_not() {
-        // #102 (a): a thin vertical WMO wall down the x = walk-nx-32 line. The walk grid must
+        // A thin vertical WMO wall down the x = walk-nx-32 line must
         // block one extra sub-cell on EACH side (the body inset — the corner-clip fix), while
         // the obs/LoS grid keeps the true footprint (sight is a line, not a body).
         let cell = flat_cell();
@@ -1063,7 +1058,7 @@ mod tests {
             true,
         );
         let row = rasterize_cell(&cell, &[&wall]).expect("a wall dirties the cell");
-        // On the wall line: blocked (pre-#102 behavior).
+        // On the wall line: blocked.
         assert!(!walk_get(&row.walk, 32, 32));
         // One sub-cell out (0.52 yd — inside `WALK_MARGIN`): blocked ONLY by the agent-radius
         // inset; the bare 0.35 yd `RASTER_MARGIN` left it walkable and the body clipped corners.

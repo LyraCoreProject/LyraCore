@@ -211,14 +211,8 @@ pub fn has_los(ctx: &ReducerContext, map_id: u32, a: (f32, f32, f32), b: (f32, f
 /// not solve the zone. 244 owns the measured tuning.
 const LEG_MAX_EXPANSIONS: u32 = 4096;
 
-/// Nav-aware replacement for the `chase_step(cur → dest)` call sites: step toward the first
-/// string-pulled waypoint of a walkable path instead of straight through geometry. Falls back
-/// to the plain straight step when nav is off, the direct line is already clear (the fast path
-/// returns `[dest]`), or no path exists (goal inside geometry / off-grid / walled-in) — but
-/// EVERY result then passes through `step_gate`, the one commit-point gate (#525 + #102), so
-/// the no-path fallback grinds to a stop at the first obstruction instead of beelining through
-/// a wall (#102 (c)). `z` is the mover's current height (near-ground horizontal segment; walls
-/// are vertical planes so the exact height barely matters).
+/// Steps toward a walkable path's first waypoint, then gates every result against geometry.
+/// A missing path may aim straight at the goal, but the commit gate stops it at obstructions.
 ///
 /// PERF NOTE: the gate fires on every committed movement step for chase/return/wander/flee/
 /// pet-follow — the ~500ms movement tick, 8x more often than the ~4s sense tick `#522`'s benchmark
@@ -249,11 +243,7 @@ pub fn nav_step(
             Some(_) => {
                 crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
             }
-            // #102 (c): no path (goal inside geometry, off-grid, or walled-in start) — still AIM
-            // the straight step a wall-less mob would take, because `step_gate` below truncates it
-            // at the first obstruction: an unreachable goal stops at the wall instead of crossing
-            // it. Holding outright here would freeze a chaser whenever its aim point (a lead past
-            // the target, a wander roll) lands inside a wall's conservative margin.
+            // Keep aiming at an unreachable goal; the commit gate truncates the move at geometry.
             None => {
                 crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
             }
@@ -267,20 +257,8 @@ pub fn nav_step(
 /// the same distance from a wall.
 const GATE_CLEARANCE_YD: f32 = 1.0;
 
-/// #525 + #102 (b): THE one commit-point gate — every `nav_step` result passes through here, so
-/// a committed move never crosses geometry a data layer knows about. Tiered per-FLAG like
-/// `has_los` (see that function's NOTE on the degrade contract):
-/// - vmap consuming → the exact collision ray (`vmap::collision_ray`, WMO + M2 doodads), #525's
-///   original gate;
-/// - grid only (`nav_enabled`) → the obs-grid raymarch (`lyracore_shared::nav::step_hit`; the
-///   mover's OWN obs column is exempt so a wall-hugger standing in the blob's conservative
-///   margin isn't held in place);
-/// - both off → no gate (the pre-243 straight-line world).
-/// Either tier truncates the step to `GATE_CLEARANCE_YD` short of the first hit — mirroring
-/// `blink_forward`'s clamp (`spell::cast::targeting`) — and holds the mover at `cur` when the
-/// hit is inside the margin (a stuck-in-place creature, never a wall-clip). A missing chunk in
-/// either layer reads as clear (the standard off-slice contract), so nothing changes on an
-/// unimported map.
+/// The single commit-point gate for every `nav_step` result.
+/// Exact vmap collision takes precedence; the obstruction grid is the fallback when nav is enabled.
 fn step_gate(
     ctx: &ReducerContext,
     map_id: u32,
