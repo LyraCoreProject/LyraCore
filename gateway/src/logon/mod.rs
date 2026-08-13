@@ -513,7 +513,7 @@ impl<D: crate::realm_core::RealmDb> LogonStore for CoordinatorStore<D> {
             // The row says where the world listener is *for this deployment* only if nobody
             // told us otherwise. `LYRACORE_REALM_ADDRESS` is how `lyracore dev up --lan` makes the
             // realm reachable from another machine — see `config::advertised_realm_address`.
-            address: crate::config::advertised_realm_address().unwrap_or(realm.address),
+            address: crate::config::advertised_realm_address_or(realm.address),
             realm_type: realm.realm_type,
             population: realm.population,
             number_of_characters: n,
@@ -1790,5 +1790,29 @@ mod tests {
                 )
             });
         }
+    }
+}
+
+/// The realm list needs a live `Coordinator`, so its use of the shared resolution is pinned by a
+/// scan rather than a unit test — the same reason `main.rs`'s startup wiring is.
+#[cfg(test)]
+mod realm_list_resolution_tripwire {
+    use crate::test_scan::code_of;
+
+    /// Both the realm list and the startup check must read one resolution. Inlining the override
+    /// here again would let the warning describe an address no client was ever given.
+    #[test]
+    fn the_realm_list_advertises_through_the_shared_resolution() {
+        let src = include_str!("mod.rs");
+        let body = code_of(
+            src,
+            "fn realms(&self, account_id: u64, username: &str) -> Result<Vec<RealmInfo>> {",
+        );
+        assert!(
+            body.contains("address: crate::config::advertised_realm_address_or(realm.address),"),
+            "the realm list no longer resolves the advertised address through \
+             `advertised_realm_address_or`, so the row and the startup warning can disagree. \
+             Body was:\n{body}"
+        );
     }
 }

@@ -1,8 +1,11 @@
 //! Static-data tables: the realm list, starting positions, per-race display info, the legal
 //! race/class combos, and the client `AreaTable.dbc`/`AreaTrigger.dbc` zone/trigger data (work-item
-//! 209). Pure data definitions — no reducer logic. Categories follow `docs/schema.md`.
+//! 209). Categories follow `docs/schema.md`. Data definitions, plus the one operator-gated writer
+//! for the realm address — it lives beside the row it writes rather than with the GM reducers.
 
-use spacetimedb::table;
+use spacetimedb::{log, reducer, table, ReducerContext, Table};
+
+use crate::helpers::require_operator;
 
 // ===========================================================================================
 //  Static-data tables [static]
@@ -175,4 +178,165 @@ pub struct GameAreaTrigger {
     pub box_width: f32,
     pub box_height: f32,
     pub box_yaw: f32,
+}
+
+// ===========================================================================================
+//  Realm address [static] — the one writer for the row above
+// ===========================================================================================
+
+/// The pure half of [`set_realm_address`]: `host:port`, trimmed, port in `1..=65535`. Blank is
+/// refused rather than written — advertising nothing fails at realm select for every player at once.
+pub fn validate_realm_address(raw: &str) -> Result<String, String> {
+    let address = raw.trim();
+    if address.is_empty() {
+        return Err("realm address must not be blank".to_string());
+    }
+    let (host, port) = address
+        .rsplit_once(':')
+        .ok_or_else(|| format!("realm address must be host:port, got `{address}`"))?;
+    if host.is_empty() {
+        return Err(format!("realm address has no host: `{address}`"));
+    }
+    match port.parse::<u16>() {
+        Ok(port) if port > 0 => Ok(address.to_string()),
+        _ => Err(format!(
+            "realm address port must be 1-65535, got `{port}` in `{address}`"
+        )),
+    }
+}
+
+/// Set the address the realm list advertises (operator-only, like [`crate::gm::set_gm_level`]).
+/// Operator-gated because this decides where every client opens its world connection — a
+/// player-callable version would let any client redirect the realm.
+#[reducer]
+pub fn set_realm_address(ctx: &ReducerContext, address: String) -> Result<(), String> {
+    require_operator(ctx)?;
+    let address = validate_realm_address(&address)?;
+    let realms = ctx.db.game_realm();
+    let mut realm = realms
+        .iter()
+        .next()
+        .ok_or_else(|| "no game_realm row on this database".to_string())?;
+    let previous = std::mem::replace(&mut realm.address, address.clone());
+    realms.id().update(realm);
+    log::info!("set_realm_address: {previous} -> {address}");
+    Ok(())
+}
+
+#[cfg(test)]
+mod realm_address_tests {
+    use super::*;
+
+    #[test]
+    fn a_blank_address_is_refused_rather_than_advertising_nothing() {
+        for blank in ["", "   ", "\t\n"] {
+            assert!(
+                validate_realm_address(blank).is_err(),
+                "{blank:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn an_address_without_a_port_is_refused() {
+        assert!(validate_realm_address("192.168.1.50").is_err());
+        assert!(validate_realm_address("realm.example.com").is_err());
+    }
+
+    #[test]
+    fn a_port_that_is_not_a_number_in_range_is_refused() {
+        for bad in [
+            "192.168.1.50:notaport",
+            "192.168.1.50:0",
+            "192.168.1.50:65536",
+            "192.168.1.50:-1",
+            "192.168.1.50:",
+        ] {
+            assert!(
+                validate_realm_address(bad).is_err(),
+                "{bad} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn an_address_without_a_host_is_refused() {
+        assert!(validate_realm_address(":8085").is_err());
+    }
+
+    #[test]
+    fn a_valid_address_is_accepted_and_trimmed() {
+        assert_eq!(
+            validate_realm_address("  159.69.88.70:8085\n"),
+            Ok("159.69.88.70:8085".to_string())
+        );
+        assert_eq!(
+            validate_realm_address("realm.example.com:8085"),
+            Ok("realm.example.com:8085".to_string())
+        );
+        assert_eq!(
+            validate_realm_address("[::1]:8085"),
+            Ok("[::1]:8085".to_string())
+        );
+    }
+}
+
+#[cfg(test)]
+mod set_realm_address_is_operator_gated_tripwire {
+    use crate::test_scan::code_of;
+
+    /// No `ReducerContext` harness exists in this crate, so the gate's PRESENCE is pinned by a scan.
+    /// Without it any client could redirect every player on the realm to a host it chose.
+    #[test]
+    fn set_realm_address_requires_the_operator_identity_first() {
+        let src = include_str!("config.rs");
+        let body = code_of(
+            src,
+            "pub fn set_realm_address(ctx: &ReducerContext, address: String) -> Result<(), String> {",
+        );
+        assert!(
+            body.contains("require_operator(ctx)?;"),
+            "`set_realm_address` is no longer operator-gated — any caller could point the realm \
+             list at a host of their choosing. Body was:\n{body}"
+        );
+    }
+
+    /// A refused address must leave the row alone. Validation is what refuses, so it has to run
+    /// before the write — a validate-after-update would blank the realm list and then report an
+    /// error, which is the one outcome worse than refusing.
+    #[test]
+    fn a_refused_address_never_reaches_the_row() {
+        let src = include_str!("config.rs");
+        let body = code_of(
+            src,
+            "pub fn set_realm_address(ctx: &ReducerContext, address: String) -> Result<(), String> {",
+        );
+        let validate = body
+            .find("validate_realm_address(&address)?;")
+            .expect("set_realm_address still validates");
+        let write = body
+            .find("realms.id().update(realm);")
+            .expect("set_realm_address still writes the row");
+        assert!(
+            validate < write,
+            "`set_realm_address` now writes the row before validating it, so a refused address \
+             lands anyway. Body was:\n{body}"
+        );
+    }
+
+    /// The write is the only record that the realm moved; without it an unexpected change is
+    /// unattributable.
+    #[test]
+    fn an_accepted_address_is_logged_with_both_values() {
+        let src = include_str!("config.rs");
+        let body = code_of(
+            src,
+            "pub fn set_realm_address(ctx: &ReducerContext, address: String) -> Result<(), String> {",
+        );
+        assert!(
+            body.contains("log::info!(\"set_realm_address: {previous} -> {address}\");"),
+            "`set_realm_address` no longer logs the change, so a realm redirected by an operator \
+             leaves no record of what it was. Body was:\n{body}"
+        );
+    }
 }
