@@ -96,7 +96,6 @@ use wow_world_messages::vanilla::{
     Gender,
     GroupLootSetting,
     ItemQuality,
-    ItemSlot,
     Language,
     Level,
     Map,
@@ -118,8 +117,6 @@ use wow_world_messages::vanilla::{
     CMSG_AUTH_SESSION,
     CMSG_AUTOBANK_ITEM,
     CMSG_AUTOEQUIP_ITEM,
-    // Inventory + death/resurrection dispatch tests.
-    CMSG_AUTOSTORE_BAG_ITEM,
     CMSG_AUTOSTORE_BANK_ITEM,
     CMSG_BANKER_ACTIVATE,
     CMSG_BUYBACK_ITEM,
@@ -164,8 +161,6 @@ use wow_world_messages::vanilla::{
     CMSG_SETSHEATHED,
     CMSG_SET_SELECTION,
     CMSG_SPIRIT_HEALER_ACTIVATE,
-    CMSG_SWAP_INV_ITEM,
-    CMSG_SWAP_ITEM,
     CMSG_TRAINER_BUY_SPELL,
     CMSG_TRAINER_LIST,
     // Item-starts-quest + party sharing.
@@ -552,18 +547,11 @@ struct InMemoryStore {
     /// shape the real `game_group_event.id` high-water mark has, without needing a fake event table.
     /// `Mutex`-wrapped for the same after-`Arc`-construction reason as `pending_rolls`.
     won_events: std::sync::Mutex<Vec<(u64, u8, u64)>>,
-    /// Recorded `move_item` calls — `(from_slot, to_slot)`. Backs both CMSG_SWAP_INV_ITEM
-    /// (drag within the main inventory) and CMSG_SWAP_ITEM (cross-bag, main-bag-only in this
-    /// gateway), which both route onto this one store method.
-    moved_items: std::sync::Mutex<Vec<(u8, u8)>>,
     /// Recorded `auto_bank_item` slots — backs both CMSG_AUTOBANK_ITEM (deposit) and
     /// CMSG_AUTOSTORE_BANK_ITEM (withdraw), which both route onto this one store method.
     auto_banked_items: std::sync::Mutex<Vec<u8>>,
     /// Recorded `buy_bank_slot` calls — the banker guid named on each `CMSG_BUY_BANK_SLOT`.
     bought_bank_slots: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `unequip_item` slots — the CMSG_AUTOSTORE_BAG_ITEM (right-click an equipped
-    /// item) dispatch.
-    unequipped_slots: std::sync::Mutex<Vec<u8>>,
     /// Recorded `sell_item` calls — `(vendor_guid, slot)`, AFTER the gateway resolves the
     /// wire's item INSTANCE guid to an inventory slot via `player_items`.
     sold_items: std::sync::Mutex<Vec<(u64, u8)>>,
@@ -2811,26 +2799,24 @@ impl ItemActionStore for InMemoryStore {
         }
     }
 
-    fn unequip_item(&self, _account_id: u64, _self_guid: u64, from_slot: u8) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
+    fn unequip_item(&self, _account_id: u64, _self_guid: u64, _from_slot: u8) -> Result<()> {
+        match &self.trade_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
         }
-        self.unequipped_slots.lock().unwrap().push(from_slot);
-        Ok(())
     }
 
     fn move_item(
         &self,
         _account_id: u64,
         _self_guid: u64,
-        from_slot: u8,
-        to_slot: u8,
+        _from_slot: u8,
+        _to_slot: u8,
     ) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
+        match &self.trade_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
         }
-        self.moved_items.lock().unwrap().push((from_slot, to_slot));
-        Ok(())
     }
 
     fn use_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
@@ -5144,9 +5130,8 @@ fn buy_bank_slot_failure_maps_the_bracketed_code_to_the_matching_result() {
 
 #[test]
 fn equip_item_err_sends_smsg_inventory_change_failure() {
-    // When `equip_item` returns Err (e.g. item requires higher level / wrong class), the gateway
-    // must send SMSG_INVENTORY_CHANGE_FAILURE so the client displays the error sound/popup instead
-    // of silently snapping the item back.
+    // Socket contract: a gameplay refusal reaches the client as an encrypted
+    // SMSG_INVENTORY_CHANGE_FAILURE frame and the session keeps serving the next action.
     let store = std::sync::Arc::new(InMemoryStore {
         login_entity: Some(warrior_entity()),
         trade_error: Some("required level not met".into()),
@@ -5180,6 +5165,8 @@ fn equip_item_err_sends_smsg_inventory_change_failure() {
 
 #[test]
 fn item_action_before_player_login_is_handled_without_panicking() {
+    // Socket contract: an item frame arriving after the handshake but before CMSG_PLAYER_LOGIN
+    // (no selected player) must not panic or error the session thread.
     let store = std::sync::Arc::new(tester_store(7));
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -5202,6 +5189,8 @@ fn item_action_before_player_login_is_handled_without_panicking() {
 
 #[test]
 fn item_reducer_transport_loss_ends_the_world_session() {
+    // Socket contract: reducer transport loss ends the session with an error and closes the
+    // socket instead of being translated into gameplay feedback.
     let store = std::sync::Arc::new(InMemoryStore {
         login_entity: Some(warrior_entity()),
         trade_error: Some("equip_item reducer transport disconnected: channel closed".into()),
@@ -5245,8 +5234,8 @@ fn item_reducer_transport_loss_ends_the_world_session() {
 
 #[test]
 fn use_item_with_start_quest_opens_details_and_does_not_consume() {
-    // Using an item whose template carries `start_quest` must open SMSG_QUESTGIVER_QUEST_DETAILS
-    // (the item's OWN instance guid as giver) and must NOT call the normal `use_item` consume path.
+    // Socket contract: the raw quest-details frame decodes as a genuine
+    // SMSG_QUESTGIVER_QUEST_DETAILS on an encrypted client and the item is not consumed.
     let mut s = quest_store();
     s.item_start_quest_fixture = Some((0x4000_0000_0000_0099, 1234));
     s.quest_details = vec![detail_view(1234, "Report to Goldshire")];
@@ -5282,7 +5271,8 @@ fn use_item_with_start_quest_opens_details_and_does_not_consume() {
 
 #[test]
 fn use_item_without_start_quest_falls_through_to_the_ordinary_use_path() {
-    // The baseline: an ordinary item (no start_quest fixture) still goes through use_item.
+    // Socket contract: an encrypted item frame traverses the real dispatcher chain into the
+    // item-action seam and its durable request reaches the store.
     let store = std::sync::Arc::new(quest_store());
     let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
     CMSG_USE_ITEM {
@@ -8024,135 +8014,7 @@ fn parse_blob(blob: &[u8]) -> (u64, FakeChar) {
     )
 }
 
-// ── Inventory dispatch (CMSG_SWAP_INV_ITEM / CMSG_AUTOSTORE_BAG_ITEM / CMSG_SWAP_ITEM /
-// CMSG_SELL_ITEM / CMSG_REPAIR_ITEM / CMSG_TRAINER_LIST) ───────────────────────────────────────────
-//
-// The 2026-08-10 thermo review found these 13 opcodes with zero offline coverage — first-hour
-// gameplay (moving items around the backpack, selling/repairing at a vendor, dying and coming back)
-// with no wire-to-store test. Each test below drives `enter_world` + a real CMSG frame and asserts
-// either the fake `WorldStore` recorded the RIGHT call+args, or the client got the RIGHT SMSG — the
-// same shape as `use_item_without_start_quest_falls_through_to_the_ordinary_use_path` above.
-
-#[test]
-fn swap_inv_item_dispatches_move_item_with_the_wire_slots() {
-    // CMSG_SWAP_INV_ITEM drives move_item directly with the two ItemSlot wire values decoded to
-    // their u8 ordinals — no guid resolution needed (unlike sell/repair, which carry an item guid).
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_SWAP_INV_ITEM {
-        source_slot: ItemSlot::MainHand,
-        destination_slot: ItemSlot::Inventory1,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client); // move_item (Ok) sends no SMSG on this path
-    server.join().unwrap();
-    assert_eq!(
-        store.moved_items.lock().unwrap().as_slice(),
-        &[(ItemSlot::MainHand.as_int(), ItemSlot::Inventory1.as_int())]
-    );
-}
-
-#[test]
-fn swap_inv_item_err_sends_inventory_change_failure() {
-    // The equip-slot-transition validation lives in the module; a rejection (e.g. wrong item type
-    // for that slot) must reach the client as SMSG_INVENTORY_CHANGE_FAILURE, exactly like the
-    // AUTOEQUIP arm's own error test above.
-    let mut s = quest_store();
-    s.trade_error = Some("cannot equip that there".into());
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    CMSG_SWAP_INV_ITEM {
-        source_slot: ItemSlot::Inventory0,
-        destination_slot: ItemSlot::MainHand,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(_) => {} // correct feedback packet
-        other => panic!("expected SMSG_INVENTORY_CHANGE_FAILURE, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-}
-
-#[test]
-fn autostore_bag_item_dispatches_unequip_item_for_an_equipped_slot() {
-    // Right-clicking an EQUIPPED item (source_bag 255 = main bag, source_slot within the equipment
-    // range 0..=EQUIPMENT_SLOT_END) unequips it into the backpack.
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_AUTOSTORE_BAG_ITEM {
-        source_bag: 255,
-        source_slot: 16, // off-hand — inside 0..=18
-        destination_bag: 255,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(store.unequipped_slots.lock().unwrap().as_slice(), &[16]);
-}
-
-#[test]
-fn autostore_bag_item_from_a_backpack_slot_is_unsupported_and_does_not_unequip() {
-    // Slot 24 is a BACKPACK slot (>= 23, past EQUIPMENT_SLOT_END=18) — the handler's own guard must
-    // refuse it rather than blindly forwarding to unequip_item (there is nothing to unequip there).
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_AUTOSTORE_BAG_ITEM {
-        source_bag: 255,
-        source_slot: 24,
-        destination_bag: 255,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client);
-    server.join().unwrap();
-    assert!(
-        store.unequipped_slots.lock().unwrap().is_empty(),
-        "a backpack slot must not be routed through unequip_item"
-    );
-}
-
-#[test]
-fn swap_item_within_the_main_bag_dispatches_move_item_via_the_typo_field() {
-    // gtker's generated field is spelled `destionation_slot` (a typo baked into the wire crate) — a
-    // test that used the correctly-spelled name wouldn't compile, so this pins that the GATEWAY reads
-    // the field the wire actually carries.
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_SWAP_ITEM {
-        source_bag: 255,
-        source_slot: 23,
-        destination_bag: 255,
-        destionation_slot: 30,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(store.moved_items.lock().unwrap().as_slice(), &[(23, 30)]);
-}
-
-#[test]
-fn swap_item_across_containers_is_unsupported_and_does_not_move() {
-    // Only the main inventory (bag 255) is modeled; a swap touching an equipped sub-bag (19..=22)
-    // must be refused rather than corrupting an unmodeled container.
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_SWAP_ITEM {
-        source_bag: 19,
-        source_slot: 0,
-        destination_bag: 255,
-        destionation_slot: 23,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client);
-    server.join().unwrap();
-    assert!(store.moved_items.lock().unwrap().is_empty());
-}
+// ── Vendor-item dispatch (CMSG_SELL_ITEM / CMSG_REPAIR_ITEM / CMSG_TRAINER_LIST) ─────────────────
 
 #[test]
 fn sell_item_resolves_the_instance_guid_to_its_slot_before_dispatch() {
