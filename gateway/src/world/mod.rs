@@ -1143,9 +1143,8 @@ fn is_desync_error(e: &anyhow::Error) -> bool {
     s.contains("not in world") || s.contains("no live entity")
 }
 
-/// Route one decrypted client message. Threads it through the per-family `handle_*` free fns (the
-/// carve of the former dispatch god-match): each consumes its own opcodes (`Ok(None)`) or passes the
-/// message on (`Ok(Some(msg))`), so the disjoint-family chain ends in the movement-relay catch-all.
+/// Route one decrypted client message through the per-family handlers. Each stage either consumes
+/// its opcode or passes it onward, so the disjoint-family chain ends in the movement-relay catch-all.
 fn dispatch<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
