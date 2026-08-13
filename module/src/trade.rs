@@ -735,7 +735,7 @@ fn gather_commit_side(
             gold_offered,
             gold_balance: entity.money,
             items_offered: items.len() as u32,
-            free_bag_slots: crate::items::count_free_backpack_slots(ctx, entity.guid),
+            free_bag_slots: crate::items::count_free_inventory_slots(ctx, entity.guid),
             offers_soulbound,
         },
         items,

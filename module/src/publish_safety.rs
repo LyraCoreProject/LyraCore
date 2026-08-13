@@ -391,6 +391,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sanctioned_cli_runs_the_column_collision_guard_before_publish() {
+        let cli = std::fs::read_to_string(repo_root().join("lyracore"))
+            .expect("the sanctioned CLI wrapper must be readable");
+        assert!(cli.contains("preflight | publish)"));
+        assert!(cli.contains("module_tables_have_unique_published_column_names"));
+        assert!(
+            cli.find("module_tables_have_unique_published_column_names")
+                .expect("collision guard invocation")
+                < cli.find("exec \"$binary\"").expect("CLI handoff")
+        );
+    }
+
     fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(dir)
             .unwrap_or_else(|e| panic!("readable {}: {e}", dir.display()))

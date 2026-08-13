@@ -412,15 +412,36 @@ fn occupied_slots(ctx: &ReducerContext, player_guid: u64) -> std::collections::H
         .collect()
 }
 
-/// How many loose backpack slots (23..=38) are open — the Trade Commit's net-bag-space input
-/// (#122). Backpack ONLY, matching `deliver_traded_item`'s allocation: equipped-bag room is
-/// invisible to trade until the gateway models sub-bags at all (`handlers/item.rs`'s gap), so a
-/// full-backpack/empty-bags player refuses conservatively rather than mis-delivering.
-pub(crate) fn count_free_backpack_slots(ctx: &ReducerContext, player_guid: u64) -> u32 {
-    let occupied = occupied_slots(ctx, player_guid);
-    (starter_item::BACKPACK_SLOT_0..BACKPACK_SLOT_END)
+/// Number of free carry slots across the backpack and all equipped bags.
+pub(crate) fn count_free_inventory_slots(ctx: &ReducerContext, player_guid: u64) -> u32 {
+    let templates = ctx.db.game_item_template();
+    let owned: Vec<ItemInstance> = ctx
+        .db
+        .game_item_instance()
+        .by_owner_guid()
+        .filter(&player_guid)
+        .collect();
+    let occupied: std::collections::HashSet<u8> = owned.iter().map(|i| i.slot).collect();
+    let backpack = (starter_item::BACKPACK_SLOT_0..BACKPACK_SLOT_END)
         .filter(|slot| !occupied.contains(slot))
-        .count() as u32
+        .count() as u32;
+    let bags = (0..BAG_SLOT_COUNT)
+        .filter_map(|bag_idx| {
+            let bag = owned.iter().find(|i| i.slot == BAG_SLOT_START + bag_idx)?;
+            let capacity = templates
+                .entry()
+                .find(bag.entry)?
+                .container_slots
+                .min(MAX_BAG_SIZE);
+            let base = BAG_CONTENT_OFFSET + bag_idx * MAX_BAG_SIZE;
+            Some(
+                (0..capacity)
+                    .filter(|offset| !occupied.contains(&(base + offset)))
+                    .count() as u32,
+            )
+        })
+        .sum::<u32>();
+    backpack + bags
 }
 
 pub(crate) fn first_free_backpack_slot(ctx: &ReducerContext, player_guid: u64) -> Option<u8> {

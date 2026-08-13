@@ -37,6 +37,14 @@ if ! command -v cargo >/dev/null 2>&1; then
     fail "cargo is required — install Rust from https://rustup.rs/"
 fi
 
+# Publishing must never reach the CLI with a schema whose normalized field names collide.
+case ${1-} in
+    preflight | publish)
+        cargo test --quiet -p lyracore-module module_tables_have_unique_published_column_names \
+            || fail "table field names collide after snake_case normalization"
+        ;;
+esac
+
 install_root=$root/.lyracore/cli/$revision
 binary=$install_root/bin/lyracore
 
