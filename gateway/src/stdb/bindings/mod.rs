@@ -297,6 +297,9 @@ pub mod game_lock_table;
 pub mod game_lock_type;
 pub mod game_loot_roll_table;
 pub mod game_loot_roll_vote_table;
+pub mod game_mail_delivery_table;
+pub mod game_mail_escrow_reaper_schedule_table;
+pub mod game_mail_escrow_table;
 pub mod game_mail_table;
 pub mod game_map_region_table;
 pub mod game_melee_attack_table;
@@ -503,6 +506,9 @@ pub mod level_stats_type;
 pub mod levelup_event_type;
 pub mod loot_roll_type;
 pub mod loot_roll_vote_type;
+pub mod mail_delivery_type;
+pub mod mail_escrow_reaper_schedule_type;
+pub mod mail_escrow_type;
 pub mod mail_type;
 pub mod map_region_type;
 pub mod melee_attack_type;
@@ -535,10 +541,26 @@ pub mod ranged_impact_reducer;
 pub mod ranged_impact_schedule_type;
 pub mod realm_group_op_reducer;
 pub mod realm_loot_op_reducer;
+pub mod realm_mail_commit_reducer;
+pub mod realm_mail_confirm_delivery_reducer;
+pub mod realm_mail_delete_reducer;
+pub mod realm_mail_fence_reducer;
+pub mod realm_mail_item_payout_reducer;
+pub mod realm_mail_item_room_reducer;
+pub mod realm_mail_mark_read_reducer;
+pub mod realm_mail_payout_reducer;
+pub mod realm_mail_return_reducer;
+pub mod realm_mail_send_reducer;
+pub mod realm_mail_settle_reducer;
+pub mod realm_mail_take_item_fence_reducer;
+pub mod realm_mail_take_item_reducer;
+pub mod realm_mail_take_money_fence_reducer;
+pub mod realm_mail_take_money_reducer;
 pub mod realm_type;
 pub mod realm_whisper_reducer;
 pub mod reap_gateway_leases_reducer;
 pub mod reap_instances_reducer;
+pub mod reap_mail_escrows_reducer;
 pub mod reap_movement_events_reducer;
 pub mod reap_transfers_reducer;
 pub mod record_region_load_reducer;
@@ -896,6 +918,9 @@ pub use game_lock_table::*;
 pub use game_lock_type::GameLock;
 pub use game_loot_roll_table::*;
 pub use game_loot_roll_vote_table::*;
+pub use game_mail_delivery_table::*;
+pub use game_mail_escrow_reaper_schedule_table::*;
+pub use game_mail_escrow_table::*;
 pub use game_mail_table::*;
 pub use game_map_region_table::*;
 pub use game_melee_attack_table::*;
@@ -1102,6 +1127,9 @@ pub use level_stats_type::LevelStats;
 pub use levelup_event_type::LevelupEvent;
 pub use loot_roll_type::LootRoll;
 pub use loot_roll_vote_type::LootRollVote;
+pub use mail_delivery_type::MailDelivery;
+pub use mail_escrow_reaper_schedule_type::MailEscrowReaperSchedule;
+pub use mail_escrow_type::MailEscrow;
 pub use mail_type::Mail;
 pub use map_region_type::MapRegion;
 pub use melee_attack_type::MeleeAttack;
@@ -1134,10 +1162,26 @@ pub use ranged_impact_reducer::ranged_impact;
 pub use ranged_impact_schedule_type::RangedImpactSchedule;
 pub use realm_group_op_reducer::realm_group_op;
 pub use realm_loot_op_reducer::realm_loot_op;
+pub use realm_mail_commit_reducer::realm_mail_commit;
+pub use realm_mail_confirm_delivery_reducer::realm_mail_confirm_delivery;
+pub use realm_mail_delete_reducer::realm_mail_delete;
+pub use realm_mail_fence_reducer::realm_mail_fence;
+pub use realm_mail_item_payout_reducer::realm_mail_item_payout;
+pub use realm_mail_item_room_reducer::realm_mail_item_room;
+pub use realm_mail_mark_read_reducer::realm_mail_mark_read;
+pub use realm_mail_payout_reducer::realm_mail_payout;
+pub use realm_mail_return_reducer::realm_mail_return;
+pub use realm_mail_send_reducer::realm_mail_send;
+pub use realm_mail_settle_reducer::realm_mail_settle;
+pub use realm_mail_take_item_fence_reducer::realm_mail_take_item_fence;
+pub use realm_mail_take_item_reducer::realm_mail_take_item;
+pub use realm_mail_take_money_fence_reducer::realm_mail_take_money_fence;
+pub use realm_mail_take_money_reducer::realm_mail_take_money;
 pub use realm_type::Realm;
 pub use realm_whisper_reducer::realm_whisper;
 pub use reap_gateway_leases_reducer::reap_gateway_leases;
 pub use reap_instances_reducer::reap_instances;
+pub use reap_mail_escrows_reducer::reap_mail_escrows;
 pub use reap_movement_events_reducer::reap_movement_events;
 pub use reap_transfers_reducer::reap_transfers;
 pub use record_region_load_reducer::record_region_load;
@@ -2245,6 +2289,99 @@ pub enum Reducer {
         deadline_micros: i64,
         recipients: Vec<u64>,
     },
+    RealmMailCommit {
+        escrow_id: u64,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        item_entry: u32,
+        item_stack_count: u32,
+        item_durability: u32,
+        item_enchant_id: u32,
+        item_soulbound: bool,
+        cod: u32,
+        cod_mail_id: u64,
+    },
+    RealmMailConfirmDelivery {
+        escrow_id: u64,
+    },
+    RealmMailDelete {
+        recipient_guid: u64,
+        mail_id: u64,
+    },
+    RealmMailFence {
+        escrow_id: u64,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        postage: u32,
+        item_guid: u64,
+        cod: u32,
+        mail_id: u64,
+    },
+    RealmMailItemPayout {
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        item_entry: u32,
+        item_stack_count: u32,
+        item_durability: u32,
+        item_enchant_id: u32,
+        item_soulbound: bool,
+    },
+    RealmMailItemRoom {
+        payee_guid: u64,
+    },
+    RealmMailMarkRead {
+        recipient_guid: u64,
+        mail_id: u64,
+    },
+    RealmMailPayout {
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        amount: u32,
+    },
+    RealmMailReturn {
+        recipient_guid: u64,
+        mail_id: u64,
+    },
+    RealmMailSend {
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        cod: u32,
+        item_guid: u64,
+    },
+    RealmMailSettle {
+        escrow_id: u64,
+    },
+    RealmMailTakeItem {
+        recipient_guid: u64,
+        mail_id: u64,
+    },
+    RealmMailTakeItemFence {
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        expect_entry: u32,
+    },
+    RealmMailTakeMoney {
+        recipient_guid: u64,
+        mail_id: u64,
+    },
+    RealmMailTakeMoneyFence {
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        expect_money: u32,
+    },
     RealmWhisper {
         sender_guid: u64,
         target_guid: u64,
@@ -2256,6 +2393,9 @@ pub enum Reducer {
     },
     ReapInstances {
         schedule: InstanceReaperSchedule,
+    },
+    ReapMailEscrows {
+        schedule: MailEscrowReaperSchedule,
     },
     ReapMovementEvents {
         schedule: EventReaperSchedule,
@@ -2593,9 +2733,25 @@ impl __sdk::Reducer for Reducer {
             Reducer::RangedImpact { .. } => "ranged_impact",
             Reducer::RealmGroupOp { .. } => "realm_group_op",
             Reducer::RealmLootOp { .. } => "realm_loot_op",
+            Reducer::RealmMailCommit { .. } => "realm_mail_commit",
+            Reducer::RealmMailConfirmDelivery { .. } => "realm_mail_confirm_delivery",
+            Reducer::RealmMailDelete { .. } => "realm_mail_delete",
+            Reducer::RealmMailFence { .. } => "realm_mail_fence",
+            Reducer::RealmMailItemPayout { .. } => "realm_mail_item_payout",
+            Reducer::RealmMailItemRoom { .. } => "realm_mail_item_room",
+            Reducer::RealmMailMarkRead { .. } => "realm_mail_mark_read",
+            Reducer::RealmMailPayout { .. } => "realm_mail_payout",
+            Reducer::RealmMailReturn { .. } => "realm_mail_return",
+            Reducer::RealmMailSend { .. } => "realm_mail_send",
+            Reducer::RealmMailSettle { .. } => "realm_mail_settle",
+            Reducer::RealmMailTakeItem { .. } => "realm_mail_take_item",
+            Reducer::RealmMailTakeItemFence { .. } => "realm_mail_take_item_fence",
+            Reducer::RealmMailTakeMoney { .. } => "realm_mail_take_money",
+            Reducer::RealmMailTakeMoneyFence { .. } => "realm_mail_take_money_fence",
             Reducer::RealmWhisper { .. } => "realm_whisper",
             Reducer::ReapGatewayLeases { .. } => "reap_gateway_leases",
             Reducer::ReapInstances { .. } => "reap_instances",
+            Reducer::ReapMailEscrows { .. } => "reap_mail_escrows",
             Reducer::ReapMovementEvents { .. } => "reap_movement_events",
             Reducer::ReapTransfers { .. } => "reap_transfers",
             Reducer::RecordRegionLoad { .. } => "record_region_load",
@@ -4485,6 +4641,181 @@ impl __sdk::Reducer for Reducer {
                 deadline_micros: deadline_micros.clone(),
                 recipients: recipients.clone(),
             }),
+            Reducer::RealmMailCommit {
+                escrow_id,
+                sender_guid,
+                recipient_guid,
+                subject,
+                body,
+                money,
+                item_entry,
+                item_stack_count,
+                item_durability,
+                item_enchant_id,
+                item_soulbound,
+                cod,
+                cod_mail_id,
+            } => __sats::bsatn::to_vec(&realm_mail_commit_reducer::RealmMailCommitArgs {
+                escrow_id: escrow_id.clone(),
+                sender_guid: sender_guid.clone(),
+                recipient_guid: recipient_guid.clone(),
+                subject: subject.clone(),
+                body: body.clone(),
+                money: money.clone(),
+                item_entry: item_entry.clone(),
+                item_stack_count: item_stack_count.clone(),
+                item_durability: item_durability.clone(),
+                item_enchant_id: item_enchant_id.clone(),
+                item_soulbound: item_soulbound.clone(),
+                cod: cod.clone(),
+                cod_mail_id: cod_mail_id.clone(),
+            }),
+            Reducer::RealmMailConfirmDelivery { escrow_id } => __sats::bsatn::to_vec(
+                &realm_mail_confirm_delivery_reducer::RealmMailConfirmDeliveryArgs {
+                    escrow_id: escrow_id.clone(),
+                },
+            ),
+            Reducer::RealmMailDelete {
+                recipient_guid,
+                mail_id,
+            } => __sats::bsatn::to_vec(&realm_mail_delete_reducer::RealmMailDeleteArgs {
+                recipient_guid: recipient_guid.clone(),
+                mail_id: mail_id.clone(),
+            }),
+            Reducer::RealmMailFence {
+                escrow_id,
+                sender_guid,
+                recipient_guid,
+                subject,
+                body,
+                money,
+                postage,
+                item_guid,
+                cod,
+                mail_id,
+            } => __sats::bsatn::to_vec(&realm_mail_fence_reducer::RealmMailFenceArgs {
+                escrow_id: escrow_id.clone(),
+                sender_guid: sender_guid.clone(),
+                recipient_guid: recipient_guid.clone(),
+                subject: subject.clone(),
+                body: body.clone(),
+                money: money.clone(),
+                postage: postage.clone(),
+                item_guid: item_guid.clone(),
+                cod: cod.clone(),
+                mail_id: mail_id.clone(),
+            }),
+            Reducer::RealmMailItemPayout {
+                escrow_id,
+                payee_guid,
+                mail_id,
+                item_entry,
+                item_stack_count,
+                item_durability,
+                item_enchant_id,
+                item_soulbound,
+            } => __sats::bsatn::to_vec(&realm_mail_item_payout_reducer::RealmMailItemPayoutArgs {
+                escrow_id: escrow_id.clone(),
+                payee_guid: payee_guid.clone(),
+                mail_id: mail_id.clone(),
+                item_entry: item_entry.clone(),
+                item_stack_count: item_stack_count.clone(),
+                item_durability: item_durability.clone(),
+                item_enchant_id: item_enchant_id.clone(),
+                item_soulbound: item_soulbound.clone(),
+            }),
+            Reducer::RealmMailItemRoom { payee_guid } => {
+                __sats::bsatn::to_vec(&realm_mail_item_room_reducer::RealmMailItemRoomArgs {
+                    payee_guid: payee_guid.clone(),
+                })
+            }
+            Reducer::RealmMailMarkRead {
+                recipient_guid,
+                mail_id,
+            } => __sats::bsatn::to_vec(&realm_mail_mark_read_reducer::RealmMailMarkReadArgs {
+                recipient_guid: recipient_guid.clone(),
+                mail_id: mail_id.clone(),
+            }),
+            Reducer::RealmMailPayout {
+                escrow_id,
+                payee_guid,
+                mail_id,
+                amount,
+            } => __sats::bsatn::to_vec(&realm_mail_payout_reducer::RealmMailPayoutArgs {
+                escrow_id: escrow_id.clone(),
+                payee_guid: payee_guid.clone(),
+                mail_id: mail_id.clone(),
+                amount: amount.clone(),
+            }),
+            Reducer::RealmMailReturn {
+                recipient_guid,
+                mail_id,
+            } => __sats::bsatn::to_vec(&realm_mail_return_reducer::RealmMailReturnArgs {
+                recipient_guid: recipient_guid.clone(),
+                mail_id: mail_id.clone(),
+            }),
+            Reducer::RealmMailSend {
+                sender_guid,
+                recipient_guid,
+                subject,
+                body,
+                money,
+                cod,
+                item_guid,
+            } => __sats::bsatn::to_vec(&realm_mail_send_reducer::RealmMailSendArgs {
+                sender_guid: sender_guid.clone(),
+                recipient_guid: recipient_guid.clone(),
+                subject: subject.clone(),
+                body: body.clone(),
+                money: money.clone(),
+                cod: cod.clone(),
+                item_guid: item_guid.clone(),
+            }),
+            Reducer::RealmMailSettle { escrow_id } => {
+                __sats::bsatn::to_vec(&realm_mail_settle_reducer::RealmMailSettleArgs {
+                    escrow_id: escrow_id.clone(),
+                })
+            }
+            Reducer::RealmMailTakeItem {
+                recipient_guid,
+                mail_id,
+            } => __sats::bsatn::to_vec(&realm_mail_take_item_reducer::RealmMailTakeItemArgs {
+                recipient_guid: recipient_guid.clone(),
+                mail_id: mail_id.clone(),
+            }),
+            Reducer::RealmMailTakeItemFence {
+                escrow_id,
+                payee_guid,
+                mail_id,
+                expect_entry,
+            } => __sats::bsatn::to_vec(
+                &realm_mail_take_item_fence_reducer::RealmMailTakeItemFenceArgs {
+                    escrow_id: escrow_id.clone(),
+                    payee_guid: payee_guid.clone(),
+                    mail_id: mail_id.clone(),
+                    expect_entry: expect_entry.clone(),
+                },
+            ),
+            Reducer::RealmMailTakeMoney {
+                recipient_guid,
+                mail_id,
+            } => __sats::bsatn::to_vec(&realm_mail_take_money_reducer::RealmMailTakeMoneyArgs {
+                recipient_guid: recipient_guid.clone(),
+                mail_id: mail_id.clone(),
+            }),
+            Reducer::RealmMailTakeMoneyFence {
+                escrow_id,
+                payee_guid,
+                mail_id,
+                expect_money,
+            } => __sats::bsatn::to_vec(
+                &realm_mail_take_money_fence_reducer::RealmMailTakeMoneyFenceArgs {
+                    escrow_id: escrow_id.clone(),
+                    payee_guid: payee_guid.clone(),
+                    mail_id: mail_id.clone(),
+                    expect_money: expect_money.clone(),
+                },
+            ),
             Reducer::RealmWhisper {
                 sender_guid,
                 target_guid,
@@ -4503,6 +4834,11 @@ impl __sdk::Reducer for Reducer {
             }
             Reducer::ReapInstances { schedule } => {
                 __sats::bsatn::to_vec(&reap_instances_reducer::ReapInstancesArgs {
+                    schedule: schedule.clone(),
+                })
+            }
+            Reducer::ReapMailEscrows { schedule } => {
+                __sats::bsatn::to_vec(&reap_mail_escrows_reducer::ReapMailEscrowsArgs {
                     schedule: schedule.clone(),
                 })
             }
@@ -4758,6 +5094,9 @@ pub struct DbUpdate {
     game_loot_roll: __sdk::TableUpdate<LootRoll>,
     game_loot_roll_vote: __sdk::TableUpdate<LootRollVote>,
     game_mail: __sdk::TableUpdate<Mail>,
+    game_mail_delivery: __sdk::TableUpdate<MailDelivery>,
+    game_mail_escrow: __sdk::TableUpdate<MailEscrow>,
+    game_mail_escrow_reaper_schedule: __sdk::TableUpdate<MailEscrowReaperSchedule>,
     game_map_region: __sdk::TableUpdate<MapRegion>,
     game_melee_attack: __sdk::TableUpdate<MeleeAttack>,
     game_melee_schedule: __sdk::TableUpdate<MeleeSchedule>,
@@ -5123,6 +5462,17 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_mail" => db_update
                     .game_mail
                     .append(game_mail_table::parse_table_update(table_update)?),
+                "game_mail_delivery" => db_update
+                    .game_mail_delivery
+                    .append(game_mail_delivery_table::parse_table_update(table_update)?),
+                "game_mail_escrow" => db_update
+                    .game_mail_escrow
+                    .append(game_mail_escrow_table::parse_table_update(table_update)?),
+                "game_mail_escrow_reaper_schedule" => {
+                    db_update.game_mail_escrow_reaper_schedule.append(
+                        game_mail_escrow_reaper_schedule_table::parse_table_update(table_update)?,
+                    )
+                }
                 "game_map_region" => db_update
                     .game_map_region
                     .append(game_map_region_table::parse_table_update(table_update)?),
@@ -5776,6 +6126,18 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_mail = cache
             .apply_diff_to_table::<Mail>("game_mail", &self.game_mail)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_mail_delivery = cache
+            .apply_diff_to_table::<MailDelivery>("game_mail_delivery", &self.game_mail_delivery)
+            .with_updates_by_pk(|row| &row.escrow_id);
+        diff.game_mail_escrow = cache
+            .apply_diff_to_table::<MailEscrow>("game_mail_escrow", &self.game_mail_escrow)
+            .with_updates_by_pk(|row| &row.escrow_id);
+        diff.game_mail_escrow_reaper_schedule = cache
+            .apply_diff_to_table::<MailEscrowReaperSchedule>(
+                "game_mail_escrow_reaper_schedule",
+                &self.game_mail_escrow_reaper_schedule,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
         diff.game_map_region = cache
             .apply_diff_to_table::<MapRegion>("game_map_region", &self.game_map_region)
             .with_updates_by_pk(|row| &row.key);
@@ -6347,6 +6709,15 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_mail" => db_update
                     .game_mail
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_mail_delivery" => db_update
+                    .game_mail_delivery
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_mail_escrow" => db_update
+                    .game_mail_escrow
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_mail_escrow_reaper_schedule" => db_update
+                    .game_mail_escrow_reaper_schedule
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_map_region" => db_update
                     .game_map_region
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -6861,6 +7232,15 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_mail" => db_update
                     .game_mail
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_mail_delivery" => db_update
+                    .game_mail_delivery
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_mail_escrow" => db_update
+                    .game_mail_escrow
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_mail_escrow_reaper_schedule" => db_update
+                    .game_mail_escrow_reaper_schedule
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_map_region" => db_update
                     .game_map_region
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -7189,6 +7569,9 @@ pub struct AppliedDiff<'r> {
     game_loot_roll: __sdk::TableAppliedDiff<'r, LootRoll>,
     game_loot_roll_vote: __sdk::TableAppliedDiff<'r, LootRollVote>,
     game_mail: __sdk::TableAppliedDiff<'r, Mail>,
+    game_mail_delivery: __sdk::TableAppliedDiff<'r, MailDelivery>,
+    game_mail_escrow: __sdk::TableAppliedDiff<'r, MailEscrow>,
+    game_mail_escrow_reaper_schedule: __sdk::TableAppliedDiff<'r, MailEscrowReaperSchedule>,
     game_map_region: __sdk::TableAppliedDiff<'r, MapRegion>,
     game_melee_attack: __sdk::TableAppliedDiff<'r, MeleeAttack>,
     game_melee_schedule: __sdk::TableAppliedDiff<'r, MeleeSchedule>,
@@ -7713,6 +8096,21 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             event,
         );
         callbacks.invoke_table_row_callbacks::<Mail>("game_mail", &self.game_mail, event);
+        callbacks.invoke_table_row_callbacks::<MailDelivery>(
+            "game_mail_delivery",
+            &self.game_mail_delivery,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<MailEscrow>(
+            "game_mail_escrow",
+            &self.game_mail_escrow,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<MailEscrowReaperSchedule>(
+            "game_mail_escrow_reaper_schedule",
+            &self.game_mail_escrow_reaper_schedule,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<MapRegion>(
             "game_map_region",
             &self.game_map_region,
@@ -8816,6 +9214,9 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_loot_roll_table::register_table(client_cache);
         game_loot_roll_vote_table::register_table(client_cache);
         game_mail_table::register_table(client_cache);
+        game_mail_delivery_table::register_table(client_cache);
+        game_mail_escrow_table::register_table(client_cache);
+        game_mail_escrow_reaper_schedule_table::register_table(client_cache);
         game_map_region_table::register_table(client_cache);
         game_melee_attack_table::register_table(client_cache);
         game_melee_schedule_table::register_table(client_cache);
@@ -8985,6 +9386,9 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_loot_roll",
         "game_loot_roll_vote",
         "game_mail",
+        "game_mail_delivery",
+        "game_mail_escrow",
+        "game_mail_escrow_reaper_schedule",
         "game_map_region",
         "game_melee_attack",
         "game_melee_schedule",

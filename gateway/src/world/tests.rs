@@ -439,6 +439,30 @@ struct InMemoryStore {
     /// Gameobject guids that ARE a mailbox within reach on this shard. Empty (derive-Default)
     /// refuses every mailbox, which is the wrong-map / out-of-range / not-a-mailbox arm.
     mailboxes: Vec<u64>,
+    /// `game_world_entity.money` per guid, on THIS database — the purse the postage comes out of.
+    /// A guid with no row here cannot pay, which is also the module's answer for a character with no
+    /// live entity on the shard being asked.
+    purses: std::sync::Mutex<Vec<(u64, u32)>>,
+    /// Letters written on THIS database: `(sender, recipient, subject, body, attached money)`.
+    /// Recorded separately from `mails` because WHICH call wrote the row is what tells the two
+    /// planes apart — `mail_send` on one database, `mail_commit` on the mail plane of a sharded one.
+    #[allow(clippy::type_complexity)]
+    sent_mail: std::sync::Mutex<Vec<(u64, u64, String, String, u32)>>,
+    /// The escrow ledger on THIS database, as `(the guid the fence is filed under, the row)`. A
+    /// letter's fence is filed under its SENDER and lives on their shard; a take's is filed under
+    /// the PAYEE and lives on the plane holding the mail row.
+    #[allow(clippy::type_complexity)]
+    mail_escrows: std::sync::Mutex<Vec<(u64, mail::HeldEscrow)>>,
+    /// `game_mail_escrow.delivered` per escrow id: the attestation that licenses the settle. Kept
+    /// beside the fence rather than in it so the fake cannot settle one it never attested.
+    attested: std::sync::Mutex<Vec<(u64, bool)>>,
+    /// Delivery/payout receipts on THIS database, `(escrow_id, recipient or payee)` — the
+    /// idempotency key that makes a replayed commit or payout a no-op.
+    mail_receipts: std::sync::Mutex<Vec<(u64, u64)>>,
+    /// The mail-escrow step to fail on THIS database — a gateway killed before that step's
+    /// transaction committed. `transfer`'s `kill_at` for the mail drive, and a `Mutex` because a
+    /// re-drive test has to bring the database back up before driving again.
+    mail_kill_at: std::sync::Mutex<Option<String>>,
     /// When set, `realm_group_op(ACCEPT, …)` fails with this message. INJECTED because a real
     /// one cannot be staged synchronously: every accept-time refusal the module has (already grouped,
     /// party full, the inviter no longer leads) needs the party to change BETWEEN the invite and the
@@ -542,6 +566,13 @@ struct InMemoryStore {
     cancelled_auras: std::sync::Mutex<Vec<u32>>,
     /// Recorded `cancel_cast` self_guids — CMSG_CANCEL_CAST.
     cancelled_casts: std::sync::Mutex<Vec<u64>>,
+    /// `game_item_instance` on THIS database: `item_guid -> (owner_guid, snapshot)`. The mail
+    /// attachment path deletes from here at send and inserts at take, which is the whole "a fenced
+    /// item is in nobody's bags" property.
+    mail_items: std::sync::Mutex<Vec<(u64, u64, mail::AttachedItem)>>,
+    /// This shard's bags have no room — the fixture behind the full-bag refusal on a take.
+    /// Atomic so a test can flip it AFTER the fixture is wrapped in an `Arc`, like `purses`.
+    bags_full: std::sync::atomic::AtomicBool,
     /// What `player_items` returns for ANY owner guid — the CMSG_SELL_ITEM/CMSG_REPAIR_ITEM
     /// item-instance-guid → inventory-slot resolution fixture. Empty by default (no items), matching
     /// every earlier test that never sets this.
@@ -576,6 +607,113 @@ impl InMemoryStore {
             .lock()
             .unwrap()
             .push((self.shard.clone(), what.to_string()));
+    }
+
+    /// One mail-escrow step boundary. `Err` is the gateway dying before this step committed: the
+    /// call never lands, and nothing after it in the drive runs either.
+    fn mail_kill(&self, step: &str) -> Result<()> {
+        if self.mail_kill_at.lock().unwrap().as_deref() == Some(step) {
+            anyhow::bail!("injected: the gateway died before {step} on {}", self.shard);
+        }
+        Ok(())
+    }
+
+    /// Take `copper` out of a purse on THIS database, or refuse and take nothing — the module's
+    /// `charge_postage`, including its "no live entity here" arm for a guid with no purse row.
+    fn debit(&self, guid: u64, copper: u32) -> Result<()> {
+        let mut purses = self.purses.lock().unwrap();
+        match purses.iter_mut().find(|(g, _)| *g == guid) {
+            Some((_, money)) if *money >= copper => {
+                *money -= copper;
+                Ok(())
+            }
+            _ => Err(anyhow!(lyracore_shared::mail::NOT_ENOUGH_MONEY)),
+        }
+    }
+
+    fn credit(&self, guid: u64, copper: u32) {
+        let mut purses = self.purses.lock().unwrap();
+        if let Some((_, money)) = purses.iter_mut().find(|(g, _)| *g == guid) {
+            *money = money.saturating_add(copper);
+        }
+    }
+
+    /// The module's `detach_item`: the mailable verdict, then the DELETE. `item_guid` 0 is a letter
+    /// with no attachment.
+    fn detach(&self, sender_guid: u64, item_guid: u64) -> Result<mail::AttachedItem> {
+        if item_guid == 0 {
+            return Ok(mail::AttachedItem::default());
+        }
+        let mut items = self.mail_items.lock().unwrap();
+        match items
+            .iter()
+            .position(|(g, owner, _)| *g == item_guid && *owner == sender_guid)
+        {
+            None => Err(anyhow!(lyracore_shared::mail::NOT_YOUR_ITEM)),
+            Some(i) if items[i].2.soulbound => {
+                Err(anyhow!(lyracore_shared::mail::ITEM_IS_SOULBOUND))
+            }
+            Some(i) => Ok(items.remove(i).2),
+        }
+    }
+
+    /// The module's `store_instance_state`: one new row carrying the recorded state, or the item
+    /// module's own full-bag refusal.
+    fn store_snapshot(&self, owner_guid: u64, item: &mail::AttachedItem) -> Result<()> {
+        if self.bags_full.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(anyhow!(lyracore_shared::mail::INVENTORY_FULL));
+        }
+        let mut items = self.mail_items.lock().unwrap();
+        let guid = items.iter().map(|(g, _, _)| *g).max().unwrap_or(0) + 1;
+        items.push((guid, owner_guid, item.clone()));
+        Ok(())
+    }
+
+    /// Every item `owner` holds on this database — the assertion surface for "it left the bags",
+    /// "it arrived unchanged" and "it never arrived twice".
+    pub(crate) fn bags_of(&self, owner: u64) -> Vec<mail::AttachedItem> {
+        self.mail_items
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, o, _)| *o == owner)
+            .map(|(_, _, i)| i.clone())
+            .collect()
+    }
+
+    /// The module's `insert_mail`: the row both write paths reach, so a letter written by the
+    /// single-database send and one written by the escrow's commit cannot differ.
+    #[allow(clippy::too_many_arguments)]
+    fn write_mail(
+        &self,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        cod: u32,
+        item: &mail::AttachedItem,
+    ) {
+        let mut mails = self.mails.lock().unwrap();
+        let id = mails.iter().map(|(_, m)| m.id).max().unwrap_or(0) + 1;
+        mails.push((
+            recipient_guid,
+            codec::MailView {
+                id,
+                sender_guid,
+                subject,
+                body,
+                money,
+                cod,
+                item_entry: item.entry,
+                item_stack_count: item.stack_count,
+                item_durability: item.durability,
+                item_enchant_id: item.enchant_id,
+                item_soulbound: item.soulbound,
+                created_at_secs: 1_000,
+                ..Default::default()
+            },
+        ));
     }
 
     /// Record a transfer step and honour an injected kill. `Err` means "the gateway died
@@ -1030,6 +1168,510 @@ impl WorldStore for InMemoryStore {
     fn mailbox_in_range(&self, mailbox_guid: u64, _player_guid: u64) -> Result<bool> {
         self.rec("mailbox_in_range");
         Ok(self.mailboxes.contains(&mailbox_guid))
+    }
+    /// Models the module's `apply_mark_read`: the row lookup scoped to `recipient_guid` IS the
+    /// authorization, so a mail that exists but belongs to someone else fails the same way a
+    /// nonexistent id does.
+    fn mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_mark_read");
+        let mut mails = self.mails.lock().unwrap();
+        match mails
+            .iter_mut()
+            .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
+        {
+            Some((_, m)) => {
+                m.was_read = true;
+                Ok(())
+            }
+            None => Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL)),
+        }
+    }
+    /// Models the module's `apply_delete`: same merged not-found/not-yours refusal as mark-read.
+    fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_delete");
+        let mut mails = self.mails.lock().unwrap();
+        let before = mails.len();
+        mails.retain(|(to, m)| !(*to == recipient_guid && m.id == mail_id));
+        if mails.len() == before {
+            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+        }
+        Ok(())
+    }
+    /// Models the module's `apply_return`: the SAME row, re-addressed to whoever sent it, with
+    /// whatever it still carries (or nothing) travelling unchanged — except the cash-on-delivery
+    /// price, which is dropped, because the row is going back to whoever set it.
+    fn mail_return(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_return");
+        let mut mails = self.mails.lock().unwrap();
+        match mails
+            .iter_mut()
+            .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
+        {
+            Some((to, m)) => {
+                let sender = m.sender_guid;
+                m.sender_guid = recipient_guid;
+                m.was_read = false;
+                m.cod = 0;
+                *to = sender;
+                Ok(())
+            }
+            None => Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL)),
+        }
+    }
+    /// Models the module's `apply_send`: the postage plus the attached coin leave the purse and the
+    /// row is written, in ONE call — the single-database plane's one transaction. The id is
+    /// per-database, as the module's `auto_inc` is.
+    #[allow(clippy::too_many_arguments)]
+    fn mail_send(
+        &self,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        cod: u32,
+        item_guid: u64,
+    ) -> Result<()> {
+        self.rec("mail_send");
+        let item = self.detach(sender_guid, item_guid)?;
+        self.debit(sender_guid, lyracore_shared::mail::total_cost(money))?;
+        self.sent_mail.lock().unwrap().push((
+            sender_guid,
+            recipient_guid,
+            subject.clone(),
+            body.clone(),
+            money,
+        ));
+        self.write_mail(
+            sender_guid,
+            recipient_guid,
+            subject,
+            body,
+            money,
+            cod,
+            &item,
+        );
+        Ok(())
+    }
+
+    /// Models the module's `apply_take_item`: the COD debit, the grant, the clear and the seller's
+    /// payout row are ONE transaction, so a full bag or a price the taker cannot pay leaves the
+    /// letter exactly as it was, and a second take finds an empty one.
+    fn mail_take_item(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        let (item, settlement) = {
+            let mails = self.mails.lock().unwrap();
+            let Some((_, m)) = mails
+                .iter()
+                .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
+            else {
+                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+            };
+            if m.item_entry == 0 {
+                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
+            }
+            (
+                mail::AttachedItem {
+                    entry: m.item_entry,
+                    stack_count: m.item_stack_count,
+                    durability: m.item_durability,
+                    enchant_id: m.item_enchant_id,
+                    soulbound: m.item_soulbound,
+                },
+                lyracore_shared::mail::cod_settlement(
+                    m.cod,
+                    m.sender_guid,
+                    &m.subject,
+                    recipient_guid,
+                ),
+            )
+        };
+        self.rec("mail_take_item");
+        if let Some(s) = &settlement {
+            self.debit(s.payer_guid, s.copper)
+                .map_err(|_| anyhow!(lyracore_shared::mail::COD_NOT_AFFORDABLE))?;
+        }
+        if let Err(e) = self.store_snapshot(recipient_guid, &item) {
+            // The fake cannot roll back, so it undoes the one write it made — the real module gets
+            // this from the transaction, and asserting on it is the point of the full-bag test.
+            if let Some(s) = &settlement {
+                self.credit(s.payer_guid, s.copper);
+            }
+            return Err(e);
+        }
+        let mut mails = self.mails.lock().unwrap();
+        if let Some((_, m)) = mails
+            .iter_mut()
+            .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
+        {
+            m.item_entry = 0;
+            m.item_stack_count = 0;
+            m.item_durability = 0;
+            m.item_enchant_id = 0;
+            m.item_soulbound = false;
+            m.cod = 0;
+        }
+        drop(mails);
+        if let Some(s) = settlement {
+            self.write_mail(
+                s.payer_guid,
+                s.payee_guid,
+                s.subject,
+                String::new(),
+                s.copper,
+                0,
+                &mail::AttachedItem::default(),
+            );
+        }
+        Ok(())
+    }
+
+    fn mail_item_room(&self, _payee_guid: u64) -> Result<()> {
+        self.rec("mail_item_room");
+        if self.bags_full.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(anyhow!(lyracore_shared::mail::INVENTORY_FULL));
+        }
+        Ok(())
+    }
+    /// Models the module's `apply_take_money`: the credit and the clear are one transaction, so a
+    /// second take finds an empty row.
+    fn mail_take_money(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_take_money");
+        let money = {
+            let mut mails = self.mails.lock().unwrap();
+            let Some((_, m)) = mails
+                .iter_mut()
+                .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
+            else {
+                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+            };
+            if m.money == 0 {
+                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
+            }
+            std::mem::take(&mut m.money)
+        };
+        self.credit(recipient_guid, money);
+        Ok(())
+    }
+    /// Models `mail_escrow::apply_fence`: the whole cost leaves the purse into a fence row here.
+    fn mail_fence(
+        &self,
+        escrow_id: u64,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        postage: u32,
+        item_guid: u64,
+        cod: u32,
+        cod_source_mail_id: u64,
+    ) -> Result<()> {
+        self.rec("mail_fence");
+        self.mail_kill("mail_fence")?;
+        let escrows = self.mail_escrows.lock().unwrap();
+        if escrows.iter().any(|(_, e)| e.escrow_id == escrow_id) {
+            return Ok(()); // replay — the purse must not be debited twice for one letter
+        }
+        drop(escrows);
+        // The attachment before the debit: it is the refusal that can still fire, and nothing has
+        // been written when it does.
+        let item = self.detach(sender_guid, item_guid)?;
+        self.debit(sender_guid, money.saturating_add(postage))?;
+        self.mail_escrows.lock().unwrap().push((
+            sender_guid,
+            mail::HeldEscrow {
+                escrow_id,
+                recipient_guid,
+                subject,
+                body,
+                money,
+                postage,
+                payout: false,
+                mail_id: cod_source_mail_id,
+                item,
+                cod,
+            },
+        ));
+        self.attested.lock().unwrap().push((escrow_id, false));
+        Ok(())
+    }
+    /// Models `mail_escrow::apply_commit`: the row plus a receipt, idempotent on the escrow id.
+    fn mail_commit(
+        &self,
+        escrow_id: u64,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        item: mail::AttachedItem,
+        cod: u32,
+        cod_source_mail_id: u64,
+    ) -> Result<()> {
+        self.rec("mail_commit");
+        self.mail_kill("mail_commit")?;
+        let mut receipts = self.mail_receipts.lock().unwrap();
+        if receipts.iter().any(|(id, _)| *id == escrow_id) {
+            return Ok(());
+        }
+        receipts.push((escrow_id, recipient_guid));
+        drop(receipts);
+        self.sent_mail.lock().unwrap().push((
+            sender_guid,
+            recipient_guid,
+            subject.clone(),
+            body.clone(),
+            money,
+        ));
+        self.write_mail(
+            sender_guid,
+            recipient_guid,
+            subject,
+            body,
+            money,
+            cod,
+            &item,
+        );
+        // The price stops being owed in the SAME call that delivers the payment for it — the
+        // module clears it inside the commit's transaction, which is what makes a COD take charge
+        // once however the drive is interrupted.
+        if cod_source_mail_id != 0 {
+            if let Some((_, m)) = self
+                .mails
+                .lock()
+                .unwrap()
+                .iter_mut()
+                .find(|(_, m)| m.id == cod_source_mail_id)
+            {
+                m.cod = 0;
+            }
+        }
+        Ok(())
+    }
+    /// Models `mail_escrow::apply_take_fence`: the copper leaves the ROW into a fence here.
+    fn mail_take_money_fence(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        expect_money: u32,
+    ) -> Result<()> {
+        self.rec("mail_take_money_fence");
+        self.mail_kill("mail_take_money_fence")?;
+        if self
+            .mail_escrows
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, e)| e.escrow_id == escrow_id)
+        {
+            return Ok(());
+        }
+        let money = {
+            let mut mails = self.mails.lock().unwrap();
+            let Some((_, m)) = mails
+                .iter_mut()
+                .find(|(to, m)| *to == payee_guid && m.id == mail_id)
+            else {
+                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+            };
+            if m.money == 0 {
+                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
+            }
+            if m.money != expect_money {
+                return Err(anyhow!(
+                    "refusing to fence an amount the payout would not match"
+                ));
+            }
+            std::mem::take(&mut m.money)
+        };
+        self.mail_escrows.lock().unwrap().push((
+            payee_guid,
+            mail::HeldEscrow {
+                escrow_id,
+                recipient_guid: payee_guid,
+                subject: String::new(),
+                body: String::new(),
+                money,
+                postage: 0,
+                payout: true,
+                mail_id,
+                item: mail::AttachedItem::default(),
+                cod: 0,
+            },
+        ));
+        self.attested.lock().unwrap().push((escrow_id, false));
+        Ok(())
+    }
+    /// Models `mail_escrow::apply_take_item_fence`: the ATTACHMENT leaves the row into a fence.
+    fn mail_take_item_fence(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        expect_entry: u32,
+    ) -> Result<()> {
+        self.rec("mail_take_item_fence");
+        self.mail_kill("mail_take_item_fence")?;
+        if self
+            .mail_escrows
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, e)| e.escrow_id == escrow_id)
+        {
+            return Ok(());
+        }
+        let item = {
+            let mut mails = self.mails.lock().unwrap();
+            let Some((_, m)) = mails
+                .iter_mut()
+                .find(|(to, m)| *to == payee_guid && m.id == mail_id)
+            else {
+                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+            };
+            if m.item_entry == 0 {
+                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
+            }
+            if m.item_entry != expect_entry {
+                return Err(anyhow!(
+                    "refusing to fence an item the grant would not match"
+                ));
+            }
+            let item = mail::AttachedItem {
+                entry: m.item_entry,
+                stack_count: m.item_stack_count,
+                durability: m.item_durability,
+                enchant_id: m.item_enchant_id,
+                soulbound: m.item_soulbound,
+            };
+            m.item_entry = 0;
+            m.item_stack_count = 0;
+            m.item_durability = 0;
+            m.item_enchant_id = 0;
+            m.item_soulbound = false;
+            item
+        };
+        self.mail_escrows.lock().unwrap().push((
+            payee_guid,
+            mail::HeldEscrow {
+                escrow_id,
+                recipient_guid: payee_guid,
+                subject: String::new(),
+                body: String::new(),
+                money: 0,
+                postage: 0,
+                payout: true,
+                mail_id,
+                item,
+                cod: 0,
+            },
+        ));
+        self.attested.lock().unwrap().push((escrow_id, false));
+        Ok(())
+    }
+    /// Models `mail_escrow::apply_item_payout`: the grant plus a receipt, idempotent on the escrow
+    /// id, and refused by a full bag — which leaves the fence holding the item.
+    fn mail_item_payout(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        _mail_id: u64,
+        item: mail::AttachedItem,
+    ) -> Result<()> {
+        self.rec("mail_item_payout");
+        self.mail_kill("mail_item_payout")?;
+        let receipts = self.mail_receipts.lock().unwrap();
+        if receipts.iter().any(|(id, _)| *id == escrow_id) {
+            return Ok(());
+        }
+        drop(receipts);
+        self.store_snapshot(payee_guid, &item)?;
+        self.mail_receipts
+            .lock()
+            .unwrap()
+            .push((escrow_id, payee_guid));
+        Ok(())
+    }
+    /// Models `mail_escrow::apply_payout`: the credit plus a receipt, idempotent on the escrow id.
+    fn mail_payout(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        _mail_id: u64,
+        amount: u32,
+    ) -> Result<()> {
+        self.rec("mail_payout");
+        self.mail_kill("mail_payout")?;
+        let mut receipts = self.mail_receipts.lock().unwrap();
+        if receipts.iter().any(|(id, _)| *id == escrow_id) {
+            return Ok(());
+        }
+        if !self
+            .purses
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(g, _)| *g == payee_guid)
+        {
+            return Err(anyhow!(lyracore_shared::mail::NOT_IN_WORLD));
+        }
+        receipts.push((escrow_id, payee_guid));
+        drop(receipts);
+        self.credit(payee_guid, amount);
+        Ok(())
+    }
+    fn mail_confirm_delivery(&self, escrow_id: u64) -> Result<()> {
+        self.rec("mail_confirm_delivery");
+        self.mail_kill("mail_confirm_delivery")?;
+        let mut attested = self.attested.lock().unwrap();
+        match attested.iter_mut().find(|(id, _)| *id == escrow_id) {
+            Some((_, done)) => {
+                *done = true;
+                Ok(())
+            }
+            None => Err(anyhow!("mail escrow {escrow_id}: nothing fenced here")),
+        }
+    }
+    /// Models `mail_escrow::apply_settle`, delete-last included: it REFUSES while unattested.
+    fn mail_settle(&self, escrow_id: u64) -> Result<()> {
+        self.rec("mail_settle");
+        self.mail_kill("mail_settle")?;
+        let attested = self
+            .attested
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(id, _)| *id == escrow_id)
+            .map(|(_, done)| *done);
+        match attested {
+            None => Ok(()), // already settled, or this call reached the wrong database
+            Some(false) => Err(anyhow!(
+                "mail escrow {escrow_id}: delivery not attested — refusing to destroy the fence"
+            )),
+            Some(true) => {
+                self.mail_escrows
+                    .lock()
+                    .unwrap()
+                    .retain(|(_, e)| e.escrow_id != escrow_id);
+                self.attested
+                    .lock()
+                    .unwrap()
+                    .retain(|(id, _)| *id != escrow_id);
+                Ok(())
+            }
+        }
+    }
+    fn mail_escrows_of(&self, sender_guid: u64) -> Result<Vec<mail::HeldEscrow>> {
+        self.rec("mail_escrows_of");
+        Ok(self
+            .mail_escrows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(owner, _)| *owner == sender_guid)
+            .map(|(_, e)| e.clone())
+            .collect())
     }
     fn trainer_serves(&self, _player_guid: u64, _trainer_guid: u64) -> Result<bool> {
         Ok(!self.trainer_refuses_class) // default true — every existing fixture trainer serves

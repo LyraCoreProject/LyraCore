@@ -8,13 +8,15 @@
 
 use lyracore_shared::mail as mail_rules;
 use wow_world_messages::vanilla::{
-    Gold, MSG_QUERY_NEXT_MAIL_TIME_Server, Mail, Mail_MailType, SMSG_ITEM_TEXT_QUERY_RESPONSE,
-    SMSG_MAIL_LIST_RESULT,
+    Gold, InventoryResult, MSG_QUERY_NEXT_MAIL_TIME_Server, Mail, Mail_MailType,
+    SMSG_SEND_MAIL_RESULT_MailAction, SMSG_SEND_MAIL_RESULT_MailResult,
+    SMSG_SEND_MAIL_RESULT_MailResultTwo, SMSG_ITEM_TEXT_QUERY_RESPONSE, SMSG_MAIL_LIST_RESULT,
+    SMSG_SEND_MAIL_RESULT,
 };
 
-/// One `game_mail` row, flattened for the codec. The attachment columns are carried even though
-/// nothing writes them yet: the wire has exactly one item block per mail, and the list packet is
-/// what a later slice's attachment must render through.
+/// One `game_mail` row, flattened for the codec. The attachment is the mail row's own snapshot
+/// columns — the wire has exactly one item block per mail, and this is what the mailbox window
+/// renders before the recipient takes it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MailView {
     pub id: u64,
@@ -24,7 +26,16 @@ pub struct MailView {
     pub item_entry: u32,
     pub item_stack_count: u32,
     pub item_durability: u32,
+    /// The attached item's TEMPLATE max durability (`game_item_template.max_durability`), not the
+    /// row's own snapshot — the mail row only ever snapshots CURRENT durability. Read separately so
+    /// a damaged attachment previews damaged instead of `max_durability == item_durability` always
+    /// reading as pristine. 0 for no attachment, the same sentinel `item_durability` uses.
+    pub max_durability: u32,
     pub item_enchant_id: u32,
+    /// Not sent on the wire — the client shows no bind state in the mail window. Carried because
+    /// the sharded take hands the whole snapshot to the other database, and a bind state dropped in
+    /// transit would be an item that arrives less bound than it left.
+    pub item_soulbound: bool,
     pub money: u32,
     pub cod: u32,
     pub was_read: bool,
@@ -61,7 +72,7 @@ pub fn build_mail_list(mails: &[MailView], now_secs: i64) -> SMSG_MAIL_LIST_RESU
                 item_suffix_factor: 0,
                 item_stack_size: m.item_stack_count.min(u8::MAX as u32) as u8,
                 item_spell_charges: 0,
-                max_durability: m.item_durability,
+                max_durability: m.max_durability,
                 durability: m.item_durability,
                 money: Gold::new(m.money),
                 cash_on_delivery_amount: m.cod,
@@ -86,6 +97,129 @@ pub fn build_next_mail_time(has_unread: bool) -> MSG_QUERY_NEXT_MAIL_TIME_Server
 /// empty text rather than silence: the client opened the letter and waits for this packet.
 pub fn build_item_text_response(item_text_id: u32, text: String) -> SMSG_ITEM_TEXT_QUERY_RESPONSE {
     SMSG_ITEM_TEXT_QUERY_RESPONSE { item_text_id, text }
+}
+
+/// Answer `CMSG_MAIL_DELETE` with `SMSG_SEND_MAIL_RESULT` — the wire's only ack for this opcode, so
+/// both a successful delete AND a refused one (not the caller's mail, or a stale gate) reply through
+/// it rather than through a family of specific `MailResultTwo` variants: none of them names "not your
+/// mail", and `ErrInternalError` is mangoszero's own generic bucket for exactly that ("Mail database
+/// error"). `CMSG_MAIL_MARK_AS_READ` gets no wire reply at all — vanilla sends none, the client
+/// already flipped its own display — so there is no sibling builder for it.
+pub fn build_mail_delete_result(mail_id: u32, ok: bool) -> SMSG_SEND_MAIL_RESULT {
+    SMSG_SEND_MAIL_RESULT {
+        mail_id,
+        action: SMSG_SEND_MAIL_RESULT_MailAction::Deleted {
+            result2: if ok {
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
+            } else {
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+            },
+        },
+    }
+}
+
+/// Answer `CMSG_MAIL_RETURN_TO_SENDER` with `SMSG_SEND_MAIL_RESULT`/ReturnedToSender —
+/// [`build_mail_delete_result`]'s twin, same generic-bucket refusal for the same reason:
+/// `MailResultTwo` has no variant naming "not your mail".
+pub fn build_mail_return_result(mail_id: u32, ok: bool) -> SMSG_SEND_MAIL_RESULT {
+    SMSG_SEND_MAIL_RESULT {
+        mail_id,
+        action: SMSG_SEND_MAIL_RESULT_MailAction::ReturnedToSender {
+            result2: if ok {
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
+            } else {
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+            },
+        },
+    }
+}
+
+/// Answer `CMSG_MAIL_TAKE_MONEY` with `SMSG_SEND_MAIL_RESULT`/MoneyTaken — the ack that closes the
+/// client's spinner and makes it re-read the mail.
+///
+/// A refusal answers `ErrInternalError` for the same reason the delete arm does: `MailResultTwo` has
+/// no variant for "not your mail" or "there is nothing in it", and mangoszero uses the generic
+/// bucket for exactly those. The two refusals deliberately look the same on the wire, so a crafted
+/// mail id cannot tell an empty mail apart from somebody else's.
+pub fn build_mail_take_money_result(mail_id: u32, ok: bool) -> SMSG_SEND_MAIL_RESULT {
+    SMSG_SEND_MAIL_RESULT {
+        mail_id,
+        action: SMSG_SEND_MAIL_RESULT_MailAction::MoneyTaken {
+            result2: if ok {
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
+            } else {
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+            },
+        },
+    }
+}
+
+/// Answer `CMSG_MAIL_TAKE_ITEM` with `SMSG_SEND_MAIL_RESULT`/ItemTaken.
+///
+/// The ItemTaken action carries `MailResult` (not `MailResultTwo`), whose success arm names the
+/// item and stack the client just gained — `taken` is that pair, and it is what makes the mail
+/// window drop the right attachment without re-reading the list.
+///
+/// A FULL BAG gets its own verdict — `ErrEquipError` carrying vanilla's `InventoryFull` — because
+/// it is the one refusal the player can act on, and the item is still in the letter when they do.
+/// A cash-on-delivery price the taker cannot pay gets `ErrNotEnoughMoney` for the same reason: it
+/// is actionable, and it is the message that tells them to bring gold rather than that the mailbox
+/// is broken. Every other refusal (not your mail, nothing in it, an unreachable database) answers
+/// the generic bucket, so a crafted mail id cannot tell an empty mail apart from somebody else's.
+pub fn build_mail_take_item_result(
+    mail_id: u32,
+    taken: Result<(u32, u32), MailTakeItemError>,
+) -> SMSG_SEND_MAIL_RESULT {
+    SMSG_SEND_MAIL_RESULT {
+        mail_id,
+        action: SMSG_SEND_MAIL_RESULT_MailAction::ItemTaken {
+            result: match taken {
+                Ok((item, item_count)) => SMSG_SEND_MAIL_RESULT_MailResult::Ok { item, item_count },
+                Err(MailTakeItemError::BagsFull) => {
+                    SMSG_SEND_MAIL_RESULT_MailResult::ErrEquipError {
+                        equip_error: u32::from(InventoryResult::InventoryFull.as_int()),
+                    }
+                }
+                Err(MailTakeItemError::NotEnoughMoney) => {
+                    SMSG_SEND_MAIL_RESULT_MailResult::ErrNotEnoughMoney {
+                        item: 0,
+                        item_count: 0,
+                    }
+                }
+                Err(MailTakeItemError::Other) => {
+                    SMSG_SEND_MAIL_RESULT_MailResult::ErrInternalError {
+                        item: 0,
+                        item_count: 0,
+                    }
+                }
+            },
+        },
+    }
+}
+
+/// The verdicts an item take can answer with. Deliberately smaller than the handler's own refusal
+/// type: the wire only distinguishes the two a player can act on — "make room" and "bring gold" —
+/// from "no".
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MailTakeItemError {
+    BagsFull,
+    /// The cash-on-delivery price is more than the taker has.
+    NotEnoughMoney,
+    Other,
+}
+
+/// Answer `CMSG_SEND_MAIL` with `SMSG_SEND_MAIL_RESULT`/Send.
+///
+/// `result2` is chosen by the caller, one variant per gate: the client renders each as its own
+/// on-screen line, and that line is the whole diagnosability story for a letter that did not go.
+/// `mail_id` is 0 — a send names no existing mail, and vanilla sends 0 here too.
+pub fn build_mail_send_result(
+    result2: SMSG_SEND_MAIL_RESULT_MailResultTwo,
+) -> SMSG_SEND_MAIL_RESULT {
+    SMSG_SEND_MAIL_RESULT {
+        mail_id: 0,
+        action: SMSG_SEND_MAIL_RESULT_MailAction::Send { result2 },
+    }
 }
 
 #[cfg(test)]
@@ -145,5 +279,207 @@ mod tests {
     fn the_mail_poll_packet_carries_the_shared_unread_signal() {
         assert_eq!(build_next_mail_time(true).unread_mails, 0.0);
         assert!(build_next_mail_time(false).unread_mails < 0.0);
+    }
+
+    /// A send answers through the SEND action, carrying whichever verdict the gates produced.
+    #[test]
+    fn a_send_result_carries_the_gates_own_verdict_on_the_send_action() {
+        for want in [
+            SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok,
+            SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrRecipientNotFound,
+            SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrCannotSendToSelf,
+            SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrNotYourTeam,
+            SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrNotEnoughMoney,
+        ] {
+            let packet = build_mail_send_result(want);
+            assert_eq!(packet.mail_id, 0, "a send names no existing mail");
+            match packet.action {
+                SMSG_SEND_MAIL_RESULT_MailAction::Send { result2 } => assert_eq!(result2, want),
+                other => panic!("expected the Send action, got {other:?}"),
+            }
+        }
+    }
+
+    /// A take answers through the MoneyTaken action, carrying the mail id back so the client
+    /// re-reads the right row. Both refusals it can produce — not your mail, and nothing left in it
+    /// — deliberately look the same on the wire.
+    #[test]
+    fn a_take_money_result_answers_on_the_money_taken_action() {
+        match build_mail_take_money_result(7, true).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::MoneyTaken { result2 } => {
+                assert_eq!(result2, SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok)
+            }
+            other => panic!("expected the MoneyTaken action, got {other:?}"),
+        }
+        let refused = build_mail_take_money_result(7, false);
+        assert_eq!(refused.mail_id, 7);
+        match refused.action {
+            SMSG_SEND_MAIL_RESULT_MailAction::MoneyTaken { result2 } => assert_eq!(
+                result2,
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+            ),
+            other => panic!("expected the MoneyTaken action, got {other:?}"),
+        }
+    }
+
+    /// The list packet carries the attached copper, so the recipient can see what is in a letter
+    /// before opening it.
+    #[test]
+    fn the_list_packet_carries_a_mails_attached_copper() {
+        let mut m = view(1, "here you go");
+        m.money = 130;
+        assert_eq!(build_mail_list(&[m], 1_000).mails[0].money, Gold::new(130));
+    }
+
+    /// **The cash-on-delivery price is on the wire BEFORE anything is taken.** It is the field the
+    /// mail window renders as the asking price, so a player who cannot see it is being asked to buy
+    /// blind.
+    #[test]
+    fn the_list_packet_carries_a_mails_cash_on_delivery_price() {
+        let mut m = view(1, "yours for 250");
+        m.item_entry = 5_090_001;
+        m.cod = 250;
+        assert_eq!(
+            build_mail_list(&[m], 1_000).mails[0].cash_on_delivery_amount,
+            250
+        );
+    }
+
+    /// The list packet carries the whole attachment, so the recipient sees what is in a letter
+    /// before taking it: the icon comes from the entry, and the stack and durability from the
+    /// snapshot the sender's own item was copied into.
+    #[test]
+    fn the_list_packet_carries_a_mails_attached_item() {
+        let mut m = view(1, "here you go");
+        m.item_entry = 5_090_001;
+        m.item_stack_count = 12;
+        m.item_durability = 42;
+        m.item_enchant_id = 7;
+        let wire = &build_mail_list(&[m], 1_000).mails[0];
+        assert_eq!(wire.item, 5_090_001);
+        assert_eq!(wire.item_stack_size, 12);
+        assert_eq!(wire.durability, 42);
+        assert_eq!(
+            wire.item_enchant_id, 7,
+            "an enchant dropped here is an enchant the recipient cannot see they are owed"
+        );
+    }
+
+    /// **A damaged attachment must preview damaged.** The row snapshots only CURRENT durability, so
+    /// `max_durability` on the wire has to come from the view's own template-derived field, never
+    /// from `item_durability` — sending the current value for both always renders the icon at full
+    /// bars, hiding the damage the mail window exists to show.
+    #[test]
+    fn a_damaged_attachment_previews_with_its_templates_max_durability_not_its_current_one() {
+        let mut m = view(1, "well-used");
+        m.item_entry = 5_090_001;
+        m.item_durability = 10;
+        m.max_durability = 40;
+        let wire = &build_mail_list(&[m], 1_000).mails[0];
+        assert_eq!(
+            wire.durability, 10,
+            "the current durability rides unchanged"
+        );
+        assert_eq!(
+            wire.max_durability, 40,
+            "max_durability must be the TEMPLATE's, not a copy of the current value"
+        );
+    }
+
+    /// A take answers through the ItemTaken action, whose success arm names the item and stack the
+    /// client just gained — that pair is what makes the mail window drop the right attachment.
+    #[test]
+    fn a_take_item_result_names_what_the_client_just_gained() {
+        match build_mail_take_item_result(7, Ok((5_090_001, 12))).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::ItemTaken { result } => assert_eq!(
+                result,
+                SMSG_SEND_MAIL_RESULT_MailResult::Ok {
+                    item: 5_090_001,
+                    item_count: 12
+                }
+            ),
+            other => panic!("expected the ItemTaken action, got {other:?}"),
+        }
+    }
+
+    /// **A full bag answers `ErrEquipError`, not the generic bucket.** It is the one refusal the
+    /// player can act on, and the item is still in the letter while they do — so the client must
+    /// render "make room" rather than "mail database error".
+    #[test]
+    fn a_full_bag_answers_the_equip_error_variant_and_everything_else_the_generic_one() {
+        match build_mail_take_item_result(7, Err(MailTakeItemError::BagsFull)).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::ItemTaken { result } => assert_eq!(
+                result,
+                SMSG_SEND_MAIL_RESULT_MailResult::ErrEquipError {
+                    equip_error: u32::from(InventoryResult::InventoryFull.as_int())
+                }
+            ),
+            other => panic!("expected the ItemTaken action, got {other:?}"),
+        }
+        match build_mail_take_item_result(7, Err(MailTakeItemError::NotEnoughMoney)).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::ItemTaken { result } => assert_eq!(
+                result,
+                SMSG_SEND_MAIL_RESULT_MailResult::ErrNotEnoughMoney {
+                    item: 0,
+                    item_count: 0
+                },
+                "a COD price the taker cannot pay must read as 'bring gold', not as a broken \
+                 mailbox"
+            ),
+            other => panic!("expected the ItemTaken action, got {other:?}"),
+        }
+        match build_mail_take_item_result(7, Err(MailTakeItemError::Other)).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::ItemTaken { result } => assert_eq!(
+                result,
+                SMSG_SEND_MAIL_RESULT_MailResult::ErrInternalError {
+                    item: 0,
+                    item_count: 0
+                }
+            ),
+            other => panic!("expected the ItemTaken action, got {other:?}"),
+        }
+    }
+
+    /// A successful return answers `Ok` on the ReturnedToSender action; a refused one answers
+    /// `ErrInternalError`, [`build_mail_delete_result`]'s twin. Both carry the mail id back.
+    #[test]
+    fn a_return_result_carries_the_mail_id_and_the_generic_error_on_refusal() {
+        match build_mail_return_result(7, true).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::ReturnedToSender { result2 } => {
+                assert_eq!(result2, SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok)
+            }
+            other => panic!("expected the ReturnedToSender action, got {other:?}"),
+        }
+        let refused = build_mail_return_result(7, false);
+        assert_eq!(refused.mail_id, 7);
+        match refused.action {
+            SMSG_SEND_MAIL_RESULT_MailAction::ReturnedToSender { result2 } => assert_eq!(
+                result2,
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+            ),
+            other => panic!("expected the ReturnedToSender action, got {other:?}"),
+        }
+    }
+
+    /// A successful delete answers `Ok`; a refused one answers `ErrInternalError` — the generic
+    /// bucket, because none of `MailResultTwo`'s named variants means "not your mail". Both carry
+    /// the mail id back so the client's window drops the right row either way.
+    #[test]
+    fn a_delete_result_carries_the_mail_id_and_the_generic_error_on_refusal() {
+        match build_mail_delete_result(7, true).action {
+            SMSG_SEND_MAIL_RESULT_MailAction::Deleted { result2 } => {
+                assert_eq!(result2, SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok)
+            }
+            other => panic!("expected the Deleted action, got {other:?}"),
+        }
+        let refused = build_mail_delete_result(7, false);
+        assert_eq!(refused.mail_id, 7);
+        match refused.action {
+            SMSG_SEND_MAIL_RESULT_MailAction::Deleted { result2 } => assert_eq!(
+                result2,
+                SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError
+            ),
+            other => panic!("expected the Deleted action, got {other:?}"),
+        }
     }
 }

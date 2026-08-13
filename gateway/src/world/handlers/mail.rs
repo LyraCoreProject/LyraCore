@@ -1,12 +1,12 @@
-//! Mail family: open the mailbox window, answer the client's mail poll, and serve a letter's body.
-//!
-//! Read path only — sending, attachments, take, mark-read, delete and return are later
-//! slices, and their opcodes fall through to the next handler until they land.
+//! Mail family: open the mailbox window, answer the client's mail poll, serve a letter's body, mark
+//! a mail read or delete it, post a letter with copper and one item attached (at a
+//! cash-on-delivery price, or not), take either back out, and return a mail to its sender.
 //!
 //! Every failure is per-action: log, and either answer the packet the client is blocked on or send
 //! nothing. Nothing here tears a session down, matching the vendor/loot/combat arms.
 
 use super::super::*;
+use wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo;
 
 pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
     tx: &SessionTx,
@@ -76,6 +76,197 @@ pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
                     )),
                 )),
             )?;
+        }
+        // Flip a mail's read state. Vanilla sends NO reply for this opcode — the client already
+        // flipped its own display — so success and a refusal both answer with silence; only the
+        // next CMSG_GET_MAIL_LIST shows the truth. A crafted id (someone else's mail, or a stale
+        // one) is refused the same as a genuine miss — never trust a client-supplied mail id.
+        ClientOpcodeMessage::CMSG_MAIL_MARK_AS_READ(c) => {
+            let self_guid = social::self_guid(conn);
+            if let Err(e) =
+                mail::mark_read(store, self_guid, c.mailbox.guid(), u64::from(c.mail_id))
+            {
+                log::debug!(
+                    "world: mail mark-as-read refused (account {}): {e}",
+                    conn.account_id
+                );
+            }
+        }
+        // Delete a mail — destroys any attachment it still holds, as vanilla does (the confirmation
+        // prompt is client-side). Unlike the read-only arms above, `CMSG_MAIL_DELETE` has a real
+        // ack (`SMSG_SEND_MAIL_RESULT`/Deleted), so both outcomes reply through it, matching the
+        // vendor/loot arms' "a failed action still answers" rule.
+        ClientOpcodeMessage::CMSG_MAIL_DELETE(c) => {
+            let self_guid = social::self_guid(conn);
+            let ok = match mail::delete(store, self_guid, c.mailbox_id.guid(), u64::from(c.mail_id))
+            {
+                Ok(()) => true,
+                Err(e) => {
+                    log::debug!(
+                        "world: mail delete refused (account {}): {e}",
+                        conn.account_id
+                    );
+                    false
+                }
+            };
+            send(
+                tx,
+                Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
+                    codec::build_mail_delete_result(c.mail_id, ok),
+                ))),
+            )?;
+        }
+        // Return a mail to whoever sent it. The row is re-addressed in place — no escrow, since it
+        // never leaves the plane that already holds it — so this is [`mail::delete`]'s twin down to
+        // the authorization: a mail id is client-supplied, and "not yours" reads the same as "no
+        // such mail". Acks through `SMSG_SEND_MAIL_RESULT`/ReturnedToSender either way.
+        ClientOpcodeMessage::CMSG_MAIL_RETURN_TO_SENDER(c) => {
+            let self_guid = social::self_guid(conn);
+            let ok = match mail::return_to_sender(
+                store,
+                self_guid,
+                c.mailbox_id.guid(),
+                u64::from(c.mail_id),
+            ) {
+                Ok(()) => true,
+                Err(e) => {
+                    log::debug!(
+                        "world: mail return refused (account {}): {e}",
+                        conn.account_id
+                    );
+                    false
+                }
+            };
+            send(
+                tx,
+                Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
+                    codec::build_mail_return_result(c.mail_id, ok),
+                ))),
+            )?;
+        }
+        // Take a mail's copper into the purse. The mail id is client-supplied, so the refusal for
+        // somebody else's mail is the authorization boundary and not a sanity check — and it reads
+        // the same as "there is nothing in it", so a crafted id learns nothing either way. Both
+        // outcomes ack through `SMSG_SEND_MAIL_RESULT`/MoneyTaken, which is what closes the
+        // client's spinner.
+        ClientOpcodeMessage::CMSG_MAIL_TAKE_MONEY(c) => {
+            let self_guid = social::self_guid(conn);
+            let ok =
+                match mail::take_money(store, self_guid, c.mailbox.guid(), u64::from(c.mail_id)) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        log::debug!(
+                            "world: mail take-money refused (account {}): {e}",
+                            conn.account_id
+                        );
+                        false
+                    }
+                };
+            send(
+                tx,
+                Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
+                    codec::build_mail_take_money_result(c.mail_id, ok),
+                ))),
+            )?;
+        }
+        // Take a mail's attached item into the bags, paying any cash-on-delivery price for it. A
+        // full bag answers `ErrEquipError` and an unaffordable price `ErrNotEnoughMoney` — the two
+        // refusals a player can act on, and in both the item STAYS in the letter, which is also
+        // what leaves a refused buyer free to return it. Every other refusal reads the same, so a
+        // crafted mail id learns nothing.
+        ClientOpcodeMessage::CMSG_MAIL_TAKE_ITEM(c) => {
+            let self_guid = social::self_guid(conn);
+            let outcome =
+                match mail::take_item(store, self_guid, c.mailbox.guid(), u64::from(c.mail_id)) {
+                    Ok(taken) => Ok(taken),
+                    Err(e) => {
+                        log::debug!(
+                            "world: mail take-item refused (account {}): {e}",
+                            conn.account_id
+                        );
+                        Err(match e {
+                            mail::TakeItemRefusal::BagsFull(_) => {
+                                codec::MailTakeItemError::BagsFull
+                            }
+                            mail::TakeItemRefusal::CannotAffordCod(_) => {
+                                codec::MailTakeItemError::NotEnoughMoney
+                            }
+                            mail::TakeItemRefusal::Other(_) => codec::MailTakeItemError::Other,
+                        })
+                    }
+                };
+            send(
+                tx,
+                Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
+                    codec::build_mail_take_item_result(c.mail_id, outcome),
+                ))),
+            )?;
+        }
+        // Post a letter. `cash_on_delivery_amount` is the price the RECIPIENT will owe for the
+        // attachment — it costs the sender nothing here. Every refusal answers with its OWN
+        // `MailResultTwo`, never a generic internal error: the client renders each as distinct
+        // on-screen text, which is all the player gets to work with.
+        //
+        // The one refusal that answers with SILENCE is the mailbox gate, matching the list arm
+        // above — vanilla has no mailbox-refusal packet, and the client only offers Send at a
+        // mailbox, so reaching it means a crafted packet or a desynced session.
+        ClientOpcodeMessage::CMSG_SEND_MAIL(c) => {
+            let self_guid = social::self_guid(conn);
+            let result2 = match mail::send(
+                store,
+                self_guid,
+                c.mailbox.guid(),
+                &c.receiver,
+                c.subject.clone(),
+                c.body.clone(),
+                c.money.as_int(),
+                c.cash_on_delivery_amount,
+                c.item.guid(),
+            ) {
+                Ok(()) => Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok),
+                Err(e) => {
+                    log::debug!(
+                        "world: mail send refused (account {}): {e}",
+                        conn.account_id
+                    );
+                    match e {
+                        mail::SendRefusal::NoMailbox(_) => None,
+                        mail::SendRefusal::RecipientNotFound(_) => {
+                            Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrRecipientNotFound)
+                        }
+                        mail::SendRefusal::CannotSendToSelf => {
+                            Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrCannotSendToSelf)
+                        }
+                        mail::SendRefusal::NotYourTeam => {
+                            Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrNotYourTeam)
+                        }
+                        mail::SendRefusal::NotEnoughMoney(_) => {
+                            Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrNotEnoughMoney)
+                        }
+                        // A bound item and one that is not the sender's are different mistakes, so
+                        // the client is told which: vanilla has no "soulbound" mail line, and
+                        // `ErrCantSendWrappedCod` is mangoszero's nearest — it renders as a refusal
+                        // about the attachment rather than about the letter.
+                        mail::SendRefusal::AttachmentSoulbound(_) => {
+                            Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrCantSendWrappedCod)
+                        }
+                        mail::SendRefusal::AttachmentInvalid(_) => {
+                            Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrMailAttachmentInvalid)
+                        }
+                        mail::SendRefusal::Internal(_) => {
+                            Some(SMSG_SEND_MAIL_RESULT_MailResultTwo::ErrInternalError)
+                        }
+                    }
+                }
+            };
+            if let Some(result2) = result2 {
+                send(
+                    tx,
+                    Outbound::One(ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(Box::new(
+                        codec::build_mail_send_result(result2),
+                    ))),
+                )?;
+            }
         }
         other => return Ok(Some(other)),
     }

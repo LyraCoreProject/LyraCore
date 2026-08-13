@@ -487,8 +487,156 @@ impl WorldStore for Coordinator {
         self.mailbox_in_range(mailbox_guid, player_guid)
     }
 
+    fn mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.mail_mark_read(recipient_guid, mail_id)
+    }
+
+    fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.mail_delete(recipient_guid, mail_id)
+    }
     fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool> {
         self.trainer_serves(player_guid, trainer_guid)
+    }
+
+    fn mail_return(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.mail_return(recipient_guid, mail_id)
+    }
+
+    fn mail_send(
+        &self,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        cod: u32,
+        item_guid: u64,
+    ) -> Result<()> {
+        self.mail_send(
+            sender_guid,
+            recipient_guid,
+            subject,
+            body,
+            money,
+            cod,
+            item_guid,
+        )
+    }
+
+    fn mail_take_money(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.mail_take_money(recipient_guid, mail_id)
+    }
+
+    fn mail_take_item(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.mail_take_item(recipient_guid, mail_id)
+    }
+
+    fn mail_item_room(&self, payee_guid: u64) -> Result<()> {
+        self.mail_item_room(payee_guid)
+    }
+
+    fn mail_fence(
+        &self,
+        escrow_id: u64,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        postage: u32,
+        item_guid: u64,
+        cod: u32,
+        cod_source_mail_id: u64,
+    ) -> Result<()> {
+        self.mail_fence(
+            escrow_id,
+            sender_guid,
+            recipient_guid,
+            subject,
+            body,
+            money,
+            postage,
+            item_guid,
+            cod,
+            cod_source_mail_id,
+        )
+    }
+
+    fn mail_commit(
+        &self,
+        escrow_id: u64,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        item: crate::world::mail::AttachedItem,
+        cod: u32,
+        cod_source_mail_id: u64,
+    ) -> Result<()> {
+        self.mail_commit(
+            escrow_id,
+            sender_guid,
+            recipient_guid,
+            subject,
+            body,
+            money,
+            item,
+            cod,
+            cod_source_mail_id,
+        )
+    }
+
+    fn mail_take_money_fence(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        expect_money: u32,
+    ) -> Result<()> {
+        self.mail_take_money_fence(escrow_id, payee_guid, mail_id, expect_money)
+    }
+
+    fn mail_payout(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        amount: u32,
+    ) -> Result<()> {
+        self.mail_payout(escrow_id, payee_guid, mail_id, amount)
+    }
+
+    fn mail_take_item_fence(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        expect_entry: u32,
+    ) -> Result<()> {
+        self.mail_take_item_fence(escrow_id, payee_guid, mail_id, expect_entry)
+    }
+
+    fn mail_item_payout(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        item: crate::world::mail::AttachedItem,
+    ) -> Result<()> {
+        self.mail_item_payout(escrow_id, payee_guid, mail_id, item)
+    }
+
+    fn mail_confirm_delivery(&self, escrow_id: u64) -> Result<()> {
+        self.mail_confirm_delivery(escrow_id)
+    }
+
+    fn mail_settle(&self, escrow_id: u64) -> Result<()> {
+        self.mail_settle(escrow_id)
+    }
+
+    fn mail_escrows_of(&self, sender_guid: u64) -> Result<Vec<crate::world::mail::HeldEscrow>> {
+        self.mail_escrows_of(sender_guid)
     }
 
     fn buy_item(

@@ -16,9 +16,8 @@ impl Coordinator {
     /// per-owner read here (`player_items`, `player_skills`).
     pub fn mail_list(&self, recipient_guid: u64) -> Result<Vec<crate::codec::MailView>> {
         let guard = self.0.coord();
-        let mut mails: Vec<crate::codec::MailView> = guard
-            .conn
-            .db
+        let db = &guard.conn.db;
+        let mut mails: Vec<crate::codec::MailView> = db
             .game_mail()
             .iter()
             .filter(|m| m.recipient_guid == recipient_guid)
@@ -30,7 +29,17 @@ impl Coordinator {
                 item_entry: m.item_entry,
                 item_stack_count: m.item_stack_count,
                 item_durability: m.item_durability,
+                // The row only ever snapshots CURRENT durability (mail.rs's `ItemSnapshot`); the
+                // true max lives on the attachment's own template, the same read `player_items`
+                // joins for. 0 for no attachment — `entry().find(0)` finds nothing.
+                max_durability: db
+                    .game_item_template()
+                    .entry()
+                    .find(&m.item_entry)
+                    .map(|t| t.max_durability)
+                    .unwrap_or(0),
                 item_enchant_id: m.item_enchant_id,
+                item_soulbound: m.item_soulbound,
                 money: m.money,
                 cod: m.cod,
                 was_read: m.was_read,
@@ -39,6 +48,45 @@ impl Coordinator {
             .collect();
         mails.sort_by_key(|m| m.id);
         Ok(mails)
+    }
+
+    /// Every mail escrow this database is holding for `sender_guid` — the fences a drive filed and
+    /// never finished.
+    ///
+    /// The one module→gateway data flow the escrow adds, and it exists for the same reason
+    /// `escrowed_transfer` does: the gateway is the only component that can see both databases, so
+    /// re-driving a stalled fence means re-deriving the whole letter from its row. A fresh drive
+    /// reads nothing. Private table, read through the owner token.
+    ///
+    /// Keyed by `sender_guid`, which on a payout escrow is the PAYEE — the character owed the
+    /// copper either way, and the one whose session is about to re-drive it.
+    pub fn mail_escrows_of(&self, sender_guid: u64) -> Result<Vec<crate::world::mail::HeldEscrow>> {
+        let guard = self.0.coord();
+        Ok(guard
+            .conn
+            .db
+            .game_mail_escrow()
+            .iter()
+            .filter(|e| e.sender_guid == sender_guid)
+            .map(|e| crate::world::mail::HeldEscrow {
+                escrow_id: e.escrow_id,
+                recipient_guid: e.recipient_guid,
+                subject: e.subject,
+                body: e.body,
+                money: e.money,
+                postage: e.postage,
+                payout: e.payout,
+                mail_id: e.mail_id,
+                item: crate::world::mail::AttachedItem {
+                    entry: e.item_entry,
+                    stack_count: e.item_stack_count,
+                    durability: e.item_durability,
+                    enchant_id: e.item_enchant_id,
+                    soulbound: e.item_soulbound,
+                },
+                cod: e.cod,
+            })
+            .collect())
     }
 
     /// Is `player_guid` standing at the mailbox `mailbox_guid` names?
