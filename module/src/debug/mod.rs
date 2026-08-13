@@ -55,7 +55,7 @@ use lyracore_shared::{constants, spatial};
 use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use crate::{
-    build_creature_entity, game_character, game_config, game_creature_move_schedule,
+    build_creature_entity, game_aura, game_character, game_config, game_creature_move_schedule,
     game_creature_spawn, game_creature_template, game_gameobject, game_gameobject_pool,
     game_gameobject_pool_member, game_gameobject_template, game_gameobject_unlocked,
     game_creature_spline, game_entity_motion, game_ground_area, game_item_instance,
@@ -1010,6 +1010,77 @@ pub fn debug_cast_spell_at(
         false,
         Some((x, y, z)),
     )
+}
+
+/// Seed `count` SYNTHETIC filler auras directly into `target_guid`'s buff (`debuff=false`) or debuff
+/// (`debuff=true`) `UNIT_FIELD_AURA` range, at slots `[0, count)` / `[BUFF_SLOT_COUNT, BUFF_SLOT_COUNT +
+/// count)` — the harness lever for proving the 32-buff/16-debuff cap end to end (issue #155) without
+/// hunting down that many distinct real spells. This is SETUP: it writes `game_aura` rows directly and
+/// skips `apply_group_conflict`/`pick_aura_slot` entirely, on purpose — the probe's own cast (a real
+/// `debug_cast_at`/player cast against the now-full range) is what exercises the policy boundary under
+/// test. Synthetic ids (`9_000_000 + slot`) so a real spell used by the probe cast can never collide
+/// with a filler row. Errors if `count` exceeds the range's real slot count (32 buff / 16 debuff) — the
+/// same geometry `pick_aura_slot` enforces, not an arbitrary harness limit.
+#[reducer]
+pub fn debug_fill_aura_slots(
+    ctx: &ReducerContext,
+    target_guid: u64,
+    caster_guid: u64,
+    debuff: bool,
+    count: u8,
+) -> Result<(), String> {
+    let range_len = if debuff {
+        constants::tracer_spell::AURA_SLOTS - constants::tracer_spell::BUFF_SLOT_COUNT
+    } else {
+        constants::tracer_spell::BUFF_SLOT_COUNT
+    };
+    if count > range_len {
+        return Err(format!(
+            "count {count} exceeds the real {range_len}-slot {} range",
+            if debuff { "debuff" } else { "buff" }
+        ));
+    }
+    let base_slot = if debuff {
+        constants::tracer_spell::BUFF_SLOT_COUNT
+    } else {
+        0
+    };
+    let auras = ctx.db.game_aura();
+    let now = ctx.timestamp;
+    let expires = now
+        .checked_add(TimeDuration::from_micros(3_600_000_000)) // 1h — outlives any probe session
+        .unwrap_or(now);
+    for i in 0..count {
+        let slot = base_slot + i;
+        auras.insert(crate::Aura {
+            id: 0,
+            target_guid,
+            caster_guid,
+            spell_id: 9_000_000 + slot as u32,
+            slot,
+            level: 1,
+            flags: if debuff {
+                0
+            } else {
+                constants::tracer_spell::AURA_FLAGS
+            },
+            applied_at: now,
+            expires_at: expires,
+            effect_id: 0,
+            eff_kind: 0,
+            amount: 0,
+            eff_p0: 0,
+            eff_p0_kind: 0,
+            eff_p1: 0,
+            period_ms: 0,
+            amount_remaining: 0,
+            stacks: 1,
+            next_tick_micros: 0,
+            channel_target: 0,
+            enters_combat: false,
+        });
+    }
+    Ok(())
 }
 
 /// Log the reputation vendor discount (195) `player_guid` gets at a creature whose FactionTemplate is

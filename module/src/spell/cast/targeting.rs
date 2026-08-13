@@ -1837,6 +1837,48 @@ mod effect_handler_tests {
         }
     }
 
+    /// Buff cap (issue #155's named vector, the debuff cap test's mirror image): 32 live buffs fully
+    /// occupy `[0, 32)`; a 33rd distinct buff gets `None` and the 32 existing entries are untouched.
+    #[test]
+    fn thirty_two_buffs_full_refuses_the_thirty_third_leaving_the_thirty_two_untouched() {
+        let buffs_full: Vec<(u8, u32)> = (0u8..32).map(|slot| (slot, slot as u32 + 2000)).collect();
+        assert_eq!(buffs_full.len(), 32);
+        assert_eq!(super::pick_aura_slot(&buffs_full, 8888, false, 32, 48), None);
+        for &(slot, spell_id) in &buffs_full {
+            assert_eq!(
+                super::pick_aura_slot(&buffs_full, spell_id, false, 32, 48),
+                Some(slot)
+            );
+        }
+    }
+
+    /// Range independence (issue #155): the buff and debuff ranges never compete for the same slots, in
+    /// EITHER direction — a full buff range still has room for a distinct debuff, and a full debuff range
+    /// still has room for a distinct buff. Each half is also covered inside the two full-range tests
+    /// above (a full range's OWN polarity refuses); this test is the cross-polarity vector specifically.
+    #[test]
+    fn buff_and_debuff_ranges_are_independent_when_full() {
+        let buffs_full: Vec<(u8, u32)> = (0u8..32).map(|slot| (slot, slot as u32 + 2000)).collect();
+        let debuffs_full: Vec<(u8, u32)> =
+            (32u8..48).map(|slot| (slot, slot as u32 + 1000)).collect();
+        // A full 32-slot buff range does not block a fresh debuff — it still lands at 32.
+        assert_eq!(
+            super::pick_aura_slot(&buffs_full, 9999, true, 32, 48),
+            Some(32)
+        );
+        // A full 16-slot debuff range does not block a fresh buff — it still lands at 0.
+        assert_eq!(
+            super::pick_aura_slot(&debuffs_full, 8888, false, 32, 48),
+            Some(0)
+        );
+        // Both ranges full simultaneously: a fresh debuff is refused (debuff range is what's full for
+        // it) and a fresh buff is refused (buff range is what's full for it) — each by its OWN range,
+        // not by the other polarity's occupancy.
+        let both_full: Vec<(u8, u32)> = buffs_full.iter().chain(debuffs_full.iter()).copied().collect();
+        assert_eq!(super::pick_aura_slot(&both_full, 9999, true, 32, 48), None);
+        assert_eq!(super::pick_aura_slot(&both_full, 8888, false, 32, 48), None);
+    }
+
     /// The craft-recipe predicate is now DATA-DRIVEN (282): reagents from game_spell_reagent, the
     /// profession line + band from game_skill_ability — both ctx-aware, verified live in the import
     /// (P5) rather than unit-tested here. The one pure decision left is `is_profession_line`, which
