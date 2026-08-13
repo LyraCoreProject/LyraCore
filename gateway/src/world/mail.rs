@@ -750,6 +750,12 @@ fn pay_cod<St: WorldStore + ?Sized>(
 /// would make collisions possible again. `auto_inc` cannot serve because the key spans databases.
 fn next_escrow_id() -> Result<u64> {
     use std::sync::atomic::Ordering;
+    #[cfg(test)]
+    if NEXT_ESCROW_ID.get().is_none() {
+        // Unit and in-memory stores do not run coordinator startup; give the process-wide harness
+        // one deterministic range while production remains fail-closed until realm-core claims it.
+        install_escrow_id_range(1, u64::MAX);
+    }
     let next = NEXT_ESCROW_ID.get().ok_or_else(|| {
         anyhow::anyhow!(
         "mail escrow id range was not claimed; refusing instead of falling back to colliding ids"
