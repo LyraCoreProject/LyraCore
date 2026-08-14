@@ -904,10 +904,6 @@ impl WorldStore for Coordinator {
         self.start_ranged_attack(account_id, self_guid, target_guid, spell_id)
     }
 
-    fn stop_attack(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        self.stop_attack(account_id, self_guid)
-    }
-
     fn set_sheathed(&self, account_id: u64, self_guid: u64, state: u8) -> Result<()> {
         self.set_sheathed(account_id, self_guid, state)
     }

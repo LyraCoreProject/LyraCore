@@ -1,5 +1,5 @@
-//! Combat family (N3/C1 + aura tracer): selection, melee stop, spell cast. Melee attack START is
-//! owned by the melee-attack seam in `melee.rs`.
+//! Combat family (N3/C1 + aura tracer): selection, spell cast, ranged auto-repeat. Melee attack
+//! start and stop are owned by the melee-attack seam in `melee.rs`.
 
 use super::super::*;
 
@@ -36,10 +36,9 @@ fn ranged_ammo_display<St: WorldStore + ?Sized>(store: &St, self_guid: u64) -> O
         .map(|t| (t.display_id, 24))
 }
 
-/// Combat family (N3/C1 + aura tracer): selection, melee stop, spell cast. Melee START lives in the
-/// melee-attack seam (`melee.rs`). ⚠️ Holds the session-fatal `is_desync_error` early-exit on
-/// CMSG_ATTACKSTOP — a desync means the player's own entity is gone, so the session is torn down for
-/// a clean relog, unlike the transient per-swing failures that stay logged + alive.
+/// Combat family (N3/C1 + aura tracer): selection, spell cast, ranged auto-repeat. Melee start and
+/// stop live in the melee-attack seam (`melee.rs`), and the session-fatal desync exits for melee
+/// went with them.
 pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
@@ -75,48 +74,6 @@ pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
         // consumed here (rather than falling through to the dispatch tail's `log::debug!` "ignoring"
         // line) so a `.speed` never spams the log or risks a future desync-classifier false-positive.
         ClientOpcodeMessage::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(_) => {}
-        // Combat (C1): stop auto-attacking; leave combat stance. Best-effort — a stop_attack
-        // failure must not drop the session, and the client is always told to leave stance.
-        ClientOpcodeMessage::CMSG_ATTACKSTOP => {
-            // While a ranged auto-repeat is armed, the client sends CMSG_ATTACKSTOP as part of
-            // switching out of melee stance — but melee + ranged share one game_melee_attack row,
-            // so honoring it would delete the auto-shot engagement (one-shot-then-stops). The
-            // ranged loop is torn down only by CMSG_CANCEL_AUTO_REPEAT_SPELL; ignore the melee stop.
-            let was_repeat = matches!(&conn.state, WorldState::InWorld(iw) if iw.ranged_repeat);
-            log::info!(
-                "world[autoshot]: CMSG_ATTACKSTOP ranged_repeat_active={was_repeat} (account {})",
-                conn.account_id
-            );
-            if was_repeat {
-                return Ok(None);
-            }
-            if let Err(e) = store.stop_attack(conn.account_id, self_guid) {
-                // A desync (entity gone) is session-fatal — recover via a clean disconnect, not a
-                // silent hang. A transient stop_attack failure stays logged + ignored.
-                if is_desync_error(&e) {
-                    return Err(e.context(
-                        "player desync (entity missing) on attackstop — closing session for a clean relog",
-                    ));
-                }
-                log::debug!(
-                    "world: stop_attack ignored (account {}): {e}",
-                    conn.account_id
-                );
-            }
-            // `attacking_target` may name a creature the server already killed (the kill sends its
-            // own SMSG_ATTACKSTOP and can't reach this thread to clear it); re-sending stop for a
-            // now-dead guid is harmless (the client no longer has that unit).
-            if let WorldState::InWorld(iw) = &mut conn.state {
-                if let Some(target_guid) = iw.attacking_target.take() {
-                    send(
-                        tx,
-                        Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTOP(Box::new(
-                            codec::build_attack_stop(iw.self_guid, target_guid),
-                        ))),
-                    )?;
-                }
-            }
-        }
         // Draw / stow weapons (#101). The client sends this on `Z`, on a weapon swap, and when an
         // ability auto-draws. It is a pure render-state change: nothing gates on it, so a failure is
         // logged and dropped rather than being session-fatal like ATTACKSWING/ATTACKSTOP. gtker
@@ -475,7 +432,8 @@ pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
         // Stop the ranged auto-repeat loop (the client toggled off / auto-switched to melee).
         // `stop_attack` ONLY when a ranged loop is actually armed: the client's
         // melee-press sends CMSG_ATTACKSWING *then* this cancel back-to-back (live-logged), and the
-        // swing handler has already overwritten the shared engagement row to MELEE + cleared
+        // swing handler has already overwritten the shared engagement row (the sharing rule is
+        // stated in `melee::attack_stop`) to MELEE + cleared
         // `ranged_repeat` — an unconditional stop here deleted that just-armed melee row (the
         // "press melee attack twice" bug). Same observable rule the reference cores follow — a no-op when nothing is
         // armed. NO inline ack either — the SMSG_CANCEL_AUTO_REPEAT the client needs on a real

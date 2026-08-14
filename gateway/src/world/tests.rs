@@ -123,6 +123,7 @@ use wow_world_messages::vanilla::{
     CMSG_BUY_BANK_SLOT,
     CMSG_BUY_ITEM,
     CMSG_CANCEL_AURA,
+    CMSG_CANCEL_AUTO_REPEAT_SPELL,
     CMSG_CANCEL_CAST,
     CMSG_CAST_SPELL,
     CMSG_CHAR_CREATE,
@@ -279,6 +280,9 @@ struct InMemoryStore {
     ground_casts: std::sync::Mutex<Vec<(u32, u64, f32, f32, f32)>>,
     /// Recorded `start_ranged_attack` dispatches: (target_guid, spell_id) — the Auto Shot intercept.
     ranged_attacks: std::sync::Mutex<Vec<(u64, u32)>>,
+    /// Recorded `stop_attack` dispatches: the actor guid. The Auto Shot teardowns reach this
+    /// through `WorldStore`'s `MeleeActionStore` supertrait, so it pins that resolution.
+    stop_attacks: std::sync::Mutex<Vec<u64>>,
     /// Recorded `set_sheathed` dispatches: (self_guid, state) — the `CMSG_SETSHEATHED` route (#101).
     sheathed: std::sync::Mutex<Vec<(u64, u8)>>,
     /// What `spell_cast_time` returns: None (default) = unknown spell (the handler treats it as
@@ -2049,9 +2053,6 @@ impl WorldStore for InMemoryStore {
             .push((target_guid, spell_id));
         Ok(())
     }
-    fn stop_attack(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
-        Ok(())
-    }
     fn set_sheathed(&self, _account_id: u64, self_guid: u64, state: u8) -> Result<()> {
         self.sheathed.lock().unwrap().push((self_guid, state));
         Ok(())
@@ -2791,6 +2792,10 @@ impl MeleeActionStore for InMemoryStore {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
         }
+    }
+    fn stop_attack(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.stop_attacks.lock().unwrap().push(self_guid);
+        Ok(())
     }
 }
 
@@ -5845,6 +5850,39 @@ fn auto_shot_failure_replies_cast_result_only_and_never_arms() {
     drop(client);
     server.join().unwrap();
     assert!(store.ranged_attacks.lock().unwrap().is_empty());
+}
+
+#[test]
+fn cancelling_auto_repeat_still_tears_the_ranged_loop_down_through_stop_attack() {
+    // `stop_attack` lives on the melee-attack seam's trait; the combat handler reaches it through
+    // the `WorldStore` supertrait. Pin that the Auto Shot teardown still lands on the reducer.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_CAST_SPELL {
+        spell: 75,
+        targets: unit_targets(88),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let (op, _) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(op, OP_SPELL_START, "the activation ack arms the loop");
+    CMSG_CANCEL_AUTO_REPEAT_SPELL {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    // The cancel sends no ack of its own (the on_delete relay does), so a sentinel proves the
+    // server got that far before we assert.
+    CMSG_QUESTGIVER_STATUS_QUERY {
+        guid: Guid::new(50),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(_) => {}
+        other => panic!("expected the sentinel (the cancel acks nothing), got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.stop_attacks.lock().unwrap().as_slice(), &[1]);
 }
 
 #[test]

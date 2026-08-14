@@ -684,9 +684,6 @@ pub trait WorldStore: ItemActionStore + MeleeActionStore + Send + Sync {
         spell_id: u32,
     ) -> Result<()>;
 
-    /// Stop the player's melee auto-attack (`CMSG_ATTACKSTOP`, combat C1).
-    fn stop_attack(&self, account_id: u64, self_guid: u64) -> Result<()>;
-
     /// Draw or stow the player's weapons (`CMSG_SETSHEATHED`, the `Z` key). `state` is 0 stowed /
     /// 1 melee / 2 ranged; the module range-checks it. Writes `UNIT_FIELD_BYTES_2` byte 0, which is
     /// what makes a drawn or stowed weapon visible to OTHER players. [#101]

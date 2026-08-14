@@ -3,9 +3,10 @@
 
 use super::*;
 
-// Per-family dispatch handlers — code-motion of the former dispatch match arms (bodies verbatim,
-// incl. in `handle_combat` the session-fatal `is_desync_error` early-exit on ATTACKSTOP).
+// Per-family dispatch handlers — code-motion of the former dispatch match arms, bodies verbatim.
 // Each returns `Ok(None)` once it consumes its opcode, else `Ok(Some(msg))` to pass the message on.
+// `melee.rs` is the exception: it is a seam, not code-motion. Its bodies were rewritten to return an
+// outcome the world session applies, and the session-fatal melee desync exits live there.
 
 mod bank;
 mod char;
