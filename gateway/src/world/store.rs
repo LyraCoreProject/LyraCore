@@ -522,7 +522,10 @@ pub trait WorldStore:
     fn gossip_options(&self, npc_guid: u64) -> Result<Vec<codec::GossipOptionView>>;
 
     /// `(taken, rewarded)` for `quest_id` in `guid`'s quest log — feeds the QUEST_TAKEN/QUEST_REWARDED
-    /// gossip option conditions (`codec::option_condition_holds`).
+    /// gossip option conditions (`codec::option_condition_holds`). The seam's
+    /// `QuestActionStore::quest_status` has taken over its only caller, so this declaration is
+    /// waiting to be retired with the rest of the family.
+    #[allow(dead_code)]
     fn quest_status(&self, guid: u64, quest_id: u32) -> (bool, bool);
 
     /// Respec at `trainer_guid` (the "I wish to unlearn my talents." gossip option, gated to level
@@ -541,7 +544,10 @@ pub trait WorldStore:
     fn buy_bank_slot(&self, account_id: u64, self_guid: u64, banker_guid: u64) -> Result<()>;
 
     /// Evaluate a quest giver's quests against the player for the overhead status icon + the quest
-    /// menu (quests gateway slice). See `stdb::reads::quest_giver_evals`.
+    /// menu (quests gateway slice). See `stdb::reads::quest_giver_evals`. The seam's
+    /// `QuestActionStore::giver_quest_evals` has taken over every caller, so this declaration is
+    /// waiting to be retired with the rest of the family.
+    #[allow(dead_code)]
     fn quest_giver_evals(
         &self,
         giver_guid: u64,
@@ -589,7 +595,9 @@ pub trait WorldStore:
     /// Quest sharing: share `quest_id` with the caller's party (`CMSG_PUSHQUESTTOPARTY`).
     /// The module validates the sender is grouped + actively on the quest and pushes per-member
     /// `QUEST_SHARE`/`QUEST_PUSH_RESULT` events; a gameplay `Err` (not grouped / not on the quest) is
-    /// per-action, not session-fatal.
+    /// per-action, not session-fatal. The seam's `QuestActionStore::push_quest` has taken over its
+    /// only caller, so this declaration is waiting to be retired with the rest of the family.
+    #[allow(dead_code)]
     fn push_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()>;
 
     /// The player's active quests as quest-log descriptor slots (Phase 2 — the L window). Empty if

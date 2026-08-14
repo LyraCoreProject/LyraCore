@@ -1,10 +1,12 @@
 //! Quest family: the overhead `!`/`?` status, the quest-giver menu, the details and definition
-//! screens, accept, the turn-in round trip and log abandon enter through `dispatch_quest_action`;
-//! the gameobject giver, the item-started quest and the world-entry descriptor block call the
-//! shared builders here rather than reaching for the store. `handle_quest` still owns the dialog
-//! opcodes that have not moved yet.
+//! screens, accept, the turn-in round trip, log abandon and party sharing all enter through
+//! `dispatch_quest_action`; the gameobject giver, the item-started quest, the world-entry
+//! descriptor block and the gossip quest section call the shared builders here rather than
+//! reaching for the store. `handle_quest` owns no opcodes anymore — it is waiting on T6 to retire
+//! it.
 
 use super::super::*;
+use wow_world_messages::vanilla::QuestItem;
 
 /// Durable reads the quest family needs, in the seam's own vocabulary so it can be exercised
 /// without the broad `WorldStore`.
@@ -58,6 +60,15 @@ pub(crate) trait QuestActionStore: Send + Sync {
     /// Abandon an active quest (`CMSG_QUESTLOG_REMOVE_QUEST`). The module deletes the quest-log row;
     /// the relay clears the slot.
     fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()>;
+
+    /// Share `quest_id` with the caller's party (`CMSG_PUSHQUESTTOPARTY`). The module validates
+    /// grouped + actively-on-the-quest and pushes the per-member `QUEST_SHARE`/`QUEST_PUSH_RESULT`
+    /// events itself; a gameplay `Err` is per-action, not session-fatal.
+    fn push_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()>;
+
+    /// `(taken, rewarded)` for `quest_id` in `player_guid`'s quest log — feeds the
+    /// QUEST_TAKEN/QUEST_REWARDED gossip option conditions.
+    fn quest_status(&self, player_guid: u64, quest_id: u32) -> (bool, bool);
 }
 
 impl QuestActionStore for crate::stdb::Coordinator {
@@ -115,6 +126,14 @@ impl QuestActionStore for crate::stdb::Coordinator {
 
     fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
         crate::stdb::Coordinator::abandon_quest(self, account_id, self_guid, quest_id)
+    }
+
+    fn push_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
+        crate::stdb::Coordinator::push_quest(self, account_id, self_guid, quest_id)
+    }
+
+    fn quest_status(&self, player_guid: u64, quest_id: u32) -> (bool, bool) {
+        crate::stdb::Coordinator::quest_status(self, player_guid, quest_id)
     }
 }
 
@@ -258,6 +277,29 @@ pub(crate) fn quest_log_update<St: QuestActionStore + ?Sized>(
     let mask = codec::update_mask::full_quest_log_mask(&slots);
     let (opcode, body) = codec::build_values_update_raw(player_guid, &mask);
     Ok(vec![Outbound::Raw { opcode, body }])
+}
+
+/// The quest section of a combined gossip menu for `npc` against `self_guid` — the same evaluation
+/// and the same menu-item derivation `quest_giver_menu` uses, so a gossip-flagged questgiver can
+/// never show different quest icons than `CMSG_QUESTGIVER_HELLO` would.
+pub(crate) fn gossip_quest_items<St: QuestActionStore + ?Sized>(
+    store: &St,
+    npc: u64,
+    self_guid: u64,
+) -> Result<Vec<QuestItem>> {
+    Ok(codec::quest_menu_items(
+        &store.giver_quest_evals(npc, self_guid)?,
+    ))
+}
+
+/// `(taken, rewarded)` for `quest_id` in `player_guid`'s quest log — the read behind the
+/// QUEST_TAKEN/QUEST_REWARDED gossip option conditions that gate a gossip menu row.
+pub(crate) fn quest_gate_state<St: QuestActionStore + ?Sized>(
+    store: &St,
+    player_guid: u64,
+    quest_id: u32,
+) -> (bool, bool) {
+    store.quest_status(player_guid, quest_id)
 }
 
 /// The quest opcodes that own their whole protocol round trip. Anything else — and anything at all
@@ -437,41 +479,44 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
                 outbound: Vec::new(),
             })
         }
-        other => Ok(QuestActionOutcome::PassThrough(other)),
-    }
-}
-
-/// The one quest dialog opcode that still reads the broad `WorldStore`: party sharing. It is
-/// evaluated against the player, so it needs the in-world player guid — in CharSelect it passes
-/// through. A reducer rejection is per-action: logged, not fatal.
-///
-/// Party sharing answers the client through the group-event relay rather than directly, so `_tx` is
-/// unused until that last branch moves to the seam and this function goes away.
-pub(crate) fn handle_quest<St: WorldStore + ?Sized>(
-    _tx: &SessionTx,
-    store: &St,
-    conn: &mut WorldConn,
-    msg: ClientOpcodeMessage,
-) -> Result<Option<ClientOpcodeMessage>> {
-    let self_guid = match &conn.state {
-        WorldState::InWorld(iw) => iw.self_guid,
-        WorldState::CharSelect => return Ok(Some(msg)),
-    };
-    match msg {
         // Share a quest with the party (`CMSG_PUSHQUESTTOPARTY`). The module validates
         // grouped + actively-on-the-quest and pushes the per-member `QUEST_SHARE`/`QUEST_PUSH_RESULT`
         // events itself (relayed by `subscriptions.rs`'s `on_group_event`); no direct SMSG here.
         ClientOpcodeMessage::CMSG_PUSHQUESTTOPARTY(p) => {
-            if let Err(e) = store.push_quest(conn.account_id, self_guid, p.quest_id) {
-                log::debug!(
-                    "world: push_quest ignored (account {}): {e}",
-                    conn.account_id
-                );
+            match store.push_quest(player.account_id, self_guid, p.quest_id) {
+                Ok(()) => {}
+                Err(e)
+                    if classify_quest_action_error(&e) == QuestActionErrorClass::GameplayRefusal =>
+                {
+                    log::debug!(
+                        "world: push_quest ignored (account {}): {e}",
+                        player.account_id
+                    );
+                }
+                Err(e) => return Err(e),
             }
+            Ok(QuestActionOutcome::Handled {
+                outbound: Vec::new(),
+            })
         }
-        other => return Ok(Some(other)),
+        other => Ok(QuestActionOutcome::PassThrough(other)),
     }
-    Ok(None)
+}
+
+/// Empty and awaiting retirement: party sharing (the last opcode this function owned) moved to
+/// `dispatch_quest_action` in T5. Left in place rather than deleted — T6 owns removing it along
+/// with the `WorldStore` quest surface it no longer reads.
+pub(crate) fn handle_quest<St: WorldStore + ?Sized>(
+    _tx: &SessionTx,
+    _store: &St,
+    conn: &mut WorldConn,
+    msg: ClientOpcodeMessage,
+) -> Result<Option<ClientOpcodeMessage>> {
+    let _self_guid = match &conn.state {
+        WorldState::InWorld(iw) => iw.self_guid,
+        WorldState::CharSelect => return Ok(Some(msg)),
+    };
+    Ok(Some(msg))
 }
 
 #[cfg(test)]
@@ -479,7 +524,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
-        Guid, QuestGiverStatus, CMSG_PING, CMSG_QUESTGIVER_ACCEPT_QUEST,
+        Guid, QuestGiverStatus, CMSG_PING, CMSG_PUSHQUESTTOPARTY, CMSG_QUESTGIVER_ACCEPT_QUEST,
         CMSG_QUESTGIVER_CHOOSE_REWARD, CMSG_QUESTGIVER_COMPLETE_QUEST, CMSG_QUESTGIVER_HELLO,
         CMSG_QUESTGIVER_QUERY_QUEST, CMSG_QUESTGIVER_STATUS_QUERY, CMSG_QUESTLOG_REMOVE_QUEST,
         CMSG_QUEST_QUERY,
@@ -510,6 +555,8 @@ mod tests {
         turn_in_calls: Mutex<Vec<TurnInCall>>,
         quest_log_requests: Mutex<Vec<u64>>,
         abandon_requests: Mutex<Vec<(u64, u64, u32)>>,
+        push_requests: Mutex<Vec<(u64, u64, u32)>>,
+        status_requests: Mutex<Vec<(u64, u32)>>,
         evals: Vec<codec::GiverQuestEval>,
         details: Vec<codec::QuestDetailView>,
         refuses: bool,
@@ -519,6 +566,8 @@ mod tests {
         turn_in_error: Option<String>,
         quest_log: Vec<codec::update_mask::QuestLogSlot>,
         abandon_error: Option<String>,
+        push_error: Option<String>,
+        quest_status: (bool, bool),
     }
 
     impl QuestActionStore for InMemoryQuestActions {
@@ -618,6 +667,24 @@ mod tests {
             self.abandon_error
                 .as_ref()
                 .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+        }
+
+        fn push_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
+            self.push_requests
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid, quest_id));
+            self.push_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+        }
+
+        fn quest_status(&self, player_guid: u64, quest_id: u32) -> (bool, bool) {
+            self.status_requests
+                .lock()
+                .unwrap()
+                .push((player_guid, quest_id));
+            self.quest_status
         }
     }
 
@@ -1438,5 +1505,118 @@ mod tests {
         };
 
         assert!(format!("{error:#}").contains("reducer transport disconnected"));
+    }
+
+    // ── Party sharing ────────────────────────────────────────────────────────
+
+    fn push_to_party(quest_id: u32) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_PUSHQUESTTOPARTY(CMSG_PUSHQUESTTOPARTY { quest_id })
+    }
+
+    #[test]
+    fn party_sharing_requests_the_durable_share_and_answers_nothing_on_success() {
+        let actions = InMemoryQuestActions::default();
+
+        let batch =
+            outbound(dispatch_quest_action(&actions, player(), push_to_party(QUEST)).unwrap());
+
+        assert!(
+            batch.is_empty(),
+            "the per-member group-event relay is the only feedback path"
+        );
+        assert_eq!(
+            actions.push_requests.lock().unwrap().as_slice(),
+            &[(7, SELF_GUID, QUEST)]
+        );
+    }
+
+    #[test]
+    fn a_refused_share_answers_nothing_and_does_not_end_the_session() {
+        let actions = InMemoryQuestActions {
+            push_error: Some("not on that quest".into()),
+            ..Default::default()
+        };
+
+        let batch =
+            outbound(dispatch_quest_action(&actions, player(), push_to_party(QUEST)).unwrap());
+
+        assert!(batch.is_empty());
+    }
+
+    #[test]
+    fn a_dead_transport_on_share_ends_the_session() {
+        let actions = InMemoryQuestActions {
+            push_error: Some("push_quest reducer transport disconnected: channel closed".into()),
+            ..Default::default()
+        };
+
+        let error = match dispatch_quest_action(&actions, player(), push_to_party(QUEST)) {
+            Err(error) => error,
+            Ok(_) => panic!("a dead reducer transport must end the session"),
+        };
+
+        assert!(format!("{error:#}").contains("reducer transport disconnected"));
+    }
+
+    // ── The gossip quest section ────────────────────────────────────────────
+
+    #[test]
+    fn gossip_quest_items_matches_the_giver_menus_items_for_the_same_evaluation() {
+        // Both reads come from the same eval + the same `codec::quest_menu_items` derivation, so a
+        // gossip-flagged questgiver's menu icon can never drift from what HELLO would show.
+        let actions = InMemoryQuestActions {
+            evals: vec![
+                eval(QUEST, codec::ROLE_START, false, false),
+                eval(QUEST + 1, codec::ROLE_START, false, false),
+            ],
+            details: vec![detail(QUEST), detail(QUEST + 1)],
+            ..Default::default()
+        };
+
+        let gossip_items = gossip_quest_items(&actions, GIVER, SELF_GUID).unwrap();
+        let menu = outbound(dispatch_quest_action(&actions, player(), hello(GIVER)).unwrap());
+
+        let menu_items = match menu.as_slice() {
+            [Outbound::One(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_LIST(l))] => &l.quest_items,
+            _ => panic!("expected the quest list screen"),
+        };
+        assert_eq!(menu_items.len(), gossip_items.len());
+        for (from_menu, from_gossip) in menu_items.iter().zip(&gossip_items) {
+            assert_eq!(from_menu.quest_id, from_gossip.quest_id);
+            assert_eq!(from_menu.quest_icon, from_gossip.quest_icon);
+            assert_eq!(from_menu.title, from_gossip.title);
+        }
+    }
+
+    #[test]
+    fn a_giver_with_no_quests_contributes_an_empty_gossip_section() {
+        let actions = InMemoryQuestActions::default();
+
+        assert!(gossip_quest_items(&actions, GIVER, SELF_GUID)
+            .unwrap()
+            .is_empty());
+    }
+
+    // ── The gossip quest gate ───────────────────────────────────────────────
+
+    #[test]
+    fn quest_gate_state_answers_untaken_for_a_quest_never_seen() {
+        let actions = InMemoryQuestActions::default();
+
+        assert_eq!(quest_gate_state(&actions, SELF_GUID, QUEST), (false, false));
+    }
+
+    #[test]
+    fn quest_gate_state_answers_taken_once_the_quest_is_in_the_log() {
+        let actions = InMemoryQuestActions {
+            quest_status: (true, false),
+            ..Default::default()
+        };
+
+        assert_eq!(quest_gate_state(&actions, SELF_GUID, QUEST), (true, false));
+        assert_eq!(
+            actions.status_requests.lock().unwrap().as_slice(),
+            &[(SELF_GUID, QUEST)]
+        );
     }
 }

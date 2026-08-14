@@ -340,6 +340,14 @@ mod tests {
         fn abandon_quest(&self, _account_id: u64, _self_guid: u64, _quest_id: u32) -> Result<()> {
             unreachable!("no item action abandons a quest")
         }
+
+        fn push_quest(&self, _account_id: u64, _self_guid: u64, _quest_id: u32) -> Result<()> {
+            unreachable!("no item action shares a quest with the party")
+        }
+
+        fn quest_status(&self, _player_guid: u64, _quest_id: u32) -> (bool, bool) {
+            unreachable!("no item action reads gossip quest gate state")
+        }
     }
 
     fn player() -> ItemActionPlayer {

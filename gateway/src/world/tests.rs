@@ -147,7 +147,6 @@ use wow_world_messages::vanilla::{
     CMSG_NPC_TEXT_QUERY,
     CMSG_PLAYED_TIME,
     CMSG_PLAYER_LOGIN,
-    CMSG_PUSHQUESTTOPARTY,
     CMSG_QUESTGIVER_CHOOSE_REWARD,
     CMSG_QUESTGIVER_HELLO,
     CMSG_QUESTGIVER_STATUS_QUERY,
@@ -2771,6 +2770,14 @@ impl QuestActionStore for InMemoryStore {
         WorldStore::abandon_quest(self, account_id, self_guid, quest_id)
     }
 
+    fn push_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
+        WorldStore::push_quest(self, account_id, self_guid, quest_id)
+    }
+
+    fn quest_status(&self, player_guid: u64, quest_id: u32) -> (bool, bool) {
+        WorldStore::quest_status(self, player_guid, quest_id)
+    }
+
     fn turn_in_quest(
         &self,
         account_id: u64,
@@ -5226,33 +5233,6 @@ fn item_reducer_transport_loss_ends_the_world_session() {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).is_err(),
         "the socket closes instead of translating transport loss into gameplay feedback"
     );
-}
-
-// ── Quest sharing ────────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn push_quest_to_party_dispatches_the_quest_id() {
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_PUSHQUESTTOPARTY { quest_id: 1234 }
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    drop(client); // push_quest sends no direct SMSG — the module's group events carry the feedback
-    server.join().unwrap();
-    assert_eq!(store.pushed_quests.lock().unwrap().as_slice(), &[(7, 1234)]);
-}
-
-#[test]
-fn push_quest_to_party_rejection_is_logged_and_ignored_not_session_fatal() {
-    let mut s = quest_store();
-    s.push_quest_error = Some("not in a group".into());
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store, 1);
-    CMSG_PUSHQUESTTOPARTY { quest_id: 1234 }
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    drop(client);
-    server.join().unwrap(); // must not panic / kill the session on a gameplay rejection
 }
 
 // ===========================================================================
