@@ -59,6 +59,10 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     crate::seed::seed_spell_groups(ctx);
     let spell_groups = ctx.db.game_spell_group().count();
 
+    // The live stacking-family probe needs its four family members present on an already-migrated
+    // database, where `init` never re-runs.
+    crate::seed::seed_stacking_probe_fixture(ctx);
+
     crate::seed::seed_pw_shield_fixture(ctx);
     // Weakened Soul 6788, Test PW:Shield 50072
     let pw_shield = [6788u32, 50072u32]

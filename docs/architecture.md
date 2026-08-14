@@ -499,6 +499,11 @@ The ladder, and the rule that no rung substitutes for another:
 **Live wire tests against a running stack are operator-gated in attended sessions.** Offline tests
 are unrestricted.
 
+Two rungs are recorded as reproducible probe documents rather than as tooling:
+[`vmap-rollout.md`](./vmap-rollout.md) for exact collision, and
+[`cc-diminishing-returns-probe.md`](./cc-diminishing-returns-probe.md) for crowd-control diminishing
+returns, whose persisted state and removal-time window only a live database can show.
+
 The build carries source-scan tripwire tests that fail on architectural drift rather than on
 behaviour, all in `module/src/tripwires.rs` (#379 pulled them out of `lib.rs`): no module code
 outside `region.rs`/`load.rs` may read a shard id (`:478`); no whole-table `.iter()` over a spatial
@@ -537,5 +542,6 @@ local test harness needs it.
 | [`quickstart.md`](./quickstart.md) | The shortest path from a clean checkout to a running realm. |
 | [`development-cli.md`](./development-cli.md) | The `./lyracore` CLI: the pinned shim, and the build, preflight, publish and local-stack commands. |
 | [`data-ingestion.md`](./data-ingestion.md) | Where vanilla content comes from and the licensing firewall. |
+| [`aura-capacity-verification.md`](./aura-capacity-verification.md) | The live-stack procedure proving the 32-buff/16-debuff cap end to end: refusal, untouched survivors, the overflow log line, and the wire-level `SMSG_SPELL_FAILURE` relay. |
 
 **The work queue is GitHub Issues**, which is the single source of truth for what is open.

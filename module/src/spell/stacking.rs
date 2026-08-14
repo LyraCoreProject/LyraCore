@@ -239,6 +239,21 @@ pub(crate) fn dr_pre_level(prior: Option<DrWindow>, now_micros: i64) -> u8 {
     }
 }
 
+/// The row `bump_dr_level` writes after a successful application: the level advanced off the SAME
+/// `dr_pre_level` the decision was made from (capped at the immune step) and the PROVISIONAL window ending
+/// 15s after this application's own already-scaled expiry. Pure so the whole ladder is driven from
+/// production math in a test — the ctx-bound `bump_dr_level` is only the read/write around it.
+pub(crate) fn dr_bump(
+    prior: Option<DrWindow>,
+    now_micros: i64,
+    expires_at_micros: i64,
+) -> DrWindow {
+    DrWindow {
+        level: (dr_pre_level(prior, now_micros) + 1).min(3),
+        window_expires_micros: expires_at_micros + DR_WINDOW_MICROS,
+    }
+}
+
 /// Duration scale (basis points) for a CC application at `pre_level` (the level BEFORE this hit): 0 → 100%
 /// (fresh/reset), 1 → 50%, 2 → 25%, 3+ → `None` (immune — the 4th same-window hit is refused outright).
 pub(crate) fn dr_scale_bp(pre_level: u8) -> Option<u32> {
@@ -251,24 +266,16 @@ pub(crate) fn dr_scale_bp(pre_level: u8) -> Option<u32> {
 }
 
 /// "Strength" for a stacking-group comparison: rank first (dominant), then the effect's own magnitude as
-/// the tiebreaker — per the work item's "rank first then primary-effect magnitude" rule. `magnitude` must
-/// already be non-negative (callers pass `abs()`'d, stack-multiplied values — see `apply_group_conflict`).
-/// NOTE (documented divergence / follow-up): this reads `rank` uniformly regardless of whether the two
-/// auras being compared share a spell NAME. That's correct for a same-family group (Fortitude rank1 vs
-/// rank2 — the intended use of "rank first") but would be WRONG for a genuinely cross-family
-/// EXCLUSIVE_STRONGER group (armor debuffs: Sunder's rank is Sunder's-own 1..5, Expose Armor's rank is
-/// Expose's-own 1..5 — the two numberings aren't comparable) IF `game_spell_chain` ever carries real rows
-/// for those ids with differing ranks. Today none of Sunder/Expose/Faerie Fire exist in the curated kit
-/// (no `game_spell` row → `rank_of` returns 0 for all three), so the comparison is magnitude-only in
-/// practice and the vector below (the 5-stack Sunder-vs-Expose calc) is unaffected. [V] — once work-item
-/// 102's real `spell_chain` data lands for these ids, gate `rank_of` on "shares the incoming spell's NAME"
-/// before reusing it across a multi-family group, or add a per-group "single-family" flag.
+/// the tiebreaker. `magnitude` must already be non-negative (callers pass `abs()`'d, stack-multiplied
+/// values — see `apply_group_conflict`). Reaching for this directly compares rank numbers that may
+/// belong to different spell chains; only `compute_group_strength` knows whether that is meaningful.
 pub(crate) fn compute_strength(rank: u8, magnitude: i32) -> i32 {
     (rank as i32) * 100_000 + magnitude.clamp(0, 99_999)
 }
 
-/// Strength with the group's comparison contract applied. Keeping this decision next to the
-/// formula makes a heterogeneous group safe even after real spell-chain rows are imported.
+/// Strength with the group's comparison contract applied. A group that mixes rank chains — armor
+/// debuffs, or any buff paired with its group-cast form — drops rank and compares magnitude alone,
+/// because one chain's rank number says nothing about another's.
 pub(crate) fn compute_group_strength(rank_is_comparable: bool, rank: u8, magnitude: i32) -> i32 {
     compute_strength(if rank_is_comparable { rank } else { 0 }, magnitude)
 }
@@ -447,9 +454,9 @@ pub(crate) fn bump_dr_level(
         level: r.level,
         window_expires_micros: r.window_expires_micros,
     });
-    let pre_level = dr_pre_level(prior, now_micros);
-    let new_level = (pre_level + 1).min(3);
-    let new_window = expires_at_micros + DR_WINDOW_MICROS;
+    let bumped = dr_bump(prior, now_micros, expires_at_micros);
+    let new_level = bumped.level;
+    let new_window = bumped.window_expires_micros;
     match existing {
         Some(mut row) => {
             row.level = new_level;
@@ -584,49 +591,131 @@ mod tests {
         );
     }
 
-    /// Armor debuffs (EXCLUSIVE_STRONGER, verbatim vector, including the 5-STACK strength calc): Sunder
-    /// Armor (450/stack, real vanilla rank-5 value) at a single fresh stack (450) onto an existing Expose
-    /// Armor (real vanilla flat 2050) is WEAKER → Refuse. Expose (2050) onto an existing Sunder at its
-    /// hard 5-stack cap (450 × 5 = 2250 — the "5-stack strength calc") is ALSO weaker (2250 > 2050) →
-    /// Refuse. Neither displaces the other at these real values (armor debuffs aren't in the curated kit
-    /// today, so `rank_of` is 0 for both — a pure magnitude comparison, matching the vector).
+    /// The armor-debuff family is heterogeneous, so `rank_is_comparable` is false for it and the
+    /// comparison is magnitude only. Sunder Armor's magnitude is per-application: its ACTIVE STACK
+    /// COUNT decides whether Expose Armor displaces it, which is the whole point of the two vectors
+    /// below. Magnitudes are the real 1.12.1 values — Sunder rank 5 is 450 armor per stack and Expose
+    /// Armor rank 5 at five combo points is 2050.
     #[test]
-    fn armor_debuffs_exclusive_stronger_compares_magnitude_including_5_stack_sunder() {
-        const SUNDER_PER_STACK: i32 = 450; // real vanilla Sunder Armor rank-5 per-application armor reduction
-        const EXPOSE_FLAT: i32 = 2050; // real vanilla Expose Armor flat armor reduction
+    fn armor_debuff_strength_folds_sunders_active_stack_count() {
+        const SUNDER_PER_STACK: i32 = 450;
+        const EXPOSE_5_COMBO: i32 = 2050;
+        // The fold `apply_group_conflict` performs when it summarises an existing aura row.
+        fn armor_strength(rank: u8, amount: i32, stacks: u16) -> i32 {
+            compute_group_strength(
+                false,
+                rank,
+                amount.saturating_abs().saturating_mul(stacks.max(1) as i32),
+            )
+        }
 
-        // Sunder (fresh, 1 stack) onto an existing Expose: Expose (2050) is stronger → Refuse.
+        // ONE STACK: Sunder is worth 450, so Expose Armor's 2050 displaces it.
+        let sunder_1_stack = AuraSummary {
+            aura_id: 8,
+            caster_guid: 2,
+            strength: armor_strength(5, -450, 1),
+        };
+        assert_eq!(sunder_1_stack.strength, SUNDER_PER_STACK);
+        assert_eq!(
+            resolve_group_conflict(
+                1,
+                armor_strength(5, -EXPOSE_5_COMBO, 1),
+                GroupRule::ExclusiveStronger,
+                &[sunder_1_stack],
+            ),
+            ApplyDecision::Apply {
+                duration_scale_bp: 10_000,
+                evict: vec![8]
+            }
+        );
+
+        // FIVE STACKS: the same Sunder is worth 2250, so the same Expose Armor is refused.
+        let sunder_5_stack = AuraSummary {
+            aura_id: 8,
+            caster_guid: 2,
+            strength: armor_strength(5, -450, 5),
+        };
+        assert_eq!(sunder_5_stack.strength, SUNDER_PER_STACK * 5);
+        assert_eq!(
+            resolve_group_conflict(
+                1,
+                armor_strength(5, -EXPOSE_5_COMBO, 1),
+                GroupRule::ExclusiveStronger,
+                &[sunder_5_stack],
+            ),
+            ApplyDecision::Refuse { reason: "weaker" }
+        );
+
+        // A fresh single Sunder never displaces an established Expose Armor either.
         let expose_existing = AuraSummary {
             aura_id: 7,
             caster_guid: 1,
-            strength: compute_strength(0, EXPOSE_FLAT),
+            strength: armor_strength(5, -EXPOSE_5_COMBO, 1),
         };
         assert_eq!(
             resolve_group_conflict(
                 2,
-                compute_strength(0, SUNDER_PER_STACK),
+                armor_strength(5, -450, 1),
                 GroupRule::ExclusiveStronger,
                 &[expose_existing],
             ),
             ApplyDecision::Refuse { reason: "weaker" }
         );
+    }
 
-        // Expose onto an existing Sunder AT ITS 5-STACK CAP: 450 * 5 = 2250 > Expose's 2050 → Refuse.
-        let sunder_5_stack_strength = compute_strength(0, SUNDER_PER_STACK * 5);
-        assert_eq!(sunder_5_stack_strength, 2250);
-        let sunder_existing = AuraSummary {
-            aura_id: 8,
-            caster_guid: 2,
-            strength: sunder_5_stack_strength,
+    /// Fortitude mixes two rank chains, so it compares magnitude. A higher rank still replaces a lower
+    /// one (its magnitude is larger) and a lower rank is still refused. Magnitudes are the real 1.12.1
+    /// stamina values.
+    #[test]
+    fn fortitude_family_replaces_and_refuses_by_magnitude() {
+        const PW_FORT_R5: i32 = 43;
+        const PW_FORT_R6: i32 = 54;
+        let rank5 = AuraSummary {
+            aura_id: 42,
+            caster_guid: 200,
+            strength: compute_group_strength(false, 5, PW_FORT_R5),
         };
         assert_eq!(
             resolve_group_conflict(
-                1,
-                compute_strength(0, EXPOSE_FLAT),
+                100,
+                compute_group_strength(false, 6, PW_FORT_R6),
                 GroupRule::ExclusiveStronger,
-                &[sunder_existing],
+                &[rank5],
+            ),
+            ApplyDecision::Apply {
+                duration_scale_bp: 10_000,
+                evict: vec![42]
+            }
+        );
+
+        let rank6 = AuraSummary {
+            aura_id: 43,
+            caster_guid: 200,
+            strength: compute_group_strength(false, 6, PW_FORT_R6),
+        };
+        assert_eq!(
+            resolve_group_conflict(
+                100,
+                compute_group_strength(false, 5, PW_FORT_R5),
+                GroupRule::ExclusiveStronger,
+                &[rank6],
             ),
             ApplyDecision::Refuse { reason: "weaker" }
+        );
+
+        // Prayer of Fortitude rank 2 grants the same stamina as Power Word: Fortitude rank 6. Comparing
+        // the two chains' rank numbers instead would refuse it as "rank 2 versus rank 6".
+        assert_eq!(
+            resolve_group_conflict(
+                100,
+                compute_group_strength(false, 2, PW_FORT_R6),
+                GroupRule::ExclusiveStronger,
+                &[rank6],
+            ),
+            ApplyDecision::Apply {
+                duration_scale_bp: 10_000,
+                evict: vec![43]
+            }
         );
     }
 
@@ -743,6 +832,171 @@ mod tests {
         assert_eq!(dr_pre_level(Some(row_after_removal_3), t40_1), 0);
     }
 
+    /// One player target's `(category)` DR state driven through the PRODUCTION policy fns — the
+    /// in-process twin of the live probe in `docs/cc-diminishing-returns.md`, so the ladder, the window
+    /// stamping and the level agreement are asserted without a `ReducerContext`.
+    struct DrProbe {
+        row: Option<DrWindow>,
+    }
+
+    impl DrProbe {
+        /// A CC application of `base_ms` base duration at `now`. Returns the aura expiry the caster would
+        /// observe, or `None` when the application is refused at the immune step.
+        fn apply(&mut self, now: i64, base_ms: i64) -> Option<i64> {
+            match resolve_dr(self.row, now) {
+                ApplyDecision::Refuse { reason } => {
+                    assert_eq!(reason, "immune");
+                    None // refused: `aura_apply` returns before `bump_dr_level`, so `self.row` is untouched
+                }
+                ApplyDecision::Apply {
+                    duration_scale_bp,
+                    evict,
+                } => {
+                    assert!(evict.is_empty(), "a DR decision never evicts another aura");
+                    let expires = now + base_ms * 1_000 * (duration_scale_bp as i64) / 10_000;
+                    self.row = Some(dr_bump(self.row, now, expires));
+                    Some(expires)
+                }
+            }
+        }
+
+        /// Removal by ANY path — natural expiry, dispel, or break-on-damage. Mirrors the one line
+        /// `dr_window_on_removal` writes around its row read; the call sites themselves are pinned by
+        /// `every_removal_path_stamps_the_window_at_the_actual_removal_time`.
+        fn remove(&mut self, at: i64) {
+            let row = self
+                .row
+                .as_mut()
+                .expect("a removed CC aura always has a DR row");
+            row.window_expires_micros = at + DR_WINDOW_MICROS;
+        }
+    }
+
+    /// The end-to-end player-target timeline the live probe reproduces, on Polymorph's 20s base: full,
+    /// half and quarter duration, a refused immune application, an early (break-on-damage) removal
+    /// stamping the window before the scheduled expiry would have, a natural expiry stamping it at the
+    /// reaper's observation instant, and a fresh chain once the window lapses.
+    #[test]
+    fn player_target_dr_timeline_end_to_end_on_a_twenty_second_control() {
+        const S: i64 = 1_000_000;
+        const POLY_MS: i64 = 20_000;
+        let mut probe = DrProbe { row: None };
+
+        // t=0 — first application: full duration, stored level 1.
+        let expiry_1 = probe
+            .apply(0, POLY_MS)
+            .expect("a fresh target is never immune");
+        assert_eq!(expiry_1, 20 * S);
+        let row_1 = probe.row.expect("a successful application persists a row");
+        assert_eq!(row_1.level, 1);
+        // The persisted window agrees with the observed expiry: provisional = this aura's expiry + 15s.
+        assert_eq!(row_1.window_expires_micros, expiry_1 + DR_WINDOW_MICROS);
+
+        // t=3 — RECAST while the first aura is still active (it expires at t=20). The still-live level is
+        // read as-is, so a refresh cannot bypass progression: 50%, stored level 2.
+        let expiry_2 = probe.apply(3 * S, POLY_MS).expect("level 1 still applies");
+        assert_eq!(expiry_2, 13 * S); // 3s + 50% of 20s
+        let row_2 = probe.row.expect("row persists");
+        assert_eq!(row_2.level, 2);
+        assert_eq!(row_2.window_expires_micros, expiry_2 + DR_WINDOW_MICROS);
+
+        // t=5 — EARLY removal (break-on-damage or dispel) seven seconds before the scheduled expiry. The
+        // window is re-stamped from the ACTUAL removal, which is strictly earlier than the provisional
+        // scheduled-expiry value; the level is untouched by a removal.
+        let provisional = row_2.window_expires_micros;
+        probe.remove(5 * S);
+        let row_3 = probe.row.expect("row persists");
+        assert_eq!(row_3.window_expires_micros, 5 * S + DR_WINDOW_MICROS);
+        assert!(row_3.window_expires_micros < provisional);
+        assert_eq!(row_3.level, 2);
+
+        // t=8 — third application inside the window: 25%, stored level 3.
+        let expiry_3 = probe.apply(8 * S, POLY_MS).expect("level 2 still applies");
+        assert_eq!(expiry_3, 13 * S); // 8s + 25% of 20s
+        assert_eq!(probe.row.expect("row persists").level, 3);
+
+        // t=10 — fourth application while the third aura is still active: refused as immune, and the
+        // persisted level AND window are left exactly as they were.
+        let before_immune = probe.row;
+        assert_eq!(probe.apply(10 * S, POLY_MS), None);
+        assert_eq!(probe.row, before_immune);
+
+        // t=13.2 — NATURAL expiry, observed by the aura reaper 200ms after the scheduled t=13. The window
+        // starts at that removal instant, not at the scheduled expiry.
+        let removed_at = 13 * S + S / 5;
+        assert!(removed_at >= expiry_3);
+        probe.remove(removed_at);
+        let row_4 = probe.row.expect("row persists");
+        assert_eq!(row_4.window_expires_micros, removed_at + DR_WINDOW_MICROS);
+        assert_eq!(row_4.level, 3);
+
+        // Still immune at the exact window boundary (t=28.2).
+        assert_eq!(probe.apply(row_4.window_expires_micros, POLY_MS), None);
+
+        // One microsecond later the window has lapsed: full duration again, and a FRESH chain (level 1).
+        let restart = row_4.window_expires_micros + 1;
+        let expiry_4 = probe
+            .apply(restart, POLY_MS)
+            .expect("a lapsed window is a fresh target");
+        assert_eq!(expiry_4 - restart, 20 * S);
+        assert_eq!(probe.row.expect("row persists").level, 1);
+    }
+
+    /// Every removal path stamps the window from the reducer's OWN timestamp — never from the aura's
+    /// scheduled `expires_at`, which is what would keep an early removal's window running too long.
+    #[test]
+    fn every_removal_path_stamps_the_window_at_the_actual_removal_time() {
+        for (source, signature) in [
+            (
+                include_str!("scheduler.rs"),
+                "pub fn tick_auras(", // natural expiry
+            ),
+            (
+                include_str!("effects.rs"),
+                "pub(crate) fn dispel_target(", // dispel
+            ),
+            (
+                include_str!("control.rs"),
+                "pub(crate) fn break_auras_on_damage(", // break on damage
+            ),
+        ] {
+            let body = crate::test_scan::code_of(source, signature);
+            assert!(
+                body.contains("dr_window_on_removal("),
+                "{signature} must start the DR window when it removes an aura"
+            );
+            assert!(
+                body.contains("ctx.timestamp.to_micros_since_unix_epoch()")
+                    || body.contains("now.to_micros_since_unix_epoch()"),
+                "{signature} must stamp the window from the removal instant"
+            );
+            assert!(
+                !body.contains("dr_window_on_removal(ctx, a.target_guid, category, expires"),
+                "{signature} must not stamp the window from the scheduled expiry"
+            );
+        }
+    }
+
+    /// The stored level advances only AFTER an aura row was actually placed or refreshed: a group or slot
+    /// refusal between the DR decision and the insert must leave the target's progression untouched.
+    #[test]
+    fn dr_level_advances_only_after_the_aura_is_placed() {
+        let aura_apply = crate::test_scan::code_of(
+            include_str!("cast/targeting.rs"),
+            "pub(crate) fn aura_apply(",
+        );
+        let decision = aura_apply
+            .find("resolve_dr_for_target(")
+            .expect("aura_apply resolves DR");
+        let insert = aura_apply
+            .find("auras.insert(Aura {")
+            .expect("aura_apply inserts the aura");
+        let bump = aura_apply
+            .find("bump_dr_level(")
+            .expect("aura_apply advances DR");
+        assert!(decision < insert && insert < bump);
+    }
+
     /// Same double-poly scenario against a CREATURE target: `dr_category_for_effect` returns `None` for a
     /// non-player target (checked at the call site, before `resolve_dr_for_target` is ever invoked), so
     /// `aura_apply` never calls `resolve_dr` at all for a creature — modeled here as a `None` prior with no
@@ -821,12 +1075,97 @@ mod tests {
         assert!(compute_group_strength(true, 2, 1) > compute_group_strength(true, 1, 99_999));
     }
 
+    /// Every `.rs` file under `module/src`, so the scans below cannot be sidestepped by putting a
+    /// second aura path outside the spell module.
+    fn module_sources() -> Vec<std::path::PathBuf> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("module source directory is readable") {
+                let path = entry.expect("module source entry is readable").path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&crate::test_scan::repo_root().join("module/src"), &mut out);
+        out.sort();
+        out
+    }
+
+    /// `path` relative to the repo root, for a readable failure message.
+    fn rel(path: &std::path::Path) -> String {
+        path.strip_prefix(crate::test_scan::repo_root())
+            .unwrap_or(path)
+            .display()
+            .to_string()
+    }
+
+    /// Every live `game_aura` insert in `module/src`, as `file:line`.
+    fn aura_insert_sites() -> Vec<String> {
+        module_sources()
+            .iter()
+            .flat_map(|path| {
+                let source = std::fs::read_to_string(path).expect("module source is readable");
+                let file = rel(path);
+                crate::test_scan::raw_table_reads(&source, &["game_aura"], |content, idx| {
+                    content[idx..].trim_start().starts_with(".insert(")
+                })
+                .into_iter()
+                .map(move |(line, _)| format!("{file}:{line}"))
+                .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// Live (non-comment, non-string-literal) calls to or definitions of `name` in `source`.
+    fn live_calls(source: &str, name: &str) -> usize {
+        let needle = format!("{name}(");
+        source
+            .match_indices(needle.as_str())
+            .filter(|(idx, _)| {
+                !crate::test_scan::on_comment_line(source, *idx)
+                    && !crate::test_scan::in_string_literal(source, *idx)
+                    && crate::test_scan::is_standalone_ident(source, *idx, name)
+            })
+            .count()
+    }
+
+    /// The single-boundary guard. `raw_table_reads` follows both the inline `ctx.db.game_aura()`
+    /// call and this crate's dominant `let auras = ctx.db.game_aura();` handle idiom, and skips
+    /// comments and string literals — so this test's own needles never satisfy it.
     #[test]
     fn every_aura_entry_point_converges_on_the_authoritative_insertion_boundary() {
+        // `debug::debug_fill_aura_slots` writes synthetic filler rows to stage a full aura range, so it
+        // must skip the very boundary the capacity probe exercises. It is the ONLY exempt site.
+        let sites = aura_insert_sites();
+        let gameplay: Vec<_> = sites
+            .iter()
+            .filter(|s| !s.starts_with("module/src/debug/mod.rs:"))
+            .collect();
+        assert_eq!(
+            gameplay.len(),
+            1,
+            "a second game_aura insertion path bypasses aura_apply: {sites:?}"
+        );
+        assert!(
+            gameplay[0].starts_with("module/src/spell/cast/targeting.rs:"),
+            "the authoritative insertion site moved out of aura_apply: {sites:?}"
+        );
+        assert!(
+            sites.len() <= 2,
+            "a second debug game_aura insertion path appeared: {sites:?}"
+        );
+
+        // The one insertion sits inside `aura_apply`, after the group, DR and slot decisions.
         let targeting = include_str!("cast/targeting.rs");
         let aura_apply = crate::test_scan::code_of(targeting, "pub(crate) fn aura_apply(");
         assert_eq!(
-            aura_apply.matches("auras.insert(Aura {").count(),
+            crate::test_scan::raw_table_reads(&aura_apply, &["game_aura"], |content, idx| {
+                content[idx..].trim_start().starts_with(".insert(")
+            })
+            .len(),
             1,
             "aura_apply must retain exactly one game_aura insertion site"
         );
@@ -834,47 +1173,44 @@ mod tests {
         assert!(aura_apply.contains("resolve_dr_for_target("));
         assert!(aura_apply.contains("pick_aura_slot("));
 
-        fn rust_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-            for entry in std::fs::read_dir(dir).expect("spell source directory is readable") {
-                let path = entry.expect("spell source entry is readable").path();
-                if path.is_dir() {
-                    rust_sources(&path, out);
-                } else if path.extension().is_some_and(|ext| ext == "rs") {
-                    out.push(path);
-                }
-            }
+        // The three entry points: normal casts (`apply_effect`), linked debuffs
+        // (`apply_linked_debuff`) and passive/talent/racial grants (`apply_spell_auras`).
+        let resolve = include_str!("cast/resolve.rs");
+        for (source, signature) in [
+            (targeting, "pub(crate) fn apply_effect("),
+            (targeting, "pub(crate) fn apply_linked_debuff("),
+            (resolve, "pub(crate) fn apply_spell_auras("),
+        ] {
+            let body = crate::test_scan::code_of(source, signature);
+            assert!(
+                live_calls(&body, "aura_apply") >= 1,
+                "`{signature}` no longer reaches the aura-application boundary"
+            );
         }
-        let mut sources = Vec::new();
-        rust_sources(
-            &crate::test_scan::repo_root().join("module/src/spell"),
-            &mut sources,
-        );
-        let insertions: Vec<_> = sources
+        // …and nothing else calls it. One definition plus exactly three call sites; a fourth entry
+        // point must be routed through one of them or justified by moving this pin.
+        let calls: usize = module_sources()
             .iter()
-            .filter_map(|path| {
-                // This test's own assertion contains the needle as a string literal; it is not a
-                // production aura path, so exclude the file containing the tripwire itself.
-                if path.file_name().is_some_and(|name| name == "stacking.rs") {
-                    return None;
-                }
-                let source = std::fs::read_to_string(path).expect("spell source is readable");
-                source
-                    .contains("auras.insert(Aura {")
-                    .then(|| path.display().to_string())
+            .map(|path| {
+                let source = std::fs::read_to_string(path).expect("module source is readable");
+                live_calls(&source, "aura_apply")
             })
-            .collect();
+            .sum();
         assert_eq!(
-            insertions.len(),
-            1,
-            "a second game_aura insertion path bypasses aura_apply: {insertions:?}"
+            calls, 4,
+            "aura_apply gained or lost a caller — every aura entry point must converge here"
         );
 
-        // Normal casts and linked effects share `apply_effect`; passive/talent/racial application
-        // calls the same boundary from `apply_spell_auras`.
-        assert!(targeting.contains("aura_apply(\n            ctx,"));
-        let resolve = include_str!("cast/resolve.rs");
-        let passive = crate::test_scan::code_of(resolve, "pub(crate) fn apply_spell_auras(");
-        assert!(passive.contains("aura_apply("));
+        // A multi-effect spell calls the boundary once per effect; its own earlier effect must not
+        // be treated as a conflicting family member of the later ones.
+        let conflict = crate::test_scan::code_of(
+            include_str!("stacking.rs"),
+            "pub(crate) fn apply_group_conflict(",
+        );
+        assert!(
+            conflict.contains("a.spell_id != spell_id"),
+            "sibling effects of one spell must be excluded from their own family conflict"
+        );
     }
 
     /// `group_rule_from_u8` decodes the four documented rule bytes; an unrecognized byte is the safe
