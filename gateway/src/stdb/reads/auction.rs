@@ -80,6 +80,12 @@ fn select_active_page(
     )
 }
 
+fn bidder_matches(row: &Auction, player_guid: u64, _outbid_auction_ids: &[u32]) -> bool {
+    // Vanilla sends recently outbid ids as cache-invalidation hints. They never authorize a
+    // displaced row back into the bidder tab; the authoritative winner is the realm Auction.
+    row.highest_bidder_guid == player_guid
+}
+
 fn now_micros() -> i64 {
     let micros = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -130,6 +136,7 @@ impl Coordinator {
         let offset = match &query {
             AuctionQuery::Browse(request) => request.offset,
             AuctionQuery::Owner { offset } => *offset,
+            AuctionQuery::Bidder { offset, .. } => *offset,
         };
         let (rows, total) = select_active_page(
             db.game_auction().iter(),
@@ -156,6 +163,10 @@ impl Coordinator {
                         )
                     }),
                 AuctionQuery::Owner { .. } => row.owner_guid == player_guid,
+                AuctionQuery::Bidder {
+                    outbid_auction_ids,
+                    ..
+                } => bidder_matches(row, player_guid, outbid_auction_ids),
             },
         );
 
@@ -319,6 +330,26 @@ mod tests {
 
         let rows = vec![expired, at_deadline, other_house, other_owner, owned];
         let (page, total) = select_active_page(rows, 20, 0, |row| row.owner_guid == 1);
+        assert_eq!(total, 1);
+        assert_eq!(page.iter().map(|row| row.id).collect::<Vec<_>>(), vec![5]);
+    }
+
+    #[test]
+    fn bidder_selection_never_reintroduces_requested_outbid_auctions() {
+        let mut highest = auction(5);
+        highest.highest_bidder_guid = 8;
+        highest.highest_bid = 107;
+        let mut displaced = auction(19);
+        displaced.highest_bidder_guid = 9;
+        displaced.highest_bid = 113;
+
+        let requested_outbid_ids = [19, 88];
+        let (page, total) = select_active_page(
+            vec![displaced, highest],
+            20,
+            0,
+            |row| bidder_matches(row, 8, &requested_outbid_ids),
+        );
         assert_eq!(total, 1);
         assert_eq!(page.iter().map(|row| row.id).collect::<Vec<_>>(), vec![5]);
     }

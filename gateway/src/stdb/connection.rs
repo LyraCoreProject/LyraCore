@@ -374,6 +374,8 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_character",
         "SELECT * FROM game_world_entity",
         "SELECT * FROM game_auction",
+        "SELECT * FROM game_auction_bid_decision",
+        "SELECT * FROM game_auction_bid_hold",
         "SELECT * FROM game_auction_hold",
         "SELECT * FROM game_auction_operation_receipt",
         // The four box-scoped tables now ride THIS one global subscription per shard instead

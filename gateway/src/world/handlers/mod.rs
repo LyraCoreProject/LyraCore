@@ -30,7 +30,8 @@ pub(crate) use bank::handle_bank;
 pub(crate) use auction::{
     decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action,
     AuctionActionOutcome, AuctionActionPlayer, AuctionActionStore, AuctionBrowseRequest,
-    AuctionPage, AuctionQuery, CreateAuctionOutcome, CreateAuctionRequest,
+    AuctionPage, AuctionQuery, CreateAuctionOutcome, CreateAuctionRequest, PlaceBidOutcome,
+    PlaceBidRequest,
     CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 #[cfg(test)]

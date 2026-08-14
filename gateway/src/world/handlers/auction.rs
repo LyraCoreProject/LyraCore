@@ -39,6 +39,31 @@ pub(crate) enum CreateAuctionOutcome {
     Database,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PlaceBidRequest {
+    pub(crate) actor_guid: u64,
+    pub(crate) auctioneer_guid: u64,
+    pub(crate) auction_id: u32,
+    pub(crate) offer: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlaceBidOutcome {
+    Accepted {
+        minimum_increment: u32,
+    },
+    ItemNotFound,
+    NotEnoughMoney,
+    HigherBid {
+        bidder_guid: u64,
+        current_bid: u32,
+        minimum_increment: u32,
+    },
+    BidIncrement,
+    BidOwn,
+    Database,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AuctionBrowseRequest {
     pub(crate) auctioneer_guid: u64,
@@ -57,6 +82,10 @@ pub(crate) struct AuctionBrowseRequest {
 pub(crate) enum AuctionQuery {
     Browse(AuctionBrowseRequest),
     Owner { offset: u32 },
+    Bidder {
+        offset: u32,
+        outbid_auction_ids: Vec<u32>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +103,8 @@ pub(crate) trait AuctionActionStore: Send + Sync {
     ) -> Result<Option<AuctionInteraction>>;
 
     fn create_auction(&self, request: CreateAuctionRequest) -> Result<CreateAuctionOutcome>;
+
+    fn place_bid(&self, request: PlaceBidRequest) -> Result<PlaceBidOutcome>;
 
     fn auction_query(&self, player_guid: u64, query: AuctionQuery) -> Result<AuctionPage>;
 }
@@ -114,6 +145,10 @@ impl AuctionActionStore for crate::stdb::Coordinator {
         crate::stdb::Coordinator::create_auction(self, request)
     }
 
+    fn place_bid(&self, request: PlaceBidRequest) -> Result<PlaceBidOutcome> {
+        crate::stdb::Coordinator::place_bid(self, request)
+    }
+
     fn auction_query(&self, player_guid: u64, query: AuctionQuery) -> Result<AuctionPage> {
         crate::stdb::Coordinator::auction_query(self, player_guid, query)
     }
@@ -132,7 +167,10 @@ pub(crate) enum AuctionActionOutcome {
 enum AuctionRequest {
     Hello(wow_world_messages::vanilla::Guid),
     Owner(u32),
-    Bidder,
+    Bidder {
+        offset: u32,
+        outbid_auction_ids: Vec<u32>,
+    },
 }
 
 pub(crate) const CMSG_AUCTION_LIST_ITEMS_OPCODE: u32 = 0x0258;
@@ -263,6 +301,46 @@ fn create_result(outcome: CreateAuctionOutcome) -> AuctionActionOutcome {
     }
 }
 
+fn bid_result(auction_id: u32, outcome: PlaceBidOutcome) -> AuctionActionOutcome {
+    use wow_world_messages::{
+        vanilla::{
+            SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction as Action,
+            SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult as ResultOne,
+            SMSG_AUCTION_COMMAND_RESULT,
+        },
+        Guid,
+    };
+    let result = match outcome {
+        PlaceBidOutcome::Accepted { minimum_increment } => ResultOne::Ok {
+            auction_outbid1: minimum_increment,
+        },
+        PlaceBidOutcome::ItemNotFound => ResultOne::ErrItemNotFound,
+        PlaceBidOutcome::NotEnoughMoney => ResultOne::ErrNotEnoughMoney,
+        PlaceBidOutcome::HigherBid {
+            bidder_guid,
+            current_bid,
+            minimum_increment,
+        } => ResultOne::ErrHigherBid {
+            auction_outbid2: minimum_increment,
+            higher_bidder: Guid::new(bidder_guid),
+            new_bid: current_bid,
+        },
+        PlaceBidOutcome::BidIncrement => ResultOne::ErrBidIncrement,
+        PlaceBidOutcome::BidOwn => ResultOne::ErrBidOwn,
+        PlaceBidOutcome::Database => ResultOne::ErrDatabase,
+    };
+    AuctionActionOutcome::Handled {
+        outbound: vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(Box::new(
+                SMSG_AUCTION_COMMAND_RESULT {
+                    auction_id,
+                    action: Action::BidPlaced { result },
+                },
+            )),
+        )],
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AuctionActionErrorClass {
     GameplayRefusal,
@@ -316,7 +394,49 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
             (message.auctioneer, AuctionRequest::Owner(message.list_from))
         }
         ClientOpcodeMessage::CMSG_AUCTION_LIST_BIDDER_ITEMS(message) => {
-            (message.auctioneer, AuctionRequest::Bidder)
+            (
+                message.auctioneer,
+                AuctionRequest::Bidder {
+                    offset: message.start_from_page,
+                    outbid_auction_ids: message.outbid_item_ids,
+                },
+            )
+        }
+        ClientOpcodeMessage::CMSG_AUCTION_PLACE_BID(message) => {
+            let auction_id = message.auction_id;
+            let Some(player_guid) = player.self_guid else {
+                return Ok(bid_result(auction_id, PlaceBidOutcome::Database));
+            };
+            let auctioneer_guid = message.auctioneer.guid();
+            let entities = match store.auction_entities(player_guid, auctioneer_guid) {
+                Ok(entities) => entities,
+                Err(error)
+                    if classify_auction_action_error(&error)
+                        == AuctionActionErrorClass::GameplayRefusal =>
+                {
+                    return Ok(bid_result(auction_id, PlaceBidOutcome::Database));
+                }
+                Err(error) => return Err(error),
+            };
+            if !interaction_allowed(entities) {
+                return Ok(bid_result(auction_id, PlaceBidOutcome::Database));
+            }
+            let outcome = match store.place_bid(PlaceBidRequest {
+                actor_guid: player_guid,
+                auctioneer_guid,
+                auction_id,
+                offer: message.price.as_int(),
+            }) {
+                Ok(outcome) => outcome,
+                Err(error)
+                    if classify_auction_action_error(&error)
+                        == AuctionActionErrorClass::GameplayRefusal =>
+                {
+                    PlaceBidOutcome::Database
+                }
+                Err(error) => return Err(error),
+            };
+            return Ok(bid_result(auction_id, outcome));
         }
         ClientOpcodeMessage::CMSG_AUCTION_SELL_ITEM(message) => {
             let Some(player_guid) = player.self_guid else {
@@ -382,9 +502,7 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
             outbound: Vec::new(),
         });
     }
-    use wow_world_messages::vanilla::{
-        AuctionHouse, MSG_AUCTION_HELLO_Server, SMSG_AUCTION_BIDDER_LIST_RESULT,
-    };
+    use wow_world_messages::vanilla::{AuctionHouse, MSG_AUCTION_HELLO_Server};
     let message = match request {
         AuctionRequest::Hello(auctioneer) => {
             ServerOpcodeMessage::MSG_AUCTION_HELLO(Box::new(MSG_AUCTION_HELLO_Server {
@@ -399,12 +517,25 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
                 codec::build_auction_owner_list_result(&page.rows, page.total, page.now_micros),
             ))
         }
-        AuctionRequest::Bidder => ServerOpcodeMessage::SMSG_AUCTION_BIDDER_LIST_RESULT(Box::new(
-            SMSG_AUCTION_BIDDER_LIST_RESULT {
-                auctions: Vec::new(),
-                total_amount_of_auctions: 0,
-            },
-        )),
+        AuctionRequest::Bidder {
+            offset,
+            outbid_auction_ids,
+        } => {
+            let page = store.auction_query(
+                player_guid,
+                AuctionQuery::Bidder {
+                    offset,
+                    outbid_auction_ids,
+                },
+            )?;
+            ServerOpcodeMessage::SMSG_AUCTION_BIDDER_LIST_RESULT(Box::new(
+                codec::build_auction_bidder_list_result(
+                    &page.rows,
+                    page.total,
+                    page.now_micros,
+                ),
+            ))
+        }
     };
     Ok(AuctionActionOutcome::Handled {
         outbound: vec![Outbound::One(message)],
@@ -442,15 +573,20 @@ mod tests {
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
         Guid, MSG_AUCTION_HELLO_Client, SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction,
+        SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult,
         SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo, CMSG_AUCTION_LIST_BIDDER_ITEMS,
-        CMSG_AUCTION_LIST_ITEMS, CMSG_AUCTION_LIST_OWNER_ITEMS, CMSG_AUCTION_SELL_ITEM,
+        CMSG_AUCTION_LIST_ITEMS, CMSG_AUCTION_LIST_OWNER_ITEMS, CMSG_AUCTION_PLACE_BID,
+        CMSG_AUCTION_SELL_ITEM,
     };
+    use wow_world_messages::shared::Gold;
 
     struct InMemoryAuctionActions {
         result: Mutex<Result<Option<AuctionInteraction>, String>>,
         lookups: Mutex<Vec<(u64, u64)>>,
         creates: Mutex<Vec<CreateAuctionRequest>>,
         create_result: Mutex<Result<CreateAuctionOutcome, String>>,
+        bids: Mutex<Vec<PlaceBidRequest>>,
+        bid_result: Mutex<Result<PlaceBidOutcome, String>>,
         query_result: Mutex<Result<AuctionPage, String>>,
         queries: Mutex<Vec<(u64, AuctionQuery)>>,
     }
@@ -476,6 +612,16 @@ mod tests {
         fn create_auction(&self, request: CreateAuctionRequest) -> Result<CreateAuctionOutcome> {
             self.creates.lock().unwrap().push(request);
             self.create_result
+                .lock()
+                .unwrap()
+                .as_ref()
+                .copied()
+                .map_err(|error| anyhow::anyhow!(error.clone()))
+        }
+
+        fn place_bid(&self, request: PlaceBidRequest) -> Result<PlaceBidOutcome> {
+            self.bids.lock().unwrap().push(request);
+            self.bid_result
                 .lock()
                 .unwrap()
                 .as_ref()
@@ -516,6 +662,10 @@ mod tests {
             lookups: Mutex::default(),
             creates: Mutex::default(),
             create_result: Mutex::new(Ok(CreateAuctionOutcome::Created { auction_id: 41 })),
+            bids: Mutex::default(),
+            bid_result: Mutex::new(Ok(PlaceBidOutcome::Accepted {
+                minimum_increment: 6,
+            })),
             query_result: Mutex::new(Ok(AuctionPage {
                 rows: Vec::new(),
                 total: 0,
@@ -531,6 +681,8 @@ mod tests {
             lookups: Mutex::default(),
             creates: Mutex::default(),
             create_result: Mutex::new(Ok(CreateAuctionOutcome::Database)),
+            bids: Mutex::default(),
+            bid_result: Mutex::new(Ok(PlaceBidOutcome::Database)),
             query_result: Mutex::new(Ok(AuctionPage {
                 rows: Vec::new(),
                 total: 0,
@@ -690,6 +842,62 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn bidder_view_preserves_requested_outbid_ids_and_uses_current_highest_rows() {
+        let store = store_with(Some(valid_interaction()));
+        *store.query_result.lock().unwrap() = Ok(AuctionPage {
+            rows: vec![codec::AuctionView {
+                id: 19,
+                item_entry: 35,
+                item_stack_count: 3,
+                item_enchant_id: 4,
+                owner_guid: 7,
+                start_bid: 80,
+                buyout: 900,
+                highest_bidder_guid: 8,
+                highest_bid: 107,
+                expires_at_micros: 4_000_000,
+            }],
+            total: 52,
+            now_micros: 1_000_000,
+        });
+        let outcome = dispatch_auction_action(
+            &store,
+            AuctionActionPlayer { self_guid: Some(8) },
+            CMSG_AUCTION_LIST_BIDDER_ITEMS {
+                auctioneer: Guid::new(42),
+                start_from_page: 50,
+                outbid_item_ids: vec![19, 88],
+            }
+            .into(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            store.queries.lock().unwrap().as_slice(),
+            &[(
+                8,
+                AuctionQuery::Bidder {
+                    offset: 50,
+                    outbid_auction_ids: vec![19, 88],
+                },
+            )]
+        );
+        let AuctionActionOutcome::Handled { outbound } = outcome else {
+            panic!("bidder view must be handled")
+        };
+        assert!(matches!(
+            outbound.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_BIDDER_LIST_RESULT(message))]
+                if message.total_amount_of_auctions == 52
+                    && message.auctions.len() == 1
+                    && message.auctions[0].id == 19
+                    && message.auctions[0].minimum_bid == 6
+                    && message.auctions[0].highest_bid == 107
+                    && message.auctions[0].highest_bidder.guid() == 8
+        ));
+    }
+
     fn hello_outbound(store: &InMemoryAuctionActions) -> Result<Vec<Outbound>> {
         match dispatch_auction_action(
             store,
@@ -722,6 +930,24 @@ mod tests {
             AuctionActionOutcome::Handled { outbound } => Ok(outbound),
             AuctionActionOutcome::PassThrough(_) => {
                 panic!("auction sell must never pass beyond its focused seam")
+            }
+        }
+    }
+
+    fn bid_outbound(store: &InMemoryAuctionActions) -> Result<Vec<Outbound>> {
+        match dispatch_auction_action(
+            store,
+            AuctionActionPlayer { self_guid: Some(8) },
+            CMSG_AUCTION_PLACE_BID {
+                auctioneer: Guid::new(42),
+                auction_id: 41,
+                price: Gold::new(107),
+            }
+            .into(),
+        )? {
+            AuctionActionOutcome::Handled { outbound } => Ok(outbound),
+            AuctionActionOutcome::PassThrough(_) => {
+                panic!("auction bid must never pass beyond its focused seam")
             }
         }
     }
@@ -828,6 +1054,92 @@ mod tests {
                 duration_minutes: 720,
             }]
         );
+    }
+
+    #[test]
+    fn a_valid_bid_holds_the_full_offer_and_receives_the_specific_bid_result() {
+        let store = store_with(Some(valid_interaction()));
+        let outbound = bid_outbound(&store).unwrap();
+        assert_eq!(
+            store.bids.lock().unwrap().as_slice(),
+            &[PlaceBidRequest {
+                actor_guid: 8,
+                auctioneer_guid: 42,
+                auction_id: 41,
+                offer: 107,
+            }]
+        );
+        assert!(matches!(
+            outbound.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(message))]
+                if message.auction_id == 41
+                    && message.action
+                        == SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction::BidPlaced {
+                            result: SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult::Ok {
+                                auction_outbid1: 6,
+                            },
+                        }
+        ));
+    }
+
+    #[test]
+    fn bid_refusals_use_the_specific_vanilla_result_variants() {
+        let cases = [
+            (
+                PlaceBidOutcome::ItemNotFound,
+                SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult::ErrItemNotFound,
+            ),
+            (
+                PlaceBidOutcome::NotEnoughMoney,
+                SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult::ErrNotEnoughMoney,
+            ),
+            (
+                PlaceBidOutcome::BidIncrement,
+                SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult::ErrBidIncrement,
+            ),
+            (
+                PlaceBidOutcome::BidOwn,
+                SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult::ErrBidOwn,
+            ),
+            (
+                PlaceBidOutcome::Database,
+                SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult::ErrDatabase,
+            ),
+        ];
+        for (outcome, expected) in cases {
+            let store = store_with(Some(valid_interaction()));
+            *store.bid_result.lock().unwrap() = Ok(outcome);
+            let outbound = bid_outbound(&store).unwrap();
+            assert!(matches!(
+                outbound.as_slice(),
+                [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(message))]
+                    if message.auction_id == 41
+                        && message.action
+                            == SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction::BidPlaced {
+                                result: expected,
+                            }
+            ));
+        }
+
+        let store = store_with(Some(valid_interaction()));
+        *store.bid_result.lock().unwrap() = Ok(PlaceBidOutcome::HigherBid {
+            bidder_guid: 9,
+            current_bid: 101,
+            minimum_increment: 6,
+        });
+        let outbound = bid_outbound(&store).unwrap();
+        assert!(matches!(
+            outbound.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(message))]
+                if matches!(message.action,
+                    SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction::BidPlaced {
+                        result: SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult::ErrHigherBid {
+                            auction_outbid2: 6,
+                            higher_bidder,
+                            new_bid: 101,
+                        },
+                    } if higher_bidder.guid() == 9)
+        ));
     }
 
     #[test]

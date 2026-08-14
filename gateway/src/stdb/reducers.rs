@@ -429,6 +429,180 @@ impl Coordinator {
         })
     }
 
+    /// Place one full-offer bid. The sharded path fences the bidder purse before realm-core makes
+    /// its serialized Auction decision; both paths finish with the same terminal Hold outcome.
+    pub(crate) fn place_bid(
+        &self,
+        request: crate::world::PlaceBidRequest,
+    ) -> Result<crate::world::PlaceBidOutcome> {
+        let operation_id = self
+            .matching_pending_bid_hold(request)
+            .map_or_else(next_auction_operation_id, |hold| Ok(hold.operation_id))?;
+        let result = if self.is_sharded() {
+            self.drive_sharded_auction_bid(operation_id, request)
+        } else {
+            self.auction_bid_local(operation_id, request)?;
+            self.wait_for_terminal_bid_hold(operation_id)
+        };
+        match result {
+            Ok(hold) => bid_outcome(&hold),
+            Err(error) => match map_bid_refusal(&error) {
+                Some(outcome) => Ok(outcome),
+                None => Err(error),
+            },
+        }
+    }
+
+    fn drive_sharded_auction_bid(
+        &self,
+        operation_id: u64,
+        request: crate::world::PlaceBidRequest,
+    ) -> Result<AuctionBidHold> {
+        self.auction_hold_bid(operation_id, request)?;
+        let hold = self.wait_for_auction_bid_hold(operation_id)?;
+        if hold.outcome != lyracore_shared::auction::bid_outcome::PENDING {
+            return Ok(hold);
+        }
+        let realm = self.realm_core()?;
+        realm.auction_decide_bid(&hold)?;
+        let decision = realm.wait_for_auction_bid_decision(operation_id)?;
+        self.auction_finish_bid(&hold, &decision)?;
+        self.wait_for_terminal_bid_hold(operation_id)
+    }
+
+    fn auction_bid_local(
+        &self,
+        operation_id: u64,
+        request: crate::world::PlaceBidRequest,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_auction_bid_local",
+            gw_auction_bid_local_then(
+                operation_id,
+                request.actor_guid,
+                request.auction_id,
+                request.offer
+            )
+        )
+    }
+
+    fn auction_hold_bid(
+        &self,
+        operation_id: u64,
+        request: crate::world::PlaceBidRequest,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_auction_hold_bid",
+            gw_auction_hold_bid_then(
+                operation_id,
+                request.actor_guid,
+                request.auction_id,
+                request.offer
+            )
+        )
+    }
+
+    fn auction_decide_bid(&self, hold: &AuctionBidHold) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_auction_decide_bid",
+            realm_auction_decide_bid_then(
+                hold.operation_id,
+                hold.bidder_guid,
+                hold.auction_id,
+                hold.offer
+            )
+        )
+    }
+
+    fn auction_finish_bid(
+        &self,
+        hold: &AuctionBidHold,
+        decision: &AuctionBidDecision,
+    ) -> Result<()> {
+        if hold.operation_id != decision.operation_id
+            || hold.bidder_guid != decision.bidder_guid
+            || hold.auction_id != decision.auction_id
+            || hold.offer != decision.offer
+        {
+            return Err(anyhow!("auction bid decision payload does not match its Hold"));
+        }
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_auction_finish_bid",
+            gw_auction_finish_bid_then(
+                hold.operation_id,
+                hold.bidder_guid,
+                hold.auction_id,
+                hold.offer,
+                decision.outcome,
+                decision.revision,
+                decision.result_bidder_guid,
+                decision.result_bid,
+                decision.minimum_increment
+            )
+        )
+    }
+
+    fn matching_pending_bid_hold(
+        &self,
+        request: crate::world::PlaceBidRequest,
+    ) -> Option<AuctionBidHold> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_auction_bid_hold()
+            .iter()
+            .find(|hold| {
+                hold.outcome == lyracore_shared::auction::bid_outcome::PENDING
+                    && hold.bidder_guid == request.actor_guid
+                    && hold.auction_id == request.auction_id
+                    && hold.offer == request.offer
+            })
+    }
+
+    fn wait_for_auction_bid_hold(&self, operation_id: u64) -> Result<AuctionBidHold> {
+        wait_for_auction_cache_row(operation_id, "bid Hold", || {
+            self.0
+                .coord()
+                .conn
+                .db
+                .game_auction_bid_hold()
+                .operation_id()
+                .find(&operation_id)
+        })
+    }
+
+    fn wait_for_terminal_bid_hold(&self, operation_id: u64) -> Result<AuctionBidHold> {
+        wait_for_auction_cache_row(operation_id, "terminal bid Hold", || {
+            self.0
+                .coord()
+                .conn
+                .db
+                .game_auction_bid_hold()
+                .operation_id()
+                .find(&operation_id)
+                .filter(|hold| {
+                    hold.outcome != lyracore_shared::auction::bid_outcome::PENDING
+                })
+        })
+    }
+
+    fn wait_for_auction_bid_decision(&self, operation_id: u64) -> Result<AuctionBidDecision> {
+        wait_for_auction_cache_row(operation_id, "bid decision", || {
+            self.0
+                .coord()
+                .conn
+                .db
+                .game_auction_bid_decision()
+                .operation_id()
+                .find(&operation_id)
+        })
+    }
+
     /// Enter the world (Phase 4): call the `player_login` reducer on the coordinator connection
     /// (so `ctx.sender` is the player's bound identity), then read the resulting
     /// `game_world_entity` row back through the privileged cache as an `EntityView`.
@@ -698,6 +872,18 @@ impl Coordinator {
                 .iter()
                 .any(|hold| hold.seller_guid == character_guid);
             if has_hold {
+                return Ok(true);
+            }
+            let has_bid_hold = guard
+                .conn
+                .db
+                .game_auction_bid_hold()
+                .iter()
+                .any(|hold| {
+                    hold.bidder_guid == character_guid
+                        && hold.outcome == lyracore_shared::auction::bid_outcome::PENDING
+                });
+            if has_bid_hold {
                 return Ok(true);
             }
         }
@@ -2722,6 +2908,40 @@ fn map_auction_refusal(error: &anyhow::Error) -> Option<crate::world::CreateAuct
     }
 }
 
+fn bid_outcome(hold: &AuctionBidHold) -> Result<crate::world::PlaceBidOutcome> {
+    use crate::world::PlaceBidOutcome;
+    use lyracore_shared::auction::bid_outcome;
+    Ok(match hold.outcome {
+        bid_outcome::ACCEPTED => PlaceBidOutcome::Accepted {
+            minimum_increment: u32::try_from(u64::from(hold.offer).div_ceil(20))
+                .unwrap_or(u32::MAX)
+                .max(1),
+        },
+        bid_outcome::ITEM_NOT_FOUND => PlaceBidOutcome::ItemNotFound,
+        bid_outcome::HIGHER_BID => PlaceBidOutcome::HigherBid {
+            bidder_guid: hold.result_bidder_guid,
+            current_bid: hold.result_bid,
+            minimum_increment: hold.minimum_increment,
+        },
+        bid_outcome::BID_INCREMENT => PlaceBidOutcome::BidIncrement,
+        bid_outcome::BID_OWN => PlaceBidOutcome::BidOwn,
+        bid_outcome::DATABASE => PlaceBidOutcome::Database,
+        outcome => return Err(anyhow!("auction bid Hold has non-terminal outcome {outcome}")),
+    })
+}
+
+fn map_bid_refusal(error: &anyhow::Error) -> Option<crate::world::PlaceBidOutcome> {
+    use crate::world::PlaceBidOutcome;
+    let text = format!("{error:#}");
+    if text.contains(lyracore_shared::auction::result::NOT_ENOUGH_MONEY) {
+        Some(PlaceBidOutcome::NotEnoughMoney)
+    } else if text.contains(lyracore_shared::auction::result::DATABASE) {
+        Some(PlaceBidOutcome::Database)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod auction_reducer_tests {
     use super::*;
@@ -2747,5 +2967,21 @@ mod auction_reducer_tests {
             assert_eq!(map_auction_refusal(&anyhow!("[{tag}] refused")), Some(expected));
         }
         assert_eq!(map_auction_refusal(&anyhow!("transport disconnected")), None);
+
+        assert_eq!(
+            map_bid_refusal(&anyhow!(
+                "[{}] refused",
+                lyracore_shared::auction::result::NOT_ENOUGH_MONEY
+            )),
+            Some(crate::world::PlaceBidOutcome::NotEnoughMoney)
+        );
+        assert_eq!(
+            map_bid_refusal(&anyhow!(
+                "[{}] refused",
+                lyracore_shared::auction::result::DATABASE
+            )),
+            Some(crate::world::PlaceBidOutcome::Database)
+        );
+        assert_eq!(map_bid_refusal(&anyhow!("transport disconnected")), None);
     }
 }

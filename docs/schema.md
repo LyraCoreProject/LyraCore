@@ -54,8 +54,8 @@ publish presents as an unrelated mid-session hang, not a loud "no such table".
 
 ## 2. Inventory
 
-**173 tables** — 164 of them in `module/src/**`, the remaining 9 contributed by extension packages
-compiled into the same module. **108 public, 65 private.**
+**175 tables** — 166 of them in `module/src/**`, the remaining 9 contributed by extension packages
+compiled into the same module. **108 public, 67 private.**
 
 | Domain | Tables | Public | Where |
 |---|---:|---:|---|
@@ -69,7 +69,7 @@ compiled into the same module. **108 public, 65 private.**
 | Talent tree (static) | 2 | 2 | `talent.rs` |
 | Quest | 9 | 8 | `quest.rs` |
 | Item / vendor | 4 | 3 | `items/tables.rs` |
-| Auction house | 4 | 1 | `auction.rs` |
+| Auction house | 6 | 1 | `auction.rs` |
 | Creature (template, spawn, AI, pet, trainer) | 15 | 11 | `creatures/*`, `trainer.rs` |
 | GameObject | 6 | 6 | `gameobject.rs` |
 | Loot | 9 | 6 | `loot.rs` |
@@ -245,9 +245,11 @@ RAM.
 `game_auction` is the public active Stormwind market. Its item columns are the complete item-instance
 snapshot while no inventory row exists. Private `game_auction_hold` is the source-shard value fence;
 private `game_auction_operation_receipt` makes listing retries idempotent after that Hold is deleted.
-`game_auction_expiry` is a private one-shot schedule at the listing's original deadline. These tables
-are additive and are deliberately excluded from character transfer manifests; deletion is refused
-while a character owns Auction value.
+Private `game_auction_bid_hold` fences a bidder's complete offer and retains the terminal source
+outcome; private `game_auction_bid_decision` is realm-core's serialized, replay-safe decision.
+`game_auction_expiry` is a private one-shot schedule at the listing's original deadline. These
+tables are additive and are deliberately excluded from character transfer manifests; deletion is
+refused while a character owns Auction value.
 
 ---
 

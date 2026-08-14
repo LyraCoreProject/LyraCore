@@ -2,6 +2,11 @@
 
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
+use lyracore_shared::auction::bid_outcome::{
+    ACCEPTED as BID_ACCEPTED, BID_INCREMENT, BID_OWN, DATABASE as BID_DATABASE,
+    HIGHER_BID as BID_HIGHER, ITEM_NOT_FOUND as BID_ITEM_NOT_FOUND, PENDING as BID_PENDING,
+};
+
 use crate::{game_item_instance, game_item_template, game_world_entity};
 
 /// One active listing in the shared Stormwind market. The complete item-instance snapshot is the
@@ -83,6 +88,41 @@ pub struct AuctionOperationReceipt {
     pub deposit: u32,
     pub created_micros: i64,
     pub expires_micros: i64,
+}
+
+/// Source-shard copper fence for one caller-identified bid. `outcome == 0` is pending; every
+/// nonzero outcome is terminal and retains the full payload for safe replay detection.
+#[table(
+    accessor = game_auction_bid_hold,
+    index(accessor = by_bidder, btree(columns = [bidder_guid]))
+)]
+pub struct AuctionBidHold {
+    #[primary_key]
+    pub operation_id: u64,
+    pub bidder_guid: u64,
+    pub auction_id: u32,
+    pub offer: u32,
+    pub outcome: u8,
+    pub revision: u64,
+    pub result_bidder_guid: u64,
+    pub result_bid: u32,
+    pub minimum_increment: u32,
+}
+
+/// Realm-core's terminal serialized decision for one bid payload. Accepted decisions, the Auction
+/// revision update, and any displaced-bidder mail are committed in the same transaction.
+#[table(accessor = game_auction_bid_decision)]
+pub struct AuctionBidDecision {
+    #[primary_key]
+    pub operation_id: u64,
+    pub bidder_guid: u64,
+    pub auction_id: u32,
+    pub offer: u32,
+    pub outcome: u8,
+    pub revision: u64,
+    pub result_bidder_guid: u64,
+    pub result_bid: u32,
+    pub minimum_increment: u32,
 }
 
 /// One one-shot scheduler row for each active Auction.
@@ -182,6 +222,283 @@ enum OperationMatch {
     Replay(u32),
     Conflict,
     Fresh,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BidRequest {
+    operation_id: u64,
+    bidder_guid: u64,
+    auction_id: u32,
+    offer: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BidAuction {
+    id: u32,
+    owner_guid: u64,
+    highest_bidder_guid: u64,
+    highest_bid: u32,
+    start_bid: u32,
+    expires_micros: i64,
+    revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BidDecision {
+    Accepted {
+        revision: u64,
+        displaced_bidder_guid: u64,
+        displaced_bid: u32,
+    },
+    ItemNotFound,
+    HigherBid {
+        bidder_guid: u64,
+        current_bid: u32,
+        minimum_increment: u32,
+    },
+    BidIncrement,
+    BidOwn,
+    Database,
+}
+
+#[derive(Clone, Copy)]
+struct BidDecisionFields {
+    outcome: u8,
+    revision: u64,
+    result_bidder_guid: u64,
+    result_bid: u32,
+    minimum_increment: u32,
+}
+
+fn bid_decision_fields(decision: BidDecision) -> BidDecisionFields {
+    let mut fields = BidDecisionFields {
+        outcome: BID_DATABASE,
+        revision: 0,
+        result_bidder_guid: 0,
+        result_bid: 0,
+        minimum_increment: 0,
+    };
+    match decision {
+        BidDecision::Accepted {
+            revision,
+            displaced_bidder_guid,
+            displaced_bid,
+        } => {
+            fields.outcome = BID_ACCEPTED;
+            fields.revision = revision;
+            fields.result_bidder_guid = displaced_bidder_guid;
+            fields.result_bid = displaced_bid;
+        }
+        BidDecision::ItemNotFound => fields.outcome = BID_ITEM_NOT_FOUND,
+        BidDecision::HigherBid {
+            bidder_guid,
+            current_bid,
+            minimum_increment,
+        } => {
+            fields.outcome = BID_HIGHER;
+            fields.result_bidder_guid = bidder_guid;
+            fields.result_bid = current_bid;
+            fields.minimum_increment = minimum_increment;
+        }
+        BidDecision::BidIncrement => fields.outcome = BID_INCREMENT,
+        BidDecision::BidOwn => fields.outcome = BID_OWN,
+        BidDecision::Database => {}
+    }
+    fields
+}
+
+fn bid_decision_from_fields(fields: BidDecisionFields) -> Option<BidDecision> {
+    match fields.outcome {
+        BID_PENDING => None,
+        BID_ACCEPTED => Some(BidDecision::Accepted {
+            revision: fields.revision,
+            displaced_bidder_guid: fields.result_bidder_guid,
+            displaced_bid: fields.result_bid,
+        }),
+        BID_ITEM_NOT_FOUND => Some(BidDecision::ItemNotFound),
+        BID_HIGHER => Some(BidDecision::HigherBid {
+            bidder_guid: fields.result_bidder_guid,
+            current_bid: fields.result_bid,
+            minimum_increment: fields.minimum_increment,
+        }),
+        BID_INCREMENT => Some(BidDecision::BidIncrement),
+        BID_OWN => Some(BidDecision::BidOwn),
+        _ => Some(BidDecision::Database),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BidRefusal {
+    NotEnoughMoney,
+    Database,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HeldBid {
+    request: BidRequest,
+    decision: Option<BidDecision>,
+}
+
+trait BidSource {
+    fn money(&self, bidder_guid: u64) -> Option<u32>;
+    fn hold(&self, operation_id: u64) -> Option<HeldBid>;
+    fn create_hold(&mut self, request: BidRequest) -> Result<(), BidRefusal>;
+    fn finish_hold(
+        &mut self,
+        request: BidRequest,
+        decision: BidDecision,
+    ) -> Result<(), BidRefusal>;
+}
+
+fn fence_bid<S: BidSource>(source: &mut S, request: BidRequest) -> Result<(), BidRefusal> {
+    if request.operation_id == 0
+        || request.bidder_guid == 0
+        || request.auction_id == 0
+        || request.offer == 0
+    {
+        return Err(BidRefusal::Database);
+    }
+    if let Some(hold) = source.hold(request.operation_id) {
+        return if hold.request == request {
+            Ok(())
+        } else {
+            Err(BidRefusal::Database)
+        };
+    }
+    if source
+        .money(request.bidder_guid)
+        .is_none_or(|money| money < request.offer)
+    {
+        return Err(BidRefusal::NotEnoughMoney);
+    }
+    source.create_hold(request)?;
+    Ok(())
+}
+
+fn finish_bid<S: BidSource>(
+    source: &mut S,
+    request: BidRequest,
+    decision: BidDecision,
+) -> Result<BidDecision, BidRefusal> {
+    let hold = source
+        .hold(request.operation_id)
+        .ok_or(BidRefusal::Database)?;
+    if hold.request != request {
+        return Err(BidRefusal::Database);
+    }
+    if let Some(existing) = hold.decision {
+        return if existing == decision {
+            Ok(existing)
+        } else {
+            Err(BidRefusal::Database)
+        };
+    }
+    source.finish_hold(request, decision)?;
+    Ok(decision)
+}
+
+fn minimum_next_bid(auction: BidAuction) -> Result<u32, BidDecision> {
+    if auction.highest_bid == 0 {
+        return Ok(auction.start_bid);
+    }
+    let increment = u32::try_from(u64::from(auction.highest_bid).div_ceil(20))
+        .map_err(|_| BidDecision::Database)?
+        .max(1);
+    auction
+        .highest_bid
+        .checked_add(increment)
+        .ok_or(BidDecision::Database)
+}
+
+fn decide_bid(auction: Option<BidAuction>, request: BidRequest, now_micros: i64) -> BidDecision {
+    if request.operation_id == 0
+        || request.bidder_guid == 0
+        || request.auction_id == 0
+        || request.offer == 0
+    {
+        return BidDecision::Database;
+    }
+    let Some(auction) = auction.filter(|auction| {
+        auction.id == request.auction_id && auction.expires_micros > now_micros
+    }) else {
+        return BidDecision::ItemNotFound;
+    };
+    if auction.owner_guid == request.bidder_guid {
+        return BidDecision::BidOwn;
+    }
+    let minimum_increment = if auction.highest_bid == 0 {
+        0
+    } else {
+        u32::try_from(u64::from(auction.highest_bid).div_ceil(20))
+            .unwrap_or(u32::MAX)
+            .max(1)
+    };
+    let Ok(minimum) = minimum_next_bid(auction) else {
+        return BidDecision::Database;
+    };
+    if auction.highest_bid != 0 && request.offer <= auction.highest_bid {
+        return BidDecision::HigherBid {
+            bidder_guid: auction.highest_bidder_guid,
+            current_bid: auction.highest_bid,
+            minimum_increment,
+        };
+    }
+    if request.offer < minimum {
+        return BidDecision::BidIncrement;
+    }
+    let Some(revision) = auction.revision.checked_add(1) else {
+        return BidDecision::Database;
+    };
+    BidDecision::Accepted {
+        revision,
+        displaced_bidder_guid: auction.highest_bidder_guid,
+        displaced_bid: auction.highest_bid,
+    }
+}
+
+trait BidMarket {
+    fn decision(&self, operation_id: u64) -> Option<(BidRequest, BidDecision)>;
+    fn auction(&self, auction_id: u32) -> Option<BidAuction>;
+    fn now_micros(&self) -> i64;
+    fn commit_decision(
+        &mut self,
+        request: BidRequest,
+        auction: Option<BidAuction>,
+        decision: BidDecision,
+    ) -> Result<(), BidRefusal>;
+}
+
+fn resolve_bid<S: BidMarket>(
+    market: &mut S,
+    request: BidRequest,
+) -> Result<BidDecision, BidRefusal> {
+    if let Some((existing_request, decision)) = market.decision(request.operation_id) {
+        return if existing_request == request {
+            Ok(decision)
+        } else {
+            Err(BidRefusal::Database)
+        };
+    }
+    let auction = market.auction(request.auction_id);
+    let decision = decide_bid(auction, request, market.now_micros());
+    market.commit_decision(request, auction, decision)?;
+    Ok(decision)
+}
+
+fn drive_bid<S: BidSource, M: BidMarket>(
+    source: &mut S,
+    market: &mut M,
+    request: BidRequest,
+) -> Result<BidDecision, BidRefusal> {
+    fence_bid(source, request)?;
+    if let Some(decision) = source
+        .hold(request.operation_id)
+        .and_then(|hold| hold.decision)
+    {
+        return Ok(decision);
+    }
+    let decision = resolve_bid(market, request)?;
+    finish_bid(source, request, decision)
 }
 
 trait ListingSource {
@@ -613,6 +930,225 @@ impl MarketSink for CtxMarket<'_> {
     }
 }
 
+struct CtxBidSource<'a> {
+    ctx: &'a ReducerContext,
+}
+
+impl BidSource for CtxBidSource<'_> {
+    fn money(&self, bidder_guid: u64) -> Option<u32> {
+        crate::helpers::acting_entity_by_guid(self.ctx, bidder_guid).map(|bidder| bidder.money)
+    }
+
+    fn hold(&self, operation_id: u64) -> Option<HeldBid> {
+        self.ctx
+            .db
+            .game_auction_bid_hold()
+            .operation_id()
+            .find(operation_id)
+            .map(|row| HeldBid {
+                request: BidRequest {
+                    operation_id: row.operation_id,
+                    bidder_guid: row.bidder_guid,
+                    auction_id: row.auction_id,
+                    offer: row.offer,
+                },
+                decision: bid_decision_from_fields(BidDecisionFields {
+                    outcome: row.outcome,
+                    revision: row.revision,
+                    result_bidder_guid: row.result_bidder_guid,
+                    result_bid: row.result_bid,
+                    minimum_increment: row.minimum_increment,
+                }),
+            })
+    }
+
+    fn create_hold(&mut self, request: BidRequest) -> Result<(), BidRefusal> {
+        let mut bidder = crate::helpers::acting_entity_by_guid(self.ctx, request.bidder_guid)
+            .ok_or(BidRefusal::NotEnoughMoney)?;
+        bidder.money = bidder
+            .money
+            .checked_sub(request.offer)
+            .ok_or(BidRefusal::NotEnoughMoney)?;
+        self.ctx.db.game_world_entity().guid().update(bidder);
+        self.ctx.db.game_auction_bid_hold().insert(AuctionBidHold {
+            operation_id: request.operation_id,
+            bidder_guid: request.bidder_guid,
+            auction_id: request.auction_id,
+            offer: request.offer,
+            outcome: BID_PENDING,
+            revision: 0,
+            result_bidder_guid: 0,
+            result_bid: 0,
+            minimum_increment: 0,
+        });
+        Ok(())
+    }
+
+    fn finish_hold(
+        &mut self,
+        request: BidRequest,
+        decision: BidDecision,
+    ) -> Result<(), BidRefusal> {
+        if !matches!(decision, BidDecision::Accepted { .. }) {
+            let mut bidder = crate::helpers::acting_entity_by_guid(self.ctx, request.bidder_guid)
+                .ok_or(BidRefusal::Database)?;
+            bidder.money = bidder
+                .money
+                .checked_add(request.offer)
+                .ok_or(BidRefusal::Database)?;
+            self.ctx.db.game_world_entity().guid().update(bidder);
+        }
+        let fields = bid_decision_fields(decision);
+        self.ctx
+            .db
+            .game_auction_bid_hold()
+            .operation_id()
+            .update(AuctionBidHold {
+                operation_id: request.operation_id,
+                bidder_guid: request.bidder_guid,
+                auction_id: request.auction_id,
+                offer: request.offer,
+                outcome: fields.outcome,
+                revision: fields.revision,
+                result_bidder_guid: fields.result_bidder_guid,
+                result_bid: fields.result_bid,
+                minimum_increment: fields.minimum_increment,
+            });
+        Ok(())
+    }
+}
+
+struct CtxBidMarket<'a> {
+    ctx: &'a ReducerContext,
+}
+
+impl BidMarket for CtxBidMarket<'_> {
+    fn decision(&self, operation_id: u64) -> Option<(BidRequest, BidDecision)> {
+        let row = self
+            .ctx
+            .db
+            .game_auction_bid_decision()
+            .operation_id()
+            .find(operation_id)?;
+        let decision = bid_decision_from_fields(BidDecisionFields {
+            outcome: row.outcome,
+            revision: row.revision,
+            result_bidder_guid: row.result_bidder_guid,
+            result_bid: row.result_bid,
+            minimum_increment: row.minimum_increment,
+        })?;
+        Some((
+            BidRequest {
+                operation_id: row.operation_id,
+                bidder_guid: row.bidder_guid,
+                auction_id: row.auction_id,
+                offer: row.offer,
+            },
+            decision,
+        ))
+    }
+
+    fn auction(&self, auction_id: u32) -> Option<BidAuction> {
+        self.ctx
+            .db
+            .game_auction()
+            .id()
+            .find(auction_id)
+            .filter(|auction| auction.house == lyracore_shared::auction::STORMWIND_HOUSE_ID)
+            .map(|auction| BidAuction {
+                id: auction.id,
+                owner_guid: auction.owner_guid,
+                highest_bidder_guid: auction.highest_bidder_guid,
+                highest_bid: auction.highest_bid,
+                start_bid: auction.start_bid,
+                expires_micros: auction.expires_at.to_micros_since_unix_epoch(),
+                revision: auction.revision,
+            })
+    }
+
+    fn now_micros(&self) -> i64 {
+        self.ctx.timestamp.to_micros_since_unix_epoch()
+    }
+
+    fn commit_decision(
+        &mut self,
+        request: BidRequest,
+        auction: Option<BidAuction>,
+        decision: BidDecision,
+    ) -> Result<(), BidRefusal> {
+        if let BidDecision::Accepted {
+            revision,
+            displaced_bidder_guid,
+            displaced_bid,
+        } = decision
+        {
+            let expected = auction.ok_or(BidRefusal::Database)?;
+            let mut row = self
+                .ctx
+                .db
+                .game_auction()
+                .id()
+                .find(request.auction_id)
+                .ok_or(BidRefusal::Database)?;
+            if row.revision != expected.revision
+                || row.highest_bidder_guid != expected.highest_bidder_guid
+                || row.highest_bid != expected.highest_bid
+            {
+                return Err(BidRefusal::Database);
+            }
+            row.highest_bidder_guid = request.bidder_guid;
+            row.highest_bid = request.offer;
+            row.revision = revision;
+            self.ctx.db.game_auction().id().update(row);
+            if displaced_bidder_guid != 0 {
+                crate::mail::insert_mail(
+                    self.ctx,
+                    displaced_bidder_guid,
+                    0,
+                    "Auction outbid".to_string(),
+                    String::new(),
+                    displaced_bid,
+                    0,
+                    &crate::items::ItemSnapshot::default(),
+                );
+            }
+        }
+        let fields = bid_decision_fields(decision);
+        self.ctx
+            .db
+            .game_auction_bid_decision()
+            .insert(AuctionBidDecision {
+                operation_id: request.operation_id,
+                bidder_guid: request.bidder_guid,
+                auction_id: request.auction_id,
+                offer: request.offer,
+                outcome: fields.outcome,
+                revision: fields.revision,
+                result_bidder_guid: fields.result_bidder_guid,
+                result_bid: fields.result_bid,
+                minimum_increment: fields.minimum_increment,
+            });
+        Ok(())
+    }
+}
+
+fn bid_request(operation_id: u64, bidder_guid: u64, auction_id: u32, offer: u32) -> BidRequest {
+    BidRequest {
+        operation_id,
+        bidder_guid,
+        auction_id,
+        offer,
+    }
+}
+
+fn tagged_bid(refusal: BidRefusal, detail: &str) -> String {
+    let tag = match refusal {
+        BidRefusal::NotEnoughMoney => lyracore_shared::auction::result::NOT_ENOUGH_MONEY,
+        BidRefusal::Database => lyracore_shared::auction::result::DATABASE,
+    };
+    format!("[{tag}] {detail}")
+}
+
 fn validate_market_listing(ctx: &ReducerContext, listing: &PreparedListing) -> Result<(), String> {
     if listing.request.operation_id == 0
         || listing.snapshot.stack_count == 0
@@ -854,6 +1390,95 @@ pub fn realm_auction_settle_listing(ctx: &ReducerContext, operation_id: u64) -> 
         .map_err(|refusal| tagged(refusal, "listing Hold is not confirmed"))
 }
 
+/// Single-database bid: full-offer Hold, realm decision, Auction update, refund mail, and terminal
+/// source outcome commit atomically.
+#[reducer]
+pub fn gw_auction_bid_local(
+    ctx: &ReducerContext,
+    operation_id: u64,
+    bidder_guid: u64,
+    auction_id: u32,
+    offer: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let request = bid_request(operation_id, bidder_guid, auction_id, offer);
+    drive_bid(
+        &mut CtxBidSource { ctx },
+        &mut CtxBidMarket { ctx },
+        request,
+    )
+        .map(|_| ())
+        .map_err(|refusal| tagged_bid(refusal, "local bid rejected"))
+}
+
+/// Sharded bid phase 1: move the complete offer into a source-shard Hold before realm-core decides.
+#[reducer]
+pub fn gw_auction_hold_bid(
+    ctx: &ReducerContext,
+    operation_id: u64,
+    bidder_guid: u64,
+    auction_id: u32,
+    offer: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    fence_bid(
+        &mut CtxBidSource { ctx },
+        bid_request(operation_id, bidder_guid, auction_id, offer),
+    )
+    .map_err(|refusal| tagged_bid(refusal, "bid Hold rejected"))
+}
+
+/// Sharded bid phase 2: serialize against the realm Auction and persist one terminal decision.
+#[reducer]
+pub fn realm_auction_decide_bid(
+    ctx: &ReducerContext,
+    operation_id: u64,
+    bidder_guid: u64,
+    auction_id: u32,
+    offer: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    resolve_bid(
+        &mut CtxBidMarket { ctx },
+        bid_request(operation_id, bidder_guid, auction_id, offer),
+    )
+    .map(|_| ())
+    .map_err(|refusal| tagged_bid(refusal, "bid decision conflict"))
+}
+
+/// Sharded bid phase 3: consume an accepted Hold or restore a rejected Hold exactly once.
+#[reducer]
+#[allow(clippy::too_many_arguments)]
+pub fn gw_auction_finish_bid(
+    ctx: &ReducerContext,
+    operation_id: u64,
+    bidder_guid: u64,
+    auction_id: u32,
+    offer: u32,
+    outcome: u8,
+    revision: u64,
+    result_bidder_guid: u64,
+    result_bid: u32,
+    minimum_increment: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let decision = bid_decision_from_fields(BidDecisionFields {
+        outcome,
+        revision,
+        result_bidder_guid,
+        result_bid,
+        minimum_increment,
+    })
+    .ok_or_else(|| tagged_bid(BidRefusal::Database, "bid decision is pending"))?;
+    finish_bid(
+        &mut CtxBidSource { ctx },
+        bid_request(operation_id, bidder_guid, auction_id, offer),
+        decision,
+    )
+    .map(|_| ())
+    .map_err(|refusal| tagged_bid(refusal, "bid outcome conflict"))
+}
+
 /// Scheduler-only one-shot expiry. Replays see no active Auction and therefore create no mail.
 #[reducer]
 pub fn expire_auction(ctx: &ReducerContext, schedule: AuctionExpiry) -> Result<(), String> {
@@ -866,11 +1491,17 @@ pub fn expire_auction(ctx: &ReducerContext, schedule: AuctionExpiry) -> Result<(
 /// Character deletion must not destroy value held by or listed for that character.
 pub(crate) fn character_has_auction_value(ctx: &ReducerContext, character_guid: u64) -> bool {
     ctx.db
-        .game_auction_hold()
-        .by_seller()
+        .game_auction_bid_hold()
+        .by_bidder()
         .filter(character_guid)
-        .next()
-        .is_some()
+        .any(|hold| hold.outcome == BID_PENDING)
+        || ctx
+            .db
+            .game_auction_hold()
+            .by_seller()
+            .filter(character_guid)
+            .next()
+            .is_some()
         || ctx
             .db
             .game_auction()
@@ -1424,6 +2055,359 @@ mod tests {
     }
 
     #[test]
+    fn realm_bid_decision_enforces_the_vanilla_price_ladder_and_revision() {
+        let active = BidAuction {
+            id: 41,
+            owner_guid: 7,
+            highest_bidder_guid: 0,
+            highest_bid: 0,
+            start_bid: 100,
+            expires_micros: 2_000,
+            revision: 3,
+        };
+        let request = BidRequest {
+            operation_id: 900,
+            bidder_guid: 8,
+            auction_id: 41,
+            offer: 100,
+        };
+
+        assert_eq!(
+            decide_bid(Some(active), request, 1_000),
+            BidDecision::Accepted {
+                revision: 4,
+                displaced_bidder_guid: 0,
+                displaced_bid: 0,
+            }
+        );
+
+        let bid = BidAuction {
+            highest_bidder_guid: 9,
+            highest_bid: 101,
+            ..active
+        };
+        assert_eq!(minimum_next_bid(bid), Ok(107));
+        assert_eq!(
+            decide_bid(Some(bid), BidRequest { offer: 101, ..request }, 1_000),
+            BidDecision::HigherBid {
+                bidder_guid: 9,
+                current_bid: 101,
+                minimum_increment: 6,
+            }
+        );
+        assert_eq!(
+            decide_bid(Some(bid), BidRequest { offer: 106, ..request }, 1_000),
+            BidDecision::BidIncrement
+        );
+        assert_eq!(
+            decide_bid(Some(active), BidRequest { offer: 99, ..request }, 1_000),
+            BidDecision::BidIncrement
+        );
+        assert_eq!(
+            decide_bid(
+                Some(BidAuction {
+                    owner_guid: 8,
+                    ..active
+                }),
+                request,
+                1_000,
+            ),
+            BidDecision::BidOwn
+        );
+        assert_eq!(decide_bid(None, request, 1_000), BidDecision::ItemNotFound);
+        assert_eq!(
+            decide_bid(
+                Some(BidAuction {
+                    expires_micros: 1_000,
+                    ..active
+                }),
+                request,
+                1_000,
+            ),
+            BidDecision::ItemNotFound
+        );
+        assert_eq!(
+            decide_bid(Some(active), BidRequest { operation_id: 0, ..request }, 1_000),
+            BidDecision::Database
+        );
+        assert!(matches!(
+            decide_bid(
+                Some(BidAuction {
+                    highest_bid: u32::MAX,
+                    ..bid
+                }),
+                request,
+                1_000,
+            ),
+            BidDecision::Database
+        ));
+    }
+
+    #[derive(Clone, Copy)]
+    struct FakeBidSource {
+        money: u32,
+        hold: Option<HeldBid>,
+    }
+
+    impl FakeBidSource {
+        fn new(money: u32) -> Self {
+            Self { money, hold: None }
+        }
+    }
+
+    impl BidSource for FakeBidSource {
+        fn money(&self, _bidder_guid: u64) -> Option<u32> {
+            Some(self.money)
+        }
+
+        fn hold(&self, operation_id: u64) -> Option<HeldBid> {
+            self.hold
+                .filter(|hold| hold.request.operation_id == operation_id)
+        }
+
+        fn create_hold(&mut self, request: BidRequest) -> Result<(), BidRefusal> {
+            self.money -= request.offer;
+            self.hold = Some(HeldBid {
+                request,
+                decision: None,
+            });
+            Ok(())
+        }
+
+        fn finish_hold(
+            &mut self,
+            request: BidRequest,
+            decision: BidDecision,
+        ) -> Result<(), BidRefusal> {
+            if !matches!(decision, BidDecision::Accepted { .. }) {
+                self.money += request.offer;
+            }
+            self.hold = Some(HeldBid {
+                request,
+                decision: Some(decision),
+            });
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn bid_hold_decisions_are_terminal_replay_safe_and_conserve_copper() {
+        let request = BidRequest {
+            operation_id: 901,
+            bidder_guid: 8,
+            auction_id: 41,
+            offer: 107,
+        };
+        let rejected = BidDecision::BidIncrement;
+        let accepted = BidDecision::Accepted {
+            revision: 4,
+            displaced_bidder_guid: 9,
+            displaced_bid: 101,
+        };
+
+        let mut rejection = FakeBidSource::new(200);
+        assert_eq!(fence_bid(&mut rejection, request), Ok(()));
+        assert_eq!(rejection.money, 93, "the full offer is held first");
+        assert_eq!(finish_bid(&mut rejection, request, rejected), Ok(rejected));
+        assert_eq!(rejection.money, 200, "a rejection restores the offer");
+        assert_eq!(finish_bid(&mut rejection, request, rejected), Ok(rejected));
+        assert_eq!(rejection.money, 200, "replay cannot restore twice");
+
+        let mut acceptance = FakeBidSource::new(200);
+        assert_eq!(fence_bid(&mut acceptance, request), Ok(()));
+        assert_eq!(finish_bid(&mut acceptance, request, accepted), Ok(accepted));
+        assert_eq!(finish_bid(&mut acceptance, request, accepted), Ok(accepted));
+        assert_eq!(acceptance.money, 93, "accepted value is consumed once");
+
+        assert_eq!(
+            finish_bid(&mut acceptance, BidRequest { offer: 108, ..request }, accepted),
+            Err(BidRefusal::Database),
+            "changed-payload identifier reuse fails closed"
+        );
+
+        for malformed in [
+            BidRequest {
+                operation_id: 0,
+                ..request
+            },
+            BidRequest {
+                bidder_guid: 0,
+                ..request
+            },
+            BidRequest {
+                auction_id: 0,
+                ..request
+            },
+            BidRequest {
+                offer: 0,
+                ..request
+            },
+        ] {
+            let mut source = FakeBidSource::new(200);
+            assert_eq!(fence_bid(&mut source, malformed), Err(BidRefusal::Database));
+            assert_eq!(source.money, 200);
+            assert!(source.hold.is_none());
+        }
+        let mut poor = FakeBidSource::new(106);
+        assert_eq!(
+            fence_bid(&mut poor, request),
+            Err(BidRefusal::NotEnoughMoney)
+        );
+        assert_eq!(poor.money, 106);
+        assert!(poor.hold.is_none());
+    }
+
+    #[derive(Clone)]
+    struct FakeBidMarket {
+        auction: Option<BidAuction>,
+        decision: Option<(BidRequest, BidDecision)>,
+        refunds: Vec<(u64, u32)>,
+        now_micros: i64,
+    }
+
+    impl BidMarket for FakeBidMarket {
+        fn decision(&self, operation_id: u64) -> Option<(BidRequest, BidDecision)> {
+            self.decision
+                .filter(|(request, _)| request.operation_id == operation_id)
+        }
+
+        fn auction(&self, auction_id: u32) -> Option<BidAuction> {
+            self.auction.filter(|auction| auction.id == auction_id)
+        }
+
+        fn now_micros(&self) -> i64 {
+            self.now_micros
+        }
+
+        fn commit_decision(
+            &mut self,
+            request: BidRequest,
+            auction: Option<BidAuction>,
+            decision: BidDecision,
+        ) -> Result<(), BidRefusal> {
+            if let BidDecision::Accepted {
+                revision,
+                displaced_bidder_guid,
+                displaced_bid,
+            } = decision
+            {
+                let mut auction = auction.expect("only an active Auction can accept a bid");
+                auction.highest_bidder_guid = request.bidder_guid;
+                auction.highest_bid = request.offer;
+                auction.revision = revision;
+                self.auction = Some(auction);
+                if displaced_bidder_guid != 0 {
+                    self.refunds
+                        .push((displaced_bidder_guid, displaced_bid));
+                }
+            }
+            self.decision = Some((request, decision));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn realm_bid_replay_updates_once_and_returns_the_displaced_bid_once() {
+        let request = BidRequest {
+            operation_id: 902,
+            bidder_guid: 8,
+            auction_id: 41,
+            offer: 107,
+        };
+        let mut market = FakeBidMarket {
+            auction: Some(BidAuction {
+                id: 41,
+                owner_guid: 7,
+                highest_bidder_guid: 9,
+                highest_bid: 101,
+                start_bid: 100,
+                expires_micros: 2_000,
+                revision: 3,
+            }),
+            decision: None,
+            refunds: Vec::new(),
+            now_micros: 1_000,
+        };
+
+        let expected = BidDecision::Accepted {
+            revision: 4,
+            displaced_bidder_guid: 9,
+            displaced_bid: 101,
+        };
+        assert_eq!(resolve_bid(&mut market, request), Ok(expected));
+        assert_eq!(resolve_bid(&mut market, request), Ok(expected));
+        assert_eq!(market.refunds, vec![(9, 101)]);
+        assert_eq!(
+            market.auction.map(|auction| (
+                auction.highest_bidder_guid,
+                auction.highest_bid,
+                auction.revision,
+            )),
+            Some((8, 107, 4))
+        );
+
+        assert_eq!(
+            resolve_bid(&mut market, BidRequest { offer: 108, ..request }),
+            Err(BidRefusal::Database)
+        );
+        assert_eq!(market.refunds, vec![(9, 101)]);
+    }
+
+    #[test]
+    fn local_and_interrupted_sharded_bids_have_equivalent_value_and_market_state() {
+        let request = BidRequest {
+            operation_id: 903,
+            bidder_guid: 8,
+            auction_id: 41,
+            offer: 107,
+        };
+        let source = FakeBidSource::new(200);
+        let market = FakeBidMarket {
+            auction: Some(BidAuction {
+                id: 41,
+                owner_guid: 7,
+                highest_bidder_guid: 9,
+                highest_bid: 101,
+                start_bid: 100,
+                expires_micros: 2_000,
+                revision: 3,
+            }),
+            decision: None,
+            refunds: Vec::new(),
+            now_micros: 1_000,
+        };
+
+        let mut local_source = source;
+        let mut local_market = market.clone();
+        let expected = drive_bid(&mut local_source, &mut local_market, request).unwrap();
+
+        for killed_after in 0..=2 {
+            let mut sharded_source = source;
+            let mut sharded_market = market.clone();
+            if killed_after >= 1 {
+                fence_bid(&mut sharded_source, request).unwrap();
+            }
+            if killed_after >= 2 {
+                resolve_bid(&mut sharded_market, request).unwrap();
+            }
+
+            assert_eq!(
+                drive_bid(&mut sharded_source, &mut sharded_market, request),
+                Ok(expected)
+            );
+            assert_eq!(sharded_source.money, local_source.money);
+            assert_eq!(sharded_source.hold, local_source.hold);
+            assert_eq!(sharded_market.auction, local_market.auction);
+            assert_eq!(sharded_market.refunds, local_market.refunds);
+            assert_eq!(
+                drive_bid(&mut sharded_source, &mut sharded_market, request),
+                Ok(expected)
+            );
+            assert_eq!(sharded_market.refunds, vec![(9, 101)]);
+        }
+    }
+
+    #[test]
     fn auction_write_reducers_gate_before_reading_caller_named_state() {
         use crate::test_scan::code_of;
 
@@ -1433,6 +2417,10 @@ mod tests {
             "pub fn realm_auction_commit_listing(",
             "pub fn realm_auction_confirm_listing(",
             "pub fn realm_auction_settle_listing(",
+            "pub fn gw_auction_bid_local(",
+            "pub fn gw_auction_hold_bid(",
+            "pub fn realm_auction_decide_bid(",
+            "pub fn gw_auction_finish_bid(",
         ] {
             let body = code_of(include_str!("auction.rs"), signature);
             let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");

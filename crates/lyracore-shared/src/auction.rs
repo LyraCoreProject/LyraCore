@@ -12,3 +12,14 @@ pub mod result {
     pub const ITEM_NOT_FOUND: &str = "AUCTION_ITEM_NOT_FOUND";
     pub const NOT_ENOUGH_MONEY: &str = "AUCTION_NOT_ENOUGH_MONEY";
 }
+
+/// Stable terminal outcome codes shared by bid Hold and decision rows.
+pub mod bid_outcome {
+    pub const PENDING: u8 = 0;
+    pub const ACCEPTED: u8 = 1;
+    pub const ITEM_NOT_FOUND: u8 = 2;
+    pub const HIGHER_BID: u8 = 3;
+    pub const BID_INCREMENT: u8 = 4;
+    pub const BID_OWN: u8 = 5;
+    pub const DATABASE: u8 = 6;
+}

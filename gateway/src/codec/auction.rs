@@ -1,7 +1,10 @@
 use std::time::Duration;
 
 use wow_world_messages::{
-    vanilla::{AuctionListItem, SMSG_AUCTION_LIST_RESULT, SMSG_AUCTION_OWNER_LIST_RESULT},
+    vanilla::{
+        AuctionListItem, SMSG_AUCTION_BIDDER_LIST_RESULT, SMSG_AUCTION_LIST_RESULT,
+        SMSG_AUCTION_OWNER_LIST_RESULT,
+    },
     Guid,
 };
 
@@ -76,6 +79,17 @@ pub fn build_auction_owner_list_result(
     }
 }
 
+pub fn build_auction_bidder_list_result(
+    rows: &[AuctionView],
+    total: u32,
+    now_micros: i64,
+) -> SMSG_AUCTION_BIDDER_LIST_RESULT {
+    SMSG_AUCTION_BIDDER_LIST_RESULT {
+        auctions: build_items(rows, now_micros),
+        total_amount_of_auctions: total,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,12 +144,15 @@ mod tests {
     }
 
     #[test]
-    fn browse_and_owner_packets_use_the_same_row_mapping_and_total() {
+    fn browse_owner_and_bidder_packets_use_the_same_row_mapping_and_total() {
         let rows = [view()];
         let browse = build_auction_list_result(&rows, 51, 1_000_000);
         let owner = build_auction_owner_list_result(&rows, 51, 1_000_000);
+        let bidder = build_auction_bidder_list_result(&rows, 51, 1_000_000);
         assert_eq!(browse.auctions, owner.auctions);
+        assert_eq!(browse.auctions, bidder.auctions);
         assert_eq!(browse.total_amount_of_auctions, 51);
         assert_eq!(owner.total_amount_of_auctions, 51);
+        assert_eq!(bidder.total_amount_of_auctions, 51);
     }
 }

@@ -14,6 +14,8 @@ pub mod advance_taxi_flight_reducer;
 pub mod append_vmap_generation_chunks_reducer;
 pub mod areatrigger_teleport_type;
 pub mod arm_all_pools_reducer;
+pub mod auction_bid_decision_type;
+pub mod auction_bid_hold_type;
 pub mod auction_expiry_type;
 pub mod auction_hold_type;
 pub mod auction_operation_receipt_type;
@@ -216,6 +218,8 @@ pub mod game_area_trigger_table;
 pub mod game_area_trigger_type;
 pub mod game_area_type;
 pub mod game_areatrigger_teleport_table;
+pub mod game_auction_bid_decision_table;
+pub mod game_auction_bid_hold_table;
 pub mod game_auction_expiry_table;
 pub mod game_auction_hold_table;
 pub mod game_auction_operation_receipt_table;
@@ -435,6 +439,9 @@ pub mod gw_add_friend_reducer;
 pub mod gw_add_ignore_reducer;
 pub mod gw_arm_taxi_flight_reducer;
 pub mod gw_attack_reducer;
+pub mod gw_auction_bid_local_reducer;
+pub mod gw_auction_finish_bid_reducer;
+pub mod gw_auction_hold_bid_reducer;
 pub mod gw_auction_hold_listing_reducer;
 pub mod gw_auction_list_local_reducer;
 pub mod gw_auto_bank_item_reducer;
@@ -573,6 +580,7 @@ pub mod ranged_impact_reducer;
 pub mod ranged_impact_schedule_type;
 pub mod realm_auction_commit_listing_reducer;
 pub mod realm_auction_confirm_listing_reducer;
+pub mod realm_auction_decide_bid_reducer;
 pub mod realm_auction_settle_listing_reducer;
 pub mod realm_group_op_reducer;
 pub mod realm_loot_op_reducer;
@@ -675,6 +683,8 @@ pub use advance_taxi_flight_reducer::advance_taxi_flight;
 pub use append_vmap_generation_chunks_reducer::append_vmap_generation_chunks;
 pub use areatrigger_teleport_type::AreatriggerTeleport;
 pub use arm_all_pools_reducer::arm_all_pools;
+pub use auction_bid_decision_type::AuctionBidDecision;
+pub use auction_bid_hold_type::AuctionBidHold;
 pub use auction_expiry_type::AuctionExpiry;
 pub use auction_hold_type::AuctionHold;
 pub use auction_operation_receipt_type::AuctionOperationReceipt;
@@ -877,6 +887,8 @@ pub use game_area_trigger_table::*;
 pub use game_area_trigger_type::GameAreaTrigger;
 pub use game_area_type::GameArea;
 pub use game_areatrigger_teleport_table::*;
+pub use game_auction_bid_decision_table::*;
+pub use game_auction_bid_hold_table::*;
 pub use game_auction_expiry_table::*;
 pub use game_auction_hold_table::*;
 pub use game_auction_operation_receipt_table::*;
@@ -1096,6 +1108,9 @@ pub use gw_add_friend_reducer::gw_add_friend;
 pub use gw_add_ignore_reducer::gw_add_ignore;
 pub use gw_arm_taxi_flight_reducer::gw_arm_taxi_flight;
 pub use gw_attack_reducer::gw_attack;
+pub use gw_auction_bid_local_reducer::gw_auction_bid_local;
+pub use gw_auction_finish_bid_reducer::gw_auction_finish_bid;
+pub use gw_auction_hold_bid_reducer::gw_auction_hold_bid;
 pub use gw_auction_hold_listing_reducer::gw_auction_hold_listing;
 pub use gw_auction_list_local_reducer::gw_auction_list_local;
 pub use gw_auto_bank_item_reducer::gw_auto_bank_item;
@@ -1234,6 +1249,7 @@ pub use ranged_impact_reducer::ranged_impact;
 pub use ranged_impact_schedule_type::RangedImpactSchedule;
 pub use realm_auction_commit_listing_reducer::realm_auction_commit_listing;
 pub use realm_auction_confirm_listing_reducer::realm_auction_confirm_listing;
+pub use realm_auction_decide_bid_reducer::realm_auction_decide_bid;
 pub use realm_auction_settle_listing_reducer::realm_auction_settle_listing;
 pub use realm_group_op_reducer::realm_group_op;
 pub use realm_loot_op_reducer::realm_loot_op;
@@ -1995,6 +2011,29 @@ pub enum Reducer {
         actor_guid: u64,
         target_guid: u64,
     },
+    GwAuctionBidLocal {
+        operation_id: u64,
+        bidder_guid: u64,
+        auction_id: u32,
+        offer: u32,
+    },
+    GwAuctionFinishBid {
+        operation_id: u64,
+        bidder_guid: u64,
+        auction_id: u32,
+        offer: u32,
+        outcome: u8,
+        revision: u64,
+        result_bidder_guid: u64,
+        result_bid: u32,
+        minimum_increment: u32,
+    },
+    GwAuctionHoldBid {
+        operation_id: u64,
+        bidder_guid: u64,
+        auction_id: u32,
+        offer: u32,
+    },
     GwAuctionHoldListing {
         operation_id: u64,
         seller_guid: u64,
@@ -2427,6 +2466,12 @@ pub enum Reducer {
         operation_id: u64,
         auction_id: u32,
     },
+    RealmAuctionDecideBid {
+        operation_id: u64,
+        bidder_guid: u64,
+        auction_id: u32,
+        offer: u32,
+    },
     RealmAuctionSettleListing {
         operation_id: u64,
     },
@@ -2808,6 +2853,9 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwAddIgnore { .. } => "gw_add_ignore",
             Reducer::GwArmTaxiFlight { .. } => "gw_arm_taxi_flight",
             Reducer::GwAttack { .. } => "gw_attack",
+            Reducer::GwAuctionBidLocal { .. } => "gw_auction_bid_local",
+            Reducer::GwAuctionFinishBid { .. } => "gw_auction_finish_bid",
+            Reducer::GwAuctionHoldBid { .. } => "gw_auction_hold_bid",
             Reducer::GwAuctionHoldListing { .. } => "gw_auction_hold_listing",
             Reducer::GwAuctionListLocal { .. } => "gw_auction_list_local",
             Reducer::GwAutoBankItem { .. } => "gw_auto_bank_item",
@@ -2908,6 +2956,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::RangedImpact { .. } => "ranged_impact",
             Reducer::RealmAuctionCommitListing { .. } => "realm_auction_commit_listing",
             Reducer::RealmAuctionConfirmListing { .. } => "realm_auction_confirm_listing",
+            Reducer::RealmAuctionDecideBid { .. } => "realm_auction_decide_bid",
             Reducer::RealmAuctionSettleListing { .. } => "realm_auction_settle_listing",
             Reducer::RealmGroupOp { .. } => "realm_group_op",
             Reducer::RealmLootOp { .. } => "realm_loot_op",
@@ -4135,6 +4184,49 @@ Reducer::DebugTakeLoot{
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
 }),
+            Reducer::GwAuctionBidLocal{
+                operation_id,
+                bidder_guid,
+                auction_id,
+                offer,
+}             => __sats::bsatn::to_vec(&gw_auction_bid_local_reducer::GwAuctionBidLocalArgs {
+                operation_id: operation_id.clone(),
+                bidder_guid: bidder_guid.clone(),
+                auction_id: auction_id.clone(),
+                offer: offer.clone(),
+}),
+            Reducer::GwAuctionFinishBid{
+                operation_id,
+                bidder_guid,
+                auction_id,
+                offer,
+                outcome,
+                revision,
+                result_bidder_guid,
+                result_bid,
+                minimum_increment,
+}             => __sats::bsatn::to_vec(&gw_auction_finish_bid_reducer::GwAuctionFinishBidArgs {
+                operation_id: operation_id.clone(),
+                bidder_guid: bidder_guid.clone(),
+                auction_id: auction_id.clone(),
+                offer: offer.clone(),
+                outcome: outcome.clone(),
+                revision: revision.clone(),
+                result_bidder_guid: result_bidder_guid.clone(),
+                result_bid: result_bid.clone(),
+                minimum_increment: minimum_increment.clone(),
+}),
+            Reducer::GwAuctionHoldBid{
+                operation_id,
+                bidder_guid,
+                auction_id,
+                offer,
+}             => __sats::bsatn::to_vec(&gw_auction_hold_bid_reducer::GwAuctionHoldBidArgs {
+                operation_id: operation_id.clone(),
+                bidder_guid: bidder_guid.clone(),
+                auction_id: auction_id.clone(),
+                offer: offer.clone(),
+}),
             Reducer::GwAuctionHoldListing{
                 operation_id,
                 seller_guid,
@@ -4901,6 +4993,17 @@ Reducer::ProvisionAccount{
                 operation_id: operation_id.clone(),
                 auction_id: auction_id.clone(),
 }),
+            Reducer::RealmAuctionDecideBid{
+                operation_id,
+                bidder_guid,
+                auction_id,
+                offer,
+}             => __sats::bsatn::to_vec(&realm_auction_decide_bid_reducer::RealmAuctionDecideBidArgs {
+                operation_id: operation_id.clone(),
+                bidder_guid: bidder_guid.clone(),
+                auction_id: auction_id.clone(),
+                offer: offer.clone(),
+}),
             Reducer::RealmAuctionSettleListing{
                 operation_id,
 }             => __sats::bsatn::to_vec(&realm_auction_settle_listing_reducer::RealmAuctionSettleListingArgs {
@@ -5307,6 +5410,8 @@ pub struct DbUpdate {
     game_area_trigger: __sdk::TableUpdate<GameAreaTrigger>,
     game_areatrigger_teleport: __sdk::TableUpdate<AreatriggerTeleport>,
     game_auction: __sdk::TableUpdate<Auction>,
+    game_auction_bid_decision: __sdk::TableUpdate<AuctionBidDecision>,
+    game_auction_bid_hold: __sdk::TableUpdate<AuctionBidHold>,
     game_auction_expiry: __sdk::TableUpdate<AuctionExpiry>,
     game_auction_hold: __sdk::TableUpdate<AuctionHold>,
     game_auction_operation_receipt: __sdk::TableUpdate<AuctionOperationReceipt>,
@@ -5511,6 +5616,12 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_auction" => db_update
                     .game_auction
                     .append(game_auction_table::parse_table_update(table_update)?),
+                "game_auction_bid_decision" => db_update.game_auction_bid_decision.append(
+                    game_auction_bid_decision_table::parse_table_update(table_update)?,
+                ),
+                "game_auction_bid_hold" => db_update.game_auction_bid_hold.append(
+                    game_auction_bid_hold_table::parse_table_update(table_update)?,
+                ),
                 "game_auction_expiry" => db_update
                     .game_auction_expiry
                     .append(game_auction_expiry_table::parse_table_update(table_update)?),
@@ -6095,6 +6206,18 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_auction = cache
             .apply_diff_to_table::<Auction>("game_auction", &self.game_auction)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_auction_bid_decision = cache
+            .apply_diff_to_table::<AuctionBidDecision>(
+                "game_auction_bid_decision",
+                &self.game_auction_bid_decision,
+            )
+            .with_updates_by_pk(|row| &row.operation_id);
+        diff.game_auction_bid_hold = cache
+            .apply_diff_to_table::<AuctionBidHold>(
+                "game_auction_bid_hold",
+                &self.game_auction_bid_hold,
+            )
+            .with_updates_by_pk(|row| &row.operation_id);
         diff.game_auction_expiry = cache
             .apply_diff_to_table::<AuctionExpiry>("game_auction_expiry", &self.game_auction_expiry)
             .with_updates_by_pk(|row| &row.scheduled_id);
@@ -6855,6 +6978,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_auction" => db_update
                     .game_auction
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_auction_bid_decision" => db_update
+                    .game_auction_bid_decision
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_auction_bid_hold" => db_update
+                    .game_auction_bid_hold
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_auction_expiry" => db_update
                     .game_auction_expiry
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -7414,6 +7543,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_auction" => db_update
                     .game_auction
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_auction_bid_decision" => db_update
+                    .game_auction_bid_decision
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_auction_bid_hold" => db_update
+                    .game_auction_bid_hold
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_auction_expiry" => db_update
                     .game_auction_expiry
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -7961,6 +8096,8 @@ pub struct AppliedDiff<'r> {
     game_area_trigger: __sdk::TableAppliedDiff<'r, GameAreaTrigger>,
     game_areatrigger_teleport: __sdk::TableAppliedDiff<'r, AreatriggerTeleport>,
     game_auction: __sdk::TableAppliedDiff<'r, Auction>,
+    game_auction_bid_decision: __sdk::TableAppliedDiff<'r, AuctionBidDecision>,
+    game_auction_bid_hold: __sdk::TableAppliedDiff<'r, AuctionBidHold>,
     game_auction_expiry: __sdk::TableAppliedDiff<'r, AuctionExpiry>,
     game_auction_hold: __sdk::TableAppliedDiff<'r, AuctionHold>,
     game_auction_operation_receipt: __sdk::TableAppliedDiff<'r, AuctionOperationReceipt>,
@@ -8172,6 +8309,16 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             event,
         );
         callbacks.invoke_table_row_callbacks::<Auction>("game_auction", &self.game_auction, event);
+        callbacks.invoke_table_row_callbacks::<AuctionBidDecision>(
+            "game_auction_bid_decision",
+            &self.game_auction_bid_decision,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<AuctionBidHold>(
+            "game_auction_bid_hold",
+            &self.game_auction_bid_hold,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<AuctionExpiry>(
             "game_auction_expiry",
             &self.game_auction_expiry,
@@ -9674,6 +9821,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_area_trigger_table::register_table(client_cache);
         game_areatrigger_teleport_table::register_table(client_cache);
         game_auction_table::register_table(client_cache);
+        game_auction_bid_decision_table::register_table(client_cache);
+        game_auction_bid_hold_table::register_table(client_cache);
         game_auction_expiry_table::register_table(client_cache);
         game_auction_hold_table::register_table(client_cache);
         game_auction_operation_receipt_table::register_table(client_cache);
@@ -9858,6 +10007,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_area_trigger",
         "game_areatrigger_teleport",
         "game_auction",
+        "game_auction_bid_decision",
+        "game_auction_bid_hold",
         "game_auction_expiry",
         "game_auction_hold",
         "game_auction_operation_receipt",

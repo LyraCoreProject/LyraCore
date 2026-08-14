@@ -55,6 +55,7 @@ use handlers::{
 };
 pub(crate) use handlers::{
     AuctionBrowseRequest, AuctionPage, AuctionQuery, CreateAuctionOutcome, CreateAuctionRequest,
+    PlaceBidOutcome, PlaceBidRequest,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;

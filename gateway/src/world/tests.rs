@@ -2699,6 +2699,13 @@ impl AuctionActionStore for InMemoryStore {
         Ok(super::handlers::CreateAuctionOutcome::Database)
     }
 
+    fn place_bid(
+        &self,
+        _request: super::handlers::PlaceBidRequest,
+    ) -> Result<super::handlers::PlaceBidOutcome> {
+        Ok(super::handlers::PlaceBidOutcome::Database)
+    }
+
     fn auction_query(
         &self,
         _player_guid: u64,
