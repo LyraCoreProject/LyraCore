@@ -329,6 +329,17 @@ mod tests {
         fn item_start_quest(&self, _owner_guid: u64, _slot: u8) -> Option<(u64, u32)> {
             self.start_quest
         }
+
+        fn player_quest_log(
+            &self,
+            _player_guid: u64,
+        ) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
+            unreachable!("no item action reads the quest log")
+        }
+
+        fn abandon_quest(&self, _account_id: u64, _self_guid: u64, _quest_id: u32) -> Result<()> {
+            unreachable!("no item action abandons a quest")
+        }
     }
 
     fn player() -> ItemActionPlayer {

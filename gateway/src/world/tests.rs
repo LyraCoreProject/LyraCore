@@ -151,7 +151,6 @@ use wow_world_messages::vanilla::{
     CMSG_QUESTGIVER_CHOOSE_REWARD,
     CMSG_QUESTGIVER_HELLO,
     CMSG_QUESTGIVER_STATUS_QUERY,
-    CMSG_QUESTLOG_REMOVE_QUEST,
     CMSG_QUEST_QUERY,
     // Item guid → slot resolution (vendor sell / armorer repair).
     CMSG_RECLAIM_CORPSE,
@@ -2764,6 +2763,14 @@ impl QuestActionStore for InMemoryStore {
         None
     }
 
+    fn player_quest_log(&self, player_guid: u64) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
+        WorldStore::player_quest_log(self, player_guid)
+    }
+
+    fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
+        WorldStore::abandon_quest(self, account_id, self_guid, quest_id)
+    }
+
     fn turn_in_quest(
         &self,
         account_id: u64,
@@ -4390,7 +4397,8 @@ fn enter_world(
     let (mut client, server_end) = world_session_socket_pair();
     // The login sequence ends with the quest-log VALUES packet IFF the player has quests (mirrors
     // `send_quest_log`'s skip-when-empty). Checked before `store` is moved into the server thread.
-    let has_quest_log = store.player_quest_log(guid).is_ok_and(|s| !s.is_empty());
+    let has_quest_log =
+        WorldStore::player_quest_log(store.as_ref(), guid).is_ok_and(|s| !s.is_empty());
     let item_creates = store.player_items(guid).map(|v| v.len()).unwrap_or(0);
     let server_store = store;
     let server = std::thread::spawn(move || {
@@ -4759,46 +4767,46 @@ fn quest_choose_reward_reaches_the_quest_module_and_replies_complete_over_the_ci
     );
 }
 
+// Abandon-slot resolution and the raw descriptor build are now unit-tested at the quest seam
+// (`handlers/quest.rs`, `InMemoryQuestActions`) — that's where `dispatch_quest_action` and
+// `quest_log_update` actually live. This test proves the one thing the seam test cannot: that a
+// real login wires `send_quest_log` to that same descriptor, sent after the self CREATE.
 #[test]
-fn quest_abandon_resolves_log_slot_to_quest_id() {
-    let mut s = quest_store();
-    // The client sends a LOG SLOT (3), not a quest id — the gateway must resolve it via player_quest_log.
-    s.quest_log_slots = vec![codec::update_mask::QuestLogSlot {
+fn login_sends_the_quest_log_descriptor_raw_update_after_the_create_packet() {
+    let slots = vec![codec::update_mask::QuestLogSlot {
         slot: 3,
         quest_id: 777,
         counts: Vec::new(),
         state: 0,
         timer: 0,
     }];
+    let mut s = quest_store();
+    s.quest_log_slots = slots.clone();
     let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_QUESTLOG_REMOVE_QUEST { slot: 3 }
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    drop(client);
-    server.join().unwrap();
-    // Slot 3 → quest 777, abandoned for account 7.
-    assert_eq!(store.abandoned.lock().unwrap().as_slice(), &[(7, 777)]);
-}
 
-#[test]
-fn quest_abandon_unknown_slot_is_a_noop() {
-    let mut s = quest_store();
-    s.quest_log_slots = vec![codec::update_mask::QuestLogSlot {
-        slot: 3,
-        quest_id: 777,
-        counts: Vec::new(),
-        state: 0,
-        timer: 0,
-    }];
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_QUESTLOG_REMOVE_QUEST { slot: 9 } // no such slot → resolve finds nothing → no reducer call
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
+
+    // The fixed 10-message login sequence, then the self CREATE_OBJECT2 — discarded, this test is
+    // about what comes right after.
+    for _ in 0..10 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+    // gtker's typed reader rejects this raw partial VALUES body (no OBJECT_FIELD_TYPE), so read it
+    // RAW and compare it against the same builder the seam's `quest_log_update` calls.
+    let (opcode, body) = read_raw_frame(&mut client, &mut c_dec);
+    let mask = codec::update_mask::full_quest_log_mask(&slots);
+    assert_eq!((opcode, body), codec::build_values_update_raw(1, &mask));
+
     drop(client);
     server.join().unwrap();
-    assert!(store.abandoned.lock().unwrap().is_empty());
 }
 
 // ── Inspect ───────────────────────────────────────────────────────────────────────────────────────

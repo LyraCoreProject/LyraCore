@@ -581,6 +581,9 @@ pub trait WorldStore:
 
     /// Abandon an active quest (`CMSG_QUESTLOG_REMOVE_QUEST`). The module deletes the quest-log row;
     /// the relay clears the slot. The gateway resolves the client's log SLOT to the quest id first.
+    /// The seam's `QuestActionStore::abandon_quest` has taken over its only caller, so this
+    /// declaration is waiting to be retired with the rest of the family.
+    #[allow(dead_code)]
     fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()>;
 
     /// Quest sharing: share `quest_id` with the caller's party (`CMSG_PUSHQUESTTOPARTY`).
@@ -590,7 +593,10 @@ pub trait WorldStore:
     fn push_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()>;
 
     /// The player's active quests as quest-log descriptor slots (Phase 2 — the L window). Empty if
-    /// none. Encoded into the `PLAYER_QUEST_LOG_*` fields + sent via the raw VALUES path.
+    /// none. Encoded into the `PLAYER_QUEST_LOG_*` fields + sent via the raw VALUES path. The seam's
+    /// `QuestActionStore::player_quest_log` has taken over every caller, so this declaration is
+    /// waiting to be retired with the rest of the family.
+    #[allow(dead_code)]
     fn player_quest_log(&self, player_guid: u64) -> Result<Vec<codec::update_mask::QuestLogSlot>>;
 
     /// The player's LEARNED spells (`game_player_spell`, beyond the class kit) — chained into the

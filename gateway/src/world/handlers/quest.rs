@@ -1,7 +1,8 @@
 //! Quest family: the overhead `!`/`?` status, the quest-giver menu, the details and definition
-//! screens, accept and the turn-in round trip enter through `dispatch_quest_action`; the gameobject
-//! giver and the item-started quest call the shared builders here rather than reaching for the
-//! store. `handle_quest` still owns the dialog opcodes that have not moved yet.
+//! screens, accept, the turn-in round trip and log abandon enter through `dispatch_quest_action`;
+//! the gameobject giver, the item-started quest and the world-entry descriptor block call the
+//! shared builders here rather than reaching for the store. `handle_quest` still owns the dialog
+//! opcodes that have not moved yet.
 
 use super::super::*;
 
@@ -48,6 +49,15 @@ pub(crate) trait QuestActionStore: Send + Sync {
         quest_id: u32,
         reward_index: u32,
     ) -> Result<()>;
+
+    /// The player's active quests as quest-log descriptor slots (the L window), in slot order.
+    /// Empty if none. The one read behind both abandon's slot→quest resolution and the world-entry
+    /// descriptor block, so a slot means the same quest in both.
+    fn player_quest_log(&self, player_guid: u64) -> Result<Vec<codec::update_mask::QuestLogSlot>>;
+
+    /// Abandon an active quest (`CMSG_QUESTLOG_REMOVE_QUEST`). The module deletes the quest-log row;
+    /// the relay clears the slot.
+    fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()>;
 }
 
 impl QuestActionStore for crate::stdb::Coordinator {
@@ -97,6 +107,14 @@ impl QuestActionStore for crate::stdb::Coordinator {
             quest_id,
             reward_index,
         )
+    }
+
+    fn player_quest_log(&self, player_guid: u64) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
+        crate::stdb::Coordinator::player_quest_log(self, player_guid)
+    }
+
+    fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
+        crate::stdb::Coordinator::abandon_quest(self, account_id, self_guid, quest_id)
     }
 }
 
@@ -214,6 +232,32 @@ pub(crate) fn item_started_quest<St: QuestActionStore + ?Sized>(
         return Ok(None);
     };
     Ok(Some(quest_details_screen(store, item_guid, quest_id)?))
+}
+
+/// The player's quest-log slots, in slot order — the ONE place they are read. Abandon resolves the
+/// client's slot against this, and `quest_log_update` renders the same slots into the world-entry
+/// descriptor block, so a slot cannot mean one quest to the click and another to the window.
+pub(crate) fn quest_log_slots<St: QuestActionStore + ?Sized>(
+    store: &St,
+    player_guid: u64,
+) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
+    store.player_quest_log(player_guid)
+}
+
+/// The raw quest-log descriptor VALUES update for `player_guid` — login (initial sync) and the
+/// quest-log relay (on accept / progress / turn-in) both render this. An empty batch when the log
+/// is empty, so an empty log adds nothing to world entry.
+pub(crate) fn quest_log_update<St: QuestActionStore + ?Sized>(
+    store: &St,
+    player_guid: u64,
+) -> Result<Vec<Outbound>> {
+    let slots = quest_log_slots(store, player_guid)?;
+    if slots.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mask = codec::update_mask::full_quest_log_mask(&slots);
+    let (opcode, body) = codec::build_values_update_raw(player_guid, &mask);
+    Ok(vec![Outbound::Raw { opcode, body }])
 }
 
 /// The quest opcodes that own their whole protocol round trip. Anything else — and anything at all
@@ -365,16 +409,44 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
                 Err(e) => Err(e),
             }
         }
+        // Abandon a quest from the log ("Abandon Quest"). The payload is a LOG SLOT (0..19), not a
+        // quest id — resolve it via the same `quest_log_slots` ordering the world-entry block reads,
+        // then request the durable abandon. A slot that is not currently in the log (stale window,
+        // typo'd click) resolves to nothing and requests nothing — it cannot abandon an arbitrary
+        // quest. No SMSG on success: the quest-log relay re-sends the cleared block.
+        ClientOpcodeMessage::CMSG_QUESTLOG_REMOVE_QUEST(r) => {
+            if let Some(s) = quest_log_slots(store, self_guid)?
+                .into_iter()
+                .find(|s| s.slot == r.slot)
+            {
+                match store.abandon_quest(player.account_id, self_guid, s.quest_id) {
+                    Ok(()) => {}
+                    Err(e)
+                        if classify_quest_action_error(&e)
+                            == QuestActionErrorClass::GameplayRefusal =>
+                    {
+                        log::debug!(
+                            "world: abandon_quest ignored (account {}): {e}",
+                            player.account_id
+                        );
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(QuestActionOutcome::Handled {
+                outbound: Vec::new(),
+            })
+        }
         other => Ok(QuestActionOutcome::PassThrough(other)),
     }
 }
 
-/// The quest dialog opcodes that still read the broad `WorldStore`: abandon and party sharing.
-/// Reads are evaluated against the player, so these need the in-world player guid — in CharSelect
-/// the opcodes pass through. Reducer rejections are per-action: logged, not fatal.
+/// The one quest dialog opcode that still reads the broad `WorldStore`: party sharing. It is
+/// evaluated against the player, so it needs the in-world player guid — in CharSelect it passes
+/// through. A reducer rejection is per-action: logged, not fatal.
 ///
-/// Neither remaining opcode answers the client, so `_tx` is unused until the last two branches move
-/// to the seam and this function goes away.
+/// Party sharing answers the client through the group-event relay rather than directly, so `_tx` is
+/// unused until that last branch moves to the seam and this function goes away.
 pub(crate) fn handle_quest<St: WorldStore + ?Sized>(
     _tx: &SessionTx,
     store: &St,
@@ -386,23 +458,6 @@ pub(crate) fn handle_quest<St: WorldStore + ?Sized>(
         WorldState::CharSelect => return Ok(Some(msg)),
     };
     match msg {
-        // Abandon a quest from the log ("Abandon Quest"). The payload is a LOG slot (0..19), not a quest
-        // id — resolve it via the same slot ordering player_quest_log uses, then call the module reducer
-        // (deletes the row). The quest-log relay then re-sends the cleared block, so the slot disappears.
-        ClientOpcodeMessage::CMSG_QUESTLOG_REMOVE_QUEST(r) => {
-            if let Some(s) = store
-                .player_quest_log(self_guid)?
-                .into_iter()
-                .find(|s| s.slot == r.slot)
-            {
-                if let Err(e) = store.abandon_quest(conn.account_id, self_guid, s.quest_id) {
-                    log::debug!(
-                        "world: abandon_quest ignored (account {}): {e}",
-                        conn.account_id
-                    );
-                }
-            }
-        }
         // Share a quest with the party (`CMSG_PUSHQUESTTOPARTY`). The module validates
         // grouped + actively-on-the-quest and pushes the per-member `QUEST_SHARE`/`QUEST_PUSH_RESULT`
         // events itself (relayed by `subscriptions.rs`'s `on_group_event`); no direct SMSG here.
@@ -426,7 +481,8 @@ mod tests {
     use wow_world_messages::vanilla::{
         Guid, QuestGiverStatus, CMSG_PING, CMSG_QUESTGIVER_ACCEPT_QUEST,
         CMSG_QUESTGIVER_CHOOSE_REWARD, CMSG_QUESTGIVER_COMPLETE_QUEST, CMSG_QUESTGIVER_HELLO,
-        CMSG_QUESTGIVER_QUERY_QUEST, CMSG_QUESTGIVER_STATUS_QUERY, CMSG_QUEST_QUERY,
+        CMSG_QUESTGIVER_QUERY_QUEST, CMSG_QUESTGIVER_STATUS_QUERY, CMSG_QUESTLOG_REMOVE_QUEST,
+        CMSG_QUEST_QUERY,
     };
 
     /// One durable call of the turn-in round trip, recorded in the order the seam made it. The
@@ -452,6 +508,8 @@ mod tests {
         accept_requests: Mutex<Vec<(u64, u64, u64, u32)>>,
         start_quest_requests: Mutex<Vec<(u64, u8)>>,
         turn_in_calls: Mutex<Vec<TurnInCall>>,
+        quest_log_requests: Mutex<Vec<u64>>,
+        abandon_requests: Mutex<Vec<(u64, u64, u32)>>,
         evals: Vec<codec::GiverQuestEval>,
         details: Vec<codec::QuestDetailView>,
         refuses: bool,
@@ -459,6 +517,8 @@ mod tests {
         accept_error: Option<String>,
         start_quest: Option<(u64, u32)>,
         turn_in_error: Option<String>,
+        quest_log: Vec<codec::update_mask::QuestLogSlot>,
+        abandon_error: Option<String>,
     }
 
     impl QuestActionStore for InMemoryQuestActions {
@@ -541,6 +601,24 @@ mod tests {
                 .as_ref()
                 .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
         }
+
+        fn player_quest_log(
+            &self,
+            player_guid: u64,
+        ) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
+            self.quest_log_requests.lock().unwrap().push(player_guid);
+            Ok(self.quest_log.clone())
+        }
+
+        fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
+            self.abandon_requests
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid, quest_id));
+            self.abandon_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+        }
     }
 
     const GIVER: u64 = 0xF130_0000_0000_0050;
@@ -589,6 +667,10 @@ mod tests {
         }))
     }
 
+    fn abandon(slot: u8) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_QUESTLOG_REMOVE_QUEST(CMSG_QUESTLOG_REMOVE_QUEST { slot })
+    }
+
     /// One giver↔quest relation. `startable` follows the role, the way the module evaluates it.
     fn eval(quest_id: u32, role: u8, active: bool, complete: bool) -> codec::GiverQuestEval {
         codec::GiverQuestEval {
@@ -619,6 +701,18 @@ mod tests {
             rewards: Vec::new(),
             choice_rewards: Vec::new(),
             objectives: Vec::new(),
+        }
+    }
+
+    /// One quest-log slot. `counts`/`state`/`timer` are irrelevant to slot resolution, so every
+    /// fixture leaves them at their zero value.
+    fn log_slot(slot: u8, quest_id: u32) -> codec::update_mask::QuestLogSlot {
+        codec::update_mask::QuestLogSlot {
+            slot,
+            quest_id,
+            counts: Vec::new(),
+            state: 0,
+            timer: 0,
         }
     }
 
@@ -1000,6 +1094,126 @@ mod tests {
             .expect("the quest module owns a quest-starting item");
 
         assert!(same_batch(&from_giver, &from_item));
+    }
+
+    // ── The quest log: abandon and the world-entry descriptor block ──────────
+
+    #[test]
+    fn abandon_resolves_the_log_slot_to_a_quest_id_and_requests_the_durable_abandon() {
+        let actions = InMemoryQuestActions {
+            quest_log: vec![log_slot(3, 777)],
+            ..Default::default()
+        };
+
+        let batch = outbound(dispatch_quest_action(&actions, player(), abandon(3)).unwrap());
+
+        assert!(
+            batch.is_empty(),
+            "the quest-log relay carries the cleared slot"
+        );
+        assert_eq!(
+            actions.abandon_requests.lock().unwrap().as_slice(),
+            &[(7, SELF_GUID, 777)]
+        );
+    }
+
+    #[test]
+    fn abandon_of_a_slot_not_in_the_log_requests_nothing() {
+        // A stale window or a desynced client can send a slot the log doesn't currently hold — that
+        // must resolve to nothing, so it can never abandon whatever quest a live slot happens to hold.
+        let actions = InMemoryQuestActions {
+            quest_log: vec![log_slot(3, 777)],
+            ..Default::default()
+        };
+
+        let batch = outbound(dispatch_quest_action(&actions, player(), abandon(9)).unwrap());
+
+        assert!(batch.is_empty());
+        assert!(actions.abandon_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn abandon_against_an_empty_log_requests_nothing() {
+        let actions = InMemoryQuestActions::default();
+
+        let batch = outbound(dispatch_quest_action(&actions, player(), abandon(0)).unwrap());
+
+        assert!(batch.is_empty());
+        assert!(actions.abandon_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_refused_abandon_answers_nothing_and_does_not_end_the_session() {
+        let actions = InMemoryQuestActions {
+            quest_log: vec![log_slot(3, 777)],
+            abandon_error: Some("quest cannot be abandoned mid-escort".into()),
+            ..Default::default()
+        };
+
+        let batch = outbound(dispatch_quest_action(&actions, player(), abandon(3)).unwrap());
+
+        assert!(batch.is_empty());
+    }
+
+    #[test]
+    fn a_dead_transport_on_abandon_ends_the_session() {
+        let actions = InMemoryQuestActions {
+            quest_log: vec![log_slot(3, 777)],
+            abandon_error: Some(
+                "abandon_quest reducer transport disconnected: channel closed".into(),
+            ),
+            ..Default::default()
+        };
+
+        let error = match dispatch_quest_action(&actions, player(), abandon(3)) {
+            Err(error) => error,
+            Ok(_) => panic!("a dead reducer transport must end the session"),
+        };
+
+        assert!(format!("{error:#}").contains("reducer transport disconnected"));
+    }
+
+    #[test]
+    fn quest_log_update_answers_nothing_for_an_empty_log() {
+        let actions = InMemoryQuestActions::default();
+
+        assert!(quest_log_update(&actions, SELF_GUID).unwrap().is_empty());
+    }
+
+    #[test]
+    fn quest_log_update_answers_the_current_raw_descriptor_for_a_non_empty_log() {
+        let slots = vec![log_slot(0, QUEST), log_slot(3, QUEST + 1)];
+        let actions = InMemoryQuestActions {
+            quest_log: slots.clone(),
+            ..Default::default()
+        };
+        let mask = codec::update_mask::full_quest_log_mask(&slots);
+        let want = codec::build_values_update_raw(SELF_GUID, &mask);
+
+        let batch = quest_log_update(&actions, SELF_GUID).unwrap();
+
+        assert!(matches!(
+            batch.as_slice(),
+            [Outbound::Raw { opcode, body }] if (*opcode, body.clone()) == want
+        ));
+    }
+
+    #[test]
+    fn abandon_resolution_and_the_world_entry_block_read_the_same_slot_ordering() {
+        // Both paths ask `player_quest_log` for the same player guid through `quest_log_slots` — the
+        // one seam that decides what a slot means, so the click and the window cannot disagree.
+        let actions = InMemoryQuestActions {
+            quest_log: vec![log_slot(3, 777)],
+            ..Default::default()
+        };
+
+        let _ = dispatch_quest_action(&actions, player(), abandon(3)).unwrap();
+        let _ = quest_log_update(&actions, SELF_GUID).unwrap();
+
+        assert_eq!(
+            actions.quest_log_requests.lock().unwrap().as_slice(),
+            &[SELF_GUID, SELF_GUID]
+        );
     }
 
     // ── Player context and error classification ──────────────────────────────
