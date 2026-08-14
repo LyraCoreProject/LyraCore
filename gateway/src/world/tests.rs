@@ -3662,7 +3662,7 @@ fn player_login_emits_sequence_then_self_create() {
 }
 
 #[test]
-fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
+fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
     // MSG_MOVE_WORLDPORT_ACK must re-run the SAME enter_world path as
     // CMSG_PLAYER_LOGIN — rebuilding the entity (now on the NEW map the module's teleport_player
     // durably wrote to the character row) and re-subscribing with a FRESH `created` dedup set — a
@@ -3678,6 +3678,7 @@ fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
         entity_in_world: false,
         login_entity: Some(warrior_entity()),
         worldport_entity: Some(ported),
+        corpse_money: 25,
         ..tester_store(7)
     });
 
@@ -3695,6 +3696,8 @@ fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
     for _ in 0..10 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
+
+    let _ = open_loot_window(&mut client, &mut c_enc, &mut c_dec, 60);
 
     // The client finished "loading" the new map (having received TRANSFER_PENDING/NEW_WORLD from the
     // on_teleport relay, which this InMemoryStore-driven dispatch test doesn't exercise — that's
@@ -3748,8 +3751,17 @@ fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
          subscription placement is the observable)"
     );
 
+    // The old map's open window cannot authorize a targetless request after re-entry.
+    CMSG_LOOT_MONEY {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+
     drop(client);
     server.join().unwrap();
+    assert!(
+        store.money_looted.lock().unwrap().is_empty(),
+        "world-port re-entry must start with no open loot target"
+    );
 }
 
 #[test]
@@ -5300,14 +5312,17 @@ fn item_reducer_transport_loss_ends_the_world_session() {
 // ===========================================================================
 
 #[test]
-fn logout_while_out_of_combat_succeeds() {
+fn logout_while_out_of_combat_succeeds_and_clears_open_loot() {
     // combat_until_ms=0 (default, never in combat) → CMSG_LOGOUT_REQUEST must reply
     // Success/Instant + LOGOUT_COMPLETE and the logout() store reducer must be called.
     let store = std::sync::Arc::new(InMemoryStore {
         login_entity: Some(warrior_entity()),
+        corpse_money: 25,
         ..tester_store(7)
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    let _ = open_loot_window(&mut client, &mut c_enc, &mut c_dec, 60);
 
     CMSG_LOGOUT_REQUEST {}
         .write_encrypted_client(&mut client, &mut c_enc)
@@ -5333,6 +5348,10 @@ fn logout_while_out_of_combat_succeeds() {
         other => panic!("expected SMSG_LOGOUT_COMPLETE, got {other}"),
     }
 
+    CMSG_LOOT_MONEY {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+
     drop(client);
     server.join().unwrap();
 
@@ -5342,6 +5361,10 @@ fn logout_while_out_of_combat_succeeds() {
             .logout_called
             .load(std::sync::atomic::Ordering::SeqCst),
         "logout() must be called on a successful out-of-combat logout"
+    );
+    assert!(
+        store.money_looted.lock().unwrap().is_empty(),
+        "logout must discard the open loot target"
     );
 }
 
@@ -5590,6 +5613,22 @@ fn read_raw_frame<S: Read>(client: &mut S, dec: &mut DecrypterHalf) -> (u16, Vec
     let mut body = vec![0u8; (h.size as usize).saturating_sub(2)];
     client.read_exact(&mut body).unwrap();
     (h.opcode, body)
+}
+
+fn open_loot_window(
+    client: &mut UnixStream,
+    enc: &mut EncrypterHalf,
+    dec: &mut DecrypterHalf,
+    target_guid: u64,
+) -> Vec<u8> {
+    CMSG_LOOT {
+        guid: Guid::new(target_guid),
+    }
+    .write_encrypted_client(&mut *client, enc)
+    .unwrap();
+    let (opcode, body) = read_raw_frame(client, dec);
+    assert_eq!(opcode, OP_LOOT_RESPONSE);
+    body
 }
 
 /// `SpellCastTargets` carrying a UNIT target (the client's selected mob).
@@ -5849,7 +5888,7 @@ fn quest_query_answers_the_raw_definition_body_through_the_cipher() {
 
 #[test]
 fn loot_opens_the_window_and_loot_money_drives_the_tracked_guid() {
-    // CMSG_LOOT arms looting_target and replies the RAW loot window (guid + money in the body);
+    // CMSG_LOOT arms the open-loot state and replies the RAW loot window (guid + money in the body);
     // CMSG_LOOT_MONEY (which carries NO guid) must then hit the TRACKED corpse. A
     // SOLO money loot sends ONLY SMSG_LOOT_CLEAR_MONEY — the unconditional SMSG_LOOT_MONEY_NOTIFY
     // is gone (vanilla never sends it to a solo looter; the client prints its own local "You loot X
@@ -6002,17 +6041,12 @@ fn looting_a_fully_emptied_corpse_attempts_the_skinning_fallback() {
 }
 
 #[test]
-fn loot_release_clears_the_tracked_target_so_loot_money_is_a_noop() {
+fn loot_release_clears_the_tracked_target_so_take_requests_are_noops() {
     let mut s = quest_store();
     s.corpse_money = 25; // non-empty so the skin fallback stays out of the picture
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_LOOT {
-        guid: Guid::new(60),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    let _ = read_raw_frame(&mut client, &mut c_dec);
+    let _ = open_loot_window(&mut client, &mut c_enc, &mut c_dec, 60);
     CMSG_LOOT_RELEASE {
         guid: Guid::new(60),
     }
@@ -6022,8 +6056,11 @@ fn loot_release_clears_the_tracked_target_so_loot_money_is_a_noop() {
         ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(r) => assert_eq!(r.guid.guid(), 60),
         other => panic!("expected SMSG_LOOT_RELEASE_RESPONSE, got {other}"),
     }
-    // The window is closed — a stray CMSG_LOOT_MONEY must not reach the store.
+    // The window is closed — stray targetless take requests must not reach the store.
     CMSG_LOOT_MONEY {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 3 }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
     drop(client);
@@ -6031,6 +6068,10 @@ fn loot_release_clears_the_tracked_target_so_loot_money_is_a_noop() {
     assert!(
         store.money_looted.lock().unwrap().is_empty(),
         "release cleared the tracked target"
+    );
+    assert!(
+        store.items_looted.lock().unwrap().is_empty(),
+        "release cleared the tracked target before an item take"
     );
 }
 

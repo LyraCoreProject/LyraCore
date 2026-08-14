@@ -343,8 +343,8 @@ pub struct InWorld {
     /// The guid being melee auto-attacked (combat C1), so `CMSG_ATTACKSTOP` can name it. The
     /// authoritative engagement lives in `game_melee_attack`; this is protocol state.
     pub attacking_target: Option<u64>,
-    /// The corpse guid with an open loot window (slice 3; `CMSG_LOOT_MONEY` carries no guid).
-    pub looting_target: Option<u64>,
+    /// The target whose loot window is open. Targetless take requests use this protocol state.
+    pub open_loot: OpenLootState,
     /// A ranged auto-repeat (Auto Shot / wand Shoot) is armed. Melee and ranged share one
     /// `game_melee_attack` row keyed by attacker, so the melee-stop `CMSG_ATTACKSTOP` the client
     /// sends when switching to ranged would collaterally kill the auto-shot. While this is set,
@@ -1239,9 +1239,7 @@ fn dispatch<St: WorldStore + ?Sized>(
         return Ok(());
     };
     let current_loot_state = match &conn.state {
-        WorldState::InWorld(iw) => OpenLootState {
-            target_guid: iw.looting_target,
-        },
+        WorldState::InWorld(iw) => iw.open_loot,
         WorldState::CharSelect => OpenLootState::default(),
     };
     let msg = match dispatch_loot_window(
@@ -1259,7 +1257,7 @@ fn dispatch<St: WorldStore + ?Sized>(
             outbound,
         } => {
             if let WorldState::InWorld(iw) = &mut conn.state {
-                iw.looting_target = next_state.target_guid;
+                iw.open_loot = next_state;
             }
             for message in outbound {
                 send(tx, message)?;

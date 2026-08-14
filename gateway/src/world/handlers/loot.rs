@@ -256,6 +256,15 @@ pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
                 outbound,
             })
         }
+        ClientOpcodeMessage::CMSG_LOOT_RELEASE(request) => Ok(LootWindowOutcome::Handled {
+            next_state: OpenLootState::default(),
+            durable_request: None,
+            outbound: vec![Outbound::One(
+                ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(Box::new(
+                    codec::build_loot_release_response(request.guid.guid()),
+                )),
+            )],
+        }),
         other => Ok(LootWindowOutcome::PassThrough(other)),
     }
 }
@@ -269,19 +278,6 @@ pub(crate) fn handle_loot<St: WorldStore + ?Sized>(
     msg: ClientOpcodeMessage,
 ) -> Result<Option<ClientOpcodeMessage>> {
     match msg {
-        // Close the loot window: clear the open-corpse state and ack so the client releases the UI.
-        ClientOpcodeMessage::CMSG_LOOT_RELEASE(l) => {
-            let target_guid = l.guid.guid();
-            if let WorldState::InWorld(iw) = &mut conn.state {
-                iw.looting_target = None;
-            }
-            send(
-                tx,
-                Outbound::One(ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(Box::new(
-                    codec::build_loot_release_response(target_guid),
-                ))),
-            )?;
-        }
         // Group loot methods: a need/greed vote, and the master looter's
         // explicit assign. Both are per-action — a rejection (no roll open, already voted, not the
         // master) is logged + ignored rather than tearing the session; the live vote/winner/master
@@ -358,7 +354,7 @@ pub(crate) fn handle_loot<St: WorldStore + ?Sized>(
                         let items = store.corpse_loot(go_guid, self_guid).unwrap_or_default();
                         if !items.is_empty() {
                             if let WorldState::InWorld(iw) = &mut conn.state {
-                                iw.looting_target = Some(go_guid);
+                                iw.open_loot.target_guid = Some(go_guid);
                             }
                             let (opcode, body) = codec::build_loot_response_raw(go_guid, 0, &items);
                             send(tx, Outbound::Raw { opcode, body })?;
@@ -487,7 +483,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex;
-    use wow_world_messages::vanilla::{CMSG_AUTOSTORE_LOOT_ITEM, CMSG_LOOT};
+    use wow_world_messages::vanilla::{CMSG_AUTOSTORE_LOOT_ITEM, CMSG_LOOT, CMSG_LOOT_RELEASE};
     use wow_world_messages::Guid;
 
     #[derive(Default)]
@@ -598,6 +594,37 @@ mod tests {
         ClientOpcodeMessage::CMSG_LOOT(CMSG_LOOT {
             guid: Guid::new(target_guid),
         })
+    }
+
+    fn release(target_guid: u64) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_LOOT_RELEASE(CMSG_LOOT_RELEASE {
+            guid: Guid::new(target_guid),
+        })
+    }
+
+    fn dispatch_release(current_state: OpenLootState, request_target: u64) -> OpenLootState {
+        let outcome = dispatch_loot_window(
+            &InMemoryLootWindow::default(),
+            player(),
+            current_state,
+            release(request_target),
+        )
+        .unwrap();
+        let LootWindowOutcome::Handled {
+            next_state,
+            durable_request,
+            outbound,
+        } = outcome
+        else {
+            panic!("release passed through")
+        };
+        assert_eq!(durable_request, None);
+        assert!(matches!(
+            outbound.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(response))]
+                if response.guid.guid() == request_target
+        ));
+        next_state
     }
 
     #[test]
@@ -892,6 +919,30 @@ mod tests {
         assert_eq!(store.money_reads.lock().unwrap().as_slice(), &[60]);
         assert_eq!(store.item_reads.lock().unwrap().as_slice(), &[(60, 42)]);
         assert!(store.skin_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn release_clears_the_open_target_and_acknowledges_the_request_target() {
+        let next_state = dispatch_release(
+            OpenLootState {
+                target_guid: Some(60),
+            },
+            91,
+        );
+        assert_eq!(next_state, OpenLootState::default());
+    }
+
+    #[test]
+    fn duplicate_release_keeps_state_empty_and_is_acknowledged() {
+        let next_state = dispatch_release(
+            OpenLootState {
+                target_guid: Some(60),
+            },
+            60,
+        );
+        let next_state = dispatch_release(next_state, 60);
+
+        assert_eq!(next_state, OpenLootState::default());
     }
 
     #[test]
