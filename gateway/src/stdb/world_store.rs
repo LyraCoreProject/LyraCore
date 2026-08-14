@@ -695,36 +695,10 @@ impl WorldStore for Coordinator {
         self.skin_corpse(account_id, self_guid, corpse_guid)
     }
 
-    fn item_slot_by_guid(&self, account_id: u64, item_guid: u64) -> Option<u8> {
-        self.item_slot_by_guid(account_id, item_guid)
-    }
-
-    fn disenchant_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()> {
-        self.disenchant_item(account_id, self_guid, slot)
-    }
-
-    fn enchant_item_on_slot(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        slot: u8,
-        enchant_id: u32,
-    ) -> Result<()> {
-        self.enchant_item_on_slot(account_id, self_guid, slot, enchant_id)
-    }
-
     fn talent_grant_spell(&self, talent_id: u32) -> u32 {
         self.talent_by_id(talent_id)
             .map(|t| t.grant_spell_id)
             .unwrap_or(0)
-    }
-
-    fn fish(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        self.fish(account_id, self_guid)
-    }
-
-    fn pick_lock(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()> {
-        self.pick_lock(account_id, self_guid, go_guid)
     }
 
     fn set_faction_at_war(

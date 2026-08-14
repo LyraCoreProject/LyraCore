@@ -1777,43 +1777,8 @@ impl WorldStore for InMemoryStore {
         self.skinned.lock().unwrap().push(corpse_guid);
         Ok(())
     }
-    fn item_slot_by_guid(&self, _account_id: u64, item_guid: u64) -> Option<u8> {
-        self.item_slots
-            .iter()
-            .find(|(g, _)| *g == item_guid)
-            .map(|&(_, s)| s)
-    }
-    fn disenchant_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
-        self.disenchanted.lock().unwrap().push(slot);
-        Ok(())
-    }
-    fn enchant_item_on_slot(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        slot: u8,
-        enchant_id: u32,
-    ) -> Result<()> {
-        self.enchanted.lock().unwrap().push((slot, enchant_id));
-        Ok(())
-    }
     fn talent_grant_spell(&self, _talent_id: u32) -> u32 {
         self.talent_grant
-    }
-    fn fish(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
-        self.fish_casts
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
-    }
-    fn pick_lock(&self, _account_id: u64, _self_guid: u64, go_guid: u64) -> Result<()> {
-        self.pick_lock_casts.lock().unwrap().push(go_guid);
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
     }
     fn set_faction_at_war(
         &self,
@@ -2791,6 +2756,41 @@ impl CastStore for InMemoryStore {
             .unwrap()
             .push((spell_id, target_guid, x, y, z));
         Ok(())
+    }
+    fn item_slot_by_guid(&self, _account_id: u64, item_guid: u64) -> Option<u8> {
+        self.item_slots
+            .iter()
+            .find(|(g, _)| *g == item_guid)
+            .map(|&(_, s)| s)
+    }
+    fn disenchant_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
+        self.disenchanted.lock().unwrap().push(slot);
+        Ok(())
+    }
+    fn enchant_item_on_slot(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        slot: u8,
+        enchant_id: u32,
+    ) -> Result<()> {
+        self.enchanted.lock().unwrap().push((slot, enchant_id));
+        Ok(())
+    }
+    fn fish(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+        self.fish_casts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        match &self.trade_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
+    }
+    fn pick_lock(&self, _account_id: u64, _self_guid: u64, go_guid: u64) -> Result<()> {
+        self.pick_lock_casts.lock().unwrap().push(go_guid);
+        match &self.trade_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
     }
 }
 

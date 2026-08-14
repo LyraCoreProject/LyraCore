@@ -455,35 +455,9 @@ pub trait WorldStore: CastStore + ItemActionStore + Send + Sync {
     /// or dead player) — the caller falls through to the empty loot window and the player sees nothing.
     fn skin_corpse(&self, account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()>;
 
-    /// Given an item-instance GUID from a client spell-target, return the bag slot for that item
-    /// (so the disenchant / enchant_item reducer can receive a slot, not a GUID).
-    fn item_slot_by_guid(&self, account_id: u64, item_guid: u64) -> Option<u8>;
-
-    /// Disenchant the item in `slot` (`CMSG_CAST_SPELL` spell 13262). The module validates skill +
-    /// item disenchantability and yields Strange Dust into the bag.
-    fn disenchant_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()>;
-
-    /// Apply `enchant_id` to the item in `slot` (`CMSG_CAST_SPELL` for enchant spell). The module
-    /// validates skill, consumes reagent dust, and stamps enchant_id on the item instance.
-    fn enchant_item_on_slot(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        slot: u8,
-        enchant_id: u32,
-    ) -> Result<()>;
-
     /// Return the `grant_spell_id` for `talent_id` (0 = passive, no ability granted), so the gateway
     /// can push `SMSG_LEARNED_SPELL` for ability talents after a successful `learn_talent`.
     fn talent_grant_spell(&self, talent_id: u32) -> u32;
-
-    /// The instant-resolve Fishing catch.
-    fn fish(&self, account_id: u64, self_guid: u64) -> Result<()>;
-
-    /// Pick the lock on GameObject `go_guid` (`CMSG_CAST_SPELL` for Pick Lock). The module gates it
-    /// (range / lock requirement / caster's Lockpicking skill); `Err` = refused (out of range, not
-    /// locked, or skill too low) → the gateway answers SMSG_CAST_RESULT::Failure.
-    fn pick_lock(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()>;
 
     /// Persist one action-bar button (`CMSG_SET_ACTION_BUTTON`); action 0 clears the slot.
     fn set_action_button(

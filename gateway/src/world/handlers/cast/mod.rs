@@ -2,9 +2,11 @@
 //! decoding, durable dispatch and the ordered client-visible messages.
 //!
 //! The module root holds the seam types, the route decision tree and the ordinary cast route
-//! (instant, timed, next-swing, ground-area and ground-targeted casts). The ranged auto-repeat and
-//! manual-completion routes are recognised here and passed through to the combat handler until
-//! their own sibling modules exist.
+//! (instant, timed, next-swing, ground-area and ground-targeted casts). `manual` owns enchant,
+//! disenchant, fishing and lock opening. The ranged auto-repeat route is recognised here and passed
+//! through to the combat handler until its own sibling module exists.
+
+mod manual;
 
 use super::super::*;
 use wow_world_messages::vanilla::CMSG_CAST_SPELL;
@@ -60,6 +62,32 @@ pub(crate) trait CastStore: Send + Sync {
         y: f32,
         z: f32,
     ) -> Result<()>;
+
+    /// Given an item-instance GUID from a client spell-target, return the bag slot for that item
+    /// (so the disenchant / enchant_item reducer can receive a slot, not a GUID).
+    fn item_slot_by_guid(&self, account_id: u64, item_guid: u64) -> Option<u8>;
+
+    /// Disenchant the item in `slot` (`CMSG_CAST_SPELL` spell 13262). The module validates skill +
+    /// item disenchantability and yields Strange Dust into the bag.
+    fn disenchant_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()>;
+
+    /// Apply `enchant_id` to the item in `slot` (`CMSG_CAST_SPELL` for enchant spell). The module
+    /// validates skill, consumes reagent dust, and stamps enchant_id on the item instance.
+    fn enchant_item_on_slot(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        slot: u8,
+        enchant_id: u32,
+    ) -> Result<()>;
+
+    /// The instant-resolve Fishing catch.
+    fn fish(&self, account_id: u64, self_guid: u64) -> Result<()>;
+
+    /// Pick the lock on GameObject `go_guid` (`CMSG_CAST_SPELL` for Pick Lock). The module gates it
+    /// (range / lock requirement / caster's Lockpicking skill); `Err` = refused (out of range, not
+    /// locked, or skill too low) → the gateway answers SMSG_CAST_RESULT::Failure.
+    fn pick_lock(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()>;
 }
 
 impl CastStore for crate::stdb::Coordinator {
@@ -122,6 +150,34 @@ impl CastStore for crate::stdb::Coordinator {
             z,
         )
     }
+
+    fn item_slot_by_guid(&self, account_id: u64, item_guid: u64) -> Option<u8> {
+        crate::stdb::Coordinator::item_slot_by_guid(self, account_id, item_guid)
+    }
+
+    fn disenchant_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()> {
+        crate::stdb::Coordinator::disenchant_item(self, account_id, self_guid, slot)
+    }
+
+    fn enchant_item_on_slot(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        slot: u8,
+        enchant_id: u32,
+    ) -> Result<()> {
+        crate::stdb::Coordinator::enchant_item_on_slot(
+            self, account_id, self_guid, slot, enchant_id,
+        )
+    }
+
+    fn fish(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        crate::stdb::Coordinator::fish(self, account_id, self_guid)
+    }
+
+    fn pick_lock(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()> {
+        crate::stdb::Coordinator::pick_lock(self, account_id, self_guid, go_guid)
+    }
 }
 
 /// Everything the cast module knows about the caller. `self_guid` is `None` when the session has no
@@ -159,8 +215,9 @@ enum CastRoute {
     /// Auto Shot and wand Shoot: an auto-repeat attack loop, not a one-shot cast.
     RangedAutoRepeat,
     /// Enchant, disenchant, fishing and lock opening. Their reducers emit no cast event, so the
-    /// route sends the completion sequence itself.
-    ManualCompletion,
+    /// route sends the completion sequence itself. The payload is the one classification decision,
+    /// made once here instead of re-testing the same effect metadata inside the route.
+    ManualCompletion(manual::ManualRoute),
     /// Every other cast: instant, timed, next-swing, ground-area and ground-targeted.
     Ordinary,
 }
@@ -168,11 +225,12 @@ enum CastRoute {
 fn route_for<St: CastStore + ?Sized>(store: &St, spell_id: u32) -> CastRoute {
     if store.spell_is_ranged_auto_repeat(spell_id) {
         CastRoute::RangedAutoRepeat
-    } else if store.enchant_route(spell_id).is_some()
-        || store.spell_is_fishing(spell_id)
-        || store.spell_is_open_lock(spell_id)
-    {
-        CastRoute::ManualCompletion
+    } else if let Some(route) = store.enchant_route(spell_id) {
+        CastRoute::ManualCompletion(manual::ManualRoute::Enchant(route))
+    } else if store.spell_is_fishing(spell_id) {
+        CastRoute::ManualCompletion(manual::ManualRoute::Fish)
+    } else if store.spell_is_open_lock(spell_id) {
+        CastRoute::ManualCompletion(manual::ManualRoute::OpenLock)
     } else {
         CastRoute::Ordinary
     }
@@ -212,9 +270,12 @@ pub(crate) fn dispatch_cast<St: CastStore + ?Sized>(
     match msg {
         ClientOpcodeMessage::CMSG_CAST_SPELL(c) => match route_for(store, c.spell) {
             CastRoute::Ordinary => ordinary_cast(store, player, &c),
-            CastRoute::RangedAutoRepeat | CastRoute::ManualCompletion => Ok(
-                CastOutcome::PassThrough(ClientOpcodeMessage::CMSG_CAST_SPELL(c)),
-            ),
+            CastRoute::ManualCompletion(route) => {
+                manual::manual_completion_cast(store, player, &c, route)
+            }
+            CastRoute::RangedAutoRepeat => Ok(CastOutcome::PassThrough(
+                ClientOpcodeMessage::CMSG_CAST_SPELL(c),
+            )),
         },
         other => Ok(CastOutcome::PassThrough(other)),
     }
@@ -289,7 +350,10 @@ fn ordinary_cast<St: CastStore + ?Sized>(
         );
         outbound.push(Outbound::Raw {
             opcode: OP_CAST_RESULT,
-            body: codec::build_cast_result_failed(spell, codec::cast_failure_reason_for(&e.to_string())),
+            body: codec::build_cast_result_failed(
+                spell,
+                codec::cast_failure_reason_for(&e.to_string()),
+            ),
         });
     }
     Ok(CastOutcome::Handled {
@@ -305,13 +369,21 @@ mod tests {
     use wow_world_messages::vanilla::{
         Guid, SpellCastTargets, SpellCastTargets_SpellCastTargetFlags,
         SpellCastTargets_SpellCastTargetFlags_DestLocation,
-        SpellCastTargets_SpellCastTargetFlags_Unit, Vector3d, CMSG_PING,
+        SpellCastTargets_SpellCastTargetFlags_Gameobject,
+        SpellCastTargets_SpellCastTargetFlags_Item, SpellCastTargets_SpellCastTargetFlags_Unit,
+        Vector3d, CMSG_PING,
     };
 
     /// One recorded durable cast: account, caster, spell and unit target.
     type Cast = (u64, u64, u32, u64);
     /// One recorded durable ground cast: a [`Cast`] plus the click point.
     type GroundCast = (u64, u64, u32, u64, f32, f32, f32);
+    /// One recorded `enchant_item_on_slot` call: slot and enchant id.
+    type EnchantCall = (u8, u32);
+    /// One recorded `fish` call: account and caster.
+    type FishCall = (u64, u64);
+    /// One recorded `pick_lock` call: account, caster and GameObject guid.
+    type PickLockCall = (u64, u64, u64);
 
     /// Spell-route metadata and durable results for the cast routes, plus a record of every durable
     /// call. Nothing else: no vendors, parties, mail, transfer or unrelated world state.
@@ -327,6 +399,14 @@ mod tests {
         cast_error: Option<String>,
         casts: Mutex<Vec<Cast>>,
         ground_casts: Mutex<Vec<GroundCast>>,
+        /// Item-instance guid → bag slot, for the manual-completion item target.
+        item_slots: Vec<(u64, u8)>,
+        /// Shared refusal for every manual-completion durable operation.
+        manual_error: Option<String>,
+        disenchant_calls: Mutex<Vec<u8>>,
+        enchant_calls: Mutex<Vec<EnchantCall>>,
+        fish_calls: Mutex<Vec<FishCall>>,
+        pick_lock_calls: Mutex<Vec<PickLockCall>>,
     }
 
     impl InMemoryCasts {
@@ -346,6 +426,12 @@ mod tests {
 
         fn durable_result(&self) -> Result<()> {
             self.cast_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |e| Err(anyhow!("{e}")))
+        }
+
+        fn manual_result(&self) -> Result<()> {
+            self.manual_error
                 .as_ref()
                 .map_or_else(|| Ok(()), |e| Err(anyhow!("{e}")))
         }
@@ -404,11 +490,55 @@ mod tests {
             y: f32,
             z: f32,
         ) -> Result<()> {
-            self.ground_casts
+            self.ground_casts.lock().unwrap().push((
+                account_id,
+                self_guid,
+                spell_id,
+                target_guid,
+                x,
+                y,
+                z,
+            ));
+            self.durable_result()
+        }
+
+        fn item_slot_by_guid(&self, _account_id: u64, item_guid: u64) -> Option<u8> {
+            self.item_slots
+                .iter()
+                .find(|(g, _)| *g == item_guid)
+                .map(|&(_, s)| s)
+        }
+
+        fn disenchant_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
+            self.disenchant_calls.lock().unwrap().push(slot);
+            self.manual_result()
+        }
+
+        fn enchant_item_on_slot(
+            &self,
+            _account_id: u64,
+            _self_guid: u64,
+            slot: u8,
+            enchant_id: u32,
+        ) -> Result<()> {
+            self.enchant_calls.lock().unwrap().push((slot, enchant_id));
+            self.manual_result()
+        }
+
+        fn fish(&self, account_id: u64, self_guid: u64) -> Result<()> {
+            self.fish_calls
                 .lock()
                 .unwrap()
-                .push((account_id, self_guid, spell_id, target_guid, x, y, z));
-            self.durable_result()
+                .push((account_id, self_guid));
+            self.manual_result()
+        }
+
+        fn pick_lock(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()> {
+            self.pick_lock_calls
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid, go_guid));
+            self.manual_result()
         }
     }
 
@@ -447,6 +577,33 @@ mod tests {
         }
     }
 
+    fn item_targets(item_guid: u64) -> SpellCastTargets {
+        SpellCastTargets {
+            target_flags: SpellCastTargets_SpellCastTargetFlags::new_item(
+                SpellCastTargets_SpellCastTargetFlags_Item::Item {
+                    item: Guid::new(item_guid),
+                },
+            ),
+        }
+    }
+
+    /// The GAMEOBJECT target shape, or its ObjectUnk sibling — the two the vanilla client sends for
+    /// Pick Lock.
+    fn gameobject_targets(go_guid: u64, unk_shape: bool) -> SpellCastTargets {
+        let target = if unk_shape {
+            SpellCastTargets_SpellCastTargetFlags_Gameobject::ObjectUnk {
+                object_unk: Guid::new(go_guid),
+            }
+        } else {
+            SpellCastTargets_SpellCastTargetFlags_Gameobject::Gameobject {
+                gameobject: Guid::new(go_guid),
+            }
+        };
+        SpellCastTargets {
+            target_flags: SpellCastTargets_SpellCastTargetFlags::new_gameobject(target),
+        }
+    }
+
     /// The handled outcome, or a panic naming what came back instead.
     fn handled(outcome: CastOutcome) -> (CastTransition, Vec<Outbound>) {
         match outcome {
@@ -474,6 +631,11 @@ mod tests {
                     opcode: OP_CAST_RESULT,
                     body,
                 } => format!("CAST_RESULT(FAILED {:#04x})", body[5]),
+                Outbound::One(ServerOpcodeMessage::SMSG_CAST_RESULT(r))
+                    if matches!(r.result, SMSG_CAST_RESULT_SimpleSpellCastResult::Failure) =>
+                {
+                    "CAST_RESULT(FAILURE)".to_string()
+                }
                 _ => "UNEXPECTED".to_string(),
             })
             .collect()
@@ -620,8 +782,12 @@ mod tests {
         };
 
         handled(
-            dispatch_cast(&store, player(), cast(2120, dest_targets(-8913.5, 554.25, 93.75)))
-                .unwrap(),
+            dispatch_cast(
+                &store,
+                player(),
+                cast(2120, dest_targets(-8913.5, 554.25, 93.75)),
+            )
+            .unwrap(),
         );
 
         assert_eq!(
@@ -645,12 +811,7 @@ mod tests {
 
         assert_eq!(
             sequence(&outbound),
-            [
-                "START",
-                "CAST_RESULT(OK)",
-                "GO",
-                "CAST_RESULT(FAILED 0x4d)"
-            ],
+            ["START", "CAST_RESULT(OK)", "GO", "CAST_RESULT(FAILED 0x4d)"],
             "the client clears the pending cast first, then shows the refusal"
         );
     }
@@ -707,35 +868,20 @@ mod tests {
     // ── Routes other modules own ─────────────────────────────────────────────
 
     #[test]
-    fn ranged_auto_repeat_enchant_fishing_and_lock_opening_pass_through_untouched() {
+    fn ranged_auto_repeat_passes_through_untouched() {
         let store = InMemoryCasts {
             ranged_auto_repeat: vec![75],
-            fishing: vec![7620],
-            open_lock: vec![1804],
             ..InMemoryCasts::instant()
         };
 
-        for spell in [75, 7620, 1804] {
-            assert!(
-                matches!(
-                    dispatch_cast(&store, player(), cast(spell, unit_targets(77))).unwrap(),
-                    CastOutcome::PassThrough(ClientOpcodeMessage::CMSG_CAST_SPELL(c)) if c.spell == spell
-                ),
-                "spell {spell} must reach the combat handler unchanged"
-            );
-        }
-
-        let enchanting = InMemoryCasts {
-            enchant: Some(EnchantRoute::Disenchant),
-            ..InMemoryCasts::instant()
-        };
-        assert!(matches!(
-            dispatch_cast(&enchanting, player(), cast(13262, unit_targets(0))).unwrap(),
-            CastOutcome::PassThrough(_)
-        ));
-
+        assert!(
+            matches!(
+                dispatch_cast(&store, player(), cast(75, unit_targets(77))).unwrap(),
+                CastOutcome::PassThrough(ClientOpcodeMessage::CMSG_CAST_SPELL(c)) if c.spell == 75
+            ),
+            "ranged auto-repeat must reach the combat handler unchanged until its own route module exists"
+        );
         assert!(store.casts.lock().unwrap().is_empty());
-        assert!(enchanting.casts.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -751,5 +897,167 @@ mod tests {
             .unwrap(),
             CastOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
         ));
+    }
+
+    // ── Manual completion: enchant, disenchant, fishing, lock opening ────────
+
+    #[test]
+    fn enchant_cast_resolves_the_item_guid_to_its_slot_and_completes_manually() {
+        let store = InMemoryCasts {
+            enchant: Some(EnchantRoute::Enchant(777)),
+            item_slots: vec![(500, 4)],
+            ..Default::default()
+        };
+
+        let (transition, outbound) =
+            handled(dispatch_cast(&store, player(), cast(7418, item_targets(500))).unwrap());
+
+        assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
+        assert_eq!(transition, CastTransition::default());
+        assert_eq!(store.enchant_calls.lock().unwrap().as_slice(), &[(4, 777)]);
+        assert!(store.disenchant_calls.lock().unwrap().is_empty());
+        assert!(
+            store.casts.lock().unwrap().is_empty(),
+            "an enchant cast never reaches cast_spell"
+        );
+    }
+
+    #[test]
+    fn disenchant_cast_resolves_the_item_guid_to_its_slot_and_completes_manually() {
+        let store = InMemoryCasts {
+            enchant: Some(EnchantRoute::Disenchant),
+            item_slots: vec![(500, 9)],
+            ..Default::default()
+        };
+
+        let (_, outbound) =
+            handled(dispatch_cast(&store, player(), cast(13262, item_targets(500))).unwrap());
+
+        assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
+        assert_eq!(store.disenchant_calls.lock().unwrap().as_slice(), &[9]);
+        assert!(store.enchant_calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn enchant_without_an_owned_item_target_fails_with_no_durable_operation() {
+        let store = InMemoryCasts {
+            enchant: Some(EnchantRoute::Enchant(777)),
+            ..Default::default()
+        };
+
+        let (_, outbound) = handled(
+            dispatch_cast(&store, player(), cast(7418, SpellCastTargets::default())).unwrap(),
+        );
+
+        assert_eq!(
+            sequence(&outbound),
+            ["CAST_RESULT(FAILURE)"],
+            "no item target means no success sequence"
+        );
+        assert!(store.enchant_calls.lock().unwrap().is_empty());
+        assert!(store.disenchant_calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn disenchant_with_an_item_guid_not_in_the_bag_fails_with_no_durable_operation() {
+        let store = InMemoryCasts {
+            enchant: Some(EnchantRoute::Disenchant),
+            ..Default::default()
+        };
+
+        let (_, outbound) =
+            handled(dispatch_cast(&store, player(), cast(13262, item_targets(500))).unwrap());
+
+        assert_eq!(sequence(&outbound), ["CAST_RESULT(FAILURE)"]);
+        assert!(store.disenchant_calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn fishing_cast_requests_the_fish_reducer_with_no_target_and_completes_manually() {
+        let store = InMemoryCasts {
+            fishing: vec![7620],
+            ..Default::default()
+        };
+
+        let (_, outbound) = handled(
+            dispatch_cast(&store, player(), cast(7620, SpellCastTargets::default())).unwrap(),
+        );
+
+        assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
+        assert_eq!(
+            store.fish_calls.lock().unwrap().as_slice(),
+            &[(ACCOUNT, CASTER)]
+        );
+    }
+
+    #[test]
+    fn fishing_refusal_sends_only_the_simple_failure_and_stays_non_fatal() {
+        let store = InMemoryCasts {
+            fishing: vec![7620],
+            manual_error: Some("fishing skill too low".into()),
+            ..Default::default()
+        };
+
+        let (_, outbound) = handled(
+            dispatch_cast(&store, player(), cast(7620, SpellCastTargets::default())).unwrap(),
+        );
+
+        assert_eq!(sequence(&outbound), ["CAST_RESULT(FAILURE)"]);
+    }
+
+    #[test]
+    fn a_dead_reducer_transport_on_a_manual_route_is_session_fatal() {
+        let store = InMemoryCasts {
+            fishing: vec![7620],
+            manual_error: Some("fish reducer transport disconnected: channel closed".into()),
+            ..Default::default()
+        };
+
+        let error = match dispatch_cast(&store, player(), cast(7620, SpellCastTargets::default())) {
+            Err(error) => error,
+            Ok(_) => panic!("a dead reducer transport must end the session"),
+        };
+        assert!(format!("{error:#}").contains("reducer transport disconnected"));
+    }
+
+    #[test]
+    fn pick_lock_cast_decodes_either_gameobject_target_shape_and_completes_manually() {
+        for unk_shape in [false, true] {
+            let store = InMemoryCasts {
+                open_lock: vec![1804],
+                ..Default::default()
+            };
+
+            let (_, outbound) = handled(
+                dispatch_cast(
+                    &store,
+                    player(),
+                    cast(1804, gameobject_targets(0xABCD, unk_shape)),
+                )
+                .unwrap(),
+            );
+
+            assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
+            assert_eq!(
+                store.pick_lock_calls.lock().unwrap().as_slice(),
+                &[(ACCOUNT, CASTER, 0xABCD)],
+                "unk_shape={unk_shape}"
+            );
+        }
+    }
+
+    #[test]
+    fn pick_lock_without_a_gameobject_target_fails_with_no_durable_operation() {
+        let store = InMemoryCasts {
+            open_lock: vec![1804],
+            ..Default::default()
+        };
+
+        let (_, outbound) = handled(
+            dispatch_cast(&store, player(), cast(1804, SpellCastTargets::default())).unwrap(),
+        );
+
+        assert_eq!(sequence(&outbound), ["CAST_RESULT(FAILURE)"]);
+        assert!(store.pick_lock_calls.lock().unwrap().is_empty());
     }
 }
