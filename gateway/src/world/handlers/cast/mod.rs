@@ -16,6 +16,7 @@ mod manual;
 mod ranged;
 
 use super::super::*;
+use super::MeleeActionStore;
 use wow_world_messages::vanilla::CMSG_CAST_SPELL;
 
 /// `SMSG_CAST_RESULT`. Both bodies are hand-rolled (gtker's typed message inverts the status
@@ -24,7 +25,7 @@ const OP_CAST_RESULT: u16 = 0x0130;
 
 /// Imported spell taxonomy and the durable cast operations the module needs. Narrow on purpose:
 /// nothing here exposes a coordinator read, a reducer handle or a spell table to the caller.
-pub(crate) trait CastStore: Send + Sync {
+pub(crate) trait CastStore: MeleeActionStore + Send + Sync {
     /// True iff `spell_id` is an auto-repeat ranged attack (Auto Shot / wand Shoot) — the
     /// `RANGED_AUTO_REPEAT` cast_flags bit, so a new ranged ability onboards as data.
     fn spell_is_ranged_auto_repeat(&self, spell_id: u32) -> bool;
@@ -112,13 +113,11 @@ pub(crate) trait CastStore: Send + Sync {
     /// Remove the caller's own aura named by the wire spell id. The aura relay re-syncs the buff bar.
     fn cancel_aura(&self, account_id: u64, self_guid: u64, spell_id: u32) -> Result<()>;
 
-    // The three operations below are shared with the melee, character and vendor paths. They are
-    // declared here rather than on `WorldStore` because a second declaration of the same name would
-    // make every `St: WorldStore` call ambiguous; `WorldStore: CastStore` keeps them reachable.
-
-    /// Tear down the caller's auto-attack engagement (`gw_stop_attack`). Melee and ranged share one
-    /// durable row, so the ranged route asks for this only when a ranged loop was armed.
-    fn stop_attack(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    // The two reads below are shared with the character, vendor and query paths. They are declared
+    // here rather than on `WorldStore` because a second declaration of the same name would make
+    // every `St: WorldStore` call ambiguous; `WorldStore: CastStore` keeps them reachable. The
+    // ranged teardown comes from `MeleeActionStore`: melee and ranged share one durable row, so it
+    // has one declaration, on the seam that owns that row.
 
     /// Every item a character owns. The ranged route reads the equipped launcher and the projectile
     /// stacks from it.
@@ -239,10 +238,6 @@ impl CastStore for crate::stdb::Coordinator {
 
     fn cancel_aura(&self, account_id: u64, self_guid: u64, spell_id: u32) -> Result<()> {
         crate::stdb::Coordinator::cancel_aura(self, account_id, self_guid, spell_id)
-    }
-
-    fn stop_attack(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        crate::stdb::Coordinator::stop_attack(self, account_id, self_guid)
     }
 
     fn player_items(&self, owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
@@ -673,20 +668,28 @@ pub(super) mod tests {
             Ok(())
         }
 
-        fn stop_attack(&self, account_id: u64, self_guid: u64) -> Result<()> {
-            self.stop_attacks
-                .lock()
-                .unwrap()
-                .push((account_id, self_guid));
-            Ok(())
-        }
-
         fn player_items(&self, _owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
             Ok(self.items.clone())
         }
 
         fn item_template(&self, entry: u32) -> Result<Option<codec::ItemTemplateView>> {
             Ok(self.templates.iter().find(|t| t.entry == entry).cloned())
+        }
+    }
+
+    /// The ranged teardown the cast module shares with the melee seam. `start_attack` is never
+    /// reached from a cast route; it exists because the two share one durable engagement row.
+    impl MeleeActionStore for InMemoryCasts {
+        fn start_attack(&self, _account_id: u64, _actor_guid: u64, _target_guid: u64) -> Result<()> {
+            unreachable!("no cast route arms a melee engagement")
+        }
+
+        fn stop_attack(&self, account_id: u64, actor_guid: u64) -> Result<()> {
+            self.stop_attacks
+                .lock()
+                .unwrap()
+                .push((account_id, actor_guid));
+            Ok(())
         }
     }
 

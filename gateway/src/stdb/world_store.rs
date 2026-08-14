@@ -468,10 +468,6 @@ impl WorldStore for Coordinator {
         self.corpse_loot(corpse_guid, viewer_guid)
     }
 
-    fn vendor_items(&self, vendor_guid: u64) -> Result<Vec<codec::VendorItemView>> {
-        self.vendor_items(vendor_guid)
-    }
-
     fn npc_refuses_interaction(&self, npc_guid: u64, player_guid: u64) -> Result<bool> {
         self.npc_refuses_interaction(npc_guid, player_guid)
     }
@@ -636,35 +632,6 @@ impl WorldStore for Coordinator {
         self.mail_escrows_of(sender_guid)
     }
 
-    fn buy_item(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        vendor_guid: u64,
-        item_entry: u32,
-        count: u32,
-    ) -> Result<()> {
-        self.buy_item(account_id, self_guid, vendor_guid, item_entry, count)
-    }
-
-    fn sell_item(&self, account_id: u64, self_guid: u64, vendor_guid: u64, slot: u8) -> Result<()> {
-        self.sell_item(account_id, self_guid, vendor_guid, slot)
-    }
-
-    fn buyback_item(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        vendor_guid: u64,
-        slot: u8,
-    ) -> Result<()> {
-        self.buyback_item(account_id, self_guid, vendor_guid, slot)
-    }
-
-    fn repair_item(&self, account_id: u64, self_guid: u64, npc_guid: u64, slot: u8) -> Result<()> {
-        self.repair_item(account_id, self_guid, npc_guid, slot)
-    }
-
     fn trainer_list(
         &self,
         player_guid: u64,
@@ -816,10 +783,6 @@ impl WorldStore for Coordinator {
     fn player_reputations(&self, player_guid: u64) -> Result<Vec<(i32, i32, bool)>> {
         self.player_reputations(player_guid)
     }
-    fn buyback_ring(&self, player_guid: u64) -> Vec<(u32, u32, u32)> {
-        self.buyback_ring(player_guid)
-    }
-
     fn resolve_learn_target(&self, spell_id: u32) -> u32 {
         self.resolve_learn_target(spell_id)
     }
@@ -839,9 +802,6 @@ impl WorldStore for Coordinator {
         self.inspect(account_id, self_guid, target_guid)
     }
 
-    fn start_attack(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
-        self.start_attack(account_id, self_guid, target_guid)
-    }
     fn pet_command(
         &self,
         account_id: u64,
