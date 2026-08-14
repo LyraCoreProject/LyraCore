@@ -337,9 +337,6 @@ pub trait WorldStore: CastStore + ItemActionStore + Send + Sync {
     /// Look up a creature template by entry to answer `CMSG_CREATURE_QUERY` (Tier 2 / NPCs).
     fn creature_template(&self, entry: u32) -> Result<Option<codec::CreatureView>>;
 
-    /// Look up an item template by entry to answer `CMSG_ITEM_QUERY_SINGLE` (items slice-1).
-    fn item_template(&self, entry: u32) -> Result<Option<codec::ItemTemplateView>>;
-
     /// Look up a gameobject template by entry to answer `CMSG_GAMEOBJECT_QUERY`.
     fn gameobject_template(&self, entry: u32) -> Result<Option<codec::GameObjectTemplateView>>;
 
@@ -369,8 +366,6 @@ pub trait WorldStore: CastStore + ItemActionStore + Send + Sync {
         payload: String,
     ) -> Result<()>;
 
-    /// Read every item a character owns, for the login item spawns + inventory slots (items slice-1).
-    fn player_items(&self, owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>>;
     /// The character's learned skill lines as `(skill_line, current, max_rank)` — feeds the self
     /// CREATE's SkillInfo block. Empty when no `game_player_skill` rows exist.
     fn player_skills(&self, character_guid: u64) -> Result<Vec<(u32, u16, u16)>>;
@@ -666,19 +661,6 @@ pub trait WorldStore: CastStore + ItemActionStore + Send + Sync {
         data: u32,
         target_guid: u64,
     ) -> Result<()>;
-
-    /// Start the player's RANGED auto-attack on `target_guid` with `spell_id` (75 Auto Shot / 5019 wand
-    /// Shoot), from `CMSG_CAST_SPELL`. Requires a ranged weapon equipped (the module enforces it).
-    fn start_ranged_attack(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-        spell_id: u32,
-    ) -> Result<()>;
-
-    /// Stop the player's melee auto-attack (`CMSG_ATTACKSTOP`, combat C1).
-    fn stop_attack(&self, account_id: u64, self_guid: u64) -> Result<()>;
 
     /// Draw or stow the player's weapons (`CMSG_SETSHEATHED`, the `Z` key). `state` is 0 stowed /
     /// 1 melee / 2 ranged; the module range-checks it. Writes `UNIT_FIELD_BYTES_2` byte 0, which is

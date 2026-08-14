@@ -1129,9 +1129,6 @@ impl WorldStore for InMemoryStore {
     fn creature_template(&self, _entry: u32) -> Result<Option<codec::CreatureView>> {
         Ok(None)
     }
-    fn item_template(&self, _entry: u32) -> Result<Option<codec::ItemTemplateView>> {
-        Ok(None)
-    }
     fn gameobject_template(&self, _entry: u32) -> Result<Option<codec::GameObjectTemplateView>> {
         Ok(None)
     }
@@ -1150,9 +1147,6 @@ impl WorldStore for InMemoryStore {
 
     fn enter_areatrigger(&self, _account_id: u64, _self_guid: u64, _trigger_id: u32) -> Result<()> {
         Ok(())
-    }
-    fn player_items(&self, _owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
-        Ok(self.player_items_fixture.clone())
     }
     fn player_skills(&self, _character_guid: u64) -> Result<Vec<(u32, u16, u16)>> {
         Ok(Vec::new())
@@ -2031,25 +2025,6 @@ impl WorldStore for InMemoryStore {
     ) -> Result<()> {
         Ok(())
     }
-    fn start_ranged_attack(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        target_guid: u64,
-        spell_id: u32,
-    ) -> Result<()> {
-        if let Some(e) = &self.start_ranged_attack_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.ranged_attacks
-            .lock()
-            .unwrap()
-            .push((target_guid, spell_id));
-        Ok(())
-    }
-    fn stop_attack(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
-        Ok(())
-    }
     fn set_sheathed(&self, _account_id: u64, self_guid: u64, state: u8) -> Result<()> {
         self.sheathed.lock().unwrap().push((self_guid, state));
         Ok(())
@@ -2738,6 +2713,31 @@ impl WorldStore for InMemoryStore {
 }
 
 impl CastStore for InMemoryStore {
+    fn item_template(&self, _entry: u32) -> Result<Option<codec::ItemTemplateView>> {
+        Ok(None)
+    }
+    fn player_items(&self, _owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
+        Ok(self.player_items_fixture.clone())
+    }
+    fn start_ranged_attack(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        target_guid: u64,
+        spell_id: u32,
+    ) -> Result<()> {
+        if let Some(e) = &self.start_ranged_attack_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.ranged_attacks
+            .lock()
+            .unwrap()
+            .push((target_guid, spell_id));
+        Ok(())
+    }
+    fn stop_attack(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+        Ok(())
+    }
     fn spell_is_ranged_auto_repeat(&self, spell_id: u32) -> bool {
         // Mirrors the real RANGED_AUTO_REPEAT cast_flags bit for the two vanilla auto-repeat abilities.
         matches!(spell_id, 75 | 5019)
