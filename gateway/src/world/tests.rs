@@ -1,4 +1,4 @@
-use super::handlers::ItemActionStore;
+use super::handlers::{ItemActionStore, VendorActionStore};
 use super::*;
 use std::os::unix::net::UnixStream;
 
@@ -135,6 +135,7 @@ use wow_world_messages::vanilla::{
     CMSG_GOSSIP_SELECT_OPTION,
     CMSG_INSPECT,
     CMSG_LEARN_TALENT,
+    CMSG_LIST_INVENTORY,
     CMSG_LOGOUT_REQUEST,
     CMSG_LOOT,
     CMSG_LOOT_MASTER_GIVE,
@@ -194,8 +195,11 @@ struct InMemoryStore {
     characters: Vec<codec::CharacterView>,
     login_entity: Option<codec::EntityView>,
     moves: std::sync::Mutex<Vec<MoveRecord>>,
-    /// Vendor stock returned by `vendor_items` (empty by default).
+    /// Vendor stock the seam's `vendor_stock` read returns (empty by default).
     vendor_stock: Vec<codec::VendorItemView>,
+    /// The player's buyback ring as `(item_entry, stack_count, price)`; empty by default, so a
+    /// fixture login replays no buyback tab.
+    buyback_ring: Vec<(u32, u32, u32)>,
     /// 195: `npc_refuses_interaction` return — false (derive-Default) keeps every fixture NPC open.
     npc_refuses: bool,
     /// Spelled as a refusal so derive-Default (false) keeps every fixture trainer serving; the
@@ -301,7 +305,7 @@ struct InMemoryStore {
     money_looted: std::sync::Mutex<Vec<u64>>,
     /// Recorded `skin_corpse` targets (the empty-loot-window skinning fallback).
     skinned: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `buyback_item` calls: (vendor_guid, slot) — pins the 69→0 slot mapping.
+    /// Recorded `vendor_buyback` calls: (vendor_guid, slot) — pins the 69→0 slot mapping.
     bought_back: std::sync::Mutex<Vec<(u64, u8)>>,
     /// What `talent_grant_spell` returns (0 = passive talent → no SMSG_LEARNED_SPELL push).
     talent_grant: u32,
@@ -552,12 +556,6 @@ struct InMemoryStore {
     auto_banked_items: std::sync::Mutex<Vec<u8>>,
     /// Recorded `buy_bank_slot` calls — the banker guid named on each `CMSG_BUY_BANK_SLOT`.
     bought_bank_slots: std::sync::Mutex<Vec<u64>>,
-    /// Recorded `sell_item` calls — `(vendor_guid, slot)`, AFTER the gateway resolves the
-    /// wire's item INSTANCE guid to an inventory slot via `player_items`.
-    sold_items: std::sync::Mutex<Vec<(u64, u8)>>,
-    /// Recorded `repair_item` calls — `(npc_guid, slot)`. `slot == u8::MAX` is the
-    /// "repair all" fixture (item guid 0 on the wire).
-    repaired_items: std::sync::Mutex<Vec<(u64, u8)>>,
     /// Trainer rows `trainer_list` returns for ANY (player, trainer) pair — the
     /// CMSG_TRAINER_LIST fixture. Empty by default (an empty trainer window).
     trainer_spells: Vec<codec::TrainerSpellView>,
@@ -590,10 +588,6 @@ struct InMemoryStore {
     /// This shard's bags have no room — the fixture behind the full-bag refusal on a take.
     /// Atomic so a test can flip it AFTER the fixture is wrapped in an `Arc`, like `purses`.
     bags_full: std::sync::atomic::AtomicBool,
-    /// What `player_items` returns for ANY owner guid — the CMSG_SELL_ITEM/CMSG_REPAIR_ITEM
-    /// item-instance-guid → inventory-slot resolution fixture. Empty by default (no items), matching
-    /// every earlier test that never sets this.
-    player_items_fixture: Vec<codec::ItemInstanceView>,
     /// Recorded `initiate_trade` calls — `(self_guid, target_guid)` off CMSG_INITIATE_TRADE (#120).
     initiated_trades: std::sync::Mutex<Vec<(u64, u64)>>,
     /// Recorded `begin_trade` self_guids — CMSG_BEGIN_TRADE (#120).
@@ -1152,7 +1146,8 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
     fn player_items(&self, _owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
-        Ok(self.player_items_fixture.clone())
+        // No fixture owns items: the login sequence spawns no item CREATEs for any test store.
+        Ok(Vec::new())
     }
     fn player_skills(&self, _character_guid: u64) -> Result<Vec<(u32, u16, u16)>> {
         Ok(Vec::new())
@@ -1170,9 +1165,6 @@ impl WorldStore for InMemoryStore {
             .get(&viewer_guid)
             .cloned()
             .unwrap_or_default())
-    }
-    fn vendor_items(&self, _vendor_guid: u64) -> Result<Vec<codec::VendorItemView>> {
-        Ok(self.vendor_stock.clone())
     }
     fn npc_refuses_interaction(&self, _npc_guid: u64, _player_guid: u64) -> Result<bool> {
         Ok(self.npc_refuses) // default false — every existing fixture NPC keeps interacting
@@ -1699,58 +1691,6 @@ impl WorldStore for InMemoryStore {
     fn trainer_serves(&self, _player_guid: u64, _trainer_guid: u64) -> Result<bool> {
         Ok(!self.trainer_refuses_class) // default true — every existing fixture trainer serves
     }
-    fn buy_item(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _vendor_guid: u64,
-        _item_entry: u32,
-        _count: u32,
-    ) -> Result<()> {
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
-    }
-    fn sell_item(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        vendor_guid: u64,
-        slot: u8,
-    ) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.sold_items.lock().unwrap().push((vendor_guid, slot));
-        Ok(())
-    }
-    fn buyback_item(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        vendor_guid: u64,
-        slot: u8,
-    ) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.bought_back.lock().unwrap().push((vendor_guid, slot));
-        Ok(())
-    }
-    fn repair_item(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        npc_guid: u64,
-        slot: u8,
-    ) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.repaired_items.lock().unwrap().push((npc_guid, slot));
-        Ok(())
-    }
     fn trainer_list(
         &self,
         _player_guid: u64,
@@ -1979,9 +1919,6 @@ impl WorldStore for InMemoryStore {
     }
     fn player_actions(&self, _player_guid: u64) -> Result<Vec<(u8, u32, u8)>> {
         Ok(self.player_actions.clone())
-    }
-    fn buyback_ring(&self, _player_guid: u64) -> Vec<(u32, u32, u32)> {
-        Vec::new()
     }
     fn resolve_learn_target(&self, spell_id: u32) -> u32 {
         spell_id // mock: self-contained ranks (no wrapper table in the mock store)
@@ -2787,6 +2724,81 @@ impl WorldStore for InMemoryStore {
         if contacts.len() == before {
             return Err(anyhow!("not on that list"));
         }
+        Ok(())
+    }
+}
+
+impl VendorActionStore for InMemoryStore {
+    fn vendor_stock(&self, _vendor_guid: u64) -> Result<Vec<codec::VendorItemView>> {
+        Ok(self.vendor_stock.clone())
+    }
+
+    fn vendor_refuses_interaction(&self, _vendor_guid: u64, _player_guid: u64) -> Result<bool> {
+        Ok(self.npc_refuses)
+    }
+
+    fn vendor_buy(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _vendor_guid: u64,
+        _item_entry: u32,
+        _count: u32,
+    ) -> Result<()> {
+        match &self.trade_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
+    }
+
+    fn buyback_slots(&self, _player_guid: u64) -> Vec<(u32, u32, u32)> {
+        self.buyback_ring.clone()
+    }
+
+    fn vendor_item_slot(&self, item_guid: u64) -> Option<u8> {
+        self.item_slots
+            .iter()
+            .find(|(g, _)| *g == item_guid)
+            .map(|&(_, s)| s)
+    }
+
+    fn vendor_repair(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _npc_guid: u64,
+        _slot: u8,
+    ) -> Result<()> {
+        match &self.trade_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
+    }
+
+    fn vendor_sell(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _vendor_guid: u64,
+        _slot: u8,
+    ) -> Result<()> {
+        match &self.trade_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
+    }
+
+    fn vendor_buyback(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        vendor_guid: u64,
+        slot: u8,
+    ) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.bought_back.lock().unwrap().push((vendor_guid, slot));
         Ok(())
     }
 }
@@ -4319,12 +4331,9 @@ fn eval(quest_id: u32, role: u8, active: bool, complete: bool) -> codec::GiverQu
 /// Spin up a world session over a socket pair, handshake as TESTER, enter the world as `guid`, and
 /// drain the login sequence — 10 fixed messages (LYRACORE_QUEST_LOG off in tests → no quest-log update
 /// appended) plus one SMSG_UPDATE_OBJECT CREATE per `player_items()` row (`enter_world` inserts
-/// one per owned item BEFORE the self-spawn CREATE — see its doc comment in `mod.rs`). Every
-/// earlier test leaves `player_items_fixture` empty, so this reads exactly the same 10 messages
-/// as before; only a test that seeds items (the CMSG_SELL_ITEM/CMSG_REPAIR_ITEM guid→slot ones)
-/// needs the extra drain, and getting it wrong here manifests as the CLIENT closing with unread
-/// bytes still queued — which the kernel reports back to the SERVER thread's next read as
-/// ECONNRESET, not a clean EOF.
+/// one per owned item BEFORE the self-spawn CREATE — see its doc comment in `mod.rs`). Draining one
+/// message too few manifests as the CLIENT closing with unread bytes still queued — which the kernel
+/// reports back to the SERVER thread's next read as ECONNRESET, not a clean EOF.
 /// Returns the client socket + encrypted halves + the server join handle for the test to drive.
 fn enter_world(
     store: std::sync::Arc<InMemoryStore>,
@@ -6540,6 +6549,30 @@ fn who_reply_lists_every_online_player_with_level_and_zone() {
 }
 
 #[test]
+fn login_replays_a_persisted_buyback_ring_after_the_login_sequence() {
+    // The ring survives logout, so world entry rebuilds the tab: one fabricated item CREATE per
+    // entry, then the raw descriptor update. (An EMPTY ring emits nothing — every other login test
+    // reads the login sequence and then EOF, which is that case.)
+    let store = std::sync::Arc::new(InMemoryStore {
+        buyback_ring: vec![(2589, 5, 120), (4540, 1, 30)],
+        ..quest_store()
+    });
+    let (mut client, _c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    for _ in 0..2 {
+        match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(_) => {}
+            other => panic!("expected a fabricated buyback item CREATE, got {other}"),
+        }
+    }
+    // The descriptor update is a hand-rolled partial VALUES mask gtker cannot decode; the frame is
+    // consumed either way, and EOF after it proves nothing else was sent.
+    let _ = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec);
+    assert!(ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).is_err());
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
 fn buyback_maps_the_wire_slot_enum_to_zero_based_ring_slots() {
     // BuybackSlot rides as 69..=81 on the wire; the store reducer takes 0-based ring slots —
     // Slot1 (69) → 0, Slot13 (81) → 12.
@@ -6790,6 +6823,30 @@ fn learn_talent_rank_upgrade_supersedes_the_previous_rank_spell() {
         0x00A9,
         "the CHARACTER_POINTS1 VALUES push"
     );
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn list_inventory_opens_the_vendor_window_over_the_socket() {
+    let mut s = quest_store();
+    s.vendor_stock = vec![codec::VendorItemView {
+        item_entry: 4540,
+        display_id: 6353,
+        buy_price: 25,
+        ..Default::default()
+    }];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_LIST_INVENTORY {
+        guid: Guid::new(80),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let (op, body) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(op, codec::SMSG_LIST_INVENTORY_OPCODE);
+    assert_eq!(&body[0..8], &80u64.to_le_bytes());
+    assert_eq!(body[8], 1, "one stocked item");
     drop(client);
     server.join().unwrap();
 }
@@ -8014,130 +8071,7 @@ fn parse_blob(blob: &[u8]) -> (u64, FakeChar) {
     )
 }
 
-// ── Vendor-item dispatch (CMSG_SELL_ITEM / CMSG_REPAIR_ITEM / CMSG_TRAINER_LIST) ─────────────────
-
-#[test]
-fn sell_item_resolves_the_instance_guid_to_its_slot_before_dispatch() {
-    // CMSG_SELL_ITEM carries the item's INSTANCE guid, not a slot — the gateway must resolve it via
-    // player_items() before calling the module's slot-based sell_item.
-    let mut s = quest_store();
-    s.player_items_fixture = vec![codec::ItemInstanceView {
-        guid: 0x4000_0000_0000_0099,
-        slot: 30,
-        ..Default::default()
-    }];
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_SELL_ITEM {
-        vendor: Guid::new(555),
-        item: Guid::new(0x4000_0000_0000_0099),
-        amount: 1,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    // 248: a successful sell also pushes the refreshed buyback tab (one raw VALUES frame) — drain it
-    // tolerantly, same as `buyback_maps_the_wire_slot_enum_to_zero_based_ring_slots` above.
-    let _ = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec);
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(store.sold_items.lock().unwrap().as_slice(), &[(555, 30)]);
-}
-
-#[test]
-fn sell_item_for_an_unknown_guid_does_not_dispatch() {
-    // No fixture item matches this guid (already sold / never ours) — the gateway must log + ignore
-    // rather than calling sell_item with a garbage slot.
-    let store = std::sync::Arc::new(quest_store()); // player_items_fixture stays empty
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_SELL_ITEM {
-        vendor: Guid::new(555),
-        item: Guid::new(0x4000_0000_0000_0099),
-        amount: 1,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client); // no match → no sell_item call → no buyback-view push, no SMSG at all
-    server.join().unwrap();
-    assert!(store.sold_items.lock().unwrap().is_empty());
-}
-
-#[test]
-fn repair_item_resolves_the_instance_guid_to_its_slot_before_dispatch() {
-    let mut s = quest_store();
-    s.player_items_fixture = vec![codec::ItemInstanceView {
-        guid: 0x4000_0000_0000_0042,
-        slot: 7,
-        ..Default::default()
-    }];
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_REPAIR_ITEM {
-        npc: Guid::new(200),
-        item: Guid::new(0x4000_0000_0000_0042),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client); // repair_item (Ok) sends no SMSG on this path
-    server.join().unwrap();
-    assert_eq!(store.repaired_items.lock().unwrap().as_slice(), &[(200, 7)]);
-}
-
-#[test]
-fn repair_item_guid_zero_is_repair_all_and_dispatches_the_whole_body_slot() {
-    // 252 live find: the client's REPAIR-ALL button sends item guid 0, which the gateway routes to
-    // the module's whole-body slot (u8::MAX) WITHOUT going through player_items() resolution — no
-    // items are seeded here, so a wrongly-routed per-item lookup would find nothing and skip the call.
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_REPAIR_ITEM {
-        npc: Guid::new(200),
-        item: Guid::new(0),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(
-        store.repaired_items.lock().unwrap().as_slice(),
-        &[(200, u8::MAX)]
-    );
-}
-
-#[test]
-fn repair_all_err_is_relayed_as_a_system_chat_line_not_silently_swallowed() {
-    // #514: a rejected repair-all (NPC gate / range / not-enough-money) used to be logged at debug
-    // and dropped, so the player saw nothing at all. It must now reach the client as a self-only
-    // SMSG_MESSAGECHAT System line carrying the module's rejection text.
-    let mut s = quest_store();
-    s.trade_error = Some("not enough money to repair".into());
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_REPAIR_ITEM {
-        npc: Guid::new(200),
-        item: Guid::new(0),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_MESSAGECHAT(m) => {
-            assert!(
-                matches!(
-                    m.chat_type,
-                    wow_world_messages::vanilla::SMSG_MESSAGECHAT_ChatType::System { .. }
-                ),
-                "repair failure relays as a System chat line"
-            );
-            assert_eq!(m.message, "not enough money to repair");
-        }
-        other => panic!("expected SMSG_MESSAGECHAT, got {other}"),
-    }
-    assert!(
-        store.repaired_items.lock().unwrap().is_empty(),
-        "the failed repair never landed a fake success"
-    );
-    drop(client);
-    server.join().unwrap();
-}
+// ── Trainer dispatch (CMSG_TRAINER_LIST) ─────────────────────────────────────────────────────────
 
 #[test]
 fn trainer_list_replies_smsg_trainer_list_with_the_fixture_spells() {
