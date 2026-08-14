@@ -1,14 +1,15 @@
 //! `WorldStore`: the broad storage/coordination seam used by the world session. Deep protocol
-//! families may add focused supertraits such as [`ItemActionStore`] and [`VendorActionStore`] so
+//! families may add focused supertraits such as [`ItemActionStore`], [`MeleeActionStore`] and
+//! [`VendorActionStore`] so
 //! their wire mapping and failure policy can be tested without implementing this entire interface —
 //! a migrated family's operations live only on its own trait, never here. Kept as one broad
 //! trait for the remaining session operations (only two implementors); the section markers below
 //! are load-bearing navigation, not a split.
 
-use super::handlers::{ItemActionStore, VendorActionStore};
+use super::handlers::{ItemActionStore, MeleeActionStore, VendorActionStore};
 use super::*;
 
-pub trait WorldStore: ItemActionStore + VendorActionStore + Send + Sync {
+pub trait WorldStore: ItemActionStore + MeleeActionStore + VendorActionStore + Send + Sync {
     /// Look up the shared session key K (+ account id) for an (already uppercased) account
     /// name. `None` when no live session exists for that account (reject the handshake).
     fn lookup_session(&self, account_name: &str) -> Result<Option<WorldSession>>;
@@ -623,8 +624,6 @@ pub trait WorldStore: ItemActionStore + VendorActionStore + Send + Sync {
     /// stateless-gate reducers (`enter_areatrigger`, `use_gameobject`).
     fn inspect(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
 
-    /// Start the player's melee auto-attack on `target_guid` (`CMSG_ATTACKSWING`, combat C1).
-    fn start_attack(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
     /// Relay a pet command-bar action (`CMSG_PET_ACTION`). `data` is the raw packed action
     /// (flag<<24 | id): flag 0x07 = command (Stay/Follow/Attack/Dismiss), flag 0x06 = react state
     /// (Passive/Defensive/Aggressive). The module decodes + validates (all pet policy lives there).
@@ -645,9 +644,6 @@ pub trait WorldStore: ItemActionStore + VendorActionStore + Send + Sync {
         target_guid: u64,
         spell_id: u32,
     ) -> Result<()>;
-
-    /// Stop the player's melee auto-attack (`CMSG_ATTACKSTOP`, combat C1).
-    fn stop_attack(&self, account_id: u64, self_guid: u64) -> Result<()>;
 
     /// Draw or stow the player's weapons (`CMSG_SETSHEATHED`, the `Z` key). `state` is 0 stowed /
     /// 1 melee / 2 ranged; the module range-checks it. Writes `UNIT_FIELD_BYTES_2` byte 0, which is

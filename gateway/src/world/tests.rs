@@ -1,4 +1,4 @@
-use super::handlers::{ItemActionStore, VendorActionStore};
+use super::handlers::{ItemActionStore, MeleeActionStore, VendorActionStore};
 use super::*;
 use std::os::unix::net::UnixStream;
 
@@ -123,6 +123,7 @@ use wow_world_messages::vanilla::{
     CMSG_BUY_BANK_SLOT,
     CMSG_BUY_ITEM,
     CMSG_CANCEL_AURA,
+    CMSG_CANCEL_AUTO_REPEAT_SPELL,
     CMSG_CANCEL_CAST,
     CMSG_CAST_SPELL,
     CMSG_CHAR_CREATE,
@@ -250,7 +251,8 @@ struct InMemoryStore {
     /// `add_ignore`/`del_friend`/`del_ignore` mutate it; `contact_lists` reads it scoped to the caller.
     contacts: std::sync::Mutex<Vec<(u64, u64, bool)>>,
     group_invites: std::sync::Mutex<Vec<u64>>,
-    /// When set, `start_attack` returns this error (drives the ATTACKSWING dead/friendly/desync split).
+    /// When set, `start_attack` returns this error. Only the session-fatal desync case is driven
+    /// from here now; the refusal mapping is tested on the melee seam itself.
     start_attack_error: Option<String>,
     /// When set, `start_ranged_attack` returns this error (Auto Shot failure → SMSG_CAST_RESULT).
     start_ranged_attack_error: Option<String>,
@@ -283,6 +285,9 @@ struct InMemoryStore {
     ground_casts: std::sync::Mutex<Vec<(u32, u64, f32, f32, f32)>>,
     /// Recorded `start_ranged_attack` dispatches: (target_guid, spell_id) — the Auto Shot intercept.
     ranged_attacks: std::sync::Mutex<Vec<(u64, u32)>>,
+    /// Recorded `stop_attack` dispatches: the actor guid. The Auto Shot teardowns reach this
+    /// through `WorldStore`'s `MeleeActionStore` supertrait, so it pins that resolution.
+    stop_attacks: std::sync::Mutex<Vec<u64>>,
     /// Recorded `set_sheathed` dispatches: (self_guid, state) — the `CMSG_SETSHEATHED` route (#101).
     sheathed: std::sync::Mutex<Vec<(u64, u8)>>,
     /// What `spell_cast_time` returns: None (default) = unknown spell (the handler treats it as
@@ -1961,13 +1966,6 @@ impl WorldStore for InMemoryStore {
         }
         Ok(())
     }
-    fn start_attack(&self, _account_id: u64, _self_guid: u64, _target_guid: u64) -> Result<()> {
-        self.rec("start_attack");
-        match &self.start_attack_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
-    }
     fn pet_command(
         &self,
         _account_id: u64,
@@ -1991,9 +1989,6 @@ impl WorldStore for InMemoryStore {
             .lock()
             .unwrap()
             .push((target_guid, spell_id));
-        Ok(())
-    }
-    fn stop_attack(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
         Ok(())
     }
     fn set_sheathed(&self, _account_id: u64, self_guid: u64, state: u8) -> Result<()> {
@@ -2724,6 +2719,20 @@ impl WorldStore for InMemoryStore {
         if contacts.len() == before {
             return Err(anyhow!("not on that list"));
         }
+        Ok(())
+    }
+}
+
+impl MeleeActionStore for InMemoryStore {
+    fn start_attack(&self, _account_id: u64, _self_guid: u64, _target_guid: u64) -> Result<()> {
+        self.rec("start_attack");
+        match &self.start_attack_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
+    }
+    fn stop_attack(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.stop_attacks.lock().unwrap().push(self_guid);
         Ok(())
     }
 }
@@ -5485,7 +5494,7 @@ fn played_time_replies_with_the_durable_total_plus_the_live_session_span() {
 
 // ===========================================================================================
 //  The handler-level tests — CMSG_CAST_SPELL routing, quest instant
-//  routing, the loot window state machine, the ATTACKSWING error split, and the smaller mappings.
+//  routing, the loot window state machine, melee attack over the socket, and the smaller mappings.
 //  Each drives the full encrypted session (enter_world) and pins wire replies + store dispatches.
 // ===========================================================================================
 
@@ -5851,6 +5860,39 @@ fn auto_shot_failure_replies_cast_result_only_and_never_arms() {
     drop(client);
     server.join().unwrap();
     assert!(store.ranged_attacks.lock().unwrap().is_empty());
+}
+
+#[test]
+fn cancelling_auto_repeat_still_tears_the_ranged_loop_down_through_stop_attack() {
+    // The cancel tears the loop down only when one is armed (the `was_repeat` gate). Arm Auto Shot,
+    // then cancel, and pin that the teardown reaches the durable disengage for this attacker.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_CAST_SPELL {
+        spell: 75,
+        targets: unit_targets(88),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let (op, _) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(op, OP_SPELL_START, "the activation ack arms the loop");
+    CMSG_CANCEL_AUTO_REPEAT_SPELL {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    // The cancel sends no ack of its own (the on_delete relay does), so a sentinel proves the
+    // server got that far before we assert.
+    CMSG_QUESTGIVER_STATUS_QUERY {
+        guid: Guid::new(50),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(_) => {}
+        other => panic!("expected the sentinel (the cancel acks nothing), got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.stop_attacks.lock().unwrap().as_slice(), &[1]);
 }
 
 #[test]
@@ -6377,7 +6419,10 @@ fn a_viewer_with_no_fixture_entry_sees_an_empty_window_non_quest_rows_unaffected
     server.join().unwrap();
 }
 
-// ── CMSG_ATTACKSWING error split + happy path (combat C1) ───────────────────────────────────────
+// ── Melee attack over the socket (combat C1) ────────────────────────────────────────────────────
+// The melee seam (`handlers/melee.rs`) owns the decisions and tests them directly. What is left
+// here is what the seam cannot reach: opcode dispatch, the encoded attack messages on the wire,
+// and the session teardown a fatal melee error causes.
 
 #[test]
 fn attackswing_ok_replies_attackstart_and_stop_echoes_then_clears() {
@@ -6424,48 +6469,47 @@ fn attackswing_ok_replies_attackstart_and_stop_echoes_then_clears() {
 }
 
 #[test]
-fn attackswing_at_a_dead_target_replies_deadtarget() {
-    let mut s = quest_store();
-    s.start_attack_error = Some(lyracore_shared::ERR_ATTACK_TARGET_DEAD.into());
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+fn melee_opcodes_at_character_select_answer_nothing_and_keep_the_session_alive() {
+    // No WorldEntity yet, so the seam has no attacker guid to name and no combat state to change.
+    // The durable calls still go out under the legacy zero actor and the client gets no attack
+    // message. The sentinel can only arrive if neither opcode replied or panicked.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     CMSG_ATTACKSWING {
         guid: Guid::new(90),
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
+    CMSG_ATTACKSTOP {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    CMSG_CHAR_ENUM {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
     match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_ATTACKSWING_DEADTARGET => {}
-        other => panic!("expected SMSG_ATTACKSWING_DEADTARGET, got {other}"),
+        ServerOpcodeMessage::SMSG_CHAR_ENUM(_) => {}
+        other => panic!("expected the sentinel (no melee reply at character select), got {other}"),
     }
     drop(client);
     server.join().unwrap();
-}
-
-#[test]
-fn attackswing_at_a_friendly_target_replies_cant_attack() {
-    let mut s = quest_store();
-    s.start_attack_error = Some(lyracore_shared::ERR_ATTACK_FRIENDLY.into());
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    CMSG_ATTACKSWING {
-        guid: Guid::new(90),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_ATTACKSWING_CANT_ATTACK => {}
-        other => panic!("expected SMSG_ATTACKSWING_CANT_ATTACK, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
+    assert_eq!(
+        store.stop_attacks.lock().unwrap().as_slice(),
+        &[0],
+        "the stop still reaches the durable seam under the legacy zero actor"
+    );
 }
 
 #[test]
 fn attackswing_desync_error_is_session_fatal() {
     // A desync-classified start_attack failure (the player's OWN entity is gone) must PROPAGATE
-    // as session-fatal: run_world_session returns Err and the socket tears down for a clean relog —
-    // unlike the transient dead/friendly failures above, which keep the session alive.
+    // as session-fatal: run_world_session returns Err and the socket tears down for a clean relog.
+    // Only the socket half is proved here; which failures are fatal, and which answer a refusal
+    // instead, belongs to the melee seam's own tests.
     let mut s = quest_store();
     s.start_attack_error = Some("no live entity for guid 1".into());
     let store = std::sync::Arc::new(s);
