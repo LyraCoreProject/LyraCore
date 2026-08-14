@@ -1,4 +1,6 @@
-use super::handlers::{ItemActionStore, MeleeActionStore, QuestActionStore, VendorActionStore};
+use super::handlers::{
+    CastStore, ItemActionStore, MeleeActionStore, QuestActionStore, VendorActionStore,
+};
 use super::*;
 use std::os::unix::net::UnixStream;
 
@@ -105,7 +107,6 @@ use wow_world_messages::vanilla::{
     SheathState,
     SpellCastTargets,
     SpellCastTargets_SpellCastTargetFlags,
-    SpellCastTargets_SpellCastTargetFlags_Item,
     SpellCastTargets_SpellCastTargetFlags_Unit,
     Talent,
     TrainingFailureReason,
@@ -247,10 +248,6 @@ struct InMemoryStore {
     /// When set, `start_attack` returns this error. Only the session-fatal desync case is driven
     /// from here now; the refusal mapping is tested on the melee seam itself.
     start_attack_error: Option<String>,
-    /// When set, `start_ranged_attack` returns this error (Auto Shot failure → SMSG_CAST_RESULT).
-    start_ranged_attack_error: Option<String>,
-    /// When set, `cast_spell` returns this error (cast rejection → SMSG_CAST_RESULT Failure).
-    cast_spell_error: Option<String>,
     /// When set, `send_whisper` returns this error (→ SMSG_CHAT_PLAYER_NOT_FOUND).
     whisper_error: Option<String>,
     /// Recorded `send_whisper` calls — `(target_player, message)`, the TYPED
@@ -272,31 +269,19 @@ struct InMemoryStore {
     gm_commands: std::sync::Mutex<Vec<String>>,
     /// Recorded `cast_spell` dispatches: (spell_id, target_guid) — pins target threading.
     casts: std::sync::Mutex<Vec<(u32, u64)>>,
-    // Test recorder: the tuple is the recorded CALL's argument list, so it tracks the verb it records.
-    #[allow(clippy::type_complexity)]
-    /// Ground-targeted casts routed via `cast_spell_at`: (spell_id, target_guid, x, y, z).
-    ground_casts: std::sync::Mutex<Vec<(u32, u64, f32, f32, f32)>>,
     /// Recorded `start_ranged_attack` dispatches: (target_guid, spell_id) — the Auto Shot intercept.
     ranged_attacks: std::sync::Mutex<Vec<(u64, u32)>>,
     /// Recorded `stop_attack` dispatches: the actor guid. The Auto Shot teardowns reach this
     /// through `WorldStore`'s `MeleeActionStore` supertrait, so it pins that resolution.
     stop_attacks: std::sync::Mutex<Vec<u64>>,
+    /// The caller's owned items, for the Auto Shot ammo block on the activation START.
+    player_items_fixture: Vec<codec::ItemInstanceView>,
+    /// Item-instance guid → bag slot, for the vendor repair target.
+    item_slots: Vec<(u64, u8)>,
     /// Recorded `set_sheathed` dispatches: (self_guid, state) — the `CMSG_SETSHEATHED` route (#101).
     sheathed: std::sync::Mutex<Vec<(u64, u8)>>,
-    /// What `spell_cast_time` returns: None (default) = unknown spell (the handler treats it as
-    /// instant), Some(t) = the game_spell header's cast_time_ms.
-    cast_time_ms: Option<u32>,
-    queues_next_swing: bool,
     channel_joins: std::sync::Mutex<Vec<String>>,
     channel_messages: std::sync::Mutex<Vec<(String, String)>>,
-    /// Enchant/disenchant routing `enchant_route` returns (None = a normal cast).
-    enchant_route: Option<super::EnchantRoute>,
-    /// Item-guid → bag-slot fixture backing `item_slot_by_guid`.
-    item_slots: Vec<(u64, u8)>,
-    /// Recorded `enchant_item_on_slot` calls: (slot, enchant_id).
-    enchanted: std::sync::Mutex<Vec<(u8, u32)>>,
-    /// Recorded `disenchant_item` slots.
-    disenchanted: std::sync::Mutex<Vec<u8>>,
     /// The lootable copper `loot_target_money` reports for any target (default 0).
     corpse_money: u32,
     /// Recorded `loot_money` targets — CMSG_LOOT_MONEY must drive the TRACKED guid.
@@ -309,14 +294,6 @@ struct InMemoryStore {
     talent_grant: u32,
     /// What `talent_pane_sync` returns: (teach rank-spell, superseded prev, points remaining).
     talent_pane: (u32, u32, u32),
-    /// Spell ids `spell_is_fishing` claims.
-    fishing_spells: Vec<u32>,
-    /// Count of `fish` reducer dispatches.
-    fish_casts: std::sync::atomic::AtomicU64,
-    /// Spell ids `spell_is_open_lock` claims (Pick Lock).
-    open_lock_spells: Vec<u32>,
-    /// Recorded `pick_lock` reducer dispatches: the target GO guid decoded off the cast.
-    pick_lock_casts: std::sync::Mutex<Vec<u64>>,
     /// `npc_is_innkeeper` flag for the gossip bind-home routing.
     innkeeper: bool,
     /// Whether `bind_home` ran (the innkeeper gossip select).
@@ -1111,9 +1088,6 @@ impl WorldStore for InMemoryStore {
     fn creature_template(&self, _entry: u32) -> Result<Option<codec::CreatureView>> {
         Ok(None)
     }
-    fn item_template(&self, _entry: u32) -> Result<Option<codec::ItemTemplateView>> {
-        Ok(None)
-    }
     fn gameobject_template(&self, _entry: u32) -> Result<Option<codec::GameObjectTemplateView>> {
         Ok(None)
     }
@@ -1132,10 +1106,6 @@ impl WorldStore for InMemoryStore {
 
     fn enter_areatrigger(&self, _account_id: u64, _self_guid: u64, _trigger_id: u32) -> Result<()> {
         Ok(())
-    }
-    fn player_items(&self, _owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
-        // No fixture owns items: the login sequence spawns no item CREATEs for any test store.
-        Ok(Vec::new())
     }
     fn player_skills(&self, _character_guid: u64) -> Result<Vec<(u32, u16, u16)>> {
         Ok(Vec::new())
@@ -1705,52 +1675,8 @@ impl WorldStore for InMemoryStore {
         self.skinned.lock().unwrap().push(corpse_guid);
         Ok(())
     }
-    fn item_slot_by_guid(&self, _account_id: u64, item_guid: u64) -> Option<u8> {
-        self.item_slots
-            .iter()
-            .find(|(g, _)| *g == item_guid)
-            .map(|&(_, s)| s)
-    }
-    fn disenchant_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
-        self.disenchanted.lock().unwrap().push(slot);
-        Ok(())
-    }
-    fn enchant_item_on_slot(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        slot: u8,
-        enchant_id: u32,
-    ) -> Result<()> {
-        self.enchanted.lock().unwrap().push((slot, enchant_id));
-        Ok(())
-    }
     fn talent_grant_spell(&self, _talent_id: u32) -> u32 {
         self.talent_grant
-    }
-    fn spell_is_ground_area(&self, _spell_id: u32) -> bool {
-        false
-    }
-    fn spell_is_fishing(&self, spell_id: u32) -> bool {
-        self.fishing_spells.contains(&spell_id)
-    }
-    fn fish(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
-        self.fish_casts
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
-    }
-    fn spell_is_open_lock(&self, spell_id: u32) -> bool {
-        self.open_lock_spells.contains(&spell_id)
-    }
-    fn pick_lock(&self, _account_id: u64, _self_guid: u64, go_guid: u64) -> Result<()> {
-        self.pick_lock_casts.lock().unwrap().push(go_guid);
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
     }
     fn set_faction_at_war(
         &self,
@@ -1879,75 +1805,9 @@ impl WorldStore for InMemoryStore {
     ) -> Result<()> {
         Ok(())
     }
-    fn start_ranged_attack(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        target_guid: u64,
-        spell_id: u32,
-    ) -> Result<()> {
-        if let Some(e) = &self.start_ranged_attack_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.ranged_attacks
-            .lock()
-            .unwrap()
-            .push((target_guid, spell_id));
-        Ok(())
-    }
     fn set_sheathed(&self, _account_id: u64, self_guid: u64, state: u8) -> Result<()> {
         self.sheathed.lock().unwrap().push((self_guid, state));
         Ok(())
-    }
-    fn cast_spell(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        spell_id: u32,
-        target_guid: u64,
-    ) -> Result<()> {
-        if let Some(e) = &self.cast_spell_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.casts.lock().unwrap().push((spell_id, target_guid));
-        Ok(())
-    }
-    fn cast_spell_at(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        spell_id: u32,
-        target_guid: u64,
-        x: f32,
-        y: f32,
-        z: f32,
-    ) -> Result<()> {
-        if let Some(e) = &self.cast_spell_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.ground_casts
-            .lock()
-            .unwrap()
-            .push((spell_id, target_guid, x, y, z));
-        Ok(())
-    }
-    fn cancel_aura(&self, _account_id: u64, _self_guid: u64, spell_id: u32) -> Result<()> {
-        self.cancelled_auras.lock().unwrap().push(spell_id);
-        Ok(())
-    }
-    fn cancel_cast(&self, _account_id: u64, self_guid: u64) -> Result<()> {
-        self.cancelled_casts.lock().unwrap().push(self_guid);
-        Ok(())
-    }
-    fn spell_cast_time(&self, _spell_id: u32) -> Option<u32> {
-        self.cast_time_ms
-    }
-    fn spell_queues_next_swing(&self, _spell_id: u32) -> bool {
-        self.queues_next_swing
-    }
-    fn spell_is_ranged_auto_repeat(&self, spell_id: u32) -> bool {
-        // Mirrors the real RANGED_AUTO_REPEAT cast_flags bit for the two vanilla auto-repeat abilities.
-        matches!(spell_id, 75 | 5019)
     }
     fn entity_max_health(&self, _guid: u64) -> u32 {
         100
@@ -1974,9 +1834,6 @@ impl WorldStore for InMemoryStore {
     }
     fn superseded_old_rank(&self, _new_spell: u32, _player_guid: u64) -> Option<u32> {
         None
-    }
-    fn enchant_route(&self, _spell_id: u32) -> Option<super::EnchantRoute> {
-        self.enchant_route
     }
     fn send_chat(
         &self,
@@ -2624,6 +2481,109 @@ impl WorldStore for InMemoryStore {
             return Err(anyhow!("not on that list"));
         }
         Ok(())
+    }
+}
+
+/// Cast operations for the shared adapter. It configures no cast state: the surviving encrypted
+/// tests need one instant ordinary cast, the two auto-repeat spells, and a record of what each
+/// cancellation asked for. Route variation — cast time, next-swing, ground area, enchant,
+/// disenchant, fishing and lock opening — belongs to the cast seam's own focused adapter.
+impl CastStore for InMemoryStore {
+    fn cancel_aura(&self, _account_id: u64, _self_guid: u64, spell_id: u32) -> Result<()> {
+        self.cancelled_auras.lock().unwrap().push(spell_id);
+        Ok(())
+    }
+    fn cancel_cast(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.cancelled_casts.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+    fn cast_spell(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        spell_id: u32,
+        target_guid: u64,
+    ) -> Result<()> {
+        self.casts.lock().unwrap().push((spell_id, target_guid));
+        Ok(())
+    }
+    fn start_ranged_attack(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        target_guid: u64,
+        spell_id: u32,
+    ) -> Result<()> {
+        self.ranged_attacks
+            .lock()
+            .unwrap()
+            .push((target_guid, spell_id));
+        Ok(())
+    }
+    fn spell_is_ranged_auto_repeat(&self, spell_id: u32) -> bool {
+        // Mirrors the real RANGED_AUTO_REPEAT cast_flags bit for the two vanilla auto-repeat abilities.
+        matches!(spell_id, 75 | 5019)
+    }
+    /// Every other spell is an instant ordinary cast — the one route these tests send over a socket.
+    fn spell_cast_time(&self, _spell_id: u32) -> Option<u32> {
+        Some(0)
+    }
+    fn spell_queues_next_swing(&self, _spell_id: u32) -> bool {
+        false
+    }
+    fn spell_is_ground_area(&self, _spell_id: u32) -> bool {
+        false
+    }
+    fn enchant_route(&self, _spell_id: u32) -> Option<super::EnchantRoute> {
+        None
+    }
+    fn spell_is_fishing(&self, _spell_id: u32) -> bool {
+        false
+    }
+    fn spell_is_open_lock(&self, _spell_id: u32) -> bool {
+        false
+    }
+    fn cast_spell_at(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _spell_id: u32,
+        _target_guid: u64,
+        _x: f32,
+        _y: f32,
+        _z: f32,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn item_slot_by_guid(&self, _account_id: u64, _item_guid: u64) -> Option<u8> {
+        None
+    }
+    fn disenchant_item(&self, _account_id: u64, _self_guid: u64, _slot: u8) -> Result<()> {
+        Ok(())
+    }
+    fn enchant_item_on_slot(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _slot: u8,
+        _enchant_id: u32,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn fish(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+        Ok(())
+    }
+    fn pick_lock(&self, _account_id: u64, _self_guid: u64, _go_guid: u64) -> Result<()> {
+        Ok(())
+    }
+
+    // Shared with the character, vendor and query paths, so these two keep real fixtures.
+
+    fn player_items(&self, _owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
+        Ok(self.player_items_fixture.clone())
+    }
+    fn item_template(&self, _entry: u32) -> Result<Option<codec::ItemTemplateView>> {
+        Ok(None)
     }
 }
 
@@ -5357,41 +5317,20 @@ fn unit_targets(guid: u64) -> SpellCastTargets {
     }
 }
 
-/// `SpellCastTargets` carrying an ITEM target (an enchant cast dropped on a bag item).
-fn item_targets(item_guid: u64) -> SpellCastTargets {
-    SpellCastTargets {
-        target_flags: SpellCastTargets_SpellCastTargetFlags::new_item(
-            SpellCastTargets_SpellCastTargetFlags_Item::Item {
-                item: Guid::new(item_guid),
-            },
-        ),
-    }
-}
-
-/// `SpellCastTargets` carrying a DEST_LOCATION (a ground-targeted click — Flamestrike/Blizzard).
-fn dest_targets(x: f32, y: f32, z: f32) -> SpellCastTargets {
-    use wow_world_messages::vanilla::{
-        SpellCastTargets_SpellCastTargetFlags_DestLocation, Vector3d,
-    };
-    SpellCastTargets {
-        target_flags: SpellCastTargets_SpellCastTargetFlags::new_dest_location(
-            SpellCastTargets_SpellCastTargetFlags_DestLocation {
-                destination: Vector3d { x, y, z },
-            },
-        ),
-    }
-}
-
-// ── CMSG_CAST_SPELL routing (instant-cast ordering, Auto Shot intercept, enchant routing) ──────────
+// ── Cast dispatch through the encrypted session ────────────────────────────────────────────────
+//
+// Route selection, target decoding, durable dispatch and message ORDER are covered per route by the
+// focused seam tests in `handlers/cast`. What only a socket can show survives here: that a cast
+// opcode reaches the seam through the real dispatch chain, that the ordered batch leaves the writer
+// as those frames in that order, and that the session supplies the caller's identity.
 
 #[test]
 fn instant_cast_sends_start_then_raw_cast_result_ok_then_go_and_threads_the_target() {
     // Root-cause client-wedge fix: an INSTANT cast must emit START(0) → raw CAST_RESULT(OK,
     // opcode 0x0130, 5-byte body) → GO synchronously, IN THAT ORDER, and the cast must reach the
-    // store with the client's unit target. cast_time_ms = Some(0) is the explicit-instant case.
-    let mut s = quest_store();
-    s.cast_time_ms = Some(0);
-    let store = std::sync::Arc::new(s);
+    // store with the client's unit target. Raw and typed sends interleave here, so the frame order
+    // is a property of the writer, not just of the batch the seam returns.
+    let store = std::sync::Arc::new(quest_store());
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
     CMSG_CAST_SPELL {
@@ -5421,166 +5360,6 @@ fn instant_cast_sends_start_then_raw_cast_result_ok_then_go_and_threads_the_targ
     server.join().unwrap();
     // The unit target rode CMSG → handler → store unchanged (target-keyed effects need it).
     assert_eq!(store.casts.lock().unwrap().as_slice(), &[(100, 77)]);
-}
-
-#[test]
-fn unknown_cast_time_is_treated_as_instant() {
-    // spell_cast_time = None (spell not in game_spell) → the handler treats the cast as instant
-    // (a stray START/GO is harmless; a missing one wedges the client). Default mock = None.
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_CAST_SPELL {
-        spell: 42,
-        targets: SpellCastTargets::default(),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    let (op, _) = read_raw_frame(&mut client, &mut c_dec);
-    assert_eq!(
-        op, OP_SPELL_START,
-        "unknown cast time must still clear the client synchronously"
-    );
-    // Drain the rest of the clear (raw CAST_RESULT + GO): closing with unread frames pending
-    // resets the socket instead of EOF-ing it, which would end the server side with an error.
-    assert_eq!(read_raw_frame(&mut client, &mut c_dec).0, OP_CAST_RESULT);
-    assert_eq!(read_raw_frame(&mut client, &mut c_dec).0, OP_SPELL_GO);
-    drop(client);
-    server.join().unwrap();
-    // No unit target in the cast → target 0 (the module substitutes the caster).
-    assert_eq!(store.casts.lock().unwrap().as_slice(), &[(42, 0)]);
-}
-
-#[test]
-fn timed_cast_sends_no_synchronous_start_go_but_still_dispatches() {
-    // A TIMED cast keeps the relay path (begin_cast sends START(cast_time); completion sends GO) —
-    // the handler must dispatch cast_spell WITHOUT any synchronous START/RESULT/GO of its own.
-    let mut s = quest_store();
-    s.cast_time_ms = Some(2500);
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_CAST_SPELL {
-        spell: 200,
-        targets: unit_targets(77),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    // Sentinel: the next reply must be the STATUS_QUERY answer — nothing was sent for the cast.
-    CMSG_QUESTGIVER_STATUS_QUERY {
-        guid: Guid::new(50),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(_) => {}
-        other => panic!(
-            "expected SMSG_QUESTGIVER_STATUS (no sync START/GO for a timed cast), got {other}"
-        ),
-    }
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(store.casts.lock().unwrap().as_slice(), &[(200, 77)]);
-}
-
-#[test]
-fn ground_targeted_cast_routes_to_cast_spell_at_with_the_click_coords() {
-    // 118 phase 2: a cast carrying a DEST_LOCATION target block (the player clicked the ground) must
-    // route to cast_spell_at with those coords — NOT the plain cast_spell path — so the module anchors
-    // the AoE/patch at the click. Timed (Flamestrike is a 2s cast) → no sync START/GO, same as a normal
-    // timed cast; the dest just picks the reducer.
-    let mut s = quest_store();
-    s.cast_time_ms = Some(2000);
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_CAST_SPELL {
-        spell: 2120,
-        targets: dest_targets(-9440.0, 64.0, 55.5),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    // Sentinel: a timed cast sends nothing synchronously, so the next reply is the STATUS answer.
-    CMSG_QUESTGIVER_STATUS_QUERY {
-        guid: Guid::new(50),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(_) => {}
-        other => panic!("expected SMSG_QUESTGIVER_STATUS, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-    // Landed on cast_spell_at (with coords), and NOT on the plain cast_spell path.
-    assert_eq!(
-        store.ground_casts.lock().unwrap().as_slice(),
-        &[(2120, 0, -9440.0, 64.0, 55.5)]
-    );
-    assert!(
-        store.casts.lock().unwrap().is_empty(),
-        "a ground cast must not reach cast_spell"
-    );
-}
-
-#[test]
-fn on_next_swing_cast_sends_no_synchronous_start_go_but_still_dispatches() {
-    // 114: an on-next-swing spell (Heroic Strike/Cleave) is INSTANT by cast time, but sends NOTHING
-    // synchronously — the client lights the button locally and holds the pending cast; the module's
-    // swing-fire cast event (is_completion) later delivers CAST_RESULT(OK)+GO. A sync START/GO here
-    // would "resolve" the cast at queue time and un-light the button (the 114 bug).
-    let mut s = quest_store();
-    s.cast_time_ms = Some(0);
-    s.queues_next_swing = true;
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_CAST_SPELL {
-        spell: 78,
-        targets: unit_targets(77),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    // Sentinel: the next reply must be the STATUS_QUERY answer — nothing was sent for the queue cast.
-    CMSG_QUESTGIVER_STATUS_QUERY {
-        guid: Guid::new(50),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(_) => {}
-        other => panic!("expected SMSG_QUESTGIVER_STATUS (no sync START/GO for an on-next-swing cast), got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(store.casts.lock().unwrap().as_slice(), &[(78, 77)]);
-}
-
-#[test]
-fn rejected_instant_cast_clears_the_client_then_reports_failure() {
-    // The synchronous START/RESULT/GO clear goes out BEFORE cast_spell is dispatched; a store
-    // rejection then appends SMSG_CAST_RESULT(Failure) — a silent cast-bar reset, not a red error.
-    let mut s = quest_store();
-    s.cast_spell_error = Some("not enough power: have 0, need 30".into());
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    CMSG_CAST_SPELL {
-        spell: 100,
-        targets: unit_targets(77),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    assert_eq!(read_raw_frame(&mut client, &mut c_dec).0, OP_SPELL_START);
-    assert_eq!(read_raw_frame(&mut client, &mut c_dec).0, OP_CAST_RESULT);
-    assert_eq!(read_raw_frame(&mut client, &mut c_dec).0, OP_SPELL_GO);
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_CAST_RESULT(r) => {
-            assert_eq!(r.spell, 100);
-            assert!(matches!(
-                r.result,
-                SMSG_CAST_RESULT_SimpleSpellCastResult::Failure
-            ));
-        }
-        other => panic!("expected SMSG_CAST_RESULT failure, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
 }
 
 #[test]
@@ -5665,30 +5444,35 @@ fn auto_shot_intercept_starts_the_ranged_attack_instead_of_casting() {
 }
 
 #[test]
-fn auto_shot_failure_replies_cast_result_only_and_never_arms() {
-    // 097 vanilla shape: a rejected activation answers ONLY the raw SMSG_CAST_RESULT(reason) — no
-    // SPELL_START (vmangos rejects before sending anything; the 5875 client drops its auto-repeat
-    // toggle on the failure result, keeping toggle state in lockstep with the dead server loop).
-    let mut s = quest_store();
-    s.start_ranged_attack_error = Some("no ranged weapon equipped".into());
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+fn a_cast_before_entering_the_world_answers_nothing_and_keeps_the_session_alive() {
+    // A cast can arrive while the session is still at character select — a stale addon macro, a
+    // reconnect race. The seam answers no frames and names a zero caster; the session must serve the
+    // next opcode instead of panicking, which the CHAR_ENUM sentinel proves.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+
     CMSG_CAST_SPELL {
-        spell: 75,
-        targets: unit_targets(88),
+        spell: 100,
+        targets: unit_targets(77),
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    let (op, body) = read_raw_frame(&mut client, &mut c_dec);
-    assert_eq!(
-        op, 0x0130,
-        "rejection is the raw SMSG_CAST_RESULT, not SPELL_START"
-    );
-    assert_eq!(&body[0..4], &75u32.to_le_bytes());
-    assert_eq!(body[4], 0x02, "status byte = CAST_FAILED");
+    CMSG_CHAR_ENUM {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_CHAR_ENUM(_) => {}
+        other => panic!("expected SMSG_CHAR_ENUM (the cast sent no frames), got {other}"),
+    }
     drop(client);
     server.join().unwrap();
-    assert!(store.ranged_attacks.lock().unwrap().is_empty());
+    assert_eq!(store.casts.lock().unwrap().as_slice(), &[(100, 77)]);
 }
 
 #[test]
@@ -5722,87 +5506,6 @@ fn cancelling_auto_repeat_still_tears_the_ranged_loop_down_through_stop_attack()
     drop(client);
     server.join().unwrap();
     assert_eq!(store.stop_attacks.lock().unwrap().as_slice(), &[1]);
-}
-
-#[test]
-fn enchant_cast_resolves_the_item_guid_to_its_slot_and_dispatches_the_enchant() {
-    // An ITEM-target cast whose spell routes as Enchant(id): item guid → bag slot →
-    // enchant_item_on_slot(slot, id), then the manual START → raw CAST_RESULT(OK) → GO clear.
-    let mut s = quest_store();
-    s.enchant_route = Some(super::EnchantRoute::Enchant(777));
-    s.item_slots = vec![(500, 4)];
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_CAST_SPELL {
-        spell: 7418,
-        targets: item_targets(500),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    assert_eq!(read_raw_frame(&mut client, &mut c_dec).0, OP_SPELL_START);
-    let (op, body) = read_raw_frame(&mut client, &mut c_dec);
-    assert_eq!(op, OP_CAST_RESULT);
-    assert_eq!(body.last(), Some(&0x00), "OK result byte");
-    assert_eq!(read_raw_frame(&mut client, &mut c_dec).0, OP_SPELL_GO);
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(store.enchanted.lock().unwrap().as_slice(), &[(4, 777)]);
-    assert!(
-        store.casts.lock().unwrap().is_empty(),
-        "an enchant cast never reaches cast_spell"
-    );
-}
-
-#[test]
-fn disenchant_cast_routes_to_the_disenchant_reducer() {
-    let mut s = quest_store();
-    s.enchant_route = Some(super::EnchantRoute::Disenchant);
-    s.item_slots = vec![(500, 9)];
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_CAST_SPELL {
-        spell: 13262,
-        targets: item_targets(500),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    assert_eq!(read_raw_frame(&mut client, &mut c_dec).0, OP_SPELL_START);
-    assert_eq!(read_raw_frame(&mut client, &mut c_dec).0, OP_CAST_RESULT);
-    assert_eq!(read_raw_frame(&mut client, &mut c_dec).0, OP_SPELL_GO);
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(store.disenchanted.lock().unwrap().as_slice(), &[9]);
-    assert!(store.enchanted.lock().unwrap().is_empty());
-}
-
-#[test]
-fn enchant_cast_without_an_item_target_replies_failure_and_dispatches_nothing() {
-    // An enchant-routed spell with no ITEM target (mis-click) → SMSG_CAST_RESULT(Failure), no
-    // START/GO (nothing succeeded to clear), and neither enchant reducer runs.
-    let mut s = quest_store();
-    s.enchant_route = Some(super::EnchantRoute::Enchant(777));
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_CAST_SPELL {
-        spell: 7418,
-        targets: SpellCastTargets::default(),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_CAST_RESULT(r) => {
-            assert_eq!(r.spell, 7418);
-            assert!(matches!(
-                r.result,
-                SMSG_CAST_RESULT_SimpleSpellCastResult::Failure
-            ));
-        }
-        other => panic!("expected SMSG_CAST_RESULT failure, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-    assert!(store.enchanted.lock().unwrap().is_empty());
-    assert!(store.disenchanted.lock().unwrap().is_empty());
 }
 
 // ── Quest giver routing (CMSG_QUESTGIVER_HELLO) ──────────────────────────────────────────────────
@@ -6501,83 +6204,6 @@ fn trainer_buy_failure_parses_the_reason_tag_into_the_failure_code() {
         drop(client);
         server.join().unwrap();
     }
-}
-
-#[test]
-fn fishing_cast_routes_to_the_fish_reducer_with_the_manual_clear() {
-    // 060: a spell flagged E_FISH routes CMSG_CAST_SPELL to the fish reducer (never cast_spell),
-    // acked with the manual START -> raw CAST_RESULT(OK) -> GO clear (the enchant shape).
-    let mut s = quest_store();
-    s.fishing_spells = vec![7620];
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_CAST_SPELL {
-        spell: 7620,
-        targets: SpellCastTargets::default(),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    assert_eq!(read_raw_frame(&mut client, &mut c_dec).0, OP_SPELL_START);
-    assert_eq!(
-        read_raw_frame(&mut client, &mut c_dec).0,
-        0x0130,
-        "raw CAST_RESULT(OK)"
-    );
-    assert_eq!(read_raw_frame(&mut client, &mut c_dec).0, OP_SPELL_GO);
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(
-        store.fish_casts.load(std::sync::atomic::Ordering::SeqCst),
-        1
-    );
-    assert!(
-        store.casts.lock().unwrap().is_empty(),
-        "fishing must not reach cast_spell"
-    );
-}
-
-#[test]
-fn pick_lock_cast_routes_to_the_pick_lock_reducer_with_the_manual_clear() {
-    // 119: a spell flagged E_OPEN_LOCK routes CMSG_CAST_SPELL to the pick_lock reducer (never
-    // cast_spell), with the target GO guid decoded off the cast's GAMEOBJECT target block, and acked
-    // with the manual START -> raw CAST_RESULT(OK) -> GO clear (the enchant/fish shape).
-    use wow_world_messages::vanilla::SpellCastTargets_SpellCastTargetFlags_Gameobject as GoTgt;
-    let mut s = quest_store();
-    s.open_lock_spells = vec![1804];
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    let targets = SpellCastTargets {
-        target_flags:
-            wow_world_messages::vanilla::SpellCastTargets_SpellCastTargetFlags::new_gameobject(
-                GoTgt::Gameobject {
-                    gameobject: Guid::new(0xABCD),
-                },
-            ),
-    };
-    CMSG_CAST_SPELL {
-        spell: 1804,
-        targets,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    assert_eq!(read_raw_frame(&mut client, &mut c_dec).0, OP_SPELL_START);
-    assert_eq!(
-        read_raw_frame(&mut client, &mut c_dec).0,
-        0x0130,
-        "raw CAST_RESULT(OK)"
-    );
-    assert_eq!(read_raw_frame(&mut client, &mut c_dec).0, OP_SPELL_GO);
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(
-        store.pick_lock_casts.lock().unwrap().as_slice(),
-        &[0xABCD],
-        "pick_lock got the GO guid off the cast"
-    );
-    assert!(
-        store.casts.lock().unwrap().is_empty(),
-        "pick lock must not reach cast_spell"
-    );
 }
 
 #[test]

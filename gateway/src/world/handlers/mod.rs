@@ -11,6 +11,7 @@ use super::*;
 // world session to send, so the family can be tested without a socket.
 
 mod bank;
+mod cast;
 mod char;
 mod combat;
 mod item;
@@ -24,6 +25,7 @@ mod trainer;
 mod vendor;
 
 pub(crate) use bank::handle_bank;
+pub(crate) use cast::{dispatch_cast, CastOutcome, CastPlayer, CastStore, CastTransition};
 pub(crate) use char::handle_char;
 pub(crate) use combat::handle_combat;
 pub(crate) use item::{dispatch_item_action, ItemActionOutcome, ItemActionPlayer, ItemActionStore};
