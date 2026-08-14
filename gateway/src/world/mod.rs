@@ -1271,6 +1271,7 @@ fn dispatch<St: WorldStore + ?Sized>(
         )? {
             LootWindowOutcome::Handled {
                 next_state,
+                durable_request: _observed_durable_request,
                 outbound,
             } => {
                 if let WorldState::InWorld(iw) = &mut conn.state {
