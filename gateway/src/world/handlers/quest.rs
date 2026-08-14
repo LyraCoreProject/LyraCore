@@ -1,6 +1,7 @@
-//! Quest family: the overhead `!`/`?` status and the quest-giver menu enter through
-//! `dispatch_quest_action`; the gameobject giver calls the shared menu builder here rather than
-//! reaching for the store. `handle_quest` still owns the dialog opcodes that have not moved yet.
+//! Quest family: the overhead `!`/`?` status, the quest-giver menu and the turn-in round trip
+//! enter through `dispatch_quest_action`; the gameobject giver calls the shared menu builder here
+//! rather than reaching for the store. `handle_quest` still owns the dialog opcodes that have not
+//! moved yet.
 
 use super::super::*;
 
@@ -21,6 +22,18 @@ pub(crate) trait QuestActionStore: Send + Sync {
 
     /// Whether standing (Unfriendly or below) makes this giver refuse to talk.
     fn giver_refuses_interaction(&self, giver_guid: u64, player_guid: u64) -> Result<bool>;
+
+    /// Hand a completed quest in to `giver_guid` for its rewards. The module validates completion
+    /// and grants money/XP/items; `reward_index` is the player's pick-1-of-N choice reward slot,
+    /// ignored by quests with no choice rewards.
+    fn turn_in_quest(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        giver_guid: u64,
+        quest_id: u32,
+        reward_index: u32,
+    ) -> Result<()>;
 }
 
 impl QuestActionStore for crate::stdb::Coordinator {
@@ -38,6 +51,24 @@ impl QuestActionStore for crate::stdb::Coordinator {
 
     fn giver_refuses_interaction(&self, giver_guid: u64, player_guid: u64) -> Result<bool> {
         crate::stdb::Coordinator::npc_refuses_interaction(self, giver_guid, player_guid)
+    }
+
+    fn turn_in_quest(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        giver_guid: u64,
+        quest_id: u32,
+        reward_index: u32,
+    ) -> Result<()> {
+        crate::stdb::Coordinator::turn_in_quest(
+            self,
+            account_id,
+            self_guid,
+            giver_guid,
+            quest_id,
+            reward_index,
+        )
     }
 }
 
@@ -170,15 +201,78 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
                 },
             })
         }
+        // Opened a turn-in (clicked the `?`): the offer-reward screen when the giver's current
+        // evaluation reports the quest complete, else the request-items "not finished" screen. The
+        // module is the authority on completion; this only picks the screen and grants nothing.
+        ClientOpcodeMessage::CMSG_QUESTGIVER_COMPLETE_QUEST(c) => {
+            let giver = c.guid.guid();
+            let Some(detail) = store.quest_detail_view(c.quest_id)? else {
+                return Ok(QuestActionOutcome::Handled {
+                    outbound: Vec::new(),
+                });
+            };
+            let complete = store
+                .giver_quest_evals(giver, self_guid)?
+                .iter()
+                .any(|e| e.quest_id == c.quest_id && e.role == codec::ROLE_END && e.complete);
+            let screen = if complete {
+                ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(Box::new(
+                    codec::build_offer_reward(giver, &detail),
+                ))
+            } else {
+                ServerOpcodeMessage::SMSG_QUESTGIVER_REQUEST_ITEMS(Box::new(
+                    codec::build_request_items(giver, &detail, false),
+                ))
+            };
+            Ok(QuestActionOutcome::Handled {
+                outbound: vec![Outbound::One(screen)],
+            })
+        }
+        // Chose the reward → the module grants money/XP/items (gated on completion). The durable
+        // turn-in is requested BEFORE any outbound is built, so a refused turn-in can never show a
+        // "Quest Complete" popup for rewards the player did not get.
+        ClientOpcodeMessage::CMSG_QUESTGIVER_CHOOSE_REWARD(c) => {
+            match store.turn_in_quest(
+                player.account_id,
+                self_guid,
+                c.guid.guid(),
+                c.quest_id,
+                c.reward,
+            ) {
+                // The popup echoes the definition's XP/money/items, so what it shows matches what
+                // the module granted. Unreadable details drop it — the turn-in already happened.
+                Ok(()) => Ok(QuestActionOutcome::Handled {
+                    outbound: match store.quest_detail_view(c.quest_id)? {
+                        Some(detail) => vec![Outbound::One(
+                            ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(Box::new(
+                                codec::build_quest_complete(&detail),
+                            )),
+                        )],
+                        None => Vec::new(),
+                    },
+                }),
+                Err(e)
+                    if classify_quest_action_error(&e) == QuestActionErrorClass::GameplayRefusal =>
+                {
+                    log::debug!(
+                        "world: turn_in_quest ignored (account {}): {e}",
+                        player.account_id
+                    );
+                    Ok(QuestActionOutcome::Handled {
+                        outbound: Vec::new(),
+                    })
+                }
+                Err(e) => Err(e),
+            }
+        }
         other => Ok(QuestActionOutcome::PassThrough(other)),
     }
 }
 
-/// The quest dialog opcodes that still read the broad `WorldStore`: the quest details + accept, the
-/// turn-in offer/complete round-trip, abandon, the client's quest-definition query, and party
-/// sharing. Reads are evaluated against the player, so these need the in-world player guid — in
-/// CharSelect the opcodes pass through. Reducer rejections (accept/turn-in gates) are per-action:
-/// logged, not fatal.
+/// The quest dialog opcodes that still read the broad `WorldStore`: the quest details + accept,
+/// abandon, the client's quest-definition query, and party sharing. Reads are evaluated against the
+/// player, so these need the in-world player guid — in CharSelect the opcodes pass through. Reducer
+/// rejections (the accept gate) are per-action: logged, not fatal.
 pub(crate) fn handle_quest<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
@@ -240,53 +334,6 @@ pub(crate) fn handle_quest<St: WorldStore + ?Sized>(
                 );
             }
         }
-        // Opened a turn-in (clicked the `?`): the offer-reward screen if every objective is met, else
-        // the request-items "not finished" screen (the module is the authority; this only picks the UI).
-        ClientOpcodeMessage::CMSG_QUESTGIVER_COMPLETE_QUEST(c) => {
-            let giver = c.guid.guid();
-            if let Some(detail) = store.quest_detail(c.quest_id)? {
-                let complete = store
-                    .quest_giver_evals(giver, self_guid)?
-                    .iter()
-                    .any(|e| e.quest_id == c.quest_id && e.role == codec::ROLE_END && e.complete);
-                let out = if complete {
-                    ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(Box::new(
-                        codec::build_offer_reward(giver, &detail),
-                    ))
-                } else {
-                    ServerOpcodeMessage::SMSG_QUESTGIVER_REQUEST_ITEMS(Box::new(
-                        codec::build_request_items(giver, &detail, false),
-                    ))
-                };
-                send(tx, Outbound::One(out))?;
-            }
-        }
-        // Chose the reward → the module grants money/XP/items (gated on completion). On success, the
-        // "Quest Complete" popup echoes what was granted (XP via the shared formula, so it matches).
-        ClientOpcodeMessage::CMSG_QUESTGIVER_CHOOSE_REWARD(c) => {
-            match store.turn_in_quest(
-                conn.account_id,
-                self_guid,
-                c.guid.guid(),
-                c.quest_id,
-                c.reward,
-            ) {
-                Ok(()) => {
-                    if let Some(detail) = store.quest_detail(c.quest_id)? {
-                        send(
-                            tx,
-                            Outbound::One(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(
-                                Box::new(codec::build_quest_complete(&detail)),
-                            )),
-                        )?;
-                    }
-                }
-                Err(e) => log::debug!(
-                    "world: turn_in_quest ignored (account {}): {e}",
-                    conn.account_id
-                ),
-            }
-        }
         // Share a quest with the party (`CMSG_PUSHQUESTTOPARTY`). The module validates
         // grouped + actively-on-the-quest and pushes the per-member `QUEST_SHARE`/`QUEST_PUSH_RESULT`
         // events itself (relayed by `subscriptions.rs`'s `on_group_event`); no direct SMSG here.
@@ -308,18 +355,36 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
-        Guid, QuestGiverStatus, CMSG_PING, CMSG_QUESTGIVER_HELLO, CMSG_QUESTGIVER_STATUS_QUERY,
+        Guid, QuestGiverStatus, CMSG_PING, CMSG_QUESTGIVER_CHOOSE_REWARD,
+        CMSG_QUESTGIVER_COMPLETE_QUEST, CMSG_QUESTGIVER_HELLO, CMSG_QUESTGIVER_STATUS_QUERY,
     };
+
+    /// One durable call of the turn-in round trip, recorded in the order the seam made it. The
+    /// completion popup is built from `Detail`, so a `TurnIn` recorded ahead of it is the proof
+    /// that no screen can claim completion before the module granted it.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum TurnInCall {
+        TurnIn {
+            account_id: u64,
+            self_guid: u64,
+            giver: u64,
+            quest_id: u32,
+            reward_index: u32,
+        },
+        Detail(u32),
+    }
 
     #[derive(Default)]
     struct InMemoryQuestActions {
         eval_requests: Mutex<Vec<(u64, u64)>>,
         detail_requests: Mutex<Vec<u32>>,
         gate_requests: Mutex<Vec<(u64, u64)>>,
+        turn_in_calls: Mutex<Vec<TurnInCall>>,
         evals: Vec<codec::GiverQuestEval>,
         details: Vec<codec::QuestDetailView>,
         refuses: bool,
         gate_error: Option<String>,
+        turn_in_error: Option<String>,
     }
 
     impl QuestActionStore for InMemoryQuestActions {
@@ -337,6 +402,10 @@ mod tests {
 
         fn quest_detail_view(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>> {
             self.detail_requests.lock().unwrap().push(quest_id);
+            self.turn_in_calls
+                .lock()
+                .unwrap()
+                .push(TurnInCall::Detail(quest_id));
             Ok(self
                 .details
                 .iter()
@@ -353,6 +422,26 @@ mod tests {
                 Some(error) => Err(anyhow::anyhow!("{error}")),
                 None => Ok(self.refuses),
             }
+        }
+
+        fn turn_in_quest(
+            &self,
+            account_id: u64,
+            self_guid: u64,
+            giver_guid: u64,
+            quest_id: u32,
+            reward_index: u32,
+        ) -> Result<()> {
+            self.turn_in_calls.lock().unwrap().push(TurnInCall::TurnIn {
+                account_id,
+                self_guid,
+                giver: giver_guid,
+                quest_id,
+                reward_index,
+            });
+            self.turn_in_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
         }
     }
 
@@ -661,5 +750,174 @@ mod tests {
             outcome,
             QuestActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
         ));
+    }
+
+    // ── The turn-in round trip ───────────────────────────────────────────────
+
+    fn complete_quest(quest_id: u32) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_QUESTGIVER_COMPLETE_QUEST(Box::new(
+            CMSG_QUESTGIVER_COMPLETE_QUEST {
+                guid: Guid::new(GIVER),
+                quest_id,
+            },
+        ))
+    }
+
+    fn choose_reward(reward: u32) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_QUESTGIVER_CHOOSE_REWARD(Box::new(
+            CMSG_QUESTGIVER_CHOOSE_REWARD {
+                guid: Guid::new(GIVER),
+                quest_id: QUEST,
+                reward,
+            },
+        ))
+    }
+
+    /// A finished turn-in whose quest actually pays, so the popup has something to echo.
+    fn rewarded_turn_in() -> InMemoryQuestActions {
+        InMemoryQuestActions {
+            details: vec![codec::QuestDetailView {
+                reward_xp: 250,
+                money_reward: 1200,
+                ..detail(QUEST)
+            }],
+            ..one_quest(codec::ROLE_END, true, true)
+        }
+    }
+
+    fn turn_in_of(reward_index: u32) -> TurnInCall {
+        TurnInCall::TurnIn {
+            account_id: 7,
+            self_guid: SELF_GUID,
+            giver: GIVER,
+            quest_id: QUEST,
+            reward_index,
+        }
+    }
+
+    #[test]
+    fn opening_a_complete_turn_in_offers_the_reward_and_grants_nothing() {
+        let actions = one_quest(codec::ROLE_END, true, true);
+
+        let batch =
+            outbound(dispatch_quest_action(&actions, player(), complete_quest(QUEST)).unwrap());
+
+        assert!(matches!(
+            batch.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(r))]
+                if r.npc == Guid::new(GIVER) && r.quest_id == QUEST
+        ));
+        // Opening the screen is a read. The rewards are only granted once a reward is chosen.
+        assert!(!actions
+            .turn_in_calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| matches!(call, TurnInCall::TurnIn { .. })));
+    }
+
+    #[test]
+    fn opening_an_incomplete_turn_in_asks_for_the_remaining_items() {
+        let actions = one_quest(codec::ROLE_END, true, false);
+
+        let batch =
+            outbound(dispatch_quest_action(&actions, player(), complete_quest(QUEST)).unwrap());
+
+        assert!(matches!(
+            batch.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_QUESTGIVER_REQUEST_ITEMS(r))]
+                if r.npc == Guid::new(GIVER) && r.quest_id == QUEST
+        ));
+    }
+
+    #[test]
+    fn opening_a_turn_in_for_an_unknown_quest_answers_nothing() {
+        let actions = one_quest(codec::ROLE_END, true, true);
+
+        let batch =
+            outbound(dispatch_quest_action(&actions, player(), complete_quest(QUEST + 1)).unwrap());
+
+        assert!(batch.is_empty());
+        // No screen to build, so the giver is never evaluated.
+        assert!(actions.eval_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn choosing_a_reward_turns_the_quest_in_before_any_outbound_is_built() {
+        // The ordering is the whole point: the popup is built from the detail read, so a turn-in
+        // recorded ahead of it is what stops a refusal from showing a false "Quest Complete".
+        let actions = rewarded_turn_in();
+
+        dispatch_quest_action(&actions, player(), choose_reward(2)).unwrap();
+
+        assert_eq!(
+            actions.turn_in_calls.lock().unwrap().as_slice(),
+            &[turn_in_of(2), TurnInCall::Detail(QUEST)]
+        );
+    }
+
+    #[test]
+    fn a_granted_turn_in_answers_the_popup_built_from_the_quest_details() {
+        let actions = rewarded_turn_in();
+
+        let batch = outbound(dispatch_quest_action(&actions, player(), choose_reward(0)).unwrap());
+
+        assert!(matches!(
+            batch.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(c))]
+                if c.quest_id == QUEST
+                    && c.experience_reward == 250
+                    && c.money_reward.as_int() == 1200
+        ));
+    }
+
+    #[test]
+    fn a_refused_turn_in_answers_nothing_and_never_claims_completion() {
+        let actions = InMemoryQuestActions {
+            turn_in_error: Some("quest objectives are not complete".into()),
+            ..rewarded_turn_in()
+        };
+
+        let batch = outbound(dispatch_quest_action(&actions, player(), choose_reward(2)).unwrap());
+
+        assert!(batch.is_empty(), "a refusal must not send a completion popup");
+        // The refusal stopped before the popup's detail read, so nothing was built at all.
+        assert_eq!(
+            actions.turn_in_calls.lock().unwrap().as_slice(),
+            &[turn_in_of(2)]
+        );
+    }
+
+    #[test]
+    fn a_granted_turn_in_with_unreadable_details_answers_nothing_and_is_not_retried() {
+        let actions = InMemoryQuestActions {
+            details: Vec::new(),
+            ..one_quest(codec::ROLE_END, true, true)
+        };
+
+        let batch = outbound(dispatch_quest_action(&actions, player(), choose_reward(0)).unwrap());
+
+        assert!(batch.is_empty());
+        assert_eq!(
+            actions.turn_in_calls.lock().unwrap().as_slice(),
+            &[turn_in_of(0), TurnInCall::Detail(QUEST)]
+        );
+    }
+
+    #[test]
+    fn a_reducer_transport_failure_on_turn_in_is_session_fatal() {
+        let actions = InMemoryQuestActions {
+            turn_in_error: Some(
+                "turn_in_quest reducer transport disconnected: channel closed".into(),
+            ),
+            ..rewarded_turn_in()
+        };
+
+        let error = match dispatch_quest_action(&actions, player(), choose_reward(2)) {
+            Err(error) => error,
+            Ok(_) => panic!("a dead reducer transport must end the session"),
+        };
+
+        assert!(format!("{error:#}").contains("reducer transport disconnected"));
     }
 }

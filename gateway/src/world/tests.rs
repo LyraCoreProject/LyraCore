@@ -150,7 +150,6 @@ use wow_world_messages::vanilla::{
     CMSG_PUSHQUESTTOPARTY,
     CMSG_QUESTGIVER_ACCEPT_QUEST,
     CMSG_QUESTGIVER_CHOOSE_REWARD,
-    CMSG_QUESTGIVER_COMPLETE_QUEST,
     CMSG_QUESTGIVER_HELLO,
     CMSG_QUESTGIVER_STATUS_QUERY,
     CMSG_QUESTLOG_REMOVE_QUEST,
@@ -2757,6 +2756,24 @@ impl QuestActionStore for InMemoryStore {
     fn giver_refuses_interaction(&self, _giver_guid: u64, _player_guid: u64) -> Result<bool> {
         Ok(self.npc_refuses)
     }
+
+    fn turn_in_quest(
+        &self,
+        account_id: u64,
+        _self_guid: u64,
+        giver_guid: u64,
+        quest_id: u32,
+        reward_index: u32,
+    ) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.turned_in
+            .lock()
+            .unwrap()
+            .push((account_id, giver_guid, quest_id, reward_index));
+        Ok(())
+    }
 }
 
 impl VendorActionStore for InMemoryStore {
@@ -4735,12 +4752,15 @@ fn quest_accept_dispatches_to_reducer_with_giver_and_quest() {
 }
 
 #[test]
-fn quest_choose_reward_turns_in_and_replies_complete() {
+fn quest_choose_reward_reaches_the_quest_module_and_replies_complete_over_the_cipher() {
+    // The socket-level contract: dispatch routes CHOOSE_REWARD to the quest module, the chosen
+    // pick-1-of-N slot reaches the store unchanged, and the typed completion reply crosses the
+    // encrypted frame. Which screen a turn-in opens is decided at the `dispatch_quest_action` seam
+    // and proved there.
     let mut s = quest_store();
     s.quest_details = vec![detail_view(1234, "A Threat Within")];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    // reward: 2 — the chosen pick-1-of-N slot must be threaded CMSG -> handler -> store unchanged.
     CMSG_QUESTGIVER_CHOOSE_REWARD {
         guid: Guid::new(50),
         quest_id: 1234,
@@ -4748,7 +4768,6 @@ fn quest_choose_reward_turns_in_and_replies_complete() {
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    // Success → the "Quest Complete" popup (the reward screen close-out).
     match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
         ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(_) => {}
         other => panic!("expected SMSG_QUESTGIVER_QUEST_COMPLETE, got {other}"),
@@ -4759,35 +4778,6 @@ fn quest_choose_reward_turns_in_and_replies_complete() {
         store.turned_in.lock().unwrap().as_slice(),
         &[(7, 50, 1234, 2)]
     );
-}
-
-#[test]
-fn quest_complete_picks_offer_reward_vs_request_items_by_completion() {
-    // COMPLETE → OFFER_REWARD when the giver's END eval is complete.
-    for (complete, want_offer) in [(true, true), (false, false)] {
-        let mut s = quest_store();
-        s.quest_details = vec![detail_view(1234, "A Threat Within")];
-        s.quest_evals = vec![eval(1234, codec::ROLE_END, true, complete)];
-        let store = std::sync::Arc::new(s);
-        let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-        CMSG_QUESTGIVER_COMPLETE_QUEST {
-            guid: Guid::new(50),
-            quest_id: 1234,
-        }
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-        match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-            ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(_) => {
-                assert!(want_offer, "got OFFER but wanted REQUEST")
-            }
-            ServerOpcodeMessage::SMSG_QUESTGIVER_REQUEST_ITEMS(_) => {
-                assert!(!want_offer, "got REQUEST but wanted OFFER")
-            }
-            other => panic!("expected OFFER_REWARD/REQUEST_ITEMS, got {other}"),
-        }
-        drop(client);
-        server.join().unwrap();
-    }
 }
 
 #[test]
