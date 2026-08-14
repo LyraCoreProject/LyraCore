@@ -1099,3 +1099,52 @@ fn upsert_effect(ctx: &spacetimedb::ReducerContext, row: SpellEffect) {
     ctx.db.game_spell_effect().id().delete(row.id);
     ctx.db.game_spell_effect().insert(row);
 }
+
+/// Stacking-family probe fixture — the four real family members a live aura-stacking probe needs
+/// (`docs/aura-stacking-probes.md`).
+///
+/// A curated sandbox carries only rank 1 of each aura family and every one of those is self-cast,
+/// so neither "the stronger member wins from either caster" nor "two paladins, one target" can be
+/// staged on it without these rows. Power Word: Fortitude and Prayer of Fortitude are the
+/// magnitude-compared EXCLUSIVE_STRONGER pair (family 2); Blessing of Might and Blessing of Wisdom
+/// are the EXCLUSIVE_PER_CASTER pair (family 3). All four are ally-targeted so a second caster can
+/// reach somebody else's target.
+///
+/// These are REAL vanilla ids, so a database whose catalogue already holds one keeps its own row:
+/// an imported Spell.dbc is authoritative and a fixture must never overwrite it.
+pub(crate) fn seed_stacking_probe_fixture(ctx: &ReducerContext) {
+    // (spell_id, name, effect kind, p0, p0_kind, magnitude)
+    const PROBE_SPELLS: &[(u32, &str, u8, i32, u8, i32)] = &[
+        // Family 2 — A_MOD_STAT(STAT_STA), compared by magnitude. The pair is deliberately drawn from
+        // the family's two DIFFERENT chains: `aura_apply` displaces a same-NAME other rank before any
+        // family policy runs, so two ranks of one chain would never reach the strength comparison.
+        (1243, "Power Word: Fortitude", 0xA0, 2, 1, 3),
+        (21562, "Prayer of Fortitude", 0xA0, 2, 1, 26),
+        // Family 3 — one Blessing per paladin per target. Might is A_MOD_COMBAT(attack power),
+        // Wisdom an A_MOD_STAT(STAT_SPI) stand-in for its mana regen.
+        (19740, "Blessing of Might", 0xA3, 0, 5, 20),
+        (19742, "Blessing of Wisdom", 0xA0, 4, 1, 10),
+    ];
+    for &(spell_id, name, kind, p0, p0_kind, magnitude) in PROBE_SPELLS {
+        if ctx.db.game_spell().spell_id().find(spell_id).is_some() {
+            continue;
+        }
+        ctx.db.game_spell().insert(Spell {
+            range_yd: 30,
+            duration_ms: 1_800_000,
+            max_stacks: 1,
+            ..base_spell(spell_id, name)
+        });
+        upsert_effect(
+            ctx,
+            SpellEffect {
+                kind,
+                base_points: magnitude,
+                target: 2, // T_TARGET_ALLY — the probe's second caster buffs someone else's target
+                p0,
+                p0_kind,
+                ..base_effect(spell_id, 0)
+            },
+        );
+    }
+}

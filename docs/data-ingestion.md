@@ -232,6 +232,59 @@ import produces — hundreds of creature templates, quests, or loot rows. That o
 machine where **you** ran `./lyracore import` against **your own** client and **your own** fetched
 dump.
 
+## Starter aura families — provenance (reconciled 2026-08-13)
+
+`module/src/seed.rs`'s `seed_spell_groups` hand-authors the mutually exclusive aura families. This
+records what its rows were checked against, because "hand-authored" is not the same as "unverified"
+and the two must not be conflated.
+
+**Reference source.** `DBFilesClient/Spell.dbc`, read out of a locally owned 1.12.1 client install
+(`Data/dbc.MPQ` + `patch*.MPQ` patch chain, build 5875), through the same `wow-mpq` + `wow_dbc` read
+path `importer/src/dbc.rs` already uses. **Revision:** the client's own shipped DBC — there is no
+upstream revision to pin beyond the build number, and `wow_dbc` hard-asserts the 5875 record shape, so
+a wrong-version client fails the read rather than producing silent drift. The probe was a throwaway
+example, run once, deleted after; it printed derived facts (id, name, rank subtext, base points) and
+wrote nothing. **No client bytes entered the repository tree**, matching the firewall above.
+
+**Not used, deliberately:** cmangos `spell_group` / `spell_group_stack_rules`. That dataset would
+answer the rule questions directly, but it is GPL-licensed content this project ships zero rows of, and
+transcribing its group assignments into a permissively licensed repository is exactly the copy the
+firewall forbids. Operators who run the importer against their own dump get it locally; the shipped
+starter set does not.
+
+**Verified against the client (membership):** every id in all nine families, by spell name and rank
+subtext. Corrections this produced:
+
+| Family | Correction |
+|---|---|
+| Mark of the Wild | Rank 4 (`5234`) was missing from an otherwise complete 7-rank chain. |
+| Paladin Blessings | Added Might rank 7 (`25291`), Wisdom rank 6 (`25290`), Sanctuary ranks 2-4 (`20912`/`20913`/`20914`), and the eight Greater Blessings (a Greater Blessing is the same buff as its single-target form). |
+| Armor debuffs | Added Faerie Fire (Feral) ranks 1-4 (`16857`/`17390`/`17391`/`17392`) — the druid form-shifted cast of the same debuff. |
+| Well Fed | Added the real food-buff ids alongside the sandbox's synthetic `50116`. |
+| Fortitude, Battle Shout, Intellect, Spirit, Shadow Protection | No membership change — the existing ids matched the client exactly. |
+
+**Verified by reasoning over the client's own magnitudes (comparability):** `rank_is_comparable` was
+`true` for eight of nine families and is now `true` only for Battle Shout, the sole family built from a
+single rank chain. The client makes the bug concrete: Prayer of Fortitude rank 1 grants the same
+stamina as Power Word: Fortitude rank 5, and rank 2 the same as rank 6, so comparing the two chains'
+rank numbers would have refused a correct Prayer of Fortitude rank 2 in favour of a Power Word rank 6
+of identical strength. Gift of the Wild ranks 1-2 sit at Mark of the Wild ranks 6-7 the same way. Those
+families now compare effect magnitude, with an existing aura's stack count folded in.
+
+**Unverified, and marked as such:**
+
+- **Rule assignment per family.** `Spell.dbc` does not encode aura exclusivity; that lives in
+  server-side data. The assignments (EXCLUSIVE_STRONGER everywhere except per-caster Blessings and
+  latest-wins Well Fed) rest on observed 1.12.1 behaviour, not on a reference table.
+- **Whether Blessing of Freedom, Protection, and Sacrifice share the Blessing exclusivity.** They are
+  omitted rather than guessed at.
+- **Expose Armor's magnitude**, which the client stores as a combo-point coefficient rather than a flat
+  value. The policy tests use its 5-combo-point value.
+
+**How the families are checked on a live database:**
+[`aura-stacking-probes.md`](./aura-stacking-probes.md) — replacement, refusal, per-caster Blessings,
+and persisted `game_aura` rows, through the debug reducers on a development database.
+
 ## Where these questions landed
 
 The open questions this document originally posed have all been answered, and the answers are the

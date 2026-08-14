@@ -1,0 +1,44 @@
+# AGENTS.md
+
+In this project we focus on building complex things as simple as possible. We love to find ways to reduce complexity when solving problems.
+
+## Coding preferences - general
+
+- Keep things simple. Channel "yagni" energy unless told otherwise.
+- Typesafety is useful, take advantage of it.
+- Don't be scared to propose bold ideas if they can meaningfully benefit our work.
+- Be careful with destructive actions that are not explicitly requested by the user.
+- Tests are good! Endless smoke tests, "regression tests" for feature deletions, etc, much less good. Tests should be focused, not slop.
+- Comments are a great way to clarify functionality and how code is used. Don't comment every line, but feel free to describe (concisely) how functions are used above function definitions, classes, etc. Do not put issue numbers in comments.
+- Keep comments up to date! When making changes, it's important to keep things in sync.
+
+## Questions are read-only
+
+- A question from a user is a request for an answer, not for changes. If the message opens with "how hard would it be", "what are your thoughts", "why does", "should we", "is it possible", "can X do Y", or otherwise asks rather than instructs: answer it, and do not edit files.
+- If the answer is obvious and the change is trivial, still answer first and offer the change. Ask before making it.
+
+## Match ceremony to the task
+
+- Do not spawn subagents or a multi-agent panel for work a single agent finishes in one pass. Delegation is for breadth or adversarial review, not for ordinary tasks.
+- When several agents work in parallel, state file ownership up front so they do not collide.
+
+## Visual and design work
+
+- Do not edit real components first. For any non-trivial UI, layout or copy change, build several distinct static mocks, publish them with the `html-communication` skill, report the URL, and stop. Wait for a pick before implementing.
+- Standing constraints: Information-dense, no decorative card/pill chrome, no light-gray subtitle lines above sections. Minimal copy. No em dashes.
+
+## Blast radius
+
+- Never touch production or live databases unless explicitly told to or confirmed by the user. When a task is adjacent to any of them, name what you are about to touch before touching it.
+
+## Pull Requests
+
+- File PRs with the `file-pr` skill (`.claude/skills/file-pr/SKILL.md`).
+- Make sure titles follow conventions from the repo. They should be simple and easy to understand. Conventional commit styles in projects that use them, i.e. "fix(player): movement no longer updates twice".
+- PR descriptions should aim for simplicity. Open with a minimal, clear description of the problem. Follow up with how you solved it. Give a little bit of context, talk in ASD-STE100 Simplified Technical English, and use the ubiquitous language from `CONTEXT.md` if available.
+- Add a blurb to the end of the PR description about what model and harness is making the changes.
+- **Rebase onto latest `main` before opening**. Stale branches conflict and waste a review round.
+
+## Legacy code style
+
+Much of the existing codebase carries essay comments and issue references. That style is legacy, not the template: match the surrounding code's naming and idiom, not its comment density.
