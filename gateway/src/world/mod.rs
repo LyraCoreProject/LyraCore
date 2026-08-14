@@ -1238,44 +1238,53 @@ fn dispatch<St: WorldStore + ?Sized>(
     let Some(msg) = handle_combat(tx, store, conn, msg)? else {
         return Ok(());
     };
-    if let ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) = &msg {
+    let dispatches_to_loot_window = if let ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) = &msg {
         let target_guid = request.guid.guid();
-        if store.gameobject_type(target_guid)?
-            == Some(lyracore_shared::constants::go_type::QUESTGIVER)
-        {
-            for message in quest_giver_menu(store, target_guid, social::self_guid(conn).unwrap_or(0))? {
-                send(tx, message)?;
+        match store.gameobject_type(target_guid)? {
+            Some(lyracore_shared::constants::go_type::QUESTGIVER) => {
+                for message in
+                    quest_giver_menu(store, target_guid, social::self_guid(conn).unwrap_or(0))?
+                {
+                    send(tx, message)?;
+                }
+                return Ok(());
             }
-            return Ok(());
+            Some(lyracore_shared::constants::go_type::CHEST) => true,
+            _ => false,
         }
-    }
+    } else {
+        true
+    };
     let current_loot_state = match &conn.state {
         WorldState::InWorld(iw) => iw.open_loot,
         WorldState::CharSelect => OpenLootState::default(),
     };
-    let msg = match dispatch_loot_window(
-        store,
-        LootWindowPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-        },
-        current_loot_state,
-        msg,
-    )? {
-        LootWindowOutcome::Handled {
-            next_state,
-            durable_request: _durable_request,
-            outbound,
-        } => {
-            if let WorldState::InWorld(iw) = &mut conn.state {
-                iw.open_loot = next_state;
+    let msg = if dispatches_to_loot_window {
+        match dispatch_loot_window(
+            store,
+            LootWindowPlayer {
+                account_id: conn.account_id,
+                self_guid: social::self_guid(conn),
+            },
+            current_loot_state,
+            msg,
+        )? {
+            LootWindowOutcome::Handled {
+                next_state,
+                outbound,
+            } => {
+                if let WorldState::InWorld(iw) = &mut conn.state {
+                    iw.open_loot = next_state;
+                }
+                for message in outbound {
+                    send(tx, message)?;
+                }
+                return Ok(());
             }
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
+            LootWindowOutcome::PassThrough(msg) => msg,
         }
-        LootWindowOutcome::PassThrough(msg) => msg,
+    } else {
+        msg
     };
     let Some(msg) = handle_loot(tx, store, conn, msg)? else {
         return Ok(());

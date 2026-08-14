@@ -87,15 +87,16 @@ pub mod npc_flags {
 }
 
 /// GameObject `type_id` values (cmangos `GAMEOBJECT_TYPE_*`). `module/src/gameobject.rs`'s `go_type`
-/// module owns the full LIVE dispatch set (CHEST/GOOBER/GATHER/DOOR/BUTTON + docs) and re-exports its
-/// `QUESTGIVER` constant from here so it can never drift from the gateway's copy — the gateway (which
-/// does not depend on the module crate) needs to recognize a QUESTGIVER GO independently, to route
-/// `CMSG_GAMEOBJ_USE` on one to the quest window instead of the loot/toggle reducer path (work-item 041).
+/// module owns the full live dispatch set and re-exports the values the gateway also needs from
+/// here, so its questgiver and chest routing cannot drift from the module.
 pub mod go_type {
     /// `GAMEOBJECT_TYPE_QUESTGIVER` (2) — a GO whose `use` (right-click) opens the quest window
     /// (Wanted Poster GO 68 starts q176; the Lost Guards corpses GO 55/56 drive the q37/q45/q71 END
     /// chain) rather than rolling loot or toggling state.
     pub const QUESTGIVER: u8 = 2;
+    /// `GAMEOBJECT_TYPE_CHEST` (3) — the only GameObject type whose right-click belongs to the
+    /// gateway loot-window lifecycle.
+    pub const CHEST: u8 = 3;
 }
 
 /// `UNIT_FIELD_BYTES_1` byte-3 visibility flags (vanilla 1.12). Drives client render state, stored in

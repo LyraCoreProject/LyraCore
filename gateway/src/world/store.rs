@@ -356,10 +356,9 @@ pub trait WorldStore:
     /// Look up a gameobject template by entry to answer `CMSG_GAMEOBJECT_QUERY`.
     fn gameobject_template(&self, entry: u32) -> Result<Option<codec::GameObjectTemplateView>>;
 
-    /// The `type_id` of a SPAWNED gameobject by its live guid — lets
-    /// `CMSG_GAMEOBJ_USE` route a `go_type::QUESTGIVER` GO (the Wanted Poster, the Lost Guards
-    /// corpses) to the quest window instead of the loot-window path. The default treats a GameObject
-    /// as a non-questgiver; production overrides it with the spawned-object read.
+    /// The `type_id` of a spawned GameObject by its live guid. `CMSG_GAMEOBJ_USE` sends questgivers
+    /// to the quest window, chests to the loot-window lifecycle, and every other type to the general
+    /// use path. Production overrides the default with the spawned-object read.
     fn gameobject_type(&self, _go_guid: u64) -> Result<Option<u8>> {
         Ok(None)
     }

@@ -32,6 +32,7 @@ pub(crate) mod world_index;
 pub(crate) mod world_view; // the shared per-shard AOI dispatch that replaced the per-player subscriptions
 
 pub use connection::Coordinator;
+pub(crate) use connection::is_reducer_refusal;
 pub use subscriptions::PlayerSubscriptions;
 // Re-exported so `crate::stdb::{RealmRow, AccountRow}` resolves (they are the return types of
 // `Coordinator::realm` / `account_by_username`). `allow(unused_imports)` because in this *binary*

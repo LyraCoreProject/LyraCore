@@ -42,7 +42,7 @@ pub mod go_type {
     /// (GAMEOBJECT_TYPE_QUESTGIVER).
     pub const QUESTGIVER: u8 = lyracore_shared::constants::go_type::QUESTGIVER;
     /// Loot container — `use` rolls its drop into the loot window. cmangos type 3.
-    pub const CHEST: u8 = 3;
+    pub const CHEST: u8 = lyracore_shared::constants::go_type::CHEST;
     /// Quest-use object (lever/totem/etc.) — `use` grants USE_GAMEOBJECT quest credit. cmangos type 10.
     pub const GOOBER: u8 = 10;
     /// Gather node (mining vein / herb bush). `use` skill-gates then DIRECT-grants the ore/herb

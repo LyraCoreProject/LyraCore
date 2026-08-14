@@ -2924,7 +2924,11 @@ impl LootWindowStore for InMemoryStore {
         Ok(self.corpse_money)
     }
 
-    fn corpse_loot(&self, _target_guid: u64, viewer_guid: u64) -> Result<Vec<codec::LootItemView>> {
+    fn loot_target_items(
+        &self,
+        _target_guid: u64,
+        viewer_guid: u64,
+    ) -> Result<Vec<codec::LootItemView>> {
         self.corpse_loot_reads
             .lock()
             .unwrap()
@@ -5928,11 +5932,34 @@ fn questgiver_gameobject_bypasses_the_chest_lifecycle() {
     assert!(store.corpse_loot_reads.lock().unwrap().is_empty());
 }
 
+#[test]
+fn non_chest_gameobject_preserves_the_general_use_path() {
+    let mut s = quest_store();
+    s.gameobject_type = Some(0);
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+
+    CMSG_GAMEOBJ_USE {
+        guid: Guid::new(91),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.gameobjects_used.lock().unwrap().as_slice(), &[91]);
+    assert_eq!(
+        store.corpse_loot_reads.lock().unwrap().as_slice(),
+        &[(91, 1)]
+    );
+}
+
 // ── Loot window state machine ────────────────────────────────────────────────────────────────────
 
 #[test]
 fn chest_dispatch_opens_the_shared_window_and_tracks_its_target() {
     let mut s = quest_store();
+    s.gameobject_type = Some(lyracore_shared::constants::go_type::CHEST);
     s.corpse_loot_by_viewer.insert(1, vec![(4, 117, 2, 321)]);
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
@@ -5964,6 +5991,53 @@ fn chest_dispatch_opens_the_shared_window_and_tracks_its_target() {
         &[(90, 1)]
     );
     assert_eq!(store.items_looted.lock().unwrap().as_slice(), &[(90, 4)]);
+}
+
+#[test]
+fn loot_before_player_login_is_handled_without_panicking() {
+    let store = std::sync::Arc::new(tester_store(7));
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
+
+    CMSG_LOOT {
+        guid: Guid::new(60),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+
+    server
+        .join()
+        .expect("loot without a selected player must not panic")
+        .expect("loot without a selected player remains a handled no-op");
+    assert!(store.corpse_loot_reads.lock().unwrap().is_empty());
+    assert!(store.skinned.lock().unwrap().is_empty());
+}
+
+#[test]
+fn loot_with_a_zero_player_guid_is_handled_without_panicking() {
+    let mut entity = warrior_entity();
+    entity.guid = 0;
+    let store = std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(entity),
+        ..tester_store(7)
+    });
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 0);
+
+    CMSG_LOOT {
+        guid: Guid::new(60),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+
+    server
+        .join()
+        .expect("loot with a zero player guid must not panic");
+    assert!(store.corpse_loot_reads.lock().unwrap().is_empty());
+    assert!(store.skinned.lock().unwrap().is_empty());
 }
 
 #[test]
