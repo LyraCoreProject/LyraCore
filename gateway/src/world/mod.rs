@@ -52,7 +52,7 @@ use handlers::{
     ItemActionOutcome, ItemActionPlayer, LootWindowOutcome, LootWindowPlayer, MeleeActionOutcome,
     MeleeActionPlayer, OpenLootState, QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome,
     TaxiActionPlayer, VendorActionOutcome, VendorActionPlayer,
-    CMSG_AUCTION_LIST_ITEMS_OPCODE,
+    CMSG_AUCTION_LIST_ITEMS_OPCODE, quest_giver_menu,
 };
 pub(crate) use handlers::{
     AuctionBrowseRequest, AuctionPage, AuctionQuery, CreateAuctionOutcome, CreateAuctionRequest,
@@ -1238,6 +1238,17 @@ fn dispatch<St: WorldStore + ?Sized>(
     let Some(msg) = handle_combat(tx, store, conn, msg)? else {
         return Ok(());
     };
+    if let ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) = &msg {
+        let target_guid = request.guid.guid();
+        if store.gameobject_type(target_guid)?
+            == Some(lyracore_shared::constants::go_type::QUESTGIVER)
+        {
+            for message in quest_giver_menu(store, target_guid, social::self_guid(conn).unwrap_or(0))? {
+                send(tx, message)?;
+            }
+            return Ok(());
+        }
+    }
     let current_loot_state = match &conn.state {
         WorldState::InWorld(iw) => iw.open_loot,
         WorldState::CharSelect => OpenLootState::default(),

@@ -320,7 +320,8 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
             })
         }
         // Right-click a questgiver → the quest menu (every quest it offers/completes for this
-        // player). An Unfriendly-or-below giver refuses it and answers nothing at all.
+        // player). An Unfriendly-or-below giver refuses it and answers nothing at all. A
+        // QUESTGIVER GameObject reaches the same `quest_giver_menu` helper from session dispatch.
         ClientOpcodeMessage::CMSG_QUESTGIVER_HELLO(h) => {
             let giver = h.guid.guid();
             let refuses = match store.giver_refuses_interaction(giver, self_guid) {

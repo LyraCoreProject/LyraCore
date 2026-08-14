@@ -358,16 +358,11 @@ pub trait WorldStore:
 
     /// The `type_id` of a SPAWNED gameobject by its live guid — lets
     /// `CMSG_GAMEOBJ_USE` route a `go_type::QUESTGIVER` GO (the Wanted Poster, the Lost Guards
-    /// corpses) to the quest window instead of the loot/toggle reducer path. Defaulted to `Ok(None)`
-    /// (never a questgiver) so existing `WorldStore` implementors (test mocks) that don't override it
-    /// keep their prior CMSG_GAMEOBJ_USE behavior unchanged; only the production `Coordinator` impl
-    /// (`stdb::world_store`) overrides it with a real read.
+    /// corpses) to the quest window instead of the loot-window path. The default treats a GameObject
+    /// as a non-questgiver; production overrides it with the spawned-object read.
     fn gameobject_type(&self, _go_guid: u64) -> Result<Option<u8>> {
         Ok(None)
     }
-
-    /// Use a gameobject (`CMSG_GAMEOBJ_USE`): a chest rolls its loot, a quest-object grants credit.
-    fn use_gameobject(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()>;
 
     /// Enter an area trigger (`CMSG_AREATRIGGER`): credit any active "explore" quest tied to it.
     fn enter_areatrigger(&self, account_id: u64, self_guid: u64, trigger_id: u32) -> Result<()>;

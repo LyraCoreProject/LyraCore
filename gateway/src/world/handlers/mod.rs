@@ -52,7 +52,7 @@ pub(crate) use melee::{
 };
 pub(crate) use query::handle_query;
 pub(crate) use quest::{
-    dispatch_quest_action, QuestActionOutcome, QuestActionPlayer, QuestActionStore,
+    dispatch_quest_action, quest_giver_menu, QuestActionOutcome, QuestActionPlayer, QuestActionStore,
 };
 pub(crate) use taxi::{
     dispatch_taxi_action, queue_reply_then_arm, TaxiActionOutcome, TaxiActionPlayer, TaxiActionStore,

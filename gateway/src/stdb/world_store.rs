@@ -438,10 +438,6 @@ impl WorldStore for Coordinator {
         self.gameobject_type(go_guid)
     }
 
-    fn use_gameobject(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()> {
-        self.use_gameobject(account_id, self_guid, go_guid)
-    }
-
     fn enter_areatrigger(&self, account_id: u64, self_guid: u64, trigger_id: u32) -> Result<()> {
         self.enter_areatrigger(account_id, self_guid, trigger_id)
     }

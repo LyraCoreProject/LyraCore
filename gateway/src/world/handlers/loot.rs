@@ -1,12 +1,17 @@
 //! Loot-window action dispatch plus the remaining corpse, GameObject, and group-loot handler.
 
 use super::super::*;
-use super::quest::quest_giver_menu;
 
 /// Durable reads and requests needed by the loot-window lifecycle.
 pub(crate) trait LootWindowStore: Send + Sync {
     fn loot_target_money(&self, target_guid: u64) -> Result<u32>;
     fn corpse_loot(&self, target_guid: u64, viewer_guid: u64) -> Result<Vec<codec::LootItemView>>;
+    fn use_gameobject(
+        &self,
+        account_id: u64,
+        actor_guid: u64,
+        target_guid: u64,
+    ) -> Result<LootWindowRequestStatus>;
     fn skin_corpse(
         &self,
         account_id: u64,
@@ -69,6 +74,18 @@ impl LootWindowStore for crate::stdb::Coordinator {
         crate::stdb::Coordinator::corpse_loot(self, target_guid, viewer_guid)
     }
 
+    fn use_gameobject(
+        &self,
+        account_id: u64,
+        actor_guid: u64,
+        target_guid: u64,
+    ) -> Result<LootWindowRequestStatus> {
+        coordinator_request_status(
+            "gw_use_gameobject",
+            crate::stdb::Coordinator::use_gameobject(self, account_id, actor_guid, target_guid),
+        )
+    }
+
     fn skin_corpse(
         &self,
         account_id: u64,
@@ -129,6 +146,7 @@ pub(crate) struct LootWindowPlayer {
 /// A durable operation the dispatcher requested while producing an outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LootWindowDurableRequest {
+    UseGameObject { target_guid: u64 },
     SkinCreature { target_guid: u64 },
     TakeMoney { target_guid: u64 },
     TakeItem { target_guid: u64, loot_slot: u8 },
@@ -168,6 +186,47 @@ pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
     msg: ClientOpcodeMessage,
 ) -> Result<LootWindowOutcome> {
     match msg {
+        ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) => {
+            let Some(actor_guid) = player.self_guid else {
+                return Ok(LootWindowOutcome::Handled {
+                    next_state: current_state,
+                    durable_request: None,
+                    outbound: Vec::new(),
+                });
+            };
+            let target_guid = request.guid.guid();
+            let durable_request = Some(LootWindowDurableRequest::UseGameObject { target_guid });
+            match store.use_gameobject(player.account_id, actor_guid, target_guid)? {
+                LootWindowRequestStatus::Applied => {}
+                LootWindowRequestStatus::Refused(error) => {
+                    log::debug!(
+                        "world: use_gameobject rejected (account {}): {error}",
+                        player.account_id
+                    );
+                    return Ok(LootWindowOutcome::Handled {
+                        next_state: current_state,
+                        durable_request,
+                        outbound: Vec::new(),
+                    });
+                }
+            }
+            let items = store.corpse_loot(target_guid, actor_guid)?;
+            if items.is_empty() {
+                return Ok(LootWindowOutcome::Handled {
+                    next_state: current_state,
+                    durable_request,
+                    outbound: Vec::new(),
+                });
+            }
+            let (opcode, body) = codec::build_loot_response_raw(target_guid, 0, &items);
+            Ok(LootWindowOutcome::Handled {
+                next_state: OpenLootState {
+                    target_guid: Some(target_guid),
+                },
+                durable_request,
+                outbound: vec![Outbound::Raw { opcode, body }],
+            })
+        }
         ClientOpcodeMessage::CMSG_LOOT(request) => {
             let Some(viewer_guid) = player.self_guid else {
                 return Ok(LootWindowOutcome::Handled {
@@ -269,8 +328,8 @@ pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
     }
 }
 
-/// Remaining loot, GameObject, group-loot, and death-recovery operations not yet migrated to a
-/// focused action interface.
+/// Remaining group-loot, non-window GameObject, and death-recovery operations not yet migrated to
+/// a focused action interface.
 pub(crate) fn handle_loot<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
@@ -317,54 +376,6 @@ pub(crate) fn handle_loot<St: WorldStore + ?Sized>(
                     "world: loot_master_give ignored (account {}): {e}",
                     conn.account_id
                 );
-            }
-        }
-        // Use a gameobject (CMSG_GAMEOBJ_USE): the module rolls a CHEST's loot into game_corpse_loot
-        // (keyed on the GO guid) or grants a quest-object's credit. For a chest we then open the loot
-        // window the same way CMSG_LOOT does. Known limitation: the post-reducer corpse_loot read
-        // can lag the loot-row subscription on the very first use (a re-click's CMSG_LOOT
-        // re-serves the same rows); the roll itself is committed server-side. A goober yields no
-        // rows → no window.
-        ClientOpcodeMessage::CMSG_GAMEOBJ_USE(g) => {
-            let go_guid = g.guid.guid();
-            // The VIEWER for `quest_only` filtering — a chest is only usable
-            // in-world; 0 (no real character ever has this guid) is a safe "no viewer" fallback for
-            // the CharSelect edge case, hiding every quest_only row rather than guessing.
-            let self_guid = match &conn.state {
-                WorldState::InWorld(iw) => iw.self_guid,
-                WorldState::CharSelect => 0,
-            };
-            // A QUESTGIVER-type GO (the Wanted Poster GO 68, the Lost Guards corpses GO 55/56)
-            // never rolls loot or grants credit: in vanilla a
-            // GAMEOBJECT_TYPE_QUESTGIVER goes straight to the quest window (the same menu/single-quest
-            // logic `CMSG_QUESTGIVER_HELLO` uses for a creature giver), so the client's right-click
-            // opens the quest dialog on it exactly like an NPC — it never sends a separate
-            // CMSG_QUESTGIVER_HELLO for a gameobject giver. Checked BEFORE the ordinary use-reducer
-            // path, and short-circuits it entirely (the module's `apply_use_gameobject` treats
-            // QUESTGIVER as an inert no-op anyway, so skipping it changes nothing state-side).
-            if store.gameobject_type(go_guid)?
-                == Some(lyracore_shared::constants::go_type::QUESTGIVER)
-            {
-                for message in quest_giver_menu(store, go_guid, self_guid)? {
-                    send(tx, message)?;
-                }
-            } else {
-                match store.use_gameobject(conn.account_id, self_guid, go_guid) {
-                    Ok(()) => {
-                        let items = store.corpse_loot(go_guid, self_guid).unwrap_or_default();
-                        if !items.is_empty() {
-                            if let WorldState::InWorld(iw) = &mut conn.state {
-                                iw.open_loot.target_guid = Some(go_guid);
-                            }
-                            let (opcode, body) = codec::build_loot_response_raw(go_guid, 0, &items);
-                            send(tx, Outbound::Raw { opcode, body })?;
-                        }
-                    }
-                    Err(e) => log::debug!(
-                        "world: use_gameobject ignored (account {}): {e}",
-                        conn.account_id
-                    ),
-                }
             }
         }
         // Enter an area trigger (CMSG_AREATRIGGER): the client fires this when the player physically
@@ -483,7 +494,9 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex;
-    use wow_world_messages::vanilla::{CMSG_AUTOSTORE_LOOT_ITEM, CMSG_LOOT, CMSG_LOOT_RELEASE};
+    use wow_world_messages::vanilla::{
+        CMSG_AUTOSTORE_LOOT_ITEM, CMSG_GAMEOBJ_USE, CMSG_LOOT, CMSG_LOOT_RELEASE,
+    };
     use wow_world_messages::Guid;
 
     #[derive(Default)]
@@ -492,11 +505,15 @@ mod tests {
         items_by_viewer: HashMap<u64, Vec<codec::LootItemView>>,
         money_reads: Mutex<Vec<u64>>,
         item_reads: Mutex<Vec<(u64, u64)>>,
+        use_requests: Mutex<Vec<(u64, u64, u64)>>,
+        operations: Mutex<Vec<&'static str>>,
         skin_requests: Mutex<Vec<(u64, u64, u64)>>,
         money_take_requests: Mutex<Vec<(u64, u64, u64)>>,
         item_take_requests: Mutex<Vec<(u64, u64, u64, u8)>>,
         skin_refusal: Option<String>,
         skin_fatal_error: Option<String>,
+        use_refusal: Option<String>,
+        use_fatal_error: Option<String>,
         money_take_refusal: Option<String>,
         money_take_fatal_error: Option<String>,
         item_take_refusal: Option<String>,
@@ -529,6 +546,7 @@ mod tests {
             target_guid: u64,
             viewer_guid: u64,
         ) -> Result<Vec<codec::LootItemView>> {
+            self.operations.lock().unwrap().push("read generated loot");
             self.item_reads
                 .lock()
                 .unwrap()
@@ -538,6 +556,20 @@ mod tests {
                 .get(&viewer_guid)
                 .cloned()
                 .unwrap_or_default())
+        }
+
+        fn use_gameobject(
+            &self,
+            account_id: u64,
+            actor_guid: u64,
+            target_guid: u64,
+        ) -> Result<LootWindowRequestStatus> {
+            self.operations.lock().unwrap().push("use gameobject");
+            self.use_requests
+                .lock()
+                .unwrap()
+                .push((account_id, actor_guid, target_guid));
+            request_status(&self.use_refusal, &self.use_fatal_error)
         }
 
         fn skin_corpse(
@@ -594,6 +626,132 @@ mod tests {
         ClientOpcodeMessage::CMSG_LOOT(CMSG_LOOT {
             guid: Guid::new(target_guid),
         })
+    }
+
+    fn open_chest(target_guid: u64) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_GAMEOBJ_USE(CMSG_GAMEOBJ_USE {
+            guid: Guid::new(target_guid),
+        })
+    }
+
+    #[test]
+    fn chest_use_precedes_generated_loot_and_opens_the_shared_window() {
+        let mut store = InMemoryLootWindow::default();
+        store.items_by_viewer.insert(42, vec![(4, 117, 2, 321)]);
+        let current_state = OpenLootState {
+            target_guid: Some(11),
+        };
+
+        let outcome =
+            dispatch_loot_window(&store, player(), current_state, open_chest(90)).unwrap();
+
+        let LootWindowOutcome::Handled {
+            next_state,
+            durable_request,
+            outbound,
+        } = outcome
+        else {
+            panic!("chest use passed through")
+        };
+        assert_eq!(next_state.target_guid, Some(90));
+        assert_eq!(
+            durable_request,
+            Some(LootWindowDurableRequest::UseGameObject { target_guid: 90 })
+        );
+        let [Outbound::Raw { opcode, body }] = outbound.as_slice() else {
+            panic!("expected one raw loot window")
+        };
+        assert_eq!(*opcode, 0x0160);
+        assert_eq!(&body[0..8], &90u64.to_le_bytes());
+        assert_eq!(&body[9..13], &0u32.to_le_bytes());
+        assert_eq!(body[13], 1);
+        assert_eq!(
+            store.operations.lock().unwrap().as_slice(),
+            &["use gameobject", "read generated loot"]
+        );
+        assert_eq!(
+            store.use_requests.lock().unwrap().as_slice(),
+            &[(7, 42, 90)]
+        );
+        assert_eq!(store.item_reads.lock().unwrap().as_slice(), &[(90, 42)]);
+    }
+
+    #[test]
+    fn successful_empty_chest_use_keeps_the_current_window_state() {
+        let store = InMemoryLootWindow::default();
+        let current_state = OpenLootState {
+            target_guid: Some(11),
+        };
+
+        let outcome =
+            dispatch_loot_window(&store, player(), current_state, open_chest(90)).unwrap();
+
+        assert!(matches!(
+            outcome,
+            LootWindowOutcome::Handled {
+                next_state,
+                durable_request: Some(LootWindowDurableRequest::UseGameObject {
+                    target_guid: 90
+                }),
+                outbound,
+            } if next_state == current_state && outbound.is_empty()
+        ));
+        assert_eq!(
+            store.operations.lock().unwrap().as_slice(),
+            &["use gameobject", "read generated loot"]
+        );
+    }
+
+    #[test]
+    fn refused_chest_use_does_not_read_loot_or_change_window_state() {
+        let store = InMemoryLootWindow {
+            use_refusal: Some("out of range".into()),
+            ..Default::default()
+        };
+        let current_state = OpenLootState {
+            target_guid: Some(11),
+        };
+
+        let outcome =
+            dispatch_loot_window(&store, player(), current_state, open_chest(90)).unwrap();
+
+        assert!(matches!(
+            outcome,
+            LootWindowOutcome::Handled {
+                next_state,
+                durable_request: Some(LootWindowDurableRequest::UseGameObject {
+                    target_guid: 90
+                }),
+                outbound,
+            } if next_state == current_state && outbound.is_empty()
+        ));
+        assert_eq!(
+            store.operations.lock().unwrap().as_slice(),
+            &["use gameobject"]
+        );
+        assert!(store.item_reads.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn fatal_chest_use_failure_propagates_without_reading_loot() {
+        let store = InMemoryLootWindow {
+            use_fatal_error: Some("transport disconnected".into()),
+            ..Default::default()
+        };
+        let current_state = OpenLootState {
+            target_guid: Some(11),
+        };
+
+        let error = dispatch_loot_window(&store, player(), current_state, open_chest(90))
+            .err()
+            .expect("fatal GameObject failure was handled");
+
+        assert_eq!(error.to_string(), "transport disconnected");
+        assert_eq!(
+            store.operations.lock().unwrap().as_slice(),
+            &["use gameobject"]
+        );
+        assert!(store.item_reads.lock().unwrap().is_empty());
     }
 
     fn release(target_guid: u64) -> ClientOpcodeMessage {
@@ -919,6 +1077,64 @@ mod tests {
         assert_eq!(store.money_reads.lock().unwrap().as_slice(), &[60]);
         assert_eq!(store.item_reads.lock().unwrap().as_slice(), &[(60, 42)]);
         assert!(store.skin_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn two_viewers_of_one_creature_receive_their_own_visible_items() {
+        let mut store = InMemoryLootWindow::default();
+        store.items_by_viewer.insert(42, vec![(0, 6948, 1, 100)]);
+        store.items_by_viewer.insert(43, vec![(2, 2589, 5, 200)]);
+
+        let first = dispatch_loot_window(
+            &store,
+            player(),
+            OpenLootState::default(),
+            open_creature(60),
+        )
+        .unwrap();
+        let second = dispatch_loot_window(
+            &store,
+            LootWindowPlayer {
+                account_id: 8,
+                self_guid: Some(43),
+            },
+            OpenLootState::default(),
+            open_creature(60),
+        )
+        .unwrap();
+
+        let LootWindowOutcome::Handled {
+            outbound: first_outbound,
+            ..
+        } = first
+        else {
+            panic!("first creature open passed through")
+        };
+        let LootWindowOutcome::Handled {
+            outbound: second_outbound,
+            ..
+        } = second
+        else {
+            panic!("second creature open passed through")
+        };
+        let [Outbound::Raw {
+            body: first_body, ..
+        }] = first_outbound.as_slice()
+        else {
+            panic!("expected the first viewer's loot window")
+        };
+        let [Outbound::Raw {
+            body: second_body, ..
+        }] = second_outbound.as_slice()
+        else {
+            panic!("expected the second viewer's loot window")
+        };
+        assert_eq!(&first_body[15..19], &6948u32.to_le_bytes());
+        assert_eq!(&second_body[15..19], &2589u32.to_le_bytes());
+        assert_eq!(
+            store.item_reads.lock().unwrap().as_slice(),
+            &[(60, 42), (60, 43)]
+        );
     }
 
     #[test]
