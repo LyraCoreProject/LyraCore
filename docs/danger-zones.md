@@ -396,6 +396,7 @@ setsid nohup env \
   ./target/debug/lyracore-gateway </dev/null >/tmp/gw.log 2>&1 &
 sleep 4
 ./lyracore production status \
+  --server local \
   --gateway-log /tmp/gw.log \
   --realm-core lyracore-realm \
   lyracore lyracore-world-1 lyracore-instances lyracore-realm
@@ -449,7 +450,7 @@ Two facts that have made a broken startup look fine:
    both non-fatal.
 
 `coordinator connected to shard <db>` (`connection.rs`) is printed once per **successful**
-connection and is the line that actually proves connectivity. Count it.
+connection. `production status` verifies one distinct marker per expected database.
 
 ### ⚠ `pkill -x lyracore-gatewa` — the 15-character truncation, not a typo
 

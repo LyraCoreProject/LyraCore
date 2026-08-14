@@ -1,8 +1,9 @@
 # Read-only realm diagnosis
 
-Gather the cheapest evidence first. Keep the run read-only: status, inventory, process metadata,
-listeners, logs, schema description, and `SELECT` queries. Ask for separate authorization before any
-publish, reducer, import, SQL write, service restart, or node-death test.
+Gather the cheapest evidence first. Use the approved target and expected topology established by the
+production contract. Keep the run read-only: status, inventory, process metadata, listeners, logs,
+schema description, and `SELECT` queries. Ask for separate authorization before any publish, reducer,
+import, SQL write, service restart, or node-death test.
 
 ## 1. Fix the target and time window
 
@@ -25,13 +26,12 @@ Collect and classify in this order:
 1. **Prerequisites:** `cargo`, `spacetime`, pinned versions, and the node URI.
 2. **Node:** standalone service state, PID/restarts, loopback listener on 3000, and bounded error-log
    tail.
-3. **Inventory:** `spacetime list -s local` and expected database names.
+3. **Inventory:** `spacetime list -s <node>` and expected database names from the approved source.
 4. **Gateway identity:** PID, start time, manager, executable, and only the named variables from the
-   update reference. Render the coordinator token as present/absent.
-5. **Gateway connectivity:** run
-   `./lyracore production status --gateway-log <log> --realm-core <realm-core> <database>...`.
-   Supply the complete production database set explicitly. This command isolates the latest-start
-   segment and distinguishes configured shards from successful coordinator connections.
+   production contract. Render the coordinator token as present/absent.
+5. **Gateway connectivity:** run the production contract's latest-start health probe. It isolates
+   the latest-start segment and distinguishes configured shards from successful coordinator
+   connections.
 6. **Client path:** logon/world listeners, advertised realm address, and recent accept/login errors.
 7. **Capacity:** queue settings, blocking-pool setting, file-descriptor startup line, `QUEUESTAT`, and
    `SHARDLOAD` warnings.
@@ -47,7 +47,7 @@ State the question before running the query.
 **Advertised address on each database**
 
 ```bash
-spacetime sql -s local <database> "SELECT id, name, address FROM game_realm"
+spacetime sql -s <node> <database> "SELECT id, name, address FROM game_realm"
 ```
 
 Expected: every database advertises the same externally reachable `host:port`. Loopback is valid
@@ -56,7 +56,7 @@ only for a loopback client.
 **Realm-core load samples for one shard**
 
 ```bash
-spacetime sql -s local <realm-core> "SELECT shard, sessions, updated_at_micros FROM game_shard_load_total WHERE shard = '<database>'"
+spacetime sql -s <node> <realm-core> "SELECT shard, sessions, updated_at_micros FROM game_shard_load_total WHERE shard = '<database>'"
 ```
 
 Expected: one recently updated row per connected shard. Absence supports a sampling/connectivity
@@ -65,7 +65,7 @@ finding; it does not prove the database is down.
 **Feature configuration on one shard**
 
 ```bash
-spacetime sql -s local <database> "SELECT vmap_enabled FROM game_config WHERE id = 0"
+spacetime sql -s <node> <database> "SELECT vmap_enabled FROM game_config WHERE id = 0"
 ```
 
 Use only when the symptom concerns collision/VMAP rollout parity. Repeat separately for every world

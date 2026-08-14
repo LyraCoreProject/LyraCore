@@ -54,7 +54,7 @@ lyracore import [--accept] [--client-data PATH]
 lyracore config
 lyracore config set client-data PATH
 lyracore character gm NAME true|false
-lyracore production status --gateway-log PATH --realm-core DB DATABASE ...
+lyracore production status --server SERVER --gateway-log PATH --realm-core DB DATABASE ...
 lyracore update
 ```
 
@@ -199,15 +199,17 @@ unit test in the CLI too. [`docs/danger-zones.md`](./danger-zones.md) §1 remain
 
 ```bash
 ./lyracore production status \
+  --server local \
   --gateway-log /tmp/gw.log \
   --realm-core lyracore-realm \
   lyracore lyracore-world-1 lyracore-instances lyracore-realm
 ```
 
-This command does not infer production from the contributor fixture. The log path, realm-core, and
-complete database set are required. It checks that every named database is reachable, isolates the
-latest gateway-start segment, compares configured and expected topology, requires a distinct
-coordinator connection per database, and verifies realm-core plus logon/world listener markers.
+This command does not infer production from the contributor fixture. The server, log path,
+realm-core, and complete database set are required. The server value is forwarded unchanged to
+SpacetimeDB inventory and schema probes. The command checks that every named database is reachable,
+isolates the latest gateway-start segment, compares configured and expected topology, requires a
+distinct coordinator connection per database, and verifies realm-core plus logon/world listener markers.
 Address and missing-occupancy signals are warnings; unreachable databases, missing connections,
 startup errors, or missing listeners fail the command. It performs no publish, reducer call, SQL
 write, or service action. It is the canonical log parser for the production runbook; verify the
