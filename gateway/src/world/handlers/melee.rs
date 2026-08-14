@@ -4,10 +4,8 @@ use super::super::*;
 
 pub(crate) trait MeleeActionStore: Send + Sync {
     fn start_attack(&self, account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()>;
-    /// Disarm the actor's outgoing engagement row. Also the teardown call for the ranged
-    /// auto-repeat loop in `combat.rs` — see `attack_stop` for why the two share this call.
-    /// Those two `combat.rs` callers leave with the ranged auto-repeat slice: that slice owns the
-    /// shared disengage, which today is a direct call plus a hand-edited `ranged_repeat`.
+    /// Disarm the actor's outgoing engagement row. Also the ranged auto-repeat teardown call;
+    /// `attack_stop` states the rule the two share.
     fn stop_attack(&self, account_id: u64, actor_guid: u64) -> Result<()>;
 }
 
@@ -31,8 +29,6 @@ pub(crate) struct MeleeActionPlayer {
 }
 
 impl MeleeActionPlayer {
-    /// Snapshot the melee-relevant session facts. A player at character select has no WorldEntity,
-    /// no active target and no ranged loop.
     pub(crate) fn from_conn(conn: &WorldConn) -> Self {
         let (attacking_target, ranged_repeat) = match &conn.state {
             WorldState::InWorld(iw) => (iw.attacking_target, iw.ranged_repeat),
@@ -53,16 +49,15 @@ pub(crate) enum MeleeTransition {
     /// Leave the session's combat state as it is (every refusal).
     Unchanged,
     /// Melee engagement armed on `target`. Clears ranged auto-repeat: the shared durable row now
-    /// means melee, so a later stop may be honored (`attack_stop` states the sharing rule).
+    /// means melee.
     Engaged(u64),
-    /// Melee engagement dropped: no active target. Leaves ranged auto-repeat alone — a stop that
-    /// reaches here never had one armed.
+    /// Melee engagement dropped. Leaves ranged auto-repeat alone: a stop that reaches here never
+    /// had one armed.
     Disengaged,
 }
 
 impl MeleeTransition {
-    /// Apply the transition to the session's combat state. A player who left the world in the
-    /// meantime has no combat state to carry, so applying is a no-op there.
+    /// A player who left the world meanwhile has no combat state to carry, so this is a no-op.
     pub(crate) fn apply(self, state: &mut WorldState) {
         let WorldState::InWorld(iw) = state else {
             return;
@@ -113,6 +108,14 @@ pub(crate) fn dispatch_melee_action<St: MeleeActionStore + ?Sized>(
     }
 }
 
+/// The player's own entity is gone, so no further action can be served. Close the session rather
+/// than leave the player in a frozen world with no recovery.
+fn desync_exit(error: anyhow::Error, opcode: &str) -> anyhow::Error {
+    error.context(format!(
+        "player desync (entity missing) on {opcode} — closing session for a clean relog"
+    ))
+}
+
 /// Arm the durable engagement first; session state and client stance follow only on success.
 fn attack_start<St: MeleeActionStore + ?Sized>(
     store: &St,
@@ -125,18 +128,14 @@ fn attack_start<St: MeleeActionStore + ?Sized>(
         target_guid,
     ) {
         let text = e.to_string();
-        // A corpse or a friendly target must be ANSWERED: without a refusal the client hangs in
-        // combat stance with no swings. Both are transient per-swing failures, not session-fatal.
+        // A corpse or a friendly target must be answered: with no refusal the client hangs in
+        // combat stance and never swings. Both are transient per-swing failures, not fatal.
         let refusal = if text.contains(lyracore_shared::ERR_ATTACK_TARGET_DEAD) {
             Some(ServerOpcodeMessage::SMSG_ATTACKSWING_DEADTARGET)
         } else if text.contains(lyracore_shared::ERR_ATTACK_FRIENDLY) {
             Some(ServerOpcodeMessage::SMSG_ATTACKSWING_CANT_ATTACK)
         } else if is_desync_error(&e) {
-            // The player's OWN entity is gone, so no further action can be served. Close the
-            // session instead of leaving the player in a frozen world with no recovery.
-            return Err(e.context(
-                "player desync (entity missing) on attackswing — closing session for a clean relog",
-            ));
+            return Err(desync_exit(e, "attackswing"));
         } else {
             // Out of range, retarget races: expected, so ignore.
             None
@@ -151,8 +150,8 @@ fn attack_start<St: MeleeActionStore + ?Sized>(
             outbound: refusal.map(Outbound::One).into_iter().collect(),
         });
     }
-    // A player who is not in the world has no combat state to arm and no attacker guid to name.
-    // The durable call still ran; the module rejects an unresolved actor.
+    // Not in the world: no combat state to arm and no attacker guid to name. The durable call
+    // already ran, and the module rejects an unresolved actor.
     let Some(self_guid) = player.self_guid else {
         return Ok(MeleeActionOutcome::Handled {
             transition: MeleeTransition::Unchanged,
@@ -173,11 +172,10 @@ fn attack_stop<St: MeleeActionStore + ?Sized>(
     store: &St,
     player: MeleeActionPlayer,
 ) -> Result<MeleeActionOutcome> {
-    // THE SHARING RULE, stated once for both attack paths and for the ranged teardowns in
-    // `combat.rs`: melee and ranged auto-repeat share ONE durable engagement row per attacker.
-    // The client sends CMSG_ATTACKSTOP when it switches out of melee stance, ranged loop armed or
-    // not, so honoring it here would delete the auto-shot engagement (one shot, then silence).
-    // Only CMSG_CANCEL_AUTO_REPEAT_SPELL tears the ranged loop down.
+    // Melee and ranged auto-repeat share one durable engagement row per attacker. The client sends
+    // CMSG_ATTACKSTOP whenever it leaves melee stance, ranged loop armed or not, so honoring it
+    // here would delete the auto-shot engagement: one shot, then silence. Only
+    // CMSG_CANCEL_AUTO_REPEAT_SPELL tears that loop down.
     if player.ranged_repeat {
         return Ok(MeleeActionOutcome::Handled {
             transition: MeleeTransition::Unchanged,
@@ -186,14 +184,10 @@ fn attack_stop<St: MeleeActionStore + ?Sized>(
     }
     if let Err(e) = store.stop_attack(player.account_id, player.self_guid.unwrap_or(0)) {
         if is_desync_error(&e) {
-            // The player's OWN entity is gone: nothing further can be served, so close the session
-            // instead of leaving the player frozen with no recovery.
-            return Err(e.context(
-                "player desync (entity missing) on attackstop — closing session for a clean relog",
-            ));
+            return Err(desync_exit(e, "attackstop"));
         }
-        // A refused stop still clears the client's stance: the recorded target may already be dead
-        // or despawned, and leaving the player swinging at nothing is worse than a stale disarm.
+        // A refused stop still clears the client's stance: the recorded target may already be dead,
+        // and leaving the player swinging at nothing is worse than a stale disarm.
         log::debug!(
             "world: stop_attack ignored (account {}): {e}",
             player.account_id
@@ -321,8 +315,6 @@ mod tests {
             matches!(outbound.as_slice(), [Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTART(a))]
                 if a.attacker.guid() == 42 && a.victim.guid() == 90)
         );
-        // The session records the target and drops the ranged loop: the shared durable engagement
-        // row now means melee.
         let mut state = in_world(None, true);
         transition.apply(&mut state);
         assert_eq!(combat_state(&state), (Some(90), false));
@@ -454,8 +446,7 @@ mod tests {
         ));
     }
 
-    /// The recorded target may already be dead or despawned: the kill clears the durable row on
-    /// another thread and cannot reach this session. The late stop is refused, and that is harmless.
+    /// A kill clears the durable row on another thread, so a late stop is refused. That is harmless.
     #[test]
     fn an_ordinary_stop_refusal_still_clears_the_target_and_keeps_the_session_alive() {
         let actions = InMemoryMeleeActions {

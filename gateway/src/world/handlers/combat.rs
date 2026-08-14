@@ -139,6 +139,8 @@ pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
                         // client's toggle on the failure result — tear down the still-firing OLD
                         // loop too, or the server keeps shooting a target the client thinks it
                         // stopped (review find). Fresh activations (was_repeat false) skip the no-op.
+                        // Deferred: this teardown moves behind the melee seam with the ranged
+                        // auto-repeat slice.
                         if was_repeat {
                             if let WorldState::InWorld(iw) = &mut conn.state {
                                 iw.ranged_repeat = false;
@@ -430,15 +432,16 @@ pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
             }
         }
         // Stop the ranged auto-repeat loop (the client toggled off / auto-switched to melee).
-        // `stop_attack` ONLY when a ranged loop is actually armed: the client's
-        // melee-press sends CMSG_ATTACKSWING *then* this cancel back-to-back (live-logged), and the
-        // swing handler has already overwritten the shared engagement row (the sharing rule is
-        // stated in `melee::attack_stop`) to MELEE + cleared
-        // `ranged_repeat` — an unconditional stop here deleted that just-armed melee row (the
-        // "press melee attack twice" bug). Same observable rule the reference cores follow — a no-op when nothing is
+        // Call `stop_attack` ONLY when a ranged loop is actually armed: the client's melee-press
+        // sends CMSG_ATTACKSWING *then* this cancel back-to-back (live-logged), and the melee seam
+        // has already pointed the shared engagement row at melee and cleared `ranged_repeat`
+        // (`melee::attack_stop` states the sharing rule). An unconditional stop here deleted that
+        // just-armed melee row (the "press melee attack twice" bug). Same observable rule the
+        // reference cores follow — a no-op when nothing is
         // armed. NO inline ack either — the SMSG_CANCEL_AUTO_REPEAT the client needs on a real
         // teardown is sent by the game_melee_attack on_delete relay (the one choke point), and real
         // cores never ack a client-initiated cancel from the handler (cmangos: echo-loop warning).
+        // Deferred: this teardown moves behind the melee seam with the ranged auto-repeat slice.
         ClientOpcodeMessage::CMSG_CANCEL_AUTO_REPEAT_SPELL => {
             let was_repeat = matches!(&conn.state, WorldState::InWorld(iw) if iw.ranged_repeat);
             log::info!("world[autoshot]: CMSG_CANCEL_AUTO_REPEAT_SPELL ranged_repeat_active={was_repeat} (account {})", conn.account_id);

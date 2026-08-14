@@ -5855,8 +5855,8 @@ fn auto_shot_failure_replies_cast_result_only_and_never_arms() {
 
 #[test]
 fn cancelling_auto_repeat_still_tears_the_ranged_loop_down_through_stop_attack() {
-    // `stop_attack` lives on the melee-attack seam's trait; the combat handler reaches it through
-    // the `WorldStore` supertrait. Pin that the Auto Shot teardown still lands on the reducer.
+    // The cancel tears the loop down only when one is armed (the `was_repeat` gate). Arm Auto Shot,
+    // then cancel, and pin that the teardown reaches the durable disengage for this attacker.
     let store = std::sync::Arc::new(quest_store());
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_CAST_SPELL {
@@ -6457,6 +6457,42 @@ fn attackswing_ok_replies_attackstart_and_stop_echoes_then_clears() {
     }
     drop(client);
     server.join().unwrap();
+}
+
+#[test]
+fn melee_opcodes_at_character_select_answer_nothing_and_keep_the_session_alive() {
+    // No WorldEntity yet, so the seam has no attacker guid to name and no combat state to change.
+    // The durable calls still go out under the legacy zero actor and the client gets no attack
+    // message. The sentinel can only arrive if neither opcode replied or panicked.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_ATTACKSWING {
+        guid: Guid::new(90),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    CMSG_ATTACKSTOP {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    CMSG_CHAR_ENUM {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_CHAR_ENUM(_) => {}
+        other => panic!("expected the sentinel (no melee reply at character select), got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(
+        store.stop_attacks.lock().unwrap().as_slice(),
+        &[0],
+        "the stop still reaches the durable seam under the legacy zero actor"
+    );
 }
 
 #[test]
