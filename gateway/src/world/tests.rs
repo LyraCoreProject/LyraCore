@@ -2698,6 +2698,18 @@ impl AuctionActionStore for InMemoryStore {
     ) -> Result<super::handlers::CreateAuctionOutcome> {
         Ok(super::handlers::CreateAuctionOutcome::Database)
     }
+
+    fn auction_query(
+        &self,
+        _player_guid: u64,
+        _query: super::handlers::AuctionQuery,
+    ) -> Result<super::handlers::AuctionPage> {
+        Ok(super::handlers::AuctionPage {
+            rows: Vec::new(),
+            total: 0,
+            now_micros: 0,
+        })
+    }
 }
 
 impl QuestActionStore for InMemoryStore {

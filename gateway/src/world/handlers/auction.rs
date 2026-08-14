@@ -39,6 +39,33 @@ pub(crate) enum CreateAuctionOutcome {
     Database,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AuctionBrowseRequest {
+    pub(crate) auctioneer_guid: u64,
+    pub(crate) offset: u32,
+    pub(crate) name: String,
+    pub(crate) minimum_level: Option<u8>,
+    pub(crate) maximum_level: Option<u8>,
+    pub(crate) inventory_type: Option<u32>,
+    pub(crate) item_class: Option<u32>,
+    pub(crate) item_subclass: Option<u32>,
+    pub(crate) quality: Option<u8>,
+    pub(crate) usable_only: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AuctionQuery {
+    Browse(AuctionBrowseRequest),
+    Owner { offset: u32 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AuctionPage {
+    pub(crate) rows: Vec<codec::AuctionView>,
+    pub(crate) total: u32,
+    pub(crate) now_micros: i64,
+}
+
 pub(crate) trait AuctionActionStore: Send + Sync {
     fn auction_entities(
         &self,
@@ -47,6 +74,8 @@ pub(crate) trait AuctionActionStore: Send + Sync {
     ) -> Result<Option<AuctionInteraction>>;
 
     fn create_auction(&self, request: CreateAuctionRequest) -> Result<CreateAuctionOutcome>;
+
+    fn auction_query(&self, player_guid: u64, query: AuctionQuery) -> Result<AuctionPage>;
 }
 
 impl AuctionActionStore for crate::stdb::Coordinator {
@@ -84,6 +113,10 @@ impl AuctionActionStore for crate::stdb::Coordinator {
     fn create_auction(&self, request: CreateAuctionRequest) -> Result<CreateAuctionOutcome> {
         crate::stdb::Coordinator::create_auction(self, request)
     }
+
+    fn auction_query(&self, player_guid: u64, query: AuctionQuery) -> Result<AuctionPage> {
+        crate::stdb::Coordinator::auction_query(self, player_guid, query)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,9 +131,112 @@ pub(crate) enum AuctionActionOutcome {
 
 enum AuctionRequest {
     Hello(wow_world_messages::vanilla::Guid),
-    Browse,
-    Owner,
+    Owner(u32),
     Bidder,
+}
+
+pub(crate) const CMSG_AUCTION_LIST_ITEMS_OPCODE: u32 = 0x0258;
+
+/// Decode build-5875 browse bodies locally because the protocol dependency narrows the wire's
+/// `u32` quality to an enum before callers can observe the real client's `0xffff_ffff` sentinel.
+pub(crate) fn decode_auction_browse(body: &[u8]) -> Result<AuctionBrowseRequest> {
+    if !(32..=287).contains(&body.len()) {
+        return Err(anyhow!(
+            "invalid CMSG_AUCTION_LIST_ITEMS body size {}",
+            body.len()
+        ));
+    }
+    let auctioneer_guid = u64::from_le_bytes(body[0..8].try_into().unwrap());
+    let offset = u32::from_le_bytes(body[8..12].try_into().unwrap());
+    let name_end = body[12..]
+        .iter()
+        .position(|byte| *byte == 0)
+        .map(|position| position + 12)
+        .ok_or_else(|| anyhow!("CMSG_AUCTION_LIST_ITEMS name is not terminated"))?;
+    let name = std::str::from_utf8(&body[12..name_end])
+        .map_err(|_| anyhow!("CMSG_AUCTION_LIST_ITEMS name is not UTF-8"))?
+        .to_owned();
+    let fields = &body[name_end + 1..];
+    if fields.len() != 19 {
+        return Err(anyhow!(
+            "invalid CMSG_AUCTION_LIST_ITEMS trailing size {}",
+            fields.len()
+        ));
+    }
+    let minimum_level = fields[0];
+    let maximum_level = fields[1];
+    let inventory_type = u32::from_le_bytes(fields[2..6].try_into().unwrap());
+    let item_class = u32::from_le_bytes(fields[6..10].try_into().unwrap());
+    let item_subclass = u32::from_le_bytes(fields[10..14].try_into().unwrap());
+    let quality = match u32::from_le_bytes(fields[14..18].try_into().unwrap()) {
+        u32::MAX => None,
+        value @ 0..=6 => Some(value as u8),
+        value => return Err(anyhow!("invalid auction quality {value:#x}")),
+    };
+    let optional_filter = |value| (value != u32::MAX).then_some(value);
+    Ok(AuctionBrowseRequest {
+        auctioneer_guid,
+        offset,
+        name,
+        minimum_level: (minimum_level != 0).then_some(minimum_level),
+        maximum_level: (maximum_level != 0).then_some(maximum_level),
+        inventory_type: optional_filter(inventory_type),
+        item_class: optional_filter(item_class),
+        item_subclass: optional_filter(item_subclass),
+        quality,
+        usable_only: fields[18] != 0,
+    })
+}
+
+pub(crate) fn dispatch_auction_browse_action<St: AuctionActionStore + ?Sized>(
+    store: &St,
+    player: AuctionActionPlayer,
+    request: AuctionBrowseRequest,
+) -> Result<AuctionActionOutcome> {
+    let Some(player_guid) =
+        validated_auction_player_guid(store, player, request.auctioneer_guid)?
+    else {
+        return Ok(AuctionActionOutcome::Handled {
+            outbound: vec![Outbound::One(
+                ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(Box::new(
+                    codec::build_auction_list_result(&[], 0, 0),
+                )),
+            )],
+        });
+    };
+    let page = store.auction_query(player_guid, AuctionQuery::Browse(request))?;
+    Ok(AuctionActionOutcome::Handled {
+        outbound: vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(Box::new(
+                codec::build_auction_list_result(&page.rows, page.total, page.now_micros),
+            )),
+        )],
+    })
+}
+
+fn validated_auction_player_guid<St: AuctionActionStore + ?Sized>(
+    store: &St,
+    player: AuctionActionPlayer,
+    auctioneer_guid: u64,
+) -> Result<Option<u64>> {
+    let Some(player_guid) = player.self_guid else {
+        return Ok(None);
+    };
+    let entities = match store.auction_entities(player_guid, auctioneer_guid) {
+        Ok(entities) => entities,
+        Err(error)
+            if classify_auction_action_error(&error)
+                == AuctionActionErrorClass::GameplayRefusal =>
+        {
+            log::debug!(
+                "world: auctioneer {auctioneer_guid} interaction unavailable for player \
+                 {player_guid}: {error}"
+            );
+            None
+        }
+        Err(error) => return Err(error),
+    };
+    Ok(interaction_allowed(entities).then_some(player_guid))
 }
 
 fn create_result(outcome: CreateAuctionOutcome) -> AuctionActionOutcome {
@@ -156,10 +292,28 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
             AuctionRequest::Hello(message.auctioneer),
         ),
         ClientOpcodeMessage::CMSG_AUCTION_LIST_ITEMS(message) => {
-            (message.auctioneer, AuctionRequest::Browse)
+            return dispatch_auction_browse_action(
+                store,
+                player,
+                AuctionBrowseRequest {
+                    auctioneer_guid: message.auctioneer.guid(),
+                    offset: message.list_start_item,
+                    name: message.searched_name,
+                    minimum_level: (message.minimum_level != 0).then_some(message.minimum_level),
+                    maximum_level: (message.maximum_level != 0).then_some(message.maximum_level),
+                    inventory_type: (message.auction_slot_id != u32::MAX)
+                        .then_some(message.auction_slot_id),
+                    item_class: (message.auction_main_category != u32::MAX)
+                        .then_some(message.auction_main_category),
+                    item_subclass: (message.auction_sub_category != u32::MAX)
+                        .then_some(message.auction_sub_category),
+                    quality: Some(message.auction_quality.as_int()),
+                    usable_only: message.usable != 0,
+                },
+            );
         }
         ClientOpcodeMessage::CMSG_AUCTION_LIST_OWNER_ITEMS(message) => {
-            (message.auctioneer, AuctionRequest::Owner)
+            (message.auctioneer, AuctionRequest::Owner(message.list_from))
         }
         ClientOpcodeMessage::CMSG_AUCTION_LIST_BIDDER_ITEMS(message) => {
             (message.auctioneer, AuctionRequest::Bidder)
@@ -230,7 +384,6 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
     }
     use wow_world_messages::vanilla::{
         AuctionHouse, MSG_AUCTION_HELLO_Server, SMSG_AUCTION_BIDDER_LIST_RESULT,
-        SMSG_AUCTION_LIST_RESULT, SMSG_AUCTION_OWNER_LIST_RESULT,
     };
     let message = match request {
         AuctionRequest::Hello(auctioneer) => {
@@ -240,18 +393,12 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
                     .expect("the shared Stormwind house id must be a vanilla AuctionHouse"),
             }))
         }
-        AuctionRequest::Browse => {
-            ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(Box::new(SMSG_AUCTION_LIST_RESULT {
-                auctions: Vec::new(),
-                total_amount_of_auctions: 0,
-            }))
+        AuctionRequest::Owner(offset) => {
+            let page = store.auction_query(player_guid, AuctionQuery::Owner { offset })?;
+            ServerOpcodeMessage::SMSG_AUCTION_OWNER_LIST_RESULT(Box::new(
+                codec::build_auction_owner_list_result(&page.rows, page.total, page.now_micros),
+            ))
         }
-        AuctionRequest::Owner => ServerOpcodeMessage::SMSG_AUCTION_OWNER_LIST_RESULT(Box::new(
-            SMSG_AUCTION_OWNER_LIST_RESULT {
-                auctions: Vec::new(),
-                total_amount_of_auctions: 0,
-            },
-        )),
         AuctionRequest::Bidder => ServerOpcodeMessage::SMSG_AUCTION_BIDDER_LIST_RESULT(Box::new(
             SMSG_AUCTION_BIDDER_LIST_RESULT {
                 auctions: Vec::new(),
@@ -304,6 +451,8 @@ mod tests {
         lookups: Mutex<Vec<(u64, u64)>>,
         creates: Mutex<Vec<CreateAuctionRequest>>,
         create_result: Mutex<Result<CreateAuctionOutcome, String>>,
+        query_result: Mutex<Result<AuctionPage, String>>,
+        queries: Mutex<Vec<(u64, AuctionQuery)>>,
     }
 
     impl AuctionActionStore for InMemoryAuctionActions {
@@ -333,6 +482,16 @@ mod tests {
                 .copied()
                 .map_err(|error| anyhow::anyhow!(error.clone()))
         }
+
+        fn auction_query(&self, player_guid: u64, query: AuctionQuery) -> Result<AuctionPage> {
+            self.queries.lock().unwrap().push((player_guid, query));
+            self.query_result
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(Clone::clone)
+                .map_err(|error| anyhow::anyhow!(error.clone()))
+        }
     }
 
     fn valid_interaction() -> AuctionInteraction {
@@ -357,6 +516,12 @@ mod tests {
             lookups: Mutex::default(),
             creates: Mutex::default(),
             create_result: Mutex::new(Ok(CreateAuctionOutcome::Created { auction_id: 41 })),
+            query_result: Mutex::new(Ok(AuctionPage {
+                rows: Vec::new(),
+                total: 0,
+                now_micros: 0,
+            })),
+            queries: Mutex::default(),
         }
     }
 
@@ -366,7 +531,163 @@ mod tests {
             lookups: Mutex::default(),
             creates: Mutex::default(),
             create_result: Mutex::new(Ok(CreateAuctionOutcome::Database)),
+            query_result: Mutex::new(Ok(AuctionPage {
+                rows: Vec::new(),
+                total: 0,
+                now_micros: 0,
+            })),
+            queries: Mutex::default(),
         }
+    }
+
+    fn raw_browse(quality: u32) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&99_u64.to_le_bytes());
+        body.extend_from_slice(&50_u32.to_le_bytes());
+        body.extend_from_slice(b"Sword\0");
+        body.extend_from_slice(&[10, 20]);
+        body.extend_from_slice(&13_u32.to_le_bytes());
+        body.extend_from_slice(&2_u32.to_le_bytes());
+        body.extend_from_slice(&7_u32.to_le_bytes());
+        body.extend_from_slice(&quality.to_le_bytes());
+        body.push(1);
+        body
+    }
+
+    #[test]
+    fn raw_browse_preserves_sentinels_and_rejects_unknown_quality_values() {
+        assert_eq!(
+            decode_auction_browse(&raw_browse(u32::MAX)).unwrap(),
+            AuctionBrowseRequest {
+                auctioneer_guid: 99,
+                offset: 50,
+                name: "Sword".to_owned(),
+                minimum_level: Some(10),
+                maximum_level: Some(20),
+                inventory_type: Some(13),
+                item_class: Some(2),
+                item_subclass: Some(7),
+                quality: None,
+                usable_only: true,
+            }
+        );
+        assert!(decode_auction_browse(&raw_browse(0x100)).is_err());
+
+        let mut empty = raw_browse(u32::MAX);
+        empty[18] = 0;
+        empty[19] = 0;
+        empty[20..24].copy_from_slice(&u32::MAX.to_le_bytes());
+        empty[24..28].copy_from_slice(&u32::MAX.to_le_bytes());
+        empty[28..32].copy_from_slice(&u32::MAX.to_le_bytes());
+        let decoded = decode_auction_browse(&empty).unwrap();
+        assert_eq!(decoded.minimum_level, None);
+        assert_eq!(decoded.maximum_level, None);
+        assert_eq!(decoded.inventory_type, None);
+        assert_eq!(decoded.item_class, None);
+        assert_eq!(decoded.item_subclass, None);
+    }
+
+    #[test]
+    fn normalized_browse_queries_once_and_emits_one_ordered_packet_with_the_full_total() {
+        let store = store_with(Some(valid_interaction()));
+        *store.query_result.lock().unwrap() = Ok(AuctionPage {
+            rows: vec![codec::AuctionView {
+                id: 8,
+                item_entry: 25,
+                item_stack_count: 2,
+                item_enchant_id: 7,
+                owner_guid: 70,
+                start_bid: 100,
+                buyout: 500,
+                highest_bidder_guid: 71,
+                highest_bid: 201,
+                expires_at_micros: 5_000_000,
+            }],
+            total: 51,
+            now_micros: 1_000_000,
+        });
+        let request = AuctionBrowseRequest {
+            auctioneer_guid: 42,
+            offset: 50,
+            name: "sword".to_owned(),
+            minimum_level: None,
+            maximum_level: None,
+            inventory_type: None,
+            item_class: None,
+            item_subclass: None,
+            quality: None,
+            usable_only: false,
+        };
+
+        let outcome = dispatch_auction_browse_action(
+            &store,
+            AuctionActionPlayer { self_guid: Some(7) },
+            request.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            store.queries.lock().unwrap().as_slice(),
+            &[(7, AuctionQuery::Browse(request))]
+        );
+        let AuctionActionOutcome::Handled { outbound } = outcome else {
+            panic!("browse must be handled")
+        };
+        assert!(matches!(
+            outbound.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(message))]
+                if message.total_amount_of_auctions == 51
+                    && message.auctions.len() == 1
+                    && message.auctions[0].id == 8
+                    && message.auctions[0].minimum_bid == 11
+        ));
+    }
+
+    #[test]
+    fn owner_view_uses_its_zero_based_offset_and_the_shared_row_codec() {
+        let store = store_with(Some(valid_interaction()));
+        *store.query_result.lock().unwrap() = Ok(AuctionPage {
+            rows: vec![codec::AuctionView {
+                id: 19,
+                item_entry: 35,
+                item_stack_count: 3,
+                item_enchant_id: 4,
+                owner_guid: 7,
+                start_bid: 80,
+                buyout: 900,
+                highest_bidder_guid: 12,
+                highest_bid: 100,
+                expires_at_micros: 4_000_000,
+            }],
+            total: 52,
+            now_micros: 1_000_000,
+        });
+        let outcome = dispatch_auction_action(
+            &store,
+            AuctionActionPlayer { self_guid: Some(7) },
+            CMSG_AUCTION_LIST_OWNER_ITEMS {
+                auctioneer: Guid::new(42),
+                list_from: 50,
+            }
+            .into(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            store.queries.lock().unwrap().as_slice(),
+            &[(7, AuctionQuery::Owner { offset: 50 })]
+        );
+        let AuctionActionOutcome::Handled { outbound } = outcome else {
+            panic!("owner view must be handled")
+        };
+        assert!(matches!(
+            outbound.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_OWNER_LIST_RESULT(message))]
+                if message.total_amount_of_auctions == 52
+                    && message.auctions.len() == 1
+                    && message.auctions[0].id == 19
+                    && message.auctions[0].minimum_bid == 5
+                    && message.auctions[0].time_left == std::time::Duration::from_millis(3_000)
+        ));
     }
 
     fn hello_outbound(store: &InMemoryAuctionActions) -> Result<Vec<Outbound>> {

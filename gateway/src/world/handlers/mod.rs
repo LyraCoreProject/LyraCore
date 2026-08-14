@@ -28,8 +28,10 @@ mod vendor;
 
 pub(crate) use bank::handle_bank;
 pub(crate) use auction::{
-    dispatch_auction_action, AuctionActionOutcome, AuctionActionPlayer, AuctionActionStore,
-    CreateAuctionOutcome, CreateAuctionRequest,
+    decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action,
+    AuctionActionOutcome, AuctionActionPlayer, AuctionActionStore, AuctionBrowseRequest,
+    AuctionPage, AuctionQuery, CreateAuctionOutcome, CreateAuctionRequest,
+    CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 #[cfg(test)]
 pub(crate) use auction::{AuctionEntity, AuctionInteraction};

@@ -6,6 +6,7 @@
 //! either domain file.
 
 mod account;
+mod auction;
 mod items;
 mod mail;
 mod npc_vendor;
