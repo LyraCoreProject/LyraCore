@@ -2,7 +2,7 @@
 //! (login and cross-map world-port). Pure code-motion out of `world/mod.rs`.
 
 use super::super::*;
-use super::push_buyback_view;
+use super::vendor::build_buyback_view_replay;
 
 /// Tell a client whose world-port cannot complete that it is off, so its loading screen ends with an
 /// error instead of never ending. Best-effort and infallible by design: it runs on
@@ -147,7 +147,9 @@ fn enter_world<St: WorldStore + ?Sized>(
     )?;
     // Replay the buyback-tab view (the ring persists across sessions; without this the tab
     // is empty until the first in-session sell).
-    push_buyback_view(tx, store, character_guid, true)?;
+    for message in build_buyback_view_replay(store, character_guid) {
+        send(tx, message)?;
+    }
     // Put realm-core's party roster onto the shard this character just entered
     // and re-render the party frame. THIS is what carries a party across a shard boundary now that
     // the old interim blob mirror is gone — and it runs on every world entry, so a party formed while the

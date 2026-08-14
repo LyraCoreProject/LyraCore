@@ -2,6 +2,7 @@
 //! plus who/friend/ignore. Pure code-motion out of `world/mod.rs`.
 
 use super::super::*;
+use super::vendor::{vendor_has_stock, vendor_open_outbound};
 
 /// The NPC's imported gossip options, condition-filtered against `player_guid`'s quest
 /// state — the SINGLE chokepoint both `CMSG_GOSSIP_HELLO` (render) and `CMSG_GOSSIP_SELECT_OPTION`
@@ -144,7 +145,7 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
             // "Make this inn your home." entry (hearthstone bind) — that one DOES need the npc_flags
             // read. Both are APPENDED to the imported options rather than replaced by them: a dump menu
             // that omits the row would otherwise strand the NPC's stock or its bind.
-            let is_vendor = !store.vendor_items(npc)?.is_empty();
+            let is_vendor = vendor_has_stock(store, npc)?;
             let is_innkeeper = store.npc_is_innkeeper(npc)?;
             let options = codec::gossip_menu_options(
                 filtered_gossip_options(store, npc, player_guid)?,
@@ -204,10 +205,12 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
             let _ = store.gossip_select(conn.account_id, self_guid, npc, c.gossip_list_id, option_row_id);
             use lyracore_shared::constants::gossip_option;
             match clicked.map(|(_, action)| action) {
+                // The gossip click does not run the interaction gate — it never has: only the
+                // direct CMSG_LIST_INVENTORY open does.
                 Some(gossip_option::VENDOR) => {
-                    let items = store.vendor_items(npc)?;
-                    let (opcode, body) = codec::build_list_inventory_raw(npc, &items);
-                    send(tx, Outbound::Raw { opcode, body })?;
+                    for message in vendor_open_outbound(store, npc)? {
+                        send(tx, message)?;
+                    }
                 }
                 Some(gossip_option::INNKEEPER) => {
                     // Bind failure (not in world) is per-action; close the window either way (the

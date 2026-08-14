@@ -34,61 +34,9 @@ pub(crate) use query::handle_query;
 pub(crate) use quest::handle_quest;
 pub(crate) use trade::handle_trade;
 pub(crate) use trainer::handle_trainer;
-pub(crate) use vendor::handle_vendor;
-
-/// Rebuild + push the buyback-tab view: a synthesized ITEM object per ring entry (fabricated
-/// guid 0x4090…|slot — a client-only object, never a real instance) and ONE raw VALUES update
-/// carrying all 12 VendorBuyback INV_SLOT pointers + BUYBACK_PRICE/TIMESTAMP arrays (the price/
-/// timestamp arrays are gtker-walled past slot 0 → the shared raw encoder). Cleared slots write
-/// guid 0 / price 0, so ring shifts and evictions render correctly without tracking prior state.
-fn push_buyback_view<St: WorldStore + ?Sized>(
-    tx: &SessionTx,
-    store: &St,
-    self_guid: u64,
-    skip_if_empty: bool,
-) -> Result<()> {
-    let ring = store.buyback_ring(self_guid);
-    log::debug!("buyback view: guid={self_guid} ring_len={}", ring.len());
-    // Login replay of an EMPTY ring is a no-op by construction (the client's descriptor fields
-    // start zeroed) — skipping keeps the login sequence byte-identical for ring-less players.
-    // In-session callers always push (a ring that just BECAME empty must clear the tab).
-    if skip_if_empty && ring.is_empty() {
-        return Ok(());
-    }
-    let mut mask = codec::update_mask::UpdateMaskValues::new();
-    for i in 0..12u16 {
-        let (fab_guid, price) = match ring.get(i as usize) {
-            Some(&(entry, count, price)) => {
-                let fab_guid = 0x4090_0000_0000_0000u64 | u64::from(i);
-                let view = codec::ItemInstanceView {
-                    guid: fab_guid,
-                    entry,
-                    owner_guid: self_guid,
-                    slot: 69 + i as u8,
-                    stack_count: count,
-                    durability: 0,
-                    max_durability: 0,
-                    container_slots: 0,
-                };
-                send(
-                    tx,
-                    Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                        codec::build_item_create_object(&view),
-                    ))),
-                )?;
-                (fab_guid, price)
-            }
-            None => (0, 0),
-        };
-        // PLAYER_FIELD_INV_SLOT guid pair for VendorBuyback slot 69+i (base 486, 2 words/slot);
-        // BUYBACK_PRICE_1 = 1226, BUYBACK_TIMESTAMP_1 = 1238 (5875 indices via gtker impls).
-        mask.set_u64(486 + (69 + i) * 2, fab_guid);
-        mask.set_u32(1226 + i, price);
-        mask.set_u32(1238 + i, 0);
-    }
-    let (opcode, body) = codec::build_values_update_raw(self_guid, &mask);
-    send(tx, Outbound::Raw { opcode, body })
-}
+pub(crate) use vendor::{
+    dispatch_vendor_action, VendorActionOutcome, VendorActionPlayer, VendorActionStore,
+};
 
 /// Open the bank window for `banker_guid`. Single chokepoint for `CMSG_BANKER_ACTIVATE` and the
 /// BANKER gossip option, so the two entry points cannot drift apart.
