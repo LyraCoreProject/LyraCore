@@ -52,6 +52,7 @@ use handlers::{
     QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome, TaxiActionPlayer, VendorActionOutcome,
     VendorActionPlayer,
 };
+pub(crate) use handlers::{CreateAuctionOutcome, CreateAuctionRequest};
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
 pub use store::WorldStore;

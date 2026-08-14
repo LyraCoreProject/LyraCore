@@ -158,10 +158,8 @@ use wow_world_messages::vanilla::{
     CMSG_QUEST_QUERY,
     // Item guid → slot resolution (vendor sell / armorer repair).
     CMSG_RECLAIM_CORPSE,
-    CMSG_REPAIR_ITEM,
     CMSG_REPOP_REQUEST,
     CMSG_RESURRECT_RESPONSE,
-    CMSG_SELL_ITEM,
     CMSG_SETSHEATHED,
     CMSG_SET_SELECTION,
     CMSG_SPIRIT_HEALER_ACTIVATE,
@@ -2692,6 +2690,13 @@ impl AuctionActionStore for InMemoryStore {
     ) -> Result<Option<AuctionInteraction>> {
         self.rec("auction_entities");
         Ok(self.auction_interaction)
+    }
+
+    fn create_auction(
+        &self,
+        _request: super::handlers::CreateAuctionRequest,
+    ) -> Result<super::handlers::CreateAuctionOutcome> {
+        Ok(super::handlers::CreateAuctionOutcome::Database)
     }
 }
 

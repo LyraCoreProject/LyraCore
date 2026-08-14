@@ -21,12 +21,32 @@ pub(crate) struct AuctionInteraction {
     pub(crate) auctioneer: AuctionEntity,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CreateAuctionRequest {
+    pub(crate) actor_guid: u64,
+    pub(crate) auctioneer_guid: u64,
+    pub(crate) item_guid: u64,
+    pub(crate) start_bid: u32,
+    pub(crate) buyout: u32,
+    pub(crate) duration_minutes: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CreateAuctionOutcome {
+    Created { auction_id: u32 },
+    ItemNotFound,
+    NotEnoughMoney,
+    Database,
+}
+
 pub(crate) trait AuctionActionStore: Send + Sync {
     fn auction_entities(
         &self,
         player_guid: u64,
         auctioneer_guid: u64,
     ) -> Result<Option<AuctionInteraction>>;
+
+    fn create_auction(&self, request: CreateAuctionRequest) -> Result<CreateAuctionOutcome>;
 }
 
 impl AuctionActionStore for crate::stdb::Coordinator {
@@ -60,6 +80,10 @@ impl AuctionActionStore for crate::stdb::Coordinator {
             auctioneer: view(auctioneer),
         }))
     }
+
+    fn create_auction(&self, request: CreateAuctionRequest) -> Result<CreateAuctionOutcome> {
+        crate::stdb::Coordinator::create_auction(self, request)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +103,30 @@ enum AuctionRequest {
     Bidder,
 }
 
+fn create_result(outcome: CreateAuctionOutcome) -> AuctionActionOutcome {
+    use wow_world_messages::vanilla::{
+        SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction as Action,
+        SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo as ResultTwo,
+        SMSG_AUCTION_COMMAND_RESULT,
+    };
+    let (auction_id, result2) = match outcome {
+        CreateAuctionOutcome::Created { auction_id } => (auction_id, ResultTwo::Ok),
+        CreateAuctionOutcome::ItemNotFound => (0, ResultTwo::ErrItemNotFound),
+        CreateAuctionOutcome::NotEnoughMoney => (0, ResultTwo::ErrNotEnoughMoney),
+        CreateAuctionOutcome::Database => (0, ResultTwo::ErrDatabase),
+    };
+    AuctionActionOutcome::Handled {
+        outbound: vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(Box::new(
+                SMSG_AUCTION_COMMAND_RESULT {
+                    auction_id,
+                    action: Action::Started { result2 },
+                },
+            )),
+        )],
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AuctionActionErrorClass {
     GameplayRefusal,
@@ -86,10 +134,11 @@ enum AuctionActionErrorClass {
 }
 
 fn classify_auction_action_error(error: &anyhow::Error) -> AuctionActionErrorClass {
-    if error
-        .chain()
-        .any(|cause| cause.to_string().contains("reducer transport disconnected"))
-    {
+    if error.chain().any(|cause| {
+        let text = cause.to_string();
+        text.contains("reducer transport disconnected")
+            || (text.contains("realm-core database") && text.contains("is not connected"))
+    }) {
         AuctionActionErrorClass::Fatal
     } else {
         AuctionActionErrorClass::GameplayRefusal
@@ -115,6 +164,43 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
         ClientOpcodeMessage::CMSG_AUCTION_LIST_BIDDER_ITEMS(message) => {
             (message.auctioneer, AuctionRequest::Bidder)
         }
+        ClientOpcodeMessage::CMSG_AUCTION_SELL_ITEM(message) => {
+            let Some(player_guid) = player.self_guid else {
+                return Ok(create_result(CreateAuctionOutcome::Database));
+            };
+            let auctioneer_guid = message.auctioneer.guid();
+            let entities = match store.auction_entities(player_guid, auctioneer_guid) {
+                Ok(entities) => entities,
+                Err(error)
+                    if classify_auction_action_error(&error)
+                        == AuctionActionErrorClass::GameplayRefusal =>
+                {
+                    return Ok(create_result(CreateAuctionOutcome::Database));
+                }
+                Err(error) => return Err(error),
+            };
+            if !interaction_allowed(entities) {
+                return Ok(create_result(CreateAuctionOutcome::Database));
+            }
+            let outcome = match store.create_auction(CreateAuctionRequest {
+                actor_guid: player_guid,
+                auctioneer_guid,
+                item_guid: message.item.guid(),
+                start_bid: message.starting_bid,
+                buyout: message.buyout,
+                duration_minutes: message.auction_duration_in_minutes,
+            }) {
+                Ok(outcome) => outcome,
+                Err(error)
+                    if classify_auction_action_error(&error)
+                        == AuctionActionErrorClass::GameplayRefusal =>
+                {
+                    CreateAuctionOutcome::Database
+                }
+                Err(error) => return Err(error),
+            };
+            return Ok(create_result(outcome));
+        }
         other => return Ok(AuctionActionOutcome::PassThrough(other)),
     };
     let Some(player_guid) = player.self_guid else {
@@ -137,31 +223,7 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
         }
         Err(error) => return Err(error),
     };
-    let Some(AuctionInteraction {
-        player: actor,
-        auctioneer,
-    }) = entities
-    else {
-        return Ok(AuctionActionOutcome::Handled {
-            outbound: Vec::new(),
-        });
-    };
-    let dx = actor.x - auctioneer.x;
-    let dy = actor.y - auctioneer.y;
-    let dz = actor.z - auctioneer.z;
-    let allowed = actor.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0
-        && !actor.dead
-        && lyracore_shared::faction::team_for_race(actor.race)
-            == lyracore_shared::faction::TEAM_ALLIANCE
-        && auctioneer.type_mask & lyracore_shared::constants::type_mask::CREATURE
-            == lyracore_shared::constants::type_mask::CREATURE
-        && auctioneer.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT == 0
-        && !auctioneer.dead
-        && auctioneer.npc_flags & lyracore_shared::constants::npc_flags::AUCTIONEER != 0
-        && actor.map_id == auctioneer.map_id
-        && actor.instance_id == auctioneer.instance_id
-        && dx * dx + dy * dy + dz * dz <= lyracore_shared::auction::INTERACTION_RANGE_SQ;
-    if !allowed {
+    if !interaction_allowed(entities) {
         return Ok(AuctionActionOutcome::Handled {
             outbound: Vec::new(),
         });
@@ -202,18 +264,46 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
     })
 }
 
+fn interaction_allowed(entities: Option<AuctionInteraction>) -> bool {
+    let Some(AuctionInteraction {
+        player: actor,
+        auctioneer,
+    }) = entities
+    else {
+        return false;
+    };
+    let dx = actor.x - auctioneer.x;
+    let dy = actor.y - auctioneer.y;
+    let dz = actor.z - auctioneer.z;
+    actor.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0
+        && !actor.dead
+        && lyracore_shared::faction::team_for_race(actor.race)
+            == lyracore_shared::faction::TEAM_ALLIANCE
+        && auctioneer.type_mask & lyracore_shared::constants::type_mask::CREATURE
+            == lyracore_shared::constants::type_mask::CREATURE
+        && auctioneer.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT == 0
+        && !auctioneer.dead
+        && auctioneer.npc_flags & lyracore_shared::constants::npc_flags::AUCTIONEER != 0
+        && actor.map_id == auctioneer.map_id
+        && actor.instance_id == auctioneer.instance_id
+        && dx * dx + dy * dy + dz * dz <= lyracore_shared::auction::INTERACTION_RANGE_SQ
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
-        Guid, MSG_AUCTION_HELLO_Client, CMSG_AUCTION_LIST_BIDDER_ITEMS, CMSG_AUCTION_LIST_ITEMS,
-        CMSG_AUCTION_LIST_OWNER_ITEMS,
+        Guid, MSG_AUCTION_HELLO_Client, SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction,
+        SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo, CMSG_AUCTION_LIST_BIDDER_ITEMS,
+        CMSG_AUCTION_LIST_ITEMS, CMSG_AUCTION_LIST_OWNER_ITEMS, CMSG_AUCTION_SELL_ITEM,
     };
 
     struct InMemoryAuctionActions {
         result: Mutex<Result<Option<AuctionInteraction>, String>>,
         lookups: Mutex<Vec<(u64, u64)>>,
+        creates: Mutex<Vec<CreateAuctionRequest>>,
+        create_result: Mutex<Result<CreateAuctionOutcome, String>>,
     }
 
     impl AuctionActionStore for InMemoryAuctionActions {
@@ -231,6 +321,16 @@ mod tests {
                 .unwrap()
                 .as_ref()
                 .map(Clone::clone)
+                .map_err(|error| anyhow::anyhow!(error.clone()))
+        }
+
+        fn create_auction(&self, request: CreateAuctionRequest) -> Result<CreateAuctionOutcome> {
+            self.creates.lock().unwrap().push(request);
+            self.create_result
+                .lock()
+                .unwrap()
+                .as_ref()
+                .copied()
                 .map_err(|error| anyhow::anyhow!(error.clone()))
         }
     }
@@ -255,6 +355,8 @@ mod tests {
         InMemoryAuctionActions {
             result: Mutex::new(Ok(interaction)),
             lookups: Mutex::default(),
+            creates: Mutex::default(),
+            create_result: Mutex::new(Ok(CreateAuctionOutcome::Created { auction_id: 41 })),
         }
     }
 
@@ -262,6 +364,8 @@ mod tests {
         InMemoryAuctionActions {
             result: Mutex::new(Err(error.to_string())),
             lookups: Mutex::default(),
+            creates: Mutex::default(),
+            create_result: Mutex::new(Ok(CreateAuctionOutcome::Database)),
         }
     }
 
@@ -277,6 +381,26 @@ mod tests {
             AuctionActionOutcome::Handled { outbound } => Ok(outbound),
             AuctionActionOutcome::PassThrough(_) => {
                 panic!("auction hello must never pass beyond its focused seam")
+            }
+        }
+    }
+
+    fn sell_outbound(store: &InMemoryAuctionActions) -> Result<Vec<Outbound>> {
+        match dispatch_auction_action(
+            store,
+            AuctionActionPlayer { self_guid: Some(7) },
+            CMSG_AUCTION_SELL_ITEM {
+                auctioneer: Guid::new(42),
+                item: Guid::new(70),
+                starting_bid: 100,
+                buyout: 500,
+                auction_duration_in_minutes: 720,
+            }
+            .into(),
+        )? {
+            AuctionActionOutcome::Handled { outbound } => Ok(outbound),
+            AuctionActionOutcome::PassThrough(_) => {
+                panic!("auction sell must never pass beyond its focused seam")
             }
         }
     }
@@ -357,6 +481,106 @@ mod tests {
                 _ => panic!("query {index} selected the wrong response opcode"),
             }
         }
+    }
+
+    #[test]
+    fn a_valid_sell_request_receives_the_specific_started_result() {
+        let store = store_with(Some(valid_interaction()));
+        let outbound = sell_outbound(&store).unwrap();
+        assert!(matches!(
+            outbound.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(message))]
+                if message.auction_id == 41
+                    && message.action
+                        == SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction::Started {
+                            result2: SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo::Ok,
+                        }
+        ));
+        assert_eq!(
+            store.creates.lock().unwrap().as_slice(),
+            &[CreateAuctionRequest {
+                actor_guid: 7,
+                auctioneer_guid: 42,
+                item_guid: 70,
+                start_bid: 100,
+                buyout: 500,
+                duration_minutes: 720,
+            }]
+        );
+    }
+
+    #[test]
+    fn sell_refusals_use_the_specific_started_result_variants() {
+        let cases = [
+            (
+                CreateAuctionOutcome::ItemNotFound,
+                SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo::ErrItemNotFound,
+            ),
+            (
+                CreateAuctionOutcome::NotEnoughMoney,
+                SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo::ErrNotEnoughMoney,
+            ),
+            (
+                CreateAuctionOutcome::Database,
+                SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo::ErrDatabase,
+            ),
+        ];
+
+        for (outcome, expected) in cases {
+            let store = store_with(Some(valid_interaction()));
+            *store.create_result.lock().unwrap() = Ok(outcome);
+            let outbound = sell_outbound(&store).unwrap();
+            assert!(matches!(
+                outbound.as_slice(),
+                [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(message))]
+                    if message.auction_id == 0
+                        && message.action
+                            == SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction::Started {
+                                result2: expected,
+                            }
+            ));
+        }
+    }
+
+    #[test]
+    fn sell_checks_the_auctioneer_before_calling_the_listing_driver() {
+        let store = store_with(None);
+        let outbound = sell_outbound(&store).unwrap();
+        assert!(store.creates.lock().unwrap().is_empty());
+        assert!(matches!(
+            outbound.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(message))]
+                if message.action
+                    == SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction::Started {
+                        result2: SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo::ErrDatabase,
+                    }
+        ));
+    }
+
+    #[test]
+    fn sell_transport_failure_is_fatal() {
+        let store = store_with(Some(valid_interaction()));
+        *store.create_result.lock().unwrap() =
+            Err("auction reducer transport disconnected: channel closed".to_string());
+
+        let error = match sell_outbound(&store) {
+            Ok(_) => panic!("a dead reducer transport must end the session"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("transport disconnected"));
+    }
+
+    #[test]
+    fn sell_realm_core_outage_is_fatal() {
+        let store = store_with(Some(valid_interaction()));
+        *store.create_result.lock().unwrap() =
+            Err("realm-core database lyracore-realm is not connected".to_string());
+
+        let error = match sell_outbound(&store) {
+            Ok(_) => panic!("an unavailable realm plane must end the session"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("not connected"));
     }
 
     #[test]

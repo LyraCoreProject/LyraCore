@@ -14,6 +14,10 @@ pub mod advance_taxi_flight_reducer;
 pub mod append_vmap_generation_chunks_reducer;
 pub mod areatrigger_teleport_type;
 pub mod arm_all_pools_reducer;
+pub mod auction_expiry_type;
+pub mod auction_hold_type;
+pub mod auction_operation_receipt_type;
+pub mod auction_type;
 pub mod aura_schedule_type;
 pub mod aura_type;
 pub mod begin_transfer_reducer;
@@ -198,6 +202,7 @@ pub mod entity_motion_type;
 pub mod establish_session_reducer;
 pub mod event_reaper_schedule_type;
 pub mod evict_instance_population_reducer;
+pub mod expire_auction_reducer;
 pub mod faction_template_type;
 pub mod faction_type;
 pub mod finish_transfer_reducer;
@@ -211,6 +216,10 @@ pub mod game_area_trigger_table;
 pub mod game_area_trigger_type;
 pub mod game_area_type;
 pub mod game_areatrigger_teleport_table;
+pub mod game_auction_expiry_table;
+pub mod game_auction_hold_table;
+pub mod game_auction_operation_receipt_table;
+pub mod game_auction_table;
 pub mod game_aura_schedule_table;
 pub mod game_aura_table;
 pub mod game_bot_invite_intent_table;
@@ -426,6 +435,8 @@ pub mod gw_add_friend_reducer;
 pub mod gw_add_ignore_reducer;
 pub mod gw_arm_taxi_flight_reducer;
 pub mod gw_attack_reducer;
+pub mod gw_auction_hold_listing_reducer;
+pub mod gw_auction_list_local_reducer;
 pub mod gw_auto_bank_item_reducer;
 pub mod gw_begin_trade_reducer;
 pub mod gw_bind_home_reducer;
@@ -560,6 +571,9 @@ pub mod quest_text_type;
 pub mod race_info_type;
 pub mod ranged_impact_reducer;
 pub mod ranged_impact_schedule_type;
+pub mod realm_auction_commit_listing_reducer;
+pub mod realm_auction_confirm_listing_reducer;
+pub mod realm_auction_settle_listing_reducer;
 pub mod realm_group_op_reducer;
 pub mod realm_loot_op_reducer;
 pub mod realm_mail_commit_reducer;
@@ -661,6 +675,10 @@ pub use advance_taxi_flight_reducer::advance_taxi_flight;
 pub use append_vmap_generation_chunks_reducer::append_vmap_generation_chunks;
 pub use areatrigger_teleport_type::AreatriggerTeleport;
 pub use arm_all_pools_reducer::arm_all_pools;
+pub use auction_expiry_type::AuctionExpiry;
+pub use auction_hold_type::AuctionHold;
+pub use auction_operation_receipt_type::AuctionOperationReceipt;
+pub use auction_type::Auction;
 pub use aura_schedule_type::AuraSchedule;
 pub use aura_type::Aura;
 pub use begin_transfer_reducer::begin_transfer;
@@ -845,6 +863,7 @@ pub use entity_motion_type::EntityMotion;
 pub use establish_session_reducer::establish_session;
 pub use event_reaper_schedule_type::EventReaperSchedule;
 pub use evict_instance_population_reducer::evict_instance_population;
+pub use expire_auction_reducer::expire_auction;
 pub use faction_template_type::FactionTemplate;
 pub use faction_type::Faction;
 pub use finish_transfer_reducer::finish_transfer;
@@ -858,6 +877,10 @@ pub use game_area_trigger_table::*;
 pub use game_area_trigger_type::GameAreaTrigger;
 pub use game_area_type::GameArea;
 pub use game_areatrigger_teleport_table::*;
+pub use game_auction_expiry_table::*;
+pub use game_auction_hold_table::*;
+pub use game_auction_operation_receipt_table::*;
+pub use game_auction_table::*;
 pub use game_aura_schedule_table::*;
 pub use game_aura_table::*;
 pub use game_bot_invite_intent_table::*;
@@ -1073,6 +1096,8 @@ pub use gw_add_friend_reducer::gw_add_friend;
 pub use gw_add_ignore_reducer::gw_add_ignore;
 pub use gw_arm_taxi_flight_reducer::gw_arm_taxi_flight;
 pub use gw_attack_reducer::gw_attack;
+pub use gw_auction_hold_listing_reducer::gw_auction_hold_listing;
+pub use gw_auction_list_local_reducer::gw_auction_list_local;
 pub use gw_auto_bank_item_reducer::gw_auto_bank_item;
 pub use gw_begin_trade_reducer::gw_begin_trade;
 pub use gw_bind_home_reducer::gw_bind_home;
@@ -1207,6 +1232,9 @@ pub use quest_text_type::QuestText;
 pub use race_info_type::RaceInfo;
 pub use ranged_impact_reducer::ranged_impact;
 pub use ranged_impact_schedule_type::RangedImpactSchedule;
+pub use realm_auction_commit_listing_reducer::realm_auction_commit_listing;
+pub use realm_auction_confirm_listing_reducer::realm_auction_confirm_listing;
+pub use realm_auction_settle_listing_reducer::realm_auction_settle_listing;
 pub use realm_group_op_reducer::realm_group_op;
 pub use realm_loot_op_reducer::realm_loot_op;
 pub use realm_mail_commit_reducer::realm_mail_commit;
@@ -1914,6 +1942,9 @@ pub enum Reducer {
     EvictInstancePopulation {
         instance_id: u64,
     },
+    ExpireAuction {
+        schedule: AuctionExpiry,
+    },
     FinishTransfer {
         transfer_id: u64,
     },
@@ -1963,6 +1994,22 @@ pub enum Reducer {
     GwAttack {
         actor_guid: u64,
         target_guid: u64,
+    },
+    GwAuctionHoldListing {
+        operation_id: u64,
+        seller_guid: u64,
+        item_guid: u64,
+        start_bid: u32,
+        buyout: u32,
+        duration_minutes: u32,
+    },
+    GwAuctionListLocal {
+        operation_id: u64,
+        seller_guid: u64,
+        item_guid: u64,
+        start_bid: u32,
+        buyout: u32,
+        duration_minutes: u32,
     },
     GwAutoBankItem {
         actor_guid: u64,
@@ -2360,6 +2407,29 @@ pub enum Reducer {
     RangedImpact {
         shot: RangedImpactSchedule,
     },
+    RealmAuctionCommitListing {
+        operation_id: u64,
+        seller_guid: u64,
+        item_guid: u64,
+        item_entry: u32,
+        item_stack_count: u32,
+        item_durability: u32,
+        item_enchant_id: u32,
+        item_soulbound: bool,
+        start_bid: u32,
+        buyout: u32,
+        duration_minutes: u32,
+        deposit: u32,
+        created_micros: i64,
+        expires_micros: i64,
+    },
+    RealmAuctionConfirmListing {
+        operation_id: u64,
+        auction_id: u32,
+    },
+    RealmAuctionSettleListing {
+        operation_id: u64,
+    },
     RealmGroupOp {
         op: u8,
         actor_guid: u64,
@@ -2724,6 +2794,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::EnsureInstance { .. } => "ensure_instance",
             Reducer::EstablishSession { .. } => "establish_session",
             Reducer::EvictInstancePopulation { .. } => "evict_instance_population",
+            Reducer::ExpireAuction { .. } => "expire_auction",
             Reducer::FinishTransfer { .. } => "finish_transfer",
             Reducer::FirePendingCast { .. } => "fire_pending_cast",
             Reducer::FireSpellImpact { .. } => "fire_spell_impact",
@@ -2737,6 +2808,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwAddIgnore { .. } => "gw_add_ignore",
             Reducer::GwArmTaxiFlight { .. } => "gw_arm_taxi_flight",
             Reducer::GwAttack { .. } => "gw_attack",
+            Reducer::GwAuctionHoldListing { .. } => "gw_auction_hold_listing",
+            Reducer::GwAuctionListLocal { .. } => "gw_auction_list_local",
             Reducer::GwAutoBankItem { .. } => "gw_auto_bank_item",
             Reducer::GwBeginTrade { .. } => "gw_begin_trade",
             Reducer::GwBindHome { .. } => "gw_bind_home",
@@ -2833,6 +2906,9 @@ impl __sdk::Reducer for Reducer {
             Reducer::ProvisionAccount { .. } => "provision_account",
             Reducer::PublishMotion { .. } => "publish_motion",
             Reducer::RangedImpact { .. } => "ranged_impact",
+            Reducer::RealmAuctionCommitListing { .. } => "realm_auction_commit_listing",
+            Reducer::RealmAuctionConfirmListing { .. } => "realm_auction_confirm_listing",
+            Reducer::RealmAuctionSettleListing { .. } => "realm_auction_settle_listing",
             Reducer::RealmGroupOp { .. } => "realm_group_op",
             Reducer::RealmLootOp { .. } => "realm_loot_op",
             Reducer::RealmMailCommit { .. } => "realm_mail_commit",
@@ -3967,6 +4043,11 @@ Reducer::DebugTakeLoot{
 }             => __sats::bsatn::to_vec(&evict_instance_population_reducer::EvictInstancePopulationArgs {
                 instance_id: instance_id.clone(),
 }),
+            Reducer::ExpireAuction{
+                schedule,
+}             => __sats::bsatn::to_vec(&expire_auction_reducer::ExpireAuctionArgs {
+                schedule: schedule.clone(),
+}),
             Reducer::FinishTransfer{
                 transfer_id,
 }             => __sats::bsatn::to_vec(&finish_transfer_reducer::FinishTransferArgs {
@@ -4053,6 +4134,36 @@ Reducer::DebugTakeLoot{
 }             => __sats::bsatn::to_vec(&gw_attack_reducer::GwAttackArgs {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
+}),
+            Reducer::GwAuctionHoldListing{
+                operation_id,
+                seller_guid,
+                item_guid,
+                start_bid,
+                buyout,
+                duration_minutes,
+}             => __sats::bsatn::to_vec(&gw_auction_hold_listing_reducer::GwAuctionHoldListingArgs {
+                operation_id: operation_id.clone(),
+                seller_guid: seller_guid.clone(),
+                item_guid: item_guid.clone(),
+                start_bid: start_bid.clone(),
+                buyout: buyout.clone(),
+                duration_minutes: duration_minutes.clone(),
+}),
+            Reducer::GwAuctionListLocal{
+                operation_id,
+                seller_guid,
+                item_guid,
+                start_bid,
+                buyout,
+                duration_minutes,
+}             => __sats::bsatn::to_vec(&gw_auction_list_local_reducer::GwAuctionListLocalArgs {
+                operation_id: operation_id.clone(),
+                seller_guid: seller_guid.clone(),
+                item_guid: item_guid.clone(),
+                start_bid: start_bid.clone(),
+                buyout: buyout.clone(),
+                duration_minutes: duration_minutes.clone(),
 }),
             Reducer::GwAutoBankItem{
                 actor_guid,
@@ -4752,6 +4863,49 @@ Reducer::ProvisionAccount{
 }             => __sats::bsatn::to_vec(&ranged_impact_reducer::RangedImpactArgs {
                 shot: shot.clone(),
 }),
+            Reducer::RealmAuctionCommitListing{
+                operation_id,
+                seller_guid,
+                item_guid,
+                item_entry,
+                item_stack_count,
+                item_durability,
+                item_enchant_id,
+                item_soulbound,
+                start_bid,
+                buyout,
+                duration_minutes,
+                deposit,
+                created_micros,
+                expires_micros,
+}             => __sats::bsatn::to_vec(&realm_auction_commit_listing_reducer::RealmAuctionCommitListingArgs {
+                operation_id: operation_id.clone(),
+                seller_guid: seller_guid.clone(),
+                item_guid: item_guid.clone(),
+                item_entry: item_entry.clone(),
+                item_stack_count: item_stack_count.clone(),
+                item_durability: item_durability.clone(),
+                item_enchant_id: item_enchant_id.clone(),
+                item_soulbound: item_soulbound.clone(),
+                start_bid: start_bid.clone(),
+                buyout: buyout.clone(),
+                duration_minutes: duration_minutes.clone(),
+                deposit: deposit.clone(),
+                created_micros: created_micros.clone(),
+                expires_micros: expires_micros.clone(),
+}),
+            Reducer::RealmAuctionConfirmListing{
+                operation_id,
+                auction_id,
+}             => __sats::bsatn::to_vec(&realm_auction_confirm_listing_reducer::RealmAuctionConfirmListingArgs {
+                operation_id: operation_id.clone(),
+                auction_id: auction_id.clone(),
+}),
+            Reducer::RealmAuctionSettleListing{
+                operation_id,
+}             => __sats::bsatn::to_vec(&realm_auction_settle_listing_reducer::RealmAuctionSettleListingArgs {
+                operation_id: operation_id.clone(),
+}),
             Reducer::RealmGroupOp{
                 op,
                 actor_guid,
@@ -5152,6 +5306,10 @@ pub struct DbUpdate {
     game_area: __sdk::TableUpdate<GameArea>,
     game_area_trigger: __sdk::TableUpdate<GameAreaTrigger>,
     game_areatrigger_teleport: __sdk::TableUpdate<AreatriggerTeleport>,
+    game_auction: __sdk::TableUpdate<Auction>,
+    game_auction_expiry: __sdk::TableUpdate<AuctionExpiry>,
+    game_auction_hold: __sdk::TableUpdate<AuctionHold>,
+    game_auction_operation_receipt: __sdk::TableUpdate<AuctionOperationReceipt>,
     game_aura: __sdk::TableUpdate<Aura>,
     game_aura_schedule: __sdk::TableUpdate<AuraSchedule>,
     game_bot_invite_intent: __sdk::TableUpdate<BotInviteIntent>,
@@ -5350,6 +5508,20 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_areatrigger_teleport" => db_update.game_areatrigger_teleport.append(
                     game_areatrigger_teleport_table::parse_table_update(table_update)?,
                 ),
+                "game_auction" => db_update
+                    .game_auction
+                    .append(game_auction_table::parse_table_update(table_update)?),
+                "game_auction_expiry" => db_update
+                    .game_auction_expiry
+                    .append(game_auction_expiry_table::parse_table_update(table_update)?),
+                "game_auction_hold" => db_update
+                    .game_auction_hold
+                    .append(game_auction_hold_table::parse_table_update(table_update)?),
+                "game_auction_operation_receipt" => {
+                    db_update.game_auction_operation_receipt.append(
+                        game_auction_operation_receipt_table::parse_table_update(table_update)?,
+                    )
+                }
                 "game_aura" => db_update
                     .game_aura
                     .append(game_aura_table::parse_table_update(table_update)?),
@@ -5920,6 +6092,21 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_areatrigger_teleport,
             )
             .with_updates_by_pk(|row| &row.trigger_id);
+        diff.game_auction = cache
+            .apply_diff_to_table::<Auction>("game_auction", &self.game_auction)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_auction_expiry = cache
+            .apply_diff_to_table::<AuctionExpiry>("game_auction_expiry", &self.game_auction_expiry)
+            .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.game_auction_hold = cache
+            .apply_diff_to_table::<AuctionHold>("game_auction_hold", &self.game_auction_hold)
+            .with_updates_by_pk(|row| &row.operation_id);
+        diff.game_auction_operation_receipt = cache
+            .apply_diff_to_table::<AuctionOperationReceipt>(
+                "game_auction_operation_receipt",
+                &self.game_auction_operation_receipt,
+            )
+            .with_updates_by_pk(|row| &row.operation_id);
         diff.game_aura = cache
             .apply_diff_to_table::<Aura>("game_aura", &self.game_aura)
             .with_updates_by_pk(|row| &row.id);
@@ -6665,6 +6852,18 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_areatrigger_teleport" => db_update
                     .game_areatrigger_teleport
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_auction" => db_update
+                    .game_auction
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_auction_expiry" => db_update
+                    .game_auction_expiry
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_auction_hold" => db_update
+                    .game_auction_hold
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_auction_operation_receipt" => db_update
+                    .game_auction_operation_receipt
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_aura" => db_update
                     .game_aura
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -7212,6 +7411,18 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_areatrigger_teleport" => db_update
                     .game_areatrigger_teleport
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_auction" => db_update
+                    .game_auction
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_auction_expiry" => db_update
+                    .game_auction_expiry
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_auction_hold" => db_update
+                    .game_auction_hold
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_auction_operation_receipt" => db_update
+                    .game_auction_operation_receipt
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_aura" => db_update
                     .game_aura
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -7749,6 +7960,10 @@ pub struct AppliedDiff<'r> {
     game_area: __sdk::TableAppliedDiff<'r, GameArea>,
     game_area_trigger: __sdk::TableAppliedDiff<'r, GameAreaTrigger>,
     game_areatrigger_teleport: __sdk::TableAppliedDiff<'r, AreatriggerTeleport>,
+    game_auction: __sdk::TableAppliedDiff<'r, Auction>,
+    game_auction_expiry: __sdk::TableAppliedDiff<'r, AuctionExpiry>,
+    game_auction_hold: __sdk::TableAppliedDiff<'r, AuctionHold>,
+    game_auction_operation_receipt: __sdk::TableAppliedDiff<'r, AuctionOperationReceipt>,
     game_aura: __sdk::TableAppliedDiff<'r, Aura>,
     game_aura_schedule: __sdk::TableAppliedDiff<'r, AuraSchedule>,
     game_bot_invite_intent: __sdk::TableAppliedDiff<'r, BotInviteIntent>,
@@ -7954,6 +8169,22 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<AreatriggerTeleport>(
             "game_areatrigger_teleport",
             &self.game_areatrigger_teleport,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<Auction>("game_auction", &self.game_auction, event);
+        callbacks.invoke_table_row_callbacks::<AuctionExpiry>(
+            "game_auction_expiry",
+            &self.game_auction_expiry,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<AuctionHold>(
+            "game_auction_hold",
+            &self.game_auction_hold,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<AuctionOperationReceipt>(
+            "game_auction_operation_receipt",
+            &self.game_auction_operation_receipt,
             event,
         );
         callbacks.invoke_table_row_callbacks::<Aura>("game_aura", &self.game_aura, event);
@@ -9442,6 +9673,10 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_area_table::register_table(client_cache);
         game_area_trigger_table::register_table(client_cache);
         game_areatrigger_teleport_table::register_table(client_cache);
+        game_auction_table::register_table(client_cache);
+        game_auction_expiry_table::register_table(client_cache);
+        game_auction_hold_table::register_table(client_cache);
+        game_auction_operation_receipt_table::register_table(client_cache);
         game_aura_table::register_table(client_cache);
         game_aura_schedule_table::register_table(client_cache);
         game_bot_invite_intent_table::register_table(client_cache);
@@ -9622,6 +9857,10 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_area",
         "game_area_trigger",
         "game_areatrigger_teleport",
+        "game_auction",
+        "game_auction_expiry",
+        "game_auction_hold",
+        "game_auction_operation_receipt",
         "game_aura",
         "game_aura_schedule",
         "game_bot_invite_intent",

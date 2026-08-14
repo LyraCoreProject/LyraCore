@@ -3,7 +3,7 @@
 //! and blocks on its completion via the `call_reducer!` macro. Cache reads live in `reads.rs`.
 
 use anyhow::{anyhow, Result};
-use spacetimedb_sdk::Identity;
+use spacetimedb_sdk::{Identity, Table};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -195,6 +195,238 @@ impl Coordinator {
             "gw_arm_taxi_flight",
             gw_arm_taxi_flight_then(character_guid)
         )
+    }
+
+    /// Create one auction listing. Single-database deployments use one atomic reducer; sharded
+    /// deployments drive the durable Hold -> Auction -> receipt -> settle protocol.
+    pub(crate) fn create_auction(
+        &self,
+        request: crate::world::CreateAuctionRequest,
+    ) -> Result<crate::world::CreateAuctionOutcome> {
+        use crate::world::CreateAuctionOutcome;
+
+        let item_is_present = self
+            .0
+            .coord()
+            .conn
+            .db
+            .game_item_instance()
+            .guid()
+            .find(&request.item_guid)
+            .is_some();
+        // A successful listing removes the source item in the same transaction that records its
+        // Hold or receipt. Presence therefore proves this is a new request even when a returned
+        // item later reuses the same guid and terms.
+        if !item_is_present {
+            if let Some(receipt) = self.matching_active_auction_receipt(request)? {
+                if self
+                    .0
+                    .coord()
+                    .conn
+                    .db
+                    .game_auction_hold()
+                    .operation_id()
+                    .find(&receipt.operation_id)
+                    .is_some()
+                {
+                    self.auction_settle_listing(receipt.operation_id)?;
+                }
+                return Ok(CreateAuctionOutcome::Created {
+                    auction_id: receipt.auction_id,
+                });
+            }
+        }
+
+        let operation_id = if item_is_present {
+            next_auction_operation_id()?
+        } else {
+            match self.matching_auction_hold(request) {
+                Some(hold) => hold.operation_id,
+                None => next_auction_operation_id()?,
+            }
+        };
+
+        let result = if self.is_sharded() {
+            self.drive_sharded_auction_listing(operation_id, request)
+        } else {
+            self.auction_list_local(operation_id, request)
+                .and_then(|()| self.wait_for_auction_receipt(operation_id))
+                .map(|receipt| receipt.auction_id)
+        };
+
+        match result {
+            Ok(auction_id) => Ok(CreateAuctionOutcome::Created { auction_id }),
+            Err(error) => match map_auction_refusal(&error) {
+                Some(outcome) => Ok(outcome),
+                None => Err(error),
+            },
+        }
+    }
+
+    fn drive_sharded_auction_listing(
+        &self,
+        operation_id: u64,
+        request: crate::world::CreateAuctionRequest,
+    ) -> Result<u32> {
+        self.auction_hold_listing(operation_id, request)?;
+        let hold = self.wait_for_auction_hold(operation_id)?;
+        let realm = self.realm_core()?;
+        realm.auction_commit_listing(&hold)?;
+        let receipt = realm.wait_for_auction_receipt(operation_id)?;
+        self.auction_confirm_listing(operation_id, receipt.auction_id)?;
+        self.wait_for_auction_receipt(operation_id)?;
+        self.auction_settle_listing(operation_id)?;
+        Ok(receipt.auction_id)
+    }
+
+    fn auction_list_local(
+        &self,
+        operation_id: u64,
+        request: crate::world::CreateAuctionRequest,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_auction_list_local",
+            gw_auction_list_local_then(
+                operation_id,
+                request.actor_guid,
+                request.item_guid,
+                request.start_bid,
+                request.buyout,
+                request.duration_minutes
+            )
+        )
+    }
+
+    fn auction_hold_listing(
+        &self,
+        operation_id: u64,
+        request: crate::world::CreateAuctionRequest,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_auction_hold_listing",
+            gw_auction_hold_listing_then(
+                operation_id,
+                request.actor_guid,
+                request.item_guid,
+                request.start_bid,
+                request.buyout,
+                request.duration_minutes
+            )
+        )
+    }
+
+    fn auction_commit_listing(&self, hold: &AuctionHold) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_auction_commit_listing",
+            realm_auction_commit_listing_then(
+                hold.operation_id,
+                hold.seller_guid,
+                hold.item_guid,
+                hold.item_entry,
+                hold.item_stack_count,
+                hold.item_durability,
+                hold.item_enchant_id,
+                hold.item_soulbound,
+                hold.start_bid,
+                hold.buyout,
+                hold.duration_minutes,
+                hold.deposit,
+                hold.created_micros,
+                hold.expires_micros
+            )
+        )
+    }
+
+    fn auction_confirm_listing(&self, operation_id: u64, auction_id: u32) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_auction_confirm_listing",
+            realm_auction_confirm_listing_then(operation_id, auction_id)
+        )
+    }
+
+    fn auction_settle_listing(&self, operation_id: u64) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_auction_settle_listing",
+            realm_auction_settle_listing_then(operation_id)
+        )
+    }
+
+    fn matching_auction_hold(
+        &self,
+        request: crate::world::CreateAuctionRequest,
+    ) -> Option<AuctionHold> {
+        let guard = self.0.coord();
+        let hold = guard
+            .conn
+            .db
+            .game_auction_hold()
+            .iter()
+            .find(|hold| same_auction_request(hold, request));
+        hold
+    }
+
+    fn matching_active_auction_receipt(
+        &self,
+        request: crate::world::CreateAuctionRequest,
+    ) -> Result<Option<AuctionOperationReceipt>> {
+        let candidates = {
+            let guard = self.0.coord();
+            guard
+                .conn
+                .db
+                .game_auction_operation_receipt()
+                .iter()
+                .filter(|receipt| same_auction_request(receipt, request))
+                .collect::<Vec<_>>()
+        };
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+
+        // Receipts outlive Auctions so an operation replay stays auditable. Only reuse a receipt
+        // while its Auction is still active: returned items can later be granted the same item guid
+        // and legitimately listed again with the same terms.
+        let realm = self.realm_core()?;
+        let guard = realm.0.coord();
+        let receipt = candidates.into_iter().find(|receipt| {
+            guard
+                .conn
+                .db
+                .game_auction()
+                .id()
+                .find(&receipt.auction_id)
+                .is_some_and(|auction| auction.listing_operation_id == receipt.operation_id)
+        });
+        Ok(receipt)
+    }
+
+    fn wait_for_auction_hold(&self, operation_id: u64) -> Result<AuctionHold> {
+        wait_for_auction_cache_row(operation_id, "Hold", || {
+            self.0
+                .coord()
+                .conn
+                .db
+                .game_auction_hold()
+                .operation_id()
+                .find(&operation_id)
+        })
+    }
+
+    fn wait_for_auction_receipt(&self, operation_id: u64) -> Result<AuctionOperationReceipt> {
+        wait_for_auction_cache_row(operation_id, "receipt", || {
+            self.0
+                .coord()
+                .conn
+                .db
+                .game_auction_operation_receipt()
+                .operation_id()
+                .find(&operation_id)
+        })
     }
 
     /// Enter the world (Phase 4): call the `player_login` reducer on the coordinator connection
@@ -435,6 +667,16 @@ impl Coordinator {
         character_guid: u64,
     ) -> Result<crate::codec::CharDeleteOutcome> {
         use crate::codec::CharDeleteOutcome;
+        match self.character_has_auction_value(character_guid) {
+            Ok(true) => return Ok(CharDeleteOutcome::Failed),
+            Ok(false) => {}
+            Err(error) => {
+                log::warn!(
+                    "delete_character: could not verify auction value for {character_guid}: {error:#}"
+                );
+                return Ok(CharDeleteOutcome::Failed);
+            }
+        }
         let result = call_reducer!(
             self.0.call_pipe().conn.reducers,
             "delete_character",
@@ -444,6 +686,28 @@ impl Coordinator {
             Ok(()) => CharDeleteOutcome::Success,
             Err(_) => CharDeleteOutcome::Failed,
         })
+    }
+
+    fn character_has_auction_value(&self, character_guid: u64) -> Result<bool> {
+        for (_, shard) in self.world_shards() {
+            let guard = shard.0.coord();
+            let has_hold = guard
+                .conn
+                .db
+                .game_auction_hold()
+                .iter()
+                .any(|hold| hold.seller_guid == character_guid);
+            if has_hold {
+                return Ok(true);
+            }
+        }
+
+        let realm = self.realm_core()?;
+        let guard = realm.0.coord();
+        let has_auction = guard.conn.db.game_auction().iter().any(|auction| {
+            auction.owner_guid == character_guid || auction.highest_bidder_guid == character_guid
+        });
+        Ok(has_auction)
     }
 
     /// Logon writes K + the bound per-account identity (Phase 1).
@@ -2358,5 +2622,130 @@ mod taxi_reply_tests {
             .find("gw_ack_taxi_reply_then(character_guid, request_id)")
             .expect("reply acknowledgement");
         assert!(observes < acknowledges);
+    }
+}
+
+fn wait_for_auction_cache_row<T>(
+    operation_id: u64,
+    row_name: &str,
+    mut read: impl FnMut() -> Option<T>,
+) -> Result<T> {
+    for _ in 0..100 {
+        if let Some(row) = read() {
+            return Ok(row);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Err(anyhow!(
+        "auction {row_name} {operation_id} committed but is not visible in the coordinator cache"
+    ))
+}
+
+trait AuctionRequestFields {
+    fn actor_guid(&self) -> u64;
+    fn item_guid(&self) -> u64;
+    fn start_bid(&self) -> u32;
+    fn buyout(&self) -> u32;
+    fn duration_minutes(&self) -> u32;
+}
+
+impl AuctionRequestFields for AuctionHold {
+    fn actor_guid(&self) -> u64 {
+        self.seller_guid
+    }
+    fn item_guid(&self) -> u64 {
+        self.item_guid
+    }
+    fn start_bid(&self) -> u32 {
+        self.start_bid
+    }
+    fn buyout(&self) -> u32 {
+        self.buyout
+    }
+    fn duration_minutes(&self) -> u32 {
+        self.duration_minutes
+    }
+}
+
+impl AuctionRequestFields for AuctionOperationReceipt {
+    fn actor_guid(&self) -> u64 {
+        self.actor_guid
+    }
+    fn item_guid(&self) -> u64 {
+        self.item_guid
+    }
+    fn start_bid(&self) -> u32 {
+        self.start_bid
+    }
+    fn buyout(&self) -> u32 {
+        self.buyout
+    }
+    fn duration_minutes(&self) -> u32 {
+        self.duration_minutes
+    }
+}
+
+fn same_auction_request(
+    row: &impl AuctionRequestFields,
+    request: crate::world::CreateAuctionRequest,
+) -> bool {
+    row.actor_guid() == request.actor_guid
+        && row.item_guid() == request.item_guid
+        && row.start_bid() == request.start_bid
+        && row.buyout() == request.buyout
+        && row.duration_minutes() == request.duration_minutes
+}
+
+fn next_auction_operation_id() -> Result<u64> {
+    loop {
+        let mut bytes = [0; 8];
+        getrandom::fill(&mut bytes)
+            .map_err(|error| anyhow!("OS randomness unavailable: {error}"))?;
+        let operation_id = u64::from_le_bytes(bytes);
+        if operation_id != 0 {
+            return Ok(operation_id);
+        }
+    }
+}
+
+fn map_auction_refusal(error: &anyhow::Error) -> Option<crate::world::CreateAuctionOutcome> {
+    use crate::world::CreateAuctionOutcome;
+    let text = format!("{error:#}");
+    if text.contains(lyracore_shared::auction::result::ITEM_NOT_FOUND) {
+        Some(CreateAuctionOutcome::ItemNotFound)
+    } else if text.contains(lyracore_shared::auction::result::NOT_ENOUGH_MONEY) {
+        Some(CreateAuctionOutcome::NotEnoughMoney)
+    } else if text.contains(lyracore_shared::auction::result::DATABASE) {
+        Some(CreateAuctionOutcome::Database)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod auction_reducer_tests {
+    use super::*;
+    use crate::world::CreateAuctionOutcome;
+
+    #[test]
+    fn reducer_tags_map_to_typed_listing_outcomes() {
+        let cases = [
+            (
+                lyracore_shared::auction::result::ITEM_NOT_FOUND,
+                CreateAuctionOutcome::ItemNotFound,
+            ),
+            (
+                lyracore_shared::auction::result::NOT_ENOUGH_MONEY,
+                CreateAuctionOutcome::NotEnoughMoney,
+            ),
+            (
+                lyracore_shared::auction::result::DATABASE,
+                CreateAuctionOutcome::Database,
+            ),
+        ];
+        for (tag, expected) in cases {
+            assert_eq!(map_auction_refusal(&anyhow!("[{tag}] refused")), Some(expected));
+        }
+        assert_eq!(map_auction_refusal(&anyhow!("transport disconnected")), None);
     }
 }

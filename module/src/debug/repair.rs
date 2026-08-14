@@ -6,12 +6,11 @@ use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration}
 
 use crate::spell::stacking::game_spell_group;
 use crate::{
-    game_aura_schedule, game_character, game_createinfo_spell, game_creature_move_schedule,
-    game_faction, game_ground_area_schedule, game_instance_reaper_schedule, game_item_template,
-    game_gateway_lease_reaper_schedule, game_motion_publish_schedule, game_spell, game_talent,
-    game_breath_schedule,
-    AuraSchedule, BreathSchedule, CreatureMoveSchedule,
-    GroundAreaSchedule,
+    game_auction, game_auction_expiry, game_aura_schedule, game_breath_schedule, game_character,
+    game_createinfo_spell, game_creature_move_schedule, game_faction,
+    game_gateway_lease_reaper_schedule, game_ground_area_schedule, game_instance_reaper_schedule,
+    game_item_template, game_motion_publish_schedule, game_spell, game_talent, AuctionExpiry,
+    AuraSchedule, BreathSchedule, CreatureMoveSchedule, GroundAreaSchedule,
 };
 
 /// Consolidated post-publish repair pass (#378). SpacetimeDB's `init` reducer runs ONLY on a
@@ -225,6 +224,27 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(crate::gw::LEASE_REAP_MICROS)),
     });
 
+    // One-shot Auction expiries are created with their Auctions, not seeded globally. A publish
+    // must preserve them; if an older/broken publication left one absent, restore only that missing
+    // row at the Auction's original deadline. Never re-arm an existing row or move its deadline.
+    let mut auction_expiries = 0u64;
+    for auction in ctx.db.game_auction().iter() {
+        if ctx
+            .db
+            .game_auction_expiry()
+            .auction_id()
+            .find(auction.id)
+            .is_none()
+        {
+            ctx.db.game_auction_expiry().insert(AuctionExpiry {
+                scheduled_id: 0,
+                scheduled_at: ScheduleAt::Time(auction.expires_at),
+                auction_id: auction.id,
+            });
+            auction_expiries += 1;
+        }
+    }
+
     // row_count: total rows/rearms across every family this pass touched (work-item 216 provenance
     // stamp) — one stamp for the whole repair pass, replacing the 13 separate per-family stamps the
     // deleted reducers wrote. The trailing `+ 2` is the two schedule rows this always (re)arms
@@ -246,8 +266,9 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         + breath_schedule
         + ground_area_schedule
         + motion_schedule
+        + auction_expiries
         + 2;
     crate::import_meta::stamp(ctx, "debug_repair_after_publish", "", "", total);
-    log::info!("debug_repair_after_publish: repaired {total} fixture/schedule row(s) across 17 seed families");
+    log::info!("debug_repair_after_publish: repaired {total} fixture/schedule row(s), including missing Auction expiries");
     Ok(())
 }
