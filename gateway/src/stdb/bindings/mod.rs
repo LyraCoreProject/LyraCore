@@ -440,6 +440,7 @@ pub mod gw_add_ignore_reducer;
 pub mod gw_arm_taxi_flight_reducer;
 pub mod gw_attack_reducer;
 pub mod gw_auction_bid_local_reducer;
+pub mod gw_auction_confirm_bid_refund_reducer;
 pub mod gw_auction_finish_bid_reducer;
 pub mod gw_auction_hold_bid_reducer;
 pub mod gw_auction_hold_listing_reducer;
@@ -581,6 +582,7 @@ pub mod ranged_impact_schedule_type;
 pub mod realm_auction_commit_listing_reducer;
 pub mod realm_auction_confirm_listing_reducer;
 pub mod realm_auction_decide_bid_reducer;
+pub mod realm_auction_refund_bid_reducer;
 pub mod realm_auction_settle_listing_reducer;
 pub mod realm_group_op_reducer;
 pub mod realm_loot_op_reducer;
@@ -1109,6 +1111,7 @@ pub use gw_add_ignore_reducer::gw_add_ignore;
 pub use gw_arm_taxi_flight_reducer::gw_arm_taxi_flight;
 pub use gw_attack_reducer::gw_attack;
 pub use gw_auction_bid_local_reducer::gw_auction_bid_local;
+pub use gw_auction_confirm_bid_refund_reducer::gw_auction_confirm_bid_refund;
 pub use gw_auction_finish_bid_reducer::gw_auction_finish_bid;
 pub use gw_auction_hold_bid_reducer::gw_auction_hold_bid;
 pub use gw_auction_hold_listing_reducer::gw_auction_hold_listing;
@@ -1250,6 +1253,7 @@ pub use ranged_impact_schedule_type::RangedImpactSchedule;
 pub use realm_auction_commit_listing_reducer::realm_auction_commit_listing;
 pub use realm_auction_confirm_listing_reducer::realm_auction_confirm_listing;
 pub use realm_auction_decide_bid_reducer::realm_auction_decide_bid;
+pub use realm_auction_refund_bid_reducer::realm_auction_refund_bid;
 pub use realm_auction_settle_listing_reducer::realm_auction_settle_listing;
 pub use realm_group_op_reducer::realm_group_op;
 pub use realm_loot_op_reducer::realm_loot_op;
@@ -2017,6 +2021,13 @@ pub enum Reducer {
         auction_id: u32,
         offer: u32,
     },
+    GwAuctionConfirmBidRefund {
+        operation_id: u64,
+        bidder_guid: u64,
+        auction_id: u32,
+        offer: u32,
+        deferred_refund: u32,
+    },
     GwAuctionFinishBid {
         operation_id: u64,
         bidder_guid: u64,
@@ -2472,6 +2483,13 @@ pub enum Reducer {
         auction_id: u32,
         offer: u32,
     },
+    RealmAuctionRefundBid {
+        operation_id: u64,
+        bidder_guid: u64,
+        auction_id: u32,
+        offer: u32,
+        deferred_refund: u32,
+    },
     RealmAuctionSettleListing {
         operation_id: u64,
     },
@@ -2854,6 +2872,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwArmTaxiFlight { .. } => "gw_arm_taxi_flight",
             Reducer::GwAttack { .. } => "gw_attack",
             Reducer::GwAuctionBidLocal { .. } => "gw_auction_bid_local",
+            Reducer::GwAuctionConfirmBidRefund { .. } => "gw_auction_confirm_bid_refund",
             Reducer::GwAuctionFinishBid { .. } => "gw_auction_finish_bid",
             Reducer::GwAuctionHoldBid { .. } => "gw_auction_hold_bid",
             Reducer::GwAuctionHoldListing { .. } => "gw_auction_hold_listing",
@@ -2957,6 +2976,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::RealmAuctionCommitListing { .. } => "realm_auction_commit_listing",
             Reducer::RealmAuctionConfirmListing { .. } => "realm_auction_confirm_listing",
             Reducer::RealmAuctionDecideBid { .. } => "realm_auction_decide_bid",
+            Reducer::RealmAuctionRefundBid { .. } => "realm_auction_refund_bid",
             Reducer::RealmAuctionSettleListing { .. } => "realm_auction_settle_listing",
             Reducer::RealmGroupOp { .. } => "realm_group_op",
             Reducer::RealmLootOp { .. } => "realm_loot_op",
@@ -4195,6 +4215,19 @@ Reducer::DebugTakeLoot{
                 auction_id: auction_id.clone(),
                 offer: offer.clone(),
 }),
+            Reducer::GwAuctionConfirmBidRefund{
+                operation_id,
+                bidder_guid,
+                auction_id,
+                offer,
+                deferred_refund,
+}             => __sats::bsatn::to_vec(&gw_auction_confirm_bid_refund_reducer::GwAuctionConfirmBidRefundArgs {
+                operation_id: operation_id.clone(),
+                bidder_guid: bidder_guid.clone(),
+                auction_id: auction_id.clone(),
+                offer: offer.clone(),
+                deferred_refund: deferred_refund.clone(),
+}),
             Reducer::GwAuctionFinishBid{
                 operation_id,
                 bidder_guid,
@@ -5003,6 +5036,19 @@ Reducer::ProvisionAccount{
                 bidder_guid: bidder_guid.clone(),
                 auction_id: auction_id.clone(),
                 offer: offer.clone(),
+}),
+            Reducer::RealmAuctionRefundBid{
+                operation_id,
+                bidder_guid,
+                auction_id,
+                offer,
+                deferred_refund,
+}             => __sats::bsatn::to_vec(&realm_auction_refund_bid_reducer::RealmAuctionRefundBidArgs {
+                operation_id: operation_id.clone(),
+                bidder_guid: bidder_guid.clone(),
+                auction_id: auction_id.clone(),
+                offer: offer.clone(),
+                deferred_refund: deferred_refund.clone(),
 }),
             Reducer::RealmAuctionSettleListing{
                 operation_id,

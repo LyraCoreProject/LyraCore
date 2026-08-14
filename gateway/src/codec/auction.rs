@@ -23,11 +23,7 @@ pub struct AuctionView {
 }
 
 pub fn build_auction_list_item(view: &AuctionView, now_micros: i64) -> AuctionListItem {
-    let minimum_bid = if view.highest_bid == 0 {
-        0
-    } else {
-        u32::try_from(u64::from(view.highest_bid).div_ceil(20)).unwrap_or(u32::MAX)
-    };
+    let minimum_bid = lyracore_shared::auction::bid_increment(view.highest_bid);
     let remaining_millis = view.expires_at_micros.saturating_sub(now_micros).max(0) / 1_000;
     AuctionListItem {
         id: view.id,

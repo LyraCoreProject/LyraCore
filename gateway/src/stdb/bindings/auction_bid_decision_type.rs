@@ -16,6 +16,7 @@ pub struct AuctionBidDecision {
     pub result_bidder_guid: u64,
     pub result_bid: u32,
     pub minimum_increment: u32,
+    pub deferred_refund: u32,
 }
 
 impl __sdk::InModule for AuctionBidDecision {
@@ -35,6 +36,7 @@ pub struct AuctionBidDecisionCols {
     pub result_bidder_guid: __sdk::__query_builder::Col<AuctionBidDecision, u64>,
     pub result_bid: __sdk::__query_builder::Col<AuctionBidDecision, u32>,
     pub minimum_increment: __sdk::__query_builder::Col<AuctionBidDecision, u32>,
+    pub deferred_refund: __sdk::__query_builder::Col<AuctionBidDecision, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for AuctionBidDecision {
@@ -50,6 +52,7 @@ impl __sdk::__query_builder::HasCols for AuctionBidDecision {
             result_bidder_guid: __sdk::__query_builder::Col::new(table_name, "result_bidder_guid"),
             result_bid: __sdk::__query_builder::Col::new(table_name, "result_bid"),
             minimum_increment: __sdk::__query_builder::Col::new(table_name, "minimum_increment"),
+            deferred_refund: __sdk::__query_builder::Col::new(table_name, "deferred_refund"),
         }
     }
 }

@@ -91,7 +91,7 @@ pub struct AuctionOperationReceipt {
 }
 
 /// Source-shard copper fence for one caller-identified bid. `outcome == 0` is pending; every
-/// nonzero outcome is terminal and retains the full payload for safe replay detection.
+/// nonzero outcome is terminal and retains the full payload plus any refund awaiting realm relay.
 #[table(
     accessor = game_auction_bid_hold,
     index(accessor = by_bidder, btree(columns = [bidder_guid]))
@@ -107,10 +107,12 @@ pub struct AuctionBidHold {
     pub result_bidder_guid: u64,
     pub result_bid: u32,
     pub minimum_increment: u32,
+    #[default(0)]
+    pub deferred_refund: u32,
 }
 
-/// Realm-core's terminal serialized decision for one bid payload. Accepted decisions, the Auction
-/// revision update, and any displaced-bidder mail are committed in the same transaction.
+/// Realm-core's terminal serialized decision for one bid payload. Auction changes, displaced mail,
+/// and any later source-refund mail are exact-once updates recorded on this row.
 #[table(accessor = game_auction_bid_decision)]
 pub struct AuctionBidDecision {
     #[primary_key]
@@ -123,6 +125,8 @@ pub struct AuctionBidDecision {
     pub result_bidder_guid: u64,
     pub result_bid: u32,
     pub minimum_increment: u32,
+    #[default(0)]
+    pub deferred_refund: u32,
 }
 
 /// One one-shot scheduler row for each active Auction.
@@ -337,6 +341,7 @@ enum BidRefusal {
 struct HeldBid {
     request: BidRequest,
     decision: Option<BidDecision>,
+    deferred_refund: u32,
 }
 
 trait BidSource {
@@ -348,6 +353,7 @@ trait BidSource {
         request: BidRequest,
         decision: BidDecision,
     ) -> Result<(), BidRefusal>;
+    fn confirm_refund(&mut self, request: BidRequest) -> Result<(), BidRefusal>;
 }
 
 fn fence_bid<S: BidSource>(source: &mut S, request: BidRequest) -> Result<(), BidRefusal> {
@@ -397,13 +403,16 @@ fn finish_bid<S: BidSource>(
     Ok(decision)
 }
 
+fn split_bid_refund(purse: u32, refund: u32) -> (u32, u32) {
+    let purse_credit = refund.min(u32::MAX - purse);
+    (purse + purse_credit, refund - purse_credit)
+}
+
 fn minimum_next_bid(auction: BidAuction) -> Result<u32, BidDecision> {
     if auction.highest_bid == 0 {
         return Ok(auction.start_bid);
     }
-    let increment = u32::try_from(u64::from(auction.highest_bid).div_ceil(20))
-        .map_err(|_| BidDecision::Database)?
-        .max(1);
+    let increment = lyracore_shared::auction::bid_increment(auction.highest_bid);
     auction
         .highest_bid
         .checked_add(increment)
@@ -426,13 +435,7 @@ fn decide_bid(auction: Option<BidAuction>, request: BidRequest, now_micros: i64)
     if auction.owner_guid == request.bidder_guid {
         return BidDecision::BidOwn;
     }
-    let minimum_increment = if auction.highest_bid == 0 {
-        0
-    } else {
-        u32::try_from(u64::from(auction.highest_bid).div_ceil(20))
-            .unwrap_or(u32::MAX)
-            .max(1)
-    };
+    let minimum_increment = lyracore_shared::auction::bid_increment(auction.highest_bid);
     let Ok(minimum) = minimum_next_bid(auction) else {
         return BidDecision::Database;
     };
@@ -466,6 +469,69 @@ trait BidMarket {
         auction: Option<BidAuction>,
         decision: BidDecision,
     ) -> Result<(), BidRefusal>;
+}
+
+trait BidRefundSink {
+    fn refund_decision(
+        &self,
+        operation_id: u64,
+    ) -> Option<(BidRequest, BidDecision, u32)>;
+    fn commit_refund(
+        &mut self,
+        request: BidRequest,
+        amount: u32,
+    ) -> Result<(), BidRefusal>;
+}
+
+fn relay_bid_refund<S: BidRefundSink>(
+    sink: &mut S,
+    request: BidRequest,
+    amount: u32,
+) -> Result<(), BidRefusal> {
+    if amount == 0 {
+        return Ok(());
+    }
+    if amount > request.offer {
+        return Err(BidRefusal::Database);
+    }
+    let (existing_request, decision, recorded) = sink
+        .refund_decision(request.operation_id)
+        .ok_or(BidRefusal::Database)?;
+    if existing_request != request || matches!(decision, BidDecision::Accepted { .. }) {
+        return Err(BidRefusal::Database);
+    }
+    if recorded != 0 {
+        return if recorded == amount {
+            Ok(())
+        } else {
+            Err(BidRefusal::Database)
+        };
+    }
+    sink.commit_refund(request, amount)
+}
+
+fn confirm_bid_refund<S: BidSource>(
+    source: &mut S,
+    request: BidRequest,
+    amount: u32,
+) -> Result<(), BidRefusal> {
+    if amount == 0 || amount > request.offer {
+        return Err(BidRefusal::Database);
+    }
+    let hold = source
+        .hold(request.operation_id)
+        .ok_or(BidRefusal::Database)?;
+    let decision = hold.decision.ok_or(BidRefusal::Database)?;
+    if hold.request != request || matches!(decision, BidDecision::Accepted { .. }) {
+        return Err(BidRefusal::Database);
+    }
+    if hold.deferred_refund == 0 {
+        return Ok(());
+    }
+    if hold.deferred_refund != amount {
+        return Err(BidRefusal::Database);
+    }
+    source.confirm_refund(request)
 }
 
 fn resolve_bid<S: BidMarket>(
@@ -959,6 +1025,7 @@ impl BidSource for CtxBidSource<'_> {
                     result_bid: row.result_bid,
                     minimum_increment: row.minimum_increment,
                 }),
+                deferred_refund: row.deferred_refund,
             })
     }
 
@@ -980,6 +1047,7 @@ impl BidSource for CtxBidSource<'_> {
             result_bidder_guid: 0,
             result_bid: 0,
             minimum_increment: 0,
+            deferred_refund: 0,
         });
         Ok(())
     }
@@ -989,15 +1057,16 @@ impl BidSource for CtxBidSource<'_> {
         request: BidRequest,
         decision: BidDecision,
     ) -> Result<(), BidRefusal> {
-        if !matches!(decision, BidDecision::Accepted { .. }) {
+        let deferred_refund = if !matches!(decision, BidDecision::Accepted { .. }) {
             let mut bidder = crate::helpers::acting_entity_by_guid(self.ctx, request.bidder_guid)
                 .ok_or(BidRefusal::Database)?;
-            bidder.money = bidder
-                .money
-                .checked_add(request.offer)
-                .ok_or(BidRefusal::Database)?;
+            let (money, deferred_refund) = split_bid_refund(bidder.money, request.offer);
+            bidder.money = money;
             self.ctx.db.game_world_entity().guid().update(bidder);
-        }
+            deferred_refund
+        } else {
+            0
+        };
         let fields = bid_decision_fields(decision);
         self.ctx
             .db
@@ -1013,7 +1082,31 @@ impl BidSource for CtxBidSource<'_> {
                 result_bidder_guid: fields.result_bidder_guid,
                 result_bid: fields.result_bid,
                 minimum_increment: fields.minimum_increment,
+                deferred_refund,
             });
+        Ok(())
+    }
+
+    fn confirm_refund(&mut self, request: BidRequest) -> Result<(), BidRefusal> {
+        let mut row = self
+            .ctx
+            .db
+            .game_auction_bid_hold()
+            .operation_id()
+            .find(request.operation_id)
+            .ok_or(BidRefusal::Database)?;
+        if row.bidder_guid != request.bidder_guid
+            || row.auction_id != request.auction_id
+            || row.offer != request.offer
+        {
+            return Err(BidRefusal::Database);
+        }
+        row.deferred_refund = 0;
+        self.ctx
+            .db
+            .game_auction_bid_hold()
+            .operation_id()
+            .update(row);
         Ok(())
     }
 }
@@ -1127,7 +1220,72 @@ impl BidMarket for CtxBidMarket<'_> {
                 result_bidder_guid: fields.result_bidder_guid,
                 result_bid: fields.result_bid,
                 minimum_increment: fields.minimum_increment,
+                deferred_refund: 0,
             });
+        Ok(())
+    }
+}
+
+impl BidRefundSink for CtxBidMarket<'_> {
+    fn refund_decision(
+        &self,
+        operation_id: u64,
+    ) -> Option<(BidRequest, BidDecision, u32)> {
+        let row = self
+            .ctx
+            .db
+            .game_auction_bid_decision()
+            .operation_id()
+            .find(operation_id)?;
+        let decision = bid_decision_from_fields(BidDecisionFields {
+            outcome: row.outcome,
+            revision: row.revision,
+            result_bidder_guid: row.result_bidder_guid,
+            result_bid: row.result_bid,
+            minimum_increment: row.minimum_increment,
+        })?;
+        Some((
+            bid_request(row.operation_id, row.bidder_guid, row.auction_id, row.offer),
+            decision,
+            row.deferred_refund,
+        ))
+    }
+
+    fn commit_refund(
+        &mut self,
+        request: BidRequest,
+        amount: u32,
+    ) -> Result<(), BidRefusal> {
+        let mut row = self
+            .ctx
+            .db
+            .game_auction_bid_decision()
+            .operation_id()
+            .find(request.operation_id)
+            .ok_or(BidRefusal::Database)?;
+        if row.bidder_guid != request.bidder_guid
+            || row.auction_id != request.auction_id
+            || row.offer != request.offer
+            || row.deferred_refund != 0
+        {
+            return Err(BidRefusal::Database);
+        }
+        crate::mail::insert_mail(
+            self.ctx,
+            request.bidder_guid,
+            0,
+            "Auction bid refund".to_string(),
+            String::new(),
+            amount,
+            0,
+            &crate::items::ItemSnapshot::default(),
+        );
+        row.deferred_refund = amount;
+        self.ctx
+            .db
+            .game_auction_bid_decision()
+            .operation_id()
+            .update(row);
         Ok(())
     }
 }
@@ -1407,8 +1565,18 @@ pub fn gw_auction_bid_local(
         &mut CtxBidMarket { ctx },
         request,
     )
-        .map(|_| ())
-        .map_err(|refusal| tagged_bid(refusal, "local bid rejected"))
+    .map_err(|refusal| tagged_bid(refusal, "local bid rejected"))?;
+    let deferred_refund = CtxBidSource { ctx }
+        .hold(operation_id)
+        .ok_or_else(|| tagged_bid(BidRefusal::Database, "local bid Hold missing"))?
+        .deferred_refund;
+    if deferred_refund != 0 {
+        relay_bid_refund(&mut CtxBidMarket { ctx }, request, deferred_refund)
+            .map_err(|refusal| tagged_bid(refusal, "local bid refund conflict"))?;
+        confirm_bid_refund(&mut CtxBidSource { ctx }, request, deferred_refund)
+            .map_err(|refusal| tagged_bid(refusal, "local bid refund confirmation conflict"))?;
+    }
+    Ok(())
 }
 
 /// Sharded bid phase 1: move the complete offer into a source-shard Hold before realm-core decides.
@@ -1479,6 +1647,44 @@ pub fn gw_auction_finish_bid(
     .map_err(|refusal| tagged_bid(refusal, "bid outcome conflict"))
 }
 
+/// Sharded bid phase 4: place an unrepresentable purse refund in realm-core mail exactly once.
+#[reducer]
+pub fn realm_auction_refund_bid(
+    ctx: &ReducerContext,
+    operation_id: u64,
+    bidder_guid: u64,
+    auction_id: u32,
+    offer: u32,
+    deferred_refund: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    relay_bid_refund(
+        &mut CtxBidMarket { ctx },
+        bid_request(operation_id, bidder_guid, auction_id, offer),
+        deferred_refund,
+    )
+    .map_err(|refusal| tagged_bid(refusal, "bid refund conflict"))
+}
+
+/// Sharded bid phase 5: record on the source that realm-core durably accepted the refund mail.
+#[reducer]
+pub fn gw_auction_confirm_bid_refund(
+    ctx: &ReducerContext,
+    operation_id: u64,
+    bidder_guid: u64,
+    auction_id: u32,
+    offer: u32,
+    deferred_refund: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    confirm_bid_refund(
+        &mut CtxBidSource { ctx },
+        bid_request(operation_id, bidder_guid, auction_id, offer),
+        deferred_refund,
+    )
+    .map_err(|refusal| tagged_bid(refusal, "bid refund confirmation conflict"))
+}
+
 /// Scheduler-only one-shot expiry. Replays see no active Auction and therefore create no mail.
 #[reducer]
 pub fn expire_auction(ctx: &ReducerContext, schedule: AuctionExpiry) -> Result<(), String> {
@@ -1494,7 +1700,7 @@ pub(crate) fn character_has_auction_value(ctx: &ReducerContext, character_guid: 
         .game_auction_bid_hold()
         .by_bidder()
         .filter(character_guid)
-        .any(|hold| hold.outcome == BID_PENDING)
+        .any(|hold| hold.outcome == BID_PENDING || hold.deferred_refund != 0)
         || ctx
             .db
             .game_auction_hold()
@@ -2146,12 +2352,17 @@ mod tests {
     #[derive(Clone, Copy)]
     struct FakeBidSource {
         money: u32,
+        deferred_refund: u32,
         hold: Option<HeldBid>,
     }
 
     impl FakeBidSource {
         fn new(money: u32) -> Self {
-            Self { money, hold: None }
+            Self {
+                money,
+                deferred_refund: 0,
+                hold: None,
+            }
         }
     }
 
@@ -2170,6 +2381,7 @@ mod tests {
             self.hold = Some(HeldBid {
                 request,
                 decision: None,
+                deferred_refund: 0,
             });
             Ok(())
         }
@@ -2180,11 +2392,24 @@ mod tests {
             decision: BidDecision,
         ) -> Result<(), BidRefusal> {
             if !matches!(decision, BidDecision::Accepted { .. }) {
-                self.money += request.offer;
+                let (money, deferred_refund) = split_bid_refund(self.money, request.offer);
+                self.money = money;
+                self.deferred_refund += deferred_refund;
             }
             self.hold = Some(HeldBid {
                 request,
                 decision: Some(decision),
+                deferred_refund: self.deferred_refund,
+            });
+            Ok(())
+        }
+
+        fn confirm_refund(&mut self, request: BidRequest) -> Result<(), BidRefusal> {
+            self.deferred_refund = 0;
+            self.hold = self.hold.map(|mut hold| {
+                assert_eq!(hold.request, request);
+                hold.deferred_refund = 0;
+                hold
             });
             Ok(())
         }
@@ -2212,6 +2437,36 @@ mod tests {
         assert_eq!(rejection.money, 200, "a rejection restores the offer");
         assert_eq!(finish_bid(&mut rejection, request, rejected), Ok(rejected));
         assert_eq!(rejection.money, 200, "replay cannot restore twice");
+
+        let mut overflowed_rejection = FakeBidSource::new(200);
+        assert_eq!(fence_bid(&mut overflowed_rejection, request), Ok(()));
+        overflowed_rejection.money = u32::MAX;
+        assert_eq!(
+            finish_bid(&mut overflowed_rejection, request, rejected),
+            Ok(rejected),
+            "an intervening purse credit cannot strand a rejected Hold"
+        );
+        assert_eq!(overflowed_rejection.money, u32::MAX);
+        assert_eq!(overflowed_rejection.deferred_refund, request.offer);
+        assert_eq!(
+            finish_bid(&mut overflowed_rejection, request, rejected),
+            Ok(rejected)
+        );
+        assert_eq!(
+            overflowed_rejection.deferred_refund,
+            request.offer,
+            "replay cannot defer the refund twice"
+        );
+        assert_eq!(
+            confirm_bid_refund(&mut overflowed_rejection, request, request.offer),
+            Ok(())
+        );
+        assert_eq!(overflowed_rejection.deferred_refund, 0);
+        assert_eq!(
+            confirm_bid_refund(&mut overflowed_rejection, request, request.offer),
+            Ok(()),
+            "confirmation replay is idempotent"
+        );
 
         let mut acceptance = FakeBidSource::new(200);
         assert_eq!(fence_bid(&mut acceptance, request), Ok(()));
@@ -2304,6 +2559,72 @@ mod tests {
             self.decision = Some((request, decision));
             Ok(())
         }
+    }
+
+    struct FakeBidRefundSink {
+        request: BidRequest,
+        decision: BidDecision,
+        recorded: u32,
+        mails: Vec<(u64, u32)>,
+    }
+
+    impl BidRefundSink for FakeBidRefundSink {
+        fn refund_decision(
+            &self,
+            operation_id: u64,
+        ) -> Option<(BidRequest, BidDecision, u32)> {
+            (self.request.operation_id == operation_id)
+                .then_some((self.request, self.decision, self.recorded))
+        }
+
+        fn commit_refund(
+            &mut self,
+            request: BidRequest,
+            amount: u32,
+        ) -> Result<(), BidRefusal> {
+            self.recorded = amount;
+            self.mails.push((request.bidder_guid, amount));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn deferred_bid_refund_relay_is_terminal_and_payload_safe() {
+        let request = BidRequest {
+            operation_id: 904,
+            bidder_guid: 8,
+            auction_id: 41,
+            offer: 107,
+        };
+        let mut sink = FakeBidRefundSink {
+            request,
+            decision: BidDecision::BidIncrement,
+            recorded: 0,
+            mails: Vec::new(),
+        };
+
+        assert_eq!(relay_bid_refund(&mut sink, request, 7), Ok(()));
+        assert_eq!(relay_bid_refund(&mut sink, request, 7), Ok(()));
+        assert_eq!(sink.mails, vec![(8, 7)]);
+        assert_eq!(
+            relay_bid_refund(&mut sink, BidRequest { offer: 108, ..request }, 7),
+            Err(BidRefusal::Database)
+        );
+        assert_eq!(
+            relay_bid_refund(&mut sink, request, 8),
+            Err(BidRefusal::Database)
+        );
+
+        sink.recorded = 0;
+        sink.decision = BidDecision::Accepted {
+            revision: 4,
+            displaced_bidder_guid: 9,
+            displaced_bid: 101,
+        };
+        assert_eq!(
+            relay_bid_refund(&mut sink, request, 7),
+            Err(BidRefusal::Database)
+        );
     }
 
     #[test]
@@ -2421,6 +2742,8 @@ mod tests {
             "pub fn gw_auction_hold_bid(",
             "pub fn realm_auction_decide_bid(",
             "pub fn gw_auction_finish_bid(",
+            "pub fn realm_auction_refund_bid(",
+            "pub fn gw_auction_confirm_bid_refund(",
         ] {
             let body = code_of(include_str!("auction.rs"), signature);
             let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");

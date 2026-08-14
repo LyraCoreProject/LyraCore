@@ -436,7 +436,7 @@ impl Coordinator {
         request: crate::world::PlaceBidRequest,
     ) -> Result<crate::world::PlaceBidOutcome> {
         let operation_id = self
-            .matching_pending_bid_hold(request)
+            .matching_unfinished_bid_hold(request)
             .map_or_else(next_auction_operation_id, |hold| Ok(hold.operation_id))?;
         let result = if self.is_sharded() {
             self.drive_sharded_auction_bid(operation_id, request)
@@ -459,15 +459,21 @@ impl Coordinator {
         request: crate::world::PlaceBidRequest,
     ) -> Result<AuctionBidHold> {
         self.auction_hold_bid(operation_id, request)?;
-        let hold = self.wait_for_auction_bid_hold(operation_id)?;
-        if hold.outcome != lyracore_shared::auction::bid_outcome::PENDING {
-            return Ok(hold);
-        }
+        let mut hold = self.wait_for_auction_bid_hold(operation_id)?;
         let realm = self.realm_core()?;
-        realm.auction_decide_bid(&hold)?;
-        let decision = realm.wait_for_auction_bid_decision(operation_id)?;
-        self.auction_finish_bid(&hold, &decision)?;
-        self.wait_for_terminal_bid_hold(operation_id)
+        if hold.outcome == lyracore_shared::auction::bid_outcome::PENDING {
+            realm.auction_decide_bid(&hold)?;
+            let decision = realm.wait_for_auction_bid_decision(operation_id)?;
+            self.auction_finish_bid(&hold, &decision)?;
+            hold = self.wait_for_terminal_bid_hold(operation_id)?;
+        }
+        if hold.deferred_refund != 0 {
+            realm.auction_refund_bid(&hold)?;
+            realm.wait_for_bid_refund(&hold)?;
+            self.auction_confirm_bid_refund(&hold)?;
+            hold = self.wait_for_settled_bid_refund(hold.operation_id)?;
+        }
+        Ok(hold)
     }
 
     fn auction_bid_local(
@@ -522,11 +528,7 @@ impl Coordinator {
         hold: &AuctionBidHold,
         decision: &AuctionBidDecision,
     ) -> Result<()> {
-        if hold.operation_id != decision.operation_id
-            || hold.bidder_guid != decision.bidder_guid
-            || hold.auction_id != decision.auction_id
-            || hold.offer != decision.offer
-        {
+        if !bid_payload_matches(hold, decision) {
             return Err(anyhow!("auction bid decision payload does not match its Hold"));
         }
         call_reducer!(
@@ -546,7 +548,35 @@ impl Coordinator {
         )
     }
 
-    fn matching_pending_bid_hold(
+    fn auction_refund_bid(&self, hold: &AuctionBidHold) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_auction_refund_bid",
+            realm_auction_refund_bid_then(
+                hold.operation_id,
+                hold.bidder_guid,
+                hold.auction_id,
+                hold.offer,
+                hold.deferred_refund
+            )
+        )
+    }
+
+    fn auction_confirm_bid_refund(&self, hold: &AuctionBidHold) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_auction_confirm_bid_refund",
+            gw_auction_confirm_bid_refund_then(
+                hold.operation_id,
+                hold.bidder_guid,
+                hold.auction_id,
+                hold.offer,
+                hold.deferred_refund
+            )
+        )
+    }
+
+    fn matching_unfinished_bid_hold(
         &self,
         request: crate::world::PlaceBidRequest,
     ) -> Option<AuctionBidHold> {
@@ -557,7 +587,8 @@ impl Coordinator {
             .game_auction_bid_hold()
             .iter()
             .find(|hold| {
-                hold.outcome == lyracore_shared::auction::bid_outcome::PENDING
+                (hold.outcome == lyracore_shared::auction::bid_outcome::PENDING
+                    || hold.deferred_refund != 0)
                     && hold.bidder_guid == request.actor_guid
                     && hold.auction_id == request.auction_id
                     && hold.offer == request.offer
@@ -600,6 +631,35 @@ impl Coordinator {
                 .game_auction_bid_decision()
                 .operation_id()
                 .find(&operation_id)
+        })
+    }
+
+    fn wait_for_bid_refund(&self, hold: &AuctionBidHold) -> Result<AuctionBidDecision> {
+        wait_for_auction_cache_row(hold.operation_id, "bid refund", || {
+            self.0
+                .coord()
+                .conn
+                .db
+                .game_auction_bid_decision()
+                .operation_id()
+                .find(&hold.operation_id)
+                .filter(|decision| bid_refund_is_recorded(hold, decision))
+        })
+    }
+
+    fn wait_for_settled_bid_refund(&self, operation_id: u64) -> Result<AuctionBidHold> {
+        wait_for_auction_cache_row(operation_id, "settled bid refund", || {
+            self.0
+                .coord()
+                .conn
+                .db
+                .game_auction_bid_hold()
+                .operation_id()
+                .find(&operation_id)
+                .filter(|hold| {
+                    hold.outcome != lyracore_shared::auction::bid_outcome::PENDING
+                        && hold.deferred_refund == 0
+                })
         })
     }
 
@@ -879,10 +939,7 @@ impl Coordinator {
                 .db
                 .game_auction_bid_hold()
                 .iter()
-                .any(|hold| {
-                    hold.bidder_guid == character_guid
-                        && hold.outcome == lyracore_shared::auction::bid_outcome::PENDING
-                });
+                .any(|hold| bid_hold_has_value(&hold, character_guid));
             if has_bid_hold {
                 return Ok(true);
             }
@@ -2908,14 +2965,31 @@ fn map_auction_refusal(error: &anyhow::Error) -> Option<crate::world::CreateAuct
     }
 }
 
+fn bid_payload_matches(hold: &AuctionBidHold, decision: &AuctionBidDecision) -> bool {
+    hold.operation_id == decision.operation_id
+        && hold.bidder_guid == decision.bidder_guid
+        && hold.auction_id == decision.auction_id
+        && hold.offer == decision.offer
+}
+
+fn bid_refund_is_recorded(hold: &AuctionBidHold, decision: &AuctionBidDecision) -> bool {
+    hold.deferred_refund != 0
+        && bid_payload_matches(hold, decision)
+        && hold.deferred_refund == decision.deferred_refund
+}
+
+fn bid_hold_has_value(hold: &AuctionBidHold, bidder_guid: u64) -> bool {
+    hold.bidder_guid == bidder_guid
+        && (hold.outcome == lyracore_shared::auction::bid_outcome::PENDING
+            || hold.deferred_refund != 0)
+}
+
 fn bid_outcome(hold: &AuctionBidHold) -> Result<crate::world::PlaceBidOutcome> {
     use crate::world::PlaceBidOutcome;
     use lyracore_shared::auction::bid_outcome;
     Ok(match hold.outcome {
         bid_outcome::ACCEPTED => PlaceBidOutcome::Accepted {
-            minimum_increment: u32::try_from(u64::from(hold.offer).div_ceil(20))
-                .unwrap_or(u32::MAX)
-                .max(1),
+            minimum_increment: lyracore_shared::auction::bid_increment(hold.offer),
         },
         bid_outcome::ITEM_NOT_FOUND => PlaceBidOutcome::ItemNotFound,
         bid_outcome::HIGHER_BID => PlaceBidOutcome::HigherBid {
@@ -2983,5 +3057,60 @@ mod auction_reducer_tests {
             Some(crate::world::PlaceBidOutcome::Database)
         );
         assert_eq!(map_bid_refusal(&anyhow!("transport disconnected")), None);
+    }
+
+    #[test]
+    fn deferred_refund_receipt_requires_the_full_hold_payload() {
+        let hold = AuctionBidHold {
+            operation_id: 7,
+            bidder_guid: 8,
+            auction_id: 9,
+            offer: 10,
+            outcome: lyracore_shared::auction::bid_outcome::BID_INCREMENT,
+            revision: 0,
+            result_bidder_guid: 0,
+            result_bid: 0,
+            minimum_increment: 0,
+            deferred_refund: 3,
+        };
+        let decision = AuctionBidDecision {
+            operation_id: hold.operation_id,
+            bidder_guid: hold.bidder_guid,
+            auction_id: hold.auction_id,
+            offer: hold.offer,
+            outcome: hold.outcome,
+            revision: hold.revision,
+            result_bidder_guid: hold.result_bidder_guid,
+            result_bid: hold.result_bid,
+            minimum_increment: hold.minimum_increment,
+            deferred_refund: hold.deferred_refund,
+        };
+
+        assert!(bid_refund_is_recorded(&hold, &decision));
+        assert!(!bid_refund_is_recorded(
+            &hold,
+            &AuctionBidDecision {
+                offer: 11,
+                ..decision.clone()
+            }
+        ));
+        assert!(!bid_refund_is_recorded(
+            &hold,
+            &AuctionBidDecision {
+                deferred_refund: 2,
+                ..decision
+            }
+        ));
+
+        let bidder_guid = hold.bidder_guid;
+        assert!(bid_hold_has_value(&hold, bidder_guid));
+        assert!(!bid_hold_has_value(&hold, bidder_guid + 1));
+        assert!(!bid_hold_has_value(
+            &AuctionBidHold {
+                deferred_refund: 0,
+                ..hold
+            },
+            bidder_guid
+        ));
     }
 }
