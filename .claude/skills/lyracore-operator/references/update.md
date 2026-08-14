@@ -22,8 +22,7 @@ reason to clean the checkout. Resolve the intended `origin/main` commit with
 `./lyracore update` enforce its own tracked-edit refusal.
 
 Resolve the approved production source, expected topology, inventory, and sanitized live gateway
-state through the production contract. Require its SpacetimeDB node identifier to be exactly
-`local`; report any other nickname, host, or URL as a blocker before presenting the checkpoint.
+state through the production contract. Apply its update-node gate before presenting the checkpoint.
 
 Before any `./lyracore update`, emit this checkpoint:
 
@@ -46,8 +45,8 @@ Pause for explicit confirmation of that exact checkpoint. Continue without a new
 current request already confirmed those exact values. A general instruction to update a host is not
 confirmation of topology that the user has not seen.
 
-Completion criterion: tools pass, the approved node is exactly `local`, the three topology views
-agree, and the exact checkpoint is confirmed. Otherwise report a blocker and stop before mutation.
+Completion criterion: tools pass, the production contract's topology and update-node gates pass,
+and the exact checkpoint is confirmed. Otherwise report a blocker and stop before mutation.
 
 ## 2. Update the checkout
 
@@ -121,10 +120,9 @@ configuration and a known log source.
 Run the production contract's latest-start health probe against the replacement. Also verify process
 identity and the actual listening sockets with `ss -ltnp` or the host's equivalent.
 
-Report these warnings with impact:
+Report the production contract's classifications and these update-specific warnings with impact:
 
 - realm advertises loopback while the world listener is remote: clients return to realm select;
-- `LYRACORE_METRICS_DB_IDS` absent: writer occupancy is unmeasured;
 - login queue disabled or blocking-pool capacity unresolved: admission capacity is unbounded or
   unknown;
 - cross-shard catalogue check unavailable: replicated content parity remains unproved.
