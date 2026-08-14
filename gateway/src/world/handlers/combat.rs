@@ -1,10 +1,11 @@
-//! Combat family: selection, pet commands, melee swing/stop, sheathing, chat channels and the two
-//! cancellation opcodes. Every `CMSG_CAST_SPELL` route now belongs to the cast seam in `cast`.
+//! Combat family: selection, pet commands, melee swing/stop, sheathing and chat channels. Every
+//! cast opcode — the `CMSG_CAST_SPELL` routes and both cancellations — belongs to the cast seam in
+//! `cast`.
 
 use super::super::*;
 
-/// Combat family: selection, pet commands, melee swing/stop, sheathing, chat channels and the two
-/// cancellation opcodes. ⚠️ Holds the two session-fatal `is_desync_error` early-exits on
+/// Combat family: selection, pet commands, melee swing/stop, sheathing and chat channels. ⚠️ Holds
+/// the two session-fatal `is_desync_error` early-exits on
 /// CMSG_ATTACKSWING/CMSG_ATTACKSTOP — a desync means the player's own entity is gone, so the
 /// session is torn down for a clean relog, unlike the transient per-swing failures that stay
 /// logged and alive.
@@ -161,9 +162,6 @@ pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
                 );
             }
         }
-        // Cancel a buff: the player right-clicked its icon (CMSG_CANCEL_AURA). Best-effort — remove the
-        // caller's own aura by spell id; the aura on_delete relay then re-syncs the buff bar. A failure
-        // (no such aura / not in world) is per-action — log + ignore, never tear the session down.
         // Chat channels: the client auto-sends JOIN for General/Trade/LocalDefense on
         // zone-in; ack with SMSG_CHANNEL_NOTIFY(YouJoined) so the tab arms (the client won't
         // accept channel lines for a channel it never got the join notice for). Re-joins are
@@ -205,26 +203,6 @@ pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
                         },
                     ))),
                 )?;
-            }
-        }
-        ClientOpcodeMessage::CMSG_CANCEL_AURA(c) => {
-            if let Err(e) = store.cancel_aura(conn.account_id, self_guid, c.id) {
-                log::debug!(
-                    "world: cancel_aura ignored (account {}): {e}",
-                    conn.account_id
-                );
-            }
-        }
-        // Cancel an in-progress cast (CMSG_CANCEL_CAST — Esc / moved / recast). Clear the caller's pending
-        // cast server-side so a scheduled completion can't fire a phantom SMSG_SPELL_GO that wedges the
-        // client's cast state ("Another action is in progress"). Best-effort — a failure (nothing pending
-        // / not in world) is per-action: log + ignore. The client's spell id (_c) is not needed.
-        ClientOpcodeMessage::CMSG_CANCEL_CAST(_c) => {
-            if let Err(e) = store.cancel_cast(conn.account_id, social::self_guid(conn).unwrap_or(0)) {
-                log::debug!(
-                    "world: cancel_cast ignored (account {}): {e}",
-                    conn.account_id
-                );
             }
         }
         other => return Ok(Some(other)),

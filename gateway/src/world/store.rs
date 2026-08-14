@@ -641,16 +641,6 @@ pub trait WorldStore: CastStore + ItemActionStore + Send + Sync {
     /// what makes a drawn or stowed weapon visible to OTHER players. [#101]
     fn set_sheathed(&self, account_id: u64, self_guid: u64, state: u8) -> Result<()>;
 
-    /// Cancel one of the caller's own auras by spell id (`CMSG_CANCEL_AURA` — the player right-clicks a
-    /// buff icon to remove it). The module deletes the matching aura on the caller; the aura relay then
-    /// re-syncs the buff bar.
-    fn cancel_aura(&self, account_id: u64, self_guid: u64, spell_id: u32) -> Result<()>;
-
-    /// Cancel the caller's in-progress cast (`CMSG_CANCEL_CAST` — the player pressed Esc, moved, or
-    /// recast). The module deletes the caller's pending cast so the scheduled completion never fires a
-    /// phantom `SMSG_SPELL_GO` that wedges the client in "Another action is in progress".
-    fn cancel_cast(&self, account_id: u64, self_guid: u64) -> Result<()>;
-
     /// The live entity's max health (0 if not in world) — the fall-damage flavor line folds
     /// the shared curve against it.
     fn entity_max_health(&self, guid: u64) -> u32;

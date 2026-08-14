@@ -855,14 +855,6 @@ impl WorldStore for Coordinator {
         self.set_sheathed(account_id, self_guid, state)
     }
 
-    fn cancel_aura(&self, account_id: u64, self_guid: u64, spell_id: u32) -> Result<()> {
-        self.cancel_aura(account_id, self_guid, spell_id)
-    }
-
-    fn cancel_cast(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        self.cancel_cast(account_id, self_guid)
-    }
-
     fn entity_max_health(&self, guid: u64) -> u32 {
         self.entity_max_health(guid)
     }

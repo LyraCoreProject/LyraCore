@@ -3,9 +3,15 @@
 //!
 //! The module root holds the seam types, the route decision tree and the ordinary cast route
 //! (instant, timed, next-swing, ground-area and ground-targeted casts). Ranged auto-repeat lives in
-//! [`ranged`], and the routes whose reducers emit no cast event — enchant, disenchant, fishing and
-//! lock opening — in [`manual`].
+//! [`ranged`], the routes whose reducers emit no cast event — enchant, disenchant, fishing and lock
+//! opening — in [`manual`], and both cancellations in [`cancel`].
+//!
+//! Deleting this module does not delete the decisions in it. Spell taxonomy routing, client target
+//! decoding, durable-operation selection, ranged auto-repeat state, failure mapping and the
+//! message-order rules would spread back across the broad combat handler and the store adapters,
+//! which is where they lived before and why one cast change needed edits in several files.
 
+mod cancel;
 mod manual;
 mod ranged;
 
@@ -98,6 +104,13 @@ pub(crate) trait CastStore: Send + Sync {
     /// Pick the lock on GameObject `go_guid`. The module gates range, the lock requirement and the
     /// caller's skill; `Err` is the refusal the player sees as a cast failure.
     fn pick_lock(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()>;
+
+    /// Drop the caller's pending cast, so a scheduled completion cannot fire later. Under the
+    /// one-pending-cast rule the caller identifies the cast, so the client's spell id is unused.
+    fn cancel_cast(&self, account_id: u64, self_guid: u64) -> Result<()>;
+
+    /// Remove the caller's own aura named by the wire spell id. The aura relay re-syncs the buff bar.
+    fn cancel_aura(&self, account_id: u64, self_guid: u64, spell_id: u32) -> Result<()>;
 
     // The three operations below are shared with the melee, character and vendor paths. They are
     // declared here rather than on `WorldStore` because a second declaration of the same name would
@@ -220,6 +233,14 @@ impl CastStore for crate::stdb::Coordinator {
         crate::stdb::Coordinator::pick_lock(self, account_id, self_guid, go_guid)
     }
 
+    fn cancel_cast(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        crate::stdb::Coordinator::cancel_cast(self, account_id, self_guid)
+    }
+
+    fn cancel_aura(&self, account_id: u64, self_guid: u64, spell_id: u32) -> Result<()> {
+        crate::stdb::Coordinator::cancel_aura(self, account_id, self_guid, spell_id)
+    }
+
     fn stop_attack(&self, account_id: u64, self_guid: u64) -> Result<()> {
         crate::stdb::Coordinator::stop_attack(self, account_id, self_guid)
     }
@@ -329,6 +350,8 @@ pub(crate) fn dispatch_cast<St: CastStore + ?Sized>(
             }
         },
         ClientOpcodeMessage::CMSG_CANCEL_AUTO_REPEAT_SPELL => Ok(ranged::cancel(store, player)),
+        ClientOpcodeMessage::CMSG_CANCEL_CAST(_) => cancel::cancel_cast(store, player),
+        ClientOpcodeMessage::CMSG_CANCEL_AURA(c) => cancel::cancel_aura(store, player, c.id),
         other => Ok(CastOutcome::PassThrough(other)),
     }
 }
@@ -440,6 +463,8 @@ pub(super) mod tests {
     pub(crate) type FishCall = (u64, u64);
     /// One recorded `pick_lock` call: account, caster and GameObject guid.
     pub(crate) type PickLockCall = (u64, u64, u64);
+    /// One recorded `cancel_aura` call: account, caster and wire spell id.
+    pub(crate) type CancelAuraCall = (u64, u64, u32);
 
     /// Spell-route metadata, item state and durable results for the cast routes, plus a record of
     /// every durable call. Nothing else: no vendors, parties, mail, transfer or unrelated world
@@ -463,6 +488,8 @@ pub(super) mod tests {
         pub(crate) item_slots: Vec<(u64, u8)>,
         /// Shared refusal for every manual-completion durable operation.
         pub(crate) manual_error: Option<String>,
+        /// Shared refusal for both cancellation operations.
+        pub(crate) cancel_error: Option<String>,
         pub(crate) casts: Mutex<Vec<Cast>>,
         pub(crate) ground_casts: Mutex<Vec<GroundCast>>,
         pub(crate) ranged_attacks: Mutex<Vec<RangedAttack>>,
@@ -471,6 +498,8 @@ pub(super) mod tests {
         pub(crate) enchant_calls: Mutex<Vec<EnchantCall>>,
         pub(crate) fish_calls: Mutex<Vec<FishCall>>,
         pub(crate) pick_lock_calls: Mutex<Vec<PickLockCall>>,
+        pub(crate) cancel_cast_calls: Mutex<Vec<(u64, u64)>>,
+        pub(crate) cancel_aura_calls: Mutex<Vec<CancelAuraCall>>,
     }
 
     impl InMemoryCasts {
@@ -496,6 +525,12 @@ pub(super) mod tests {
 
         fn manual_result(&self) -> Result<()> {
             self.manual_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |e| Err(anyhow!("{e}")))
+        }
+
+        fn cancel_result(&self) -> Result<()> {
+            self.cancel_error
                 .as_ref()
                 .map_or_else(|| Ok(()), |e| Err(anyhow!("{e}")))
         }
@@ -603,6 +638,22 @@ pub(super) mod tests {
                 .unwrap()
                 .push((account_id, self_guid, go_guid));
             self.manual_result()
+        }
+
+        fn cancel_cast(&self, account_id: u64, self_guid: u64) -> Result<()> {
+            self.cancel_cast_calls
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid));
+            self.cancel_result()
+        }
+
+        fn cancel_aura(&self, account_id: u64, self_guid: u64, spell_id: u32) -> Result<()> {
+            self.cancel_aura_calls
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid, spell_id));
+            self.cancel_result()
         }
 
         fn start_ranged_attack(
