@@ -89,7 +89,9 @@ authentication data.
 - Public world listener plus loopback `game_realm.address`: **client-breaking advertisement**;
   request separate authorization to run `set_realm_address` on every database. Diagnosis does not
   invoke the reducer.
-- Metrics IDs absent or `occupancy=unmeasured`: **observability gap**, not a gameplay outage.
+- Metrics IDs absent or `occupancy=unmeasured`: **observability gap**; record a separate `WARN`,
+  never `FAIL` or a blocker by itself. Preserve `PASS` for gameplay and connectivity when their
+  evidence passes.
 - Listener absent with a live process: **startup/bind failure**; inspect the first error after the
   latest gateway start.
 - Repeated `QUEUESTAT` depth with no admission: **capacity/admission problem**; preserve settings and

@@ -95,4 +95,8 @@ Configured databases prove intent. A distinct `coordinator connected to shard <d
 for every expected database proves connectivity. Listener log markers do not prove that the process
 still owns its sockets, so inspect actual sockets separately.
 
+Classify missing `LYRACORE_METRICS_DB_IDS` or `occupancy=unmeasured` as a separate `WARN`. It is an
+observability gap, never a `FAIL` or blocker by itself. Keep gameplay and connectivity checks `PASS`
+when their own evidence passes.
+
 Finish when status accounts for every expected database, realm-core, startup error, and listener.
