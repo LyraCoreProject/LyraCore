@@ -3,10 +3,12 @@
 
 use super::*;
 
-// Per-family dispatch handlers — code-motion of the former dispatch match arms, bodies verbatim.
-// Each returns `Ok(None)` once it consumes its opcode, else `Ok(Some(msg))` to pass the message on.
-// `melee.rs` is the exception: it is a seam, not code-motion. Its bodies were rewritten to return an
-// outcome the world session applies, and the session-fatal melee desync exits live there.
+// Two shapes live here. A `handle_*` handler is code-motion of the former dispatch match arms
+// (bodies verbatim): it sends on the socket itself and returns `Ok(None)` once it consumes its
+// opcode, else `Ok(Some(msg))` to pass the message on. A `dispatch_*_action` seam — item, melee,
+// quest and vendor — owns a whole protocol family instead: it takes a narrow store trait and a
+// player context, decides refusal-versus-fatal itself, and returns the outbound batch for the
+// world session to send, so the family can be tested without a socket.
 
 mod bank;
 mod cast;
@@ -33,7 +35,9 @@ pub(crate) use melee::{
     dispatch_melee_action, MeleeActionOutcome, MeleeActionPlayer, MeleeActionStore,
 };
 pub(crate) use query::handle_query;
-pub(crate) use quest::handle_quest;
+pub(crate) use quest::{
+    dispatch_quest_action, QuestActionOutcome, QuestActionPlayer, QuestActionStore,
+};
 pub(crate) use trade::handle_trade;
 pub(crate) use trainer::handle_trainer;
 pub(crate) use vendor::{
@@ -49,55 +53,4 @@ fn send_show_bank(tx: &SessionTx, banker_guid: u64) -> Result<()> {
             banker_guid,
         ))),
     )
-}
-
-/// The quest menu for `giver` (creature OR gameobject guid — `quest_giver_evals` resolves either)
-/// against `self_guid`: vanilla "instant quest" (mangos `SendPreparedQuest`) opens a
-/// SINGLE menu-worthy quest's screen DIRECTLY (accept details for a new quest, the reward screen for a
-/// finished turn-in, the "not done yet" request-items screen for one in progress); a giver with
-/// MULTIPLE quests shows the list instead. Shared by `CMSG_QUESTGIVER_HELLO` (a
-/// creature giver) and `CMSG_GAMEOBJ_USE` on a `go_type::QUESTGIVER` gameobject (a GO giver) — the two
-/// client interactions converge on the exact same window, so this is the single chokepoint that keeps
-/// them from drifting apart (mirrors `filtered_gossip_options`'s HELLO/SELECT_OPTION rationale).
-fn send_questgiver_menu<St: WorldStore + ?Sized>(
-    tx: &SessionTx,
-    store: &St,
-    giver: u64,
-    self_guid: u64,
-) -> Result<()> {
-    let evals = store.quest_giver_evals(giver, self_guid)?;
-    let menu = codec::quest_menu_items(&evals);
-    let single = if menu.len() == 1 {
-        store.quest_detail(menu[0].quest_id)?
-    } else {
-        None
-    };
-    if let Some(detail) = single {
-        let turn_in = evals
-            .iter()
-            .find(|e| e.quest_id == detail.quest_id && e.role == codec::ROLE_END && e.active);
-        if turn_in.is_none() {
-            let (opcode, body) = codec::build_quest_details_raw(giver, &detail);
-            send(tx, Outbound::Raw { opcode, body })?;
-            return Ok(());
-        }
-        let out = match turn_in {
-            Some(e) if e.complete => ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(Box::new(
-                codec::build_offer_reward(giver, &detail),
-            )),
-            Some(_) => ServerOpcodeMessage::SMSG_QUESTGIVER_REQUEST_ITEMS(Box::new(
-                codec::build_request_items(giver, &detail, false),
-            )),
-            None => unreachable!("new quests are handled by the raw DETAILS branch above"),
-        };
-        send(tx, Outbound::One(out))?;
-    } else {
-        send(
-            tx,
-            Outbound::One(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_LIST(Box::new(
-                codec::build_quest_list(giver, "Greetings.", &evals),
-            ))),
-        )?;
-    }
-    Ok(())
 }

@@ -2,6 +2,7 @@
 //! plus who/friend/ignore. Pure code-motion out of `world/mod.rs`.
 
 use super::super::*;
+use super::quest;
 use super::vendor::{vendor_has_stock, vendor_open_outbound};
 
 /// The NPC's imported gossip options, condition-filtered against `player_guid`'s quest
@@ -32,7 +33,7 @@ fn filtered_gossip_options<St: WorldStore + ?Sized>(
     Ok(raw
         .into_iter()
         .filter(|opt| {
-            let (taken, rewarded) = store.quest_status(player_guid, opt.cond_value1);
+            let (taken, rewarded) = quest::quest_gate_state(store, player_guid, opt.cond_value1);
             codec::option_condition_holds(opt.cond_type, taken, rewarded)
         })
         .filter(|opt| opt.action != gossip_option::UNLEARNTALENTS || level >= MIN_TALENT_LEVEL)
@@ -135,9 +136,7 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                 return Ok(None);
             }
             let quests = match &conn.state {
-                WorldState::InWorld(iw) => {
-                    codec::quest_menu_items(&store.quest_giver_evals(npc, iw.self_guid)?)
-                }
+                WorldState::InWorld(iw) => quest::gossip_quest_items(store, npc, iw.self_guid)?,
                 WorldState::CharSelect => Vec::new(),
             };
             // A vendor that ALSO has the gossip bit gets a "browse goods" menu entry (rank-vendor #6);

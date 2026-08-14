@@ -2,7 +2,7 @@
 //! master-loot / group-roll flows. Pure code-motion out of `world/mod.rs`.
 
 use super::super::*;
-use super::send_questgiver_menu;
+use super::quest::quest_giver_menu;
 
 /// Loot / corpse family (slices 3/4/5): loot a corpse (open window / take money / close window) and
 /// the death-recovery flow (release spirit / corpse-location query / reclaim corpse) — grouped as
@@ -181,7 +181,9 @@ pub(crate) fn handle_loot<St: WorldStore + ?Sized>(
             if store.gameobject_type(go_guid)?
                 == Some(lyracore_shared::constants::go_type::QUESTGIVER)
             {
-                send_questgiver_menu(tx, store, go_guid, self_guid)?;
+                for message in quest_giver_menu(store, go_guid, self_guid)? {
+                    send(tx, message)?;
+                }
             } else {
                 match store.use_gameobject(conn.account_id, self_guid, go_guid) {
                     Ok(()) => {

@@ -717,10 +717,6 @@ impl WorldStore for Coordinator {
         self.gossip_options(npc_guid)
     }
 
-    fn quest_status(&self, guid: u64, quest_id: u32) -> (bool, bool) {
-        self.quest_status(guid, quest_id)
-    }
-
     fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()> {
         self.reset_talents(account_id, self_guid, trainer_guid)
     }
@@ -733,50 +729,6 @@ impl WorldStore for Coordinator {
         self.buy_bank_slot(account_id, self_guid, banker_guid)
     }
 
-    fn quest_giver_evals(
-        &self,
-        giver_guid: u64,
-        player_guid: u64,
-    ) -> Result<Vec<codec::GiverQuestEval>> {
-        self.quest_giver_evals(giver_guid, player_guid)
-    }
-
-    fn quest_detail(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>> {
-        self.quest_detail(quest_id)
-    }
-
-    fn accept_quest(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        giver_guid: u64,
-        quest_id: u32,
-    ) -> Result<()> {
-        self.accept_quest(account_id, self_guid, giver_guid, quest_id)
-    }
-
-    fn turn_in_quest(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        giver_guid: u64,
-        quest_id: u32,
-        reward_index: u32,
-    ) -> Result<()> {
-        self.turn_in_quest(account_id, self_guid, giver_guid, quest_id, reward_index)
-    }
-
-    fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
-        self.abandon_quest(account_id, self_guid, quest_id)
-    }
-
-    fn push_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
-        self.push_quest(account_id, self_guid, quest_id)
-    }
-
-    fn player_quest_log(&self, player_guid: u64) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
-        self.player_quest_log(player_guid)
-    }
     fn player_learned_spells(&self, player_guid: u64) -> Result<Vec<u32>> {
         self.player_learned_spells(player_guid)
     }

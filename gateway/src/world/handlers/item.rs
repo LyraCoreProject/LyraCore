@@ -1,6 +1,7 @@
 //! Item-action dispatcher: protocol mapping and feedback for equip, use, and inventory operations.
 
 use super::super::*;
+use super::quest::{item_started_quest, QuestActionPlayer, QuestActionStore};
 
 const MAIN_BAG: u8 = 255; // INVENTORY_SLOT_BAG_0 — backpack + equipped slots share this pseudo-bag
 const EQUIP_SLOT_END: u8 = 18; // EQUIPMENT_SLOT_END — last equipment slot (main-hand=15, off=16…)
@@ -11,8 +12,6 @@ pub(crate) trait ItemActionStore: Send + Sync {
     fn move_item(&self, account_id: u64, actor_guid: u64, from_slot: u8, to_slot: u8)
         -> Result<()>;
     fn use_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<()>;
-    fn item_start_quest(&self, owner_guid: u64, slot: u8) -> Option<(u64, u32)>;
-    fn item_quest_detail(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>>;
 }
 
 impl ItemActionStore for crate::stdb::Coordinator {
@@ -36,14 +35,6 @@ impl ItemActionStore for crate::stdb::Coordinator {
 
     fn use_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
         crate::stdb::Coordinator::use_item(self, account_id, actor_guid, slot)
-    }
-
-    fn item_start_quest(&self, owner_guid: u64, slot: u8) -> Option<(u64, u32)> {
-        crate::stdb::Coordinator::item_start_quest(self, owner_guid, slot)
-    }
-
-    fn item_quest_detail(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>> {
-        crate::stdb::Coordinator::quest_detail(self, quest_id)
     }
 }
 
@@ -94,7 +85,9 @@ fn inventory_action_outbound(
     }
 }
 
-pub(crate) fn dispatch_item_action<St: ItemActionStore + ?Sized>(
+/// Quest-starting items are the one item action the quest family owns, so the store must answer
+/// both vocabularies. Every `WorldStore` already does.
+pub(crate) fn dispatch_item_action<St: ItemActionStore + QuestActionStore + ?Sized>(
     store: &St,
     player: ItemActionPlayer,
     msg: ClientOpcodeMessage,
@@ -186,23 +179,20 @@ pub(crate) fn dispatch_item_action<St: ItemActionStore + ?Sized>(
                 outbound: Vec::new(),
             })
         }
+        // Using an item that starts a quest opens that quest instead of consuming the item, so the
+        // quest family gets first refusal on the slot.
         ClientOpcodeMessage::CMSG_USE_ITEM(c) if c.bag_index == MAIN_BAG => {
-            let start_quest = player
-                .self_guid
-                .and_then(|guid| store.item_start_quest(guid, c.bag_slot));
-            let outbound = if let Some((item_guid, quest_id)) = start_quest {
-                store
-                    .item_quest_detail(quest_id)?
-                    .map_or_else(Vec::new, |detail| {
-                        let (opcode, body) = codec::build_quest_details_raw(item_guid, &detail);
-                        vec![Outbound::Raw { opcode, body }]
-                    })
-            } else {
-                inventory_action_outbound(
+            let quest_player = QuestActionPlayer {
+                account_id: player.account_id,
+                self_guid: player.self_guid,
+            };
+            let outbound = match item_started_quest(store, quest_player, c.bag_slot)? {
+                Some(details) => details,
+                None => inventory_action_outbound(
                     player.account_id,
                     "use_item",
                     store.use_item(player.account_id, player.self_guid.unwrap_or(0), c.bag_slot),
-                )?
+                )?,
             };
             Ok(ItemActionOutcome::Handled { outbound })
         }
@@ -289,17 +279,74 @@ mod tests {
                 .as_ref()
                 .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
         }
+    }
 
-        fn item_start_quest(&self, _owner_guid: u64, _slot: u8) -> Option<(u64, u32)> {
-            self.start_quest
+    /// The item seam reaches the quest family for one thing only: whether the used item starts a
+    /// quest. The rest of the quest vocabulary is out of reach from here, and saying so keeps a
+    /// future route from quietly reading a canned answer.
+    impl QuestActionStore for InMemoryItemActions {
+        fn giver_quest_evals(
+            &self,
+            _giver_guid: u64,
+            _player_guid: u64,
+        ) -> Result<Vec<codec::GiverQuestEval>> {
+            unreachable!("no item action opens a quest giver's menu")
         }
 
-        fn item_quest_detail(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>> {
+        fn quest_detail_view(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>> {
             Ok(self
                 .quest_detail
                 .as_ref()
                 .filter(|detail| detail.quest_id == quest_id)
                 .cloned())
+        }
+
+        fn giver_refuses_interaction(&self, _giver_guid: u64, _player_guid: u64) -> Result<bool> {
+            unreachable!("no item action runs the giver interaction gate")
+        }
+
+        fn turn_in_quest(
+            &self,
+            _account_id: u64,
+            _self_guid: u64,
+            _giver_guid: u64,
+            _quest_id: u32,
+            _reward_index: u32,
+        ) -> Result<()> {
+            unreachable!("no item action turns a quest in")
+        }
+
+        fn accept_quest(
+            &self,
+            _account_id: u64,
+            _self_guid: u64,
+            _giver_guid: u64,
+            _quest_id: u32,
+        ) -> Result<()> {
+            unreachable!("no item action accepts a quest")
+        }
+
+        fn item_start_quest(&self, _owner_guid: u64, _slot: u8) -> Option<(u64, u32)> {
+            self.start_quest
+        }
+
+        fn player_quest_log(
+            &self,
+            _player_guid: u64,
+        ) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
+            unreachable!("no item action reads the quest log")
+        }
+
+        fn abandon_quest(&self, _account_id: u64, _self_guid: u64, _quest_id: u32) -> Result<()> {
+            unreachable!("no item action abandons a quest")
+        }
+
+        fn push_quest(&self, _account_id: u64, _self_guid: u64, _quest_id: u32) -> Result<()> {
+            unreachable!("no item action shares a quest with the party")
+        }
+
+        fn quest_status(&self, _player_guid: u64, _quest_id: u32) -> (bool, bool) {
+            unreachable!("no item action reads gossip quest gate state")
         }
     }
 

@@ -1,16 +1,17 @@
 //! `WorldStore`: the broad storage/coordination seam used by the world session. Deep protocol
-//! families may add focused supertraits such as [`ItemActionStore`], [`MeleeActionStore`] and
-//! [`VendorActionStore`] so
-//! their wire mapping and failure policy can be tested without implementing this entire interface —
-//! a migrated family's operations live only on its own trait, never here. Kept as one broad
-//! trait for the remaining session operations (only two implementors); the section markers below
-//! are load-bearing navigation, not a split.
+//! families may add focused supertraits such as [`ItemActionStore`], [`MeleeActionStore`],
+//! [`QuestActionStore`] and [`VendorActionStore`] so their wire mapping and failure policy can be
+//! tested without implementing this entire interface — a migrated family's operations live only on
+//! its own trait, never here. Kept as one broad trait for the remaining session operations (only
+//! two implementors); the section markers below are load-bearing navigation, not a split.
 
-use super::handlers::{CastStore, ItemActionStore, MeleeActionStore, VendorActionStore};
+use super::handlers::{
+    CastStore, ItemActionStore, MeleeActionStore, QuestActionStore, VendorActionStore,
+};
 use super::*;
 
 pub trait WorldStore:
-    CastStore + ItemActionStore + MeleeActionStore + VendorActionStore + Send + Sync
+    CastStore + ItemActionStore + MeleeActionStore + QuestActionStore + VendorActionStore + Send + Sync
 {
     /// Look up the shared session key K (+ account id) for an (already uppercased) account
     /// name. `None` when no live session exists for that account (reject the handshake).
@@ -385,9 +386,11 @@ pub trait WorldStore:
     fn corpse_loot(&self, corpse_guid: u64, viewer_guid: u64) -> Result<Vec<codec::LootItemView>>;
 
     /// Standing-derived reaction gate: does this NPC refuse `player_guid` its
-    /// interaction WINDOW (gossip/vendor/trainer/questgiver)? Rep-bar factions refuse at
-    /// Unfriendly-or-below standing; bar-less factions fall back to the FactionTemplate hostility
-    /// masks. Fail-open on missing data.
+    /// interaction WINDOW? Rep-bar factions refuse at Unfriendly-or-below standing; bar-less
+    /// factions fall back to the FactionTemplate hostility masks. Fail-open on missing data.
+    /// Gossip, trainer and banker ask here; the migrated families ask the same read through their
+    /// own traits (`QuestActionStore::giver_refuses_interaction`,
+    /// `VendorActionStore::vendor_refuses_interaction`).
     fn npc_refuses_interaction(&self, npc_guid: u64, player_guid: u64) -> Result<bool>;
 
     /// Does this trainer serve `player_guid`'s class? Gates the window and the "train" gossip
@@ -481,10 +484,6 @@ pub trait WorldStore:
     /// (the gateway falls back to the flag-derived vendor/innkeeper synthesis).
     fn gossip_options(&self, npc_guid: u64) -> Result<Vec<codec::GossipOptionView>>;
 
-    /// `(taken, rewarded)` for `quest_id` in `guid`'s quest log — feeds the QUEST_TAKEN/QUEST_REWARDED
-    /// gossip option conditions (`codec::option_condition_holds`).
-    fn quest_status(&self, guid: u64, quest_id: u32) -> (bool, bool);
-
     /// Respec at `trainer_guid` (the "I wish to unlearn my talents." gossip option, gated to level
     /// 10+ by `filtered_gossip_options` — #516). Errors (out of range / not enough gold) are
     /// per-action; the caller just closes the gossip window either way.
@@ -499,53 +498,6 @@ pub trait WorldStore:
     /// Buy the next bank bag slot from `banker_guid` (`CMSG_BUY_BANK_SLOT`). A refusal `Err` leads
     /// with its `SMSG_BUY_BANK_SLOT_RESULT` code in brackets (the trainer `[N]` precedent).
     fn buy_bank_slot(&self, account_id: u64, self_guid: u64, banker_guid: u64) -> Result<()>;
-
-    /// Evaluate a quest giver's quests against the player for the overhead status icon + the quest
-    /// menu (quests gateway slice). See `stdb::reads::quest_giver_evals`.
-    fn quest_giver_evals(
-        &self,
-        giver_guid: u64,
-        player_guid: u64,
-    ) -> Result<Vec<codec::GiverQuestEval>>;
-
-    /// Build a quest's detail view (accept / offer-reward / completion screens). `None` if unloaded.
-    fn quest_detail(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>>;
-
-    /// Accept a quest from a giver (`CMSG_QUESTGIVER_ACCEPT_QUEST`). The module gates it; a gameplay
-    /// `Err` is per-action, not session-fatal.
-    fn accept_quest(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        giver_guid: u64,
-        quest_id: u32,
-    ) -> Result<()>;
-
-    /// Turn a completed quest in for its rewards (`CMSG_QUESTGIVER_CHOOSE_REWARD`). The module
-    /// validates completion + grants money/XP/items. `reward_index` is the player's pick-1-of-N choice
-    /// reward slot (the CMSG `reward` field); ignored by quests with no choice rewards.
-    fn turn_in_quest(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        giver_guid: u64,
-        quest_id: u32,
-        reward_index: u32,
-    ) -> Result<()>;
-
-    /// Abandon an active quest (`CMSG_QUESTLOG_REMOVE_QUEST`). The module deletes the quest-log row;
-    /// the relay clears the slot. The gateway resolves the client's log SLOT to the quest id first.
-    fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()>;
-
-    /// Quest sharing: share `quest_id` with the caller's party (`CMSG_PUSHQUESTTOPARTY`).
-    /// The module validates the sender is grouped + actively on the quest and pushes per-member
-    /// `QUEST_SHARE`/`QUEST_PUSH_RESULT` events; a gameplay `Err` (not grouped / not on the quest) is
-    /// per-action, not session-fatal.
-    fn push_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()>;
-
-    /// The player's active quests as quest-log descriptor slots (Phase 2 — the L window). Empty if
-    /// none. Encoded into the `PLAYER_QUEST_LOG_*` fields + sent via the raw VALUES path.
-    fn player_quest_log(&self, player_guid: u64) -> Result<Vec<codec::update_mask::QuestLogSlot>>;
 
     /// The player's LEARNED spells (`game_player_spell`, beyond the class kit) — chained into the
     /// login SMSG_INITIAL_SPELLS so a taught ability (e.g. Auto Shot) reaches the client spellbook.
