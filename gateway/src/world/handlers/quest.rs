@@ -2,14 +2,16 @@
 //! screens, accept, the turn-in round trip, log abandon and party sharing all enter through
 //! `dispatch_quest_action`; the gameobject giver, the item-started quest, the world-entry
 //! descriptor block and the gossip quest section call the shared builders here rather than
-//! reaching for the store. `handle_quest` owns no opcodes anymore — it is waiting on T6 to retire
-//! it.
+//! reaching for the store. Every quest read and reducer the world session needs lives on
+//! `QuestActionStore`; `WorldStore` carries none of them. The stdb-tier relays in
+//! `subscriptions.rs` (quest-log sync, the shared-quest details screen) sit below the session and
+//! render their own copies from the same `codec` builders these functions use.
 
 use super::super::*;
 use wow_world_messages::vanilla::QuestItem;
 
-/// Durable reads the quest family needs, in the seam's own vocabulary so it can be exercised
-/// without the broad `WorldStore`.
+/// The durable reads and reducer calls the quest family needs, in the seam's own vocabulary so it
+/// can be exercised without the broad `WorldStore`.
 pub(crate) trait QuestActionStore: Send + Sync {
     /// Every quest `giver_guid` offers or completes for `player_guid` — the input to both the
     /// overhead status icon and the menu. Resolves a creature giver or a gameobject giver.
@@ -253,24 +255,18 @@ pub(crate) fn item_started_quest<St: QuestActionStore + ?Sized>(
     Ok(Some(quest_details_screen(store, item_guid, quest_id)?))
 }
 
-/// The player's quest-log slots, in slot order — the ONE place they are read. Abandon resolves the
-/// client's slot against this, and `quest_log_update` renders the same slots into the world-entry
-/// descriptor block, so a slot cannot mean one quest to the click and another to the window.
-pub(crate) fn quest_log_slots<St: QuestActionStore + ?Sized>(
-    store: &St,
-    player_guid: u64,
-) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
-    store.player_quest_log(player_guid)
-}
-
-/// The raw quest-log descriptor VALUES update for `player_guid` — login (initial sync) and the
-/// quest-log relay (on accept / progress / turn-in) both render this. An empty batch when the log
-/// is empty, so an empty log adds nothing to world entry.
+/// The raw quest-log descriptor VALUES update for `player_guid` — the world-entry (login) copy of
+/// the block. The in-session relay renders its own copy in `stdb::subscriptions`'s
+/// `quest_log_sync`, off the same `build_quest_log_slots` read and the same
+/// `full_quest_log_mask` encoding, so the two cannot describe a slot differently. The one
+/// deliberate difference is here: an empty log answers an EMPTY batch, because the client's
+/// descriptor fields start zeroed at world entry; the relay always sends, since an all-zero mask
+/// is how a turned-in quest's slot gets cleared mid-session.
 pub(crate) fn quest_log_update<St: QuestActionStore + ?Sized>(
     store: &St,
     player_guid: u64,
 ) -> Result<Vec<Outbound>> {
-    let slots = quest_log_slots(store, player_guid)?;
+    let slots = store.player_quest_log(player_guid)?;
     if slots.is_empty() {
         return Ok(Vec::new());
     }
@@ -303,7 +299,7 @@ pub(crate) fn quest_gate_state<St: QuestActionStore + ?Sized>(
 }
 
 /// The quest opcodes that own their whole protocol round trip. Anything else — and anything at all
-/// before world entry — passes through to `handle_quest`.
+/// before world entry — passes through to the next family in the dispatch chain.
 pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
     store: &St,
     player: QuestActionPlayer,
@@ -452,12 +448,13 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
             }
         }
         // Abandon a quest from the log ("Abandon Quest"). The payload is a LOG SLOT (0..19), not a
-        // quest id — resolve it via the same `quest_log_slots` ordering the world-entry block reads,
-        // then request the durable abandon. A slot that is not currently in the log (stale window,
-        // typo'd click) resolves to nothing and requests nothing — it cannot abandon an arbitrary
-        // quest. No SMSG on success: the quest-log relay re-sends the cleared block.
+        // quest id — resolve it against the same `player_quest_log` ordering the world-entry block
+        // reads, then request the durable abandon. A slot that is not currently in the log (stale
+        // window, typo'd click) resolves to nothing and requests nothing — it cannot abandon an
+        // arbitrary quest. No SMSG on success: the quest-log relay re-sends the cleared block.
         ClientOpcodeMessage::CMSG_QUESTLOG_REMOVE_QUEST(r) => {
-            if let Some(s) = quest_log_slots(store, self_guid)?
+            if let Some(s) = store
+                .player_quest_log(self_guid)?
                 .into_iter()
                 .find(|s| s.slot == r.slot)
             {
@@ -501,22 +498,6 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
         }
         other => Ok(QuestActionOutcome::PassThrough(other)),
     }
-}
-
-/// Empty and awaiting retirement: party sharing (the last opcode this function owned) moved to
-/// `dispatch_quest_action` in T5. Left in place rather than deleted — T6 owns removing it along
-/// with the `WorldStore` quest surface it no longer reads.
-pub(crate) fn handle_quest<St: WorldStore + ?Sized>(
-    _tx: &SessionTx,
-    _store: &St,
-    conn: &mut WorldConn,
-    msg: ClientOpcodeMessage,
-) -> Result<Option<ClientOpcodeMessage>> {
-    let _self_guid = match &conn.state {
-        WorldState::InWorld(iw) => iw.self_guid,
-        WorldState::CharSelect => return Ok(Some(msg)),
-    };
-    Ok(Some(msg))
 }
 
 #[cfg(test)]
@@ -1267,8 +1248,8 @@ mod tests {
 
     #[test]
     fn abandon_resolution_and_the_world_entry_block_read_the_same_slot_ordering() {
-        // Both paths ask `player_quest_log` for the same player guid through `quest_log_slots` — the
-        // one seam that decides what a slot means, so the click and the window cannot disagree.
+        // Both paths ask `player_quest_log` for the same player guid — the one read that decides
+        // what a slot means, so the click and the window cannot disagree.
         let actions = InMemoryQuestActions {
             quest_log: vec![log_slot(3, 777)],
             ..Default::default()

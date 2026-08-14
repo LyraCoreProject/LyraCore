@@ -203,17 +203,15 @@ struct InMemoryStore {
     trainer_refuses_class: bool,
     /// When set, buy/sell return this error (a gameplay failure) instead of `Ok`.
     trade_error: Option<String>,
-    /// Quest-giver evals returned by `quest_giver_evals` (the menu/status input).
+    /// Quest-giver evals returned by `giver_quest_evals` (the menu/status input).
     quest_evals: Vec<codec::GiverQuestEval>,
-    /// Quest details `quest_detail(id)` resolves from (matched by `quest_id`).
+    /// Quest details `quest_detail_view(id)` resolves from (matched by `quest_id`).
     quest_details: Vec<codec::QuestDetailView>,
-    /// The player's quest-log slots `player_quest_log` returns (drives abandon's slot→id resolution).
+    /// The player's quest-log slots `player_quest_log` returns (drives the login descriptor block).
     quest_log_slots: Vec<codec::update_mask::QuestLogSlot>,
-    /// Recorded quest reducer dispatches: (account, giver, quest) for accept/turn-in; (account, quest)
-    /// for abandon — so E2E tests assert the RIGHT reducer ran with the RIGHT args.
-    accepted: std::sync::Mutex<Vec<(u64, u64, u32)>>,
+    /// Recorded `turn_in_quest` dispatches: (account, giver, quest, reward_index) — so the
+    /// choose-reward socket test asserts the player's pick reached the store unchanged.
     turned_in: std::sync::Mutex<Vec<(u64, u64, u32, u32)>>,
-    abandoned: std::sync::Mutex<Vec<(u64, u32)>>,
     /// Override for `player_combat_until_ms`: 0 = out of combat (default), non-zero = in combat until
     /// this ms-epoch deadline (use u64::MAX for "always in combat" in tests).
     combat_until_ms: u64,
@@ -362,10 +360,6 @@ struct InMemoryStore {
     loot_master_gives: std::sync::Mutex<Vec<(u64, u8, u64)>>,
     /// Recorded `use_item` slots.
     used_items: std::sync::Mutex<Vec<u8>>,
-    /// Recorded `push_quest` calls: (account_id, quest_id) — quest sharing.
-    pushed_quests: std::sync::Mutex<Vec<(u64, u32)>>,
-    /// When set, `push_quest` returns this error instead of `Ok`.
-    push_quest_error: Option<String>,
     /// Recorded `player_login` call count — the WORLDPORT_ACK test distinguishes the
     /// initial `CMSG_PLAYER_LOGIN` call from a world-port RE-entry call, since both dispatch through
     /// this one trait method (`enter_world` is shared by both call sites).
@@ -1792,16 +1786,6 @@ impl WorldStore for InMemoryStore {
             None => Ok(()),
         }
     }
-    fn push_quest(&self, account_id: u64, _self_guid: u64, quest_id: u32) -> Result<()> {
-        if let Some(e) = &self.push_quest_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.pushed_quests
-            .lock()
-            .unwrap()
-            .push((account_id, quest_id));
-        Ok(())
-    }
     fn bind_home(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
         self.home_bound
             .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1818,18 +1802,6 @@ impl WorldStore for InMemoryStore {
     }
     fn gossip_options(&self, _npc_guid: u64) -> Result<Vec<codec::GossipOptionView>> {
         Ok(self.gossip_opts.clone())
-    }
-    fn quest_status(&self, _guid: u64, quest_id: u32) -> (bool, bool) {
-        match self
-            .quest_log
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|(id, _)| *id == quest_id)
-        {
-            Some((_, rewarded)) => (true, *rewarded),
-            None => (false, false),
-        }
     }
     fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()> {
         if let Some(e) = &self.reset_talents_error {
@@ -1855,56 +1827,6 @@ impl WorldStore for InMemoryStore {
         self.bought_bank_slots.lock().unwrap().push(banker_guid);
         Ok(())
     }
-    fn quest_giver_evals(
-        &self,
-        _giver_guid: u64,
-        _player_guid: u64,
-    ) -> Result<Vec<codec::GiverQuestEval>> {
-        Ok(self.quest_evals.clone())
-    }
-    fn quest_detail(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>> {
-        Ok(self
-            .quest_details
-            .iter()
-            .find(|d| d.quest_id == quest_id)
-            .cloned())
-    }
-    fn accept_quest(
-        &self,
-        account_id: u64,
-        _self_guid: u64,
-        giver_guid: u64,
-        quest_id: u32,
-    ) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.accepted
-            .lock()
-            .unwrap()
-            .push((account_id, giver_guid, quest_id));
-        Ok(())
-    }
-    fn turn_in_quest(
-        &self,
-        account_id: u64,
-        _self_guid: u64,
-        giver_guid: u64,
-        quest_id: u32,
-        reward_index: u32,
-    ) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.turned_in
-            .lock()
-            .unwrap()
-            .push((account_id, giver_guid, quest_id, reward_index));
-        Ok(())
-    }
-    fn player_quest_log(&self, _player_guid: u64) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
-        Ok(self.quest_log_slots.clone())
-    }
     fn player_learned_spells(&self, _player_guid: u64) -> Result<Vec<u32>> {
         Ok(Vec::new())
     }
@@ -1927,13 +1849,6 @@ impl WorldStore for InMemoryStore {
         // live on THIS shard"). Empty by default, so the single flag above is still the answer
         // every test written before realm-wide party routing set.
         self.entity_in_world || self.live_guids.contains(&guid)
-    }
-    fn abandon_quest(&self, account_id: u64, _self_guid: u64, quest_id: u32) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.abandoned.lock().unwrap().push((account_id, quest_id));
-        Ok(())
     }
     fn set_target(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
         self.rec("set_target");
@@ -2747,14 +2662,17 @@ impl QuestActionStore for InMemoryStore {
         Ok(self.npc_refuses)
     }
 
+    /// Accept, abandon and share are driven only at the quest seam, where
+    /// `InMemoryQuestActions` records the request — a socket test would prove nothing more, so
+    /// this store just answers success.
     fn accept_quest(
         &self,
-        account_id: u64,
-        self_guid: u64,
-        giver_guid: u64,
-        quest_id: u32,
+        _account_id: u64,
+        _self_guid: u64,
+        _giver_guid: u64,
+        _quest_id: u32,
     ) -> Result<()> {
-        WorldStore::accept_quest(self, account_id, self_guid, giver_guid, quest_id)
+        Ok(())
     }
 
     /// No socket test drives an item-started quest — the route is proved at the quest seam.
@@ -2762,20 +2680,29 @@ impl QuestActionStore for InMemoryStore {
         None
     }
 
-    fn player_quest_log(&self, player_guid: u64) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
-        WorldStore::player_quest_log(self, player_guid)
+    fn player_quest_log(&self, _player_guid: u64) -> Result<Vec<codec::update_mask::QuestLogSlot>> {
+        Ok(self.quest_log_slots.clone())
     }
 
-    fn abandon_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
-        WorldStore::abandon_quest(self, account_id, self_guid, quest_id)
+    fn abandon_quest(&self, _account_id: u64, _self_guid: u64, _quest_id: u32) -> Result<()> {
+        Ok(())
     }
 
-    fn push_quest(&self, account_id: u64, self_guid: u64, quest_id: u32) -> Result<()> {
-        WorldStore::push_quest(self, account_id, self_guid, quest_id)
+    fn push_quest(&self, _account_id: u64, _self_guid: u64, _quest_id: u32) -> Result<()> {
+        Ok(())
     }
 
-    fn quest_status(&self, player_guid: u64, quest_id: u32) -> (bool, bool) {
-        WorldStore::quest_status(self, player_guid, quest_id)
+    fn quest_status(&self, _player_guid: u64, quest_id: u32) -> (bool, bool) {
+        match self
+            .quest_log
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(id, _)| *id == quest_id)
+        {
+            Some((_, rewarded)) => (true, *rewarded),
+            None => (false, false),
+        }
     }
 
     fn turn_in_quest(
@@ -4336,14 +4263,15 @@ fn desync_error_classifies_entity_missing_as_fatal_but_not_transient() {
 }
 
 // ===========================================================================================
-//  Quest-giver dispatch (E2E over the world session) — the #1 documented test gap. Each test drives a
-//  CMSG_QUESTGIVER_* / CMSG_QUESTLOG_REMOVE_QUEST through `run_world_session` (full handshake + login +
-//  encrypted dispatch) and asserts the gateway routes it to the right `WorldStore` reducer with the right
-//  args (recorded by the fake) and/or replies with the right `SMSG_QUESTGIVER_*` — the wire-to-store seam.
+//  Quest traffic over the world session. Which screen a quest opens, and which durable request it
+//  makes, is decided and proved at the `dispatch_quest_action` seam (`handlers/quest.rs`). What is
+//  left here is only what the seam cannot see: that a quest opcode reaches the seam through the
+//  full handshake + login + cipher, and that the bodies it answers with survive the encrypted
+//  frame. Five tests carry that contract, each naming it in its own comment.
 // ===========================================================================================
 
 /// A store configured for an in-world TESTER (account 7, char guid 1) with a login entity — the
-/// fixture every quest test builds on, then overlays quest evals / details / log slots.
+/// base fixture every socket test that needs a logged-in player builds on, quest or not.
 fn quest_store() -> InMemoryStore {
     InMemoryStore {
         login_entity: Some(warrior_entity()),
@@ -4404,8 +4332,7 @@ fn enter_world(
     let (mut client, server_end) = world_session_socket_pair();
     // The login sequence ends with the quest-log VALUES packet IFF the player has quests (mirrors
     // `send_quest_log`'s skip-when-empty). Checked before `store` is moved into the server thread.
-    let has_quest_log =
-        WorldStore::player_quest_log(store.as_ref(), guid).is_ok_and(|s| !s.is_empty());
+    let has_quest_log = !store.quest_log_slots.is_empty();
     let item_creates = store.player_items(guid).map(|v| v.len()).unwrap_or(0);
     let server_store = store;
     let server = std::thread::spawn(move || {
@@ -7293,40 +7220,10 @@ fn gossip_hello_shows_unlearn_talents_at_level_10_and_select_routes_to_reset_tal
 }
 
 #[test]
-fn gossip_hello_hides_a_quest_gated_option_until_the_quest_is_taken() {
-    // 217's second acceptance criterion: an option gated on an unaccepted quest stays hidden.
-    use lyracore_shared::constants::{gossip_condition, gossip_option};
-    let mut s = quest_store();
-    s.gossip_opts = vec![opt(0, "About that favor...", gossip_option::GOSSIP)];
-    s.gossip_opts[0].cond_type = gossip_condition::QUEST_TAKEN;
-    s.gossip_opts[0].cond_value1 = 60;
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    CMSG_GOSSIP_HELLO {
-        guid: Guid::new(90),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        // No imported options survive the filter → falls back to the flag-derived synthesis, which
-        // (no vendor stock, no innkeeper flag here) is just the Farewell line.
-        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(m) => {
-            assert_eq!(
-                m.gossips.len(),
-                1,
-                "the quest-gated option must be hidden: {:?}",
-                m.gossips
-            );
-            assert_eq!(m.gossips[0].message, "Farewell.");
-        }
-        other => panic!("expected SMSG_GOSSIP_MESSAGE, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-}
-
-#[test]
 fn gossip_hello_shows_a_quest_gated_option_once_the_quest_is_taken() {
+    // The socket-level contract: the player's quest state reaches the gossip filter through the
+    // quest seam's `quest_gate_state`, and the gated row is assembled into the gossip message the
+    // client actually receives. The hidden case is covered by the position-alignment test below.
     use lyracore_shared::constants::{gossip_condition, gossip_option};
     let mut s = quest_store();
     s.gossip_opts = vec![opt(0, "About that favor...", gossip_option::GOSSIP)];

@@ -3,10 +3,12 @@
 
 use super::*;
 
-// Per-family dispatch handlers — code-motion of the former dispatch match arms, bodies verbatim.
-// Each returns `Ok(None)` once it consumes its opcode, else `Ok(Some(msg))` to pass the message on.
-// `melee.rs` is the exception: it is a seam, not code-motion. Its bodies were rewritten to return an
-// outcome the world session applies, and the session-fatal melee desync exits live there.
+// Two shapes live here. A `handle_*` handler is code-motion of the former dispatch match arms
+// (bodies verbatim): it sends on the socket itself and returns `Ok(None)` once it consumes its
+// opcode, else `Ok(Some(msg))` to pass the message on. A `dispatch_*_action` seam — item, melee,
+// quest and vendor — owns a whole protocol family instead: it takes a narrow store trait and a
+// player context, decides refusal-versus-fatal itself, and returns the outbound batch for the
+// world session to send, so the family can be tested without a socket.
 
 mod bank;
 mod char;
@@ -32,7 +34,7 @@ pub(crate) use melee::{
 };
 pub(crate) use query::handle_query;
 pub(crate) use quest::{
-    dispatch_quest_action, handle_quest, QuestActionOutcome, QuestActionPlayer, QuestActionStore,
+    dispatch_quest_action, QuestActionOutcome, QuestActionPlayer, QuestActionStore,
 };
 pub(crate) use trade::handle_trade;
 pub(crate) use trainer::handle_trainer;

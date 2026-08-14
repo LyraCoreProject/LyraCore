@@ -50,10 +50,12 @@ fn abort_pending_transfer<St: WorldStore + ?Sized>(
     }
 }
 
-/// Build + send the player's quest-log descriptor fields as a raw VALUES update (Phase 2). A no-op
-/// when the gate is off or the player has no active quests (`quest_log_update` returns an empty
-/// batch, so the CREATE packet's already-zeroed fields stand). Shared by login (initial sync) and
-/// the quest-log relay (on accept / progress / turn-in).
+/// Build + send the player's quest-log descriptor fields as a raw VALUES update (Phase 2) — the
+/// world-entry copy of the block, sent right after the self CREATE. A no-op when the gate is off
+/// or the player has no active quests (`quest_log_update` returns an empty batch, so the CREATE
+/// packet's already-zeroed fields stand). The in-session relay on accept / progress / turn-in is
+/// `stdb::subscriptions`'s `quest_log_sync`, which renders the same descriptor from the same
+/// builders.
 fn send_quest_log<St: QuestActionStore + ?Sized>(
     tx: &SessionTx,
     store: &St,

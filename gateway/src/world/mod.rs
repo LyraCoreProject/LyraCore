@@ -45,10 +45,9 @@ pub mod whisper;
 use coalesce::CoalesceState;
 use handlers::{
     dispatch_item_action, dispatch_melee_action, dispatch_quest_action, dispatch_vendor_action,
-    handle_bank, handle_char, handle_combat, handle_loot, handle_mail, handle_query, handle_quest,
-    handle_trade, handle_trainer, ItemActionOutcome, ItemActionPlayer, MeleeActionOutcome,
-    MeleeActionPlayer, QuestActionOutcome, QuestActionPlayer,
-    VendorActionOutcome, VendorActionPlayer,
+    handle_bank, handle_char, handle_combat, handle_loot, handle_mail, handle_query, handle_trade,
+    handle_trainer, ItemActionOutcome, ItemActionPlayer, MeleeActionOutcome, MeleeActionPlayer,
+    QuestActionOutcome, QuestActionPlayer, VendorActionOutcome, VendorActionPlayer,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
@@ -1245,9 +1244,6 @@ fn dispatch<St: WorldStore + ?Sized>(
             return Ok(());
         }
         QuestActionOutcome::PassThrough(msg) => msg,
-    };
-    let Some(msg) = handle_quest(tx, store, conn, msg)? else {
-        return Ok(());
     };
     let Some(msg) = handle_social(tx, store, conn, msg)? else {
         return Ok(());
