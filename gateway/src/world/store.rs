@@ -8,7 +8,7 @@
 
 use super::handlers::{
     AuctionActionStore, CastStore, ItemActionStore, MeleeActionStore, QuestActionStore,
-    TaxiActionStore, VendorActionStore,
+    LootWindowStore, TaxiActionStore, VendorActionStore,
 };
 use super::*;
 
@@ -16,6 +16,7 @@ pub trait WorldStore:
     AuctionActionStore
     + CastStore
     + ItemActionStore
+    + LootWindowStore
     + MeleeActionStore
     + QuestActionStore
     + TaxiActionStore
@@ -390,10 +391,9 @@ pub trait WorldStore:
     /// folded here (they self-correct via the on_aura relay). Mirrors the module's combat `effective_armor`.
     fn effective_armor(&self, guid: u64) -> u32;
 
-    /// Read a corpse's item loot for the loot window (items slice-4): `(slot, id, count, display)`,
-    /// filtered for `viewer_guid` (a `quest_only` row is shown only to a
-    /// viewer who currently needs it, or who already owns a per-member reserved clone of it).
-    fn corpse_loot(&self, corpse_guid: u64, viewer_guid: u64) -> Result<Vec<codec::LootItemView>>;
+    /// Read a vendor's stock for `SMSG_LIST_INVENTORY` (Tier 2 / vendors): resolve the vendor's
+    /// creature entry from its entity row, join `game_npc_vendor` × `game_item_template`.
+    fn vendor_items(&self, vendor_guid: u64) -> Result<Vec<codec::VendorItemView>>;
 
     /// Standing-derived reaction gate: does this NPC refuse `player_guid` its
     /// interaction WINDOW? Rep-bar factions refuse at Unfriendly-or-below standing; bar-less
@@ -425,11 +425,23 @@ pub trait WorldStore:
         spell_id: u32,
     ) -> Result<()>;
 
-    /// Skin a beast corpse that has been fully looted (no items, no money left). The module gates it
-    /// (dead beast, in range, not already skinned); on success the leather lands in the bag via the
-    /// item-subscription relay. `Err` = not applicable (not a beast, out of range, already skinned,
-    /// or dead player) — the caller falls through to the empty loot window and the player sees nothing.
-    fn skin_corpse(&self, account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()>;
+    /// Given an item-instance GUID from a client spell-target, return the bag slot for that item
+    /// (so the disenchant / enchant_item reducer can receive a slot, not a GUID).
+    fn item_slot_by_guid(&self, account_id: u64, item_guid: u64) -> Option<u8>;
+
+    /// Disenchant the item in `slot` (`CMSG_CAST_SPELL` spell 13262). The module validates skill +
+    /// item disenchantability and yields Strange Dust into the bag.
+    fn disenchant_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()>;
+
+    /// Apply `enchant_id` to the item in `slot` (`CMSG_CAST_SPELL` for enchant spell). The module
+    /// validates skill, consumes reagent dust, and stamps enchant_id on the item instance.
+    fn enchant_item_on_slot(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        slot: u8,
+        enchant_id: u32,
+    ) -> Result<()>;
 
     /// Return the `grant_spell_id` for `talent_id` (0 = passive, no ability granted), so the gateway
     /// can push `SMSG_LEARNED_SPELL` for ability talents after a successful `learn_talent`.
@@ -843,10 +855,6 @@ pub trait WorldStore:
     fn mail_escrows_of(&self, _sender_guid: u64) -> Result<Vec<mail::HeldEscrow>> {
         Ok(Vec::new())
     }
-
-    /// Read a corpse's lootable copper for `SMSG_LOOT_RESPONSE` (slice 3). 0 if the target is gone
-    /// or not a corpse. Read-only — the actual take is `loot_money`.
-    fn loot_target_money(&self, target_guid: u64) -> Result<u32>;
 
     /// Take the money from a corpse the player has open (`CMSG_LOOT_MONEY`, slice 3): the module
     /// validates dead+range+has-money, moves the copper to the looter, and clears the lootable flag.

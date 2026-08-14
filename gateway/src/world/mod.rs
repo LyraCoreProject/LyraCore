@@ -45,12 +45,13 @@ pub mod whisper;
 use coalesce::CoalesceState;
 use handlers::{
     decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action, dispatch_cast,
-    dispatch_item_action, dispatch_melee_action, dispatch_quest_action, dispatch_taxi_action,
-    dispatch_vendor_action, handle_bank, handle_char, handle_combat, handle_loot, handle_mail,
-    handle_query, handle_trade, handle_trainer, queue_reply_then_arm, AuctionActionOutcome,
-    AuctionActionPlayer, CastOutcome, CastPlayer, CastTransition, ItemActionOutcome,
-    ItemActionPlayer, MeleeActionOutcome, MeleeActionPlayer, QuestActionOutcome, QuestActionPlayer,
-    TaxiActionOutcome, TaxiActionPlayer, VendorActionOutcome, VendorActionPlayer,
+    dispatch_item_action, dispatch_loot_window, dispatch_melee_action, dispatch_quest_action,
+    dispatch_taxi_action, dispatch_vendor_action, handle_bank, handle_char, handle_combat,
+    handle_loot, handle_mail, handle_query, handle_trade, handle_trainer, queue_reply_then_arm,
+    AuctionActionOutcome, AuctionActionPlayer, CastOutcome, CastPlayer, CastTransition,
+    ItemActionOutcome, ItemActionPlayer, LootWindowOutcome, LootWindowPlayer, MeleeActionOutcome,
+    MeleeActionPlayer, OpenLootState, QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome,
+    TaxiActionPlayer, VendorActionOutcome, VendorActionPlayer,
     CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 pub(crate) use handlers::{
@@ -1236,6 +1237,36 @@ fn dispatch<St: WorldStore + ?Sized>(
     };
     let Some(msg) = handle_combat(tx, store, conn, msg)? else {
         return Ok(());
+    };
+    let current_loot_state = match &conn.state {
+        WorldState::InWorld(iw) => OpenLootState {
+            target_guid: iw.looting_target,
+        },
+        WorldState::CharSelect => OpenLootState::default(),
+    };
+    let msg = match dispatch_loot_window(
+        store,
+        LootWindowPlayer {
+            account_id: conn.account_id,
+            self_guid: social::self_guid(conn),
+        },
+        current_loot_state,
+        msg,
+    )? {
+        LootWindowOutcome::Handled {
+            next_state,
+            durable_request: _durable_request,
+            outbound,
+        } => {
+            if let WorldState::InWorld(iw) = &mut conn.state {
+                iw.looting_target = next_state.target_guid;
+            }
+            for message in outbound {
+                send(tx, message)?;
+            }
+            return Ok(());
+        }
+        LootWindowOutcome::PassThrough(msg) => msg,
     };
     let Some(msg) = handle_loot(tx, store, conn, msg)? else {
         return Ok(());

@@ -464,8 +464,8 @@ impl WorldStore for Coordinator {
         self.effective_armor(guid)
     }
 
-    fn corpse_loot(&self, corpse_guid: u64, viewer_guid: u64) -> Result<Vec<codec::LootItemView>> {
-        self.corpse_loot(corpse_guid, viewer_guid)
+    fn vendor_items(&self, vendor_guid: u64) -> Result<Vec<codec::VendorItemView>> {
+        self.vendor_items(vendor_guid)
     }
 
     fn npc_refuses_interaction(&self, npc_guid: u64, player_guid: u64) -> Result<bool> {
@@ -650,8 +650,22 @@ impl WorldStore for Coordinator {
         self.buy_trainer_spell(account_id, self_guid, trainer_guid, spell_id)
     }
 
-    fn skin_corpse(&self, account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()> {
-        self.skin_corpse(account_id, self_guid, corpse_guid)
+    fn item_slot_by_guid(&self, account_id: u64, item_guid: u64) -> Option<u8> {
+        self.item_slot_by_guid(account_id, item_guid)
+    }
+
+    fn disenchant_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()> {
+        self.disenchant_item(account_id, self_guid, slot)
+    }
+
+    fn enchant_item_on_slot(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        slot: u8,
+        enchant_id: u32,
+    ) -> Result<()> {
+        self.enchant_item_on_slot(account_id, self_guid, slot, enchant_id)
     }
 
     fn talent_grant_spell(&self, talent_id: u32) -> u32 {
@@ -841,10 +855,6 @@ impl WorldStore for Coordinator {
 
     fn gm_command(&self, account_id: u64, self_guid: u64, text: String) -> Result<()> {
         self.gm_command(account_id, self_guid, text)
-    }
-
-    fn loot_target_money(&self, target_guid: u64) -> Result<u32> {
-        self.loot_target_money(target_guid)
     }
 
     fn loot_money(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {

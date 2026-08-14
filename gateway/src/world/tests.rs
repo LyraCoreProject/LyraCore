@@ -1,6 +1,6 @@
 use super::handlers::{
     AuctionActionStore, AuctionEntity, AuctionInteraction, CastStore, ItemActionStore,
-    MeleeActionStore, QuestActionStore, TaxiActionStore, VendorActionStore,
+    LootWindowStore, MeleeActionStore, QuestActionStore, TaxiActionStore, VendorActionStore,
 };
 use super::*;
 use std::os::unix::net::UnixStream;
@@ -1133,12 +1133,8 @@ impl WorldStore for InMemoryStore {
             .map(|e| e.effective_armor)
             .unwrap_or(0)
     }
-    fn corpse_loot(&self, _corpse_guid: u64, viewer_guid: u64) -> Result<Vec<codec::LootItemView>> {
-        Ok(self
-            .corpse_loot_by_viewer
-            .get(&viewer_guid)
-            .cloned()
-            .unwrap_or_default())
+    fn vendor_items(&self, _vendor_guid: u64) -> Result<Vec<codec::VendorItemView>> {
+        Ok(self.vendor_stock.clone())
     }
     fn npc_refuses_interaction(&self, _npc_guid: u64, _player_guid: u64) -> Result<bool> {
         Ok(self.npc_refuses) // default false — every existing fixture NPC keeps interacting
@@ -1684,11 +1680,24 @@ impl WorldStore for InMemoryStore {
             None => Ok(()),
         }
     }
-    fn skin_corpse(&self, _account_id: u64, _self_guid: u64, corpse_guid: u64) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.skinned.lock().unwrap().push(corpse_guid);
+    fn item_slot_by_guid(&self, _account_id: u64, item_guid: u64) -> Option<u8> {
+        self.item_slots
+            .iter()
+            .find(|(g, _)| *g == item_guid)
+            .map(|&(_, s)| s)
+    }
+    fn disenchant_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
+        self.disenchanted.lock().unwrap().push(slot);
+        Ok(())
+    }
+    fn enchant_item_on_slot(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        slot: u8,
+        enchant_id: u32,
+    ) -> Result<()> {
+        self.enchanted.lock().unwrap().push((slot, enchant_id));
         Ok(())
     }
     fn talent_grant_spell(&self, _talent_id: u32) -> u32 {
@@ -1922,9 +1931,6 @@ impl WorldStore for InMemoryStore {
                 Ok(())
             }
         }
-    }
-    fn loot_target_money(&self, _target_guid: u64) -> Result<u32> {
-        Ok(self.corpse_money)
     }
     fn loot_money(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
         self.money_looted.lock().unwrap().push(target_guid);
@@ -2912,6 +2918,28 @@ impl ItemActionStore for InMemoryStore {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
         }
+    }
+}
+
+impl LootWindowStore for InMemoryStore {
+    fn loot_target_money(&self, _target_guid: u64) -> Result<u32> {
+        Ok(self.corpse_money)
+    }
+
+    fn corpse_loot(&self, _target_guid: u64, viewer_guid: u64) -> Result<Vec<codec::LootItemView>> {
+        Ok(self
+            .corpse_loot_by_viewer
+            .get(&viewer_guid)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn skin_corpse(&self, _account_id: u64, _actor_guid: u64, target_guid: u64) -> Result<()> {
+        if let Some(error) = &self.trade_error {
+            return Err(anyhow!("gw_skin reducer failed: {error}"));
+        }
+        self.skinned.lock().unwrap().push(target_guid);
+        Ok(())
     }
 }
 
