@@ -31,6 +31,13 @@ In this project we focus on building complex things as simple as possible. We lo
 
 - Never touch production or live databases unless explicitly told to or confirmed by the user. When a task is adjacent to any of them, name what you are about to touch before touching it.
 
+## Realm operations
+
+- For a production realm update or read-only realm diagnosis, use `$lyracore-operator`. Its
+  authoritative safety boundary is `docs/danger-zones.md`; require a named host before mutation.
+- Before changing `./lyracore` behaviour or its pin, read `docs/agents/cross-repo-cli.md`. The CLI
+  source is the sibling `lyracore-cli` repository, not `.lyracore/cli/`'s installed cache.
+
 ## Pull Requests
 
 - File PRs with the `file-pr` skill (`.claude/skills/file-pr/SKILL.md`).
