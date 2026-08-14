@@ -58,6 +58,8 @@ pub mod npc_flags {
     /// vanilla 1.12 / cmangos-classic numbering — VENDOR is 0x4, not the 0x80 of later cores (where 0x80
     /// is INNKEEPER). Confirmed against the cmangos creature_template (every npc_vendor creature has 0x4).
     pub const VENDOR: u32 = 0x0000_0004;
+    /// `UNIT_NPC_FLAG_FLIGHTMASTER` (0x8) — exposes the vanilla taxi service.
+    pub const TAXI: u32 = 0x0000_0008;
     /// `UNIT_NPC_FLAG_TRAINER` (0x10) — teaches spells (`CMSG_TRAINER_LIST` → the trainer window). vanilla
     /// 1.12 / cmangos-classic numbering; class trainers (Llane Beshere, Priestess Anetta, …) carry this.
     pub const TRAINER: u32 = 0x0000_0010;
@@ -131,10 +133,17 @@ pub mod sheath_state {
 /// `UNIT_FIELD_FLAGS` bits (vanilla 1.12), stored in `game_world_entity.unit_flags`, sent in the CREATE
 /// and relayed as a VALUES change.
 pub mod unit_flags {
+    /// `UNIT_FLAG_NOT_SELECTABLE` (0x02000000) in the vanilla 1.12 UnitFlags enum. The client does
+    /// not offer an interaction cursor for such a unit, and server-side service gates must agree.
+    pub const NOT_SELECTABLE: u32 = 0x0200_0000;
     /// `UNIT_FLAG_IN_COMBAT` (0x00080000) — the unit is fighting. Observers render the in-combat state;
     /// set at any hostile action (`combat::enter_combat`), cleared ~`COMBAT_DROP_MS` after the last one
     /// (the tick's combat-drop pass). Covers a pure caster, whom the auto-attack stance can't show.
     pub const IN_COMBAT: u32 = 0x0008_0000;
+    /// `UNIT_FLAG_TAXI_FLIGHT` (0x00100000) — the player is under server-controlled flight-path
+    /// movement. This is presentation/state, not the route cursor; the authoritative route lives in
+    /// the module's active-taxi-flight row.
+    pub const TAXI_FLIGHT: u32 = 0x0010_0000;
 }
 
 /// Aura+spell tracer — a minimal ADDITIVE spell pipeline to live-test the spell-tier wire format
@@ -227,12 +236,85 @@ pub mod start_human_warrior {
     pub const ORIENTATION: f32 = 0.0;
 }
 
+/// Vanilla 5875 represents known taxi nodes as eight 32-bit words. Node ids are one-based bit
+/// positions in that fixed mask, so a value outside this range cannot cross the protocol intact.
+pub mod taxi_protocol {
+    pub const NODE_MASK_WORDS: u32 = 8;
+    pub const CLIENT_NODE_ID_MIN: u32 = 1;
+    pub const CLIENT_NODE_ID_MAX: u32 = NODE_MASK_WORDS * u32::BITS;
+    pub const REPLY_STATUS: u8 = 1;
+    pub const REPLY_OPEN: u8 = 2;
+    pub const REPLY_ACTIVATE: u8 = 3;
+
+    // Stable module-to-gateway activation results. They deliberately match the vanilla
+    // ActivateTaxiReply discriminants, but remain shared primitive constants so the wasm module
+    // does not depend on the wire-codec crate and the gateway never has to parse refusal prose.
+    pub const ACTIVATE_OK: u8 = 0;
+    pub const ACTIVATE_UNSPECIFIED_SERVER_ERROR: u8 = 1;
+    pub const ACTIVATE_NO_SUCH_PATH: u8 = 2;
+    pub const ACTIVATE_NOT_ENOUGH_MONEY: u8 = 3;
+    pub const ACTIVATE_TOO_FAR_AWAY: u8 = 4;
+    pub const ACTIVATE_NO_VENDOR_NEARBY: u8 = 5;
+    pub const ACTIVATE_NOT_VISITED: u8 = 6;
+    pub const ACTIVATE_PLAYER_BUSY: u8 = 7;
+    pub const ACTIVATE_PLAYER_ALREADY_MOUNTED: u8 = 8;
+    pub const ACTIVATE_PLAYER_SHAPE_SHIFTED: u8 = 9;
+    pub const ACTIVATE_PLAYER_MOVING: u8 = 10;
+    pub const ACTIVATE_SAME_NODE: u8 = 11;
+    pub const ACTIVATE_NOT_STANDING: u8 = 12;
+}
+
+/// Reserved, hand-authored taxi catalogue used by the headless flight flow. Its storage ids sit
+/// beside the existing 509xxxx scenario rows so a DBC import can wholesale-replace its derived
+/// catalogue and then restore this route without colliding with client-derived primary keys. The
+/// separate client ids fit the vanilla protocol mask and are protected by a unique table index.
+///
+/// These values are shared by the native importer and the wasm module. Keeping the two writers on
+/// one definition prevents a fresh database and a post-import database from growing different
+/// versions of the fixture.
+pub mod taxi_fixture {
+    pub const STORAGE_ID_FLOOR: u32 = 5_090_000;
+
+    pub const SOURCE_NODE_STORAGE_ID: u32 = 5_090_100;
+    pub const DESTINATION_NODE_STORAGE_ID: u32 = 5_090_101;
+    pub const PATH_ID: u32 = 5_090_102;
+    pub const POINT_IDS: [u32; 3] = [5_090_103, 5_090_104, 5_090_105];
+
+    // These synthetic wire ids deliberately exercise the final two bits of the fixed 256-bit mask.
+    // They are useful to headless protocol tests, but do not create matching map art in a real client.
+    pub const SOURCE_CLIENT_NODE_ID: u32 = super::taxi_protocol::CLIENT_NODE_ID_MAX - 1;
+    pub const DESTINATION_CLIENT_NODE_ID: u32 = super::taxi_protocol::CLIENT_NODE_ID_MAX;
+
+    pub const MAP_ID: u32 = super::start_human_warrior::MAP_ID;
+    pub const SOURCE_X: f32 = super::start_human_warrior::X + 5.0;
+    pub const SOURCE_Y: f32 = super::start_human_warrior::Y - 5.0;
+    pub const SOURCE_Z: f32 = super::start_human_warrior::Z;
+    pub const DESTINATION_X: f32 = SOURCE_X + 60.0;
+    pub const DESTINATION_Y: f32 = SOURCE_Y;
+    pub const DESTINATION_Z: f32 = SOURCE_Z;
+    pub const MIDPOINT_X: f32 = SOURCE_X + 30.0;
+    pub const MIDPOINT_Y: f32 = SOURCE_Y;
+    pub const MIDPOINT_Z: f32 = SOURCE_Z + 12.0;
+
+    pub const SOURCE_NAME: &str = "Northshire Test Flight";
+    pub const DESTINATION_NAME: &str = "Northshire Test Landing";
+    pub const FARE: u32 = 25;
+    // Build-5875 display ids used only by the synthetic fixture. Imported nodes retain the exact
+    // Horde-first / Alliance-second pair from the operator's TaxiNodes.dbc.
+    pub const MOUNT_DISPLAY_HORDE: u32 = 295;
+    pub const MOUNT_DISPLAY_ALLIANCE: u32 = 1147;
+
+    pub const FLIGHT_MASTER_ENTRY: u32 = 51_006;
+    pub const FLIGHT_MASTER_GUID: u64 =
+        (0xF130_u64 << 48) | ((FLIGHT_MASTER_ENTRY as u64) << 24) | 1;
+}
+
 /// Gossip menu OPTION (work-item 217): `game_gossip_option.action` codes as they land verbatim from
 /// the cmangos dump's `gossip_menu_option.OptionType`/`option_id` column (the importer copies it
 /// through unchanged — this module documents what the values MEAN so the gateway dispatch and the
 /// importer agree without duplicating magic numbers). `[V]` — confirm against your own dump; only
 /// GOSSIP/BANKER/VENDOR/TAXI/TRAINER/INNKEEPER are read by the dispatcher today, the rest are
-/// inert (submenu/taxi aren't wired up — work-item 217 scope note).
+/// inert (submenu navigation remains deferred).
 pub mod gossip_option {
     pub const GOSSIP: u32 = 1; // plain text / submenu link (submenu navigation deferred, work-item 217)
     /// Quests reach the window through its QUEST section, never an option row, so the importer drops

@@ -168,7 +168,10 @@ pub fn reap_gateway_leases(
 /// `is_desync_error` on the gateway classifies on "not in world", and the two entries must be
 /// indistinguishable to that classifier.
 fn actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, String> {
-    acting_entity_by_guid(ctx, actor_guid).ok_or_else(|| "mover not in world".to_string())
+    let actor = acting_entity_by_guid(ctx, actor_guid)
+        .ok_or_else(|| "mover not in world".to_string())?;
+    crate::taxi::reject_action_while_in_flight(ctx, actor_guid)?;
+    Ok(actor)
 }
 
 /// [`crate::world::movement_update`] with the mover named by guid — the movement heartbeat, the
@@ -187,6 +190,9 @@ pub fn gw_movement_update(
     move_time_ms: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    if crate::taxi::movement_is_suppressed(ctx, actor_guid) {
+        return Ok(());
+    }
     let mover = actor(ctx, actor_guid)?;
     crate::world::apply_movement_update(ctx, mover, opcode, movement_info, x, y, z, o, move_time_ms)
 }
@@ -216,6 +222,9 @@ pub struct GwMove {
 pub fn gw_movement_batch(ctx: &ReducerContext, moves: Vec<GwMove>) -> Result<(), String> {
     require_operator(ctx)?;
     for m in moves {
+        if crate::taxi::movement_is_suppressed(ctx, m.actor_guid) {
+            continue;
+        }
         let mover = match actor(ctx, m.actor_guid) {
             Ok(e) => e,
             Err(e) => {

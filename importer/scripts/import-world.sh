@@ -141,6 +141,34 @@ SPACETIME_SERVER="${SPACETIME_SERVER:-http://127.0.0.1:3000}"
 # rather than depending on q(), which wouldn't exist in that extracted context.
 q() { spacetime sql --server "$SPACETIME_SERVER" "$DB" "$1"; }
 call_q() { spacetime call --server "$SPACETIME_SERVER" "$DB" "$@"; }
+# CHECKED IMPORT HELPERS BEGIN — extracted by import-manifest-smoke.sh.
+# This script intentionally does not use `set -e`, so an importer in a display pipeline must have
+# its status captured before grep/tail can obscure it. A failed apply can have written an early SQL
+# batch; the caller exits, and the next clear+reload rerun repairs that partial family.
+run_checked_step() { # label output-regex tail-lines command [args...]
+  local label="$1" pattern="$2" lines="$3" output status
+  shift 3
+  output="$("$@" 2>&1)"; status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "[world] ABORT — $label failed (exit $status)" >&2
+    [ -z "$output" ] || printf '%s\n' "$output" >&2
+    return "$status"
+  fi
+  printf '%s\n' "$output" | grep -iE "$pattern" | tail -"$lines" || true
+}
+# CHECKED IMPORT HELPERS END
+
+# TAXI RESTORE HELPERS BEGIN — extracted by import-manifest-smoke.sh.
+restore_taxi_fixture_or_fail() {
+  local output status
+  output="$(call_q restore_taxi_fixture 2>&1)"; status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "[world] ABORT — restore_taxi_fixture failed (exit $status)" >&2
+    [ -z "$output" ] || printf '%s\n' "$output" >&2
+    return "$status"
+  fi
+}
+# TAXI RESTORE HELPERS END
 # Whole extra maps folded into the SAME clear+reload run (--include-map). Map 0's canonical run carries
 # the Deadmines interior (36); another continent gets none by default — its own instanced maps belong
 # to the instances database, not to a continent shard.
@@ -235,8 +263,9 @@ foreign_spatial_maps() { comm -23 <(probe_maps "$1") <(printf '%s\n' "$EXPECTED_
 # Two of the four families above are ones `init` NEVER seeds: only a real `importer --apply`
 # run writes to `game_terrain_chunk`/`game_nav_chunk` (module/src/terrain.rs, module/src/nav.rs doc
 # comments; module/src/gameobject.rs's `imported_terrain_maps` reads the identical signal for its own
-# pool-arming fence). `init` DOES seed 3 map-0 creature rows and up to 5 map-0 gameobject rows into
-# EVERY freshly published database (the demo chicken/wolf/trainer + chest/goober/gather-node fixtures),
+# pool-arming fence). `init` DOES seed 4 map-0 creature rows and up to 5 map-0 gameobject rows into
+# EVERY freshly published database (the demo chicken/wolf/trainer/flight-master +
+# chest/goober/gather-node fixtures),
 # so `game_creature_spawn`/`game_gameobject` alone can't tell a never-imported shard from a genuinely
 # contaminated one — but `game_terrain_chunk`/`game_nav_chunk` can: empty means nothing has ever been
 # really imported here, so ANY foreign map `db_spatial_probe` reports can only be `init`'s own fixtures.
@@ -247,8 +276,8 @@ db_imported_probe() {
     printf '%s\n' "$out"
   done | grep -oE '^ *[0-9]+ *$|^!.+' | tr -d ' ' | sort -u
 }
-# Second, independent fail-safe signal: `init` seeds AT MOST 3 `game_creature_spawn`
-# rows (chicken/wolf/trainer) and AT MOST 5 `game_gameobject` rows (chest/goober/2 standalone gather
+# Second, independent fail-safe signal: `init` seeds AT MOST 4 `game_creature_spawn`
+# rows (chicken/wolf/trainer/flight-master) and AT MOST 5 `game_gameobject` rows (chest/goober/2 standalone gather
 # nodes/1 armed tier-pool point) into EVERY freshly published database — module/src/seed.rs. Terrain/nav
 # alone is not sufficient: `./target/debug/lyracore-importer --family creatures` (or `gameobjects`) run DIRECTLY —
 # a supported way to reload one family into a dev node, which bypasses this script's terrain/nav ETL
@@ -256,7 +285,7 @@ db_imported_probe() {
 # permanently empty. A row count over the fixture ceiling in EITHER table means real content landed here
 # by SOME path, terrain/nav probe notwithstanding, so `db_never_imported` below ANDs this in too. Prints a
 # bare integer, or nothing (→ caller fails safe) if the count can't be read or parsed.
-INIT_MAX_CREATURE_FIXTURES=3
+INIT_MAX_CREATURE_FIXTURES=4
 INIT_MAX_GAMEOBJECT_FIXTURES=5
 db_row_count() { # table
   # Self-contained inline --server default — see db_spatial_probe's comment above.
@@ -354,8 +383,8 @@ echo "[world] nav grid ETL  --map $MAP  --box $BOX${CENTER:+  --center $CENTER}"
 # classes fall back to the Warrior loadout, Human Female renders Male, and create_character skips
 # race/class validation (each is an idempotent clear+reload, independent of the cmangos creature slice).
 echo "[world] character-creation + faction DBC tables (start items / race+class combos / race display / factions)"
-./target/debug/lyracore-importer --db "$DB" --dbc "$DBC" --apply 2>&1 \
-  | grep -iE "dbc: loaded|error|abort" | tail -6
+run_checked_step "standalone DBC catalogue import" "dbc: loaded|error|abort" 6 \
+  ./target/debug/lyracore-importer --db "$DB" --dbc "$DBC" --apply || exit 1
 # Real talent trees (TalentTab.dbc + Talent.dbc → game_talent_tab/game_talent).
 # WITHOUT this the tables hold only the 8 demo talents, whose ids don't match what the 5875 client
 # sends on a talent click → talent selection silently fails (the client renders the real trees from its
@@ -414,6 +443,13 @@ echo "[world] repair (re-arm creature tick + re-seed fixtures/schedules)"
 # used to bolt extra seeders onto itself, per #378's history). Preconditions above (this database is
 # already published + claimed) satisfy debug_repair_after_publish's `require_operator` gate.
 call_q debug_repair_after_publish >/dev/null 2>&1
+# The creature import above wholesale-replaces init's map-0 roster. Restore the reserved taxi route
+# and its source flight master only when this database owns map 0; another continent must never gain
+# a foreign-map fixture during its import.
+if [ "$MAP" = 0 ]; then
+  echo "[world] restore taxi fixture"
+  restore_taxi_fixture_or_fail || exit 1
+fi
 # ARM the synthesized gather pools → max_active live game_gameobject rows per pool (init does NOT re-run
 # on an auto-migrate publish, and the importer writes pool members via SQL but no live rows). Idempotent.
 # This call is UNCONDITIONAL (every MAP) on purpose — `arm_pool` itself map-fences each
@@ -489,8 +525,22 @@ q_list() { # <query> — like n() but returns the MATCHING NUMERIC LINES themsel
   if [ "$status" -ne 0 ]; then sql_note_failure "$out"; return 0; fi
   printf '%s\n' "$out" | grep -oE '^ *[0-9]+ *$' | tr -d ' '
 }
+# TAXI FIXTURE VERIFY BEGIN — extracted by import-manifest-smoke.sh. These literals mirror the
+# hand-authored constants in crates/lyracore-shared; keeping them explicit makes this an independent
+# post-import check rather than asking the restore reducer whether its own transaction succeeded.
+verify_taxi_fixture_anchors() {
+  chk "reserved taxi source storage/wire node" 1 "$(n "SELECT id FROM game_taxi_node WHERE id=5090100 AND client_node_id=255 AND map_id=0")"
+  chk "reserved taxi destination storage/wire node" 1 "$(n "SELECT id FROM game_taxi_node WHERE id=5090101 AND client_node_id=256 AND map_id=0")"
+  chk "reserved directed taxi route" 1 "$(n "SELECT id FROM game_taxi_path WHERE id=5090102 AND source_node_id=5090100 AND destination_node_id=5090101 AND fare=25")"
+  chk "reserved ordered taxi geometry" 3 "$(n "SELECT id FROM game_taxi_path_node WHERE path_id=5090102 AND map_id=0")"
+  chk "reserved flight-master template" 1 "$(n "SELECT entry FROM game_creature_template WHERE entry=51006 AND npc_flags=9")"
+  chk "reserved flight-master spawn" 1 "$(n "SELECT guid FROM game_creature_spawn WHERE guid=17379391817761423361 AND entry=51006 AND map_id=0")"
+  chk "reserved live flight-master entity" 1 "$(n "SELECT guid FROM game_world_entity WHERE guid=17379391817761423361 AND entry=51006 AND map_id=0")"
+}
+# TAXI FIXTURE VERIFY END
 echo "[world] assertions (map $MAP → $DB):"
 [ "$SLICE" = 0 ] || echo "  ..    map-0 corridor fixture checks (Goldshire trainers / Farley / Sentinel Hill / Elwynn caster cast+rotation rows / Deadmines) SKIPPED — not this continent's content"
+[ "$MAP" != 0 ] || verify_taxi_fixture_anchors
 chk0 "Goldshire anchor trainers spawned {328,377,906,913,917,927} (NOT total coverage — see the service-coverage audit below)" "$FLOOR_CLASS_TRAINERS" \
     "$(n "SELECT guid FROM game_world_entity WHERE owner_guid=0 AND (entry=328 OR entry=377 OR entry=906 OR entry=913 OR entry=917 OR entry=927)" '[0-9]{6,}')"
 chk "class trainer offerings (learn_skill_line=0)"   "$FLOOR_TRAINER_OFFERINGS_CLASS" "$(n "SELECT spell_id FROM game_trainer_spell WHERE learn_skill_line = 0")"
@@ -648,6 +698,11 @@ chk0 "474/476 Frost Armor rotation row"    "$FLOOR_FROST_ARMOR_ROTATION" "$(n "S
 chk "areas imported (game_area) [V]"                 "$FLOOR_AREAS" "$(n "SELECT id FROM game_area")"
 chk "area triggers imported (game_area_trigger) [V]"  "$FLOOR_AREA_TRIGGERS" "$(n "SELECT id FROM game_area_trigger")"
 chk "graveyards imported (game_graveyard) [V]"         "$FLOOR_GRAVEYARDS" "$(n "SELECT id FROM game_graveyard")"
+# The importer restores a reserved 509xxxx fixture after every whole-family replacement. Count only
+# low client ids here so a missing Taxi*.dbc load cannot pass by observing those fixture rows alone.
+chk "taxi nodes imported from TaxiNodes.dbc"            "$FLOOR_TAXI_NODES" "$(n "SELECT id FROM game_taxi_node WHERE id < 5090000")"
+chk "directed taxi paths imported from TaxiPath.dbc"    "$FLOOR_TAXI_PATHS" "$(n "SELECT id FROM game_taxi_path WHERE id < 5090000")"
+chk "taxi path points imported from TaxiPathNode.dbc"   "$FLOOR_TAXI_PATH_NODES" "$(n "SELECT id FROM game_taxi_path_node WHERE id < 5090000")"
 # Zone graveyard_zone → game_graveyard "join" check: `spacetime sql` has no JOIN, so this is done
 # shell-side (fetch each table separately, intersect in bash) — at least one link for $GRAVEYARD_ZONE
 # must resolve to a real game_graveyard row, proving `graveyard::resolve_graveyard`'s zone-linked path

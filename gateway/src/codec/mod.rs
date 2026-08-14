@@ -34,6 +34,7 @@ mod movement;
 mod npc;
 mod quest;
 mod trainer;
+mod taxi;
 mod values;
 
 pub use social::{
@@ -60,6 +61,7 @@ pub use movement::*;
 pub use npc::*;
 pub use quest::*;
 pub use trainer::*;
+pub use taxi::*;
 pub use values::*;
 
 // Shared imports for the family submodules. Kept at this (private) module level so each submodule

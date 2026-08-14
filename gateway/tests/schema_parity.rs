@@ -466,7 +466,7 @@ parity_test!(parity_game_world_entity, "game_world_entity", lyracore_module::Wor
     run_speed_mult_bp, godmode, resting, cell,
     sheet_str_bonus, sheet_agi_bonus, sheet_sta_bonus, sheet_int_bonus, sheet_spi_bonus,
     sheet_ap_base, sheet_ap_mods, sheet_dmg_min, sheet_dmg_max, sheet_crit_bp, unit_bytes_2,
-    bank_bag_slots,
+    bank_bag_slots, mount_display_id,
 });
 // `game_config` became gateway-subscribed so the startup instance-hosting check can read
 // `hosts_instances` back instead of guessing. The generated binding was STALE when that subscription
@@ -481,6 +481,30 @@ parity_test!(parity_game_creature_template, "game_creature_template", lyracore_m
     creature_type, creature_family, type_flags, rank, scale, base_attack_time_ms, money_min,
     money_max, max_level, max_level_health, aggro_range, damage_min, damage_max, armor,
     pickpocket_loot_id, skin_loot_id, trainer_type, trainer_class,
+});
+parity_test!(parity_game_taxi_node, "game_taxi_node", lyracore_module::GameTaxiNode, bindings::game_taxi_node_type::GameTaxiNode, {
+    id, client_node_id, map_id, x, y, z, name, mount_display_horde, mount_display_alliance,
+});
+parity_test!(parity_game_taxi_path, "game_taxi_path", lyracore_module::GameTaxiPath, bindings::game_taxi_path_type::GameTaxiPath, {
+    id, source_node_id, destination_node_id, fare,
+});
+parity_test!(parity_game_taxi_path_node, "game_taxi_path_node", lyracore_module::GameTaxiPathNode, bindings::game_taxi_path_node_type::GameTaxiPathNode, {
+    id, path_id, node_index, map_id, x, y, z, flags, delay_ms,
+});
+parity_test!(parity_game_character_taxi_node, "game_character_taxi_node", lyracore_module::CharacterTaxiNode, bindings::character_taxi_node_type::CharacterTaxiNode, {
+    id, character_guid, node_id,
+});
+parity_test!(parity_game_active_taxi_flight, "game_active_taxi_flight", lyracore_module::ActiveTaxiFlight, bindings::active_taxi_flight_type::ActiveTaxiFlight, {
+    character_guid, path_id, source_node_id, destination_node_id, mount_display_id, fare,
+    current_node_index, started_micros,
+});
+parity_test!(parity_game_taxi_service_reply, "game_taxi_service_reply", lyracore_module::TaxiServiceReply, bindings::taxi_service_reply_type::TaxiServiceReply, {
+    request_id, character_guid, operation, npc_guid, accepted, known, source_client_node_id,
+    available_client_node_ids, refusal, created_micros, result_code,
+});
+parity_test!(parity_game_taxi_passenger_spline, "game_taxi_passenger_spline", lyracore_module::TaxiPassengerSpline, bindings::taxi_passenger_spline_type::TaxiPassengerSpline, {
+    character_guid, map_id, instance_id, grid_x, grid_y, cell, start_x, start_y, start_z, points,
+    duration_ms, spline_id,
 });
 parity_test!(parity_game_start_position, "game_start_position", lyracore_module::StartPosition, bindings::start_position_type::StartPosition, {
     race_class, race, class, map_id, zone_id, x, y, z, orientation, display_id,
@@ -714,6 +738,7 @@ const MANIFEST_TABLES: &[&str] = &[
     // subscription.
     "game_entity_motion",
     "game_creature_spline",
+    "game_taxi_passenger_spline",
     "game_chat_event",
     "game_emote_event",
     "game_teleport_event",
@@ -741,6 +766,12 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_world_entity",
     "game_config",
     "game_creature_template",
+    "game_taxi_node",
+    "game_taxi_path",
+    "game_taxi_path_node",
+    "game_character_taxi_node",
+    "game_active_taxi_flight",
+    "game_taxi_service_reply",
     "game_start_position",
     "game_corpse",
     "game_item_template",

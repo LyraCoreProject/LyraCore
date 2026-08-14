@@ -180,6 +180,77 @@ pub struct GameAreaTrigger {
     pub box_yaw: f32,
 }
 
+/// One `TaxiNodes.dbc` row: a named flight point and the two mount displays the 5875 client data
+/// assigns to it. `id` is the server-side storage key; `client_node_id` is the unique one-based bit
+/// position used by the vanilla 256-bit taxi mask. Imported rows use their DBC id for both, while
+/// reserved fixtures retain high storage ids without leaking those values onto the wire. The DBC
+/// mount array is Horde first, Alliance second. [static]
+#[table(accessor = game_taxi_node, public)]
+pub struct GameTaxiNode {
+    #[primary_key]
+    pub id: u32,
+    #[unique]
+    pub client_node_id: u32,
+    pub map_id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub name: String,
+    pub mount_display_horde: u32,
+    pub mount_display_alliance: u32,
+}
+
+/// One directed `TaxiPath.dbc` route. A reverse flight exists only when the DBC contains a separate
+/// row in the opposite direction. Its ordered geometry lives in `game_taxi_path_node`. [static]
+#[table(
+    accessor = game_taxi_path,
+    public,
+    index(accessor = by_source, btree(columns = [source_node_id])),
+    index(accessor = by_route, btree(columns = [source_node_id, destination_node_id]))
+)]
+pub struct GameTaxiPath {
+    #[primary_key]
+    pub id: u32,
+    pub source_node_id: u32,
+    pub destination_node_id: u32,
+    /// Copper, copied from `TaxiPath.dbc::cost` after rejecting negative values.
+    pub fare: u32,
+}
+
+/// One `TaxiPathNode.dbc` row. `id` is the stable DBC key, while `(path_id, node_index)` is the
+/// actual flight order. `flags` is the DBC's signed `int32` container, retained verbatim so all 32
+/// flag bits survive (including the sign bit); consumers that interpret bits must view its bit
+/// pattern as `u32`. Delay is also an `int32` in the vanilla DBC contract, but negative delays are
+/// rejected by the importer because elapsed time cannot be negative. [static]
+#[table(
+    accessor = game_taxi_path_node,
+    public,
+    index(accessor = by_path_id, btree(columns = [path_id])),
+    index(accessor = by_path, btree(columns = [path_id, node_index]))
+)]
+pub struct GameTaxiPathNode {
+    #[primary_key]
+    pub id: u32,
+    pub path_id: u32,
+    pub node_index: u32,
+    pub map_id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub flags: i32,
+    pub delay_ms: i32,
+}
+
+/// Restore the reserved catalogue and its map-0 flight master after the normal world ETL replaces
+/// spatial fixture rows. The import script calls this only for a map-0 run, so restoring a test NPC
+/// cannot contaminate a shard that owns another continent.
+#[reducer]
+pub fn restore_taxi_fixture(ctx: &ReducerContext) -> Result<(), String> {
+    require_operator(ctx)?;
+    crate::seed::seed_taxi_fixture(ctx);
+    Ok(())
+}
+
 // ===========================================================================================
 //  Realm address [static] — the one writer for the row above
 // ===========================================================================================

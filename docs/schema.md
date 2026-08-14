@@ -54,8 +54,8 @@ publish presents as an unrelated mid-session hang, not a loud "no such table".
 
 ## 2. Inventory
 
-**161 tables** — 152 of them in `module/src/**`, the remaining 9 contributed by extension packages
-compiled into the same module. **103 public, 58 private.**
+**169 tables** — 160 of them in `module/src/**`, the remaining 9 contributed by extension packages
+compiled into the same module. **107 public, 62 private.**
 
 | Domain | Tables | Public | Where |
 |---|---:|---:|---|
@@ -76,7 +76,8 @@ compiled into the same module. **103 public, 58 private.**
 | Instance / encounter | 7 | 0 | `instance.rs`, `encounter.rs` |
 | Region / sharding / transfer / load | 7 | 0 | `region.rs`, `load.rs`, `transfer/` |
 | Realm-core | 2 | 0 | `realm_core.rs` |
-| Config / static data / diagnostics | 20 | 19 | `config.rs`, `gm.rs`, `faction.rs`, `skilldata.rs`, `stats.rs`, `action_bar.rs`, `import_meta.rs`, `debug.rs` |
+| Config / static data / diagnostics | 23 | 22 | `config.rs`, `gm.rs`, `faction.rs`, `skilldata.rs`, `stats.rs`, `action_bar.rs`, `import_meta.rs`, `debug.rs` |
+| Taxi progression / service | 5 | 1 | `taxi.rs` |
 | GC | 1 | 0 | `gc.rs` |
 | Exact vmap generations | 2 | 0 | `vmap.rs` |
 | Extension packages | 9 | 2 | compiled into the module; maintained outside this repository |
@@ -84,9 +85,10 @@ compiled into the same module. **103 public, 58 private.**
 Two shapes recur and are worth naming:
 
 - **`[static]` / catalogue tables** — `game_item_template` (17,720 rows), `game_spell`,
-  `game_spell_effect`, `game_creature_template`, `game_quest_*`, `game_faction*`, DBC-derived
-  reference data. Written only by the importer, replicated identically to every shard, and checked
-  for skew by the maintainers' cross-shard catalogue-parity check. Per-player connections are gone
+  `game_spell_effect`, `game_creature_template`, `game_quest_*`, `game_faction*`, the three
+  `game_taxi_*` tables, and other DBC-derived reference data. Written only by the importer,
+  replicated identically to every shard, and checked for skew by the maintainers' cross-shard
+  catalogue-parity check. Per-player connections are gone
   (#483) — there is now exactly one connection per database, so a catalogue is read into exactly one
   cache copy by construction. See §5 for why that used to need enforcing.
 - **`[event]` tables** — transient outbound signals that cannot be derived from a row diff (a
@@ -99,6 +101,55 @@ Two shapes recur and are worth naming:
 ## 3. The load-bearing tables
 
 Read the structs; this section gives you the shape and the reason.
+
+### `game_taxi_node` / `game_taxi_path` / `game_taxi_path_node` (`module/src/config.rs`)
+
+Public static catalogue rows imported from the operator's `TaxiNodes.dbc`, `TaxiPath.dbc`, and
+`TaxiPathNode.dbc`. A node's `id` is its storage key and `client_node_id` is its unique wire id in the
+vanilla client's fixed eight-word (256-bit) taxi mask. Imported nodes use their DBC id for both;
+reserved fixtures keep 509xxxx storage ids but use bounded synthetic wire ids. Nodes also retain map
+position, name, and the Horde/Alliance mount-display pair. Paths are directed source-to-destination
+edges with their fare in copper; the reverse direction is present only when the DBC contains a second
+row. Path nodes keep their stable DBC id and explicit `(path_id, node_index)` order, plus map position,
+flags, and delay. `flags` remains the DBC's signed `int32` container so every raw bit survives; delay
+keeps the source type but the importer rejects negative time. The importer validates references,
+wire-id bounds/collisions, and duplicate ordinals before writing, then replaces the family
+point-first/path-second/node-last so a successful rerun removes stale geometry.
+
+### Taxi progression, schedule, spline, and service tables (`module/src/taxi.rs`)
+
+`game_character_taxi_node` is a private module table containing durable, character-scoped taxi
+progression. Each row records a known catalogue node by its server storage id. Opening a nearby,
+living, selectable, friendly flight master discovers its source node idempotently; a status query
+only reads this state. The table participates in character deletion and shard transfer, and remints
+its local surrogate id at the destination. The gateway does not subscribe or read it.
+
+`game_active_taxi_flight` is private and has one row at most per character because
+`character_guid` is its primary key. A successful direct-route activation creates the row in the
+same serialized transaction that deducts the imported fare. It records the storage ids for the path
+and endpoints, the selected mount display, the paid fare, the starting point cursor, and the start
+time. The gateway queues the successful activation reply before an idempotent arm reducer sets the
+live mount/flight flag and starts the schedule. Duplicate activation therefore sees
+the existing row before it can charge again. Character deletion removes the row. It is explicitly
+not transported because supported baseline flights are confined to one open-world shard.
+
+`game_taxi_flight_schedule` drives the 250 ms authoritative route clock. The public
+`game_taxi_passenger_spline` row carries the current remaining route to the owner and visibility-
+checked AOI observers; it is refreshed whenever the passenger changes AOI cell.
+
+`game_taxi_service_reply` is a private transient request/reply seam between the gateway and the
+module. The owner-token coordinator subscribes it; ordinary clients cannot. The gateway sends a
+status, open, or activation request with a unique request id, and the module writes an independently
+keyed reply, so overlapping requests for one character cannot overwrite each other before
+observation. Each observed row is acknowledged and deleted by an operator-gated reducer. Writes
+also reap crash
+leftovers older than 60 seconds, while never deleting a young unobserved row regardless of overlap.
+The module owns NPC, range, reaction, discovery, topology, and direct-route policy. Replies expose
+client node ids for the fixed 256-bit wire mask while catalogue paths and discoveries keep storage
+ids. Activation replies also carry a stable numeric result which the gateway maps directly to the
+closest vanilla `ActivateTaxiReply`; refusal prose remains diagnostic. The mailbox is deleted with
+the character but is not transported, so a stale request can never become progression on the
+destination shard.
 
 ### `game_world_entity` — the live in-world row (`module/src/world.rs:20`)
 
@@ -119,9 +170,15 @@ pub struct WorldEntity { /* ~50 columns; see the source */ }
 
 Column groups: identity/control (`guid`, `owner_identity`, `account_id`), spatial (`map_id`,
 `instance_id`, `x/y/z/orientation`, `grid_x`, `grid_y`, `last_move_ms`), the object block
-(`type_mask`, `entry`, `scale_x`), the unit block (health/power/level/faction/display/flags/attack
+(`type_mask`, `entry`, `scale_x`), the unit block (health/power/level/faction/display/mount/flags/attack
 time/dynamic flags), the player block (appearance bytes, flags, xp, money, the five base stats,
 armor), the current `target_guid`, and the creature-movement cursor.
+
+Taxi activation end-appends `mount_display_id` for `UNIT_FIELD_MOUNTDISPLAYID` and sets
+`UNIT_FLAG_TAXI_FLIGHT` in the existing `unit_flags` word. The gateway relays both in one
+OBJECT_FIELD_TYPE-free partial VALUES mask, so self and observers see one coherent mounted-flight
+presentation. Route progress is never stored in `game_creature_spline`; it belongs to the separate
+active-flight row.
 
 Three indexes, each earning its keep:
 - `by_grid` is the AOI range scan. Note it is **four** columns — `instance_id` is in the key, because
@@ -254,7 +311,7 @@ is the cache the gateway reads through.
 
 ## 6. Scheduled tables
 
-Ten scheduled tables drive every periodic and deferred effect in the game. Nothing on a gateway
+Eleven scheduled tables drive every periodic and deferred effect in the game. Nothing on a gateway
 timer decides gameplay.
 
 | Scheduled table | Reducer | Cadence | Where |
@@ -269,6 +326,7 @@ timer decides gameplay.
 | `game_pending_cast` | `fire_pending_cast` | one-shot at cast completion | `spell/tables.rs:468` |
 | `game_pending_spell_impact` | `fire_spell_impact` | one-shot at projectile landing | `spell/tables.rs:515` |
 | `game_ranged_impact_schedule` | `ranged_impact` | one-shot at shot landing | `combat/mod.rs:1196` |
+| `game_taxi_flight_schedule` | `advance_taxi_flight` | 250 ms while a passenger is active | `taxi.rs` |
 
 The interval rows are inserted by `init` (`module/src/seed.rs:1358–1408`), except the transfer reaper
 which `begin_transfer` arms lazily and idempotently. Scheduled reducers self-gate on
@@ -319,7 +377,7 @@ Two hard-won rules live with it and are restated in `danger-zones.md` §1:
 config rows, the scheduled rows, and the static fixtures the test harness depends on, **all in one
 transaction** — a partial seed never persists.
 
-Two things to know about it:
+Three things to know about it:
 
 - `game_realm.address` is seeded to `127.0.0.1:8085`. An external client will log in and then fail to
   reach the world server. There is no config knob for it today; change it in `seed.rs` and republish,
@@ -330,6 +388,12 @@ Two things to know about it:
   reducers panic and roll back the whole transaction, SQL inserts fail silently. Fixture rows must
   use fixed reserved ids (509xxxx) with delete-first. `danger-zones.md` §2 has the full list of
   reserved ranges.
+- The taxi harness reserves the 5090000+ storage namespace for two nodes, one directed route, three
+  ordered points, and a nearby `GOSSIP|TAXI` flight master. Its wire ids 255 and 256 fit the vanilla
+  taxi mask and are unique-indexed independently of storage. They support headless protocol tests;
+  an unmodified client has no matching synthetic map entries, so visual real-client flights must use
+  imported nodes. The DBC pass always restores the catalogue rows; the map-0 world import restores
+  and verifies the NPC after replacing spatial content.
 
 Real world content — 2,200+ spawns, 420 quests, the item/spell/faction catalogues — is **not**
 seeded. It comes from the importer; see [`data-ingestion.md`](./data-ingestion.md).

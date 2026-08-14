@@ -6,7 +6,7 @@ use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
 #[cfg(feature = "debug_reducers")]
 use crate::creatures::tick::game_creature_spline;
-use crate::{game_race_info, game_world_entity, Character, WorldEntity};
+use crate::{game_active_taxi_flight, game_race_info, game_world_entity, Character, WorldEntity};
 
 // ===========================================================================================
 //  Creature data [static]
@@ -645,6 +645,7 @@ pub fn build_creature_entity(
         sheet_dmg_max: 0,
         sheet_crit_bp: 0,
         bank_bag_slots: 0, // a creature owns no bank slots
+        mount_display_id: 0, // creatures do not use the player taxi presentation field
     }
 }
 
@@ -799,7 +800,19 @@ pub fn build_player_entity(
         sheet_dmg_min: 0,
         sheet_dmg_max: 0,
         sheet_crit_bp: 0,
+        mount_display_id: 0,
     };
+    // An interrupted connection does not cancel a paid flight. Restore its presentation while the
+    // scheduler continues from its original authoritative timestamp.
+    if let Some(flight) = ctx
+        .db
+        .game_active_taxi_flight()
+        .character_guid()
+        .find(character.guid)
+    {
+        entity.mount_display_id = flight.mount_display_id;
+        entity.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
+    }
     // The level-derived stat block — the five base attributes, armor, and max health/power — from the
     // real class/level curve (importer P3), via the ONE shared writer also used by the ding loop and a
     // GM level-set (#362). Falls back to the flat placeholder/zeros when the curve isn't loaded, so an

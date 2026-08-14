@@ -8,7 +8,9 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 pub mod account_type;
 pub mod activate_vmap_generation_reducer;
+pub mod active_taxi_flight_type;
 pub mod addon_message_type;
+pub mod advance_taxi_flight_reducer;
 pub mod append_vmap_generation_chunks_reducer;
 pub mod areatrigger_teleport_type;
 pub mod arm_all_pools_reducer;
@@ -28,6 +30,7 @@ pub mod character_explored_type;
 pub mod character_quest_type;
 pub mod character_shard_type;
 pub mod character_talent_type;
+pub mod character_taxi_node_type;
 pub mod character_type;
 pub mod chat_event_type;
 pub mod claim_guid_range_reducer;
@@ -64,6 +67,7 @@ pub mod debug_arm_instance_tick_reducer;
 pub mod debug_assert_blink_clamp_reducer;
 pub mod debug_assert_chase_stops_at_column_reducer;
 pub mod debug_assert_floor_snap_reducer;
+pub mod debug_assert_unreachable_goal_stops_at_wall_reducer;
 pub mod debug_audit_class_kits_reducer;
 pub mod debug_audit_quest_chains_reducer;
 pub mod debug_auto_bank_item_reducer;
@@ -106,6 +110,7 @@ pub mod debug_equip_offhand_reducer;
 pub mod debug_equip_weapon_reducer;
 pub mod debug_expire_quest_reducer;
 pub mod debug_explore_at_reducer;
+pub mod debug_fill_aura_slots_reducer;
 pub mod debug_fish_reducer;
 pub mod debug_floor_probe_reducer;
 pub mod debug_force_cast_at_reducer;
@@ -199,6 +204,7 @@ pub mod finish_transfer_reducer;
 pub mod fire_pending_cast_reducer;
 pub mod fire_spell_impact_reducer;
 pub mod game_account_table;
+pub mod game_active_taxi_flight_table;
 pub mod game_addon_message_table;
 pub mod game_area_table;
 pub mod game_area_trigger_table;
@@ -222,6 +228,7 @@ pub mod game_character_quest_table;
 pub mod game_character_shard_table;
 pub mod game_character_table;
 pub mod game_character_talent_table;
+pub mod game_character_taxi_node_table;
 pub mod game_chat_event_table;
 pub mod game_class_level_stats_table;
 pub mod game_combat_event_table;
@@ -365,6 +372,15 @@ pub mod game_start_position_table;
 pub mod game_talent_tab_table;
 pub mod game_talent_table;
 pub mod game_taunt_lock_table;
+pub mod game_taxi_flight_schedule_table;
+pub mod game_taxi_node_table;
+pub mod game_taxi_node_type;
+pub mod game_taxi_passenger_spline_table;
+pub mod game_taxi_path_node_table;
+pub mod game_taxi_path_node_type;
+pub mod game_taxi_path_table;
+pub mod game_taxi_path_type;
+pub mod game_taxi_service_reply_table;
 pub mod game_teleport_event_table;
 pub mod game_terrain_chunk_table;
 pub mod game_threat_table;
@@ -404,8 +420,11 @@ pub mod gw_abandon_quest_reducer;
 pub mod gw_accept_group_invite_reducer;
 pub mod gw_accept_quest_reducer;
 pub mod gw_accept_trade_reducer;
+pub mod gw_ack_taxi_reply_reducer;
+pub mod gw_activate_taxi_reducer;
 pub mod gw_add_friend_reducer;
 pub mod gw_add_ignore_reducer;
+pub mod gw_arm_taxi_flight_reducer;
 pub mod gw_attack_reducer;
 pub mod gw_auto_bank_item_reducer;
 pub mod gw_begin_trade_reducer;
@@ -451,6 +470,7 @@ pub mod gw_move_item_reducer;
 pub mod gw_move_type;
 pub mod gw_movement_batch_reducer;
 pub mod gw_movement_update_reducer;
+pub mod gw_open_taxi_reducer;
 pub mod gw_party_chat_reducer;
 pub mod gw_pet_command_reducer;
 pub mod gw_pick_lock_reducer;
@@ -478,6 +498,7 @@ pub mod gw_skin_reducer;
 pub mod gw_spirit_res_reducer;
 pub mod gw_stop_attack_reducer;
 pub mod gw_take_loot_reducer;
+pub mod gw_taxi_node_status_reducer;
 pub mod gw_trainer_buy_reducer;
 pub mod gw_turn_in_quest_reducer;
 pub mod gw_unaccept_trade_reducer;
@@ -569,6 +590,7 @@ pub mod region_assignment_type;
 pub mod region_load_type;
 pub mod release_transfer_reducer;
 pub mod rest_state_event_type;
+pub mod restore_taxi_fixture_reducer;
 pub mod resurrect_request_type;
 pub mod roll_event_type;
 pub mod school_lockout_type;
@@ -604,6 +626,9 @@ pub mod sync_group_mirror_reducer;
 pub mod talent_tab_type;
 pub mod talent_type;
 pub mod taunt_lock_type;
+pub mod taxi_flight_schedule_type;
+pub mod taxi_passenger_spline_type;
+pub mod taxi_service_reply_type;
 pub mod teleport_event_type;
 pub mod terrain_chunk_type;
 pub mod threat_entry_type;
@@ -630,7 +655,9 @@ pub mod xp_event_type;
 
 pub use account_type::Account;
 pub use activate_vmap_generation_reducer::activate_vmap_generation;
+pub use active_taxi_flight_type::ActiveTaxiFlight;
 pub use addon_message_type::AddonMessage;
+pub use advance_taxi_flight_reducer::advance_taxi_flight;
 pub use append_vmap_generation_chunks_reducer::append_vmap_generation_chunks;
 pub use areatrigger_teleport_type::AreatriggerTeleport;
 pub use arm_all_pools_reducer::arm_all_pools;
@@ -650,6 +677,7 @@ pub use character_explored_type::CharacterExplored;
 pub use character_quest_type::CharacterQuest;
 pub use character_shard_type::CharacterShard;
 pub use character_talent_type::CharacterTalent;
+pub use character_taxi_node_type::CharacterTaxiNode;
 pub use character_type::Character;
 pub use chat_event_type::ChatEvent;
 pub use claim_guid_range_reducer::claim_guid_range;
@@ -686,6 +714,7 @@ pub use debug_arm_instance_tick_reducer::debug_arm_instance_tick;
 pub use debug_assert_blink_clamp_reducer::debug_assert_blink_clamp;
 pub use debug_assert_chase_stops_at_column_reducer::debug_assert_chase_stops_at_column;
 pub use debug_assert_floor_snap_reducer::debug_assert_floor_snap;
+pub use debug_assert_unreachable_goal_stops_at_wall_reducer::debug_assert_unreachable_goal_stops_at_wall;
 pub use debug_audit_class_kits_reducer::debug_audit_class_kits;
 pub use debug_audit_quest_chains_reducer::debug_audit_quest_chains;
 pub use debug_auto_bank_item_reducer::debug_auto_bank_item;
@@ -728,6 +757,7 @@ pub use debug_equip_offhand_reducer::debug_equip_offhand;
 pub use debug_equip_weapon_reducer::debug_equip_weapon;
 pub use debug_expire_quest_reducer::debug_expire_quest;
 pub use debug_explore_at_reducer::debug_explore_at;
+pub use debug_fill_aura_slots_reducer::debug_fill_aura_slots;
 pub use debug_fish_reducer::debug_fish;
 pub use debug_floor_probe_reducer::debug_floor_probe;
 pub use debug_force_cast_at_reducer::debug_force_cast_at;
@@ -821,6 +851,7 @@ pub use finish_transfer_reducer::finish_transfer;
 pub use fire_pending_cast_reducer::fire_pending_cast;
 pub use fire_spell_impact_reducer::fire_spell_impact;
 pub use game_account_table::*;
+pub use game_active_taxi_flight_table::*;
 pub use game_addon_message_table::*;
 pub use game_area_table::*;
 pub use game_area_trigger_table::*;
@@ -844,6 +875,7 @@ pub use game_character_quest_table::*;
 pub use game_character_shard_table::*;
 pub use game_character_table::*;
 pub use game_character_talent_table::*;
+pub use game_character_taxi_node_table::*;
 pub use game_chat_event_table::*;
 pub use game_class_level_stats_table::*;
 pub use game_combat_event_table::*;
@@ -987,6 +1019,15 @@ pub use game_start_position_table::*;
 pub use game_talent_tab_table::*;
 pub use game_talent_table::*;
 pub use game_taunt_lock_table::*;
+pub use game_taxi_flight_schedule_table::*;
+pub use game_taxi_node_table::*;
+pub use game_taxi_node_type::GameTaxiNode;
+pub use game_taxi_passenger_spline_table::*;
+pub use game_taxi_path_node_table::*;
+pub use game_taxi_path_node_type::GameTaxiPathNode;
+pub use game_taxi_path_table::*;
+pub use game_taxi_path_type::GameTaxiPath;
+pub use game_taxi_service_reply_table::*;
 pub use game_teleport_event_table::*;
 pub use game_terrain_chunk_table::*;
 pub use game_threat_table::*;
@@ -1026,8 +1067,11 @@ pub use gw_abandon_quest_reducer::gw_abandon_quest;
 pub use gw_accept_group_invite_reducer::gw_accept_group_invite;
 pub use gw_accept_quest_reducer::gw_accept_quest;
 pub use gw_accept_trade_reducer::gw_accept_trade;
+pub use gw_ack_taxi_reply_reducer::gw_ack_taxi_reply;
+pub use gw_activate_taxi_reducer::gw_activate_taxi;
 pub use gw_add_friend_reducer::gw_add_friend;
 pub use gw_add_ignore_reducer::gw_add_ignore;
+pub use gw_arm_taxi_flight_reducer::gw_arm_taxi_flight;
 pub use gw_attack_reducer::gw_attack;
 pub use gw_auto_bank_item_reducer::gw_auto_bank_item;
 pub use gw_begin_trade_reducer::gw_begin_trade;
@@ -1073,6 +1117,7 @@ pub use gw_move_item_reducer::gw_move_item;
 pub use gw_move_type::GwMove;
 pub use gw_movement_batch_reducer::gw_movement_batch;
 pub use gw_movement_update_reducer::gw_movement_update;
+pub use gw_open_taxi_reducer::gw_open_taxi;
 pub use gw_party_chat_reducer::gw_party_chat;
 pub use gw_pet_command_reducer::gw_pet_command;
 pub use gw_pick_lock_reducer::gw_pick_lock;
@@ -1100,6 +1145,7 @@ pub use gw_skin_reducer::gw_skin;
 pub use gw_spirit_res_reducer::gw_spirit_res;
 pub use gw_stop_attack_reducer::gw_stop_attack;
 pub use gw_take_loot_reducer::gw_take_loot;
+pub use gw_taxi_node_status_reducer::gw_taxi_node_status;
 pub use gw_trainer_buy_reducer::gw_trainer_buy;
 pub use gw_turn_in_quest_reducer::gw_turn_in_quest;
 pub use gw_unaccept_trade_reducer::gw_unaccept_trade;
@@ -1191,6 +1237,7 @@ pub use region_assignment_type::RegionAssignment;
 pub use region_load_type::RegionLoad;
 pub use release_transfer_reducer::release_transfer;
 pub use rest_state_event_type::RestStateEvent;
+pub use restore_taxi_fixture_reducer::restore_taxi_fixture;
 pub use resurrect_request_type::ResurrectRequest;
 pub use roll_event_type::RollEvent;
 pub use school_lockout_type::SchoolLockout;
@@ -1226,6 +1273,9 @@ pub use sync_group_mirror_reducer::sync_group_mirror;
 pub use talent_tab_type::TalentTab;
 pub use talent_type::Talent;
 pub use taunt_lock_type::TauntLock;
+pub use taxi_flight_schedule_type::TaxiFlightSchedule;
+pub use taxi_passenger_spline_type::TaxiPassengerSpline;
+pub use taxi_service_reply_type::TaxiServiceReply;
 pub use teleport_event_type::TeleportEvent;
 pub use terrain_chunk_type::TerrainChunk;
 pub use threat_entry_type::ThreatEntry;
@@ -1260,6 +1310,9 @@ pub use xp_event_type::XpEvent;
 pub enum Reducer {
     ActivateVmapGeneration {
         generation_id: u64,
+    },
+    AdvanceTaxiFlight {
+        schedule: TaxiFlightSchedule,
     },
     AppendVmapGenerationChunks {
         generation_id: u64,
@@ -1328,6 +1381,9 @@ pub enum Reducer {
     DebugAssertFloorSnap {
         map_id: u32,
         creature_entry: u32,
+    },
+    DebugAssertUnreachableGoalStopsAtWall {
+        character_guid: u64,
     },
     DebugAuditClassKits,
     DebugAuditQuestChains,
@@ -1516,6 +1572,12 @@ pub enum Reducer {
         map_id: u32,
         x: f32,
         y: f32,
+    },
+    DebugFillAuraSlots {
+        target_guid: u64,
+        caster_guid: u64,
+        debuff: bool,
+        count: u8,
     },
     DebugFish {
         character_guid: u64,
@@ -1876,6 +1938,17 @@ pub enum Reducer {
     GwAcceptTrade {
         actor_guid: u64,
     },
+    GwAckTaxiReply {
+        character_guid: u64,
+        request_id: u64,
+    },
+    GwActivateTaxi {
+        character_guid: u64,
+        npc_guid: u64,
+        source_client_node_id: u32,
+        destination_client_node_id: u32,
+        request_id: u64,
+    },
     GwAddFriend {
         actor_guid: u64,
         target_guid: u64,
@@ -1883,6 +1956,9 @@ pub enum Reducer {
     GwAddIgnore {
         actor_guid: u64,
         target_guid: u64,
+    },
+    GwArmTaxiFlight {
+        character_guid: u64,
     },
     GwAttack {
         actor_guid: u64,
@@ -2072,6 +2148,11 @@ pub enum Reducer {
         o: f32,
         move_time_ms: u32,
     },
+    GwOpenTaxi {
+        character_guid: u64,
+        npc_guid: u64,
+        request_id: u64,
+    },
     GwPartyChat {
         actor_guid: u64,
         text: String,
@@ -2192,6 +2273,11 @@ pub enum Reducer {
         actor_guid: u64,
         corpse_guid: u64,
         loot_slot: u8,
+    },
+    GwTaxiNodeStatus {
+        character_guid: u64,
+        npc_guid: u64,
+        request_id: u64,
     },
     GwTrainerBuy {
         actor_guid: u64,
@@ -2419,6 +2505,7 @@ pub enum Reducer {
     ReleaseTransfer {
         transfer_id: u64,
     },
+    RestoreTaxiFixture,
     SetCharacterShard {
         character_guid: u64,
         map_id: u32,
@@ -2496,6 +2583,7 @@ impl __sdk::Reducer for Reducer {
     fn reducer_name(&self) -> &'static str {
         match self {
             Reducer::ActivateVmapGeneration { .. } => "activate_vmap_generation",
+            Reducer::AdvanceTaxiFlight { .. } => "advance_taxi_flight",
             Reducer::AppendVmapGenerationChunks { .. } => "append_vmap_generation_chunks",
             Reducer::ArmAllPools => "arm_all_pools",
             Reducer::BeginTransfer { .. } => "begin_transfer",
@@ -2511,6 +2599,9 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugAssertBlinkClamp { .. } => "debug_assert_blink_clamp",
             Reducer::DebugAssertChaseStopsAtColumn { .. } => "debug_assert_chase_stops_at_column",
             Reducer::DebugAssertFloorSnap { .. } => "debug_assert_floor_snap",
+            Reducer::DebugAssertUnreachableGoalStopsAtWall { .. } => {
+                "debug_assert_unreachable_goal_stops_at_wall"
+            }
             Reducer::DebugAuditClassKits => "debug_audit_class_kits",
             Reducer::DebugAuditQuestChains => "debug_audit_quest_chains",
             Reducer::DebugAutoBankItem { .. } => "debug_auto_bank_item",
@@ -2553,6 +2644,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugEquipWeapon { .. } => "debug_equip_weapon",
             Reducer::DebugExpireQuest { .. } => "debug_expire_quest",
             Reducer::DebugExploreAt { .. } => "debug_explore_at",
+            Reducer::DebugFillAuraSlots { .. } => "debug_fill_aura_slots",
             Reducer::DebugFish { .. } => "debug_fish",
             Reducer::DebugFloorProbe { .. } => "debug_floor_probe",
             Reducer::DebugForceCast { .. } => "debug_force_cast",
@@ -2639,8 +2731,11 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwAcceptGroupInvite { .. } => "gw_accept_group_invite",
             Reducer::GwAcceptQuest { .. } => "gw_accept_quest",
             Reducer::GwAcceptTrade { .. } => "gw_accept_trade",
+            Reducer::GwAckTaxiReply { .. } => "gw_ack_taxi_reply",
+            Reducer::GwActivateTaxi { .. } => "gw_activate_taxi",
             Reducer::GwAddFriend { .. } => "gw_add_friend",
             Reducer::GwAddIgnore { .. } => "gw_add_ignore",
+            Reducer::GwArmTaxiFlight { .. } => "gw_arm_taxi_flight",
             Reducer::GwAttack { .. } => "gw_attack",
             Reducer::GwAutoBankItem { .. } => "gw_auto_bank_item",
             Reducer::GwBeginTrade { .. } => "gw_begin_trade",
@@ -2685,6 +2780,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwMoveItem { .. } => "gw_move_item",
             Reducer::GwMovementBatch { .. } => "gw_movement_batch",
             Reducer::GwMovementUpdate { .. } => "gw_movement_update",
+            Reducer::GwOpenTaxi { .. } => "gw_open_taxi",
             Reducer::GwPartyChat { .. } => "gw_party_chat",
             Reducer::GwPetCommand { .. } => "gw_pet_command",
             Reducer::GwPickLock { .. } => "gw_pick_lock",
@@ -2712,6 +2808,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwSpiritRes { .. } => "gw_spirit_res",
             Reducer::GwStopAttack { .. } => "gw_stop_attack",
             Reducer::GwTakeLoot { .. } => "gw_take_loot",
+            Reducer::GwTaxiNodeStatus { .. } => "gw_taxi_node_status",
             Reducer::GwTrainerBuy { .. } => "gw_trainer_buy",
             Reducer::GwTurnInQuest { .. } => "gw_turn_in_quest",
             Reducer::GwUnacceptTrade { .. } => "gw_unaccept_trade",
@@ -2762,6 +2859,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::RecordRegionLoad { .. } => "record_region_load",
             Reducer::RecordShardLoad { .. } => "record_shard_load",
             Reducer::ReleaseTransfer { .. } => "release_transfer",
+            Reducer::RestoreTaxiFixture => "restore_taxi_fixture",
             Reducer::SetCharacterShard { .. } => "set_character_shard",
             Reducer::SetGmLevel { .. } => "set_gm_level",
             Reducer::SetMotionTickMs { .. } => "set_motion_tick_ms",
@@ -2783,24 +2881,26 @@ impl __sdk::Reducer for Reducer {
     #[allow(clippy::clone_on_copy)]
     fn args_bsatn(&self) -> Result<Vec<u8>, __sats::bsatn::EncodeError> {
         match self {
-            Reducer::ActivateVmapGeneration { generation_id } => __sats::bsatn::to_vec(
-                &activate_vmap_generation_reducer::ActivateVmapGenerationArgs {
-                    generation_id: generation_id.clone(),
-                },
-            ),
-            Reducer::AppendVmapGenerationChunks {
+                        Reducer::ActivateVmapGeneration{
+                generation_id,
+}             => __sats::bsatn::to_vec(&activate_vmap_generation_reducer::ActivateVmapGenerationArgs {
+                generation_id: generation_id.clone(),
+}),
+            Reducer::AdvanceTaxiFlight{
+                schedule,
+}             => __sats::bsatn::to_vec(&advance_taxi_flight_reducer::AdvanceTaxiFlightArgs {
+                schedule: schedule.clone(),
+}),
+            Reducer::AppendVmapGenerationChunks{
                 generation_id,
                 packed,
-            } => __sats::bsatn::to_vec(
-                &append_vmap_generation_chunks_reducer::AppendVmapGenerationChunksArgs {
-                    generation_id: generation_id.clone(),
-                    packed: packed.clone(),
-                },
-            ),
-            Reducer::ArmAllPools => {
-                __sats::bsatn::to_vec(&arm_all_pools_reducer::ArmAllPoolsArgs {})
-            }
-            Reducer::BeginTransfer {
+}             => __sats::bsatn::to_vec(&append_vmap_generation_chunks_reducer::AppendVmapGenerationChunksArgs {
+                generation_id: generation_id.clone(),
+                packed: packed.clone(),
+}),
+            Reducer::ArmAllPools => __sats::bsatn::to_vec(&arm_all_pools_reducer::ArmAllPoolsArgs {
+                }),
+Reducer::BeginTransfer{
                 transfer_id,
                 character_guid,
                 dest_map_id,
@@ -2810,7 +2910,7 @@ impl __sdk::Reducer for Reducer {
                 dest_z,
                 dest_o,
                 cross_database,
-            } => __sats::bsatn::to_vec(&begin_transfer_reducer::BeginTransferArgs {
+}             => __sats::bsatn::to_vec(&begin_transfer_reducer::BeginTransferArgs {
                 transfer_id: transfer_id.clone(),
                 character_guid: character_guid.clone(),
                 dest_map_id: dest_map_id.clone(),
@@ -2820,28 +2920,27 @@ impl __sdk::Reducer for Reducer {
                 dest_z: dest_z.clone(),
                 dest_o: dest_o.clone(),
                 cross_database: cross_database.clone(),
-            }),
-            Reducer::ClaimGuidRange {
+}),
+            Reducer::ClaimGuidRange{
                 shard_name,
                 current_mark,
-            } => __sats::bsatn::to_vec(&claim_guid_range_reducer::ClaimGuidRangeArgs {
+}             => __sats::bsatn::to_vec(&claim_guid_range_reducer::ClaimGuidRangeArgs {
                 shard_name: shard_name.clone(),
                 current_mark: current_mark.clone(),
-            }),
-            Reducer::ClaimOperator => {
-                __sats::bsatn::to_vec(&claim_operator_reducer::ClaimOperatorArgs {})
-            }
-            Reducer::ClearPromotedLootRoll { roll_id } => __sats::bsatn::to_vec(
-                &clear_promoted_loot_roll_reducer::ClearPromotedLootRollArgs {
-                    roll_id: roll_id.clone(),
-                },
-            ),
-            Reducer::ConfirmImport { transfer_id } => {
-                __sats::bsatn::to_vec(&confirm_import_reducer::ConfirmImportArgs {
-                    transfer_id: transfer_id.clone(),
-                })
-            }
-            Reducer::CreateCharacter {
+}),
+            Reducer::ClaimOperator => __sats::bsatn::to_vec(&claim_operator_reducer::ClaimOperatorArgs {
+                }),
+Reducer::ClearPromotedLootRoll{
+                roll_id,
+}             => __sats::bsatn::to_vec(&clear_promoted_loot_roll_reducer::ClearPromotedLootRollArgs {
+                roll_id: roll_id.clone(),
+}),
+            Reducer::ConfirmImport{
+                transfer_id,
+}             => __sats::bsatn::to_vec(&confirm_import_reducer::ConfirmImportArgs {
+                transfer_id: transfer_id.clone(),
+}),
+            Reducer::CreateCharacter{
                 account_id,
                 name,
                 race,
@@ -2852,7 +2951,7 @@ impl __sdk::Reducer for Reducer {
                 hair_style,
                 hair_color,
                 facial_hair,
-            } => __sats::bsatn::to_vec(&create_character_reducer::CreateCharacterArgs {
+}             => __sats::bsatn::to_vec(&create_character_reducer::CreateCharacterArgs {
                 account_id: account_id.clone(),
                 name: name.clone(),
                 race: race.clone(),
@@ -2863,91 +2962,88 @@ impl __sdk::Reducer for Reducer {
                 hair_style: hair_style.clone(),
                 hair_color: hair_color.clone(),
                 facial_hair: facial_hair.clone(),
-            }),
-            Reducer::DebugAcceptQuest {
+}),
+            Reducer::DebugAcceptQuest{
                 character_guid,
                 giver_guid,
                 quest_entry,
-            } => __sats::bsatn::to_vec(&debug_accept_quest_reducer::DebugAcceptQuestArgs {
+}             => __sats::bsatn::to_vec(&debug_accept_quest_reducer::DebugAcceptQuestArgs {
                 character_guid: character_guid.clone(),
                 giver_guid: giver_guid.clone(),
                 quest_entry: quest_entry.clone(),
-            }),
-            Reducer::DebugAddThreat {
+}),
+            Reducer::DebugAddThreat{
                 creature_guid,
                 source_guid,
                 amount,
-            } => __sats::bsatn::to_vec(&debug_add_threat_reducer::DebugAddThreatArgs {
+}             => __sats::bsatn::to_vec(&debug_add_threat_reducer::DebugAddThreatArgs {
                 creature_guid: creature_guid.clone(),
                 source_guid: source_guid.clone(),
                 amount: amount.clone(),
-            }),
-            Reducer::DebugApplyDamage {
+}),
+            Reducer::DebugApplyDamage{
                 target_guid,
                 amount,
                 attacker_guid,
-            } => __sats::bsatn::to_vec(&debug_apply_damage_reducer::DebugApplyDamageArgs {
+}             => __sats::bsatn::to_vec(&debug_apply_damage_reducer::DebugApplyDamageArgs {
                 target_guid: target_guid.clone(),
                 amount: amount.clone(),
                 attacker_guid: attacker_guid.clone(),
-            }),
-            Reducer::DebugArmInstanceTick {
+}),
+            Reducer::DebugArmInstanceTick{
                 instance_id,
                 tick_ms,
-            } => {
-                __sats::bsatn::to_vec(&debug_arm_instance_tick_reducer::DebugArmInstanceTickArgs {
-                    instance_id: instance_id.clone(),
-                    tick_ms: tick_ms.clone(),
-                })
-            }
-            Reducer::DebugAssertBlinkClamp { character_guid } => __sats::bsatn::to_vec(
-                &debug_assert_blink_clamp_reducer::DebugAssertBlinkClampArgs {
-                    character_guid: character_guid.clone(),
-                },
-            ),
-            Reducer::DebugAssertChaseStopsAtColumn { character_guid } => __sats::bsatn::to_vec(
-                &debug_assert_chase_stops_at_column_reducer::DebugAssertChaseStopsAtColumnArgs {
-                    character_guid: character_guid.clone(),
-                },
-            ),
-            Reducer::DebugAssertFloorSnap {
+}             => __sats::bsatn::to_vec(&debug_arm_instance_tick_reducer::DebugArmInstanceTickArgs {
+                instance_id: instance_id.clone(),
+                tick_ms: tick_ms.clone(),
+}),
+            Reducer::DebugAssertBlinkClamp{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_assert_blink_clamp_reducer::DebugAssertBlinkClampArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugAssertChaseStopsAtColumn{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_assert_chase_stops_at_column_reducer::DebugAssertChaseStopsAtColumnArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugAssertFloorSnap{
                 map_id,
                 creature_entry,
-            } => {
-                __sats::bsatn::to_vec(&debug_assert_floor_snap_reducer::DebugAssertFloorSnapArgs {
-                    map_id: map_id.clone(),
-                    creature_entry: creature_entry.clone(),
-                })
-            }
-            Reducer::DebugAuditClassKits => {
-                __sats::bsatn::to_vec(&debug_audit_class_kits_reducer::DebugAuditClassKitsArgs {})
-            }
-            Reducer::DebugAuditQuestChains => __sats::bsatn::to_vec(
-                &debug_audit_quest_chains_reducer::DebugAuditQuestChainsArgs {},
-            ),
-            Reducer::DebugAutoBankItem {
+}             => __sats::bsatn::to_vec(&debug_assert_floor_snap_reducer::DebugAssertFloorSnapArgs {
+                map_id: map_id.clone(),
+                creature_entry: creature_entry.clone(),
+}),
+            Reducer::DebugAssertUnreachableGoalStopsAtWall{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_assert_unreachable_goal_stops_at_wall_reducer::DebugAssertUnreachableGoalStopsAtWallArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugAuditClassKits => __sats::bsatn::to_vec(&debug_audit_class_kits_reducer::DebugAuditClassKitsArgs {
+                }),
+Reducer::DebugAuditQuestChains => __sats::bsatn::to_vec(&debug_audit_quest_chains_reducer::DebugAuditQuestChainsArgs {
+                }),
+Reducer::DebugAutoBankItem{
                 character_guid,
                 slot,
-            } => __sats::bsatn::to_vec(&debug_auto_bank_item_reducer::DebugAutoBankItemArgs {
+}             => __sats::bsatn::to_vec(&debug_auto_bank_item_reducer::DebugAutoBankItemArgs {
                 character_guid: character_guid.clone(),
                 slot: slot.clone(),
-            }),
-            Reducer::DebugBackfillCellIds => {
-                __sats::bsatn::to_vec(&debug_backfill_cell_ids_reducer::DebugBackfillCellIdsArgs {})
-            }
-            Reducer::DebugBackfillGoGrid => {
-                __sats::bsatn::to_vec(&debug_backfill_go_grid_reducer::DebugBackfillGoGridArgs {})
-            }
-            Reducer::DebugBeginCast {
+}),
+            Reducer::DebugBackfillCellIds => __sats::bsatn::to_vec(&debug_backfill_cell_ids_reducer::DebugBackfillCellIdsArgs {
+                }),
+Reducer::DebugBackfillGoGrid => __sats::bsatn::to_vec(&debug_backfill_go_grid_reducer::DebugBackfillGoGridArgs {
+                }),
+Reducer::DebugBeginCast{
                 caster_guid,
                 spell_id,
                 target_guid,
-            } => __sats::bsatn::to_vec(&debug_begin_cast_reducer::DebugBeginCastArgs {
+}             => __sats::bsatn::to_vec(&debug_begin_cast_reducer::DebugBeginCastArgs {
                 caster_guid: caster_guid.clone(),
                 spell_id: spell_id.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::DebugBenchCollisionGate {
+}),
+            Reducer::DebugBenchCollisionGate{
                 map,
                 min_x,
                 min_y,
@@ -2955,18 +3051,16 @@ impl __sdk::Reducer for Reducer {
                 max_y,
                 directions,
                 radius,
-            } => __sats::bsatn::to_vec(
-                &debug_bench_collision_gate_reducer::DebugBenchCollisionGateArgs {
-                    map: map.clone(),
-                    min_x: min_x.clone(),
-                    min_y: min_y.clone(),
-                    max_x: max_x.clone(),
-                    max_y: max_y.clone(),
-                    directions: directions.clone(),
-                    radius: radius.clone(),
-                },
-            ),
-            Reducer::DebugBenchLos {
+}             => __sats::bsatn::to_vec(&debug_bench_collision_gate_reducer::DebugBenchCollisionGateArgs {
+                map: map.clone(),
+                min_x: min_x.clone(),
+                min_y: min_y.clone(),
+                max_x: max_x.clone(),
+                max_y: max_y.clone(),
+                directions: directions.clone(),
+                radius: radius.clone(),
+}),
+            Reducer::DebugBenchLos{
                 map,
                 min_x,
                 min_y,
@@ -2975,7 +3069,7 @@ impl __sdk::Reducer for Reducer {
                 directions,
                 radius,
                 exact,
-            } => __sats::bsatn::to_vec(&debug_bench_los_reducer::DebugBenchLosArgs {
+}             => __sats::bsatn::to_vec(&debug_bench_los_reducer::DebugBenchLosArgs {
                 map: map.clone(),
                 min_x: min_x.clone(),
                 min_y: min_y.clone(),
@@ -2984,202 +3078,199 @@ impl __sdk::Reducer for Reducer {
                 directions: directions.clone(),
                 radius: radius.clone(),
                 exact: exact.clone(),
-            }),
-            Reducer::DebugBindHome { character_guid } => {
-                __sats::bsatn::to_vec(&debug_bind_home_reducer::DebugBindHomeArgs {
-                    character_guid: character_guid.clone(),
-                })
-            }
-            Reducer::DebugBuyBankSlot {
+}),
+            Reducer::DebugBindHome{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_bind_home_reducer::DebugBindHomeArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugBuyBankSlot{
                 character_guid,
                 banker_guid,
-            } => __sats::bsatn::to_vec(&debug_buy_bank_slot_reducer::DebugBuyBankSlotArgs {
+}             => __sats::bsatn::to_vec(&debug_buy_bank_slot_reducer::DebugBuyBankSlotArgs {
                 character_guid: character_guid.clone(),
                 banker_guid: banker_guid.clone(),
-            }),
-            Reducer::DebugBuyItem {
+}),
+            Reducer::DebugBuyItem{
                 character_guid,
                 vendor_guid,
                 item_entry,
                 count,
-            } => __sats::bsatn::to_vec(&debug_buy_item_reducer::DebugBuyItemArgs {
+}             => __sats::bsatn::to_vec(&debug_buy_item_reducer::DebugBuyItemArgs {
                 character_guid: character_guid.clone(),
                 vendor_guid: vendor_guid.clone(),
                 item_entry: item_entry.clone(),
                 count: count.clone(),
-            }),
-            Reducer::DebugBuyTrainerSpell {
+}),
+            Reducer::DebugBuyTrainerSpell{
                 character_guid,
                 trainer_entry,
                 spell_id,
-            } => {
-                __sats::bsatn::to_vec(&debug_buy_trainer_spell_reducer::DebugBuyTrainerSpellArgs {
-                    character_guid: character_guid.clone(),
-                    trainer_entry: trainer_entry.clone(),
-                    spell_id: spell_id.clone(),
-                })
-            }
-            Reducer::DebugCastAt {
+}             => __sats::bsatn::to_vec(&debug_buy_trainer_spell_reducer::DebugBuyTrainerSpellArgs {
+                character_guid: character_guid.clone(),
+                trainer_entry: trainer_entry.clone(),
+                spell_id: spell_id.clone(),
+}),
+            Reducer::DebugCastAt{
                 caster_guid,
                 spell_id,
                 target_guid,
-            } => __sats::bsatn::to_vec(&debug_cast_at_reducer::DebugCastAtArgs {
+}             => __sats::bsatn::to_vec(&debug_cast_at_reducer::DebugCastAtArgs {
                 caster_guid: caster_guid.clone(),
                 spell_id: spell_id.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::DebugCastSpell {
+}),
+            Reducer::DebugCastSpell{
                 character_guid,
                 spell_id,
                 target_guid,
-            } => __sats::bsatn::to_vec(&debug_cast_spell_reducer::DebugCastSpellArgs {
+}             => __sats::bsatn::to_vec(&debug_cast_spell_reducer::DebugCastSpellArgs {
                 character_guid: character_guid.clone(),
                 spell_id: spell_id.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::DebugCastSpellAt {
+}),
+            Reducer::DebugCastSpellAt{
                 caster_guid,
                 spell_id,
                 target_guid,
                 x,
                 y,
                 z,
-            } => __sats::bsatn::to_vec(&debug_cast_spell_at_reducer::DebugCastSpellAtArgs {
+}             => __sats::bsatn::to_vec(&debug_cast_spell_at_reducer::DebugCastSpellAtArgs {
                 caster_guid: caster_guid.clone(),
                 spell_id: spell_id.clone(),
                 target_guid: target_guid.clone(),
                 x: x.clone(),
                 y: y.clone(),
                 z: z.clone(),
-            }),
-            Reducer::DebugCatalogueFingerprint => __sats::bsatn::to_vec(
-                &debug_catalogue_fingerprint_reducer::DebugCatalogueFingerprintArgs {},
-            ),
-            Reducer::DebugCheckRestAt { guid, map_id, x, y } => {
-                __sats::bsatn::to_vec(&debug_check_rest_at_reducer::DebugCheckRestAtArgs {
-                    guid: guid.clone(),
-                    map_id: map_id.clone(),
-                    x: x.clone(),
-                    y: y.clone(),
-                })
-            }
-            Reducer::DebugCheckSubmerged { guid } => {
-                __sats::bsatn::to_vec(&debug_check_submerged_reducer::DebugCheckSubmergedArgs {
-                    guid: guid.clone(),
-                })
-            }
-            Reducer::DebugClearCreatures { map_id } => {
-                __sats::bsatn::to_vec(&debug_clear_creatures_reducer::DebugClearCreaturesArgs {
-                    map_id: map_id.clone(),
-                })
-            }
-            Reducer::DebugComputeSpell {
+}),
+            Reducer::DebugCatalogueFingerprint => __sats::bsatn::to_vec(&debug_catalogue_fingerprint_reducer::DebugCatalogueFingerprintArgs {
+                }),
+Reducer::DebugCheckRestAt{
+                guid,
+                map_id,
+                x,
+                y,
+}             => __sats::bsatn::to_vec(&debug_check_rest_at_reducer::DebugCheckRestAtArgs {
+                guid: guid.clone(),
+                map_id: map_id.clone(),
+                x: x.clone(),
+                y: y.clone(),
+}),
+            Reducer::DebugCheckSubmerged{
+                guid,
+}             => __sats::bsatn::to_vec(&debug_check_submerged_reducer::DebugCheckSubmergedArgs {
+                guid: guid.clone(),
+}),
+            Reducer::DebugClearCreatures{
+                map_id,
+}             => __sats::bsatn::to_vec(&debug_clear_creatures_reducer::DebugClearCreaturesArgs {
+                map_id: map_id.clone(),
+}),
+            Reducer::DebugComputeSpell{
                 caster_guid,
                 target_guid,
                 spell_id,
-            } => __sats::bsatn::to_vec(&debug_compute_spell_reducer::DebugComputeSpellArgs {
+}             => __sats::bsatn::to_vec(&debug_compute_spell_reducer::DebugComputeSpellArgs {
                 caster_guid: caster_guid.clone(),
                 target_guid: target_guid.clone(),
                 spell_id: spell_id.clone(),
-            }),
-            Reducer::DebugComputeSwing {
+}),
+            Reducer::DebugComputeSwing{
                 attacker_guid,
                 target_guid,
-            } => __sats::bsatn::to_vec(&debug_compute_swing_reducer::DebugComputeSwingArgs {
+}             => __sats::bsatn::to_vec(&debug_compute_swing_reducer::DebugComputeSwingArgs {
                 attacker_guid: attacker_guid.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::DebugCreateFixtureInstance { character_guid } => __sats::bsatn::to_vec(
-                &debug_create_fixture_instance_reducer::DebugCreateFixtureInstanceArgs {
-                    character_guid: character_guid.clone(),
-                },
-            ),
-            Reducer::DebugDeleteCharacter { character_guid } => {
-                __sats::bsatn::to_vec(&debug_delete_character_reducer::DebugDeleteCharacterArgs {
-                    character_guid: character_guid.clone(),
-                })
-            }
-            Reducer::DebugDisarmInstanceTick { instance_id } => __sats::bsatn::to_vec(
-                &debug_disarm_instance_tick_reducer::DebugDisarmInstanceTickArgs {
-                    instance_id: instance_id.clone(),
-                },
-            ),
-            Reducer::DebugDisenchant {
+}),
+            Reducer::DebugCreateFixtureInstance{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_create_fixture_instance_reducer::DebugCreateFixtureInstanceArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugDeleteCharacter{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_delete_character_reducer::DebugDeleteCharacterArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugDisarmInstanceTick{
+                instance_id,
+}             => __sats::bsatn::to_vec(&debug_disarm_instance_tick_reducer::DebugDisarmInstanceTickArgs {
+                instance_id: instance_id.clone(),
+}),
+            Reducer::DebugDisenchant{
                 character_guid,
                 slot,
-            } => __sats::bsatn::to_vec(&debug_disenchant_reducer::DebugDisenchantArgs {
+}             => __sats::bsatn::to_vec(&debug_disenchant_reducer::DebugDisenchantArgs {
                 character_guid: character_guid.clone(),
                 slot: slot.clone(),
-            }),
-            Reducer::DebugEnchantItem {
+}),
+            Reducer::DebugEnchantItem{
                 character_guid,
                 target_slot,
                 enchant_id,
-            } => __sats::bsatn::to_vec(&debug_enchant_item_reducer::DebugEnchantItemArgs {
+}             => __sats::bsatn::to_vec(&debug_enchant_item_reducer::DebugEnchantItemArgs {
                 character_guid: character_guid.clone(),
                 target_slot: target_slot.clone(),
                 enchant_id: enchant_id.clone(),
-            }),
-            Reducer::DebugEncounterEquip {
+}),
+            Reducer::DebugEncounterEquip{
                 creature_guid,
                 main_hand,
                 off_hand,
                 ranged,
-            } => __sats::bsatn::to_vec(&debug_encounter_equip_reducer::DebugEncounterEquipArgs {
+}             => __sats::bsatn::to_vec(&debug_encounter_equip_reducer::DebugEncounterEquipArgs {
                 creature_guid: creature_guid.clone(),
                 main_hand: main_hand.clone(),
                 off_hand: off_hand.clone(),
                 ranged: ranged.clone(),
-            }),
-            Reducer::DebugEncounterMove {
+}),
+            Reducer::DebugEncounterMove{
                 creature_guid,
                 x,
                 y,
                 z,
                 run,
-            } => __sats::bsatn::to_vec(&debug_encounter_move_reducer::DebugEncounterMoveArgs {
+}             => __sats::bsatn::to_vec(&debug_encounter_move_reducer::DebugEncounterMoveArgs {
                 creature_guid: creature_guid.clone(),
                 x: x.clone(),
                 y: y.clone(),
                 z: z.clone(),
                 run: run.clone(),
-            }),
-            Reducer::DebugEncounterOpenDoor {
+}),
+            Reducer::DebugEncounterOpenDoor{
                 go_entry,
                 instance_id,
-            } => __sats::bsatn::to_vec(
-                &debug_encounter_open_door_reducer::DebugEncounterOpenDoorArgs {
-                    go_entry: go_entry.clone(),
-                    instance_id: instance_id.clone(),
-                },
-            ),
-            Reducer::DebugEncounterReset {
+}             => __sats::bsatn::to_vec(&debug_encounter_open_door_reducer::DebugEncounterOpenDoorArgs {
+                go_entry: go_entry.clone(),
+                instance_id: instance_id.clone(),
+}),
+            Reducer::DebugEncounterReset{
                 instance_id,
                 encounter_id,
-            } => __sats::bsatn::to_vec(&debug_encounter_reset_reducer::DebugEncounterResetArgs {
+}             => __sats::bsatn::to_vec(&debug_encounter_reset_reducer::DebugEncounterResetArgs {
                 instance_id: instance_id.clone(),
                 encounter_id: encounter_id.clone(),
-            }),
-            Reducer::DebugEncounterResetHpFired { instance_id, entry } => __sats::bsatn::to_vec(
-                &debug_encounter_reset_hp_fired_reducer::DebugEncounterResetHpFiredArgs {
-                    instance_id: instance_id.clone(),
-                    entry: entry.clone(),
-                },
-            ),
-            Reducer::DebugEncounterSetState {
+}),
+            Reducer::DebugEncounterResetHpFired{
+                instance_id,
+                entry,
+}             => __sats::bsatn::to_vec(&debug_encounter_reset_hp_fired_reducer::DebugEncounterResetHpFiredArgs {
+                instance_id: instance_id.clone(),
+                entry: entry.clone(),
+}),
+            Reducer::DebugEncounterSetState{
                 instance_id,
                 encounter_id,
                 state,
                 data,
-            } => __sats::bsatn::to_vec(
-                &debug_encounter_set_state_reducer::DebugEncounterSetStateArgs {
-                    instance_id: instance_id.clone(),
-                    encounter_id: encounter_id.clone(),
-                    state: state.clone(),
-                    data: data.clone(),
-                },
-            ),
-            Reducer::DebugEncounterSpawnWave {
+}             => __sats::bsatn::to_vec(&debug_encounter_set_state_reducer::DebugEncounterSetStateArgs {
+                instance_id: instance_id.clone(),
+                encounter_id: encounter_id.clone(),
+                state: state.clone(),
+                data: data.clone(),
+}),
+            Reducer::DebugEncounterSpawnWave{
                 instance_id,
                 encounter_id,
                 map_id,
@@ -3189,363 +3280,363 @@ impl __sdk::Reducer for Reducer {
                 y,
                 z,
                 orientation,
-            } => __sats::bsatn::to_vec(
-                &debug_encounter_spawn_wave_reducer::DebugEncounterSpawnWaveArgs {
-                    instance_id: instance_id.clone(),
-                    encounter_id: encounter_id.clone(),
-                    map_id: map_id.clone(),
-                    entry: entry.clone(),
-                    count: count.clone(),
-                    x: x.clone(),
-                    y: y.clone(),
-                    z: z.clone(),
-                    orientation: orientation.clone(),
-                },
-            ),
-            Reducer::DebugEncounterWatchHp { entry, pct } => __sats::bsatn::to_vec(
-                &debug_encounter_watch_hp_reducer::DebugEncounterWatchHpArgs {
-                    entry: entry.clone(),
-                    pct: pct.clone(),
-                },
-            ),
-            Reducer::DebugEngage {
+}             => __sats::bsatn::to_vec(&debug_encounter_spawn_wave_reducer::DebugEncounterSpawnWaveArgs {
+                instance_id: instance_id.clone(),
+                encounter_id: encounter_id.clone(),
+                map_id: map_id.clone(),
+                entry: entry.clone(),
+                count: count.clone(),
+                x: x.clone(),
+                y: y.clone(),
+                z: z.clone(),
+                orientation: orientation.clone(),
+}),
+            Reducer::DebugEncounterWatchHp{
+                entry,
+                pct,
+}             => __sats::bsatn::to_vec(&debug_encounter_watch_hp_reducer::DebugEncounterWatchHpArgs {
+                entry: entry.clone(),
+                pct: pct.clone(),
+}),
+            Reducer::DebugEngage{
                 attacker_guid,
                 target_guid,
-            } => __sats::bsatn::to_vec(&debug_engage_reducer::DebugEngageArgs {
+}             => __sats::bsatn::to_vec(&debug_engage_reducer::DebugEngageArgs {
                 attacker_guid: attacker_guid.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::DebugEnterAreatrigger {
+}),
+            Reducer::DebugEnterAreatrigger{
                 character_guid,
                 trigger_id,
-            } => __sats::bsatn::to_vec(
-                &debug_enter_areatrigger_reducer::DebugEnterAreatriggerArgs {
-                    character_guid: character_guid.clone(),
-                    trigger_id: trigger_id.clone(),
-                },
-            ),
-            Reducer::DebugEnterInstance {
+}             => __sats::bsatn::to_vec(&debug_enter_areatrigger_reducer::DebugEnterAreatriggerArgs {
+                character_guid: character_guid.clone(),
+                trigger_id: trigger_id.clone(),
+}),
+            Reducer::DebugEnterInstance{
                 character_guid,
                 instance_id,
-            } => __sats::bsatn::to_vec(&debug_enter_instance_reducer::DebugEnterInstanceArgs {
+}             => __sats::bsatn::to_vec(&debug_enter_instance_reducer::DebugEnterInstanceArgs {
                 character_guid: character_guid.clone(),
                 instance_id: instance_id.clone(),
-            }),
-            Reducer::DebugEquipItem {
+}),
+            Reducer::DebugEquipItem{
                 character_guid,
                 from_slot,
-            } => __sats::bsatn::to_vec(&debug_equip_item_reducer::DebugEquipItemArgs {
+}             => __sats::bsatn::to_vec(&debug_equip_item_reducer::DebugEquipItemArgs {
                 character_guid: character_guid.clone(),
                 from_slot: from_slot.clone(),
-            }),
-            Reducer::DebugEquipOffhand {
+}),
+            Reducer::DebugEquipOffhand{
                 character_guid,
                 item_entry,
-            } => __sats::bsatn::to_vec(&debug_equip_offhand_reducer::DebugEquipOffhandArgs {
+}             => __sats::bsatn::to_vec(&debug_equip_offhand_reducer::DebugEquipOffhandArgs {
                 character_guid: character_guid.clone(),
                 item_entry: item_entry.clone(),
-            }),
-            Reducer::DebugEquipWeapon {
+}),
+            Reducer::DebugEquipWeapon{
                 character_guid,
                 item_entry,
-            } => __sats::bsatn::to_vec(&debug_equip_weapon_reducer::DebugEquipWeaponArgs {
+}             => __sats::bsatn::to_vec(&debug_equip_weapon_reducer::DebugEquipWeaponArgs {
                 character_guid: character_guid.clone(),
                 item_entry: item_entry.clone(),
-            }),
-            Reducer::DebugExpireQuest {
+}),
+            Reducer::DebugExpireQuest{
                 character_guid,
                 quest_entry,
-            } => __sats::bsatn::to_vec(&debug_expire_quest_reducer::DebugExpireQuestArgs {
+}             => __sats::bsatn::to_vec(&debug_expire_quest_reducer::DebugExpireQuestArgs {
                 character_guid: character_guid.clone(),
                 quest_entry: quest_entry.clone(),
-            }),
-            Reducer::DebugExploreAt { guid, map_id, x, y } => {
-                __sats::bsatn::to_vec(&debug_explore_at_reducer::DebugExploreAtArgs {
-                    guid: guid.clone(),
-                    map_id: map_id.clone(),
-                    x: x.clone(),
-                    y: y.clone(),
-                })
-            }
-            Reducer::DebugFish { character_guid } => {
-                __sats::bsatn::to_vec(&debug_fish_reducer::DebugFishArgs {
-                    character_guid: character_guid.clone(),
-                })
-            }
-            Reducer::DebugFloorProbe { map, x, y, probe_z } => {
-                __sats::bsatn::to_vec(&debug_floor_probe_reducer::DebugFloorProbeArgs {
-                    map: map.clone(),
-                    x: x.clone(),
-                    y: y.clone(),
-                    probe_z: probe_z.clone(),
-                })
-            }
-            Reducer::DebugForceCast {
+}),
+            Reducer::DebugExploreAt{
+                guid,
+                map_id,
+                x,
+                y,
+}             => __sats::bsatn::to_vec(&debug_explore_at_reducer::DebugExploreAtArgs {
+                guid: guid.clone(),
+                map_id: map_id.clone(),
+                x: x.clone(),
+                y: y.clone(),
+}),
+            Reducer::DebugFillAuraSlots{
+                target_guid,
+                caster_guid,
+                debuff,
+                count,
+}             => __sats::bsatn::to_vec(&debug_fill_aura_slots_reducer::DebugFillAuraSlotsArgs {
+                target_guid: target_guid.clone(),
+                caster_guid: caster_guid.clone(),
+                debuff: debuff.clone(),
+                count: count.clone(),
+}),
+            Reducer::DebugFish{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_fish_reducer::DebugFishArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugFloorProbe{
+                map,
+                x,
+                y,
+                probe_z,
+}             => __sats::bsatn::to_vec(&debug_floor_probe_reducer::DebugFloorProbeArgs {
+                map: map.clone(),
+                x: x.clone(),
+                y: y.clone(),
+                probe_z: probe_z.clone(),
+}),
+            Reducer::DebugForceCast{
                 character_guid,
                 spell_id,
-            } => __sats::bsatn::to_vec(&debug_force_cast_reducer::DebugForceCastArgs {
+}             => __sats::bsatn::to_vec(&debug_force_cast_reducer::DebugForceCastArgs {
                 character_guid: character_guid.clone(),
                 spell_id: spell_id.clone(),
-            }),
-            Reducer::DebugForceCastAt {
+}),
+            Reducer::DebugForceCastAt{
                 caster_guid,
                 spell_id,
                 target_guid,
-            } => __sats::bsatn::to_vec(&debug_force_cast_at_reducer::DebugForceCastAtArgs {
+}             => __sats::bsatn::to_vec(&debug_force_cast_at_reducer::DebugForceCastAtArgs {
                 caster_guid: caster_guid.clone(),
                 spell_id: spell_id.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::DebugForceGameobjectRespawn { go_entry } => __sats::bsatn::to_vec(
-                &debug_force_gameobject_respawn_reducer::DebugForceGameobjectRespawnArgs {
-                    go_entry: go_entry.clone(),
-                },
-            ),
-            Reducer::DebugForcePoolReroll {
+}),
+            Reducer::DebugForceGameobjectRespawn{
+                go_entry,
+}             => __sats::bsatn::to_vec(&debug_force_gameobject_respawn_reducer::DebugForceGameobjectRespawnArgs {
+                go_entry: go_entry.clone(),
+}),
+            Reducer::DebugForcePoolReroll{
                 pool_id,
                 gathered_guid,
-            } => {
-                __sats::bsatn::to_vec(&debug_force_pool_reroll_reducer::DebugForcePoolRerollArgs {
-                    pool_id: pool_id.clone(),
-                    gathered_guid: gathered_guid.clone(),
-                })
-            }
-            Reducer::DebugGossipSelect {
+}             => __sats::bsatn::to_vec(&debug_force_pool_reroll_reducer::DebugForcePoolRerollArgs {
+                pool_id: pool_id.clone(),
+                gathered_guid: gathered_guid.clone(),
+}),
+            Reducer::DebugGossipSelect{
                 character_guid,
                 npc_guid,
                 option_id,
                 option_row_id,
-            } => __sats::bsatn::to_vec(&debug_gossip_select_reducer::DebugGossipSelectArgs {
+}             => __sats::bsatn::to_vec(&debug_gossip_select_reducer::DebugGossipSelectArgs {
                 character_guid: character_guid.clone(),
                 npc_guid: npc_guid.clone(),
                 option_id: option_id.clone(),
                 option_row_id: option_row_id.clone(),
-            }),
-            Reducer::DebugGrantDefaultActions { character_name } => __sats::bsatn::to_vec(
-                &debug_grant_default_actions_reducer::DebugGrantDefaultActionsArgs {
-                    character_name: character_name.clone(),
-                },
-            ),
-            Reducer::DebugGrantItem {
+}),
+            Reducer::DebugGrantDefaultActions{
+                character_name,
+}             => __sats::bsatn::to_vec(&debug_grant_default_actions_reducer::DebugGrantDefaultActionsArgs {
+                character_name: character_name.clone(),
+}),
+            Reducer::DebugGrantItem{
                 character_guid,
                 entry,
                 count,
-            } => __sats::bsatn::to_vec(&debug_grant_item_reducer::DebugGrantItemArgs {
+}             => __sats::bsatn::to_vec(&debug_grant_item_reducer::DebugGrantItemArgs {
                 character_guid: character_guid.clone(),
                 entry: entry.clone(),
                 count: count.clone(),
-            }),
-            Reducer::DebugGrantQuest {
+}),
+            Reducer::DebugGrantQuest{
                 character_guid,
                 quest_entry,
-            } => __sats::bsatn::to_vec(&debug_grant_quest_reducer::DebugGrantQuestArgs {
+}             => __sats::bsatn::to_vec(&debug_grant_quest_reducer::DebugGrantQuestArgs {
                 character_guid: character_guid.clone(),
                 quest_entry: quest_entry.clone(),
-            }),
-            Reducer::DebugGrantReputation {
+}),
+            Reducer::DebugGrantReputation{
                 character_guid,
                 faction_id,
                 amount,
-            } => __sats::bsatn::to_vec(&debug_grant_reputation_reducer::DebugGrantReputationArgs {
+}             => __sats::bsatn::to_vec(&debug_grant_reputation_reducer::DebugGrantReputationArgs {
                 character_guid: character_guid.clone(),
                 faction_id: faction_id.clone(),
                 amount: amount.clone(),
-            }),
-            Reducer::DebugKillCreature {
+}),
+            Reducer::DebugKillCreature{
                 killer_guid,
                 target_guid,
-            } => __sats::bsatn::to_vec(&debug_kill_creature_reducer::DebugKillCreatureArgs {
+}             => __sats::bsatn::to_vec(&debug_kill_creature_reducer::DebugKillCreatureArgs {
                 killer_guid: killer_guid.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::DebugKillNearest {
+}),
+            Reducer::DebugKillNearest{
                 killer_guid,
                 creature_entry,
-            } => __sats::bsatn::to_vec(&debug_kill_nearest_reducer::DebugKillNearestArgs {
+}             => __sats::bsatn::to_vec(&debug_kill_nearest_reducer::DebugKillNearestArgs {
                 killer_guid: killer_guid.clone(),
                 creature_entry: creature_entry.clone(),
-            }),
-            Reducer::DebugLearnProfession {
+}),
+            Reducer::DebugLearnProfession{
                 character_guid,
                 skill_line,
                 cap,
-            } => __sats::bsatn::to_vec(&debug_learn_profession_reducer::DebugLearnProfessionArgs {
+}             => __sats::bsatn::to_vec(&debug_learn_profession_reducer::DebugLearnProfessionArgs {
                 character_guid: character_guid.clone(),
                 skill_line: skill_line.clone(),
                 cap: cap.clone(),
-            }),
-            Reducer::DebugLearnProfessionFromTrainer {
+}),
+            Reducer::DebugLearnProfessionFromTrainer{
                 character_guid,
                 profession,
-            } => __sats::bsatn::to_vec(
-                &debug_learn_profession_from_trainer_reducer::DebugLearnProfessionFromTrainerArgs {
-                    character_guid: character_guid.clone(),
-                    profession: profession.clone(),
-                },
-            ),
-            Reducer::DebugLearnSpell {
+}             => __sats::bsatn::to_vec(&debug_learn_profession_from_trainer_reducer::DebugLearnProfessionFromTrainerArgs {
+                character_guid: character_guid.clone(),
+                profession: profession.clone(),
+}),
+            Reducer::DebugLearnSpell{
                 character_guid,
                 spell_id,
-            } => __sats::bsatn::to_vec(&debug_learn_spell_reducer::DebugLearnSpellArgs {
+}             => __sats::bsatn::to_vec(&debug_learn_spell_reducer::DebugLearnSpellArgs {
                 character_guid: character_guid.clone(),
                 spell_id: spell_id.clone(),
-            }),
-            Reducer::DebugLearnTalent {
+}),
+            Reducer::DebugLearnTalent{
                 character_guid,
                 talent_id,
-            } => __sats::bsatn::to_vec(&debug_learn_talent_reducer::DebugLearnTalentArgs {
+}             => __sats::bsatn::to_vec(&debug_learn_talent_reducer::DebugLearnTalentArgs {
                 character_guid: character_guid.clone(),
                 talent_id: talent_id.clone(),
-            }),
-            Reducer::DebugLearnWeaponFromTrainer {
+}),
+            Reducer::DebugLearnWeaponFromTrainer{
                 character_guid,
                 skill_line,
-            } => __sats::bsatn::to_vec(
-                &debug_learn_weapon_from_trainer_reducer::DebugLearnWeaponFromTrainerArgs {
-                    character_guid: character_guid.clone(),
-                    skill_line: skill_line.clone(),
-                },
-            ),
-            Reducer::DebugLogVendorDiscount {
+}             => __sats::bsatn::to_vec(&debug_learn_weapon_from_trainer_reducer::DebugLearnWeaponFromTrainerArgs {
+                character_guid: character_guid.clone(),
+                skill_line: skill_line.clone(),
+}),
+            Reducer::DebugLogVendorDiscount{
                 player_guid,
                 faction_template_id,
-            } => __sats::bsatn::to_vec(
-                &debug_log_vendor_discount_reducer::DebugLogVendorDiscountArgs {
-                    player_guid: player_guid.clone(),
-                    faction_template_id: faction_template_id.clone(),
-                },
-            ),
-            Reducer::DebugMoveItem {
+}             => __sats::bsatn::to_vec(&debug_log_vendor_discount_reducer::DebugLogVendorDiscountArgs {
+                player_guid: player_guid.clone(),
+                faction_template_id: faction_template_id.clone(),
+}),
+            Reducer::DebugMoveItem{
                 character_guid,
                 from_slot,
                 to_slot,
-            } => __sats::bsatn::to_vec(&debug_move_item_reducer::DebugMoveItemArgs {
+}             => __sats::bsatn::to_vec(&debug_move_item_reducer::DebugMoveItemArgs {
                 character_guid: character_guid.clone(),
                 from_slot: from_slot.clone(),
                 to_slot: to_slot.clone(),
-            }),
-            Reducer::DebugNavLeg {
+}),
+            Reducer::DebugNavLeg{
                 map,
                 x_0,
                 y_0,
                 x_1,
                 y_1,
-            } => __sats::bsatn::to_vec(&debug_nav_leg_reducer::DebugNavLegArgs {
+}             => __sats::bsatn::to_vec(&debug_nav_leg_reducer::DebugNavLegArgs {
                 map: map.clone(),
                 x_0: x_0.clone(),
                 y_0: y_0.clone(),
                 x_1: x_1.clone(),
                 y_1: y_1.clone(),
-            }),
-            Reducer::DebugNavProbe { map, x, y } => {
-                __sats::bsatn::to_vec(&debug_nav_probe_reducer::DebugNavProbeArgs {
-                    map: map.clone(),
-                    x: x.clone(),
-                    y: y.clone(),
-                })
-            }
-            Reducer::DebugNormalizeSpawnTimers { limit } => __sats::bsatn::to_vec(
-                &debug_normalize_spawn_timers_reducer::DebugNormalizeSpawnTimersArgs {
-                    limit: limit.clone(),
-                },
-            ),
-            Reducer::DebugPetCommand {
+}),
+            Reducer::DebugNavProbe{
+                map,
+                x,
+                y,
+}             => __sats::bsatn::to_vec(&debug_nav_probe_reducer::DebugNavProbeArgs {
+                map: map.clone(),
+                x: x.clone(),
+                y: y.clone(),
+}),
+            Reducer::DebugNormalizeSpawnTimers{
+                limit,
+}             => __sats::bsatn::to_vec(&debug_normalize_spawn_timers_reducer::DebugNormalizeSpawnTimersArgs {
+                limit: limit.clone(),
+}),
+            Reducer::DebugPetCommand{
                 owner_guid,
                 data,
                 target_guid,
-            } => __sats::bsatn::to_vec(&debug_pet_command_reducer::DebugPetCommandArgs {
+}             => __sats::bsatn::to_vec(&debug_pet_command_reducer::DebugPetCommandArgs {
                 owner_guid: owner_guid.clone(),
                 data: data.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::DebugPickLockEntry {
+}),
+            Reducer::DebugPickLockEntry{
                 character_guid,
                 go_entry,
-            } => __sats::bsatn::to_vec(&debug_pick_lock_entry_reducer::DebugPickLockEntryArgs {
+}             => __sats::bsatn::to_vec(&debug_pick_lock_entry_reducer::DebugPickLockEntryArgs {
                 character_guid: character_guid.clone(),
                 go_entry: go_entry.clone(),
-            }),
-            Reducer::DebugPushQuest {
+}),
+            Reducer::DebugPushQuest{
                 character_guid,
                 quest_entry,
-            } => __sats::bsatn::to_vec(&debug_push_quest_reducer::DebugPushQuestArgs {
+}             => __sats::bsatn::to_vec(&debug_push_quest_reducer::DebugPushQuestArgs {
                 character_guid: character_guid.clone(),
                 quest_entry: quest_entry.clone(),
-            }),
-            Reducer::DebugRangedAttackNearest {
+}),
+            Reducer::DebugRangedAttackNearest{
                 attacker_guid,
                 spell_id,
-            } => __sats::bsatn::to_vec(
-                &debug_ranged_attack_nearest_reducer::DebugRangedAttackNearestArgs {
-                    attacker_guid: attacker_guid.clone(),
-                    spell_id: spell_id.clone(),
-                },
-            ),
-            Reducer::DebugReapInstance { instance_id } => {
-                __sats::bsatn::to_vec(&debug_reap_instance_reducer::DebugReapInstanceArgs {
-                    instance_id: instance_id.clone(),
-                })
-            }
-            Reducer::DebugRegrid => {
-                __sats::bsatn::to_vec(&debug_regrid_reducer::DebugRegridArgs {})
-            }
-            Reducer::DebugRepairAfterPublish => __sats::bsatn::to_vec(
-                &debug_repair_after_publish_reducer::DebugRepairAfterPublishArgs {},
-            ),
-            Reducer::DebugRepairItem {
+}             => __sats::bsatn::to_vec(&debug_ranged_attack_nearest_reducer::DebugRangedAttackNearestArgs {
+                attacker_guid: attacker_guid.clone(),
+                spell_id: spell_id.clone(),
+}),
+            Reducer::DebugReapInstance{
+                instance_id,
+}             => __sats::bsatn::to_vec(&debug_reap_instance_reducer::DebugReapInstanceArgs {
+                instance_id: instance_id.clone(),
+}),
+            Reducer::DebugRegrid => __sats::bsatn::to_vec(&debug_regrid_reducer::DebugRegridArgs {
+                }),
+Reducer::DebugRepairAfterPublish => __sats::bsatn::to_vec(&debug_repair_after_publish_reducer::DebugRepairAfterPublishArgs {
+                }),
+Reducer::DebugRepairItem{
                 character_guid,
                 slot,
-            } => __sats::bsatn::to_vec(&debug_repair_item_reducer::DebugRepairItemArgs {
+}             => __sats::bsatn::to_vec(&debug_repair_item_reducer::DebugRepairItemArgs {
                 character_guid: character_guid.clone(),
                 slot: slot.clone(),
-            }),
-            Reducer::DebugRepop { character_guid } => {
-                __sats::bsatn::to_vec(&debug_repop_reducer::DebugRepopArgs {
-                    character_guid: character_guid.clone(),
-                })
-            }
-            Reducer::DebugReseedSkills { character_guid } => {
-                __sats::bsatn::to_vec(&debug_reseed_skills_reducer::DebugReseedSkillsArgs {
-                    character_guid: character_guid.clone(),
-                })
-            }
-            Reducer::DebugResetInstance { character_guid } => {
-                __sats::bsatn::to_vec(&debug_reset_instance_reducer::DebugResetInstanceArgs {
-                    character_guid: character_guid.clone(),
-                })
-            }
-            Reducer::DebugResetTalents {
+}),
+            Reducer::DebugRepop{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_repop_reducer::DebugRepopArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugReseedSkills{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_reseed_skills_reducer::DebugReseedSkillsArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugResetInstance{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_reset_instance_reducer::DebugResetInstanceArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugResetTalents{
                 character_guid,
                 trainer_guid,
-            } => __sats::bsatn::to_vec(&debug_reset_talents_reducer::DebugResetTalentsArgs {
+}             => __sats::bsatn::to_vec(&debug_reset_talents_reducer::DebugResetTalentsArgs {
                 character_guid: character_guid.clone(),
                 trainer_guid: trainer_guid.clone(),
-            }),
-            Reducer::DebugResurrectResponse {
+}),
+            Reducer::DebugResurrectResponse{
                 character_guid,
                 accept,
-            } => __sats::bsatn::to_vec(
-                &debug_resurrect_response_reducer::DebugResurrectResponseArgs {
-                    character_guid: character_guid.clone(),
-                    accept: accept.clone(),
-                },
-            ),
-            Reducer::DebugRetireRegionCreatures {
+}             => __sats::bsatn::to_vec(&debug_resurrect_response_reducer::DebugResurrectResponseArgs {
+                character_guid: character_guid.clone(),
+                accept: accept.clone(),
+}),
+            Reducer::DebugRetireRegionCreatures{
                 map_id,
                 gx_min,
                 gx_max,
                 gy_min,
                 gy_max,
-            } => __sats::bsatn::to_vec(
-                &debug_retire_region_creatures_reducer::DebugRetireRegionCreaturesArgs {
-                    map_id: map_id.clone(),
-                    gx_min: gx_min.clone(),
-                    gx_max: gx_max.clone(),
-                    gy_min: gy_min.clone(),
-                    gy_max: gy_max.clone(),
-                },
-            ),
-            Reducer::DebugScoreMovement {
+}             => __sats::bsatn::to_vec(&debug_retire_region_creatures_reducer::DebugRetireRegionCreaturesArgs {
+                map_id: map_id.clone(),
+                gx_min: gx_min.clone(),
+                gx_max: gx_max.clone(),
+                gy_min: gy_min.clone(),
+                gy_max: gy_max.clone(),
+}),
+            Reducer::DebugScoreMovement{
                 guid,
                 old_x,
                 old_y,
@@ -3554,7 +3645,7 @@ impl __sdk::Reducer for Reducer {
                 z,
                 old_move_ms,
                 move_time_ms,
-            } => __sats::bsatn::to_vec(&debug_score_movement_reducer::DebugScoreMovementArgs {
+}             => __sats::bsatn::to_vec(&debug_score_movement_reducer::DebugScoreMovementArgs {
                 guid: guid.clone(),
                 old_x: old_x.clone(),
                 old_y: old_y.clone(),
@@ -3563,113 +3654,111 @@ impl __sdk::Reducer for Reducer {
                 z: z.clone(),
                 old_move_ms: old_move_ms.clone(),
                 move_time_ms: move_time_ms.clone(),
-            }),
-            Reducer::DebugSeedCreatureAiFixtures => __sats::bsatn::to_vec(
-                &debug_seed_creature_ai_fixtures_reducer::DebugSeedCreatureAiFixturesArgs {},
-            ),
-            Reducer::DebugSeedMail {
+}),
+            Reducer::DebugSeedCreatureAiFixtures => __sats::bsatn::to_vec(&debug_seed_creature_ai_fixtures_reducer::DebugSeedCreatureAiFixturesArgs {
+                }),
+Reducer::DebugSeedMail{
                 recipient_guid,
                 sender_guid,
                 subject,
                 body,
                 money,
-            } => __sats::bsatn::to_vec(&debug_seed_mail_reducer::DebugSeedMailArgs {
+}             => __sats::bsatn::to_vec(&debug_seed_mail_reducer::DebugSeedMailArgs {
                 recipient_guid: recipient_guid.clone(),
                 sender_guid: sender_guid.clone(),
                 subject: subject.clone(),
                 body: body.clone(),
                 money: money.clone(),
-            }),
-            Reducer::DebugSeedScenarioFixtures => __sats::bsatn::to_vec(
-                &debug_seed_scenario_fixtures_reducer::DebugSeedScenarioFixturesArgs {},
-            ),
-            Reducer::DebugSellItem {
+}),
+            Reducer::DebugSeedScenarioFixtures => __sats::bsatn::to_vec(&debug_seed_scenario_fixtures_reducer::DebugSeedScenarioFixturesArgs {
+                }),
+Reducer::DebugSellItem{
                 character_guid,
                 vendor_guid,
                 slot,
-            } => __sats::bsatn::to_vec(&debug_sell_item_reducer::DebugSellItemArgs {
+}             => __sats::bsatn::to_vec(&debug_sell_item_reducer::DebugSellItemArgs {
                 character_guid: character_guid.clone(),
                 vendor_guid: vendor_guid.clone(),
                 slot: slot.clone(),
-            }),
-            Reducer::DebugSetHealth { guid, health } => {
-                __sats::bsatn::to_vec(&debug_set_health_reducer::DebugSetHealthArgs {
-                    guid: guid.clone(),
-                    health: health.clone(),
-                })
-            }
-            Reducer::DebugSetLevel {
+}),
+            Reducer::DebugSetHealth{
+                guid,
+                health,
+}             => __sats::bsatn::to_vec(&debug_set_health_reducer::DebugSetHealthArgs {
+                guid: guid.clone(),
+                health: health.clone(),
+}),
+            Reducer::DebugSetLevel{
                 character_guid,
                 level,
-            } => __sats::bsatn::to_vec(&debug_set_level_reducer::DebugSetLevelArgs {
+}             => __sats::bsatn::to_vec(&debug_set_level_reducer::DebugSetLevelArgs {
                 character_guid: character_guid.clone(),
                 level: level.clone(),
-            }),
-            Reducer::DebugSetMoney {
+}),
+            Reducer::DebugSetMoney{
                 character_guid,
                 copper,
-            } => __sats::bsatn::to_vec(&debug_set_money_reducer::DebugSetMoneyArgs {
+}             => __sats::bsatn::to_vec(&debug_set_money_reducer::DebugSetMoneyArgs {
                 character_guid: character_guid.clone(),
                 copper: copper.clone(),
-            }),
-            Reducer::DebugSetNavEnabled { enabled } => {
-                __sats::bsatn::to_vec(&debug_set_nav_enabled_reducer::DebugSetNavEnabledArgs {
-                    enabled: enabled.clone(),
-                })
-            }
-            Reducer::DebugSetPower { guid, power } => {
-                __sats::bsatn::to_vec(&debug_set_power_reducer::DebugSetPowerArgs {
-                    guid: guid.clone(),
-                    power: power.clone(),
-                })
-            }
-            Reducer::DebugSetSkill {
+}),
+            Reducer::DebugSetNavEnabled{
+                enabled,
+}             => __sats::bsatn::to_vec(&debug_set_nav_enabled_reducer::DebugSetNavEnabledArgs {
+                enabled: enabled.clone(),
+}),
+            Reducer::DebugSetPower{
+                guid,
+                power,
+}             => __sats::bsatn::to_vec(&debug_set_power_reducer::DebugSetPowerArgs {
+                guid: guid.clone(),
+                power: power.clone(),
+}),
+            Reducer::DebugSetSkill{
                 character_guid,
                 skill_line,
                 value,
-            } => __sats::bsatn::to_vec(&debug_set_skill_reducer::DebugSetSkillArgs {
+}             => __sats::bsatn::to_vec(&debug_set_skill_reducer::DebugSetSkillArgs {
                 character_guid: character_guid.clone(),
                 skill_line: skill_line.clone(),
                 value: value.clone(),
-            }),
-            Reducer::DebugSetVmapEnabled { enabled } => {
-                __sats::bsatn::to_vec(&debug_set_vmap_enabled_reducer::DebugSetVmapEnabledArgs {
-                    enabled: enabled.clone(),
-                })
-            }
-            Reducer::DebugSetXpRate { rate } => {
-                __sats::bsatn::to_vec(&debug_set_xp_rate_reducer::DebugSetXpRateArgs {
-                    rate: rate.clone(),
-                })
-            }
-            Reducer::DebugSetupGatherPool {
+}),
+            Reducer::DebugSetVmapEnabled{
+                enabled,
+}             => __sats::bsatn::to_vec(&debug_set_vmap_enabled_reducer::DebugSetVmapEnabledArgs {
+                enabled: enabled.clone(),
+}),
+            Reducer::DebugSetXpRate{
+                rate,
+}             => __sats::bsatn::to_vec(&debug_set_xp_rate_reducer::DebugSetXpRateArgs {
+                rate: rate.clone(),
+}),
+            Reducer::DebugSetupGatherPool{
                 pool_id,
                 max_active,
                 in_place,
                 members,
-            } => {
-                __sats::bsatn::to_vec(&debug_setup_gather_pool_reducer::DebugSetupGatherPoolArgs {
-                    pool_id: pool_id.clone(),
-                    max_active: max_active.clone(),
-                    in_place: in_place.clone(),
-                    members: members.clone(),
-                })
-            }
-            Reducer::DebugSkinNearest { character_guid } => {
-                __sats::bsatn::to_vec(&debug_skin_nearest_reducer::DebugSkinNearestArgs {
-                    character_guid: character_guid.clone(),
-                })
-            }
-            Reducer::DebugSpawnAtFeet {
+}             => __sats::bsatn::to_vec(&debug_setup_gather_pool_reducer::DebugSetupGatherPoolArgs {
+                pool_id: pool_id.clone(),
+                max_active: max_active.clone(),
+                in_place: in_place.clone(),
+                members: members.clone(),
+}),
+            Reducer::DebugSkinNearest{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_skin_nearest_reducer::DebugSkinNearestArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugSpawnAtFeet{
                 character_guid,
                 creature_entry,
                 offset,
-            } => __sats::bsatn::to_vec(&debug_spawn_at_feet_reducer::DebugSpawnAtFeetArgs {
+}             => __sats::bsatn::to_vec(&debug_spawn_at_feet_reducer::DebugSpawnAtFeetArgs {
                 character_guid: character_guid.clone(),
                 creature_entry: creature_entry.clone(),
                 offset: offset.clone(),
-            }),
-            Reducer::DebugSpawnGameobject {
+}),
+            Reducer::DebugSpawnGameobject{
                 template_entry,
                 type_id,
                 display_id,
@@ -3682,7 +3771,7 @@ impl __sdk::Reducer for Reducer {
                 gather_skill_line,
                 respawn_secs,
                 gather_gray,
-            } => __sats::bsatn::to_vec(&debug_spawn_gameobject_reducer::DebugSpawnGameobjectArgs {
+}             => __sats::bsatn::to_vec(&debug_spawn_gameobject_reducer::DebugSpawnGameobjectArgs {
                 template_entry: template_entry.clone(),
                 type_id: type_id.clone(),
                 display_id: display_id.clone(),
@@ -3695,140 +3784,138 @@ impl __sdk::Reducer for Reducer {
                 gather_skill_line: gather_skill_line.clone(),
                 respawn_secs: respawn_secs.clone(),
                 gather_gray: gather_gray.clone(),
-            }),
-            Reducer::DebugSpawnGroundArea {
+}),
+            Reducer::DebugSpawnGroundArea{
                 caster_guid,
                 spell_id,
-            } => {
-                __sats::bsatn::to_vec(&debug_spawn_ground_area_reducer::DebugSpawnGroundAreaArgs {
-                    caster_guid: caster_guid.clone(),
-                    spell_id: spell_id.clone(),
-                })
-            }
-            Reducer::DebugSpawnPlayerEntity { character_guid } => __sats::bsatn::to_vec(
-                &debug_spawn_player_entity_reducer::DebugSpawnPlayerEntityArgs {
-                    character_guid: character_guid.clone(),
-                },
-            ),
-            Reducer::DebugSpiritHealerRes { character_guid } => {
-                __sats::bsatn::to_vec(&debug_spirit_healer_res_reducer::DebugSpiritHealerResArgs {
-                    character_guid: character_guid.clone(),
-                })
-            }
-            Reducer::DebugSplitItem {
+}             => __sats::bsatn::to_vec(&debug_spawn_ground_area_reducer::DebugSpawnGroundAreaArgs {
+                caster_guid: caster_guid.clone(),
+                spell_id: spell_id.clone(),
+}),
+            Reducer::DebugSpawnPlayerEntity{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_spawn_player_entity_reducer::DebugSpawnPlayerEntityArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugSpiritHealerRes{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_spirit_healer_res_reducer::DebugSpiritHealerResArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugSplitItem{
                 character_guid,
                 slot,
                 count,
                 to_slot,
-            } => __sats::bsatn::to_vec(&debug_split_item_reducer::DebugSplitItemArgs {
+}             => __sats::bsatn::to_vec(&debug_split_item_reducer::DebugSplitItemArgs {
                 character_guid: character_guid.clone(),
                 slot: slot.clone(),
                 count: count.clone(),
                 to_slot: to_slot.clone(),
-            }),
-            Reducer::DebugStressRelay {
+}),
+            Reducer::DebugStressRelay{
                 character_guid,
                 victim_entry,
                 item_entry,
                 junk_rows,
-            } => __sats::bsatn::to_vec(&debug_stress_relay_reducer::DebugStressRelayArgs {
+}             => __sats::bsatn::to_vec(&debug_stress_relay_reducer::DebugStressRelayArgs {
                 character_guid: character_guid.clone(),
                 victim_entry: victim_entry.clone(),
                 item_entry: item_entry.clone(),
                 junk_rows: junk_rows.clone(),
-            }),
-            Reducer::DebugSweepEncounterState { instance_id } => __sats::bsatn::to_vec(
-                &debug_sweep_encounter_state_reducer::DebugSweepEncounterStateArgs {
-                    instance_id: instance_id.clone(),
-                },
-            ),
-            Reducer::DebugSweepSliceLens => {
-                __sats::bsatn::to_vec(&debug_sweep_slice_lens_reducer::DebugSweepSliceLensArgs {})
-            }
-            Reducer::DebugTakeLoot {
+}),
+            Reducer::DebugSweepEncounterState{
+                instance_id,
+}             => __sats::bsatn::to_vec(&debug_sweep_encounter_state_reducer::DebugSweepEncounterStateArgs {
+                instance_id: instance_id.clone(),
+}),
+            Reducer::DebugSweepSliceLens => __sats::bsatn::to_vec(&debug_sweep_slice_lens_reducer::DebugSweepSliceLensArgs {
+                }),
+Reducer::DebugTakeLoot{
                 character_guid,
                 corpse_guid,
                 loot_slot,
-            } => __sats::bsatn::to_vec(&debug_take_loot_reducer::DebugTakeLootArgs {
+}             => __sats::bsatn::to_vec(&debug_take_loot_reducer::DebugTakeLootArgs {
                 character_guid: character_guid.clone(),
                 corpse_guid: corpse_guid.clone(),
                 loot_slot: loot_slot.clone(),
-            }),
-            Reducer::DebugTeleport {
+}),
+            Reducer::DebugTeleport{
                 character_guid,
                 map_id,
                 x,
                 y,
                 z,
                 o,
-            } => __sats::bsatn::to_vec(&debug_teleport_reducer::DebugTeleportArgs {
+}             => __sats::bsatn::to_vec(&debug_teleport_reducer::DebugTeleportArgs {
                 character_guid: character_guid.clone(),
                 map_id: map_id.clone(),
                 x: x.clone(),
                 y: y.clone(),
                 z: z.clone(),
                 o: o.clone(),
-            }),
-            Reducer::DebugTurnInQuest {
+}),
+            Reducer::DebugTurnInQuest{
                 character_guid,
                 giver_guid,
                 quest_entry,
                 reward_index,
-            } => __sats::bsatn::to_vec(&debug_turn_in_quest_reducer::DebugTurnInQuestArgs {
+}             => __sats::bsatn::to_vec(&debug_turn_in_quest_reducer::DebugTurnInQuestArgs {
                 character_guid: character_guid.clone(),
                 giver_guid: giver_guid.clone(),
                 quest_entry: quest_entry.clone(),
                 reward_index: reward_index.clone(),
-            }),
-            Reducer::DebugUnequipItem {
+}),
+            Reducer::DebugUnequipItem{
                 character_guid,
                 from_slot,
-            } => __sats::bsatn::to_vec(&debug_unequip_item_reducer::DebugUnequipItemArgs {
+}             => __sats::bsatn::to_vec(&debug_unequip_item_reducer::DebugUnequipItemArgs {
                 character_guid: character_guid.clone(),
                 from_slot: from_slot.clone(),
-            }),
-            Reducer::DebugUseGameobject {
+}),
+            Reducer::DebugUseGameobject{
                 character_guid,
                 go_guid,
-            } => __sats::bsatn::to_vec(&debug_use_gameobject_reducer::DebugUseGameobjectArgs {
+}             => __sats::bsatn::to_vec(&debug_use_gameobject_reducer::DebugUseGameobjectArgs {
                 character_guid: character_guid.clone(),
                 go_guid: go_guid.clone(),
-            }),
-            Reducer::DebugUseGameobjectEntry {
+}),
+            Reducer::DebugUseGameobjectEntry{
                 character_guid,
                 go_entry,
-            } => __sats::bsatn::to_vec(
-                &debug_use_gameobject_entry_reducer::DebugUseGameobjectEntryArgs {
-                    character_guid: character_guid.clone(),
-                    go_entry: go_entry.clone(),
-                },
-            ),
-            Reducer::DebugUseHearthstone { character_guid } => {
-                __sats::bsatn::to_vec(&debug_use_hearthstone_reducer::DebugUseHearthstoneArgs {
-                    character_guid: character_guid.clone(),
-                })
-            }
-            Reducer::DebugUseItem {
+}             => __sats::bsatn::to_vec(&debug_use_gameobject_entry_reducer::DebugUseGameobjectEntryArgs {
+                character_guid: character_guid.clone(),
+                go_entry: go_entry.clone(),
+}),
+            Reducer::DebugUseHearthstone{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_use_hearthstone_reducer::DebugUseHearthstoneArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugUseItem{
                 character_guid,
                 slot,
-            } => __sats::bsatn::to_vec(&debug_use_item_reducer::DebugUseItemArgs {
+}             => __sats::bsatn::to_vec(&debug_use_item_reducer::DebugUseItemArgs {
                 character_guid: character_guid.clone(),
                 slot: slot.clone(),
-            }),
-            Reducer::DebugVerifyCombatRegen { character_guid } => __sats::bsatn::to_vec(
-                &debug_verify_combat_regen_reducer::DebugVerifyCombatRegenArgs {
-                    character_guid: character_guid.clone(),
-                },
-            ),
-            Reducer::DebugVmapAreaInfo { map, x, y, z } => {
-                __sats::bsatn::to_vec(&debug_vmap_area_info_reducer::DebugVmapAreaInfoArgs {
-                    map: map.clone(),
-                    x: x.clone(),
-                    y: y.clone(),
-                    z: z.clone(),
-                })
-            }
-            Reducer::DebugVmapRay {
+}),
+            Reducer::DebugVerifyCombatRegen{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_verify_combat_regen_reducer::DebugVerifyCombatRegenArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::DebugVmapAreaInfo{
+                map,
+                x,
+                y,
+                z,
+}             => __sats::bsatn::to_vec(&debug_vmap_area_info_reducer::DebugVmapAreaInfoArgs {
+                map: map.clone(),
+                x: x.clone(),
+                y: y.clone(),
+                z: z.clone(),
+}),
+            Reducer::DebugVmapRay{
                 map,
                 x_0,
                 y_0,
@@ -3836,7 +3923,7 @@ impl __sdk::Reducer for Reducer {
                 x_1,
                 y_1,
                 z_1,
-            } => __sats::bsatn::to_vec(&debug_vmap_ray_reducer::DebugVmapRayArgs {
+}             => __sats::bsatn::to_vec(&debug_vmap_ray_reducer::DebugVmapRayArgs {
                 map: map.clone(),
                 x_0: x_0.clone(),
                 y_0: y_0.clone(),
@@ -3844,408 +3931,437 @@ impl __sdk::Reducer for Reducer {
                 x_1: x_1.clone(),
                 y_1: y_1.clone(),
                 z_1: z_1.clone(),
-            }),
-            Reducer::DeleteCharacter {
+}),
+            Reducer::DeleteCharacter{
                 account_id,
                 character_guid,
-            } => __sats::bsatn::to_vec(&delete_character_reducer::DeleteCharacterArgs {
+}             => __sats::bsatn::to_vec(&delete_character_reducer::DeleteCharacterArgs {
                 account_id: account_id.clone(),
                 character_guid: character_guid.clone(),
-            }),
-            Reducer::DiscardVmapGeneration { generation_id } => __sats::bsatn::to_vec(
-                &discard_vmap_generation_reducer::DiscardVmapGenerationArgs {
-                    generation_id: generation_id.clone(),
-                },
-            ),
-            Reducer::EnsureInstance {
+}),
+            Reducer::DiscardVmapGeneration{
+                generation_id,
+}             => __sats::bsatn::to_vec(&discard_vmap_generation_reducer::DiscardVmapGenerationArgs {
+                generation_id: generation_id.clone(),
+}),
+            Reducer::EnsureInstance{
                 instance_id,
                 map_id,
                 party_id,
-            } => __sats::bsatn::to_vec(&ensure_instance_reducer::EnsureInstanceArgs {
+}             => __sats::bsatn::to_vec(&ensure_instance_reducer::EnsureInstanceArgs {
                 instance_id: instance_id.clone(),
                 map_id: map_id.clone(),
                 party_id: party_id.clone(),
-            }),
-            Reducer::EstablishSession {
+}),
+            Reducer::EstablishSession{
                 account_id,
                 session_key,
                 bound_identity,
-            } => __sats::bsatn::to_vec(&establish_session_reducer::EstablishSessionArgs {
+}             => __sats::bsatn::to_vec(&establish_session_reducer::EstablishSessionArgs {
                 account_id: account_id.clone(),
                 session_key: session_key.clone(),
                 bound_identity: bound_identity.clone(),
-            }),
-            Reducer::EvictInstancePopulation { instance_id } => __sats::bsatn::to_vec(
-                &evict_instance_population_reducer::EvictInstancePopulationArgs {
-                    instance_id: instance_id.clone(),
-                },
-            ),
-            Reducer::FinishTransfer { transfer_id } => {
-                __sats::bsatn::to_vec(&finish_transfer_reducer::FinishTransferArgs {
-                    transfer_id: transfer_id.clone(),
-                })
-            }
-            Reducer::FirePendingCast { sched } => {
-                __sats::bsatn::to_vec(&fire_pending_cast_reducer::FirePendingCastArgs {
-                    sched: sched.clone(),
-                })
-            }
-            Reducer::FireSpellImpact { sched } => {
-                __sats::bsatn::to_vec(&fire_spell_impact_reducer::FireSpellImpactArgs {
-                    sched: sched.clone(),
-                })
-            }
-            Reducer::GwAbandonQuest {
+}),
+            Reducer::EvictInstancePopulation{
+                instance_id,
+}             => __sats::bsatn::to_vec(&evict_instance_population_reducer::EvictInstancePopulationArgs {
+                instance_id: instance_id.clone(),
+}),
+            Reducer::FinishTransfer{
+                transfer_id,
+}             => __sats::bsatn::to_vec(&finish_transfer_reducer::FinishTransferArgs {
+                transfer_id: transfer_id.clone(),
+}),
+            Reducer::FirePendingCast{
+                sched,
+}             => __sats::bsatn::to_vec(&fire_pending_cast_reducer::FirePendingCastArgs {
+                sched: sched.clone(),
+}),
+            Reducer::FireSpellImpact{
+                sched,
+}             => __sats::bsatn::to_vec(&fire_spell_impact_reducer::FireSpellImpactArgs {
+                sched: sched.clone(),
+}),
+            Reducer::GwAbandonQuest{
                 actor_guid,
                 quest_entry,
-            } => __sats::bsatn::to_vec(&gw_abandon_quest_reducer::GwAbandonQuestArgs {
+}             => __sats::bsatn::to_vec(&gw_abandon_quest_reducer::GwAbandonQuestArgs {
                 actor_guid: actor_guid.clone(),
                 quest_entry: quest_entry.clone(),
-            }),
-            Reducer::GwAcceptGroupInvite { actor_guid } => {
-                __sats::bsatn::to_vec(&gw_accept_group_invite_reducer::GwAcceptGroupInviteArgs {
-                    actor_guid: actor_guid.clone(),
-                })
-            }
-            Reducer::GwAcceptQuest {
+}),
+            Reducer::GwAcceptGroupInvite{
+                actor_guid,
+}             => __sats::bsatn::to_vec(&gw_accept_group_invite_reducer::GwAcceptGroupInviteArgs {
+                actor_guid: actor_guid.clone(),
+}),
+            Reducer::GwAcceptQuest{
                 actor_guid,
                 giver_guid,
                 quest_entry,
-            } => __sats::bsatn::to_vec(&gw_accept_quest_reducer::GwAcceptQuestArgs {
+}             => __sats::bsatn::to_vec(&gw_accept_quest_reducer::GwAcceptQuestArgs {
                 actor_guid: actor_guid.clone(),
                 giver_guid: giver_guid.clone(),
                 quest_entry: quest_entry.clone(),
-            }),
-            Reducer::GwAcceptTrade { actor_guid } => {
-                __sats::bsatn::to_vec(&gw_accept_trade_reducer::GwAcceptTradeArgs {
-                    actor_guid: actor_guid.clone(),
-                })
-            }
-            Reducer::GwAddFriend {
+}),
+            Reducer::GwAcceptTrade{
+                actor_guid,
+}             => __sats::bsatn::to_vec(&gw_accept_trade_reducer::GwAcceptTradeArgs {
+                actor_guid: actor_guid.clone(),
+}),
+            Reducer::GwAckTaxiReply{
+                character_guid,
+                request_id,
+}             => __sats::bsatn::to_vec(&gw_ack_taxi_reply_reducer::GwAckTaxiReplyArgs {
+                character_guid: character_guid.clone(),
+                request_id: request_id.clone(),
+}),
+            Reducer::GwActivateTaxi{
+                character_guid,
+                npc_guid,
+                source_client_node_id,
+                destination_client_node_id,
+                request_id,
+}             => __sats::bsatn::to_vec(&gw_activate_taxi_reducer::GwActivateTaxiArgs {
+                character_guid: character_guid.clone(),
+                npc_guid: npc_guid.clone(),
+                source_client_node_id: source_client_node_id.clone(),
+                destination_client_node_id: destination_client_node_id.clone(),
+                request_id: request_id.clone(),
+}),
+            Reducer::GwAddFriend{
                 actor_guid,
                 target_guid,
-            } => __sats::bsatn::to_vec(&gw_add_friend_reducer::GwAddFriendArgs {
+}             => __sats::bsatn::to_vec(&gw_add_friend_reducer::GwAddFriendArgs {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::GwAddIgnore {
+}),
+            Reducer::GwAddIgnore{
                 actor_guid,
                 target_guid,
-            } => __sats::bsatn::to_vec(&gw_add_ignore_reducer::GwAddIgnoreArgs {
+}             => __sats::bsatn::to_vec(&gw_add_ignore_reducer::GwAddIgnoreArgs {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::GwAttack {
+}),
+            Reducer::GwArmTaxiFlight{
+                character_guid,
+}             => __sats::bsatn::to_vec(&gw_arm_taxi_flight_reducer::GwArmTaxiFlightArgs {
+                character_guid: character_guid.clone(),
+}),
+            Reducer::GwAttack{
                 actor_guid,
                 target_guid,
-            } => __sats::bsatn::to_vec(&gw_attack_reducer::GwAttackArgs {
+}             => __sats::bsatn::to_vec(&gw_attack_reducer::GwAttackArgs {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::GwAutoBankItem { actor_guid, slot } => {
-                __sats::bsatn::to_vec(&gw_auto_bank_item_reducer::GwAutoBankItemArgs {
-                    actor_guid: actor_guid.clone(),
-                    slot: slot.clone(),
-                })
-            }
-            Reducer::GwBeginTrade { actor_guid } => {
-                __sats::bsatn::to_vec(&gw_begin_trade_reducer::GwBeginTradeArgs {
-                    actor_guid: actor_guid.clone(),
-                })
-            }
-            Reducer::GwBindHome { actor_guid } => {
-                __sats::bsatn::to_vec(&gw_bind_home_reducer::GwBindHomeArgs {
-                    actor_guid: actor_guid.clone(),
-                })
-            }
-            Reducer::GwBusyTrade { actor_guid } => {
-                __sats::bsatn::to_vec(&gw_busy_trade_reducer::GwBusyTradeArgs {
-                    actor_guid: actor_guid.clone(),
-                })
-            }
-            Reducer::GwBuyBankSlot {
+}),
+            Reducer::GwAutoBankItem{
+                actor_guid,
+                slot,
+}             => __sats::bsatn::to_vec(&gw_auto_bank_item_reducer::GwAutoBankItemArgs {
+                actor_guid: actor_guid.clone(),
+                slot: slot.clone(),
+}),
+            Reducer::GwBeginTrade{
+                actor_guid,
+}             => __sats::bsatn::to_vec(&gw_begin_trade_reducer::GwBeginTradeArgs {
+                actor_guid: actor_guid.clone(),
+}),
+            Reducer::GwBindHome{
+                actor_guid,
+}             => __sats::bsatn::to_vec(&gw_bind_home_reducer::GwBindHomeArgs {
+                actor_guid: actor_guid.clone(),
+}),
+            Reducer::GwBusyTrade{
+                actor_guid,
+}             => __sats::bsatn::to_vec(&gw_busy_trade_reducer::GwBusyTradeArgs {
+                actor_guid: actor_guid.clone(),
+}),
+            Reducer::GwBuyBankSlot{
                 actor_guid,
                 banker_guid,
-            } => __sats::bsatn::to_vec(&gw_buy_bank_slot_reducer::GwBuyBankSlotArgs {
+}             => __sats::bsatn::to_vec(&gw_buy_bank_slot_reducer::GwBuyBankSlotArgs {
                 actor_guid: actor_guid.clone(),
                 banker_guid: banker_guid.clone(),
-            }),
-            Reducer::GwBuyItem {
+}),
+            Reducer::GwBuyItem{
                 actor_guid,
                 vendor_guid,
                 item_entry,
                 count,
-            } => __sats::bsatn::to_vec(&gw_buy_item_reducer::GwBuyItemArgs {
+}             => __sats::bsatn::to_vec(&gw_buy_item_reducer::GwBuyItemArgs {
                 actor_guid: actor_guid.clone(),
                 vendor_guid: vendor_guid.clone(),
                 item_entry: item_entry.clone(),
                 count: count.clone(),
-            }),
-            Reducer::GwBuybackItem {
+}),
+            Reducer::GwBuybackItem{
                 actor_guid,
                 vendor_guid,
                 slot,
-            } => __sats::bsatn::to_vec(&gw_buyback_item_reducer::GwBuybackItemArgs {
+}             => __sats::bsatn::to_vec(&gw_buyback_item_reducer::GwBuybackItemArgs {
                 actor_guid: actor_guid.clone(),
                 vendor_guid: vendor_guid.clone(),
                 slot: slot.clone(),
-            }),
-            Reducer::GwCancelAura {
+}),
+            Reducer::GwCancelAura{
                 actor_guid,
                 spell_id,
-            } => __sats::bsatn::to_vec(&gw_cancel_aura_reducer::GwCancelAuraArgs {
+}             => __sats::bsatn::to_vec(&gw_cancel_aura_reducer::GwCancelAuraArgs {
                 actor_guid: actor_guid.clone(),
                 spell_id: spell_id.clone(),
-            }),
-            Reducer::GwCancelCast { actor_guid } => {
-                __sats::bsatn::to_vec(&gw_cancel_cast_reducer::GwCancelCastArgs {
-                    actor_guid: actor_guid.clone(),
-                })
-            }
-            Reducer::GwCancelTrade { actor_guid } => {
-                __sats::bsatn::to_vec(&gw_cancel_trade_reducer::GwCancelTradeArgs {
-                    actor_guid: actor_guid.clone(),
-                })
-            }
-            Reducer::GwCastAt {
+}),
+            Reducer::GwCancelCast{
                 actor_guid,
-                spell_id,
-                target_guid,
-            } => __sats::bsatn::to_vec(&gw_cast_at_reducer::GwCastAtArgs {
+}             => __sats::bsatn::to_vec(&gw_cancel_cast_reducer::GwCancelCastArgs {
                 actor_guid: actor_guid.clone(),
-                spell_id: spell_id.clone(),
-                target_guid: target_guid.clone(),
-            }),
-            Reducer::GwCastSpell {
+}),
+            Reducer::GwCancelTrade{
+                actor_guid,
+}             => __sats::bsatn::to_vec(&gw_cancel_trade_reducer::GwCancelTradeArgs {
+                actor_guid: actor_guid.clone(),
+}),
+            Reducer::GwCastAt{
                 actor_guid,
                 spell_id,
                 target_guid,
-            } => __sats::bsatn::to_vec(&gw_cast_spell_reducer::GwCastSpellArgs {
+}             => __sats::bsatn::to_vec(&gw_cast_at_reducer::GwCastAtArgs {
                 actor_guid: actor_guid.clone(),
                 spell_id: spell_id.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::GwCastSpellAt {
+}),
+            Reducer::GwCastSpell{
+                actor_guid,
+                spell_id,
+                target_guid,
+}             => __sats::bsatn::to_vec(&gw_cast_spell_reducer::GwCastSpellArgs {
+                actor_guid: actor_guid.clone(),
+                spell_id: spell_id.clone(),
+                target_guid: target_guid.clone(),
+}),
+            Reducer::GwCastSpellAt{
                 actor_guid,
                 spell_id,
                 target_guid,
                 x,
                 y,
                 z,
-            } => __sats::bsatn::to_vec(&gw_cast_spell_at_reducer::GwCastSpellAtArgs {
+}             => __sats::bsatn::to_vec(&gw_cast_spell_at_reducer::GwCastSpellAtArgs {
                 actor_guid: actor_guid.clone(),
                 spell_id: spell_id.clone(),
                 target_guid: target_guid.clone(),
                 x: x.clone(),
                 y: y.clone(),
                 z: z.clone(),
-            }),
-            Reducer::GwClearTradeItem {
+}),
+            Reducer::GwClearTradeItem{
                 actor_guid,
                 trade_slot,
-            } => __sats::bsatn::to_vec(&gw_clear_trade_item_reducer::GwClearTradeItemArgs {
+}             => __sats::bsatn::to_vec(&gw_clear_trade_item_reducer::GwClearTradeItemArgs {
                 actor_guid: actor_guid.clone(),
                 trade_slot: trade_slot.clone(),
-            }),
-            Reducer::GwClientCommand {
+}),
+            Reducer::GwClientCommand{
                 actor_guid,
                 cmd,
                 payload,
-            } => __sats::bsatn::to_vec(&gw_client_command_reducer::GwClientCommandArgs {
+}             => __sats::bsatn::to_vec(&gw_client_command_reducer::GwClientCommandArgs {
                 actor_guid: actor_guid.clone(),
                 cmd: cmd.clone(),
                 payload: payload.clone(),
-            }),
-            Reducer::GwDelFriend {
+}),
+            Reducer::GwDelFriend{
                 actor_guid,
                 target_guid,
-            } => __sats::bsatn::to_vec(&gw_del_friend_reducer::GwDelFriendArgs {
+}             => __sats::bsatn::to_vec(&gw_del_friend_reducer::GwDelFriendArgs {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::GwDelIgnore {
+}),
+            Reducer::GwDelIgnore{
                 actor_guid,
                 target_guid,
-            } => __sats::bsatn::to_vec(&gw_del_ignore_reducer::GwDelIgnoreArgs {
+}             => __sats::bsatn::to_vec(&gw_del_ignore_reducer::GwDelIgnoreArgs {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::GwDisenchant { actor_guid, slot } => {
-                __sats::bsatn::to_vec(&gw_disenchant_reducer::GwDisenchantArgs {
-                    actor_guid: actor_guid.clone(),
-                    slot: slot.clone(),
-                })
-            }
-            Reducer::GwEnchantItem {
+}),
+            Reducer::GwDisenchant{
+                actor_guid,
+                slot,
+}             => __sats::bsatn::to_vec(&gw_disenchant_reducer::GwDisenchantArgs {
+                actor_guid: actor_guid.clone(),
+                slot: slot.clone(),
+}),
+            Reducer::GwEnchantItem{
                 actor_guid,
                 target_slot,
                 enchant_id,
-            } => __sats::bsatn::to_vec(&gw_enchant_item_reducer::GwEnchantItemArgs {
+}             => __sats::bsatn::to_vec(&gw_enchant_item_reducer::GwEnchantItemArgs {
                 actor_guid: actor_guid.clone(),
                 target_slot: target_slot.clone(),
                 enchant_id: enchant_id.clone(),
-            }),
-            Reducer::GwEnterAreatrigger {
+}),
+            Reducer::GwEnterAreatrigger{
                 actor_guid,
                 trigger_id,
-            } => __sats::bsatn::to_vec(&gw_enter_areatrigger_reducer::GwEnterAreatriggerArgs {
+}             => __sats::bsatn::to_vec(&gw_enter_areatrigger_reducer::GwEnterAreatriggerArgs {
                 actor_guid: actor_guid.clone(),
                 trigger_id: trigger_id.clone(),
-            }),
-            Reducer::GwEquipItem {
+}),
+            Reducer::GwEquipItem{
                 actor_guid,
                 from_slot,
-            } => __sats::bsatn::to_vec(&gw_equip_item_reducer::GwEquipItemArgs {
+}             => __sats::bsatn::to_vec(&gw_equip_item_reducer::GwEquipItemArgs {
                 actor_guid: actor_guid.clone(),
                 from_slot: from_slot.clone(),
-            }),
-            Reducer::GwFish { actor_guid } => __sats::bsatn::to_vec(&gw_fish_reducer::GwFishArgs {
+}),
+            Reducer::GwFish{
+                actor_guid,
+}             => __sats::bsatn::to_vec(&gw_fish_reducer::GwFishArgs {
                 actor_guid: actor_guid.clone(),
-            }),
-            Reducer::GwGmCommand { actor_guid, text } => {
-                __sats::bsatn::to_vec(&gw_gm_command_reducer::GwGmCommandArgs {
-                    actor_guid: actor_guid.clone(),
-                    text: text.clone(),
-                })
-            }
-            Reducer::GwGossipSelect {
+}),
+            Reducer::GwGmCommand{
+                actor_guid,
+                text,
+}             => __sats::bsatn::to_vec(&gw_gm_command_reducer::GwGmCommandArgs {
+                actor_guid: actor_guid.clone(),
+                text: text.clone(),
+}),
+            Reducer::GwGossipSelect{
                 actor_guid,
                 npc_guid,
                 option_id,
                 option_row_id,
-            } => __sats::bsatn::to_vec(&gw_gossip_select_reducer::GwGossipSelectArgs {
+}             => __sats::bsatn::to_vec(&gw_gossip_select_reducer::GwGossipSelectArgs {
                 actor_guid: actor_guid.clone(),
                 npc_guid: npc_guid.clone(),
                 option_id: option_id.clone(),
                 option_row_id: option_row_id.clone(),
-            }),
-            Reducer::GwGroupDecline { actor_guid } => {
-                __sats::bsatn::to_vec(&gw_group_decline_reducer::GwGroupDeclineArgs {
-                    actor_guid: actor_guid.clone(),
-                })
-            }
-            Reducer::GwGroupInvite {
+}),
+            Reducer::GwGroupDecline{
+                actor_guid,
+}             => __sats::bsatn::to_vec(&gw_group_decline_reducer::GwGroupDeclineArgs {
+                actor_guid: actor_guid.clone(),
+}),
+            Reducer::GwGroupInvite{
                 actor_guid,
                 target_guid,
-            } => __sats::bsatn::to_vec(&gw_group_invite_reducer::GwGroupInviteArgs {
+}             => __sats::bsatn::to_vec(&gw_group_invite_reducer::GwGroupInviteArgs {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::GwGroupLeave { actor_guid } => {
-                __sats::bsatn::to_vec(&gw_group_leave_reducer::GwGroupLeaveArgs {
-                    actor_guid: actor_guid.clone(),
-                })
-            }
-            Reducer::GwGroupLootMethod {
+}),
+            Reducer::GwGroupLeave{
+                actor_guid,
+}             => __sats::bsatn::to_vec(&gw_group_leave_reducer::GwGroupLeaveArgs {
+                actor_guid: actor_guid.clone(),
+}),
+            Reducer::GwGroupLootMethod{
                 actor_guid,
                 loot_setting,
                 master_guid,
                 loot_threshold,
-            } => __sats::bsatn::to_vec(&gw_group_loot_method_reducer::GwGroupLootMethodArgs {
+}             => __sats::bsatn::to_vec(&gw_group_loot_method_reducer::GwGroupLootMethodArgs {
                 actor_guid: actor_guid.clone(),
                 loot_setting: loot_setting.clone(),
                 master_guid: master_guid.clone(),
                 loot_threshold: loot_threshold.clone(),
-            }),
-            Reducer::GwGroupUninvite {
+}),
+            Reducer::GwGroupUninvite{
                 actor_guid,
                 target_guid,
-            } => __sats::bsatn::to_vec(&gw_group_uninvite_reducer::GwGroupUninviteArgs {
+}             => __sats::bsatn::to_vec(&gw_group_uninvite_reducer::GwGroupUninviteArgs {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::GwHeartbeat => {
-                __sats::bsatn::to_vec(&gw_heartbeat_reducer::GwHeartbeatArgs {})
-            }
-            Reducer::GwIgnoreTrade { actor_guid } => {
-                __sats::bsatn::to_vec(&gw_ignore_trade_reducer::GwIgnoreTradeArgs {
-                    actor_guid: actor_guid.clone(),
-                })
-            }
-            Reducer::GwInitiateTrade {
+}),
+            Reducer::GwHeartbeat => __sats::bsatn::to_vec(&gw_heartbeat_reducer::GwHeartbeatArgs {
+                }),
+Reducer::GwIgnoreTrade{
+                actor_guid,
+}             => __sats::bsatn::to_vec(&gw_ignore_trade_reducer::GwIgnoreTradeArgs {
+                actor_guid: actor_guid.clone(),
+}),
+            Reducer::GwInitiateTrade{
                 actor_guid,
                 target_guid,
-            } => __sats::bsatn::to_vec(&gw_initiate_trade_reducer::GwInitiateTradeArgs {
+}             => __sats::bsatn::to_vec(&gw_initiate_trade_reducer::GwInitiateTradeArgs {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::GwInspect {
+}),
+            Reducer::GwInspect{
                 actor_guid,
                 target_guid,
-            } => __sats::bsatn::to_vec(&gw_inspect_reducer::GwInspectArgs {
+}             => __sats::bsatn::to_vec(&gw_inspect_reducer::GwInspectArgs {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::GwJoinChannel {
+}),
+            Reducer::GwJoinChannel{
                 actor_guid,
                 channel,
-            } => __sats::bsatn::to_vec(&gw_join_channel_reducer::GwJoinChannelArgs {
+}             => __sats::bsatn::to_vec(&gw_join_channel_reducer::GwJoinChannelArgs {
                 actor_guid: actor_guid.clone(),
                 channel: channel.clone(),
-            }),
-            Reducer::GwLearnTalent {
+}),
+            Reducer::GwLearnTalent{
                 actor_guid,
                 talent_id,
-            } => __sats::bsatn::to_vec(&gw_learn_talent_reducer::GwLearnTalentArgs {
+}             => __sats::bsatn::to_vec(&gw_learn_talent_reducer::GwLearnTalentArgs {
                 actor_guid: actor_guid.clone(),
                 talent_id: talent_id.clone(),
-            }),
-            Reducer::GwLeaveChannel {
+}),
+            Reducer::GwLeaveChannel{
                 actor_guid,
                 channel,
-            } => __sats::bsatn::to_vec(&gw_leave_channel_reducer::GwLeaveChannelArgs {
+}             => __sats::bsatn::to_vec(&gw_leave_channel_reducer::GwLeaveChannelArgs {
                 actor_guid: actor_guid.clone(),
                 channel: channel.clone(),
-            }),
-            Reducer::GwLeaveWorld { actor_guid } => {
-                __sats::bsatn::to_vec(&gw_leave_world_reducer::GwLeaveWorldArgs {
-                    actor_guid: actor_guid.clone(),
-                })
-            }
-            Reducer::GwLootMasterGive {
+}),
+            Reducer::GwLeaveWorld{
+                actor_guid,
+}             => __sats::bsatn::to_vec(&gw_leave_world_reducer::GwLeaveWorldArgs {
+                actor_guid: actor_guid.clone(),
+}),
+            Reducer::GwLootMasterGive{
                 actor_guid,
                 corpse_guid,
                 loot_slot,
                 target_guid,
-            } => __sats::bsatn::to_vec(&gw_loot_master_give_reducer::GwLootMasterGiveArgs {
+}             => __sats::bsatn::to_vec(&gw_loot_master_give_reducer::GwLootMasterGiveArgs {
                 actor_guid: actor_guid.clone(),
                 corpse_guid: corpse_guid.clone(),
                 loot_slot: loot_slot.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::GwLootMoney {
+}),
+            Reducer::GwLootMoney{
                 actor_guid,
                 target_guid,
-            } => __sats::bsatn::to_vec(&gw_loot_money_reducer::GwLootMoneyArgs {
+}             => __sats::bsatn::to_vec(&gw_loot_money_reducer::GwLootMoneyArgs {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::GwLootRoll {
+}),
+            Reducer::GwLootRoll{
                 actor_guid,
                 corpse_guid,
                 loot_slot,
                 vote,
-            } => __sats::bsatn::to_vec(&gw_loot_roll_reducer::GwLootRollArgs {
+}             => __sats::bsatn::to_vec(&gw_loot_roll_reducer::GwLootRollArgs {
                 actor_guid: actor_guid.clone(),
                 corpse_guid: corpse_guid.clone(),
                 loot_slot: loot_slot.clone(),
                 vote: vote.clone(),
-            }),
-            Reducer::GwMoveItem {
+}),
+            Reducer::GwMoveItem{
                 actor_guid,
                 from_slot,
                 to_slot,
-            } => __sats::bsatn::to_vec(&gw_move_item_reducer::GwMoveItemArgs {
+}             => __sats::bsatn::to_vec(&gw_move_item_reducer::GwMoveItemArgs {
                 actor_guid: actor_guid.clone(),
                 from_slot: from_slot.clone(),
                 to_slot: to_slot.clone(),
-            }),
-            Reducer::GwMovementBatch { moves } => {
-                __sats::bsatn::to_vec(&gw_movement_batch_reducer::GwMovementBatchArgs {
-                    moves: moves.clone(),
-                })
-            }
-            Reducer::GwMovementUpdate {
+}),
+            Reducer::GwMovementBatch{
+                moves,
+}             => __sats::bsatn::to_vec(&gw_movement_batch_reducer::GwMovementBatchArgs {
+                moves: moves.clone(),
+}),
+            Reducer::GwMovementUpdate{
                 actor_guid,
                 opcode,
                 movement_info,
@@ -4254,7 +4370,7 @@ impl __sdk::Reducer for Reducer {
                 z,
                 o,
                 move_time_ms,
-            } => __sats::bsatn::to_vec(&gw_movement_update_reducer::GwMovementUpdateArgs {
+}             => __sats::bsatn::to_vec(&gw_movement_update_reducer::GwMovementUpdateArgs {
                 actor_guid: actor_guid.clone(),
                 opcode: opcode.clone(),
                 movement_info: movement_info.clone(),
@@ -4263,372 +4379,393 @@ impl __sdk::Reducer for Reducer {
                 z: z.clone(),
                 o: o.clone(),
                 move_time_ms: move_time_ms.clone(),
-            }),
-            Reducer::GwPartyChat { actor_guid, text } => {
-                __sats::bsatn::to_vec(&gw_party_chat_reducer::GwPartyChatArgs {
-                    actor_guid: actor_guid.clone(),
-                    text: text.clone(),
-                })
-            }
-            Reducer::GwPetCommand {
+}),
+            Reducer::GwOpenTaxi{
+                character_guid,
+                npc_guid,
+                request_id,
+}             => __sats::bsatn::to_vec(&gw_open_taxi_reducer::GwOpenTaxiArgs {
+                character_guid: character_guid.clone(),
+                npc_guid: npc_guid.clone(),
+                request_id: request_id.clone(),
+}),
+            Reducer::GwPartyChat{
+                actor_guid,
+                text,
+}             => __sats::bsatn::to_vec(&gw_party_chat_reducer::GwPartyChatArgs {
+                actor_guid: actor_guid.clone(),
+                text: text.clone(),
+}),
+            Reducer::GwPetCommand{
                 actor_guid,
                 data,
                 target_guid,
-            } => __sats::bsatn::to_vec(&gw_pet_command_reducer::GwPetCommandArgs {
+}             => __sats::bsatn::to_vec(&gw_pet_command_reducer::GwPetCommandArgs {
                 actor_guid: actor_guid.clone(),
                 data: data.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::GwPickLock {
+}),
+            Reducer::GwPickLock{
                 actor_guid,
                 go_guid,
-            } => __sats::bsatn::to_vec(&gw_pick_lock_reducer::GwPickLockArgs {
+}             => __sats::bsatn::to_vec(&gw_pick_lock_reducer::GwPickLockArgs {
                 actor_guid: actor_guid.clone(),
                 go_guid: go_guid.clone(),
-            }),
-            Reducer::GwPlayerLogin {
+}),
+            Reducer::GwPlayerLogin{
                 account_id,
                 character_guid,
-            } => __sats::bsatn::to_vec(&gw_player_login_reducer::GwPlayerLoginArgs {
+}             => __sats::bsatn::to_vec(&gw_player_login_reducer::GwPlayerLoginArgs {
                 account_id: account_id.clone(),
                 character_guid: character_guid.clone(),
-            }),
-            Reducer::GwPushQuestToParty {
+}),
+            Reducer::GwPushQuestToParty{
                 actor_guid,
                 quest_entry,
-            } => __sats::bsatn::to_vec(&gw_push_quest_to_party_reducer::GwPushQuestToPartyArgs {
+}             => __sats::bsatn::to_vec(&gw_push_quest_to_party_reducer::GwPushQuestToPartyArgs {
                 actor_guid: actor_guid.clone(),
                 quest_entry: quest_entry.clone(),
-            }),
-            Reducer::GwRangedAttack {
+}),
+            Reducer::GwRangedAttack{
                 actor_guid,
                 target_guid,
                 spell_id,
-            } => __sats::bsatn::to_vec(&gw_ranged_attack_reducer::GwRangedAttackArgs {
+}             => __sats::bsatn::to_vec(&gw_ranged_attack_reducer::GwRangedAttackArgs {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
                 spell_id: spell_id.clone(),
-            }),
-            Reducer::GwReclaimCorpse {
+}),
+            Reducer::GwReclaimCorpse{
                 actor_guid,
                 corpse_guid,
-            } => __sats::bsatn::to_vec(&gw_reclaim_corpse_reducer::GwReclaimCorpseArgs {
+}             => __sats::bsatn::to_vec(&gw_reclaim_corpse_reducer::GwReclaimCorpseArgs {
                 actor_guid: actor_guid.clone(),
                 corpse_guid: corpse_guid.clone(),
-            }),
-            Reducer::GwRepairItem {
+}),
+            Reducer::GwRepairItem{
                 actor_guid,
                 npc_guid,
                 slot,
-            } => __sats::bsatn::to_vec(&gw_repair_item_reducer::GwRepairItemArgs {
+}             => __sats::bsatn::to_vec(&gw_repair_item_reducer::GwRepairItemArgs {
                 actor_guid: actor_guid.clone(),
                 npc_guid: npc_guid.clone(),
                 slot: slot.clone(),
-            }),
-            Reducer::GwRepop { actor_guid } => {
-                __sats::bsatn::to_vec(&gw_repop_reducer::GwRepopArgs {
-                    actor_guid: actor_guid.clone(),
-                })
-            }
-            Reducer::GwResetTalents {
+}),
+            Reducer::GwRepop{
+                actor_guid,
+}             => __sats::bsatn::to_vec(&gw_repop_reducer::GwRepopArgs {
+                actor_guid: actor_guid.clone(),
+}),
+            Reducer::GwResetTalents{
                 actor_guid,
                 trainer_guid,
-            } => __sats::bsatn::to_vec(&gw_reset_talents_reducer::GwResetTalentsArgs {
+}             => __sats::bsatn::to_vec(&gw_reset_talents_reducer::GwResetTalentsArgs {
                 actor_guid: actor_guid.clone(),
                 trainer_guid: trainer_guid.clone(),
-            }),
-            Reducer::GwRespondResurrect { actor_guid, accept } => {
-                __sats::bsatn::to_vec(&gw_respond_resurrect_reducer::GwRespondResurrectArgs {
-                    actor_guid: actor_guid.clone(),
-                    accept: accept.clone(),
-                })
-            }
-            Reducer::GwSellItem {
+}),
+            Reducer::GwRespondResurrect{
+                actor_guid,
+                accept,
+}             => __sats::bsatn::to_vec(&gw_respond_resurrect_reducer::GwRespondResurrectArgs {
+                actor_guid: actor_guid.clone(),
+                accept: accept.clone(),
+}),
+            Reducer::GwSellItem{
                 actor_guid,
                 vendor_guid,
                 slot,
-            } => __sats::bsatn::to_vec(&gw_sell_item_reducer::GwSellItemArgs {
+}             => __sats::bsatn::to_vec(&gw_sell_item_reducer::GwSellItemArgs {
                 actor_guid: actor_guid.clone(),
                 vendor_guid: vendor_guid.clone(),
                 slot: slot.clone(),
-            }),
-            Reducer::GwSendChannelMessage {
+}),
+            Reducer::GwSendChannelMessage{
                 actor_guid,
                 channel,
                 message,
-            } => {
-                __sats::bsatn::to_vec(&gw_send_channel_message_reducer::GwSendChannelMessageArgs {
-                    actor_guid: actor_guid.clone(),
-                    channel: channel.clone(),
-                    message: message.clone(),
-                })
-            }
-            Reducer::GwSendChat {
+}             => __sats::bsatn::to_vec(&gw_send_channel_message_reducer::GwSendChannelMessageArgs {
+                actor_guid: actor_guid.clone(),
+                channel: channel.clone(),
+                message: message.clone(),
+}),
+            Reducer::GwSendChat{
                 actor_guid,
                 chat_type,
                 language,
                 message,
-            } => __sats::bsatn::to_vec(&gw_send_chat_reducer::GwSendChatArgs {
+}             => __sats::bsatn::to_vec(&gw_send_chat_reducer::GwSendChatArgs {
                 actor_guid: actor_guid.clone(),
                 chat_type: chat_type.clone(),
                 language: language.clone(),
                 message: message.clone(),
-            }),
-            Reducer::GwSendEmote {
+}),
+            Reducer::GwSendEmote{
                 actor_guid,
                 text_emote,
                 emote_anim,
                 target_guid,
-            } => __sats::bsatn::to_vec(&gw_send_emote_reducer::GwSendEmoteArgs {
+}             => __sats::bsatn::to_vec(&gw_send_emote_reducer::GwSendEmoteArgs {
                 actor_guid: actor_guid.clone(),
                 text_emote: text_emote.clone(),
                 emote_anim: emote_anim.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::GwSendRoll {
+}),
+            Reducer::GwSendRoll{
                 actor_guid,
                 min_roll,
                 max_roll,
-            } => __sats::bsatn::to_vec(&gw_send_roll_reducer::GwSendRollArgs {
+}             => __sats::bsatn::to_vec(&gw_send_roll_reducer::GwSendRollArgs {
                 actor_guid: actor_guid.clone(),
                 min_roll: min_roll.clone(),
                 max_roll: max_roll.clone(),
-            }),
-            Reducer::GwSendWhisper {
+}),
+            Reducer::GwSendWhisper{
                 actor_guid,
                 target_name,
                 message,
-            } => __sats::bsatn::to_vec(&gw_send_whisper_reducer::GwSendWhisperArgs {
+}             => __sats::bsatn::to_vec(&gw_send_whisper_reducer::GwSendWhisperArgs {
                 actor_guid: actor_guid.clone(),
                 target_name: target_name.clone(),
                 message: message.clone(),
-            }),
-            Reducer::GwSetActionButton {
+}),
+            Reducer::GwSetActionButton{
                 actor_guid,
                 button,
                 action,
                 action_type,
-            } => __sats::bsatn::to_vec(&gw_set_action_button_reducer::GwSetActionButtonArgs {
+}             => __sats::bsatn::to_vec(&gw_set_action_button_reducer::GwSetActionButtonArgs {
                 actor_guid: actor_guid.clone(),
                 button: button.clone(),
                 action: action.clone(),
                 action_type: action_type.clone(),
-            }),
-            Reducer::GwSetFactionAtWar {
+}),
+            Reducer::GwSetFactionAtWar{
                 actor_guid,
                 reputation_index,
                 at_war,
-            } => __sats::bsatn::to_vec(&gw_set_faction_at_war_reducer::GwSetFactionAtWarArgs {
+}             => __sats::bsatn::to_vec(&gw_set_faction_at_war_reducer::GwSetFactionAtWarArgs {
                 actor_guid: actor_guid.clone(),
                 reputation_index: reputation_index.clone(),
                 at_war: at_war.clone(),
-            }),
-            Reducer::GwSetSheathed { actor_guid, state } => {
-                __sats::bsatn::to_vec(&gw_set_sheathed_reducer::GwSetSheathedArgs {
-                    actor_guid: actor_guid.clone(),
-                    state: state.clone(),
-                })
-            }
-            Reducer::GwSetTarget {
+}),
+            Reducer::GwSetSheathed{
+                actor_guid,
+                state,
+}             => __sats::bsatn::to_vec(&gw_set_sheathed_reducer::GwSetSheathedArgs {
+                actor_guid: actor_guid.clone(),
+                state: state.clone(),
+}),
+            Reducer::GwSetTarget{
                 actor_guid,
                 target_guid,
-            } => __sats::bsatn::to_vec(&gw_set_target_reducer::GwSetTargetArgs {
+}             => __sats::bsatn::to_vec(&gw_set_target_reducer::GwSetTargetArgs {
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
-            }),
-            Reducer::GwSetTradeGold { actor_guid, copper } => {
-                __sats::bsatn::to_vec(&gw_set_trade_gold_reducer::GwSetTradeGoldArgs {
-                    actor_guid: actor_guid.clone(),
-                    copper: copper.clone(),
-                })
-            }
-            Reducer::GwSetTradeItem {
+}),
+            Reducer::GwSetTradeGold{
+                actor_guid,
+                copper,
+}             => __sats::bsatn::to_vec(&gw_set_trade_gold_reducer::GwSetTradeGoldArgs {
+                actor_guid: actor_guid.clone(),
+                copper: copper.clone(),
+}),
+            Reducer::GwSetTradeItem{
                 actor_guid,
                 trade_slot,
                 inv_slot,
-            } => __sats::bsatn::to_vec(&gw_set_trade_item_reducer::GwSetTradeItemArgs {
+}             => __sats::bsatn::to_vec(&gw_set_trade_item_reducer::GwSetTradeItemArgs {
                 actor_guid: actor_guid.clone(),
                 trade_slot: trade_slot.clone(),
                 inv_slot: inv_slot.clone(),
-            }),
-            Reducer::GwSkin {
+}),
+            Reducer::GwSkin{
                 actor_guid,
                 corpse_guid,
-            } => __sats::bsatn::to_vec(&gw_skin_reducer::GwSkinArgs {
+}             => __sats::bsatn::to_vec(&gw_skin_reducer::GwSkinArgs {
                 actor_guid: actor_guid.clone(),
                 corpse_guid: corpse_guid.clone(),
-            }),
-            Reducer::GwSpiritRes { actor_guid } => {
-                __sats::bsatn::to_vec(&gw_spirit_res_reducer::GwSpiritResArgs {
-                    actor_guid: actor_guid.clone(),
-                })
-            }
-            Reducer::GwStopAttack { actor_guid } => {
-                __sats::bsatn::to_vec(&gw_stop_attack_reducer::GwStopAttackArgs {
-                    actor_guid: actor_guid.clone(),
-                })
-            }
-            Reducer::GwTakeLoot {
+}),
+            Reducer::GwSpiritRes{
+                actor_guid,
+}             => __sats::bsatn::to_vec(&gw_spirit_res_reducer::GwSpiritResArgs {
+                actor_guid: actor_guid.clone(),
+}),
+            Reducer::GwStopAttack{
+                actor_guid,
+}             => __sats::bsatn::to_vec(&gw_stop_attack_reducer::GwStopAttackArgs {
+                actor_guid: actor_guid.clone(),
+}),
+            Reducer::GwTakeLoot{
                 actor_guid,
                 corpse_guid,
                 loot_slot,
-            } => __sats::bsatn::to_vec(&gw_take_loot_reducer::GwTakeLootArgs {
+}             => __sats::bsatn::to_vec(&gw_take_loot_reducer::GwTakeLootArgs {
                 actor_guid: actor_guid.clone(),
                 corpse_guid: corpse_guid.clone(),
                 loot_slot: loot_slot.clone(),
-            }),
-            Reducer::GwTrainerBuy {
+}),
+            Reducer::GwTaxiNodeStatus{
+                character_guid,
+                npc_guid,
+                request_id,
+}             => __sats::bsatn::to_vec(&gw_taxi_node_status_reducer::GwTaxiNodeStatusArgs {
+                character_guid: character_guid.clone(),
+                npc_guid: npc_guid.clone(),
+                request_id: request_id.clone(),
+}),
+            Reducer::GwTrainerBuy{
                 actor_guid,
                 trainer_guid,
                 spell_id,
-            } => __sats::bsatn::to_vec(&gw_trainer_buy_reducer::GwTrainerBuyArgs {
+}             => __sats::bsatn::to_vec(&gw_trainer_buy_reducer::GwTrainerBuyArgs {
                 actor_guid: actor_guid.clone(),
                 trainer_guid: trainer_guid.clone(),
                 spell_id: spell_id.clone(),
-            }),
-            Reducer::GwTurnInQuest {
+}),
+            Reducer::GwTurnInQuest{
                 actor_guid,
                 giver_guid,
                 quest_entry,
                 reward_index,
-            } => __sats::bsatn::to_vec(&gw_turn_in_quest_reducer::GwTurnInQuestArgs {
+}             => __sats::bsatn::to_vec(&gw_turn_in_quest_reducer::GwTurnInQuestArgs {
                 actor_guid: actor_guid.clone(),
                 giver_guid: giver_guid.clone(),
                 quest_entry: quest_entry.clone(),
                 reward_index: reward_index.clone(),
-            }),
-            Reducer::GwUnacceptTrade { actor_guid } => {
-                __sats::bsatn::to_vec(&gw_unaccept_trade_reducer::GwUnacceptTradeArgs {
-                    actor_guid: actor_guid.clone(),
-                })
-            }
-            Reducer::GwUnequipItem {
+}),
+            Reducer::GwUnacceptTrade{
+                actor_guid,
+}             => __sats::bsatn::to_vec(&gw_unaccept_trade_reducer::GwUnacceptTradeArgs {
+                actor_guid: actor_guid.clone(),
+}),
+            Reducer::GwUnequipItem{
                 actor_guid,
                 from_slot,
-            } => __sats::bsatn::to_vec(&gw_unequip_item_reducer::GwUnequipItemArgs {
+}             => __sats::bsatn::to_vec(&gw_unequip_item_reducer::GwUnequipItemArgs {
                 actor_guid: actor_guid.clone(),
                 from_slot: from_slot.clone(),
-            }),
-            Reducer::GwUseGameobject {
+}),
+            Reducer::GwUseGameobject{
                 actor_guid,
                 go_guid,
-            } => __sats::bsatn::to_vec(&gw_use_gameobject_reducer::GwUseGameobjectArgs {
+}             => __sats::bsatn::to_vec(&gw_use_gameobject_reducer::GwUseGameobjectArgs {
                 actor_guid: actor_guid.clone(),
                 go_guid: go_guid.clone(),
-            }),
-            Reducer::GwUseItem { actor_guid, slot } => {
-                __sats::bsatn::to_vec(&gw_use_item_reducer::GwUseItemArgs {
-                    actor_guid: actor_guid.clone(),
-                    slot: slot.clone(),
-                })
-            }
-            Reducer::ImportCharacter { transfer_id } => {
-                __sats::bsatn::to_vec(&import_character_reducer::ImportCharacterArgs {
-                    transfer_id: transfer_id.clone(),
-                })
-            }
-            Reducer::ImportCharacterBlob { transfer_id, blob } => {
-                __sats::bsatn::to_vec(&import_character_blob_reducer::ImportCharacterBlobArgs {
-                    transfer_id: transfer_id.clone(),
-                    blob: blob.clone(),
-                })
-            }
-            Reducer::ImportCreatureSpawns { packed } => {
-                __sats::bsatn::to_vec(&import_creature_spawns_reducer::ImportCreatureSpawnsArgs {
-                    packed: packed.clone(),
-                })
-            }
-            Reducer::ImportCreatureSpawnsAppend { packed } => __sats::bsatn::to_vec(
-                &import_creature_spawns_append_reducer::ImportCreatureSpawnsAppendArgs {
-                    packed: packed.clone(),
-                },
-            ),
-            Reducer::ImportGameobjects { packed } => {
-                __sats::bsatn::to_vec(&import_gameobjects_reducer::ImportGameobjectsArgs {
-                    packed: packed.clone(),
-                })
-            }
-            Reducer::ImportGameobjectsAppend { packed } => __sats::bsatn::to_vec(
-                &import_gameobjects_append_reducer::ImportGameobjectsAppendArgs {
-                    packed: packed.clone(),
-                },
-            ),
-            Reducer::ImportMapRegions { packed } => {
-                __sats::bsatn::to_vec(&import_map_regions_reducer::ImportMapRegionsArgs {
-                    packed: packed.clone(),
-                })
-            }
-            Reducer::ImportNavChunks { packed } => {
-                __sats::bsatn::to_vec(&import_nav_chunks_reducer::ImportNavChunksArgs {
-                    packed: packed.clone(),
-                })
-            }
-            Reducer::ImportNavChunksAppend { packed } => __sats::bsatn::to_vec(
-                &import_nav_chunks_append_reducer::ImportNavChunksAppendArgs {
-                    packed: packed.clone(),
-                },
-            ),
-            Reducer::ImportTerrainChunks { packed } => {
-                __sats::bsatn::to_vec(&import_terrain_chunks_reducer::ImportTerrainChunksArgs {
-                    packed: packed.clone(),
-                })
-            }
-            Reducer::ImportTerrainChunksAppend { packed } => __sats::bsatn::to_vec(
-                &import_terrain_chunks_append_reducer::ImportTerrainChunksAppendArgs {
-                    packed: packed.clone(),
-                },
-            ),
-            Reducer::ImportVmapChunks { packed } => {
-                __sats::bsatn::to_vec(&import_vmap_chunks_reducer::ImportVmapChunksArgs {
-                    packed: packed.clone(),
-                })
-            }
-            Reducer::ImportVmapChunksAppend { packed } => __sats::bsatn::to_vec(
-                &import_vmap_chunks_append_reducer::ImportVmapChunksAppendArgs {
-                    packed: packed.clone(),
-                },
-            ),
-            Reducer::InstallGuidRange { base } => {
-                __sats::bsatn::to_vec(&install_guid_range_reducer::InstallGuidRangeArgs {
-                    base: base.clone(),
-                })
-            }
-            Reducer::OnDisconnect => {
-                __sats::bsatn::to_vec(&on_disconnect_reducer::OnDisconnectArgs {})
-            }
-            Reducer::ProvisionAccount {
+}),
+            Reducer::GwUseItem{
+                actor_guid,
+                slot,
+}             => __sats::bsatn::to_vec(&gw_use_item_reducer::GwUseItemArgs {
+                actor_guid: actor_guid.clone(),
+                slot: slot.clone(),
+}),
+            Reducer::ImportCharacter{
+                transfer_id,
+}             => __sats::bsatn::to_vec(&import_character_reducer::ImportCharacterArgs {
+                transfer_id: transfer_id.clone(),
+}),
+            Reducer::ImportCharacterBlob{
+                transfer_id,
+                blob,
+}             => __sats::bsatn::to_vec(&import_character_blob_reducer::ImportCharacterBlobArgs {
+                transfer_id: transfer_id.clone(),
+                blob: blob.clone(),
+}),
+            Reducer::ImportCreatureSpawns{
+                packed,
+}             => __sats::bsatn::to_vec(&import_creature_spawns_reducer::ImportCreatureSpawnsArgs {
+                packed: packed.clone(),
+}),
+            Reducer::ImportCreatureSpawnsAppend{
+                packed,
+}             => __sats::bsatn::to_vec(&import_creature_spawns_append_reducer::ImportCreatureSpawnsAppendArgs {
+                packed: packed.clone(),
+}),
+            Reducer::ImportGameobjects{
+                packed,
+}             => __sats::bsatn::to_vec(&import_gameobjects_reducer::ImportGameobjectsArgs {
+                packed: packed.clone(),
+}),
+            Reducer::ImportGameobjectsAppend{
+                packed,
+}             => __sats::bsatn::to_vec(&import_gameobjects_append_reducer::ImportGameobjectsAppendArgs {
+                packed: packed.clone(),
+}),
+            Reducer::ImportMapRegions{
+                packed,
+}             => __sats::bsatn::to_vec(&import_map_regions_reducer::ImportMapRegionsArgs {
+                packed: packed.clone(),
+}),
+            Reducer::ImportNavChunks{
+                packed,
+}             => __sats::bsatn::to_vec(&import_nav_chunks_reducer::ImportNavChunksArgs {
+                packed: packed.clone(),
+}),
+            Reducer::ImportNavChunksAppend{
+                packed,
+}             => __sats::bsatn::to_vec(&import_nav_chunks_append_reducer::ImportNavChunksAppendArgs {
+                packed: packed.clone(),
+}),
+            Reducer::ImportTerrainChunks{
+                packed,
+}             => __sats::bsatn::to_vec(&import_terrain_chunks_reducer::ImportTerrainChunksArgs {
+                packed: packed.clone(),
+}),
+            Reducer::ImportTerrainChunksAppend{
+                packed,
+}             => __sats::bsatn::to_vec(&import_terrain_chunks_append_reducer::ImportTerrainChunksAppendArgs {
+                packed: packed.clone(),
+}),
+            Reducer::ImportVmapChunks{
+                packed,
+}             => __sats::bsatn::to_vec(&import_vmap_chunks_reducer::ImportVmapChunksArgs {
+                packed: packed.clone(),
+}),
+            Reducer::ImportVmapChunksAppend{
+                packed,
+}             => __sats::bsatn::to_vec(&import_vmap_chunks_append_reducer::ImportVmapChunksAppendArgs {
+                packed: packed.clone(),
+}),
+            Reducer::InstallGuidRange{
+                base,
+}             => __sats::bsatn::to_vec(&install_guid_range_reducer::InstallGuidRangeArgs {
+                base: base.clone(),
+}),
+            Reducer::OnDisconnect => __sats::bsatn::to_vec(&on_disconnect_reducer::OnDisconnectArgs {
+                }),
+Reducer::ProvisionAccount{
                 username,
                 salt,
                 verifier,
-            } => __sats::bsatn::to_vec(&provision_account_reducer::ProvisionAccountArgs {
+}             => __sats::bsatn::to_vec(&provision_account_reducer::ProvisionAccountArgs {
                 username: username.clone(),
                 salt: salt.clone(),
                 verifier: verifier.clone(),
-            }),
-            Reducer::PublishMotion { schedule } => {
-                __sats::bsatn::to_vec(&publish_motion_reducer::PublishMotionArgs {
-                    schedule: schedule.clone(),
-                })
-            }
-            Reducer::RangedImpact { shot } => {
-                __sats::bsatn::to_vec(&ranged_impact_reducer::RangedImpactArgs {
-                    shot: shot.clone(),
-                })
-            }
-            Reducer::RealmGroupOp {
+}),
+            Reducer::PublishMotion{
+                schedule,
+}             => __sats::bsatn::to_vec(&publish_motion_reducer::PublishMotionArgs {
+                schedule: schedule.clone(),
+}),
+            Reducer::RangedImpact{
+                shot,
+}             => __sats::bsatn::to_vec(&ranged_impact_reducer::RangedImpactArgs {
+                shot: shot.clone(),
+}),
+            Reducer::RealmGroupOp{
                 op,
                 actor_guid,
                 target_guid,
                 arg_a,
                 arg_b,
-            } => __sats::bsatn::to_vec(&realm_group_op_reducer::RealmGroupOpArgs {
+}             => __sats::bsatn::to_vec(&realm_group_op_reducer::RealmGroupOpArgs {
                 op: op.clone(),
                 actor_guid: actor_guid.clone(),
                 target_guid: target_guid.clone(),
                 arg_a: arg_a.clone(),
                 arg_b: arg_b.clone(),
-            }),
-            Reducer::RealmLootOp {
+}),
+            Reducer::RealmLootOp{
                 op,
                 corpse_guid,
                 slot,
@@ -4637,7 +4774,7 @@ impl __sdk::Reducer for Reducer {
                 vote,
                 deadline_micros,
                 recipients,
-            } => __sats::bsatn::to_vec(&realm_loot_op_reducer::RealmLootOpArgs {
+}             => __sats::bsatn::to_vec(&realm_loot_op_reducer::RealmLootOpArgs {
                 op: op.clone(),
                 corpse_guid: corpse_guid.clone(),
                 slot: slot.clone(),
@@ -4646,8 +4783,8 @@ impl __sdk::Reducer for Reducer {
                 vote: vote.clone(),
                 deadline_micros: deadline_micros.clone(),
                 recipients: recipients.clone(),
-            }),
-            Reducer::RealmMailCommit {
+}),
+            Reducer::RealmMailCommit{
                 escrow_id,
                 sender_guid,
                 recipient_guid,
@@ -4661,7 +4798,7 @@ impl __sdk::Reducer for Reducer {
                 item_soulbound,
                 cod,
                 cod_mail_id,
-            } => __sats::bsatn::to_vec(&realm_mail_commit_reducer::RealmMailCommitArgs {
+}             => __sats::bsatn::to_vec(&realm_mail_commit_reducer::RealmMailCommitArgs {
                 escrow_id: escrow_id.clone(),
                 sender_guid: sender_guid.clone(),
                 recipient_guid: recipient_guid.clone(),
@@ -4675,20 +4812,20 @@ impl __sdk::Reducer for Reducer {
                 item_soulbound: item_soulbound.clone(),
                 cod: cod.clone(),
                 cod_mail_id: cod_mail_id.clone(),
-            }),
-            Reducer::RealmMailConfirmDelivery { escrow_id } => __sats::bsatn::to_vec(
-                &realm_mail_confirm_delivery_reducer::RealmMailConfirmDeliveryArgs {
-                    escrow_id: escrow_id.clone(),
-                },
-            ),
-            Reducer::RealmMailDelete {
+}),
+            Reducer::RealmMailConfirmDelivery{
+                escrow_id,
+}             => __sats::bsatn::to_vec(&realm_mail_confirm_delivery_reducer::RealmMailConfirmDeliveryArgs {
+                escrow_id: escrow_id.clone(),
+}),
+            Reducer::RealmMailDelete{
                 recipient_guid,
                 mail_id,
-            } => __sats::bsatn::to_vec(&realm_mail_delete_reducer::RealmMailDeleteArgs {
+}             => __sats::bsatn::to_vec(&realm_mail_delete_reducer::RealmMailDeleteArgs {
                 recipient_guid: recipient_guid.clone(),
                 mail_id: mail_id.clone(),
-            }),
-            Reducer::RealmMailFence {
+}),
+            Reducer::RealmMailFence{
                 escrow_id,
                 sender_guid,
                 recipient_guid,
@@ -4699,7 +4836,7 @@ impl __sdk::Reducer for Reducer {
                 item_guid,
                 cod,
                 mail_id,
-            } => __sats::bsatn::to_vec(&realm_mail_fence_reducer::RealmMailFenceArgs {
+}             => __sats::bsatn::to_vec(&realm_mail_fence_reducer::RealmMailFenceArgs {
                 escrow_id: escrow_id.clone(),
                 sender_guid: sender_guid.clone(),
                 recipient_guid: recipient_guid.clone(),
@@ -4710,8 +4847,8 @@ impl __sdk::Reducer for Reducer {
                 item_guid: item_guid.clone(),
                 cod: cod.clone(),
                 mail_id: mail_id.clone(),
-            }),
-            Reducer::RealmMailItemPayout {
+}),
+            Reducer::RealmMailItemPayout{
                 escrow_id,
                 payee_guid,
                 mail_id,
@@ -4720,7 +4857,7 @@ impl __sdk::Reducer for Reducer {
                 item_durability,
                 item_enchant_id,
                 item_soulbound,
-            } => __sats::bsatn::to_vec(&realm_mail_item_payout_reducer::RealmMailItemPayoutArgs {
+}             => __sats::bsatn::to_vec(&realm_mail_item_payout_reducer::RealmMailItemPayoutArgs {
                 escrow_id: escrow_id.clone(),
                 payee_guid: payee_guid.clone(),
                 mail_id: mail_id.clone(),
@@ -4729,38 +4866,38 @@ impl __sdk::Reducer for Reducer {
                 item_durability: item_durability.clone(),
                 item_enchant_id: item_enchant_id.clone(),
                 item_soulbound: item_soulbound.clone(),
-            }),
-            Reducer::RealmMailItemRoom { payee_guid } => {
-                __sats::bsatn::to_vec(&realm_mail_item_room_reducer::RealmMailItemRoomArgs {
-                    payee_guid: payee_guid.clone(),
-                })
-            }
-            Reducer::RealmMailMarkRead {
+}),
+            Reducer::RealmMailItemRoom{
+                payee_guid,
+}             => __sats::bsatn::to_vec(&realm_mail_item_room_reducer::RealmMailItemRoomArgs {
+                payee_guid: payee_guid.clone(),
+}),
+            Reducer::RealmMailMarkRead{
                 recipient_guid,
                 mail_id,
-            } => __sats::bsatn::to_vec(&realm_mail_mark_read_reducer::RealmMailMarkReadArgs {
+}             => __sats::bsatn::to_vec(&realm_mail_mark_read_reducer::RealmMailMarkReadArgs {
                 recipient_guid: recipient_guid.clone(),
                 mail_id: mail_id.clone(),
-            }),
-            Reducer::RealmMailPayout {
+}),
+            Reducer::RealmMailPayout{
                 escrow_id,
                 payee_guid,
                 mail_id,
                 amount,
-            } => __sats::bsatn::to_vec(&realm_mail_payout_reducer::RealmMailPayoutArgs {
+}             => __sats::bsatn::to_vec(&realm_mail_payout_reducer::RealmMailPayoutArgs {
                 escrow_id: escrow_id.clone(),
                 payee_guid: payee_guid.clone(),
                 mail_id: mail_id.clone(),
                 amount: amount.clone(),
-            }),
-            Reducer::RealmMailReturn {
+}),
+            Reducer::RealmMailReturn{
                 recipient_guid,
                 mail_id,
-            } => __sats::bsatn::to_vec(&realm_mail_return_reducer::RealmMailReturnArgs {
+}             => __sats::bsatn::to_vec(&realm_mail_return_reducer::RealmMailReturnArgs {
                 recipient_guid: recipient_guid.clone(),
                 mail_id: mail_id.clone(),
-            }),
-            Reducer::RealmMailSend {
+}),
+            Reducer::RealmMailSend{
                 sender_guid,
                 recipient_guid,
                 subject,
@@ -4768,7 +4905,7 @@ impl __sdk::Reducer for Reducer {
                 money,
                 cod,
                 item_guid,
-            } => __sats::bsatn::to_vec(&realm_mail_send_reducer::RealmMailSendArgs {
+}             => __sats::bsatn::to_vec(&realm_mail_send_reducer::RealmMailSendArgs {
                 sender_guid: sender_guid.clone(),
                 recipient_guid: recipient_guid.clone(),
                 subject: subject.clone(),
@@ -4776,160 +4913,158 @@ impl __sdk::Reducer for Reducer {
                 money: money.clone(),
                 cod: cod.clone(),
                 item_guid: item_guid.clone(),
-            }),
-            Reducer::RealmMailSettle { escrow_id } => {
-                __sats::bsatn::to_vec(&realm_mail_settle_reducer::RealmMailSettleArgs {
-                    escrow_id: escrow_id.clone(),
-                })
-            }
-            Reducer::RealmMailTakeItem {
+}),
+            Reducer::RealmMailSettle{
+                escrow_id,
+}             => __sats::bsatn::to_vec(&realm_mail_settle_reducer::RealmMailSettleArgs {
+                escrow_id: escrow_id.clone(),
+}),
+            Reducer::RealmMailTakeItem{
                 recipient_guid,
                 mail_id,
-            } => __sats::bsatn::to_vec(&realm_mail_take_item_reducer::RealmMailTakeItemArgs {
+}             => __sats::bsatn::to_vec(&realm_mail_take_item_reducer::RealmMailTakeItemArgs {
                 recipient_guid: recipient_guid.clone(),
                 mail_id: mail_id.clone(),
-            }),
-            Reducer::RealmMailTakeItemFence {
+}),
+            Reducer::RealmMailTakeItemFence{
                 escrow_id,
                 payee_guid,
                 mail_id,
                 expect_entry,
-            } => __sats::bsatn::to_vec(
-                &realm_mail_take_item_fence_reducer::RealmMailTakeItemFenceArgs {
-                    escrow_id: escrow_id.clone(),
-                    payee_guid: payee_guid.clone(),
-                    mail_id: mail_id.clone(),
-                    expect_entry: expect_entry.clone(),
-                },
-            ),
-            Reducer::RealmMailTakeMoney {
+}             => __sats::bsatn::to_vec(&realm_mail_take_item_fence_reducer::RealmMailTakeItemFenceArgs {
+                escrow_id: escrow_id.clone(),
+                payee_guid: payee_guid.clone(),
+                mail_id: mail_id.clone(),
+                expect_entry: expect_entry.clone(),
+}),
+            Reducer::RealmMailTakeMoney{
                 recipient_guid,
                 mail_id,
-            } => __sats::bsatn::to_vec(&realm_mail_take_money_reducer::RealmMailTakeMoneyArgs {
+}             => __sats::bsatn::to_vec(&realm_mail_take_money_reducer::RealmMailTakeMoneyArgs {
                 recipient_guid: recipient_guid.clone(),
                 mail_id: mail_id.clone(),
-            }),
-            Reducer::RealmMailTakeMoneyFence {
+}),
+            Reducer::RealmMailTakeMoneyFence{
                 escrow_id,
                 payee_guid,
                 mail_id,
                 expect_money,
-            } => __sats::bsatn::to_vec(
-                &realm_mail_take_money_fence_reducer::RealmMailTakeMoneyFenceArgs {
-                    escrow_id: escrow_id.clone(),
-                    payee_guid: payee_guid.clone(),
-                    mail_id: mail_id.clone(),
-                    expect_money: expect_money.clone(),
-                },
-            ),
-            Reducer::RealmWhisper {
+}             => __sats::bsatn::to_vec(&realm_mail_take_money_fence_reducer::RealmMailTakeMoneyFenceArgs {
+                escrow_id: escrow_id.clone(),
+                payee_guid: payee_guid.clone(),
+                mail_id: mail_id.clone(),
+                expect_money: expect_money.clone(),
+}),
+            Reducer::RealmWhisper{
                 sender_guid,
                 target_guid,
                 message,
                 sender_is_ignored,
-            } => __sats::bsatn::to_vec(&realm_whisper_reducer::RealmWhisperArgs {
+}             => __sats::bsatn::to_vec(&realm_whisper_reducer::RealmWhisperArgs {
                 sender_guid: sender_guid.clone(),
                 target_guid: target_guid.clone(),
                 message: message.clone(),
                 sender_is_ignored: sender_is_ignored.clone(),
-            }),
-            Reducer::ReapGatewayLeases { schedule } => {
-                __sats::bsatn::to_vec(&reap_gateway_leases_reducer::ReapGatewayLeasesArgs {
-                    schedule: schedule.clone(),
-                })
-            }
-            Reducer::ReapInstances { schedule } => {
-                __sats::bsatn::to_vec(&reap_instances_reducer::ReapInstancesArgs {
-                    schedule: schedule.clone(),
-                })
-            }
-            Reducer::ReapMailEscrows { schedule } => {
-                __sats::bsatn::to_vec(&reap_mail_escrows_reducer::ReapMailEscrowsArgs {
-                    schedule: schedule.clone(),
-                })
-            }
-            Reducer::ReapMovementEvents { schedule } => {
-                __sats::bsatn::to_vec(&reap_movement_events_reducer::ReapMovementEventsArgs {
-                    schedule: schedule.clone(),
-                })
-            }
-            Reducer::ReapTransfers { schedule } => {
-                __sats::bsatn::to_vec(&reap_transfers_reducer::ReapTransfersArgs {
-                    schedule: schedule.clone(),
-                })
-            }
-            Reducer::RecordRegionLoad {
+}),
+            Reducer::ReapGatewayLeases{
+                schedule,
+}             => __sats::bsatn::to_vec(&reap_gateway_leases_reducer::ReapGatewayLeasesArgs {
+                schedule: schedule.clone(),
+}),
+            Reducer::ReapInstances{
+                schedule,
+}             => __sats::bsatn::to_vec(&reap_instances_reducer::ReapInstancesArgs {
+                schedule: schedule.clone(),
+}),
+            Reducer::ReapMailEscrows{
+                schedule,
+}             => __sats::bsatn::to_vec(&reap_mail_escrows_reducer::ReapMailEscrowsArgs {
+                schedule: schedule.clone(),
+}),
+            Reducer::ReapMovementEvents{
+                schedule,
+}             => __sats::bsatn::to_vec(&reap_movement_events_reducer::ReapMovementEventsArgs {
+                schedule: schedule.clone(),
+}),
+            Reducer::ReapTransfers{
+                schedule,
+}             => __sats::bsatn::to_vec(&reap_transfers_reducer::ReapTransfersArgs {
+                schedule: schedule.clone(),
+}),
+            Reducer::RecordRegionLoad{
                 map_id,
                 region_id,
                 players,
-            } => __sats::bsatn::to_vec(&record_region_load_reducer::RecordRegionLoadArgs {
+}             => __sats::bsatn::to_vec(&record_region_load_reducer::RecordRegionLoadArgs {
                 map_id: map_id.clone(),
                 region_id: region_id.clone(),
                 players: players.clone(),
-            }),
-            Reducer::RecordShardLoad {
+}),
+            Reducer::RecordShardLoad{
                 shard,
                 writer_occupancy_pct,
                 sessions,
                 gateway_key,
-            } => __sats::bsatn::to_vec(&record_shard_load_reducer::RecordShardLoadArgs {
+}             => __sats::bsatn::to_vec(&record_shard_load_reducer::RecordShardLoadArgs {
                 shard: shard.clone(),
                 writer_occupancy_pct: writer_occupancy_pct.clone(),
                 sessions: sessions.clone(),
                 gateway_key: gateway_key.clone(),
-            }),
-            Reducer::ReleaseTransfer { transfer_id } => {
-                __sats::bsatn::to_vec(&release_transfer_reducer::ReleaseTransferArgs {
-                    transfer_id: transfer_id.clone(),
-                })
-            }
-            Reducer::SetCharacterShard {
+}),
+            Reducer::ReleaseTransfer{
+                transfer_id,
+}             => __sats::bsatn::to_vec(&release_transfer_reducer::ReleaseTransferArgs {
+                transfer_id: transfer_id.clone(),
+}),
+            Reducer::RestoreTaxiFixture => __sats::bsatn::to_vec(&restore_taxi_fixture_reducer::RestoreTaxiFixtureArgs {
+                }),
+Reducer::SetCharacterShard{
                 character_guid,
                 map_id,
                 instance_id,
-            } => __sats::bsatn::to_vec(&set_character_shard_reducer::SetCharacterShardArgs {
+}             => __sats::bsatn::to_vec(&set_character_shard_reducer::SetCharacterShardArgs {
                 character_guid: character_guid.clone(),
                 map_id: map_id.clone(),
                 instance_id: instance_id.clone(),
-            }),
-            Reducer::SetGmLevel {
+}),
+            Reducer::SetGmLevel{
                 character_name,
                 level,
-            } => __sats::bsatn::to_vec(&set_gm_level_reducer::SetGmLevelArgs {
+}             => __sats::bsatn::to_vec(&set_gm_level_reducer::SetGmLevelArgs {
                 character_name: character_name.clone(),
                 level: level.clone(),
-            }),
-            Reducer::SetMotionTickMs { tick_ms } => {
-                __sats::bsatn::to_vec(&set_motion_tick_ms_reducer::SetMotionTickMsArgs {
-                    tick_ms: tick_ms.clone(),
-                })
-            }
-            Reducer::SetRealmAddress { address } => {
-                __sats::bsatn::to_vec(&set_realm_address_reducer::SetRealmAddressArgs {
-                    address: address.clone(),
-                })
-            }
-            Reducer::SetRegionAssignment {
+}),
+            Reducer::SetMotionTickMs{
+                tick_ms,
+}             => __sats::bsatn::to_vec(&set_motion_tick_ms_reducer::SetMotionTickMsArgs {
+                tick_ms: tick_ms.clone(),
+}),
+            Reducer::SetRealmAddress{
+                address,
+}             => __sats::bsatn::to_vec(&set_realm_address_reducer::SetRealmAddressArgs {
+                address: address.clone(),
+}),
+            Reducer::SetRegionAssignment{
                 map_id,
                 region_id,
                 shard,
                 epoch,
-            } => __sats::bsatn::to_vec(&set_region_assignment_reducer::SetRegionAssignmentArgs {
+}             => __sats::bsatn::to_vec(&set_region_assignment_reducer::SetRegionAssignmentArgs {
                 map_id: map_id.clone(),
                 region_id: region_id.clone(),
                 shard: shard.clone(),
                 epoch: epoch.clone(),
-            }),
-            Reducer::SettleLootRoll {
+}),
+            Reducer::SettleLootRoll{
                 corpse_guid,
                 slot,
                 winner_guid,
-            } => __sats::bsatn::to_vec(&settle_loot_roll_reducer::SettleLootRollArgs {
+}             => __sats::bsatn::to_vec(&settle_loot_roll_reducer::SettleLootRollArgs {
                 corpse_guid: corpse_guid.clone(),
                 slot: slot.clone(),
                 winner_guid: winner_guid.clone(),
-            }),
-            Reducer::StageVmapGeneration {
+}),
+            Reducer::StageVmapGeneration{
                 generation_id,
                 map_id,
                 expected_chunks,
@@ -4937,7 +5072,7 @@ impl __sdk::Reducer for Reducer {
                 manifest_digest_hex,
                 source_identity,
                 selection_identity,
-            } => __sats::bsatn::to_vec(&stage_vmap_generation_reducer::StageVmapGenerationArgs {
+}             => __sats::bsatn::to_vec(&stage_vmap_generation_reducer::StageVmapGenerationArgs {
                 generation_id: generation_id.clone(),
                 map_id: map_id.clone(),
                 expected_chunks: expected_chunks.clone(),
@@ -4945,65 +5080,65 @@ impl __sdk::Reducer for Reducer {
                 manifest_digest_hex: manifest_digest_hex.clone(),
                 source_identity: source_identity.clone(),
                 selection_identity: selection_identity.clone(),
-            }),
-            Reducer::StampImportMeta {
+}),
+            Reducer::StampImportMeta{
                 family,
                 source_sha,
                 file_hash,
                 row_count,
-            } => __sats::bsatn::to_vec(&stamp_import_meta_reducer::StampImportMetaArgs {
+}             => __sats::bsatn::to_vec(&stamp_import_meta_reducer::StampImportMetaArgs {
                 family: family.clone(),
                 source_sha: source_sha.clone(),
                 file_hash: file_hash.clone(),
                 row_count: row_count.clone(),
-            }),
-            Reducer::SyncGroupMirror {
+}),
+            Reducer::SyncGroupMirror{
                 group_id,
                 leader_guid,
                 loot_method_setting,
                 loot_threshold,
                 master_looter_guid,
                 members,
-            } => __sats::bsatn::to_vec(&sync_group_mirror_reducer::SyncGroupMirrorArgs {
+}             => __sats::bsatn::to_vec(&sync_group_mirror_reducer::SyncGroupMirrorArgs {
                 group_id: group_id.clone(),
                 leader_guid: leader_guid.clone(),
                 loot_method_setting: loot_method_setting.clone(),
                 loot_threshold: loot_threshold.clone(),
                 master_looter_guid: master_looter_guid.clone(),
                 members: members.clone(),
-            }),
-            Reducer::TickAuras { schedule } => {
-                __sats::bsatn::to_vec(&tick_auras_reducer::TickAurasArgs {
-                    schedule: schedule.clone(),
-                })
-            }
-            Reducer::TickBreath { schedule } => {
-                __sats::bsatn::to_vec(&tick_breath_reducer::TickBreathArgs {
-                    schedule: schedule.clone(),
-                })
-            }
-            Reducer::TickCreatures { schedule } => {
-                __sats::bsatn::to_vec(&tick_creatures_reducer::TickCreaturesArgs {
-                    schedule: schedule.clone(),
-                })
-            }
-            Reducer::TickGroundAreas { schedule } => {
-                __sats::bsatn::to_vec(&tick_ground_areas_reducer::TickGroundAreasArgs {
-                    schedule: schedule.clone(),
-                })
-            }
-            Reducer::TickMelee { schedule } => {
-                __sats::bsatn::to_vec(&tick_melee_reducer::TickMeleeArgs {
-                    schedule: schedule.clone(),
-                })
-            }
-            Reducer::VerifyVmapGeneration { generation_id } => {
-                __sats::bsatn::to_vec(&verify_vmap_generation_reducer::VerifyVmapGenerationArgs {
-                    generation_id: generation_id.clone(),
-                })
-            }
+}),
+            Reducer::TickAuras{
+                schedule,
+}             => __sats::bsatn::to_vec(&tick_auras_reducer::TickAurasArgs {
+                schedule: schedule.clone(),
+}),
+            Reducer::TickBreath{
+                schedule,
+}             => __sats::bsatn::to_vec(&tick_breath_reducer::TickBreathArgs {
+                schedule: schedule.clone(),
+}),
+            Reducer::TickCreatures{
+                schedule,
+}             => __sats::bsatn::to_vec(&tick_creatures_reducer::TickCreaturesArgs {
+                schedule: schedule.clone(),
+}),
+            Reducer::TickGroundAreas{
+                schedule,
+}             => __sats::bsatn::to_vec(&tick_ground_areas_reducer::TickGroundAreasArgs {
+                schedule: schedule.clone(),
+}),
+            Reducer::TickMelee{
+                schedule,
+}             => __sats::bsatn::to_vec(&tick_melee_reducer::TickMeleeArgs {
+                schedule: schedule.clone(),
+}),
+            Reducer::VerifyVmapGeneration{
+                generation_id,
+}             => __sats::bsatn::to_vec(&verify_vmap_generation_reducer::VerifyVmapGenerationArgs {
+                generation_id: generation_id.clone(),
+}),
             _ => unreachable!(),
-        }
+}
     }
 }
 
@@ -5012,6 +5147,7 @@ impl __sdk::Reducer for Reducer {
 #[doc(hidden)]
 pub struct DbUpdate {
     game_account: __sdk::TableUpdate<Account>,
+    game_active_taxi_flight: __sdk::TableUpdate<ActiveTaxiFlight>,
     game_addon_message: __sdk::TableUpdate<AddonMessage>,
     game_area: __sdk::TableUpdate<GameArea>,
     game_area_trigger: __sdk::TableUpdate<GameAreaTrigger>,
@@ -5033,6 +5169,7 @@ pub struct DbUpdate {
     game_character_quest: __sdk::TableUpdate<CharacterQuest>,
     game_character_shard: __sdk::TableUpdate<CharacterShard>,
     game_character_talent: __sdk::TableUpdate<CharacterTalent>,
+    game_character_taxi_node: __sdk::TableUpdate<CharacterTaxiNode>,
     game_chat_event: __sdk::TableUpdate<ChatEvent>,
     game_class_level_stats: __sdk::TableUpdate<ClassLevelStats>,
     game_combat_event: __sdk::TableUpdate<CombatEvent>,
@@ -5163,6 +5300,12 @@ pub struct DbUpdate {
     game_talent: __sdk::TableUpdate<Talent>,
     game_talent_tab: __sdk::TableUpdate<TalentTab>,
     game_taunt_lock: __sdk::TableUpdate<TauntLock>,
+    game_taxi_flight_schedule: __sdk::TableUpdate<TaxiFlightSchedule>,
+    game_taxi_node: __sdk::TableUpdate<GameTaxiNode>,
+    game_taxi_passenger_spline: __sdk::TableUpdate<TaxiPassengerSpline>,
+    game_taxi_path: __sdk::TableUpdate<GameTaxiPath>,
+    game_taxi_path_node: __sdk::TableUpdate<GameTaxiPathNode>,
+    game_taxi_service_reply: __sdk::TableUpdate<TaxiServiceReply>,
     game_teleport_event: __sdk::TableUpdate<TeleportEvent>,
     game_terrain_chunk: __sdk::TableUpdate<TerrainChunk>,
     game_threat: __sdk::TableUpdate<ThreatEntry>,
@@ -5192,6 +5335,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_account" => db_update
                     .game_account
                     .append(game_account_table::parse_table_update(table_update)?),
+                "game_active_taxi_flight" => db_update.game_active_taxi_flight.append(
+                    game_active_taxi_flight_table::parse_table_update(table_update)?,
+                ),
                 "game_addon_message" => db_update
                     .game_addon_message
                     .append(game_addon_message_table::parse_table_update(table_update)?),
@@ -5254,6 +5400,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 ),
                 "game_character_talent" => db_update.game_character_talent.append(
                     game_character_talent_table::parse_table_update(table_update)?,
+                ),
+                "game_character_taxi_node" => db_update.game_character_taxi_node.append(
+                    game_character_taxi_node_table::parse_table_update(table_update)?,
                 ),
                 "game_chat_event" => db_update
                     .game_chat_event
@@ -5649,6 +5798,24 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_taunt_lock" => db_update
                     .game_taunt_lock
                     .append(game_taunt_lock_table::parse_table_update(table_update)?),
+                "game_taxi_flight_schedule" => db_update.game_taxi_flight_schedule.append(
+                    game_taxi_flight_schedule_table::parse_table_update(table_update)?,
+                ),
+                "game_taxi_node" => db_update
+                    .game_taxi_node
+                    .append(game_taxi_node_table::parse_table_update(table_update)?),
+                "game_taxi_passenger_spline" => db_update.game_taxi_passenger_spline.append(
+                    game_taxi_passenger_spline_table::parse_table_update(table_update)?,
+                ),
+                "game_taxi_path" => db_update
+                    .game_taxi_path
+                    .append(game_taxi_path_table::parse_table_update(table_update)?),
+                "game_taxi_path_node" => db_update
+                    .game_taxi_path_node
+                    .append(game_taxi_path_node_table::parse_table_update(table_update)?),
+                "game_taxi_service_reply" => db_update.game_taxi_service_reply.append(
+                    game_taxi_service_reply_table::parse_table_update(table_update)?,
+                ),
                 "game_teleport_event" => db_update
                     .game_teleport_event
                     .append(game_teleport_event_table::parse_table_update(table_update)?),
@@ -5732,6 +5899,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_account = cache
             .apply_diff_to_table::<Account>("game_account", &self.game_account)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_active_taxi_flight = cache
+            .apply_diff_to_table::<ActiveTaxiFlight>(
+                "game_active_taxi_flight",
+                &self.game_active_taxi_flight,
+            )
+            .with_updates_by_pk(|row| &row.character_guid);
         diff.game_addon_message = cache
             .apply_diff_to_table::<AddonMessage>("game_addon_message", &self.game_addon_message)
             .with_updates_by_pk(|row| &row.id);
@@ -5826,6 +5999,12 @@ impl __sdk::DbUpdate for DbUpdate {
             .apply_diff_to_table::<CharacterTalent>(
                 "game_character_talent",
                 &self.game_character_talent,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_character_taxi_node = cache
+            .apply_diff_to_table::<CharacterTaxiNode>(
+                "game_character_taxi_node",
+                &self.game_character_taxi_node,
             )
             .with_updates_by_pk(|row| &row.id);
         diff.game_chat_event = cache
@@ -6365,6 +6544,36 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_taunt_lock = cache
             .apply_diff_to_table::<TauntLock>("game_taunt_lock", &self.game_taunt_lock)
             .with_updates_by_pk(|row| &row.creature_guid);
+        diff.game_taxi_flight_schedule = cache
+            .apply_diff_to_table::<TaxiFlightSchedule>(
+                "game_taxi_flight_schedule",
+                &self.game_taxi_flight_schedule,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.game_taxi_node = cache
+            .apply_diff_to_table::<GameTaxiNode>("game_taxi_node", &self.game_taxi_node)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_taxi_passenger_spline = cache
+            .apply_diff_to_table::<TaxiPassengerSpline>(
+                "game_taxi_passenger_spline",
+                &self.game_taxi_passenger_spline,
+            )
+            .with_updates_by_pk(|row| &row.character_guid);
+        diff.game_taxi_path = cache
+            .apply_diff_to_table::<GameTaxiPath>("game_taxi_path", &self.game_taxi_path)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_taxi_path_node = cache
+            .apply_diff_to_table::<GameTaxiPathNode>(
+                "game_taxi_path_node",
+                &self.game_taxi_path_node,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_taxi_service_reply = cache
+            .apply_diff_to_table::<TaxiServiceReply>(
+                "game_taxi_service_reply",
+                &self.game_taxi_service_reply,
+            )
+            .with_updates_by_pk(|row| &row.request_id);
         diff.game_teleport_event = cache
             .apply_diff_to_table::<TeleportEvent>("game_teleport_event", &self.game_teleport_event)
             .with_updates_by_pk(|row| &row.id);
@@ -6441,6 +6650,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_account" => db_update
                     .game_account
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_active_taxi_flight" => db_update
+                    .game_active_taxi_flight
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_addon_message" => db_update
                     .game_addon_message
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -6503,6 +6715,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_character_talent" => db_update
                     .game_character_talent
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_character_taxi_node" => db_update
+                    .game_character_taxi_node
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_chat_event" => db_update
                     .game_chat_event
@@ -6893,6 +7108,24 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_taunt_lock" => db_update
                     .game_taunt_lock
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_taxi_flight_schedule" => db_update
+                    .game_taxi_flight_schedule
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_taxi_node" => db_update
+                    .game_taxi_node
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_taxi_passenger_spline" => db_update
+                    .game_taxi_passenger_spline
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_taxi_path" => db_update
+                    .game_taxi_path
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_taxi_path_node" => db_update
+                    .game_taxi_path_node
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_taxi_service_reply" => db_update
+                    .game_taxi_service_reply
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_teleport_event" => db_update
                     .game_teleport_event
@@ -6964,6 +7197,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_account" => db_update
                     .game_account
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_active_taxi_flight" => db_update
+                    .game_active_taxi_flight
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_addon_message" => db_update
                     .game_addon_message
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -7026,6 +7262,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_character_talent" => db_update
                     .game_character_talent
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_character_taxi_node" => db_update
+                    .game_character_taxi_node
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_chat_event" => db_update
                     .game_chat_event
@@ -7417,6 +7656,24 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_taunt_lock" => db_update
                     .game_taunt_lock
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_taxi_flight_schedule" => db_update
+                    .game_taxi_flight_schedule
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_taxi_node" => db_update
+                    .game_taxi_node
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_taxi_passenger_spline" => db_update
+                    .game_taxi_passenger_spline
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_taxi_path" => db_update
+                    .game_taxi_path
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_taxi_path_node" => db_update
+                    .game_taxi_path_node
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_taxi_service_reply" => db_update
+                    .game_taxi_service_reply
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_teleport_event" => db_update
                     .game_teleport_event
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -7487,6 +7744,7 @@ impl __sdk::DbUpdate for DbUpdate {
 #[doc(hidden)]
 pub struct AppliedDiff<'r> {
     game_account: __sdk::TableAppliedDiff<'r, Account>,
+    game_active_taxi_flight: __sdk::TableAppliedDiff<'r, ActiveTaxiFlight>,
     game_addon_message: __sdk::TableAppliedDiff<'r, AddonMessage>,
     game_area: __sdk::TableAppliedDiff<'r, GameArea>,
     game_area_trigger: __sdk::TableAppliedDiff<'r, GameAreaTrigger>,
@@ -7508,6 +7766,7 @@ pub struct AppliedDiff<'r> {
     game_character_quest: __sdk::TableAppliedDiff<'r, CharacterQuest>,
     game_character_shard: __sdk::TableAppliedDiff<'r, CharacterShard>,
     game_character_talent: __sdk::TableAppliedDiff<'r, CharacterTalent>,
+    game_character_taxi_node: __sdk::TableAppliedDiff<'r, CharacterTaxiNode>,
     game_chat_event: __sdk::TableAppliedDiff<'r, ChatEvent>,
     game_class_level_stats: __sdk::TableAppliedDiff<'r, ClassLevelStats>,
     game_combat_event: __sdk::TableAppliedDiff<'r, CombatEvent>,
@@ -7638,6 +7897,12 @@ pub struct AppliedDiff<'r> {
     game_talent: __sdk::TableAppliedDiff<'r, Talent>,
     game_talent_tab: __sdk::TableAppliedDiff<'r, TalentTab>,
     game_taunt_lock: __sdk::TableAppliedDiff<'r, TauntLock>,
+    game_taxi_flight_schedule: __sdk::TableAppliedDiff<'r, TaxiFlightSchedule>,
+    game_taxi_node: __sdk::TableAppliedDiff<'r, GameTaxiNode>,
+    game_taxi_passenger_spline: __sdk::TableAppliedDiff<'r, TaxiPassengerSpline>,
+    game_taxi_path: __sdk::TableAppliedDiff<'r, GameTaxiPath>,
+    game_taxi_path_node: __sdk::TableAppliedDiff<'r, GameTaxiPathNode>,
+    game_taxi_service_reply: __sdk::TableAppliedDiff<'r, TaxiServiceReply>,
     game_teleport_event: __sdk::TableAppliedDiff<'r, TeleportEvent>,
     game_terrain_chunk: __sdk::TableAppliedDiff<'r, TerrainChunk>,
     game_threat: __sdk::TableAppliedDiff<'r, ThreatEntry>,
@@ -7670,6 +7935,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks: &mut __sdk::DbCallbacks<RemoteModule>,
     ) {
         callbacks.invoke_table_row_callbacks::<Account>("game_account", &self.game_account, event);
+        callbacks.invoke_table_row_callbacks::<ActiveTaxiFlight>(
+            "game_active_taxi_flight",
+            &self.game_active_taxi_flight,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<AddonMessage>(
             "game_addon_message",
             &self.game_addon_message,
@@ -7765,6 +8035,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<CharacterTalent>(
             "game_character_talent",
             &self.game_character_talent,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CharacterTaxiNode>(
+            "game_character_taxi_node",
+            &self.game_character_taxi_node,
             event,
         );
         callbacks.invoke_table_row_callbacks::<ChatEvent>(
@@ -8379,6 +8654,36 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<TauntLock>(
             "game_taunt_lock",
             &self.game_taunt_lock,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<TaxiFlightSchedule>(
+            "game_taxi_flight_schedule",
+            &self.game_taxi_flight_schedule,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GameTaxiNode>(
+            "game_taxi_node",
+            &self.game_taxi_node,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<TaxiPassengerSpline>(
+            "game_taxi_passenger_spline",
+            &self.game_taxi_passenger_spline,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GameTaxiPath>(
+            "game_taxi_path",
+            &self.game_taxi_path,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GameTaxiPathNode>(
+            "game_taxi_path_node",
+            &self.game_taxi_path_node,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<TaxiServiceReply>(
+            "game_taxi_service_reply",
+            &self.game_taxi_service_reply,
             event,
         );
         callbacks.invoke_table_row_callbacks::<TeleportEvent>(
@@ -9132,6 +9437,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
 
     fn register_tables(client_cache: &mut __sdk::ClientCache<Self>) {
         game_account_table::register_table(client_cache);
+        game_active_taxi_flight_table::register_table(client_cache);
         game_addon_message_table::register_table(client_cache);
         game_area_table::register_table(client_cache);
         game_area_trigger_table::register_table(client_cache);
@@ -9153,6 +9459,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_character_quest_table::register_table(client_cache);
         game_character_shard_table::register_table(client_cache);
         game_character_talent_table::register_table(client_cache);
+        game_character_taxi_node_table::register_table(client_cache);
         game_chat_event_table::register_table(client_cache);
         game_class_level_stats_table::register_table(client_cache);
         game_combat_event_table::register_table(client_cache);
@@ -9283,6 +9590,12 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_talent_table::register_table(client_cache);
         game_talent_tab_table::register_table(client_cache);
         game_taunt_lock_table::register_table(client_cache);
+        game_taxi_flight_schedule_table::register_table(client_cache);
+        game_taxi_node_table::register_table(client_cache);
+        game_taxi_passenger_spline_table::register_table(client_cache);
+        game_taxi_path_table::register_table(client_cache);
+        game_taxi_path_node_table::register_table(client_cache);
+        game_taxi_service_reply_table::register_table(client_cache);
         game_teleport_event_table::register_table(client_cache);
         game_terrain_chunk_table::register_table(client_cache);
         game_threat_table::register_table(client_cache);
@@ -9304,6 +9617,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
     }
     const ALL_TABLE_NAMES: &'static [&'static str] = &[
         "game_account",
+        "game_active_taxi_flight",
         "game_addon_message",
         "game_area",
         "game_area_trigger",
@@ -9325,6 +9639,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_character_quest",
         "game_character_shard",
         "game_character_talent",
+        "game_character_taxi_node",
         "game_chat_event",
         "game_class_level_stats",
         "game_combat_event",
@@ -9455,6 +9770,12 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_talent",
         "game_talent_tab",
         "game_taunt_lock",
+        "game_taxi_flight_schedule",
+        "game_taxi_node",
+        "game_taxi_passenger_spline",
+        "game_taxi_path",
+        "game_taxi_path_node",
+        "game_taxi_service_reply",
         "game_teleport_event",
         "game_terrain_chunk",
         "game_threat",

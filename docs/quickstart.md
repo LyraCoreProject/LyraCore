@@ -348,8 +348,18 @@ LAN one below.
 ## Getting the real world
 
 What you just logged into is a **fixture**: a few demo creatures, one questgiver, a gather node or
-two. It exists so that every layer — spawn, combat, quest, loot, movement — has something to act on
-without anybody needing a world database. It is not a zone.
+two, and a flight master with one short directed test route. It exists so that every layer — spawn,
+combat, quest, loot, movement, and taxi catalogue lookup — has something to act on without anybody
+needing a world database. The synthetic taxi ids fit the vanilla wire mask for headless tests, but
+the unmodified client has no matching map art for invented nodes. Use the locally imported
+`TaxiNodes.dbc` catalogue for visual client flight testing. It is not a zone.
+
+Opening the fixture discovers its source. Once its destination is known, direct activation charges
+the imported fare and selects the source node's race-appropriate Horde or Alliance mount display in
+one authoritative transaction. A duplicate request cannot create a second active flight or charge
+the purse twice. The gateway queues the success reply before it arms authoritative scheduled
+movement. Supported direct routes then advance to an exact durable landing; routes with delays or
+nonzero point flags are refused until those semantics are implemented.
 
 The real thing is the Elwynn/Westfall corridor: roughly 950 creature templates, 640 quests, the
 trainer/vendor/loot tables behind them, a ground-height map and a navigation grid. **That data is not

@@ -20,6 +20,7 @@ mod mail;
 mod melee;
 mod query;
 mod quest;
+mod taxi;
 mod trade;
 mod trainer;
 mod vendor;
@@ -37,6 +38,9 @@ pub(crate) use melee::{
 pub(crate) use query::handle_query;
 pub(crate) use quest::{
     dispatch_quest_action, QuestActionOutcome, QuestActionPlayer, QuestActionStore,
+};
+pub(crate) use taxi::{
+    dispatch_taxi_action, queue_reply_then_arm, TaxiActionOutcome, TaxiActionPlayer, TaxiActionStore,
 };
 pub(crate) use trade::handle_trade;
 pub(crate) use trainer::handle_trainer;

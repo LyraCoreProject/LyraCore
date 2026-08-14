@@ -601,6 +601,8 @@ pub(crate) trait ShardLedger {
 
 /// What **step 1** touches, on the SOURCE database.
 pub(crate) trait BeginSink: ShardLedger {
+    /// A direct taxi flight is module-owned movement and cannot cross a shard boundary.
+    fn has_active_taxi_flight(&self, guid: u64) -> bool;
     /// Is this character mid-transfer under ANY id? The by-character lookup no per-id check can do
     /// (see [`plan_begin`]'s `AlreadyInTransit`).
     fn is_in_transit(&self, guid: u64) -> bool;
@@ -735,6 +737,9 @@ impl ShardLedger for CtxShard<'_> {
 }
 
 impl BeginSink for CtxShard<'_> {
+    fn has_active_taxi_flight(&self, guid: u64) -> bool {
+        crate::taxi::is_in_flight(self.ctx, guid)
+    }
     fn is_in_transit(&self, guid: u64) -> bool {
         is_in_transit(self.ctx, guid)
     }
@@ -869,6 +874,9 @@ pub fn begin_transfer(
     cross_database: bool,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    if crate::taxi::is_in_flight(ctx, character_guid) {
+        return Err("PLAYER_IN_TAXI_FLIGHT".to_string());
+    }
     // Trade teardown BEFORE the escrow write flips the in-transit fence (#123): the partner's
     // `TradeCanceled` still addresses a resolvable character, and the not_transported sweep then
     // has no session left to silently drop. Shard-side concern, so it lives here in the reducer
@@ -900,6 +908,9 @@ pub(crate) fn apply_begin<S: BeginSink>(
     dest: Destination,
     cross_database: bool,
 ) -> Result<(), String> {
+    if sink.has_active_taxi_flight(character_guid) {
+        return Err("PLAYER_IN_TAXI_FLIGHT".to_string());
+    }
     if transfer_id == 0 {
         return Err("transfer_id 0 is reserved (it is the \"no transfer\" sentinel)".to_string());
     }

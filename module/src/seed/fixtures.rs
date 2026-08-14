@@ -2,18 +2,20 @@
 //! engine mechanics headlessly verifiable on a no-import sandbox (no Spell.dbc — the licensing
 //! firewall keeps real client data out of the repo). This is a DIFFERENT fixture family from
 //! `seed.rs`'s own map-0 (Northshire) demo content (see that file's header, layer 2): these are
-//! synthetic engine-mechanic probes with no map presence, kept in their own file so the kit can
-//! grow without dragging `init` itself past readability; `seed.rs`'s map-0 fixtures stay inline
-//! because they compose directly with the production seed's spawn/gameobject calls.
-//! Every fn here is IDEMPOTENT (insert-if-absent / upsert) and is shared by `init` and its
-//! feature-gated `debug_seed_*` re-runner reducer (init does NOT re-run on an auto-migrate
-//! publish, so a dev DB re-seeds via the debug reducer).
+//! mostly synthetic engine-mechanic probes with no map presence, kept in their own file so the kit
+//! can grow without dragging `init` itself past readability. The taxi fixture is the exception: its
+//! source flight master is restored from the same constructor as its reserved catalogue rows.
+//! Every fn here is IDEMPOTENT (insert-if-absent, upsert, or reserved-id replacement) and is shared
+//! by `init` and its feature-gated re-runner reducer (init does NOT re-run on an auto-migrate
+//! publish, so a dev DB re-seeds through a reducer).
 
 use spacetimedb::{ReducerContext, Table};
 
 use crate::{
-    game_creature_template, game_faction, game_item_template, game_spell, game_spell_effect,
-    CreatureTemplate, Faction, ItemTemplate, Spell, SpellEffect,
+    game_creature_spawn, game_creature_template, game_faction, game_item_template, game_spell,
+    game_spell_effect, game_taxi_node, game_taxi_path, game_taxi_path_node, game_world_entity,
+    CreatureSpawn, CreatureTemplate, Faction, GameTaxiNode, GameTaxiPath, GameTaxiPathNode,
+    ItemTemplate, Spell, SpellEffect,
 };
 
 /// Canonical fixture-NPC/item constructors — the single source of truth for the synthetic rows
@@ -101,6 +103,153 @@ pub(crate) fn profession_trainer_template() -> CreatureTemplate {
         trainer_type: 2,   // TRADESKILLS — serves every class; the gate keys on trainer_class, which stays 0
         trainer_class: 0,
     }
+}
+
+/// The reserved taxi fixture: two nodes, one directed route, three ordered points, and one nearby
+/// source flight master. This is the single module-side constructor used by fresh-database seeding
+/// and the operator restore reducer after a map-0 world import replaces the creature roster.
+///
+/// Delete-then-insert corrects mutated canonical rows and is safe because every id is in the shared
+/// reserved namespace. The DBC family's wholesale clear removes obsolete fixture ids if this shape
+/// changes; imported low ids are never touched.
+pub(crate) fn seed_taxi_fixture(ctx: &ReducerContext) {
+    use lyracore_shared::constants::taxi_fixture as taxi;
+
+    let points = ctx.db.game_taxi_path_node();
+    for id in taxi::POINT_IDS {
+        points.id().delete(id);
+    }
+    ctx.db.game_taxi_path().id().delete(taxi::PATH_ID);
+    ctx.db
+        .game_taxi_node()
+        .id()
+        .delete(taxi::SOURCE_NODE_STORAGE_ID);
+    ctx.db
+        .game_taxi_node()
+        .id()
+        .delete(taxi::DESTINATION_NODE_STORAGE_ID);
+
+    ctx.db.game_taxi_node().insert(GameTaxiNode {
+        id: taxi::SOURCE_NODE_STORAGE_ID,
+        client_node_id: taxi::SOURCE_CLIENT_NODE_ID,
+        map_id: taxi::MAP_ID,
+        x: taxi::SOURCE_X,
+        y: taxi::SOURCE_Y,
+        z: taxi::SOURCE_Z,
+        name: taxi::SOURCE_NAME.to_string(),
+        mount_display_horde: taxi::MOUNT_DISPLAY_HORDE,
+        mount_display_alliance: taxi::MOUNT_DISPLAY_ALLIANCE,
+    });
+    ctx.db.game_taxi_node().insert(GameTaxiNode {
+        id: taxi::DESTINATION_NODE_STORAGE_ID,
+        client_node_id: taxi::DESTINATION_CLIENT_NODE_ID,
+        map_id: taxi::MAP_ID,
+        x: taxi::DESTINATION_X,
+        y: taxi::DESTINATION_Y,
+        z: taxi::DESTINATION_Z,
+        name: taxi::DESTINATION_NAME.to_string(),
+        mount_display_horde: taxi::MOUNT_DISPLAY_HORDE,
+        mount_display_alliance: taxi::MOUNT_DISPLAY_ALLIANCE,
+    });
+    ctx.db.game_taxi_path().insert(GameTaxiPath {
+        id: taxi::PATH_ID,
+        source_node_id: taxi::SOURCE_NODE_STORAGE_ID,
+        destination_node_id: taxi::DESTINATION_NODE_STORAGE_ID,
+        fare: taxi::FARE,
+    });
+    for (id, node_index, x, y, z) in [
+        (
+            taxi::POINT_IDS[0],
+            0,
+            taxi::SOURCE_X,
+            taxi::SOURCE_Y,
+            taxi::SOURCE_Z,
+        ),
+        (
+            taxi::POINT_IDS[1],
+            1,
+            taxi::MIDPOINT_X,
+            taxi::MIDPOINT_Y,
+            taxi::MIDPOINT_Z,
+        ),
+        (
+            taxi::POINT_IDS[2],
+            2,
+            taxi::DESTINATION_X,
+            taxi::DESTINATION_Y,
+            taxi::DESTINATION_Z,
+        ),
+    ] {
+        points.insert(GameTaxiPathNode {
+            id,
+            path_id: taxi::PATH_ID,
+            node_index,
+            map_id: taxi::MAP_ID,
+            x,
+            y,
+            z,
+            flags: 0,
+            delay_ms: 0,
+        });
+    }
+
+    let template = CreatureTemplate {
+        entry: taxi::FLIGHT_MASTER_ENTRY,
+        name: "Test Flight Master".to_string(),
+        subname: "Flight Master".to_string(),
+        display_id: 3167,
+        level: 30,
+        health: 1500,
+        faction_template: 35,
+        npc_flags: lyracore_shared::constants::npc_flags::GOSSIP
+            | lyracore_shared::constants::npc_flags::TAXI,
+        unit_flags: 0,
+        creature_type: 7,
+        creature_family: 0,
+        type_flags: 0,
+        rank: 0,
+        scale: 1.0,
+        base_attack_time_ms: 2000,
+        money_min: 0,
+        money_max: 0,
+        max_level: 0,
+        max_level_health: 0,
+        aggro_range: 0,
+        damage_min: 0,
+        damage_max: 0,
+        armor: 0,
+        pickpocket_loot_id: 0,
+        skin_loot_id: 0,
+        trainer_type: 0,
+        trainer_class: 0,
+    };
+    let templates = ctx.db.game_creature_template();
+    templates.entry().delete(taxi::FLIGHT_MASTER_ENTRY);
+    let template = templates.insert(template);
+
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .delete(taxi::FLIGHT_MASTER_GUID);
+    let spawns = ctx.db.game_creature_spawn();
+    spawns.guid().delete(taxi::FLIGHT_MASTER_GUID);
+    let spawn = spawns.insert(CreatureSpawn {
+        guid: taxi::FLIGHT_MASTER_GUID,
+        entry: taxi::FLIGHT_MASTER_ENTRY,
+        map_id: taxi::MAP_ID,
+        x: taxi::SOURCE_X,
+        y: taxi::SOURCE_Y,
+        z: taxi::SOURCE_Z,
+        orientation: 0.0,
+        respawn_at: crate::creatures::timer_never(ctx),
+        despawn_at: crate::creatures::timer_never(ctx),
+        movement_type: crate::creatures::MOVEMENT_IDLE,
+        respawn_secs: 0,
+    });
+    crate::creatures::insert_creature_entity(
+        ctx,
+        crate::build_creature_entity(&spawn, &template, 0, 0),
+    );
 }
 
 /// "Tempered Blade" — hand-authored reference weapon (licensing firewall: never bulk-imported;
