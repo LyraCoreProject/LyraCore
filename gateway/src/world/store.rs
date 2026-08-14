@@ -856,21 +856,6 @@ pub trait WorldStore:
         Ok(Vec::new())
     }
 
-    /// Take the money from a corpse the player has open (`CMSG_LOOT_MONEY`, slice 3): the module
-    /// validates dead+range+has-money, moves the copper to the looter, and clears the lootable flag.
-    fn loot_money(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
-
-    /// Take one item from the open corpse's loot into the backpack (`CMSG_AUTOSTORE_LOOT_ITEM`, slice
-    /// 4): the module moves the corpse-loot item in `loot_slot` into a free inventory slot and deletes
-    /// the loot row. The item then appears in the bag via the inventory live-relay.
-    fn take_loot(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        corpse_guid: u64,
-        loot_slot: u8,
-    ) -> Result<()>;
-
     /// Revive the caller after death (`CMSG_REPOP_REQUEST` / Release Spirit, slice 4): the module
     /// restores full health in place and clears the dead state (the client leaves the death screen
     /// once the restored health replicates).

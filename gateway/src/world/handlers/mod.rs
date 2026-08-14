@@ -40,6 +40,8 @@ pub(crate) use cast::{dispatch_cast, CastOutcome, CastPlayer, CastStore, CastTra
 pub(crate) use char::handle_char;
 pub(crate) use combat::handle_combat;
 pub(crate) use item::{dispatch_item_action, ItemActionOutcome, ItemActionPlayer, ItemActionStore};
+#[cfg(test)]
+pub(crate) use loot::LootWindowRequestStatus;
 pub(crate) use loot::{
     dispatch_loot_window, handle_loot, LootWindowOutcome, LootWindowPlayer, LootWindowStore,
     OpenLootState,

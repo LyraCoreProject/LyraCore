@@ -1,6 +1,7 @@
 use super::handlers::{
     AuctionActionStore, AuctionEntity, AuctionInteraction, CastStore, ItemActionStore,
-    LootWindowStore, MeleeActionStore, QuestActionStore, TaxiActionStore, VendorActionStore,
+    LootWindowRequestStatus, LootWindowStore, MeleeActionStore, QuestActionStore, TaxiActionStore,
+    VendorActionStore,
 };
 use super::*;
 use std::os::unix::net::UnixStream;
@@ -123,6 +124,7 @@ use wow_world_messages::vanilla::{
     CMSG_AUTOBANK_ITEM,
     CMSG_AUTOEQUIP_ITEM,
     CMSG_AUTOSTORE_BANK_ITEM,
+    CMSG_AUTOSTORE_LOOT_ITEM,
     CMSG_BANKER_ACTIVATE,
     CMSG_BUYBACK_ITEM,
     CMSG_BUY_BANK_SLOT,
@@ -294,6 +296,10 @@ struct InMemoryStore {
     corpse_money: u32,
     /// Recorded `loot_money` targets — CMSG_LOOT_MONEY must drive the TRACKED guid.
     money_looted: std::sync::Mutex<Vec<u64>>,
+    /// Recorded target and slot for `CMSG_AUTOSTORE_LOOT_ITEM`.
+    items_looted: std::sync::Mutex<Vec<(u64, u8)>>,
+    /// Gameplay refusal returned by `take_loot` after recording its arguments.
+    loot_item_refusal: Option<String>,
     /// Recorded `skin_corpse` targets (the empty-loot-window skinning fallback).
     skinned: std::sync::Mutex<Vec<u64>>,
     /// Recorded `vendor_buyback` calls: (vendor_guid, slot) — pins the 69→0 slot mapping.
@@ -1932,19 +1938,6 @@ impl WorldStore for InMemoryStore {
             }
         }
     }
-    fn loot_money(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
-        self.money_looted.lock().unwrap().push(target_guid);
-        Ok(())
-    }
-    fn take_loot(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _corpse_guid: u64,
-        _loot_slot: u8,
-    ) -> Result<()> {
-        Ok(())
-    }
     fn repop(&self, _account_id: u64, self_guid: u64) -> Result<()> {
         self.repopped.lock().unwrap().push(self_guid);
         Ok(())
@@ -2934,12 +2927,44 @@ impl LootWindowStore for InMemoryStore {
             .unwrap_or_default())
     }
 
-    fn skin_corpse(&self, _account_id: u64, _actor_guid: u64, target_guid: u64) -> Result<()> {
+    fn skin_corpse(
+        &self,
+        _account_id: u64,
+        _actor_guid: u64,
+        target_guid: u64,
+    ) -> Result<LootWindowRequestStatus> {
         if let Some(error) = &self.trade_error {
-            return Err(anyhow!("gw_skin reducer failed: {error}"));
+            return Ok(LootWindowRequestStatus::Refused(anyhow!(error.clone())));
         }
         self.skinned.lock().unwrap().push(target_guid);
-        Ok(())
+        Ok(LootWindowRequestStatus::Applied)
+    }
+
+    fn loot_money(
+        &self,
+        _account_id: u64,
+        _actor_guid: u64,
+        target_guid: u64,
+    ) -> Result<LootWindowRequestStatus> {
+        self.money_looted.lock().unwrap().push(target_guid);
+        Ok(LootWindowRequestStatus::Applied)
+    }
+
+    fn take_loot(
+        &self,
+        _account_id: u64,
+        _actor_guid: u64,
+        target_guid: u64,
+        loot_slot: u8,
+    ) -> Result<LootWindowRequestStatus> {
+        self.items_looted
+            .lock()
+            .unwrap()
+            .push((target_guid, loot_slot));
+        if let Some(error) = &self.loot_item_refusal {
+            return Ok(LootWindowRequestStatus::Refused(anyhow!(error.clone())));
+        }
+        Ok(LootWindowRequestStatus::Applied)
     }
 }
 
@@ -5872,6 +5897,62 @@ fn loot_opens_the_window_and_loot_money_drives_the_tracked_guid() {
         store.skinned.lock().unwrap().is_empty(),
         "a corpse with money is not skinned"
     );
+}
+
+#[test]
+fn loot_item_dispatch_uses_the_tracked_target_and_removes_only_its_slot() {
+    let mut s = quest_store();
+    s.corpse_money = 1;
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    CMSG_LOOT {
+        guid: Guid::new(75),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let _ = read_raw_frame(&mut client, &mut c_dec);
+    CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 3 }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_LOOT_REMOVED(removed) => assert_eq!(removed.slot, 3),
+        other => panic!("expected SMSG_LOOT_REMOVED, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.items_looted.lock().unwrap().as_slice(), &[(75, 3)]);
+}
+
+#[test]
+fn loot_item_refusal_sends_no_false_removal_and_the_session_survives() {
+    let mut s = quest_store();
+    s.corpse_money = 1;
+    s.loot_item_refusal = Some("inventory full".into());
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    CMSG_LOOT {
+        guid: Guid::new(75),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let _ = read_raw_frame(&mut client, &mut c_dec);
+    CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 3 }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    CMSG_LOOT {
+        guid: Guid::new(76),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+
+    let (opcode, _) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(opcode, OP_LOOT_RESPONSE);
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.items_looted.lock().unwrap().as_slice(), &[(75, 3)]);
 }
 
 #[test]

@@ -857,20 +857,6 @@ impl WorldStore for Coordinator {
         self.gm_command(account_id, self_guid, text)
     }
 
-    fn loot_money(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
-        self.loot_money(account_id, self_guid, target_guid)
-    }
-
-    fn take_loot(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        corpse_guid: u64,
-        loot_slot: u8,
-    ) -> Result<()> {
-        self.take_loot(account_id, self_guid, corpse_guid, loot_slot)
-    }
-
     fn repop(&self, account_id: u64, self_guid: u64) -> Result<()> {
         self.repop(account_id, self_guid)
     }
