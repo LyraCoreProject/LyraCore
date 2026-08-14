@@ -31,10 +31,17 @@ Query the approved node explicitly:
 spacetime list -s <node>
 ```
 
+Diagnosis may use any explicit SpacetimeDB nickname, host, or URL. Update mode requires the approved
+node identifier to be exactly `local`: `./lyracore publish` is hardwired to `-s local` and cannot
+publish to another selector. A host or URL that happens to reach the same process is still a blocker
+because the update would validate one selector and publish through another.
+
 The contributor fixture is not production evidence. In particular, `lyracore-kalimdor` does not
 substitute for a configured production world shard.
 
-Finish when the expected set and discovered inventory agree. A mismatch blocks publish and restart.
+Finish when the expected set and discovered inventory agree. In update mode, also finish only when
+the approved node identifier is exactly `local`. Either mismatch blocks mutation, publish, and
+restart.
 
 ## 3. Compare sanitized live state
 

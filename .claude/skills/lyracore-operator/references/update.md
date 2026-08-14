@@ -22,7 +22,8 @@ reason to clean the checkout. Resolve the intended `origin/main` commit with
 `./lyracore update` enforce its own tracked-edit refusal.
 
 Resolve the approved production source, expected topology, inventory, and sanitized live gateway
-state through the production contract.
+state through the production contract. Require its SpacetimeDB node identifier to be exactly
+`local`; report any other nickname, host, or URL as a blocker before presenting the checkpoint.
 
 Before any `./lyracore update`, emit this checkpoint:
 
@@ -45,8 +46,8 @@ Pause for explicit confirmation of that exact checkpoint. Continue without a new
 current request already confirmed those exact values. A general instruction to update a host is not
 confirmation of topology that the user has not seen.
 
-Completion criterion: tools pass, the three topology views agree, and the exact checkpoint is
-confirmed. Otherwise report a blocker and stop before mutation.
+Completion criterion: tools pass, the approved node is exactly `local`, the three topology views
+agree, and the exact checkpoint is confirmed. Otherwise report a blocker and stop before mutation.
 
 ## 2. Update the checkout
 
