@@ -44,12 +44,13 @@ pub mod transfer;
 pub mod whisper;
 use coalesce::CoalesceState;
 use handlers::{
-    dispatch_cast, dispatch_item_action, dispatch_melee_action, dispatch_quest_action,
-    dispatch_taxi_action, dispatch_vendor_action, handle_bank, handle_char, handle_combat, handle_loot,
-    handle_mail, handle_query, handle_trade, handle_trainer, CastOutcome, CastPlayer, CastTransition,
-    ItemActionOutcome, ItemActionPlayer, MeleeActionOutcome, MeleeActionPlayer,
-    queue_reply_then_arm, QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome, TaxiActionPlayer,
-    VendorActionOutcome, VendorActionPlayer,
+    dispatch_auction_action, dispatch_cast, dispatch_item_action, dispatch_melee_action,
+    dispatch_quest_action, dispatch_taxi_action, dispatch_vendor_action, handle_bank, handle_char,
+    handle_combat, handle_loot, handle_mail, handle_query, handle_trade, handle_trainer,
+    queue_reply_then_arm, AuctionActionOutcome, AuctionActionPlayer, CastOutcome, CastPlayer,
+    CastTransition, ItemActionOutcome, ItemActionPlayer, MeleeActionOutcome, MeleeActionPlayer,
+    QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome, TaxiActionPlayer, VendorActionOutcome,
+    VendorActionPlayer,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
@@ -1225,6 +1226,21 @@ fn dispatch<St: WorldStore + ?Sized>(
     };
     let Some(msg) = handle_loot(tx, store, conn, msg)? else {
         return Ok(());
+    };
+    let msg = match dispatch_auction_action(
+        store,
+        AuctionActionPlayer {
+            self_guid: social::self_guid(conn),
+        },
+        msg,
+    )? {
+        AuctionActionOutcome::Handled { outbound } => {
+            for message in outbound {
+                send(tx, message)?;
+            }
+            return Ok(());
+        }
+        AuctionActionOutcome::PassThrough(msg) => msg,
     };
     let msg = match dispatch_vendor_action(
         store,

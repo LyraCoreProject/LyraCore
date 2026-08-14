@@ -78,6 +78,8 @@ pub mod npc_flags {
     /// `UNIT_NPC_FLAG_BANKER` (0x100, vanilla 1.12 / cmangos-classic) — opens the bank window and
     /// gates every move into or out of a bank slot.
     pub const BANKER: u32 = 0x0000_0100;
+    /// `UNIT_NPC_FLAG_AUCTIONEER` (0x1000, vanilla 1.12) — opens an auction-house window.
+    pub const AUCTIONEER: u32 = 0x0000_1000;
     /// `UNIT_NPC_FLAG_REPAIR` (0x4000, vanilla 1.12 / cmangos-classic) — repairs item durability
     /// (`CMSG_REPAIR_ITEM`). Armorers (Corina Steele 54, Quartermaster Hudson 1249, Hicks 1645, …)
     /// carry 0x4000|0x4 (REPAIR+VENDOR). NOTE: 0x1000 (4096) is AUCTIONEER in this numbering, NOT repair.
@@ -399,6 +401,12 @@ mod tests {
     fn creature_type_mask_is_0x9() {
         // OBJECT | UNIT, no PLAYER bit — the codec branches on the PLAYER bit to pick Unit vs Player.
         assert_eq!(type_mask::CREATURE, 0x9);
+    }
+
+    #[test]
+    fn vanilla_auction_vocabulary_uses_the_build_5875_values() {
+        assert_eq!(npc_flags::AUCTIONEER, 0x1000);
+        assert_eq!(crate::auction::STORMWIND_HOUSE_ID, 1);
     }
 
     /// Work-item 041: pin the shared GameObject QUESTGIVER type id against cmangos — this is the

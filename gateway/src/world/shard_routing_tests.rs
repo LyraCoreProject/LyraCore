@@ -39,6 +39,7 @@ fn sharded_stores_with_home_entity(
         shard: "instances".into(),
         calls: calls.clone(),
         login_entity: Some(warrior_entity()),
+        auction_interaction: Some(stormwind_auction_interaction()),
         worldport_entity: Some(ported),
         ..Default::default()
     });
@@ -63,6 +64,36 @@ fn sharded_stores_with_home_entity(
         ..Default::default()
     });
     (world, calls)
+}
+
+#[test]
+fn auctioneer_lookup_uses_the_sessions_pinned_home_shard() {
+    let (store, calls) = sharded_stores();
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+
+    MSG_AUCTION_HELLO_Client {
+        auctioneer: Guid::new(42),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    assert!(matches!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(),
+        ServerOpcodeMessage::MSG_AUCTION_HELLO(_)
+    ));
+
+    drop(client);
+    server.join().unwrap();
+    let log = calls.lock().unwrap();
+    assert!(
+        log.iter()
+            .any(|(shard, call)| shard == "instances" && call == "auction_entities"),
+        "the named lookup must run on the pinned home shard: {log:?}"
+    );
+    assert!(
+        !log.iter()
+            .any(|(shard, call)| shard == "world" && call == "auction_entities"),
+        "auction lookup escaped to the default shard: {log:?}"
+    );
 }
 
 /// One heartbeat at a fixed position — the movement half of the routed traffic.

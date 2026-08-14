@@ -7,6 +7,7 @@
 //! `wow_world_messages` (which owns the descriptor field indices); the table/reducer logic
 //! lives in the module. See `docs/` for the design these constants implement.
 
+pub mod auction;
 pub mod bank;
 pub mod constants;
 pub mod env;

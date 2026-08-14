@@ -1,6 +1,6 @@
 use super::handlers::{
-    CastStore, ItemActionStore, MeleeActionStore, QuestActionStore, TaxiActionStore,
-    VendorActionStore,
+    AuctionActionStore, AuctionEntity, AuctionInteraction, CastStore, ItemActionStore,
+    MeleeActionStore, QuestActionStore, TaxiActionStore, VendorActionStore,
 };
 use super::*;
 use std::os::unix::net::UnixStream;
@@ -114,6 +114,9 @@ use wow_world_messages::vanilla::{
     WorldResult,
     CMSG_ADD_FRIEND,
     CMSG_ADD_IGNORE,
+    CMSG_AUCTION_LIST_BIDDER_ITEMS,
+    CMSG_AUCTION_LIST_ITEMS,
+    CMSG_AUCTION_LIST_OWNER_ITEMS,
     CMSG_ATTACKSTOP,
     CMSG_ATTACKSWING,
     CMSG_AUTH_SESSION,
@@ -168,6 +171,7 @@ use wow_world_messages::vanilla::{
     CMSG_TRAINER_BUY_SPELL,
     CMSG_TRAINER_LIST,
     CMSG_WHO,
+    MSG_AUCTION_HELLO_Client,
     // Cross-map teleport: the client's world-port-finished ack.
     MSG_MOVE_WORLDPORT_ACK,
 };
@@ -195,6 +199,8 @@ struct InMemoryStore {
     session: Option<WorldSession>,
     characters: Vec<codec::CharacterView>,
     login_entity: Option<codec::EntityView>,
+    /// Named player/auctioneer snapshots returned to the focused auction interaction seam.
+    auction_interaction: Option<AuctionInteraction>,
     moves: std::sync::Mutex<Vec<MoveRecord>>,
     /// Vendor stock the seam's `vendor_stock` read returns (empty by default).
     vendor_stock: Vec<codec::VendorItemView>,
@@ -2675,6 +2681,17 @@ impl MeleeActionStore for InMemoryStore {
     fn stop_attack(&self, _account_id: u64, self_guid: u64) -> Result<()> {
         self.stop_attacks.lock().unwrap().push(self_guid);
         Ok(())
+    }
+}
+
+impl AuctionActionStore for InMemoryStore {
+    fn auction_entities(
+        &self,
+        _player_guid: u64,
+        _auctioneer_guid: u64,
+    ) -> Result<Option<AuctionInteraction>> {
+        self.rec("auction_entities");
+        Ok(self.auction_interaction)
     }
 }
 
@@ -5353,6 +5370,111 @@ fn played_time_replies_with_the_durable_total_plus_the_live_session_span() {
             );
         }
         other => panic!("expected SMSG_PLAYED_TIME, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+}
+
+fn stormwind_auction_interaction() -> AuctionInteraction {
+    AuctionInteraction {
+        player: AuctionEntity {
+            type_mask: lyracore_shared::constants::type_mask::PLAYER,
+            race: 1,
+            ..Default::default()
+        },
+        auctioneer: AuctionEntity {
+            type_mask: lyracore_shared::constants::type_mask::CREATURE,
+            npc_flags: lyracore_shared::constants::npc_flags::AUCTIONEER,
+            x: 5.0,
+            ..Default::default()
+        },
+    }
+}
+
+#[test]
+fn auction_house_round_trip_stays_typed_and_ordered_over_an_encrypted_session() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        auction_interaction: Some(stormwind_auction_interaction()),
+        ..quest_store()
+    });
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    let auctioneer = Guid::new(42);
+
+    MSG_AUCTION_HELLO_Client { auctioneer }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::MSG_AUCTION_HELLO(message) => {
+            assert_eq!(message.auctioneer, auctioneer);
+            assert_eq!(message.auction_house.as_int(), 1);
+        }
+        other => panic!("expected auction hello first, got {other}"),
+    }
+
+    CMSG_AUCTION_LIST_ITEMS {
+        auctioneer,
+        ..Default::default()
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(result) => {
+            assert!(result.auctions.is_empty());
+            assert_eq!(result.total_amount_of_auctions, 0);
+        }
+        other => panic!("expected empty browse view second, got {other}"),
+    }
+
+    CMSG_AUCTION_LIST_OWNER_ITEMS {
+        auctioneer,
+        ..Default::default()
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_AUCTION_OWNER_LIST_RESULT(result) => {
+            assert!(result.auctions.is_empty());
+            assert_eq!(result.total_amount_of_auctions, 0);
+        }
+        other => panic!("expected empty owner view third, got {other}"),
+    }
+
+    CMSG_AUCTION_LIST_BIDDER_ITEMS {
+        auctioneer,
+        ..Default::default()
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_AUCTION_BIDDER_LIST_RESULT(result) => {
+            assert!(result.auctions.is_empty());
+            assert_eq!(result.total_amount_of_auctions, 0);
+        }
+        other => panic!("expected empty bidder view fourth, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn refused_auctioneer_interaction_keeps_the_encrypted_world_session_alive() {
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+
+    MSG_AUCTION_HELLO_Client {
+        auctioneer: Guid::new(999),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    CMSG_WHO::default()
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_WHO(response) => assert!(response.players.is_empty()),
+        other => panic!("auction refusal must be silent and leave WHO next, got {other}"),
     }
 
     drop(client);
