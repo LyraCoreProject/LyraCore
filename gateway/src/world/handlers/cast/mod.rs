@@ -2,9 +2,11 @@
 //! decoding, durable dispatch and the ordered client-visible messages.
 //!
 //! The module root holds the seam types, the route decision tree and the ordinary cast route
-//! (instant, timed, next-swing, ground-area and ground-targeted casts). The ranged auto-repeat and
-//! manual-completion routes are recognised here and passed through to the combat handler until
-//! their own sibling modules exist.
+//! (instant, timed, next-swing, ground-area and ground-targeted casts). Ranged auto-repeat lives in
+//! [`ranged`]. The manual-completion routes are recognised here and passed through to the combat
+//! handler until their own sibling module exists.
+
+mod ranged;
 
 use super::super::*;
 use wow_world_messages::vanilla::CMSG_CAST_SPELL;
@@ -60,6 +62,31 @@ pub(crate) trait CastStore: Send + Sync {
         y: f32,
         z: f32,
     ) -> Result<()>;
+
+    /// Arm the ranged auto-repeat loop on `target_guid` with `spell_id`. The module requires an
+    /// equipped ranged weapon; `Err` is the refusal the player sees as a cast failure.
+    fn start_ranged_attack(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+        spell_id: u32,
+    ) -> Result<()>;
+
+    // The three operations below are shared with the melee, character and vendor paths. They are
+    // declared here rather than on `WorldStore` because a second declaration of the same name would
+    // make every `St: WorldStore` call ambiguous; `WorldStore: CastStore` keeps them reachable.
+
+    /// Tear down the caller's auto-attack engagement (`gw_stop_attack`). Melee and ranged share one
+    /// durable row, so the ranged route asks for this only when a ranged loop was armed.
+    fn stop_attack(&self, account_id: u64, self_guid: u64) -> Result<()>;
+
+    /// Every item a character owns. The ranged route reads the equipped launcher and the projectile
+    /// stacks from it.
+    fn player_items(&self, owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>>;
+
+    /// One item template by entry — the launcher's class/subclass and the projectile's display id.
+    fn item_template(&self, entry: u32) -> Result<Option<codec::ItemTemplateView>>;
 }
 
 impl CastStore for crate::stdb::Coordinator {
@@ -121,6 +148,34 @@ impl CastStore for crate::stdb::Coordinator {
             y,
             z,
         )
+    }
+
+    fn start_ranged_attack(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+        spell_id: u32,
+    ) -> Result<()> {
+        crate::stdb::Coordinator::start_ranged_attack(
+            self,
+            account_id,
+            self_guid,
+            target_guid,
+            spell_id,
+        )
+    }
+
+    fn stop_attack(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        crate::stdb::Coordinator::stop_attack(self, account_id, self_guid)
+    }
+
+    fn player_items(&self, owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
+        crate::stdb::Coordinator::player_items(self, owner_guid)
+    }
+
+    fn item_template(&self, entry: u32) -> Result<Option<codec::ItemTemplateView>> {
+        crate::stdb::Coordinator::item_template(self, entry)
     }
 }
 
@@ -212,10 +267,12 @@ pub(crate) fn dispatch_cast<St: CastStore + ?Sized>(
     match msg {
         ClientOpcodeMessage::CMSG_CAST_SPELL(c) => match route_for(store, c.spell) {
             CastRoute::Ordinary => ordinary_cast(store, player, &c),
-            CastRoute::RangedAutoRepeat | CastRoute::ManualCompletion => Ok(
-                CastOutcome::PassThrough(ClientOpcodeMessage::CMSG_CAST_SPELL(c)),
-            ),
+            CastRoute::RangedAutoRepeat => ranged::activate(store, player, &c),
+            CastRoute::ManualCompletion => Ok(CastOutcome::PassThrough(
+                ClientOpcodeMessage::CMSG_CAST_SPELL(c),
+            )),
         },
+        ClientOpcodeMessage::CMSG_CANCEL_AUTO_REPEAT_SPELL => Ok(ranged::cancel(store, player)),
         other => Ok(CastOutcome::PassThrough(other)),
     }
 }
@@ -298,8 +355,10 @@ fn ordinary_cast<St: CastStore + ?Sized>(
     })
 }
 
+/// The focused in-memory cast adapter and the shared seam-test helpers. Every route module's tests
+/// use this one fake, so `pub(super)` reaches the sibling route modules.
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
@@ -309,35 +368,45 @@ mod tests {
     };
 
     /// One recorded durable cast: account, caster, spell and unit target.
-    type Cast = (u64, u64, u32, u64);
+    pub(crate) type Cast = (u64, u64, u32, u64);
     /// One recorded durable ground cast: a [`Cast`] plus the click point.
-    type GroundCast = (u64, u64, u32, u64, f32, f32, f32);
+    pub(crate) type GroundCast = (u64, u64, u32, u64, f32, f32, f32);
+    /// One recorded ranged activation: account, caster, unit target and spell.
+    pub(crate) type RangedAttack = (u64, u64, u64, u32);
 
-    /// Spell-route metadata and durable results for the cast routes, plus a record of every durable
-    /// call. Nothing else: no vendors, parties, mail, transfer or unrelated world state.
+    /// Spell-route metadata, item state and durable results for the cast routes, plus a record of
+    /// every durable call. Nothing else: no vendors, parties, mail, transfer or unrelated world
+    /// state.
     #[derive(Default)]
-    struct InMemoryCasts {
-        cast_time_ms: Option<u32>,
-        queues_next_swing: bool,
-        ground_area: bool,
-        ranged_auto_repeat: Vec<u32>,
-        enchant: Option<EnchantRoute>,
-        fishing: Vec<u32>,
-        open_lock: Vec<u32>,
-        cast_error: Option<String>,
-        casts: Mutex<Vec<Cast>>,
-        ground_casts: Mutex<Vec<GroundCast>>,
+    pub(crate) struct InMemoryCasts {
+        pub(crate) cast_time_ms: Option<u32>,
+        pub(crate) queues_next_swing: bool,
+        pub(crate) ground_area: bool,
+        pub(crate) ranged_auto_repeat: Vec<u32>,
+        pub(crate) enchant: Option<EnchantRoute>,
+        pub(crate) fishing: Vec<u32>,
+        pub(crate) open_lock: Vec<u32>,
+        pub(crate) cast_error: Option<String>,
+        /// When set, `start_ranged_attack` refuses with this reason.
+        pub(crate) ranged_error: Option<String>,
+        /// The caller's owned items, and the templates their entries resolve to.
+        pub(crate) items: Vec<codec::ItemInstanceView>,
+        pub(crate) templates: Vec<codec::ItemTemplateView>,
+        pub(crate) casts: Mutex<Vec<Cast>>,
+        pub(crate) ground_casts: Mutex<Vec<GroundCast>>,
+        pub(crate) ranged_attacks: Mutex<Vec<RangedAttack>>,
+        pub(crate) stop_attacks: Mutex<Vec<(u64, u64)>>,
     }
 
     impl InMemoryCasts {
-        fn refusing(error: &str) -> Self {
+        pub(crate) fn refusing(error: &str) -> Self {
             Self {
                 cast_error: Some(error.into()),
                 ..Default::default()
             }
         }
 
-        fn instant() -> Self {
+        pub(crate) fn instant() -> Self {
             Self {
                 cast_time_ms: Some(0),
                 ..Default::default()
@@ -410,12 +479,45 @@ mod tests {
                 .push((account_id, self_guid, spell_id, target_guid, x, y, z));
             self.durable_result()
         }
+
+        fn start_ranged_attack(
+            &self,
+            account_id: u64,
+            self_guid: u64,
+            target_guid: u64,
+            spell_id: u32,
+        ) -> Result<()> {
+            if let Some(e) = &self.ranged_error {
+                return Err(anyhow!("{e}"));
+            }
+            self.ranged_attacks
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid, target_guid, spell_id));
+            Ok(())
+        }
+
+        fn stop_attack(&self, account_id: u64, self_guid: u64) -> Result<()> {
+            self.stop_attacks
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid));
+            Ok(())
+        }
+
+        fn player_items(&self, _owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
+            Ok(self.items.clone())
+        }
+
+        fn item_template(&self, entry: u32) -> Result<Option<codec::ItemTemplateView>> {
+            Ok(self.templates.iter().find(|t| t.entry == entry).cloned())
+        }
     }
 
-    const ACCOUNT: u64 = 7;
-    const CASTER: u64 = 42;
+    pub(crate) const ACCOUNT: u64 = 7;
+    pub(crate) const CASTER: u64 = 42;
 
-    fn player() -> CastPlayer {
+    pub(crate) fn player() -> CastPlayer {
         CastPlayer {
             account_id: ACCOUNT,
             self_guid: Some(CASTER),
@@ -423,11 +525,11 @@ mod tests {
         }
     }
 
-    fn cast(spell: u32, targets: SpellCastTargets) -> ClientOpcodeMessage {
+    pub(crate) fn cast(spell: u32, targets: SpellCastTargets) -> ClientOpcodeMessage {
         ClientOpcodeMessage::CMSG_CAST_SPELL(Box::new(CMSG_CAST_SPELL { spell, targets }))
     }
 
-    fn unit_targets(guid: u64) -> SpellCastTargets {
+    pub(crate) fn unit_targets(guid: u64) -> SpellCastTargets {
         SpellCastTargets {
             target_flags: SpellCastTargets_SpellCastTargetFlags::new_unit(
                 SpellCastTargets_SpellCastTargetFlags_Unit {
@@ -437,7 +539,7 @@ mod tests {
         }
     }
 
-    fn dest_targets(x: f32, y: f32, z: f32) -> SpellCastTargets {
+    pub(crate) fn dest_targets(x: f32, y: f32, z: f32) -> SpellCastTargets {
         SpellCastTargets {
             target_flags: SpellCastTargets_SpellCastTargetFlags::new_dest_location(
                 SpellCastTargets_SpellCastTargetFlags_DestLocation {
@@ -448,7 +550,7 @@ mod tests {
     }
 
     /// The handled outcome, or a panic naming what came back instead.
-    fn handled(outcome: CastOutcome) -> (CastTransition, Vec<Outbound>) {
+    pub(crate) fn handled(outcome: CastOutcome) -> (CastTransition, Vec<Outbound>) {
         match outcome {
             CastOutcome::Handled {
                 transition,
@@ -460,7 +562,7 @@ mod tests {
 
     /// One label per outbound unit, in order — the synchronous sequence is the contract, and it
     /// spans both raw and typed sends.
-    fn sequence(outbound: &[Outbound]) -> Vec<String> {
+    pub(crate) fn sequence(outbound: &[Outbound]) -> Vec<String> {
         outbound
             .iter()
             .map(|out| match out {
@@ -480,7 +582,7 @@ mod tests {
     }
 
     /// The single `SMSG_SPELL_GO` in the batch.
-    fn spell_go(outbound: &[Outbound]) -> &wow_world_messages::vanilla::SMSG_SPELL_GO {
+    pub(crate) fn spell_go(outbound: &[Outbound]) -> &wow_world_messages::vanilla::SMSG_SPELL_GO {
         outbound
             .iter()
             .find_map(|out| match out {
@@ -707,15 +809,14 @@ mod tests {
     // ── Routes other modules own ─────────────────────────────────────────────
 
     #[test]
-    fn ranged_auto_repeat_enchant_fishing_and_lock_opening_pass_through_untouched() {
+    fn enchant_fishing_and_lock_opening_pass_through_untouched() {
         let store = InMemoryCasts {
-            ranged_auto_repeat: vec![75],
             fishing: vec![7620],
             open_lock: vec![1804],
             ..InMemoryCasts::instant()
         };
 
-        for spell in [75, 7620, 1804] {
+        for spell in [7620, 1804] {
             assert!(
                 matches!(
                     dispatch_cast(&store, player(), cast(spell, unit_targets(77))).unwrap(),

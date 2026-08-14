@@ -430,10 +430,6 @@ impl WorldStore for Coordinator {
         self.creature_template(entry)
     }
 
-    fn item_template(&self, entry: u32) -> Result<Option<codec::ItemTemplateView>> {
-        self.item_template(entry)
-    }
-
     fn gameobject_template(&self, entry: u32) -> Result<Option<codec::GameObjectTemplateView>> {
         self.gameobject_template(entry)
     }
@@ -458,10 +454,6 @@ impl WorldStore for Coordinator {
         payload: String,
     ) -> Result<()> {
         self.client_command(account_id, self_guid, cmd, payload)
-    }
-
-    fn player_items(&self, owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
-        self.player_items(owner_guid)
     }
 
     fn player_skills(&self, character_guid: u64) -> Result<Vec<(u32, u16, u16)>> {
@@ -885,20 +877,6 @@ impl WorldStore for Coordinator {
     ) -> Result<()> {
         self.pet_command(account_id, self_guid, data, target_guid)
     }
-    fn start_ranged_attack(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-        spell_id: u32,
-    ) -> Result<()> {
-        self.start_ranged_attack(account_id, self_guid, target_guid, spell_id)
-    }
-
-    fn stop_attack(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        self.stop_attack(account_id, self_guid)
-    }
-
     fn set_sheathed(&self, account_id: u64, self_guid: u64, state: u8) -> Result<()> {
         self.set_sheathed(account_id, self_guid, state)
     }

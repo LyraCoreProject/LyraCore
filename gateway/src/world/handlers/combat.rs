@@ -3,39 +3,6 @@
 
 use super::super::*;
 
-/// The `(display_id, inv_type)` ammo block for the auto-shot activation `SMSG_SPELL_START`:
-/// `Some` only when the ranged slot (17) holds a LAUNCHER (weapon subclass 2/3/18 — bow/gun/crossbow)
-/// and a class-6 Projectile stack is in the bags; a wand fires its own bolt (no ammo block), mirroring
-/// the swing tick's per-shot rule + the GO relay. Deliberate simplification: inv-type 24
-/// (INVTYPE_AMMO) is hardcoded like the GO relay; no-ammo launchers get None (the first shot tick
-/// then tears the loop down → cancel).
-fn ranged_ammo_display<St: WorldStore + ?Sized>(store: &St, self_guid: u64) -> Option<(u32, u32)> {
-    let items = store.player_items(self_guid).ok()?;
-    let launcher = items
-        .iter()
-        .find(|i| i.slot == 17)
-        .and_then(|i| store.item_template(i.entry).ok().flatten())?;
-    if launcher.class != 2 || !matches!(launcher.subclass, 2 | 3 | 18) {
-        return None;
-    }
-    // min_by_key(slot) + stack_count > 0 mirrors the module's per-shot `find_ammo` pick, so the
-    // nocked projectile on the START matches the one each SPELL_GO fires (review find — the client
-    // cache iterates unsorted, and a dead stack must not be nocked).
-    items
-        .iter()
-        .filter(|i| i.stack_count > 0)
-        .filter(|i| {
-            store
-                .item_template(i.entry)
-                .ok()
-                .flatten()
-                .is_some_and(|t| t.class == 6)
-        })
-        .min_by_key(|i| i.slot)
-        .and_then(|i| store.item_template(i.entry).ok().flatten())
-        .map(|t| (t.display_id, 24))
-}
-
 /// Combat family (N3/C1 + aura tracer): selection, melee swing/stop, spell cast. ⚠️ Holds the two
 /// session-fatal `is_desync_error` early-exits on CMSG_ATTACKSWING/CMSG_ATTACKSTOP — preserved
 /// verbatim (a desync = the player's own entity is gone → tear the session down for a clean relog,
@@ -193,94 +160,11 @@ pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
                 );
             }
         }
-        // The cast routes the cast seam has not taken over yet: ranged auto-repeat, enchant,
-        // disenchant, fishing and lock opening. The seam classifies every CMSG_CAST_SPELL first and
-        // passes these through, so an ordinary cast never arrives here.
+        // The cast routes the cast seam has not taken over yet: enchant, disenchant, fishing and
+        // lock opening. The seam classifies every CMSG_CAST_SPELL first and passes these through,
+        // so an ordinary cast and a ranged auto-repeat never arrive here.
         ClientOpcodeMessage::CMSG_CAST_SPELL(c) => {
-            // Ranged auto-attack: Auto Shot + wand Shoot are AUTO-REPEAT ranged attacks (the
-            // RANGED_AUTO_REPEAT cast_flags bit — set by the importer from the DBC AttributesEx2 AUTOREPEAT
-            // bit, NOT a hardcoded id list), not one-shot casts. Intercept them BEFORE the
-            // normal cast path: clear the client cast state (SPELL_START→SPELL_GO, else the action button
-            // locks with "Another action is in progress"), then arm the server-side ranged swing loop on
-            // the cast's unit target. The loop fires on the ranged-weapon timer until
-            // CMSG_CANCEL_AUTO_REPEAT_SPELL / CMSG_ATTACKSTOP.
-            if store.spell_is_ranged_auto_repeat(c.spell) {
-                // The shot's target rides the cast's SpellCastTargets (UNIT flag). Deliberate
-                // simplification: no current-selection fallback — Auto Shot/Shoot are cast ON a
-                // target, so the client always includes it.
-                let target = c
-                    .targets
-                    .target_flags
-                    .get_unit()
-                    .map(|u| u.unit_target.guid())
-                    .unwrap_or(0);
-                let was_repeat = matches!(&conn.state, WorldState::InWorld(iw) if iw.ranged_repeat);
-                log::info!(
-                    "world[autoshot]: AUTO-REPEAT activate spell={} target={} already_repeating={} (account {})",
-                    c.spell, target, was_repeat, conn.account_id
-                );
-                // Arm the server loop FIRST; a rejected activation answers ONLY the raw
-                // SMSG_CAST_RESULT(reason) — the 5875 client drops its auto-repeat toggle on a failure
-                // result, keeping the client/server toggle in lockstep (vanilla likewise rejects a
-                // failed castability check BEFORE sending SPELL_START). The old shape (START first, then a
-                // bare typed Failure on rejection) left the client toggled ON over a dead server loop:
-                // the NEXT press then sent CMSG_CANCEL_AUTO_REPEAT_SPELL instead of a cast — the
-                // "pressing Auto Shot does nothing until I move" bug.
-                match store.start_ranged_attack(conn.account_id, self_guid, target, c.spell) {
-                    Err(e) => {
-                        log::info!("world[autoshot]: start_ranged_attack REJECTED spell={} target={} (account {}): {e}", c.spell, target, conn.account_id);
-                        let reason = codec::cast_failure_reason_for(&e.to_string());
-                        send(
-                            tx,
-                            Outbound::Raw {
-                                opcode: 0x0130,
-                                body: codec::build_cast_result_failed(c.spell, reason),
-                            },
-                        )?;
-                        // A rejected RE-activation (retarget at an invalid new target) drops the
-                        // client's toggle on the failure result — tear down the still-firing OLD
-                        // loop too, or the server keeps shooting a target the client thinks it
-                        // stopped (review find). Fresh activations (was_repeat false) skip the no-op.
-                        if was_repeat {
-                            if let WorldState::InWorld(iw) = &mut conn.state {
-                                iw.ranged_repeat = false;
-                            }
-                            if let Err(e) = store.stop_attack(conn.account_id, self_guid) {
-                                log::debug!(
-                                    "world: reject-teardown stop_attack ignored (account {}): {e}",
-                                    conn.account_id
-                                );
-                            }
-                        }
-                    }
-                    Ok(()) => {
-                        if let WorldState::InWorld(iw) = &mut conn.state {
-                            iw.ranged_repeat = true;
-                            // Activation ack = SMSG_SPELL_START alone: timer 0 (the 0.5s
-                            // wind-up is an ATTACK-TIMER, not a cast bar — vmangos GetCastTime skips the
-                            // ranged +500ms for auto-repeat; the client animates its own wind-up),
-                            // CAST_FLAG_AMMO + ammo block (nocks the arrow — the between-shots aim pose
-                            // rides the client's local auto-repeat state), and the real unit target.
-                            // No CAST_RESULT(OK) and no GO: the activation cast is parked in the
-                            // client's AUTOREPEAT slot and never resolves; each shot's GO comes from
-                            // the swing-tick combat-event relay (subscriptions.rs).
-                            let ammo = ranged_ammo_display(store, iw.self_guid);
-                            send(
-                                tx,
-                                Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(Box::new(
-                                    codec::build_spell_start(
-                                        iw.self_guid,
-                                        c.spell,
-                                        0,
-                                        target,
-                                        ammo,
-                                    ),
-                                ))),
-                            )?;
-                        }
-                    }
-                }
-            } else if let Some(route) = store.enchant_route(c.spell) {
+            if let Some(route) = store.enchant_route(c.spell) {
                 // Enchant/disenchant spells target an item instance by GUID (routed here by EFFECT KIND,
                 // not a spell-id list — a new enchant is a data row). Resolve the GUID → bag slot, then
                 // dispatch to the module reducer (disenchant or enchant_item_on_slot, with enchant_id
@@ -435,30 +319,6 @@ pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
                             codec::build_spell_go(caster, c.spell, 0, None),
                         ))),
                     )?;
-                }
-            }
-        }
-        // Stop the ranged auto-repeat loop (the client toggled off / auto-switched to melee).
-        // `stop_attack` ONLY when a ranged loop is actually armed: the client's
-        // melee-press sends CMSG_ATTACKSWING *then* this cancel back-to-back (live-logged), and the
-        // swing handler has already overwritten the shared engagement row to MELEE + cleared
-        // `ranged_repeat` — an unconditional stop here deleted that just-armed melee row (the
-        // "press melee attack twice" bug). Same observable rule the reference cores follow — a no-op when nothing is
-        // armed. NO inline ack either — the SMSG_CANCEL_AUTO_REPEAT the client needs on a real
-        // teardown is sent by the game_melee_attack on_delete relay (the one choke point), and real
-        // cores never ack a client-initiated cancel from the handler (cmangos: echo-loop warning).
-        ClientOpcodeMessage::CMSG_CANCEL_AUTO_REPEAT_SPELL => {
-            let was_repeat = matches!(&conn.state, WorldState::InWorld(iw) if iw.ranged_repeat);
-            log::info!("world[autoshot]: CMSG_CANCEL_AUTO_REPEAT_SPELL ranged_repeat_active={was_repeat} (account {})", conn.account_id);
-            if let WorldState::InWorld(iw) = &mut conn.state {
-                iw.ranged_repeat = false;
-            }
-            if was_repeat {
-                if let Err(e) = store.stop_attack(conn.account_id, self_guid) {
-                    log::debug!(
-                        "world: cancel_auto_repeat stop_attack ignored (account {}): {e}",
-                        conn.account_id
-                    );
                 }
             }
         }
