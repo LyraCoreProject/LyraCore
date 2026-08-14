@@ -32,3 +32,4 @@ __pycache__/
 # artifact instead. `.cargo/mutants.toml` is the configuration and IS checked in.
 /mutants.out/
 /mutants.out.old/
+.scratch/
