@@ -1,4 +1,4 @@
-use super::handlers::ItemActionStore;
+use super::handlers::{CastStore, ItemActionStore};
 use super::*;
 use std::os::unix::net::UnixStream;
 
@@ -1800,12 +1800,6 @@ impl WorldStore for InMemoryStore {
     fn talent_grant_spell(&self, _talent_id: u32) -> u32 {
         self.talent_grant
     }
-    fn spell_is_ground_area(&self, _spell_id: u32) -> bool {
-        false
-    }
-    fn spell_is_fishing(&self, spell_id: u32) -> bool {
-        self.fishing_spells.contains(&spell_id)
-    }
     fn fish(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
         self.fish_casts
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1813,9 +1807,6 @@ impl WorldStore for InMemoryStore {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
         }
-    }
-    fn spell_is_open_lock(&self, spell_id: u32) -> bool {
-        self.open_lock_spells.contains(&spell_id)
     }
     fn pick_lock(&self, _account_id: u64, _self_guid: u64, go_guid: u64) -> Result<()> {
         self.pick_lock_casts.lock().unwrap().push(go_guid);
@@ -2063,38 +2054,6 @@ impl WorldStore for InMemoryStore {
         self.sheathed.lock().unwrap().push((self_guid, state));
         Ok(())
     }
-    fn cast_spell(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        spell_id: u32,
-        target_guid: u64,
-    ) -> Result<()> {
-        if let Some(e) = &self.cast_spell_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.casts.lock().unwrap().push((spell_id, target_guid));
-        Ok(())
-    }
-    fn cast_spell_at(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        spell_id: u32,
-        target_guid: u64,
-        x: f32,
-        y: f32,
-        z: f32,
-    ) -> Result<()> {
-        if let Some(e) = &self.cast_spell_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.ground_casts
-            .lock()
-            .unwrap()
-            .push((spell_id, target_guid, x, y, z));
-        Ok(())
-    }
     fn cancel_aura(&self, _account_id: u64, _self_guid: u64, spell_id: u32) -> Result<()> {
         self.cancelled_auras.lock().unwrap().push(spell_id);
         Ok(())
@@ -2102,16 +2061,6 @@ impl WorldStore for InMemoryStore {
     fn cancel_cast(&self, _account_id: u64, self_guid: u64) -> Result<()> {
         self.cancelled_casts.lock().unwrap().push(self_guid);
         Ok(())
-    }
-    fn spell_cast_time(&self, _spell_id: u32) -> Option<u32> {
-        self.cast_time_ms
-    }
-    fn spell_queues_next_swing(&self, _spell_id: u32) -> bool {
-        self.queues_next_swing
-    }
-    fn spell_is_ranged_auto_repeat(&self, spell_id: u32) -> bool {
-        // Mirrors the real RANGED_AUTO_REPEAT cast_flags bit for the two vanilla auto-repeat abilities.
-        matches!(spell_id, 75 | 5019)
     }
     fn entity_max_health(&self, _guid: u64) -> u32 {
         100
@@ -2138,9 +2087,6 @@ impl WorldStore for InMemoryStore {
     }
     fn superseded_old_rank(&self, _new_spell: u32, _player_guid: u64) -> Option<u32> {
         None
-    }
-    fn enchant_route(&self, _spell_id: u32) -> Option<super::EnchantRoute> {
-        self.enchant_route
     }
     fn send_chat(
         &self,
@@ -2787,6 +2733,63 @@ impl WorldStore for InMemoryStore {
         if contacts.len() == before {
             return Err(anyhow!("not on that list"));
         }
+        Ok(())
+    }
+}
+
+impl CastStore for InMemoryStore {
+    fn spell_is_ranged_auto_repeat(&self, spell_id: u32) -> bool {
+        // Mirrors the real RANGED_AUTO_REPEAT cast_flags bit for the two vanilla auto-repeat abilities.
+        matches!(spell_id, 75 | 5019)
+    }
+    fn enchant_route(&self, _spell_id: u32) -> Option<super::EnchantRoute> {
+        self.enchant_route
+    }
+    fn spell_is_fishing(&self, spell_id: u32) -> bool {
+        self.fishing_spells.contains(&spell_id)
+    }
+    fn spell_is_open_lock(&self, spell_id: u32) -> bool {
+        self.open_lock_spells.contains(&spell_id)
+    }
+    fn spell_is_ground_area(&self, _spell_id: u32) -> bool {
+        false
+    }
+    fn spell_cast_time(&self, _spell_id: u32) -> Option<u32> {
+        self.cast_time_ms
+    }
+    fn spell_queues_next_swing(&self, _spell_id: u32) -> bool {
+        self.queues_next_swing
+    }
+    fn cast_spell(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        spell_id: u32,
+        target_guid: u64,
+    ) -> Result<()> {
+        if let Some(e) = &self.cast_spell_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.casts.lock().unwrap().push((spell_id, target_guid));
+        Ok(())
+    }
+    fn cast_spell_at(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        spell_id: u32,
+        target_guid: u64,
+        x: f32,
+        y: f32,
+        z: f32,
+    ) -> Result<()> {
+        if let Some(e) = &self.cast_spell_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.ground_casts
+            .lock()
+            .unwrap()
+            .push((spell_id, target_guid, x, y, z));
         Ok(())
     }
 }

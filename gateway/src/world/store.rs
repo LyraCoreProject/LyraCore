@@ -4,10 +4,10 @@
 //! trait for the remaining session operations (only two implementors); the section markers below
 //! are load-bearing navigation, not a split.
 
-use super::handlers::ItemActionStore;
+use super::handlers::{CastStore, ItemActionStore};
 use super::*;
 
-pub trait WorldStore: ItemActionStore + Send + Sync {
+pub trait WorldStore: CastStore + ItemActionStore + Send + Sync {
     /// Look up the shared session key K (+ account id) for an (already uppercased) account
     /// name. `None` when no live session exists for that account (reject the handshake).
     fn lookup_session(&self, account_name: &str) -> Result<Option<WorldSession>>;
@@ -477,17 +477,8 @@ pub trait WorldStore: ItemActionStore + Send + Sync {
     /// can push `SMSG_LEARNED_SPELL` for ability talents after a successful `learn_talent`.
     fn talent_grant_spell(&self, talent_id: u32) -> u32;
 
-    /// True iff `spell_id` spawns a ground area (E_PERSISTENT_AREA) — its GO carries no hit list.
-    fn spell_is_ground_area(&self, spell_id: u32) -> bool;
-
-    /// True iff `spell_id` is a Fishing cast (E_FISH) — routed to the `fish` reducer.
-    fn spell_is_fishing(&self, spell_id: u32) -> bool;
-
     /// The instant-resolve Fishing catch.
     fn fish(&self, account_id: u64, self_guid: u64) -> Result<()>;
-
-    /// True iff `spell_id` is an Open-Lock cast (E_OPEN_LOCK) — routed to the `pick_lock` reducer.
-    fn spell_is_open_lock(&self, spell_id: u32) -> bool;
 
     /// Pick the lock on GameObject `go_guid` (`CMSG_CAST_SPELL` for Pick Lock). The module gates it
     /// (range / lock requirement / caster's Lockpicking skill); `Err` = refused (out of range, not
@@ -694,29 +685,6 @@ pub trait WorldStore: ItemActionStore + Send + Sync {
     /// what makes a drawn or stowed weapon visible to OTHER players. [#101]
     fn set_sheathed(&self, account_id: u64, self_guid: u64, state: u8) -> Result<()>;
 
-    /// Cast a spell (`CMSG_CAST_SPELL`, aura tracer). Self-cast; target ignored.
-    fn cast_spell(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        spell_id: u32,
-        target_guid: u64,
-    ) -> Result<()>;
-
-    /// Cast a GROUND-TARGETED spell at a clicked world point (`CMSG_CAST_SPELL` with a DEST_LOCATION
-    /// target block — Flamestrike/Blizzard/Rain of Fire). `(x,y,z)` is the ground click; the module
-    /// anchors the AoE/patch there.
-    fn cast_spell_at(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        spell_id: u32,
-        target_guid: u64,
-        x: f32,
-        y: f32,
-        z: f32,
-    ) -> Result<()>;
-
     /// Cancel one of the caller's own auras by spell id (`CMSG_CANCEL_AURA` — the player right-clicks a
     /// buff icon to remove it). The module deletes the matching aura on the caller; the aura relay then
     /// re-syncs the buff bar.
@@ -727,28 +695,9 @@ pub trait WorldStore: ItemActionStore + Send + Sync {
     /// phantom `SMSG_SPELL_GO` that wedges the client in "Another action is in progress".
     fn cancel_cast(&self, account_id: u64, self_guid: u64) -> Result<()>;
 
-    /// The spell's cast time (ms) from the static game_spell header — 0 = instant, None = unknown.
-    /// The CMSG_CAST_SPELL handler uses it to clear instant casts synchronously.
-    fn spell_cast_time(&self, spell_id: u32) -> Option<u32>;
-
     /// The live entity's max health (0 if not in world) — the fall-damage flavor line folds
     /// the shared curve against it.
     fn entity_max_health(&self, guid: u64) -> u32;
-
-    /// True iff `spell_id` queues on the caster's next melee swing (Heroic Strike/Cleave). The
-    /// CMSG_CAST_SPELL handler then sends NO synchronous START/CAST_RESULT/GO — the swing-fire
-    /// emits them.
-    fn spell_queues_next_swing(&self, spell_id: u32) -> bool;
-
-    /// True iff `spell_id` is an auto-repeat ranged attack (Auto Shot / wand Shoot) — the
-    /// `RANGED_AUTO_REPEAT` cast_flags bit. The CMSG_CAST_SPELL handler routes on this instead of a
-    /// hardcoded `spell == 75 || 5019` id list; a new ranged auto-repeat ability onboards as data.
-    fn spell_is_ranged_auto_repeat(&self, spell_id: u32) -> bool;
-
-    /// Enchant/disenchant routing for `spell_id` from its effect rows — `None` for a normal cast. Lets
-    /// the CMSG_CAST_SPELL handler route ITEM-target enchanting by effect KIND (enchant id in the effect
-    /// data) instead of a hardcoded spell-id list; a new enchant is a data row, no gateway change.
-    fn enchant_route(&self, spell_id: u32) -> Option<EnchantRoute>;
 
     /// Join a chat channel — the client auto-sends CMSG_JOIN_CHANNEL on zone-in.
     fn join_channel(&self, account_id: u64, self_guid: u64, channel: String) -> Result<()>;

@@ -44,9 +44,9 @@ pub mod transfer;
 pub mod whisper;
 use coalesce::CoalesceState;
 use handlers::{
-    dispatch_item_action, handle_bank, handle_char, handle_combat, handle_loot, handle_mail,
-    handle_query, handle_quest, handle_trade, handle_trainer, handle_vendor, ItemActionOutcome,
-    ItemActionPlayer,
+    dispatch_cast, dispatch_item_action, handle_bank, handle_char, handle_combat, handle_loot,
+    handle_mail, handle_query, handle_quest, handle_trade, handle_trainer, handle_vendor,
+    CastOutcome, CastPlayer, CastTransition, ItemActionOutcome, ItemActionPlayer,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
@@ -1148,6 +1148,14 @@ fn is_desync_error(e: &anyhow::Error) -> bool {
     s.contains("not in world") || s.contains("no live entity")
 }
 
+/// Write one cast-lifecycle transition into the session. A transition only exists while the player
+/// is in the world, so a character-select session ignores it.
+fn apply_cast_transition(conn: &mut WorldConn, transition: CastTransition) {
+    if let (Some(armed), WorldState::InWorld(iw)) = (transition.ranged_repeat, &mut conn.state) {
+        iw.ranged_repeat = armed;
+    }
+}
+
 /// Route one decrypted client message through the per-family handlers. Each stage either consumes
 /// its opcode or passes it onward, so the disjoint-family chain ends in the movement-relay catch-all.
 fn dispatch<St: WorldStore + ?Sized>(
@@ -1170,6 +1178,31 @@ fn dispatch<St: WorldStore + ?Sized>(
 
     let Some(msg) = handle_char(tx, store, conn, msg)? else {
         return Ok(());
+    };
+    // The cast seam runs BEFORE the broad combat handler: it owns every cast route it has taken
+    // over and passes the rest through, so the combat handler keeps serving them.
+    let msg = match dispatch_cast(
+        store,
+        CastPlayer {
+            account_id: conn.account_id,
+            self_guid: social::self_guid(conn),
+            ranged_repeat: matches!(&conn.state, WorldState::InWorld(iw) if iw.ranged_repeat),
+        },
+        msg,
+    )? {
+        CastOutcome::Handled {
+            transition,
+            outbound,
+        } => {
+            // The transition lands first: the batch is what the client sees, and session state
+            // must already agree with it when the next request arrives.
+            apply_cast_transition(conn, transition);
+            for message in outbound {
+                send(tx, message)?;
+            }
+            return Ok(());
+        }
+        CastOutcome::PassThrough(msg) => msg,
     };
     let Some(msg) = handle_combat(tx, store, conn, msg)? else {
         return Ok(());

@@ -193,12 +193,9 @@ pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
                 );
             }
         }
-        // Aura+spell tracer: cast a spell. On success the module applies the aura + emits the cast
-        // event (relayed as SMSG_CAST_RESULT(OK)+SMSG_SPELL_GO + the buff-icon VALUES). On
-        // rejection (unknown spell / not in world), reply SMSG_CAST_RESULT::Failure — a SILENT
-        // cast-bar reset (NOT a red error; `Success { reason }` is the red-error variant). Self-cast:
-        // ignore c.targets. Today CMSG_CAST_SPELL falls into `other =>` and is ignored, so this only
-        // enriches safe behavior.
+        // The cast routes the cast seam has not taken over yet: ranged auto-repeat, enchant,
+        // disenchant, fishing and lock opening. The seam classifies every CMSG_CAST_SPELL first and
+        // passes these through, so an ordinary cast never arrives here.
         ClientOpcodeMessage::CMSG_CAST_SPELL(c) => {
             // Ranged auto-attack: Auto Shot + wand Shoot are AUTO-REPEAT ranged attacks (the
             // RANGED_AUTO_REPEAT cast_flags bit — set by the importer from the DBC AttributesEx2 AUTOREPEAT
@@ -437,99 +434,6 @@ pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
                         Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(Box::new(
                             codec::build_spell_go(caster, c.spell, 0, None),
                         ))),
-                    )?;
-                }
-            } else {
-                // Thread the client's selected unit target (mirrors the ranged path above) so target-keyed
-                // effects — combo finishers, enemy spells — see the real target, not the caster. No unit
-                // target (self-buffs) → 0 → the module substitutes the caster.
-                let target = c
-                    .targets
-                    .target_flags
-                    .get_unit()
-                    .map(|u| u.unit_target.guid())
-                    .unwrap_or(0);
-                // ROOT-CAUSE FIX: for an INSTANT cast, send the caster's START+GO SYNCHRONOUSLY here
-                // (as Auto-Shot/Enchant already do), BEFORE dispatching cast_spell. The async relay would
-                // deliver START/GO via the game_spell_cast_event subscription callback, which the SpacetimeDB
-                // SDK fires AFTER game_aura's (fixed alphabetical callback order, bindings/mod.rs) — so the
-                // applied buff reaches the client before START/GO and wedges its cast slot ("Another action in
-                // progress" until Esc). Sending them inline guarantees START -> GO -> effects. Timed casts keep
-                // the relay path (begin_cast sends START(cast_time); the completion sends GO). The relay
-                // suppresses its now-duplicate START/GO to the caster for this instant cast. Unknown spell ->
-                // treat as instant (safe: a stray START/GO is harmless; a missing one wedges).
-                let instant = store
-                    .spell_cast_time(c.spell)
-                    .map(|t| t == 0)
-                    .unwrap_or(true);
-                // An on-next-swing spell (Heroic Strike/Cleave) sends NOTHING here — the client
-                // lights the button locally on the press and holds the pending cast; the module's
-                // swing-fire emits the CAST_RESULT(OK)+GO (is_completion row) that releases it. The
-                // sync START(0)+GO below is exactly what un-lit the button and "resolved" the cast
-                // at queue time (the button-lock bug).
-                let queues_swing = instant && store.spell_queues_next_swing(c.spell);
-                if instant && !queues_swing {
-                    if let WorldState::InWorld(iw) = &conn.state {
-                        let caster = iw.self_guid;
-                        // vmangos sequence: START(0) → CAST_RESULT(OK) → GO.
-                        // SMSG_CAST_RESULT(spell_id, 0x00) is the missing server ACK; the 5875 client
-                        // requires it before GO to transition m_currentSpells to a clearable state.
-                        // Raw 5-byte body (gtker's Success struct would add an erroneous reason byte).
-                        send(
-                            tx,
-                            Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(Box::new(
-                                codec::build_spell_start(caster, c.spell, 0, 0, None),
-                            ))),
-                        )?;
-                        send(
-                            tx,
-                            Outbound::Raw {
-                                opcode: 0x0130,
-                                body: codec::build_cast_result_ok(c.spell),
-                            },
-                        )?;
-                        // A GROUND-AREA spell (Consecration) hits the ground, not a unit — an
-                        // EMPTY hit list (the self-cast fallback put the CASTER in hits[] and the
-                        // client played the impact animation ON the paladin).
-                        let go = if store.spell_is_ground_area(c.spell) {
-                            codec::build_spell_go_area(caster, c.spell)
-                        } else {
-                            codec::build_spell_go(caster, c.spell, target, None)
-                        };
-                        send(
-                            tx,
-                            Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(Box::new(go))),
-                        )?;
-                    }
-                }
-                // A GROUND-TARGETED cast rides a DEST_LOCATION target block (the player
-                // clicked the ground — Flamestrike/Blizzard/Rain of Fire). Route it to cast_spell_at with
-                // the click coords so the module anchors the AoE/patch there; a normal cast (no dest) keeps
-                // the cast_spell path. The START/GO handshake above is unchanged (keyed on `instant`) — a
-                // timed ground cast just relays START now + GO at completion like any other timed spell.
-                let dest = c
-                    .targets
-                    .target_flags
-                    .get_dest_location()
-                    .map(|d| (d.destination.x, d.destination.y, d.destination.z));
-                let cast_result = match dest {
-                    Some((x, y, z)) => {
-                        store.cast_spell_at(conn.account_id, self_guid, c.spell, target, x, y, z)
-                    }
-                    None => store.cast_spell(conn.account_id, self_guid, c.spell, target),
-                };
-                if let Err(e) = cast_result {
-                    // Carry the REASON so the client prints the red error line ("Not enough
-                    // rage", "You must be behind your target") — the bare typed Failure only reset
-                    // the button silently, leaving server-only gates (behind/stealth/stance/react)
-                    // invisible. Raw body: spell + 0x02 + CastFailureReason.
-                    let reason = codec::cast_failure_reason_for(&e.to_string());
-                    send(
-                        tx,
-                        Outbound::Raw {
-                            opcode: 0x0130,
-                            body: codec::build_cast_result_failed(c.spell, reason),
-                        },
                     )?;
                 }
             }
