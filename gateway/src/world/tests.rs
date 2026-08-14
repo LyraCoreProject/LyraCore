@@ -148,12 +148,12 @@ use wow_world_messages::vanilla::{
     CMSG_PLAYED_TIME,
     CMSG_PLAYER_LOGIN,
     CMSG_PUSHQUESTTOPARTY,
-    CMSG_QUESTGIVER_ACCEPT_QUEST,
     CMSG_QUESTGIVER_CHOOSE_REWARD,
     CMSG_QUESTGIVER_COMPLETE_QUEST,
     CMSG_QUESTGIVER_HELLO,
     CMSG_QUESTGIVER_STATUS_QUERY,
     CMSG_QUESTLOG_REMOVE_QUEST,
+    CMSG_QUEST_QUERY,
     // Item guid → slot resolution (vendor sell / armorer repair).
     CMSG_RECLAIM_CORPSE,
     CMSG_REPAIR_ITEM,
@@ -165,8 +165,6 @@ use wow_world_messages::vanilla::{
     CMSG_SPIRIT_HEALER_ACTIVATE,
     CMSG_TRAINER_BUY_SPELL,
     CMSG_TRAINER_LIST,
-    // Item-starts-quest + party sharing.
-    CMSG_USE_ITEM,
     CMSG_WHO,
     // Cross-map teleport: the client's world-port-finished ack.
     MSG_MOVE_WORLDPORT_ACK,
@@ -365,13 +363,7 @@ struct InMemoryStore {
     loot_rolls: std::sync::Mutex<Vec<(u64, u32, u8)>>,
     /// Recorded `loot_master_give` calls: (corpse_guid, loot_slot, target_guid).
     loot_master_gives: std::sync::Mutex<Vec<(u64, u8, u64)>>,
-    /// `item_start_quest` fixture (item-starts-quest) — `Some((item_guid, quest_id))`
-    /// makes CMSG_USE_ITEM open the quest details screen instead of consuming the item; `None`
-    /// (default) is the pre-item-starts-quest behavior (every item goes through the normal
-    /// `use_item` consume path).
-    item_start_quest_fixture: Option<(u64, u32)>,
-    /// Recorded `use_item` slots — the non-consumption test proves this stays EMPTY when
-    /// `item_start_quest_fixture` intercepts the use.
+    /// Recorded `use_item` slots.
     used_items: std::sync::Mutex<Vec<u8>>,
     /// Recorded `push_quest` calls: (account_id, quest_id) — quest sharing.
     pushed_quests: std::sync::Mutex<Vec<(u64, u32)>>,
@@ -2757,6 +2749,21 @@ impl QuestActionStore for InMemoryStore {
     fn giver_refuses_interaction(&self, _giver_guid: u64, _player_guid: u64) -> Result<bool> {
         Ok(self.npc_refuses)
     }
+
+    fn accept_quest(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        giver_guid: u64,
+        quest_id: u32,
+    ) -> Result<()> {
+        WorldStore::accept_quest(self, account_id, self_guid, giver_guid, quest_id)
+    }
+
+    /// No socket test drives an item-started quest — the route is proved at the quest seam.
+    fn item_start_quest(&self, _owner_guid: u64, _slot: u8) -> Option<(u64, u32)> {
+        None
+    }
 }
 
 impl VendorActionStore for InMemoryStore {
@@ -2868,18 +2875,6 @@ impl ItemActionStore for InMemoryStore {
             Some(e) => Err(anyhow!("{e}")),
             None => Ok(()),
         }
-    }
-
-    fn item_start_quest(&self, _owner_guid: u64, _slot: u8) -> Option<(u64, u32)> {
-        self.item_start_quest_fixture
-    }
-
-    fn item_quest_detail(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>> {
-        Ok(self
-            .quest_details
-            .iter()
-            .find(|d| d.quest_id == quest_id)
-            .cloned())
     }
 }
 
@@ -4719,22 +4714,6 @@ fn del_ignore_round_trips_added_then_unknown_is_ignore_not_found() {
 }
 
 #[test]
-fn quest_accept_dispatches_to_reducer_with_giver_and_quest() {
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_QUESTGIVER_ACCEPT_QUEST {
-        guid: Guid::new(50),
-        quest_id: 1234,
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client); // accept sends no SMSG — server reads it, then EOF
-    server.join().unwrap();
-    // The gateway resolved account 7 (from the session) + giver 50 + quest 1234 and called the reducer.
-    assert_eq!(store.accepted.lock().unwrap().as_slice(), &[(7, 50, 1234)]);
-}
-
-#[test]
 fn quest_choose_reward_turns_in_and_replies_complete() {
     let mut s = quest_store();
     s.quest_details = vec![detail_view(1234, "A Threat Within")];
@@ -5249,64 +5228,6 @@ fn item_reducer_transport_loss_ends_the_world_session() {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).is_err(),
         "the socket closes instead of translating transport loss into gameplay feedback"
     );
-}
-
-// ── Item-starts-quest ────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn use_item_with_start_quest_opens_details_and_does_not_consume() {
-    // Socket contract: the raw quest-details frame decodes as a genuine
-    // SMSG_QUESTGIVER_QUEST_DETAILS on an encrypted client and the item is not consumed.
-    let mut s = quest_store();
-    s.item_start_quest_fixture = Some((0x4000_0000_0000_0099, 1234));
-    s.quest_details = vec![detail_view(1234, "Report to Goldshire")];
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_USE_ITEM {
-        bag_index: 255,
-        bag_slot: 5,
-        spell_index: 0,
-        targets: unit_targets(0),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(d) => {
-            assert_eq!(
-                d.guid.guid(),
-                0x4000_0000_0000_0099,
-                "the item's OWN instance guid is the giver"
-            );
-            assert_eq!(d.quest_id, 1234);
-        }
-        other => panic!("expected SMSG_QUESTGIVER_QUEST_DETAILS, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-    // The item was NOT consumed — the ordinary use_item path never ran.
-    assert!(
-        store.used_items.lock().unwrap().is_empty(),
-        "start_quest item must not be consumed"
-    );
-}
-
-#[test]
-fn use_item_without_start_quest_falls_through_to_the_ordinary_use_path() {
-    // Socket contract: an encrypted item frame traverses the real dispatcher chain into the
-    // item-action seam and its durable request reaches the store.
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_USE_ITEM {
-        bag_index: 255,
-        bag_slot: 5,
-        spell_index: 0,
-        targets: unit_targets(0),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    drop(client); // use_item (Ok) sends no SMSG on this path
-    server.join().unwrap();
-    assert_eq!(store.used_items.lock().unwrap().as_slice(), &[5]);
 }
 
 // ── Quest sharing ────────────────────────────────────────────────────────────────────────────────
@@ -6003,6 +5924,28 @@ fn quest_hello_reaches_the_quest_module_and_its_raw_details_body_survives_the_ci
         &body[..12],
         &codec::build_quest_details_raw(50, &detail_view(1234, "A Threat Within")).1[..12],
         "giver guid + quest id reached the wire unchanged"
+    );
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn quest_query_answers_the_raw_definition_body_through_the_cipher() {
+    // The socket-level contract for the client's cold-cache definition query: the hand-rolled 5875
+    // body crosses the encrypted frame intact. Which quests answer at all is proved at the seam.
+    const OP_QUEST_QUERY_RESPONSE: u16 = 0x005D;
+    let mut s = quest_store();
+    s.quest_details = vec![detail_view(1234, "A Threat Within")];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_QUEST_QUERY { quest_id: 1234 }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    let (op, body) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(op, OP_QUEST_QUERY_RESPONSE);
+    assert_eq!(
+        body,
+        codec::build_quest_query_response_raw(&detail_view(1234, "A Threat Within")).1
     );
     drop(client);
     server.join().unwrap();

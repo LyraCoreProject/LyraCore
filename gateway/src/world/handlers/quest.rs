@@ -1,6 +1,7 @@
-//! Quest family: the overhead `!`/`?` status and the quest-giver menu enter through
-//! `dispatch_quest_action`; the gameobject giver calls the shared menu builder here rather than
-//! reaching for the store. `handle_quest` still owns the dialog opcodes that have not moved yet.
+//! Quest family: the overhead `!`/`?` status, the quest-giver menu, the details and definition
+//! screens and accept enter through `dispatch_quest_action`; the gameobject giver and the
+//! item-started quest call the shared builders here rather than reaching for the store.
+//! `handle_quest` still owns the dialog opcodes that have not moved yet.
 
 use super::super::*;
 
@@ -21,6 +22,20 @@ pub(crate) trait QuestActionStore: Send + Sync {
 
     /// Whether standing (Unfriendly or below) makes this giver refuse to talk.
     fn giver_refuses_interaction(&self, giver_guid: u64, player_guid: u64) -> Result<bool>;
+
+    /// Open the quest log row for `quest_id` offered by `giver_guid`. The module gates it, so a
+    /// refusal here is a gameplay answer, not a broken session.
+    fn accept_quest(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        giver_guid: u64,
+        quest_id: u32,
+    ) -> Result<()>;
+
+    /// The quest the item in `slot` starts, as `(item instance guid, quest id)`. `None` when the
+    /// item starts no quest — an item is its own quest giver, hence the instance guid.
+    fn item_start_quest(&self, owner_guid: u64, slot: u8) -> Option<(u64, u32)>;
 }
 
 impl QuestActionStore for crate::stdb::Coordinator {
@@ -38,6 +53,20 @@ impl QuestActionStore for crate::stdb::Coordinator {
 
     fn giver_refuses_interaction(&self, giver_guid: u64, player_guid: u64) -> Result<bool> {
         crate::stdb::Coordinator::npc_refuses_interaction(self, giver_guid, player_guid)
+    }
+
+    fn accept_quest(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        giver_guid: u64,
+        quest_id: u32,
+    ) -> Result<()> {
+        crate::stdb::Coordinator::accept_quest(self, account_id, self_guid, giver_guid, quest_id)
+    }
+
+    fn item_start_quest(&self, owner_guid: u64, slot: u8) -> Option<(u64, u32)> {
+        crate::stdb::Coordinator::item_start_quest(self, owner_guid, slot)
     }
 }
 
@@ -122,6 +151,41 @@ pub(crate) fn quest_giver_menu<St: QuestActionStore + ?Sized>(
     })
 }
 
+/// The details + Accept screen for one quest, offered by `giver`. Clicking a quest in a giver's
+/// menu and using an item that starts a quest both land here, so the two routes cannot render
+/// different screens for the same quest. A quest whose definition is not loaded renders nothing.
+/// RAW-encoded for the same reason the menu is: gtker's 1.12 reward triples are incomplete.
+pub(crate) fn quest_details_screen<St: QuestActionStore + ?Sized>(
+    store: &St,
+    giver: u64,
+    quest_id: u32,
+) -> Result<Vec<Outbound>> {
+    Ok(store
+        .quest_detail_view(quest_id)?
+        .map_or_else(Vec::new, |detail| {
+            let (opcode, body) = codec::build_quest_details_raw(giver, &detail);
+            vec![Outbound::Raw { opcode, body }]
+        }))
+}
+
+/// The screen a `CMSG_USE_ITEM` opens when that item starts a quest — the item instance is its own
+/// giver. `None` means the item starts no quest, which is the item family's signal to fall through
+/// to the ordinary use path; `Some` means the quest module consumed the action, so the item is
+/// never used up by opening its own quest.
+pub(crate) fn item_started_quest<St: QuestActionStore + ?Sized>(
+    store: &St,
+    player: QuestActionPlayer,
+    slot: u8,
+) -> Result<Option<Vec<Outbound>>> {
+    let Some(self_guid) = player.self_guid else {
+        return Ok(None);
+    };
+    let Some((item_guid, quest_id)) = store.item_start_quest(self_guid, slot) else {
+        return Ok(None);
+    };
+    Ok(Some(quest_details_screen(store, item_guid, quest_id)?))
+}
+
 /// The quest opcodes that own their whole protocol round trip. Anything else — and anything at all
 /// before world entry — passes through to `handle_quest`.
 pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
@@ -170,15 +234,51 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
                 },
             })
         }
+        // Clicked a quest in the menu → its details + Accept button.
+        ClientOpcodeMessage::CMSG_QUESTGIVER_QUERY_QUEST(q) => Ok(QuestActionOutcome::Handled {
+            outbound: quest_details_screen(store, q.guid.guid(), q.quest_id)?,
+        }),
+        // The client asks for a quest's full definition (it sends this for any quest id it sees in a
+        // PLAYER_QUEST_LOG slot but has no data for). Without this reply the client won't
+        // display/count the quest in its log — so this is what makes the quest-log window entry
+        // actually appear. RAW-encoded: gtker's typed layout writes the rep Faction fields as u16,
+        // shifting the title by 4 bytes; the hand-rolled body matches the 5875 layout exactly.
+        ClientOpcodeMessage::CMSG_QUEST_QUERY(q) => {
+            let outbound = store
+                .quest_detail_view(q.quest_id)?
+                .map_or_else(Vec::new, |detail| {
+                    let (opcode, body) = codec::build_quest_query_response_raw(&detail);
+                    vec![Outbound::Raw { opcode, body }]
+                });
+            Ok(QuestActionOutcome::Handled { outbound })
+        }
+        // Clicked Accept → the module opens the quest log row (gated). No SMSG on success: the
+        // client closes the window itself and the quest-log relay carries the new slot.
+        ClientOpcodeMessage::CMSG_QUESTGIVER_ACCEPT_QUEST(a) => {
+            match store.accept_quest(player.account_id, self_guid, a.guid.guid(), a.quest_id) {
+                Ok(()) => {}
+                Err(e)
+                    if classify_quest_action_error(&e) == QuestActionErrorClass::GameplayRefusal =>
+                {
+                    log::debug!(
+                        "world: accept_quest ignored (account {}): {e}",
+                        player.account_id
+                    );
+                }
+                Err(e) => return Err(e),
+            }
+            Ok(QuestActionOutcome::Handled {
+                outbound: Vec::new(),
+            })
+        }
         other => Ok(QuestActionOutcome::PassThrough(other)),
     }
 }
 
-/// The quest dialog opcodes that still read the broad `WorldStore`: the quest details + accept, the
-/// turn-in offer/complete round-trip, abandon, the client's quest-definition query, and party
-/// sharing. Reads are evaluated against the player, so these need the in-world player guid — in
-/// CharSelect the opcodes pass through. Reducer rejections (accept/turn-in gates) are per-action:
-/// logged, not fatal.
+/// The quest dialog opcodes that still read the broad `WorldStore`: the turn-in offer/complete
+/// round-trip, abandon, and party sharing. Reads are evaluated against the player, so these need
+/// the in-world player guid — in CharSelect the opcodes pass through. Reducer rejections (the
+/// turn-in gate) are per-action: logged, not fatal.
 pub(crate) fn handle_quest<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
@@ -190,27 +290,6 @@ pub(crate) fn handle_quest<St: WorldStore + ?Sized>(
         WorldState::CharSelect => return Ok(Some(msg)),
     };
     match msg {
-        // Clicked a quest in the menu → its details + Accept button.
-        ClientOpcodeMessage::CMSG_QUESTGIVER_QUERY_QUEST(q) => {
-            let giver = q.guid.guid();
-            if let Some(detail) = store.quest_detail(q.quest_id)? {
-                send(tx, {
-                    let (opcode, body) = codec::build_quest_details_raw(giver, &detail);
-                    Outbound::Raw { opcode, body }
-                })?;
-            }
-        }
-        // The client asks for a quest's full definition (it sends this for any quest id it sees in a
-        // PLAYER_QUEST_LOG slot but has no data for). Without this reply the client won't display/count
-        // the quest in its log — so this is what makes the quest-log window entry actually appear.
-        ClientOpcodeMessage::CMSG_QUEST_QUERY(q) => {
-            if let Some(detail) = store.quest_detail(q.quest_id)? {
-                // RAW-encoded (gtker's typed layout writes the rep Faction fields as u16 → 4-byte title
-                // shift). The hand-rolled body matches the 5875 layout exactly.
-                let (opcode, body) = codec::build_quest_query_response_raw(&detail);
-                send(tx, Outbound::Raw { opcode, body })?;
-            }
-        }
         // Abandon a quest from the log ("Abandon Quest"). The payload is a LOG slot (0..19), not a quest
         // id — resolve it via the same slot ordering player_quest_log uses, then call the module reducer
         // (deletes the row). The quest-log relay then re-sends the cleared block, so the slot disappears.
@@ -226,18 +305,6 @@ pub(crate) fn handle_quest<St: WorldStore + ?Sized>(
                         conn.account_id
                     );
                 }
-            }
-        }
-        // Clicked Accept → the module opens the quest log row (gated). No SMSG on success (the client
-        // closes the window itself; the quest-log window is the deferred Phase-2 descriptor slice).
-        ClientOpcodeMessage::CMSG_QUESTGIVER_ACCEPT_QUEST(a) => {
-            if let Err(e) =
-                store.accept_quest(conn.account_id, self_guid, a.guid.guid(), a.quest_id)
-            {
-                log::debug!(
-                    "world: accept_quest ignored (account {}): {e}",
-                    conn.account_id
-                );
             }
         }
         // Opened a turn-in (clicked the `?`): the offer-reward screen if every objective is met, else
@@ -308,7 +375,8 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
-        Guid, QuestGiverStatus, CMSG_PING, CMSG_QUESTGIVER_HELLO, CMSG_QUESTGIVER_STATUS_QUERY,
+        Guid, QuestGiverStatus, CMSG_PING, CMSG_QUESTGIVER_ACCEPT_QUEST, CMSG_QUESTGIVER_HELLO,
+        CMSG_QUESTGIVER_QUERY_QUEST, CMSG_QUESTGIVER_STATUS_QUERY, CMSG_QUEST_QUERY,
     };
 
     #[derive(Default)]
@@ -316,10 +384,14 @@ mod tests {
         eval_requests: Mutex<Vec<(u64, u64)>>,
         detail_requests: Mutex<Vec<u32>>,
         gate_requests: Mutex<Vec<(u64, u64)>>,
+        accept_requests: Mutex<Vec<(u64, u64, u64, u32)>>,
+        start_quest_requests: Mutex<Vec<(u64, u8)>>,
         evals: Vec<codec::GiverQuestEval>,
         details: Vec<codec::QuestDetailView>,
         refuses: bool,
         gate_error: Option<String>,
+        accept_error: Option<String>,
+        start_quest: Option<(u64, u32)>,
     }
 
     impl QuestActionStore for InMemoryQuestActions {
@@ -354,13 +426,40 @@ mod tests {
                 None => Ok(self.refuses),
             }
         }
+
+        fn accept_quest(
+            &self,
+            account_id: u64,
+            self_guid: u64,
+            giver_guid: u64,
+            quest_id: u32,
+        ) -> Result<()> {
+            self.accept_requests
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid, giver_guid, quest_id));
+            self.accept_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+        }
+
+        fn item_start_quest(&self, owner_guid: u64, slot: u8) -> Option<(u64, u32)> {
+            self.start_quest_requests
+                .lock()
+                .unwrap()
+                .push((owner_guid, slot));
+            self.start_quest
+        }
     }
 
     const GIVER: u64 = 0xF130_0000_0000_0050;
     const GO_GIVER: u64 = 0xF110_0000_0000_0044;
+    const ITEM_GIVER: u64 = 0x4000_0000_0000_0099;
     const QUEST: u32 = 1234;
     const SELF_GUID: u64 = 42;
+    const BAG_SLOT: u8 = 5;
     const OP_QUEST_DETAILS: u16 = 0x0188;
+    const OP_QUEST_QUERY_RESPONSE: u16 = 0x005D;
 
     fn player() -> QuestActionPlayer {
         QuestActionPlayer {
@@ -379,6 +478,24 @@ mod tests {
         ClientOpcodeMessage::CMSG_QUESTGIVER_HELLO(CMSG_QUESTGIVER_HELLO {
             guid: Guid::new(giver),
         })
+    }
+
+    fn query_quest(giver: u64, quest_id: u32) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_QUESTGIVER_QUERY_QUEST(Box::new(CMSG_QUESTGIVER_QUERY_QUEST {
+            guid: Guid::new(giver),
+            quest_id,
+        }))
+    }
+
+    fn quest_query(quest_id: u32) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_QUEST_QUERY(CMSG_QUEST_QUERY { quest_id })
+    }
+
+    fn accept(giver: u64, quest_id: u32) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_QUESTGIVER_ACCEPT_QUEST(Box::new(CMSG_QUESTGIVER_ACCEPT_QUEST {
+            guid: Guid::new(giver),
+            quest_id,
+        }))
     }
 
     /// One giver↔quest relation. `startable` follows the role, the way the module evaluates it.
@@ -419,6 +536,15 @@ mod tests {
     fn one_quest(role: u8, active: bool, complete: bool) -> InMemoryQuestActions {
         InMemoryQuestActions {
             evals: vec![eval(QUEST, role, active, complete)],
+            details: vec![detail(QUEST)],
+            ..Default::default()
+        }
+    }
+
+    /// A store where only `QUEST` has a loaded definition — the fixture the details, definition
+    /// and accept routes differ on by the quest id they ask for.
+    fn loaded_quest() -> InMemoryQuestActions {
+        InMemoryQuestActions {
             details: vec![detail(QUEST)],
             ..Default::default()
         }
@@ -606,6 +732,183 @@ mod tests {
             other_giver.as_slice(),
             [Outbound::Raw { opcode: OP_QUEST_DETAILS, body }] if body[..8] == GO_GIVER.to_le_bytes()
         ));
+    }
+
+    // ── The details screen and the definition query ──────────────────────────
+
+    #[test]
+    fn a_details_request_opens_the_whole_screen_for_the_asking_giver() {
+        let actions = loaded_quest();
+
+        let batch =
+            outbound(dispatch_quest_action(&actions, player(), query_quest(GIVER, QUEST)).unwrap());
+
+        assert!(matches!(
+            batch.as_slice(),
+            [Outbound::Raw { opcode: OP_QUEST_DETAILS, body }]
+                if *body == codec::build_quest_details_raw(GIVER, &detail(QUEST)).1
+        ));
+    }
+
+    #[test]
+    fn a_details_request_for_an_unloaded_quest_answers_nothing() {
+        let actions = loaded_quest();
+
+        let batch = outbound(
+            dispatch_quest_action(&actions, player(), query_quest(GIVER, QUEST + 1)).unwrap(),
+        );
+
+        assert!(batch.is_empty());
+    }
+
+    #[test]
+    fn a_definition_query_answers_the_raw_vanilla_definition() {
+        let actions = loaded_quest();
+
+        let batch =
+            outbound(dispatch_quest_action(&actions, player(), quest_query(QUEST)).unwrap());
+
+        assert!(matches!(
+            batch.as_slice(),
+            [Outbound::Raw { opcode: OP_QUEST_QUERY_RESPONSE, body }]
+                if *body == codec::build_quest_query_response_raw(&detail(QUEST)).1
+        ));
+    }
+
+    #[test]
+    fn a_definition_query_for_an_unloaded_quest_answers_nothing() {
+        let actions = loaded_quest();
+
+        let batch =
+            outbound(dispatch_quest_action(&actions, player(), quest_query(QUEST + 1)).unwrap());
+
+        assert!(batch.is_empty());
+    }
+
+    // ── Accept ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn accept_requests_the_durable_accept_for_the_account_player_giver_and_quest() {
+        let actions = loaded_quest();
+
+        let batch =
+            outbound(dispatch_quest_action(&actions, player(), accept(GIVER, QUEST)).unwrap());
+
+        assert!(batch.is_empty(), "the client closes the window itself");
+        assert_eq!(
+            actions.accept_requests.lock().unwrap().as_slice(),
+            &[(7, SELF_GUID, GIVER, QUEST)]
+        );
+    }
+
+    #[test]
+    fn a_refused_accept_answers_nothing_and_does_not_end_the_session() {
+        let actions = InMemoryQuestActions {
+            accept_error: Some("quest requires level 10".into()),
+            ..loaded_quest()
+        };
+
+        let batch =
+            outbound(dispatch_quest_action(&actions, player(), accept(GIVER, QUEST)).unwrap());
+
+        assert!(batch.is_empty());
+    }
+
+    #[test]
+    fn a_dead_transport_on_accept_ends_the_session() {
+        let actions = InMemoryQuestActions {
+            accept_error: Some(
+                "accept_quest reducer transport disconnected: channel closed".into(),
+            ),
+            ..loaded_quest()
+        };
+
+        let error = match dispatch_quest_action(&actions, player(), accept(GIVER, QUEST)) {
+            Err(error) => error,
+            Ok(_) => panic!("a dead reducer transport must end the session"),
+        };
+
+        assert!(format!("{error:#}").contains("reducer transport disconnected"));
+    }
+
+    // ── The item-started quest ───────────────────────────────────────────────
+
+    #[test]
+    fn an_item_that_starts_a_quest_opens_its_details_with_the_item_as_the_giver() {
+        let actions = InMemoryQuestActions {
+            start_quest: Some((ITEM_GIVER, QUEST)),
+            ..loaded_quest()
+        };
+
+        let batch = item_started_quest(&actions, player(), BAG_SLOT)
+            .unwrap()
+            .expect("the quest module owns a quest-starting item");
+
+        assert!(matches!(
+            batch.as_slice(),
+            [Outbound::Raw { opcode: OP_QUEST_DETAILS, body }]
+                if body[..8] == ITEM_GIVER.to_le_bytes() && body[8..12] == QUEST.to_le_bytes()
+        ));
+        assert_eq!(
+            actions.start_quest_requests.lock().unwrap().as_slice(),
+            &[(SELF_GUID, BAG_SLOT)]
+        );
+    }
+
+    #[test]
+    fn an_item_that_starts_no_quest_leaves_the_action_to_the_item_family() {
+        let actions = loaded_quest();
+
+        assert!(item_started_quest(&actions, player(), BAG_SLOT)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn an_item_starting_an_unloaded_quest_still_belongs_to_the_quest_module() {
+        // The empty batch is what keeps the item from being consumed: the item family only falls
+        // through on `None`, and a missing definition is not a reason to eat the item.
+        let actions = InMemoryQuestActions {
+            start_quest: Some((ITEM_GIVER, QUEST + 1)),
+            ..loaded_quest()
+        };
+
+        let batch = item_started_quest(&actions, player(), BAG_SLOT).unwrap();
+
+        assert_eq!(batch.map(|batch| batch.len()), Some(0));
+    }
+
+    #[test]
+    fn without_a_player_guid_no_item_is_asked_about_its_quest() {
+        let actions = InMemoryQuestActions {
+            start_quest: Some((ITEM_GIVER, QUEST)),
+            ..loaded_quest()
+        };
+        let player = QuestActionPlayer {
+            account_id: 7,
+            self_guid: None,
+        };
+
+        assert!(item_started_quest(&actions, player, BAG_SLOT)
+            .unwrap()
+            .is_none());
+        assert!(actions.start_quest_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_item_route_and_the_giver_route_render_the_same_details_screen() {
+        let actions = InMemoryQuestActions {
+            start_quest: Some((GIVER, QUEST)),
+            ..loaded_quest()
+        };
+
+        let from_giver =
+            outbound(dispatch_quest_action(&actions, player(), query_quest(GIVER, QUEST)).unwrap());
+        let from_item = item_started_quest(&actions, player(), BAG_SLOT)
+            .unwrap()
+            .expect("the quest module owns a quest-starting item");
+
+        assert!(same_batch(&from_giver, &from_item));
     }
 
     // ── Player context and error classification ──────────────────────────────

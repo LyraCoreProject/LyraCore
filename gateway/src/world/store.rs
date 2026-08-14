@@ -552,7 +552,9 @@ pub trait WorldStore:
     fn quest_detail(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>>;
 
     /// Accept a quest from a giver (`CMSG_QUESTGIVER_ACCEPT_QUEST`). The module gates it; a gameplay
-    /// `Err` is per-action, not session-fatal.
+    /// `Err` is per-action, not session-fatal. The seam's `QuestActionStore::accept_quest` has taken
+    /// over every caller, so this declaration is waiting to be retired with the rest of the family.
+    #[allow(dead_code)]
     fn accept_quest(
         &self,
         account_id: u64,
