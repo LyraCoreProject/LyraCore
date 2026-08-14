@@ -430,10 +430,6 @@ impl WorldStore for Coordinator {
         self.creature_template(entry)
     }
 
-    fn item_template(&self, entry: u32) -> Result<Option<codec::ItemTemplateView>> {
-        self.item_template(entry)
-    }
-
     fn gameobject_template(&self, entry: u32) -> Result<Option<codec::GameObjectTemplateView>> {
         self.gameobject_template(entry)
     }
@@ -458,10 +454,6 @@ impl WorldStore for Coordinator {
         payload: String,
     ) -> Result<()> {
         self.client_command(account_id, self_guid, cmd, payload)
-    }
-
-    fn player_items(&self, owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
-        self.player_items(owner_guid)
     }
 
     fn player_skills(&self, character_guid: u64) -> Result<Vec<(u32, u16, u16)>> {
@@ -662,48 +654,10 @@ impl WorldStore for Coordinator {
         self.skin_corpse(account_id, self_guid, corpse_guid)
     }
 
-    fn item_slot_by_guid(&self, account_id: u64, item_guid: u64) -> Option<u8> {
-        self.item_slot_by_guid(account_id, item_guid)
-    }
-
-    fn disenchant_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()> {
-        self.disenchant_item(account_id, self_guid, slot)
-    }
-
-    fn enchant_item_on_slot(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        slot: u8,
-        enchant_id: u32,
-    ) -> Result<()> {
-        self.enchant_item_on_slot(account_id, self_guid, slot, enchant_id)
-    }
-
     fn talent_grant_spell(&self, talent_id: u32) -> u32 {
         self.talent_by_id(talent_id)
             .map(|t| t.grant_spell_id)
             .unwrap_or(0)
-    }
-
-    fn spell_is_ground_area(&self, spell_id: u32) -> bool {
-        self.spell_is_ground_area(spell_id)
-    }
-
-    fn spell_is_fishing(&self, spell_id: u32) -> bool {
-        self.spell_is_fishing(spell_id)
-    }
-
-    fn fish(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        self.fish(account_id, self_guid)
-    }
-
-    fn spell_is_open_lock(&self, spell_id: u32) -> bool {
-        self.spell_is_open_lock(spell_id)
-    }
-
-    fn pick_lock(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()> {
-        self.pick_lock(account_id, self_guid, go_guid)
     }
 
     fn set_faction_at_war(
@@ -857,61 +811,8 @@ impl WorldStore for Coordinator {
     ) -> Result<()> {
         self.pet_command(account_id, self_guid, data, target_guid)
     }
-    fn start_ranged_attack(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-        spell_id: u32,
-    ) -> Result<()> {
-        self.start_ranged_attack(account_id, self_guid, target_guid, spell_id)
-    }
-
     fn set_sheathed(&self, account_id: u64, self_guid: u64, state: u8) -> Result<()> {
         self.set_sheathed(account_id, self_guid, state)
-    }
-
-    fn cast_spell(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        spell_id: u32,
-        target_guid: u64,
-    ) -> Result<()> {
-        self.cast_spell(account_id, self_guid, spell_id, target_guid)
-    }
-
-    fn cast_spell_at(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        spell_id: u32,
-        target_guid: u64,
-        x: f32,
-        y: f32,
-        z: f32,
-    ) -> Result<()> {
-        self.cast_spell_at(account_id, self_guid, spell_id, target_guid, x, y, z)
-    }
-
-    fn cancel_aura(&self, account_id: u64, self_guid: u64, spell_id: u32) -> Result<()> {
-        self.cancel_aura(account_id, self_guid, spell_id)
-    }
-
-    fn cancel_cast(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        self.cancel_cast(account_id, self_guid)
-    }
-
-    fn spell_cast_time(&self, spell_id: u32) -> Option<u32> {
-        self.spell_cast_time(spell_id)
-    }
-
-    fn spell_queues_next_swing(&self, spell_id: u32) -> bool {
-        self.spell_queues_next_swing(spell_id)
-    }
-
-    fn spell_is_ranged_auto_repeat(&self, spell_id: u32) -> bool {
-        self.spell_is_ranged_auto_repeat(spell_id)
     }
 
     fn entity_max_health(&self, guid: u64) -> u32 {
@@ -938,10 +839,6 @@ impl WorldStore for Coordinator {
 
     fn superseded_old_rank(&self, new_spell: u32, player_guid: u64) -> Option<u32> {
         self.superseded_old_rank(new_spell, player_guid)
-    }
-
-    fn enchant_route(&self, spell_id: u32) -> Option<crate::world::EnchantRoute> {
-        self.enchant_route(spell_id)
     }
 
     fn send_chat(
