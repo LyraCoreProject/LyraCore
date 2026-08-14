@@ -566,6 +566,10 @@ pub trait WorldStore:
     /// Turn a completed quest in for its rewards (`CMSG_QUESTGIVER_CHOOSE_REWARD`). The module
     /// validates completion + grants money/XP/items. `reward_index` is the player's pick-1-of-N choice
     /// reward slot (the CMSG `reward` field); ignored by quests with no choice rewards.
+    ///
+    /// The quest seam (`QuestActionStore::turn_in_quest`) owns the call now; the declaration goes
+    /// when `WorldStore` shrinks.
+    #[allow(dead_code)]
     fn turn_in_quest(
         &self,
         account_id: u64,

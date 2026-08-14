@@ -305,6 +305,17 @@ mod tests {
             unreachable!("no item action runs the giver interaction gate")
         }
 
+        fn turn_in_quest(
+            &self,
+            _account_id: u64,
+            _self_guid: u64,
+            _giver_guid: u64,
+            _quest_id: u32,
+            _reward_index: u32,
+        ) -> Result<()> {
+            unreachable!("no item action turns a quest in")
+        }
+
         fn accept_quest(
             &self,
             _account_id: u64,
