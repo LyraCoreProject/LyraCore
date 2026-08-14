@@ -1,14 +1,15 @@
 //! `WorldStore`: the broad storage/coordination seam used by the world session. Deep protocol
-//! families may add focused supertraits such as [`ItemActionStore`] and [`VendorActionStore`] so
-//! their wire mapping and failure policy can be tested without implementing this entire interface —
-//! a migrated family's operations live only on its own trait, never here. Kept as one broad
-//! trait for the remaining session operations (only two implementors); the section markers below
-//! are load-bearing navigation, not a split.
+//! families may add focused supertraits such as [`ItemActionStore`], [`QuestActionStore`] and
+//! [`VendorActionStore`] so their wire mapping and failure policy can be tested without
+//! implementing this entire interface — a migrated family's operations live only on its own trait,
+//! never here. The quest family is mid-migration, so its reads still appear below as well. Kept as
+//! one broad trait for the remaining session operations (only two implementors); the section
+//! markers below are load-bearing navigation, not a split.
 
-use super::handlers::{ItemActionStore, VendorActionStore};
+use super::handlers::{ItemActionStore, QuestActionStore, VendorActionStore};
 use super::*;
 
-pub trait WorldStore: ItemActionStore + VendorActionStore + Send + Sync {
+pub trait WorldStore: ItemActionStore + QuestActionStore + VendorActionStore + Send + Sync {
     /// Look up the shared session key K (+ account id) for an (already uppercased) account
     /// name. `None` when no live session exists for that account (reject the handshake).
     fn lookup_session(&self, account_name: &str) -> Result<Option<WorldSession>>;
