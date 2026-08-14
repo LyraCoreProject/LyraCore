@@ -6,6 +6,8 @@ pub(crate) trait MeleeActionStore: Send + Sync {
     fn start_attack(&self, account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()>;
     /// Disarm the actor's outgoing engagement row. Also the teardown call for the ranged
     /// auto-repeat loop in `combat.rs` — see `attack_stop` for why the two share this call.
+    /// Those two `combat.rs` callers leave with the ranged auto-repeat slice: that slice owns the
+    /// shared disengage, which today is a direct call plus a hand-edited `ranged_repeat`.
     fn stop_attack(&self, account_id: u64, actor_guid: u64) -> Result<()>;
 }
 

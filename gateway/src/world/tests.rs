@@ -247,7 +247,8 @@ struct InMemoryStore {
     /// `add_ignore`/`del_friend`/`del_ignore` mutate it; `contact_lists` reads it scoped to the caller.
     contacts: std::sync::Mutex<Vec<(u64, u64, bool)>>,
     group_invites: std::sync::Mutex<Vec<u64>>,
-    /// When set, `start_attack` returns this error (drives the ATTACKSWING dead/friendly/desync split).
+    /// When set, `start_attack` returns this error. Only the session-fatal desync case is driven
+    /// from here now; the refusal mapping is tested on the melee seam itself.
     start_attack_error: Option<String>,
     /// When set, `start_ranged_attack` returns this error (Auto Shot failure → SMSG_CAST_RESULT).
     start_ranged_attack_error: Option<String>,
@@ -5484,7 +5485,7 @@ fn played_time_replies_with_the_durable_total_plus_the_live_session_span() {
 
 // ===========================================================================================
 //  The handler-level tests — CMSG_CAST_SPELL routing, quest instant
-//  routing, the loot window state machine, the ATTACKSWING error split, and the smaller mappings.
+//  routing, the loot window state machine, melee attack over the socket, and the smaller mappings.
 //  Each drives the full encrypted session (enter_world) and pins wire replies + store dispatches.
 // ===========================================================================================
 
@@ -6409,7 +6410,10 @@ fn a_viewer_with_no_fixture_entry_sees_an_empty_window_non_quest_rows_unaffected
     server.join().unwrap();
 }
 
-// ── CMSG_ATTACKSWING error split + happy path (combat C1) ───────────────────────────────────────
+// ── Melee attack over the socket (combat C1) ────────────────────────────────────────────────────
+// The melee seam (`handlers/melee.rs`) owns the decisions and tests them directly. What is left
+// here is what the seam cannot reach: opcode dispatch, the encoded attack messages on the wire,
+// and the session teardown a fatal melee error causes.
 
 #[test]
 fn attackswing_ok_replies_attackstart_and_stop_echoes_then_clears() {
@@ -6456,48 +6460,11 @@ fn attackswing_ok_replies_attackstart_and_stop_echoes_then_clears() {
 }
 
 #[test]
-fn attackswing_at_a_dead_target_replies_deadtarget() {
-    let mut s = quest_store();
-    s.start_attack_error = Some(lyracore_shared::ERR_ATTACK_TARGET_DEAD.into());
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    CMSG_ATTACKSWING {
-        guid: Guid::new(90),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_ATTACKSWING_DEADTARGET => {}
-        other => panic!("expected SMSG_ATTACKSWING_DEADTARGET, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-}
-
-#[test]
-fn attackswing_at_a_friendly_target_replies_cant_attack() {
-    let mut s = quest_store();
-    s.start_attack_error = Some(lyracore_shared::ERR_ATTACK_FRIENDLY.into());
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    CMSG_ATTACKSWING {
-        guid: Guid::new(90),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_ATTACKSWING_CANT_ATTACK => {}
-        other => panic!("expected SMSG_ATTACKSWING_CANT_ATTACK, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-}
-
-#[test]
 fn attackswing_desync_error_is_session_fatal() {
     // A desync-classified start_attack failure (the player's OWN entity is gone) must PROPAGATE
-    // as session-fatal: run_world_session returns Err and the socket tears down for a clean relog —
-    // unlike the transient dead/friendly failures above, which keep the session alive.
+    // as session-fatal: run_world_session returns Err and the socket tears down for a clean relog.
+    // Only the socket half is proved here; which failures are fatal, and which answer a refusal
+    // instead, belongs to the melee seam's own tests.
     let mut s = quest_store();
     s.start_attack_error = Some("no live entity for guid 1".into());
     let store = std::sync::Arc::new(s);
