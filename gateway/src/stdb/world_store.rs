@@ -885,9 +885,6 @@ impl WorldStore for Coordinator {
         self.inspect(account_id, self_guid, target_guid)
     }
 
-    fn start_attack(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
-        self.start_attack(account_id, self_guid, target_guid)
-    }
     fn pet_command(
         &self,
         account_id: u64,

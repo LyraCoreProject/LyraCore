@@ -1,4 +1,4 @@
-use super::handlers::ItemActionStore;
+use super::handlers::{ItemActionStore, MeleeActionStore};
 use super::*;
 use std::os::unix::net::UnixStream;
 
@@ -2024,13 +2024,6 @@ impl WorldStore for InMemoryStore {
         }
         Ok(())
     }
-    fn start_attack(&self, _account_id: u64, _self_guid: u64, _target_guid: u64) -> Result<()> {
-        self.rec("start_attack");
-        match &self.start_attack_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
-    }
     fn pet_command(
         &self,
         _account_id: u64,
@@ -2788,6 +2781,16 @@ impl WorldStore for InMemoryStore {
             return Err(anyhow!("not on that list"));
         }
         Ok(())
+    }
+}
+
+impl MeleeActionStore for InMemoryStore {
+    fn start_attack(&self, _account_id: u64, _self_guid: u64, _target_guid: u64) -> Result<()> {
+        self.rec("start_attack");
+        match &self.start_attack_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
     }
 }
 

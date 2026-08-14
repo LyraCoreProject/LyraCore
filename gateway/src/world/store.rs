@@ -4,10 +4,10 @@
 //! trait for the remaining session operations (only two implementors); the section markers below
 //! are load-bearing navigation, not a split.
 
-use super::handlers::ItemActionStore;
+use super::handlers::{ItemActionStore, MeleeActionStore};
 use super::*;
 
-pub trait WorldStore: ItemActionStore + Send + Sync {
+pub trait WorldStore: ItemActionStore + MeleeActionStore + Send + Sync {
     /// Look up the shared session key K (+ account id) for an (already uppercased) account
     /// name. `None` when no live session exists for that account (reject the handshake).
     fn lookup_session(&self, account_name: &str) -> Result<Option<WorldSession>>;
@@ -663,8 +663,6 @@ pub trait WorldStore: ItemActionStore + Send + Sync {
     /// stateless-gate reducers (`enter_areatrigger`, `use_gameobject`).
     fn inspect(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
 
-    /// Start the player's melee auto-attack on `target_guid` (`CMSG_ATTACKSWING`, combat C1).
-    fn start_attack(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
     /// Relay a pet command-bar action (`CMSG_PET_ACTION`). `data` is the raw packed action
     /// (flag<<24 | id): flag 0x07 = command (Stay/Follow/Attack/Dismiss), flag 0x06 = react state
     /// (Passive/Defensive/Aggressive). The module decodes + validates (all pet policy lives there).

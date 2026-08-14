@@ -4,7 +4,7 @@
 use super::*;
 
 // Per-family dispatch handlers — code-motion of the former dispatch match arms (bodies verbatim,
-// incl. in `handle_combat` the two session-fatal `is_desync_error` early-exits on ATTACKSWING/STOP).
+// incl. in `handle_combat` the session-fatal `is_desync_error` early-exit on ATTACKSTOP).
 // Each returns `Ok(None)` once it consumes its opcode, else `Ok(Some(msg))` to pass the message on.
 
 mod bank;
@@ -13,6 +13,7 @@ mod combat;
 mod item;
 mod loot;
 mod mail;
+mod melee;
 mod query;
 mod quest;
 mod trade;
@@ -25,6 +26,9 @@ pub(crate) use combat::handle_combat;
 pub(crate) use item::{dispatch_item_action, ItemActionOutcome, ItemActionPlayer, ItemActionStore};
 pub(crate) use loot::handle_loot;
 pub(crate) use mail::handle_mail;
+pub(crate) use melee::{
+    dispatch_melee_action, MeleeActionOutcome, MeleeActionPlayer, MeleeActionStore,
+};
 pub(crate) use query::handle_query;
 pub(crate) use quest::handle_quest;
 pub(crate) use trade::handle_trade;

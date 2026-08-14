@@ -1,5 +1,5 @@
-//! Combat family (N3/C1 + aura tracer): selection, melee swing/stop, spell cast. Pure
-//! code-motion out of `world/mod.rs`.
+//! Combat family (N3/C1 + aura tracer): selection, melee stop, spell cast. Melee attack START is
+//! owned by the melee-attack seam in `melee.rs`.
 
 use super::super::*;
 
@@ -36,10 +36,10 @@ fn ranged_ammo_display<St: WorldStore + ?Sized>(store: &St, self_guid: u64) -> O
         .map(|t| (t.display_id, 24))
 }
 
-/// Combat family (N3/C1 + aura tracer): selection, melee swing/stop, spell cast. ⚠️ Holds the two
-/// session-fatal `is_desync_error` early-exits on CMSG_ATTACKSWING/CMSG_ATTACKSTOP — preserved
-/// verbatim (a desync = the player's own entity is gone → tear the session down for a clean relog,
-/// unlike the transient per-swing failures that stay logged + alive).
+/// Combat family (N3/C1 + aura tracer): selection, melee stop, spell cast. Melee START lives in the
+/// melee-attack seam (`melee.rs`). ⚠️ Holds the session-fatal `is_desync_error` early-exit on
+/// CMSG_ATTACKSTOP — a desync means the player's own entity is gone, so the session is torn down for
+/// a clean relog, unlike the transient per-swing failures that stay logged + alive.
 pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
@@ -75,68 +75,6 @@ pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
         // consumed here (rather than falling through to the dispatch tail's `log::debug!` "ignoring"
         // line) so a `.speed` never spams the log or risks a future desync-classifier false-positive.
         ClientOpcodeMessage::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(_) => {}
-        // Combat (C1): begin melee auto-attack. Arm the server-side engagement (the swing tick
-        // applies damage), and ack with SMSG_ATTACKSTART so the client enters combat stance and
-        // plays the swing animation. The per-swing damage text comes from the relayed
-        // SMSG_ATTACKERSTATEUPDATE; the health bar from the on_update VALUES relay.
-        ClientOpcodeMessage::CMSG_ATTACKSWING(s) => {
-            let target_guid = s.guid.guid();
-            let was_repeat = matches!(&conn.state, WorldState::InWorld(iw) if iw.ranged_repeat);
-            log::info!("world[autoshot]: CMSG_ATTACKSWING target={target_guid} ranged_repeat_active={was_repeat} (account {})", conn.account_id);
-            // A failed start_attack (target already dead/despawned, out of range, not in world) is
-            // an EXPECTED transient condition, not session-fatal — e.g. the client swings at the
-            // Chicken on the same frame it dies. Log + ignore so the player isn't disconnected; only
-            // arm + ack the stance when the engagement actually started.
-            match store.start_attack(conn.account_id, self_guid, target_guid) {
-                Ok(()) => {
-                    if let WorldState::InWorld(iw) = &mut conn.state {
-                        iw.attacking_target = Some(target_guid);
-                        // Switching to melee overwrites the shared game_melee_attack row to a melee
-                        // engagement, so a later CMSG_ATTACKSTOP should now be honored.
-                        iw.ranged_repeat = false;
-                        send(
-                            tx,
-                            Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTART(Box::new(
-                                codec::build_attack_start(iw.self_guid, target_guid),
-                            ))),
-                        )?;
-                    }
-                }
-                Err(e) => {
-                    // A swing at a corpse → reply SMSG_ATTACKSWING_DEADTARGET so the client leaves
-                    // combat stance and shows "can't attack — target is dead" (it otherwise hangs in
-                    // stance with no swings, since the server refuses to arm the engagement). A friendly
-                    // target → SMSG_ATTACKSWING_CANT_ATTACK. These are TRANSIENT per-swing failures.
-                    if e.to_string()
-                        .contains(lyracore_shared::ERR_ATTACK_TARGET_DEAD)
-                    {
-                        send(
-                            tx,
-                            Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSWING_DEADTARGET),
-                        )?;
-                    } else if e.to_string().contains(lyracore_shared::ERR_ATTACK_FRIENDLY) {
-                        send(
-                            tx,
-                            Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSWING_CANT_ATTACK),
-                        )?;
-                    } else if is_desync_error(&e) {
-                        // The player's OWN entity is gone — a desync, NOT a transient swing failure (the
-                        // gateway's view went stale, e.g. a schema migration dropped its subscription). No
-                        // action can be served, so the player would otherwise hang in combat stance with
-                        // no recovery. Propagate as session-fatal → clean socket teardown → the client
-                        // shows "Disconnected" and relog re-materializes from durable state.
-                        return Err(e.context(
-                            "player desync (entity missing) on attackswing — closing session for a clean relog",
-                        ));
-                    }
-                    // Other failures (out of range, retarget races) are transient → log + ignore.
-                    log::debug!(
-                        "world: start_attack ignored (account {}): {e}",
-                        conn.account_id
-                    );
-                }
-            }
-        }
         // Combat (C1): stop auto-attacking; leave combat stance. Best-effort — a stop_attack
         // failure must not drop the session, and the client is always told to leave stance.
         ClientOpcodeMessage::CMSG_ATTACKSTOP => {
