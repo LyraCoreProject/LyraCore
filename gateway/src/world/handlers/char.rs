@@ -2,6 +2,7 @@
 //! (login and cross-map world-port). Pure code-motion out of `world/mod.rs`.
 
 use super::super::*;
+use super::quest::{quest_log_update, QuestActionStore};
 use super::vendor::build_buyback_view_replay;
 
 /// Tell a client whose world-port cannot complete that it is off, so its loading screen ends with an
@@ -50,9 +51,10 @@ fn abort_pending_transfer<St: WorldStore + ?Sized>(
 }
 
 /// Build + send the player's quest-log descriptor fields as a raw VALUES update (Phase 2). A no-op
-/// when the gate is off or the player has no active quests. Shared by login (initial sync) and the
-/// quest-log relay (on accept / progress / turn-in). A full sync of all 20 slots, so removals clear.
-fn send_quest_log<St: WorldStore + ?Sized>(
+/// when the gate is off or the player has no active quests (`quest_log_update` returns an empty
+/// batch, so the CREATE packet's already-zeroed fields stand). Shared by login (initial sync) and
+/// the quest-log relay (on accept / progress / turn-in).
+fn send_quest_log<St: QuestActionStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
     player_guid: u64,
@@ -60,13 +62,12 @@ fn send_quest_log<St: WorldStore + ?Sized>(
     if !crate::config::quest_log_fields_enabled() {
         return Ok(());
     }
-    let slots = store.player_quest_log(player_guid).unwrap_or_default();
-    if slots.is_empty() {
-        return Ok(()); // no quests → nothing to show; the CREATE packet already zeroed these fields
+    // A read failure is treated as an empty log, not a login failure — the same defensive
+    // `unwrap_or_default` every other read in `enter_world` uses; this one is display-only too.
+    for message in quest_log_update(store, player_guid).unwrap_or_default() {
+        send(tx, message)?;
     }
-    let mask = codec::update_mask::full_quest_log_mask(&slots);
-    let (opcode, body) = codec::build_values_update_raw(player_guid, &mask);
-    send(tx, Outbound::Raw { opcode, body })
+    Ok(())
 }
 
 /// Enter (or RE-enter) the world as `character_guid`: rebuild the live entity, subscribe
