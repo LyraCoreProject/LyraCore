@@ -1,4 +1,4 @@
-use super::handlers::{ItemActionStore, MeleeActionStore, VendorActionStore};
+use super::handlers::{ItemActionStore, MeleeActionStore, QuestActionStore, VendorActionStore};
 use super::*;
 use std::os::unix::net::UnixStream;
 
@@ -2737,6 +2737,28 @@ impl MeleeActionStore for InMemoryStore {
     }
 }
 
+impl QuestActionStore for InMemoryStore {
+    fn giver_quest_evals(
+        &self,
+        _giver_guid: u64,
+        _player_guid: u64,
+    ) -> Result<Vec<codec::GiverQuestEval>> {
+        Ok(self.quest_evals.clone())
+    }
+
+    fn quest_detail_view(&self, quest_id: u32) -> Result<Option<codec::QuestDetailView>> {
+        Ok(self
+            .quest_details
+            .iter()
+            .find(|d| d.quest_id == quest_id)
+            .cloned())
+    }
+
+    fn giver_refuses_interaction(&self, _giver_guid: u64, _player_guid: u64) -> Result<bool> {
+        Ok(self.npc_refuses)
+    }
+}
+
 impl VendorActionStore for InMemoryStore {
     fn vendor_stock(&self, _vendor_guid: u64) -> Result<Vec<codec::VendorItemView>> {
         Ok(self.vendor_stock.clone())
@@ -4713,25 +4735,6 @@ fn quest_accept_dispatches_to_reducer_with_giver_and_quest() {
 }
 
 #[test]
-fn quest_hello_replies_with_the_quest_list() {
-    let mut s = quest_store();
-    s.quest_evals = vec![eval(1234, codec::ROLE_START, false, false)];
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    CMSG_QUESTGIVER_HELLO {
-        guid: Guid::new(50),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_LIST(_) => {} // dispatched HELLO → quest list
-        other => panic!("expected SMSG_QUESTGIVER_QUEST_LIST, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-}
-
-#[test]
 fn quest_choose_reward_turns_in_and_replies_complete() {
     let mut s = quest_store();
     s.quest_details = vec![detail_view(1234, "A Threat Within")];
@@ -5976,69 +5979,17 @@ fn enchant_cast_without_an_item_target_replies_failure_and_dispatches_nothing() 
     assert!(store.disenchanted.lock().unwrap().is_empty());
 }
 
-// ── Quest instant routing (CMSG_QUESTGIVER_HELLO) ────────────────────────────────────────────────
+// ── Quest giver routing (CMSG_QUESTGIVER_HELLO) ──────────────────────────────────────────────────
 
 #[test]
-fn quest_hello_with_one_menu_quest_opens_its_screen_directly_by_state() {
-    // Vanilla "instant quest": exactly ONE menu-worthy quest skips the list and opens the quest's
-    // own screen — DETAILS for a new quest, OFFER_REWARD for a finished turn-in, REQUEST_ITEMS for
-    // one still in progress — selected off the giver's END-eval state.
-    enum Want {
-        Details,
-        Offer,
-        Request,
-    }
-    let cases = [
-        (eval(1234, codec::ROLE_START, false, false), Want::Details),
-        (eval(1234, codec::ROLE_END, true, true), Want::Offer),
-        (eval(1234, codec::ROLE_END, true, false), Want::Request),
-    ];
-    for (e, want) in cases {
-        let mut s = quest_store();
-        s.quest_evals = vec![e];
-        s.quest_details = vec![detail_view(1234, "A Threat Within")];
-        let store = std::sync::Arc::new(s);
-        let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-        CMSG_QUESTGIVER_HELLO {
-            guid: Guid::new(50),
-        }
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-        match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-            ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(_) => {
-                assert!(
-                    matches!(want, Want::Details),
-                    "got DETAILS for a turn-in state"
-                )
-            }
-            ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(_) => {
-                assert!(
-                    matches!(want, Want::Offer),
-                    "got OFFER_REWARD but the quest isn't complete"
-                )
-            }
-            ServerOpcodeMessage::SMSG_QUESTGIVER_REQUEST_ITEMS(_) => {
-                assert!(
-                    matches!(want, Want::Request),
-                    "got REQUEST_ITEMS but the quest is complete"
-                )
-            }
-            other => panic!("expected a direct quest screen, got {other}"),
-        }
-        drop(client);
-        server.join().unwrap();
-    }
-}
-
-#[test]
-fn quest_hello_with_two_menu_quests_shows_the_list() {
-    // ≥2 menu-worthy quests → the list window, even though both details are loaded.
+fn quest_hello_reaches_the_quest_module_and_its_raw_details_body_survives_the_cipher() {
+    // The socket-level contract: dispatch routes HELLO to the quest module, and the raw-encoded
+    // DETAILS screen it returns crosses the encrypted frame intact. Which screen a giver opens is
+    // decided at the `dispatch_quest_action` seam and proved there.
+    const OP_QUEST_DETAILS: u16 = 0x0188;
     let mut s = quest_store();
-    s.quest_evals = vec![
-        eval(1234, codec::ROLE_START, false, false),
-        eval(1235, codec::ROLE_START, false, false),
-    ];
-    s.quest_details = vec![detail_view(1234, "One"), detail_view(1235, "Two")];
+    s.quest_evals = vec![eval(1234, codec::ROLE_START, false, false)];
+    s.quest_details = vec![detail_view(1234, "A Threat Within")];
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
     CMSG_QUESTGIVER_HELLO {
@@ -6046,12 +5997,13 @@ fn quest_hello_with_two_menu_quests_shows_the_list() {
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_LIST(l) => {
-            assert_eq!(l.quest_items.len(), 2, "both quests listed");
-        }
-        other => panic!("expected SMSG_QUESTGIVER_QUEST_LIST, got {other}"),
-    }
+    let (op, body) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(op, OP_QUEST_DETAILS);
+    assert_eq!(
+        &body[..12],
+        &codec::build_quest_details_raw(50, &detail_view(1234, "A Threat Within")).1[..12],
+        "giver guid + quest id reached the wire unchanged"
+    );
     drop(client);
     server.join().unwrap();
 }
