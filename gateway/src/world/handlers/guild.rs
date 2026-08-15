@@ -4,7 +4,7 @@
 //! shard) is `world::guild`'s job, so nothing here knows how many databases there are.
 
 use super::super::*;
-use crate::world::guild::GuildView;
+use crate::world::guild::{GuildRoster, GuildView};
 use wow_world_messages::vanilla::{GuildCommand, GuildCommandResult};
 
 /// The durable requests and reads the guild family needs, in the seam's own vocabulary so it can be
@@ -20,6 +20,12 @@ pub(crate) trait GuildActionStore: Send + Sync {
 
     /// The guild `character_guid` belongs to. `None` = guildless.
     fn guild_of(&self, character_guid: u64) -> Result<Option<u64>>;
+
+    /// `guild_id`'s roster, ALREADY RENDERED: the authority's guids, ranks and notes with each
+    /// member's name, level, class, area and online flag filled in from the shards. `None` = no
+    /// such guild. The fan-out belongs to the routing layer, so nothing here knows how many
+    /// databases answered.
+    fn guild_roster(&self, guild_id: u64) -> Result<Option<GuildRoster>>;
 }
 
 impl GuildActionStore for crate::stdb::Coordinator {
@@ -38,6 +44,10 @@ impl GuildActionStore for crate::stdb::Coordinator {
 
     fn guild_of(&self, character_guid: u64) -> Result<Option<u64>> {
         crate::world::guild::guild_of(self, character_guid)
+    }
+
+    fn guild_roster(&self, guild_id: u64) -> Result<Option<GuildRoster>> {
+        crate::world::guild::roster(self, guild_id)
     }
 }
 
@@ -117,6 +127,7 @@ pub(crate) fn dispatch_guild_action<St: GuildActionStore + ?Sized>(
         }
         ClientOpcodeMessage::CMSG_GUILD_QUERY(s) => guild_query(store, u64::from(s.guild_id)),
         ClientOpcodeMessage::CMSG_GUILD_INFO => guild_info(store, self_guid),
+        ClientOpcodeMessage::CMSG_GUILD_ROSTER => guild_roster(store, self_guid),
         other => Ok(GuildActionOutcome::PassThrough(other)),
     }
 }
@@ -195,6 +206,40 @@ fn guild_info<St: GuildActionStore + ?Sized>(
     })
 }
 
+/// `CMSG_GUILD_ROSTER` — the guild panel, and the one guild screen realm-core cannot answer on its
+/// own: it holds guids, ranks and notes, so the name, level, class, area and online flag of every
+/// member arrive from the shards through the routing layer.
+///
+/// Offline members are listed, not omitted — reading who is in the guild while they are away is
+/// most of what the panel is for.
+///
+/// A caller in no guild is refused with `GuildPlayerNotInGuild` under the `Create` command, the
+/// pair vanilla's own roster handler sends. A membership pointing at a guild that has since gone
+/// gets the same answer: from the client's side those are the same fact.
+fn guild_roster<St: GuildActionStore + ?Sized>(
+    store: &St,
+    self_guid: u64,
+) -> Result<GuildActionOutcome> {
+    let roster = match store.guild_of(self_guid)? {
+        Some(guild_id) => store.guild_roster(guild_id)?,
+        None => None,
+    };
+    let Some(roster) = roster else {
+        return Ok(GuildActionOutcome::Handled {
+            outbound: command_result(
+                GuildCommand::Create,
+                "",
+                GuildCommandResult::GuildPlayerNotInGuild,
+            ),
+        });
+    };
+    Ok(GuildActionOutcome::Handled {
+        outbound: vec![Outbound::One(ServerOpcodeMessage::SMSG_GUILD_ROSTER(
+            Box::new(codec::build_guild_roster(&roster)),
+        ))],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +256,9 @@ mod tests {
         guilds: Vec<GuildView>,
         membership: Vec<(u64, u64)>,
         read_error: Option<String>,
+        /// Rosters keyed by guild id, ALREADY rendered — the shard fan-out is the routing layer's,
+        /// and is pinned there (`world/guild_tests.rs`).
+        rosters: Vec<(u64, GuildRoster)>,
     }
 
     impl GuildActionStore for InMemoryGuildActions {
@@ -237,6 +285,17 @@ mod tests {
                 .iter()
                 .find(|(guid, _)| *guid == character_guid)
                 .map(|(_, guild_id)| *guild_id))
+        }
+
+        fn guild_roster(&self, guild_id: u64) -> Result<Option<GuildRoster>> {
+            if let Some(error) = &self.read_error {
+                anyhow::bail!("{error}");
+            }
+            Ok(self
+                .rosters
+                .iter()
+                .find(|(id, _)| *id == guild_id)
+                .map(|(_, roster)| roster.clone()))
         }
     }
 
@@ -522,5 +581,191 @@ mod tests {
             outcome,
             GuildActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
         ));
+    }
+
+    // --- Roster ---------------------------------------------------------------------------
+
+    use crate::world::guild::GuildRosterEntry;
+    use wow_world_messages::vanilla::{
+        Area, Class, GuildMember_GuildMemberStatus, Level, SMSG_GUILD_ROSTER,
+    };
+
+    const VIM: u64 = 43;
+
+    /// The Silver Hand's roster as the routing layer hands it over: the master online, one member
+    /// offline, and every shard-resolved field DIFFERENT between the two — a level, a class and a
+    /// zone that a hard-coded default could not produce by accident.
+    fn silver_hand_roster() -> GuildRoster {
+        use lyracore_shared::guild::DEFAULT_RANK_RIGHTS;
+        GuildRoster {
+            motd: "Raid at eight".into(),
+            info_text: "Founded on the Sunday".into(),
+            rank_rights: DEFAULT_RANK_RIGHTS.to_vec(),
+            members: vec![
+                GuildRosterEntry {
+                    guid: GINGER,
+                    rank: 0,
+                    public_note: "founder".into(),
+                    officer_note: "trusted".into(),
+                    name: "Ginger".into(),
+                    level: 60,
+                    class: 2,    // Paladin
+                    zone_id: 12, // Elwynn Forest
+                    online: true,
+                },
+                GuildRosterEntry {
+                    guid: VIM,
+                    rank: 3,
+                    public_note: "alt of Ginger".into(),
+                    officer_note: String::new(),
+                    name: "Vim".into(),
+                    level: 24,
+                    class: 8,    // Mage
+                    zone_id: 14, // Durotar
+                    online: false,
+                },
+            ],
+        }
+    }
+
+    /// A store holding the Silver Hand's roster, with Ginger a member of it.
+    fn with_roster() -> InMemoryGuildActions {
+        InMemoryGuildActions {
+            guilds: vec![silver_hand()],
+            membership: vec![(GINGER, 3)],
+            rosters: vec![(3, silver_hand_roster())],
+            ..Default::default()
+        }
+    }
+
+    fn roster_of(actions: &InMemoryGuildActions) -> SMSG_GUILD_ROSTER {
+        let outbound = handled(
+            dispatch_guild_action(actions, player(), ClientOpcodeMessage::CMSG_GUILD_ROSTER)
+                .unwrap(),
+        );
+        match outbound.as_slice() {
+            [Outbound::One(ServerOpcodeMessage::SMSG_GUILD_ROSTER(m))] => (**m).clone(),
+            other => panic!(
+                "expected exactly one SMSG_GUILD_ROSTER, got {} message(s)",
+                other.len()
+            ),
+        }
+    }
+
+    /// AC1/AC6: one roster packet listing every member, online and offline, each carrying the two
+    /// notes realm-core holds for it.
+    #[test]
+    fn a_roster_request_lists_every_member_with_their_ranks_and_notes() {
+        let m = roster_of(&with_roster());
+
+        assert_eq!(m.members.len(), 2, "the offline member is listed too");
+        assert_eq!(m.members[0].guid.guid(), GINGER);
+        assert_eq!(m.members[0].rank, 0);
+        assert_eq!(m.members[0].public_note, "founder");
+        assert_eq!(m.members[0].officer_note, "trusted");
+        assert_eq!(m.members[1].guid.guid(), VIM);
+        assert_eq!(m.members[1].rank, 3);
+        assert_eq!(m.members[1].public_note, "alt of Ginger");
+        assert_eq!(m.members[1].officer_note, "");
+    }
+
+    /// AC2 at the seam: the shard-resolved half reaches the packet, per member and unmixed. What
+    /// proves the fan-out RAN is the routing test against two shards holding different data
+    /// (`world/guild_tests.rs`); this pins that nothing drops it on the way to the wire.
+    #[test]
+    fn each_entry_carries_its_own_name_level_class_and_area() {
+        let m = roster_of(&with_roster());
+
+        assert_eq!(m.members[0].name, "Ginger");
+        assert_eq!(m.members[0].level, Level::new(60));
+        assert_eq!(m.members[0].class, Class::Paladin);
+        assert_eq!(m.members[0].area, Area::ElwynnForest);
+        assert_eq!(m.members[1].name, "Vim");
+        assert_eq!(m.members[1].level, Level::new(24));
+        assert_eq!(m.members[1].class, Class::Mage);
+        assert_eq!(m.members[1].area, Area::Durotar);
+    }
+
+    /// AC3: the online column is per member, and an offline one is listed rather than dropped.
+    #[test]
+    fn online_and_offline_members_report_their_own_status() {
+        let m = roster_of(&with_roster());
+
+        assert_eq!(m.members[0].status, GuildMember_GuildMemberStatus::Online);
+        assert_eq!(
+            m.members[1].status,
+            GuildMember_GuildMemberStatus::Offline { time_offline: 0.0 }
+        );
+    }
+
+    /// AC4: one `rights` entry per rank, in rank order — the client indexes it by a member's rank.
+    #[test]
+    fn rights_carries_one_entry_per_rank_in_rank_order() {
+        use lyracore_shared::guild::{DEFAULT_RANK_RIGHTS, GUILD_RANK_COUNT};
+        let m = roster_of(&with_roster());
+
+        assert_eq!(m.rights.len(), GUILD_RANK_COUNT);
+        assert_eq!(m.rights.as_slice(), &DEFAULT_RANK_RIGHTS);
+    }
+
+    /// AC5: the MOTD and the information text are the guild row's own, not blanks.
+    #[test]
+    fn the_roster_carries_the_guilds_motd_and_information_text() {
+        let m = roster_of(&with_roster());
+
+        assert_eq!(m.motd, "Raid at eight");
+        assert_eq!(m.guild_info, "Founded on the Sunday");
+    }
+
+    /// AC7: a guildless caller is refused, not answered with an empty roster — the client leaves
+    /// its panel open on silence.
+    #[test]
+    fn a_guildless_caller_is_refused_with_player_not_in_guild() {
+        let actions = InMemoryGuildActions::default();
+
+        let outbound = handled(
+            dispatch_guild_action(&actions, player(), ClientOpcodeMessage::CMSG_GUILD_ROSTER)
+                .unwrap(),
+        );
+
+        assert_eq!(
+            command_result_of(&outbound).2,
+            GuildCommandResult::GuildPlayerNotInGuild
+        );
+    }
+
+    /// A membership pointing at a guild the authority no longer has is the same fact from the
+    /// client's side, and gets the same answer rather than an empty batch.
+    #[test]
+    fn a_membership_of_a_guild_that_is_gone_is_refused_the_same_way() {
+        let actions = InMemoryGuildActions {
+            membership: vec![(GINGER, 3)],
+            ..Default::default()
+        };
+
+        let outbound = handled(
+            dispatch_guild_action(&actions, player(), ClientOpcodeMessage::CMSG_GUILD_ROSTER)
+                .unwrap(),
+        );
+
+        assert_eq!(
+            command_result_of(&outbound).2,
+            GuildCommandResult::GuildPlayerNotInGuild
+        );
+    }
+
+    /// A roster read that cannot reach its database propagates rather than looking like a caller
+    /// who is in no guild.
+    #[test]
+    fn a_failed_roster_read_propagates_rather_than_refusing() {
+        let actions = InMemoryGuildActions {
+            read_error: Some("realm-core unreachable".into()),
+            ..with_roster()
+        };
+
+        assert!(
+            dispatch_guild_action(&actions, player(), ClientOpcodeMessage::CMSG_GUILD_ROSTER)
+                .is_err()
+        );
     }
 }

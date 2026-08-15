@@ -2333,6 +2333,14 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
 
+    fn guild_roster_snapshot(
+        &self,
+        guild_id: u64,
+    ) -> Result<Option<super::guild::GuildRosterView>> {
+        self.rec("guild_roster_snapshot");
+        Ok(self.guild.lock().unwrap().roster(guild_id))
+    }
+
     fn group_roster(&self, character_guid: u64) -> Result<Option<super::party::GroupRoster>> {
         if self.is_realm {
             let p = self.party.lock().unwrap();
@@ -2684,6 +2692,10 @@ impl handlers::GuildActionStore for InMemoryStore {
 
     fn guild_of(&self, character_guid: u64) -> Result<Option<u64>> {
         super::guild::guild_of(self, character_guid)
+    }
+
+    fn guild_roster(&self, guild_id: u64) -> Result<Option<super::guild::GuildRoster>> {
+        super::guild::roster(self, guild_id)
     }
 }
 
@@ -4614,6 +4626,64 @@ fn guild_create_dispatches_over_the_cipher_and_replies_with_a_typed_command_resu
         Some((1, 0)),
         "the founder holds rank 0 of the guild the socket just created"
     );
+}
+
+/// The ONE encrypted-socket test for the roster. It proves DISPATCH and the TYPED REPLY over the
+/// cipher — that `CMSG_GUILD_ROSTER` reaches the guild seam through the real session loop and that
+/// the answer decodes as an `SMSG_GUILD_ROSTER` carrying the shard-resolved half (name, level,
+/// class, area), which is the half realm-core cannot answer. Every criterion is covered without a
+/// socket in `handlers/guild.rs` and `world/guild_tests.rs`.
+#[test]
+fn guild_roster_dispatches_over_the_cipher_and_replies_with_the_rendered_roster() {
+    use wow_world_messages::vanilla::{Area, Class, CMSG_GUILD_ROSTER};
+
+    let s = quest_store();
+    s.guild
+        .lock()
+        .unwrap()
+        .create(1, "The Silver Hand", GUILD_FIXTURE_MICROS)
+        .unwrap();
+    s.guild.lock().unwrap().guild_text.push((
+        1,
+        "Raid at eight".into(),
+        "Founded on the Sunday".into(),
+    ));
+    let store = std::sync::Arc::new(InMemoryStore {
+        characters: vec![codec::CharacterView {
+            guid: 1,
+            name: "Tester".into(),
+            level: 31,
+            class: 4,    // Rogue
+            zone_id: 12, // Elwynn Forest
+            ..Default::default()
+        }],
+        ..s
+    });
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    CMSG_GUILD_ROSTER {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GUILD_ROSTER(r) => {
+            assert_eq!(r.motd, "Raid at eight");
+            assert_eq!(r.guild_info, "Founded on the Sunday");
+            assert_eq!(r.rights.len(), lyracore_shared::guild::GUILD_RANK_COUNT);
+            let [member] = r.members.as_slice() else {
+                panic!("expected the one member, got {}", r.members.len());
+            };
+            assert_eq!(member.guid.guid(), 1);
+            assert_eq!(member.rank, 0);
+            assert_eq!(member.name, "Tester");
+            assert_eq!(member.level, Level::new(31));
+            assert_eq!(member.class, Class::Rogue);
+            assert_eq!(member.area, Area::ElwynnForest);
+        }
+        other => panic!("expected SMSG_GUILD_ROSTER, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
 }
 
 #[test]
@@ -7525,6 +7595,11 @@ struct FakeGuild {
     /// Every op that reached the AUTHORITY: `(op, actor, target, arg_a, text)`. The assertion that
     /// a guild op ran on realm-core rather than on the player's shard.
     ops: Vec<(u8, u64, u64, u32, String)>,
+    /// The roster fields the create path never writes: `guild_id → (motd, info_text)`. Seeded
+    /// straight into the fake, which is what a guild whose master has set them looks like.
+    guild_text: Vec<(u64, String, String)>,
+    /// `character_guid → (public_note, officer_note)`, likewise seeded rather than written.
+    member_notes: Vec<(u64, String, String)>,
 }
 
 impl FakeGuild {
@@ -7570,6 +7645,45 @@ impl FakeGuild {
             member_count: self.members.iter().filter(|(g, ..)| *g == guild_id).count() as u32,
             // Seeded from the shared vanilla list, exactly as the module's `seed_ranks` does.
             rank_names: DEFAULT_RANK_NAMES.iter().map(|n| n.to_string()).collect(),
+        })
+    }
+
+    /// The authority's whole answer for a roster: guids, ranks, notes, the guild text and the ten
+    /// rank rights. No name, level, class or area — realm-core has no character rows to read them
+    /// from, which is the fact `world::guild::render_roster` exists to repair.
+    fn roster(&self, guild_id: u64) -> Option<super::guild::GuildRosterView> {
+        use lyracore_shared::guild::DEFAULT_RANK_RIGHTS;
+        self.guilds.iter().find(|(g, ..)| *g == guild_id)?;
+        let (motd, info_text) = self
+            .guild_text
+            .iter()
+            .find(|(g, ..)| *g == guild_id)
+            .map(|(_, motd, info)| (motd.clone(), info.clone()))
+            .unwrap_or_default();
+        Some(super::guild::GuildRosterView {
+            guild_id,
+            motd,
+            info_text,
+            rank_rights: DEFAULT_RANK_RIGHTS.to_vec(),
+            members: self
+                .members
+                .iter()
+                .filter(|(g, ..)| *g == guild_id)
+                .map(|(_, guid, rank)| {
+                    let (public_note, officer_note) = self
+                        .member_notes
+                        .iter()
+                        .find(|(g, ..)| g == guid)
+                        .map(|(_, public, officer)| (public.clone(), officer.clone()))
+                        .unwrap_or_default();
+                    super::guild::GuildRosterMember {
+                        guid: *guid,
+                        rank: *rank,
+                        public_note,
+                        officer_note,
+                    }
+                })
+                .collect(),
         })
     }
 }

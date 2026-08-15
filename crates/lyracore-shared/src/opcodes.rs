@@ -59,6 +59,8 @@ pub mod guild {
     pub const CMSG_GUILD_INFO: u32 = 0x087;
     pub const SMSG_GUILD_INFO: u16 = 0x088;
     pub const SMSG_GUILD_COMMAND_RESULT: u16 = 0x093;
+    pub const CMSG_GUILD_ROSTER: u32 = 0x089;
+    pub const SMSG_GUILD_ROSTER: u16 = 0x08A;
 }
 
 /// `MSG_MOVE_*` opcodes. These flow **both** directions: the client sends its own movement,

@@ -1,10 +1,13 @@
-//! Guild packets: the query response, the info panel, and the one error channel.
+//! Guild packets: the query response, the info panel, the roster, and the one error channel.
 
+use crate::world::guild::GuildRoster;
 use lyracore_shared::guild::GUILD_RANK_COUNT;
 use wow_world_messages::vanilla::{
-    GuildCommand, GuildCommandResult, SMSG_GUILD_COMMAND_RESULT, SMSG_GUILD_INFO,
-    SMSG_GUILD_QUERY_RESPONSE,
+    Area, Class, GuildCommand, GuildCommandResult, GuildMember, GuildMember_GuildMemberStatus,
+    Level, SMSG_GUILD_COMMAND_RESULT, SMSG_GUILD_INFO, SMSG_GUILD_QUERY_RESPONSE,
+    SMSG_GUILD_ROSTER,
 };
+use wow_world_messages::Guid;
 
 /// Build `SMSG_GUILD_QUERY_RESPONSE` for a guild the client asked about by id.
 ///
@@ -67,6 +70,43 @@ pub fn build_guild_command_result(
         command,
         string: subject.to_string(),
         result,
+    }
+}
+
+/// Build `SMSG_GUILD_ROSTER` — the guild panel.
+///
+/// Takes a roster the routing layer has ALREADY rendered against the shards
+/// (`world::guild::render_roster`), because realm-core knows only guids, ranks and notes: name,
+/// level, class and area come from whichever shard holds the character.
+///
+/// A class or zone the client's own enums do not have degrades that ONE field rather than dropping
+/// the member — an absent row in the guild panel reads as "they left". `time_offline` is reported
+/// as zero: the authority keeps no last-seen timestamp, and vanilla's client renders the column
+/// only for members it already knows are offline.
+pub fn build_guild_roster(roster: &GuildRoster) -> SMSG_GUILD_ROSTER {
+    SMSG_GUILD_ROSTER {
+        motd: roster.motd.clone(),
+        guild_info: roster.info_text.clone(),
+        rights: roster.rank_rights.clone(),
+        members: roster
+            .members
+            .iter()
+            .map(|m| GuildMember {
+                guid: Guid::new(m.guid),
+                status: if m.online {
+                    GuildMember_GuildMemberStatus::Online
+                } else {
+                    GuildMember_GuildMemberStatus::Offline { time_offline: 0.0 }
+                },
+                name: m.name.clone(),
+                rank: m.rank,
+                level: Level::new(m.level),
+                class: Class::try_from(m.class).unwrap_or_default(),
+                area: Area::try_from(m.zone_id).unwrap_or(Area::None),
+                public_note: m.public_note.clone(),
+                officer_note: m.officer_note.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -136,5 +176,37 @@ mod tests {
     fn the_epoch_itself_is_the_first_of_january_1970() {
         assert_eq!(civil_date(0), (0, 0, 1970));
         assert_eq!(civil_date(-1), (30, 11, 1969)); // one microsecond earlier is 1969-12-31
+    }
+
+    /// A member no shard could resolve arrives here with a zero class and a zero zone — neither of
+    /// which the client's enums have. It renders with the fallbacks and stays in the list, because
+    /// a guild panel missing a row reads as "they left".
+    #[test]
+    fn an_unresolved_member_renders_with_fallbacks_rather_than_being_dropped() {
+        use crate::world::guild::GuildRosterEntry;
+
+        let roster = GuildRoster {
+            members: vec![GuildRosterEntry {
+                guid: 9,
+                rank: 4,
+                public_note: "on leave".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let m = build_guild_roster(&roster);
+        let [member] = m.members.as_slice() else {
+            panic!("the member must not be dropped");
+        };
+        assert_eq!(member.guid.guid(), 9);
+        assert_eq!(member.rank, 4);
+        assert_eq!(member.public_note, "on leave");
+        assert_eq!(member.name, "");
+        assert_eq!(member.area, Area::None);
+        assert_eq!(
+            member.status,
+            GuildMember_GuildMemberStatus::Offline { time_offline: 0.0 }
+        );
     }
 }

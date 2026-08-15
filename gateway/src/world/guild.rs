@@ -150,3 +150,128 @@ pub(crate) fn guild_of<St: WorldStore + ?Sized>(
     };
     Ok(membership.map(|(guild_id, _rank)| guild_id))
 }
+
+// ===========================================================================================
+//  Roster
+// ===========================================================================================
+
+/// One guild's roster as the AUTHORITY holds it: guids, ranks and notes, plus the guild-wide text
+/// and the per-rank rights.
+///
+/// Nothing a `game_character` row would answer is in here, and that is not an omission — realm-core
+/// holds no character rows at all. [`render_roster`] joins this half to the shards' half.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct GuildRosterView {
+    pub guild_id: u64,
+    pub motd: String,
+    pub info_text: String,
+    /// One entry per rank row, in rank order — `SMSG_GUILD_ROSTER.rights` verbatim. Written at
+    /// creation from the vanilla defaults and never consulted server-side.
+    pub rank_rights: Vec<u32>,
+    /// Members in join order (member-row id), which is the order the roster renders in.
+    pub members: Vec<GuildRosterMember>,
+}
+
+/// A roster member as realm-core has it — the whole of what the authority knows about a member.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct GuildRosterMember {
+    pub guid: u64,
+    pub rank: u32,
+    pub public_note: String,
+    pub officer_note: String,
+}
+
+/// A guild roster with every field `SMSG_GUILD_ROSTER` carries: the authority's half joined to the
+/// human-readable half only the shards can answer.
+///
+/// [`render_roster`] is the only thing that builds one, which is what stops a roster packet being
+/// built from realm-core's rows alone — that compiles, and renders a guild of nameless level-zero
+/// members standing in `Area::None`.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct GuildRoster {
+    pub motd: String,
+    pub info_text: String,
+    pub rank_rights: Vec<u32>,
+    pub members: Vec<GuildRosterEntry>,
+}
+
+/// A rendered roster member: the authority's guid, rank and notes, plus what the shard holding the
+/// character answered for. A member no shard has a row for keeps the first half and takes the
+/// defaults for the second.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct GuildRosterEntry {
+    pub guid: u64,
+    pub rank: u32,
+    pub public_note: String,
+    pub officer_note: String,
+    pub name: String,
+    pub level: u8,
+    pub class: u8,
+    pub zone_id: u32,
+    pub online: bool,
+}
+
+/// The roster of `guild_id`, read from the authority and rendered against the shards. `None` = no
+/// such guild.
+pub(crate) fn roster<St: WorldStore + ?Sized>(
+    store: &St,
+    guild_id: u64,
+) -> Result<Option<GuildRoster>> {
+    let view = match store.realm_store() {
+        Some(realm) => realm.guild_roster_snapshot(guild_id)?,
+        None => store.guild_roster_snapshot(guild_id)?,
+    };
+    Ok(view.map(|view| render_roster(store, &view)))
+}
+
+/// Fill each member's name, level, class, area and online flag from the shards — the guild twin of
+/// [`super::party::render_list`], and for the same reason.
+///
+/// **The fan-out is the design, not a workaround.** Realm-core owns membership and holds no
+/// `game_character` rows, so it cannot say what a member is called, what level they are, or where
+/// they stand. Skipping the fan-out still builds a well-formed packet, which is exactly why it has
+/// to be here: the guild panel would render every member as a nameless level-zero character in
+/// `Area::None`.
+///
+/// A member no connected shard has a row for keeps its guid, rank and notes and takes the defaults
+/// for the rest. It is never dropped: a missing row in the guild panel reads as "they left", which
+/// is a worse lie than a blank one.
+pub(crate) fn render_roster<St: WorldStore + ?Sized>(
+    store: &St,
+    view: &GuildRosterView,
+) -> GuildRoster {
+    GuildRoster {
+        motd: view.motd.clone(),
+        info_text: view.info_text.clone(),
+        rank_rights: view.rank_rights.clone(),
+        members: view
+            .members
+            .iter()
+            .map(|m| {
+                // This handle first (the viewer's own shard), then every other connected one — a
+                // member standing inside an instance is on a database this handle never reads.
+                // Empty on a single-database gateway, so the union never leaves it.
+                let character = super::party::character_anywhere(store, m.guid)
+                    .ok()
+                    .flatten();
+                GuildRosterEntry {
+                    guid: m.guid,
+                    rank: m.rank,
+                    public_note: m.public_note.clone(),
+                    officer_note: m.officer_note.clone(),
+                    name: character
+                        .as_ref()
+                        .map(|c| c.name.clone())
+                        .unwrap_or_default(),
+                    level: character.as_ref().map_or(0, |c| c.level),
+                    class: character.as_ref().map_or(0, |c| c.class),
+                    zone_id: character.as_ref().map_or(0, |c| c.zone_id),
+                    // The live-entity union, not `game_character.online`: the same flag the party
+                    // frame's online column reads, so a session-less playerbot in the guild shows
+                    // up as the online member it is.
+                    online: super::party::live_anywhere(store, m.guid),
+                }
+            })
+            .collect(),
+    }
+}

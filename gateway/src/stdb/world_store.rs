@@ -1078,6 +1078,13 @@ impl WorldStore for Coordinator {
         self.sync_guild_membership(character_guid, guild_id, guild_rank)
     }
 
+    fn guild_roster_snapshot(
+        &self,
+        guild_id: u64,
+    ) -> Result<Option<crate::world::guild::GuildRosterView>> {
+        Ok(self.guild_roster_view(guild_id))
+    }
+
     fn realm_whisper(
         &self,
         sender_guid: u64,

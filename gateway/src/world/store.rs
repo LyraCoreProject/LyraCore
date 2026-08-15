@@ -240,6 +240,13 @@ pub trait WorldStore:
         Ok(())
     }
 
+    /// `guild_id`'s roster as THIS handle's database holds it — guids, ranks, notes, the guild
+    /// text and the per-rank rights, and nothing a `game_character` row would answer. The
+    /// human-readable half is filled from the shards by `guild::render_roster`.
+    fn guild_roster_snapshot(&self, _guild_id: u64) -> Result<Option<guild::GuildRosterView>> {
+        Ok(None)
+    }
+
     /// `realm_whisper` — deliver one whisper against the database this handle names. Called on the
     /// realm-core handle, which is the only one that can address BOTH parties of
     /// a cross-shard whisper: `recipient_guid` is realm-wide, a bound identity is per-database.

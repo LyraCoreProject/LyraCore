@@ -280,3 +280,251 @@ fn a_refused_create_propagates_the_authoritys_own_error_string() {
     let invalid = create(world.as_ref(), VIM, "X").expect_err("one character is too short");
     assert!(format!("{invalid:#}").contains(err::NAME_INVALID));
 }
+
+// ===========================================================================================
+//  Roster
+// ===========================================================================================
+
+/// A guild member whose character row nothing holds — a shard that is down, or a row the sweeps
+/// have already taken. It still belongs to the guild as far as the authority is concerned.
+const MYSTERY: u64 = 77;
+
+/// A character row with every shard-resolved field set to something DISTINCT, so a roster entry
+/// that quietly took a default reads as a wrong value rather than as a coincidence.
+fn resident(guid: u64, name: &str, level: u8, class: u8, zone_id: u32) -> codec::CharacterView {
+    codec::CharacterView {
+        guid,
+        name: name.into(),
+        level,
+        class,
+        zone_id,
+        ..Default::default()
+    }
+}
+
+/// [`guild_topology`] with the roster's own fixtures: Ginger's row on `world` and Vim's on
+/// `instances`, carrying different names, levels, classes and zones. Ginger is live; Vim's row
+/// exists with nobody at the keyboard, which is exactly what an offline guild member is.
+///
+/// The split is the point. A roster rendered from one shard alone, or from realm-core alone, cannot
+/// produce both rows.
+fn roster_topology() -> (
+    std::sync::Arc<InMemoryStore>, // realm-core
+    std::sync::Arc<InMemoryStore>, // the open-world shard
+    std::sync::Arc<InMemoryStore>, // the instances shard
+) {
+    let calls: ShardCallLog = Default::default();
+    let realm = std::sync::Arc::new(InMemoryStore {
+        shard: "lyracore-realm".into(),
+        calls: calls.clone(),
+        is_realm: true,
+        ..Default::default()
+    });
+    let world = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        realm: Some(realm.clone()),
+        characters: vec![resident(GINGER, "Ginger", 60, 2, 12)], // Paladin, Elwynn Forest
+        live_guids: vec![GINGER],
+        ..Default::default()
+    });
+    let instances = std::sync::Arc::new(InMemoryStore {
+        shard: "instances".into(),
+        calls: calls.clone(),
+        realm: Some(realm.clone()),
+        characters: vec![resident(VIM, "Vim", 24, 8, 14)], // Mage, Durotar
+        ..Default::default()
+    });
+    for shard in [&world, &instances] {
+        *shard.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+    }
+    seed_silver_hand(&realm);
+    (realm, world, instances)
+}
+
+/// Seed the authority with the roster realm-core owns: Ginger as master, Vim at rank 3, the guild
+/// text and both members' notes. Seeded directly rather than through an invite — membership writes
+/// belong to another slice, and the roster only ever reads.
+fn seed_silver_hand(realm: &InMemoryStore) {
+    let mut g = realm.guild.lock().unwrap();
+    let guild_id = g
+        .create(GINGER, "The Silver Hand", GUILD_FIXTURE_MICROS)
+        .expect("the fixture guild is founded");
+    g.members.push((guild_id, VIM, 3));
+    g.guild_text.push((
+        guild_id,
+        "Raid at eight".into(),
+        "Founded on the Sunday".into(),
+    ));
+    g.member_notes
+        .push((GINGER, "founder".into(), "trusted".into()));
+    g.member_notes
+        .push((VIM, "alt of Ginger".into(), String::new()));
+}
+
+/// **AC2, and the reason this ticket exists.** Realm-core knows guids, ranks and notes and nothing
+/// else, so every human-readable field has to come from the shard that holds that character. The
+/// two members sit on DIFFERENT databases with different levels, classes and zones — an
+/// implementation that skipped the fan-out would still build a well-formed packet, and every entry
+/// in it would be a level-zero unknown class in zone zero.
+#[test]
+fn every_roster_entry_carries_the_real_character_from_the_shard_that_holds_it() {
+    let (_realm, world, instances) = roster_topology();
+
+    let roster = guild::roster(world.as_ref(), 1)
+        .unwrap()
+        .expect("the authority has the guild");
+
+    assert_eq!(roster.motd, "Raid at eight");
+    assert_eq!(roster.info_text, "Founded on the Sunday");
+    assert_eq!(
+        roster.rank_rights,
+        lyracore_shared::guild::DEFAULT_RANK_RIGHTS.to_vec(),
+        "one rights entry per rank, in rank order"
+    );
+
+    let [ginger, vim] = roster.members.as_slice() else {
+        panic!("both members must be listed, got {:?}", roster.members);
+    };
+    assert_eq!(
+        (
+            ginger.guid,
+            ginger.rank,
+            ginger.name.as_str(),
+            ginger.level,
+            ginger.class,
+            ginger.zone_id
+        ),
+        (GINGER, 0, "Ginger", 60, 2, 12),
+        "the master's row came off his own shard"
+    );
+    assert_eq!(
+        (
+            vim.guid,
+            vim.rank,
+            vim.name.as_str(),
+            vim.level,
+            vim.class,
+            vim.zone_id
+        ),
+        (VIM, 3, "Vim", 24, 8, 14),
+        "the member inside the dungeon is on a database the viewer's shard never reads"
+    );
+    assert_eq!(
+        (ginger.public_note.as_str(), ginger.officer_note.as_str()),
+        ("founder", "trusted"),
+        "the notes are realm-core's half of the entry"
+    );
+
+    // And the answer does not depend on where the viewer stands.
+    let from_the_dungeon = guild::roster(instances.as_ref(), 1).unwrap().unwrap();
+    assert_eq!(from_the_dungeon, roster);
+}
+
+/// AC3: the online column is resolved per member across the shards, and an offline member is listed
+/// with their last-known level, class and area rather than dropped — an absent row in the guild
+/// panel reads as "they left".
+#[test]
+fn offline_members_are_listed_with_their_last_known_row() {
+    let (_realm, world, _instances) = roster_topology();
+
+    let roster = guild::roster(world.as_ref(), 1).unwrap().unwrap();
+
+    assert!(roster.members[0].online, "Ginger is live on `world`");
+    assert!(
+        !roster.members[1].online,
+        "Vim has a character row and no live entity anywhere"
+    );
+    assert_eq!(roster.members[1].level, 24, "and still carries their row");
+}
+
+/// AC8: a member no shard can answer for keeps the guid, rank and notes realm-core knows and takes
+/// the defaults for the rest. Never dropped, never a panic.
+#[test]
+fn a_member_no_shard_can_resolve_still_appears_with_what_the_authority_knows() {
+    let (realm, world, _instances) = roster_topology();
+    realm.guild.lock().unwrap().members.push((1, MYSTERY, 4));
+    realm
+        .guild
+        .lock()
+        .unwrap()
+        .member_notes
+        .push((MYSTERY, "on leave".into(), String::new()));
+
+    let roster = guild::roster(world.as_ref(), 1).unwrap().unwrap();
+
+    let mystery = roster
+        .members
+        .iter()
+        .find(|m| m.guid == MYSTERY)
+        .expect("an unresolvable member is still a member");
+    assert_eq!(
+        (mystery.rank, mystery.public_note.as_str()),
+        (4, "on leave")
+    );
+    assert_eq!(
+        (
+            mystery.name.as_str(),
+            mystery.level,
+            mystery.class,
+            mystery.zone_id,
+            mystery.online
+        ),
+        ("", 0, 0, 0, false)
+    );
+}
+
+/// **AC9, the single-database assertion.** An unsharded gateway reads the roster from the player's
+/// own database and renders it from that same database's character rows — the realm plane is never
+/// touched, and the answer is the one the sharded path gives.
+#[test]
+fn an_unsharded_gateway_renders_the_roster_from_the_players_own_shard() {
+    let calls: ShardCallLog = Default::default();
+    let store = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        characters: vec![resident(GINGER, "Ginger", 60, 2, 12)],
+        live_guids: vec![GINGER],
+        ..Default::default() // no `realm`, no `peers` — the unconfigured gateway
+    });
+    seed_silver_hand(&store);
+    calls.lock().unwrap().clear(); // the seeding is not a routed call
+
+    let roster = guild::roster(store.as_ref(), 1)
+        .unwrap()
+        .expect("the one database is the authority");
+
+    let log = calls.lock().unwrap().clone();
+    assert!(
+        log.iter().all(|(shard, _)| shard == "world"),
+        "every read must land on the player's own database, got {log:?}"
+    );
+    assert!(
+        !log.iter().any(|(_, call)| call == "realm_guild_op"),
+        "the realm plane must be untouched on a single-database gateway"
+    );
+    assert_eq!(roster.motd, "Raid at eight");
+    assert_eq!(
+        (
+            roster.members[0].name.as_str(),
+            roster.members[0].level,
+            roster.members[0].class,
+            roster.members[0].zone_id,
+            roster.members[0].online
+        ),
+        ("Ginger", 60, 2, 12, true)
+    );
+    // Vim has no character row on this one database, so the entry degrades rather than vanishing.
+    assert_eq!(roster.members[1].guid, VIM);
+    assert_eq!(roster.members[1].rank, 3);
+    assert_eq!(roster.members[1].name, "");
+}
+
+/// A guild id the authority does not have is absent, not an error — the same posture the query read
+/// takes for a stale id the client still holds.
+#[test]
+fn an_unknown_guild_id_has_no_roster() {
+    let (_realm, world, _instances) = roster_topology();
+
+    assert_eq!(guild::roster(world.as_ref(), 99).unwrap(), None);
+}
