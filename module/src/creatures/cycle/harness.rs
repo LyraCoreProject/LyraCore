@@ -3,7 +3,8 @@
 //! the ordered movement effects a client would have received.
 
 use super::*;
-use crate::creatures::chase_step;
+use crate::creatures::ai::ROUT_DURATION_MS;
+use crate::creatures::{chase_step, rout_window_open};
 use lyracore_shared::spatial;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
@@ -56,7 +57,11 @@ struct MoveEffect {
 struct Scenario {
     creatures: RefCell<HashMap<u64, XCreature>>,
     legs: RefCell<Vec<LegInFlight>>,
-    suppressed: RefCell<HashSet<u64>>,
+    /// FROZEN by crowd control — a stun, root or polymorph. Fear is the other axis, below.
+    frozen: RefCell<HashSet<u64>>,
+    /// Live fear auras, `(feared unit, caster)`, in the order the world reads them: one row each, so
+    /// a creature feared twice really is listed twice.
+    fears: RefCell<Vec<(u64, u64)>>,
     engaged: RefCell<HashSet<u64>>,
     routes: RefCell<HashMap<u64, Vec<Waypoint>>>,
     homes: RefCell<HashMap<u64, Home>>,
@@ -76,8 +81,9 @@ struct Scenario {
     players: RefCell<Vec<AggroTarget>>,
     /// Live melee engagements — what aggro arms, and what combat entry and chase read.
     fights: RefCell<Vec<Engagement>>,
-    /// Creatures inside an open rout window: the rout leg is their sole mover.
-    routing: RefCell<HashSet<u64>>,
+    /// Each engagement's rout clock, `creature -> the ms its window closes at`. Absent is the
+    /// never-routed sentinel; the rout phase is the only thing that writes it.
+    rout_clock: RefCell<HashMap<u64, u32>>,
     /// The longest offensive spell range a creature fights from; absent means melee-only.
     hold_ranges: RefCell<HashMap<u64, f32>>,
     /// Determinism input: when each PLAYER last moved. A creature's own move clock is on its row.
@@ -257,9 +263,21 @@ impl Scenario {
         self
     }
 
-    /// The creature is inside an open rout window, so the rout leg owns its movement.
+    /// The creature is already routing: wounded, of a kind that runs, and inside an open window.
     fn routing(self, guid: u64) -> Self {
-        self.routing.borrow_mut().insert(guid);
+        let ends_ms = (self.now_micros.get() / 1000) as u32 + ROUT_DURATION_MS;
+        self.rout_clock.borrow_mut().insert(guid, ends_ms);
+        self.wounded_runner(guid)
+    }
+
+    /// Hurt past the rout threshold and of a kind that runs — `rout_eligible` in the world.
+    fn wounded_runner(self, guid: u64) -> Self {
+        self.hurt(guid, 10).near_death(guid)
+    }
+
+    /// `caster` has fear up on `guid`. Called twice, the creature carries two live fear auras.
+    fn feared_by(self, guid: u64, caster: u64) -> Self {
+        self.fears.borrow_mut().push((guid, caster));
         self
     }
 
@@ -465,8 +483,13 @@ impl Scenario {
     }
 
     fn rooted(self, guid: u64) -> Self {
-        self.suppressed.borrow_mut().insert(guid);
+        self.frozen.borrow_mut().insert(guid);
         self
+    }
+
+    /// This engagement's rout clock, as the phase left it.
+    fn rout_ends_ms(&self, guid: u64) -> u32 {
+        self.rout_clock.borrow().get(&guid).copied().unwrap_or(0)
     }
 
     fn at(&self, guid: u64) -> XCreature {
@@ -497,7 +520,7 @@ impl MotionSink for Scenario {
         self.legs.borrow().clone()
     }
     fn movement_suppressed(&self, guid: u64) -> bool {
-        self.suppressed.borrow().contains(&guid)
+        self.cc(guid).2
     }
     fn commit_position(&mut self, guid: u64, at: Point, moved_ms: u32) {
         self.place(guid, at, Some(moved_ms));
@@ -541,6 +564,28 @@ impl MotionSink for Scenario {
 }
 
 impl Scenario {
+    /// The crowd-control lattice, composed the way the world composes it — `spell::cc_blocks` over
+    /// this scenario's frozen set and its fear rows: `(action blocked, movement blocked, self
+    /// movement suppressed)`.
+    fn cc(&self, guid: u64) -> (bool, bool, bool) {
+        let frozen = self.frozen.borrow().contains(&guid);
+        let feared = self.fears.borrow().iter().any(|(unit, _)| *unit == guid);
+        crate::spell::cc_blocks(frozen, false, feared, false)
+    }
+
+    /// Is this creature ACTIVELY routing — the world's `creature_is_routing`: wounded and of a kind
+    /// that runs, inside an open window, and free to move. Chase, the rout leg and the swing pass all
+    /// read this one verdict, so the harness answers it in one place too.
+    fn is_routing(&self, guid: u64) -> bool {
+        let eligible = self
+            .creatures
+            .borrow()
+            .get(&guid)
+            .is_some_and(|c| c.would_rout);
+        let now_ms = (self.now_micros.get() / 1000) as u32;
+        eligible && rout_window_open(now_ms, self.rout_ends_ms(guid)) && !self.cc(guid).2
+    }
+
     /// The state mirror behind both position writes, matching `CtxWorld::place`.
     fn place(&self, guid: u64, at: Point, moved_ms: Option<u32>) -> Option<(i32, i32)> {
         let mut creatures = self.creatures.borrow_mut();
@@ -729,7 +774,7 @@ impl EngageSink for Scenario {
                 aggro_range: c.aggro_range,
                 detect_range_mod: c.detect_range_mod,
                 would_rout: c.would_rout,
-                cannot_act: c.cannot_act,
+                cannot_act: c.cannot_act || self.cc(guid).0,
             })
             .collect()
     }
@@ -790,7 +835,7 @@ impl CastSink for Scenario {
                     level: c.level as u8,
                     health: c.health,
                     max_health: c.max_health,
-                    cannot_act: c.cannot_act,
+                    cannot_act: c.cannot_act || self.cc(f.attacker).0,
                     casting: self.casting.borrow().contains(&f.attacker),
                 })
             })
@@ -884,7 +929,7 @@ impl PursuitSink for Scenario {
                     orientation: c.orientation,
                     victim_at,
                     victim_last_move_ms,
-                    routing: self.routing.borrow().contains(&f.attacker),
+                    routing: self.is_routing(f.attacker),
                     leg: legs.iter().find(|l| l.guid == f.attacker).cloned(),
                 })
             })
@@ -917,6 +962,71 @@ impl PursuitSink for Scenario {
     }
 }
 
+// The in-memory rout world. A fight whose attacker is not a creature row is a PLAYER's own attack
+// row, which the production adapter drops for the same reason: only creatures rout.
+impl RoutSink for Scenario {
+    fn routers(&self, scope: &TickScope) -> Vec<Router> {
+        let creatures = self.creatures.borrow();
+        let legs = self.legs.borrow();
+        self.fights
+            .borrow()
+            .iter()
+            .filter_map(|f| {
+                let c = creatures.get(&f.attacker)?;
+                scope.covers(c.instance_id).then_some(Router {
+                    guid: f.attacker,
+                    at: c.at,
+                    victim: f.victim,
+                    victim_at: self.unit(f.victim).map(|(at, _)| at),
+                    health: c.health,
+                    max_health: c.max_health,
+                    eligible: c.would_rout,
+                    rout_ends_ms: self.rout_ends_ms(f.attacker),
+                    routing: self.is_routing(f.attacker),
+                    committed: legs.iter().any(|l| l.guid == f.attacker),
+                })
+            })
+            .collect()
+    }
+    fn start_rout(&mut self, guid: u64, ends_ms: u32) {
+        self.rout_clock.borrow_mut().insert(guid, ends_ms);
+    }
+}
+
+// The in-memory fear world: one candidate per live fear aura, as the world's aura scan yields them.
+impl FearSink for Scenario {
+    fn panicked(&self, scope: &TickScope) -> Vec<Panicked> {
+        let creatures = self.creatures.borrow();
+        let fears = self.fears.borrow();
+        fears
+            .iter()
+            .filter_map(|(guid, _)| {
+                let c = creatures.get(guid)?;
+                // Which caster wins is the FIRST fear row on the unit, not this row's — the same
+                // tie-break `spell::fear_source` makes.
+                let (_, caster) = fears.iter().find(|(unit, _)| unit == guid)?;
+                // The caster if it is still in the world; failing that, whatever the creature was
+                // fighting — it still flees SOMETHING.
+                let source = self.unit(*caster).map(|(at, _)| at).or_else(|| {
+                    let victim = self
+                        .fights
+                        .borrow()
+                        .iter()
+                        .find(|f| f.attacker == *guid)
+                        .map(|f| f.victim)?;
+                    self.unit(victim).map(|(at, _)| at)
+                });
+                scope.covers(c.instance_id).then_some(Panicked {
+                    guid: *guid,
+                    at: c.at,
+                    source_at: source,
+                    frozen: self.cc(*guid).1,
+                })
+            })
+            .collect()
+    }
+}
+
 // Not migrated yet: the cycle SEQUENCES these, the harness cannot run them.
 impl LegacyPasses for Scenario {
     fn legacy_pet(&mut self, _scope: &TickScope, _now_ms: u32, _pets: &[u64]) -> usize {
@@ -926,12 +1036,6 @@ impl LegacyPasses for Scenario {
         0
     }
     fn legacy_combat_drop(&mut self, _in_combat: &[u64]) -> usize {
-        0
-    }
-    fn legacy_flee(&mut self, _scope: &TickScope) -> usize {
-        0
-    }
-    fn legacy_fear_flee(&mut self, _scope: &TickScope, _tick_secs: f32) -> usize {
         0
     }
 }
@@ -1950,23 +2054,18 @@ fn an_offensive_caster_holds_at_its_spell_range() {
 }
 
 #[test]
-fn a_routing_or_suppressed_creature_is_not_moved_by_chase() {
-    let held: [(&str, Twist); 2] = [
-        ("routing", |w| w.routing(WOLF)),
-        ("rooted", |w| w.rooted(WOLF)),
-    ];
-    for (case, hold) in held {
-        let mut w = hold(wolf_fighting(p(15.0, 0.0, 10.0)).attacking(WOLF, HUNTER));
-        let tick = w.tick(false, catch_all());
-        run_cycle(&mut w, tick);
+fn a_crowd_controlled_creature_is_not_moved_by_chase() {
+    let mut w = wolf_fighting(p(15.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .rooted(WOLF);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
 
-        assert!(
-            w.effects().is_empty(),
-            "the rout leg and fear are the SOLE movers of the creatures they own; a chase leg in \
-             the same firing shares their spline id and the client throws one of the two away \
-             ({case})"
-        );
-    }
+    assert!(
+        w.effects().is_empty(),
+        "a rooted creature keeps swinging but must not slide toward its victim; the client would \
+         show it walking while the server says it is pinned"
+    );
 }
 
 #[test]
@@ -2235,4 +2334,230 @@ fn a_taunt_pins_the_target_whatever_the_threat_table_says() {
              next nuke has no way to hold a mob off the group ({case})"
         );
     }
+}
+
+/// A wolf swinging at a hunter standing INSIDE melee reach and already faced: chase decides to stand
+/// still, so every movement effect in these scenarios is the rout's or fear's own.
+fn wolf_cornered() -> Scenario {
+    wolf_fighting(p(3.0, 0.0, 10.0)).attacking(WOLF, HUNTER)
+}
+
+/// What a healthy creature's run leg over the committed rout distance would take.
+fn healthy_rout_ms() -> u32 {
+    (FLEE_LEG_YD / lyracore_shared::constants::speeds::RUN * 1000.0) as u32
+}
+
+#[test]
+fn a_wounded_runner_breaks_off_and_sprints_away_from_its_victim() {
+    let mut w = wolf_cornered().wounded_runner(WOLF);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    let now_ms = (SETTLED / 1000) as u32;
+    let leg = w.effects();
+    assert_eq!(leg.len(), 1, "the rout is the router's SOLE mover");
+    assert_eq!(
+        (leg[0].dest, leg[0].run),
+        (p(-FLEE_LEG_YD, 0.0, 10.0), true),
+        "a routing creature must run the full committed dash directly AWAY from what it fights; a \
+         short leg re-decided every firing is the flee spin the commit exists to remove"
+    );
+    assert!(
+        leg[0].dur_ms > healthy_rout_ms(),
+        "a wounded runner must travel SLOWER than a healthy one, or the player can never close the \
+         gap and the mob is uncatchable"
+    );
+    assert_eq!(
+        w.rout_ends_ms(WOLF),
+        now_ms + ROUT_DURATION_MS,
+        "the rout must be BOUNDED — an unstamped window is a creature that runs until it dies"
+    );
+    assert!(
+        w.flagged().contains(&WOLF) && w.flagged().contains(&HUNTER),
+        "routing is a SHARED combat state: without the re-stamp on both sides the combat drop \
+         fires mid-run and the pair simply untargets each other"
+    );
+}
+
+#[test]
+fn a_creature_that_fights_to_the_death_never_enters_the_rout_path() {
+    // Identically wounded, but a beast/undead/elemental or a pet: it stands and swings.
+    let mut w = wolf_cornered().hurt(WOLF, 10);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert!(
+        w.effects().is_empty() && w.rout_ends_ms(WOLF) == 0,
+        "fleeing is SELECTIVE: a Northshire wolf that runs away at 10% health drops the fight the \
+         player was winning"
+    );
+}
+
+#[test]
+fn a_router_rides_its_committed_leg_and_re_rolls_only_once_it_ends() {
+    let mut w = wolf_cornered().wounded_runner(WOLF);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+    let dur_ms = w.effects()[0].dur_ms;
+
+    w.advance_clock(500_000);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+    assert_eq!(
+        w.effects().len(),
+        1,
+        "re-picking an away-bearing every firing snap-rotates the client's facing — the flee spin; \
+         the committed leg must play out"
+    );
+    assert_eq!(
+        w.victims(),
+        [(WOLF, HUNTER)],
+        "a router must stay ENGAGED while it runs, or it can be neither chased down nor killed"
+    );
+
+    // The dash lands, and the window is still open: the next one is rolled from where it stopped.
+    w.advance_clock(dur_ms as u64 * 1000);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+    assert_eq!(
+        w.effects().len(),
+        2,
+        "a rout whose leg ended mid-window must keep running, not stand still until the window \
+         closes"
+    );
+}
+
+#[test]
+fn a_spent_rout_returns_the_creature_to_chasing_and_never_opens_a_second() {
+    let mut w = wolf_cornered().wounded_runner(WOLF);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+    let opened_at = w.rout_ends_ms(WOLF);
+
+    // Past the window: the dash has landed and the creature is an ordinary attacker again.
+    w.advance_clock(ROUT_DURATION_MS as u64 * 1000 + 1_000_000);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    let chase = w.effects()[1];
+    assert!(
+        chase.dest.x > chase.start.x,
+        "once the window closes the creature must turn round and CLOSE on its victim; standing \
+         where the rout left it is a mob that never fights again"
+    );
+    assert_eq!(
+        w.rout_ends_ms(WOLF),
+        opened_at,
+        "the spent clock is what forbids a second rout — re-stamping it would let a creature run \
+         for the rest of the fight"
+    );
+}
+
+#[test]
+fn a_feared_creature_is_moved_by_fear_and_by_nothing_else() {
+    let mut w = wolf_fighting(p(15.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .feared_by(WOLF, HUNTER)
+        .rolls([u32::MAX / 2]);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    let leg = w.effects();
+    assert_eq!(
+        leg.len(),
+        1,
+        "every other mover must skip a feared creature: two legs in one firing share a spline id \
+         and the client throws one of them away"
+    );
+    assert!(
+        leg[0].dest.x < -14.0 && leg[0].run,
+        "a feared creature is force-walked AWAY from whoever feared it, at a run; got {:?}",
+        leg[0].dest
+    );
+    assert_eq!(
+        w.victims(),
+        [(WOLF, HUNTER)],
+        "fear does NOT disengage: when the aura lapses the creature must turn and fight the unit \
+         it was already fighting"
+    );
+}
+
+#[test]
+fn two_fear_sources_panic_the_creature_once() {
+    let mut w = wolf_fighting(p(15.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .feared_by(WOLF, HUNTER)
+        .feared_by(WOLF, RANGER)
+        .rolls([u32::MAX / 2]);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.effects().len(),
+        1,
+        "a creature two casters feared is still ONE panicking creature; a leg per aura row would \
+         double its terror speed and burn a second spline id"
+    );
+}
+
+#[test]
+fn fear_owns_a_wounded_runner_and_leaves_its_rout_window_intact() {
+    let cases: [(&str, Twist, bool); 2] = [
+        ("about to rout", |w| w.wounded_runner(WOLF), false),
+        ("already routing", |w| w.routing(WOLF), true),
+    ];
+    for (case, twist, was_open) in cases {
+        let mut w = twist(
+            wolf_fighting(p(15.0, 0.0, 10.0))
+                .attacking(WOLF, HUNTER)
+                .rolls([u32::MAX / 2]),
+        )
+        .feared_by(WOLF, HUNTER);
+        let before = w.rout_ends_ms(WOLF);
+        let tick = w.tick(false, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            w.effects().len(),
+            1,
+            "fear owns forced movement outright: a rout leg in the same firing would fight the \
+             fear dash for the one spline id ({case})"
+        );
+        assert_eq!(
+            (w.rout_ends_ms(WOLF), before != 0),
+            (before, was_open),
+            "fear must leave the rout window exactly as it found it, or a creature loses (or \
+             silently spends) its one rout to a crowd control that already ended ({case})"
+        );
+    }
+}
+
+#[test]
+fn a_crowd_controlled_router_keeps_its_state_and_resumes_when_the_control_ends() {
+    let mut w = wolf_cornered().routing(WOLF).rooted(WOLF);
+    let open_until = w.rout_ends_ms(WOLF);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert!(
+        w.effects().is_empty(),
+        "a frozen creature must not move at all — not by chase, not by its own rout"
+    );
+    assert_eq!(
+        (w.victims(), w.rout_ends_ms(WOLF)),
+        (vec![(WOLF, HUNTER)], open_until),
+        "crowd control suspends the behavior, it does not destroy it: losing the engagement or the \
+         window here is a creature that stands still for good once the control lifts"
+    );
+
+    w.frozen.borrow_mut().remove(&WOLF); // the root expires
+    w.advance_clock(500_000);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.effects().len(),
+        1,
+        "the creature must resume its rout on the very next firing, inside the window it kept"
+    );
 }

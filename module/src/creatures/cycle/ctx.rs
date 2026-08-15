@@ -12,16 +12,16 @@ use spacetimedb::{ReducerContext, Table};
 
 use super::{
     run_cycle, AggroTarget, CastSink, CastWhen, Caster, CreatureWorld, CycleOutcome, EngageSink,
-    Engagement, Fighter, Gait, Home, IdleCreature, IdleSink, Leg, LegInFlight, LegacyPasses,
-    MotionSink, Point, Pull, Pursuit, PursuitSink, Sensor, SpellOption, ThreatSink, TickContext,
-    Waypoint,
+    Engagement, FearSink, Fighter, Gait, Home, IdleCreature, IdleSink, Leg, LegInFlight,
+    LegacyPasses, MotionSink, Panicked, Point, Pull, Pursuit, PursuitSink, RoutSink, Router,
+    Sensor, SpellOption, ThreatSink, TickContext, Waypoint,
 };
 use crate::creatures::ai::TickScope;
 use crate::creatures::cast_condition;
 use crate::creatures::tick::{self, CreatureSpline, TickSweep};
 use crate::spell::game_pending_cast;
 use crate::{
-    game_creature_cast, game_creature_spawn, game_creature_spell, game_creature_spline,
+    game_aura, game_creature_cast, game_creature_spawn, game_creature_spell, game_creature_spline,
     game_creature_template, game_creature_waypoint, game_melee_attack, game_spell,
     game_world_entity, MeleeAttack,
 };
@@ -584,6 +584,97 @@ impl PursuitSink for CtxWorld<'_> {
     }
 }
 
+impl RoutSink for CtxWorld<'_> {
+    // ponytail: `creature_is_routing` re-derives eligibility that `eligible` already carries, because
+    // it is the ONE predicate chase, this phase and `combat::swing` share and forking it would let a
+    // creature be diverted out of chasing with nothing left to move it. Ceiling: one extra template
+    // read plus one aura scan per engaged creature per firing.
+    fn routers(&self, scope: &TickScope) -> Vec<Router> {
+        let entities = self.ctx.db.game_world_entity();
+        let splines = self.ctx.db.game_creature_spline();
+        // The engaged rows ARE the candidate set — the rout clock lives on them, so the state is in
+        // hand with no extra lookup, and a creature whose row is gone can never have been routing.
+        self.ctx
+            .db
+            .game_melee_attack()
+            .iter()
+            .filter_map(|row| {
+                let c = tick::movable_creature(self.ctx, row.attacker_guid, scope)?;
+                Some(Router {
+                    guid: c.guid,
+                    at: Point {
+                        x: c.x,
+                        y: c.y,
+                        z: c.z,
+                    },
+                    victim: row.target_guid,
+                    victim_at: entities.guid().find(row.target_guid).map(|t| Point {
+                        x: t.x,
+                        y: t.y,
+                        z: t.z,
+                    }),
+                    health: c.health,
+                    max_health: c.max_health,
+                    eligible: tick::rout_eligible(self.ctx, &c),
+                    rout_ends_ms: row.rout_ends_ms,
+                    routing: tick::creature_is_routing(self.ctx, &c),
+                    committed: splines.guid().find(c.guid).is_some(),
+                })
+            })
+            .collect()
+    }
+    fn start_rout(&mut self, guid: u64, ends_ms: u32) {
+        let melee = self.ctx.db.game_melee_attack();
+        if let Some(mut row) = melee.attacker_guid().find(guid) {
+            row.rout_ends_ms = ends_ms;
+            melee.attacker_guid().update(row);
+        }
+    }
+}
+
+impl FearSink for CtxWorld<'_> {
+    // KNOWN DEBT, inherited verbatim with the pass: `game_aura` carries no by-mechanic index, so the
+    // fear rows are found by scanning the aura table, which is itself small — fear uptime is rare.
+    // ponytail: one row per AURA, not per feared creature, so a doubly-feared creature is resolved
+    // twice and the phase collapses it. Ceiling: a second `fear_source` scan for a rare case.
+    fn panicked(&self, scope: &TickScope) -> Vec<Panicked> {
+        let entities = self.ctx.db.game_world_entity();
+        let melee = self.ctx.db.game_melee_attack();
+        self.ctx
+            .db
+            .game_aura()
+            .iter()
+            .filter(|a| a.eff_kind == crate::spell::A_CONTROL && a.eff_p0 == crate::spell::M_FEAR)
+            .filter_map(|a| {
+                let c = tick::movable_creature(self.ctx, a.target_guid, scope)?;
+                // Re-resolved rather than read off the row above, so which caster wins when a
+                // creature carries two fears stays `fear_source`'s own find order.
+                let source = crate::spell::fear_source(self.ctx, c.guid)?;
+                let at = entities.guid().find(source).or_else(|| {
+                    melee
+                        .attacker_guid()
+                        .find(c.guid)
+                        .and_then(|r| entities.guid().find(r.target_guid))
+                });
+                Some(Panicked {
+                    guid: c.guid,
+                    at: Point {
+                        x: c.x,
+                        y: c.y,
+                        z: c.z,
+                    },
+                    source_at: at.map(|s| Point {
+                        x: s.x,
+                        y: s.y,
+                        z: s.z,
+                    }),
+                    frozen: crate::spell::is_movement_blocked(self.ctx, c.guid),
+                })
+            })
+            .collect()
+    }
+}
+
 impl CreatureWorld for CtxWorld<'_> {
     fn awake_creatures(&self, scope: &TickScope) -> TickSweep {
         tick::active_cell_creatures(self.ctx, scope)
@@ -612,11 +703,5 @@ impl LegacyPasses for CtxWorld<'_> {
     }
     fn legacy_combat_drop(&mut self, in_combat: &[u64]) -> usize {
         tick::pass_combat_drop(self.ctx, in_combat)
-    }
-    fn legacy_flee(&mut self, scope: &TickScope) -> usize {
-        tick::pass_flee(self.ctx, scope)
-    }
-    fn legacy_fear_flee(&mut self, scope: &TickScope, tick_secs: f32) -> usize {
-        tick::pass_fear_flee(self.ctx, scope, tick_secs)
     }
 }

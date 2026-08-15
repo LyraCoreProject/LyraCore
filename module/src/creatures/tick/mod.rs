@@ -7,11 +7,9 @@
 //! ticket by ticket.
 //!
 //!   - `mod.rs` (this file) — the two tables + the schedule table, the `tick_creatures` shell, the
-//!     active-cell sweep and rows-visited evidence logs, `pass_combat_drop`, the shared "one
-//!     movement-leg grammar" toolkit (`PendingLeg`/`drain_legs`/`movable_creature`; the pure
-//!     `leg_toward` geometry lives in `creatures::ai`), and the one spline writer
-//!     (`emit_move_spline`/`emit_creature_leg`) both `movement` and `sense` depend on.
-//!   - [`movement`] — the engaged legs still here: the low-HP rout and fear-flee.
+//!     active-cell sweep and rows-visited evidence logs, `pass_combat_drop`, the shared candidate
+//!     gate `movable_creature`, the rout predicates, and the one spline writer
+//!     (`emit_move_spline`/`emit_creature_leg`) every movement decision funnels through.
 //!   - [`lifecycle`] — the canonical despawn checklist (issue #359) + decay/respawn/GO-respawn, the
 //!     due-time passes that run regardless of proximity.
 //!   - [`sense`] — regen.
@@ -24,14 +22,12 @@ use crate::{game_aura, game_entity_motion, game_melee_attack, game_world_entity,
 use super::*;
 
 mod lifecycle;
-mod movement;
 mod sense;
 
 // The behavior cycle (`creatures::cycle`) owns WHEN each pass runs, so it needs to name them. Every
 // line here disappears with the pass it exports, as the tickets in `.scratch/creature-behavior-cycle`
 // migrate each body into the cycle.
 pub(crate) use lifecycle::{pass_decay, pass_gameobject_respawn, pass_respawn};
-pub(crate) use movement::{pass_fear_flee, pass_flee};
 pub(crate) use sense::pass_regen;
 
 // Re-export so `crate::creatures::tick::despawn_creature_entity` (and, via `creatures::mod.rs`'s own
@@ -419,10 +415,10 @@ fn log_active_cell_stats(ctx: &ReducerContext, awake: usize) {
     );
 }
 
-/// Work-item 233 done-when evidence: log the cast/pass_flee/pass_fear_flee rows-visited drop, in
+/// Work-item 233 done-when evidence: log the cast/rout/fear rows-visited drop, in
 /// the SAME rare window `log_active_cell_stats` uses (reusing its throttle — no extra per-tick cost).
-/// `melee_rows` is the candidate universe BOTH the cycle's cast phase and `pass_flee` outer-loop (identical
-/// gate: "currently the attacker in `game_melee_attack`"); `fear_rows` is what `pass_fear_flee` now
+/// `melee_rows` is the candidate universe BOTH the cycle's cast and rout phases outer-loop (identical
+/// gate: "currently the attacker in `game_melee_attack`"); `fear_rows` is what the fear phase
 /// outer-loops (the `A_CONTROL(M_FEAR)` aura rows). `total_all` is a full `game_world_entity` count
 /// (players included) — what EVERY ONE of the three fully `entities.iter()`-scanned before this item,
 /// so it's the honest "before" denominator the rows-visited ratio is measured against.
@@ -440,8 +436,8 @@ fn log_narrowed_pass_stats(ctx: &ReducerContext) {
         .filter(|a| a.eff_kind == crate::spell::A_CONTROL && a.eff_p0 == crate::spell::M_FEAR)
         .count();
     log::info!(
-        "tick_creatures narrowed passes (work-item 233): cast/flee visit {melee_rows} melee rows, \
-         fear-flee visits {fear_rows} aura rows, vs {total_all} total entities each used to scan"
+        "tick_creatures narrowed passes (work-item 233): cast/rout visit {melee_rows} melee rows, \
+         fear visits {fear_rows} aura rows, vs {total_all} total entities each used to scan"
     );
 }
 
@@ -716,51 +712,8 @@ pub(crate) fn emit_creature_leg(
     ctx.db.game_world_entity().guid().update(e);
 }
 
-// ===========================================================================================
-//  One movement-leg grammar (issue #383) — shared by chase / return / wander / flee / fear-flee
-// ===========================================================================================
-
-/// One geometric movement leg queued by a candidate loop, ready for `drain_legs`. Replaces the
-/// anonymous `(guid, dest_x, dest_y, z_fallback, duration_ms)` tuple every RUN/step pass used to
-/// collect-then-mutate, re-explained by a near-identical comment at each site.
-struct PendingLeg {
-    guid: u64,
-    dest: (f32, f32),
-    z_fallback: f32,
-    duration_ms: u32,
-}
-
-/// Drain a batch of queued legs through the one shared writer (`emit_creature_leg`), re-finding each
-/// mover's LIVE row first — the collect-then-mutate pattern every movement pass already followed, now
-/// with one drain loop instead of five near-identical ones. `run` (walk/run animation) and
-/// `set_leg_ends` (the patrol/wander-only ETA gate) are uniform across one pass's whole batch, so
-/// they're parameters here rather than fields repeated on every `PendingLeg`.
-fn drain_legs(
-    ctx: &ReducerContext,
-    legs: Vec<PendingLeg>,
-    run: bool,
-    set_leg_ends: bool,
-    now_ms: u32,
-) {
-    let entities = ctx.db.game_world_entity();
-    for leg in legs {
-        if let Some(c) = entities.guid().find(leg.guid) {
-            emit_creature_leg(
-                ctx,
-                c,
-                leg.dest,
-                leg.z_fallback,
-                leg.duration_ms,
-                run,
-                now_ms,
-                set_leg_ends,
-            );
-        }
-    }
-}
-
-/// The shared gate ladder every ENGAGED/table-driven pass (the cycle's cast, threat-retarget and
-/// chase phases; flee / fear-flee) opens its per-candidate loop with: resolve `guid` to a live CREATURE (no PLAYER bit, not
+/// The shared gate ladder every ENGAGED/table-driven phase (cast, threat retarget, chase, rout and
+/// fear) opens its per-candidate loop with: resolve `guid` to a live CREATURE (no PLAYER bit, not
 /// dead) whose instance THIS firing's `scope` covers. `None` collapses each site's `let Some(c) = ...
 /// else { continue }; if c.is_player() || c.dead { continue }; if !scope.covers(c.instance_id) {
 /// continue }` into one check — every call site still increments its own `visited` counter only on

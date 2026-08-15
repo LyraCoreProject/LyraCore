@@ -14,11 +14,12 @@ use lyracore_shared::constants;
 use spacetimedb::log;
 
 use super::ai::{
-    aggro_radius, finite_point, hp_pct_below, is_aggro_candidate, leg_in_flight, leg_toward,
-    nearest_waypoint_idx, next_waypoint_idx, spline_t, stealth_detect_range, wander_point,
-    within_assist_radius, TickScope, CHASE_LEAD_YD, CHASE_LEASH_SQ, CHASE_MELEE_SQ,
-    CHASE_REPATH_COS, CHASE_TARGET_MOVING_MS, MOVE_TICK_SECS, RETURN_LEASH_SQ, SENSE_EVERY_N_TICKS,
-    WANDER_CHANCE_PCT, WANDER_RADIUS,
+    aggro_radius, fear_step_for_tick, feared_flee_step, finite_point, flee_step, hp_pct_below,
+    is_aggro_candidate, leg_in_flight, leg_toward, may_start_rout, nearest_waypoint_idx,
+    next_waypoint_idx, rout_close_ms, spline_t, stealth_detect_range, wander_point,
+    within_assist_radius, wounded_slow_factor, TickScope, CHASE_LEAD_YD, CHASE_LEASH_SQ,
+    CHASE_MELEE_SQ, CHASE_REPATH_COS, CHASE_TARGET_MOVING_MS, FLEE_LEG_YD, MOVE_TICK_SECS,
+    RETURN_LEASH_SQ, SENSE_EVERY_N_TICKS, WANDER_CHANCE_PCT, WANDER_RADIUS,
 };
 use super::cast_condition;
 use super::tick::TickSweep;
@@ -388,9 +389,71 @@ pub(crate) trait PursuitSink {
     fn face(&mut self, guid: u64, orientation: f32, spline_id: u32);
 }
 
+/// A creature that could break off and run this firing: its fight, its wounds, and its rout clock.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Router {
+    pub guid: u64,
+    pub at: Point,
+    /// The unit it is fighting — what it runs AWAY from, and the other half of the combat re-stamp.
+    pub victim: u64,
+    /// Where that unit stands. `None` when its row is gone: there is no direction to run in, and the
+    /// one rout must not be spent standing still.
+    pub victim_at: Option<Point>,
+    /// The wounded-slow rule reads these: a creature this hurt runs slower, so it stays catchable.
+    pub health: u32,
+    pub max_health: u32,
+    /// Wounded past the rout threshold AND of a kind that runs. Decides whether a rout may START.
+    pub eligible: bool,
+    /// This engagement's rout clock: 0 = never routed, otherwise the ms the window closes at. The
+    /// spent value is what makes the rout once per engagement.
+    pub rout_ends_ms: u32,
+    /// Already routing — the shared `creature_is_routing` verdict chase, this phase and the swing
+    /// pass all read, so none of them can divert a creature nothing then moves.
+    pub routing: bool,
+    /// Still riding its committed rout leg. The next leg is rolled only once this one has ended.
+    pub committed: bool,
+}
+
+/// The rout's surface: the fights that could break, and the once-per-engagement clock bounding them.
+pub(crate) trait RoutSink {
+    /// Every live engagement this firing covers whose attacker is a creature that could move. NOT
+    /// scoped to the active-cell sweep: a rout dragged out of every active cell must still finish.
+    fn routers(&self, scope: &TickScope) -> Vec<Router>;
+    /// Open this engagement's rout window, closing at `ends_ms`. This phase is its ONLY writer, so
+    /// "eligible and unstamped" is the single moment a rout can begin.
+    fn start_rout(&mut self, guid: u64, ends_ms: u32);
+}
+
+/// A creature fear has taken over this firing: where it stands, and what it runs from.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Panicked {
+    pub guid: u64,
+    pub at: Point,
+    /// Where the terror comes from — the caster if it is still in the world, else the unit the
+    /// creature was fighting. `None` leaves it running from its own feet, i.e. a fixed bearing.
+    pub source_at: Option<Point>,
+    /// A stun, root or polymorph OUTRANKS fear: the creature stays frozen instead of running.
+    pub frozen: bool,
+}
+
+/// Fear's surface: who is panicking. The leg itself goes through the one leg writer like every other.
+pub(crate) trait FearSink {
+    /// One entry per live fear aura this firing covers — a creature carrying two is listed twice, and
+    /// the phase is what collapses that into one panicking creature.
+    fn panicked(&self, scope: &TickScope) -> Vec<Panicked>;
+}
+
 /// The whole world one cycle touches.
 pub(crate) trait CreatureWorld:
-    MotionSink + IdleSink + EngageSink + CastSink + ThreatSink + PursuitSink + LegacyPasses
+    MotionSink
+    + IdleSink
+    + EngageSink
+    + CastSink
+    + ThreatSink
+    + PursuitSink
+    + RoutSink
+    + FearSink
+    + LegacyPasses
 {
     /// The creatures near a covered player this firing, plus the pet and in-combat candidate lists
     /// the same sweep harvests. Read ONCE per cycle and shared by every pass that scopes to it.
@@ -409,8 +472,6 @@ pub(crate) trait LegacyPasses {
     fn legacy_pet(&mut self, scope: &TickScope, now_ms: u32, pets: &[u64]) -> usize;
     fn legacy_regen(&mut self) -> usize;
     fn legacy_combat_drop(&mut self, in_combat: &[u64]) -> usize;
-    fn legacy_flee(&mut self, scope: &TickScope) -> usize;
-    fn legacy_fear_flee(&mut self, scope: &TickScope, tick_secs: f32) -> usize;
 }
 
 /// ONE firing's complete behavior transition. The order below is load-bearing:
@@ -461,11 +522,8 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         rows.push(("regen*", w.legacy_regen() as u64));
         rows.push(("combat_drop*", w.legacy_combat_drop(&in_combat) as u64));
     }
-    rows.push(("flee", w.legacy_flee(&tick.scope) as u64));
-    rows.push((
-        "fear_flee",
-        w.legacy_fear_flee(&tick.scope, tick.tick_secs) as u64,
-    ));
+    rows.push(("rout", rout(w, &tick) as u64));
+    rows.push(("fear", fear(w, &tick) as u64));
     if global {
         w.run_package_passes();
     }
@@ -1076,6 +1134,125 @@ fn loiter<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature, home: Ho
         hold_until_landed: true,
     };
     w.commit_leg(c.guid, leg, tick.now_ms);
+}
+
+/// ROUT — a creature wounded past the flee threshold, of a kind that runs, breaks off and sprints
+/// AWAY from the unit it fights without leaving the fight: routing is a shared combat state, so both
+/// sides stay engaged, keep their target, and the runner can still be caught and killed.
+///
+/// The rout is BOUNDED and once per engagement. This phase is the ONLY writer of the window, so
+/// "eligible and never stamped" is the single moment one can begin; once the window closes the
+/// creature is an ordinary attacker again — chase closes the gap, the swing pass lands its blows —
+/// and no later health drop opens a second one. The leg is ONE committed `FLEE_LEG_YD` dash, re-rolled
+/// only after the previous one ended: re-picking an away-bearing every firing snap-rotated the
+/// client's facing, which is the "flee spin".
+///
+/// It runs after regen, whose in-combat gate skips the still-engaged runner — otherwise regen would
+/// re-write the row from its own snapshot and REVERT the fled position every firing, pinning the
+/// runner in aggro range. The engagements are the candidate set, so this ignores the active-cell
+/// sweep and stays O(fights running). Visited in guid order. Returns the covered candidates.
+///
+/// ponytail: on the ONE firing a window opens, chase has already decided from `routing == false`, so
+/// a distant chaser throws a leg this phase then overwrites. Ceiling: one wasted row write per rout
+/// started — the relay carries a single spline row per creature, so the client only ever plays the
+/// rout leg. Verbatim pre-cycle behavior.
+fn rout<W: RoutSink + MotionSink + IdleSink + EngageSink>(w: &mut W, tick: &TickContext) -> usize {
+    let mut routers = w.routers(&tick.scope);
+    routers.sort_unstable_by_key(|c| c.guid);
+    let visited = routers.len();
+    for c in routers {
+        // Crowd control: a FROZEN creature stays engaged and locked in place, and a FEARED one is
+        // moved by the fear phase below instead — skipping it here is what stops the double move.
+        // The window is left exactly as it was, so the rout resumes when the control ends.
+        if w.movement_suppressed(c.guid) {
+            continue;
+        }
+        let starting = may_start_rout(c.eligible, c.rout_ends_ms);
+        if !starting && !c.routing {
+            continue; // not eligible, or the one window is spent — it stands and fights
+        }
+        // Resolved BEFORE the window is stamped, so a victim that vanished cannot spend the rout
+        // without a leg ever being run.
+        let Some(victim_at) = c.victim_at else {
+            continue;
+        };
+        if starting {
+            w.start_rout(c.guid, rout_close_ms(tick.now_ms));
+        }
+        // Both sides re-stamp EVERY firing, mid-leg included: without it the combat-drop deadline
+        // fires during the long committed run and the pair simply untargets each other.
+        w.enter_combat(c.guid);
+        w.enter_combat(c.victim);
+        if c.committed {
+            continue; // still riding the last dash — one stable travel tangent, no re-aim
+        }
+        let run = w.speed_of(c.guid, Gait::Run) * wounded_slow_factor(c.health, c.max_health);
+        let away = flee_step(c.at.x, c.at.y, victim_at.x, victim_at.y, FLEE_LEG_YD);
+        let step = w.navigate(c.guid, away, FLEE_LEG_YD);
+        let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, run) else {
+            continue; // nowhere to run — the client rejects a zero-length leg
+        };
+        let leg = Leg {
+            to: (x, y),
+            z_fallback: c.at.z,
+            dur_ms,
+            gait: Gait::Run,
+            hold_until_landed: false,
+        };
+        w.commit_leg(c.guid, leg, tick.now_ms);
+    }
+    visited
+}
+
+/// FEAR — a feared creature does not steer itself at all: it is force-walked away from whatever
+/// feared it, one jittered dash per firing, until the aura lapses. Every other mover skips a feared
+/// creature, so this phase is its SOLE mover and it gets exactly one leg per firing.
+///
+/// Fear does NOT disengage: the melee row is untouched, so when the aura expires the creature turns
+/// and fights the unit it was already fighting. A stun, root or polymorph outranks fear and freezes
+/// it in place instead. Running LAST, after regen, is what keeps regen from reverting the dash.
+///
+/// The dash scales with the firing's own interval, so a fast schedule row does not multiply terror
+/// speed. Visited in guid order. Returns the covered creatures considered.
+fn fear<W: FearSink + IdleSink>(w: &mut W, tick: &TickContext) -> usize {
+    let mut panicked = w.panicked(&tick.scope);
+    // Two casters fearing one creature is still ONE panicking creature: a second leg in the firing
+    // would share the first's spline id and the client would throw one of them away.
+    panicked.sort_unstable_by_key(|c| c.guid);
+    panicked.dedup_by_key(|c| c.guid);
+    let visited = panicked.len();
+    for c in panicked {
+        if c.frozen {
+            continue;
+        }
+        // No source left to run from leaves the creature running from its own feet, which the step
+        // turns into a fixed bearing — a feared creature always moves.
+        let from = c.source_at.unwrap_or(c.at);
+        let (fx, fy) = feared_flee_step(
+            c.at.x,
+            c.at.y,
+            from.x,
+            from.y,
+            fear_step_for_tick(tick.tick_secs),
+            w.roll(),
+        );
+        // ponytail: the flat RUN speed and no navigation, alone among the movers — a snared feared
+        // creature should panic slower and a wall should turn it, and neither happens. Pre-cycle
+        // behavior, carried verbatim.
+        let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), (fx, fy), constants::speeds::RUN)
+        else {
+            continue;
+        };
+        let leg = Leg {
+            to: (x, y),
+            z_fallback: c.at.z,
+            dur_ms,
+            gait: Gait::Run,
+            hold_until_landed: false,
+        };
+        w.commit_leg(c.guid, leg, tick.now_ms);
+    }
+    visited
 }
 
 /// The facing correction's precise edges. A scenario test proves that a creature reaching a standing

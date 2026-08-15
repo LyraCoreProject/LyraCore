@@ -41,7 +41,7 @@ pub fn should_flee(health: u32, max_health: u32) -> bool {
 
 /// Is this creature TYPE eligible to flee at low HP? Fleeing is SELECTIVE in vanilla, not universal:
 /// HUMANOIDS rout to call for help, while BEASTS (wolves/boars), undead, elementals, etc. fight to the
-/// death. The old `pass_flee` fled EVERY near-dead creature, so a Northshire wolf (BEAST) ran away and
+/// death. The rout once fled EVERY near-dead creature, so a Northshire wolf (BEAST) ran away and
 /// dropped combat ("not all enemies should flee"). This is the minimal heuristic gate (a per-template
 /// `flags_extra` NO_FLEE flag from the DBC is the fuller fix). `creature_type` is the template column the
 /// importer loads verbatim. Pure — unit-tested. [creatures]
@@ -101,7 +101,7 @@ pub fn should_evade(now_ms: u32, pursuit_ends_ms: u32, target_dist_sq: f32) -> b
 /// cmangos "wounded slowdown" — the mechanic that makes a fleeing (definitionally low-HP) mob
 /// CATCHABLE. A creature under 30% HP moves slower: factor `1 − ((30 − min(hp%,30)) × 1.67)/100`,
 /// floored ~0.5 (×1.0 at ≥30% HP, ×0.75 at 15%, ×0.67 at 10%, ~×0.5 near death). Applied to the flee
-/// leg in `pass_flee`. Without it a fleer ran at the flat 7.0 yd/s player-run constant — exact parity,
+/// leg by the cycle's rout phase. Without it a fleer ran at the flat 7.0 yd/s player-run constant — exact parity,
 /// so the chase gap never closed and the mob was uncatchable.
 /// Pure — unit-tested. [creatures]
 pub fn wounded_slow_factor(health: u32, max_health: u32) -> f32 {
@@ -792,9 +792,8 @@ mod tests {
 
     /// Work-item 230's engaged-creature-never-dormant rule ("a player could drag one far away") only
     /// holds if a creature glued to a player by combat can never wander past the active-cell radius
-    /// before the active set would have covered it anyway. the chase phase and
-    /// `pass_flee` don't consult the active set at all (see their doc comments) — that's the primary
-    /// guarantee — but this
+    /// before the active set would have covered it anyway. The chase and rout phases don't consult
+    /// the active set at all (see their doc comments) — that's the primary guarantee — but this
     /// pins the geometric invariant too: the chase cutoff (the farthest a target can be and still be
     /// pursued) must stay inside `combat_active_radius`, so even a hypothetical future re-gate could
     /// never sleep a still-engaged creature out from under its target.
