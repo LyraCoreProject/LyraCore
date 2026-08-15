@@ -67,6 +67,11 @@ pub mod event_kind {
     /// The guild roster changed → the gateway re-renders from the row's payload
     /// ([`super::encode_roster`]), built in the SAME transaction as the membership change.
     pub const ROSTER: u8 = 0;
+    /// The MOTD changed → the gateway relays `SMSG_GUILD_EVENT(Motd, [new_motd])` to every member's
+    /// row. `other_guid` is the setter (always the guild master at write time); `payload` is the new
+    /// MOTD text, which may be empty. One row per member, dropped in the same transaction as the
+    /// write (the module's `set_guild_text` core).
+    pub const MOTD: u8 = 13;
 }
 
 /// The REALM-CORE guild ops: the `op` byte of the single operator-gated `realm_guild_op` reducer
@@ -78,9 +83,25 @@ pub mod event_kind {
 ///
 /// Argument slots (`realm_guild_op(op, actor_guid, target_guid, arg_a, text)`), per op:
 /// - [`CREATE`] — `text` is the guild name; `target_guid` and `arg_a` unused.
+/// - [`SET_MOTD`] — `text` is the new MOTD (may be empty); `target_guid`/`arg_a` unused.
+/// - [`SET_INFO_TEXT`] — `text` is the new info text (may be empty); `target_guid`/`arg_a` unused.
+/// - [`SET_PUBLIC_NOTE`] — `target_guid` is the member whose note changes; `text` is the new note.
+/// - [`SET_OFFICER_NOTE`] — same shape as [`SET_PUBLIC_NOTE`], for the officer note.
 pub mod realm_op {
     /// `CMSG_GUILD_CREATE` — `actor_guid` founds a guild named `text` and becomes its master.
     pub const CREATE: u8 = 0;
+    /// `CMSG_GUILD_MOTD` — `actor_guid` (must be the guild master) sets the guild's MOTD to `text`.
+    /// An empty `text` is a valid write: it CLEARS the MOTD rather than being refused.
+    pub const SET_MOTD: u8 = 12;
+    /// `CMSG_GUILD_INFO_TEXT` — same gate and shape as [`SET_MOTD`], for `Guild.info_text`. Unlike
+    /// the MOTD, a change here never drops a [`super::event_kind::MOTD`] notification.
+    pub const SET_INFO_TEXT: u8 = 13;
+    /// `CMSG_GUILD_SET_PUBLIC_NOTE` — `target_guid`'s public note becomes `text`. `actor_guid` must
+    /// be `target_guid` itself (a member may always set their OWN public note) or the guild master.
+    pub const SET_PUBLIC_NOTE: u8 = 14;
+    /// `CMSG_GUILD_SET_OFFICER_NOTE` — same shape as [`SET_PUBLIC_NOTE`], but master-only: unlike
+    /// the public note, a member may never set even their own officer note.
+    pub const SET_OFFICER_NOTE: u8 = 15;
 }
 
 /// The guild reducers' `Err` strings the gateway maps to `GuildCommandResult` variants — EXACT
@@ -92,6 +113,11 @@ pub mod err {
     pub const NAME_INVALID: &str = "guild name invalid";
     pub const NOT_IN_GUILD: &str = "not in a guild";
     pub const NOT_GUILD_MASTER: &str = "not the guild master";
+    /// Not a module refusal — the GATEWAY synthesizes this when a `CMSG_GUILD_SET_*_NOTE` target
+    /// name does not resolve to any known character (`world::party::resolve_by_name` came back
+    /// empty). Kept in the same classified vocabulary as the module's own strings so the whole
+    /// family maps to `GuildCommandResult` through one lookup.
+    pub const PLAYER_NOT_FOUND: &str = "guild note target not found";
 }
 
 /// Encode a `ROSTER` payload: `motd|guid,rank,public_note,officer_note;...`.
@@ -202,5 +228,16 @@ mod tests {
     #[test]
     fn realm_guild_op_codes_are_stable() {
         assert_eq!(realm_op::CREATE, 0);
+    }
+
+    /// The MOTD/notes family's own reserved number block — a WIRE value the module dispatches on
+    /// and the gateway relay decodes, deployed separately. Pinned, not merely defined.
+    #[test]
+    fn motd_and_note_realm_ops_and_event_kind_are_stable() {
+        assert_eq!(realm_op::SET_MOTD, 12);
+        assert_eq!(realm_op::SET_INFO_TEXT, 13);
+        assert_eq!(realm_op::SET_PUBLIC_NOTE, 14);
+        assert_eq!(realm_op::SET_OFFICER_NOTE, 15);
+        assert_eq!(event_kind::MOTD, 13);
     }
 }

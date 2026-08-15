@@ -280,3 +280,152 @@ fn a_refused_create_propagates_the_authoritys_own_error_string() {
     let invalid = create(world.as_ref(), VIM, "X").expect_err("one character is too short");
     assert!(format!("{invalid:#}").contains(err::NAME_INVALID));
 }
+
+fn set_motd(store: &InMemoryStore, self_guid: u64, text: &str) -> Result<()> {
+    guild::run(store, 7, self_guid, guild::Op::SetMotd(text.into()))
+}
+
+fn set_public_note(
+    store: &InMemoryStore,
+    self_guid: u64,
+    target_guid: u64,
+    note: &str,
+) -> Result<()> {
+    guild::run(
+        store,
+        7,
+        self_guid,
+        guild::Op::SetPublicNote {
+            target_guid,
+            note: note.into(),
+        },
+    )
+}
+
+/// The MOTD op runs on the authority, exactly like create — packed with `realm_op::SET_MOTD`, the
+/// setter's own guid as the actor, and no membership-push side effect (T6's ops never change
+/// membership, unlike T1's create).
+#[test]
+fn setting_the_motd_runs_on_realm_core_with_the_setters_guid_as_actor() {
+    let (realm, world, _instances, _calls) = guild_topology();
+    create(world.as_ref(), GINGER, "The Silver Hand").unwrap();
+
+    set_motd(world.as_ref(), GINGER, "Raid at 8pm")
+        .expect("the master's motd change reaches the authority");
+
+    assert_eq!(
+        realm.guild.lock().unwrap().ops.last(),
+        Some(&(
+            lyracore_shared::guild::realm_op::SET_MOTD,
+            GINGER,
+            0,
+            0,
+            "Raid at 8pm".to_string()
+        ))
+    );
+    let view = guild::view(world.as_ref(), 1)
+        .unwrap()
+        .expect("the guild is there");
+    assert_eq!(view.motd, "Raid at 8pm");
+}
+
+/// Acceptance criterion 4: an empty MOTD reaches the authority and clears the stored value — never
+/// refused for being blank.
+#[test]
+fn an_empty_motd_clears_the_stored_value() {
+    let (_realm, world, _instances, _calls) = guild_topology();
+    create(world.as_ref(), GINGER, "The Silver Hand").unwrap();
+    set_motd(world.as_ref(), GINGER, "Hello").unwrap();
+
+    set_motd(world.as_ref(), GINGER, "").expect("an empty motd is a valid clear, not a refusal");
+
+    let view = guild::view(world.as_ref(), 1).unwrap().unwrap();
+    assert_eq!(view.motd, "");
+}
+
+/// Acceptance criterion 2: a non-master's MOTD change is refused with the module's own
+/// `NOT_GUILD_MASTER` string, and the stored MOTD is untouched.
+#[test]
+fn a_non_masters_motd_change_is_refused_and_changes_nothing() {
+    use lyracore_shared::guild::err;
+    let (realm, world, instances, _calls) = guild_topology();
+    create(world.as_ref(), GINGER, "The Silver Hand").unwrap();
+    // Vim joins as a plain member via the fake's own membership list (no invite flow needed here).
+    realm.guild.lock().unwrap().members.push((
+        1,
+        VIM,
+        lyracore_shared::guild::GUILD_RANK_COUNT as u32 - 1,
+    ));
+
+    let refused =
+        set_motd(instances.as_ref(), VIM, "Nope").expect_err("a non-master must be refused");
+    assert!(format!("{refused:#}").contains(err::NOT_GUILD_MASTER));
+
+    let view = guild::view(instances.as_ref(), 1).unwrap().unwrap();
+    assert_eq!(view.motd, "", "the refused change must not have landed");
+}
+
+/// Acceptance criterion 6: a member may set their own public note; the master may set anyone's.
+#[test]
+fn a_member_sets_their_own_public_note_and_the_master_sets_anyones() {
+    let (realm, world, instances, _calls) = guild_topology();
+    create(world.as_ref(), GINGER, "The Silver Hand").unwrap();
+    realm.guild.lock().unwrap().members.push((1, VIM, 4));
+
+    set_public_note(instances.as_ref(), VIM, VIM, "my own note")
+        .expect("a member may set their own public note");
+    set_public_note(world.as_ref(), GINGER, VIM, "master's note on Vim")
+        .expect("the master may set anyone's public note");
+
+    assert_eq!(
+        realm.guild.lock().unwrap().notes.get(&(1, VIM)).cloned(),
+        Some(("master's note on Vim".to_string(), String::new())),
+        "the master's write landed last"
+    );
+}
+
+/// Acceptance criterion 6 (the refusal half): a member setting ANOTHER member's public note is
+/// refused unless they are the master.
+#[test]
+fn a_member_setting_anothers_public_note_is_refused() {
+    use lyracore_shared::guild::err;
+    let (realm, world, instances, _calls) = guild_topology();
+    create(world.as_ref(), GINGER, "The Silver Hand").unwrap();
+    realm.guild.lock().unwrap().members.push((1, VIM, 4));
+
+    let refused = set_public_note(instances.as_ref(), VIM, GINGER, "not mine to set")
+        .expect_err("a plain member may not set someone else's public note");
+    assert!(format!("{refused:#}").contains(err::NOT_GUILD_MASTER));
+}
+
+/// **The single-database assertion, T6's ops.** An unsharded gateway runs every setter through
+/// `realm_guild_op` directly on the player's own database — the twin of
+/// `an_unsharded_gateway_runs_every_guild_op_on_the_players_own_shard`, which pins T1's `Create`
+/// taking the SEPARATE `create_guild` reducer instead. T6 adds no new single-database reducer (and
+/// no new hand-spliced binding): `realm_guild_op` already runs correctly against any database, so
+/// the unsharded arm calls it on `store` directly rather than duplicating a reducer per op.
+#[test]
+fn an_unsharded_gateway_runs_every_motd_and_note_setter_on_the_players_own_shard() {
+    let calls: ShardCallLog = Default::default();
+    let store = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        characters: vec![character(GINGER, "Ginger")],
+        live_guids: vec![GINGER],
+        ..Default::default() // no `realm`, no `peers` — the unconfigured gateway
+    });
+    create(store.as_ref(), GINGER, "The Silver Hand").expect("the legacy create path answers");
+    calls.lock().unwrap().clear();
+
+    set_motd(store.as_ref(), GINGER, "Hello").expect("the legacy motd path answers");
+
+    let log = calls.lock().unwrap().clone();
+    assert_eq!(
+        log,
+        vec![("world".to_string(), "realm_guild_op".to_string())],
+        "an unsharded gateway runs the setter through `realm_guild_op` on its OWN (only) database — \
+         there is no separate plane to have skipped"
+    );
+    let view = guild::view(store.as_ref(), 1).unwrap().unwrap();
+    assert_eq!(view.motd, "Hello");
+}

@@ -98,6 +98,15 @@ pub mod idx {
     pub const CONTAINER_FIELD_SLOT_1: u16 = 50;
 
     pub const PLAYER_FLAGS: u16 = 190;
+    /// `PLAYER_GUILDID` — the character's `game_guild.guild_id` (0 = guildless). Vanilla 1.12 index
+    /// 191, immediately after `PLAYER_FLAGS` (190) — cross-checked against gtker's own typed
+    /// setter, `set_player_guildid → set_int(191, …)`.
+    pub const PLAYER_GUILDID: u16 = 191;
+    /// `PLAYER_GUILDRANK` — the character's `game_guild_member.rank_index` (meaningless while
+    /// `PLAYER_GUILDID` is 0). Vanilla 1.12 index 192, cross-checked against gtker's
+    /// `set_player_guildrank → set_int(192, …)`. `PLAYER_GUILD_TIMESTAMP` (193, unused here) follows
+    /// immediately, then `PLAYER_BYTES_2` (194) below — the numbering this pair sits between.
+    pub const PLAYER_GUILDRANK: u16 = 192;
     /// `PLAYER_BYTES_2`: byte 0 = facial hair, byte 3 = rest state (RESTED 0x01 → zzz + blue XP
     /// bar / NORMAL 0x02). Vanilla 1.12 index 194 (gtker `set_player_bytes_2` → `set_bytes(194, …)`,
     /// cross-checked: `PLAYER_BYTES_3 = 195`, `PLAYER_FLAGS = 190`). Relayed live on an inn crossing.
@@ -335,6 +344,21 @@ pub fn full_quest_log_mask(slots: &[QuestLogSlot]) -> UpdateMaskValues {
     m
 }
 
+/// Build a partial-VALUES mask carrying `PLAYER_GUILDID`/`PLAYER_GUILDRANK` — `guild_id` 0 and
+/// `rank` 0 for a guildless character. Pure and self-contained, ready for `build_values_update_raw`
+/// at the two points these fields need it: the self CREATE at login (`game_character.guild_id`/
+/// `guild_rank` are already current on an unsharded gateway; on a sharded one they settle a moment
+/// later, after `world::guild::on_world_entry`'s cross-database sync) and a live re-send whenever a
+/// membership-changing op completes. No live caller yet in this ticket's own scope (T6 owns none of
+/// those ops) — see the ticket's final report for exactly where each call belongs.
+#[allow(dead_code)]
+pub fn player_guild_columns_mask(guild_id: u64, rank: u32) -> UpdateMaskValues {
+    let mut m = UpdateMaskValues::new();
+    m.set_u32(idx::PLAYER_GUILDID, guild_id as u32);
+    m.set_u32(idx::PLAYER_GUILDRANK, rank);
+    m
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,6 +525,29 @@ mod tests {
         assert_eq!(quest_log_field(1, 0), 201); // slot 1: stride 3
         assert_eq!(quest_log_field(19, 0), 255); // last slot id
         assert_eq!(quest_log_field(19, 2), 257); // last slot timer (block 8)
+    }
+
+    /// `PLAYER_GUILDID`/`PLAYER_GUILDRANK` sit between the existing `PLAYER_FLAGS` (190) and
+    /// `PLAYER_BYTES_2` (194) — that neighbouring numbering is the cross-check this test pins.
+    #[test]
+    fn player_guild_field_indices() {
+        assert_eq!(idx::PLAYER_FLAGS, 190);
+        assert_eq!(idx::PLAYER_GUILDID, 191);
+        assert_eq!(idx::PLAYER_GUILDRANK, 192);
+        assert_eq!(idx::PLAYER_BYTES_2, 194);
+    }
+
+    /// The mask carries a guilded character's real id/rank, and a guildless one's zeroes — the two
+    /// halves of acceptance criterion 8, as a pure encode.
+    #[test]
+    fn player_guild_columns_mask_carries_the_real_pair_or_zero() {
+        let guilded = player_guild_columns_mask(7, 2);
+        assert_eq!(guilded.get(idx::PLAYER_GUILDID), Some(7));
+        assert_eq!(guilded.get(idx::PLAYER_GUILDRANK), Some(2));
+
+        let guildless = player_guild_columns_mask(0, 0);
+        assert_eq!(guildless.get(idx::PLAYER_GUILDID), Some(0));
+        assert_eq!(guildless.get(idx::PLAYER_GUILDRANK), Some(0));
     }
 
     /// Counts pack 6 bits each (max 63, NOT a byte) with state in byte 3 — the vanilla subtlety.

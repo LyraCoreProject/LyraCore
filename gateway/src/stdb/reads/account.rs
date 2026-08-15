@@ -260,6 +260,13 @@ impl Coordinator {
     /// `game_world_entity` for entries with `entry == 0` (player entities; creatures have a
     /// non-zero entry), then joins each against `game_character` for name/race/class/zone. The
     /// coordinator bypasses RLS so it sees every player's entity regardless of the caller's scope.
+    ///
+    /// `guild` resolves `ch.guild_id` through [`Self::guild_view`], THIS handle's own database —
+    /// correct on the common single-database gateway (`game_guild` lives on the same database as
+    /// `game_character` there); on a sharded gateway `game_guild` rows live on realm-core instead,
+    /// so a guilded row here degrades to an empty guild name rather than the real one. Threading the
+    /// realm-core lookup through would mean routing `online_players` itself through `WorldStore`,
+    /// which this raw cache-reader layer does not do for anything else.
     pub fn online_players(&self) -> Result<Vec<crate::codec::WhoPlayerView>> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
@@ -269,12 +276,18 @@ impl Coordinator {
             .filter(|e| e.entry == 0) // players have entry == 0; creatures have a template entry
             .filter_map(|e| {
                 let ch = db.game_character().guid().find(&e.guid)?;
+                let guild = (ch.guild_id != 0)
+                    .then(|| self.guild_view(ch.guild_id))
+                    .flatten()
+                    .map(|g| g.name)
+                    .unwrap_or_default();
                 Some(crate::codec::WhoPlayerView {
                     name: ch.name.clone(),
                     level: ch.level,
                     class: ch.class,
                     race: ch.race,
                     zone_id: ch.zone_id,
+                    guild,
                 })
             })
             .collect();

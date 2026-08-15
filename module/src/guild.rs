@@ -326,6 +326,118 @@ fn disband(ctx: &ReducerContext, guild_id: u64) {
     ctx.db.game_guild().guild_id().delete(guild_id);
 }
 
+/// Set a guild's MOTD or its info text — D3's only permission check (guild master), and an empty
+/// `text` is a valid write that CLEARS the field rather than a refusal.
+///
+/// A MOTD change also drops one [`GuildEvent`] (kind
+/// [`lyracore_shared::guild::event_kind::MOTD`]) per current member — the durable half of "every
+/// online member sees the new MOTD live"; delivery is the gateway relay's job, the same
+/// `game_group_event` shape [`push_event`] mirrors. Info text carries no broadcast: T6's own scope
+/// keeps it to gating and storage.
+fn set_guild_text(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    text: &str,
+    motd: bool,
+) -> Result<(), String> {
+    let member = guild_of(ctx, actor_guid).ok_or_else(|| guild_err::NOT_IN_GUILD.to_string())?;
+    let mut guild = ctx
+        .db
+        .game_guild()
+        .guild_id()
+        .find(member.guild_id)
+        .ok_or_else(|| guild_err::NOT_IN_GUILD.to_string())?;
+    if guild.master_guid != actor_guid {
+        return Err(guild_err::NOT_GUILD_MASTER.to_string());
+    }
+    if motd {
+        guild.motd = text.to_string();
+    } else {
+        guild.info_text = text.to_string();
+    }
+    let guild_id = guild.guild_id;
+    ctx.db.game_guild().guild_id().update(guild);
+    if motd {
+        for m in members_of(ctx, guild_id) {
+            push_event(
+                ctx,
+                m.character_guid,
+                lyracore_shared::guild::event_kind::MOTD,
+                actor_guid,
+                text.to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Set a member's public or officer note. The public note is the one thing a plain member may write
+/// about themselves — their OWN row only; every other case (another member's public note, anyone's
+/// officer note) is master-only (D3). `target_guid` must be a fellow member of the actor's own
+/// guild — reusing [`lyracore_shared::guild::err::NOT_IN_GUILD`] for "no such member here" keeps one
+/// refusal vocabulary instead of inventing a second.
+fn set_member_note(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    target_guid: u64,
+    note: &str,
+    officer: bool,
+) -> Result<(), String> {
+    let actor_member =
+        guild_of(ctx, actor_guid).ok_or_else(|| guild_err::NOT_IN_GUILD.to_string())?;
+    let guild = ctx
+        .db
+        .game_guild()
+        .guild_id()
+        .find(actor_member.guild_id)
+        .ok_or_else(|| guild_err::NOT_IN_GUILD.to_string())?;
+    let is_master = guild.master_guid == actor_guid;
+    let setting_own_public_note = !officer && actor_guid == target_guid;
+    if !is_master && !setting_own_public_note {
+        return Err(guild_err::NOT_GUILD_MASTER.to_string());
+    }
+    let Some(mut target) = guild_of(ctx, target_guid) else {
+        return Err(guild_err::NOT_IN_GUILD.to_string());
+    };
+    if target.guild_id != guild.guild_id {
+        return Err(guild_err::NOT_IN_GUILD.to_string());
+    }
+    if officer {
+        target.officer_note = note.to_string();
+    } else {
+        target.public_note = note.to_string();
+    }
+    ctx.db.game_guild_member().id().update(target);
+    Ok(())
+}
+
+/// Drop one per-recipient guild notification — the `group::push_event` shape, on the guild's own
+/// table. `other_name` is resolved at write time so the gateway relay never needs a lookup; a
+/// `recipient_guid`/`other_guid` outside `game_character` (REALM-CORE holds none) reads as the zero
+/// identity / empty name respectively, exactly as `group::push_event` does.
+fn push_event(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    kind: u8,
+    other_guid: u64,
+    payload: String,
+) {
+    let bound = crate::helpers::character_by_guid(ctx, recipient_guid).map(|c| c.owner_identity);
+    let other_name = crate::helpers::character_by_guid(ctx, other_guid)
+        .map(|c| c.name)
+        .unwrap_or_default();
+    ctx.db.game_guild_event().insert(GuildEvent {
+        id: 0,
+        recipient_identity: crate::helpers::event_recipient_identity(bound),
+        recipient_guid,
+        kind,
+        other_guid,
+        other_name,
+        payload,
+        created_at: ctx.timestamp,
+    });
+}
+
 // ===========================================================================================
 //  Reducers
 // ===========================================================================================
@@ -363,6 +475,10 @@ pub fn realm_guild_op(
     let _ = (target_guid, arg_a); // slots later ops read; CREATE uses `text` alone
     match op {
         realm_op::CREATE => create_guild_for(ctx, actor_guid, &text).map(|_| ()),
+        realm_op::SET_MOTD => set_guild_text(ctx, actor_guid, &text, true),
+        realm_op::SET_INFO_TEXT => set_guild_text(ctx, actor_guid, &text, false),
+        realm_op::SET_PUBLIC_NOTE => set_member_note(ctx, actor_guid, target_guid, &text, false),
+        realm_op::SET_OFFICER_NOTE => set_member_note(ctx, actor_guid, target_guid, &text, true),
         other => Err(format!("unknown realm guild op {other}")),
     }
 }
@@ -463,6 +579,80 @@ mod tests {
         assert!(
             arm.starts_with("create_guild_for(ctx, actor_guid, &text)"),
             "`realm_op::CREATE` no longer runs the create core. Arm was:\n{arm}"
+        );
+    }
+
+    /// T6's four op bytes each dispatch to their own core, the same way CREATE does above.
+    #[test]
+    fn every_motd_and_note_realm_guild_op_byte_dispatches_to_its_own_core() {
+        let body = code_of(include_str!("guild.rs"), "pub fn realm_guild_op(");
+        for (op, core) in [
+            (
+                "realm_op::SET_MOTD =>",
+                "set_guild_text(ctx, actor_guid, &text, true)",
+            ),
+            (
+                "realm_op::SET_INFO_TEXT =>",
+                "set_guild_text(ctx, actor_guid, &text, false)",
+            ),
+            (
+                "realm_op::SET_PUBLIC_NOTE =>",
+                "set_member_note(ctx, actor_guid, target_guid, &text, false)",
+            ),
+            (
+                "realm_op::SET_OFFICER_NOTE =>",
+                "set_member_note(ctx, actor_guid, target_guid, &text, true)",
+            ),
+        ] {
+            let arm = body
+                .split(op)
+                .nth(1)
+                .unwrap_or_else(|| panic!("`realm_guild_op` no longer dispatches {op}:\n{body}"));
+            let arm: String = arm.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(
+                arm.starts_with(core),
+                "`{op}` no longer runs `{core}`. Arm was:\n{arm}"
+            );
+        }
+    }
+
+    /// D3's only permission check, pinned at the setter that guards the guild's shared text: a
+    /// non-master is refused, and — the criterion that reads like a trap — an EMPTY value is never
+    /// treated as a second refusal. `set_guild_text` must not gate on the string's own length/emptiness
+    /// at all; the master's write always lands, blank or not.
+    #[test]
+    fn set_guild_text_gates_on_the_master_alone_and_never_on_emptiness() {
+        let body = code_of(include_str!("guild.rs"), "fn set_guild_text(");
+        assert!(
+            body.contains("guild.master_guid != actor_guid")
+                && body.contains("guild_err::NOT_GUILD_MASTER"),
+            "`set_guild_text` must refuse a non-master setter with the shared NOT_GUILD_MASTER \
+             string. Body was:\n{body}"
+        );
+        assert!(
+            !body.contains("is_empty()") && !body.contains(".len() == 0"),
+            "`set_guild_text` must not reject an empty value — an empty MOTD/info text is a valid \
+             CLEAR, not a refusal (acceptance criterion 4). Body was:\n{body}"
+        );
+    }
+
+    /// The note gate's one member-writable exception, pinned: a member may set their OWN public
+    /// note without being master, but every other combination (someone else's public note, anyone's
+    /// officer note) still runs through the master-only refusal.
+    #[test]
+    fn set_member_note_admits_only_a_members_own_public_note_without_the_master_gate() {
+        let body = code_of(include_str!("guild.rs"), "fn set_member_note(");
+        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            normalized
+                .contains("let setting_own_public_note = !officer && actor_guid == target_guid;"),
+            "`set_member_note` no longer computes the own-public-note exception the way D3 needs. \
+             Body was:\n{body}"
+        );
+        assert!(
+            normalized.contains("if !is_master && !setting_own_public_note {"),
+            "`set_member_note` must refuse every case OTHER than the member's own public note \
+             unless the actor is master. Body was:\n{body}"
         );
     }
 }

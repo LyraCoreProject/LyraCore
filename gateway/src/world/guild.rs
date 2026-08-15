@@ -47,16 +47,33 @@ pub struct GuildView {
 pub(crate) enum Op {
     /// `CMSG_GUILD_CREATE`, name already validated by nobody — the module owns that gate.
     Create(String),
+    /// `CMSG_GUILD_MOTD` — the new MOTD (may be empty; an empty value CLEARS it, D3's acceptance
+    /// criterion 4). Master-only, gated module-side.
+    SetMotd(String),
+    /// `CMSG_GUILD_INFO_TEXT` — same shape and gate as [`Op::SetMotd`], for `Guild.info_text`.
+    SetInfoText(String),
+    /// `CMSG_GUILD_SET_PUBLIC_NOTE` — `target_guid`'s public note becomes `note`. Module-gated: the
+    /// note owner or the guild master.
+    SetPublicNote { target_guid: u64, note: String },
+    /// `CMSG_GUILD_SET_OFFICER_NOTE` — same shape as [`Op::SetPublicNote`], master-only.
+    SetOfficerNote { target_guid: u64, note: String },
 }
 
 /// Run one guild op for the session that owns `self_guid`.
 ///
 /// Unsharded → the player's own connection calls the player-facing reducer on the player's own
-/// shard, and nothing else happens.
+/// shard, and nothing else happens. [`Op::Create`] is the one exception: it runs through the
+/// dedicated single-database [`WorldStore::create_guild`] reducer T1 shipped rather than
+/// `realm_guild_op` — every OTHER op reaches `realm_guild_op` on `store` directly instead of adding
+/// a same-shaped single-database reducer per op (and the hand-spliced binding each would cost;
+/// `realm_guild_op` already runs correctly against ANY database, sharded or not, because the module
+/// publishes it everywhere).
 ///
 /// Sharded → realm-core runs the op, then the acting character's own guild columns are pushed onto
 /// every connected world shard. The push is best-effort BY DESIGN (see [`push_membership`]); the
-/// op's own result is not.
+/// op's own result is not. T6's four ops never change membership, so — unlike [`Op::Create`] — the
+/// push after them just re-confirms the SAME pair; harmless, and left unconditional rather than
+/// restructured (this match is one of the four files every guild ticket appends to in parallel).
 pub(crate) fn run<St: WorldStore + ?Sized>(
     store: &St,
     account_id: u64,
@@ -66,10 +83,36 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     let Some(realm) = store.realm_store() else {
         return match op {
             Op::Create(name) => store.create_guild(account_id, self_guid, &name),
+            Op::SetMotd(text) => store.realm_guild_op(realm_op::SET_MOTD, self_guid, 0, 0, text),
+            Op::SetInfoText(text) => {
+                store.realm_guild_op(realm_op::SET_INFO_TEXT, self_guid, 0, 0, text)
+            }
+            Op::SetPublicNote { target_guid, note } => store.realm_guild_op(
+                realm_op::SET_PUBLIC_NOTE,
+                self_guid,
+                target_guid,
+                0,
+                note,
+            ),
+            Op::SetOfficerNote { target_guid, note } => store.realm_guild_op(
+                realm_op::SET_OFFICER_NOTE,
+                self_guid,
+                target_guid,
+                0,
+                note,
+            ),
         };
     };
     let (code, target, arg_a, text) = match op {
         Op::Create(name) => (realm_op::CREATE, 0, 0, name),
+        Op::SetMotd(text) => (realm_op::SET_MOTD, 0, 0, text),
+        Op::SetInfoText(text) => (realm_op::SET_INFO_TEXT, 0, 0, text),
+        Op::SetPublicNote { target_guid, note } => {
+            (realm_op::SET_PUBLIC_NOTE, target_guid, 0, note)
+        }
+        Op::SetOfficerNote { target_guid, note } => {
+            (realm_op::SET_OFFICER_NOTE, target_guid, 0, note)
+        }
     };
     realm.realm_guild_op(code, self_guid, target, arg_a, text)?;
     push_membership(store, realm.as_ref(), self_guid);
