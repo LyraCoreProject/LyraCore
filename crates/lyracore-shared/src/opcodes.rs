@@ -64,6 +64,10 @@ pub mod guild {
     pub const CMSG_GUILD_ACCEPT: u32 = 0x084;
     pub const CMSG_GUILD_DECLINE: u32 = 0x085;
     pub const SMSG_GUILD_EVENT: u16 = 0x092;
+    /// The refused-invite notice, sent to the INVITER. Vanilla 1.12 carries it; `wow_world_messages`
+    /// 0.3 defines it for TBC and Wrath but not for vanilla, so the gateway builds the body itself
+    /// (`codec::build_guild_decline_raw`) rather than lying on the command-result channel.
+    pub const SMSG_GUILD_DECLINE: u16 = 0x086;
     pub const CMSG_GUILD_ROSTER: u32 = 0x089;
     pub const SMSG_GUILD_ROSTER: u16 = 0x08A;
 }

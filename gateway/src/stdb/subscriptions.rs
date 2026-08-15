@@ -1732,7 +1732,6 @@ pub(crate) fn group_event_outbound(
 /// about; `row.payload` is the kind's own extra field.
 pub(crate) fn guild_event_outbound(row: &GuildEvent) -> Vec<Outbound> {
     use lyracore_shared::guild::event_kind;
-    use wow_world_messages::vanilla::{GuildCommand, GuildCommandResult};
     let wire_event = |event| {
         Some(ServerOpcodeMessage::SMSG_GUILD_EVENT(Box::new(
             codec::build_guild_event(event, std::slice::from_ref(&row.other_name)),
@@ -1743,16 +1742,12 @@ pub(crate) fn guild_event_outbound(row: &GuildEvent) -> Vec<Outbound> {
             codec::build_guild_invite(&row.other_name, &row.payload),
         ))),
         event_kind::JOINED => wire_event(wow_world_messages::vanilla::GuildEvent::Joined),
-        // Vanilla answers a refused invite with SMSG_GUILD_DECLINE, which `wow_world_messages` 0.3
-        // does not carry. The command-result channel is the guild system's only other way to say
-        // anything to a client, and "%s is not in your guild" is true of somebody who just refused.
-        event_kind::DECLINED => Some(ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(Box::new(
-            codec::build_guild_command_result(
-                GuildCommand::Invite,
-                &row.other_name,
-                GuildCommandResult::GuildPlayerNotInGuildS,
-            ),
-        ))),
+        // The refused-invite notice, built by hand: vanilla carries SMSG_GUILD_DECLINE, but
+        // `wow_world_messages` 0.3 defines it only for TBC and Wrath.
+        event_kind::DECLINED => {
+            let (opcode, body) = codec::build_guild_decline_raw(&row.other_name);
+            return vec![Outbound::Raw { opcode, body }];
+        }
         event_kind::SIGNED_ON => wire_event(wow_world_messages::vanilla::GuildEvent::SignedOn),
         event_kind::SIGNED_OFF => wire_event(wow_world_messages::vanilla::GuildEvent::SignedOff),
         event_kind::LEFT => wire_event(wow_world_messages::vanilla::GuildEvent::Left),
@@ -3696,7 +3691,7 @@ mod tests {
     #[test]
     fn guild_event_kinds_decode_to_their_own_packets() {
         use lyracore_shared::guild::event_kind;
-        use wow_world_messages::vanilla::{GuildCommandResult, GuildEvent as WireEvent};
+        use wow_world_messages::vanilla::GuildEvent as WireEvent;
 
         let row = |kind: u8, payload: &str| GuildEvent {
             id: 1,
@@ -3762,14 +3757,13 @@ mod tests {
             }
             other => panic!("expected SMSG_MESSAGECHAT, got {other}"),
         }
-        // A decline rides the command-result channel: vanilla's SMSG_GUILD_DECLINE is not in the
-        // message crate, and a guild refusal is never a system chat line.
-        match one(event_kind::DECLINED, "") {
-            ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(m) => {
-                assert_eq!(m.string, "Ginger");
-                assert_eq!(m.result, GuildCommandResult::GuildPlayerNotInGuildS);
+        // A decline is the hand-built SMSG_GUILD_DECLINE: one CString naming the decliner.
+        match guild_event_outbound(&row(event_kind::DECLINED, "")).as_slice() {
+            [Outbound::Raw { opcode, body }] => {
+                assert_eq!(*opcode, lyracore_shared::opcodes::guild::SMSG_GUILD_DECLINE);
+                assert_eq!(body.as_slice(), b"Ginger\0");
             }
-            other => panic!("expected SMSG_GUILD_COMMAND_RESULT, got {other}"),
+            other => panic!("expected one raw SMSG_GUILD_DECLINE, got {} item(s)", other.len()),
         }
         match guild_event_outbound(&row(event_kind::GUILD_COLUMNS, "7,4")).as_slice() {
             [Outbound::Raw { opcode, .. }] => {

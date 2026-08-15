@@ -150,6 +150,20 @@ pub fn build_guild_chat(sender_guid: u64, message: String) -> SMSG_MESSAGECHAT {
     }
 }
 
+/// Build `SMSG_GUILD_DECLINE` — the notice the INVITER gets when their invite is refused. One
+/// CString: the name of whoever declined.
+///
+/// Hand-built, unlike every other packet here, because `wow_world_messages` 0.3 defines this opcode
+/// for TBC and Wrath but not for vanilla. The alternative was to reuse
+/// `SMSG_GUILD_COMMAND_RESULT(Invite, …, GuildPlayerNotInGuildS)`, which a 1.12 client renders as
+/// "<name> is not in your guild" — a different fact.
+pub fn build_guild_decline_raw(decliner_name: &str) -> (u16, Vec<u8>) {
+    let mut body = Vec::with_capacity(decliner_name.len() + 1);
+    body.extend_from_slice(decliner_name.as_bytes());
+    body.push(0); // CString terminator
+    (lyracore_shared::opcodes::guild::SMSG_GUILD_DECLINE, body)
+}
+
 /// Unix-epoch micros → `(day, month, year)` in UTC, in the shape `SMSG_GUILD_INFO` wants: the day
 /// and month are ZERO-BASED (vanilla's own encoding — the client adds one before rendering) and the
 /// year is the full year.

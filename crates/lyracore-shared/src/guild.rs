@@ -85,12 +85,8 @@ pub mod event_kind {
     /// including the one who just joined. `other_name` is the joiner.
     pub const JOINED: u8 = 1;
 
-    /// The recipient's invite was declined → `SMSG_GUILD_COMMAND_RESULT` to the INVITER.
-    /// `other_name` is the character who declined.
-    ///
-    /// Vanilla answers this with `SMSG_GUILD_DECLINE`, which `wow_world_messages` 0.3 does not
-    /// carry. The command-result channel is the one alternative the guild system allows — a system
-    /// chat line is never it.
+    /// The recipient's invite was declined → `SMSG_GUILD_DECLINE` to the INVITER. `other_name` is
+    /// the character who declined; `payload` is unused.
     pub const DECLINED: u8 = 2;
 
     /// A member entered the world → `SMSG_GUILD_EVENT(SignedOn)` to the rest of the guild.
