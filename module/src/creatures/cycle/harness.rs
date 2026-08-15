@@ -20,6 +20,9 @@ struct XCreature {
     /// The ETA gate an idle leg arms, and the route cursor patrol walks by.
     leg_ends_ms: u32,
     wp_target: u64,
+    /// What a heal-when-low rotation line reads. Full health unless a scenario hurts it.
+    health: u32,
+    max_health: u32,
     // --- what the engagement phases read; every one has a quiet default a builder overrides.
     level: u32,
     faction_template: u32,
@@ -87,6 +90,22 @@ struct Scenario {
     pulls: RefCell<Vec<(u64, u64, Pull)>>,
     /// Ordered units the cycle flagged in combat, oldest first.
     flagged: RefCell<Vec<u64>>,
+    /// Authored spell rotations, per creature (the world keys them by template).
+    rotations: RefCell<HashMap<u64, Vec<SpellOption>>>,
+    /// The single spell a creature with no rotation falls back to.
+    lone_spells: RefCell<HashMap<u64, u32>>,
+    /// `(unit, spell)` auras already on a unit — what a missing-aura condition reads.
+    auras: RefCell<HashSet<(u64, u32)>>,
+    /// Creatures with a cast bar already running.
+    casting: RefCell<HashSet<u64>>,
+    /// Fault injection: spells the spell module refuses — on cooldown, unaffordable or out of range.
+    not_ready: RefCell<HashSet<u32>>,
+    /// Ordered casts the cycle began, oldest first.
+    casts: RefCell<Vec<CastEffect>>,
+    /// The threat table, `(creature, source) -> threat`.
+    threat: RefCell<HashMap<(u64, u64), i64>>,
+    /// Live taunt locks: the creature is pinned on this unit whatever the threat table says.
+    taunts: RefCell<HashMap<u64, u64>>,
     /// Scenario input for the active-cell sweep.
     awake: RefCell<TickSweep>,
     /// Positions read BEFORE any pass ran, i.e. by the sweep — still the leg starts, because the
@@ -117,6 +136,8 @@ impl Scenario {
                 orientation: 0.0,
                 leg_ends_ms: 0,
                 wp_target: 0,
+                health: 100,
+                max_health: 100,
                 level: 10,
                 faction_template: BEASTS,
                 map_id: MAP,
@@ -246,6 +267,76 @@ impl Scenario {
     fn caster(self, guid: u64, yards: f32) -> Self {
         self.hold_ranges.borrow_mut().insert(guid, yards);
         self
+    }
+
+    /// Author one line of the creature's spell rotation.
+    fn rotation_line(self, guid: u64, spell_id: u32, when: CastWhen, priority: u8) -> Self {
+        let mut rotations = self.rotations.borrow_mut();
+        let lines = rotations.entry(guid).or_default();
+        lines.push(SpellOption {
+            spell_id,
+            when,
+            priority,
+            authored: lines.len() as u64,
+        });
+        drop(rotations);
+        self
+    }
+
+    /// The creature has no rotation, only the one authored spell.
+    fn lone_spell(self, guid: u64, spell_id: u32) -> Self {
+        self.lone_spells.borrow_mut().insert(guid, spell_id);
+        self
+    }
+
+    /// The unit already carries this spell's aura.
+    fn carrying(self, guid: u64, spell_id: u32) -> Self {
+        self.auras.borrow_mut().insert((guid, spell_id));
+        self
+    }
+
+    /// The creature's cast bar is already running.
+    fn mid_cast(self, guid: u64) -> Self {
+        self.casting.borrow_mut().insert(guid);
+        self
+    }
+
+    /// Fault injection: the spell module refuses this spell — on cooldown, unaffordable, out of range.
+    fn not_ready(self, spell_id: u32) -> Self {
+        self.not_ready.borrow_mut().insert(spell_id);
+        self
+    }
+
+    fn hurt(self, guid: u64, health: u32) -> Self {
+        self.tweak(guid, |c| c.health = health)
+    }
+
+    /// `source` has done enough to `creature` to hold this much of its threat table.
+    fn threat(self, creature: u64, source: u64, threat: i64) -> Self {
+        self.threat.borrow_mut().insert((creature, source), threat);
+        self
+    }
+
+    /// A live taunt: the creature is pinned on `taunter` for the window's duration.
+    fn taunted(self, creature: u64, taunter: u64) -> Self {
+        self.taunts.borrow_mut().insert(creature, taunter);
+        self
+    }
+
+    fn casts(&self) -> Vec<CastEffect> {
+        self.casts.borrow().clone()
+    }
+
+    /// Who each creature is fighting now, guid-ordered — what retargeting rewrites.
+    fn victims(&self) -> Vec<(u64, u64)> {
+        let mut pairs: Vec<(u64, u64)> = self
+            .fights
+            .borrow()
+            .iter()
+            .map(|f| (f.attacker, f.victim))
+            .collect();
+        pairs.sort_unstable();
+        pairs
     }
 
     /// The player RUNS to `at`: it stands there and its move clock reads now, so a chaser treats it
@@ -682,6 +773,99 @@ impl EngageSink for Scenario {
     }
 }
 
+// The in-memory casting world. The spell module is a fake: `begin_cast` records the action and
+// reports "not ready" for the spells a scenario put on cooldown, which is all the cycle reads back.
+impl CastSink for Scenario {
+    fn casters(&self, scope: &TickScope) -> Vec<Caster> {
+        let creatures = self.creatures.borrow();
+        self.fights
+            .borrow()
+            .iter()
+            .filter_map(|f| {
+                let c = creatures.get(&f.attacker)?;
+                scope.covers(c.instance_id).then_some(Caster {
+                    guid: f.attacker,
+                    victim: f.victim,
+                    victim_at: self.unit(f.victim).map(|(at, _)| at),
+                    level: c.level as u8,
+                    health: c.health,
+                    max_health: c.max_health,
+                    cannot_act: c.cannot_act,
+                    casting: self.casting.borrow().contains(&f.attacker),
+                })
+            })
+            .collect()
+    }
+    fn rotation_of(&self, guid: u64) -> Vec<SpellOption> {
+        self.rotations
+            .borrow()
+            .get(&guid)
+            .cloned()
+            .unwrap_or_default()
+    }
+    fn lone_spell(&self, guid: u64) -> Option<u32> {
+        self.lone_spells.borrow().get(&guid).copied()
+    }
+    fn carries(&self, guid: u64, spell_id: u32) -> bool {
+        self.auras.borrow().contains(&(guid, spell_id))
+    }
+    fn begin_cast(&mut self, caster: &Caster, spell_id: u32, target: u64) -> bool {
+        if self.not_ready.borrow().contains(&spell_id) {
+            return false;
+        }
+        self.casts
+            .borrow_mut()
+            .push((caster.guid, spell_id, target));
+        self.auras.borrow_mut().insert((target, spell_id));
+        true
+    }
+}
+
+// The in-memory threat world. The compare and the taunt window are the real `crate::threat`'s in
+// production; here a scenario states the table and the lock outright.
+impl ThreatSink for Scenario {
+    fn fighters(&self, scope: &TickScope) -> Vec<Fighter> {
+        let creatures = self.creatures.borrow();
+        self.fights
+            .borrow()
+            .iter()
+            .filter_map(|f| {
+                let c = creatures.get(&f.attacker)?;
+                scope.covers(c.instance_id).then_some(Fighter {
+                    guid: f.attacker,
+                    victim: f.victim,
+                })
+            })
+            .collect()
+    }
+    fn taunted_onto(&self, guid: u64) -> Option<u64> {
+        self.taunts.borrow().get(&guid).copied()
+    }
+    fn top_threat(&self, guid: u64) -> Option<u64> {
+        self.threat
+            .borrow()
+            .iter()
+            .filter(|((creature, _), _)| *creature == guid)
+            // Highest threat wins; the lowest guid breaks a tie, as the threat table does.
+            .max_by(|a, b| a.1.cmp(b.1).then(b.0 .1.cmp(&a.0 .1)))
+            .map(|((_, source), _)| *source)
+    }
+    fn threat_on(&self, creature: u64, source: u64) -> i64 {
+        self.threat
+            .borrow()
+            .get(&(creature, source))
+            .copied()
+            .unwrap_or(0)
+    }
+    fn retarget(&mut self, creature: u64, victim: u64) {
+        for f in self.fights.borrow_mut().iter_mut() {
+            if f.attacker == creature {
+                f.victim = victim;
+            }
+        }
+    }
+}
+
 // The in-memory chase world. A fight whose attacker is not a creature row is a PLAYER's own attack
 // row, which the production adapter drops for the same reason: chase moves creatures.
 impl PursuitSink for Scenario {
@@ -738,12 +922,6 @@ impl LegacyPasses for Scenario {
     fn legacy_pet(&mut self, _scope: &TickScope, _now_ms: u32, _pets: &[u64]) -> usize {
         0
     }
-    fn legacy_cast(&mut self, _scope: &TickScope) -> usize {
-        0
-    }
-    fn legacy_threat_retarget(&mut self, _scope: &TickScope) -> usize {
-        0
-    }
     fn legacy_regen(&mut self) -> usize {
         0
     }
@@ -764,6 +942,11 @@ const PACK_MATE: u64 = WOLF + 1;
 const FAR_MATE: u64 = WOLF + 2;
 const HUNTER: u64 = 0x0000_0000_0000_0A11;
 const RANGER: u64 = HUNTER + 1;
+/// An authored offensive spell, a heal, a debuff and a self-buff.
+const NUKE: u32 = 100;
+const HEAL: u32 = 101;
+const DEBUFF: u32 = 102;
+const BUFF: u32 = 103;
 const BEASTS: u32 = 14;
 const ALLIANCE: u32 = 1;
 const MAP: u32 = 0;
@@ -1265,6 +1448,9 @@ fn wolf_and_player(player_at: Point) -> Scenario {
 
 /// A scenario twist a table-driven test applies before it runs the cycle.
 type Twist = fn(Scenario) -> Scenario;
+
+/// One cast the cycle began: who cast, which spell, and at whom.
+type CastEffect = (u64, u32, u64);
 
 /// A passive pack mate: it answers a call but never notices a player by itself.
 fn pack_mate(w: Scenario, guid: u64, at: Point) -> Scenario {
@@ -1797,4 +1983,256 @@ fn a_blocked_chase_goes_around_instead_of_through() {
         "a chase leg must head for the detour corner navigation returns, or the mob walks into the \
          geometry between it and its victim and stands there swinging at nothing"
     );
+}
+
+/// A wolf fighting the hunter with ONE authored spell and 30 yards of spell range — the caster shape
+/// the cast phase decides on. The cast phase is a sensing phase, so its scenarios fire `sense`.
+fn wolf_casting(player_at: Point) -> Scenario {
+    wolf_fighting(player_at)
+        .attacking(WOLF, HUNTER)
+        .caster(WOLF, 30.0)
+        .lone_spell(WOLF, NUKE)
+}
+
+#[test]
+fn a_caster_at_spell_range_casts_and_stays_where_it_is() {
+    let mut w = wolf_casting(p(20.0, 0.0, 10.0));
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.casts(),
+        [(WOLF, NUKE, HUNTER)],
+        "a caster must begin its cast in the SAME firing it is engaged, or the spell it was \
+         authored around never goes off"
+    );
+    assert!(
+        w.effects().is_empty() && w.victims() == [(WOLF, HUNTER)],
+        "casting decides a spell, not a move and not a fight: a closing leg in the firing it casts \
+         drags the caster into melee, and rewriting the engagement would restart the swing"
+    );
+}
+
+#[test]
+fn a_wall_blocked_caster_drops_the_spell_and_closes_instead() {
+    let mut w = wolf_casting(p(20.0, 0.0, 10.0)).wall_between(WOLF, HUNTER);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert!(
+        w.casts().is_empty() && w.effects().len() == 1,
+        "cast and chase must reach ONE verdict about the same line: a caster that holds at range \
+         through a wall it cannot cast through stands there doing nothing for the whole fight"
+    );
+}
+
+#[test]
+fn a_caster_that_cannot_act_or_is_already_casting_begins_nothing() {
+    let held: [(&str, Twist); 2] = [
+        ("stunned", |w| w.crowd_controlled(WOLF)),
+        ("already casting", |w| w.mid_cast(WOLF)),
+    ];
+    for (case, hold) in held {
+        let mut w = hold(wolf_casting(p(20.0, 0.0, 10.0)));
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert!(
+            w.casts().is_empty(),
+            "a stun has to stop the cast to be worth casting, and re-entering a running cast bar \
+             deletes and restarts it every firing, so the spell would never land ({case})"
+        );
+    }
+}
+
+#[test]
+fn the_rotation_fires_its_highest_priority_ready_action() {
+    // A heal it only wants below half health, over a nuke it can always throw.
+    let rotation = |w: Scenario| {
+        w.rotation_line(WOLF, HEAL, CastWhen::Hurt(50), 10)
+            .rotation_line(WOLF, NUKE, CastWhen::Always, 1)
+    };
+    let cases: [(&str, Twist, u32, u64); 3] = [
+        ("unhurt, so the heal is not eligible", |w| w, NUKE, HUNTER),
+        (
+            "hurt, so the heal outranks the nuke",
+            |w| w.hurt(WOLF, 10),
+            HEAL,
+            WOLF,
+        ),
+        (
+            "hurt but the heal is on cooldown",
+            |w| w.hurt(WOLF, 10).not_ready(HEAL),
+            NUKE,
+            HUNTER,
+        ),
+    ];
+    for (case, twist, spell_id, target) in cases {
+        let mut w = twist(rotation(wolf_casting(p(20.0, 0.0, 10.0))));
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            w.casts(),
+            [(WOLF, spell_id, target)],
+            "the rotation is an authored priority list: firing the wrong line, or giving up when \
+             the top one is on cooldown, is a caster that never uses the spell it was given ({case})"
+        );
+    }
+}
+
+#[test]
+fn a_missing_aura_line_waits_until_the_aura_is_actually_missing() {
+    let cases: [(&str, Twist, Vec<CastEffect>); 4] = [
+        (
+            "the victim lacks the debuff",
+            |w| w,
+            vec![(WOLF, DEBUFF, HUNTER)],
+        ),
+        (
+            "the victim already has it",
+            |w| w.carrying(HUNTER, DEBUFF),
+            vec![],
+        ),
+        (
+            "the buff has lapsed",
+            |w| {
+                w.carrying(HUNTER, DEBUFF)
+                    .rotation_line(WOLF, BUFF, CastWhen::SelfLacksIt, 1)
+            },
+            vec![(WOLF, BUFF, WOLF)],
+        ),
+        (
+            "it is already buffed",
+            |w| {
+                w.carrying(HUNTER, DEBUFF)
+                    .rotation_line(WOLF, BUFF, CastWhen::SelfLacksIt, 1)
+                    .carrying(WOLF, BUFF)
+            },
+            vec![],
+        ),
+    ];
+    for (case, twist, casts) in cases {
+        let mut w = twist(wolf_casting(p(20.0, 0.0, 10.0)).rotation_line(
+            WOLF,
+            DEBUFF,
+            CastWhen::VictimLacksIt,
+            5,
+        ));
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            w.casts(),
+            casts.as_slice(),
+            "a debuff re-applied every firing wastes the whole rotation on a spell that is already \
+             running, and a buff never re-applied leaves the creature fighting without it ({case})"
+        );
+    }
+}
+
+#[test]
+fn only_a_creature_with_no_rotation_at_all_falls_back_to_its_one_spell() {
+    let cases: [(&str, Twist, Vec<CastEffect>); 3] = [
+        ("no rotation", |w| w, vec![(WOLF, NUKE, HUNTER)]),
+        (
+            "a rotation wins over the lone spell",
+            |w| w.rotation_line(WOLF, DEBUFF, CastWhen::Always, 1),
+            vec![(WOLF, DEBUFF, HUNTER)],
+        ),
+        (
+            "a rotation this server cannot read is still a rotation",
+            |w| w.rotation_line(WOLF, DEBUFF, CastWhen::Never, 1),
+            vec![],
+        ),
+    ];
+    for (case, twist, casts) in cases {
+        let mut w = twist(wolf_casting(p(20.0, 0.0, 10.0)));
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            w.casts(),
+            casts.as_slice(),
+            "the single-spell casters authored before rotations existed must keep casting, and a \
+             creature whose rotation this build does not understand must not silently fall back to \
+             a spell its author replaced ({case})"
+        );
+    }
+}
+
+#[test]
+fn a_creature_re_points_at_a_stronger_threat_and_chases_it_in_the_same_cycle() {
+    let mut w = wolf_fighting(p(5.0, 0.0, 10.0))
+        .player(RANGER, p(20.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .threat(WOLF, HUNTER, 50)
+        .threat(WOLF, RANGER, 100);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.victims(),
+        [(WOLF, RANGER)],
+        "the creature must fight whoever out-threats its current target, or a healer can never \
+         pull a mob off the player it first aggroed"
+    );
+    assert_eq!(
+        w.effects().first().map(|e| e.dest),
+        Some(p(16.0, 0.0, 10.0)),
+        "the retarget must land BEFORE the movement decision, or the creature spends the firing \
+         running at the player it no longer fights and only turns round on the next one"
+    );
+}
+
+#[test]
+fn equal_threat_leaves_the_target_where_it_is() {
+    let mut w = wolf_fighting(p(20.0, 0.0, 10.0))
+        .player(RANGER, p(5.0, 0.0, 10.0))
+        .attacking(WOLF, RANGER)
+        .threat(WOLF, HUNTER, 50)
+        .threat(WOLF, RANGER, 50);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.victims(),
+        [(WOLF, RANGER)],
+        "the switch needs STRICTLY more threat: on a tie the creature would flip target every \
+         firing and swing at nobody"
+    );
+}
+
+#[test]
+fn a_taunt_pins_the_target_whatever_the_threat_table_says() {
+    let cases: [(&str, Twist, u64); 2] = [
+        (
+            "pinned on the weaker source",
+            |w| w.taunted(WOLF, HUNTER),
+            HUNTER,
+        ),
+        (
+            "yanked onto the taunter",
+            |w| w.taunted(WOLF, RANGER),
+            RANGER,
+        ),
+    ];
+    for (case, taunt, victim) in cases {
+        let mut w = taunt(
+            wolf_fighting(p(5.0, 0.0, 10.0))
+                .player(RANGER, p(20.0, 0.0, 10.0))
+                .attacking(WOLF, HUNTER)
+                .threat(WOLF, HUNTER, 50)
+                .threat(WOLF, RANGER, 100),
+        );
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            w.victims(),
+            [(WOLF, victim)],
+            "taunt is a forced target, not a threat bump: a tank whose taunt is overtaken by the \
+             next nuke has no way to hold a mob off the group ({case})"
+        );
+    }
 }

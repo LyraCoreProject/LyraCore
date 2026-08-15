@@ -14,12 +14,13 @@ use lyracore_shared::constants;
 use spacetimedb::log;
 
 use super::ai::{
-    aggro_radius, finite_point, is_aggro_candidate, leg_in_flight, leg_toward,
+    aggro_radius, finite_point, hp_pct_below, is_aggro_candidate, leg_in_flight, leg_toward,
     nearest_waypoint_idx, next_waypoint_idx, spline_t, stealth_detect_range, wander_point,
     within_assist_radius, TickScope, CHASE_LEAD_YD, CHASE_LEASH_SQ, CHASE_MELEE_SQ,
     CHASE_REPATH_COS, CHASE_TARGET_MOVING_MS, MOVE_TICK_SECS, RETURN_LEASH_SQ, SENSE_EVERY_N_TICKS,
     WANDER_CHANCE_PCT, WANDER_RADIUS,
 };
+use super::cast_condition;
 use super::tick::TickSweep;
 
 mod ctx;
@@ -252,6 +253,108 @@ pub(crate) trait EngageSink {
     fn enter_combat(&mut self, guid: u64);
 }
 
+/// An engaged creature the cast phase considers, with everything a rotation condition reads.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Caster {
+    pub guid: u64,
+    /// The unit it is swinging at — every offensive line of the rotation aims here.
+    pub victim: u64,
+    /// Where the victim stands, for the one line-of-sight verdict cast and chase share. `None` when
+    /// the victim row is gone: nothing blocks a line to a unit that is not there.
+    pub victim_at: Option<Point>,
+    /// Spell rank comes from the caster's level.
+    pub level: u8,
+    pub health: u32,
+    pub max_health: u32,
+    /// Stunned, polymorphed or feared. A ROOTED caster still casts — ranged needs no movement.
+    pub cannot_act: bool,
+    /// Already mid-cast. Beginning a second cast deletes and restarts the first, so a creature that
+    /// re-entered every firing would never finish one.
+    pub casting: bool,
+}
+
+/// What one authored rotation line waits for before it fires.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum CastWhen {
+    /// A nuke or debuff at the victim: eligible whenever the spell itself is ready.
+    Always,
+    /// A heal on itself, below this percentage of its own health.
+    Hurt(u32),
+    /// A debuff the victim does not carry yet.
+    VictimLacksIt,
+    /// A buff the caster has let lapse.
+    SelfLacksIt,
+    /// A condition this server does not understand. The line is authored but never fires, and it
+    /// still counts as a rotation — a creature that has one does not fall back to its lone spell.
+    Never,
+}
+
+impl CastWhen {
+    /// Read an authored rotation condition. Kept here rather than in the adapter so the whole
+    /// rotation grammar, unknown discriminants included, is one cycle-owned decision.
+    fn of(condition: u8, condition_value: u8) -> CastWhen {
+        match condition {
+            cast_condition::ALWAYS => CastWhen::Always,
+            cast_condition::SELF_HP_BELOW_PCT => CastWhen::Hurt(condition_value as u32),
+            cast_condition::TARGET_MISSING_AURA => CastWhen::VictimLacksIt,
+            cast_condition::SELF_MISSING_AURA => CastWhen::SelfLacksIt,
+            _ => CastWhen::Never,
+        }
+    }
+}
+
+/// One line of a creature's spell rotation: which spell, and what it waits for.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct SpellOption {
+    pub spell_id: u32,
+    pub when: CastWhen,
+    /// Tried highest first.
+    pub priority: u8,
+    /// Authoring order — the tie-break that keeps a same-priority pair deterministic.
+    pub authored: u64,
+}
+
+/// Casting's surface: who is engaged, what it may cast, and "begin this cast". The cycle picks WHICH
+/// spell and WHETHER to cast; resolution, cooldown, power cost and aura application stay behind
+/// [`CastSink::begin_cast`], in the spell module.
+pub(crate) trait CastSink {
+    /// Every engaged creature this firing covers whose attacker could cast — the same engagement
+    /// rows and the same gate ladder chase opens with.
+    fn casters(&self, scope: &TickScope) -> Vec<Caster>;
+    /// This creature's authored rotation, in no particular order; empty for one with no rotation.
+    fn rotation_of(&self, guid: u64) -> Vec<SpellOption>;
+    /// The single spell a creature with no rotation casts at its victim.
+    fn lone_spell(&self, guid: u64) -> Option<u32>;
+    /// Does this unit already carry `spell_id`'s aura? The missing-aura conditions read it.
+    fn carries(&self, guid: u64, spell_id: u32) -> bool;
+    /// Begin `spell_id` at `target`. `false` means the spell was not ready — global cooldown, its own
+    /// cooldown, power cost or range — so the next line of the rotation gets its turn.
+    fn begin_cast(&mut self, caster: &Caster, spell_id: u32, target: u64) -> bool;
+}
+
+/// One engaged creature and the unit it currently fights — the pairing threat may overturn.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Fighter {
+    pub guid: u64,
+    pub victim: u64,
+}
+
+/// Threat's surface. The authority is `crate::threat`: who counts as a valid source, how ties break,
+/// and when a taunt lock is still live all stay there — the cycle only composes them.
+pub(crate) trait ThreatSink {
+    /// Every engaged creature this firing covers, with the unit it is fighting now.
+    fn fighters(&self, scope: &TickScope) -> Vec<Fighter>;
+    /// The unit a live taunt lock pins this creature on, regardless of the threat table.
+    fn taunted_onto(&self, guid: u64) -> Option<u64>;
+    /// Its highest-threat valid source; `None` for an empty or all-invalid table.
+    fn top_threat(&self, guid: u64) -> Option<u64>;
+    /// How much threat `source` holds on `creature`; a source absent from the table holds none.
+    fn threat_on(&self, creature: u64, source: u64) -> i64;
+    /// Point the creature at `victim` — the engagement and the creature's own target together, and
+    /// nothing else: the swing clock stays where it was, so a retarget does not refresh the swing.
+    fn retarget(&mut self, creature: u64, victim: u64);
+}
+
 /// One creature closing on the unit it fights, with everything that decision reads: where both
 /// stand, how recently the victim moved, and the leg the chaser is already running.
 #[derive(Clone, PartialEq, Debug)]
@@ -287,7 +390,7 @@ pub(crate) trait PursuitSink {
 
 /// The whole world one cycle touches.
 pub(crate) trait CreatureWorld:
-    MotionSink + IdleSink + EngageSink + PursuitSink + LegacyPasses
+    MotionSink + IdleSink + EngageSink + CastSink + ThreatSink + PursuitSink + LegacyPasses
 {
     /// The creatures near a covered player this firing, plus the pet and in-combat candidate lists
     /// the same sweep harvests. Read ONCE per cycle and shared by every pass that scopes to it.
@@ -304,8 +407,6 @@ pub(crate) trait CreatureWorld:
 /// Passes still living in `creatures::tick` — the cycle owns WHEN they run, not yet HOW.
 pub(crate) trait LegacyPasses {
     fn legacy_pet(&mut self, scope: &TickScope, now_ms: u32, pets: &[u64]) -> usize;
-    fn legacy_cast(&mut self, scope: &TickScope) -> usize;
-    fn legacy_threat_retarget(&mut self, scope: &TickScope) -> usize;
     fn legacy_regen(&mut self) -> usize;
     fn legacy_combat_drop(&mut self, in_combat: &[u64]) -> usize;
     fn legacy_flee(&mut self, scope: &TickScope) -> usize;
@@ -350,11 +451,8 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         rows.push(("aggro", seen as u64));
         rows.push(("assist", assist(w, &active, pulls) as u64));
         rows.push(("pet", w.legacy_pet(&tick.scope, tick.now_ms, &pets) as u64));
-        rows.push(("cast", w.legacy_cast(&tick.scope) as u64));
-        rows.push((
-            "threat_retarget",
-            w.legacy_threat_retarget(&tick.scope) as u64,
-        ));
+        rows.push(("cast", cast(w, &tick.scope) as u64));
+        rows.push(("threat_retarget", threat_retarget(w, &tick.scope) as u64));
     }
     rows.push(("chase", chase(w, &tick) as u64));
     rows.push(("combat_enter", combat_entry(w, &tick.scope) as u64));
@@ -627,6 +725,118 @@ fn assist<W: EngageSink>(w: &mut W, active: &HashSet<u64>, mut calls: Vec<Called
         w.engage(neighbor, victim, Pull::Assisted);
     }
     neighbors.len()
+}
+
+/// CAST — an engaged caster creature begins ONE action from its rotation. It runs before chase, so a
+/// caster that can cast casts instead of merely closing, and both phases reach the SAME line-of-sight
+/// verdict about the same line: with a wall in the way the offensive half of the rotation is dropped
+/// here and chase closes rather than holding at spell range.
+///
+/// A creature with rotation lines uses them, highest priority first; one with none falls back to its
+/// single authored spell; one with neither never casts. Eligibility is only the CONDITION half — the
+/// spell module owns cooldown, power cost and range, and reports "not ready" by refusing the cast, at
+/// which point the next line down gets its turn. At most one cast per creature per firing.
+///
+/// The engagement rows are the candidate set, so this stays O(fights running). Visited in guid order.
+/// Returns the covered candidates considered.
+fn cast<W: CastSink + EngageSink>(w: &mut W, scope: &TickScope) -> usize {
+    let mut casters = w.casters(scope);
+    casters.sort_unstable_by_key(|c| c.guid);
+    let visited = casters.len();
+    // Collect-then-cast: a cast applies auras and moves health, which the conditions above read. One
+    // interleaved loop would let the first creature's cast decide the second creature's rotation.
+    let mut ready: Vec<(Caster, Vec<(u32, u64)>)> = Vec::new();
+    for c in casters {
+        if c.cannot_act || c.casting {
+            continue;
+        }
+        let mut rotation = w.rotation_of(c.guid);
+        let mut candidates: Vec<(u32, u64)> = if rotation.is_empty() {
+            match w.lone_spell(c.guid) {
+                Some(spell_id) => vec![(spell_id, c.victim)],
+                None => continue, // no rotation and no spell — it only ever melees
+            }
+        } else {
+            rotation.sort_unstable_by(|a, b| {
+                b.priority
+                    .cmp(&a.priority)
+                    .then(a.authored.cmp(&b.authored))
+            });
+            rotation
+                .iter()
+                .filter_map(|o| eligible_cast(w, &c, o))
+                .collect()
+        };
+        // A hostile cast needs a clear line to its victim. Blocked, only the self-cast half survives
+        // and the creature melees instead — the verdict chase reads again to close the distance.
+        if candidates.iter().any(|&(_, t)| t != c.guid) {
+            let blocked = c.victim_at.is_some_and(|at| !w.line_of_sight(c.guid, at));
+            if blocked {
+                candidates.retain(|&(_, t)| t == c.guid);
+            }
+        }
+        if !candidates.is_empty() {
+            ready.push((c, candidates));
+        }
+    }
+    for (c, candidates) in ready {
+        for (spell_id, target) in candidates {
+            if w.begin_cast(&c, spell_id, target) {
+                break; // one action per firing; the rest of the rotation waits
+            }
+        }
+    }
+    visited
+}
+
+/// One rotation line's verdict: `Some((spell, target))` when the world matches what the line waits
+/// for. A heal or buff is aimed at the caster, a nuke or debuff at its victim.
+fn eligible_cast<W: CastSink>(w: &W, c: &Caster, option: &SpellOption) -> Option<(u32, u64)> {
+    let target = match option.when {
+        CastWhen::Always => c.victim,
+        CastWhen::Hurt(pct) => hp_pct_below(c.health, c.max_health, pct).then_some(c.guid)?,
+        CastWhen::VictimLacksIt => (!w.carries(c.victim, option.spell_id)).then_some(c.victim)?,
+        CastWhen::SelfLacksIt => (!w.carries(c.guid, option.spell_id)).then_some(c.guid)?,
+        CastWhen::Never => return None,
+    };
+    Some((option.spell_id, target))
+}
+
+/// THREAT RETARGET — an engaged creature re-points at whoever it hates most. It runs before chase, so
+/// the movement leg in the same firing follows the newly chosen victim rather than trailing a firing
+/// behind it. Choosing a target is neither moving nor acting, so crowd control does not gate it: a
+/// stunned creature still tracks who it will swing at when the stun lifts.
+///
+/// A live taunt lock pins the creature outright. Otherwise the switch needs STRICTLY more threat than
+/// the current victim holds, which is the hysteresis that stops a tie flapping the target: an empty
+/// table, or one source, leaves a proximity pull exactly where it was.
+///
+/// ponytail: this walks the engagement rows the cast phase just walked, rather than sharing one
+/// candidate list. Ceiling: a second pass over the engaged rows per sense firing. A shared snapshot
+/// would be read before the casts above land, which is exactly what a fresh read exists to avoid.
+fn threat_retarget<W: ThreatSink>(w: &mut W, scope: &TickScope) -> usize {
+    let fighters = w.fighters(scope);
+    let visited = fighters.len();
+    // Collect-then-repoint: retargeting writes the engagement rows this list was read from.
+    let mut switches: Vec<(u64, u64)> = Vec::new();
+    for f in &fighters {
+        if let Some(pinned) = w.taunted_onto(f.guid) {
+            if pinned != f.victim {
+                switches.push((f.guid, pinned));
+            }
+            continue; // pinned — the threat compare is suspended for the taunt window
+        }
+        let Some(top) = w.top_threat(f.guid) else {
+            continue;
+        };
+        if top != f.victim && w.threat_on(f.guid, top) > w.threat_on(f.guid, f.victim) {
+            switches.push((f.guid, top));
+        }
+    }
+    for (creature, victim) in switches {
+        w.retarget(creature, victim);
+    }
+    visited
 }
 
 /// How far short of a STANDING victim a closing leg lands: just inside the 5-yard melee band, so the

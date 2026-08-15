@@ -11,13 +11,15 @@ use lyracore_shared::{constants, spatial};
 use spacetimedb::{ReducerContext, Table};
 
 use super::{
-    run_cycle, AggroTarget, CreatureWorld, CycleOutcome, EngageSink, Engagement, Gait, Home,
-    IdleCreature, IdleSink, Leg, LegInFlight, LegacyPasses, MotionSink, Point, Pull, Pursuit,
-    PursuitSink, Sensor, TickContext, Waypoint,
+    run_cycle, AggroTarget, CastSink, CastWhen, Caster, CreatureWorld, CycleOutcome, EngageSink,
+    Engagement, Fighter, Gait, Home, IdleCreature, IdleSink, Leg, LegInFlight, LegacyPasses,
+    MotionSink, Point, Pull, Pursuit, PursuitSink, Sensor, SpellOption, ThreatSink, TickContext,
+    Waypoint,
 };
 use crate::creatures::ai::TickScope;
 use crate::creatures::cast_condition;
 use crate::creatures::tick::{self, CreatureSpline, TickSweep};
+use crate::spell::game_pending_cast;
 use crate::{
     game_creature_cast, game_creature_spawn, game_creature_spell, game_creature_spline,
     game_creature_template, game_creature_waypoint, game_melee_attack, game_spell,
@@ -385,6 +387,134 @@ impl EngageSink for CtxWorld<'_> {
     }
 }
 
+impl CtxWorld<'_> {
+    /// The template this creature was spawned from — the key both spell tables are authored against.
+    fn entry_of(&self, guid: u64) -> Option<u32> {
+        self.ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(guid)
+            .map(|c| c.entry)
+    }
+}
+
+impl CastSink for CtxWorld<'_> {
+    fn casters(&self, scope: &TickScope) -> Vec<Caster> {
+        let entities = self.ctx.db.game_world_entity();
+        let pending = self.ctx.db.game_pending_cast();
+        // Same candidate discovery as chase: the engaged rows ARE the set, one per attacker.
+        self.ctx
+            .db
+            .game_melee_attack()
+            .iter()
+            .filter_map(|row| {
+                let c = tick::movable_creature(self.ctx, row.attacker_guid, scope)?;
+                let guid = c.guid;
+                let casting = pending.by_caster().filter(&guid).next().is_some();
+                Some(Caster {
+                    guid,
+                    victim: row.target_guid,
+                    victim_at: entities.guid().find(row.target_guid).map(|t| Point {
+                        x: t.x,
+                        y: t.y,
+                        z: t.z,
+                    }),
+                    level: c.level as u8,
+                    health: c.health,
+                    max_health: c.max_health,
+                    cannot_act: crate::spell::is_action_blocked(self.ctx, guid),
+                    casting,
+                })
+            })
+            .collect()
+    }
+    fn rotation_of(&self, guid: u64) -> Vec<SpellOption> {
+        self.entry_of(guid).map_or(Vec::new(), |entry| {
+            self.ctx
+                .db
+                .game_creature_spell()
+                .by_entry()
+                .filter(&entry)
+                .map(|r| SpellOption {
+                    spell_id: r.spell_id,
+                    when: CastWhen::of(r.condition, r.condition_value),
+                    priority: r.priority,
+                    authored: r.id,
+                })
+                .collect()
+        })
+    }
+    fn lone_spell(&self, guid: u64) -> Option<u32> {
+        self.ctx
+            .db
+            .game_creature_cast()
+            .creature_entry()
+            .find(self.entry_of(guid)?)
+            .map(|c| c.spell_id)
+    }
+    fn carries(&self, guid: u64, spell_id: u32) -> bool {
+        crate::spell::has_aura(self.ctx, guid, spell_id)
+    }
+    fn begin_cast(&mut self, caster: &Caster, spell_id: u32, target: u64) -> bool {
+        crate::spell::begin_cast(
+            self.ctx,
+            caster.guid,
+            spell_id,
+            caster.level,
+            target,
+            false,
+            None,
+        )
+        .is_ok()
+    }
+}
+
+impl ThreatSink for CtxWorld<'_> {
+    fn fighters(&self, scope: &TickScope) -> Vec<Fighter> {
+        self.ctx
+            .db
+            .game_melee_attack()
+            .iter()
+            .filter_map(|a| {
+                tick::movable_creature(self.ctx, a.attacker_guid, scope).map(|c| Fighter {
+                    guid: c.guid,
+                    victim: a.target_guid,
+                })
+            })
+            .collect()
+    }
+    fn taunted_onto(&self, guid: u64) -> Option<u64> {
+        crate::threat::forced_target(
+            self.ctx,
+            guid,
+            (self.ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64,
+        )
+    }
+    fn top_threat(&self, guid: u64) -> Option<u64> {
+        crate::threat::top_threat_target(self.ctx, guid)
+    }
+    fn threat_on(&self, creature: u64, source: u64) -> i64 {
+        crate::threat::threat_of(self.ctx, creature, source)
+    }
+    fn retarget(&mut self, creature: u64, victim: u64) {
+        // The engagement keeps its PK and its swing clock — only the victim moves, so the creature
+        // swings at the new foe on its own cadence instead of restarting the swing timer.
+        let melee = self.ctx.db.game_melee_attack();
+        if let Some(mut row) = melee.attacker_guid().find(creature) {
+            row.target_guid = victim;
+            melee.attacker_guid().update(row);
+        }
+        let entities = self.ctx.db.game_world_entity();
+        if let Some(mut c) = entities.guid().find(creature) {
+            if c.target_guid != victim {
+                c.target_guid = victim;
+                entities.guid().update(c);
+            }
+        }
+    }
+}
+
 impl PursuitSink for CtxWorld<'_> {
     fn pursuits(&self, scope: &TickScope) -> Vec<Pursuit> {
         let entities = self.ctx.db.game_world_entity();
@@ -476,12 +606,6 @@ impl CreatureWorld for CtxWorld<'_> {
 impl LegacyPasses for CtxWorld<'_> {
     fn legacy_pet(&mut self, scope: &TickScope, now_ms: u32, pets: &[u64]) -> usize {
         crate::creatures::pass_pet(self.ctx, now_ms, scope, self.interval_micros, pets)
-    }
-    fn legacy_cast(&mut self, scope: &TickScope) -> usize {
-        tick::pass_cast(self.ctx, scope)
-    }
-    fn legacy_threat_retarget(&mut self, scope: &TickScope) -> usize {
-        tick::pass_threat_retarget(self.ctx, scope)
     }
     fn legacy_regen(&mut self) -> usize {
         tick::pass_regen(self.ctx)

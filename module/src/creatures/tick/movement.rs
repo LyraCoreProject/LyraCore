@@ -30,8 +30,8 @@ use super::*;
 /// mid-flight the instant it — or the player chasing it — stepped past the active-cell edge, which is
 /// exactly the "mid-leg flee... finishes" outcome the item requires, not "freezes."
 ///
-/// Work-item 233: outer-loops `game_melee_attack` directly (same precedent as the chase
-/// phase and `pass_cast`) instead of `entities.iter()` + a per-row `.find(&c.guid)` gate. VERIFIED before
+/// Work-item 233: outer-loops `game_melee_attack` directly (same precedent as the chase and cast
+/// phases) instead of `entities.iter()` + a per-row `.find(&c.guid)` gate. VERIFIED before
 /// switching: "fleeing" carries NO separate state on `WorldEntity` (no `is_fleeing`/`fleeing_since`
 /// field — `WorldEntity`'s only combat-adjacent fields are `dead`/`target_guid`/`unit_flags`); a
 /// creature's rout status comes from exactly two things — "is it the attacker in a melee row" and that
@@ -41,7 +41,7 @@ use super::*;
 /// melee table instead of the entity table cannot miss a genuinely routing creature. It is also where
 /// the rout clock lives, so the state is in hand with no extra lookup.
 /// Work-item 229: gated per candidate on `scope.covers(c.instance_id)` (attacker's instance = the
-/// pair's — same construction argument as pass_cast and chase).
+/// pair's — same construction argument as the cast and chase phases).
 ///
 /// Issue #383: dropped the `_tick_secs` parameter, same reasoning and same committed-leg architecture
 /// as chase — the flee leg is one full `FLEE_LEG_YD` dash, re-rolled only when the previous

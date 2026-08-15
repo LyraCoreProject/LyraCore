@@ -14,8 +14,8 @@
 //!
 //! Everything is GENERIC over `owner_guid != 0` + the `E_SUMMON_PET` kind — NO per-spell-id branch. The
 //! Imp CASTS Firebolt (3110) via DATA, not code: the importer emits a `game_creature_cast` row keyed to
-//! the Imp's entry (416) from cmangos `creature_template_spells`, and `pass_cast` (run right after
-//! `pass_pet` in the same sense tick) fires it at the pet's melee target with ZERO pet-specific engine
+//! the Imp's entry (416) from cmangos `creature_template_spells`, and the cycle's cast phase (run right
+//! after `pass_pet` in the same sense tick) fires it at the pet's melee target with ZERO pet-specific engine
 //! code — the SAME engine + SAME cast table the wild caster mobs use. The Imp KEEPS its melee row
 //! (armed by `pass_pet`) so it still chases/swings as a fallback; `ranged_spell_id` stays 0 (the cast
 //! is independent of the wand/ranged-auto-attack field). [entity]
@@ -532,7 +532,7 @@ pub(crate) fn pass_pet(
                         attacker_guid: pet_guid,
                         target_guid,
                         last_swing_ms: 0,   // swing on the next melee tick
-                        ranged_spell_id: 0, // 0 = melee/no wand auto-shot; Firebolt is cast via pass_cast (game_creature_cast 416→3110), NOT this field
+                        ranged_spell_id: 0, // 0 = melee/no wand auto-shot; Firebolt is cast by the cycle's cast phase (game_creature_cast 416→3110), NOT this field
                         last_offhand_swing_ms: 0,
                         rout_ends_ms: 0,
                         pursuit_ends_ms: 0,

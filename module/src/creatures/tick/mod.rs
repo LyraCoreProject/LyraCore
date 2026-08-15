@@ -14,7 +14,7 @@
 //!   - [`movement`] — the engaged legs still here: the low-HP rout and fear-flee.
 //!   - [`lifecycle`] — the canonical despawn checklist (issue #359) + decay/respawn/GO-respawn, the
 //!     due-time passes that run regardless of proximity.
-//!   - [`sense`] — cast, threat-retarget, regen.
+//!   - [`sense`] — regen.
 
 use lyracore_shared::spatial;
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
@@ -32,7 +32,7 @@ mod sense;
 // migrate each body into the cycle.
 pub(crate) use lifecycle::{pass_decay, pass_gameobject_respawn, pass_respawn};
 pub(crate) use movement::{pass_fear_flee, pass_flee};
-pub(crate) use sense::{pass_cast, pass_regen, pass_threat_retarget};
+pub(crate) use sense::pass_regen;
 
 // Re-export so `crate::creatures::tick::despawn_creature_entity` (and, via `creatures::mod.rs`'s own
 // `pub use tick::*`, `crate::creatures::despawn_creature_entity`) still resolves — `encounter.rs`/
@@ -419,9 +419,9 @@ fn log_active_cell_stats(ctx: &ReducerContext, awake: usize) {
     );
 }
 
-/// Work-item 233 done-when evidence: log the pass_cast/pass_flee/pass_fear_flee rows-visited drop, in
+/// Work-item 233 done-when evidence: log the cast/pass_flee/pass_fear_flee rows-visited drop, in
 /// the SAME rare window `log_active_cell_stats` uses (reusing its throttle — no extra per-tick cost).
-/// `melee_rows` is the candidate universe BOTH `pass_cast` and `pass_flee` now outer-loop (identical
+/// `melee_rows` is the candidate universe BOTH the cycle's cast phase and `pass_flee` outer-loop (identical
 /// gate: "currently the attacker in `game_melee_attack`"); `fear_rows` is what `pass_fear_flee` now
 /// outer-loops (the `A_CONTROL(M_FEAR)` aura rows). `total_all` is a full `game_world_entity` count
 /// (players included) — what EVERY ONE of the three fully `entities.iter()`-scanned before this item,
@@ -759,14 +759,15 @@ fn drain_legs(
     }
 }
 
-/// The shared gate ladder every ENGAGED/table-driven pass (cast / threat-retarget / chase / flee /
-/// fear-flee) opens its per-candidate loop with: resolve `guid` to a live CREATURE (no PLAYER bit, not
+/// The shared gate ladder every ENGAGED/table-driven pass (the cycle's cast, threat-retarget and
+/// chase phases; flee / fear-flee) opens its per-candidate loop with: resolve `guid` to a live CREATURE (no PLAYER bit, not
 /// dead) whose instance THIS firing's `scope` covers. `None` collapses each site's `let Some(c) = ...
 /// else { continue }; if c.is_player() || c.dead { continue }; if !scope.covers(c.instance_id) {
 /// continue }` into one check — every call site still increments its own `visited` counter only on
 /// `Some`, matching the existing "gate first, then count" order everywhere.
 ///
-/// `pub(crate)` for the cycle's production adapter, which opens the chase candidate list with it.
+/// `pub(crate)` for the cycle's production adapter, which opens the cast, threat-retarget and chase
+/// candidate lists with it.
 pub(crate) fn movable_creature(
     ctx: &ReducerContext,
     guid: u64,
