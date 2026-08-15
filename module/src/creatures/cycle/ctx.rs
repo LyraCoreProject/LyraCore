@@ -2,8 +2,8 @@
 //!
 //! **This layer is the seam's own blind spot.** The harness substitutes an in-memory `Scenario` for
 //! every line of it, so a no-op'd method here is invisible to every test in the crate. Keep every
-//! method a pass-through; ticket 09 pins its exact shape the way `transfer::tests::
-//! the_production_adapter_is_the_pass_through_the_harness_assumes` pins `CtxShard`.
+//! method a pass-through: `harness::the_production_adapter_is_the_pass_through_the_harness_assumes`
+//! pins this file's exact shape, and re-blessing an edit there is the only thing that covers it.
 
 use std::collections::HashSet;
 

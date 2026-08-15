@@ -1,10 +1,9 @@
-//! The broadcast creature-move event + the creature tick schedule, the scheduled `tick_creatures`
-//! shell, and the pass bodies the shell no longer sequences. [server]/[event]
+//! The broadcast creature-move event + the creature tick schedule and the scheduled `tick_creatures`
+//! shell. [server]/[event]
 //!
-//! The pass ORDER lives in [`crate::creatures::cycle`], not here: `tick_creatures` authorizes the
-//! firing, resolves coverage and cadence, and runs one behavior cycle. Each pass below is migrated
-//! into that module by its own ticket (`.scratch/creature-behavior-cycle/`), so this file shrinks
-//! ticket by ticket.
+//! No behavior pass lives here. `tick_creatures` authorizes the firing, resolves coverage and
+//! cadence, and runs ONE behavior cycle; the pass list and its load-bearing order are
+//! [`crate::creatures::cycle`]'s alone.
 //!
 //!   - `mod.rs` (this file) — the two tables + the schedule table, the `tick_creatures` shell, the
 //!     active-cell sweep and rows-visited evidence logs, the shared candidate gate
