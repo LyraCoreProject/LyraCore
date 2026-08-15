@@ -2004,6 +2004,7 @@ impl WorldStore for InMemoryStore {
                 race: c.race,
                 zone_id: c.zone_id,
                 guild: String::new(),
+                                guild_id: 0,
             })
             .collect())
     }
@@ -2375,10 +2376,6 @@ impl WorldStore for InMemoryStore {
 
     fn guild_membership(&self, character_guid: u64) -> Result<Option<(u64, u32)>> {
         Ok(self.guild.lock().unwrap().guild_of(character_guid))
-    }
-
-    fn guild_member_guids(&self, guild_id: u64) -> Result<Vec<u64>> {
-        Ok(self.guild.lock().unwrap().member_guids(guild_id))
     }
 
     fn sync_guild_membership(
@@ -2817,14 +2814,12 @@ impl handlers::GuildActionStore for InMemoryStore {
         target_name: &str,
         note: &str,
     ) -> Result<()> {
-        let target_guid = super::party::resolve_by_name(self, target_name)?
-            .ok_or_else(|| anyhow!("{}", lyracore_shared::guild::err::PLAYER_NOT_FOUND))?;
         super::guild::run(
             self,
             account_id,
             self_guid,
             super::guild::Op::SetPublicNote {
-                target_guid,
+                target_guid: super::guild::member_by_name(self, self_guid, target_name)?,
                 note: note.to_string(),
             },
         )
@@ -2837,14 +2832,12 @@ impl handlers::GuildActionStore for InMemoryStore {
         target_name: &str,
         note: &str,
     ) -> Result<()> {
-        let target_guid = super::party::resolve_by_name(self, target_name)?
-            .ok_or_else(|| anyhow!("{}", lyracore_shared::guild::err::PLAYER_NOT_FOUND))?;
         super::guild::run(
             self,
             account_id,
             self_guid,
             super::guild::Op::SetOfficerNote {
-                target_guid,
+                target_guid: super::guild::member_by_name(self, self_guid, target_name)?,
                 note: note.to_string(),
             },
         )
@@ -3694,6 +3687,8 @@ fn warrior_entity() -> codec::EntityView {
         owner_guid: 0,       // not a summon
         effective_armor: 40, // agility 20 * 2 (base; no gear in the fixture → effective == base)
         // No hearthstone bind recorded for the test entity; fall back to login position.
+        guild_id: 0,
+        guild_rank: 0,
         home_map: 0,
         home_zone: 0,
         home_x: 0.0,

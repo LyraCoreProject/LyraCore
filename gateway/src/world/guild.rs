@@ -86,54 +86,52 @@ pub(crate) enum Op {
 
 /// Run one guild op for the session that owns `self_guid`.
 ///
-/// Unsharded → the player's own connection calls the player-facing reducer on the player's own
-/// shard, and nothing else happens. Ops with no player-facing reducer run the operator-gated
-/// `realm_guild_op` against that same shard instead, which with one database is the same thing.
+/// Unsharded → [`Op::Create`] calls the player-facing `create_guild` reducer on the player's own
+/// shard, which already is the authority; every other op reaches [`authority`] on that same
+/// database. A same-shaped single-database reducer per verb would cost a hand-spliced binding each
+/// and buy nothing, because `realm_guild_op` runs correctly against ANY database.
 ///
-/// Sharded → realm-core runs the op, then the guild columns of every character the op moved are
-/// pushed onto every connected world shard. The push is best-effort BY DESIGN (see
-/// [`push_membership`]); the op's own result is not.
-/// shard, and nothing else happens. [`Op::Create`] is the one exception: it runs through the
-/// dedicated single-database [`WorldStore::create_guild`] reducer T1 shipped rather than
-/// `realm_guild_op` — every OTHER op reaches `realm_guild_op` on `store` directly instead of adding
-/// a same-shaped single-database reducer per op (and the hand-spliced binding each would cost;
-/// `realm_guild_op` already runs correctly against ANY database, sharded or not, because the module
-/// publishes it everywhere).
-///
-/// Sharded → realm-core runs the op, then the acting character's own guild columns are pushed onto
-/// every connected world shard. The push is best-effort BY DESIGN (see [`push_membership`]); the
-/// op's own result is not. T6's four ops never change membership, so — unlike [`Op::Create`] — the
-/// push after them just re-confirms the SAME pair; harmless, and left unconditional rather than
-/// restructured (this match is one of the four files every guild ticket appends to in parallel).
+/// Sharded → realm-core runs the op, then the guild columns of every character it moved are pushed
+/// onto every connected world shard. The push is best-effort BY DESIGN (see [`push_membership`]);
+/// the op's own result is not.
 pub(crate) fn run<St: WorldStore + ?Sized>(
     store: &St,
     account_id: u64,
     self_guid: u64,
     op: Op,
 ) -> Result<()> {
-    let Some(realm) = store.realm_store() else {
-        return match op {
-            Op::Create(name) => store.create_guild(account_id, self_guid, &name),
-            // Every op past CREATE has no player-facing reducer of its own: `realm_guild_op` runs
-            // against the database THIS handle points at, which on an unsharded gateway already is
-            // the authority AND the player's own shard. A reducer per verb would cost a
-            // hand-maintained SDK binding each and buy nothing. The module's cores stamp a moved
-            // character's own guild columns in the same transaction, so there is nothing to push.
-            other => {
-                let (code, target, arg_a, text) = slots(other);
-                store.realm_guild_op(code, self_guid, target, arg_a, text)
-            }
-        };
-    };
+    if let (None, Op::Create(name)) = (store.realm_store(), &op) {
+        return store.create_guild(account_id, self_guid, name);
+    }
     // Read BEFORE the op: a disband leaves no roster to read the ex-members from afterwards, and a
     // shard that never hears about them keeps the dead guild's columns forever.
     let moved = moved_by(store, self_guid, &op)?;
     let (code, target, arg_a, text) = slots(op);
-    realm.realm_guild_op(code, self_guid, target, arg_a, text)?;
-    for guid in moved {
-        push_membership(store, realm.as_ref(), guid);
+    authority(store, code, self_guid, target, arg_a, text)?;
+    if let Some(realm) = store.realm_store() {
+        for guid in moved {
+            push_membership(store, realm.as_ref(), guid);
+        }
     }
     Ok(())
+}
+
+/// Call `realm_guild_op` on whichever database is the guild AUTHORITY: realm-core when the gateway
+/// is sharded, this handle's own database when it is not.
+///
+/// The one place that choice is made, so no verb can drift onto the wrong plane.
+fn authority<St: WorldStore + ?Sized>(
+    store: &St,
+    op: u8,
+    actor_guid: u64,
+    target_guid: u64,
+    arg_a: u32,
+    text: String,
+) -> Result<()> {
+    match store.realm_store() {
+        Some(realm) => realm.realm_guild_op(op, actor_guid, target_guid, arg_a, text),
+        None => store.realm_guild_op(op, actor_guid, target_guid, arg_a, text),
+    }
 }
 
 /// Resolve `CMSG_GUILD_INVITE`'s typed name to the character it means, across every shard.
@@ -216,11 +214,7 @@ pub(crate) fn broadcast_presence<St: WorldStore + ?Sized>(
         realm_op::PRESENCE_OFF
     };
     let name = own_name(store, self_guid).unwrap_or_default();
-    let pushed = match store.realm_store() {
-        Some(realm) => realm.realm_guild_op(realm_op::PRESENCE, self_guid, 0, arg_a, name),
-        None => store.realm_guild_op(realm_op::PRESENCE, self_guid, 0, arg_a, name),
-    };
-    if let Err(e) = pushed {
+    if let Err(e) = authority(store, realm_op::PRESENCE, self_guid, 0, arg_a, name) {
         log::warn!(
             "guild: could not broadcast {} for {self_guid} ({e:#}) — their guild sees no status line",
             if online { "sign-on" } else { "sign-off" }
@@ -282,15 +276,17 @@ fn moved_by<St: WorldStore + ?Sized>(store: &St, self_guid: u64, op: &Op) -> Res
         | Op::SetPublicNote { .. }
         | Op::SetOfficerNote { .. } => {}
         Op::Remove { target_guid, .. } | Op::Leader { target_guid, .. } => moved.push(*target_guid),
+        // The only op that has to read the roster: every member's columns move, and after the
+        // cascade there is no roster left to read them from.
         Op::Disband => {
             if let Some(guild_id) = guild_of(store, self_guid)? {
-                let members = match store.realm_store() {
-                    Some(realm) => realm.guild_member_guids(guild_id)?,
-                    None => store.guild_member_guids(guild_id)?,
+                let view = match store.realm_store() {
+                    Some(realm) => realm.guild_roster_snapshot(guild_id)?,
+                    None => store.guild_roster_snapshot(guild_id)?,
                 };
-                for guid in members {
-                    if !moved.contains(&guid) {
-                        moved.push(guid);
+                for member in view.into_iter().flat_map(|v| v.members) {
+                    if !moved.contains(&member.guid) {
+                        moved.push(member.guid);
                     }
                 }
             }
@@ -534,23 +530,45 @@ pub(crate) fn render_roster<St: WorldStore + ?Sized>(
     }
 }
 
-/// Send one `/g` line for the session that owns `self_guid` — D4/D1 made concrete: guild chat has
-/// no shard mirror, so unlike `run`'s `Op::Create` handling (which has a genuinely different
-/// single-database reducer with its own "actor is in world" check) it has only ONE plane. Both
-/// arms below drive the SAME `realm_guild_op(GUILD_CHAT)` op, so they cannot drift; only the
-/// database that receives the call differs. Mirrors `world::whisper::run`, the closest existing
-/// precedent for a realm-core relay with no shard mirror behind it.
+/// Fill the `/who` panel's guild-name column from the AUTHORITY.
 ///
-/// Unlike [`run`], this never calls [`push_membership`]: chat never changes `self_guid`'s guild id
-/// or rank, so there is nothing to push.
+/// The shards answer for who is online and hand back each character's cached `guild_id`; only
+/// realm-core has the guild rows a NAME comes from, so the join happens here — the same split
+/// [`render_roster`] makes, for the same reason. A single-database gateway reads its own rows and
+/// gets the same answer.
+///
+/// One read per distinct guild, not per player: a 49-row panel of one guild costs one read. A guild
+/// the authority cannot answer for leaves that row's name empty rather than dropping the player.
+pub(crate) fn render_who<St: WorldStore + ?Sized>(
+    store: &St,
+    players: &mut [super::super::codec::WhoPlayerView],
+) {
+    let mut names: std::collections::HashMap<u64, String> = std::collections::HashMap::new();
+    for player in players.iter_mut() {
+        if player.guild_id == 0 {
+            continue;
+        }
+        let name = names.entry(player.guild_id).or_insert_with(|| {
+            view(store, player.guild_id)
+                .ok()
+                .flatten()
+                .map(|g| g.name)
+                .unwrap_or_default()
+        });
+        player.guild.clone_from(name);
+    }
+}
+
+/// Send one `/g` line for the session that owns `self_guid` — D4 and D1 made concrete.
+///
+/// Deliberately NOT an [`Op`] through [`run`]: chat changes no membership, so the guild-column push
+/// `run` performs after every op would be a realm read and a write to every shard for nothing.
+/// Mirrors `world::whisper::run`, the closest existing precedent for a realm-core relay with no
+/// shard mirror behind it.
 pub(crate) fn send_chat<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: u64,
     text: String,
 ) -> Result<()> {
-    use lyracore_shared::guild::realm_op;
-    match store.realm_store() {
-        Some(realm) => realm.realm_guild_op(realm_op::GUILD_CHAT, self_guid, 0, 0, text),
-        None => store.realm_guild_op(realm_op::GUILD_CHAT, self_guid, 0, 0, text),
-    }
+    authority(store, realm_op::GUILD_CHAT, self_guid, 0, 0, text)
 }

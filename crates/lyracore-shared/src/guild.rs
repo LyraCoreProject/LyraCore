@@ -126,6 +126,16 @@ pub mod event_kind {
     /// the guild master at write time); `payload` is the new MOTD text, which may be empty. One row
     /// per member, dropped in the same transaction as the write.
     pub const MOTD: u8 = 10;
+
+    /// The recipient's OWN membership changed → a partial `SMSG_UPDATE_OBJECT` carrying
+    /// `PLAYER_GUILDID`/`PLAYER_GUILDRANK` for them. `payload` is the new pair via
+    /// [`super::encode_guild_columns`]; `other_guid`/`other_name` are unused.
+    ///
+    /// Addressed rather than answered on the acting connection, because the character whose
+    /// columns moved is often NOT the caller (a kick, a disband) and may be standing on another
+    /// database entirely. The authority writes one row and the relay finds whichever session
+    /// holds them.
+    pub const GUILD_COLUMNS: u8 = 11;
 }
 
 /// The REALM-CORE guild ops: the `op` byte of the single operator-gated `realm_guild_op` reducer
@@ -245,11 +255,20 @@ pub mod err {
         "the guild master must transfer the guild or disband it";
     /// A master removing themselves is a leave (or a disband), never a kick.
     pub const CANNOT_REMOVE_SELF: &str = "cannot remove yourself from the guild";
-    /// Not a module refusal — the GATEWAY synthesizes this when a `CMSG_GUILD_SET_*_NOTE` target
-    /// name does not resolve to any known character (`world::party::resolve_by_name` came back
-    /// empty). Kept in the same classified vocabulary as the module's own strings so the whole
-    /// family maps to `GuildCommandResult` through one lookup.
-    pub const PLAYER_NOT_FOUND: &str = "guild note target not found";
+}
+
+/// Encode a `GUILD_COLUMNS` payload: `guild_id,rank`, the pair the recipient's own
+/// `PLAYER_GUILDID`/`PLAYER_GUILDRANK` descriptors take. `(0, 0)` is a character who just left,
+/// was kicked, or whose guild was disbanded.
+pub fn encode_guild_columns(guild_id: u64, rank: u32) -> String {
+    format!("{guild_id},{rank}")
+}
+
+/// Decode a `GUILD_COLUMNS` payload. `None` on anything malformed — a descriptor update built from
+/// garbage would put a wrong guild on the name plate, which is worse than none.
+pub fn decode_guild_columns(payload: &str) -> Option<(u64, u32)> {
+    let (guild_id, rank) = payload.split_once(',')?;
+    Some((guild_id.parse().ok()?, rank.parse().ok()?))
 }
 
 /// Encode a `GUILD_CHAT` payload: just the raw message text. Unlike [`encode_roster`]'s
@@ -345,6 +364,7 @@ mod tests {
             event_kind::LEADER_CHANGED,
             event_kind::GUILD_CHAT,
             event_kind::MOTD,
+            event_kind::GUILD_COLUMNS,
         ];
         assert_eq!(
             kinds.to_vec(),
@@ -414,6 +434,15 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn guild_columns_payload_round_trips_and_fails_closed() {
+        assert_eq!(decode_guild_columns(&encode_guild_columns(7, 4)), Some((7, 4)));
+        assert_eq!(decode_guild_columns(&encode_guild_columns(0, 0)), Some((0, 0)));
+        assert!(decode_guild_columns("7").is_none());
+        assert!(decode_guild_columns("x,4").is_none());
+        assert!(decode_guild_columns("7,x").is_none());
     }
 
     #[test]

@@ -45,6 +45,8 @@ impl Coordinator {
         let home_x = char_row.as_ref().map(|c| c.home_x).unwrap_or(0.0);
         let home_y = char_row.as_ref().map(|c| c.home_y).unwrap_or(0.0);
         let home_z = char_row.as_ref().map(|c| c.home_z).unwrap_or(0.0);
+        let guild_id = char_row.as_ref().map(|c| c.guild_id).unwrap_or(0);
+        let guild_rank = char_row.as_ref().map(|c| c.guild_rank).unwrap_or(0);
         // 15 s cap, 15 ms steps. Was 3 s — the cold-1000 measurement showed the reducer
         // COMMITTING while the coordinator stream lagged the login-burst tail past 3 s (writer at
         // 34.5%, so pure propagation, not CPU): 67/1000 logins died here with the entity already
@@ -60,6 +62,8 @@ impl Coordinator {
                 .find(&character_guid)
             {
                 let mut view = entity_view(e, zone_id);
+                view.guild_id = guild_id;
+                view.guild_rank = guild_rank;
                 view.home_map = home_map;
                 view.home_zone = home_zone;
                 view.home_x = home_x;

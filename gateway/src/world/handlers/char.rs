@@ -72,6 +72,33 @@ fn send_quest_log<St: QuestActionStore + ?Sized>(
     Ok(())
 }
 
+/// The guild's message of the day, as the one `SMSG_GUILD_EVENT(Motd)` vanilla shows at world
+/// entry. Empty batch for a guildless character and for a guild whose MOTD is unset.
+///
+/// A read failure yields an empty batch rather than failing the login: the greeting is display-only,
+/// and the same MOTD arrives live the next time the master sets it.
+fn guild_motd_greeting<St: super::GuildActionStore + ?Sized>(
+    store: &St,
+    character_guid: u64,
+) -> Vec<Outbound> {
+    let motd = store
+        .guild_of(character_guid)
+        .ok()
+        .flatten()
+        .and_then(|guild_id| store.guild_view(guild_id).ok().flatten())
+        .map(|view| view.motd)
+        .unwrap_or_default();
+    if motd.is_empty() {
+        return Vec::new();
+    }
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_GUILD_EVENT(
+        Box::new(codec::build_guild_event(
+            wow_world_messages::vanilla::GuildEvent::Motd,
+            std::slice::from_ref(&motd),
+        )),
+    ))]
+}
+
 /// Enter (or RE-enter) the world as `character_guid`: rebuild the live entity, subscribe
 /// to its per-player views (a FRESH `created` dedup set every call — the full AOI reset a cross-map
 /// re-entry needs), and send the login sequence + self CREATE_OBJECT as one contiguous batch. Shared by
@@ -172,6 +199,12 @@ fn enter_world<St: WorldStore + ?Sized>(
     // ...and tell the rest of their guild they are here. Best-effort inside, like everything else
     // on this path: a missing status line is not worth a failed login.
     crate::world::guild::broadcast_presence(store, character_guid, true);
+    // The guild's message of the day, which vanilla shows once, at world entry. Read through the
+    // routing layer so a sharded gateway reads realm-core, and skipped when the guild has no MOTD:
+    // an empty line in the chat frame is noise, not a greeting.
+    for message in guild_motd_greeting(store, character_guid) {
+        send(tx, message)?;
+    }
     // Enter the world: CharSelect → InWorld (a reused connection has no open loot/attack — a world-port
     // re-entry likewise starts clean, since whatever the player was attacking/looting on the old map is
     // meaningless on the new one).

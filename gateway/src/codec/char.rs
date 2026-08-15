@@ -38,6 +38,9 @@ pub struct CharacterView {
     /// The guild this character belongs to (0 = none) — the shard's cached copy of realm-core's
     /// membership, which is what the character-select screen renders.
     pub guild_id: u64,
+    /// The character's rank in that guild (meaningless while `guild_id` is 0). The other half of
+    /// the cached pair, read by the `PLAYER_GUILDRANK` descriptor rather than by `SMSG_CHAR_ENUM`.
+    pub guild_rank: u32,
 }
 
 /// Build the `SMSG_CHAR_ENUM` reply for the character-select screen (Phase 3, gateway

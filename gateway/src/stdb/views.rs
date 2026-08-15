@@ -28,6 +28,7 @@ pub(crate) fn character_view(c: Character) -> crate::codec::CharacterView {
         played_total_secs: c.played_total_secs,
         session_start_micros: c.session_start_micros,
         guild_id: c.guild_id,
+        guild_rank: c.guild_rank,
     }
 }
 
@@ -138,8 +139,10 @@ pub(crate) fn entity_view(e: WorldEntity, zone_id: u32) -> crate::codec::EntityV
         // value (`Coordinator::effective_armor`); the relays then keep it live.
         effective_armor: e.armor,
         owner_guid: e.owner_guid,
-        // Home fields are not on the world-entity row; caller fills them in from game_character when
-        // building the self-login sequence.  Peer/creature views never need these, so 0 is fine.
+        // Neither the guild pair nor the home fields are on the world-entity row: both live on
+        // `game_character`, and the caller fills them in. A creature never has either.
+        guild_id: 0,
+        guild_rank: 0,
         home_map: 0,
         home_zone: 0,
         home_x: 0.0,

@@ -20,8 +20,13 @@ pub struct WhoPlayerView {
     pub class: u8,
     pub race: u8,
     pub zone_id: u32,
-    /// The character's guild name, empty for a guildless character.
+    /// The character's guild name, empty for a guildless character. Filled by
+    /// `world::guild::render_who` from the AUTHORITY, not by whichever shard answered for the
+    /// character: on a sharded gateway the guild rows live on realm-core alone.
     pub guild: String,
+    /// The guild `guild_id` the name is resolved from (0 = guildless). A join key, not a wire
+    /// field — `SMSG_WHO` carries the name only.
+    pub guild_id: u64,
 }
 
 /// Build `SMSG_WHO` for `CMSG_WHO`. Filters are ignored for the first pass — every currently-online
@@ -561,6 +566,7 @@ mod party_tests {
                 race: 1,
                 zone_id: 12,
                 guild: String::new(),
+                guild_id: 0,
             })
             .collect();
         let resp = build_who_response(&players);
@@ -585,6 +591,7 @@ mod party_tests {
                 race: 1,
                 zone_id: 12,
                 guild: String::new(),
+                                guild_id: 0,
             },
             WhoPlayerView {
                 name: "BadClass".into(),
@@ -593,6 +600,7 @@ mod party_tests {
                 race: 1,
                 zone_id: 12,
                 guild: String::new(),
+                                guild_id: 0,
             },
             WhoPlayerView {
                 name: "BadRace".into(),
@@ -601,6 +609,7 @@ mod party_tests {
                 race: 250,
                 zone_id: 12,
                 guild: String::new(),
+                                guild_id: 0,
             },
         ];
         let resp = build_who_response(&players);
@@ -629,6 +638,7 @@ mod party_tests {
                 race: 1,
                 zone_id: 12,
                 guild: "The Silver Hand".into(),
+                                guild_id: 0,
             },
             WhoPlayerView {
                 name: "Loner".into(),
@@ -637,6 +647,7 @@ mod party_tests {
                 race: 1,
                 zone_id: 12,
                 guild: String::new(),
+                                guild_id: 0,
             },
         ];
         let resp = build_who_response(&players);

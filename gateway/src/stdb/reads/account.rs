@@ -276,18 +276,16 @@ impl Coordinator {
             .filter(|e| e.entry == 0) // players have entry == 0; creatures have a template entry
             .filter_map(|e| {
                 let ch = db.game_character().guid().find(&e.guid)?;
-                let guild = (ch.guild_id != 0)
-                    .then(|| self.guild_view(ch.guild_id))
-                    .flatten()
-                    .map(|g| g.name)
-                    .unwrap_or_default();
                 Some(crate::codec::WhoPlayerView {
                     name: ch.name.clone(),
                     level: ch.level,
                     class: ch.class,
                     race: ch.race,
                     zone_id: ch.zone_id,
-                    guild,
+                    // The name is filled by the routing layer, which is the only party that can
+                    // read realm-core. This shard holds the id and nothing else (D1).
+                    guild: String::new(),
+                    guild_id: ch.guild_id,
                 })
             })
             .collect();

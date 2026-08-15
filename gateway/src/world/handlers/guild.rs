@@ -160,14 +160,12 @@ impl GuildActionStore for crate::stdb::Coordinator {
         target_name: &str,
         note: &str,
     ) -> Result<()> {
-        let target_guid = crate::world::party::resolve_by_name(self, target_name)?
-            .ok_or_else(|| anyhow::anyhow!("{}", lyracore_shared::guild::err::PLAYER_NOT_FOUND))?;
         crate::world::guild::run(
             self,
             account_id,
             self_guid,
             crate::world::guild::Op::SetPublicNote {
-                target_guid,
+                target_guid: crate::world::guild::member_by_name(self, self_guid, target_name)?,
                 note: note.to_string(),
             },
         )
@@ -180,14 +178,12 @@ impl GuildActionStore for crate::stdb::Coordinator {
         target_name: &str,
         note: &str,
     ) -> Result<()> {
-        let target_guid = crate::world::party::resolve_by_name(self, target_name)?
-            .ok_or_else(|| anyhow::anyhow!("{}", lyracore_shared::guild::err::PLAYER_NOT_FOUND))?;
         crate::world::guild::run(
             self,
             account_id,
             self_guid,
             crate::world::guild::Op::SetOfficerNote {
-                target_guid,
+                target_guid: crate::world::guild::member_by_name(self, self_guid, target_name)?,
                 note: note.to_string(),
             },
         )
@@ -291,19 +287,19 @@ fn teardown_result_for(error: &anyhow::Error) -> GuildCommandResult {
     }
 }
 
-/// Map an MOTD/info-text/note refusal onto the wire's own result code — the same classified-string
-/// contract [`create_result_for`] reads, extended with the family's other two errors:
-/// [`lyracore_shared::guild::err::NOT_IN_GUILD`] (the actor is guildless, or a note's target is not
-/// a fellow member) and [`lyracore_shared::guild::err::NOT_GUILD_MASTER`] (D3's only permission
-/// check). [`lyracore_shared::guild::err::PLAYER_NOT_FOUND`] is not a module string — it is what the
-/// gateway itself raises when a note target's name does not resolve — but it rides the same
-/// classified vocabulary so this is still one lookup.
+/// Map an MOTD/info-text/note refusal onto the wire's own result code, off the same
+/// classified-string contract [`create_result_for`] reads.
+///
+/// A note names its target the way a kick does — through `world::guild::member_by_name`, so a
+/// homonym on another shard cannot be annotated by accident — and refuses with the same
+/// `TARGET_NOT_IN_GUILD`. The client renders it as "no player named X", which from the setter's
+/// side is what "not a member of your guild" means.
 fn setter_result_for(error: &anyhow::Error) -> GuildCommandResult {
     use lyracore_shared::guild::err;
     let text = format!("{error:#}");
     if text.contains(err::NOT_GUILD_MASTER) {
         GuildCommandResult::GuildPermissionsOrLeader
-    } else if text.contains(err::PLAYER_NOT_FOUND) {
+    } else if text.contains(err::TARGET_NOT_IN_GUILD) {
         GuildCommandResult::GuildPlayerNotFoundS
     } else if text.contains(err::NOT_IN_GUILD) {
         GuildCommandResult::GuildPlayerNotInGuild
@@ -378,66 +374,49 @@ pub(crate) fn dispatch_guild_action<St: GuildActionStore + ?Sized>(
     }
 }
 
-/// `CMSG_GUILD_CREATE`. The durable request runs first; the reply is the wire's own verdict either
-/// way, because a client that hears nothing leaves its create dialog open forever.
+/// `CMSG_GUILD_CREATE`. The reply is the wire's own verdict either way, because a client that hears
+/// nothing leaves its create dialog open forever. Success is result code 0 — the wire spells it
+/// `PlayerNoMoreInGuild`, but vanilla's own name for that code is "no message/error", and the client
+/// re-queries the guild off the back of it.
 fn guild_create<St: GuildActionStore + ?Sized>(
     store: &St,
     account_id: u64,
     self_guid: u64,
     name: &str,
 ) -> Result<GuildActionOutcome> {
-    if let Err(e) = store.guild_create(account_id, self_guid, name) {
-        if classify_guild_action_error(&e) == GuildActionErrorClass::Fatal {
-            return Err(e);
-        }
-        log::debug!("world: guild create refused (account {account_id}): {e:#}");
-        return Ok(GuildActionOutcome::Handled {
-            outbound: command_result(GuildCommand::Create, name, create_result_for(&e)),
-        });
-    }
-    // Success is result code 0 — the wire spells it `PlayerNoMoreInGuild`, but vanilla's own name
-    // for that code is "no message/error". The client re-queries the guild off the back of it.
-    Ok(GuildActionOutcome::Handled {
-        outbound: command_result(
-            GuildCommand::Create,
-            name,
-            GuildCommandResult::PlayerNoMoreInGuild,
-        ),
-    })
+    let success = command_result(
+        GuildCommand::Create,
+        name,
+        GuildCommandResult::PlayerNoMoreInGuild,
+    );
+    write_verb(
+        GuildCommand::Create,
+        name,
+        "create",
+        create_result_for,
+        success,
+        || store.guild_create(account_id, self_guid, name),
+    )
 }
 
 /// `CMSG_GUILD_MOTD`. Master-only (D3); an empty string is a valid write that CLEARS the MOTD, not a
-/// refusal. On success the caller — themselves an online member — is answered directly with
-/// `SMSG_GUILD_EVENT(Motd)`; the module also drops one `GuildEvent(MOTD)` row per OTHER member
-/// (`set_guild_text`'s core), the durable half of "every online member sees it live" whose delivery
-/// is the `game_guild_event` relay's job (the `game_group_event` shape, armed in
-/// `stdb/subscriptions.rs`/`stdb/world_view.rs` — outside this seam's file ownership).
-///
-/// `GuildCommand` has no MOTD/notes-specific variant (vanilla's wire only defines
-/// Create/Invite/Quit/Founder/Unknown19/Unknown20) — `Founder` is the closest of the six to "you are
-/// not the guild founder/master", so every refusal in this family answers with it.
+/// refusal. The caller — themselves an online member — hears `SMSG_GUILD_EVENT(Motd)` directly; every
+/// OTHER member is reached by the `game_guild_event` relay, off the rows the module drops in the
+/// same transaction.
 fn guild_set_motd<St: GuildActionStore + ?Sized>(
     store: &St,
     account_id: u64,
     self_guid: u64,
     motd: &str,
 ) -> Result<GuildActionOutcome> {
-    if let Err(e) = store.guild_set_motd(account_id, self_guid, motd) {
-        if classify_guild_action_error(&e) == GuildActionErrorClass::Fatal {
-            return Err(e);
-        }
-        log::debug!("world: guild motd refused (account {account_id}): {e:#}");
-        return Ok(GuildActionOutcome::Handled {
-            outbound: command_result(GuildCommand::Founder, "", setter_result_for(&e)),
-        });
-    }
-    Ok(GuildActionOutcome::Handled {
-        outbound: vec![Outbound::One(ServerOpcodeMessage::SMSG_GUILD_EVENT(
-            Box::new(SMSG_GUILD_EVENT {
-                event: WireGuildEvent::Motd,
-                event_descriptions: vec![motd.to_string()],
-            }),
-        ))],
+    let success = vec![Outbound::One(ServerOpcodeMessage::SMSG_GUILD_EVENT(
+        Box::new(SMSG_GUILD_EVENT {
+            event: WireGuildEvent::Motd,
+            event_descriptions: vec![motd.to_string()],
+        }),
+    ))];
+    setter("", "motd", success, || {
+        store.guild_set_motd(account_id, self_guid, motd)
     })
 }
 
@@ -449,23 +428,14 @@ fn guild_set_info_text<St: GuildActionStore + ?Sized>(
     self_guid: u64,
     text: &str,
 ) -> Result<GuildActionOutcome> {
-    if let Err(e) = store.guild_set_info_text(account_id, self_guid, text) {
-        if classify_guild_action_error(&e) == GuildActionErrorClass::Fatal {
-            return Err(e);
-        }
-        log::debug!("world: guild info text refused (account {account_id}): {e:#}");
-        return Ok(GuildActionOutcome::Handled {
-            outbound: command_result(GuildCommand::Founder, "", setter_result_for(&e)),
-        });
-    }
-    Ok(GuildActionOutcome::Handled {
-        outbound: Vec::new(),
+    setter("", "info text", Vec::new(), || {
+        store.guild_set_info_text(account_id, self_guid, text)
     })
 }
 
-/// `CMSG_GUILD_SET_PUBLIC_NOTE`. The wire carries the target by NAME; an unresolved name answers
-/// `GuildPlayerNotFoundS` the same way an unknown invite target would. A member may set their own
-/// row; setting anyone else's is master-only (D3). No broadcast on success.
+/// `CMSG_GUILD_SET_PUBLIC_NOTE`. The wire carries the target by NAME, resolved against the caller's
+/// own roster the way a kick's is. A member may set their own row; setting anyone else's is
+/// master-only (D3). No broadcast on success.
 fn guild_set_public_note<St: GuildActionStore + ?Sized>(
     store: &St,
     account_id: u64,
@@ -473,17 +443,8 @@ fn guild_set_public_note<St: GuildActionStore + ?Sized>(
     target_name: &str,
     note: &str,
 ) -> Result<GuildActionOutcome> {
-    if let Err(e) = store.guild_set_public_note(account_id, self_guid, target_name, note) {
-        if classify_guild_action_error(&e) == GuildActionErrorClass::Fatal {
-            return Err(e);
-        }
-        log::debug!("world: guild public note refused (account {account_id}): {e:#}");
-        return Ok(GuildActionOutcome::Handled {
-            outbound: command_result(GuildCommand::Founder, target_name, setter_result_for(&e)),
-        });
-    }
-    Ok(GuildActionOutcome::Handled {
-        outbound: Vec::new(),
+    setter(target_name, "public note", Vec::new(), || {
+        store.guild_set_public_note(account_id, self_guid, target_name, note)
     })
 }
 
@@ -496,17 +457,8 @@ fn guild_set_officer_note<St: GuildActionStore + ?Sized>(
     target_name: &str,
     note: &str,
 ) -> Result<GuildActionOutcome> {
-    if let Err(e) = store.guild_set_officer_note(account_id, self_guid, target_name, note) {
-        if classify_guild_action_error(&e) == GuildActionErrorClass::Fatal {
-            return Err(e);
-        }
-        log::debug!("world: guild officer note refused (account {account_id}): {e:#}");
-        return Ok(GuildActionOutcome::Handled {
-            outbound: command_result(GuildCommand::Founder, target_name, setter_result_for(&e)),
-        });
-    }
-    Ok(GuildActionOutcome::Handled {
-        outbound: Vec::new(),
+    setter(target_name, "officer note", Vec::new(), || {
+        store.guild_set_officer_note(account_id, self_guid, target_name, note)
     })
 }
 
@@ -585,22 +537,19 @@ fn guild_invite<St: GuildActionStore + ?Sized>(
     self_guid: u64,
     name: &str,
 ) -> Result<GuildActionOutcome> {
-    if let Err(e) = store.guild_invite(account_id, self_guid, name) {
-        if classify_guild_action_error(&e) == GuildActionErrorClass::Fatal {
-            return Err(e);
-        }
-        log::debug!("world: guild invite refused (account {account_id}): {e:#}");
-        return Ok(GuildActionOutcome::Handled {
-            outbound: command_result(GuildCommand::Invite, name, invite_result_for(&e)),
-        });
-    }
-    Ok(GuildActionOutcome::Handled {
-        outbound: command_result(
-            GuildCommand::Invite,
-            name,
-            GuildCommandResult::PlayerNoMoreInGuild,
-        ),
-    })
+    let success = command_result(
+        GuildCommand::Invite,
+        name,
+        GuildCommandResult::PlayerNoMoreInGuild,
+    );
+    write_verb(
+        GuildCommand::Invite,
+        name,
+        "invite",
+        invite_result_for,
+        success,
+        || store.guild_invite(account_id, self_guid, name),
+    )
 }
 
 /// `CMSG_GUILD_ACCEPT` / `CMSG_GUILD_DECLINE`.
@@ -660,12 +609,17 @@ fn guild_roster<St: GuildActionStore + ?Sized>(
     })
 }
 
-/// The shape every teardown verb shares: one durable request, then the wire's verdict either way. A
-/// client that hears nothing leaves its confirmation dialog open, so a refusal is always answered.
-fn teardown(
+/// The shape every guild WRITE verb shares: one durable request, then the wire's verdict either
+/// way. A client that hears nothing leaves its dialog open, so a refusal is always answered.
+///
+/// `classify` is the family's own error map — the one thing that genuinely differs between a create,
+/// an invite, a teardown and a setter — and `success` is what a client hears when the request lands.
+fn write_verb(
     command: GuildCommand,
     subject: &str,
     verb: &str,
+    classify: fn(&anyhow::Error) -> GuildCommandResult,
+    success: Vec<Outbound>,
     request: impl FnOnce() -> Result<()>,
 ) -> Result<GuildActionOutcome> {
     if let Err(e) = request() {
@@ -674,13 +628,48 @@ fn teardown(
         }
         log::debug!("world: guild {verb} refused: {e:#}");
         return Ok(GuildActionOutcome::Handled {
-            outbound: command_result(command, subject, teardown_result_for(&e)),
+            outbound: command_result(command, subject, classify(&e)),
         });
     }
-    // Wire code 0 — vanilla's "no message/error", i.e. success. See `guild_create`.
-    Ok(GuildActionOutcome::Handled {
-        outbound: command_result(command, subject, GuildCommandResult::PlayerNoMoreInGuild),
-    })
+    Ok(GuildActionOutcome::Handled { outbound: success })
+}
+
+/// A teardown verb: leave, kick, disband or the leadership transfer. Success is wire code 0 —
+/// vanilla's "no message/error".
+fn teardown(
+    command: GuildCommand,
+    subject: &str,
+    verb: &str,
+    request: impl FnOnce() -> Result<()>,
+) -> Result<GuildActionOutcome> {
+    let success = command_result(command, subject, GuildCommandResult::PlayerNoMoreInGuild);
+    write_verb(
+        command,
+        subject,
+        verb,
+        teardown_result_for,
+        success,
+        request,
+    )
+}
+
+/// A setter verb: MOTD, info text or either note. `GuildCommand` has no variant for any of them
+/// (vanilla's wire defines only Create/Invite/Quit/Founder/Unknown19/Unknown20), and `Founder` is
+/// the closest of the six to "you are not the guild master", so every refusal here answers with it.
+fn setter(
+    subject: &str,
+    verb: &str,
+    success: Vec<Outbound>,
+    request: impl FnOnce() -> Result<()>,
+) -> Result<GuildActionOutcome> {
+    write_verb(
+        GuildCommand::Founder,
+        subject,
+        verb,
+        setter_result_for,
+        success,
+        request,
+    )
 }
 
 /// `CMSG_GUILD_LEAVE`. `GuildCommand::Quit` is the client's own vocabulary for a member leaving,
@@ -2158,7 +2147,7 @@ mod tests {
     #[test]
     fn an_unresolved_note_target_answers_player_not_found() {
         let actions = InMemoryGuildActions {
-            public_note_error: Some(err::PLAYER_NOT_FOUND.into()),
+            public_note_error: Some(err::TARGET_NOT_IN_GUILD.into()),
             ..Default::default()
         };
 

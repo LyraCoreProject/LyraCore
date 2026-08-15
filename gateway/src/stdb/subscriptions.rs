@@ -193,21 +193,31 @@ pub(crate) fn stealth_action(is_insert: bool, post_change_count: usize) -> Steal
 /// the AOI-entry on_insert relay and the stealth REVEAL path so a re-shown stealther renders identically
 /// (gear and all). Returns `None` only on an encode error (logged by the caller).
 fn build_peer_create(coord: &Coordinator, row: &WorldEntity) -> Option<ServerOpcodeMessage> {
-    let inv: Vec<(u8, u64, u32)> =
-        if row.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0 {
-            coord
-                .player_items(row.guid)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|i| i.slot <= 18)
-                .map(|i| (i.slot, i.guid, i.entry))
-                .collect()
-        } else {
-            Vec::new()
-        };
+    let is_player = row.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0;
+    let inv: Vec<(u8, u64, u32)> = if is_player {
+        coord
+            .player_items(row.guid)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|i| i.slot <= 18)
+            .map(|i| (i.slot, i.guid, i.entry))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut view = entity_view(row.clone(), 0);
+    // The peer's guild name plate. Read from THIS shard's cached pair, not from realm-core: the
+    // peer is standing here, so this shard's copy is the one `push_membership` keeps current, and a
+    // realm read per AOI entry would put the authority on the spawn hot path.
+    if is_player {
+        if let Ok(Some(c)) = coord.character_by_guid(row.guid) {
+            view.guild_id = c.guild_id;
+            view.guild_rank = c.guild_rank;
+        }
+    }
     // Peers pass no skill rows: the SkillInfo block is a self-descriptor (the client renders
     // only its OWN skill pane); a peer CREATE ignores it.
-    match codec::build_create_object(&entity_view(row.clone(), 0), CreateKind::Peer, &inv, &[]) {
+    match codec::build_create_object(&view, CreateKind::Peer, &inv, &[]) {
         Ok(m) => Some(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m))),
         Err(e) => {
             log::warn!("peer create encode failed for guid {}: {e}", row.guid);
@@ -1759,6 +1769,28 @@ pub(crate) fn guild_event_outbound(row: &GuildEvent) -> Vec<Outbound> {
                 std::slice::from_ref(&row.payload),
             ),
         ))),
+        // The recipient's own membership moved. Not an SMSG_GUILD_EVENT at all: it is the pair of
+        // descriptors the name plate and the guild pane read, sent as a partial VALUES update so
+        // they move without a respawn.
+        event_kind::GUILD_COLUMNS => {
+            return match lyracore_shared::guild::decode_guild_columns(&row.payload) {
+                Some((guild_id, rank)) => {
+                    let (opcode, body) = codec::build_values_update_raw(
+                        row.recipient_guid,
+                        &codec::update_mask::player_guild_columns_mask(guild_id, rank),
+                    );
+                    vec![Outbound::Raw { opcode, body }]
+                }
+                None => {
+                    log::warn!(
+                        "guild GUILD_COLUMNS relay: unparseable payload {:?} (event {})",
+                        row.payload,
+                        row.id
+                    );
+                    Vec::new()
+                }
+            };
+        }
         event_kind::GUILD_CHAT => match lyracore_shared::guild::decode_guild_chat(&row.payload) {
             Some(message) => Some(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
                 codec::build_guild_chat(row.other_guid, message),
@@ -3739,6 +3771,16 @@ mod tests {
             }
             other => panic!("expected SMSG_GUILD_COMMAND_RESULT, got {other}"),
         }
+        match guild_event_outbound(&row(event_kind::GUILD_COLUMNS, "7,4")).as_slice() {
+            [Outbound::Raw { opcode, .. }] => {
+                assert_eq!(*opcode, lyracore_shared::opcodes::world::SMSG_UPDATE_OBJECT)
+            }
+            other => panic!("expected one raw VALUES update, got {} item(s)", other.len()),
+        }
+        assert!(
+            guild_event_outbound(&row(event_kind::GUILD_COLUMNS, "nonsense")).is_empty(),
+            "an unparseable pair drops rather than putting a wrong guild on the name plate"
+        );
         assert!(
             guild_event_outbound(&row(200, "")).is_empty(),
             "an unknown kind drops instead of taking the session down"

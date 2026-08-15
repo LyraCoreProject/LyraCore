@@ -24,7 +24,10 @@ pub(super) fn handle_social<St: WorldStore + ?Sized>(
         // SMSG_WHO (capped at 49, the vanilla client's display limit). The client opens the social
         // window and lists every online player, which covers the primary grouping/social use-case.
         ClientOpcodeMessage::CMSG_WHO(_) => {
-            let players = store.online_players()?;
+            let mut players = store.online_players()?;
+            // The guild-name column is the one field a shard cannot answer: guilds live on
+            // realm-core. Filled here, from the authority, before the packet is built.
+            super::guild::render_who(store, &mut players);
             let resp = codec::build_who_response(&players);
             send(
                 tx,

@@ -345,13 +345,11 @@ pub fn full_quest_log_mask(slots: &[QuestLogSlot]) -> UpdateMaskValues {
 }
 
 /// Build a partial-VALUES mask carrying `PLAYER_GUILDID`/`PLAYER_GUILDRANK` — `guild_id` 0 and
-/// `rank` 0 for a guildless character. Pure and self-contained, ready for `build_values_update_raw`
-/// at the two points these fields need it: the self CREATE at login (`game_character.guild_id`/
-/// `guild_rank` are already current on an unsharded gateway; on a sharded one they settle a moment
-/// later, after `world::guild::on_world_entry`'s cross-database sync) and a live re-send whenever a
-/// membership-changing op completes. No live caller yet in this ticket's own scope (T6 owns none of
-/// those ops) — see the ticket's final report for exactly where each call belongs.
-#[allow(dead_code)]
+/// `rank` 0 for a guildless character.
+///
+/// The live half of the pair. The CREATE at spawn carries the same two fields off `EntityView`;
+/// this is what moves them between spawns, driven by the `GUILD_COLUMNS` guild-event row the
+/// authority writes on every membership change.
 pub fn player_guild_columns_mask(guild_id: u64, rank: u32) -> UpdateMaskValues {
     let mut m = UpdateMaskValues::new();
     m.set_u32(idx::PLAYER_GUILDID, guild_id as u32);

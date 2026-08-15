@@ -78,6 +78,11 @@ pub struct EntityView {
     /// gear-folded value so the operator sees real worn armor on relog (auras self-correct via the on_aura
     /// relay). Matches the module's combat `effective_armor`, so the sheet equals the mitigation value.
     pub effective_armor: u32,
+    /// The character's own guild, from `game_character.guild_id`/`guild_rank` — the shard's cached
+    /// copy of realm-core's membership, and the only guild state a world shard holds (D1). Both are
+    /// 0 for a guildless character and for every creature row.
+    pub guild_id: u64,
+    pub guild_rank: u32,
     /// Persisted hearthstone / bind-point from `game_character.home_*`.  Zero-initialised for
     /// creature rows (which never build a `SMSG_BINDPOINTUPDATE`).
     pub home_map: u32,
@@ -330,6 +335,11 @@ pub fn build_create_object(
             .set_player_bytes_2(facial_hair, pb2_b, pb2_c, pb2_d)
             .set_player_bytes_3(pb3_a, pb3_b, pb3_c, pb3_d)
             .set_player_flags(entity.player_flags as i32)
+            // The guild name plate and the guild pane's own header read these two off the CREATE.
+            // A guildless character sends the pair as zero, which is what the client reads as "no
+            // guild" — omitting the fields would leave a relogging ex-member's plate stale.
+            .set_player_guildid(entity.guild_id as i32)
+            .set_player_guildrank(entity.guild_rank as i32)
             .set_player_xp(entity.xp as i32)
             .set_player_next_level_xp(entity.next_level_xp as i32)
             .set_player_field_coinage(entity.money as i32) // purse in copper (slice 3)

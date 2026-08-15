@@ -202,6 +202,8 @@ pub(crate) fn pending_invite(ctx: &ReducerContext, target_guid: u64) -> Option<G
 
 /// Stamp a character's own guild id and rank onto its `game_character` row.
 ///
+/// Write `character_guid`'s own guild pair onto THIS database's `game_character` row.
+///
 /// The whole of the world-shard's guild state (there is no roster mirror). A character row that is
 /// not on THIS database is not an error: on realm-core there are none at all, and the gateway
 /// pushes the same pair onto the player's own shard through [`sync_guild_membership`].
@@ -209,7 +211,7 @@ pub(crate) fn pending_invite(ctx: &ReducerContext, target_guid: u64) -> Option<G
 /// Read through the by-guid transfer chokepoint, so a mid-transfer character reads as ABSENT and
 /// this is a no-op rather than a write to a source copy the destination has already serialized
 /// past. The gateway re-pushes at world entry, which is what makes the refusal free.
-fn set_character_guild(ctx: &ReducerContext, character_guid: u64, guild_id: u64, rank: u32) {
+fn write_guild_columns(ctx: &ReducerContext, character_guid: u64, guild_id: u64, rank: u32) {
     let Some(mut c) = crate::helpers::character_by_guid(ctx, character_guid) else {
         return;
     };
@@ -219,6 +221,25 @@ fn set_character_guild(ctx: &ReducerContext, character_guid: u64, guild_id: u64,
     c.guild_id = guild_id;
     c.guild_rank = rank;
     ctx.db.game_character().guid().update(c);
+}
+
+/// A membership change: write the pair, then tell the character's own session so their
+/// `PLAYER_GUILDID`/`PLAYER_GUILDRANK` descriptors move without waiting for a respawn.
+///
+/// The notification is a row rather than a return value because the character whose membership
+/// moved is often not the actor — a kick, a disband — and may be on a database this transaction
+/// cannot see. [`sync_guild_membership`] deliberately does NOT go through here: it is the
+/// mechanical echo of a change the authority has already announced.
+fn set_character_guild(ctx: &ReducerContext, character_guid: u64, guild_id: u64, rank: u32) {
+    write_guild_columns(ctx, character_guid, guild_id, rank);
+    push_event(
+        ctx,
+        character_guid,
+        event_kind::GUILD_COLUMNS,
+        0,
+        "",
+        lyracore_shared::guild::encode_guild_columns(guild_id, rank),
+    );
 }
 
 /// The identity-free create core, shared by both planes: validate the name, refuse a founder who is
@@ -903,7 +924,7 @@ pub fn sync_guild_membership(
     guild_rank: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    set_character_guild(ctx, character_guid, guild_id, guild_rank);
+    write_guild_columns(ctx, character_guid, guild_id, guild_rank);
     Ok(())
 }
 

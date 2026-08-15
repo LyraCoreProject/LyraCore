@@ -1069,10 +1069,6 @@ impl WorldStore for Coordinator {
         Ok(self.guild_membership(character_guid))
     }
 
-    fn guild_member_guids(&self, guild_id: u64) -> Result<Vec<u64>> {
-        Ok(self.guild_member_guids(guild_id))
-    }
-
     fn sync_guild_membership(
         &self,
         character_guid: u64,
