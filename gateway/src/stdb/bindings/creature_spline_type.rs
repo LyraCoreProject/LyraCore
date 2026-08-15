@@ -23,9 +23,8 @@ pub struct CreatureSpline {
     pub spline_id: u32,
     pub run: bool,
     pub cell: i64,
-    // #518, hand-appended (docs/danger-zones.md §1.2 END-append rule): a facing-only leg (the
-    // mover doesn't move, `sx/sy/sz` == `dx/dy/dz`, `dur_ms` 0). `facing_angle` is the new heading
-    // when `facing` is true; ignored otherwise.
+    // Hand-appended under the END-append rule in docs/danger-zones.md: a facing-only leg does not
+    // move (`sx/sy/sz == dx/dy/dz`, `dur_ms == 0`). The angle is ignored unless `facing` is true.
     pub facing: bool,
     pub facing_angle: f32,
 }

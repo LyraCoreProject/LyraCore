@@ -337,6 +337,12 @@ pub struct WorldEntity {
     /// Always 0 on a creature. `#[default(0)]` + END-appended so `publish` auto-migrates.
     #[default(0)]
     pub bank_bag_slots: u8,
+    /// `UNIT_FIELD_MOUNTDISPLAYID`. Taxi activation sets this to the source node's imported,
+    /// faction-appropriate display and landing clears it. The route cursor remains in
+    /// `game_active_taxi_flight`; this field exists only so self and observers render the mount.
+    /// `#[default(0)]` + END-appended keeps existing rows unmounted across publication.
+    #[default(0)]
+    pub mount_display_id: u32,
 }
 
 impl WorldEntity {
@@ -645,6 +651,9 @@ pub(crate) fn teleport_player(
     z: f32,
     o: f32,
 ) {
+    if crate::taxi::movement_is_suppressed(ctx, player_guid) {
+        return;
+    }
     let entities = ctx.db.game_world_entity();
     let Some(e) = entities.guid().find(player_guid) else {
         return;
@@ -904,6 +913,9 @@ pub(crate) fn apply_player_login(
         entity.unit_bytes_1 = unit_bytes_1;
     }
     entities.insert(entity);
+    // Crash recovery for the narrow paid-before-gateway-arm window. A running flight already has
+    // a nonzero start and is untouched; a pending flight begins from its source on this login.
+    crate::taxi::arm_taxi_flight(ctx, character_guid);
 
     // Starter-loadout safety net: creation grants the loadout (so char-select shows gear), and
     // this idempotent call (no-op if the character owns ANY item) covers characters created
@@ -1241,6 +1253,9 @@ pub(crate) fn apply_movement_update(
     o: f32,
     move_time_ms: u32,
 ) -> Result<(), String> {
+    if crate::taxi::movement_is_suppressed(ctx, mover.guid) {
+        return Ok(());
+    }
     // #110 ground truth — see MOVEMENT_ENTRIES. Counted in the CORE, not the sender reducer, so
     // the gateway path's heartbeats land in the same total.
     {

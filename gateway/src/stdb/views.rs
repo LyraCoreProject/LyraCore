@@ -115,6 +115,7 @@ pub(crate) fn entity_view(e: WorldEntity, zone_id: u32) -> crate::codec::EntityV
         display_id: e.display_id,
         native_display_id: e.native_display_id,
         unit_flags: e.unit_flags,
+        mount_display_id: e.mount_display_id,
         base_attack_time_ms: e.base_attack_time_ms,
         dynamic_flags: e.dynamic_flags,
         player_bytes: e.player_bytes,

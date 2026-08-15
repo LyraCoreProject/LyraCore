@@ -233,10 +233,13 @@ fn seed_production_core(ctx: &ReducerContext) {
 fn seed_map0_demo_content(ctx: &ReducerContext) {
     use constants::start_human_warrior as hw;
 
+    seed_taxi_fixture(ctx);
+
     // DECISION (issue #79): everything from here down through the gather-pool block seeds MAP-0
-    // (Northshire) spatial content — 3 creature spawns (Chicken 620, Test Wolf 51000, Profession
-    // Trainer 51001) and up to 5 live `game_gameobject` rows (the chest/goober/2 standalone gather
-    // nodes + the tier-pool's one armed point) — into EVERY freshly published database, even one that
+    // (Northshire) spatial content — 4 creature spawns (Chicken 620, Test Wolf 51000, Profession
+    // Trainer 51001, Test Flight Master 51006) and up to 5 live `game_gameobject` rows (the
+    // chest/goober/2 standalone gather nodes + the tier-pool's one armed point) — into EVERY freshly
+    // published database, even one that
     // will only ever host a different continent. `init` KEEPS seeding them: they are the local
     // test-harness/module-test fixtures a bare `spacetime publish` needs (a combat target, a skinnable
     // beast, a profession trainer, a chest/goober/gather-node to exercise `use_gameobject`) — used by

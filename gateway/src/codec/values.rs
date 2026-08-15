@@ -181,6 +181,20 @@ pub fn build_unit_flags_values(guid: u64, unit_flags: u32) -> SMSG_UPDATE_OBJECT
     })
 }
 
+/// One atomic taxi-presentation VALUES update: the imported mount model and TAXI_FLIGHT flag reach
+/// the client in the same Unit mask. This uses the crash-safe `dirty_reset` path and never carries
+/// OBJECT_FIELD_TYPE. Activation and landing are the only mount-display transitions.
+pub fn build_taxi_presentation_values(
+    guid: u64,
+    mount_display_id: u32,
+    unit_flags: u32,
+) -> SMSG_UPDATE_OBJECT {
+    unit_values(guid, |unit| {
+        unit.set_unit_mountdisplayid(mount_display_id as i32);
+        unit.set_unit_flags(unit_flags as i32);
+    })
+}
+
 /// VALUES partial-update carrying `UNIT_FIELD_BYTES_2` so observers see a weapon DRAWN or STOWED the
 /// moment it happens — the `CMSG_SETSHEATHED` a client sends on `Z`. Unit mask, not player-gated: a
 /// creature draws its weapon on engage too. Same `dirty_reset` discipline as its siblings (the wire
@@ -581,6 +595,10 @@ mod lint_tests {
             ("ghost", build_ghost_values(g, 0x10, 0)),
             ("dynamic_flags", build_dynamic_flags_values(g, 1)),
             ("unit_flags", build_unit_flags_values(g, 0x80000)),
+            (
+                "taxi_presentation",
+                build_taxi_presentation_values(g, 1147, 0x0010_0000),
+            ),
             ("power", build_power_values(g, 0, 55)),
             ("target", build_target_values(g, 0xF130_0000_0000_0001)),
             ("max_vitals", build_max_vitals_values(g, 100, 0, 200)),

@@ -45,10 +45,11 @@ pub mod whisper;
 use coalesce::CoalesceState;
 use handlers::{
     dispatch_cast, dispatch_item_action, dispatch_melee_action, dispatch_quest_action,
-    dispatch_vendor_action, handle_bank, handle_char, handle_combat, handle_loot, handle_mail,
-    handle_query, handle_trade, handle_trainer, CastOutcome, CastPlayer, CastTransition,
-    ItemActionOutcome, ItemActionPlayer, MeleeActionOutcome, MeleeActionPlayer, QuestActionOutcome,
-    QuestActionPlayer, VendorActionOutcome, VendorActionPlayer,
+    dispatch_taxi_action, dispatch_vendor_action, handle_bank, handle_char, handle_combat, handle_loot,
+    handle_mail, handle_query, handle_trade, handle_trainer, CastOutcome, CastPlayer, CastTransition,
+    ItemActionOutcome, ItemActionPlayer, MeleeActionOutcome, MeleeActionPlayer,
+    queue_reply_then_arm, QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome, TaxiActionPlayer,
+    VendorActionOutcome, VendorActionPlayer,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
@@ -1278,6 +1279,31 @@ fn dispatch<St: WorldStore + ?Sized>(
             return Ok(());
         }
         QuestActionOutcome::PassThrough(msg) => msg,
+    };
+    let msg = match dispatch_taxi_action(
+        store,
+        TaxiActionPlayer {
+            self_guid: social::self_guid(conn),
+        },
+        msg,
+    )? {
+        TaxiActionOutcome::Handled { outbound } => {
+            for message in outbound {
+                send(tx, message)?;
+            }
+            return Ok(());
+        }
+        TaxiActionOutcome::Activated {
+            outbound,
+            character_guid,
+            arm,
+        } => {
+            // Queue the vanilla result first. Arming mutates the entity and spline tables, whose
+            // callbacks enqueue behind this item on the same writer even if they fire immediately.
+            queue_reply_then_arm(tx, store, outbound, character_guid, arm)?;
+            return Ok(());
+        }
+        TaxiActionOutcome::PassThrough(msg) => msg,
     };
     let Some(msg) = handle_social(tx, store, conn, msg)? else {
         return Ok(());

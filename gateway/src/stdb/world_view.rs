@@ -215,6 +215,20 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         creature_leg(v, row)
     });
 
+    // ---- game_taxi_passenger_spline (server-owned player routes) ---------------------------
+    wire_insert(
+        db.game_taxi_passenger_spline(),
+        "game_taxi_passenger_spline.insert",
+        &view,
+        |v, row| taxi_spline(v, row),
+    );
+    wire_update(
+        db.game_taxi_passenger_spline(),
+        "game_taxi_passenger_spline.update",
+        &view,
+        |v, _old, row| taxi_spline(v, row),
+    );
+
     // ---- game_roll_event -------------------------------------------------------------------
     // /roll broadcast.
     wire_insert(db.game_roll_event(), "game_roll_event.insert", &view, move |v, row| {
@@ -800,6 +814,32 @@ fn dynobj_vanished(view: &WorldView, shard: ShardId, row: &DynamicObject) {
     }
 }
 
+/// A passenger spline is always sent to its owner. Nearby sessions receive it only after the
+/// outbound visibility check confirms that the passenger already exists in their client world.
+fn taxi_spline(view: &WorldView, row: &TaxiPassengerSpline) {
+    let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
+    let mut sessions: std::collections::HashSet<_> =
+        view.entities.viewers_of(key).into_iter().collect();
+    if let Some(owner) = view.entities.session_of_owner(row.character_guid) {
+        sessions.insert(owner);
+    }
+    let row = row.clone();
+    for session in sessions {
+        let Some(viewer) = view.viewer(session) else {
+            continue;
+        };
+        let row = row.clone();
+        let tx = viewer.tx.clone();
+        enqueue(&tx, move || {
+            super::subscriptions::taxi_spline_outbound(
+                &viewer.created,
+                viewer.self_guid,
+                &row,
+            )
+        });
+    }
+}
+
 /// A rest-state flip landed on a shard's coordinator feed. Self-only family: the row names its
 /// owner and the owner is the ONLY lawful recipient, so the audience predicate IS the
 /// owner-session lookup (`WorldIndex::session_of_owner`) — there is no candidate set to filter,
@@ -1333,6 +1373,18 @@ pub(crate) fn sweep_into_view(view: &WorldView, viewer: &Arc<Viewer>) {
         };
         for o in super::subscriptions::relay_gameobject_create(&coord, viewer, &row) {
             let _ = viewer.tx.send(o);
+        }
+    }
+
+    // The login sequence queued the owner's self CREATE before registering this viewer. Chain the
+    // resident flight now so reconnect observes CREATE before MONSTER_MOVE on the same writer.
+    for coord in view.shards.read().unwrap().iter() {
+        for outbound in super::subscriptions::resident_taxi_spline_outbound(
+            coord,
+            viewer,
+            viewer.self_guid,
+        ) {
+            let _ = viewer.tx.send(outbound);
         }
     }
 }

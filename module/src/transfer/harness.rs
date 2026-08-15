@@ -148,6 +148,7 @@ pub struct FakeDb {
     /// every targeting/aggro/threat/AOI gate on a real shard, and `live` alone cannot tell
     /// "there was nothing to freeze" from "the freeze was skipped".
     froze: Cell<u32>,
+    active_taxi: RefCell<HashSet<u64>>,
 }
 
 /// The escrow out-row's columns, kept as their own struct so the fake never needs `TransferOut`
@@ -426,6 +427,9 @@ impl ShardLedger for FakeDb {
 /// The #380 seam: `apply_begin` runs here for real — the freeze, the export, the blob build and
 /// the escrow row, in order.
 impl BeginSink for FakeDb {
+    fn has_active_taxi_flight(&self, guid: u64) -> bool {
+        self.active_taxi.borrow().contains(&guid)
+    }
     fn is_in_transit(&self, guid: u64) -> bool {
         // The SAME predicate the production sink reaches through `transfer::is_in_transit`:
         // either escrow row naming this character fences it.
@@ -458,6 +462,23 @@ impl BeginSink for FakeDb {
     fn arm_reaper(&mut self) {
         self.reaper_armed.set(true);
     }
+}
+
+#[test]
+fn active_taxi_refuses_transfer_before_any_source_mutation() {
+    let mut src = beginning(GUID);
+    src.active_taxi.borrow_mut().insert(GUID);
+    let before_live = src.live.borrow().clone();
+    let before_chars = src.chars.borrow().keys().copied().collect::<HashSet<_>>();
+
+    let error = apply_begin(&mut src, XFER, GUID, DEST, true).expect_err("taxi owns movement");
+
+    assert_eq!(error, "PLAYER_IN_TAXI_FLIGHT");
+    assert_eq!(*src.live.borrow(), before_live);
+    assert_eq!(src.chars.borrow().keys().copied().collect::<HashSet<_>>(), before_chars);
+    assert_eq!(src.froze.get(), 0);
+    assert!(src.out_rows.borrow().is_empty());
+    assert!(!src.reaper_armed.get());
 }
 
 /// The issue #34 seam: `apply_finish` runs here for real, ordering included.

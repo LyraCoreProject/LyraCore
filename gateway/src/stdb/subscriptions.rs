@@ -629,6 +629,20 @@ pub(crate) fn offer_peer_create_for(
             Box::new(codec::build_pet_spells(row.guid, &spells)),
         )));
     }
+    if let Some(spline) = db
+        .game_taxi_passenger_spline()
+        .character_guid()
+        .find(&row.guid)
+    {
+        // CREATE is already first in `out`. A resident flight must follow it in the same writer
+        // work item so AOI entry can never observe MONSTER_MOVE for an unknown passenger.
+        append_resident_taxi_after_create(
+            &mut out,
+            &viewer.created,
+            viewer.self_guid,
+            &spline,
+        );
+    }
     out
 }
 
@@ -2011,6 +2025,77 @@ pub(crate) fn creature_leg_outbound(
     ))]
 }
 
+/// One module-owned passenger route to self and observers. Ordinary player motion deliberately
+/// excludes self; taxi presentation must include it because the client is not driving the mover.
+pub(crate) fn taxi_spline_outbound(
+    created: &Mutex<HashSet<u64>>,
+    self_guid: u64,
+    row: &TaxiPassengerSpline,
+) -> Vec<Outbound> {
+    if row.character_guid != self_guid && !created.lock().unwrap().contains(&row.character_guid) {
+        return Vec::new();
+    }
+    let points: Vec<Vector3d> = row
+        .points
+        .chunks_exact(3)
+        .map(|point| Vector3d {
+            x: point[0],
+            y: point[1],
+            z: point[2],
+        })
+        .collect();
+    if points.is_empty() || points.len() * 3 != row.points.len() {
+        log::warn!(
+            "taxi spline: malformed route ({} coordinates) for passenger {}",
+            row.points.len(),
+            row.character_guid
+        );
+        return Vec::new();
+    }
+    let start = Vector3d {
+        x: row.start_x,
+        y: row.start_y,
+        z: row.start_z,
+    };
+    codec::build_taxi_move_raw(
+        row.character_guid,
+        start,
+        points,
+        row.duration_ms,
+        row.spline_id,
+    )
+    .map_or_else(Vec::new, |(opcode, body)| vec![Outbound::Raw { opcode, body }])
+}
+
+fn append_resident_taxi_after_create(
+    created_outbound: &mut Vec<Outbound>,
+    created: &Mutex<HashSet<u64>>,
+    self_guid: u64,
+    row: &TaxiPassengerSpline,
+) {
+    created_outbound.extend(taxi_spline_outbound(created, self_guid, row));
+}
+
+/// Replay a resident passenger spline after the owner's self CREATE/login batch. The same helper
+/// is used by reconnect recovery, keeping the CREATE-before-MONSTER_MOVE ordering explicit.
+pub(crate) fn resident_taxi_spline_outbound(
+    coord: &Coordinator,
+    viewer: &Viewer,
+    character_guid: u64,
+) -> Vec<Outbound> {
+    let guard = coord.0.coord();
+    let Some(row) = guard
+        .conn
+        .db
+        .game_taxi_passenger_spline()
+        .character_guid()
+        .find(&character_guid)
+    else {
+        return Vec::new();
+    };
+    taxi_spline_outbound(&viewer.created, viewer.self_guid, &row)
+}
+
 /// The `on_update` dispatch decision: does this update need to be treated as a
 /// re-entry (offer a fresh CREATE via `offer_peer_create`) instead of a field diff? True exactly when
 /// the guid isn't self AND isn't already in the viewer's `created` set — i.e. either this is the first
@@ -2115,9 +2200,17 @@ pub(crate) fn entity_update_to_outbound(
                 codec::build_max_vitals_values(new.guid, new.max_health, power_b, new.max_power);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
-        // In-combat relay (UNIT_FIELD_FLAGS): the UNIT_FLAG_IN_COMBAT bit toggling as a unit enters/leaves
-        // combat → observers see the combat indicator (incl. a pure caster). Any unit, not player-gated.
-        if old.unit_flags != new.unit_flags {
+        // Taxi presentation changes mount display + flight flag in one mask, so the client never sees
+        // an intermediate mounted-but-controllable or unmounted-but-in-flight state. Ordinary flag
+        // changes retain the narrower field-only packet.
+        if old.mount_display_id != new.mount_display_id {
+            let m = codec::build_taxi_presentation_values(
+                new.guid,
+                new.mount_display_id,
+                new.unit_flags,
+            );
+            out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+        } else if old.unit_flags != new.unit_flags {
             let m = codec::build_unit_flags_values(new.guid, new.unit_flags);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
@@ -3750,6 +3843,7 @@ mod tests {
             orientation: 0.0,
             grid_x: 0,
             grid_y: 0,
+            cell: lyracore_shared::spatial::grid_cell_id(0, 0),
             last_move_ms: 0,
             type_mask: lyracore_shared::constants::type_mask::PLAYER_BIT,
             entry: 0,
@@ -3801,7 +3895,6 @@ mod tests {
             run_speed_mult_bp: 10_000,
             godmode: false,
             resting: false,
-            cell: lyracore_shared::spatial::grid_cell_id(0, 0),
             sheet_str_bonus: 0,
             sheet_agi_bonus: 0,
             sheet_sta_bonus: 0,
@@ -3813,6 +3906,7 @@ mod tests {
             sheet_dmg_max: 0,
             sheet_crit_bp: 0,
             bank_bag_slots: 0,
+            mount_display_id: 0,
         }
     }
 
@@ -4109,6 +4203,24 @@ mod tests {
             out,
             vec![ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
                 codec::build_unit_flags_values(new.guid, new.unit_flags)
+            ))]
+        );
+    }
+
+    #[test]
+    fn taxi_mount_and_flight_flag_change_emit_one_atomic_presentation_values() {
+        let old = player_entity();
+        let mut new = old.clone();
+        new.mount_display_id = 1147;
+        new.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
+        assert_eq!(
+            entity_update_to_outbound(&old, &new),
+            vec![ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                codec::build_taxi_presentation_values(
+                    new.guid,
+                    new.mount_display_id,
+                    new.unit_flags,
+                )
             ))]
         );
     }
@@ -5036,6 +5148,55 @@ mod tests {
             movement_info,
             seq: 0,
         }
+    }
+
+    fn taxi_row(character_guid: u64) -> TaxiPassengerSpline {
+        TaxiPassengerSpline {
+            character_guid,
+            map_id: 0,
+            instance_id: 0,
+            grid_x: 0,
+            grid_y: 0,
+            cell: lyracore_shared::spatial::grid_cell_id(0, 0),
+            start_x: 1.0,
+            start_y: 2.0,
+            start_z: 3.0,
+            points: vec![4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+            duration_ms: 1_000,
+            spline_id: 10,
+        }
+    }
+
+    #[test]
+    fn taxi_spline_reaches_self_and_only_created_observers() {
+        let row = taxi_row(42);
+        let created = Mutex::new(HashSet::new());
+        assert_eq!(taxi_spline_outbound(&created, 42, &row).len(), 1);
+        assert!(taxi_spline_outbound(&created, 7, &row).is_empty());
+
+        created.lock().unwrap().insert(42);
+        assert_eq!(taxi_spline_outbound(&created, 7, &row).len(), 1);
+    }
+
+    #[test]
+    fn malformed_taxi_spline_is_not_written_to_a_client() {
+        let mut row = taxi_row(42);
+        row.points.pop();
+        assert!(taxi_spline_outbound(&Mutex::new(HashSet::new()), 42, &row).is_empty());
+    }
+
+    #[test]
+    fn resident_taxi_spline_is_chained_after_passenger_create() {
+        let row = taxi_row(42);
+        let created = Mutex::new(HashSet::from([42]));
+        let mut outbound = vec![Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
+            codec::build_destroy_object(99),
+        ))];
+
+        append_resident_taxi_after_create(&mut outbound, &created, 7, &row);
+
+        assert!(matches!(outbound.first(), Some(Outbound::One(_))));
+        assert!(matches!(outbound.get(1), Some(Outbound::Raw { opcode, .. }) if *opcode == 0x00DD));
     }
 
     /// A running-forward movement block plus the bytes the module would have stored for it.

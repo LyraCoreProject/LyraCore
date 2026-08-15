@@ -303,6 +303,7 @@ mod skilldata;
 mod spell;
 mod stats;
 mod talent;
+mod taxi;
 pub mod terrain;
 #[cfg(test)]
 mod test_scan;
@@ -363,6 +364,7 @@ pub use skilldata::*;
 pub use spell::*;
 pub use stats::*;
 pub use talent::*;
+pub use taxi::*;
 pub use threat::*;
 pub use trade::*;
 pub use trainer::*;

@@ -31,7 +31,8 @@ for k in FLOOR_CLASS_TRAINERS FLOOR_TRAINER_OFFERINGS_CLASS FLOOR_TRAINER_OFFERI
          FLOOR_GEOMANCER_CAST_SPELL FLOOR_ROGUE_WIZARD_CAST_SPELL FLOOR_IMP_FIREBOLT_CAST_ROW \
          FLOOR_IMP_FIREBOLT_SPELL FLOOR_DEFIAS_CASTER_CAST_ROW FLOOR_ROTATION_ROWS \
          FLOOR_GEOMANCER_ROTATION_NUKE FLOOR_FROST_ARMOR_ROTATION FLOOR_AREAS FLOOR_AREA_TRIGGERS \
-         FLOOR_GRAVEYARDS FLOOR_GRAVEYARD_ZONE_RESOLVE FLOOR_AREATRIGGER_TELEPORTS \
+         FLOOR_GRAVEYARDS FLOOR_TAXI_NODES FLOOR_TAXI_PATHS FLOOR_TAXI_PATH_NODES \
+         FLOOR_GRAVEYARD_ZONE_RESOLVE FLOOR_AREATRIGGER_TELEPORTS \
          FLOOR_DEADMINES_PORTAL_ROUNDTRIP FLOOR_DEADMINES_CREATURE_SPAWNS FLOOR_DEADMINES_GAMEOBJECTS \
          FLOOR_DEADMINES_BOSSES FLOOR_DEADMINES_NAMED_LOOT FLOOR_PICKPOCKET_LOOT FLOOR_SKINNING_LOOT \
          FLOOR_GAMEOBJECT_CHEST_LOOT FLOOR_FISHING_LOOT FLOOR_CREATURES_WITH_PICKPOCKET \
@@ -54,7 +55,8 @@ FLOOR_SENTINEL_HILL_VENDOR FLOOR_START_ITEMS_CLASSES FLOOR_CASTER_CAST_ROWS \
 FLOOR_GEOMANCER_CAST_SPELL FLOOR_ROGUE_WIZARD_CAST_SPELL FLOOR_IMP_FIREBOLT_CAST_ROW \
 FLOOR_IMP_FIREBOLT_SPELL FLOOR_DEFIAS_CASTER_CAST_ROW FLOOR_ROTATION_ROWS \
 FLOOR_GEOMANCER_ROTATION_NUKE FLOOR_FROST_ARMOR_ROTATION FLOOR_AREAS FLOOR_AREA_TRIGGERS \
-FLOOR_GRAVEYARDS FLOOR_GRAVEYARD_ZONE_RESOLVE FLOOR_AREATRIGGER_TELEPORTS FLOOR_DEADMINES_PORTAL_ROUNDTRIP \
+FLOOR_GRAVEYARDS FLOOR_TAXI_NODES FLOOR_TAXI_PATHS FLOOR_TAXI_PATH_NODES \
+FLOOR_GRAVEYARD_ZONE_RESOLVE FLOOR_AREATRIGGER_TELEPORTS FLOOR_DEADMINES_PORTAL_ROUNDTRIP \
 FLOOR_DEADMINES_CREATURE_SPAWNS FLOOR_DEADMINES_GAMEOBJECTS FLOOR_DEADMINES_BOSSES FLOOR_DEADMINES_NAMED_LOOT \
 FLOOR_PICKPOCKET_LOOT FLOOR_SKINNING_LOOT \
 FLOOR_GAMEOBJECT_CHEST_LOOT FLOOR_FISHING_LOOT FLOOR_CREATURES_WITH_PICKPOCKET \
@@ -79,7 +81,7 @@ map1_out="$(
     source importer/scripts/import-manifest.sh
     for k in FLOOR_TERRAIN_CHUNKS FLOOR_LIVE_CREATURES FLOOR_CONTINENT_SPAWNS FLOOR_VENDORS \
              FLOOR_TRAINER_COVERAGE FLOOR_QUEST_GIVER_RELATIONS FLOOR_SPELL_TOTAL FLOOR_AREAS \
-             FLOOR_START_ITEMS_CLASSES FLOOR_CLASS_TRAINERS; do
+             FLOOR_TAXI_NODES FLOOR_START_ITEMS_CLASSES FLOOR_CLASS_TRAINERS; do
       [ -z "${!k:-}" ] && { echo "UNSET $k"; continue; }
       echo "$k=${!k}"
     done'
@@ -93,6 +95,7 @@ chk_eq "FLOOR_TERRAIN_CHUNKS drops for a non-map-0 shard" 100 "$(m1 FLOOR_TERRAI
 chk_eq "FLOOR_CONTINENT_SPAWNS drops to a presence floor"  100 "$(m1 FLOOR_CONTINENT_SPAWNS)"
 chk_eq "FLOOR_SPELL_TOTAL is map-INDEPENDENT (unchanged)" "$FLOOR_SPELL_TOTAL" "$(m1 FLOOR_SPELL_TOTAL)"
 chk_eq "FLOOR_AREAS is map-INDEPENDENT (unchanged)"        "$FLOOR_AREAS" "$(m1 FLOOR_AREAS)"
+chk_eq "FLOOR_TAXI_NODES is map-INDEPENDENT"                "$FLOOR_TAXI_NODES" "$(m1 FLOOR_TAXI_NODES)"
 chk_eq "FLOOR_START_ITEMS_CLASSES is map-INDEPENDENT"      "$FLOOR_START_ITEMS_CLASSES" "$(m1 FLOOR_START_ITEMS_CLASSES)"
 # And the map-0 defaults are untouched when MAP is unset/0 (the byte-parity guarantee for the canonical run).
 chk_eq "MAP unset keeps the map-0 terrain floor" 2500 "$FLOOR_TERRAIN_CHUNKS"
@@ -141,7 +144,7 @@ guard_out="$(
     DB=probe-db
     EXPECTED_MAPS=1
 
-    # Fresh shard: creature_spawn/gameobject carry initʼs map-0 fixtures (chicken/wolf/trainer +
+    # Fresh shard: creature_spawn/gameobject carry initʼs map-0 fixtures (chicken/wolf/trainer/flight-master +
     # chest/goober/gather-node/pool-armed rows); terrain/nav are EMPTY — exactly a brand-new shard
     # about to import map 1 for the first time, before this issue was fixed.
     spacetime() { # sql <db> "SELECT map_id FROM <table>"
@@ -171,7 +174,7 @@ guard_out="$(
     # content. The row-count fallback in db_never_imported must catch this.
     spacetime() { # sql <db> "<query>"
       case "$3" in
-        *"COUNT(*)"*game_creature_spawn*) echo " 113" ;; # far past initʼs 3-row fixture ceiling
+        *"COUNT(*)"*game_creature_spawn*) echo " 113" ;; # far past initʼs 4-row fixture ceiling
         *"COUNT(*)"*game_gameobject*) echo " 0" ;;
         *game_creature_spawn*|*game_gameobject*) echo " 0" ;; # map_id probe: still reads as map 0 only
         *game_terrain_chunk*|*game_nav_chunk*) : ;;            # no --terrain/--nav ETL ever ran
@@ -186,5 +189,78 @@ chk_eq "fresh shard: map-0 fixture rows still show up in the raw probe"   0   "$
 chk_eq "contaminated shard: db_never_imported is FALSE (real terrain/nav)" no  "$(g contaminated_never_imported)"
 chk_eq "contaminated shard: foreign map 0 still reported"                 0   "$(g contaminated_pre_foreign)"
 chk_eq "family-reload blind spot: db_never_imported is FALSE (row-count fallback catches it)" no "$(g family_reload_never_imported)"
+
+# import-world.sh does not enable `set -e`; a raw importer|grep|tail pipeline therefore used to keep
+# running after the importer failed. Exercise the marker-delimited status-capturing helper with both
+# outcomes, then pin the standalone DBC call site's explicit exit.
+echo "[smoke] standalone DBC import failure propagation:"
+checked_step_out="$(
+  bash -c '
+    set -uo pipefail
+    eval "$(sed -n "/# CHECKED IMPORT HELPERS BEGIN/,/# CHECKED IMPORT HELPERS END/p" importer/scripts/import-world.sh)"
+    good_step() { echo "dbc: loaded fixture"; return 0; }
+    bad_step() { echo "partial taxi batch applied before failure"; return 23; }
+    run_checked_step "smoke good" "dbc: loaded" 1 good_step >/dev/null
+    echo "good_status=$?"
+    bad_log="$(run_checked_step "smoke bad" "dbc: loaded" 1 bad_step 2>&1)"
+    echo "bad_status=$?"
+    case "$bad_log" in *"ABORT — smoke bad failed"*) echo "bad_abort=yes" ;; *) echo "bad_abort=no" ;; esac
+  '
+)"
+cs() { echo "$checked_step_out" | grep "^$1=" | cut -d= -f2; }
+chk_eq "successful checked step stays successful" 0 "$(cs good_status)"
+chk_eq "failed checked step preserves importer exit status" 23 "$(cs bad_status)"
+chk_eq "failed checked step emits an abort" yes "$(cs bad_abort)"
+dbc_callsite="$(sed -n '/run_checked_step "standalone DBC catalogue import"/,/--apply || exit 1/p' importer/scripts/import-world.sh)"
+case "$dbc_callsite" in *"--apply || exit 1"*) dbc_callsite_fatal=yes ;; *) dbc_callsite_fatal=no ;; esac
+chk_eq "standalone DBC call exits import-world.sh on failure" yes "$dbc_callsite_fatal"
+
+# The map-0 restore is equally load-bearing: a denied reducer call must stop the import before the
+# verification stage. Its postcondition is independently checked across the catalogue and all three
+# spatial anchors (template, spawn, live entity).
+echo "[smoke] taxi fixture restore failure propagation and anchor checks:"
+taxi_restore_out="$(
+  bash -c '
+    set -uo pipefail
+    eval "$(sed -n "/# TAXI RESTORE HELPERS BEGIN/,/# TAXI RESTORE HELPERS END/p" importer/scripts/import-world.sh)"
+    call_q() { return 0; }
+    restore_taxi_fixture_or_fail >/dev/null
+    echo "good_status=$?"
+    call_q() { echo "operator denied"; return 17; }
+    bad_log="$(restore_taxi_fixture_or_fail 2>&1)"
+    echo "bad_status=$?"
+    case "$bad_log" in *"ABORT — restore_taxi_fixture failed"*) echo "bad_abort=yes" ;; *) echo "bad_abort=no" ;; esac
+  '
+)"
+trs() { echo "$taxi_restore_out" | grep "^$1=" | cut -d= -f2; }
+chk_eq "successful taxi restore stays successful" 0 "$(trs good_status)"
+chk_eq "failed taxi restore preserves reducer exit status" 17 "$(trs bad_status)"
+chk_eq "failed taxi restore emits an abort" yes "$(trs bad_abort)"
+restore_callsite="$(sed -n '/echo "\[world\] restore taxi fixture"/,/restore_taxi_fixture_or_fail || exit 1/p' importer/scripts/import-world.sh)"
+case "$restore_callsite" in *"restore_taxi_fixture_or_fail || exit 1"*) restore_callsite_fatal=yes ;; *) restore_callsite_fatal=no ;; esac
+chk_eq "taxi restore call exits import-world.sh on failure" yes "$restore_callsite_fatal"
+
+taxi_anchor_out="$(
+  bash -c '
+    set -uo pipefail
+    eval "$(sed -n "/# TAXI FIXTURE VERIFY BEGIN/,/# TAXI FIXTURE VERIFY END/p" importer/scripts/import-world.sh)"
+    n() { case "$1" in *game_taxi_path_node*) echo 3 ;; *) echo 1 ;; esac; }
+    checked=0; fail=0
+    chk() { checked=$((checked + 1)); [ "$3" -ge "$2" ] || fail=1; }
+    verify_taxi_fixture_anchors
+    echo "success_checked=$checked"
+    echo "success_fail=$fail"
+    n() { case "$1" in *game_taxi_path_node*) echo 3 ;; *game_world_entity*) echo 0 ;; *) echo 1 ;; esac; }
+    checked=0; fail=0
+    verify_taxi_fixture_anchors
+    echo "missing_live_checked=$checked"
+    echo "missing_live_fail=$fail"
+  '
+)"
+ta() { echo "$taxi_anchor_out" | grep "^$1=" | cut -d= -f2; }
+chk_eq "taxi verification checks catalogue + template/spawn/live anchors" 7 "$(ta success_checked)"
+chk_eq "complete taxi fixture satisfies every anchor" 0 "$(ta success_fail)"
+chk_eq "taxi verification still runs every anchor after one miss" 7 "$(ta missing_live_checked)"
+chk_eq "missing live flight master fails verification" 1 "$(ta missing_live_fail)"
 
 if [ "$fail" = 0 ]; then echo "[smoke] OK — every consumed manifest key is defined"; else echo "[smoke] FAIL"; exit 1; fi

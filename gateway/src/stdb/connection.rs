@@ -392,6 +392,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // every session on the shard depends on.
         "SELECT * FROM game_entity_motion",
         "SELECT * FROM game_creature_spline",
+        "SELECT * FROM game_taxi_passenger_spline",
         // The SOURCE-side escrow. The ONE module→gateway data flow the cross-database
         // transfer adds: the export blob is written here by `begin_transfer` and the gateway
         // carries it to the other database's `import_character_blob`. Private table, read
@@ -512,6 +513,15 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // `gateway/tests/schema_parity.rs` now pins.
         "SELECT * FROM game_config",
         "SELECT * FROM game_creature_template",
+        // Taxi catalogue. Static and small enough for one coordinator cache; later discovery and
+        // activation slices resolve nodes, directed routes, and ordered path points from here.
+        "SELECT * FROM game_taxi_node",
+        "SELECT * FROM game_taxi_path",
+        "SELECT * FROM game_taxi_path_node",
+        // Private, transient, request-id-keyed mailbox written by the module's cohesive status/open
+        // operations. The owner-token coordinator may subscribe it; discovery stays module-private
+        // policy and is deliberately not subscribed.
+        "SELECT * FROM game_taxi_service_reply",
         "SELECT * FROM game_start_position",
         "SELECT * FROM game_corpse",
         // Items slice-1: the static item definitions (for CMSG_ITEM_QUERY_SINGLE) + every

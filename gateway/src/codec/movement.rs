@@ -295,6 +295,40 @@ pub fn build_monster_move(
     }
 }
 
+/// Build the dedicated multi-point passenger spline in the build-5875 Catmull-Rom form. The
+/// vendored typed writer always applies linear-path PackXYZ after the destination, even when the
+/// FLYING/Catmull-Rom flag is set. Taxi paths require full absolute points (and commonly have
+/// negative world coordinates), so this packet is intentionally encoded raw.
+pub fn build_taxi_move_raw(
+    passenger_guid: u64,
+    start: Vector3d,
+    points: Vec<Vector3d>,
+    duration_ms: u32,
+    spline_id: u32,
+) -> Option<(u16, Vec<u8>)> {
+    if points.is_empty() || points.iter().chain([&start]).any(|p| {
+        !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite()
+    }) {
+        return None;
+    }
+    let mut body = Vec::with_capacity(34 + points.len() * 12);
+    super::values::write_packed_guid_u64(&mut body, passenger_guid);
+    for value in [start.x, start.y, start.z] {
+        body.extend_from_slice(&value.to_le_bytes());
+    }
+    body.extend_from_slice(&spline_id.to_le_bytes());
+    body.push(0); // MonsterMoveNormal
+    body.extend_from_slice(&0x0000_0300u32.to_le_bytes()); // RUN_MODE | FLYING (Catmull-Rom)
+    body.extend_from_slice(&duration_ms.to_le_bytes());
+    body.extend_from_slice(&(points.len() as u32).to_le_bytes());
+    for point in points {
+        for value in [point.x, point.y, point.z] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    Some((0x00DD, body))
+}
+
 /// Build `SMSG_MONSTER_MOVE` as a FACING-ONLY packet (#518): `mover_guid` does not move — `pos` is
 /// both the spline point and its sole (degenerate) destination, `duration` 0 — but its heading
 /// changes to `angle_rad`. This is the wire tool the issue calls out as "already exists, unwired":

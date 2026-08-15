@@ -47,6 +47,8 @@ pub struct EntityView {
     pub display_id: u32,
     pub native_display_id: u32,
     pub unit_flags: u32,
+    /// `UNIT_FIELD_MOUNTDISPLAYID`; nonzero only while the module owns an active taxi flight.
+    pub mount_display_id: u32,
     pub base_attack_time_ms: u32,
     pub dynamic_flags: u32,
     pub player_bytes: u32,
@@ -379,6 +381,10 @@ pub fn build_create_object(
             // *stat line* already read correctly from MINDAMAGE/MAXDAMAGE; this fixes the hover tooltip.)
             .set_player_field_mod_damage_done_pct(1.0_f32.to_bits() as i32);
 
+        if entity.mount_display_id != 0 {
+            builder = builder.set_unit_mountdisplayid(entity.mount_display_id as i32);
+        }
+
         // Current/max power live at the descriptor index matching the unit's power type
         // (Mana=1, Rage=2, Focus=3, Energy=4, Happiness=5).
         let (power_cur, power_max) = (entity.power as i32, entity.max_power as i32);
@@ -482,6 +488,9 @@ pub fn build_create_object(
             unit_builder = unit_builder
                 .set_unit_summonedby(Guid::new(entity.owner_guid))
                 .set_unit_createdby(Guid::new(entity.owner_guid));
+        }
+        if entity.mount_display_id != 0 {
+            unit_builder = unit_builder.set_unit_mountdisplayid(entity.mount_display_id as i32);
         }
         (ObjectType::Unit, UpdateMask::Unit(unit_builder.finalize()))
     };

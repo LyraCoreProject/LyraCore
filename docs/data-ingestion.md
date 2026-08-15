@@ -69,10 +69,12 @@ confusion to avoid:
 
 ## What OUR server actually needs
 
-- **From DBCs (tiny subset, computed server-side):** `display_id`, `scale`, faction-template
-  relations (nameplate hostile/neutral/friendly), `creature_model_info` bounding-radius/combat-reach,
-  map/area IDs, canonical start coordinates, player level-stat curves. Today we *hardcode* the few we
-  use (`display_id` 49/304, faction 14) — the same "pull from a known-good source" discipline.
+- **From DBCs (the server-computed subset):** spells, talents, areas, faction-template relations,
+  creature displays/scales/model bounds, map and start-position data, stat curves, and the complete
+  taxi catalogue. `TaxiNodes.dbc` supplies each node's map position, name, and faction mount
+  displays; its DBC id becomes both the storage id and the bounded client/wire id. `TaxiPath.dbc`
+  supplies directed endpoints and fares; `TaxiPathNode.dbc` supplies ordered geometry, raw signed
+  `int32` flag containers, and non-negative signed `int32` delays.
 - **Server-side world content (the road from "one chicken" to a real world):** creature templates +
   spawns + waypoints, items, gameobjects + spawns, the loot tables, quests + relations, npc/gossip
   text, vendors, trainers, `playercreateinfo_spell`, `player_levelstats`/`player_classlevelstats`
@@ -204,6 +206,15 @@ fence plus the surrounding pre- and post-flight guards keep any one database fro
 continents' spatial rows. Non-spatial content (spells, items, quests, the DBC reference tables) is
 duplicated on every shard by design.
 
+The standalone DBC pass reads all three taxi files through the same in-memory MPQ patch chain as
+the other client tables. It validates every endpoint/path reference and every `(path, node_index)`
+ordinal, client id against the vanilla 1..=256 mask range, reserved wire-id collisions, and negative
+delays before issuing SQL. Apply is a recoverable clear-and-reload: points are cleared before paths
+and nodes, then imported rows and the reserved fixture are inserted deterministically. A database
+failure during those statements can leave a partial family, but `import-world.sh` now stops on that
+failure and the next run clears the family again before rebuilding it. No DBC bytes or generated
+catalogue artifact is written into the repository.
+
 ## What the seeded fixture knowingly contains
 
 The firewall above is about **bulk data**: this project never vendors, mirrors, or ships a
@@ -222,6 +233,13 @@ deliberately reuses real vanilla ids and, for a handful of rows, real names and 
 - **Graveyards** — five real Elwynn/Westfall world-safe-locations, with their real names and
   coordinates (`module/src/seed.rs`, mirrored as the fallback constants in `module/src/world.rs`).
 - **The start position** — the real Northshire Valley coordinates a fresh Human Warrior spawns at.
+- **Taxi harness** — two reserved nodes, one one-way test route with three hand-authored points and
+  fare, and a nearby flight master. The 5090000+ values are storage ids; separate wire ids 255/256
+  fit the client's fixed taxi mask and are rejected if imported DBC nodes already claim them. These
+  synthetic nodes exist for headless protocol tests. A real client can only render flight-map nodes
+  present in its own DBCs, so visual real-client testing uses the imported catalogue instead. Taxi
+  activation charges the path's imported copper fare and selects the source node's Horde/Alliance
+  mount display from the character's race team; a zero display is rejected safely.
 - **A handful of quest/NPC display strings** exercised by the gateway's own test fixtures.
 
 None of these came from a bulk import: they are hand-typed, one row at a time, using ids,

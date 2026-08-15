@@ -2927,6 +2927,35 @@ fn create_object_attack_power_saturates_at_zero_for_a_fresh_level_one() {
     }
 }
 
+#[test]
+fn active_taxi_mount_is_present_in_the_player_create_mask() {
+    let mut entity = warrior_entity();
+    entity.mount_display_id = 1147;
+    entity.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
+
+    let msg = build_create_object(&entity, CreateKind::SelfPlayer, &[], &[]).unwrap();
+    match &msg.objects[0] {
+        Object::CreateObject2 {
+            mask2: UpdateMask::Player(player),
+            ..
+        } => {
+            assert_eq!(player.unit_mountdisplayid(), Some(1147));
+            assert_eq!(player.unit_flags(), Some(entity.unit_flags as i32));
+        }
+        other => panic!("expected a Player CreateObject2, got {other:?}"),
+    }
+
+    let unmounted = build_create_object(&warrior_entity(), CreateKind::SelfPlayer, &[], &[])
+        .unwrap();
+    match &unmounted.objects[0] {
+        Object::CreateObject2 {
+            mask2: UpdateMask::Player(player),
+            ..
+        } => assert_eq!(player.unit_mountdisplayid(), None),
+        other => panic!("expected a Player CreateObject2, got {other:?}"),
+    }
+}
+
 // ---- P2: visible_item_index slot-19 boundary (entity.rs) ---------------------------------------
 
 #[test]
@@ -3232,6 +3261,34 @@ fn monster_move_facing_carries_the_angle_and_a_degenerate_single_point_spline() 
         vec![pos],
         "degenerate one-point spline at the mover's own position"
     );
+}
+
+#[test]
+fn taxi_move_writes_absolute_catmull_rom_points_byte_for_byte() {
+    let start = Vector3d { x: -9465.0, y: -1300.0, z: 50.0 };
+    let points = vec![
+        Vector3d { x: -9460.0, y: -1298.0, z: 52.0 },
+        Vector3d { x: -9450.0, y: -1290.0, z: 54.0 },
+        Vector3d { x: -9440.0, y: -1280.0, z: 56.0 },
+    ];
+    let (opcode, bytes) = build_taxi_move_raw(0xF00D, start, points.clone(), 12_345, 77).unwrap();
+    assert_eq!(opcode, 0x00DD);
+
+    let mut expected = vec![0x03, 0x0D, 0xF0]; // PackedGuid(0xF00D)
+    for value in [start.x, start.y, start.z] {
+        expected.extend_from_slice(&value.to_le_bytes());
+    }
+    expected.extend_from_slice(&77u32.to_le_bytes());
+    expected.push(0); // MonsterMoveNormal
+    expected.extend_from_slice(&0x300u32.to_le_bytes()); // RUN_MODE | FLYING/Catmull-Rom
+    expected.extend_from_slice(&12_345u32.to_le_bytes());
+    expected.extend_from_slice(&3u32.to_le_bytes());
+    for point in points {
+        for value in [point.x, point.y, point.z] {
+            expected.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    assert_eq!(bytes, expected);
 }
 
 // ---- P1: item.rs build_buy_failed 5-way map + build_item_create_object CONTAINER branch --------

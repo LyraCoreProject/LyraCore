@@ -89,6 +89,9 @@ FLOOR_FROST_ARMOR_ROTATION=1              # 474/476 Frost Armor rotation row
 FLOOR_AREAS=1000                          # areas imported (game_area) — tuned against a real 1.12.1 client: AreaTable imports 1081 rows
 FLOOR_AREA_TRIGGERS=400                   # area triggers imported (game_area_trigger) — tuned against a real 1.12.1 client: 432 rows
 FLOOR_GRAVEYARDS=50                       # [V] graveyards imported (game_graveyard) — same caveat as FLOOR_AREAS
+FLOOR_TAXI_NODES=1                        # client-derived rows below the reserved 5090000 fixture floor
+FLOOR_TAXI_PATHS=1                        # directed client-derived routes below the fixture floor
+FLOOR_TAXI_PATH_NODES=1                   # ordered client-derived path points below the fixture floor
 FLOOR_GRAVEYARD_ZONE_RESOLVE=1            # zone-12 graveyard_zone links resolve to a real game_graveyard row
 FLOOR_AREATRIGGER_TELEPORTS=50            # [V] areatrigger_teleport portals imported (game_areatrigger_teleport)
                                            # — an unverified estimate;

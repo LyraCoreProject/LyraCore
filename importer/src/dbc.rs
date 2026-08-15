@@ -12,7 +12,7 @@
 //! `wow_dbc::T::read` hard-asserts the build-5875 `record_size`/`field_count` for each table, so a
 //! wrong-version / heavily-patched client surfaces as a clear parse error here (the version guard).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::Path;
 
@@ -31,6 +31,9 @@ use wow_dbc::vanilla_tables::skill_line::SkillLine as DbcSkillLine;
 use wow_dbc::vanilla_tables::skill_line_ability::SkillLineAbility as DbcSkillLineAbility;
 use wow_dbc::vanilla_tables::skill_race_class_info::SkillRaceClassInfo as DbcSkillRaceClassInfo;
 use wow_dbc::vanilla_tables::skill_tiers::SkillTiers as DbcSkillTiers;
+use wow_dbc::vanilla_tables::taxi_nodes::TaxiNodes as DbcTaxiNodes;
+use wow_dbc::vanilla_tables::taxi_path::TaxiPath as DbcTaxiPath;
+use wow_dbc::vanilla_tables::taxi_path_node::TaxiPathNode as DbcTaxiPathNode;
 use wow_dbc::vanilla_tables::world_safe_locs::WorldSafeLocs as DbcWorldSafeLocs;
 use wow_dbc::{DbcTable, Indexable};
 use wow_mpq::PatchChain;
@@ -152,6 +155,14 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     let locks: DbcLock = read_table(&mut chain)?;
     let (lock_stmts, lock_count, lock_unmapped) = lock_sql(&locks);
 
+    // Taxi catalogue: all three tables are read from the same in-memory operator-owned MPQ chain,
+    // validated as one graph, and emitted as one recoverable clear+reload family. The validator runs
+    // before the first DELETE, so a dangling/truncated catalogue never damages the current rows.
+    let taxi_nodes: DbcTaxiNodes = read_table(&mut chain)?;
+    let taxi_paths: DbcTaxiPath = read_table(&mut chain)?;
+    let taxi_path_nodes: DbcTaxiPathNode = read_table(&mut chain)?;
+    let (taxi_stmts, taxi_counts) = taxi_catalogue_sql(&taxi_nodes, &taxi_paths, &taxi_path_nodes)?;
+
     // Load game_skill_line + game_skill_ability + game_skill_availability from SkillLine.dbc /
     // SkillLineAbility.dbc / SkillRaceClassInfo.dbc (work-item 208: the skill fabric as data — see
     // module/src/skilldata.rs). All no-Timestamp → plain SQL, same clear+reload shape as the blocks
@@ -198,6 +209,11 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         eprintln!("dbc: loaded {family_count} creature families into game_creature_family.");
         crate::run_sql_statements(args, &lock_stmts, "lock")?;
         eprintln!("dbc: loaded {lock_count} lock indices into game_lock.");
+        crate::run_sql_statements(args, &taxi_stmts, "taxi")?;
+        eprintln!(
+            "dbc: loaded {} taxi nodes, {} directed paths, and {} ordered path points (plus reserved fixture).",
+            taxi_counts.nodes, taxi_counts.paths, taxi_counts.path_nodes
+        );
     } else {
         println!("-- DRY RUN: load {fn_count} faction templates + {gf_count} factions + {cbi_count} (race,class) combos + {race_count} races:");
         println!("{};", faction_stmts[0]);
@@ -237,6 +253,10 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
             lock_unmapped
         );
     }
+    println!(
+        "TaxiNodes/TaxiPath/TaxiPathNode: {} nodes, {} directed paths, {} ordered points",
+        taxi_counts.nodes, taxi_counts.paths, taxi_counts.path_nodes
+    );
     Ok(())
 }
 
@@ -673,6 +693,293 @@ fn graveyard_sql(table: &DbcWorldSafeLocs) -> (Vec<String>, usize) {
     (stmts, n)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TaxiCounts {
+    nodes: usize,
+    paths: usize,
+    path_nodes: usize,
+}
+
+/// Validate and emit the three-table taxi catalogue as one deterministic clear+reload family.
+/// All validation happens before SQL is returned: a path must resolve both endpoint nodes, every
+/// point must resolve its path, every path must have geometry, costs/indices must be non-negative,
+/// and the operator's data may not enter the reserved fixture namespace. That makes a malformed
+/// client extract fail before `run_sql_statements` can execute the first DELETE.
+fn taxi_catalogue_sql(
+    nodes: &DbcTaxiNodes,
+    paths: &DbcTaxiPath,
+    path_nodes: &DbcTaxiPathNode,
+) -> Result<(Vec<String>, TaxiCounts)> {
+    use lyracore_shared::constants::taxi_fixture as fixture;
+    use lyracore_shared::constants::taxi_protocol;
+
+    if nodes.rows().is_empty() {
+        bail!("taxi DBC catalogue is incomplete: TaxiNodes=0 rows");
+    }
+
+    let mut node_ids = HashSet::with_capacity(nodes.rows().len());
+    let mut node_rows = Vec::with_capacity(nodes.rows().len() + 2);
+    for row in nodes.rows() {
+        let id = row.id.id;
+        if id >= fixture::STORAGE_ID_FLOOR {
+            bail!(
+                "TaxiNodes.dbc id {id} enters LyraCore's reserved fixture namespace (>= {})",
+                fixture::STORAGE_ID_FLOOR
+            );
+        }
+        if !(taxi_protocol::CLIENT_NODE_ID_MIN..=taxi_protocol::CLIENT_NODE_ID_MAX).contains(&id) {
+            bail!(
+                "TaxiNodes.dbc id {id} is outside the vanilla client taxi-mask range {}..={}",
+                taxi_protocol::CLIENT_NODE_ID_MIN,
+                taxi_protocol::CLIENT_NODE_ID_MAX,
+            );
+        }
+        if !node_ids.insert(id) {
+            bail!("TaxiNodes.dbc contains duplicate node id {id}");
+        }
+        if ![row.location_x, row.location_y, row.location_z]
+            .into_iter()
+            .all(f32::is_finite)
+        {
+            bail!("TaxiNodes.dbc node {id} has a non-finite position");
+        }
+        node_rows.push((
+            id,
+            format!(
+                "({},{},{},{},{},{},{},{},{})",
+                id,
+                id,
+                row.map.id,
+                row.location_x,
+                row.location_y,
+                row.location_z,
+                sql_text(&row.name.en_gb),
+                row.mount_creature_display_info[0],
+                row.mount_creature_display_info[1],
+            ),
+        ));
+    }
+    for client_node_id in [
+        fixture::SOURCE_CLIENT_NODE_ID,
+        fixture::DESTINATION_CLIENT_NODE_ID,
+    ] {
+        if node_ids.contains(&client_node_id) {
+            bail!(
+                "TaxiNodes.dbc node {client_node_id} collides with a reserved fixture client node id"
+            );
+        }
+    }
+    if paths.rows().is_empty() {
+        bail!("taxi DBC catalogue is incomplete: TaxiPath=0 rows");
+    }
+
+    let mut path_ids = HashSet::with_capacity(paths.rows().len());
+    let mut route_keys = HashSet::with_capacity(paths.rows().len());
+    let mut path_rows = Vec::with_capacity(paths.rows().len() + 1);
+    for row in paths.rows() {
+        let id = row.id.id;
+        let source = row.source_taxi_node.id;
+        let destination = row.destination_taxi_node.id;
+        if id >= fixture::STORAGE_ID_FLOOR {
+            bail!(
+                "TaxiPath.dbc id {id} enters LyraCore's reserved fixture namespace (>= {})",
+                fixture::STORAGE_ID_FLOOR
+            );
+        }
+        if !path_ids.insert(id) {
+            bail!("TaxiPath.dbc contains duplicate path id {id}");
+        }
+        if !node_ids.contains(&source) {
+            bail!("TaxiPath.dbc path {id} references missing source node {source}");
+        }
+        if !node_ids.contains(&destination) {
+            bail!("TaxiPath.dbc path {id} references missing destination node {destination}");
+        }
+        if !route_keys.insert((source, destination)) {
+            bail!(
+                "TaxiPath.dbc contains more than one directed route from node {source} to node {destination}"
+            );
+        }
+        let fare = u32::try_from(row.cost)
+            .with_context(|| format!("TaxiPath.dbc path {id} has negative fare {}", row.cost))?;
+        path_rows.push((id, format!("({id},{source},{destination},{fare})")));
+    }
+    if path_nodes.rows().is_empty() {
+        bail!("taxi DBC catalogue is incomplete: TaxiPathNode=0 rows");
+    }
+
+    let mut point_ids = HashSet::with_capacity(path_nodes.rows().len());
+    let mut point_ordinals = HashSet::with_capacity(path_nodes.rows().len());
+    let mut paths_with_points = HashSet::with_capacity(paths.rows().len());
+    let mut point_rows = Vec::with_capacity(path_nodes.rows().len() + fixture::POINT_IDS.len());
+    for row in path_nodes.rows() {
+        let id = row.id.id;
+        let path_id = row.taxi_path.id;
+        if id >= fixture::STORAGE_ID_FLOOR {
+            bail!(
+                "TaxiPathNode.dbc id {id} enters LyraCore's reserved fixture namespace (>= {})",
+                fixture::STORAGE_ID_FLOOR
+            );
+        }
+        if !point_ids.insert(id) {
+            bail!("TaxiPathNode.dbc contains duplicate point id {id}");
+        }
+        if ![row.location_x, row.location_y, row.location_z]
+            .into_iter()
+            .all(f32::is_finite)
+        {
+            bail!("TaxiPathNode.dbc point {id} has a non-finite position");
+        }
+        if !path_ids.contains(&path_id) {
+            bail!("TaxiPathNode.dbc point {id} references missing path {path_id}");
+        }
+        let node_index = u32::try_from(row.node_index).with_context(|| {
+            format!(
+                "TaxiPathNode.dbc point {id} has negative node index {}",
+                row.node_index
+            )
+        })?;
+        if !point_ordinals.insert((path_id, node_index)) {
+            bail!("TaxiPathNode.dbc repeats node index {node_index} on path {path_id}");
+        }
+        if row.delay < 0 {
+            bail!(
+                "TaxiPathNode.dbc point {id} has negative delay {}",
+                row.delay
+            );
+        }
+        paths_with_points.insert(path_id);
+        point_rows.push((
+            (path_id, node_index, id),
+            format!(
+                "({id},{path_id},{node_index},{},{},{},{},{},{})",
+                row.map.id, row.location_x, row.location_y, row.location_z, row.flags, row.delay,
+            ),
+        ));
+    }
+    if let Some(path_id) = path_ids
+        .iter()
+        .copied()
+        .find(|id| !paths_with_points.contains(id))
+    {
+        bail!("TaxiPath.dbc path {path_id} has no TaxiPathNode.dbc points");
+    }
+
+    let counts = TaxiCounts {
+        nodes: node_rows.len(),
+        paths: path_rows.len(),
+        path_nodes: point_rows.len(),
+    };
+
+    node_rows.extend([
+        (
+            fixture::SOURCE_NODE_STORAGE_ID,
+            format!(
+                "({},{},{},{},{},{},{},{},{})",
+                fixture::SOURCE_NODE_STORAGE_ID,
+                fixture::SOURCE_CLIENT_NODE_ID,
+                fixture::MAP_ID,
+                fixture::SOURCE_X,
+                fixture::SOURCE_Y,
+                fixture::SOURCE_Z,
+                sql_text(fixture::SOURCE_NAME),
+                fixture::MOUNT_DISPLAY_HORDE,
+                fixture::MOUNT_DISPLAY_ALLIANCE,
+            ),
+        ),
+        (
+            fixture::DESTINATION_NODE_STORAGE_ID,
+            format!(
+                "({},{},{},{},{},{},{},{},{})",
+                fixture::DESTINATION_NODE_STORAGE_ID,
+                fixture::DESTINATION_CLIENT_NODE_ID,
+                fixture::MAP_ID,
+                fixture::DESTINATION_X,
+                fixture::DESTINATION_Y,
+                fixture::DESTINATION_Z,
+                sql_text(fixture::DESTINATION_NAME),
+                fixture::MOUNT_DISPLAY_HORDE,
+                fixture::MOUNT_DISPLAY_ALLIANCE,
+            ),
+        ),
+    ]);
+    path_rows.push((
+        fixture::PATH_ID,
+        format!(
+            "({},{},{},{})",
+            fixture::PATH_ID,
+            fixture::SOURCE_NODE_STORAGE_ID,
+            fixture::DESTINATION_NODE_STORAGE_ID,
+            fixture::FARE,
+        ),
+    ));
+    for (id, node_index, x, y, z) in [
+        (
+            fixture::POINT_IDS[0],
+            0,
+            fixture::SOURCE_X,
+            fixture::SOURCE_Y,
+            fixture::SOURCE_Z,
+        ),
+        (
+            fixture::POINT_IDS[1],
+            1,
+            fixture::MIDPOINT_X,
+            fixture::MIDPOINT_Y,
+            fixture::MIDPOINT_Z,
+        ),
+        (
+            fixture::POINT_IDS[2],
+            2,
+            fixture::DESTINATION_X,
+            fixture::DESTINATION_Y,
+            fixture::DESTINATION_Z,
+        ),
+    ] {
+        point_rows.push((
+            (fixture::PATH_ID, node_index, id),
+            format!(
+                "({id},{},{node_index},{},{x},{y},{z},0,0)",
+                fixture::PATH_ID,
+                fixture::MAP_ID,
+            ),
+        ));
+    }
+
+    // Stable ordering makes dry-run output and applied row sets independent of DBC record order.
+    node_rows.sort_by_key(|(id, _)| *id);
+    path_rows.sort_by_key(|(id, _)| *id);
+    point_rows.sort_by_key(|(key, _)| *key);
+    let node_rows: Vec<String> = node_rows.into_iter().map(|(_, sql)| sql).collect();
+    let path_rows: Vec<String> = path_rows.into_iter().map(|(_, sql)| sql).collect();
+    let point_rows: Vec<String> = point_rows.into_iter().map(|(_, sql)| sql).collect();
+
+    let mut stmts = vec![
+        "DELETE FROM game_taxi_path_node WHERE id >= 0".to_string(),
+        "DELETE FROM game_taxi_path WHERE id >= 0".to_string(),
+        "DELETE FROM game_taxi_node WHERE id >= 0".to_string(),
+    ];
+    push_insert(
+        &mut stmts,
+        "game_taxi_node",
+        "id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance",
+        &node_rows,
+    );
+    push_insert(
+        &mut stmts,
+        "game_taxi_path",
+        "id,source_node_id,destination_node_id,fare",
+        &path_rows,
+    );
+    push_insert(
+        &mut stmts,
+        "game_taxi_path_node",
+        "id,path_id,node_index,map_id,x,y,z,flags,delay_ms",
+        &point_rows,
+    );
+    Ok((stmts, counts))
+}
+
 /// Clear+reload SQL for `game_creature_family` from `CreatureFamily.dbc` (work-item 214: the 188 pet
 /// system's data half — `CreatureTemplate.creature_family`/`type_flags` already import via
 /// `main.rs`'s `ct::FAMILY`/`ct::CREATURE_TYPE_FLAGS`, and the Wolf faction fixup already reads
@@ -865,6 +1172,9 @@ mod tests {
     use wow_dbc::vanilla_tables::sound_provider_preferences::SoundProviderPreferencesKey;
     use wow_dbc::vanilla_tables::spell::SpellKey;
     use wow_dbc::vanilla_tables::spell_icon::SpellIconKey;
+    use wow_dbc::vanilla_tables::taxi_nodes::{TaxiNodesKey, TaxiNodesRow};
+    use wow_dbc::vanilla_tables::taxi_path::{TaxiPathKey, TaxiPathRow};
+    use wow_dbc::vanilla_tables::taxi_path_node::{TaxiPathNodeKey, TaxiPathNodeRow};
     use wow_dbc::vanilla_tables::world_safe_locs::{WorldSafeLocsKey, WorldSafeLocsRow};
     use wow_dbc::vanilla_tables::zone_intro_music_table::ZoneIntroMusicTableKey;
     use wow_dbc::vanilla_tables::zone_music::ZoneMusicKey;
@@ -952,6 +1262,305 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    fn taxi_node_row(id: u32, name: &str, mounts: [u32; 2], x: f32) -> TaxiNodesRow {
+        TaxiNodesRow {
+            id: TaxiNodesKey::new(id),
+            map: MapKey::new(0),
+            location_x: x,
+            location_y: 2.0,
+            location_z: 3.0,
+            name: LocalizedString {
+                en_gb: name.to_string(),
+                ..Default::default()
+            },
+            mount_creature_display_info: mounts,
+        }
+    }
+
+    fn taxi_path_row(id: u32, source: u32, destination: u32, cost: i32) -> TaxiPathRow {
+        TaxiPathRow {
+            id: TaxiPathKey::new(id),
+            source_taxi_node: TaxiNodesKey::new(source),
+            destination_taxi_node: TaxiNodesKey::new(destination),
+            cost,
+        }
+    }
+
+    fn taxi_point_row(
+        id: u32,
+        path_id: u32,
+        node_index: i32,
+        x: f32,
+        flags: i32,
+        delay: i32,
+    ) -> TaxiPathNodeRow {
+        TaxiPathNodeRow {
+            id: TaxiPathNodeKey::new(id),
+            taxi_path: TaxiPathKey::new(path_id),
+            node_index,
+            map: MapKey::new(0),
+            location_x: x,
+            location_y: 5.0,
+            location_z: 6.0,
+            flags,
+            delay,
+        }
+    }
+
+    fn synthetic_taxi_catalogue() -> (DbcTaxiNodes, DbcTaxiPath, DbcTaxiPathNode) {
+        (
+            DbcTaxiNodes {
+                rows: vec![
+                    taxi_node_row(20, "Destination", [2200, 2201], 20.0),
+                    taxi_node_row(10, "O'Ryan's Source", [1100, 1101], 10.0),
+                ],
+            },
+            DbcTaxiPath {
+                rows: vec![taxi_path_row(70, 10, 20, 125)],
+            },
+            DbcTaxiPathNode {
+                // Deliberately shuffled: output must use path/node-index order, not record order.
+                rows: vec![
+                    // The DBC field is a signed int32 container. Preserve its complete bit pattern,
+                    // including the sign bit, rather than narrowing the public catalogue value.
+                    taxi_point_row(703, 70, 2, 30.0, i32::MIN, 900),
+                    taxi_point_row(701, 70, 0, 10.0, 1, 0),
+                    taxi_point_row(702, 70, 1, 20.0, 2, 450),
+                ],
+            },
+        )
+    }
+
+    #[test]
+    fn taxi_catalogue_sql_preserves_direction_fare_mounts_and_point_order() {
+        let (nodes, paths, points) = synthetic_taxi_catalogue();
+        let (stmts, counts) = taxi_catalogue_sql(&nodes, &paths, &points).unwrap();
+        assert_eq!(
+            counts,
+            TaxiCounts {
+                nodes: 2,
+                paths: 1,
+                path_nodes: 3,
+            }
+        );
+        assert_eq!(
+            &stmts[..3],
+            [
+                "DELETE FROM game_taxi_path_node WHERE id >= 0",
+                "DELETE FROM game_taxi_path WHERE id >= 0",
+                "DELETE FROM game_taxi_node WHERE id >= 0",
+            ],
+            "stale geometry is removed before its parent routes and nodes"
+        );
+
+        let node_insert = stmts
+            .iter()
+            .find(|sql| sql.starts_with("INSERT INTO game_taxi_node "))
+            .unwrap();
+        assert!(
+            node_insert.contains("(10,10,0,10,2,3,'O''Ryan''s Source',1100,1101)"),
+            "Horde/Alliance DBC slots and escaped names must survive: {node_insert}"
+        );
+
+        let path_insert = stmts
+            .iter()
+            .find(|sql| sql.starts_with("INSERT INTO game_taxi_path "))
+            .unwrap();
+        assert!(path_insert.contains("(70,10,20,125)"), "{path_insert}");
+        assert!(
+            !path_insert.contains("(70,20,10,125)"),
+            "a directed path must not grow an inferred reverse: {path_insert}"
+        );
+
+        let point_insert = stmts
+            .iter()
+            .find(|sql| sql.starts_with("INSERT INTO game_taxi_path_node "))
+            .unwrap();
+        let p0 = point_insert.find("(701,70,0,0,10,5,6,1,0)").unwrap();
+        let p1 = point_insert.find("(702,70,1,0,20,5,6,2,450)").unwrap();
+        let p2 = point_insert
+            .find("(703,70,2,0,30,5,6,-2147483648,900)")
+            .unwrap();
+        assert!(
+            p0 < p1 && p1 < p2,
+            "path points are not ordered: {point_insert}"
+        );
+    }
+
+    #[test]
+    fn taxi_catalogue_sql_is_deterministic_and_restores_the_reserved_fixture() {
+        use lyracore_shared::constants::taxi_fixture as fixture;
+
+        let (nodes, paths, points) = synthetic_taxi_catalogue();
+        let (first, _) = taxi_catalogue_sql(&nodes, &paths, &points).unwrap();
+
+        let mut nodes_reversed = nodes.clone();
+        nodes_reversed.rows.reverse();
+        let mut points_reversed = points.clone();
+        points_reversed.rows.reverse();
+        let (second, _) = taxi_catalogue_sql(&nodes_reversed, &paths, &points_reversed).unwrap();
+        assert_eq!(
+            first, second,
+            "DBC record order must not change emitted SQL"
+        );
+
+        let all = first.join("\n");
+        for id in [
+            fixture::SOURCE_NODE_STORAGE_ID,
+            fixture::DESTINATION_NODE_STORAGE_ID,
+            fixture::PATH_ID,
+            fixture::POINT_IDS[0],
+            fixture::POINT_IDS[1],
+            fixture::POINT_IDS[2],
+        ] {
+            assert!(
+                all.contains(&id.to_string()),
+                "successful replacement omitted reserved fixture id {id}"
+            );
+        }
+
+        use lyracore_shared::constants::taxi_protocol;
+        assert_eq!(taxi_protocol::CLIENT_NODE_ID_MAX, 8 * u32::BITS);
+        assert_eq!(
+            fixture::DESTINATION_CLIENT_NODE_ID,
+            taxi_protocol::CLIENT_NODE_ID_MAX,
+            "the fixture pins the final representable vanilla taxi-mask bit"
+        );
+        assert!(
+            all.contains(&format!(
+                "({},{},0,",
+                fixture::SOURCE_NODE_STORAGE_ID,
+                fixture::SOURCE_CLIENT_NODE_ID
+            )) && all.contains(&format!(
+                "({},{},0,",
+                fixture::DESTINATION_NODE_STORAGE_ID,
+                fixture::DESTINATION_CLIENT_NODE_ID
+            )),
+            "fixture storage ids and client ids must remain separate: {all}"
+        );
+    }
+
+    #[test]
+    fn taxi_catalogue_rejects_dangling_references_before_emitting_clear_sql() {
+        let (nodes, _, _) = synthetic_taxi_catalogue();
+        let bad_path = DbcTaxiPath {
+            rows: vec![taxi_path_row(70, 10, 999, 125)],
+        };
+        let no_points = DbcTaxiPathNode { rows: vec![] };
+        let err = taxi_catalogue_sql(&nodes, &bad_path, &no_points)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing destination node 999"), "{err}");
+
+        let good_path = DbcTaxiPath {
+            rows: vec![taxi_path_row(70, 10, 20, 125)],
+        };
+        let bad_point = DbcTaxiPathNode {
+            rows: vec![taxi_point_row(701, 999, 0, 10.0, 0, 0)],
+        };
+        let err = taxi_catalogue_sql(&nodes, &good_path, &bad_point)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("point 701 references missing path 999"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn taxi_catalogue_rejects_an_empty_file_before_emitting_clear_sql() {
+        let (nodes, paths, _) = synthetic_taxi_catalogue();
+        let err = taxi_catalogue_sql(&nodes, &paths, &DbcTaxiPathNode { rows: vec![] })
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("TaxiPathNode=0 rows"), "{err}");
+    }
+
+    #[test]
+    fn taxi_catalogue_rejects_negative_fares_indices_delays_and_id_collisions() {
+        let (nodes, _, _) = synthetic_taxi_catalogue();
+        let negative_fare = DbcTaxiPath {
+            rows: vec![taxi_path_row(70, 10, 20, -1)],
+        };
+        let point = DbcTaxiPathNode {
+            rows: vec![taxi_point_row(701, 70, 0, 10.0, 0, 0)],
+        };
+        assert!(taxi_catalogue_sql(&nodes, &negative_fare, &point)
+            .unwrap_err()
+            .to_string()
+            .contains("negative fare"));
+
+        let path = DbcTaxiPath {
+            rows: vec![taxi_path_row(70, 10, 20, 1)],
+        };
+        let negative_index = DbcTaxiPathNode {
+            rows: vec![taxi_point_row(701, 70, -1, 10.0, 0, 0)],
+        };
+        assert!(taxi_catalogue_sql(&nodes, &path, &negative_index)
+            .unwrap_err()
+            .to_string()
+            .contains("negative node index"));
+
+        let negative_delay = DbcTaxiPathNode {
+            rows: vec![taxi_point_row(701, 70, 0, 10.0, 0, -1)],
+        };
+        assert!(taxi_catalogue_sql(&nodes, &path, &negative_delay)
+            .unwrap_err()
+            .to_string()
+            .contains("negative delay"));
+
+        let reserved_nodes = DbcTaxiNodes {
+            rows: vec![taxi_node_row(
+                lyracore_shared::constants::taxi_fixture::STORAGE_ID_FLOOR,
+                "collision",
+                [1, 2],
+                0.0,
+            )],
+        };
+        assert!(taxi_catalogue_sql(
+            &reserved_nodes,
+            &DbcTaxiPath { rows: vec![] },
+            &DbcTaxiPathNode { rows: vec![] }
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("reserved fixture namespace"));
+
+        for id in [
+            0,
+            lyracore_shared::constants::taxi_protocol::CLIENT_NODE_ID_MAX + 1,
+        ] {
+            let out_of_range = DbcTaxiNodes {
+                rows: vec![taxi_node_row(id, "unrepresentable", [1, 2], 0.0)],
+            };
+            assert!(taxi_catalogue_sql(
+                &out_of_range,
+                &DbcTaxiPath { rows: vec![] },
+                &DbcTaxiPathNode { rows: vec![] }
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("outside the vanilla client taxi-mask range"));
+        }
+
+        let wire_collision = DbcTaxiNodes {
+            rows: vec![taxi_node_row(
+                lyracore_shared::constants::taxi_fixture::SOURCE_CLIENT_NODE_ID,
+                "wire collision",
+                [1, 2],
+                0.0,
+            )],
+        };
+        assert!(taxi_catalogue_sql(
+            &wire_collision,
+            &DbcTaxiPath { rows: vec![] },
+            &DbcTaxiPathNode { rows: vec![] }
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("reserved fixture client node id"));
     }
 
     #[test]

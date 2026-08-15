@@ -225,6 +225,19 @@ fn aura_transfer_arm_remints_the_auto_inc_id_before_insert() {
 }
 
 #[test]
+fn taxi_discovery_transfer_arm_remints_the_auto_inc_id_before_insert() {
+    let body = shape_of(
+        include_str!("../taxi.rs"),
+        "fn sweep_transfer_game_character_taxi_node(",
+    );
+    assert!(
+        body.contains("remint = id"),
+        "taxi discovery surrogate ids are local to one database and must be re-minted on arrival. \
+         Declaration was:\n{body}"
+    );
+}
+
+#[test]
 fn export_blob_round_trips_through_bsatn() {
     let blob = ExportBlob {
         transfer_id: 7,
@@ -1936,7 +1949,9 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
             ),
             (
                 "impl BeginSink for CtxShard<'_> {",
-                "{ fn is_in_transit(&self, guid: u64) -> bool { is_in_transit(self.ctx, guid) } fn \
+                "{ fn has_active_taxi_flight(&self, guid: u64) -> bool { \
+                 crate::taxi::is_in_flight(self.ctx, guid) } fn \
+                 is_in_transit(&self, guid: u64) -> bool { is_in_transit(self.ctx, guid) } fn \
                  freeze_live_entity(&mut self, guid: u64) { let entities = self.ctx.db.game_world_entity(); \
                  if let Some(e) = entities.guid().find(guid) { crate::world::persist_entity(self.ctx, &e, \
                  false); entities.guid().delete(guid); } } fn export_rows(&self, guid: u64) -> Vec<TableRows> \
@@ -1977,10 +1992,12 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                  }) .collect() } }",
             ),
             (
-                // The one deliberate pre-body line: trade teardown BEFORE the escrow write flips
-                // the in-transit fence (#123) — see the comment at the call site.
+                // Taxi refusal precedes trade teardown; after that, trade teardown still precedes
+                // the escrow write that flips the in-transit fence.
                 "pub fn begin_transfer(",
-                "{ require_operator(ctx)?; crate::trade::cancel_trade_for(ctx, character_guid); \
+                "{ require_operator(ctx)?; if crate::taxi::is_in_flight(ctx, character_guid) { return \
+                 Err(\"PLAYER_IN_TAXI_FLIGHT\".to_string()); } \
+                 crate::trade::cancel_trade_for(ctx, character_guid); \
                  apply_begin( &mut CtxShard { ctx }, transfer_id, character_guid, \
                  Destination { map_id: dest_map_id, instance_id: dest_instance_id, x: dest_x, y: dest_y, z: \
                  dest_z, o: dest_o, }, cross_database, ) }",

@@ -1,17 +1,26 @@
 //! `WorldStore`: the broad storage/coordination seam used by the world session. Deep protocol
 //! families may add focused supertraits such as [`ItemActionStore`], [`MeleeActionStore`],
-//! [`QuestActionStore`] and [`VendorActionStore`] so their wire mapping and failure policy can be
-//! tested without implementing this entire interface — a migrated family's operations live only on
-//! its own trait, never here. Kept as one broad trait for the remaining session operations (only
-//! two implementors); the section markers below are load-bearing navigation, not a split.
+//! [`QuestActionStore`], [`TaxiActionStore`] and [`VendorActionStore`] so their wire mapping and
+//! failure policy can be tested without implementing this entire interface — a migrated family's
+//! operations live only on its own trait, never here. Kept as one broad trait for the remaining
+//! session operations (only two implementors); the section markers below are load-bearing
+//! navigation, not a split.
 
 use super::handlers::{
-    CastStore, ItemActionStore, MeleeActionStore, QuestActionStore, VendorActionStore,
+    CastStore, ItemActionStore, MeleeActionStore, QuestActionStore, TaxiActionStore,
+    VendorActionStore,
 };
 use super::*;
 
 pub trait WorldStore:
-    CastStore + ItemActionStore + MeleeActionStore + QuestActionStore + VendorActionStore + Send + Sync
+    CastStore
+    + ItemActionStore
+    + MeleeActionStore
+    + QuestActionStore
+    + TaxiActionStore
+    + VendorActionStore
+    + Send
+    + Sync
 {
     /// Look up the shared session key K (+ account id) for an (already uppercased) account
     /// name. `None` when no live session exists for that account (reject the handshake).

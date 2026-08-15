@@ -3,6 +3,7 @@
 
 use super::super::*;
 use super::quest;
+use super::taxi::open_taxi_outbound;
 use super::vendor::{vendor_has_stock, vendor_open_outbound};
 
 /// The NPC's imported gossip options, condition-filtered against `player_guid`'s quest
@@ -179,9 +180,10 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
         }
         // The player clicked a gossip option. The click carries a POSITION, resolved against the
         // snapshot HELLO took (`GossipMenuSnapshot`), then routed by ACTION: vendor → inventory,
-        // innkeeper → bind_home, trainer → SMSG_TRAINER_LIST, banker → SMSG_SHOW_BANK, everything else
-        // including the trailing Farewell → SMSG_GOSSIP_COMPLETE. Submenu navigation is deferred
-        // (`action_menu_id` stays inert).
+        // innkeeper → bind_home, trainer → SMSG_TRAINER_LIST, taxi → the same cohesive
+        // open operation as CMSG_TAXIQUERYAVAILABLENODES, banker → SMSG_SHOW_BANK, everything
+        // else including the trailing Farewell → SMSG_GOSSIP_COMPLETE. Submenu navigation is
+        // deferred (`action_menu_id` stays inert).
         ClientOpcodeMessage::CMSG_GOSSIP_SELECT_OPTION(c) => {
             let npc = c.guid.guid();
             let player_guid = match &conn.state {
@@ -201,7 +203,13 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
             let option_row_id = clicked.map_or(codec::SYNTHESIZED_ROW_ID, |(row_id, _)| row_id);
             // Notify the module (the on_gossip_select hook chokepoint) — best-effort,
             // so a module hiccup never blocks the gossip reply below.
-            let _ = store.gossip_select(conn.account_id, self_guid, npc, c.gossip_list_id, option_row_id);
+            let _ = store.gossip_select(
+                conn.account_id,
+                self_guid,
+                npc,
+                c.gossip_list_id,
+                option_row_id,
+            );
             use lyracore_shared::constants::gossip_option;
             match clicked.map(|(_, action)| action) {
                 // The gossip click does not run the interaction gate — it never has: only the
@@ -233,9 +241,14 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                     let _ = store.reset_talents(conn.account_id, player_guid, npc);
                     send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?;
                 }
+                Some(gossip_option::TAXI) => {
+                    for message in open_taxi_outbound(store, player_guid, npc)? {
+                        send(tx, message)?;
+                    }
+                }
                 Some(gossip_option::BANKER) => super::send_show_bank(tx, npc)?,
-                // TAXI/plain-GOSSIP/submenu-link, the trailing Farewell, or a click with no live
-                // snapshot behind it — close the window.
+                // Plain-GOSSIP/submenu-link, the trailing Farewell, or a click with no live snapshot
+                // behind it — close the window.
                 _ => send(tx, Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE))?,
             }
         }
@@ -295,7 +308,9 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                 // to members. A rejection (not joined / dead) is per-action — log + drop, vanilla
                 // shows nothing for a failed channel line.
                 CMSG_MESSAGECHAT_ChatType::Channel { channel } => {
-                    if let Err(e) = store.send_channel_message(conn.account_id, self_guid, channel, message) {
+                    if let Err(e) =
+                        store.send_channel_message(conn.account_id, self_guid, channel, message)
+                    {
                         log::debug!(
                             "world: channel message rejected (account {}): {e}",
                             conn.account_id

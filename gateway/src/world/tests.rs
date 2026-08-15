@@ -1,5 +1,6 @@
 use super::handlers::{
-    CastStore, ItemActionStore, MeleeActionStore, QuestActionStore, VendorActionStore,
+    CastStore, ItemActionStore, MeleeActionStore, QuestActionStore, TaxiActionStore,
+    VendorActionStore,
 };
 use super::*;
 use std::os::unix::net::UnixStream;
@@ -161,6 +162,9 @@ use wow_world_messages::vanilla::{
     CMSG_SETSHEATHED,
     CMSG_SET_SELECTION,
     CMSG_SPIRIT_HEALER_ACTIVATE,
+    CMSG_ACTIVATETAXI,
+    CMSG_TAXINODE_STATUS_QUERY,
+    CMSG_TAXIQUERYAVAILABLENODES,
     CMSG_TRAINER_BUY_SPELL,
     CMSG_TRAINER_LIST,
     CMSG_WHO,
@@ -314,6 +318,14 @@ struct InMemoryStore {
     /// Recorded `gossip_select` notifications as `(option_id, option_row_id)` — the clicked POSITION
     /// and the stable row identity the module is told about.
     gossip_selects: std::sync::Mutex<Vec<(u32, u32)>>,
+    /// Taxi seam fixtures and operation log. Both direct query opcodes and TAXI gossip must append
+    /// the same `open` operation here.
+    taxi_status: Option<codec::TaxiNodeStatusView>,
+    taxi_map: Option<codec::TaxiMapView>,
+    taxi_activation: codec::TaxiActivationResult,
+    taxi_activation_inputs: std::sync::Mutex<Vec<(u64, u64, u32, u32)>>,
+    taxi_error: Option<String>,
+    taxi_calls: std::sync::Mutex<Vec<(&'static str, u64, u64)>>,
     /// The caller's quest log for `quest_status`, as `(quest_id, rewarded)` pairs — a quest id present
     /// here is "taken"; `rewarded` distinguishes active vs. turned-in. Absent = never seen.
     /// Behind a `Mutex` so a test can change the log WHILE a gossip window is open — the
@@ -2587,6 +2599,71 @@ impl CastStore for InMemoryStore {
     }
 }
 
+/// Taxi behavior has focused handler tests. The broad encrypted-session store opts out unless a
+/// socket test explicitly needs a taxi reply.
+impl TaxiActionStore for InMemoryStore {
+    fn taxi_node_status(
+        &self,
+        character_guid: u64,
+        npc_guid: u64,
+    ) -> Result<Option<codec::TaxiNodeStatusView>> {
+        self.taxi_calls
+            .lock()
+            .unwrap()
+            .push(("status", character_guid, npc_guid));
+        if let Some(error) = &self.taxi_error {
+            return Err(anyhow!("{error}"));
+        }
+        Ok(self.taxi_status)
+    }
+
+    fn open_taxi(
+        &self,
+        character_guid: u64,
+        npc_guid: u64,
+    ) -> Result<Option<codec::TaxiMapView>> {
+        self.taxi_calls
+            .lock()
+            .unwrap()
+            .push(("open", character_guid, npc_guid));
+        if let Some(error) = &self.taxi_error {
+            return Err(anyhow!("{error}"));
+        }
+        Ok(self.taxi_map.clone())
+    }
+
+    fn activate_taxi(
+        &self,
+        character_guid: u64,
+        npc_guid: u64,
+        source_client_node_id: u32,
+        destination_client_node_id: u32,
+    ) -> Result<codec::TaxiActivationResult> {
+        self.taxi_calls
+            .lock()
+            .unwrap()
+            .push(("activate", character_guid, npc_guid));
+        self.taxi_activation_inputs.lock().unwrap().push((
+            character_guid,
+            npc_guid,
+            source_client_node_id,
+            destination_client_node_id,
+        ));
+        if let Some(error) = &self.taxi_error {
+            return Err(anyhow!("{error}"));
+        }
+        Ok(self.taxi_activation)
+    }
+
+    fn arm_taxi_flight(&self, character_guid: u64) -> Result<()> {
+        self.taxi_calls
+            .lock()
+            .unwrap()
+            .push(("arm", character_guid, 0));
+        Ok(())
+    }
+}
+
 impl MeleeActionStore for InMemoryStore {
     fn start_attack(&self, _account_id: u64, _self_guid: u64, _target_guid: u64) -> Result<()> {
         self.rec("start_attack");
@@ -3388,6 +3465,7 @@ fn warrior_entity() -> codec::EntityView {
         display_id: 49,
         native_display_id: 49,
         unit_flags: 0,
+        mount_display_id: 0,
         base_attack_time_ms: 2000,
         dynamic_flags: 0,
         player_bytes: 0,
@@ -6436,6 +6514,187 @@ fn opt(icon: u32, text: &str, action: u32) -> codec::GossipOptionView {
         action,
         ..Default::default()
     }
+}
+
+#[test]
+fn taxi_status_query_returns_the_persisted_bit_without_opening() {
+    let mut s = quest_store();
+    s.taxi_status = Some(codec::TaxiNodeStatusView {
+        npc_guid: 90,
+        known: false,
+    });
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_TAXINODE_STATUS_QUERY {
+        guid: Guid::new(90),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_TAXINODE_STATUS(status) => {
+            assert_eq!(status.guid.guid(), 90);
+            assert!(!status.taxi_mask_node_known);
+        }
+        other => panic!("expected SMSG_TAXINODE_STATUS, got {other}"),
+    }
+    assert_eq!(
+        *store.taxi_calls.lock().unwrap(),
+        vec![("status", 1, 90)]
+    );
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn direct_taxi_query_and_taxi_gossip_share_one_open_operation() {
+    use lyracore_shared::constants::gossip_option;
+    let mut s = quest_store();
+    s.gossip_opts = vec![opt(0, "Show me your flight routes.", gossip_option::TAXI)];
+    s.taxi_map = Some(codec::TaxiMapView {
+        npc_guid: 90,
+        source_client_node_id: 255,
+        available_client_node_ids: vec![255, 256],
+    });
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    CMSG_TAXIQUERYAVAILABLENODES {
+        guid: Guid::new(90),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SHOWTAXINODES(map) => {
+            assert_eq!(map.guid.guid(), 90);
+            assert_eq!(map.nearest_node, 255);
+            assert_eq!(map.nodes.len(), 8);
+            assert_eq!(map.nodes[7], 0xC000_0000);
+        }
+        other => panic!("expected SMSG_SHOWTAXINODES, got {other}"),
+    }
+
+    gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
+    CMSG_GOSSIP_SELECT_OPTION {
+        guid: Guid::new(90),
+        gossip_list_id: 0,
+        unknown: None,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SHOWTAXINODES(map) => {
+            assert_eq!(map.nearest_node, 255);
+            assert_eq!(map.nodes[7], 0xC000_0000);
+        }
+        other => panic!("expected SMSG_SHOWTAXINODES, got {other}"),
+    }
+
+    assert_eq!(
+        *store.taxi_calls.lock().unwrap(),
+        vec![("open", 1, 90), ("open", 1, 90)]
+    );
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn activate_taxi_gameplay_refusal_replies_and_keeps_the_socket_alive() {
+    let mut s = quest_store();
+    s.taxi_activation = codec::TaxiActivationResult {
+        result_code: lyracore_shared::constants::taxi_protocol::ACTIVATE_NOT_ENOUGH_MONEY,
+    };
+    s.taxi_status = Some(codec::TaxiNodeStatusView {
+        npc_guid: 90,
+        known: true,
+    });
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    CMSG_ACTIVATETAXI {
+        guid: Guid::new(90),
+        source_node: 255,
+        destination_node: 256,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(reply) => assert_eq!(
+            reply.reply,
+            wow_world_messages::vanilla::ActivateTaxiReply::NotEnoughMoney
+        ),
+        other => panic!("expected SMSG_ACTIVATETAXIREPLY, got {other}"),
+    }
+    assert_eq!(
+        *store.taxi_activation_inputs.lock().unwrap(),
+        vec![(1, 90, 255, 256)]
+    );
+
+    // A gameplay refusal is a normal packet result, not a world-session failure.
+    CMSG_TAXINODE_STATUS_QUERY {
+        guid: Guid::new(90),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    assert!(matches!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(),
+        ServerOpcodeMessage::SMSG_TAXINODE_STATUS(_)
+    ));
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn activate_taxi_success_round_trips_over_the_encrypted_socket() {
+    let mut s = quest_store();
+    s.taxi_activation = codec::TaxiActivationResult {
+        result_code: lyracore_shared::constants::taxi_protocol::ACTIVATE_OK,
+    };
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    CMSG_ACTIVATETAXI {
+        guid: Guid::new(90),
+        source_node: 255,
+        destination_node: 256,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(reply) => assert_eq!(
+            reply.reply,
+            wow_world_messages::vanilla::ActivateTaxiReply::Ok
+        ),
+        other => panic!("expected SMSG_ACTIVATETAXIREPLY, got {other}"),
+    }
+    assert_eq!(
+        *store.taxi_activation_inputs.lock().unwrap(),
+        vec![(1, 90, 255, 256)]
+    );
+
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn taxi_gossip_transport_failure_ends_the_world_session() {
+    use lyracore_shared::constants::gossip_option;
+    let mut s = quest_store();
+    s.gossip_opts = vec![opt(0, "Show me your flight routes.", gossip_option::TAXI)];
+    s.taxi_error = Some("taxi reducer transport disconnected: channel closed".into());
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
+    CMSG_GOSSIP_SELECT_OPTION {
+        guid: Guid::new(90),
+        gossip_list_id: 0,
+        unknown: None,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+
+    server
+        .join()
+        .expect_err("a broken taxi reducer transport must end the world session");
 }
 
 #[test]

@@ -1136,6 +1136,7 @@ mod tests {
             sheet_dmg_max: 0,
             sheet_crit_bp: 0,
             bank_bag_slots: 0,
+            mount_display_id: 0,
         }
     }
 

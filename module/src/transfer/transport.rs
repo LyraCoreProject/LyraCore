@@ -80,6 +80,11 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &["game_transfer_out"];
 ///   still names the SOURCE, so carrying it would hand the destination a forwarding receipt pointing
 ///   back at the shard the character just left. `do_finish` rewrites the source's own row to name the
 ///   destination, and the authoritative copy on realm-core is the gateway's write.
+/// - `game_taxi_service_reply` — a transient request/reply mailbox. A destination recomputes taxi
+///   status from the transported discovery rows; carrying an old reply could answer a new request
+///   with a source NPC that only existed on the previous shard.
+/// - `game_active_taxi_flight` — an in-progress baseline flight is confined to one open-world shard.
+///   Carrying it would strand a route whose source NPC and scheduled geometry remain on the source.
 // Read only by the ratchet below — it is a written DECISION, kept next to `MANIFEST_EXCLUDE` in
 // the file that owns the protocol rather than hidden in `mod tests`, so the next person to reach
 // for `not_transported` finds the list they have to justify themselves against.
@@ -94,6 +99,10 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_mail_escrow",
     "game_mail_delivery",
     "game_character_shard",
+    "game_active_taxi_flight",
+    "game_taxi_flight_schedule",
+    "game_taxi_passenger_spline",
+    "game_taxi_service_reply",
     // A Trade Session (+ its slot rows) is a live dialog with a partner who is by definition NOT
     // transferring too — carrying it would import a negotiation the destination's partner copy
     // cannot see. It dies with the source, exactly as the logout teardown would (#120).
