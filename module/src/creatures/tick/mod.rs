@@ -8,10 +8,11 @@
 //!
 //!   - `mod.rs` (this file) — the two tables + the schedule table, the `tick_creatures` shell, the
 //!     active-cell sweep and rows-visited evidence logs, `pass_combat_enter`/`pass_combat_drop`, the
-//!     shared "one movement-leg grammar" toolkit (`PendingLeg`/`leg_toward`/`drain_legs`/
-//!     `movable_creature`), and the one spline writer (`emit_move_spline`/`emit_creature_leg`) both
+//!     shared "one movement-leg grammar" toolkit (`PendingLeg`/`drain_legs`/`movable_creature`;
+//!     the pure `leg_toward` geometry lives in `creatures::ai`), and the one spline writer
+//!     (`emit_move_spline`/`emit_creature_leg`) both
 //!     `movement` and `sense` depend on.
-//!   - [`movement`] — the RUN/step legs: patrol, chase, return-to-spawn, wander, flee, fear-flee.
+//!   - [`movement`] — the engaged legs: chase, flee, fear-flee.
 //!   - [`lifecycle`] — the canonical despawn checklist (issue #359) + decay/respawn/GO-respawn, the
 //!     due-time passes that run regardless of proximity.
 //!   - [`sense`] — aggro/assist (typed `AggroEvent`, issue #383), cast, threat-retarget, regen.
@@ -31,9 +32,7 @@ mod sense;
 // line here disappears with the pass it exports, as the tickets in `.scratch/creature-behavior-cycle`
 // migrate each body into the cycle.
 pub(crate) use lifecycle::{pass_decay, pass_gameobject_respawn, pass_respawn};
-pub(crate) use movement::{
-    pass_chase, pass_fear_flee, pass_flee, pass_patrol, pass_return, pass_wander,
-};
+pub(crate) use movement::{pass_chase, pass_fear_flee, pass_flee};
 pub(crate) use sense::{pass_aggro_assist, pass_cast, pass_regen, pass_threat_retarget};
 
 // Re-export so `crate::creatures::tick::despawn_creature_entity` (and, via `creatures::mod.rs`'s own
@@ -785,27 +784,6 @@ struct PendingLeg {
     duration_ms: u32,
 }
 
-/// The dist→duration_ms math every movement pass ended its per-candidate loop with (six sites: patrol
-/// inline, chase/return/wander/flee/fear-flee here): `to` is `speed` yards away from `from` in
-/// `duration_ms` milliseconds. `speed` is yd/s (already snare/wound-adjusted by the caller, if that
-/// pass applies one), so this is pure geometry — no pass-specific knowledge.
-fn leg_duration_ms(from: (f32, f32), to: (f32, f32), speed: f32) -> u32 {
-    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
-    ((dx * dx + dy * dy).sqrt() / speed * 1000.0) as u32
-}
-
-/// The shared tail every RUN/step movement pass repeats right after `nav::nav_step` resolves the
-/// actual (possibly nav-clamped) destination: skip a degenerate zero-length step (the client rejects
-/// it — `nx == c.x && ny == c.y` at five identical sites) and convert the realized distance into a leg
-/// duration at `speed` yd/s. `None` collapses every site's `if nx == c.x && ny == c.y { continue; }`
-/// into one check.
-fn leg_toward(from: (f32, f32), to: (f32, f32), speed: f32) -> Option<(f32, f32, u32)> {
-    if to == from {
-        return None;
-    }
-    Some((to.0, to.1, leg_duration_ms(from, to, speed)))
-}
-
 /// Drain a batch of queued legs through the one shared writer (`emit_creature_leg`), re-finding each
 /// mover's LIVE row first — the collect-then-mutate pattern every movement pass already followed, now
 /// with one drain loop instead of five near-identical ones. `run` (walk/run animation) and
@@ -930,4 +908,3 @@ mod relay_tripwire {
         }
     }
 }
-

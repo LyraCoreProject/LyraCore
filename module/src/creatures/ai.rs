@@ -628,6 +628,23 @@ pub fn leg_in_flight(now_ms: u32, leg_ends_ms: u32) -> bool {
     now_ms < leg_ends_ms
 }
 
+/// `to` is `speed` yards away from `from` in this many milliseconds. `speed` is yd/s, already
+/// snare/wound-adjusted by the caller if its mover applies one. Pure.
+fn leg_duration_ms(from: (f32, f32), to: (f32, f32), speed: f32) -> u32 {
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    ((dx * dx + dy * dy).sqrt() / speed * 1000.0) as u32
+}
+
+/// The tail every stepped mover shares once navigation has resolved the real landing point: drop a
+/// degenerate zero-length step (the client rejects it), else give the landing point and the leg's
+/// duration at `speed` yd/s. Pure.
+pub(crate) fn leg_toward(from: (f32, f32), to: (f32, f32), speed: f32) -> Option<(f32, f32, u32)> {
+    if to == from {
+        return None;
+    }
+    Some((to.0, to.1, leg_duration_ms(from, to, speed)))
+}
+
 /// The index AFTER `cur_idx` in a route of `len` waypoints, wrapping at the end (ordered patrol
 /// traversal: 0→1→…→len-1→0). `len == 0` → 0 (caller guards `len >= 2`). Pure — unit-tested.
 pub fn next_waypoint_idx(cur_idx: usize, len: usize) -> usize {
@@ -1582,5 +1599,4 @@ mod tests {
         }
         assert_eq!(seen.len(), 4, "ordered traversal visits all waypoints");
     }
-
 }

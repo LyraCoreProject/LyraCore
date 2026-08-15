@@ -7,16 +7,16 @@
 
 use std::collections::HashSet;
 
-use lyracore_shared::spatial;
+use lyracore_shared::{constants, spatial};
 use spacetimedb::{ReducerContext, Table};
 
 use super::{
-    run_cycle, CreatureWorld, CycleOutcome, LegInFlight, LegacyPasses, MotionSink, Point,
-    TickContext,
+    run_cycle, CreatureWorld, CycleOutcome, Gait, Home, IdleCreature, IdleSink, Leg, LegInFlight,
+    LegacyPasses, MotionSink, Point, TickContext, Waypoint,
 };
 use crate::creatures::ai::TickScope;
 use crate::creatures::tick::{self, TickSweep};
-use crate::{game_creature_spline, game_world_entity};
+use crate::{game_creature_spawn, game_creature_spline, game_creature_waypoint, game_world_entity};
 
 /// `tick_creatures`' one call into the cycle. The adapter never leaves this module.
 pub(crate) fn run(ctx: &ReducerContext, tick: TickContext, interval_micros: i64) -> CycleOutcome {
@@ -24,7 +24,6 @@ pub(crate) fn run(ctx: &ReducerContext, tick: TickContext, interval_micros: i64)
         &mut CtxWorld {
             ctx,
             interval_micros,
-            moved_this_tick: HashSet::new(),
         },
         tick,
     )
@@ -35,10 +34,6 @@ struct CtxWorld<'a> {
     /// The firing row's own cadence — only `pass_pet` still reads it.
     // ponytail: migration scaffolding, deleted with `legacy_pet` in ticket 07.
     interval_micros: i64,
-    /// Guids the return pass already moved this firing, which the wander pass must skip: one leg per
-    /// creature per firing, because both would share a `spline_id` and the client rejects the second.
-    // ponytail: migration scaffolding, deleted when ticket 02 migrates return and wander.
-    moved_this_tick: HashSet<u64>,
 }
 
 impl CtxWorld<'_> {
@@ -117,6 +112,107 @@ impl MotionSink for CtxWorld<'_> {
     }
 }
 
+impl IdleSink for CtxWorld<'_> {
+    fn idle_creatures(&self, active: &HashSet<u64>) -> Vec<IdleCreature> {
+        let entities = self.ctx.db.game_world_entity();
+        let waypoints = self.ctx.db.game_creature_waypoint();
+        active
+            .iter()
+            .filter_map(|guid| entities.guid().find(guid))
+            .filter(|c| !c.is_player() && !c.dead)
+            .map(|c| IdleCreature {
+                guid: c.guid,
+                at: Point {
+                    x: c.x,
+                    y: c.y,
+                    z: c.z,
+                },
+                leg_ends_ms: c.leg_ends_ms,
+                wp_target: c.wp_target,
+                patrols: waypoints.by_creature().filter(&c.guid).next().is_some(),
+            })
+            .collect()
+    }
+    fn route_of(&self, guid: u64) -> Vec<Waypoint> {
+        self.ctx
+            .db
+            .game_creature_waypoint()
+            .by_creature()
+            .filter(&guid)
+            .map(|w| Waypoint {
+                id: w.id,
+                at: Point {
+                    x: w.x,
+                    y: w.y,
+                    z: w.z,
+                },
+            })
+            .collect()
+    }
+    fn home_of(&self, guid: u64) -> Option<Home> {
+        self.ctx
+            .db
+            .game_creature_spawn()
+            .guid()
+            .find(guid)
+            .map(|s| Home {
+                at: Point {
+                    x: s.x,
+                    y: s.y,
+                    z: s.z,
+                },
+                wanders: s.movement_type == crate::creatures::MOVEMENT_RANDOM,
+            })
+    }
+    fn engaged(&self, guid: u64) -> bool {
+        crate::combat::is_engaged(self.ctx, guid)
+    }
+    fn speed_of(&self, guid: u64, gait: Gait) -> f32 {
+        crate::combat::effective_move_speed(
+            self.ctx,
+            guid,
+            match gait {
+                Gait::Walk => constants::speeds::WALK,
+                Gait::Run => constants::speeds::RUN,
+            },
+        )
+    }
+    fn navigate(&self, guid: u64, to: (f32, f32), max_step: f32) -> (f32, f32) {
+        self.ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(guid)
+            .map_or(to, |c| {
+                crate::nav::nav_step(self.ctx, c.map_id, (c.x, c.y), to, max_step, 0.0, c.z)
+            })
+    }
+    fn roll(&self) -> u32 {
+        self.ctx.random()
+    }
+    fn aim_at_waypoint(&mut self, guid: u64, waypoint_id: u64) {
+        let entities = self.ctx.db.game_world_entity();
+        if let Some(mut e) = entities.guid().find(guid) {
+            e.wp_target = waypoint_id;
+            entities.guid().update(e);
+        }
+    }
+    fn commit_leg(&mut self, guid: u64, leg: Leg, now_ms: u32) {
+        if let Some(e) = self.ctx.db.game_world_entity().guid().find(guid) {
+            tick::emit_creature_leg(
+                self.ctx,
+                e,
+                leg.to,
+                leg.z_fallback,
+                leg.dur_ms,
+                leg.gait == Gait::Run,
+                now_ms,
+                leg.hold_until_landed,
+            );
+        }
+    }
+}
+
 impl CreatureWorld for CtxWorld<'_> {
     fn awake_creatures(&self, scope: &TickScope) -> TickSweep {
         tick::active_cell_creatures(self.ctx, scope)
@@ -137,9 +233,6 @@ impl CreatureWorld for CtxWorld<'_> {
 }
 
 impl LegacyPasses for CtxWorld<'_> {
-    fn legacy_patrol(&mut self, active: &HashSet<u64>) -> usize {
-        tick::pass_patrol(self.ctx, active)
-    }
     fn legacy_aggro_assist(&mut self, active: &HashSet<u64>) -> usize {
         tick::pass_aggro_assist(self.ctx, active)
     }
@@ -157,12 +250,6 @@ impl LegacyPasses for CtxWorld<'_> {
     }
     fn legacy_combat_enter(&mut self, scope: &TickScope) -> usize {
         tick::pass_combat_enter(self.ctx, scope)
-    }
-    fn legacy_return(&mut self, active: &HashSet<u64>, tick_secs: f32) -> usize {
-        tick::pass_return(self.ctx, &mut self.moved_this_tick, active, tick_secs)
-    }
-    fn legacy_wander(&mut self, active: &HashSet<u64>) -> usize {
-        tick::pass_wander(self.ctx, &self.moved_this_tick, active)
     }
     fn legacy_regen(&mut self) -> usize {
         tick::pass_regen(self.ctx)

@@ -10,9 +10,14 @@
 
 use std::collections::HashSet;
 
+use lyracore_shared::constants;
 use spacetimedb::log;
 
-use super::ai::{finite_point, spline_t, TickScope};
+use super::ai::{
+    finite_point, leg_in_flight, leg_toward, nearest_waypoint_idx, next_waypoint_idx, spline_t,
+    wander_point, TickScope, MOVE_TICK_SECS, RETURN_LEASH_SQ, SENSE_EVERY_N_TICKS,
+    WANDER_CHANCE_PCT, WANDER_RADIUS,
+};
 use super::tick::TickSweep;
 
 mod ctx;
@@ -92,8 +97,80 @@ pub(crate) trait MotionSink {
     fn drop_leg(&mut self, guid: u64);
 }
 
+/// A creature the idle movers may consider this firing: awake in an active cell, alive, and not a
+/// player. `patrols` picks the anchor — a creature with a route walks it, one without falls back to
+/// its spawn post.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct IdleCreature {
+    pub guid: u64,
+    pub at: Point,
+    /// The route segment or wander hop still animating; no new idle leg starts until it lands.
+    pub leg_ends_ms: u32,
+    /// Route cursor — the waypoint this creature walks TO. Unset or stale re-acquires the nearest.
+    pub wp_target: u64,
+    pub patrols: bool,
+}
+
+/// One waypoint of a patrol route. `id` is the cursor's identity and the route's traversal order.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Waypoint {
+    pub id: u64,
+    pub at: Point,
+}
+
+/// A creature's spawn post: where it belongs, and whether it free-wanders around it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Home {
+    pub at: Point,
+    pub wanders: bool,
+}
+
+/// How a creature travels a leg. Idle movement walks; going home runs.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Gait {
+    Walk,
+    Run,
+}
+
+/// One movement leg a behavior decided, ready to send.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Leg {
+    pub to: (f32, f32),
+    /// Landing height where terrain is unimported — the waypoint's or the post's own z.
+    pub z_fallback: f32,
+    pub dur_ms: u32,
+    pub gait: Gait,
+    /// Hold the leg to completion (the idle ETA gate) instead of re-deciding it next firing.
+    pub hold_until_landed: bool,
+}
+
+/// Idle movement's surface: walk a route, walk home, loiter near the post.
+pub(crate) trait IdleSink {
+    /// The awake creatures idle movement may move at all: alive, not players. Read fresh per phase —
+    /// the passes between patrol and the return/wander phase engage creatures and move them.
+    fn idle_creatures(&self, active: &HashSet<u64>) -> Vec<IdleCreature>;
+    /// This creature's patrol route; empty for a creature that does not patrol.
+    fn route_of(&self, guid: u64) -> Vec<Waypoint>;
+    /// Where this creature spawned; `None` for one with no post to return to.
+    fn home_of(&self, guid: u64) -> Option<Home>;
+    /// Is this creature in a fight? Chase and rout own its movement if so.
+    fn engaged(&self, guid: u64) -> bool;
+    /// Yards per second at `gait`, after snares.
+    fn speed_of(&self, guid: u64, gait: Gait) -> f32;
+    /// Aim from where the creature stands toward `to`, travelling at most `max_step` yards and
+    /// stepping around whatever blocks the straight line.
+    fn navigate(&self, guid: u64, to: (f32, f32), max_step: f32) -> (f32, f32);
+    /// One roll from the world's random stream.
+    fn roll(&self) -> u32;
+    /// Move the route cursor to `waypoint_id` without moving the creature.
+    fn aim_at_waypoint(&mut self, guid: u64, waypoint_id: u64);
+    /// Send the creature on `leg`: ground-snap the landing point, relay the leg to the clients that
+    /// can see it, and stamp the move clock (plus the ETA gate for a held leg).
+    fn commit_leg(&mut self, guid: u64, leg: Leg, now_ms: u32);
+}
+
 /// The whole world one cycle touches.
-pub(crate) trait CreatureWorld: MotionSink + LegacyPasses {
+pub(crate) trait CreatureWorld: MotionSink + IdleSink + LegacyPasses {
     /// The creatures near a covered player this firing, plus the pet and in-combat candidate lists
     /// the same sweep harvests. Read ONCE per cycle and shared by every pass that scopes to it.
     fn awake_creatures(&self, scope: &TickScope) -> TickSweep;
@@ -108,15 +185,12 @@ pub(crate) trait CreatureWorld: MotionSink + LegacyPasses {
 // pass; ticket 09 deletes the trait. See .scratch/creature-behavior-cycle/.
 /// Passes still living in `creatures::tick` — the cycle owns WHEN they run, not yet HOW.
 pub(crate) trait LegacyPasses {
-    fn legacy_patrol(&mut self, active: &HashSet<u64>) -> usize;
     fn legacy_aggro_assist(&mut self, active: &HashSet<u64>) -> usize;
     fn legacy_pet(&mut self, scope: &TickScope, now_ms: u32, pets: &[u64]) -> usize;
     fn legacy_cast(&mut self, scope: &TickScope) -> usize;
     fn legacy_threat_retarget(&mut self, scope: &TickScope) -> usize;
     fn legacy_chase(&mut self, scope: &TickScope) -> usize;
     fn legacy_combat_enter(&mut self, scope: &TickScope) -> usize;
-    fn legacy_return(&mut self, active: &HashSet<u64>, tick_secs: f32) -> usize;
-    fn legacy_wander(&mut self, active: &HashSet<u64>) -> usize;
     fn legacy_regen(&mut self) -> usize;
     fn legacy_combat_drop(&mut self, in_combat: &[u64]) -> usize;
     fn legacy_flee(&mut self, scope: &TickScope) -> usize;
@@ -129,14 +203,14 @@ pub(crate) trait LegacyPasses {
 ///      tick; cast and threat retarget also precede chase (cast instead of close; move at the newly
 ///      selected victim).
 ///   3. chase before regen — regen's in-combat gate must see the still-engaged chaser.
-///   4. return before wander, sharing the one-leg-per-firing exclusion.
+///   4. walking home before loitering — one idle leg per creature per firing, home wins.
 ///   5. rout and fear movement LAST, after regen.
 ///   6. decay before respawn (inside world maintenance — decay arms a future respawn).
 ///   7. package passes after every core pass.
 ///
 /// The active-cell sweep runs once, before all passes, and its candidate set is shared: a creature
 /// absent from it is dormant this firing for every pass that scopes to it (patrol, aggro/assist,
-/// return, wander). The engaged, table-driven passes ignore the sweep and gate on `scope.covers`
+/// idle movement). The engaged, table-driven passes ignore the sweep and gate on `scope.covers`
 /// instead, so a player can drag a creature anywhere without freezing it. The due-time passes
 /// (decay, respawn, gameobject respawn, regen, combat drop) and the package passes run on the
 /// catch-all firing only, and still cover every instance.
@@ -150,7 +224,7 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
     let mut rows: Vec<(&'static str, u64)> = Vec::new();
 
     rows.push(("advance", advance_legs(w, &tick) as u64));
-    rows.push(("patrol", w.legacy_patrol(&active) as u64));
+    rows.push(("patrol", patrol(w, &tick, &active) as u64));
     if tick.sense {
         if global {
             rows.extend(w.run_due_world_maintenance());
@@ -165,13 +239,10 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
     }
     rows.push(("chase", w.legacy_chase(&tick.scope) as u64));
     rows.push(("combat_enter", w.legacy_combat_enter(&tick.scope) as u64));
-    rows.push(("return", w.legacy_return(&active, tick.tick_secs) as u64));
-    if tick.sense {
-        rows.push(("wander", w.legacy_wander(&active) as u64));
-        if global {
-            rows.push(("regen*", w.legacy_regen() as u64));
-            rows.push(("combat_drop*", w.legacy_combat_drop(&in_combat) as u64));
-        }
+    rows.push(("idle", idle_movement(w, &tick, &active) as u64));
+    if tick.sense && global {
+        rows.push(("regen*", w.legacy_regen() as u64));
+        rows.push(("combat_drop*", w.legacy_combat_drop(&in_combat) as u64));
     }
     rows.push(("flee", w.legacy_flee(&tick.scope) as u64));
     rows.push((
@@ -224,4 +295,153 @@ fn advance_legs<W: MotionSink>(w: &mut W, tick: &TickContext) -> usize {
         visited += 1;
     }
     visited
+}
+
+/// How close to a waypoint counts as standing on it. Below this the segment leg would be
+/// zero-length and the client rejects it, so the cursor advance is the whole move.
+const WAYPOINT_ARRIVE_YD: f32 = 0.5;
+
+/// The hop a wander stroll is sized for: this phase only rolls on a sense firing, so the leg must
+/// span the whole ~4s sense cadence, not one movement firing.
+/// ponytail: a schedule row slower than half the sense period senses on EVERY firing, so its
+/// wanderers hop a leg longer than the gap to the next roll. Verbatim pre-cycle behavior.
+const WANDER_HOP_SECS: f32 = MOVE_TICK_SECS * SENSE_EVERY_N_TICKS as f32;
+
+/// The idle phases visit candidates in guid order, so one firing's legs are emitted in the same
+/// order every time no matter how the sweep's set enumerates.
+fn idle_order(w: &impl IdleSink, active: &HashSet<u64>) -> Vec<IdleCreature> {
+    let mut candidates = w.idle_creatures(active);
+    candidates.sort_unstable_by_key(|c| c.guid);
+    candidates
+}
+
+/// May this creature move itself at all? A fight hands it to chase and rout; crowd control leaves
+/// fear as its only mover.
+fn moves_itself<W: IdleSink + MotionSink>(w: &W, guid: u64) -> bool {
+    !w.engaged(guid) && !w.movement_suppressed(guid)
+}
+
+/// PATROL — an idle creature with a route walks it IN ORDER, one segment per leg. The route cursor
+/// (`wp_target`) names the waypoint it walks TO; an unset or stale cursor re-acquires the nearest
+/// waypoint first, so a fresh spawn joins its route at the closest point instead of the last one.
+///
+/// The ETA gate is what makes a segment play to completion: while the current leg animates the
+/// creature is skipped, so a fast schedule row cannot re-throw the leg every firing.
+fn patrol<W: IdleSink + MotionSink>(w: &mut W, tick: &TickContext, active: &HashSet<u64>) -> usize {
+    let mut visited = 0usize;
+    for c in idle_order(w, active) {
+        if !c.patrols {
+            continue;
+        }
+        visited += 1;
+        if !moves_itself(w, c.guid) || leg_in_flight(tick.now_ms, c.leg_ends_ms) {
+            continue;
+        }
+        let mut route = w.route_of(c.guid);
+        if route.len() < 2 {
+            continue; // a single waypoint is a post, not a route
+        }
+        route.sort_unstable_by_key(|wp| wp.id);
+        let points: Vec<(f32, f32)> = route.iter().map(|wp| (wp.at.x, wp.at.y)).collect();
+        let next = match route.iter().position(|wp| wp.id == c.wp_target) {
+            Some(i) => next_waypoint_idx(i, route.len()),
+            None => nearest_waypoint_idx(c.at.x, c.at.y, &points),
+        };
+        let wp = route[next];
+        w.aim_at_waypoint(c.guid, wp.id);
+        let (dx, dy, dz) = (wp.at.x - c.at.x, wp.at.y - c.at.y, wp.at.z - c.at.z);
+        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+        if dist < WAYPOINT_ARRIVE_YD {
+            continue; // already there — next firing walks to the one after it
+        }
+        // ponytail: the flat WALK speed, alone among the movers — a snare should slow a patroller
+        // and does not. Pre-cycle behavior, carried verbatim.
+        let leg = Leg {
+            to: (wp.at.x, wp.at.y),
+            z_fallback: wp.at.z,
+            dur_ms: (dist / constants::speeds::WALK * 1000.0) as u32,
+            gait: Gait::Walk,
+            hold_until_landed: true,
+        };
+        w.commit_leg(c.guid, leg, tick.now_ms);
+    }
+    visited
+}
+
+/// IDLE MOVEMENT — walking home and loitering, as ONE decision per creature. A creature displaced
+/// past the leash walks back to its post; one that is home-enough may hop around it. The two were
+/// separate passes sharing a "moved already this firing" set; making them one branch is what keeps
+/// the rule true by construction — two legs in a firing share a `spline_id` and the client rejects
+/// the second.
+///
+/// Patrollers are the patrol phase's, engaged creatures are chase's, and only a RANDOM-movement
+/// creature loiters (an IDLE one holds its post: quest givers, vendors, guards).
+fn idle_movement<W: IdleSink + MotionSink>(
+    w: &mut W,
+    tick: &TickContext,
+    active: &HashSet<u64>,
+) -> usize {
+    let mut visited = 0usize;
+    for c in idle_order(w, active) {
+        visited += 1;
+        if c.patrols || !moves_itself(w, c.guid) {
+            continue;
+        }
+        let Some(home) = w.home_of(c.guid) else {
+            continue;
+        };
+        let (hdx, hdy) = (home.at.x - c.at.x, home.at.y - c.at.y);
+        if hdx * hdx + hdy * hdy > RETURN_LEASH_SQ {
+            walk_home(w, tick, &c, home);
+        } else if tick.sense {
+            loiter(w, tick, &c, home);
+        }
+    }
+    visited
+}
+
+/// One firing's worth of run toward the post, landing ON it rather than short of it. Re-stepped
+/// every firing from the CURRENT position, so any number of dormant firings in between only pauses
+/// the walk home.
+fn walk_home<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature, home: Home) {
+    let run = w.speed_of(c.guid, Gait::Run);
+    let step = w.navigate(c.guid, (home.at.x, home.at.y), run * tick.tick_secs);
+    let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, run) else {
+        return; // nothing to close — the client rejects a zero-length leg
+    };
+    let leg = Leg {
+        to: (x, y),
+        z_fallback: home.at.z,
+        dur_ms,
+        gait: Gait::Run,
+        hold_until_landed: false,
+    };
+    w.commit_leg(c.guid, leg, tick.now_ms);
+}
+
+/// A stroll to a random point near the post on about a third of sense firings — the other two
+/// thirds the creature stands still, which is what reads as loitering instead of a constant jog.
+/// The hop is anchored on HOME, not on the creature, so a loiterer provably never drifts off its
+/// post and never trips the walk-home leash.
+fn loiter<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature, home: Home) {
+    if !home.wanders || leg_in_flight(tick.now_ms, c.leg_ends_ms) {
+        return;
+    }
+    if w.roll() % 100 >= WANDER_CHANCE_PCT {
+        return;
+    }
+    let (hx, hy) = wander_point(home.at.x, home.at.y, w.roll(), w.roll(), WANDER_RADIUS);
+    let walk = w.speed_of(c.guid, Gait::Walk);
+    let step = w.navigate(c.guid, (hx, hy), walk * WANDER_HOP_SECS);
+    let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, walk) else {
+        return;
+    };
+    let leg = Leg {
+        to: (x, y),
+        z_fallback: home.at.z,
+        dur_ms,
+        gait: Gait::Walk,
+        hold_until_landed: true,
+    };
+    w.commit_leg(c.guid, leg, tick.now_ms);
 }
