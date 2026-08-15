@@ -27,7 +27,7 @@ So you merge, then reconcile. The branches, all cut from `37ecc64`:
 | T2 invite/accept/decline | `worktree-agent-a6549275d6071e4ec` | `4173868` |
 | T3 leave/kick/disband/leader | `worktree-agent-af20beca5f495401e` | `9dc0957` |
 | T5 guild chat | `worktree-agent-accaccd49cf1f16ed` | `0817b83` |
-| T6 motd/notes/unit fields | see the orchestrator's brief | — |
+| T6 motd/notes/unit fields | `worktree-agent-a6b2a471c61277ce1` | `457a2d1` |
 
 T1 and T4 are already on the base branch. Merge the rest one at a time, and resolve at **function
 granularity, not line granularity**: when both sides added code at the same point, take whole
@@ -39,6 +39,28 @@ starting the next.
 (`guild_event_outbound` / `guild_event_appeared` in `gateway/src/stdb/subscriptions.rs` and
 `gateway/src/stdb/world_view.rs`) because T1 subscribed `game_guild_event` but never armed a
 dispatcher. Two implementations of the same pipe will collide. Keep one.
+
+## Four unfinished criteria you must close
+
+The file-ownership split that let six agents run in parallel also cut three deliverables in half.
+Each of these is a ticket's own acceptance criterion that its agent could not reach without editing a
+file another ticket owned. They are yours, and none is optional — without them the feature is stored
+but invisible.
+
+1. **Guild event broadcast to OTHER members.** `dispatch_guild_action` only addresses the calling
+   session. T3's `Left`/`Removed`/`Disbanded`/`LeaderChanged` and T6's `Motd` all write correctly
+   addressed `game_guild_event` rows that reach nobody until the relay is armed. T2 and T5 each built
+   that relay independently; once you have collapsed them to one, verify every event kind from every
+   ticket actually reaches other members' sessions.
+2. **MOTD delivered on login** (T6's AC3, honestly reported unmet). The read path exists from T1
+   (`world::guild::guild_of` + `view(...).motd`); the send belongs in `handlers/char.rs`.
+3. **`PLAYER_GUILDID` / `PLAYER_GUILDRANK` wired into the actual packet** (T6's AC8/AC9, partial).
+   The index constants and a pure `player_guild_columns_mask()` builder exist and are tested, but
+   nothing puts them in the CREATE/spawn update or relays them live on a membership change. That
+   needs `codec/entity.rs` and `stdb/views.rs`, plus a call from the membership ops T2 and T3 own.
+4. **`/who` on a sharded gateway** (T6's AC10, single-database only). It degrades to an empty guild
+   name across shards, which is documented but wrong. `party::resolve_all_by_name` and the roster
+   fan-out T4 built show the shape of the fix.
 
 ## Three open design questions to settle
 
