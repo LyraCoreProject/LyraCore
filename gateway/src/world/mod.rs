@@ -495,6 +495,11 @@ impl WorldConn {
         }) = std::mem::replace(&mut self.state, WorldState::CharSelect)
         {
             drop(subs);
+            // The guild half of leaving the world: the rest of the guild sees a status line. Runs
+            // BEFORE the logout reducer, while the character is still in the world — the module's
+            // own membership read is unaffected either way, but the ordering keeps sign-off the
+            // mirror image of the sign-on that world entry sends.
+            guild::broadcast_presence(store, self_guid, false);
             let account_id = self.account_id;
             // The `logout` reducer must delete the entity on the shard it LIVES on, so this
             // runs on the home shard like every other player-scoped call. Session epochs are

@@ -1714,6 +1714,51 @@ pub(crate) fn group_event_outbound(
     }
 }
 
+/// Guild: the kind-decode body for `game_guild_event`. PRIVATE data addressed to one recipient, so
+/// the audience is resolved by the caller exactly as the group relay's is.
+///
+/// A guild notification carries every string it needs, because it is written on realm-core — which
+/// holds no `game_character` rows and can look nothing up. `row.other_name` is whoever the event is
+/// about; `row.payload` is the kind's own extra field.
+pub(crate) fn guild_event_outbound(row: &GuildEvent) -> Vec<Outbound> {
+    use lyracore_shared::guild::event_kind;
+    use wow_world_messages::vanilla::{GuildCommand, GuildCommandResult};
+    let wire_event = |event| {
+        Some(ServerOpcodeMessage::SMSG_GUILD_EVENT(Box::new(
+            codec::build_guild_event(event, std::slice::from_ref(&row.other_name)),
+        )))
+    };
+    let msg = match row.kind {
+        event_kind::INVITE => Some(ServerOpcodeMessage::SMSG_GUILD_INVITE(Box::new(
+            codec::build_guild_invite(&row.other_name, &row.payload),
+        ))),
+        event_kind::JOINED => wire_event(wow_world_messages::vanilla::GuildEvent::Joined),
+        // Vanilla answers a refused invite with SMSG_GUILD_DECLINE, which `wow_world_messages` 0.3
+        // does not carry. The command-result channel is the guild system's only other way to say
+        // anything to a client, and "%s is not in your guild" is true of somebody who just refused.
+        event_kind::DECLINED => Some(ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(Box::new(
+            codec::build_guild_command_result(
+                GuildCommand::Invite,
+                &row.other_name,
+                GuildCommandResult::GuildPlayerNotInGuildS,
+            ),
+        ))),
+        event_kind::PRESENCE => wire_event(if row.payload == event_kind::PRESENCE_ONLINE {
+            wow_world_messages::vanilla::GuildEvent::SignedOn
+        } else {
+            wow_world_messages::vanilla::GuildEvent::SignedOff
+        }),
+        other => {
+            log::warn!("guild event relay: unknown kind {other} (id {})", row.id);
+            None
+        }
+    };
+    match msg {
+        Some(m) => vec![Outbound::One(m)],
+        None => Vec::new(),
+    }
+}
+
 /// The shared-dispatch "who may see this row" predicate for the PRIVATE recipient-addressed families
 /// (whisper, group/loot-roll/quest-share, resurrect prompt): the row's addressee and nobody else. On
 /// the shared feed this — together with the owner-session lookup that enforces it structurally — is
@@ -3587,6 +3632,111 @@ impl Coordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The guild relay's wire mapping: each `lyracore_shared::guild::event_kind` the module writes
+    /// decodes to the packet its recipient is meant to see, off the row's own strings — realm-core
+    /// has no character rows, so anything not on the row is unrecoverable here. An unknown kind
+    /// (an older gateway against a newer module) drops rather than desyncing anything.
+    #[test]
+    fn guild_event_kinds_decode_to_their_own_packets() {
+        use lyracore_shared::guild::event_kind;
+        use wow_world_messages::vanilla::{GuildCommandResult, GuildEvent as WireEvent};
+
+        let row = |kind: u8, payload: &str| GuildEvent {
+            id: 1,
+            recipient_identity: spacetimedb_sdk::Identity::from_byte_array([0u8; 32]),
+            recipient_guid: 2,
+            kind,
+            other_guid: 1,
+            other_name: "Ginger".into(),
+            payload: payload.into(),
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+        };
+        let one = |kind: u8, payload: &str| -> ServerOpcodeMessage {
+            let out = guild_event_outbound(&row(kind, payload));
+            assert_eq!(
+                out.len(),
+                1,
+                "kind {kind} must decode to exactly one packet"
+            );
+            match out.into_iter().next().unwrap() {
+                Outbound::One(m) => m,
+                _ => panic!("kind {kind}: expected a single typed packet"),
+            }
+        };
+
+        // The invite popup: the inviter's name and the guild's, both carried on the row.
+        match one(event_kind::INVITE, "The Silver Hand") {
+            ServerOpcodeMessage::SMSG_GUILD_INVITE(m) => {
+                assert_eq!(m.player_name, "Ginger");
+                assert_eq!(m.guild_name, "The Silver Hand");
+            }
+            other => panic!("expected SMSG_GUILD_INVITE, got {other}"),
+        }
+        let guild_event = |kind: u8, payload: &str| match one(kind, payload) {
+            ServerOpcodeMessage::SMSG_GUILD_EVENT(m) => (m.event, m.event_descriptions.clone()),
+            other => panic!("expected SMSG_GUILD_EVENT, got {other}"),
+        };
+        assert_eq!(
+            guild_event(event_kind::JOINED, ""),
+            (WireEvent::Joined, vec!["Ginger".to_string()])
+        );
+        assert_eq!(
+            guild_event(event_kind::PRESENCE, event_kind::PRESENCE_ONLINE),
+            (WireEvent::SignedOn, vec!["Ginger".to_string()])
+        );
+        assert_eq!(
+            guild_event(event_kind::PRESENCE, event_kind::PRESENCE_OFFLINE),
+            (WireEvent::SignedOff, vec!["Ginger".to_string()])
+        );
+        // A decline rides the command-result channel: vanilla's SMSG_GUILD_DECLINE is not in the
+        // message crate, and a guild refusal is never a system chat line.
+        match one(event_kind::DECLINED, "") {
+            ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(m) => {
+                assert_eq!(m.string, "Ginger");
+                assert_eq!(m.result, GuildCommandResult::GuildPlayerNotInGuildS);
+            }
+            other => panic!("expected SMSG_GUILD_COMMAND_RESULT, got {other}"),
+        }
+        assert!(
+            guild_event_outbound(&row(200, "")).is_empty(),
+            "an unknown kind drops instead of taking the session down"
+        );
+    }
+
+    /// Tripwire: the guild relay must be armed on BOTH legs. `arm_shard` covers a single-database
+    /// gateway, where the shard's own tables are the guild authority; `arm_realm_private` covers a
+    /// sharded one, where every guild row is written on realm-core. No fake in this tree can reach
+    /// either (a callback on a live coordinator connection), so the wiring is pinned in source.
+    /// Without it the module writes every invite and every `Joined` line to nobody at all.
+    #[test]
+    fn the_guild_relay_is_armed_on_both_the_shard_and_the_realm_leg() {
+        for (site, label) in [
+            ("arm_shard", "game_guild_event.insert"),
+            ("arm_realm_private", "realm.game_guild_event.insert"),
+        ] {
+            let body = decommented(top_level_fn_body_of("world_view.rs", site));
+            assert!(
+                body.contains(&format!(
+                    "wire_insert(db.game_guild_event(), \"{label}\", &view, |v, row| {{ \
+                     guild_event_appeared(v, row) }});"
+                )),
+                "`{site}` no longer relays guild events — every invite popup and guild status \
+                 line would be written and delivered to nobody"
+            );
+        }
+        let dispatcher = decommented(top_level_fn_body_of(
+            "world_view.rs",
+            "guild_event_appeared",
+        ));
+        assert!(
+            dispatcher.contains("session_of_owner(row.recipient_guid)")
+                && dispatcher
+                    .contains("private_recipient_audience(row.recipient_guid, viewer.self_guid)"),
+            "guild_event_appeared is no longer recipient-keyed — these reads ride the owner token, \
+             which bypasses RLS, so a viewer fan would hand every guild's traffic to every session"
+        );
+    }
 
     /// The trade-status wire mapping (#120): every `lyracore_shared::trade::event_kind` the module
     /// emits decodes to its `SMSG_TRADE_STATUS` variant — `BeginTrade` carrying the counterparty

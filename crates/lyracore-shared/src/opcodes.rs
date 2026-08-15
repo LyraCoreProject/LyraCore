@@ -59,6 +59,11 @@ pub mod guild {
     pub const CMSG_GUILD_INFO: u32 = 0x087;
     pub const SMSG_GUILD_INFO: u16 = 0x088;
     pub const SMSG_GUILD_COMMAND_RESULT: u16 = 0x093;
+    pub const CMSG_GUILD_INVITE: u32 = 0x082;
+    pub const SMSG_GUILD_INVITE: u16 = 0x083;
+    pub const CMSG_GUILD_ACCEPT: u32 = 0x084;
+    pub const CMSG_GUILD_DECLINE: u32 = 0x085;
+    pub const SMSG_GUILD_EVENT: u16 = 0x092;
     pub const CMSG_GUILD_ROSTER: u32 = 0x089;
     pub const SMSG_GUILD_ROSTER: u16 = 0x08A;
 }

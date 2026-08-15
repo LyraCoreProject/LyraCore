@@ -21,6 +21,14 @@ pub(crate) trait GuildActionStore: Send + Sync {
     /// The guild `character_guid` belongs to. `None` = guildless.
     fn guild_of(&self, character_guid: u64) -> Result<Option<u64>>;
 
+    /// Invite the character named `name` into the caller's guild. The name is resolved realm-wide
+    /// by the implementation, so an `Err` here is either a gate's refusal (one of
+    /// `lyracore_shared::guild::err`'s strings) or a lost transport.
+    fn guild_invite(&self, account_id: u64, self_guid: u64, name: &str) -> Result<()>;
+
+    /// Answer the caller's own pending invite: join the guild, or refuse and tell the inviter.
+    fn guild_answer_invite(&self, account_id: u64, self_guid: u64, accept: bool) -> Result<()>;
+
     /// `guild_id`'s roster, ALREADY RENDERED: the authority's guids, ranks and notes with each
     /// member's name, level, class, area and online flag filled in from the shards. `None` = no
     /// such guild. The fan-out belongs to the routing layer, so nothing here knows how many
@@ -44,6 +52,14 @@ impl GuildActionStore for crate::stdb::Coordinator {
 
     fn guild_of(&self, character_guid: u64) -> Result<Option<u64>> {
         crate::world::guild::guild_of(self, character_guid)
+    }
+
+    fn guild_invite(&self, account_id: u64, self_guid: u64, name: &str) -> Result<()> {
+        crate::world::guild::invite(self, account_id, self_guid, name)
+    }
+
+    fn guild_answer_invite(&self, account_id: u64, self_guid: u64, accept: bool) -> Result<()> {
+        crate::world::guild::answer_invite(self, account_id, self_guid, accept)
     }
 
     fn guild_roster(&self, guild_id: u64) -> Result<Option<GuildRoster>> {
@@ -127,6 +143,15 @@ pub(crate) fn dispatch_guild_action<St: GuildActionStore + ?Sized>(
         }
         ClientOpcodeMessage::CMSG_GUILD_QUERY(s) => guild_query(store, u64::from(s.guild_id)),
         ClientOpcodeMessage::CMSG_GUILD_INFO => guild_info(store, self_guid),
+        ClientOpcodeMessage::CMSG_GUILD_INVITE(s) => {
+            guild_invite(store, player.account_id, self_guid, &s.invited_player)
+        }
+        ClientOpcodeMessage::CMSG_GUILD_ACCEPT => {
+            guild_answer_invite(store, player.account_id, self_guid, true)
+        }
+        ClientOpcodeMessage::CMSG_GUILD_DECLINE => {
+            guild_answer_invite(store, player.account_id, self_guid, false)
+        }
         ClientOpcodeMessage::CMSG_GUILD_ROSTER => guild_roster(store, self_guid),
         other => Ok(GuildActionOutcome::PassThrough(other)),
     }
@@ -206,6 +231,76 @@ fn guild_info<St: GuildActionStore + ?Sized>(
     })
 }
 
+/// Map an invite refusal onto the wire's own result code. Same shape as [`create_result_for`], and
+/// the strings are the same shared contract — the five gates the ticket's invite flow names, plus
+/// the internal default for anything the module has not told the gateway about.
+fn invite_result_for(error: &anyhow::Error) -> GuildCommandResult {
+    use lyracore_shared::guild::err;
+    let text = format!("{error:#}");
+    if text.contains(err::NOT_IN_GUILD) {
+        GuildCommandResult::GuildPlayerNotInGuild
+    } else if text.contains(err::NOT_GUILD_MASTER) {
+        GuildCommandResult::GuildPermissionsOrLeader
+    } else if text.contains(err::TARGET_NOT_FOUND) {
+        GuildCommandResult::GuildPlayerNotFoundS
+    } else if text.contains(err::TARGET_IN_GUILD) {
+        GuildCommandResult::AlreadyInGuildS
+    } else if text.contains(err::ALREADY_INVITED) {
+        GuildCommandResult::AlreadyInvitedToGuildS
+    } else {
+        GuildCommandResult::GuildInternal
+    }
+}
+
+/// `CMSG_GUILD_INVITE`. The client interpolates `name` into whichever line the result code selects,
+/// so the typed name is echoed back verbatim — including on the refusal that says nobody has it.
+fn guild_invite<St: GuildActionStore + ?Sized>(
+    store: &St,
+    account_id: u64,
+    self_guid: u64,
+    name: &str,
+) -> Result<GuildActionOutcome> {
+    if let Err(e) = store.guild_invite(account_id, self_guid, name) {
+        if classify_guild_action_error(&e) == GuildActionErrorClass::Fatal {
+            return Err(e);
+        }
+        log::debug!("world: guild invite refused (account {account_id}): {e:#}");
+        return Ok(GuildActionOutcome::Handled {
+            outbound: command_result(GuildCommand::Invite, name, invite_result_for(&e)),
+        });
+    }
+    Ok(GuildActionOutcome::Handled {
+        outbound: command_result(
+            GuildCommand::Invite,
+            name,
+            GuildCommandResult::PlayerNoMoreInGuild,
+        ),
+    })
+}
+
+/// `CMSG_GUILD_ACCEPT` / `CMSG_GUILD_DECLINE`.
+///
+/// Answers the caller nothing either way, which is not an oversight: what the accepting client
+/// renders is the `Joined` broadcast and its own re-query, and what a decline produces is a
+/// notification to the INVITER. A refusal here means the dialog is already gone — answered twice,
+/// or reaped by the invite GC — so there is no command result to send about it.
+fn guild_answer_invite<St: GuildActionStore + ?Sized>(
+    store: &St,
+    account_id: u64,
+    self_guid: u64,
+    accept: bool,
+) -> Result<GuildActionOutcome> {
+    if let Err(e) = store.guild_answer_invite(account_id, self_guid, accept) {
+        if classify_guild_action_error(&e) == GuildActionErrorClass::Fatal {
+            return Err(e);
+        }
+        log::debug!("world: guild invite answer refused (account {account_id}): {e:#}");
+    }
+    Ok(GuildActionOutcome::Handled {
+        outbound: Vec::new(),
+    })
+}
+
 /// `CMSG_GUILD_ROSTER` — the guild panel, and the one guild screen realm-core cannot answer on its
 /// own: it holds guids, ranks and notes, so the name, level, class, area and online flag of every
 /// member arrive from the shards through the routing layer.
@@ -245,7 +340,9 @@ mod tests {
     use super::*;
     use lyracore_shared::guild::{err, DEFAULT_RANK_NAMES};
     use std::sync::Mutex;
-    use wow_world_messages::vanilla::{CMSG_GUILD_CREATE, CMSG_GUILD_QUERY, CMSG_PING};
+    use wow_world_messages::vanilla::{
+        CMSG_GUILD_CREATE, CMSG_GUILD_INVITE, CMSG_GUILD_QUERY, CMSG_PING,
+    };
 
     /// Records the durable requests the seam makes and answers its reads from canned rows, so each
     /// dispatch branch is exercised without a database.
@@ -256,6 +353,13 @@ mod tests {
         guilds: Vec<GuildView>,
         membership: Vec<(u64, u64)>,
         read_error: Option<String>,
+        /// `(account_id, self_guid, invited_name)` per `CMSG_GUILD_INVITE` that reached the
+        /// durable layer — the "writes exactly one invite" assertion.
+        invite_requests: Mutex<Vec<(u64, u64, String)>>,
+        invite_error: Option<String>,
+        /// `(account_id, self_guid, accept)` per answered invite.
+        answer_requests: Mutex<Vec<(u64, u64, bool)>>,
+        answer_error: Option<String>,
         /// Rosters keyed by guild id, ALREADY rendered — the shard fan-out is the routing layer's,
         /// and is pinned there (`world/guild_tests.rs`).
         rosters: Vec<(u64, GuildRoster)>,
@@ -285,6 +389,26 @@ mod tests {
                 .iter()
                 .find(|(guid, _)| *guid == character_guid)
                 .map(|(_, guild_id)| *guild_id))
+        }
+
+        fn guild_invite(&self, account_id: u64, self_guid: u64, name: &str) -> Result<()> {
+            self.invite_requests
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid, name.to_string()));
+            self.invite_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+        }
+
+        fn guild_answer_invite(&self, account_id: u64, self_guid: u64, accept: bool) -> Result<()> {
+            self.answer_requests
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid, accept));
+            self.answer_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
         }
 
         fn guild_roster(&self, guild_id: u64) -> Result<Option<GuildRoster>> {
@@ -564,6 +688,164 @@ mod tests {
             GuildActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_GUILD_CREATE(_))
         ));
         assert!(actions.create_requests.lock().unwrap().is_empty());
+    }
+
+    // --- the invite handshake ---------------------------------------------------------------
+
+    fn invite(name: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_GUILD_INVITE(Box::new(CMSG_GUILD_INVITE {
+            invited_player: name.into(),
+        }))
+    }
+
+    fn invite_refused(error: &str) -> InMemoryGuildActions {
+        InMemoryGuildActions {
+            invite_error: Some(error.into()),
+            ..Default::default()
+        }
+    }
+
+    /// AC1: an accepted invite reaches the durable layer exactly once, carrying the caller's
+    /// account and guid and the name they typed, and the client is told the command succeeded.
+    #[test]
+    fn a_valid_invite_requests_it_once_and_answers_the_success_code() {
+        let actions = InMemoryGuildActions::default();
+
+        let outbound = handled(dispatch_guild_action(&actions, player(), invite("Vim")).unwrap());
+
+        assert_eq!(
+            actions.invite_requests.lock().unwrap().as_slice(),
+            &[(7, GINGER, "Vim".to_string())],
+            "exactly one invite, for the character the client named"
+        );
+        assert_eq!(
+            command_result_of(&outbound),
+            (
+                GuildCommand::Invite,
+                "Vim".to_string(),
+                GuildCommandResult::PlayerNoMoreInGuild
+            ),
+            "wire code 0 is vanilla's 'no message/error', i.e. success"
+        );
+    }
+
+    /// AC3: each of the five invite gates answers its own `GuildCommandResult`, and the refusal is
+    /// the only thing the client hears.
+    #[test]
+    fn every_invite_gate_answers_its_own_result_code() {
+        for (refusal, expected) in [
+            (err::NOT_IN_GUILD, GuildCommandResult::GuildPlayerNotInGuild),
+            (
+                err::NOT_GUILD_MASTER,
+                GuildCommandResult::GuildPermissionsOrLeader,
+            ),
+            (
+                err::TARGET_NOT_FOUND,
+                GuildCommandResult::GuildPlayerNotFoundS,
+            ),
+            (err::TARGET_IN_GUILD, GuildCommandResult::AlreadyInGuildS),
+            (
+                err::ALREADY_INVITED,
+                GuildCommandResult::AlreadyInvitedToGuildS,
+            ),
+        ] {
+            let actions = invite_refused(refusal);
+
+            let outbound =
+                handled(dispatch_guild_action(&actions, player(), invite("Vim")).unwrap());
+
+            assert_eq!(
+                command_result_of(&outbound),
+                (GuildCommand::Invite, "Vim".to_string(), expected),
+                "`{refusal}` must answer {expected:?}"
+            );
+        }
+    }
+
+    /// AC3, the other half: a refusal writes nothing. The gates run module-side inside the
+    /// transaction, so the seam's job is to carry the refusal back without a second attempt.
+    #[test]
+    fn a_refused_invite_is_requested_once_and_never_retried() {
+        let actions = invite_refused(err::TARGET_IN_GUILD);
+
+        handled(dispatch_guild_action(&actions, player(), invite("Vim")).unwrap());
+
+        assert_eq!(actions.invite_requests.lock().unwrap().len(), 1);
+        assert!(actions.answer_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_unclassified_invite_refusal_answers_the_internal_code() {
+        let actions = invite_refused("something the module has not told the gateway about");
+
+        let outbound = handled(dispatch_guild_action(&actions, player(), invite("Vim")).unwrap());
+
+        assert_eq!(
+            command_result_of(&outbound).2,
+            GuildCommandResult::GuildInternal
+        );
+    }
+
+    #[test]
+    fn a_lost_transport_during_an_invite_propagates_as_an_error() {
+        let actions = invite_refused("reducer transport disconnected");
+
+        assert!(
+            dispatch_guild_action(&actions, player(), invite("Vim")).is_err(),
+            "a lost transport must not be swallowed as a refusal"
+        );
+    }
+
+    /// AC4/AC5/AC6: accept and decline are the same durable request with opposite answers, and the
+    /// caller hears nothing back — the accepting client renders the `Joined` broadcast, and a
+    /// decline is a notification to the inviter.
+    #[test]
+    fn accept_and_decline_reach_the_authority_with_opposite_answers_and_reply_nothing() {
+        for (msg, accept) in [
+            (ClientOpcodeMessage::CMSG_GUILD_ACCEPT, true),
+            (ClientOpcodeMessage::CMSG_GUILD_DECLINE, false),
+        ] {
+            let actions = InMemoryGuildActions::default();
+
+            let outbound = handled(dispatch_guild_action(&actions, player(), msg).unwrap());
+
+            assert_eq!(
+                actions.answer_requests.lock().unwrap().as_slice(),
+                &[(7, GINGER, accept)]
+            );
+            assert!(outbound.is_empty());
+        }
+    }
+
+    /// AC7/AC8: answering an invite that is gone — never sent, already answered, or reaped by the
+    /// two-minute GC — is a no-op. It writes nothing, says nothing, and never ends the session.
+    #[test]
+    fn answering_a_missing_invite_is_a_silent_no_op() {
+        let actions = InMemoryGuildActions {
+            answer_error: Some(err::NO_PENDING_INVITE.into()),
+            ..Default::default()
+        };
+
+        let outbound = handled(
+            dispatch_guild_action(&actions, player(), ClientOpcodeMessage::CMSG_GUILD_ACCEPT)
+                .unwrap(),
+        );
+
+        assert!(outbound.is_empty(), "there is no dialog left to answer");
+        assert!(actions.invite_requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_lost_transport_while_answering_an_invite_propagates_as_an_error() {
+        let actions = InMemoryGuildActions {
+            answer_error: Some("reducer transport disconnected".into()),
+            ..Default::default()
+        };
+
+        assert!(
+            dispatch_guild_action(&actions, player(), ClientOpcodeMessage::CMSG_GUILD_ACCEPT)
+                .is_err()
+        );
     }
 
     #[test]

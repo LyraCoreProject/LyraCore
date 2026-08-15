@@ -37,6 +37,13 @@ pub const DEFAULT_RANK_NAMES: [&str; GUILD_RANK_COUNT] = [
 pub const DEFAULT_RANK_RIGHTS: [u32; GUILD_RANK_COUNT] =
     [0x00FF, 0x00FF, 0x0009, 0x0009, 0x0009, 0, 0, 0, 0, 0];
 
+/// The rank a character joins at when they accept an invite: the LOWEST **named** rank of the
+/// vanilla seed ("Initiate").
+///
+/// Not rank 9. The seed's last five names are empty, so a member parked there renders as a blank
+/// line in every guild panel — the count is a wire invariant, not five usable ranks.
+pub const GUILD_JOIN_RANK: u32 = 4;
+
 /// Shortest guild name the create gate admits (vanilla's own minimum).
 pub const GUILD_NAME_MIN_LEN: usize = 2;
 /// Longest guild name the create gate admits (vanilla's own maximum).
@@ -67,6 +74,37 @@ pub mod event_kind {
     /// The guild roster changed → the gateway re-renders from the row's payload
     /// ([`super::encode_roster`]), built in the SAME transaction as the membership change.
     pub const ROSTER: u8 = 0;
+
+    /// A guild invite was extended to the recipient → `SMSG_GUILD_INVITE`. `other_name` is the
+    /// inviter's name and `payload` the guild's name, both filled at write time: realm-core holds
+    /// no character rows, so nothing downstream can look either of them up.
+    pub const INVITE: u8 = 1;
+
+    /// A character joined the guild → `SMSG_GUILD_EVENT(Joined)`. Written for every member,
+    /// including the one who just joined. `other_name` is the joiner.
+    pub const JOINED: u8 = 2;
+
+    /// The recipient's invite was declined → `SMSG_GUILD_COMMAND_RESULT` to the INVITER.
+    /// `other_name` is the character who declined.
+    ///
+    /// Vanilla answers this with `SMSG_GUILD_DECLINE`, which `wow_world_messages` 0.3 does not
+    /// carry. The command-result channel is the one alternative the guild system allows — a system
+    /// chat line is never it.
+    pub const DECLINED: u8 = 3;
+
+    /// A member signed on or off → `SMSG_GUILD_EVENT(SignedOn)` / `(SignedOff)` to the rest of the
+    /// guild. `other_name` is the member; `payload` is [`PRESENCE_ONLINE`] or
+    /// [`PRESENCE_OFFLINE`].
+    ///
+    /// One kind rather than two because the reserved contract block is four kinds wide and the
+    /// invite handshake needs the other three. The two directions are the same broadcast with a
+    /// flipped bit, so they cost one payload byte instead of a number.
+    pub const PRESENCE: u8 = 4;
+
+    /// [`PRESENCE`]'s payload for a member who just signed on.
+    pub const PRESENCE_ONLINE: &str = "1";
+    /// [`PRESENCE`]'s payload for a member who just signed off.
+    pub const PRESENCE_OFFLINE: &str = "0";
 }
 
 /// The REALM-CORE guild ops: the `op` byte of the single operator-gated `realm_guild_op` reducer
@@ -78,9 +116,37 @@ pub mod event_kind {
 ///
 /// Argument slots (`realm_guild_op(op, actor_guid, target_guid, arg_a, text)`), per op:
 /// - [`CREATE`] — `text` is the guild name; `target_guid` and `arg_a` unused.
+/// - [`INVITE`] — `target_guid` is the invitee; `text` is the ACTOR's name; `arg_a` unused.
+/// - [`ANSWER`] — `arg_a` is [`ANSWER_ACCEPT`] or [`ANSWER_DECLINE`]; `text` is the actor's name.
+/// - [`PRESENCE`] — `arg_a` is [`PRESENCE_ON`] or [`PRESENCE_OFF`]; `text` is the actor's name.
+///
+/// Every op past `CREATE` puts the ACTING character's own name in `text`, because realm-core holds
+/// no character rows: a notification written there can only carry a name the gateway supplied.
 pub mod realm_op {
     /// `CMSG_GUILD_CREATE` — `actor_guid` founds a guild named `text` and becomes its master.
     pub const CREATE: u8 = 0;
+
+    /// `CMSG_GUILD_INVITE` — `actor_guid` (the guild master) invites `target_guid`.
+    pub const INVITE: u8 = 1;
+
+    /// `CMSG_GUILD_ACCEPT` / `CMSG_GUILD_DECLINE` — `actor_guid` answers its own pending invite.
+    ///
+    /// One op with a yes/no slot rather than two: both arms consume the same `GuildInvite` row, and
+    /// the contract's reserved block is three ops wide with [`PRESENCE`] needing one of them. The
+    /// client vocabulary keeps the two verbs apart (`world::guild::Op`); only the wire tag is shared.
+    pub const ANSWER: u8 = 2;
+
+    /// A member signed on or off — `actor_guid` tells the rest of its guild.
+    pub const PRESENCE: u8 = 3;
+
+    /// [`ANSWER`]'s `arg_a` for joining the guild.
+    pub const ANSWER_ACCEPT: u32 = 1;
+    /// [`ANSWER`]'s `arg_a` for refusing the invite.
+    pub const ANSWER_DECLINE: u32 = 0;
+    /// [`PRESENCE`]'s `arg_a` for a member who just entered the world.
+    pub const PRESENCE_ON: u32 = 1;
+    /// [`PRESENCE`]'s `arg_a` for a member who just left it.
+    pub const PRESENCE_OFF: u32 = 0;
 }
 
 /// The guild reducers' `Err` strings the gateway maps to `GuildCommandResult` variants — EXACT
@@ -92,6 +158,18 @@ pub mod err {
     pub const NAME_INVALID: &str = "guild name invalid";
     pub const NOT_IN_GUILD: &str = "not in a guild";
     pub const NOT_GUILD_MASTER: &str = "not the guild master";
+    /// The invite's TARGET already belongs to a guild. Deliberately shares no substring with
+    /// [`ALREADY_IN_GUILD`]: the classifiers match by `contains`, and the two answer different
+    /// `GuildCommandResult` codes (`AlreadyInGuildS` names a subject, `AlreadyInGuild` does not).
+    pub const TARGET_IN_GUILD: &str = "target belongs to a guild";
+    /// The invite's target is already looking at somebody else's invite dialog.
+    pub const ALREADY_INVITED: &str = "target has a pending invite";
+    /// No character of that name is online anywhere on the realm. Raised by the GATEWAY, which is
+    /// the only party that can see every shard's characters; realm-core holds none.
+    pub const TARGET_NOT_FOUND: &str = "no such player";
+    /// Accept/decline with nothing to answer — never sent, already answered, or reaped by the
+    /// invite GC. Dropped silently rather than shown: the dialog the client is answering is gone.
+    pub const NO_PENDING_INVITE: &str = "no pending guild invite";
 }
 
 /// Encode a `ROSTER` payload: `motd|guid,rank,public_note,officer_note;...`.
@@ -202,5 +280,57 @@ mod tests {
     #[test]
     fn realm_guild_op_codes_are_stable() {
         assert_eq!(realm_op::CREATE, 0);
+        assert_eq!(realm_op::INVITE, 1);
+        assert_eq!(realm_op::ANSWER, 2);
+        assert_eq!(realm_op::PRESENCE, 3);
+    }
+
+    /// The event kind is the other wire value: the module writes it, the gateway's relay decodes it
+    /// into a packet, and the two are deployed separately.
+    #[test]
+    fn guild_event_kinds_are_stable() {
+        assert_eq!(event_kind::ROSTER, 0);
+        assert_eq!(event_kind::INVITE, 1);
+        assert_eq!(event_kind::JOINED, 2);
+        assert_eq!(event_kind::DECLINED, 3);
+        assert_eq!(event_kind::PRESENCE, 4);
+    }
+
+    /// A new member joins at the lowest rank that has a NAME. Rank 9 exists only so the packet's
+    /// fixed `[String; 10]` can be filled, and a member sitting on it renders blank.
+    #[test]
+    fn a_new_member_joins_at_the_lowest_named_rank() {
+        assert_eq!(DEFAULT_RANK_NAMES[GUILD_JOIN_RANK as usize], "Initiate");
+        assert!(
+            DEFAULT_RANK_NAMES[GUILD_JOIN_RANK as usize + 1..]
+                .iter()
+                .all(|n| n.is_empty()),
+            "every rank below the join rank is nameless, so none of them may be the join rank"
+        );
+    }
+
+    /// The invite gates are classified by `contains`, so two error strings that nest silently
+    /// collapse into one wire code.
+    #[test]
+    fn the_guild_error_strings_do_not_nest() {
+        let all = [
+            err::ALREADY_IN_GUILD,
+            err::NAME_TAKEN,
+            err::NAME_INVALID,
+            err::NOT_IN_GUILD,
+            err::NOT_GUILD_MASTER,
+            err::TARGET_IN_GUILD,
+            err::ALREADY_INVITED,
+            err::TARGET_NOT_FOUND,
+            err::NO_PENDING_INVITE,
+        ];
+        for (i, a) in all.iter().enumerate() {
+            for (j, b) in all.iter().enumerate() {
+                assert!(
+                    i == j || !a.contains(b),
+                    "`{a}` contains `{b}` — the gateway's classifier would answer the wrong code"
+                );
+            }
+        }
     }
 }

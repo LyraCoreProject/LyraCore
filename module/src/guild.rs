@@ -23,7 +23,8 @@ use crate::game_character;
 // strings are the SHARED wire contract: `lyracore_shared::guild` is the one definition both crates
 // import, so a reword or a renumber is a cross-crate compile error rather than a runtime drift.
 use lyracore_shared::guild::{
-    err as guild_err, valid_guild_name, DEFAULT_RANK_NAMES, DEFAULT_RANK_RIGHTS, GUILD_MASTER_RANK,
+    err as guild_err, event_kind, valid_guild_name, DEFAULT_RANK_NAMES, DEFAULT_RANK_RIGHTS,
+    GUILD_JOIN_RANK, GUILD_MASTER_RANK,
 };
 
 /// A guild. `name` is unique realm-wide, which one index buys because realm-core is one database.
@@ -185,6 +186,16 @@ pub(crate) fn members_of(ctx: &ReducerContext, guild_id: u64) -> Vec<GuildMember
     members
 }
 
+/// The pending invite addressed to `target_guid`, if the dialog is still open. At most one exists:
+/// the invite gate refuses a second, and the GC reaps an unanswered one on the shared invite TTL.
+pub(crate) fn pending_invite(ctx: &ReducerContext, target_guid: u64) -> Option<GuildInvite> {
+    ctx.db
+        .game_guild_invite()
+        .by_target()
+        .filter(&target_guid)
+        .next()
+}
+
 // ===========================================================================================
 //  Writes
 // ===========================================================================================
@@ -326,6 +337,174 @@ fn disband(ctx: &ReducerContext, guild_id: u64) {
     ctx.db.game_guild().guild_id().delete(guild_id);
 }
 
+/// Write one guild notification for one recipient — the `game_group_event` relay shape on the
+/// guild's own table.
+///
+/// `other_name` is a PARAMETER, unlike `group::push_event`'s, which looks it up. Realm-core holds
+/// no `game_character` rows, so a name it did not receive is a name it cannot know; every caller
+/// gets it from the gateway through `realm_guild_op`'s `text` slot. `recipient_identity` still
+/// drives the per-player RLS on a world shard and is `Identity::ZERO` where no row binds one.
+fn push_event(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    kind: u8,
+    other_guid: u64,
+    other_name: &str,
+    payload: String,
+) {
+    let bound = crate::helpers::character_by_guid(ctx, recipient_guid).map(|c| c.owner_identity);
+    ctx.db.game_guild_event().insert(GuildEvent {
+        id: 0,
+        recipient_identity: crate::helpers::event_recipient_identity(bound),
+        recipient_guid,
+        kind,
+        other_guid,
+        other_name: other_name.to_string(),
+        payload,
+        created_at: ctx.timestamp,
+    });
+}
+
+/// The invite core: gate, write one pending invite, and notify the target.
+///
+/// The two gates realm-core CAN answer are here; the two it cannot — does the target exist, and is
+/// anybody at its keyboard — are the gateway's, because only the gateway sees every shard's
+/// characters. `inviter_name` rides in for the same reason: the notification carries it.
+pub(crate) fn invite_to_guild(
+    ctx: &ReducerContext,
+    inviter_guid: u64,
+    target_guid: u64,
+    inviter_name: &str,
+) -> Result<(), String> {
+    let membership = guild_of(ctx, inviter_guid).ok_or(guild_err::NOT_IN_GUILD)?;
+    let guild = ctx
+        .db
+        .game_guild()
+        .guild_id()
+        .find(membership.guild_id)
+        .ok_or(guild_err::NOT_IN_GUILD)?;
+    if guild.master_guid != inviter_guid {
+        return Err(guild_err::NOT_GUILD_MASTER.to_string());
+    }
+    if guild_of(ctx, target_guid).is_some() {
+        return Err(guild_err::TARGET_IN_GUILD.to_string());
+    }
+    if pending_invite(ctx, target_guid).is_some() {
+        return Err(guild_err::ALREADY_INVITED.to_string());
+    }
+    ctx.db.game_guild_invite().insert(GuildInvite {
+        id: 0,
+        target_guid,
+        inviter_guid,
+        guild_id: guild.guild_id,
+        created_at: ctx.timestamp,
+    });
+    push_event(
+        ctx,
+        target_guid,
+        event_kind::INVITE,
+        inviter_guid,
+        inviter_name,
+        guild.name,
+    );
+    Ok(())
+}
+
+/// The answer core: consume the actor's pending invite, then either seat them or tell the inviter.
+///
+/// Both arms delete the invite row FIRST, so an invite is answerable exactly once however the
+/// answer goes. A refusal past that point rolls the whole transaction back — including the delete —
+/// which is what keeps a join that could not be seated from silently eating the dialog.
+pub(crate) fn answer_invite(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    accept: bool,
+    actor_name: &str,
+) -> Result<(), String> {
+    let invite = pending_invite(ctx, actor_guid).ok_or(guild_err::NO_PENDING_INVITE)?;
+    ctx.db.game_guild_invite().id().delete(invite.id);
+    if !accept {
+        push_event(
+            ctx,
+            invite.inviter_guid,
+            event_kind::DECLINED,
+            actor_guid,
+            actor_name,
+            String::new(),
+        );
+        return Ok(());
+    }
+    // The dialog outlives neither of these: a guild can be disbanded, and the invitee can accept
+    // somebody else's invite, while the popup sits on screen.
+    if ctx
+        .db
+        .game_guild()
+        .guild_id()
+        .find(invite.guild_id)
+        .is_none()
+    {
+        return Err(guild_err::NOT_IN_GUILD.to_string());
+    }
+    if guild_of(ctx, actor_guid).is_some() {
+        return Err(guild_err::ALREADY_IN_GUILD.to_string());
+    }
+    ctx.db.game_guild_member().insert(GuildMember {
+        id: 0,
+        guild_id: invite.guild_id,
+        character_guid: actor_guid,
+        rank_index: GUILD_JOIN_RANK,
+        public_note: String::new(),
+        officer_note: String::new(),
+        joined_at: ctx.timestamp,
+    });
+    set_character_guild(ctx, actor_guid, invite.guild_id, GUILD_JOIN_RANK);
+    // Every member hears it, the new one included: their own client opens the guild panel off the
+    // back of this, and the roster read that follows is the same one everyone else's client makes.
+    for member in members_of(ctx, invite.guild_id) {
+        push_event(
+            ctx,
+            member.character_guid,
+            event_kind::JOINED,
+            actor_guid,
+            actor_name,
+            String::new(),
+        );
+    }
+    Ok(())
+}
+
+/// Tell the REST of `actor_guid`'s guild that they signed on or off. A guildless character has
+/// nobody to tell, which is a no-op rather than a refusal — the gateway fires this on every world
+/// entry and every logout.
+pub(crate) fn broadcast_presence(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    online: bool,
+    actor_name: &str,
+) {
+    let Some(membership) = guild_of(ctx, actor_guid) else {
+        return;
+    };
+    let payload = if online {
+        event_kind::PRESENCE_ONLINE
+    } else {
+        event_kind::PRESENCE_OFFLINE
+    };
+    for member in members_of(ctx, membership.guild_id) {
+        if member.character_guid == actor_guid {
+            continue; // nobody needs to be told they logged in
+        }
+        push_event(
+            ctx,
+            member.character_guid,
+            event_kind::PRESENCE,
+            actor_guid,
+            actor_name,
+            payload.to_string(),
+        );
+    }
+}
+
 // ===========================================================================================
 //  Reducers
 // ===========================================================================================
@@ -363,6 +542,12 @@ pub fn realm_guild_op(
     let _ = (target_guid, arg_a); // slots later ops read; CREATE uses `text` alone
     match op {
         realm_op::CREATE => create_guild_for(ctx, actor_guid, &text).map(|_| ()),
+        realm_op::INVITE => invite_to_guild(ctx, actor_guid, target_guid, &text),
+        realm_op::ANSWER => answer_invite(ctx, actor_guid, arg_a == realm_op::ANSWER_ACCEPT, &text),
+        realm_op::PRESENCE => {
+            broadcast_presence(ctx, actor_guid, arg_a == realm_op::PRESENCE_ON, &text);
+            Ok(())
+        }
         other => Err(format!("unknown realm guild op {other}")),
     }
 }
@@ -463,6 +648,86 @@ mod tests {
         assert!(
             arm.starts_with("create_guild_for(ctx, actor_guid, &text)"),
             "`realm_op::CREATE` no longer runs the create core. Arm was:\n{arm}"
+        );
+        for (tag, core) in [
+            (
+                "realm_op::INVITE =>",
+                "invite_to_guild(ctx, actor_guid, target_guid, &text)",
+            ),
+            (
+                "realm_op::ANSWER =>",
+                "answer_invite(ctx, actor_guid, arg_a == realm_op::ANSWER_ACCEPT, &text)",
+            ),
+            (
+                "realm_op::PRESENCE =>",
+                "{ broadcast_presence(ctx, actor_guid, arg_a == realm_op::PRESENCE_ON, &text);",
+            ),
+        ] {
+            let arm = body.split(tag).nth(1).unwrap_or_else(|| {
+                panic!("`realm_guild_op` no longer dispatches `{tag}`:\n{body}")
+            });
+            let arm: String = arm.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(
+                arm.starts_with(core),
+                "`{tag}` no longer runs `{core}`. Arm was:\n{arm}"
+            );
+        }
+    }
+
+    /// The invite gate is the only place the guild system checks authority at all (rank rights are
+    /// a deliberate non-goal), and each refusal is a shared error string the gateway matches
+    /// exactly to pick a `SMSG_GUILD_COMMAND_RESULT` code.
+    #[test]
+    fn the_invite_gate_refuses_with_the_shared_error_strings() {
+        let body = code_of(include_str!("guild.rs"), "pub(crate) fn invite_to_guild(");
+        for gate in [
+            "guild_err::NOT_IN_GUILD",
+            "guild_err::NOT_GUILD_MASTER",
+            "guild_err::TARGET_IN_GUILD",
+            "guild_err::ALREADY_INVITED",
+        ] {
+            assert!(
+                body.contains(gate),
+                "`invite_to_guild` no longer refuses with `{gate}` — the gateway classifies \
+                 SMSG_GUILD_COMMAND_RESULT off these exact strings. Body was:\n{body}"
+            );
+        }
+    }
+
+    /// The invite row is consumed BEFORE either arm runs, which is what makes a dialog answerable
+    /// exactly once. Consuming it afterwards would let a double-click join twice.
+    #[test]
+    fn answering_an_invite_consumes_the_row_before_deciding_anything() {
+        let body = code_of(include_str!("guild.rs"), "pub(crate) fn answer_invite(");
+        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            normalized.starts_with(
+                "{ let invite = pending_invite(ctx, actor_guid).ok_or(guild_err::NO_PENDING_INVITE)?; \
+                 ctx.db.game_guild_invite().id().delete(invite.id);"
+            ),
+            "`answer_invite` must take and delete the pending invite first. Body was:\n{body}"
+        );
+        assert!(
+            normalized
+                .contains("set_character_guild(ctx, actor_guid, invite.guild_id, GUILD_JOIN_RANK)"),
+            "an accepted invite must stamp the new member's own guild columns in the SAME \
+             transaction as the member row, or a world shard renders them guildless. Body \
+             was:\n{body}"
+        );
+    }
+
+    /// A never-answered invite is reaped, so accepting a two-minute-old dialog fails exactly like
+    /// accepting one that was never sent. Unreachable without a live node — the GC's SOURCE is what
+    /// gets pinned.
+    #[test]
+    fn unanswered_guild_invites_ride_the_shared_invite_ttl() {
+        let body = code_of(include_str!("gc.rs"), "pub fn reap_movement_events(");
+        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            normalized.contains("let t = ctx.db.game_guild_invite();")
+                && normalized.contains("INVITE_TTL_MICROS"),
+            "`game_guild_invite` is no longer reaped on the shared invite TTL — an unanswered \
+             guild dialog would stay answerable forever. Body was:\n{body}"
         );
     }
 }
