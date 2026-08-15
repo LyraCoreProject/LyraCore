@@ -13,6 +13,49 @@ against a real database over a real encrypted socket.
 The issue's acceptance note requires exactly that: "all wire-verified headlessly". Seam tests do not
 satisfy it on their own. They prove branches; they do not prove the packets a real client receives.
 
+## You own the merge itself
+
+The original plan had the orchestrator merge T2..T6 and hand you a combined tree. That was tried and
+abandoned: T3 onto T4 alone produced 19 conflicts across four files, and because git's conflict
+regions cut across function boundaries, a keep-both resolution truncated function bodies and fused
+unrelated functions together. The merge was reverted.
+
+So you merge, then reconcile. The branches, all cut from `37ecc64`:
+
+| Ticket | Branch | Commit |
+| --- | --- | --- |
+| T2 invite/accept/decline | `worktree-agent-a6549275d6071e4ec` | `4173868` |
+| T3 leave/kick/disband/leader | `worktree-agent-af20beca5f495401e` | `9dc0957` |
+| T5 guild chat | `worktree-agent-accaccd49cf1f16ed` | `0817b83` |
+| T6 motd/notes/unit fields | see the orchestrator's brief | — |
+
+T1 and T4 are already on the base branch. Merge the rest one at a time, and resolve at **function
+granularity, not line granularity**: when both sides added code at the same point, take whole
+functions from each side rather than concatenating conflict hunks. `git show <commit>:<path>` gives
+you either side's original file to copy a clean function out of. After each merge, compile before
+starting the next.
+
+**Known duplicate to collapse:** T2 and T5 independently built the guild event relay
+(`guild_event_outbound` / `guild_event_appeared` in `gateway/src/stdb/subscriptions.rs` and
+`gateway/src/stdb/world_view.rs`) because T1 subscribed `game_guild_event` but never armed a
+dispatcher. Two implementations of the same pipe will collide. Keep one.
+
+## Three open design questions to settle
+
+1. **T2's folded contract numbers.** The orchestrator reserved 4 event kinds and 3 op tags for T2,
+   but the invite flow genuinely needs 5 notifications and 4 verbs. T2 stayed in budget by folding
+   SignedOn/SignedOff into one `PRESENCE` kind with the direction in the payload, and accept/decline
+   into one `ANSWER` op with the answer in `arg_a`. That was a constraint distorting the design, not
+   the design choosing it. Now that all blocks are known and T4 consumed none, decide whether to
+   unfold them into their natural separate kinds and ops. Renumbering is cheap here and permanent
+   later.
+2. **`SMSG_GUILD_DECLINE` does not exist in `wow_world_messages` 0.3.** The README's wire table
+   implied it did. T2 routed the decline notification through
+   `SMSG_GUILD_COMMAND_RESULT(Invite, <decliner>, GuildPlayerNotInGuildS)`. Confirm that is the
+   right channel against a real client's expectations, or find the correct packet.
+3. **T3's `guild_member_guids` overlaps T4's `guild_roster_view`.** Both read the member list off
+   realm-core. T3 flagged its own six-line version as trivially foldable into T4's. Fold it.
+
 ## Delivery
 
 **Reconcile.** Read the merged `module/src/guild.rs`,
