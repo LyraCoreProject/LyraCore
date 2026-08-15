@@ -49,6 +49,18 @@ pub mod world {
     pub const SMSG_COMPRESSED_UPDATE_OBJECT: u16 = 0x1F6; // deferred
 }
 
+/// Guild opcodes. Verified against `wow_world_messages`' vanilla opcode table rather than quoted
+/// from memory — LEAVE / REMOVE / DISBAND sit at 0x08D / 0x08E / 0x08F and are easy to transpose.
+/// Later guild slices append the verbs they handle.
+pub mod guild {
+    pub const CMSG_GUILD_QUERY: u32 = 0x054;
+    pub const SMSG_GUILD_QUERY_RESPONSE: u16 = 0x055;
+    pub const CMSG_GUILD_CREATE: u32 = 0x081;
+    pub const CMSG_GUILD_INFO: u32 = 0x087;
+    pub const SMSG_GUILD_INFO: u16 = 0x088;
+    pub const SMSG_GUILD_COMMAND_RESULT: u16 = 0x093;
+}
+
 /// `MSG_MOVE_*` opcodes. These flow **both** directions: the client sends its own movement,
 /// the server relays the same opcode to nearby observers. The slice handles the subset that
 /// looks like real movement (forward/stop/turn/facing/heartbeat).

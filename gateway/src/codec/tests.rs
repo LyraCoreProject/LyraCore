@@ -1102,6 +1102,30 @@ fn char_enum_maps_seeded_warrior() {
     assert_eq!(msg.characters[0].guid.guid(), 1);
 }
 
+/// The character-select screen shows the real guild, which it did not before guilds existed: the
+/// field was hard-coded to 0 for everyone. A guildless character still reports 0.
+#[test]
+fn char_enum_reports_the_real_guild_id_and_zero_for_a_guildless_character() {
+    let guilded = CharacterView {
+        guid: 1,
+        name: "Founder".into(),
+        race: 1,
+        class: 1,
+        guild_id: 7,
+        ..Default::default()
+    };
+    let loner = CharacterView {
+        guid: 2,
+        name: "Loner".into(),
+        race: 1,
+        class: 1,
+        ..Default::default()
+    };
+    let msg = build_char_enum(&[guilded, loner]).unwrap();
+    assert_eq!(msg.characters[0].guild_id, 7);
+    assert_eq!(msg.characters[1].guild_id, 0);
+}
+
 #[test]
 fn movement_relay_roundtrips_under_same_opcode() {
     use wow_world_messages::vanilla::MovementInfo_MovementFlags;

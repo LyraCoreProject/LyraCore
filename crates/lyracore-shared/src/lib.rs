@@ -12,6 +12,7 @@ pub mod constants;
 pub mod env;
 pub mod faction;
 pub mod group;
+pub mod guild;
 pub mod instance;
 pub mod loot_roll;
 pub mod mail;

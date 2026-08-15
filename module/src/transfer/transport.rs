@@ -75,6 +75,14 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &["game_transfer_out"];
 ///   character hops, the fence stays, and the reaper there still judges it.
 /// - `game_mail_delivery` — the mail plane's delivery receipts. They only exist where the
 ///   authoritative mail rows do, and no character transfers off realm-core.
+/// - `game_guild_member` — guild membership. Authoritative on REALM-CORE for the same reason party
+///   membership is, and answered the same way: what a world shard needs is the character's own
+///   guild id and rank, which ride two columns on `game_character` and therefore travel in
+///   `character_row`. Carrying the roster row would race the authority.
+/// - `game_guild_invite` — a 2-minute dialog whose inviter is by definition not transferring, and
+///   whose guild the arriving character cannot see. It dies with the source copy, like a decline.
+/// - `game_guild_event` — a one-shot notification relay with a GC TTL; the durable half is the
+///   membership on realm-core, so carrying a packet would replay stale UI at the destination.
 /// - `game_character_shard` — the realm-core character→shard directory (#20). A routing HINT about
 ///   where the character is, and the blob exists to change that: the snapshot `begin_transfer` takes
 ///   still names the SOURCE, so carrying it would hand the destination a forwarding receipt pointing
@@ -93,6 +101,9 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_pet_command",
     "game_mail_escrow",
     "game_mail_delivery",
+    "game_guild_member",
+    "game_guild_invite",
+    "game_guild_event",
     "game_character_shard",
     // A Trade Session (+ its slot rows) is a live dialog with a partner who is by definition NOT
     // transferring too — carrying it would import a negotiation the destination's partner copy

@@ -42,6 +42,7 @@ pub mod corpse_loot_eligible_type;
 pub mod corpse_loot_type;
 pub mod corpse_type;
 pub mod create_character_reducer;
+pub mod create_guild_reducer;
 pub mod createinfo_action_type;
 pub mod createinfo_spell_type;
 pub mod creature_ai_event_type;
@@ -283,6 +284,10 @@ pub mod game_group_table;
 pub mod game_guid_allocator_table;
 pub mod game_guid_range_registry_table;
 pub mod game_guid_range_table;
+pub mod game_guild_event_table;
+pub mod game_guild_member_table;
+pub mod game_guild_rank_table;
+pub mod game_guild_table;
 pub mod game_import_meta_table;
 pub mod game_instance_binding_table;
 pub mod game_instance_binding_type;
@@ -400,6 +405,10 @@ pub mod group_type;
 pub mod guid_allocator_type;
 pub mod guid_range_assignment_type;
 pub mod guid_range_type;
+pub mod guild_event_type;
+pub mod guild_member_type;
+pub mod guild_rank_type;
+pub mod guild_type;
 pub mod gw_abandon_quest_reducer;
 pub mod gw_accept_group_invite_reducer;
 pub mod gw_accept_quest_reducer;
@@ -540,6 +549,7 @@ pub mod race_info_type;
 pub mod ranged_impact_reducer;
 pub mod ranged_impact_schedule_type;
 pub mod realm_group_op_reducer;
+pub mod realm_guild_op_reducer;
 pub mod realm_loot_op_reducer;
 pub mod realm_mail_commit_reducer;
 pub mod realm_mail_confirm_delivery_reducer;
@@ -601,6 +611,7 @@ pub mod stamp_import_meta_reducer;
 pub mod start_item_type;
 pub mod start_position_type;
 pub mod sync_group_mirror_reducer;
+pub mod sync_guild_membership_reducer;
 pub mod talent_tab_type;
 pub mod talent_type;
 pub mod taunt_lock_type;
@@ -664,6 +675,7 @@ pub use corpse_loot_eligible_type::CorpseLootEligible;
 pub use corpse_loot_type::CorpseLoot;
 pub use corpse_type::Corpse;
 pub use create_character_reducer::create_character;
+pub use create_guild_reducer::create_guild;
 pub use createinfo_action_type::CreateinfoAction;
 pub use createinfo_spell_type::CreateinfoSpell;
 pub use creature_ai_event_type::CreatureAiEvent;
@@ -905,6 +917,10 @@ pub use game_group_table::*;
 pub use game_guid_allocator_table::*;
 pub use game_guid_range_registry_table::*;
 pub use game_guid_range_table::*;
+pub use game_guild_event_table::*;
+pub use game_guild_member_table::*;
+pub use game_guild_rank_table::*;
+pub use game_guild_table::*;
 pub use game_import_meta_table::*;
 pub use game_instance_binding_table::*;
 pub use game_instance_binding_type::GameInstanceBinding;
@@ -1022,6 +1038,10 @@ pub use group_type::Group;
 pub use guid_allocator_type::GuidAllocator;
 pub use guid_range_assignment_type::GuidRangeAssignment;
 pub use guid_range_type::GuidRange;
+pub use guild_event_type::GuildEvent;
+pub use guild_member_type::GuildMember;
+pub use guild_rank_type::GuildRank;
+pub use guild_type::Guild;
 pub use gw_abandon_quest_reducer::gw_abandon_quest;
 pub use gw_accept_group_invite_reducer::gw_accept_group_invite;
 pub use gw_accept_quest_reducer::gw_accept_quest;
@@ -1162,6 +1182,7 @@ pub use race_info_type::RaceInfo;
 pub use ranged_impact_reducer::ranged_impact;
 pub use ranged_impact_schedule_type::RangedImpactSchedule;
 pub use realm_group_op_reducer::realm_group_op;
+pub use realm_guild_op_reducer::realm_guild_op;
 pub use realm_loot_op_reducer::realm_loot_op;
 pub use realm_mail_commit_reducer::realm_mail_commit;
 pub use realm_mail_confirm_delivery_reducer::realm_mail_confirm_delivery;
@@ -1223,6 +1244,7 @@ pub use stamp_import_meta_reducer::stamp_import_meta;
 pub use start_item_type::StartItem;
 pub use start_position_type::StartPosition;
 pub use sync_group_mirror_reducer::sync_group_mirror;
+pub use sync_guild_membership_reducer::sync_guild_membership;
 pub use talent_tab_type::TalentTab;
 pub use talent_type::Talent;
 pub use taunt_lock_type::TauntLock;
@@ -1299,6 +1321,10 @@ pub enum Reducer {
         hair_style: u8,
         hair_color: u8,
         facial_hair: u8,
+    },
+    CreateGuild {
+        actor_guid: u64,
+        name: String,
     },
     DebugAcceptQuest {
         character_guid: u64,
@@ -2281,6 +2307,13 @@ pub enum Reducer {
         arg_a: u8,
         arg_b: u8,
     },
+    RealmGuildOp {
+        op: u8,
+        actor_guid: u64,
+        target_guid: u64,
+        arg_a: u32,
+        text: String,
+    },
     RealmLootOp {
         op: u8,
         corpse_guid: u64,
@@ -2468,6 +2501,11 @@ pub enum Reducer {
         master_looter_guid: u64,
         members: Vec<u64>,
     },
+    SyncGuildMembership {
+        character_guid: u64,
+        guild_id: u64,
+        guild_rank: u32,
+    },
     TickAuras {
         schedule: AuraSchedule,
     },
@@ -2504,6 +2542,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::ClearPromotedLootRoll { .. } => "clear_promoted_loot_roll",
             Reducer::ConfirmImport { .. } => "confirm_import",
             Reducer::CreateCharacter { .. } => "create_character",
+            Reducer::CreateGuild { .. } => "create_guild",
             Reducer::DebugAcceptQuest { .. } => "debug_accept_quest",
             Reducer::DebugAddThreat { .. } => "debug_add_threat",
             Reducer::DebugApplyDamage { .. } => "debug_apply_damage",
@@ -2737,6 +2776,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::PublishMotion { .. } => "publish_motion",
             Reducer::RangedImpact { .. } => "ranged_impact",
             Reducer::RealmGroupOp { .. } => "realm_group_op",
+            Reducer::RealmGuildOp { .. } => "realm_guild_op",
             Reducer::RealmLootOp { .. } => "realm_loot_op",
             Reducer::RealmMailCommit { .. } => "realm_mail_commit",
             Reducer::RealmMailConfirmDelivery { .. } => "realm_mail_confirm_delivery",
@@ -2771,6 +2811,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::StageVmapGeneration { .. } => "stage_vmap_generation",
             Reducer::StampImportMeta { .. } => "stamp_import_meta",
             Reducer::SyncGroupMirror { .. } => "sync_group_mirror",
+            Reducer::SyncGuildMembership { .. } => "sync_guild_membership",
             Reducer::TickAuras { .. } => "tick_auras",
             Reducer::TickBreath { .. } => "tick_breath",
             Reducer::TickCreatures { .. } => "tick_creatures",
@@ -4628,6 +4669,34 @@ impl __sdk::Reducer for Reducer {
                 arg_a: arg_a.clone(),
                 arg_b: arg_b.clone(),
             }),
+            Reducer::RealmGuildOp {
+                op,
+                actor_guid,
+                target_guid,
+                arg_a,
+                text,
+            } => __sats::bsatn::to_vec(&realm_guild_op_reducer::RealmGuildOpArgs {
+                op: op.clone(),
+                actor_guid: actor_guid.clone(),
+                target_guid: target_guid.clone(),
+                arg_a: arg_a.clone(),
+                text: text.clone(),
+            }),
+            Reducer::CreateGuild { actor_guid, name } => {
+                __sats::bsatn::to_vec(&create_guild_reducer::CreateGuildArgs {
+                    actor_guid: actor_guid.clone(),
+                    name: name.clone(),
+                })
+            }
+            Reducer::SyncGuildMembership {
+                character_guid,
+                guild_id,
+                guild_rank,
+            } => __sats::bsatn::to_vec(&sync_guild_membership_reducer::SyncGuildMembershipArgs {
+                character_guid: character_guid.clone(),
+                guild_id: guild_id.clone(),
+                guild_rank: guild_rank.clone(),
+            }),
             Reducer::RealmLootOp {
                 op,
                 corpse_guid,
@@ -5090,6 +5159,10 @@ pub struct DbUpdate {
     game_group_event: __sdk::TableUpdate<GroupEvent>,
     game_group_invite: __sdk::TableUpdate<GroupInvite>,
     game_group_member: __sdk::TableUpdate<GroupMember>,
+    game_guild: __sdk::TableUpdate<Guild>,
+    game_guild_event: __sdk::TableUpdate<GuildEvent>,
+    game_guild_member: __sdk::TableUpdate<GuildMember>,
+    game_guild_rank: __sdk::TableUpdate<GuildRank>,
     game_guid_allocator: __sdk::TableUpdate<GuidAllocator>,
     game_guid_range: __sdk::TableUpdate<GuidRange>,
     game_guid_range_registry: __sdk::TableUpdate<GuidRangeAssignment>,
@@ -5428,6 +5501,18 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_group_member" => db_update
                     .game_group_member
                     .append(game_group_member_table::parse_table_update(table_update)?),
+                "game_guild" => db_update
+                    .game_guild
+                    .append(game_guild_table::parse_table_update(table_update)?),
+                "game_guild_event" => db_update
+                    .game_guild_event
+                    .append(game_guild_event_table::parse_table_update(table_update)?),
+                "game_guild_member" => db_update
+                    .game_guild_member
+                    .append(game_guild_member_table::parse_table_update(table_update)?),
+                "game_guild_rank" => db_update
+                    .game_guild_rank
+                    .append(game_guild_rank_table::parse_table_update(table_update)?),
                 "game_guid_allocator" => db_update
                     .game_guid_allocator
                     .append(game_guid_allocator_table::parse_table_update(table_update)?),
@@ -6083,6 +6168,18 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_group_member = cache
             .apply_diff_to_table::<GroupMember>("game_group_member", &self.game_group_member)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_guild = cache
+            .apply_diff_to_table::<Guild>("game_guild", &self.game_guild)
+            .with_updates_by_pk(|row| &row.guild_id);
+        diff.game_guild_event = cache
+            .apply_diff_to_table::<GuildEvent>("game_guild_event", &self.game_guild_event)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_guild_member = cache
+            .apply_diff_to_table::<GuildMember>("game_guild_member", &self.game_guild_member)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_guild_rank = cache
+            .apply_diff_to_table::<GuildRank>("game_guild_rank", &self.game_guild_rank)
+            .with_updates_by_pk(|row| &row.id);
         diff.game_guid_allocator = cache
             .apply_diff_to_table::<GuidAllocator>("game_guid_allocator", &self.game_guid_allocator)
             .with_updates_by_pk(|row| &row.id);
@@ -6675,6 +6772,18 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_group_member" => db_update
                     .game_group_member
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_guild" => db_update
+                    .game_guild
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_guild_event" => db_update
+                    .game_guild_event
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_guild_member" => db_update
+                    .game_guild_member
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_guild_rank" => db_update
+                    .game_guild_rank
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_guid_allocator" => db_update
                     .game_guid_allocator
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -7198,6 +7307,18 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_group_member" => db_update
                     .game_group_member
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_guild" => db_update
+                    .game_guild
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_guild_event" => db_update
+                    .game_guild_event
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_guild_member" => db_update
+                    .game_guild_member
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_guild_rank" => db_update
+                    .game_guild_rank
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_guid_allocator" => db_update
                     .game_guid_allocator
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -7565,6 +7686,10 @@ pub struct AppliedDiff<'r> {
     game_group_event: __sdk::TableAppliedDiff<'r, GroupEvent>,
     game_group_invite: __sdk::TableAppliedDiff<'r, GroupInvite>,
     game_group_member: __sdk::TableAppliedDiff<'r, GroupMember>,
+    game_guild: __sdk::TableAppliedDiff<'r, Guild>,
+    game_guild_event: __sdk::TableAppliedDiff<'r, GuildEvent>,
+    game_guild_member: __sdk::TableAppliedDiff<'r, GuildMember>,
+    game_guild_rank: __sdk::TableAppliedDiff<'r, GuildRank>,
     game_guid_allocator: __sdk::TableAppliedDiff<'r, GuidAllocator>,
     game_guid_range: __sdk::TableAppliedDiff<'r, GuidRange>,
     game_guid_range_registry: __sdk::TableAppliedDiff<'r, GuidRangeAssignment>,
@@ -8038,6 +8163,22 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<GroupMember>(
             "game_group_member",
             &self.game_group_member,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<Guild>("game_guild", &self.game_guild, event);
+        callbacks.invoke_table_row_callbacks::<GuildEvent>(
+            "game_guild_event",
+            &self.game_guild_event,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GuildMember>(
+            "game_guild_member",
+            &self.game_guild_member,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GuildRank>(
+            "game_guild_rank",
+            &self.game_guild_rank,
             event,
         );
         callbacks.invoke_table_row_callbacks::<GuidAllocator>(
@@ -9213,6 +9354,10 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_guid_allocator_table::register_table(client_cache);
         game_guid_range_table::register_table(client_cache);
         game_guid_range_registry_table::register_table(client_cache);
+        game_guild_table::register_table(client_cache);
+        game_guild_event_table::register_table(client_cache);
+        game_guild_member_table::register_table(client_cache);
+        game_guild_rank_table::register_table(client_cache);
         game_import_meta_table::register_table(client_cache);
         game_instance_table::register_table(client_cache);
         game_instance_binding_table::register_table(client_cache);
@@ -9385,6 +9530,10 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_guid_allocator",
         "game_guid_range",
         "game_guid_range_registry",
+        "game_guild",
+        "game_guild_event",
+        "game_guild_member",
+        "game_guild_rank",
         "game_import_meta",
         "game_instance",
         "game_instance_binding",

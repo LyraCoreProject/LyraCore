@@ -1739,6 +1739,55 @@ impl Coordinator {
         )
     }
 
+    /// `realm_guild_op` — one guild op against the database THIS handle points at. The gateway
+    /// calls it on the **realm-core** handle, where guild state is authoritative.
+    ///
+    /// Same trust shape as `realm_group_op`: operator-gated because it takes the acting character's
+    /// guid as an argument (realm-core has no live entity to derive one from), so only the token
+    /// that holds the operator identity may call it. The guid passed is the one this socket
+    /// authenticated into the world with — see `world::guild`. Argument slots are
+    /// `lyracore_shared::guild::realm_op`.
+    pub fn realm_guild_op(
+        &self,
+        op: u8,
+        actor_guid: u64,
+        target_guid: u64,
+        arg_a: u32,
+        text: String,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_guild_op",
+            realm_guild_op_then(op, actor_guid, target_guid, arg_a, text)
+        )
+    }
+
+    /// `create_guild` — the single-database guild path: found a guild on THIS handle's own
+    /// database, which on an unsharded gateway already is the authority.
+    pub fn create_guild(&self, account_id: u64, self_guid: u64, name: &str) -> Result<()> {
+        let _ = account_id; // the gw verb names the actor by guid; the connection is the operator's
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "create_guild",
+            create_guild_then(self_guid, name.to_string())
+        )
+    }
+
+    /// `sync_guild_membership` — stamp one character's own guild id and rank onto THIS handle's
+    /// `game_character` row. The whole of a world shard's guild state; there is no roster mirror.
+    pub fn sync_guild_membership(
+        &self,
+        character_guid: u64,
+        guild_id: u64,
+        guild_rank: u32,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "sync_guild_membership",
+            sync_guild_membership_then(character_guid, guild_id, guild_rank)
+        )
+    }
+
     /// `realm_whisper` — deliver one whisper against the database THIS handle points at. The
     /// gateway calls it on the **realm-core** handle, the only database that can
     /// address both parties of a cross-shard whisper (a guid is realm-wide; an identity is not).

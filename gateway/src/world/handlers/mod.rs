@@ -14,6 +14,7 @@ mod bank;
 mod cast;
 mod char;
 mod combat;
+mod guild;
 mod item;
 mod loot;
 mod mail;
@@ -28,6 +29,9 @@ pub(crate) use bank::handle_bank;
 pub(crate) use cast::{dispatch_cast, CastOutcome, CastPlayer, CastStore, CastTransition};
 pub(crate) use char::handle_char;
 pub(crate) use combat::handle_combat;
+pub(crate) use guild::{
+    dispatch_guild_action, GuildActionOutcome, GuildActionPlayer, GuildActionStore,
+};
 pub(crate) use item::{dispatch_item_action, ItemActionOutcome, ItemActionPlayer, ItemActionStore};
 pub(crate) use loot::handle_loot;
 pub(crate) use mail::handle_mail;

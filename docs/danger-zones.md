@@ -59,6 +59,15 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
      overwrites the reducer bindings with equivalent content; nothing needs undoing. This is also
      the case that establishes the general rule: **a table binding is only needed if the gateway
      subscribes to or reads that table.**
+     **A third exception:** the GUILD bindings — `game_guild` / `game_guild_member` /
+     `game_guild_rank` / `game_guild_event` (table + type files) and the `create_guild` /
+     `realm_guild_op` / `sync_guild_membership` reducers — were hand-spliced for the same reason as
+     the second: no live `spacetimedb-standalone` was available. `game_guild_invite` deliberately
+     has NO binding (it is private and the gateway never reads it), per the rule above. The two
+     `game_character` columns the guild system adds (`guild_id`, `guild_rank`) were hand-added to
+     `character_type.rs` and to `schema_parity.rs`, which covers all five row shapes. A future regen
+     overwrites everything here with equivalent content and adds the unused invite binding; nothing
+     needs undoing.
 
    **A defaulted column's default can be a VALID VALUE, not a sentinel — plan the backfill (#456).**
    `cell` was END-appended to the four AOI-scoped tables as `#[default(0i64)]`, and 0 is the legitimate

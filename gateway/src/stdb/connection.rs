@@ -494,7 +494,14 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_resurrect_request",
         "SELECT * FROM game_whisper_event",
         "SELECT * FROM game_group_event",
+        "SELECT * FROM game_guild_event",
         "SELECT * FROM game_trade_event",
+        // Guild state. Authoritative on realm-core and read from whichever handle the guild
+        // routing picked, so it is in the BASE list: a single-database gateway reads its own
+        // database's copy through the same reads.
+        "SELECT * FROM game_guild",
+        "SELECT * FROM game_guild_member",
+        "SELECT * FROM game_guild_rank",
         // Server-wide tunables. The gateway reads ONE column: `hosts_instances`, at
         // startup, to answer "when this realm creates a dungeon instance, will anything actually
         // spawn its population" (`ShardMap::check_instance_hosting`). Before this subscription the

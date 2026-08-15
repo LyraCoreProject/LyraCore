@@ -263,6 +263,10 @@ mod gm;
 // pick where a ghost teleports. Extracted from `world.rs` (issue #385).
 mod graveyard;
 mod group;
+/// Guilds: the guild row, its ten ranks, the roster, pending invites and the per-recipient event
+/// relay. Realm-core is authoritative; a single-database gateway runs the same cores on its own
+/// database.
+mod guild;
 mod gw;
 mod helpers;
 pub mod hooks;
@@ -347,6 +351,7 @@ pub use gc::*;
 pub use gm::*;
 pub use graveyard::*;
 pub use group::*;
+pub use guild::*;
 pub use instance::*;
 pub use items::*;
 pub use load::*;
