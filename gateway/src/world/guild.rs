@@ -338,7 +338,7 @@ pub(crate) fn member_by_name<St: WorldStore + ?Sized>(
 /// client renders as a failure. The cost of a miss is bounded and self-healing: that shard's
 /// `SMSG_CHAR_ENUM` and guild unit fields read the previous pair until the next op or the next
 /// world entry re-pushes it, and nothing else on a shard reads guild state at all.
-pub(crate) fn push_membership<St: WorldStore + ?Sized>(
+fn push_membership<St: WorldStore + ?Sized>(
     store: &St,
     realm: &dyn WorldStore,
     self_guid: u64,
@@ -490,7 +490,7 @@ pub(crate) fn roster<St: WorldStore + ?Sized>(
 /// A member no connected shard has a row for keeps its guid, rank and notes and takes the defaults
 /// for the rest. It is never dropped: a missing row in the guild panel reads as "they left", which
 /// is a worse lie than a blank one.
-pub(crate) fn render_roster<St: WorldStore + ?Sized>(
+fn render_roster<St: WorldStore + ?Sized>(
     store: &St,
     view: &GuildRosterView,
 ) -> GuildRoster {
