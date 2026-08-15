@@ -119,7 +119,7 @@ pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
     }
     // 249: leaving combat is IMMEDIATE for anyone this disengage left with no engagement at all —
     // vanilla drops the player's combat the moment the mob evades, not ~COMBAT_DROP_MS later (the
-    // decay window still covers DoT/spell-only combat via pass_combat_drop, unchanged).
+    // decay window still covers DoT/spell-only combat via the cycle's combat exit, unchanged).
     let mut freed = attackers_of_guid;
     freed.push(guid);
     let entities = ctx.db.game_world_entity();
@@ -177,9 +177,9 @@ pub(crate) fn is_engaged(ctx: &ReducerContext, guid: u64) -> bool {
 /// The MELEE half of the combatant set — both sides of every live `game_melee_attack` row. The other
 /// half is every entity carrying `UNIT_FLAG_IN_COMBAT` (pure casters, Bloodrage warriors — anything
 /// `enter_combat()` flagged without a melee row); perf catalog 1.6 moved that half to the CALLER,
-/// because the only caller (`pass_regen`) is already iterating `game_world_entity` and can harvest the
-/// flag from its own fresh rows instead of paying a second full table scan for it. A future caller
-/// that isn't already scanning must harvest the flag half itself the same way.
+/// because the only caller (the cycle's regeneration candidate read) gets that half from the flag
+/// bits the tick's active-cell sweep already harvested, instead of paying a second full table scan
+/// for it. A future caller must harvest the flag half itself the same way.
 pub(crate) fn melee_combatant_guids(ctx: &ReducerContext) -> Vec<u64> {
     ctx.db
         .game_melee_attack()

@@ -8,42 +8,36 @@
 //!     row, so the respawn/decay/return-home passes never touch a pet.
 //!   - `despawn_pets`   : delete the owner's pet (free its melee row + threat). Called on owner
 //!     logout/death + on a re-summon.
-//!   - `pass_pet`       : the tick branch (run in the sensing block) — owner-in-combat → arm a
-//!     pet→owner-target melee row (the existing chase + swing tick do the rest); owner-idle → emit a
-//!     follow RUN-leg toward the owner (the chase-pass geometry, "home = owner").
+//!
+//! The PER-TICK decision (take the owner's foe, stand down, trail the owner, despawn) is NOT here —
+//! it is the behavior cycle's pet phase (`creatures::cycle`), which reads this module through the
+//! small `pub(crate)` queries below. What stays here is the pet's identity: its tables, its bar
+//! state, its guid encoding, and summon/despawn.
 //!
 //! Everything is GENERIC over `owner_guid != 0` + the `E_SUMMON_PET` kind — NO per-spell-id branch. The
 //! Imp CASTS Firebolt (3110) via DATA, not code: the importer emits a `game_creature_cast` row keyed to
-//! the Imp's entry (416) from cmangos `creature_template_spells`, and `pass_cast` (run right after
-//! `pass_pet` in the same sense tick) fires it at the pet's melee target with ZERO pet-specific engine
-//! code — the SAME engine + SAME cast table the wild caster mobs use. The Imp KEEPS its melee row
-//! (armed by `pass_pet`) so it still chases/swings as a fallback; `ranged_spell_id` stays 0 (the cast
+//! the Imp's entry (416) from cmangos `creature_template_spells`, and the cycle's cast phase (run right
+//! after the pet phase in the same sense tick) fires it at the pet's melee target with ZERO pet-specific
+//! engine code — the SAME engine + SAME cast table the wild caster mobs use. The Imp KEEPS its melee row
+//! (armed by the pet phase) so it still chases/swings as a fallback; `ranged_spell_id` stays 0 (the cast
 //! is independent of the wand/ranged-auto-attack field). [entity]
 
-use lyracore_shared::{constants, spatial};
-use spacetimedb::{table, ReducerContext, Table};
+use lyracore_shared::constants;
 #[cfg(feature = "debug_reducers")]
 use spacetimedb::reducer;
+use spacetimedb::{table, ReducerContext, Table};
 
 use crate::{
-    game_creature_template, game_entity_motion, game_melee_attack, game_world_entity, MeleeAttack,
-    WorldEntity,
+    game_creature_template, game_entity_motion, game_melee_attack, game_world_entity, WorldEntity,
 };
 
 use super::spawn::{build_creature_entity, CreatureSpawn};
-use super::tick::emit_move_spline;
-
-/// A pet that is FARTHER than this (yards, squared) from its owner walks toward the owner when idle —
-/// the "follow band". Tuned so the pet trails a few yards behind (vanilla pets hover near the owner) and
-/// the band sits comfortably outside `CHASE_MELEE_SQ` ((5 yd)²) so a following pet doesn't jitter on top
-/// of the owner. (8 yd)².
-const PET_FOLLOW_BAND_SQ: f32 = 64.0;
 
 // ── Pet command bar (CMSG_PET_ACTION → stay/follow/attack/dismiss + passive/defensive/aggressive) ──
 /// The player's pet-bar command/react state, in a MODULE-ONLY table (the gateway never reads it — it
 /// only relays the resulting entity/melee changes, so no gateway binding is needed). Keyed by
 /// `owner_guid` (one pet per owner). An ABSENT row IS the vanilla default (Follow + Defensive), which
-/// is byte-for-byte the original derived `pass_pet` behavior — so every existing pet is unchanged
+/// is byte-for-byte the derived behavior pets had before the bar — so every existing pet is unchanged
 /// until the player presses a bar button. Ephemeral: cleared on despawn/logout with the pet (vanilla
 /// pets persist their state; that's a durable-per-character follow-up, not v1). [entity]
 #[table(accessor = game_pet_command)]
@@ -70,15 +64,16 @@ crate::character_owned!(delete, fn sweep_delete_game_pet_command(ctx, character_
 crate::character_owned!(not_transported, fn sweep_transfer_game_pet_command());
 
 // Wire numbering — gtker PetCommandState / mangos CommandStates. MUST match CMSG_PET_ACTION.data + the
-// SMSG_PET_SPELLS bar packing (build_pet_spells); do NOT reorder.
-const CMD_STAY: u8 = 0;
+// SMSG_PET_SPELLS bar packing (build_pet_spells); do NOT reorder. `pub(crate)` for the behavior
+// cycle's pet phase, which reads a stored id back into its own command/react enums.
+pub(crate) const CMD_STAY: u8 = 0;
 const CMD_FOLLOW: u8 = 1;
-const CMD_ATTACK: u8 = 2;
+pub(crate) const CMD_ATTACK: u8 = 2;
 const CMD_DISMISS: u8 = 3;
 // gtker PetReactState / mangos ReactStates.
-const REACT_PASSIVE: u8 = 0;
+pub(crate) const REACT_PASSIVE: u8 = 0;
 const REACT_DEFENSIVE: u8 = 1;
-const REACT_AGGRESSIVE: u8 = 2;
+pub(crate) const REACT_AGGRESSIVE: u8 = 2;
 // The flag byte (high 8 bits) of the packed CMSG_PET_ACTION.data (mangos ActiveStates).
 const ACT_COMMAND: u8 = 0x07;
 const ACT_REACTION: u8 = 0x06;
@@ -86,8 +81,9 @@ const ACT_REACTION: u8 = 0x06;
 const PET_AGGRO_SEEK_SQ: f32 = 100.0;
 
 /// The owner's stored pet command/react state, or the vanilla default (Follow + Defensive, no target)
-/// when no row exists — the absent-row default is exactly the original `pass_pet` behavior. [entity]
-fn pet_command_state(ctx: &ReducerContext, owner_guid: u64) -> (u8, u8, u64) {
+/// when no row exists — the absent-row default is exactly the derived behavior pets had before the
+/// bar existed. Read by the behavior cycle's pet phase. [entity]
+pub(crate) fn pet_command_state(ctx: &ReducerContext, owner_guid: u64) -> (u8, u8, u64) {
     ctx.db
         .game_pet_command()
         .owner_guid()
@@ -272,7 +268,7 @@ fn build_pet_entity(ctx: &ReducerContext, owner: &WorldEntity, entry: u32) -> Op
         respawn_secs: 0, // irrelevant — this transient spawn is never inserted, so no decay/respawn pass ever reads it
     };
     let mut pet = build_creature_entity(&spawn, &tmpl, ctx.random(), 0);
-    pet.owner_guid = owner.guid; // THIS is what makes it a pet (pass_pet keys on owner_guid != 0)
+    pet.owner_guid = owner.guid; // THIS is what makes it a pet (the cycle's pet phase keys on owner_guid != 0)
     Some(pet)
 }
 
@@ -318,289 +314,63 @@ pub fn summon_pet(ctx: &ReducerContext, caster_guid: u64, entry: u32) {
     }
 }
 
-/// PET AI pass (run in the SENSING block of `tick_creatures`, right after aggro/assist + before chase): for
-/// each live pet (`owner_guid != 0`, alive, not CC'd) decide its action keyed on the OWNER's state:
-///   - OWNER IN COMBAT (engaged, or has a live enemy target) → arm a pet→that-target `MeleeAttack` row +
-///     point the pet at the target. The EXISTING chase pass closes the gap and the swing tick swings — no
-///     new combat/movement code. (Idempotent: re-pointing keeps `last_swing_ms` cadence.)
-///   - OWNER IDLE (not in combat) → drop any pet melee row (stop fighting) and, if the pet has drifted
-///     beyond the follow band, emit a RUN follow-leg toward the owner (the return-pass geometry with
-///     "home = the owner's live position").
-///
-/// A dead owner / an owner that left the world → despawn the pet (it never outlives its owner). Snapshot
-/// the work first (collect-then-mutate), like every other pass. [entity]
-///
-/// Work-item 230 classification: ALWAYS ACTIVE, no active-cell gate — a pet's owner is a PLAYER by
-/// definition, so `entities.iter().filter(|e| e.owner_guid != 0)` is already bounded by the pet-owning
-/// player count (small), never the ~2500-creature wild population this item exists to stop scanning; a
-/// pet is inherently tethered to an always-active player anyway.
-///
-/// Work-item 233 rejected an `owner_guid` btree index on `game_world_entity` — soundly: that table is
-/// the hottest write target in the tick (every movement leg writes it), so paying index maintenance
-/// every 0.5s to shave a read that happens every ~4s over a tiny result set is a bad trade. But "no
-/// index" never meant "must full-scan": perf catalog 1.10 takes the third option and harvests the
-/// `owner_guid != 0` guids from `active_cell_creatures`' scan, which already visits every entity row
-/// every tick for the active-cell set. The dedicated scan is gone, the write path is untouched, and
-/// the candidate set + visit order are identical (table order, same predicate).
-///
-/// Work-item 229: gated per PET on `scope.covers(pet.instance_id)` — the PET's own instance, not the
-/// owner's, so a pet momentarily left behind by an owner's cross-instance teleport is still ticked by
-/// whichever row covers where the PET is (and its Follow snap then moves it into the owner's
-/// instance, whose row picks it up next sense tick — never stranded). With only the catch-all row
-/// this admits every pet (equivalence: ai.rs `tick_scope_default_config_…`). Returns covered pets
-/// visited.
-pub(crate) fn pass_pet(
-    ctx: &ReducerContext,
-    now_ms: u32,
-    scope: &super::TickScope,
-    interval_micros: i64,
-    // Perf catalog 1.10: the `owner_guid != 0` guids, harvested from `active_cell_creatures`' scan —
-    // which visits every entity row every tick anyway. In table order, so the visit order (and the
-    // resulting move-event ids) match the old dedicated scan exactly.
-    pet_guids: &[u64],
-) -> usize {
-    let mut visited = 0usize;
-    let entities = ctx.db.game_world_entity();
-    let melee = ctx.db.game_melee_attack();
-
-    // The owner's "combat target": the enemy the pet should engage. The owner is fighting when it has a
-    // live `game_melee_attack` row (a player auto-attacking) — use that row's target; else fall back to the
-    // owner's `target_guid` ONLY when the owner is flagged IN_COMBAT (so a pet doesn't attack a peacefully
-    // selected NPC). Returns the target guid, or 0 = the owner is idle (follow).
-    let owner_combat_target = |owner: &WorldEntity| -> u64 {
-        if let Some(row) = melee.attacker_guid().find(owner.guid) {
-            return row.target_guid;
-        }
-        if owner.unit_flags & constants::unit_flags::IN_COMBAT != 0 {
-            return owner.target_guid;
-        }
-        0
-    };
-
-    // Snapshot: (pet_guid, action). Action = Engage(target) | Follow(dest x,y,z,dur) | Despawn | Idle.
-    enum Act {
-        Engage(u64),
-        Follow {
-            map_id: u32,
-            instance_id: u64, // work-item 190 slice 1: follow the owner's instance too (always 0)
-            dest: (f32, f32, f32),
-            start: (f32, f32, f32),
-            duration_ms: u32, // 0 = a cross-map snap (no move-leg emitted; the position jumps to the owner)
-        },
-        Despawn,
-        Disengage, // owner went idle while the pet held a melee row — drop it (then follow next tick)
+/// The enemy `owner` is fighting, or 0 when it is idle — what a DEFENSIVE or AGGRESSIVE pet piles
+/// onto. A live `game_melee_attack` row IS the fight, so its target wins; a bare selection counts
+/// only while the owner carries the in-combat flag, so a pet does not jump a peacefully targeted
+/// NPC. [entity]
+pub(crate) fn owner_combat_target(ctx: &ReducerContext, owner: &WorldEntity) -> u64 {
+    if let Some(row) = ctx.db.game_melee_attack().attacker_guid().find(owner.guid) {
+        return row.target_guid;
     }
-    let mut work: Vec<(u64, Act)> = Vec::new();
-    for pet in pet_guids.iter().filter_map(|g| entities.guid().find(g)) {
-        // Work-item 229: only this firing's covered instances (see the fn doc).
-        if !scope.covers(pet.instance_id) {
-            continue;
-        }
-        visited += 1;
-        if pet.dead {
-            // A dead pet has no spawn row, so the decay pass never reaps it. kill_creature now deletes a
-            // combat-killed pet outright; this catches any OTHER dead-pet path (e.g. a debug kill) so a dead
-            // Imp never lingers as a stale corpse.
-            work.push((pet.guid, Act::Despawn));
-            continue;
-        }
-        // CC: a frozen/feared pet can't act/move this tick (the existing gates own that). The pet's own
-        // chase/swing already respect CC; the follow leg below must too.
-        if crate::spell::is_self_movement_suppressed(ctx, pet.guid) {
-            continue;
-        }
-        // The owner — gone (logout) or dead → the pet despawns (it never outlives the owner).
-        let Some(owner) = entities.guid().find(pet.owner_guid) else {
-            work.push((pet.guid, Act::Despawn));
-            continue;
-        };
-        if owner.dead {
-            work.push((pet.guid, Act::Despawn));
-            continue;
-        }
-        // Pet command bar (CMSG_PET_ACTION). An ABSENT row is the vanilla default (Follow + Defensive)
-        // = the original derived behavior, so an unmanaged pet is unchanged.
-        let (cmd, react, cmd_target) = pet_command_state(ctx, owner.guid);
-        // Resolve who to engage. An explicit ATTACK command wins; otherwise the react state governs
-        // auto-assist (PASSIVE never engages; DEFENSIVE/AGGRESSIVE assist the owner's combat target;
-        // AGGRESSIVE also seeks a nearby hostile when the owner is idle). The faction/self guards live
-        // in `is_valid_pet_target` (the pet's swing path has no faction gate, so this is load-bearing).
-        let engage: Option<u64> = if cmd == CMD_ATTACK {
-            if is_valid_pet_target(ctx, &owner, pet.guid, cmd_target) {
-                Some(cmd_target)
-            } else {
-                // The commanded target died/vanished → clear the stale ATTACK so the pet resumes
-                // following/assisting instead of standing on a dead foe.
-                set_pet_command(ctx, owner.guid, CMD_FOLLOW, react, 0);
-                None
-            }
-        } else {
-            None
-        };
-        let engage = engage.or_else(|| {
-            if react == REACT_PASSIVE {
-                return None; // passive pets never auto-engage
-            }
-            let t = owner_combat_target(&owner);
-            if is_valid_pet_target(ctx, &owner, pet.guid, t) {
-                Some(t) // defensive + aggressive assist the owner's target
-            } else if react == REACT_AGGRESSIVE {
-                nearest_hostile_near(ctx, &owner, &pet) // aggressive also proactively seeks
-            } else {
-                None
-            }
-        });
-        if let Some(target_guid) = engage {
-            work.push((pet.guid, Act::Engage(target_guid)));
-            continue;
-        }
-        // Not engaging. If the pet currently holds a melee row, drop it (stop fighting a stale foe).
-        if melee.attacker_guid().find(pet.guid).is_some() {
-            work.push((pet.guid, Act::Disengage));
-            continue;
-        }
-        // STAY: hold position — skip the follow-the-owner legs below. (The pet still fights when it
-        // engages above; STAY only stops it trailing the owner around.)
-        if cmd == CMD_STAY {
-            continue;
-        }
-        // Follow the owner when drifted beyond the follow band (and on the same map). Reuse the chase
-        // geometry with the OWNER as the destination ("home = the owner's live position").
-        if pet.map_id != owner.map_id || pet.instance_id != owner.instance_id {
-            // Owner zoned away (e.g. a teleport) OR changed instance (work-item 190 slice 1) — re-stage
-            // the pet at the owner (a snap, not a move-leg: SMSG_MONSTER_MOVE can't cross maps; the
-            // pet's CREATE/DESTROY on the AOI/map relay handles it).
-            work.push((
-                pet.guid,
-                Act::Follow {
-                    map_id: owner.map_id,
-                    instance_id: owner.instance_id,
-                    dest: (owner.x, owner.y, owner.z),
-                    start: (pet.x, pet.y, pet.z),
-                    duration_ms: 0,
-                },
-            ));
-            continue;
-        }
-        let (dx, dy, dz) = (owner.x - pet.x, owner.y - pet.y, owner.z - pet.z);
-        let dist_sq = dx * dx + dy * dy + dz * dz;
-        if dist_sq <= PET_FOLLOW_BAND_SQ {
-            continue; // close enough — hold position
-        }
-        let run = crate::combat::effective_move_speed(ctx, pet.guid, constants::speeds::RUN);
-        // Step ONE SENSE PERIOD of run toward the owner, stopping ~4 yd short (just inside the follow
-        // band so the pet settles a few yd behind, not on top). `pass_pet` only runs on the sense tick,
-        // so the leg must span until the NEXT one — a one-tick step would let a moving owner outrun the
-        // pet. The span is the ROW'S OWN sense period, not a hardcoded 4s (229 review: a 2.5s dedicated
-        // row senses EVERY firing, so a 4s leg re-emitted every 2.5s overlapped — ~1.6× closing speed
-        // with client jump-ahead jitter). At the default 500ms row this is exactly the old 4s leg.
-        let follow_step = run * super::ai::sense_period_secs_for_interval(interval_micros);
-        let (nx, ny) = crate::nav::nav_step(
-            ctx,
-            pet.map_id,
-            (pet.x, pet.y),
-            (owner.x, owner.y),
-            follow_step,
-            4.0,
-            pet.z,
-        );
-        if nx == pet.x && ny == pet.y {
-            continue; // no-op step (already within the stop band) — skip the zero-length leg
-        }
-        let (ndx, ndy) = (nx - pet.x, ny - pet.y);
-        let dist = (ndx * ndx + ndy * ndy).sqrt();
-        let duration_ms = ((dist / run) * 1000.0) as u32;
-        work.push((
-            pet.guid,
-            Act::Follow {
-                map_id: owner.map_id,
-                instance_id: owner.instance_id,
-                dest: (nx, ny, owner.z),
-                start: (pet.x, pet.y, pet.z),
-                duration_ms,
-            },
-        ));
+    if owner.unit_flags & constants::unit_flags::IN_COMBAT != 0 {
+        return owner.target_guid;
     }
-
-    for (pet_guid, act) in work {
-        match act {
-            Act::Despawn => despawn_pets(ctx, pet_guid_owner_of(ctx, pet_guid)),
-            Act::Engage(target_guid) => {
-                // Arm the pet→target melee row (idempotent — same shape as the aggro pass).
-                if melee.attacker_guid().find(pet_guid).is_none() {
-                    melee.insert(MeleeAttack {
-                        attacker_guid: pet_guid,
-                        target_guid,
-                        last_swing_ms: 0,   // swing on the next melee tick
-                        ranged_spell_id: 0, // 0 = melee/no wand auto-shot; Firebolt is cast via pass_cast (game_creature_cast 416→3110), NOT this field
-                        last_offhand_swing_ms: 0,
-                        rout_ends_ms: 0,
-                        pursuit_ends_ms: 0,
-                        leash_x: 0.0,
-                        leash_y: 0.0,
-                    });
-                } else if let Some(mut row) = melee.attacker_guid().find(pet_guid) {
-                    // Re-point at the owner's current target WITHOUT resetting the swing cadence.
-                    if row.target_guid != target_guid {
-                        row.target_guid = target_guid;
-                        melee.attacker_guid().update(row);
-                    }
-                }
-                if let Some(mut pet) = entities.guid().find(pet_guid) {
-                    if pet.target_guid != target_guid {
-                        pet.target_guid = target_guid;
-                        entities.guid().update(pet);
-                    }
-                }
-            }
-            Act::Disengage => {
-                crate::combat::break_own_attacks(ctx, pet_guid); // drop the pet's own attack + threat
-            }
-            Act::Follow {
-                map_id,
-                instance_id,
-                dest: (nx, ny, nz),
-                start: (sx, sy, sz),
-                duration_ms,
-            } => {
-                if duration_ms > 0 {
-                    // ONE relay path (perf 2.3) — see `creatures::tick::emit_move_spline`. This arm
-                    // kept writing the unsubscribed `game_creature_move_event` table after the gateway
-                    // dropped its subscription, so a following pet's leg moved the server and nothing
-                    // else (#357) — every sense tick, forever, on a live shard.
-                    emit_move_spline(
-                        ctx,
-                        pet_guid,
-                        (sx, sy, sz),
-                        (nx, ny, nz),
-                        duration_ms,
-                        true, // a pet follows at a run
-                        now_ms,
-                        map_id,
-                        instance_id,
-                        spatial::grid_cell(sx, sy), // leg START cell, same convention as the chase pass
-                    );
-                }
-                if let Some(mut pet) = entities.guid().find(pet_guid) {
-                    let (gx, gy) = spatial::grid_cell(nx, ny);
-                    pet.map_id = map_id; // follow the owner's map (only changes on a cross-map snap)
-                    pet.instance_id = instance_id; // follow the owner's instance (190 slice 1, always 0)
-                    pet.x = nx;
-                    pet.y = ny;
-                    pet.z = nz;
-                    pet.grid_x = gx;
-                    pet.grid_y = gy;
-                    pet.cell = spatial::grid_cell_id(gx, gy);
-                    pet.last_move_ms = now_ms;
-                    entities.guid().update(pet);
-                }
-            }
-        }
-    }
-    visited
+    0
 }
 
-/// Resolve the OWNER guid for a pet guid so `Act::Despawn` can reuse `despawn_pets(owner)` (which scans by
+/// May this pet attack `target_guid` on its owner's behalf? Resolves the owner, then applies the
+/// exists/alive/not-a-player/not-friendly guard — the pet's swing path has no faction gate of its
+/// own, so this is load-bearing. [entity]
+pub(crate) fn may_attack(
+    ctx: &ReducerContext,
+    owner_guid: u64,
+    pet_guid: u64,
+    target_guid: u64,
+) -> bool {
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(owner_guid)
+        .is_some_and(|owner| is_valid_pet_target(ctx, &owner, pet_guid, target_guid))
+}
+
+/// The nearest hostile an AGGRESSIVE pet seeks out around ITSELF, within `PET_AGGRO_SEEK_SQ`.
+/// `None` when either row is gone or nothing is in range. [entity]
+pub(crate) fn nearest_hostile_for(
+    ctx: &ReducerContext,
+    owner_guid: u64,
+    pet_guid: u64,
+) -> Option<u64> {
+    let entities = ctx.db.game_world_entity();
+    let owner = entities.guid().find(owner_guid)?;
+    let pet = entities.guid().find(pet_guid)?;
+    nearest_hostile_near(ctx, &owner, &pet)
+}
+
+/// Drop a stale ATTACK order — its foe died or vanished — keeping the react stance, so the pet
+/// resumes following instead of standing over a corpse. [entity]
+pub(crate) fn cancel_attack_order(ctx: &ReducerContext, owner_guid: u64) {
+    let (_, react, _) = pet_command_state(ctx, owner_guid);
+    set_pet_command(ctx, owner_guid, CMD_FOLLOW, react, 0);
+}
+
+/// Despawn one pet BY ITS OWN GUID — the cycle's despawn action, resolved back to the owner
+/// `despawn_pets` keys on. [entity]
+pub(crate) fn despawn_pet(ctx: &ReducerContext, pet_guid: u64) {
+    despawn_pets(ctx, pet_guid_owner_of(ctx, pet_guid));
+}
+
+/// Resolve the OWNER guid for a pet guid so [`despawn_pet`] can reuse `despawn_pets(owner)` (which scans by
 /// owner). A pet's guid encodes the owner in its low 48 bits (`pet_guid_for`), so mask the HIGHGUID off;
 /// verify against the live row in case the encoding ever changes. Pure-ish (one find). [entity]
 fn pet_guid_owner_of(ctx: &ReducerContext, pet_guid: u64) -> u64 {
@@ -631,17 +401,5 @@ mod tests {
             "the low 48 bits recover the owner"
         );
         assert_ne!(pet, owner, "pet guid is distinct from the owner");
-    }
-
-    #[test]
-    fn follow_band_sits_outside_melee_range() {
-        // The follow band ((8yd)²) must be larger than the chase melee range ((5yd)²) so a following pet
-        // settles a few yards behind the owner instead of piling onto it / jittering at the melee boundary.
-        const {
-            assert!(
-                PET_FOLLOW_BAND_SQ > super::super::ai::CHASE_MELEE_SQ,
-                "follow band must be outside melee range"
-            )
-        };
     }
 }

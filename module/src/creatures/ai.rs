@@ -41,7 +41,7 @@ pub fn should_flee(health: u32, max_health: u32) -> bool {
 
 /// Is this creature TYPE eligible to flee at low HP? Fleeing is SELECTIVE in vanilla, not universal:
 /// HUMANOIDS rout to call for help, while BEASTS (wolves/boars), undead, elementals, etc. fight to the
-/// death. The old `pass_flee` fled EVERY near-dead creature, so a Northshire wolf (BEAST) ran away and
+/// death. The rout once fled EVERY near-dead creature, so a Northshire wolf (BEAST) ran away and
 /// dropped combat ("not all enemies should flee"). This is the minimal heuristic gate (a per-template
 /// `flags_extra` NO_FLEE flag from the DBC is the fuller fix). `creature_type` is the template column the
 /// importer loads verbatim. Pure — unit-tested. [creatures]
@@ -101,7 +101,7 @@ pub fn should_evade(now_ms: u32, pursuit_ends_ms: u32, target_dist_sq: f32) -> b
 /// cmangos "wounded slowdown" — the mechanic that makes a fleeing (definitionally low-HP) mob
 /// CATCHABLE. A creature under 30% HP moves slower: factor `1 − ((30 − min(hp%,30)) × 1.67)/100`,
 /// floored ~0.5 (×1.0 at ≥30% HP, ×0.75 at 15%, ×0.67 at 10%, ~×0.5 near death). Applied to the flee
-/// leg in `pass_flee`. Without it a fleer ran at the flat 7.0 yd/s player-run constant — exact parity,
+/// leg by the cycle's rout phase. Without it a fleer ran at the flat 7.0 yd/s player-run constant — exact parity,
 /// so the chase gap never closed and the mob was uncatchable.
 /// Pure — unit-tested. [creatures]
 pub fn wounded_slow_factor(health: u32, max_health: u32) -> f32 {
@@ -628,6 +628,23 @@ pub fn leg_in_flight(now_ms: u32, leg_ends_ms: u32) -> bool {
     now_ms < leg_ends_ms
 }
 
+/// `to` is `speed` yards away from `from` in this many milliseconds. `speed` is yd/s, already
+/// snare/wound-adjusted by the caller if its mover applies one. Pure.
+fn leg_duration_ms(from: (f32, f32), to: (f32, f32), speed: f32) -> u32 {
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    ((dx * dx + dy * dy).sqrt() / speed * 1000.0) as u32
+}
+
+/// The tail every stepped mover shares once navigation has resolved the real landing point: drop a
+/// degenerate zero-length step (the client rejects it), else give the landing point and the leg's
+/// duration at `speed` yd/s. Pure.
+pub(crate) fn leg_toward(from: (f32, f32), to: (f32, f32), speed: f32) -> Option<(f32, f32, u32)> {
+    if to == from {
+        return None;
+    }
+    Some((to.0, to.1, leg_duration_ms(from, to, speed)))
+}
+
 /// The index AFTER `cur_idx` in a route of `len` waypoints, wrapping at the end (ordered patrol
 /// traversal: 0→1→…→len-1→0). `len == 0` → 0 (caller guards `len >= 2`). Pure — unit-tested.
 pub fn next_waypoint_idx(cur_idx: usize, len: usize) -> usize {
@@ -775,8 +792,8 @@ mod tests {
 
     /// Work-item 230's engaged-creature-never-dormant rule ("a player could drag one far away") only
     /// holds if a creature glued to a player by combat can never wander past the active-cell radius
-    /// before the active set would have covered it anyway. `pass_chase`/`pass_flee` don't consult the
-    /// active set at all (see their doc comments in tick.rs) — that's the primary guarantee — but this
+    /// before the active set would have covered it anyway. The chase and rout phases don't consult
+    /// the active set at all (see their doc comments) — that's the primary guarantee — but this
     /// pins the geometric invariant too: the chase cutoff (the farthest a target can be and still be
     /// pursued) must stay inside `combat_active_radius`, so even a hypothetical future re-gate could
     /// never sleep a still-engaged creature out from under its target.
@@ -1582,5 +1599,4 @@ mod tests {
         }
         assert_eq!(seen.len(), 4, "ordered traversal visits all waypoints");
     }
-
 }

@@ -573,7 +573,7 @@ pub fn equip_swap(
 /// Send a creature on a single movement leg to `(x, y, z)` (Smite's run to the weapon rack): the
 /// EXISTING creature move-event emission pattern (chase/pet-follow legs), used directly — emit one
 /// `CreatureMoveEvent` (relayed as `SMSG_MONSTER_MOVE`) and snap the server-side position/grid to
-/// the destination, exactly like `pass_chase`. Duration from the snare-aware
+/// the destination, exactly like a chase leg. Duration from the snare-aware
 /// `combat::effective_move_speed` over the 2D distance. NOTE (future cleanup, work-item 181): when
 /// the shared leg chokepoint lands, route this through it instead. Errs for a missing/player/dead
 /// mover; a zero-length leg is a no-op Ok.

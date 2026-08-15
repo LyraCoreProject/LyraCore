@@ -1770,7 +1770,8 @@ pub fn debug_disarm_instance_tick(ctx: &ReducerContext, instance_id: u64) -> Res
 
 /// Server-side integration probe for the `A_COMBAT_HEALTH_REGEN_PCT` aura (combat health regen
 /// in combat). Reads the LIVE `game_aura` table for `character_guid`, sums every active
-/// `A_COMBAT_HEALTH_REGEN_PCT` aura effect (exactly as `pass_regen` does), then computes the
+/// `A_COMBAT_HEALTH_REGEN_PCT` aura effect (exactly as the cycle's regeneration phase does), then
+/// computes the
 /// expected per-tick delta using the same `regen_health_in_combat` path. Logs the result at INFO.
 ///
 /// Returns `Ok` when the pct sum AND the tick delta are both non-zero (the aura is present AND is

@@ -60,7 +60,7 @@ pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
 /// corpse must decay on schedule whether or not a player is anywhere near it.
 /// Work-item 229: catch-all firing only, still covering ALL instances (see
 /// `TickScope::runs_global_passes`). Returns spawn rows scanned.
-pub(super) fn pass_decay(ctx: &ReducerContext) -> usize {
+pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
     let now_ts = ctx.timestamp;
     let entities = ctx.db.game_world_entity();
     let spawns = ctx.db.game_creature_spawn();
@@ -180,7 +180,7 @@ pub(super) fn pass_decay(ctx: &ReducerContext) -> usize {
 /// Work-item 230 classification: STAYS GLOBAL — `respawn_at` is a due-time; a spawn point must
 /// repopulate on schedule whether or not a player is nearby to see it happen.
 /// Work-item 229: catch-all firing only, still covering ALL instances. Returns spawn rows scanned.
-pub(super) fn pass_respawn(ctx: &ReducerContext) -> usize {
+pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
     let now_ts = ctx.timestamp;
     let entities = ctx.db.game_world_entity();
     let spawns = ctx.db.game_creature_spawn();
@@ -233,7 +233,7 @@ pub(super) fn pass_respawn(ctx: &ReducerContext) -> usize {
 /// respawn/decay), not proximity; GAMEOBJECTS are also out of this item's creature-ticking scope (see
 /// the "defer it" note above, pre-dating 230).
 /// Work-item 229: catch-all firing only, still covering ALL instances. Returns GO rows scanned.
-pub(super) fn pass_gameobject_respawn(ctx: &ReducerContext) -> usize {
+pub(crate) fn pass_gameobject_respawn(ctx: &ReducerContext) -> usize {
     let now = ctx.timestamp.to_micros_since_unix_epoch() as u64;
     let gos = ctx.db.game_gameobject();
     let members = ctx.db.game_gameobject_pool_member();

@@ -17,7 +17,7 @@
 //! | `on_group_invite`   | `group::group_invite`, after the invite row + event are written | [`GroupInvitePayload`] |
 //! | `on_death`          | `combat::kill_creature` (creature corpse AND pet despawn), plus each player-death site (melee tick, spell damage, `debug_set_health(0)`) | [`DeathPayload`] |
 //! | `on_kill`           | `combat::kill_creature` when a player `killer` gets credit | [`KillPayload`] |
-//! | `on_aggro`          | `creatures::pass_aggro_assist` — direct proximity aggro AND the pack-assist arm | [`AggroPayload`] |
+//! | `on_aggro`          | the behavior cycle's aggro phase — direct proximity aggro AND the pack-assist arm | [`AggroPayload`] |
 //! | `on_cast_resolved`  | `spell::resolve_cast_at` success exit — every cast path funnels through it | [`CastResolvedPayload`] |
 //! | `on_loot`           | `items::apply_take_loot` success — player + debug loot both route here | [`LootPayload`] |
 //! | `on_quest_accept`   | `quest::apply_accept_quest` AND `quest::grant_quest_unchecked` (the debug/harness grant) | [`QuestAcceptPayload`] |

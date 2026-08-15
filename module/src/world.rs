@@ -1617,7 +1617,7 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
 
     // Tier 3b (Warlock pet): a warlock's death dismisses its pet (vanilla — the Imp despawns when the
     // master dies). Done on release (the death→ghost transition) so the pet is gone for the corpse run.
-    // `pass_pet` ALSO despawns a pet whose owner is dead, so this is belt-and-suspenders (prompt; immediate).
+    // The cycle's pet phase ALSO despawns a pet whose owner is dead, so this is belt-and-suspenders (prompt; immediate).
     crate::creatures::despawn_pets(ctx, player_guid);
 
     // Teleport the ghost to the graveyard `graveyard::resolve_graveyard` (work-item 209) resolves for

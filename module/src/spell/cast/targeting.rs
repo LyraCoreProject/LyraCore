@@ -1227,7 +1227,7 @@ pub(crate) fn apply_effect(
             // first (one pet per owner — a re-summon replaces it), then spawns the new pet at the caster
             // with owner_guid = caster. Generic over the kind — the importer maps the raw vanilla Summon
             // effect (56) to E_SUMMON_PET with the misc_value (the creature entry) → p0; the engine never
-            // names Summon Imp. The pet then rides the creature tick's pass_pet branch (follow/engage) +
+            // names Summon Imp. The pet then rides the behavior cycle's pet phase (follow/engage) +
             // the existing chase/melee. Melee Imp for v1 (Firebolt is a follow-up via a creature rotation
             // row). No-op if p0 is 0 or the creature template isn't loaded (logged inside).
             let entry = e.p0.max(0) as u32;

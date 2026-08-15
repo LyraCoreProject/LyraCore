@@ -96,8 +96,8 @@ pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Opti
     // #519: a creature killed mid-leg (flee/patrol/chase) still carries an in-flight
     // `game_creature_spline` row with a real duration — left alone, the client keeps interpolating the
     // corpse toward the old destination after death (a Kobold Vermin sliding onward while dead). Same
-    // "TOLD to halt instead of left interpolating" 0-duration stop `pass_chase`'s stand-and-swing branch
-    // uses (movement.rs), but fired here instead so EVERY lethal path (flee/patrol/chase, not just
+    // "TOLD to halt instead of left interpolating" 0-duration stop the cycle's chase phase uses when a
+    // creature plants to swing, but fired here instead so EVERY lethal path (flee/patrol/chase, not just
     // engaged melee) gets the same treatment at this one death chokepoint. The stop lands at the
     // server's authoritative death position (`target.x/y/z`, unmoved by the kill) so the corpse renders
     // exactly where loot-click range judges it.
