@@ -219,6 +219,67 @@ T1  (serial, blocks everything)
 T2..T6 can all start the moment T1 is integrated. T3 does not truly need T2's invite flow: its tests
 seed multi-member guilds through `InMemoryGuildActions` canned reads. Same for T4.
 
+## T1 landed — what actually shipped
+
+T1 is integrated. Read `module/src/guild.rs`, `crates/lyracore-shared/src/guild.rs`,
+`gateway/src/world/guild.rs` and `gateway/src/world/handlers/guild.rs` before writing anything. The
+shapes below are load-bearing; copy them, do not restructure them.
+
+**Reserved number blocks.** T2..T6 run in parallel and all append to the shared contract. Each
+ticket owns a block and must stay inside it, or the branches collide on merge.
+
+| Ticket | `event_kind` | `realm_op` |
+| --- | --- | --- |
+| T1 (done) | 0 (`ROSTER`) | 0 (`CREATE`) |
+| T2 | 1–4 | 1–3 |
+| T3 | 5–8 | 4–7 |
+| T4 | 9–10 | 8–9 |
+| T5 | 11–12 | 10–11 |
+| T6 | 13–16 | 12–15 |
+
+**`realm_guild_op`'s signature is frozen.** Append match arms only:
+
+```rust
+realm_guild_op(ctx, op: u8, actor_guid: u64, target_guid: u64, arg_a: u32, text: String)
+```
+
+`target_guid` carries invite/kick/leader targets, `arg_a` a rank index, `text` a name, MOTD or note.
+Changing the signature costs another hand-spliced binding — see below.
+
+**Hand-spliced bindings.** There is no `spacetime` CLI in this environment, so T1 hand-wrote the
+gateway bindings for the guild tables and reducers under `gateway/src/stdb/bindings/`, plus ~13 edit
+sites in `bindings/mod.rs`. `docs/danger-zones.md` §1.2 now records this as a third exception.
+**T2..T6 add no new tables and should not need to touch `bindings/`** — but any new
+gateway-callable reducer would, so do not add one casually.
+
+**Success is `GuildCommandResult::PlayerNoMoreInGuild`.** That variant is wire code 0, which vanilla
+uses for "no message" — success. The name reads like a refusal. It is not. Use it when a guild
+command succeeds.
+
+**`sync_guild_membership` is the third reducer.** Realm-core holds no `game_character` rows, so the
+realm plane cannot stamp a character's `guild_id` / `guild_rank` itself. T1 added
+`sync_guild_membership(character_guid, guild_id, guild_rank)`, the tiny analogue of
+`sync_group_mirror`. **T2 and T3 must call `world::guild::push_membership` after every
+membership-changing op**, or the scalars silently rot and `SMSG_CHAR_ENUM` lies.
+
+**Routing tests live in `world/guild_tests.rs`**, not inside `world/guild.rs`. `InMemoryStore` is
+private to `world::tests`, so a second `WorldStore` impl inside `guild.rs` would be ~700 lines of
+duplication. This follows the `party_tests` / `loot_tests` / `mail_tests` precedent. Where a ticket
+below says "routing tests in `world/guild.rs`", write them in `world/guild_tests.rs` instead.
+
+**Cores already written — reuse, do not reimplement**: `guild_of`, `members_of`, `create_guild_for`,
+`remove_member` (already handles master succession and last-member disband), `set_character_guild`,
+`seed_ranks`, `disband`. `GuildMember.character_guid` uniqueness is enforced in code through
+`guild_of`, exactly as `GroupMember` does — there is no `#[unique]` constraint to lean on.
+
+**`GuildView.rank_names` is a `Vec<String>`**, not `[String; 10]`, because `[T; 10]: Default` is not
+in std. The fixed array is built at the packet boundary with `std::array::from_fn`, which pads a
+short guild rather than panicking. The ten-row invariant is enforced where the rows are written.
+
+**Known-failing test, not yours.** `wire_corruption_tests::writer_trace_dump_writes_a_file_with_the_traced_frames`
+fails in this environment: it hardcodes `/tmp/gw-writer-crash/`, which is owned by a different uid.
+Verified pre-existing and unrelated to guild work. Ignore it; do not "fix" it.
+
 ## Shared rules for every ticket
 
 - **Append, do not interleave.** T2..T6 all touch `module/src/guild.rs`,
