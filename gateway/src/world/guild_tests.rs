@@ -10,7 +10,8 @@
 
 use super::*;
 
-use super::party_tests::{character, GINGER, VIM};
+use super::party_tests::{character, GINGER, TRIN, VIM};
+use lyracore_shared::guild::{err, event_kind, realm_op};
 
 /// A live guild topology: realm-core plus the two world shards, wired the way the production
 /// gateway wires them — every shard's `realm_store()` is the realm handle, and `world_stores()` is
@@ -794,4 +795,369 @@ fn an_unknown_guild_id_has_no_roster() {
     let (_realm, world, _instances) = roster_topology();
 
     assert_eq!(guild::roster(world.as_ref(), 99).unwrap(), None);
+}
+
+// --- Teardown: leave, kick, disband and the leadership transfer -----------------------------
+
+/// [`guild_topology`] with a THREE-member guild already on the authority: Ginger is the master and
+/// stands on `world`, Vim stands on `instances`, Trin stands on `world`.
+///
+/// Seeded straight into realm-core's roster rather than through an invite flow — teardown does not
+/// depend on how a member joined, and the invite flow is another ticket's.
+fn teardown_topology() -> (
+    std::sync::Arc<InMemoryStore>, // realm-core
+    std::sync::Arc<InMemoryStore>, // the open-world shard
+    std::sync::Arc<InMemoryStore>, // the instances shard
+    ShardCallLog,
+) {
+    let calls: ShardCallLog = Default::default();
+    let realm = std::sync::Arc::new(InMemoryStore {
+        shard: "lyracore-realm".into(),
+        calls: calls.clone(),
+        is_realm: true,
+        ..Default::default()
+    });
+    let world = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        realm: Some(realm.clone()),
+        characters: vec![character(GINGER, "Ginger"), character(TRIN, "Trin")],
+        live_guids: vec![GINGER, TRIN],
+        ..Default::default()
+    });
+    let instances = std::sync::Arc::new(InMemoryStore {
+        shard: "instances".into(),
+        calls: calls.clone(),
+        realm: Some(realm.clone()),
+        characters: vec![character(VIM, "Vim")],
+        live_guids: vec![VIM],
+        ..Default::default()
+    });
+    for shard in [&world, &instances] {
+        *shard.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+    }
+    {
+        let mut g = realm.guild.lock().unwrap();
+        g.create(GINGER, "The Silver Hand", 0).unwrap();
+        g.members.push((1, VIM, 4));
+        g.members.push((1, TRIN, 4));
+    }
+    calls.lock().unwrap().clear();
+    (realm, world, instances, calls)
+}
+
+/// The authority's roster, as guids in join order.
+fn roster(realm: &InMemoryStore) -> Vec<u64> {
+    realm.guild.lock().unwrap().member_guids(1)
+}
+
+/// Every notification the authority queued for `kind`, as `(recipient, other_guid, other_name)`.
+fn notices(realm: &InMemoryStore, kind: u8) -> Vec<(u64, u64, String)> {
+    realm
+        .guild
+        .lock()
+        .unwrap()
+        .events
+        .iter()
+        .filter(|(_, k, ..)| *k == kind)
+        .map(|(recipient, _, other, name)| (*recipient, *other, name.clone()))
+        .collect()
+}
+
+/// What `sync_guild_membership` last wrote for `guid` on `shard`. `None` = never pushed there.
+fn columns(shard: &InMemoryStore, guid: u64) -> Option<(u64, u32)> {
+    shard
+        .guild_columns
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(g, ..)| *g == guid)
+        .map(|(_, guild_id, rank)| (*guild_id, *rank))
+}
+
+fn leave(store: &InMemoryStore, self_guid: u64, actor_name: &str) -> Result<()> {
+    guild::run(
+        store,
+        7,
+        self_guid,
+        guild::Op::Leave {
+            actor_name: actor_name.into(),
+        },
+    )
+}
+
+/// AC1: a non-master leaving takes exactly their own membership with them, the guild survives, the
+/// remaining members are told, and EVERY shard learns the leaver is guildless — including the one
+/// they are not standing on.
+#[test]
+fn a_non_master_leave_removes_only_that_member_and_clears_their_columns_everywhere() {
+    let (realm, world, instances, _calls) = teardown_topology();
+
+    leave(instances.as_ref(), VIM, "Vim").expect("a plain member may always leave");
+
+    assert_eq!(roster(realm.as_ref()), vec![GINGER, TRIN]);
+    assert!(
+        realm.guild.lock().unwrap().view(1).is_some(),
+        "the guild survives a member leaving it"
+    );
+    assert_eq!(
+        notices(realm.as_ref(), event_kind::LEFT),
+        vec![
+            (GINGER, VIM, "Vim".to_string()),
+            (TRIN, VIM, "Vim".to_string())
+        ],
+        "everyone who stayed is told who left, by name"
+    );
+    for shard in [&world, &instances] {
+        assert_eq!(
+            columns(shard, VIM),
+            Some((0, 0)),
+            "shard {} still thinks Vim is in a guild",
+            shard.shard
+        );
+    }
+}
+
+/// AC2: the master cannot simply walk out. Succession is a decision the player makes; the realm
+/// refuses rather than promoting somebody, and nothing moves.
+#[test]
+fn a_master_leaving_with_members_remaining_is_refused_and_changes_nothing() {
+    let (realm, world, _instances, _calls) = teardown_topology();
+
+    let refused = leave(world.as_ref(), GINGER, "Ginger").expect_err("the master may not leave");
+
+    assert!(format!("{refused:#}").contains(err::MASTER_MUST_TRANSFER_OR_DISBAND));
+    assert_eq!(roster(realm.as_ref()), vec![GINGER, VIM, TRIN]);
+    assert!(notices(realm.as_ref(), event_kind::LEFT).is_empty());
+}
+
+/// AC3: a master who is the LAST member may leave, and the guild goes with them — otherwise a
+/// one-member guild would hold its unique name forever.
+#[test]
+fn a_last_member_master_may_leave_and_the_guild_goes_with_them() {
+    let (realm, world, _instances, _calls) = teardown_topology();
+    realm
+        .guild
+        .lock()
+        .unwrap()
+        .members
+        .retain(|(_, guid, _)| *guid == GINGER);
+
+    leave(world.as_ref(), GINGER, "Ginger").expect("the last member may always leave");
+
+    assert!(roster(realm.as_ref()).is_empty());
+    assert_eq!(realm.guild.lock().unwrap().disbanded, vec![1]);
+    assert_eq!(columns(world.as_ref(), GINGER), Some((0, 0)));
+}
+
+/// AC4: the master kicks by NAME, the name resolves against the guild's own roster, and everyone
+/// who stayed hears about it. The kicked member is cleared on every shard, not just the kicker's.
+#[test]
+fn a_kick_by_the_master_removes_the_named_member_and_broadcasts_removed() {
+    use super::handlers::GuildActionStore;
+    let (realm, world, instances, _calls) = teardown_topology();
+
+    world
+        .guild_remove(7, GINGER, "Vim")
+        .expect("the master may remove a member");
+
+    assert_eq!(roster(realm.as_ref()), vec![GINGER, TRIN]);
+    assert_eq!(
+        notices(realm.as_ref(), event_kind::REMOVED),
+        vec![
+            (GINGER, VIM, "Vim".to_string()),
+            (TRIN, VIM, "Vim".to_string())
+        ]
+    );
+    assert_eq!(
+        columns(instances.as_ref(), VIM),
+        Some((0, 0)),
+        "the kicked member's own shard has to hear it too"
+    );
+}
+
+/// AC5, AC6 and AC7: the three kicks the authority refuses. Each one leaves the roster exactly as
+/// it was — a refused kick that still removed a row would be the worst of both.
+#[test]
+fn a_kick_is_refused_for_a_non_master_a_non_member_and_the_master_themselves() {
+    use super::handlers::GuildActionStore;
+    let (realm, world, instances, _calls) = teardown_topology();
+
+    let not_master = instances
+        .guild_remove(7, VIM, "Trin")
+        .expect_err("a plain member may not kick");
+    assert!(format!("{not_master:#}").contains(err::NOT_GUILD_MASTER));
+
+    let not_member = world
+        .guild_remove(7, GINGER, "Nobody")
+        .expect_err("a name nobody in the guild answers to is refused");
+    assert!(format!("{not_member:#}").contains(err::TARGET_NOT_IN_GUILD));
+
+    let themselves = world
+        .guild_remove(7, GINGER, "Ginger")
+        .expect_err("a kick is never a leave");
+    assert!(format!("{themselves:#}").contains(err::CANNOT_REMOVE_SELF));
+
+    assert_eq!(roster(realm.as_ref()), vec![GINGER, VIM, TRIN]);
+    assert!(notices(realm.as_ref(), event_kind::REMOVED).is_empty());
+}
+
+/// **AC8, the criterion this ticket exists for.** A disband leaves ZERO rows for the guild, and
+/// every ex-member's guild columns are zeroed on every shard — including the member standing in a
+/// dungeon on the other database. One member left holding a dead guild id can never join another
+/// guild, because `GuildMember.character_guid` is unique and enforced in code.
+#[test]
+fn a_disband_leaves_no_row_behind_and_clears_every_ex_members_columns_on_every_shard() {
+    let (realm, world, instances, _calls) = teardown_topology();
+
+    guild::run(world.as_ref(), 7, GINGER, guild::Op::Disband).expect("the master may disband");
+
+    let g = realm.guild.lock().unwrap();
+    assert!(g.members.is_empty(), "not one member row may survive");
+    assert!(g.guilds.is_empty(), "the guild row goes with them");
+    assert_eq!(g.disbanded, vec![1]);
+    drop(g);
+    assert_eq!(
+        notices(realm.as_ref(), event_kind::DISBANDED)
+            .into_iter()
+            .map(|(recipient, ..)| recipient)
+            .collect::<Vec<_>>(),
+        vec![GINGER, VIM, TRIN],
+        "every member the guild had is told, while it still has them"
+    );
+    for guid in [GINGER, VIM, TRIN] {
+        for shard in [&world, &instances] {
+            assert_eq!(
+                columns(shard, guid),
+                Some((0, 0)),
+                "shard {} still holds a dead guild for {guid}",
+                shard.shard
+            );
+        }
+    }
+}
+
+/// AC9: a disband by anybody but the master is refused, and the guild is untouched.
+#[test]
+fn a_disband_by_a_non_master_is_refused_and_changes_nothing() {
+    let (realm, _world, instances, _calls) = teardown_topology();
+
+    let refused = guild::run(instances.as_ref(), 7, VIM, guild::Op::Disband)
+        .expect_err("a plain member may not disband");
+
+    assert!(format!("{refused:#}").contains(err::NOT_GUILD_MASTER));
+    assert_eq!(roster(realm.as_ref()), vec![GINGER, VIM, TRIN]);
+    assert!(realm.guild.lock().unwrap().disbanded.is_empty());
+}
+
+/// AC10 and AC11: the transfer moves the master, swaps the two ranks and tells the guild; a
+/// transfer to somebody outside the guild is refused.
+#[test]
+fn a_leadership_transfer_moves_the_master_and_both_ranks() {
+    use super::handlers::GuildActionStore;
+    let (realm, world, instances, _calls) = teardown_topology();
+
+    world
+        .guild_set_master(7, GINGER, "Vim")
+        .expect("the master may hand the guild on");
+
+    let g = realm.guild.lock().unwrap();
+    assert_eq!(g.master_of(1), Some(VIM));
+    assert_eq!(g.guild_of(VIM), Some((1, 0)), "the new master takes rank 0");
+    assert_eq!(
+        g.guild_of(GINGER),
+        Some((1, 1)),
+        "the old master keeps officer standing rather than dropping to the bottom"
+    );
+    drop(g);
+    assert_eq!(
+        notices(realm.as_ref(), event_kind::LEADER_CHANGED)
+            .into_iter()
+            .map(|(recipient, other, _)| (recipient, other))
+            .collect::<Vec<_>>(),
+        vec![(GINGER, VIM), (VIM, VIM), (TRIN, VIM)]
+    );
+    assert_eq!(columns(world.as_ref(), GINGER), Some((1, 1)));
+    assert_eq!(columns(instances.as_ref(), VIM), Some((1, 0)));
+
+    // …and the same transfer to somebody the guild does not have is refused. Vim leads now.
+    let stranger = instances
+        .guild_set_master(7, VIM, "Nobody")
+        .expect_err("a non-member cannot be made master");
+    assert!(format!("{stranger:#}").contains(err::TARGET_NOT_IN_GUILD));
+}
+
+/// **AC13, the single-database assertion.** An unsharded gateway runs leave, kick, disband and the
+/// leadership transfer on the player's OWN database, byte-identically — no realm handle exists to
+/// route to, and the module's cores stamp the character's own columns in the same transaction.
+#[test]
+fn an_unsharded_gateway_runs_every_teardown_op_on_the_players_own_shard() {
+    use super::handlers::GuildActionStore;
+    let calls: ShardCallLog = Default::default();
+    let store = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        characters: vec![character(GINGER, "Ginger"), character(VIM, "Vim")],
+        live_guids: vec![GINGER, VIM],
+        ..Default::default() // no `realm`, no `peers` — the unconfigured gateway
+    });
+    assert!(store.realm_store().is_none());
+    {
+        let mut g = store.guild.lock().unwrap();
+        g.create(GINGER, "The Silver Hand", 0).unwrap();
+        g.members.push((1, VIM, 4));
+    }
+
+    store
+        .guild_remove(7, GINGER, "Vim")
+        .expect("the kick runs on the one database");
+
+    assert_eq!(
+        store.guild.lock().unwrap().member_guids(1),
+        vec![GINGER],
+        "the one database is the authority"
+    );
+    assert_eq!(
+        columns(store.as_ref(), VIM),
+        Some((0, 0)),
+        "the module's core stamps the kicked member's own columns in the same transaction"
+    );
+    let log = calls.lock().unwrap().clone();
+    assert!(
+        log.iter().all(|(shard, _)| shard == "world"),
+        "every call must land on the player's own database"
+    );
+    assert_eq!(
+        log.iter().filter(|(_, c)| c == "realm_guild_op").count(),
+        1,
+        "one op, run once, against the player's own database"
+    );
+
+    // The master is alone now, so the leave is the one a last member is allowed — and it disbands.
+    store
+        .guild_leave(7, GINGER)
+        .expect("the last member may leave");
+    assert!(store.guild.lock().unwrap().guilds.is_empty());
+    assert_eq!(columns(store.as_ref(), GINGER), Some((0, 0)));
+}
+
+/// The op reaches the AUTHORITY with the slots the shared contract documents. The gateway and the
+/// module are deployed separately, so the packing is a wire fact, not an implementation detail.
+#[test]
+fn every_teardown_op_reaches_realm_core_in_its_contracted_slots() {
+    use super::handlers::GuildActionStore;
+    let (realm, world, _instances, _calls) = teardown_topology();
+
+    world.guild_remove(7, GINGER, "Vim").unwrap();
+    world.guild_set_master(7, GINGER, "Trin").unwrap();
+    guild::run(world.as_ref(), 7, TRIN, guild::Op::Disband).unwrap();
+
+    assert_eq!(
+        realm.guild.lock().unwrap().ops.as_slice(),
+        &[
+            (realm_op::REMOVE, GINGER, VIM, 0, "Vim".to_string()),
+            (realm_op::LEADER, GINGER, TRIN, 0, "Trin".to_string()),
+            (realm_op::DISBAND, TRIN, 0, 0, String::new()),
+        ]
+    );
 }

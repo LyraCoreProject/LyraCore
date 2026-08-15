@@ -97,4 +97,20 @@ impl Coordinator {
             members: members.into_iter().map(|(_, m)| m).collect(),
         })
     }
+
+    /// Every member guid of `guild_id`, in join order (member-row id) — the order the module's own
+    /// `members_of` answers in. The disband fan-out's input.
+    pub fn guild_member_guids(&self, guild_id: u64) -> Vec<u64> {
+        let guard = self.0.coord();
+        let mut members: Vec<(u64, u64)> = guard
+            .conn
+            .db
+            .game_guild_member()
+            .iter()
+            .filter(|m| m.guild_id == guild_id)
+            .map(|m| (m.id, m.character_guid))
+            .collect();
+        members.sort_by_key(|(id, _)| *id);
+        members.into_iter().map(|(_, guid)| guid).collect()
+    }
 }

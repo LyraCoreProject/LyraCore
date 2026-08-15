@@ -56,6 +56,22 @@ pub(crate) enum Op {
     Accept { actor_name: String },
     /// `CMSG_GUILD_DECLINE`. `actor_name` is what the inviter's notification carries.
     Decline { actor_name: String },
+    /// `CMSG_GUILD_LEAVE`. Carries the caller's OWN name, because realm-core has no character rows
+    /// to resolve one from and the departure notice needs it.
+    Leave { actor_name: String },
+    /// `CMSG_GUILD_REMOVE` — the guild master removes `target_guid`, already resolved from the
+    /// typed name by [`member_by_name`].
+    Remove {
+        target_guid: u64,
+        target_name: String,
+    },
+    /// `CMSG_GUILD_DISBAND` — the guild master destroys the guild.
+    Disband,
+    /// `CMSG_GUILD_LEADER` — the guild master hands the guild to `target_guid`.
+    Leader {
+        target_guid: u64,
+        target_name: String,
+    },
 }
 
 /// Run one guild op for the session that owns `self_guid`.
@@ -64,9 +80,9 @@ pub(crate) enum Op {
 /// shard, and nothing else happens. Ops with no player-facing reducer run the operator-gated
 /// `realm_guild_op` against that same shard instead, which with one database is the same thing.
 ///
-/// Sharded → realm-core runs the op, then the acting character's own guild columns are pushed onto
-/// every connected world shard. The push is best-effort BY DESIGN (see [`push_membership`]); the
-/// op's own result is not.
+/// Sharded → realm-core runs the op, then the guild columns of every character the op moved are
+/// pushed onto every connected world shard. The push is best-effort BY DESIGN (see
+/// [`push_membership`]); the op's own result is not.
 pub(crate) fn run<St: WorldStore + ?Sized>(
     store: &St,
     account_id: u64,
@@ -76,56 +92,26 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     let Some(realm) = store.realm_store() else {
         return match op {
             Op::Create(name) => store.create_guild(account_id, self_guid, &name),
-            // The invite handshake has no player-facing reducer to call, and adding one would cost
-            // a hand-spliced SDK binding per verb. With ONE database, "realm-core" and "the world
-            // shard" ARE the same physical database, so the operator-gated op run against the
-            // player's own shard cannot diverge from itself — there is no second copy to contradict
-            // it. `party::run_bot_invite` makes the same argument for the same reason.
-            handshake @ (Op::Invite { .. } | Op::Accept { .. } | Op::Decline { .. }) => {
-                let (code, target, arg_a, text) = handshake_slots(handshake);
+            // Every op past CREATE has no player-facing reducer of its own: `realm_guild_op` runs
+            // against the database THIS handle points at, which on an unsharded gateway already is
+            // the authority AND the player's own shard. A reducer per verb would cost a
+            // hand-maintained SDK binding each and buy nothing. The module's cores stamp a moved
+            // character's own guild columns in the same transaction, so there is nothing to push.
+            other => {
+                let (code, target, arg_a, text) = slots(other);
                 store.realm_guild_op(code, self_guid, target, arg_a, text)
             }
         };
     };
-    let (code, target, arg_a, text) = match op {
-        Op::Create(name) => (realm_op::CREATE, 0, 0, name),
-        handshake @ (Op::Invite { .. } | Op::Accept { .. } | Op::Decline { .. }) => {
-            handshake_slots(handshake)
-        }
-    };
+    // Read BEFORE the op: a disband leaves no roster to read the ex-members from afterwards, and a
+    // shard that never hears about them keeps the dead guild's columns forever.
+    let moved = moved_by(store, self_guid, &op)?;
+    let (code, target, arg_a, text) = slots(op);
     realm.realm_guild_op(code, self_guid, target, arg_a, text)?;
-    push_membership(store, realm.as_ref(), self_guid);
-    Ok(())
-}
-
-/// Pack one invite-handshake op into `realm_guild_op`'s frozen argument slots. One place, used by
-/// both planes, so the single-database path cannot drift from the realm-core one.
-fn handshake_slots(op: Op) -> (u8, u64, u32, String) {
-    match op {
-        Op::Invite {
-            target,
-            actor_name: name,
-        } => (realm_op::INVITE, target, 0, name),
-        Op::Accept { actor_name: name } => (realm_op::ANSWER, 0, realm_op::ANSWER_ACCEPT, name),
-        Op::Decline { actor_name: name } => (realm_op::ANSWER, 0, realm_op::ANSWER_DECLINE, name),
-        // Unreachable: every call site matches the handshake ops explicitly, so a new op reaches
-        // this only by being added to the pattern above without being packed.
-        Op::Create(name) => (realm_op::CREATE, 0, 0, name),
+    for guid in moved {
+        push_membership(store, realm.as_ref(), guid);
     }
-}
-
-/// The acting character's own name, from whichever shard holds it.
-///
-/// Every op past `CREATE` carries it into `realm_guild_op`'s `text` slot: realm-core has no
-/// `game_character` rows, so a notification written there can only name whoever the gateway named.
-/// An unresolvable character sends an empty name rather than failing the op — a popup with a blank
-/// inviter is recoverable, a refused invite is not.
-fn actor_name<St: WorldStore + ?Sized>(store: &St, self_guid: u64) -> String {
-    super::party::character_anywhere(store, self_guid)
-        .ok()
-        .flatten()
-        .map(|c| c.name)
-        .unwrap_or_default()
+    Ok(())
 }
 
 /// Resolve `CMSG_GUILD_INVITE`'s typed name to the character it means, across every shard.
@@ -157,7 +143,7 @@ pub(crate) fn invite<St: WorldStore + ?Sized>(
     let target = resolve_target(store, name)?;
     let op = Op::Invite {
         target,
-        actor_name: actor_name(store, self_guid),
+        actor_name: own_name(store, self_guid)?,
     };
     run(store, account_id, self_guid, op)
 }
@@ -169,7 +155,7 @@ pub(crate) fn answer_invite<St: WorldStore + ?Sized>(
     self_guid: u64,
     accept: bool,
 ) -> Result<()> {
-    let actor_name = actor_name(store, self_guid);
+    let actor_name = own_name(store, self_guid)?;
     let op = if accept {
         Op::Accept { actor_name }
     } else {
@@ -207,7 +193,7 @@ pub(crate) fn broadcast_presence<St: WorldStore + ?Sized>(
     } else {
         realm_op::PRESENCE_OFF
     };
-    let name = actor_name(store, self_guid);
+    let name = own_name(store, self_guid).unwrap_or_default();
     let pushed = match store.realm_store() {
         Some(realm) => realm.realm_guild_op(realm_op::PRESENCE, self_guid, 0, arg_a, name),
         None => store.realm_guild_op(realm_op::PRESENCE, self_guid, 0, arg_a, name),
@@ -218,6 +204,97 @@ pub(crate) fn broadcast_presence<St: WorldStore + ?Sized>(
             if online { "sign-on" } else { "sign-off" }
         );
     }
+}
+
+/// Pack one op into `realm_guild_op`'s frozen argument slots, against the shared
+/// [`lyracore_shared::guild::realm_op`] contract. The single packing site: both planes call it, so
+/// the two cannot drift.
+fn slots(op: Op) -> (u8, u64, u32, String) {
+    match op {
+        Op::Create(name) => (realm_op::CREATE, 0, 0, name),
+        Op::Invite {
+            target,
+            actor_name: name,
+        } => (realm_op::INVITE, target, 0, name),
+        Op::Accept { actor_name: name } => (realm_op::ANSWER, 0, realm_op::ANSWER_ACCEPT, name),
+        Op::Decline { actor_name: name } => (realm_op::ANSWER, 0, realm_op::ANSWER_DECLINE, name),
+        Op::Leave { actor_name } => (realm_op::LEAVE, 0, 0, actor_name),
+        Op::Remove {
+            target_guid,
+            target_name,
+        } => (realm_op::REMOVE, target_guid, 0, target_name),
+        Op::Disband => (realm_op::DISBAND, 0, 0, String::new()),
+        Op::Leader {
+            target_guid,
+            target_name,
+        } => (realm_op::LEADER, target_guid, 0, target_name),
+    }
+}
+
+/// Every character whose guild columns `op` may move, read from the authority BEFORE it runs.
+///
+/// The caller is always in it — a create, a leave and a disband all move the caller's own columns.
+/// A kick and a leadership transfer move the target's too, and a DISBAND moves every member's, which
+/// is the only case that needs a roster read: criterion "no ex-member keeps a dead guild's id"
+/// cannot be met from the caller alone.
+fn moved_by<St: WorldStore + ?Sized>(store: &St, self_guid: u64, op: &Op) -> Result<Vec<u64>> {
+    let mut moved = vec![self_guid];
+    match op {
+        Op::Create(_) | Op::Accept { .. } | Op::Decline { .. } | Op::Leave { .. } => {}
+        // An invite moves nobody's columns — the target only joins when they accept — but the
+        // authority is read for the invite gate, so the caller's own pair is refreshed anyway.
+        Op::Invite { .. } => {}
+        Op::Remove { target_guid, .. } | Op::Leader { target_guid, .. } => moved.push(*target_guid),
+        Op::Disband => {
+            if let Some(guild_id) = guild_of(store, self_guid)? {
+                let members = match store.realm_store() {
+                    Some(realm) => realm.guild_member_guids(guild_id)?,
+                    None => store.guild_member_guids(guild_id)?,
+                };
+                for guid in members {
+                    if !moved.contains(&guid) {
+                        moved.push(guid);
+                    }
+                }
+            }
+        }
+    }
+    Ok(moved)
+}
+
+/// The caller's own character name, from whichever shard holds them.
+///
+/// Realm-core has no character rows, so a departure notice written there can only carry the name the
+/// gateway hands it. Empty when the character cannot be found on any connected shard: a nameless
+/// notice is better than a failed leave.
+pub(crate) fn own_name<St: WorldStore + ?Sized>(store: &St, self_guid: u64) -> Result<String> {
+    Ok(super::party::character_anywhere(store, self_guid)?
+        .map(|c| c.name)
+        .unwrap_or_default())
+}
+
+/// Resolve a typed player NAME to the guid of a member of `self_guid`'s OWN guild.
+///
+/// Character names are not realm-unique — [`super::party::resolve_all_by_name`] records why — so the
+/// guild is the tie-break: among every homonym the realm holds, the one sharing the caller's guild
+/// is the one the client meant. A name that matches nobody in the guild refuses exactly as a name
+/// that matches a non-member does: from the client's side both are the same typo.
+///
+/// The module gates on membership again, so this is a resolution step and not the authority.
+pub(crate) fn member_by_name<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: u64,
+    name: &str,
+) -> Result<u64> {
+    use lyracore_shared::guild::err;
+    let guild_id =
+        guild_of(store, self_guid)?.ok_or_else(|| anyhow::anyhow!("{}", err::NOT_IN_GUILD))?;
+    for guid in super::party::resolve_all_by_name(store, name)? {
+        if guild_of(store, guid)? == Some(guild_id) {
+            return Ok(guid);
+        }
+    }
+    Err(anyhow::anyhow!("{}", err::TARGET_NOT_IN_GUILD))
 }
 
 /// Push `self_guid`'s own guild id and rank, as the authority has them, onto every connected world
