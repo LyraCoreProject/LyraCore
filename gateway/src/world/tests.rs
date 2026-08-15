@@ -4987,6 +4987,171 @@ fn guild_motd_dispatches_over_the_cipher_and_replies_with_the_guild_event() {
     );
 }
 
+/// The UNION, over one encrypted socket and one session: create → invite → accept → roster → `/g`
+/// → MOTD → kick → leave → disband, asserting the opcode the client actually receives at every
+/// step.
+///
+/// The per-verb socket tests above each prove one dispatch; this proves they compose — that no
+/// verb's durable effect leaves the next one refusing, and that the session survives all nine.
+/// The cross-shard half of the same scenario is `guild_tests::a_guild_lives_its_whole_life_across_\
+/// a_shard_boundary`, which drives the routing layer against a multi-database topology.
+#[test]
+fn one_session_creates_invites_rosters_chats_retitles_kicks_leaves_and_disbands() {
+    use wow_world_messages::vanilla::{
+        GuildCommand, GuildCommandResult, CMSG_GUILD_CREATE, CMSG_GUILD_INVITE, CMSG_GUILD_MOTD,
+        CMSG_GUILD_REMOVE, CMSG_GUILD_ROSTER, CMSG_MESSAGECHAT,
+    };
+
+    let store = std::sync::Arc::new(InMemoryStore {
+        characters: vec![
+            codec::CharacterView {
+                guid: 1,
+                name: "Tester".into(),
+                level: 31,
+                class: 4,
+                zone_id: 12,
+                ..Default::default()
+            },
+            codec::CharacterView {
+                guid: 2,
+                name: "Vim".into(),
+                ..Default::default()
+            },
+        ],
+        live_guids: vec![1, 2],
+        ..quest_store()
+    });
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    // A tiny driver: send one client message, read one reply, hand back the opcode name so a step
+    // that answers the WRONG packet names itself in the failure.
+    macro_rules! step {
+        ($msg:expr) => {{
+            $msg.write_encrypted_client(&mut client, &mut c_enc).unwrap();
+            ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
+        }};
+    }
+    let succeeded = |m: &ServerOpcodeMessage, command: GuildCommand, subject: &str| match m {
+        ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(r) => {
+            assert_eq!(r.command, command);
+            assert_eq!(r.string, subject);
+            // Wire code 0 — vanilla's "no message/error".
+            assert_eq!(r.result, GuildCommandResult::PlayerNoMoreInGuild);
+        }
+        other => panic!("expected SMSG_GUILD_COMMAND_RESULT, got {other}"),
+    };
+
+    // 1. create
+    let m = step!(CMSG_GUILD_CREATE {
+        guild_name: "The Silver Hand".into()
+    });
+    succeeded(&m, GuildCommand::Create, "The Silver Hand");
+
+    // 2. invite Vim
+    let m = step!(CMSG_GUILD_INVITE {
+        invited_player: "Vim".into()
+    });
+    succeeded(&m, GuildCommand::Invite, "Vim");
+    assert_eq!(
+        store.guild.lock().unwrap().invites.as_slice(),
+        &[(2, 1, 1)],
+        "exactly one invite is pending, for Vim"
+    );
+
+    // 3. accept, as Vim. The answer is durable-only — the accepting client renders the broadcast.
+    store.guild.lock().unwrap().answer(2, true).unwrap();
+    assert_eq!(
+        store.guild.lock().unwrap().guild_of(2),
+        Some((1, lyracore_shared::guild::GUILD_JOIN_RANK)),
+        "Vim joined at the lowest NAMED rank"
+    );
+
+    // 4. roster: both members, the master first, each with the shard-resolved half filled in.
+    match step!(CMSG_GUILD_ROSTER {}) {
+        ServerOpcodeMessage::SMSG_GUILD_ROSTER(r) => {
+            let names: Vec<&str> = r.members.iter().map(|m| m.name.as_str()).collect();
+            assert_eq!(names, vec!["Tester", "Vim"]);
+            assert_eq!(r.members[0].rank, 0);
+        }
+        other => panic!("expected SMSG_GUILD_ROSTER, got {other}"),
+    }
+
+    // 5. /g, both ways. The speaker hears nothing back; the delivery is a row per recipient.
+    store.guild.lock().unwrap().events.clear();
+    CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Guild,
+        language: Language::Universal,
+        message: "for the Alliance!".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    // A sentinel: the next reply read is the roster, which proves `/g` answered nothing of its own
+    // AND that the server has finished with the line before Vim's is written.
+    match step!(CMSG_GUILD_ROSTER {}) {
+        ServerOpcodeMessage::SMSG_GUILD_ROSTER(_) => {}
+        other => panic!("expected the sentinel roster (no reply on /g), got {other}"),
+    }
+    // Vim answers from their own session's routing entry point, which is the same op byte.
+    super::guild::send_chat(store.as_ref(), 2, "and the Light".into()).unwrap();
+    let chat: Vec<(u64, u64, String)> = store
+        .guild
+        .lock()
+        .unwrap()
+        .events
+        .iter()
+        .filter(|(_, k, ..)| *k == lyracore_shared::guild::event_kind::GUILD_CHAT)
+        .map(|(to, _, from, text)| (*to, *from, text.clone()))
+        .collect();
+    assert_eq!(
+        chat,
+        vec![
+            (1, 1, "for the Alliance!".to_string()),
+            (2, 1, "for the Alliance!".to_string()),
+            (1, 2, "and the Light".to_string()),
+            (2, 2, "and the Light".to_string()),
+        ],
+        "each line reaches every member, the speaker's own echo included"
+    );
+
+    // 6. MOTD — answered to the setter as SMSG_GUILD_EVENT(Motd).
+    match step!(CMSG_GUILD_MOTD {
+        message_of_the_day: "Raid at 8pm".into()
+    }) {
+        ServerOpcodeMessage::SMSG_GUILD_EVENT(m) => {
+            assert_eq!(m.event, wow_world_messages::vanilla::GuildEvent::Motd);
+            assert_eq!(m.event_descriptions, vec!["Raid at 8pm".to_string()]);
+        }
+        other => panic!("expected SMSG_GUILD_EVENT, got {other}"),
+    }
+
+    // 7. kick Vim.
+    let m = step!(CMSG_GUILD_REMOVE {
+        player_name: "Vim".into()
+    });
+    succeeded(&m, GuildCommand::Quit, "Vim");
+    assert_eq!(store.guild.lock().unwrap().guild_of(2), None);
+
+    // 8. leave, as the last member — which disbands the guild with them.
+    let m = step!(ClientOpcodeMessage::CMSG_GUILD_LEAVE);
+    succeeded(&m, GuildCommand::Quit, "");
+
+    // 9. disband, now that there is nothing to disband: the refusal is the wire's, not a panic.
+    match step!(ClientOpcodeMessage::CMSG_GUILD_DISBAND) {
+        ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(r) => {
+            assert_eq!(r.result, GuildCommandResult::GuildPlayerNotInGuild);
+        }
+        other => panic!("expected SMSG_GUILD_COMMAND_RESULT, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(
+        store.guild.lock().unwrap().guild_of(1),
+        None,
+        "the founder left with the guild"
+    );
+}
+
 #[test]
 fn add_ignore_by_name_replies_ignore_added() {
     let mut s = quest_store();

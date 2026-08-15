@@ -1397,3 +1397,124 @@ fn an_unsharded_gateway_runs_every_motd_and_note_setter_on_the_players_own_shard
     let view = guild::view(store.as_ref(), 1).unwrap().unwrap();
     assert_eq!(view.motd, "Hello");
 }
+
+// ---- The union, across a shard boundary ----
+
+/// The whole guild lifecycle with the two characters on DIFFERENT databases: create → invite →
+/// accept → roster → `/g` both ways → set MOTD → kick → leave → disband. The sharded twin of
+/// `world::tests::one_session_creates_invites_rosters_chats_retitles_kicks_leaves_and_disbands`,
+/// which drives the same sequence over an encrypted socket against one database.
+///
+/// This is the configuration every cross-database decision in the guild system exists for: the
+/// master stands on `world`, the member on `instances`, and neither shard holds a guild row. Every
+/// step must land on realm-core, and every membership change must reach BOTH shards' cached columns.
+#[test]
+fn a_guild_lives_its_whole_life_across_a_shard_boundary() {
+    let (realm, world, instances, calls) = guild_topology();
+    let on_realm = |call: &str| {
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(shard, c)| shard == "lyracore-realm" && c == call)
+            .count()
+    };
+
+    // 1. create, from the master's own shard.
+    create(world.as_ref(), GINGER, "The Silver Hand").expect("the create reaches the authority");
+    assert!(
+        world.guild.lock().unwrap().guilds.is_empty()
+            && instances.guild.lock().unwrap().guilds.is_empty(),
+        "no world shard ever holds a guild row"
+    );
+
+    // 2/3. invite the character on the OTHER shard, and let them accept from there.
+    invite(world.as_ref(), GINGER, "Vim").expect("a realm-wide name resolves across the boundary");
+    guild::answer_invite(instances.as_ref(), 7, VIM, true).expect("Vim joins from their own shard");
+    assert_eq!(roster(realm.as_ref()), vec![GINGER, VIM]);
+    for shard in [&world, &instances] {
+        assert_eq!(
+            columns(shard, VIM),
+            Some((1, lyracore_shared::guild::GUILD_JOIN_RANK)),
+            "every shard learns the new member's guild columns, not just the one holding them"
+        );
+    }
+
+    // 4. roster: realm-core's half joined to whichever shard holds each character.
+    let rendered = guild::roster(world.as_ref(), 1)
+        .unwrap()
+        .expect("the authority has the guild");
+    let rendered: Vec<(&str, u32, bool)> = rendered
+        .members
+        .iter()
+        .map(|m| (m.name.as_str(), m.rank, m.online))
+        .collect();
+    assert_eq!(
+        rendered,
+        vec![
+            ("Ginger", 0, true),
+            ("Vim", lyracore_shared::guild::GUILD_JOIN_RANK, true)
+        ],
+        "the member standing on the OTHER shard renders with their real name, not a blank"
+    );
+
+    // 5. `/g` both ways. Each line lands on the authority whichever shard it was spoken from, and
+    // reaches both members.
+    realm.guild.lock().unwrap().events.clear();
+    guild::send_chat(world.as_ref(), GINGER, "for the Alliance!".into()).unwrap();
+    guild::send_chat(instances.as_ref(), VIM, "and the Light".into()).unwrap();
+    assert_eq!(
+        notices(realm.as_ref(), event_kind::GUILD_CHAT),
+        vec![
+            (GINGER, GINGER, "for the Alliance!".to_string()),
+            (VIM, GINGER, "for the Alliance!".to_string()),
+            (GINGER, VIM, "and the Light".to_string()),
+            (VIM, VIM, "and the Light".to_string()),
+        ],
+        "both lines reach both members, from either side of the boundary"
+    );
+
+    // 6. MOTD, set from the master's shard and readable from the member's.
+    set_motd(world.as_ref(), GINGER, "Raid at 8pm").expect("the master may set it");
+    assert_eq!(
+        guild::view(instances.as_ref(), 1).unwrap().unwrap().motd,
+        "Raid at 8pm",
+        "the member's shard reads the same authority"
+    );
+
+    // 7. kick the member on the other shard.
+    guild::run(
+        world.as_ref(),
+        7,
+        GINGER,
+        guild::Op::Remove {
+            target_guid: VIM,
+            target_name: "Vim".into(),
+        },
+    )
+    .expect("the master kicks across the boundary");
+    assert_eq!(roster(realm.as_ref()), vec![GINGER]);
+    for shard in [&world, &instances] {
+        assert_eq!(
+            columns(shard, VIM),
+            Some((0, 0)),
+            "no shard keeps a kicked member in the guild"
+        );
+    }
+
+    // 8/9. leave as the last member — which takes the guild with it, so the disband that follows
+    // has nothing left to destroy and refuses on the wire rather than panicking.
+    leave(world.as_ref(), GINGER, "Ginger").expect("the last member may always leave");
+    assert!(realm.guild.lock().unwrap().view(1).is_none());
+    let refused = guild::run(world.as_ref(), 7, GINGER, guild::Op::Disband)
+        .expect_err("there is no guild left to disband");
+    assert!(format!("{refused:#}").contains(err::NOT_IN_GUILD));
+
+    assert_eq!(
+        on_realm("create_guild"),
+        0,
+        "not one step took the single-database plane"
+    );
+    assert!(on_realm("realm_guild_op") >= 8, "every verb ran on the authority");
+}
+
