@@ -168,7 +168,7 @@ pub(crate) const A_IMMUNITY: u8 = 0xB1; // p0 = school mask OR mechanic per p0_k
 /// DETECT-RANGE modifier (Priest Mind Soothe, DBC AuraMod 91 ModDetectRange): while active on a hostile
 /// CREATURE, its proximity aggro / detection radius is shifted by the aura's SIGNED `amount` YARDS — Mind
 /// Soothe's amount is NEGATIVE (-10), so it SHRINKS the radius (`math::detect_range_mod` sums the active
-/// auras; `creatures::tick::pass_aggro_assist` ADDS the sum to the creature's aggro radius, clamped ≥ 0 — a
+/// auras; the behavior cycle's aggro phase ADDS the sum to the creature's aggro radius, clamped ≥ 0 — a
 /// soothed mob notices the player only from closer, or not at all). A generic aura via the KIND_AURA_BIT
 /// path; 0 auras → full aggro radius (baseline-safe). Read on the soothed unit.
 pub(crate) const A_MOD_DETECT_RANGE: u8 = 0xB2;

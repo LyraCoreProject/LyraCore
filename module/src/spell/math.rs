@@ -488,7 +488,7 @@ pub(crate) fn combat_health_regen_pct(ctx: &ReducerContext, unit_guid: u64) -> i
 /// Sum a unit's DETECT-RANGE modifier (`A_MOD_DETECT_RANGE`, Priest Mind Soothe): the SIGNED number of
 /// YARDS by which its proximity aggro / detection radius is modified while active (`amount × stacks`, summed
 /// as f32). Vanilla Mind Soothe carries a NEGATIVE amount (-10), so the sum is negative and SHRINKS the
-/// radius. The aggro pass (`creatures::tick::pass_aggro_assist`) ADDS this to the creature's aggro radius,
+/// radius. The behavior cycle's aggro phase ADDS this to the creature's aggro radius,
 /// clamped ≥ 0, so a soothed mob notices the player only from closer (or, if the reduction exceeds the base
 /// radius, not at all). 0 with no such aura → the full radius (baseline-safe — every un-soothed creature).
 /// Read on the SOOTHED unit (the creature). [entity]

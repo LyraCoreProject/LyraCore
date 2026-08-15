@@ -7,15 +7,14 @@
 //! ticket by ticket.
 //!
 //!   - `mod.rs` (this file) — the two tables + the schedule table, the `tick_creatures` shell, the
-//!     active-cell sweep and rows-visited evidence logs, `pass_combat_enter`/`pass_combat_drop`, the
-//!     shared "one movement-leg grammar" toolkit (`PendingLeg`/`drain_legs`/`movable_creature`;
-//!     the pure `leg_toward` geometry lives in `creatures::ai`), and the one spline writer
-//!     (`emit_move_spline`/`emit_creature_leg`) both
-//!     `movement` and `sense` depend on.
+//!     active-cell sweep and rows-visited evidence logs, `pass_combat_drop`, the shared "one
+//!     movement-leg grammar" toolkit (`PendingLeg`/`drain_legs`/`movable_creature`; the pure
+//!     `leg_toward` geometry lives in `creatures::ai`), and the one spline writer
+//!     (`emit_move_spline`/`emit_creature_leg`) both `movement` and `sense` depend on.
 //!   - [`movement`] — the engaged legs: chase, flee, fear-flee.
 //!   - [`lifecycle`] — the canonical despawn checklist (issue #359) + decay/respawn/GO-respawn, the
 //!     due-time passes that run regardless of proximity.
-//!   - [`sense`] — aggro/assist (typed `AggroEvent`, issue #383), cast, threat-retarget, regen.
+//!   - [`sense`] — cast, threat-retarget, regen.
 
 use lyracore_shared::spatial;
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
@@ -33,7 +32,7 @@ mod sense;
 // migrate each body into the cycle.
 pub(crate) use lifecycle::{pass_decay, pass_gameobject_respawn, pass_respawn};
 pub(crate) use movement::{pass_chase, pass_fear_flee, pass_flee};
-pub(crate) use sense::{pass_aggro_assist, pass_cast, pass_regen, pass_threat_retarget};
+pub(crate) use sense::{pass_cast, pass_regen, pass_threat_retarget};
 
 // Re-export so `crate::creatures::tick::despawn_creature_entity` (and, via `creatures::mod.rs`'s own
 // `pub use tick::*`, `crate::creatures::despawn_creature_entity`) still resolves — `encounter.rs`/
@@ -323,8 +322,8 @@ fn active_cell_radius(ctx: &ReducerContext) -> f32 {
 ///
 /// NOTE on the one remaining full-table touch: locating the players themselves still needs
 /// `entities.iter().filter(is_player)` — there's no `by_type_mask` (or dedicated players-only) index
-/// in the current schema, so this reads every row once. That's the SAME pattern `pass_aggro_assist`
-/// already used pre-230 to build its own player snapshot (this fn doesn't share that one — a further,
+/// in the current schema, so this reads every row once. That's the SAME pattern the cycle's aggro
+/// phase still uses to build its own player snapshot (this fn doesn't share that one — a further,
 /// independent micro-optimization) — but it's a bare bit-check per row, not the expensive per-creature
 /// template/faction/stealth logic this item exists to stop running on out-of-range creatures. The
 /// rows-visited reduction this item measures is that expensive-logic population, not this cheap scan.
@@ -503,59 +502,6 @@ fn log_pass_stats(
     log::info!(
         "tick_creatures pass rows-visited (work-item 229): scope={scope_label} sense={sense} {body} (*=full-table scan, scales with world not instances)"
     );
-}
-
-/// Movement pass — flag every unit in the melee-engaged set IN COMBAT (re-stamping its combat-drop
-/// deadline via `enter_combat`). Covers melee + aggro, AND a pure caster: casting at a mob makes the mob
-/// retaliate, so the caster is the TARGET of the mob's `game_melee_attack` row and gets flagged here
-/// (spell casts also flag directly in `apply_target_damage`). `enter_combat` skips dead + re-stamps
-/// idempotently. The engaged set is small (scales with active combats, not the world).
-///
-/// Work-item 229: gates each melee row on `scope.covers(<the pair's instance>)` so a dedicated row's
-/// combats are re-stamped by THAT row only (the re-stamp is idempotent, but the partition discipline
-/// is uniform across every scoped pass). The pair shares ONE instance by construction — arming is
-/// same-instance-gated everywhere (`apply_start_attack` rejects cross-instance targets; the
-/// aggro/assist/retaliation passes pair same-instance only) — so either side's entity resolves it;
-/// we take the attacker's, falling back to the target's if the attacker despawned this tick. A row
-/// whose BOTH entities are gone is skipped, which is observably identical to before (its
-/// `enter_combat(guid)` calls were no-ops on missing entities). Returns rows visited (covered rows).
-pub(crate) fn pass_combat_enter(ctx: &ReducerContext, scope: &TickScope) -> usize {
-    let entities = ctx.db.game_world_entity();
-    let mut guids: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    let mut visited = 0usize;
-    for a in ctx.db.game_melee_attack().iter() {
-        let attacker = entities.guid().find(a.attacker_guid);
-        let Some(instance_id) = attacker
-            .as_ref()
-            .map(|e| e.instance_id)
-            .or_else(|| entities.guid().find(a.target_guid).map(|e| e.instance_id))
-        else {
-            continue; // both sides gone — enter_combat would have no-opped anyway
-        };
-        // Equivalence: with only the catch-all row, covers() is true for every pair (ai.rs spec).
-        if !scope.covers(instance_id) {
-            continue;
-        }
-        // 249: a PLAYER's auto-attack toggle that has never actually swung (out of range — the
-        // range gate keeps last_swing_ms at 0) is NOT combat: vanilla doesn't flag you for
-        // aiming at something 30 yd away, and stopping the toggle then leaves you exactly as
-        // un-engaged as before. A CREATURE attacker row is combat from the instant it arms
-        // (aggro IS combat), and any LANDED swing stamps last_swing_ms + the damage path calls
-        // enter_combat for both sides — so real fights are untouched.
-        if a.last_swing_ms == 0
-            && a.last_offhand_swing_ms == 0
-            && attacker.as_ref().is_some_and(|e| e.is_player())
-        {
-            continue;
-        }
-        visited += 1;
-        guids.insert(a.attacker_guid);
-        guids.insert(a.target_guid);
-    }
-    for guid in guids {
-        crate::combat::enter_combat(ctx, guid);
-    }
-    visited
 }
 
 /// Sense pass — clear `UNIT_FLAG_IN_COMBAT` from any unit past its combat-drop deadline (no hostile
@@ -830,10 +776,10 @@ fn movable_creature(ctx: &ReducerContext, guid: u64, scope: &TickScope) -> Optio
 /// May this creature rout at all? The HP threshold (`should_flee`) plus the per-TYPE gate
 /// (`flee_eligible` — only HUMANOIDS rout; BEASTS/undead/elementals fight to the death). It decides
 /// whether a rout may START, never whether one is running — that is `creature_is_routing`. The two
-/// non-engaged sites (aggro re-arm, assist) ask THIS question: they act on creatures with no engagement
-/// row, which therefore have no rout clock to read. A missing template ⇒ not eligible (safe default).
+/// non-engaged sites (the cycle's aggro and assist phases) ask THIS question: they act on creatures
+/// with no engagement row, which therefore have no rout clock to read. A missing template ⇒ not eligible (safe default).
 /// [server]
-fn rout_eligible(ctx: &ReducerContext, c: &WorldEntity) -> bool {
+pub(crate) fn rout_eligible(ctx: &ReducerContext, c: &WorldEntity) -> bool {
     should_flee(c.health, c.max_health)
         && ctx
             .db

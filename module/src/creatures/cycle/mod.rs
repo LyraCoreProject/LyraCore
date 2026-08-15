@@ -14,8 +14,9 @@ use lyracore_shared::constants;
 use spacetimedb::log;
 
 use super::ai::{
-    finite_point, leg_in_flight, leg_toward, nearest_waypoint_idx, next_waypoint_idx, spline_t,
-    wander_point, TickScope, MOVE_TICK_SECS, RETURN_LEASH_SQ, SENSE_EVERY_N_TICKS,
+    aggro_radius, finite_point, is_aggro_candidate, leg_in_flight, leg_toward,
+    nearest_waypoint_idx, next_waypoint_idx, spline_t, stealth_detect_range, wander_point,
+    within_assist_radius, TickScope, MOVE_TICK_SECS, RETURN_LEASH_SQ, SENSE_EVERY_N_TICKS,
     WANDER_CHANCE_PCT, WANDER_RADIUS,
 };
 use super::tick::TickSweep;
@@ -169,8 +170,87 @@ pub(crate) trait IdleSink {
     fn commit_leg(&mut self, guid: u64, leg: Leg, now_ms: u32);
 }
 
+/// A player a creature could notice this firing. `dead` and `godmode` travel on the view rather
+/// than being filtered away by the adapter, because "who is worth noticing" is a behavior rule the
+/// cycle owns — see [`is_aggro_candidate`].
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct AggroTarget {
+    pub guid: u64,
+    pub at: Point,
+    pub level: u32,
+    pub faction_template: u32,
+    pub map_id: u32,
+    pub instance_id: u64,
+    pub dead: bool,
+    pub godmode: bool,
+    /// Stealthed: seen only from inside this creature's own, much shorter, detection range.
+    pub stealthed: bool,
+}
+
+/// A creature that may start a fight this firing: awake in an active cell, alive, not a pet, and
+/// not already swinging at someone.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Sensor {
+    pub guid: u64,
+    pub at: Point,
+    pub level: u32,
+    pub faction_template: u32,
+    pub map_id: u32,
+    pub instance_id: u64,
+    /// The template's hand-tuned aggro range (0 = the level-scaled default), or `None` when the
+    /// template row is missing: such a creature notices nobody, but still answers a pack call.
+    pub aggro_range: Option<u32>,
+    /// Mind Soothe and friends — a signed yard change to this creature's own detection radius.
+    pub detect_range_mod: f32,
+    /// Near death and of a kind that runs. Engaging it would only drag it back into the fight it
+    /// is about to flee.
+    pub would_rout: bool,
+    /// Stunned, polymorphed or feared. It cannot act, so it neither pulls nor answers a call.
+    pub cannot_act: bool,
+}
+
+/// Why a creature entered a fight, as the world hook reports it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Pull {
+    /// It noticed the player itself.
+    Noticed,
+    /// It answered a pack mate's call.
+    Assisted,
+}
+
+/// One live melee engagement, as combat entry reads it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Engagement {
+    pub attacker: u64,
+    pub victim: u64,
+    /// The pair's instance. Both sides share one by construction, so either side resolves it.
+    pub instance_id: u64,
+    /// A player's auto-attack toggle that has never landed a swing. Aiming at something out of
+    /// range is not combat, and stopping the toggle leaves the player as un-engaged as before.
+    pub player_never_swung: bool,
+}
+
+/// Engagement's surface: who can notice whom, and the fight that follows.
+pub(crate) trait EngageSink {
+    /// Every player in the world, with stealth already resolved.
+    fn players(&self) -> Vec<AggroTarget>;
+    /// The awake creatures that could start a fight. Read FRESH per phase: a creature that pulled
+    /// during the aggro phase is now swinging, so it must not also answer a pack call.
+    fn sensing_creatures(&self, active: &HashSet<u64>) -> Vec<Sensor>;
+    /// Do these two faction templates count each other as enemies? Missing data is never hostile.
+    fn hostile(&self, faction_template: u32, other: u32) -> bool;
+    /// Can `looker` see the point `at`? A wall between them stops a pull and a pack call alike.
+    fn line_of_sight(&self, looker: u64, at: Point) -> bool;
+    /// Arm the fight: the creature swings at `victim`, faces it, and the world is told.
+    fn engage(&mut self, creature: u64, victim: u64, pull: Pull);
+    /// Every live melee engagement, player-started ones included.
+    fn engagements(&self) -> Vec<Engagement>;
+    /// Flag the unit in combat and push its combat-drop deadline out.
+    fn enter_combat(&mut self, guid: u64);
+}
+
 /// The whole world one cycle touches.
-pub(crate) trait CreatureWorld: MotionSink + IdleSink + LegacyPasses {
+pub(crate) trait CreatureWorld: MotionSink + IdleSink + EngageSink + LegacyPasses {
     /// The creatures near a covered player this firing, plus the pet and in-combat candidate lists
     /// the same sweep harvests. Read ONCE per cycle and shared by every pass that scopes to it.
     fn awake_creatures(&self, scope: &TickScope) -> TickSweep;
@@ -185,12 +265,10 @@ pub(crate) trait CreatureWorld: MotionSink + IdleSink + LegacyPasses {
 // pass; ticket 09 deletes the trait. See .scratch/creature-behavior-cycle/.
 /// Passes still living in `creatures::tick` — the cycle owns WHEN they run, not yet HOW.
 pub(crate) trait LegacyPasses {
-    fn legacy_aggro_assist(&mut self, active: &HashSet<u64>) -> usize;
     fn legacy_pet(&mut self, scope: &TickScope, now_ms: u32, pets: &[u64]) -> usize;
     fn legacy_cast(&mut self, scope: &TickScope) -> usize;
     fn legacy_threat_retarget(&mut self, scope: &TickScope) -> usize;
     fn legacy_chase(&mut self, scope: &TickScope) -> usize;
-    fn legacy_combat_enter(&mut self, scope: &TickScope) -> usize;
     fn legacy_regen(&mut self) -> usize;
     fn legacy_combat_drop(&mut self, in_combat: &[u64]) -> usize;
     fn legacy_flee(&mut self, scope: &TickScope) -> usize;
@@ -202,11 +280,13 @@ pub(crate) trait LegacyPasses {
 ///   2. aggro and pet engagement before chase — a creature aggroed this sense tick closes the same
 ///      tick; cast and threat retarget also precede chase (cast instead of close; move at the newly
 ///      selected victim).
-///   3. chase before regen — regen's in-combat gate must see the still-engaged chaser.
-///   4. walking home before loitering — one idle leg per creature per firing, home wins.
-///   5. rout and fear movement LAST, after regen.
-///   6. decay before respawn (inside world maintenance — decay arms a future respawn).
-///   7. package passes after every core pass.
+///   3. aggro before assist before combat entry — a pack answers a call raised this firing, and
+///      every creature that pulled carries its combat flag before the firing ends.
+///   4. chase before regen — regen's in-combat gate must see the still-engaged chaser.
+///   5. walking home before loitering — one idle leg per creature per firing, home wins.
+///   6. rout and fear movement LAST, after regen.
+///   7. decay before respawn (inside world maintenance — decay arms a future respawn).
+///   8. package passes after every core pass.
 ///
 /// The active-cell sweep runs once, before all passes, and its candidate set is shared: a creature
 /// absent from it is dormant this firing for every pass that scopes to it (patrol, aggro/assist,
@@ -229,7 +309,9 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         if global {
             rows.extend(w.run_due_world_maintenance());
         }
-        rows.push(("aggro_assist", w.legacy_aggro_assist(&active) as u64));
+        let (pulls, seen) = aggro(w, &active);
+        rows.push(("aggro", seen as u64));
+        rows.push(("assist", assist(w, &active, pulls) as u64));
         rows.push(("pet", w.legacy_pet(&tick.scope, tick.now_ms, &pets) as u64));
         rows.push(("cast", w.legacy_cast(&tick.scope) as u64));
         rows.push((
@@ -238,7 +320,7 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         ));
     }
     rows.push(("chase", w.legacy_chase(&tick.scope) as u64));
-    rows.push(("combat_enter", w.legacy_combat_enter(&tick.scope) as u64));
+    rows.push(("combat_enter", combat_entry(w, &tick.scope) as u64));
     rows.push(("idle", idle_movement(w, &tick, &active) as u64));
     if tick.sense && global {
         rows.push(("regen*", w.legacy_regen() as u64));
@@ -364,6 +446,173 @@ fn patrol<W: IdleSink + MotionSink>(w: &mut W, tick: &TickContext, active: &Hash
             hold_until_landed: true,
         };
         w.commit_leg(c.guid, leg, tick.now_ms);
+    }
+    visited
+}
+
+/// One creature's pull this firing: who it engaged, and where it stood when it called for help.
+/// Internal cycle state — it never leaves the aggro-to-assist handoff.
+#[derive(Clone, Copy)]
+struct Called {
+    guid: u64,
+    at: Point,
+    map_id: u32,
+    instance_id: u64,
+    faction_template: u32,
+    victim: u64,
+}
+
+/// The engagement phases visit candidates in guid order, so one firing arms its fights in the same
+/// order every time no matter how the sweep's set enumerates.
+fn sensing_order(w: &impl EngageSink, active: &HashSet<u64>) -> Vec<Sensor> {
+    let mut candidates = w.sensing_creatures(active);
+    candidates.sort_unstable_by_key(|c| c.guid);
+    candidates
+}
+
+/// AGGRO — a creature notices a hostile player and engages it on sight. Collect-then-arm: the
+/// on-aggro hook runs package code, so nothing may fire while the scan is still deciding.
+///
+/// Returns this firing's pulls, which are the assist phase's whole input, plus the candidates
+/// visited. With nobody worth noticing in the world the phase costs one player read and stops.
+fn aggro<W: EngageSink>(w: &mut W, active: &HashSet<u64>) -> (Vec<Called>, usize) {
+    let targets: Vec<AggroTarget> = w
+        .players()
+        .into_iter()
+        .filter(|p| is_aggro_candidate(p.dead, p.godmode))
+        .collect();
+    if targets.is_empty() {
+        return (Vec::new(), 0);
+    }
+    let sensors = sensing_order(w, active);
+    let mut called = Vec::new();
+    for s in &sensors {
+        if s.would_rout || s.cannot_act {
+            continue;
+        }
+        let Some(victim) = nearest_noticed(w, s, &targets) else {
+            continue;
+        };
+        called.push(Called {
+            guid: s.guid,
+            at: s.at,
+            map_id: s.map_id,
+            instance_id: s.instance_id,
+            faction_template: s.faction_template,
+            victim,
+        });
+    }
+    for c in &called {
+        w.engage(c.guid, c.victim, Pull::Noticed);
+    }
+    (called, sensors.len())
+}
+
+/// The nearest player this creature notices: same map and instance, hostile, inside the
+/// level-scaled aggro radius (shrunk by a soothe, graded down again for a stealthed target), and
+/// in plain sight. `None` means nothing to pull.
+fn nearest_noticed<W: EngageSink>(w: &W, s: &Sensor, targets: &[AggroTarget]) -> Option<u64> {
+    let tuned = s.aggro_range?; // no template row, no proximity aggro
+    targets
+        .iter()
+        .filter(|p| p.map_id == s.map_id && p.instance_id == s.instance_id)
+        .filter_map(|p| {
+            let radius = (aggro_radius(s.level, p.level, tuned) + s.detect_range_mod).max(0.0);
+            if radius <= 0.0 {
+                return None; // grey to this player, or soothed all the way down
+            }
+            let d2 = dist_sq(s.at, p.at);
+            if d2 > radius * radius {
+                return None;
+            }
+            if p.stealthed && d2 > stealth_detect_range(s.level, p.level).powi(2) {
+                return None; // sneaking past, outside what this creature can see through
+            }
+            if !w.hostile(s.faction_template, p.faction_template) {
+                return None;
+            }
+            if !w.line_of_sight(s.guid, p.at) {
+                return None; // a hostile behind the abbey wall is not "seen"
+            }
+            Some((p.guid, d2))
+        })
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(guid, _)| guid)
+}
+
+fn dist_sq(a: Point, b: Point) -> f32 {
+    let (dx, dy, dz) = (a.x - b.x, a.y - b.y, a.z - b.z);
+    dx * dx + dy * dy + dz * dz
+}
+
+/// ASSIST — pack behavior: a same-faction neighbor of a creature that pulled THIS firing piles onto
+/// the same player, even a passive one the player never got close enough to notice. Range is
+/// measured from the CALLER, not from the player, so a far-flung pack mate is not dragged in, and
+/// the neighbor's own `aggro_range` is deliberately not consulted.
+///
+/// Nobody pulled means no scan at all — the overwhelmingly common firing. Calls are answered lowest
+/// caller guid first, so a neighbor standing between two of them always joins the same fight.
+fn assist<W: EngageSink>(w: &mut W, active: &HashSet<u64>, mut calls: Vec<Called>) -> usize {
+    if calls.is_empty() {
+        return 0;
+    }
+    calls.sort_unstable_by_key(|c| c.guid);
+    // Fresh read: every creature that pulled above is now swinging, so it is no longer a candidate
+    // here — one creature answers at most one call per firing by construction.
+    let neighbors = sensing_order(w, active);
+    let mut answered = Vec::new();
+    for n in &neighbors {
+        if n.would_rout || n.cannot_act {
+            continue;
+        }
+        let call = calls.iter().find(|c| {
+            c.guid != n.guid
+                && c.map_id == n.map_id
+                && c.faction_template == n.faction_template
+                && c.instance_id == n.instance_id
+                && within_assist_radius(c.at.x, c.at.y, n.at.x, n.at.y)
+                // The caller is sighted at the NEIGHBOR's own height: the two stand a pack's width
+                // apart, and their feet are what the ray has to clear.
+                && w.line_of_sight(
+                    n.guid,
+                    Point {
+                        x: c.at.x,
+                        y: c.at.y,
+                        z: n.at.z,
+                    },
+                )
+        });
+        if let Some(call) = call {
+            answered.push((n.guid, call.victim));
+        }
+    }
+    for (neighbor, victim) in answered {
+        w.engage(neighbor, victim, Pull::Assisted);
+    }
+    neighbors.len()
+}
+
+/// COMBAT ENTRY — every unit in a live engagement this firing covers gets the in-combat flag and a
+/// refreshed combat-drop deadline. It covers a pure caster too: casting at a creature makes the
+/// creature retaliate, so the caster is the VICTIM of an engagement and is flagged from here.
+///
+/// The engaged set is small — it scales with the fights running, not with the world.
+fn combat_entry<W: EngageSink>(w: &mut W, scope: &TickScope) -> usize {
+    let mut visited = 0usize;
+    let mut units: Vec<u64> = Vec::new();
+    for e in w.engagements() {
+        // Equivalence: with only the catch-all schedule row, every pair is covered.
+        if !scope.covers(e.instance_id) || e.player_never_swung {
+            continue;
+        }
+        visited += 1;
+        units.push(e.attacker);
+        units.push(e.victim);
+    }
+    units.sort_unstable();
+    units.dedup();
+    for guid in units {
+        w.enter_combat(guid);
     }
     visited
 }

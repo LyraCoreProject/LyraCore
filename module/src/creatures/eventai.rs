@@ -3,7 +3,7 @@
 //! player — a growl or a threat that gives 1-20 pulls life.
 //!
 //! Grafts onto machinery that already exists, ZERO core edits: the `on_aggro` notify hook
-//! (`fire_on_aggro` in creatures/tick.rs, fired at the aggro-arm edge) drives it, and the yell ships via
+//! (`fire_on_aggro`, fired at the behavior cycle's aggro-arm edge) drives it, and the yell ships via
 //! the existing `game_chat_event` relay (a creature is a valid `sender_guid`) — no new wire plumbing.
 //!
 //! Fixture-first (like graveyards / rest triggers): a few Elwynn barks are seeded in `seed.rs` until the

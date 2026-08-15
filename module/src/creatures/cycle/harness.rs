@@ -18,6 +18,15 @@ struct XCreature {
     /// The ETA gate an idle leg arms, and the route cursor patrol walks by.
     leg_ends_ms: u32,
     wp_target: u64,
+    // --- what the engagement phases read; every one has a quiet default a builder overrides.
+    level: u32,
+    faction_template: u32,
+    map_id: u32,
+    instance_id: u64,
+    aggro_range: Option<u32>,
+    detect_range_mod: f32,
+    would_rout: bool,
+    cannot_act: bool,
 }
 
 /// One movement leg the cycle emitted — everything the relay carries to a client. A zero `dur_ms`
@@ -58,6 +67,18 @@ struct Scenario {
     detours: RefCell<HashMap<u64, (f32, f32)>>,
     /// Ordered movement effects, oldest first.
     effects: RefCell<Vec<MoveEffect>>,
+    /// The players in the world, in the order the world reads them.
+    players: RefCell<Vec<AggroTarget>>,
+    /// Live melee engagements — what aggro arms and combat entry reads.
+    fights: RefCell<Vec<Engagement>>,
+    /// Faction pairs at war, directed. Anything absent is not hostile, as missing data is.
+    at_war: RefCell<HashSet<(u32, u32)>>,
+    /// `(looker, unseen)` pairs with something solid in between.
+    blind: RefCell<HashSet<(u64, u64)>>,
+    /// Ordered engagements the cycle armed, oldest first.
+    pulls: RefCell<Vec<(u64, u64, Pull)>>,
+    /// Ordered units the cycle flagged in combat, oldest first.
+    flagged: RefCell<Vec<u64>>,
     /// Scenario input for the active-cell sweep.
     awake: RefCell<TickSweep>,
     /// Positions read BEFORE any pass ran, i.e. by the sweep — still the leg starts, because the
@@ -74,7 +95,8 @@ impl Scenario {
         s
     }
 
-    /// Place a creature at `at`, with its grid address derived the way the world derives it.
+    /// Place a creature at `at`, with its grid address derived the way the world derives it. It is
+    /// level 10, of the creature faction, on the level-scaled aggro radius, and fit to fight.
     fn creature(self, guid: u64, at: Point) -> Self {
         let (gx, gy) = spatial::grid_cell(at.x, at.y);
         self.creatures.borrow_mut().insert(
@@ -86,9 +108,142 @@ impl Scenario {
                 last_move_ms: 0,
                 leg_ends_ms: 0,
                 wp_target: 0,
+                level: 10,
+                faction_template: BEASTS,
+                map_id: MAP,
+                instance_id: INSTANCE,
+                aggro_range: Some(0),
+                detect_range_mod: 0.0,
+                would_rout: false,
+                cannot_act: false,
             },
         );
         self
+    }
+
+    /// Edit one creature's sensing state.
+    fn tweak(self, guid: u64, edit: impl FnOnce(&mut XCreature)) -> Self {
+        edit(self.creatures.borrow_mut().get_mut(&guid).unwrap());
+        self
+    }
+
+    fn level(self, guid: u64, level: u32) -> Self {
+        self.tweak(guid, |c| c.level = level)
+    }
+
+    /// The creature's template carries a hand-tuned aggro range instead of the level-scaled one.
+    fn tuned_aggro_range(self, guid: u64, yards: u32) -> Self {
+        self.tweak(guid, |c| c.aggro_range = Some(yards))
+    }
+
+    /// Mind Soothe: a signed yard change to this creature's own detection radius.
+    fn soothed(self, guid: u64, yards: f32) -> Self {
+        self.tweak(guid, |c| c.detect_range_mod = yards)
+    }
+
+    /// Near death and of a kind that runs — it must not be pulled into a fight it would flee.
+    fn near_death(self, guid: u64) -> Self {
+        self.tweak(guid, |c| c.would_rout = true)
+    }
+
+    /// Stunned, polymorphed or feared: it cannot act.
+    fn crowd_controlled(self, guid: u64) -> Self {
+        self.tweak(guid, |c| c.cannot_act = true)
+    }
+
+    fn faction(self, guid: u64, faction_template: u32) -> Self {
+        self.tweak(guid, |c| c.faction_template = faction_template)
+    }
+
+    fn in_instance(self, guid: u64, instance_id: u64) -> Self {
+        self.tweak(guid, |c| c.instance_id = instance_id)
+    }
+
+    /// Put a living, visible, level-10 ALLIANCE player at `at`.
+    fn player(self, guid: u64, at: Point) -> Self {
+        self.players.borrow_mut().push(AggroTarget {
+            guid,
+            at,
+            level: 10,
+            faction_template: ALLIANCE,
+            map_id: MAP,
+            instance_id: INSTANCE,
+            dead: false,
+            godmode: false,
+            stealthed: false,
+        });
+        self
+    }
+
+    /// Edit one player.
+    fn tweak_player(self, guid: u64, edit: impl FnOnce(&mut AggroTarget)) -> Self {
+        edit(
+            self.players
+                .borrow_mut()
+                .iter_mut()
+                .find(|p| p.guid == guid)
+                .unwrap(),
+        );
+        self
+    }
+
+    fn player_level(self, guid: u64, level: u32) -> Self {
+        self.tweak_player(guid, |p| p.level = level)
+    }
+
+    /// A GM who cannot be killed.
+    fn godmoded(self, guid: u64) -> Self {
+        self.tweak_player(guid, |p| p.godmode = true)
+    }
+
+    fn corpse(self, guid: u64) -> Self {
+        self.tweak_player(guid, |p| p.dead = true)
+    }
+
+    fn stealthed(self, guid: u64) -> Self {
+        self.tweak_player(guid, |p| p.stealthed = true)
+    }
+
+    /// These two factions are enemies, both ways round.
+    fn at_war(self, a: u32, b: u32) -> Self {
+        self.at_war.borrow_mut().extend([(a, b), (b, a)]);
+        self
+    }
+
+    /// Something solid stands between `looker` and `unseen`.
+    fn wall_between(self, looker: u64, unseen: u64) -> Self {
+        self.blind.borrow_mut().insert((looker, unseen));
+        self
+    }
+
+    /// `attacker` is already swinging at `victim`.
+    fn attacking(self, attacker: u64, victim: u64) -> Self {
+        self.fights.borrow_mut().push(Engagement {
+            attacker,
+            victim,
+            instance_id: INSTANCE,
+            player_never_swung: false,
+        });
+        self
+    }
+
+    /// A player's auto-attack toggle armed at something it has never reached.
+    fn aiming_at(self, player: u64, victim: u64) -> Self {
+        self.fights.borrow_mut().push(Engagement {
+            attacker: player,
+            victim,
+            instance_id: INSTANCE,
+            player_never_swung: true,
+        });
+        self
+    }
+
+    fn pulls(&self) -> Vec<(u64, u64, Pull)> {
+        self.pulls.borrow().clone()
+    }
+
+    fn flagged(&self) -> Vec<u64> {
+        self.flagged.borrow().clone()
     }
 
     /// Wake these creatures: the active-cell sweep found them near a covered player this firing.
@@ -391,11 +546,75 @@ impl IdleSink for Scenario {
     }
 }
 
+// The in-memory engagement world. A scenario holds only live, non-pet creature rows, so the
+// "no players, no corpses, no pets" half of `CtxWorld::sensing_creatures` has nothing to reject.
+impl EngageSink for Scenario {
+    fn players(&self) -> Vec<AggroTarget> {
+        self.players.borrow().clone()
+    }
+    fn sensing_creatures(&self, active: &HashSet<u64>) -> Vec<Sensor> {
+        let creatures = self.creatures.borrow();
+        let fights = self.fights.borrow();
+        active
+            .iter()
+            .filter_map(|guid| creatures.get(guid).map(|c| (*guid, c)))
+            .filter(|(guid, _)| !fights.iter().any(|f| f.attacker == *guid))
+            .map(|(guid, c)| Sensor {
+                guid,
+                at: c.at,
+                level: c.level,
+                faction_template: c.faction_template,
+                map_id: c.map_id,
+                instance_id: c.instance_id,
+                aggro_range: c.aggro_range,
+                detect_range_mod: c.detect_range_mod,
+                would_rout: c.would_rout,
+                cannot_act: c.cannot_act,
+            })
+            .collect()
+    }
+    fn hostile(&self, faction_template: u32, other: u32) -> bool {
+        self.at_war.borrow().contains(&(faction_template, other))
+    }
+    /// The scenario blocks sight between two UNITS, so the sighted point is resolved back to the
+    /// unit standing on it — unambiguous in a scenario, and it keeps the assist scan's habit of
+    /// sighting a caller at the neighbor's own height out of the test's way.
+    fn line_of_sight(&self, looker: u64, at: Point) -> bool {
+        let seen = self
+            .creatures
+            .borrow()
+            .iter()
+            .find(|(_, c)| (c.at.x, c.at.y) == (at.x, at.y))
+            .map(|(guid, _)| *guid)
+            .or_else(|| {
+                self.players
+                    .borrow()
+                    .iter()
+                    .find(|p| (p.at.x, p.at.y) == (at.x, at.y))
+                    .map(|p| p.guid)
+            });
+        seen.is_none_or(|seen| !self.blind.borrow().contains(&(looker, seen)))
+    }
+    fn engage(&mut self, creature: u64, victim: u64, pull: Pull) {
+        self.pulls.borrow_mut().push((creature, victim, pull));
+        let instance_id = self.creatures.borrow()[&creature].instance_id;
+        self.fights.borrow_mut().push(Engagement {
+            attacker: creature,
+            victim,
+            instance_id,
+            player_never_swung: false,
+        });
+    }
+    fn engagements(&self) -> Vec<Engagement> {
+        self.fights.borrow().clone()
+    }
+    fn enter_combat(&mut self, guid: u64) {
+        self.flagged.borrow_mut().push(guid);
+    }
+}
+
 // Not migrated yet: the cycle SEQUENCES these, the harness cannot run them.
 impl LegacyPasses for Scenario {
-    fn legacy_aggro_assist(&mut self, _active: &HashSet<u64>) -> usize {
-        0
-    }
     fn legacy_pet(&mut self, _scope: &TickScope, _now_ms: u32, _pets: &[u64]) -> usize {
         0
     }
@@ -406,9 +625,6 @@ impl LegacyPasses for Scenario {
         0
     }
     fn legacy_chase(&mut self, _scope: &TickScope) -> usize {
-        0
-    }
-    fn legacy_combat_enter(&mut self, _scope: &TickScope) -> usize {
         0
     }
     fn legacy_regen(&mut self) -> usize {
@@ -426,6 +642,13 @@ impl LegacyPasses for Scenario {
 }
 
 const WOLF: u64 = 0x0000_0000_0000_0BEE;
+/// A second and third wolf of the same pack, guid-ordered after `WOLF`.
+const PACK_MATE: u64 = WOLF + 1;
+const FAR_MATE: u64 = WOLF + 2;
+const HUNTER: u64 = 0x0000_0000_0000_0A11;
+const RANGER: u64 = HUNTER + 1;
+const BEASTS: u32 = 14;
+const ALLIANCE: u32 = 1;
 const MAP: u32 = 0;
 const INSTANCE: u64 = 0;
 /// A one-second leg launched at t=0, sampled half way through.
@@ -910,5 +1133,317 @@ fn the_cycle_reports_the_legs_it_advanced() {
         Some(&("advance", 1)),
         "operators spot a candidate-set regression from these counts; advance must report the legs \
          it actually moved"
+    );
+}
+
+/// An awake wolf at the origin and a hostile player it may notice. Both are level 10, so the
+/// level-scaled aggro radius is the flat 20 yards.
+fn wolf_and_player(player_at: Point) -> Scenario {
+    Scenario::new(HALF_WAY)
+        .creature(WOLF, p(0.0, 0.0, 10.0))
+        .awake([WOLF])
+        .at_war(BEASTS, ALLIANCE)
+        .player(HUNTER, player_at)
+}
+
+/// A scenario twist a table-driven test applies before it runs the cycle.
+type Twist = fn(Scenario) -> Scenario;
+
+/// A passive pack mate: it answers a call but never notices a player by itself.
+fn pack_mate(w: Scenario, guid: u64, at: Point) -> Scenario {
+    w.creature(guid, at).tuned_aggro_range(guid, 1)
+}
+
+#[test]
+fn a_creature_engages_the_nearest_hostile_player_it_can_see() {
+    let mut w = wolf_and_player(p(15.0, 0.0, 10.0)).player(RANGER, p(3.0, 0.0, 10.0));
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.pulls(),
+        [(WOLF, RANGER, Pull::Noticed)],
+        "a creature must pull the CLOSEST player it notices, and only one of them — picking the \
+         farther player leaves someone walking away with a mob that skipped the man next to it"
+    );
+}
+
+#[test]
+fn a_godmoded_or_dead_player_draws_no_aggro() {
+    let untouchable: [fn(Scenario, u64) -> Scenario; 2] = [Scenario::godmoded, Scenario::corpse];
+    for hold in untouchable {
+        let mut w = hold(wolf_and_player(p(5.0, 0.0, 10.0)), HUNTER);
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert!(
+            w.pulls().is_empty(),
+            "a player who cannot die never resolves a pull the normal way — nothing kills them, so \
+             nothing ever disengages, and creatures only ACCUMULATE: a GM standing in Northshire \
+             collected 103 simultaneous attackers"
+        );
+    }
+}
+
+#[test]
+fn a_creature_outside_every_active_cell_notices_nobody() {
+    let mut w = Scenario::new(HALF_WAY)
+        .creature(WOLF, p(0.0, 0.0, 10.0))
+        .at_war(BEASTS, ALLIANCE)
+        .player(HUNTER, p(2.0, 0.0, 10.0));
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert!(
+        w.pulls().is_empty(),
+        "aggro is what the active-cell sweep exists to bound; scanning a creature no player is \
+         near puts the whole world's population back on every sense firing"
+    );
+}
+
+#[test]
+fn a_stealthed_player_is_noticed_only_from_inside_the_detection_range() {
+    // Level 10 against level 10: a 20-yard aggro radius, but only 5 yards of seeing through stealth.
+    for (dist, noticed) in [(4.0f32, true), (9.0, false)] {
+        let mut w = wolf_and_player(p(dist, 0.0, 10.0)).stealthed(HUNTER);
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            !w.pulls().is_empty(),
+            noticed,
+            "stealth must GRADE the radius down, not switch it off: a rogue who steps on a mob is \
+             seen, one crossing the camp at {dist} yards is not"
+        );
+    }
+}
+
+#[test]
+fn the_aggro_radius_scales_with_level_honors_the_template_override_and_greys_out() {
+    let cases = [
+        (
+            "equal levels, inside the base radius",
+            10,
+            10,
+            None,
+            19.0,
+            true,
+        ),
+        ("equal levels, outside it", 10, 10, None, 21.0, false),
+        (
+            "the creature out-levels the player",
+            15,
+            10,
+            None,
+            24.0,
+            true,
+        ),
+        (
+            "a hand-tuned template range wins",
+            10,
+            10,
+            Some(8),
+            12.0,
+            false,
+        ),
+        (
+            "grey: the player out-levels it too far",
+            5,
+            20,
+            None,
+            3.0,
+            false,
+        ),
+    ];
+    for (case, creature_level, player_level, tuned, dist, noticed) in cases {
+        let mut w = wolf_and_player(p(dist, 0.0, 10.0))
+            .level(WOLF, creature_level)
+            .player_level(HUNTER, player_level);
+        if let Some(yards) = tuned {
+            w = w.tuned_aggro_range(WOLF, yards);
+        }
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            !w.pulls().is_empty(),
+            noticed,
+            "the reach a creature notices you from is the whole feel of walking through a zone: a \
+             high-level player must cross a low one unmolested, and a tuned creature must keep the \
+             range its author gave it ({case})"
+        );
+    }
+}
+
+#[test]
+fn a_wall_between_them_stops_the_pull() {
+    let mut w = wolf_and_player(p(5.0, 0.0, 10.0)).wall_between(WOLF, HUNTER);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert!(
+        w.pulls().is_empty(),
+        "a hostile on the other side of the abbey wall has not been seen; pulling it drags a mob \
+         through geometry at a player who never had line of sight on it"
+    );
+}
+
+#[test]
+fn a_soothed_crowd_controlled_or_near_death_creature_starts_no_fight() {
+    let quiet: [(&str, Twist); 3] = [
+        ("soothed", |w| w.soothed(WOLF, -20.0)),
+        ("crowd controlled", |w| w.crowd_controlled(WOLF)),
+        ("near death", |w| w.near_death(WOLF)),
+    ];
+    for (case, hold) in quiet {
+        let mut w = hold(wolf_and_player(p(5.0, 0.0, 10.0)));
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert!(
+            w.pulls().is_empty(),
+            "Mind Soothe and a stun both have to actually stop the pull to be worth casting, and a \
+             creature about to rout must not be armed into the fight it is leaving ({case})"
+        );
+    }
+}
+
+#[test]
+fn a_pack_mate_answers_a_call_it_can_hear() {
+    let mut w = pack_mate(
+        wolf_and_player(p(5.0, 0.0, 10.0)),
+        PACK_MATE,
+        p(0.0, 8.0, 10.0),
+    );
+    w = pack_mate(w, FAR_MATE, p(0.0, 40.0, 10.0)).awake([WOLF, PACK_MATE, FAR_MATE]);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.pulls(),
+        [
+            (WOLF, HUNTER, Pull::Noticed),
+            (PACK_MATE, HUNTER, Pull::Assisted)
+        ],
+        "a pack answers its own: the neighbor joins the fight it never would have started, and a \
+         mate out of earshot stays out of it — range is measured from the CALLER, so pulling one \
+         wolf must not wake the whole valley"
+    );
+}
+
+#[test]
+fn a_neighbor_of_the_wrong_kind_place_or_sight_ignores_the_call() {
+    let cases: [(&str, Twist); 3] = [
+        ("another faction", |w| w.faction(PACK_MATE, 99)),
+        ("another instance", |w| w.in_instance(PACK_MATE, 7)),
+        ("a wall between them", |w| w.wall_between(PACK_MATE, WOLF)),
+    ];
+    for (case, apart) in cases {
+        let mut w = apart(
+            pack_mate(
+                wolf_and_player(p(5.0, 0.0, 10.0)),
+                PACK_MATE,
+                p(0.0, 8.0, 10.0),
+            )
+            .awake([WOLF, PACK_MATE]),
+        );
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            w.pulls(),
+            [(WOLF, HUNTER, Pull::Noticed)],
+            "assist is same-kind, same-place and in plain sight; without those gates a copy of the \
+             world in another instance, or a guard of another faction, joins a fight it can \
+             neither see nor reach ({case})"
+        );
+    }
+}
+
+#[test]
+fn nobody_pulling_means_no_assist_scan_at_all() {
+    let mut w = pack_mate(
+        Scenario::new(HALF_WAY)
+            .creature(WOLF, p(0.0, 0.0, 10.0))
+            .at_war(BEASTS, ALLIANCE)
+            .player(HUNTER, p(100.0, 0.0, 10.0)),
+        PACK_MATE,
+        p(0.0, 5.0, 10.0),
+    )
+    .awake([WOLF, PACK_MATE]);
+    let tick = w.tick(true, catch_all());
+    let outcome = run_cycle(&mut w, tick);
+
+    assert_eq!(
+        outcome
+            .rows_visited
+            .iter()
+            .find(|(key, _)| *key == "assist"),
+        Some(&("assist", 0)),
+        "no pull this firing is the overwhelmingly common case, so the assist scan must cost the \
+         tick nothing at all rather than walking the active set for an empty call list"
+    );
+}
+
+#[test]
+fn a_neighbor_between_two_callers_answers_the_lower_guid() {
+    let mut w = Scenario::new(HALF_WAY)
+        .creature(WOLF, p(-3.0, 0.0, 10.0))
+        .creature(PACK_MATE, p(3.0, 0.0, 10.0))
+        .at_war(BEASTS, ALLIANCE)
+        .player(HUNTER, p(-3.0, 2.0, 10.0))
+        .player(RANGER, p(3.0, 2.0, 10.0));
+    w = pack_mate(w, FAR_MATE, p(0.0, 0.0, 10.0)).awake([WOLF, PACK_MATE, FAR_MATE]);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.pulls(),
+        [
+            (WOLF, HUNTER, Pull::Noticed),
+            (PACK_MATE, RANGER, Pull::Noticed),
+            (FAR_MATE, HUNTER, Pull::Assisted)
+        ],
+        "a neighbor equally close to two calls must always join the same one — a hash-order \
+         tie-break makes the same pull send the pack at a different player from run to run"
+    );
+}
+
+#[test]
+fn every_unit_in_a_covered_fight_is_flagged_in_combat_and_an_aiming_player_is_not() {
+    for (scope, flagged) in [
+        (catch_all(), vec![HUNTER, WOLF]),
+        (TickScope::Only(7), Vec::new()),
+    ] {
+        let mut w = Scenario::new(HALF_WAY)
+            .creature(WOLF, p(0.0, 0.0, 10.0))
+            .player(HUNTER, p(2.0, 0.0, 10.0))
+            .player(RANGER, p(30.0, 0.0, 10.0))
+            .attacking(WOLF, HUNTER)
+            .aiming_at(RANGER, WOLF);
+        let tick = w.tick(false, scope);
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            w.flagged(),
+            flagged,
+            "both sides of a live fight carry the combat flag and a refreshed drop deadline, on \
+             every firing rather than only the sensing ones; an auto-attack toggle aimed at \
+             something 30 yards off is not combat and must leave the player free to walk away"
+        );
+    }
+}
+
+#[test]
+fn a_creature_that_pulls_is_in_combat_before_the_same_cycle_ends() {
+    let mut w = wolf_and_player(p(5.0, 0.0, 10.0));
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.flagged(),
+        [HUNTER, WOLF],
+        "aggro IS combat: a creature that pulled must not wait a whole firing for its flag, or the \
+         player sees a mob running at them while still reading as out of combat"
     );
 }

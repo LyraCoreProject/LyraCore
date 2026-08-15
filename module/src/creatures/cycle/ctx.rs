@@ -11,12 +11,16 @@ use lyracore_shared::{constants, spatial};
 use spacetimedb::{ReducerContext, Table};
 
 use super::{
-    run_cycle, CreatureWorld, CycleOutcome, Gait, Home, IdleCreature, IdleSink, Leg, LegInFlight,
-    LegacyPasses, MotionSink, Point, TickContext, Waypoint,
+    run_cycle, AggroTarget, CreatureWorld, CycleOutcome, EngageSink, Engagement, Gait, Home,
+    IdleCreature, IdleSink, Leg, LegInFlight, LegacyPasses, MotionSink, Point, Pull, Sensor,
+    TickContext, Waypoint,
 };
 use crate::creatures::ai::TickScope;
 use crate::creatures::tick::{self, TickSweep};
-use crate::{game_creature_spawn, game_creature_spline, game_creature_waypoint, game_world_entity};
+use crate::{
+    game_creature_spawn, game_creature_spline, game_creature_template, game_creature_waypoint,
+    game_melee_attack, game_world_entity, MeleeAttack,
+};
 
 /// `tick_creatures`' one call into the cycle. The adapter never leaves this module.
 pub(crate) fn run(ctx: &ReducerContext, tick: TickContext, interval_micros: i64) -> CycleOutcome {
@@ -213,6 +217,138 @@ impl IdleSink for CtxWorld<'_> {
     }
 }
 
+impl EngageSink for CtxWorld<'_> {
+    // KNOWN DEBT, inherited verbatim from the aggro pass: there is no players-only index, so the
+    // snapshot reads every entity row once per sense firing. Budgeted in `tripwires.rs`.
+    fn players(&self) -> Vec<AggroTarget> {
+        self.ctx
+            .db
+            .game_world_entity()
+            .iter()
+            .filter(|e| e.is_player())
+            .map(|e| AggroTarget {
+                guid: e.guid,
+                at: Point {
+                    x: e.x,
+                    y: e.y,
+                    z: e.z,
+                },
+                level: e.level,
+                faction_template: e.faction_template,
+                map_id: e.map_id,
+                instance_id: e.instance_id,
+                dead: e.dead,
+                godmode: e.godmode,
+                stealthed: crate::spell::is_stealthed(self.ctx, e.guid),
+            })
+            .collect()
+    }
+    fn sensing_creatures(&self, active: &HashSet<u64>) -> Vec<Sensor> {
+        let entities = self.ctx.db.game_world_entity();
+        let melee = self.ctx.db.game_melee_attack();
+        let templates = self.ctx.db.game_creature_template();
+        active
+            .iter()
+            .filter_map(|guid| entities.guid().find(guid))
+            .filter(|c| {
+                !c.is_player()
+                    && !c.dead
+                    // A PET never pulls or assists on its owner's behalf — `pass_pet` arms it off
+                    // the owner's combat instead.
+                    && c.owner_guid == 0
+                    && melee.attacker_guid().find(c.guid).is_none()
+            })
+            .map(|c| Sensor {
+                guid: c.guid,
+                at: Point {
+                    x: c.x,
+                    y: c.y,
+                    z: c.z,
+                },
+                level: c.level,
+                faction_template: c.faction_template,
+                map_id: c.map_id,
+                instance_id: c.instance_id,
+                aggro_range: templates.entry().find(c.entry).map(|t| t.aggro_range),
+                detect_range_mod: crate::spell::detect_range_mod(self.ctx, c.guid),
+                would_rout: tick::rout_eligible(self.ctx, &c),
+                cannot_act: crate::spell::is_action_blocked(self.ctx, c.guid),
+            })
+            .collect()
+    }
+    fn hostile(&self, faction_template: u32, other: u32) -> bool {
+        crate::faction::is_hostile(self.ctx, faction_template, other)
+    }
+    fn line_of_sight(&self, looker: u64, at: Point) -> bool {
+        self.ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(looker)
+            .is_none_or(|c| {
+                crate::nav::has_los(self.ctx, c.map_id, (c.x, c.y, c.z), (at.x, at.y, at.z))
+            })
+    }
+    fn engage(&mut self, creature: u64, victim: u64, pull: Pull) {
+        let melee = self.ctx.db.game_melee_attack();
+        if melee.attacker_guid().find(creature).is_none() {
+            melee.insert(MeleeAttack {
+                attacker_guid: creature,
+                target_guid: victim,
+                last_swing_ms: 0,   // swing on the next melee tick
+                ranged_spell_id: 0, // proximity and pack aggro are melee
+                last_offhand_swing_ms: 0,
+                rout_ends_ms: 0,
+                pursuit_ends_ms: 0,
+                leash_x: 0.0,
+                leash_y: 0.0,
+            });
+        }
+        let entities = self.ctx.db.game_world_entity();
+        if let Some(mut c) = entities.guid().find(creature) {
+            if c.target_guid != victim {
+                c.target_guid = victim;
+                entities.guid().update(c);
+            }
+        }
+        crate::hooks::fire_on_aggro(
+            self.ctx,
+            &crate::hooks::AggroPayload {
+                creature_guid: creature,
+                target_guid: victim,
+                assist: pull == Pull::Assisted,
+            },
+        );
+    }
+    fn engagements(&self) -> Vec<Engagement> {
+        let entities = self.ctx.db.game_world_entity();
+        self.ctx
+            .db
+            .game_melee_attack()
+            .iter()
+            .filter_map(|a| {
+                let attacker = entities.guid().find(a.attacker_guid);
+                // Both sides gone: nothing to flag, and `enter_combat` would have no-opped anyway.
+                let instance_id = attacker
+                    .as_ref()
+                    .map(|e| e.instance_id)
+                    .or_else(|| entities.guid().find(a.target_guid).map(|e| e.instance_id))?;
+                Some(Engagement {
+                    attacker: a.attacker_guid,
+                    victim: a.target_guid,
+                    instance_id,
+                    player_never_swung: a.last_swing_ms == 0
+                        && a.last_offhand_swing_ms == 0
+                        && attacker.is_some_and(|e| e.is_player()),
+                })
+            })
+            .collect()
+    }
+    fn enter_combat(&mut self, guid: u64) {
+        crate::combat::enter_combat(self.ctx, guid);
+    }
+}
+
 impl CreatureWorld for CtxWorld<'_> {
     fn awake_creatures(&self, scope: &TickScope) -> TickSweep {
         tick::active_cell_creatures(self.ctx, scope)
@@ -233,9 +369,6 @@ impl CreatureWorld for CtxWorld<'_> {
 }
 
 impl LegacyPasses for CtxWorld<'_> {
-    fn legacy_aggro_assist(&mut self, active: &HashSet<u64>) -> usize {
-        tick::pass_aggro_assist(self.ctx, active)
-    }
     fn legacy_pet(&mut self, scope: &TickScope, now_ms: u32, pets: &[u64]) -> usize {
         crate::creatures::pass_pet(self.ctx, now_ms, scope, self.interval_micros, pets)
     }
@@ -247,9 +380,6 @@ impl LegacyPasses for CtxWorld<'_> {
     }
     fn legacy_chase(&mut self, scope: &TickScope) -> usize {
         tick::pass_chase(self.ctx, scope)
-    }
-    fn legacy_combat_enter(&mut self, scope: &TickScope) -> usize {
-        tick::pass_combat_enter(self.ctx, scope)
     }
     fn legacy_regen(&mut self) -> usize {
         tick::pass_regen(self.ctx)
