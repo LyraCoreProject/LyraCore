@@ -2003,6 +2003,7 @@ impl WorldStore for InMemoryStore {
                 class: c.class,
                 race: c.race,
                 zone_id: c.zone_id,
+                guild: String::new(),
             })
             .collect())
     }
@@ -2347,6 +2348,10 @@ impl WorldStore for InMemoryStore {
                 }
                 Ok(())
             }
+            realm_op::SET_MOTD => g.set_text(actor_guid, &text, true),
+            realm_op::SET_INFO_TEXT => g.set_text(actor_guid, &text, false),
+            realm_op::SET_PUBLIC_NOTE => g.set_note(actor_guid, target_guid, &text, false),
+            realm_op::SET_OFFICER_NOTE => g.set_note(actor_guid, target_guid, &text, true),
             other => Err(anyhow!("unknown realm guild op {other}")),
         }
     }
@@ -2776,14 +2781,71 @@ impl handlers::GuildActionStore for InMemoryStore {
     }
 
     fn guild_remove(&self, account_id: u64, self_guid: u64, target_name: &str) -> Result<()> {
-        let target_guid = super::guild::member_by_name(self, self_guid, target_name)?;
         super::guild::run(
             self,
             account_id,
             self_guid,
             super::guild::Op::Remove {
-                target_guid,
+                target_guid: super::guild::member_by_name(self, self_guid, target_name)?,
                 target_name: target_name.to_string(),
+            },
+        )
+    }
+
+    fn guild_set_motd(&self, account_id: u64, self_guid: u64, motd: &str) -> Result<()> {
+        super::guild::run(
+            self,
+            account_id,
+            self_guid,
+            super::guild::Op::SetMotd(motd.to_string()),
+        )
+    }
+
+    fn guild_set_info_text(&self, account_id: u64, self_guid: u64, text: &str) -> Result<()> {
+        super::guild::run(
+            self,
+            account_id,
+            self_guid,
+            super::guild::Op::SetInfoText(text.to_string()),
+        )
+    }
+
+    fn guild_set_public_note(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_name: &str,
+        note: &str,
+    ) -> Result<()> {
+        let target_guid = super::party::resolve_by_name(self, target_name)?
+            .ok_or_else(|| anyhow!("{}", lyracore_shared::guild::err::PLAYER_NOT_FOUND))?;
+        super::guild::run(
+            self,
+            account_id,
+            self_guid,
+            super::guild::Op::SetPublicNote {
+                target_guid,
+                note: note.to_string(),
+            },
+        )
+    }
+
+    fn guild_set_officer_note(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_name: &str,
+        note: &str,
+    ) -> Result<()> {
+        let target_guid = super::party::resolve_by_name(self, target_name)?
+            .ok_or_else(|| anyhow!("{}", lyracore_shared::guild::err::PLAYER_NOT_FOUND))?;
+        super::guild::run(
+            self,
+            account_id,
+            self_guid,
+            super::guild::Op::SetOfficerNote {
+                target_guid,
+                note: note.to_string(),
             },
         )
     }
@@ -4885,6 +4947,48 @@ fn guild_leave_dispatches_over_the_cipher_and_replies_with_a_typed_command_resul
         store.guild.lock().unwrap().guild_of(1),
         None,
         "the last member left, and the guild went with them"
+    );
+}
+
+/// The ONE encrypted-socket test for T6's setter family. It proves DISPATCH over the cipher for
+/// `CMSG_GUILD_MOTD` — that it reaches the guild seam through the real session loop and the
+/// success answer comes back as a decodable `SMSG_GUILD_EVENT`. Every gate and every refusal code
+/// is covered at the seam in `handlers/guild.rs`, without a socket.
+#[test]
+fn guild_motd_dispatches_over_the_cipher_and_replies_with_the_guild_event() {
+    use wow_world_messages::vanilla::{GuildEvent, CMSG_GUILD_CREATE, CMSG_GUILD_MOTD};
+
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    // Found a guild first — the socket's own character becomes its master, so the MOTD change that
+    // follows passes D3's gate.
+    CMSG_GUILD_CREATE {
+        guild_name: "The Silver Hand".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(); // the create's own SMSG_GUILD_COMMAND_RESULT
+
+    CMSG_GUILD_MOTD {
+        message_of_the_day: "Raid at 8pm".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GUILD_EVENT(m) => {
+            assert_eq!(m.event, GuildEvent::Motd);
+            assert_eq!(m.event_descriptions, vec!["Raid at 8pm".to_string()]);
+        }
+        other => panic!("expected SMSG_GUILD_EVENT, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+
+    assert_eq!(
+        store.guild.lock().unwrap().view(1).unwrap().motd,
+        "Raid at 8pm"
     );
 }
 
@@ -7860,6 +7964,11 @@ struct FakeGuild {
     /// Guild ids that have been disbanded, so a test can tell "the guild row went" from "the guild
     /// row was never there".
     disbanded: Vec<u64>,
+    /// guild_id → (motd, info_text). A field of its OWN rather than folded into `guilds`'s tuple, so
+    /// T6's setters don't touch every existing `guilds` destructuring site.
+    text: std::collections::HashMap<u64, (String, String)>,
+    /// (guild_id, character_guid) → (public_note, officer_note).
+    notes: std::collections::HashMap<(u64, u64), (String, String)>,
 }
 
 impl FakeGuild {
@@ -7998,12 +8107,13 @@ impl FakeGuild {
         use lyracore_shared::guild::DEFAULT_RANK_NAMES;
         let (gid, name, master, created) =
             self.guilds.iter().find(|(g, ..)| *g == guild_id).cloned()?;
+        let (motd, info_text) = self.text.get(&guild_id).cloned().unwrap_or_default();
         Some(super::guild::GuildView {
             guild_id: gid,
             name,
             master_guid: master,
-            motd: String::new(),
-            info_text: String::new(),
+            motd,
+            info_text,
             created_micros: created,
             member_count: self.members.iter().filter(|(g, ..)| *g == guild_id).count() as u32,
             // Seeded from the shared vanilla list, exactly as the module's `seed_ranks` does.
@@ -8187,6 +8297,65 @@ impl FakeGuild {
             return Err(anyhow!("{}", guild_err::NOT_GUILD_MASTER));
         }
         Ok(guild_id)
+    }
+
+    /// The module's `set_guild_text`, modelled: master-only, empty text admitted.
+    fn set_text(&mut self, actor_guid: u64, text: &str, motd: bool) -> Result<()> {
+        use lyracore_shared::guild::err as guild_err;
+        let (guild_id, _) = self
+            .guild_of(actor_guid)
+            .ok_or_else(|| anyhow!("{}", guild_err::NOT_IN_GUILD))?;
+        let master = self
+            .guilds
+            .iter()
+            .find(|(g, ..)| *g == guild_id)
+            .map(|(_, _, m, _)| *m);
+        if master != Some(actor_guid) {
+            return Err(anyhow!("{}", guild_err::NOT_GUILD_MASTER));
+        }
+        let entry = self.text.entry(guild_id).or_default();
+        if motd {
+            entry.0 = text.to_string();
+        } else {
+            entry.1 = text.to_string();
+        }
+        Ok(())
+    }
+
+    /// The module's `set_member_note`, modelled: a member may set their own public note, everything
+    /// else (another member's public note, anyone's officer note) is master-only.
+    fn set_note(
+        &mut self,
+        actor_guid: u64,
+        target_guid: u64,
+        note: &str,
+        officer: bool,
+    ) -> Result<()> {
+        use lyracore_shared::guild::err as guild_err;
+        let (guild_id, _) = self
+            .guild_of(actor_guid)
+            .ok_or_else(|| anyhow!("{}", guild_err::NOT_IN_GUILD))?;
+        let master = self
+            .guilds
+            .iter()
+            .find(|(g, ..)| *g == guild_id)
+            .map(|(_, _, m, _)| *m);
+        let is_master = master == Some(actor_guid);
+        let setting_own_public_note = !officer && actor_guid == target_guid;
+        if !is_master && !setting_own_public_note {
+            return Err(anyhow!("{}", guild_err::NOT_GUILD_MASTER));
+        }
+        match self.guild_of(target_guid) {
+            Some((tg, _)) if tg == guild_id => {}
+            _ => return Err(anyhow!("{}", guild_err::NOT_IN_GUILD)),
+        }
+        let entry = self.notes.entry((guild_id, target_guid)).or_default();
+        if officer {
+            entry.1 = note.to_string();
+        } else {
+            entry.0 = note.to_string();
+        }
+        Ok(())
     }
 }
 

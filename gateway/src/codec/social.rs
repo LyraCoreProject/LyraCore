@@ -20,6 +20,8 @@ pub struct WhoPlayerView {
     pub class: u8,
     pub race: u8,
     pub zone_id: u32,
+    /// The character's guild name, empty for a guildless character.
+    pub guild: String,
 }
 
 /// Build `SMSG_WHO` for `CMSG_WHO`. Filters are ignored for the first pass — every currently-online
@@ -34,7 +36,7 @@ pub fn build_who_response(players: &[WhoPlayerView]) -> SMSG_WHO {
             let race = Race::try_from(p.race).ok()?;
             Some(WhoPlayer {
                 name: p.name.clone(),
-                guild: String::new(), // no guild system yet
+                guild: p.guild.clone(),
                 level: Level::new(p.level),
                 class,
                 race,
@@ -558,6 +560,7 @@ mod party_tests {
                 class: 1,
                 race: 1,
                 zone_id: 12,
+                guild: String::new(),
             })
             .collect();
         let resp = build_who_response(&players);
@@ -581,6 +584,7 @@ mod party_tests {
                 class: 1,
                 race: 1,
                 zone_id: 12,
+                guild: String::new(),
             },
             WhoPlayerView {
                 name: "BadClass".into(),
@@ -588,6 +592,7 @@ mod party_tests {
                 class: 250,
                 race: 1,
                 zone_id: 12,
+                guild: String::new(),
             },
             WhoPlayerView {
                 name: "BadRace".into(),
@@ -595,6 +600,7 @@ mod party_tests {
                 class: 1,
                 race: 250,
                 zone_id: 12,
+                guild: String::new(),
             },
         ];
         let resp = build_who_response(&players);
@@ -608,6 +614,34 @@ mod party_tests {
             resp.online_players, 3,
             "the count reflects the full roster, unaffected by the skip"
         );
+    }
+
+    /// `SMSG_WHO` carries the real guild name for a guilded character and an empty string for an
+    /// unguilded one — the guild system's own contribution to `/who` (was hardcoded empty for
+    /// everyone).
+    #[test]
+    fn who_response_carries_the_real_guild_name_and_empty_for_the_unguilded() {
+        let players = [
+            WhoPlayerView {
+                name: "Ginger".into(),
+                level: 10,
+                class: 1,
+                race: 1,
+                zone_id: 12,
+                guild: "The Silver Hand".into(),
+            },
+            WhoPlayerView {
+                name: "Loner".into(),
+                level: 10,
+                class: 1,
+                race: 1,
+                zone_id: 12,
+                guild: String::new(),
+            },
+        ];
+        let resp = build_who_response(&players);
+        assert_eq!(resp.players[0].guild, "The Silver Hand");
+        assert_eq!(resp.players[1].guild, "");
     }
 
     #[test]

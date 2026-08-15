@@ -5,7 +5,9 @@
 
 use super::super::*;
 use crate::world::guild::{GuildRoster, GuildView};
-use wow_world_messages::vanilla::{GuildCommand, GuildCommandResult};
+use wow_world_messages::vanilla::{
+    GuildCommand, GuildCommandResult, GuildEvent as WireGuildEvent, SMSG_GUILD_EVENT,
+};
 
 /// The durable requests and reads the guild family needs, in the seam's own vocabulary so it can be
 /// exercised without the broad `WorldStore`. Each is ALREADY ROUTED: the implementation picks the
@@ -51,6 +53,34 @@ pub(crate) trait GuildActionStore: Send + Sync {
     /// `lyracore_shared::guild::err`'s strings (today, only `NOT_IN_GUILD`) or a transport failure;
     /// the caller decides what to say to the client either way.
     fn guild_chat(&self, self_guid: u64, text: &str) -> Result<()>;
+    /// Set `self_guid`'s guild's MOTD to `motd` (master-only; an empty value clears it).
+    fn guild_set_motd(&self, account_id: u64, self_guid: u64, motd: &str) -> Result<()>;
+
+    /// Set `self_guid`'s guild's info text to `text` — same gate and shape as
+    /// [`Self::guild_set_motd`], no broadcast.
+    fn guild_set_info_text(&self, account_id: u64, self_guid: u64, text: &str) -> Result<()>;
+
+    /// Set `target_name`'s public note to `note`. `target_name` is the wire's typed name — the
+    /// implementation resolves it (realm-wide, like an invite target), so an unresolved name is a
+    /// distinct refusal from every module-side gate. `self_guid` must be `target_name` itself (a
+    /// member may set their OWN note) or the guild master.
+    fn guild_set_public_note(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_name: &str,
+        note: &str,
+    ) -> Result<()>;
+
+    /// Set `target_name`'s officer note to `note` — same resolution as
+    /// [`Self::guild_set_public_note`], but master-only.
+    fn guild_set_officer_note(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_name: &str,
+        note: &str,
+    ) -> Result<()>;
 }
 
 impl GuildActionStore for crate::stdb::Coordinator {
@@ -94,14 +124,71 @@ impl GuildActionStore for crate::stdb::Coordinator {
     }
 
     fn guild_remove(&self, account_id: u64, self_guid: u64, target_name: &str) -> Result<()> {
-        let target_guid = crate::world::guild::member_by_name(self, self_guid, target_name)?;
         crate::world::guild::run(
             self,
             account_id,
             self_guid,
             crate::world::guild::Op::Remove {
-                target_guid,
+                target_guid: crate::world::guild::member_by_name(self, self_guid, target_name)?,
                 target_name: target_name.to_string(),
+            },
+        )
+    }
+
+    fn guild_set_motd(&self, account_id: u64, self_guid: u64, motd: &str) -> Result<()> {
+        crate::world::guild::run(
+            self,
+            account_id,
+            self_guid,
+            crate::world::guild::Op::SetMotd(motd.to_string()),
+        )
+    }
+
+    fn guild_set_info_text(&self, account_id: u64, self_guid: u64, text: &str) -> Result<()> {
+        crate::world::guild::run(
+            self,
+            account_id,
+            self_guid,
+            crate::world::guild::Op::SetInfoText(text.to_string()),
+        )
+    }
+
+    fn guild_set_public_note(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_name: &str,
+        note: &str,
+    ) -> Result<()> {
+        let target_guid = crate::world::party::resolve_by_name(self, target_name)?
+            .ok_or_else(|| anyhow::anyhow!("{}", lyracore_shared::guild::err::PLAYER_NOT_FOUND))?;
+        crate::world::guild::run(
+            self,
+            account_id,
+            self_guid,
+            crate::world::guild::Op::SetPublicNote {
+                target_guid,
+                note: note.to_string(),
+            },
+        )
+    }
+
+    fn guild_set_officer_note(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_name: &str,
+        note: &str,
+    ) -> Result<()> {
+        let target_guid = crate::world::party::resolve_by_name(self, target_name)?
+            .ok_or_else(|| anyhow::anyhow!("{}", lyracore_shared::guild::err::PLAYER_NOT_FOUND))?;
+        crate::world::guild::run(
+            self,
+            account_id,
+            self_guid,
+            crate::world::guild::Op::SetOfficerNote {
+                target_guid,
+                note: note.to_string(),
             },
         )
     }
@@ -204,6 +291,27 @@ fn teardown_result_for(error: &anyhow::Error) -> GuildCommandResult {
     }
 }
 
+/// Map an MOTD/info-text/note refusal onto the wire's own result code — the same classified-string
+/// contract [`create_result_for`] reads, extended with the family's other two errors:
+/// [`lyracore_shared::guild::err::NOT_IN_GUILD`] (the actor is guildless, or a note's target is not
+/// a fellow member) and [`lyracore_shared::guild::err::NOT_GUILD_MASTER`] (D3's only permission
+/// check). [`lyracore_shared::guild::err::PLAYER_NOT_FOUND`] is not a module string — it is what the
+/// gateway itself raises when a note target's name does not resolve — but it rides the same
+/// classified vocabulary so this is still one lookup.
+fn setter_result_for(error: &anyhow::Error) -> GuildCommandResult {
+    use lyracore_shared::guild::err;
+    let text = format!("{error:#}");
+    if text.contains(err::NOT_GUILD_MASTER) {
+        GuildCommandResult::GuildPermissionsOrLeader
+    } else if text.contains(err::PLAYER_NOT_FOUND) {
+        GuildCommandResult::GuildPlayerNotFoundS
+    } else if text.contains(err::NOT_IN_GUILD) {
+        GuildCommandResult::GuildPlayerNotInGuild
+    } else {
+        GuildCommandResult::GuildInternal
+    }
+}
+
 /// One `SMSG_GUILD_COMMAND_RESULT`, the family's only error channel.
 fn command_result(
     command: GuildCommand,
@@ -254,6 +362,18 @@ pub(crate) fn dispatch_guild_action<St: GuildActionStore + ?Sized>(
             self_guid,
             &s.new_guild_leader_name,
         ),
+        ClientOpcodeMessage::CMSG_GUILD_MOTD(s) => {
+            guild_set_motd(store, player.account_id, self_guid, &s.message_of_the_day)
+        }
+        ClientOpcodeMessage::CMSG_GUILD_INFO_TEXT(s) => {
+            guild_set_info_text(store, player.account_id, self_guid, &s.guild_info)
+        }
+        ClientOpcodeMessage::CMSG_GUILD_SET_PUBLIC_NOTE(s) => {
+            guild_set_public_note(store, player.account_id, self_guid, &s.player_name, &s.note)
+        }
+        ClientOpcodeMessage::CMSG_GUILD_SET_OFFICER_NOTE(s) => {
+            guild_set_officer_note(store, player.account_id, self_guid, &s.player_name, &s.note)
+        }
         other => Ok(GuildActionOutcome::PassThrough(other)),
     }
 }
@@ -283,6 +403,110 @@ fn guild_create<St: GuildActionStore + ?Sized>(
             name,
             GuildCommandResult::PlayerNoMoreInGuild,
         ),
+    })
+}
+
+/// `CMSG_GUILD_MOTD`. Master-only (D3); an empty string is a valid write that CLEARS the MOTD, not a
+/// refusal. On success the caller — themselves an online member — is answered directly with
+/// `SMSG_GUILD_EVENT(Motd)`; the module also drops one `GuildEvent(MOTD)` row per OTHER member
+/// (`set_guild_text`'s core), the durable half of "every online member sees it live" whose delivery
+/// is the `game_guild_event` relay's job (the `game_group_event` shape, armed in
+/// `stdb/subscriptions.rs`/`stdb/world_view.rs` — outside this seam's file ownership).
+///
+/// `GuildCommand` has no MOTD/notes-specific variant (vanilla's wire only defines
+/// Create/Invite/Quit/Founder/Unknown19/Unknown20) — `Founder` is the closest of the six to "you are
+/// not the guild founder/master", so every refusal in this family answers with it.
+fn guild_set_motd<St: GuildActionStore + ?Sized>(
+    store: &St,
+    account_id: u64,
+    self_guid: u64,
+    motd: &str,
+) -> Result<GuildActionOutcome> {
+    if let Err(e) = store.guild_set_motd(account_id, self_guid, motd) {
+        if classify_guild_action_error(&e) == GuildActionErrorClass::Fatal {
+            return Err(e);
+        }
+        log::debug!("world: guild motd refused (account {account_id}): {e:#}");
+        return Ok(GuildActionOutcome::Handled {
+            outbound: command_result(GuildCommand::Founder, "", setter_result_for(&e)),
+        });
+    }
+    Ok(GuildActionOutcome::Handled {
+        outbound: vec![Outbound::One(ServerOpcodeMessage::SMSG_GUILD_EVENT(
+            Box::new(SMSG_GUILD_EVENT {
+                event: WireGuildEvent::Motd,
+                event_descriptions: vec![motd.to_string()],
+            }),
+        ))],
+    })
+}
+
+/// `CMSG_GUILD_INFO_TEXT`. Same gate and shape as [`guild_set_motd`], but no broadcast on success —
+/// an empty outbound batch, like the read-only handlers answer an absent guild.
+fn guild_set_info_text<St: GuildActionStore + ?Sized>(
+    store: &St,
+    account_id: u64,
+    self_guid: u64,
+    text: &str,
+) -> Result<GuildActionOutcome> {
+    if let Err(e) = store.guild_set_info_text(account_id, self_guid, text) {
+        if classify_guild_action_error(&e) == GuildActionErrorClass::Fatal {
+            return Err(e);
+        }
+        log::debug!("world: guild info text refused (account {account_id}): {e:#}");
+        return Ok(GuildActionOutcome::Handled {
+            outbound: command_result(GuildCommand::Founder, "", setter_result_for(&e)),
+        });
+    }
+    Ok(GuildActionOutcome::Handled {
+        outbound: Vec::new(),
+    })
+}
+
+/// `CMSG_GUILD_SET_PUBLIC_NOTE`. The wire carries the target by NAME; an unresolved name answers
+/// `GuildPlayerNotFoundS` the same way an unknown invite target would. A member may set their own
+/// row; setting anyone else's is master-only (D3). No broadcast on success.
+fn guild_set_public_note<St: GuildActionStore + ?Sized>(
+    store: &St,
+    account_id: u64,
+    self_guid: u64,
+    target_name: &str,
+    note: &str,
+) -> Result<GuildActionOutcome> {
+    if let Err(e) = store.guild_set_public_note(account_id, self_guid, target_name, note) {
+        if classify_guild_action_error(&e) == GuildActionErrorClass::Fatal {
+            return Err(e);
+        }
+        log::debug!("world: guild public note refused (account {account_id}): {e:#}");
+        return Ok(GuildActionOutcome::Handled {
+            outbound: command_result(GuildCommand::Founder, target_name, setter_result_for(&e)),
+        });
+    }
+    Ok(GuildActionOutcome::Handled {
+        outbound: Vec::new(),
+    })
+}
+
+/// `CMSG_GUILD_SET_OFFICER_NOTE`. Same name resolution as [`guild_set_public_note`], but master-only
+/// with no member exception — proper officer-rank gating is a separate future issue (D3).
+fn guild_set_officer_note<St: GuildActionStore + ?Sized>(
+    store: &St,
+    account_id: u64,
+    self_guid: u64,
+    target_name: &str,
+    note: &str,
+) -> Result<GuildActionOutcome> {
+    if let Err(e) = store.guild_set_officer_note(account_id, self_guid, target_name, note) {
+        if classify_guild_action_error(&e) == GuildActionErrorClass::Fatal {
+            return Err(e);
+        }
+        log::debug!("world: guild officer note refused (account {account_id}): {e:#}");
+        return Ok(GuildActionOutcome::Handled {
+            outbound: command_result(GuildCommand::Founder, target_name, setter_result_for(&e)),
+        });
+    }
+    Ok(GuildActionOutcome::Handled {
+        outbound: Vec::new(),
     })
 }
 
@@ -576,6 +800,14 @@ mod tests {
         teardown_error: Option<String>,
         chat_requests: Mutex<Vec<(u64, String)>>,
         chat_error: Option<String>,
+        motd_requests: Mutex<Vec<(u64, u64, String)>>,
+        motd_error: Option<String>,
+        info_text_requests: Mutex<Vec<(u64, u64, String)>>,
+        info_text_error: Option<String>,
+        public_note_requests: Mutex<Vec<(u64, u64, String, String)>>,
+        public_note_error: Option<String>,
+        officer_note_requests: Mutex<Vec<(u64, u64, String, String)>>,
+        officer_note_error: Option<String>,
     }
 
     impl GuildActionStore for InMemoryGuildActions {
@@ -614,12 +846,32 @@ mod tests {
                 .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
         }
 
+        fn guild_set_motd(&self, account_id: u64, self_guid: u64, motd: &str) -> Result<()> {
+            self.motd_requests
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid, motd.to_string()));
+            self.motd_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+        }
+
         fn guild_answer_invite(&self, account_id: u64, self_guid: u64, accept: bool) -> Result<()> {
             self.answer_requests
                 .lock()
                 .unwrap()
                 .push((account_id, self_guid, accept));
             self.answer_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+        }
+
+        fn guild_set_info_text(&self, account_id: u64, self_guid: u64, text: &str) -> Result<()> {
+            self.info_text_requests
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid, text.to_string()));
+            self.info_text_error
                 .as_ref()
                 .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
         }
@@ -654,6 +906,42 @@ mod tests {
             target_name: &str,
         ) -> Result<()> {
             self.teardown("leader", account_id, self_guid, target_name.to_string())
+        }
+
+        fn guild_set_public_note(
+            &self,
+            account_id: u64,
+            self_guid: u64,
+            target_name: &str,
+            note: &str,
+        ) -> Result<()> {
+            self.public_note_requests.lock().unwrap().push((
+                account_id,
+                self_guid,
+                target_name.to_string(),
+                note.to_string(),
+            ));
+            self.public_note_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+        }
+
+        fn guild_set_officer_note(
+            &self,
+            account_id: u64,
+            self_guid: u64,
+            target_name: &str,
+            note: &str,
+        ) -> Result<()> {
+            self.officer_note_requests.lock().unwrap().push((
+                account_id,
+                self_guid,
+                target_name.to_string(),
+                note.to_string(),
+            ));
+            self.officer_note_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
         }
 
         fn guild_chat(&self, self_guid: u64, text: &str) -> Result<()> {
@@ -1484,6 +1772,40 @@ mod tests {
         }
     }
 
+    fn motd(text: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_GUILD_MOTD(Box::new(
+            wow_world_messages::vanilla::CMSG_GUILD_MOTD {
+                message_of_the_day: text.into(),
+            },
+        ))
+    }
+
+    fn info_text(text: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_GUILD_INFO_TEXT(Box::new(
+            wow_world_messages::vanilla::CMSG_GUILD_INFO_TEXT {
+                guild_info: text.into(),
+            },
+        ))
+    }
+
+    fn set_public_note(target: &str, note: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_GUILD_SET_PUBLIC_NOTE(Box::new(
+            wow_world_messages::vanilla::CMSG_GUILD_SET_PUBLIC_NOTE {
+                player_name: target.into(),
+                note: note.into(),
+            },
+        ))
+    }
+
+    fn set_officer_note(target: &str, note: &str) -> ClientOpcodeMessage {
+        ClientOpcodeMessage::CMSG_GUILD_SET_OFFICER_NOTE(Box::new(
+            wow_world_messages::vanilla::CMSG_GUILD_SET_OFFICER_NOTE {
+                player_name: target.into(),
+                note: note.into(),
+            },
+        ))
+    }
+
     /// AC1/AC6: one roster packet listing every member, online and offline, each carrying the two
     /// notes realm-core holds for it.
     #[test]
@@ -1668,6 +1990,228 @@ mod tests {
             Ok(_) => panic!("a lost transport must not be swallowed as a refusal"),
         };
 
+        assert!(format!("{error:#}").contains("reducer transport disconnected"));
+    }
+    /// AC1: the master's MOTD change reaches the durable layer with the caller's account/guid/text,
+    /// and the caller — an online member — is answered directly with `SMSG_GUILD_EVENT(Motd)`
+    /// carrying the new text.
+    #[test]
+    fn a_masters_motd_change_requests_the_write_and_answers_with_the_guild_event() {
+        let actions = InMemoryGuildActions::default();
+
+        let outbound =
+            handled(dispatch_guild_action(&actions, player(), motd("Raid at 8pm")).unwrap());
+
+        assert_eq!(
+            actions.motd_requests.lock().unwrap().as_slice(),
+            &[(7, GINGER, "Raid at 8pm".to_string())]
+        );
+        match outbound.as_slice() {
+            [Outbound::One(ServerOpcodeMessage::SMSG_GUILD_EVENT(m))] => {
+                assert_eq!(m.event, wow_world_messages::vanilla::GuildEvent::Motd);
+                assert_eq!(m.event_descriptions, vec!["Raid at 8pm".to_string()]);
+            }
+            other => panic!(
+                "expected one SMSG_GUILD_EVENT, got {} message(s)",
+                other.len()
+            ),
+        }
+    }
+
+    /// AC4: an EMPTY motd is a valid write (it clears the MOTD) — not a second refusal path. The
+    /// seam must request it and answer success exactly like a non-empty one.
+    #[test]
+    fn an_empty_motd_is_requested_and_answered_as_a_success_not_a_refusal() {
+        let actions = InMemoryGuildActions::default();
+
+        let outbound = handled(dispatch_guild_action(&actions, player(), motd("")).unwrap());
+
+        assert_eq!(
+            actions.motd_requests.lock().unwrap().as_slice(),
+            &[(7, GINGER, String::new())]
+        );
+        assert!(matches!(
+            outbound.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_GUILD_EVENT(_))]
+        ));
+    }
+
+    /// AC2: a non-master's MOTD change is refused with `GuildPermissionsOrLeader`, and changes
+    /// nothing else on this connection (the ONE reply is the refusal, no event).
+    #[test]
+    fn a_non_masters_motd_change_is_refused_with_permissions_or_leader() {
+        let actions = InMemoryGuildActions {
+            motd_error: Some(err::NOT_GUILD_MASTER.into()),
+            ..Default::default()
+        };
+
+        let outbound = handled(dispatch_guild_action(&actions, player(), motd("Nope")).unwrap());
+
+        assert_eq!(
+            command_result_of(&outbound),
+            (
+                GuildCommand::Founder,
+                String::new(),
+                GuildCommandResult::GuildPermissionsOrLeader
+            )
+        );
+    }
+
+    /// AC5: info text behaves as the MOTD for gating and storage — same refusal mapping — but a
+    /// SUCCESSFUL change never answers with an event; the acceptance criterion is explicit that
+    /// there is no broadcast.
+    #[test]
+    fn info_text_gates_like_the_motd_but_a_success_carries_no_broadcast() {
+        let actions = InMemoryGuildActions::default();
+
+        let outbound =
+            handled(dispatch_guild_action(&actions, player(), info_text("We raid Naxx")).unwrap());
+
+        assert_eq!(
+            actions.info_text_requests.lock().unwrap().as_slice(),
+            &[(7, GINGER, "We raid Naxx".to_string())]
+        );
+        assert!(outbound.is_empty(), "info text must not broadcast");
+
+        let refused = InMemoryGuildActions {
+            info_text_error: Some(err::NOT_GUILD_MASTER.into()),
+            ..Default::default()
+        };
+        let outbound =
+            handled(dispatch_guild_action(&refused, player(), info_text("Nope")).unwrap());
+        assert_eq!(
+            command_result_of(&outbound).2,
+            GuildCommandResult::GuildPermissionsOrLeader
+        );
+    }
+
+    /// AC6: a public-note change (own or another's — the module's gate decides which; the seam only
+    /// carries the typed name through) reaches the durable layer and answers with no broadcast on
+    /// success, `GuildPermissionsOrLeader` when the module refuses it.
+    #[test]
+    fn public_note_requests_the_write_by_name_and_carries_no_broadcast_on_success() {
+        let actions = InMemoryGuildActions::default();
+
+        let outbound = handled(
+            dispatch_guild_action(&actions, player(), set_public_note("Bob", "reliable tank"))
+                .unwrap(),
+        );
+
+        assert_eq!(
+            actions.public_note_requests.lock().unwrap().as_slice(),
+            &[(7, GINGER, "Bob".to_string(), "reliable tank".to_string())]
+        );
+        assert!(outbound.is_empty());
+
+        let refused = InMemoryGuildActions {
+            public_note_error: Some(err::NOT_GUILD_MASTER.into()),
+            ..Default::default()
+        };
+        let outbound = handled(
+            dispatch_guild_action(&refused, player(), set_public_note("Carol", "x")).unwrap(),
+        );
+        assert_eq!(
+            command_result_of(&outbound),
+            (
+                GuildCommand::Founder,
+                "Carol".to_string(),
+                GuildCommandResult::GuildPermissionsOrLeader
+            )
+        );
+    }
+
+    /// AC7: the officer note is master-only, same request/refusal shape as the public note.
+    #[test]
+    fn officer_note_requests_the_write_by_name_and_gates_on_the_master() {
+        let actions = InMemoryGuildActions::default();
+
+        let outbound = handled(
+            dispatch_guild_action(
+                &actions,
+                player(),
+                set_officer_note("Bob", "watch this one"),
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(
+            actions.officer_note_requests.lock().unwrap().as_slice(),
+            &[(7, GINGER, "Bob".to_string(), "watch this one".to_string())]
+        );
+        assert!(outbound.is_empty());
+
+        let refused = InMemoryGuildActions {
+            officer_note_error: Some(err::NOT_GUILD_MASTER.into()),
+            ..Default::default()
+        };
+        let outbound = handled(
+            dispatch_guild_action(&refused, player(), set_officer_note("Dave", "x")).unwrap(),
+        );
+        assert_eq!(
+            command_result_of(&outbound).2,
+            GuildCommandResult::GuildPermissionsOrLeader
+        );
+    }
+
+    /// An unresolved note target answers `GuildPlayerNotFoundS` — the gateway's own resolution
+    /// failure, classified through the same vocabulary as the module's refusals.
+    #[test]
+    fn an_unresolved_note_target_answers_player_not_found() {
+        let actions = InMemoryGuildActions {
+            public_note_error: Some(err::PLAYER_NOT_FOUND.into()),
+            ..Default::default()
+        };
+
+        let outbound = handled(
+            dispatch_guild_action(&actions, player(), set_public_note("Nobody", "x")).unwrap(),
+        );
+
+        assert_eq!(
+            command_result_of(&outbound).2,
+            GuildCommandResult::GuildPlayerNotFoundS
+        );
+    }
+
+    /// A guildless actor is `GuildPlayerNotInGuild` — the module's `NOT_IN_GUILD` classified the
+    /// same way for every setter in this family.
+    #[test]
+    fn a_guildless_actor_setting_the_motd_answers_not_in_guild() {
+        let actions = InMemoryGuildActions {
+            motd_error: Some(err::NOT_IN_GUILD.into()),
+            ..Default::default()
+        };
+
+        let outbound = handled(dispatch_guild_action(&actions, player(), motd("x")).unwrap());
+
+        assert_eq!(
+            command_result_of(&outbound).2,
+            GuildCommandResult::GuildPlayerNotInGuild
+        );
+    }
+
+    /// An unclassified refusal still answers (never a silently dropped dialog), and a lost reducer
+    /// transport is the one failure that propagates — mirroring `guild_create`'s own coverage, once
+    /// for the setter family.
+    #[test]
+    fn setters_answer_unclassified_refusals_and_propagate_a_lost_transport() {
+        let unclassified = InMemoryGuildActions {
+            motd_error: Some("something the module has not told the gateway about".into()),
+            ..Default::default()
+        };
+        let outbound = handled(dispatch_guild_action(&unclassified, player(), motd("x")).unwrap());
+        assert_eq!(
+            command_result_of(&outbound).2,
+            GuildCommandResult::GuildInternal
+        );
+
+        let fatal = InMemoryGuildActions {
+            motd_error: Some("reducer transport disconnected".into()),
+            ..Default::default()
+        };
+        let error = match dispatch_guild_action(&fatal, player(), motd("x")) {
+            Err(error) => error,
+            Ok(_) => panic!("a lost transport must not be swallowed as a refusal"),
+        };
         assert!(format!("{error:#}").contains("reducer transport disconnected"));
     }
 }

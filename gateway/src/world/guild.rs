@@ -72,6 +72,16 @@ pub(crate) enum Op {
         target_guid: u64,
         target_name: String,
     },
+    /// `CMSG_GUILD_MOTD` — the new MOTD (may be empty; an empty value CLEARS it, D3's acceptance
+    /// criterion 4). Master-only, gated module-side.
+    SetMotd(String),
+    /// `CMSG_GUILD_INFO_TEXT` — same shape and gate as [`Op::SetMotd`], for `Guild.info_text`.
+    SetInfoText(String),
+    /// `CMSG_GUILD_SET_PUBLIC_NOTE` — `target_guid`'s public note becomes `note`. Module-gated: the
+    /// note owner or the guild master.
+    SetPublicNote { target_guid: u64, note: String },
+    /// `CMSG_GUILD_SET_OFFICER_NOTE` — same shape as [`Op::SetPublicNote`], master-only.
+    SetOfficerNote { target_guid: u64, note: String },
 }
 
 /// Run one guild op for the session that owns `self_guid`.
@@ -83,6 +93,18 @@ pub(crate) enum Op {
 /// Sharded → realm-core runs the op, then the guild columns of every character the op moved are
 /// pushed onto every connected world shard. The push is best-effort BY DESIGN (see
 /// [`push_membership`]); the op's own result is not.
+/// shard, and nothing else happens. [`Op::Create`] is the one exception: it runs through the
+/// dedicated single-database [`WorldStore::create_guild`] reducer T1 shipped rather than
+/// `realm_guild_op` — every OTHER op reaches `realm_guild_op` on `store` directly instead of adding
+/// a same-shaped single-database reducer per op (and the hand-spliced binding each would cost;
+/// `realm_guild_op` already runs correctly against ANY database, sharded or not, because the module
+/// publishes it everywhere).
+///
+/// Sharded → realm-core runs the op, then the acting character's own guild columns are pushed onto
+/// every connected world shard. The push is best-effort BY DESIGN (see [`push_membership`]); the
+/// op's own result is not. T6's four ops never change membership, so — unlike [`Op::Create`] — the
+/// push after them just re-confirms the SAME pair; harmless, and left unconditional rather than
+/// restructured (this match is one of the four files every guild ticket appends to in parallel).
 pub(crate) fn run<St: WorldStore + ?Sized>(
     store: &St,
     account_id: u64,
@@ -228,6 +250,14 @@ fn slots(op: Op) -> (u8, u64, u32, String) {
             target_guid,
             target_name,
         } => (realm_op::LEADER, target_guid, 0, target_name),
+        Op::SetMotd(text) => (realm_op::SET_MOTD, 0, 0, text),
+        Op::SetInfoText(text) => (realm_op::SET_INFO_TEXT, 0, 0, text),
+        Op::SetPublicNote { target_guid, note } => {
+            (realm_op::SET_PUBLIC_NOTE, target_guid, 0, note)
+        }
+        Op::SetOfficerNote { target_guid, note } => {
+            (realm_op::SET_OFFICER_NOTE, target_guid, 0, note)
+        }
     }
 }
 
@@ -240,10 +270,17 @@ fn slots(op: Op) -> (u8, u64, u32, String) {
 fn moved_by<St: WorldStore + ?Sized>(store: &St, self_guid: u64, op: &Op) -> Result<Vec<u64>> {
     let mut moved = vec![self_guid];
     match op {
-        Op::Create(_) | Op::Accept { .. } | Op::Decline { .. } | Op::Leave { .. } => {}
-        // An invite moves nobody's columns — the target only joins when they accept — but the
-        // authority is read for the invite gate, so the caller's own pair is refreshed anyway.
-        Op::Invite { .. } => {}
+        // Nothing here moves a SECOND character's guild columns. The caller's own pair is
+        // refreshed anyway, which costs one read and keeps the shards honest after an accept.
+        Op::Create(_)
+        | Op::Invite { .. }
+        | Op::Accept { .. }
+        | Op::Decline { .. }
+        | Op::Leave { .. }
+        | Op::SetMotd(_)
+        | Op::SetInfoText(_)
+        | Op::SetPublicNote { .. }
+        | Op::SetOfficerNote { .. } => {}
         Op::Remove { target_guid, .. } | Op::Leader { target_guid, .. } => moved.push(*target_guid),
         Op::Disband => {
             if let Some(guild_id) = guild_of(store, self_guid)? {
