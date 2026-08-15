@@ -310,6 +310,32 @@ fn displaced_bid_refund_mail(bidder_guid: u64, bid: u32) -> Option<AuctionMail> 
     })
 }
 
+fn sale_settlement_mail(
+    owner_guid: u64,
+    item: crate::items::ItemSnapshot,
+    winner_guid: u64,
+    winning_price: u32,
+    deposit: u32,
+) -> Option<[AuctionMail; 2]> {
+    let proceeds = seller_proceeds(winning_price, deposit)?;
+    Some([
+        AuctionMail {
+            recipient_guid: winner_guid,
+            sender_guid: owner_guid,
+            subject: "Auction won",
+            money: 0,
+            item,
+        },
+        AuctionMail {
+            recipient_guid: owner_guid,
+            sender_guid: winner_guid,
+            subject: "Auction sold",
+            money: proceeds,
+            item: crate::items::ItemSnapshot::default(),
+        },
+    ])
+}
+
 fn buyout_settlement_mail(
     auction: BidAuction,
     winner_guid: u64,
@@ -318,23 +344,13 @@ fn buyout_settlement_mail(
     if auction.buyout == 0 || price != auction.buyout {
         return None;
     }
-    let proceeds = seller_proceeds(price, auction.deposit)?;
-    Some([
-        AuctionMail {
-            recipient_guid: winner_guid,
-            sender_guid: auction.owner_guid,
-            subject: "Auction won",
-            money: 0,
-            item: auction.item,
-        },
-        AuctionMail {
-            recipient_guid: auction.owner_guid,
-            sender_guid: winner_guid,
-            subject: "Auction sold",
-            money: proceeds,
-            item: crate::items::ItemSnapshot::default(),
-        },
-    ])
+    sale_settlement_mail(
+        auction.owner_guid,
+        auction.item,
+        winner_guid,
+        price,
+        auction.deposit,
+    )
 }
 
 fn insert_auction_mail(ctx: &ReducerContext, mail: AuctionMail) {
@@ -888,21 +904,50 @@ struct ActiveAuction {
     highest_bid: u32,
 }
 
-trait ExpirySink {
-    fn auction(&self, auction_id: u32) -> Result<Option<ActiveAuction>, String>;
-    fn return_unsold(&mut self, auction: ActiveAuction);
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ExpiryCompletion {
+    Unsold(AuctionMail),
+    Sold([AuctionMail; 2]),
 }
 
-fn expire_unbid<S: ExpirySink>(sink: &mut S, auction_id: u32) -> Result<(), String> {
+trait ExpirySink {
+    fn auction(&self, auction_id: u32) -> Result<Option<ActiveAuction>, String>;
+    fn complete_expiry(&mut self, auction: ActiveAuction, completion: ExpiryCompletion);
+}
+
+fn expiry_completion(auction: &ActiveAuction) -> Result<ExpiryCompletion, String> {
+    match (auction.highest_bidder_guid, auction.highest_bid) {
+        (0, 0) => Ok(ExpiryCompletion::Unsold(AuctionMail {
+            recipient_guid: auction.listing.request.seller_guid,
+            sender_guid: 0,
+            subject: "Auction expired",
+            money: 0,
+            item: auction.listing.snapshot,
+        })),
+        (winner_guid, winning_price) if winner_guid != 0 && winning_price != 0 => {
+            sale_settlement_mail(
+                auction.listing.request.seller_guid,
+                auction.listing.snapshot,
+                winner_guid,
+                winning_price,
+                auction.listing.deposit,
+            )
+            .map(ExpiryCompletion::Sold)
+            .ok_or_else(|| format!("auction {} sale settlement overflow", auction.id))
+        }
+        _ => Err(format!(
+            "auction {} has inconsistent highest-bid state; preserving it for repair",
+            auction.id
+        )),
+    }
+}
+
+fn expire_active<S: ExpirySink>(sink: &mut S, auction_id: u32) -> Result<(), String> {
     let Some(auction) = sink.auction(auction_id)? else {
         return Ok(());
     };
-    if auction.highest_bidder_guid != 0 || auction.highest_bid != 0 {
-        return Err(format!(
-            "auction {auction_id} has a bid and requires sale settlement"
-        ));
-    }
-    sink.return_unsold(auction);
+    let completion = expiry_completion(&auction)?;
+    sink.complete_expiry(auction, completion);
     Ok(())
 }
 
@@ -1537,17 +1582,13 @@ impl ExpirySink for CtxExpiry<'_> {
         }))
     }
 
-    fn return_unsold(&mut self, auction: ActiveAuction) {
-        crate::mail::insert_mail(
-            self.ctx,
-            auction.listing.request.seller_guid,
-            0,
-            "Auction expired".to_string(),
-            String::new(),
-            0,
-            0,
-            &auction.listing.snapshot,
-        );
+    fn complete_expiry(&mut self, auction: ActiveAuction, completion: ExpiryCompletion) {
+        match completion {
+            ExpiryCompletion::Unsold(mail) => insert_auction_mail(self.ctx, mail),
+            ExpiryCompletion::Sold(mail) => mail
+                .into_iter()
+                .for_each(|mail| insert_auction_mail(self.ctx, mail)),
+        }
         self.ctx
             .db
             .game_auction_expiry()
@@ -1864,7 +1905,7 @@ pub fn expire_auction(ctx: &ReducerContext, schedule: AuctionExpiry) -> Result<(
     if ctx.sender() != ctx.database_identity() {
         return Err("scheduler only".to_string());
     }
-    expire_unbid(&mut CtxExpiry { ctx }, schedule.auction_id)
+    expire_active(&mut CtxExpiry { ctx }, schedule.auction_id)
 }
 
 #[cfg(feature = "debug_reducers")]
@@ -1954,7 +1995,7 @@ pub fn debug_stage_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), St
 }
 
 #[cfg(feature = "debug_reducers")]
-fn buyout_fixture_mail(
+fn auction_fixture_mail(
     ctx: &ReducerContext,
     recipient_guid: u64,
     subject: &str,
@@ -2014,7 +2055,7 @@ pub fn debug_verify_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), S
         return Err("buyout decision payload changed".to_string());
     }
 
-    let refund = buyout_fixture_mail(
+    let refund = auction_fixture_mail(
         ctx,
         BUYOUT_FIXTURE_DISPLACED_GUID,
         "Auction outbid",
@@ -2029,7 +2070,7 @@ pub fn debug_verify_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), S
         return Err("displaced-bidder refund mail changed".to_string());
     }
 
-    let winner = buyout_fixture_mail(ctx, BUYOUT_FIXTURE_WINNER_GUID, "Auction won")?;
+    let winner = auction_fixture_mail(ctx, BUYOUT_FIXTURE_WINNER_GUID, "Auction won")?;
     if winner.sender_guid != BUYOUT_FIXTURE_SELLER_GUID
         || winner.money != 0
         || winner.cod != 0
@@ -2047,7 +2088,7 @@ pub fn debug_verify_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), S
         return Err("winner item mail changed".to_string());
     }
 
-    let seller = buyout_fixture_mail(ctx, BUYOUT_FIXTURE_SELLER_GUID, "Auction sold")?;
+    let seller = auction_fixture_mail(ctx, BUYOUT_FIXTURE_SELLER_GUID, "Auction sold")?;
     if seller.sender_guid != BUYOUT_FIXTURE_WINNER_GUID
         || seller.money != 485
         || seller.cod != 0
@@ -2056,6 +2097,174 @@ pub fn debug_verify_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), S
         || !seller.snapshot().is_empty()
     {
         return Err("seller proceeds mail changed".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+const EXPIRY_FIXTURE_AUCTION_ID: u32 = 509_060;
+#[cfg(feature = "debug_reducers")]
+const EXPIRY_FIXTURE_OPERATION_ID: u64 = 509_060;
+#[cfg(feature = "debug_reducers")]
+const EXPIRY_FIXTURE_SELLER_GUID: u64 = 509_060;
+#[cfg(feature = "debug_reducers")]
+const EXPIRY_FIXTURE_WINNER_GUID: u64 = 509_061;
+#[cfg(feature = "debug_reducers")]
+const EXPIRY_FIXTURE_ITEM: crate::items::ItemSnapshot = crate::items::ItemSnapshot {
+    entry: 509_060,
+    stack_count: 2,
+    durability: 17,
+    enchant_id: 9,
+    soulbound: false,
+};
+
+/// Stage a valid winning-bid Auction whose one-shot schedule fires shortly after this transaction.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+
+    ctx.db
+        .game_auction_expiry()
+        .auction_id()
+        .delete(EXPIRY_FIXTURE_AUCTION_ID);
+    ctx.db
+        .game_auction()
+        .id()
+        .delete(EXPIRY_FIXTURE_AUCTION_ID);
+    ctx.db
+        .game_auction_operation_receipt()
+        .operation_id()
+        .delete(EXPIRY_FIXTURE_OPERATION_ID);
+
+    let mails = ctx.db.game_mail();
+    for recipient_guid in [EXPIRY_FIXTURE_SELLER_GUID, EXPIRY_FIXTURE_WINNER_GUID] {
+        let stale: Vec<u64> = mails
+            .by_recipient()
+            .filter(&recipient_guid)
+            .filter(|mail| matches!(mail.subject.as_str(), "Auction won" | "Auction sold"))
+            .map(|mail| mail.id)
+            .collect();
+        for id in stale {
+            mails.id().delete(id);
+        }
+    }
+
+    let expires_micros = ctx
+        .timestamp
+        .to_micros_since_unix_epoch()
+        .checked_add(500_000)
+        .ok_or_else(|| "auction expiry fixture deadline overflow".to_string())?;
+    let created_micros = expires_micros
+        .checked_sub(43_200_000_000)
+        .ok_or_else(|| "auction expiry fixture creation time underflow".to_string())?;
+    let expires_at = Timestamp::from_micros_since_unix_epoch(expires_micros);
+    let created_at = Timestamp::from_micros_since_unix_epoch(created_micros);
+    ctx.db
+        .game_auction_operation_receipt()
+        .insert(AuctionOperationReceipt {
+            operation_id: EXPIRY_FIXTURE_OPERATION_ID,
+            auction_id: EXPIRY_FIXTURE_AUCTION_ID,
+            actor_guid: EXPIRY_FIXTURE_SELLER_GUID,
+            item_guid: 509_063,
+            item_entry: EXPIRY_FIXTURE_ITEM.entry,
+            item_stack_count: EXPIRY_FIXTURE_ITEM.stack_count,
+            item_durability: EXPIRY_FIXTURE_ITEM.durability,
+            item_enchant_id: EXPIRY_FIXTURE_ITEM.enchant_id,
+            item_soulbound: EXPIRY_FIXTURE_ITEM.soulbound,
+            start_bid: 100,
+            buyout: 500,
+            duration_minutes: 720,
+            deposit: 10,
+            created_micros,
+            expires_micros,
+        });
+    ctx.db.game_auction().insert(Auction {
+        id: EXPIRY_FIXTURE_AUCTION_ID,
+        listing_operation_id: EXPIRY_FIXTURE_OPERATION_ID,
+        house: lyracore_shared::auction::STORMWIND_HOUSE_ID,
+        owner_guid: EXPIRY_FIXTURE_SELLER_GUID,
+        item_guid: 509_063,
+        item_entry: EXPIRY_FIXTURE_ITEM.entry,
+        item_stack_count: EXPIRY_FIXTURE_ITEM.stack_count,
+        item_durability: EXPIRY_FIXTURE_ITEM.durability,
+        item_enchant_id: EXPIRY_FIXTURE_ITEM.enchant_id,
+        item_soulbound: EXPIRY_FIXTURE_ITEM.soulbound,
+        start_bid: 100,
+        buyout: 500,
+        highest_bidder_guid: EXPIRY_FIXTURE_WINNER_GUID,
+        highest_bid: 201,
+        deposit: 10,
+        created_at,
+        expires_at,
+        revision: 3,
+    });
+    ctx.db.game_auction_expiry().insert(AuctionExpiry {
+        scheduled_id: 0,
+        scheduled_at: ScheduleAt::Time(expires_at),
+        auction_id: EXPIRY_FIXTURE_AUCTION_ID,
+    });
+    Ok(())
+}
+
+/// Re-drive the callback body after settlement to prove the missing Auction is a durable no-op.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_replay_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    expire_active(&mut CtxExpiry { ctx }, EXPIRY_FIXTURE_AUCTION_ID)
+}
+
+/// Verify the scheduler committed the exact bid-expiry mail and removed only active state.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_verify_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    if ctx
+        .db
+        .game_auction()
+        .id()
+        .find(EXPIRY_FIXTURE_AUCTION_ID)
+        .is_some()
+        || ctx
+            .db
+            .game_auction_expiry()
+            .auction_id()
+            .find(EXPIRY_FIXTURE_AUCTION_ID)
+            .is_some()
+    {
+        return Err("expired Auction or schedule is still active".to_string());
+    }
+    if ctx
+        .db
+        .game_auction_operation_receipt()
+        .operation_id()
+        .find(EXPIRY_FIXTURE_OPERATION_ID)
+        .is_none()
+    {
+        return Err("expiry removed the durable listing receipt".to_string());
+    }
+
+    let winner = auction_fixture_mail(ctx, EXPIRY_FIXTURE_WINNER_GUID, "Auction won")?;
+    if winner.sender_guid != EXPIRY_FIXTURE_SELLER_GUID
+        || winner.money != 0
+        || winner.cod != 0
+        || winner.was_read
+        || !winner.body.is_empty()
+        || winner.snapshot() != EXPIRY_FIXTURE_ITEM
+    {
+        return Err("expiry winner item mail changed".to_string());
+    }
+
+    let seller = auction_fixture_mail(ctx, EXPIRY_FIXTURE_SELLER_GUID, "Auction sold")?;
+    if seller.sender_guid != EXPIRY_FIXTURE_WINNER_GUID
+        || seller.money != 201
+        || seller.cod != 0
+        || seller.was_read
+        || !seller.body.is_empty()
+        || !seller.snapshot().is_empty()
+    {
+        return Err("expiry seller proceeds mail changed".to_string());
     }
     Ok(())
 }
@@ -2560,6 +2769,64 @@ mod tests {
     }
 
     #[test]
+    fn sharded_listing_accounts_for_the_item_and_deposit_at_every_durable_boundary() {
+        let mut source = source();
+        let mut market = market();
+        let request = request();
+
+        assert_eq!(source.money, Some(50));
+        assert_eq!(
+            source.item.as_ref().map(|item| item.snapshot),
+            Some(item(23).snapshot)
+        );
+        assert!(source.hold.is_none());
+        assert!(market.receipt.is_none());
+
+        fence_listing(&mut source, request).unwrap();
+        let hold = source.hold(request.operation_id).unwrap();
+        assert_eq!(source.money, Some(40));
+        assert!(source.item.is_none());
+        assert_eq!(hold.listing.snapshot, item(23).snapshot);
+        assert_eq!(40 + hold.listing.deposit, 50);
+        assert!(market.receipt.is_none());
+
+        let auction_id = commit_held_listing(&mut market, hold.listing.clone()).unwrap();
+        let market_receipt = market.receipt.as_ref().unwrap();
+        assert_eq!(auction_id, 41);
+        assert_eq!(market_receipt.listing.snapshot, item(23).snapshot);
+        assert_eq!(40 + market_receipt.listing.deposit, 50);
+        assert_eq!(
+            source.hold.as_ref().unwrap().listing.snapshot,
+            market_receipt.listing.snapshot,
+            "the source Hold is recovery evidence for the one market item"
+        );
+
+        confirm_listing(
+            &mut source,
+            ListingReceipt {
+                listing: hold.listing,
+                auction_id,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            source.receipt.as_ref().unwrap(),
+            market.receipt.as_ref().unwrap()
+        );
+        assert!(source.hold.is_some());
+
+        settle_listing(&mut source, request.operation_id).unwrap();
+        assert!(source.hold.is_none());
+        assert_eq!(source.money, Some(40));
+        assert_eq!(market.auction_count, 1);
+        assert_eq!(
+            market.receipt.as_ref().unwrap().listing.snapshot,
+            item(23).snapshot
+        );
+        assert_eq!(40 + market.receipt.as_ref().unwrap().listing.deposit, 50);
+    }
+
+    #[test]
     fn conflicting_operation_id_reuse_fails_closed_on_both_planes() {
         let mut source = source();
         let mut market = market();
@@ -2589,6 +2856,7 @@ mod tests {
     struct FakeExpiry {
         auction: Option<ActiveAuction>,
         schedule_count: usize,
+        mail: Vec<AuctionMail>,
         returned_items: Vec<crate::items::ItemSnapshot>,
         refunded_copper: u32,
     }
@@ -2602,8 +2870,14 @@ mod tests {
                 .cloned())
         }
 
-        fn return_unsold(&mut self, auction: ActiveAuction) {
-            self.returned_items.push(auction.listing.snapshot);
+        fn complete_expiry(&mut self, _auction: ActiveAuction, completion: ExpiryCompletion) {
+            match completion {
+                ExpiryCompletion::Unsold(mail) => {
+                    self.returned_items.push(mail.item);
+                    self.mail.push(mail);
+                }
+                ExpiryCompletion::Sold(mail) => self.mail.extend(mail),
+            }
             self.auction = None;
             self.schedule_count = 0;
         }
@@ -2626,12 +2900,13 @@ mod tests {
                 highest_bid: 0,
             }),
             schedule_count: 1,
+            mail: Vec::new(),
             returned_items: Vec::new(),
             refunded_copper: 0,
         };
 
-        assert_eq!(expire_unbid(&mut store, 41), Ok(()));
-        assert_eq!(expire_unbid(&mut store, 41), Ok(()));
+        assert_eq!(expire_active(&mut store, 41), Ok(()));
+        assert_eq!(expire_active(&mut store, 41), Ok(()));
 
         assert!(store.auction.is_none());
         assert_eq!(store.schedule_count, 0);
@@ -2640,7 +2915,7 @@ mod tests {
     }
 
     #[test]
-    fn local_and_sharded_listing_produce_the_same_auction_and_expiry_mail() {
+    fn local_and_sharded_listings_produce_the_same_unbid_and_bid_expiry_mail() {
         let mut local_store = local();
         create_local_listing(&mut local_store, request()).unwrap();
         let local_listing = local_store.committed.unwrap().0;
@@ -2651,26 +2926,79 @@ mod tests {
         let sharded_listing = market.receipt.unwrap().listing;
         assert_eq!(local_listing, sharded_listing);
 
-        let expire = |listing: PreparedListing| {
+        let expire = |listing: PreparedListing, highest_bidder_guid, highest_bid| {
             let mut store = FakeExpiry {
                 auction: Some(ActiveAuction {
                     id: 41,
                     listing,
-                    highest_bidder_guid: 0,
-                    highest_bid: 0,
+                    highest_bidder_guid,
+                    highest_bid,
                 }),
                 schedule_count: 1,
+                mail: Vec::new(),
                 returned_items: Vec::new(),
                 refunded_copper: 0,
             };
-            expire_unbid(&mut store, 41).unwrap();
+            expire_active(&mut store, 41).unwrap();
             store
         };
-        let local_expiry = expire(local_listing);
-        let sharded_expiry = expire(sharded_listing);
-        assert_eq!(local_expiry.returned_items, sharded_expiry.returned_items);
-        assert_eq!(local_expiry.refunded_copper, sharded_expiry.refunded_copper);
-        assert_eq!(local_expiry.schedule_count, sharded_expiry.schedule_count);
+        for (highest_bidder_guid, highest_bid) in [(0, 0), (8, 201)] {
+            let local_expiry = expire(local_listing.clone(), highest_bidder_guid, highest_bid);
+            let sharded_expiry = expire(sharded_listing.clone(), highest_bidder_guid, highest_bid);
+            assert_eq!(local_expiry.mail, sharded_expiry.mail);
+            assert_eq!(local_expiry.returned_items, sharded_expiry.returned_items);
+            assert_eq!(local_expiry.refunded_copper, sharded_expiry.refunded_copper);
+            assert_eq!(local_expiry.schedule_count, sharded_expiry.schedule_count);
+        }
+    }
+
+    #[test]
+    fn replayed_bid_expiry_mails_the_exact_item_and_stormwind_proceeds_once() {
+        let listing = PreparedListing {
+            request: request(),
+            snapshot: item(23).snapshot,
+            deposit: 10,
+            created_micros: 1_000,
+            expires_micros: 43_200_001_000,
+        };
+        let mut store = FakeExpiry {
+            auction: Some(ActiveAuction {
+                id: 41,
+                listing,
+                highest_bidder_guid: 8,
+                highest_bid: 201,
+            }),
+            schedule_count: 1,
+            mail: Vec::new(),
+            returned_items: Vec::new(),
+            refunded_copper: 0,
+        };
+
+        assert_eq!(expire_active(&mut store, 41), Ok(()));
+        assert_eq!(expire_active(&mut store, 41), Ok(()));
+
+        assert!(store.auction.is_none());
+        assert_eq!(store.schedule_count, 0);
+        assert_eq!(store.returned_items, Vec::new());
+        assert_eq!(
+            store.mail,
+            vec![
+                AuctionMail {
+                    recipient_guid: 8,
+                    sender_guid: 7,
+                    subject: "Auction won",
+                    money: 0,
+                    item: item(23).snapshot,
+                },
+                AuctionMail {
+                    recipient_guid: 7,
+                    sender_guid: 8,
+                    subject: "Auction sold",
+                    money: 201,
+                    item: crate::items::ItemSnapshot::default(),
+                },
+            ]
+        );
     }
 
     #[test]
@@ -3065,6 +3393,43 @@ mod tests {
         }
     }
 
+    struct BidMarketExpiry<'a> {
+        market: &'a mut FakeBidMarket,
+        listing: PreparedListing,
+    }
+
+    impl ExpirySink for BidMarketExpiry<'_> {
+        fn auction(&self, auction_id: u32) -> Result<Option<ActiveAuction>, String> {
+            Ok(self
+                .market
+                .auction
+                .filter(|auction| auction.id == auction_id)
+                .map(|auction| ActiveAuction {
+                    id: auction.id,
+                    listing: self.listing.clone(),
+                    highest_bidder_guid: auction.highest_bidder_guid,
+                    highest_bid: auction.highest_bid,
+                }))
+        }
+
+        fn complete_expiry(&mut self, _auction: ActiveAuction, completion: ExpiryCompletion) {
+            match completion {
+                ExpiryCompletion::Unsold(mail) => self.market.mail.push(mail),
+                ExpiryCompletion::Sold(mail) => self.market.mail.extend(mail),
+            }
+            self.market.auction = None;
+            self.market.expiry_armed = false;
+        }
+    }
+
+    fn expire_bid_market(
+        market: &mut FakeBidMarket,
+        listing: PreparedListing,
+    ) -> Result<(), String> {
+        let auction_id = market.auction.map_or(41, |auction| auction.id);
+        expire_active(&mut BidMarketExpiry { market, listing }, auction_id)
+    }
+
     struct FakeBidRefundSink {
         request: BidRequest,
         decision: BidDecision,
@@ -3233,6 +3598,215 @@ mod tests {
         }
     }
 
+    fn listing_for_flow(sharded: bool, operation_id: u64) -> PreparedListing {
+        let request = ListingRequest {
+            operation_id,
+            ..request()
+        };
+        if sharded {
+            let mut source = source();
+            let mut market = market();
+            fence_listing(&mut source, request).unwrap();
+            assert_eq!(drive_sharded(&mut source, &mut market, request), Ok(41));
+            assert_eq!(drive_sharded(&mut source, &mut market, request), Ok(41));
+            market.receipt.unwrap().listing
+        } else {
+            let mut store = local();
+            assert_eq!(create_local_listing(&mut store, request), Ok(41));
+            assert_eq!(create_local_listing(&mut store, request), Ok(41));
+            store.committed.unwrap().0
+        }
+    }
+
+    fn bid_market_for(listing: &PreparedListing) -> FakeBidMarket {
+        FakeBidMarket {
+            auction: Some(BidAuction {
+                id: 41,
+                owner_guid: listing.request.seller_guid,
+                item: listing.snapshot,
+                highest_bidder_guid: 0,
+                highest_bid: 0,
+                start_bid: listing.request.terms.start_bid,
+                buyout: listing.request.terms.buyout,
+                deposit: listing.deposit,
+                expires_micros: listing.expires_micros,
+                revision: 0,
+            }),
+            decisions: Vec::new(),
+            mail: Vec::new(),
+            expiry_armed: true,
+            now_micros: listing.created_micros,
+        }
+    }
+
+    fn bid_for_flow(
+        sharded: bool,
+        source: &mut FakeBidSource,
+        market: &mut FakeBidMarket,
+        request: BidRequest,
+    ) -> BidDecision {
+        if sharded {
+            fence_bid(source, request).unwrap();
+            resolve_bid(market, request).unwrap();
+        }
+        let decision = drive_bid(source, market, request).unwrap();
+        assert_eq!(drive_bid(source, market, request), Ok(decision));
+        decision
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct CompleteFlowOutcome {
+        browse_search_rows: Vec<BidAuction>,
+        decisions: Vec<BidDecision>,
+        collected_mail: Vec<AuctionMail>,
+        collected_copper: Vec<(u64, u32)>,
+        collected_items: Vec<(u64, crate::items::ItemSnapshot)>,
+        bidder_money: Vec<u32>,
+    }
+
+    fn collect_flow_mail(outcome: &mut CompleteFlowOutcome, mail: Vec<AuctionMail>) {
+        for mail in mail {
+            if mail.money != 0 {
+                assert_eq!(
+                    crate::mail::plan_take_money(
+                        Some((mail.recipient_guid, mail.money)),
+                        mail.recipient_guid,
+                    ),
+                    crate::mail::TakeMoney::Take(mail.money),
+                );
+                assert_eq!(
+                    crate::mail::plan_take_money(
+                        Some((mail.recipient_guid, 0)),
+                        mail.recipient_guid,
+                    ),
+                    crate::mail::TakeMoney::NothingToTake,
+                );
+                outcome
+                    .collected_copper
+                    .push((mail.recipient_guid, crate::mail::credited(0, mail.money)));
+            }
+            if !mail.item.is_empty() {
+                assert_eq!(
+                    crate::mail::plan_take_item(
+                        Some((mail.recipient_guid, mail.item.entry)),
+                        mail.recipient_guid,
+                    ),
+                    crate::mail::TakeItem::Take,
+                );
+                assert_eq!(
+                    crate::mail::plan_take_item(
+                        Some((mail.recipient_guid, 0)),
+                        mail.recipient_guid,
+                    ),
+                    crate::mail::TakeItem::NothingToTake,
+                );
+                outcome.collected_items.push((mail.recipient_guid, mail.item));
+            }
+            outcome.collected_mail.push(mail);
+        }
+    }
+
+    fn complete_flow(sharded: bool) -> CompleteFlowOutcome {
+        let buyout_listing = listing_for_flow(sharded, 910);
+        let mut buyout_market = bid_market_for(&buyout_listing);
+        // Browse/search renders the same authoritative Auction row that the later writes consume.
+        let browse_search_rows = buyout_market
+            .auction
+            .into_iter()
+            .filter(|auction| auction.item.entry == item(23).snapshot.entry)
+            .collect();
+        let bid = BidRequest {
+            operation_id: 911,
+            bidder_guid: 8,
+            auction_id: 41,
+            offer: 10,
+        };
+        let mut bidder = FakeBidSource::new(100);
+        let bid_decision = bid_for_flow(sharded, &mut bidder, &mut buyout_market, bid);
+        let buyout = BidRequest {
+            operation_id: 912,
+            bidder_guid: 9,
+            auction_id: 41,
+            offer: 50,
+        };
+        let mut buyer = FakeBidSource::new(100);
+        let buyout_decision = bid_for_flow(sharded, &mut buyer, &mut buyout_market, buyout);
+        expire_bid_market(&mut buyout_market, buyout_listing.clone()).unwrap();
+        let mut outcome = CompleteFlowOutcome {
+            browse_search_rows,
+            decisions: vec![bid_decision, buyout_decision],
+            collected_mail: Vec::new(),
+            collected_copper: Vec::new(),
+            collected_items: Vec::new(),
+            bidder_money: vec![bidder.money, buyer.money],
+        };
+        collect_flow_mail(&mut outcome, std::mem::take(&mut buyout_market.mail));
+
+        let unbid_listing = listing_for_flow(sharded, 913);
+        let mut unbid_market = bid_market_for(&unbid_listing);
+        expire_bid_market(&mut unbid_market, unbid_listing.clone()).unwrap();
+        expire_bid_market(&mut unbid_market, unbid_listing).unwrap();
+        collect_flow_mail(&mut outcome, std::mem::take(&mut unbid_market.mail));
+
+        let bid_expiry_listing = listing_for_flow(sharded, 914);
+        let mut bid_expiry_market = bid_market_for(&bid_expiry_listing);
+        let expiry_bid = BidRequest {
+            operation_id: 915,
+            bidder_guid: 8,
+            auction_id: 41,
+            offer: 10,
+        };
+        let mut expiry_bidder = FakeBidSource::new(100);
+        let expiry_bid_decision = bid_for_flow(
+            sharded,
+            &mut expiry_bidder,
+            &mut bid_expiry_market,
+            expiry_bid,
+        );
+        expire_bid_market(&mut bid_expiry_market, bid_expiry_listing.clone()).unwrap();
+        expire_bid_market(&mut bid_expiry_market, bid_expiry_listing).unwrap();
+        collect_flow_mail(&mut outcome, std::mem::take(&mut bid_expiry_market.mail));
+        outcome.decisions.push(expiry_bid_decision);
+        outcome.bidder_money.push(expiry_bidder.money);
+        outcome
+    }
+
+    #[test]
+    fn complete_flow_is_equivalent_across_local_and_interrupted_sharded_topologies() {
+        let local = complete_flow(false);
+        let sharded = complete_flow(true);
+        assert_eq!(sharded, local);
+        assert_eq!(local.browse_search_rows.len(), 1);
+        assert_eq!(local.collected_mail.len(), 6);
+        assert_eq!(
+            local
+                .collected_mail
+                .iter()
+                .map(|mail| (mail.recipient_guid, mail.subject, mail.money))
+                .collect::<Vec<_>>(),
+            vec![
+                (8, "Auction outbid", 10),
+                (9, "Auction won", 0),
+                (7, "Auction sold", 29),
+                (7, "Auction expired", 0),
+                (8, "Auction won", 0),
+                (7, "Auction sold", 20),
+            ]
+        );
+        assert_eq!(
+            local
+                .collected_items,
+            vec![
+                (9, item(23).snapshot),
+                (7, item(23).snapshot),
+                (8, item(23).snapshot),
+            ],
+            "buyout, unbid expiry, and bid expiry each collect one exact item"
+        );
+        assert_eq!(local.collected_copper, vec![(8, 10), (7, 29), (7, 20)]);
+        assert_eq!(local.bidder_money, vec![90, 80, 90]);
+    }
+
     #[test]
     fn buyout_atomically_delivers_exact_mail_and_conserves_copper() {
         let request = BidRequest {
@@ -3346,6 +3920,145 @@ mod tests {
     }
 
     #[test]
+    fn expiry_and_buyout_race_in_either_order_completes_once_and_conserves_value() {
+        let listing = PreparedListing {
+            request: request(),
+            snapshot: item(23).snapshot,
+            deposit: 10,
+            created_micros: 1_000,
+            expires_micros: 43_200_001_000,
+        };
+        let bid_auction = BidAuction {
+            highest_bidder_guid: 9,
+            highest_bid: 201,
+            buyout: 500,
+            ..active_bid_auction()
+        };
+        let buyout = BidRequest {
+            operation_id: 909,
+            bidder_guid: 8,
+            auction_id: 41,
+            offer: 500,
+        };
+
+        let mut buyout_source = FakeBidSource::new(700);
+        let mut buyout_market = FakeBidMarket {
+            auction: Some(bid_auction),
+            decisions: Vec::new(),
+            mail: Vec::new(),
+            expiry_armed: true,
+            now_micros: 1_000,
+        };
+        assert_eq!(
+            drive_bid(&mut buyout_source, &mut buyout_market, buyout),
+            Ok(accepted_buyout(500, 9, 201))
+        );
+        let buyout_mail = buyout_market.mail.clone();
+        expire_bid_market(&mut buyout_market, listing.clone()).unwrap();
+        expire_bid_market(&mut buyout_market, listing.clone()).unwrap();
+        assert_eq!(buyout_market.mail, buyout_mail);
+        assert_eq!(
+            u64::from(buyout_source.money)
+                + buyout_market.mail.iter().map(|mail| u64::from(mail.money)).sum::<u64>()
+                + 25,
+            700 + 201 + 10,
+            "the post-buyout purse, refund, proceeds, and cut account for all copper"
+        );
+        assert_eq!(
+            buyout_market
+                .mail
+                .iter()
+                .filter(|mail| !mail.item.is_empty())
+                .count(),
+            1
+        );
+
+        let mut expiry_market = FakeBidMarket {
+            auction: Some(bid_auction),
+            decisions: Vec::new(),
+            mail: Vec::new(),
+            expiry_armed: true,
+            now_micros: 1_000,
+        };
+        expire_bid_market(&mut expiry_market, listing.clone()).unwrap();
+        expire_bid_market(&mut expiry_market, listing).unwrap();
+        let expiry_mail = expiry_market.mail.clone();
+        let mut late_buyout_source = FakeBidSource::new(700);
+        assert_eq!(
+            drive_bid(&mut late_buyout_source, &mut expiry_market, buyout),
+            Ok(BidDecision::ItemNotFound)
+        );
+        assert_eq!(
+            drive_bid(&mut late_buyout_source, &mut expiry_market, buyout),
+            Ok(BidDecision::ItemNotFound)
+        );
+        assert_eq!(late_buyout_source.money, 700, "the losing Hold is restored once");
+        assert_eq!(expiry_market.mail, expiry_mail);
+        assert_eq!(
+            u64::from(late_buyout_source.money)
+                + expiry_mail.iter().map(|mail| u64::from(mail.money)).sum::<u64>()
+                + 10,
+            700 + 201 + 10,
+            "the post-expiry purse, proceeds, and cut account for all copper"
+        );
+        assert_eq!(
+            expiry_mail
+                .iter()
+                .filter(|mail| !mail.item.is_empty())
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn expiry_preserves_inconsistent_or_overflowing_sale_state_for_repair() {
+        let listing = PreparedListing {
+            request: request(),
+            snapshot: item(23).snapshot,
+            deposit: 10,
+            created_micros: 1_000,
+            expires_micros: 43_200_001_000,
+        };
+        for (highest_bidder_guid, highest_bid) in [(8, 0), (0, 201)] {
+            let mut store = FakeExpiry {
+                auction: Some(ActiveAuction {
+                    id: 41,
+                    listing: listing.clone(),
+                    highest_bidder_guid,
+                    highest_bid,
+                }),
+                schedule_count: 1,
+                mail: Vec::new(),
+                returned_items: Vec::new(),
+                refunded_copper: 0,
+            };
+            assert!(expire_active(&mut store, 41).is_err());
+            assert!(store.auction.is_some());
+            assert_eq!(store.schedule_count, 1);
+            assert!(store.mail.is_empty());
+        }
+
+        let mut overflowing = listing;
+        overflowing.deposit = u32::MAX;
+        let mut store = FakeExpiry {
+            auction: Some(ActiveAuction {
+                id: 41,
+                listing: overflowing,
+                highest_bidder_guid: 8,
+                highest_bid: u32::MAX,
+            }),
+            schedule_count: 1,
+            mail: Vec::new(),
+            returned_items: Vec::new(),
+            refunded_copper: 0,
+        };
+        assert!(expire_active(&mut store, 41).is_err());
+        assert!(store.auction.is_some());
+        assert_eq!(store.schedule_count, 1);
+        assert!(store.mail.is_empty());
+    }
+
+    #[test]
     fn auction_write_reducers_gate_before_reading_caller_named_state() {
         use crate::test_scan::code_of;
 
@@ -3361,6 +4074,11 @@ mod tests {
             "pub fn gw_auction_finish_bid(",
             "pub fn realm_auction_refund_bid(",
             "pub fn gw_auction_confirm_bid_refund(",
+            "pub fn debug_stage_auction_buyout_fixture(",
+            "pub fn debug_verify_auction_buyout_fixture(",
+            "pub fn debug_stage_auction_expiry_fixture(",
+            "pub fn debug_replay_auction_expiry_fixture(",
+            "pub fn debug_verify_auction_expiry_fixture(",
         ] {
             let body = code_of(include_str!("auction.rs"), signature);
             let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");

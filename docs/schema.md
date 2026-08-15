@@ -250,8 +250,9 @@ outcome, normalized accepted price, and any purse-overflow refund awaiting relay
 `game_auction_bid_decision` is realm-core's serialized, replay-safe decision and exact-once
 settlement/refund-mail receipt.
 `game_auction_expiry` is a private one-shot schedule at the listing's original deadline. These
-tables are additive and are deliberately excluded from character transfer manifests; deletion is
-refused while a character owns Auction value.
+callbacks return an unbid item or settle a winning bid with exact item and proceeds mail, then no-op
+when replayed. These tables are additive and are deliberately excluded from character transfer
+manifests; deletion is refused while a character owns Auction value.
 
 ---
 

@@ -149,6 +149,7 @@ pub mod debug_reap_instance_reducer;
 pub mod debug_regrid_reducer;
 pub mod debug_repair_after_publish_reducer;
 pub mod debug_repair_item_reducer;
+pub mod debug_replay_auction_expiry_fixture_reducer;
 pub mod debug_repop_reducer;
 pub mod debug_reseed_skills_reducer;
 pub mod debug_reset_instance_reducer;
@@ -177,6 +178,7 @@ pub mod debug_spawn_player_entity_reducer;
 pub mod debug_spirit_healer_res_reducer;
 pub mod debug_split_item_reducer;
 pub mod debug_stage_auction_buyout_fixture_reducer;
+pub mod debug_stage_auction_expiry_fixture_reducer;
 pub mod debug_stress_relay_reducer;
 pub mod debug_sweep_encounter_state_reducer;
 pub mod debug_sweep_slice_lens_reducer;
@@ -189,6 +191,7 @@ pub mod debug_use_gameobject_reducer;
 pub mod debug_use_hearthstone_reducer;
 pub mod debug_use_item_reducer;
 pub mod debug_verify_auction_buyout_fixture_reducer;
+pub mod debug_verify_auction_expiry_fixture_reducer;
 pub mod debug_verify_combat_regen_reducer;
 pub mod debug_vmap_area_info_reducer;
 pub mod debug_vmap_ray_reducer;
@@ -822,6 +825,7 @@ pub use debug_reap_instance_reducer::debug_reap_instance;
 pub use debug_regrid_reducer::debug_regrid;
 pub use debug_repair_after_publish_reducer::debug_repair_after_publish;
 pub use debug_repair_item_reducer::debug_repair_item;
+pub use debug_replay_auction_expiry_fixture_reducer::debug_replay_auction_expiry_fixture;
 pub use debug_repop_reducer::debug_repop;
 pub use debug_reseed_skills_reducer::debug_reseed_skills;
 pub use debug_reset_instance_reducer::debug_reset_instance;
@@ -850,6 +854,7 @@ pub use debug_spawn_player_entity_reducer::debug_spawn_player_entity;
 pub use debug_spirit_healer_res_reducer::debug_spirit_healer_res;
 pub use debug_split_item_reducer::debug_split_item;
 pub use debug_stage_auction_buyout_fixture_reducer::debug_stage_auction_buyout_fixture;
+pub use debug_stage_auction_expiry_fixture_reducer::debug_stage_auction_expiry_fixture;
 pub use debug_stress_relay_reducer::debug_stress_relay;
 pub use debug_sweep_encounter_state_reducer::debug_sweep_encounter_state;
 pub use debug_sweep_slice_lens_reducer::debug_sweep_slice_lens;
@@ -862,6 +867,7 @@ pub use debug_use_gameobject_reducer::debug_use_gameobject;
 pub use debug_use_hearthstone_reducer::debug_use_hearthstone;
 pub use debug_use_item_reducer::debug_use_item;
 pub use debug_verify_auction_buyout_fixture_reducer::debug_verify_auction_buyout_fixture;
+pub use debug_verify_auction_expiry_fixture_reducer::debug_verify_auction_expiry_fixture;
 pub use debug_verify_combat_regen_reducer::debug_verify_combat_regen;
 pub use debug_vmap_area_info_reducer::debug_vmap_area_info;
 pub use debug_vmap_ray_reducer::debug_vmap_ray;
@@ -1758,6 +1764,7 @@ pub enum Reducer {
         character_guid: u64,
         slot: u8,
     },
+    DebugReplayAuctionExpiryFixture,
     DebugRepop {
         character_guid: u64,
     },
@@ -1881,6 +1888,7 @@ pub enum Reducer {
         to_slot: u8,
     },
     DebugStageAuctionBuyoutFixture,
+    DebugStageAuctionExpiryFixture,
     DebugStressRelay {
         character_guid: u64,
         victim_entry: u32,
@@ -1930,6 +1938,7 @@ pub enum Reducer {
         slot: u8,
     },
     DebugVerifyAuctionBuyoutFixture,
+    DebugVerifyAuctionExpiryFixture,
     DebugVerifyCombatRegen {
         character_guid: u64,
     },
@@ -2818,6 +2827,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugRegrid => "debug_regrid",
             Reducer::DebugRepairAfterPublish => "debug_repair_after_publish",
             Reducer::DebugRepairItem { .. } => "debug_repair_item",
+            Reducer::DebugReplayAuctionExpiryFixture => "debug_replay_auction_expiry_fixture",
             Reducer::DebugRepop { .. } => "debug_repop",
             Reducer::DebugReseedSkills { .. } => "debug_reseed_skills",
             Reducer::DebugResetInstance { .. } => "debug_reset_instance",
@@ -2846,6 +2856,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugSpiritHealerRes { .. } => "debug_spirit_healer_res",
             Reducer::DebugSplitItem { .. } => "debug_split_item",
             Reducer::DebugStageAuctionBuyoutFixture => "debug_stage_auction_buyout_fixture",
+            Reducer::DebugStageAuctionExpiryFixture => "debug_stage_auction_expiry_fixture",
             Reducer::DebugStressRelay { .. } => "debug_stress_relay",
             Reducer::DebugSweepEncounterState { .. } => "debug_sweep_encounter_state",
             Reducer::DebugSweepSliceLens => "debug_sweep_slice_lens",
@@ -2858,6 +2869,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugUseHearthstone { .. } => "debug_use_hearthstone",
             Reducer::DebugUseItem { .. } => "debug_use_item",
             Reducer::DebugVerifyAuctionBuyoutFixture => "debug_verify_auction_buyout_fixture",
+            Reducer::DebugVerifyAuctionExpiryFixture => "debug_verify_auction_expiry_fixture",
             Reducer::DebugVerifyCombatRegen { .. } => "debug_verify_combat_regen",
             Reducer::DebugVmapAreaInfo { .. } => "debug_vmap_area_info",
             Reducer::DebugVmapRay { .. } => "debug_vmap_ray",
@@ -3748,7 +3760,9 @@ Reducer::DebugRepairItem{
                 character_guid: character_guid.clone(),
                 slot: slot.clone(),
 }),
-            Reducer::DebugRepop{
+            Reducer::DebugReplayAuctionExpiryFixture => __sats::bsatn::to_vec(&debug_replay_auction_expiry_fixture_reducer::DebugReplayAuctionExpiryFixtureArgs {
+                }),
+Reducer::DebugRepop{
                 character_guid,
 }             => __sats::bsatn::to_vec(&debug_repop_reducer::DebugRepopArgs {
                 character_guid: character_guid.clone(),
@@ -3969,6 +3983,8 @@ Reducer::DebugSellItem{
 }),
             Reducer::DebugStageAuctionBuyoutFixture => __sats::bsatn::to_vec(&debug_stage_auction_buyout_fixture_reducer::DebugStageAuctionBuyoutFixtureArgs {
                 }),
+Reducer::DebugStageAuctionExpiryFixture => __sats::bsatn::to_vec(&debug_stage_auction_expiry_fixture_reducer::DebugStageAuctionExpiryFixtureArgs {
+                }),
 Reducer::DebugStressRelay{
                 character_guid,
                 victim_entry,
@@ -4056,6 +4072,8 @@ Reducer::DebugTakeLoot{
                 slot: slot.clone(),
 }),
             Reducer::DebugVerifyAuctionBuyoutFixture => __sats::bsatn::to_vec(&debug_verify_auction_buyout_fixture_reducer::DebugVerifyAuctionBuyoutFixtureArgs {
+                }),
+Reducer::DebugVerifyAuctionExpiryFixture => __sats::bsatn::to_vec(&debug_verify_auction_expiry_fixture_reducer::DebugVerifyAuctionExpiryFixtureArgs {
                 }),
 Reducer::DebugVerifyCombatRegen{
                 character_guid,
