@@ -1,20 +1,22 @@
 # Guild system
 
-Spec for [issue #15](https://github.com/LyraCoreProject/LyraCore/issues/15). The issue is a parity-audit
-stub with a "slice on pickup" note. This document is that slicing.
+**Shipped.** This document was the spec for
+[issue #15](https://github.com/LyraCoreProject/LyraCore/issues/15); it now records what was built.
+The decisions below all held. "What changed during implementation" lists where the shipped code
+differs from the spec, and "Explicitly deferred" is still accurate.
 
-## The problem
+## The problem it closed
 
-There is no guild system. Today the gap shows up as four separate silent holes:
+There was no guild system. The gap showed up as four silent holes, all now closed:
 
-| Site | Current behaviour |
-| --- | --- |
-| `gateway/src/codec/char.rs:124` | `SMSG_CHAR_ENUM` sends `guild_id: 0` for every character |
-| `gateway/src/codec/social.rs:37` | `SMSG_WHO` sends an empty guild name for every row |
-| `gateway/src/world/handlers/query.rs:361` | `CMSG_MESSAGECHAT` with `ChatType::Guild` is dropped, no reply |
-| every `CMSG_GUILD_*` opcode | never dispatched |
+| Site | Was | Is |
+| --- | --- | --- |
+| `codec/char.rs` | `SMSG_CHAR_ENUM` sent `guild_id: 0` for everyone | the character's real guild id |
+| `codec/social.rs` | `SMSG_WHO` sent an empty guild name | the name, read from the authority |
+| `handlers/query.rs` | `ChatType::Guild` fell through, dropped | `guild_chat_action` |
+| every `CMSG_GUILD_*` opcode | never dispatched | `dispatch_guild_action` |
 
-The client renders all four as "no guild", so nothing looks broken. It just is not there.
+The client rendered all four as "no guild", so nothing looked broken. It just was not there.
 
 ## Decisions
 
@@ -72,7 +74,7 @@ with rank enforcement.
 
 ## Language
 
-Additions for `CONTEXT.md`, under a new `### Guilds` heading:
+These are in `CONTEXT.md` under `### Guilds`. Repeated here because the definitions are the design:
 
 **Guild**: A realm-wide, persistent roster of characters with a name unique across the realm, a guild
 master, ten ranks, and a message of the day. Authoritative on realm-core, never mirrored to a world
@@ -140,15 +142,26 @@ Sweeps, following `group.rs`:
 
 ## Shared contract
 
-A new `crates/lyracore-shared/src/guild.rs`, sibling to `group.rs`, holding the one definition both
-crates import: event kinds, the roster payload grammar, the realm-op tags, and classified error
-strings. A renumber or a delimiter change is then a cross-crate compile-visible edit, never a runtime
-drift. The roster encode/decode pair mirrors `encode_roster` / `decode_roster`.
+`crates/lyracore-shared/src/guild.rs`, sibling to `group.rs`, holds the one definition both crates
+import: event kinds, the realm-op tags, the payload codecs and the classified error strings. A
+renumber or a delimiter change is a cross-crate compile-visible edit, never a runtime drift.
+
+Two rules govern the numbers, and they are opposites on purpose:
+
+- **An event kind selects a PACKET**, so the kinds are one-to-one with what the relay can build.
+  `SIGNED_ON` and `SIGNED_OFF` are separate kinds rather than one kind with a direction in the
+  payload, because a relay that reads the payload to pick the packet variant is exactly the drift
+  this contract exists to prevent.
+- **An op tag selects a CORE**, so a verb that takes a yes/no parameter spends `arg_a` on it rather
+  than a second tag. `ANSWER` (accept/decline) and `PRESENCE` (on/off) are each one tag.
+
+Both blocks are contiguous and collision-free, pinned by a test that asserts they are
+declaration-ordered, gapless and unique.
 
 ## Wire surface
 
-All types exist in `wow_world_messages` 0.3 (vanilla feature) and `wow_world_base` 0.3. No hand-rolled
-packets.
+Every packet but one comes from `wow_world_messages` 0.3 (vanilla feature) and `wow_world_base` 0.3.
+The exception is `SMSG_GUILD_DECLINE` — see "What changed during implementation".
 
 | Direction | Message | Opcode | Slice |
 | --- | --- | --- | --- |
@@ -175,6 +188,7 @@ packets.
 | S to C | `SMSG_GUILD_COMMAND_RESULT` | 0x093 | 1 |
 | S to C | `SMSG_GUILD_EVENT` | 0x092 | 2 |
 | S to C | `SMSG_MESSAGECHAT` (`ChatType::Guild`) | 0x096 | 3 |
+| S to C | `SMSG_GUILD_DECLINE` | 0x086 | 2 |
 
 Notes on the payloads:
 
@@ -193,14 +207,104 @@ Notes on the payloads:
 - `SMSG_GUILD_EVENT` carries a `GuildEvent` enum (`Promotion`, `Demotion`, `Motd`, `Joined`, `Left`,
   `Removed`, `LeaderIs`, `LeaderChanged`, `Disbanded`, `RosterUpdate`, `SignedOn`, `SignedOff`) plus
   a `Vec<String>` of descriptions. It is the broadcast-to-the-guild channel.
-- `PLAYER_GUILDID` (191) and `PLAYER_GUILDRANK` (192) must be added to
-  `gateway/src/codec/update_mask.rs`'s `idx` module. They sit between the existing `PLAYER_FLAGS`
-  (190) and `PLAYER_BYTES_2` (194), so the numbering cross-checks against what is already there.
+- `PLAYER_GUILDID` (191) and `PLAYER_GUILDRANK` (192) are in `gateway/src/codec/update_mask.rs`'s
+  `idx` module, between the existing `PLAYER_FLAGS` (190) and `PLAYER_BYTES_2` (194). They ride the
+  CREATE at spawn and a partial VALUES update between spawns.
 
-## Slices
+## What shipped
 
-Each slice is independently shippable and independently verifiable. The order is chosen so that the
-first slice proves the storage and the realm-core routing with the smallest possible wire surface.
+Six parallel tickets plus one integration pass, not the four sequential slices below. The slice list
+is kept as the record of what was planned; the mapping is:
+
+| Ticket | What it built |
+| --- | --- |
+| T1 | the seam: all five tables, the sweeps, `realm_guild_op`, `world::guild` routing, create and query |
+| T2 | invite, accept, decline, sign-on/sign-off broadcast |
+| T3 | leave, kick, disband, leadership transfer |
+| T4 | the roster, rendered from the shards |
+| T5 | guild chat (`/g`) |
+| T6 | MOTD, info text, the two notes, the unit fields, `/who` |
+| T7 | the merge, the four cross-ticket gaps, the reconcile, this document |
+
+### The shape, end to end
+
+- **`module/src/guild.rs`** owns every rule. One operator-gated reducer, `realm_guild_op(op,
+  actor_guid, target_guid, arg_a, text)`, dispatches on the op byte to a core per verb. Two more
+  reducers exist: `create_guild` (the player-facing single-database create) and
+  `sync_guild_membership` (the mechanical push of a character's own two columns onto a shard).
+- **`gateway/src/world/guild.rs`** owns the routing and nothing else. One `Op` enum in the client's
+  vocabulary, one `slots` function packing it into the reducer's frozen argument slots, and one
+  `authority` function choosing the database. `WorldStore::realm_store()` answering `None` is "one
+  database", which already is the authority.
+- **`gateway/src/world/handlers/guild.rs`** owns protocol and screen selection. Every write verb goes
+  through one `write_verb` core; only the error classifier and the success reply differ per family.
+- **`gateway/src/stdb/subscriptions.rs`** owns the relay: one `guild_event_outbound`, decoding every
+  event kind to the packet its recipient is meant to see, armed on every shard and on realm-core.
+
+### What changed during implementation
+
+- **`SMSG_GUILD_DECLINE` is hand-built.** The spec said "no hand-rolled packets", believing the
+  message crate carried it. `wow_world_messages` 0.3 defines the opcode for TBC and Wrath but not for
+  vanilla. The body is one CString, so `codec::build_guild_decline_raw` writes it and the gateway
+  sends it raw — the same escape hatch the partial VALUES updates already use. The alternative was
+  `SMSG_GUILD_COMMAND_RESULT(Invite, <decliner>, GuildPlayerNotInGuildS)`, which a 1.12 client renders
+  as "<name> is not in your guild": a different fact.
+- **There is no `ROSTER` event kind and no roster payload grammar.** The spec reserved both. The
+  roster shipped as a pull (`CMSG_GUILD_ROSTER` → `SMSG_GUILD_ROSTER`) and membership changes
+  broadcast `Joined`/`Left`/`Removed`, so nothing ever wrote a `ROSTER` row. Removed with
+  `encode_roster`/`decode_roster`.
+- **A `GUILD_COLUMNS` event kind was added.** `PLAYER_GUILDID`/`PLAYER_GUILDRANK` ride the CREATE at
+  spawn, but they also have to move between spawns. The character whose columns moved is often not
+  the actor — a kick, a disband — and may be on another database, so the authority writes one
+  addressed row carrying the new pair and the relay turns it into a partial VALUES update. Answering
+  on the acting connection would have reached the wrong player.
+- **`GuildView.rank_names` is a `Vec<String>`**, not `[String; 10]`: `[T; 10]: Default` is not in
+  std. The fixed array is built at the packet boundary with `std::array::from_fn`, which pads a short
+  guild rather than panicking. The ten-row invariant is enforced where the rows are written.
+- **Success is `GuildCommandResult::PlayerNoMoreInGuild`.** That variant is wire code 0, which vanilla
+  uses for "no message/error". The name reads like a refusal. It is not.
+- **The gateway bindings are hand-spliced.** There is no `spacetime` CLI in the development
+  environment, so T1 hand-wrote the SDK bindings for the guild tables and the three reducers.
+  `docs/danger-zones.md` §1.2 records this. Adding a gateway-callable reducer costs another one,
+  which is why `realm_guild_op`'s signature is treated as frozen.
+- **Guild-master succession is explicit in every slice.** The spec deferred `CMSG_GUILD_LEADER` to
+  slice 4 and had slice 2 refuse a master's leave; both shipped together, so a master who would leave
+  members behind is refused and must transfer or disband. A master who is the LAST member may leave,
+  and the guild goes with them.
+
+### Verification
+
+- Seam tests per dispatch branch in `handlers/guild.rs`, against an in-memory adapter.
+- Routing tests in `world/guild_tests.rs`, against the same multi-database in-memory topology the
+  cross-database transfer uses. Every op has the single-database assertion: an unsharded gateway runs
+  it on the player's own shard.
+- One encrypted-socket test per opcode family in `world/tests.rs`, proving dispatch over the cipher.
+- The union, twice: `one_session_creates_invites_rosters_chats_retitles_kicks_leaves_and_disbands`
+  runs create → invite → accept → roster → `/g` → MOTD → kick → leave → disband over one encrypted
+  socket, and `a_guild_lives_its_whole_life_across_a_shard_boundary` runs the same sequence with the
+  two characters on different databases.
+
+### Known gaps
+
+- **A live-module wire-harness run has not happened.** The development environment has no `spacetime`
+  CLI, so `lyracore dev up` cannot publish and `lyracore dev smoke` cannot run. The two union
+  scenarios above are the closest substitute: real 5875 framing and cipher through the real session
+  loop, and the real routing layer against a real multi-database topology, but against in-memory
+  stores rather than a published module.
+- **A `spacetime publish` migration check has not happened**, for the same reason. The two
+  `game_character` columns use typed defaults (`#[default(0u64)]` on the `u64`), which is the trap
+  `docs/danger-zones.md` §1.2 names, but only a real publish proves it.
+- **`/who` lists the asking shard's players.** The guild NAME column is now correct realm-wide, but
+  the player list itself is still one database's. That predates the guild system and belongs to
+  `/who`.
+- **A peer's guild name plate updates on their next spawn**, not the instant their membership
+  changes. The live `GUILD_COLUMNS` relay is addressed to the character who moved; observers re-read
+  the pair off the next CREATE. D1's "no hot-path in-world guild read" is what makes that acceptable.
+
+## The slices as planned
+
+Kept as the record of the original plan. The work was actually cut into the seven tickets above,
+which run mostly in parallel; the content is the same.
 
 ### Slice 1: create and query
 
@@ -292,17 +396,15 @@ Each of these is a follow-up issue, not a hidden gap in the above.
 - **Faction gating.** `GuildNotAllied` exists in the result enum, and cross-faction invites should be
   rejected once faction data is threaded through the realm-core name resolution. Not slice 1 to 4.
 
-## Risks
+## Risks, and how they landed
 
-1. **Realm-core holds no character rows.** Every roster render needs a shard fan-out for names,
-   levels, classes, areas and online status. `world::party::render_list` is the precedent and the
-   thing to read first. Getting this wrong produces a roster that renders but is full of level-1
-   unknown-class members.
-2. **The fixed ten-rank array.** A guild that somehow has fewer than ten `GuildRank` rows will panic
-   or truncate at packet build. Seed ten at creation and treat the count as an invariant, not as data.
-3. **Migration.** Two new `game_character` columns. `docs/danger-zones.md` §1.2, typed defaults, and
-   the reminder that nothing in `cargo test` or `cargo check` validates default-value encoding. Only
-   a real `publish` does.
-4. **Scope creep into ranks.** D3 draws the line at "transmitted, not enforced". The pull toward
-   implementing the rights bitmask properly during slice 2 will be strong, because the column is
-   right there. It is a separate issue.
+1. **Realm-core holds no character rows.** Held. The roster fan-out is `world::guild::render_roster`,
+   the guild twin of `world::party::render_list`, and `/who`'s guild-name join is
+   `world::guild::render_who`.
+2. **The fixed ten-rank array.** Held, and softened: the packet boundary pads a short guild rather
+   than panicking, and the invariant is enforced where the rows are written.
+3. **Migration.** OPEN. Two new `game_character` columns with typed defaults. Nothing in
+   `cargo test` or `cargo check` validates default-value encoding, and no `spacetime publish` has run
+   against this branch — see "Known gaps".
+4. **Scope creep into ranks.** Held. D3's line — transmitted, not enforced — is intact: the only
+   permission check anywhere in the system is "are you the guild master".
