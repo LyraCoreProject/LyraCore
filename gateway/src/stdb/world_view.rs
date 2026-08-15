@@ -272,12 +272,13 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         melee_disengaged(v, shard, row)
     });
 
-    // ---- game_resurrect_request / game_whisper_event / game_group_event / game_trade_event ----
+    // ---- game_resurrect_request / game_whisper_event / game_group_event / game_guild_event /
+    // ---- game_trade_event ----
     // The PRIVATE tier: every row is addressed to exactly one recipient, and on this feed the
     // gateway owns the guarantee RLS used to give. Delivery is recipient-keyed (the owner-session
     // lookup) + the explicit `private_recipient_audience` predicate — never a viewer fan.
-    // (The realm-core whisper/group twins for CROSS-shard delivery ride the same dispatchers,
-    // armed once per realm-core connection by `arm_realm_private` below.)
+    // (The realm-core whisper/group/guild twins for CROSS-shard delivery ride the same
+    // dispatchers, armed once per realm-core connection by `arm_realm_private` below.)
     wire_insert(db.game_resurrect_request(), "game_resurrect_request.insert", &view, |v, row| {
         resurrect_offered(v, row)
     });
@@ -290,6 +291,9 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
             group_event_appeared(v, &coord, row)
         });
     }
+    wire_insert(db.game_guild_event(), "game_guild_event.insert", &view, |v, row| {
+        guild_event_appeared(v, row)
+    });
     wire_insert(db.game_trade_event(), "game_trade_event.insert", &view, |v, row| {
         trade_event_appeared(v, row)
     });
@@ -407,6 +411,9 @@ pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord:
     });
     wire_insert(db.game_group_event(), "realm.game_group_event.insert", &view, move |v, row| {
         group_event_appeared(v, &coord, row)
+    });
+    wire_insert(db.game_guild_event(), "realm.game_guild_event.insert", &view, |v, row| {
+        guild_event_appeared(v, row)
     });
 }
 
@@ -980,6 +987,25 @@ fn whisper_appeared(view: &WorldView, row: &WhisperEvent) {
     enqueue(&tx, move || {
         super::subscriptions::whisper_event_outbound(&row)
     });
+}
+
+/// A guild-chat (or other future guild-event) row landed → the kind-decoded packet to the row's
+/// RECIPIENT and nobody else (same shape as [`whisper_appeared`]). No `coord` needed: unlike
+/// `group_event_appeared`, nothing on the guild table needs a detail JOIN — the speaker's name
+/// already rides `row.other_name`, stamped by `guild::push_guild_chat_event` at write time.
+fn guild_event_appeared(view: &WorldView, row: &GuildEvent) {
+    let Some(session) = view.entities.session_of_owner(row.recipient_guid) else {
+        return;
+    };
+    let Some(viewer) = view.viewer(session) else {
+        return;
+    };
+    if !super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid) {
+        return;
+    }
+    let row = row.clone();
+    let tx = viewer.tx.clone();
+    enqueue(&tx, move || super::subscriptions::guild_event_outbound(&row));
 }
 
 /// A trade status landed → the `SMSG_TRADE_STATUS` packet to the row's RECIPIENT and nobody

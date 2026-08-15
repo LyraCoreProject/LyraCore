@@ -327,6 +327,93 @@ fn disband(ctx: &ReducerContext, guild_id: u64) {
 }
 
 // ===========================================================================================
+//  Chat
+// ===========================================================================================
+
+/// The guild-chat core (`/g`), driven by [`realm_guild_op`]'s `GUILD_CHAT` arm: deliver `text` to
+/// every OTHER member of `sender_guid`'s guild, plus an echo to the sender — vanilla server-echoes
+/// the speaker's own guild line back, exactly as party does (`chat::apply_party_chat`). Refuses a
+/// caller who is not in a guild with the shared [`guild_err::NOT_IN_GUILD`] string, which the
+/// gateway maps to `SMSG_GUILD_COMMAND_RESULT(GuildPlayerNotInGuild)`.
+///
+/// Every current member gets a row regardless of whether they are online — the SAME construction
+/// `chat::apply_party_chat` uses against `game_group_event`. What makes delivery "online members
+/// only" (D4) is the per-recipient RLS relay itself: an offline member's session holds no
+/// subscription to receive the row, and the shared 1-second event TTL leaves nothing to replay
+/// when they next log in.
+pub(crate) fn guild_chat_for(
+    ctx: &ReducerContext,
+    sender_guid: u64,
+    text: &str,
+) -> Result<(), String> {
+    let message =
+        crate::chat::normalized_message(text).ok_or_else(|| "empty message".to_string())?;
+    let membership =
+        guild_of(ctx, sender_guid).ok_or_else(|| guild_err::NOT_IN_GUILD.to_string())?;
+    let payload = lyracore_shared::guild::encode_guild_chat(&message);
+    let member_guids: Vec<u64> = members_of(ctx, membership.guild_id)
+        .into_iter()
+        .map(|m| m.character_guid)
+        .collect();
+    for other in guild_chat_other_recipients(sender_guid, &member_guids) {
+        push_guild_chat_event(ctx, other, sender_guid, payload.clone());
+    }
+    // The echo to the sender (vanilla server-echoes guild lines back to the speaker's own client)
+    // — deliberately a SEPARATE push outside the loop above (which excludes the sender by design),
+    // not folded into "every member incl. self", for the same reason `apply_party_chat` keeps its
+    // own echo separate: the pure recipient-set helper below only ever has to answer "who ELSE".
+    push_guild_chat_event(ctx, sender_guid, sender_guid, payload);
+    Ok(())
+}
+
+/// The OTHER guild members who get [`guild_chat_for`]'s per-recipient event row (every member of
+/// `members` except `sender_guid`) — the sender gets a SEPARATE explicit echo row, so this
+/// deliberately excludes them. Mirrors `chat::party_chat_other_recipients`. Pure — unit-tested
+/// without a `ReducerContext`.
+pub(crate) fn guild_chat_other_recipients(sender_guid: u64, members: &[u64]) -> Vec<u64> {
+    members
+        .iter()
+        .copied()
+        .filter(|&g| g != sender_guid)
+        .collect()
+}
+
+/// Insert one `GUILD_CHAT` row addressed to `recipient_guid`, mirroring `crate::group::push_event`:
+/// resolves the recipient's own bound identity for the per-player RLS relay (`Identity::ZERO` when
+/// this database holds no such character row — always the case on realm-core) and stamps
+/// `other_name` from the SPEAKER's row so the gateway never needs a name lookup.
+fn push_guild_chat_event(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    sender_guid: u64,
+    payload: String,
+) {
+    let bound = ctx
+        .db
+        .game_character()
+        .guid()
+        .find(recipient_guid)
+        .map(|c| c.owner_identity);
+    let sender_name = ctx
+        .db
+        .game_character()
+        .guid()
+        .find(sender_guid)
+        .map(|c| c.name)
+        .unwrap_or_default();
+    ctx.db.game_guild_event().insert(GuildEvent {
+        id: 0,
+        recipient_identity: crate::helpers::event_recipient_identity(bound),
+        recipient_guid,
+        kind: lyracore_shared::guild::event_kind::GUILD_CHAT,
+        other_guid: sender_guid,
+        other_name: sender_name,
+        payload,
+        created_at: ctx.timestamp,
+    });
+}
+
+// ===========================================================================================
 //  Reducers
 // ===========================================================================================
 
@@ -363,6 +450,7 @@ pub fn realm_guild_op(
     let _ = (target_guid, arg_a); // slots later ops read; CREATE uses `text` alone
     match op {
         realm_op::CREATE => create_guild_for(ctx, actor_guid, &text).map(|_| ()),
+        realm_op::GUILD_CHAT => guild_chat_for(ctx, actor_guid, &text),
         other => Err(format!("unknown realm guild op {other}")),
     }
 }
@@ -464,5 +552,56 @@ mod tests {
             arm.starts_with("create_guild_for(ctx, actor_guid, &text)"),
             "`realm_op::CREATE` no longer runs the create core. Arm was:\n{arm}"
         );
+    }
+
+    /// The `GUILD_CHAT` op byte must dispatch to the chat core, the same way `CREATE` dispatches
+    /// to `create_guild_for` above.
+    #[test]
+    fn realm_guild_op_dispatches_guild_chat_to_its_own_core() {
+        let body = code_of(include_str!("guild.rs"), "pub fn realm_guild_op(");
+        let arm = body
+            .split("realm_op::GUILD_CHAT =>")
+            .nth(1)
+            .unwrap_or_else(|| panic!("`realm_guild_op` no longer dispatches GUILD_CHAT:\n{body}"));
+        let arm: String = arm.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            arm.starts_with("guild_chat_for(ctx, actor_guid, &text)"),
+            "`realm_op::GUILD_CHAT` no longer runs the chat core. Arm was:\n{arm}"
+        );
+    }
+
+    // ---- Guild chat (T5) ----
+
+    /// The chat gate's refusal is the shared error string: the gateway maps it to
+    /// `SMSG_GUILD_COMMAND_RESULT(GuildPlayerNotInGuild)`.
+    #[test]
+    fn guild_chat_refuses_a_caller_with_no_guild_with_the_shared_error_string() {
+        let body = code_of(include_str!("guild.rs"), "pub(crate) fn guild_chat_for(");
+        assert!(
+            body.contains("guild_err::NOT_IN_GUILD"),
+            "`guild_chat_for` no longer refuses with `guild_err::NOT_IN_GUILD` — the gateway \
+             classifies SMSG_GUILD_COMMAND_RESULT off this exact string. Body was:\n{body}"
+        );
+    }
+
+    /// Mirrors `chat::party_chat_routes_to_every_other_member_and_excludes_the_sender`: the sender
+    /// never appears among the OTHER recipients, regardless of where in the roster they sit.
+    #[test]
+    fn guild_chat_other_recipients_excludes_the_sender_and_preserves_order() {
+        let members = [10u64, 20, 30];
+        assert_eq!(
+            guild_chat_other_recipients(20, &members),
+            vec![10, 30],
+            "the sender must never appear among the OTHER recipients"
+        );
+        assert_eq!(guild_chat_other_recipients(2, &[1, 2, 3, 4]), vec![1, 3, 4]);
+        assert_eq!(guild_chat_other_recipients(1, &[1, 2, 3]), vec![2, 3]);
+        assert_eq!(guild_chat_other_recipients(3, &[1, 2, 3]), vec![1, 2]);
+    }
+
+    /// Degenerate case: a guild of one (only the sender). Must not panic or wrongly include them.
+    #[test]
+    fn guild_chat_other_recipients_is_empty_when_the_sender_is_the_only_member() {
+        assert_eq!(guild_chat_other_recipients(7, &[7]), Vec::<u64>::new());
     }
 }

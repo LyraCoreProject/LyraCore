@@ -1,10 +1,12 @@
-//! Guild packets: the query response, the info panel, and the one error channel.
+//! Guild packets: the query response, the info panel, the one error channel, and the guild-chat
+//! line.
 
 use lyracore_shared::guild::GUILD_RANK_COUNT;
 use wow_world_messages::vanilla::{
-    GuildCommand, GuildCommandResult, SMSG_GUILD_COMMAND_RESULT, SMSG_GUILD_INFO,
-    SMSG_GUILD_QUERY_RESPONSE,
+    GuildCommand, GuildCommandResult, Language, PlayerChatTag, SMSG_MESSAGECHAT_ChatType,
+    SMSG_GUILD_COMMAND_RESULT, SMSG_GUILD_INFO, SMSG_GUILD_QUERY_RESPONSE, SMSG_MESSAGECHAT,
 };
+use wow_world_messages::Guid;
 
 /// Build `SMSG_GUILD_QUERY_RESPONSE` for a guild the client asked about by id.
 ///
@@ -67,6 +69,22 @@ pub fn build_guild_command_result(
         command,
         string: subject.to_string(),
         result,
+    }
+}
+
+/// Build `SMSG_MESSAGECHAT` for a guild (`/g`) line. `ChatType::Guild` carries a single `sender2`
+/// guid (the client resolves the speaker's name via NAME_QUERY) — the same one-field shape
+/// `build_whisper` uses, unlike `Party`'s two-credit shape. Always Universal + no tag: like
+/// whispers/party, guild lines aren't proximity/language-filtered — `realm_guild_op`'s `GUILD_CHAT`
+/// arm takes no `language` argument at all.
+pub fn build_guild_chat(sender_guid: u64, message: String) -> SMSG_MESSAGECHAT {
+    SMSG_MESSAGECHAT {
+        chat_type: SMSG_MESSAGECHAT_ChatType::Guild {
+            sender2: Guid::new(sender_guid),
+        },
+        language: Language::Universal,
+        message,
+        tag: PlayerChatTag::None,
     }
 }
 
@@ -136,5 +154,18 @@ mod tests {
     fn the_epoch_itself_is_the_first_of_january_1970() {
         assert_eq!(civil_date(0), (0, 0, 1970));
         assert_eq!(civil_date(-1), (30, 11, 1969)); // one microsecond earlier is 1969-12-31
+    }
+
+    /// The guild-chat packet carries the speaker's guid in `ChatType::Guild`'s one-field shape —
+    /// no leader/party credit split, unlike `Party`.
+    #[test]
+    fn the_guild_chat_packet_carries_the_speakers_guid_and_the_raw_message() {
+        let m = build_guild_chat(42, "for the Alliance!".to_string());
+        assert_eq!(m.message, "for the Alliance!");
+        assert_eq!(m.language, Language::Universal);
+        match m.chat_type {
+            SMSG_MESSAGECHAT_ChatType::Guild { sender2 } => assert_eq!(sender2.guid(), 42),
+            other => panic!("expected ChatType::Guild, got {other:?}"),
+        }
     }
 }

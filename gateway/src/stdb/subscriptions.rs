@@ -1733,6 +1733,38 @@ pub(crate) fn whisper_event_outbound(row: &WhisperEvent) -> Vec<Outbound> {
     ))]
 }
 
+/// Guild: the packet body both legs run. Audience resolved by the caller — RLS per-player, the
+/// recipient owner-session lookup on the shared leg (same shape as [`whisper_event_outbound`]).
+/// `GUILD_CHAT` (kind 11) is the only kind produced today (`guild::guild_chat_for`); `ROSTER`
+/// (kind 0) has no push producer yet, so it falls to the unknown-kind arm below rather than a
+/// dedicated one.
+pub(crate) fn guild_event_outbound(row: &GuildEvent) -> Vec<Outbound> {
+    use lyracore_shared::guild::event_kind as guild_kind;
+    let msg = match row.kind {
+        guild_kind::GUILD_CHAT => match lyracore_shared::guild::decode_guild_chat(&row.payload) {
+            Some(message) => Some(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                codec::build_guild_chat(row.other_guid, message),
+            ))),
+            None => {
+                log::warn!(
+                    "guild GUILD_CHAT relay: unparseable payload {:?} (event {})",
+                    row.payload,
+                    row.id
+                );
+                None
+            }
+        },
+        other => {
+            log::warn!("guild event relay: unknown kind {other} (event {})", row.id);
+            None
+        }
+    };
+    match msg {
+        Some(m) => vec![Outbound::One(m)],
+        None => Vec::new(),
+    }
+}
+
 /// Resurrect prompt: the packet body both legs run. Audience: the
 /// offer's target, resolved by the caller.
 pub(crate) fn resurrect_request_outbound(row: &ResurrectRequest) -> Vec<Outbound> {

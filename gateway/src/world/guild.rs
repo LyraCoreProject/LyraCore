@@ -150,3 +150,24 @@ pub(crate) fn guild_of<St: WorldStore + ?Sized>(
     };
     Ok(membership.map(|(guild_id, _rank)| guild_id))
 }
+
+/// Send one `/g` line for the session that owns `self_guid` — D4/D1 made concrete: guild chat has
+/// no shard mirror, so unlike `run`'s `Op::Create` handling (which has a genuinely different
+/// single-database reducer with its own "actor is in world" check) it has only ONE plane. Both
+/// arms below drive the SAME `realm_guild_op(GUILD_CHAT)` op, so they cannot drift; only the
+/// database that receives the call differs. Mirrors `world::whisper::run`, the closest existing
+/// precedent for a realm-core relay with no shard mirror behind it.
+///
+/// Unlike [`run`], this never calls [`push_membership`]: chat never changes `self_guid`'s guild id
+/// or rank, so there is nothing to push.
+pub(crate) fn send_chat<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: u64,
+    text: String,
+) -> Result<()> {
+    use lyracore_shared::guild::realm_op;
+    match store.realm_store() {
+        Some(realm) => realm.realm_guild_op(realm_op::GUILD_CHAT, self_guid, 0, 0, text),
+        None => store.realm_guild_op(realm_op::GUILD_CHAT, self_guid, 0, 0, text),
+    }
+}

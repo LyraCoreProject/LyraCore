@@ -67,6 +67,27 @@ pub mod event_kind {
     /// The guild roster changed → the gateway re-renders from the row's payload
     /// ([`super::encode_roster`]), built in the SAME transaction as the membership change.
     pub const ROSTER: u8 = 0;
+    /// A guild (`/g`) chat line, one row per recipient (every OTHER online member, plus an echo
+    /// to the sender) → `SMSG_MESSAGECHAT` with `ChatType::Guild`. `other_guid`/`other_name`
+    /// (resolved by the pusher, same convention [`ROSTER`] and `crate::group::event_kind` use) =
+    /// the SPEAKER; `payload` = the message text via [`encode_guild_chat`]. Mirrors
+    /// `crate::group::event_kind::PARTY_CHAT`.
+    pub const GUILD_CHAT: u8 = 11;
+}
+
+/// Encode a `GUILD_CHAT` payload: just the raw message text. Unlike [`encode_roster`]'s
+/// multi-field grammar, there is nothing else to combine — the speaker's guid/name already ride
+/// `GuildEvent.other_guid`/`other_name` — so this is a pass-through, mirroring
+/// [`crate::group::encode_party_chat`].
+pub fn encode_guild_chat(message: &str) -> String {
+    message.to_string()
+}
+
+/// Decode a `GUILD_CHAT` payload back to the message text. Never fails (any string is a valid
+/// message) — `Option` only for call-site symmetry with the other decoders, all of which DO fail
+/// closed on malformed input.
+pub fn decode_guild_chat(payload: &str) -> Option<String> {
+    Some(payload.to_string())
 }
 
 /// The REALM-CORE guild ops: the `op` byte of the single operator-gated `realm_guild_op` reducer
@@ -78,9 +99,13 @@ pub mod event_kind {
 ///
 /// Argument slots (`realm_guild_op(op, actor_guid, target_guid, arg_a, text)`), per op:
 /// - [`CREATE`] — `text` is the guild name; `target_guid` and `arg_a` unused.
+/// - [`GUILD_CHAT`] — `actor_guid` is the speaker, `text` is the message; `target_guid` and
+///   `arg_a` unused.
 pub mod realm_op {
     /// `CMSG_GUILD_CREATE` — `actor_guid` founds a guild named `text` and becomes its master.
     pub const CREATE: u8 = 0;
+    /// `CMSG_MESSAGECHAT` (`ChatType::Guild`) — `actor_guid` speaks `text` to its guild.
+    pub const GUILD_CHAT: u8 = 10;
 }
 
 /// The guild reducers' `Err` strings the gateway maps to `GuildCommandResult` variants — EXACT
@@ -202,5 +227,19 @@ mod tests {
     #[test]
     fn realm_guild_op_codes_are_stable() {
         assert_eq!(realm_op::CREATE, 0);
+        assert_eq!(realm_op::GUILD_CHAT, 10);
+        assert_eq!(event_kind::GUILD_CHAT, 11);
+    }
+
+    #[test]
+    fn guild_chat_payload_round_trips_verbatim() {
+        let message = "for the Alliance!".to_string();
+        let wire = encode_guild_chat(&message);
+        assert_eq!(decode_guild_chat(&wire), Some(message));
+        // Unlike the roster grammar, a guild-chat payload has no delimiters to strip — it is the
+        // sole field, so it must survive untouched (even one containing the roster's own framing
+        // characters, which belong to a different kind's grammar entirely).
+        assert_eq!(decode_guild_chat(""), Some(String::new()));
+        assert_eq!(decode_guild_chat("a|b;c,d"), Some("a|b;c,d".to_string()));
     }
 }

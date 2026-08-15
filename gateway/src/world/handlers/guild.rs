@@ -20,6 +20,11 @@ pub(crate) trait GuildActionStore: Send + Sync {
 
     /// The guild `character_guid` belongs to. `None` = guildless.
     fn guild_of(&self, character_guid: u64) -> Result<Option<u64>>;
+
+    /// Deliver `/g` line `text` from `self_guid` through the guild-chat relay. `Err` carries one of
+    /// `lyracore_shared::guild::err`'s strings (today, only `NOT_IN_GUILD`) or a transport failure;
+    /// the caller decides what to say to the client either way.
+    fn guild_chat(&self, self_guid: u64, text: &str) -> Result<()>;
 }
 
 impl GuildActionStore for crate::stdb::Coordinator {
@@ -38,6 +43,10 @@ impl GuildActionStore for crate::stdb::Coordinator {
 
     fn guild_of(&self, character_guid: u64) -> Result<Option<u64>> {
         crate::world::guild::guild_of(self, character_guid)
+    }
+
+    fn guild_chat(&self, self_guid: u64, text: &str) -> Result<()> {
+        crate::world::guild::send_chat(self, self_guid, text.to_string())
     }
 }
 
@@ -195,6 +204,37 @@ fn guild_info<St: GuildActionStore + ?Sized>(
     })
 }
 
+/// `CMSG_MESSAGECHAT` (`ChatType::Guild`, `/g`) — not part of `dispatch_guild_action`'s match (that
+/// seam only owns the `CMSG_GUILD_*` family; chat rides `CMSG_MESSAGECHAT`, whose OTHER chat types
+/// stay `handlers/query.rs`'s to dispatch), but the SAME seam shape so the branch is testable
+/// without a socket: called directly from `handlers/query.rs`'s `ChatType::Guild` arm.
+///
+/// A caller with no guild answers `SMSG_GUILD_COMMAND_RESULT(GuildPlayerNotInGuild)` and delivers
+/// nothing. Any OTHER gameplay refusal (not in world / empty message) is silently dropped, matching
+/// say/yell/party — the client never sends an empty line anyway. A lost reducer transport still
+/// propagates, exactly as every other guild op does.
+pub(crate) fn guild_chat_action<St: GuildActionStore + ?Sized>(
+    store: &St,
+    self_guid: u64,
+    text: String,
+) -> Result<Vec<Outbound>> {
+    if let Err(e) = store.guild_chat(self_guid, &text) {
+        if classify_guild_action_error(&e) == GuildActionErrorClass::Fatal {
+            return Err(e);
+        }
+        if format!("{e:#}").contains(lyracore_shared::guild::err::NOT_IN_GUILD) {
+            log::debug!("world: guild chat refused (guid {self_guid}): {e:#}");
+            return Ok(command_result(
+                GuildCommand::Quit,
+                "",
+                GuildCommandResult::GuildPlayerNotInGuild,
+            ));
+        }
+        log::debug!("world: guild chat dropped (guid {self_guid}): {e:#}");
+    }
+    Ok(Vec::new())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +251,8 @@ mod tests {
         guilds: Vec<GuildView>,
         membership: Vec<(u64, u64)>,
         read_error: Option<String>,
+        chat_requests: Mutex<Vec<(u64, String)>>,
+        chat_error: Option<String>,
     }
 
     impl GuildActionStore for InMemoryGuildActions {
@@ -237,6 +279,16 @@ mod tests {
                 .iter()
                 .find(|(guid, _)| *guid == character_guid)
                 .map(|(_, guild_id)| *guild_id))
+        }
+
+        fn guild_chat(&self, self_guid: u64, text: &str) -> Result<()> {
+            self.chat_requests
+                .lock()
+                .unwrap()
+                .push((self_guid, text.to_string()));
+            self.chat_error
+                .as_ref()
+                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
         }
     }
 
@@ -522,5 +574,75 @@ mod tests {
             outcome,
             GuildActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
         ));
+    }
+
+    // ---- Guild chat (T5) ----
+
+    /// AC1/AC2: a valid `/g` line reaches the durable layer with the caller's own guid and text,
+    /// and answers with NOTHING — success has no `SMSG_GUILD_COMMAND_RESULT` (the line's own
+    /// relay, fanned to every other online member plus the sender's echo, is the only feedback;
+    /// see `world::tests` for the wire-level assertion of that fan-out).
+    #[test]
+    fn a_valid_chat_line_requests_delivery_and_answers_with_nothing() {
+        let actions = InMemoryGuildActions::default();
+
+        let outbound = guild_chat_action(&actions, GINGER, "for the Alliance!".into()).unwrap();
+
+        assert_eq!(
+            actions.chat_requests.lock().unwrap().as_slice(),
+            &[(GINGER, "for the Alliance!".to_string())]
+        );
+        assert!(outbound.is_empty());
+    }
+
+    /// AC5: a caller with no guild answers `GuildPlayerNotInGuild` and delivers nothing else.
+    #[test]
+    fn a_chat_line_from_a_guildless_caller_answers_player_not_in_guild() {
+        let actions = InMemoryGuildActions {
+            chat_error: Some(err::NOT_IN_GUILD.to_string()),
+            ..Default::default()
+        };
+
+        let outbound = guild_chat_action(&actions, GINGER, "hello?".into()).unwrap();
+
+        assert_eq!(
+            command_result_of(&outbound),
+            (
+                GuildCommand::Quit,
+                String::new(),
+                GuildCommandResult::GuildPlayerNotInGuild
+            )
+        );
+    }
+
+    /// Any OTHER gameplay refusal (empty message, not in world, …) is silently dropped, exactly
+    /// like say/yell/party.
+    #[test]
+    fn an_unclassified_chat_refusal_is_dropped_rather_than_answered() {
+        let actions = InMemoryGuildActions {
+            chat_error: Some("empty message".to_string()),
+            ..Default::default()
+        };
+
+        let outbound = guild_chat_action(&actions, GINGER, String::new()).unwrap();
+
+        assert!(outbound.is_empty());
+    }
+
+    /// A lost reducer transport still propagates — chat is not exempt from the family's own Fatal
+    /// classification.
+    #[test]
+    fn a_lost_reducer_transport_propagates_out_of_guild_chat_too() {
+        let actions = InMemoryGuildActions {
+            chat_error: Some("reducer transport disconnected".to_string()),
+            ..Default::default()
+        };
+
+        let error = match guild_chat_action(&actions, GINGER, "hi".into()) {
+            Err(error) => error,
+            Ok(_) => panic!("a lost transport must not be swallowed as a refusal"),
+        };
+
+        assert!(format!("{error:#}").contains("reducer transport disconnected"));
     }
 }

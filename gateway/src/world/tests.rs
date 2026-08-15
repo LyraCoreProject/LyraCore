@@ -2292,6 +2292,16 @@ impl WorldStore for InMemoryStore {
             realm_op::CREATE => g
                 .create(actor_guid, &text, GUILD_FIXTURE_MICROS)
                 .map(|_| ()),
+            realm_op::GUILD_CHAT => {
+                use lyracore_shared::guild::{err as guild_err, event_kind};
+                let Some((guild_id, _rank)) = g.guild_of(actor_guid) else {
+                    return Err(anyhow!("{}", guild_err::NOT_IN_GUILD));
+                };
+                for member in g.members_of(guild_id) {
+                    g.events.push((member, event_kind::GUILD_CHAT));
+                }
+                Ok(())
+            }
             other => Err(anyhow!("unknown realm guild op {other}")),
         }
     }
@@ -2684,6 +2694,10 @@ impl handlers::GuildActionStore for InMemoryStore {
 
     fn guild_of(&self, character_guid: u64) -> Result<Option<u64>> {
         super::guild::guild_of(self, character_guid)
+    }
+
+    fn guild_chat(&self, self_guid: u64, text: &str) -> Result<()> {
+        super::guild::send_chat(self, self_guid, text.to_string())
     }
 }
 
@@ -7290,14 +7304,24 @@ fn messagechat_whisper_to_an_unknown_player_replies_player_not_found() {
 }
 
 #[test]
-fn messagechat_guild_is_dropped() {
-    // Chat types that need a guild system that doesn't exist yet are dropped — no store call, no reply.
-    let store = std::sync::Arc::new(quest_store());
+fn messagechat_guild_from_a_member_relays_the_line() {
+    // A guild member's `/g` now reaches the guild-chat relay (`world::guild::send_chat` →
+    // `realm_guild_op(GUILD_CHAT)`) with the typed text; no reply on success — the caller sees
+    // their own line via the SAME per-recipient relay a real member would get (the module's echo,
+    // not a gateway-built reply). This test REPLACES `messagechat_guild_is_dropped`: the drop was
+    // the bug, not the spec.
+    let s = quest_store();
+    s.guild
+        .lock()
+        .unwrap()
+        .create(1, "The Silver Hand", GUILD_FIXTURE_MICROS)
+        .expect("the fixture guild seeds cleanly");
+    let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_MESSAGECHAT {
         chat_type: CMSG_MESSAGECHAT_ChatType::Guild,
         language: Language::Universal,
-        message: "g".into(),
+        message: "for the Alliance!".into(),
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
@@ -7307,15 +7331,48 @@ fn messagechat_guild_is_dropped() {
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
     match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(_) => {} // nothing was sent for guild
-        other => panic!("expected the sentinel (guild dropped), got {other}"),
+        ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(_) => {} // nothing was sent for a successful /g
+        other => panic!("expected the sentinel (no reply on /g success), got {other}"),
     }
     drop(client);
     server.join().unwrap();
-    assert!(
-        store.chats.lock().unwrap().is_empty(),
-        "guild lines never reach send_chat"
+    assert_eq!(
+        store.guild.lock().unwrap().ops.last(),
+        Some(&(
+            lyracore_shared::guild::realm_op::GUILD_CHAT,
+            1,
+            0,
+            0,
+            "for the Alliance!".to_string()
+        )),
+        "the line must reach the authority as a GUILD_CHAT op, with the caller's own guid as actor"
     );
+}
+
+#[test]
+fn messagechat_guild_from_a_guildless_caller_replies_player_not_in_guild() {
+    // AC5: a non-member's `/g` answers SMSG_GUILD_COMMAND_RESULT(GuildPlayerNotInGuild) and
+    // delivers nothing else — the guild family's one error channel.
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+    CMSG_MESSAGECHAT {
+        chat_type: CMSG_MESSAGECHAT_ChatType::Guild,
+        language: Language::Universal,
+        message: "anyone there?".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(r) => {
+            assert_eq!(
+                r.result,
+                wow_world_messages::vanilla::GuildCommandResult::GuildPlayerNotInGuild
+            );
+        }
+        other => panic!("expected SMSG_GUILD_COMMAND_RESULT(GuildPlayerNotInGuild), got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
 }
 
 #[test]
@@ -7525,6 +7582,9 @@ struct FakeGuild {
     /// Every op that reached the AUTHORITY: `(op, actor, target, arg_a, text)`. The assertion that
     /// a guild op ran on realm-core rather than on the player's shard.
     ops: Vec<(u8, u64, u64, u32, String)>,
+    /// Every notification the authority pushed: `(recipient_guid, kind)` — the relay's input.
+    /// Mirrors `FakeParty::events`; today only `guild_chat` writes to it.
+    events: Vec<(u64, u8)>,
 }
 
 impl FakeGuild {
@@ -7533,6 +7593,16 @@ impl FakeGuild {
             .iter()
             .find(|(_, g, _)| *g == guid)
             .map(|(gid, _, rank)| (*gid, *rank))
+    }
+
+    /// Every member's character guid of `guild_id`, in join order — the module's `members_of`,
+    /// modelled.
+    fn members_of(&self, guild_id: u64) -> Vec<u64> {
+        self.members
+            .iter()
+            .filter(|(g, ..)| *g == guild_id)
+            .map(|(_, guid, _)| *guid)
+            .collect()
     }
 
     /// The module's `create_guild_for`, modelled: the three gates the ROUTING depends on, in the
