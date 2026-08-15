@@ -22,6 +22,7 @@ use super::ai::{
     RETURN_LEASH_SQ, SENSE_EVERY_N_TICKS, WANDER_CHANCE_PCT, WANDER_RADIUS,
 };
 use super::cast_condition;
+use super::pet;
 use super::tick::TickSweep;
 
 mod ctx;
@@ -75,6 +76,9 @@ pub(crate) struct TickContext {
     pub tick_secs: f32,
     /// Do the ~4s-quantized sensing passes run this firing?
     pub sense: bool,
+    /// Seconds between this row's SENSE firings. A leg decided on a sensing pass has to bridge to
+    /// the next one, so it is sized from this rather than from `tick_secs`.
+    pub sense_secs: f32,
     pub scope: TickScope,
 }
 
@@ -443,6 +447,107 @@ pub(crate) trait FearSink {
     fn panicked(&self, scope: &TickScope) -> Vec<Panicked>;
 }
 
+/// A summoned pet the pet phase decides for this firing, and the owner state that decision reads.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Pet {
+    pub guid: u64,
+    pub at: Point,
+    pub map_id: u32,
+    pub instance_id: u64,
+    /// Its owner. `None` covers BOTH "logged out" and "dead": a pet never outlives its owner, so
+    /// either one despawns it.
+    pub owner: Option<PetOwner>,
+    /// The pet's own corpse. A pet has no spawn row, so corpse decay never reaps it — this phase
+    /// does, or a killed Imp lingers forever.
+    pub dead: bool,
+    /// Stunned, rooted, polymorphed or feared: it neither engages nor trails its owner this firing.
+    pub suppressed: bool,
+    pub command: PetCommand,
+    pub react: PetReact,
+    /// Already holding a melee row — what standing down has to drop.
+    pub fighting: bool,
+}
+
+/// The owner as its pet reads it: where to trail, and what to pile onto.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct PetOwner {
+    pub guid: u64,
+    pub at: Point,
+    pub map_id: u32,
+    pub instance_id: u64,
+    /// The enemy the owner is fighting, or 0 when it is idle.
+    pub combat_target: u64,
+}
+
+/// The pet bar's movement/attack order (`CMSG_PET_ACTION`).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum PetCommand {
+    /// Hold position. The pet still fights when it engages; STAY only stops it trailing the owner.
+    Stay,
+    Follow,
+    /// The player pointed the pet at this unit explicitly.
+    Attack(u64),
+}
+
+/// The pet bar's auto-engage stance.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum PetReact {
+    Passive,
+    Defensive,
+    Aggressive,
+}
+
+impl PetCommand {
+    /// Read a stored bar command. Kept here rather than in the adapter so the whole bar grammar is
+    /// one cycle-owned decision. DISMISS despawns the pet outright and is never stored, and an
+    /// unreadable id falls back to Follow — the vanilla default an absent bar row already means.
+    fn of(command: u8, command_target: u64) -> PetCommand {
+        match command {
+            pet::CMD_STAY => PetCommand::Stay,
+            pet::CMD_ATTACK => PetCommand::Attack(command_target),
+            _ => PetCommand::Follow,
+        }
+    }
+}
+
+impl PetReact {
+    /// Read a stored bar stance; an unreadable id falls back to Defensive, the vanilla default.
+    fn of(react: u8) -> PetReact {
+        match react {
+            pet::REACT_PASSIVE => PetReact::Passive,
+            pet::REACT_AGGRESSIVE => PetReact::Aggressive,
+            _ => PetReact::Defensive,
+        }
+    }
+}
+
+/// The pet's surface: the pets this firing covers, the two questions a pet asks about a would-be
+/// foe, and the things a pet decision does. Movement reuses the shared movers — `speed_of`,
+/// `navigate` and `commit_leg` — so a follow leg is written by the one leg writer like every other.
+pub(crate) trait PetSink {
+    /// The live pets among `candidates` whose own instance this firing covers. `candidates` is the
+    /// `owner_guid != 0` list the pre-pass sweep already harvested, in table order — never a scan.
+    fn pets(&self, scope: &TickScope, candidates: &[u64]) -> Vec<Pet>;
+    /// May this pet attack `target` on its owner's behalf: in the world, alive, not a player, not
+    /// the pet or the owner itself, and not friendly to the owner. Target 0 is never valid.
+    fn pet_may_attack(&self, pet: &Pet, target: u64) -> bool;
+    /// The nearest hostile an AGGRESSIVE pet finds around ITSELF. The seek radius is the world's;
+    /// what the cycle decides is WHEN to ask.
+    fn nearest_hostile_to(&self, pet: &Pet) -> Option<u64>;
+    /// Drop a stale ATTACK order so the pet resumes following its owner.
+    fn cancel_attack_order(&mut self, owner: u64);
+    /// Point the pet at `victim` — its melee row and its own target together, WITHOUT resetting the
+    /// swing cadence, so re-pointing a pet mid-fight does not refresh its swing.
+    fn take_victim(&mut self, pet: u64, victim: u64);
+    /// Stop fighting: drop the pet's own attack row and the threat it holds.
+    fn stand_down(&mut self, pet: u64);
+    /// Delete the pet and its bar state.
+    fn dismiss(&mut self, pet: u64);
+    /// Re-place the pet on its owner's map and instance — position, grid address and packed cell in
+    /// one write. A snap, not a leg: `SMSG_MONSTER_MOVE` cannot cross either.
+    fn restage(&mut self, pet: u64, at: Point, map_id: u32, instance_id: u64, now_ms: u32);
+}
+
 /// The whole world one cycle touches.
 pub(crate) trait CreatureWorld:
     MotionSink
@@ -453,6 +558,7 @@ pub(crate) trait CreatureWorld:
     + PursuitSink
     + RoutSink
     + FearSink
+    + PetSink
     + LegacyPasses
 {
     /// The creatures near a covered player this firing, plus the pet and in-combat candidate lists
@@ -469,7 +575,6 @@ pub(crate) trait CreatureWorld:
 // pass; ticket 09 deletes the trait. See .scratch/creature-behavior-cycle/.
 /// Passes still living in `creatures::tick` — the cycle owns WHEN they run, not yet HOW.
 pub(crate) trait LegacyPasses {
-    fn legacy_pet(&mut self, scope: &TickScope, now_ms: u32, pets: &[u64]) -> usize;
     fn legacy_regen(&mut self) -> usize;
     fn legacy_combat_drop(&mut self, in_combat: &[u64]) -> usize;
 }
@@ -511,7 +616,7 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         let (pulls, seen) = aggro(w, &active);
         rows.push(("aggro", seen as u64));
         rows.push(("assist", assist(w, &active, pulls) as u64));
-        rows.push(("pet", w.legacy_pet(&tick.scope, tick.now_ms, &pets) as u64));
+        rows.push(("pet", pet_behavior(w, &tick, &pets) as u64));
         rows.push(("cast", cast(w, &tick.scope) as u64));
         rows.push(("threat_retarget", threat_retarget(w, &tick.scope) as u64));
     }
@@ -783,6 +888,172 @@ fn assist<W: EngageSink>(w: &mut W, active: &HashSet<u64>, mut calls: Vec<Called
         w.engage(neighbor, victim, Pull::Assisted);
     }
     neighbors.len()
+}
+
+/// How far a pet may drift from its owner before it runs back — the "follow band". Comfortably
+/// outside `CHASE_MELEE_SQ` so a trailing pet settles behind the owner instead of jittering on top
+/// of it. (8 yd)².
+const PET_FOLLOW_BAND_SQ: f32 = 64.0;
+
+/// How far short of the owner a follow leg lands: inside the band, so the pet settles a few yards
+/// behind rather than walking onto its owner.
+const PET_TRAIL_YD: f32 = 4.0;
+
+const _: () = assert!(
+    PET_FOLLOW_BAND_SQ > CHASE_MELEE_SQ,
+    "the follow band must sit outside melee range, or a trailing pet jitters at the boundary"
+);
+
+/// What one pet does this firing.
+enum PetAction {
+    /// The pet died, or its owner is gone or dead. Nothing else reaps a pet — it has no spawn row.
+    Despawn,
+    /// Swing at this unit. The chase phase below closes the gap and the swing pass lands the blows,
+    /// so arming the engagement is the whole of it.
+    Engage(u64),
+    /// Stop fighting: the owner went idle, or the commanded foe died.
+    StandDown,
+    /// The owner changed map or instance, which no movement leg can cross.
+    Restage {
+        at: Point,
+        map_id: u32,
+        instance_id: u64,
+    },
+    Follow(Leg),
+}
+
+/// PET — a summoned pet decides, once per sensing firing, whether to take a foe, stand down, trail
+/// its owner or despawn. It runs between aggro and cast, so a pet that arms an engagement HERE
+/// closes on that same firing through the chase phase every other creature uses, and casts through
+/// the cast phase (an Imp's Firebolt is an ordinary authored spell — no pet-specific engine code).
+///
+/// A pet is not a wild creature: it has no spawn row, so nothing else reaps its corpse and no idle
+/// mover claims it, and it never pulls or answers a pack call. Its whole per-firing behavior is
+/// here. It is also not rout-eligible, so the phases after chase leave it alone.
+///
+/// Collect-then-apply, like every other phase: a despawn deletes rows the pets after it read.
+/// Candidates come from the sweep's harvested `owner_guid != 0` list, so this costs no scan of its
+/// own. Returns the covered pets considered.
+fn pet_behavior<W: PetSink + IdleSink>(w: &mut W, tick: &TickContext, candidates: &[u64]) -> usize {
+    let pets = w.pets(&tick.scope, candidates);
+    let visited = pets.len();
+    let mut actions: Vec<(u64, PetAction)> = Vec::new();
+    for pet in &pets {
+        if pet.dead {
+            actions.push((pet.guid, PetAction::Despawn));
+            continue;
+        }
+        // Crowd control owns the pet this firing: its own chase and swing already respect it, and
+        // the follow leg below must too.
+        if pet.suppressed {
+            continue;
+        }
+        let Some(owner) = pet.owner else {
+            actions.push((pet.guid, PetAction::Despawn));
+            continue;
+        };
+        if let Some(victim) = pet_victim(w, pet, &owner) {
+            actions.push((pet.guid, PetAction::Engage(victim)));
+            continue;
+        }
+        if pet.fighting {
+            actions.push((pet.guid, PetAction::StandDown));
+            continue;
+        }
+        if pet.command == PetCommand::Stay {
+            continue; // parked: it still fights, it just does not trail
+        }
+        if let Some(action) = follow(w, tick, pet, &owner) {
+            actions.push((pet.guid, action));
+        }
+    }
+    for (guid, action) in actions {
+        match action {
+            PetAction::Despawn => w.dismiss(guid),
+            PetAction::Engage(victim) => w.take_victim(guid, victim),
+            PetAction::StandDown => w.stand_down(guid),
+            PetAction::Restage {
+                at,
+                map_id,
+                instance_id,
+            } => w.restage(guid, at, map_id, instance_id, tick.now_ms),
+            PetAction::Follow(leg) => w.commit_leg(guid, leg, tick.now_ms),
+        }
+    }
+    visited
+}
+
+/// Who this pet swings at, or `None` to stand down. An explicit ATTACK order wins; otherwise the
+/// react stance governs auto-engage — PASSIVE never engages, DEFENSIVE and AGGRESSIVE both assist
+/// the owner's fight, and AGGRESSIVE additionally seeks a hostile near itself while the owner is
+/// idle. A stale ATTACK order, whose foe died or vanished, is cleared here so the pet resumes
+/// following rather than standing over a corpse.
+fn pet_victim<W: PetSink>(w: &mut W, pet: &Pet, owner: &PetOwner) -> Option<u64> {
+    if let PetCommand::Attack(target) = pet.command {
+        if w.pet_may_attack(pet, target) {
+            return Some(target);
+        }
+        w.cancel_attack_order(owner.guid);
+    }
+    if pet.react == PetReact::Passive {
+        return None;
+    }
+    if w.pet_may_attack(pet, owner.combat_target) {
+        return Some(owner.combat_target);
+    }
+    match pet.react {
+        PetReact::Aggressive => w.nearest_hostile_to(pet),
+        _ => None,
+    }
+}
+
+/// FOLLOW — the pet trails its owner. Inside the follow band it holds; outside it, it runs ONE leg
+/// aimed `PET_TRAIL_YD` short of the owner. The leg spans this row's whole SENSING period, because
+/// that is when this phase next decides: a one-firing step would let a moving owner outrun the pet,
+/// and a hardcoded span would overlap itself on a row that senses every firing.
+///
+/// An owner that changed map or instance is snapped to instead — `SMSG_MONSTER_MOVE` crosses
+/// neither, and the AOI relay's create/destroy carries the pet over.
+///
+/// ponytail: the leg rides `commit_leg`, the writer every other mover uses, rather than the pet's
+/// own. Ceiling: two deltas from the pre-cycle pet writer, both in the direction of the rest of the
+/// tick — the landing point is now ground-snapped, and the pet's row rides the spline instead of
+/// jumping to the leg end and being pulled back by the next advance.
+fn follow<W: IdleSink>(
+    w: &W,
+    tick: &TickContext,
+    pet: &Pet,
+    owner: &PetOwner,
+) -> Option<PetAction> {
+    if pet.map_id != owner.map_id || pet.instance_id != owner.instance_id {
+        return Some(PetAction::Restage {
+            at: owner.at,
+            map_id: owner.map_id,
+            instance_id: owner.instance_id,
+        });
+    }
+    if dist_sq(pet.at, owner.at) <= PET_FOLLOW_BAND_SQ {
+        return None; // close enough — hold position
+    }
+    let (dx, dy) = (owner.at.x - pet.at.x, owner.at.y - pet.at.y);
+    let gap = (dx * dx + dy * dy).sqrt();
+    if gap <= PET_TRAIL_YD {
+        return None; // already inside the trailing band on the ground plane
+    }
+    let leg_len = gap - PET_TRAIL_YD;
+    let aim = (pet.at.x + dx / gap * leg_len, pet.at.y + dy / gap * leg_len);
+    let run = w.speed_of(pet.guid, Gait::Run);
+    let step = w.navigate(pet.guid, aim, run * tick.sense_secs);
+    let (x, y, dur_ms) = leg_toward((pet.at.x, pet.at.y), step, run)?;
+    Some(PetAction::Follow(Leg {
+        to: (x, y),
+        // The owner's height is only the fallback: the writer snaps the landing point to the ground
+        // under it, which matters wherever the pet's detour corner is nowhere near the owner.
+        z_fallback: owner.at.z,
+        dur_ms,
+        gait: Gait::Run,
+        hold_until_landed: false,
+    }))
 }
 
 /// CAST — an engaged caster creature begins ONE action from its rotation. It runs before chase, so a

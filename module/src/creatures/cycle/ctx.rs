@@ -13,11 +13,12 @@ use spacetimedb::{ReducerContext, Table};
 use super::{
     run_cycle, AggroTarget, CastSink, CastWhen, Caster, CreatureWorld, CycleOutcome, EngageSink,
     Engagement, FearSink, Fighter, Gait, Home, IdleCreature, IdleSink, Leg, LegInFlight,
-    LegacyPasses, MotionSink, Panicked, Point, Pull, Pursuit, PursuitSink, RoutSink, Router,
-    Sensor, SpellOption, ThreatSink, TickContext, Waypoint,
+    LegacyPasses, MotionSink, Panicked, Pet, PetCommand, PetOwner, PetReact, PetSink, Point, Pull,
+    Pursuit, PursuitSink, RoutSink, Router, Sensor, SpellOption, ThreatSink, TickContext, Waypoint,
 };
 use crate::creatures::ai::TickScope;
 use crate::creatures::cast_condition;
+use crate::creatures::pet;
 use crate::creatures::tick::{self, CreatureSpline, TickSweep};
 use crate::spell::game_pending_cast;
 use crate::{
@@ -27,21 +28,12 @@ use crate::{
 };
 
 /// `tick_creatures`' one call into the cycle. The adapter never leaves this module.
-pub(crate) fn run(ctx: &ReducerContext, tick: TickContext, interval_micros: i64) -> CycleOutcome {
-    run_cycle(
-        &mut CtxWorld {
-            ctx,
-            interval_micros,
-        },
-        tick,
-    )
+pub(crate) fn run(ctx: &ReducerContext, tick: TickContext) -> CycleOutcome {
+    run_cycle(&mut CtxWorld { ctx }, tick)
 }
 
 struct CtxWorld<'a> {
     ctx: &'a ReducerContext,
-    /// The firing row's own cadence — only `pass_pet` still reads it.
-    // ponytail: migration scaffolding, deleted with `legacy_pet` in ticket 07.
-    interval_micros: i64,
 }
 
 impl CtxWorld<'_> {
@@ -291,7 +283,7 @@ impl EngageSink for CtxWorld<'_> {
             .filter(|c| {
                 !c.is_player()
                     && !c.dead
-                    // A PET never pulls or assists on its owner's behalf — `pass_pet` arms it off
+                    // A PET never pulls or assists on its owner's behalf — the pet phase arms it off
                     // the owner's combat instead.
                     && c.owner_guid == 0
                     && melee.attacker_guid().find(c.guid).is_none()
@@ -675,6 +667,119 @@ impl FearSink for CtxWorld<'_> {
     }
 }
 
+impl PetSink for CtxWorld<'_> {
+    fn pets(&self, scope: &TickScope, candidates: &[u64]) -> Vec<Pet> {
+        let entities = self.ctx.db.game_world_entity();
+        let melee = self.ctx.db.game_melee_attack();
+        candidates
+            .iter()
+            .filter_map(|guid| entities.guid().find(guid))
+            .filter(|p| scope.covers(p.instance_id))
+            .map(|p| {
+                let (command, react, command_target) =
+                    pet::pet_command_state(self.ctx, p.owner_guid);
+                Pet {
+                    guid: p.guid,
+                    at: Point {
+                        x: p.x,
+                        y: p.y,
+                        z: p.z,
+                    },
+                    map_id: p.map_id,
+                    instance_id: p.instance_id,
+                    // A dead owner reads the same as a missing one: the pet despawns either way.
+                    owner: entities
+                        .guid()
+                        .find(p.owner_guid)
+                        .filter(|o| !o.dead)
+                        .map(|o| PetOwner {
+                            guid: o.guid,
+                            at: Point {
+                                x: o.x,
+                                y: o.y,
+                                z: o.z,
+                            },
+                            map_id: o.map_id,
+                            instance_id: o.instance_id,
+                            combat_target: pet::owner_combat_target(self.ctx, &o),
+                        }),
+                    dead: p.dead,
+                    suppressed: crate::spell::is_self_movement_suppressed(self.ctx, p.guid),
+                    command: PetCommand::of(command, command_target),
+                    react: PetReact::of(react),
+                    fighting: melee.attacker_guid().find(p.guid).is_some(),
+                }
+            })
+            .collect()
+    }
+    fn pet_may_attack(&self, pet: &Pet, target: u64) -> bool {
+        pet.owner
+            .is_some_and(|o| crate::creatures::pet::may_attack(self.ctx, o.guid, pet.guid, target))
+    }
+    fn nearest_hostile_to(&self, pet: &Pet) -> Option<u64> {
+        pet.owner
+            .and_then(|o| crate::creatures::pet::nearest_hostile_for(self.ctx, o.guid, pet.guid))
+    }
+    fn cancel_attack_order(&mut self, owner: u64) {
+        pet::cancel_attack_order(self.ctx, owner);
+    }
+    fn take_victim(&mut self, guid: u64, victim: u64) {
+        let melee = self.ctx.db.game_melee_attack();
+        match melee.attacker_guid().find(guid) {
+            // Re-point at the owner's current foe WITHOUT resetting the swing cadence.
+            Some(mut row) => {
+                if row.target_guid != victim {
+                    row.target_guid = victim;
+                    melee.attacker_guid().update(row);
+                }
+            }
+            None => {
+                melee.insert(MeleeAttack {
+                    attacker_guid: guid,
+                    target_guid: victim,
+                    last_swing_ms: 0,   // swing on the next melee tick
+                    ranged_spell_id: 0, // an Imp's Firebolt is cast by the cast phase, not this field
+                    last_offhand_swing_ms: 0,
+                    rout_ends_ms: 0,
+                    pursuit_ends_ms: 0,
+                    leash_x: 0.0,
+                    leash_y: 0.0,
+                });
+            }
+        }
+        let entities = self.ctx.db.game_world_entity();
+        if let Some(mut p) = entities.guid().find(guid) {
+            if p.target_guid != victim {
+                p.target_guid = victim;
+                entities.guid().update(p);
+            }
+        }
+    }
+    fn stand_down(&mut self, guid: u64) {
+        crate::combat::break_own_attacks(self.ctx, guid);
+    }
+    fn dismiss(&mut self, guid: u64) {
+        pet::despawn_pet(self.ctx, guid);
+    }
+    fn restage(&mut self, guid: u64, at: Point, map_id: u32, instance_id: u64, now_ms: u32) {
+        let entities = self.ctx.db.game_world_entity();
+        let Some(mut p) = entities.guid().find(guid) else {
+            return;
+        };
+        let (gx, gy) = spatial::grid_cell(at.x, at.y);
+        p.map_id = map_id;
+        p.instance_id = instance_id;
+        p.x = at.x;
+        p.y = at.y;
+        p.z = at.z;
+        p.grid_x = gx;
+        p.grid_y = gy;
+        p.cell = spatial::grid_cell_id(gx, gy);
+        p.last_move_ms = now_ms;
+        entities.guid().update(p);
+    }
+}
+
 impl CreatureWorld for CtxWorld<'_> {
     fn awake_creatures(&self, scope: &TickScope) -> TickSweep {
         tick::active_cell_creatures(self.ctx, scope)
@@ -695,9 +800,6 @@ impl CreatureWorld for CtxWorld<'_> {
 }
 
 impl LegacyPasses for CtxWorld<'_> {
-    fn legacy_pet(&mut self, scope: &TickScope, now_ms: u32, pets: &[u64]) -> usize {
-        crate::creatures::pass_pet(self.ctx, now_ms, scope, self.interval_micros, pets)
-    }
     fn legacy_regen(&mut self) -> usize {
         tick::pass_regen(self.ctx)
     }

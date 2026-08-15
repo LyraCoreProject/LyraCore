@@ -241,6 +241,7 @@ pub fn tick_creatures(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
         now_ms: (now_micros / 1000) as u32,
         tick_secs: tick_secs_for_interval(interval_micros),
         sense: is_sense_tick_for_interval(now_micros, interval_micros),
+        sense_secs: sense_period_secs_for_interval(interval_micros),
         scope,
     };
     // Kept for the evidence lines below, which outlive the cycle the context is moved into.
@@ -250,7 +251,7 @@ pub fn tick_creatures(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
         scope_label(&tick.scope),
     );
 
-    let outcome = crate::creatures::cycle::run(ctx, tick, interval_micros);
+    let outcome = crate::creatures::cycle::run(ctx, tick);
 
     if global {
         // The 230/233 evidence lines describe the WORLD tick; a dedicated row's numbers would only
@@ -331,12 +332,12 @@ pub(crate) fn active_cell_creatures(ctx: &ReducerContext, scope: &TickScope) -> 
     let entities = ctx.db.game_world_entity();
     let radius = active_cell_radius(ctx);
     let mut out = std::collections::HashSet::new();
-    // Perf catalog 1.10 + 1.7: `pass_pet` and `pass_combat_drop` each used to run their OWN full
+    // Perf catalog 1.10 + 1.7: the pet phase and `pass_combat_drop` each used to run their OWN full
     // `entities.iter()` scan per sense tick — one for `owner_guid != 0`, one for the IN_COMBAT bit.
     // This scan is already mandatory (it locates the players the active-cell set is built from) and
     // already visits every row, so both guid lists ride along for the cost of two bit tests: no new
     // table, no lifecycle hooks, and no index maintenance on the hottest write path in the tick (the
-    // trade `pass_pet`'s own doc rightly rejected). Collected in table order, so both passes visit the
+    // trade the pet pass's own doc rightly rejected). Collected in table order, so both passes visit the
     // same candidates in the same order as their old dedicated scans.
     let mut pets: Vec<u64> = Vec::new();
     let mut in_combat: Vec<u64> = Vec::new();
@@ -390,7 +391,7 @@ pub(crate) fn active_cell_creatures(ctx: &ReducerContext, scope: &TickScope) -> 
 pub(crate) struct TickSweep {
     /// Creatures within `active_cell_radius` of at least one covered player (work-item 230).
     pub(crate) active: std::collections::HashSet<u64>,
-    /// Live pets (`owner_guid != 0`), in table order — `pass_pet`'s candidate list.
+    /// Live pets (`owner_guid != 0`), in table order — the cycle's pet-phase candidate list.
     pub(crate) pets: Vec<u64>,
     /// Units carrying `UNIT_FLAG_IN_COMBAT`, in table order — `pass_combat_drop`'s candidate list.
     pub(crate) in_combat: Vec<u64>,

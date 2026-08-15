@@ -754,7 +754,7 @@ pub(crate) fn create_instance_with_id(
     // one at INSTANCE_TICK_INTERVAL_MICROS — the SAME cadence as the global catch-all, so it bought
     // zero latency smoothing while each firing paid the FIXED per-firing costs the partition does not
     // divide: a transaction commit on the serialized writer, a TickScope rebuild, active_cell_radius,
-    // active_cell_creatures' player scan, and pass_pet's entity scan on sense ticks. With M live
+    // active_cell_creatures' player scan, and the pet phase's candidate list on sense ticks. With M live
     // instances that is M extra tx/s each carrying an O(E) scan, for creature populations that are
     // stationary-until-aggro. The catch-all covers every instance with no dedicated row
     // (`TickScope::from_rows`) — the exact coverage teardown already relies on (step 5 below deletes

@@ -53,6 +53,18 @@ struct MoveEffect {
     facing_angle: f32,
 }
 
+/// What the pet phase did to one pet, in the order it did it. The follow leg is NOT here — it goes
+/// through the shared leg writer and shows up in `effects()` like every other movement.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum PetEffect {
+    Took(u64, u64),
+    StoodDown(u64),
+    Dismissed(u64),
+    Restaged(u64, Point, u32, u64),
+    /// The owner's stale ATTACK order was cleared.
+    OrderCleared(u64),
+}
+
 #[derive(Default)]
 struct Scenario {
     creatures: RefCell<HashMap<u64, XCreature>>,
@@ -112,6 +124,15 @@ struct Scenario {
     threat: RefCell<HashMap<(u64, u64), i64>>,
     /// Live taunt locks: the creature is pinned on this unit whatever the threat table says.
     taunts: RefCell<HashMap<u64, u64>>,
+    /// Live pets, `pet -> owner`. A pet is an ordinary creature row plus this link.
+    pet_owners: RefCell<HashMap<u64, u64>>,
+    /// The pet bar per OWNER; an absent entry is the vanilla default (Follow + Defensive).
+    pet_bars: RefCell<HashMap<u64, (PetCommand, PetReact)>>,
+    /// Creatures killed but not yet removed. Only the pet phase reads this: a pet has no spawn row,
+    /// so corpse decay never reaps it.
+    corpses: RefCell<HashSet<u64>>,
+    /// Ordered pet effects, oldest first.
+    pet_effects: RefCell<Vec<PetEffect>>,
     /// Scenario input for the active-cell sweep.
     awake: RefCell<TickSweep>,
     /// Positions read BEFORE any pass ran, i.e. by the sweep — still the leg starts, because the
@@ -389,6 +410,32 @@ impl Scenario {
         self.flagged.borrow().clone()
     }
 
+    /// Summon `guid` as `owner`'s pet at `at`: a creature row plus the owner link, harvested into
+    /// this firing's pet candidates by the sweep.
+    fn pet(self, guid: u64, owner: u64, at: Point) -> Self {
+        let s = self.creature(guid, at);
+        s.awake.borrow_mut().pets.push(guid);
+        s.pet_owners.borrow_mut().insert(guid, owner);
+        s
+    }
+
+    /// The owner's pet bar, as the player left it. An absent entry is the vanilla default
+    /// (Follow + Defensive), which is exactly what a pet did before the bar existed.
+    fn pet_bar(self, owner: u64, command: PetCommand, react: PetReact) -> Self {
+        self.pet_bars.borrow_mut().insert(owner, (command, react));
+        self
+    }
+
+    /// The creature was killed and its row is still there.
+    fn slain(self, guid: u64) -> Self {
+        self.corpses.borrow_mut().insert(guid);
+        self
+    }
+
+    fn pet_effects(&self) -> Vec<PetEffect> {
+        self.pet_effects.borrow().clone()
+    }
+
     /// Wake these creatures: the active-cell sweep found them near a covered player this firing.
     fn awake(self, guids: impl IntoIterator<Item = u64>) -> Self {
         self.awake.borrow_mut().active = guids.into_iter().collect();
@@ -510,6 +557,8 @@ impl Scenario {
             now_ms: (self.now_micros.get() / 1000) as u32,
             tick_secs: crate::creatures::MOVE_TICK_SECS,
             sense,
+            sense_secs: crate::creatures::MOVE_TICK_SECS
+                * crate::creatures::SENSE_EVERY_N_TICKS as f32,
             scope,
         }
     }
@@ -612,6 +661,41 @@ impl Scenario {
             .iter()
             .find(|p| p.guid == guid)
             .map(|p| (p.at, moved.unwrap_or(0)))
+    }
+
+    /// A pet's owner as the pet reads it. `None` for an owner that logged out or died — the two are
+    /// the same despawn to a pet.
+    fn pet_owner(&self, guid: u64) -> Option<PetOwner> {
+        let (at, map_id, instance_id) = self
+            .players
+            .borrow()
+            .iter()
+            .find(|p| p.guid == guid && !p.dead)
+            .map(|p| (p.at, p.map_id, p.instance_id))
+            .or_else(|| {
+                self.creatures
+                    .borrow()
+                    .get(&guid)
+                    .filter(|_| !self.corpses.borrow().contains(&guid))
+                    .map(|c| (c.at, c.map_id, c.instance_id))
+            })?;
+        // A live melee row IS the owner's fight. The in-combat-selection fallback the world also
+        // reads (`pet::owner_combat_target`) needs no scenario shape of its own — either way this
+        // is "the enemy the owner is fighting".
+        let combat_target = self
+            .fights
+            .borrow()
+            .iter()
+            .find(|f| f.attacker == guid)
+            .map(|f| f.victim)
+            .unwrap_or(0);
+        Some(PetOwner {
+            guid,
+            at,
+            map_id,
+            instance_id,
+            combat_target,
+        })
     }
 
     fn snapshot(&self) -> Vec<(u64, Point)> {
@@ -1027,11 +1111,125 @@ impl FearSink for Scenario {
     }
 }
 
+// The in-memory pet world. An owner is a player in production; the harness resolves a creature row
+// too, and a gone-or-dead owner reads as `None` either way — which is what despawns the pet.
+impl PetSink for Scenario {
+    fn pets(&self, scope: &TickScope, candidates: &[u64]) -> Vec<Pet> {
+        let creatures = self.creatures.borrow();
+        let owners = self.pet_owners.borrow();
+        let bars = self.pet_bars.borrow();
+        candidates
+            .iter()
+            .filter_map(|guid| {
+                let c = creatures.get(guid)?;
+                let owner_guid = *owners.get(guid)?;
+                let (command, react) = bars
+                    .get(&owner_guid)
+                    .copied()
+                    .unwrap_or((PetCommand::Follow, PetReact::Defensive));
+                scope.covers(c.instance_id).then_some(Pet {
+                    guid: *guid,
+                    at: c.at,
+                    map_id: c.map_id,
+                    instance_id: c.instance_id,
+                    owner: self.pet_owner(owner_guid),
+                    dead: self.corpses.borrow().contains(guid),
+                    suppressed: self.cc(*guid).2,
+                    command,
+                    react,
+                    fighting: self.fights.borrow().iter().any(|f| f.attacker == *guid),
+                })
+            })
+            .collect()
+    }
+    fn pet_may_attack(&self, pet: &Pet, target: u64) -> bool {
+        let Some(owner) = pet.owner else {
+            return false;
+        };
+        if target == 0 || target == pet.guid || target == owner.guid {
+            return false;
+        }
+        // Only a live CREATURE row is a valid foe: a player, a corpse and another pet are all out.
+        // The FACTION half of the guard is the world's (`pet::may_attack`) — a scenario states who
+        // exists, not who is friendly to whom.
+        self.creatures.borrow().contains_key(&target)
+            && !self.corpses.borrow().contains(&target)
+            && !self.pet_owners.borrow().contains_key(&target)
+    }
+    /// The seek RADIUS is the world's (`pet::nearest_hostile_near`); what the cycle decides is WHEN
+    /// to ask, so the scenario answers with the nearest foe it holds at all.
+    fn nearest_hostile_to(&self, pet: &Pet) -> Option<u64> {
+        let creatures = self.creatures.borrow();
+        creatures
+            .iter()
+            .filter(|(guid, c)| {
+                self.pet_may_attack(pet, **guid)
+                    && (c.map_id, c.instance_id) == (pet.map_id, pet.instance_id)
+            })
+            .min_by(|a, b| {
+                dist_sq(a.1.at, pet.at)
+                    .partial_cmp(&dist_sq(b.1.at, pet.at))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.0.cmp(b.0))
+            })
+            .map(|(guid, _)| *guid)
+    }
+    fn cancel_attack_order(&mut self, owner: u64) {
+        self.pet_effects
+            .borrow_mut()
+            .push(PetEffect::OrderCleared(owner));
+        let mut bars = self.pet_bars.borrow_mut();
+        if let Some((command, _)) = bars.get_mut(&owner) {
+            *command = PetCommand::Follow;
+        }
+    }
+    fn take_victim(&mut self, pet: u64, victim: u64) {
+        self.pet_effects
+            .borrow_mut()
+            .push(PetEffect::Took(pet, victim));
+        let instance_id = self.creatures.borrow()[&pet].instance_id;
+        let mut fights = self.fights.borrow_mut();
+        match fights.iter_mut().find(|f| f.attacker == pet) {
+            Some(f) => f.victim = victim,
+            None => fights.push(Engagement {
+                attacker: pet,
+                victim,
+                instance_id,
+                player_never_swung: false,
+            }),
+        }
+    }
+    fn stand_down(&mut self, pet: u64) {
+        self.pet_effects
+            .borrow_mut()
+            .push(PetEffect::StoodDown(pet));
+        self.fights.borrow_mut().retain(|f| f.attacker != pet);
+    }
+    fn dismiss(&mut self, pet: u64) {
+        self.pet_effects
+            .borrow_mut()
+            .push(PetEffect::Dismissed(pet));
+        self.creatures.borrow_mut().remove(&pet);
+        self.pet_owners.borrow_mut().remove(&pet);
+        self.legs.borrow_mut().retain(|l| l.guid != pet);
+        self.fights
+            .borrow_mut()
+            .retain(|f| f.attacker != pet && f.victim != pet);
+    }
+    fn restage(&mut self, pet: u64, at: Point, map_id: u32, instance_id: u64, now_ms: u32) {
+        self.pet_effects
+            .borrow_mut()
+            .push(PetEffect::Restaged(pet, at, map_id, instance_id));
+        self.place(pet, at, Some(now_ms));
+        if let Some(c) = self.creatures.borrow_mut().get_mut(&pet) {
+            c.map_id = map_id;
+            c.instance_id = instance_id;
+        }
+    }
+}
+
 // Not migrated yet: the cycle SEQUENCES these, the harness cannot run them.
 impl LegacyPasses for Scenario {
-    fn legacy_pet(&mut self, _scope: &TickScope, _now_ms: u32, _pets: &[u64]) -> usize {
-        0
-    }
     fn legacy_regen(&mut self) -> usize {
         0
     }
@@ -1046,6 +1244,8 @@ const PACK_MATE: u64 = WOLF + 1;
 const FAR_MATE: u64 = WOLF + 2;
 const HUNTER: u64 = 0x0000_0000_0000_0A11;
 const RANGER: u64 = HUNTER + 1;
+/// A warlock's summoned Imp, and the guid its owner carries.
+const IMP: u64 = 0x0000_0000_0000_1117;
 /// An authored offensive spell, a heal, a debuff and a self-buff.
 const NUKE: u32 = 100;
 const HEAL: u32 = 101;
@@ -2559,5 +2759,296 @@ fn a_crowd_controlled_router_keeps_its_state_and_resumes_when_the_control_ends()
         w.effects().len(),
         1,
         "the creature must resume its rout on the very next firing, inside the window it kept"
+    );
+}
+
+/// A warlock at the origin with its Imp beside it, on the settled clock. The pet phase is a SENSING
+/// phase, so every scenario below fires `sense`.
+fn warlock_and_imp(imp_at: Point) -> Scenario {
+    Scenario::new(SETTLED)
+        .player(HUNTER, p(0.0, 0.0, 10.0))
+        .pet(IMP, HUNTER, imp_at)
+}
+
+#[test]
+fn a_pet_takes_its_owners_foe_and_closes_on_it_in_the_same_cycle() {
+    let mut w = warlock_and_imp(p(0.0, 0.0, 10.0))
+        .creature(WOLF, p(20.0, 0.0, 10.0))
+        .attacking(HUNTER, WOLF);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.pet_effects(),
+        [PetEffect::Took(IMP, WOLF)],
+        "a pet exists to fight what its owner fights; one that never arms an engagement is an Imp \
+         that follows the warlock around watching them die"
+    );
+    assert_eq!(
+        w.effects()
+            .iter()
+            .map(|e| (e.guid, e.dest, e.run))
+            .collect::<Vec<_>>(),
+        [(IMP, p(16.0, 0.0, 10.0), true)],
+        "the pet phase runs before chase, so the pet it just armed must close in the SAME firing \
+         through the chase every other creature uses; waiting a firing is a pet that stares at the \
+         foe its owner is already fighting"
+    );
+}
+
+#[test]
+fn only_a_pet_left_off_passive_assists_its_owner() {
+    for (react, assists) in [
+        (PetReact::Passive, false),
+        (PetReact::Defensive, true),
+        (PetReact::Aggressive, true),
+    ] {
+        let mut w = warlock_and_imp(p(0.0, 0.0, 10.0))
+            .creature(WOLF, p(20.0, 0.0, 10.0))
+            .attacking(HUNTER, WOLF)
+            .pet_bar(HUNTER, PetCommand::Follow, react);
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            w.pet_effects() == [PetEffect::Took(IMP, WOLF)],
+            assists,
+            "PASSIVE is the stance a player picks to keep the pet out of a fight — a pet that \
+             piles in anyway pulls the pack the player was sneaking past ({react:?})"
+        );
+    }
+}
+
+#[test]
+fn only_an_aggressive_pet_seeks_a_foe_its_owner_is_not_fighting() {
+    for (react, seeks) in [(PetReact::Defensive, false), (PetReact::Aggressive, true)] {
+        let mut w = warlock_and_imp(p(0.0, 0.0, 10.0))
+            .creature(WOLF, p(6.0, 0.0, 10.0))
+            .pet_bar(HUNTER, PetCommand::Follow, react);
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            w.pet_effects() == [PetEffect::Took(IMP, WOLF)],
+            seeks,
+            "AGGRESSIVE is the only stance that starts a fight nobody asked for; a DEFENSIVE pet \
+             that does it too makes the safe stance unusable ({react:?})"
+        );
+    }
+}
+
+#[test]
+fn an_attack_order_wins_over_the_owners_fight_and_a_stale_one_is_dropped() {
+    let commanded = || {
+        warlock_and_imp(p(0.0, 0.0, 10.0))
+            .creature(WOLF, p(20.0, 0.0, 10.0))
+            .creature(PACK_MATE, p(-20.0, 0.0, 10.0))
+            .attacking(HUNTER, WOLF)
+            .pet_bar(HUNTER, PetCommand::Attack(PACK_MATE), PetReact::Defensive)
+    };
+
+    let mut w = commanded();
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+    assert_eq!(
+        w.pet_effects(),
+        [PetEffect::Took(IMP, PACK_MATE)],
+        "the attack button is an explicit order: a pet that assists its owner's fight instead \
+         cannot be sent at anything"
+    );
+
+    let mut w = commanded().slain(PACK_MATE);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+    assert_eq!(
+        w.pet_effects(),
+        [PetEffect::OrderCleared(HUNTER), PetEffect::Took(IMP, WOLF)],
+        "an order whose foe died must be dropped, or the pet stands over the corpse for the rest \
+         of the fight and never assists again"
+    );
+}
+
+#[test]
+fn a_pet_that_drifted_out_of_the_follow_band_runs_back_and_one_inside_it_holds() {
+    for (imp_at, legs) in [(p(-20.0, 0.0, 10.0), 1), (p(-7.0, 0.0, 10.0), 0)] {
+        let mut w = warlock_and_imp(imp_at);
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            w.effects().len(),
+            legs,
+            "the follow band is what keeps a pet from jogging on the spot beside its owner; \
+             following from inside it re-throws a leg every sense firing ({imp_at:?})"
+        );
+    }
+
+    let mut w = warlock_and_imp(p(-20.0, 0.0, 10.0));
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+    let leg = w.effects()[0];
+    assert_eq!(
+        (leg.dest, leg.run),
+        (p(-4.0, 0.0, 10.0), true),
+        "the pet must RUN back and stop a few yards short of its owner; landing on the owner puts \
+         it inside the player's own model, and walking means it never catches up"
+    );
+    assert_eq!(
+        leg.dur_ms,
+        (16.0 / lyracore_shared::constants::speeds::RUN * 1000.0) as u32,
+        "the leg has to span the whole SENSE period, because that is when the pet next decides — a \
+         one-firing step lets a moving owner outrun the pet"
+    );
+}
+
+#[test]
+fn a_pet_whose_owner_is_gone_or_dead_despawns_and_so_does_its_own_corpse() {
+    let cases: [(&str, Twist); 2] = [
+        ("the owner died", |w| w.corpse(HUNTER)),
+        ("the pet was killed", |w| w.slain(IMP)),
+    ];
+    for (case, twist) in cases {
+        let mut w = twist(warlock_and_imp(p(0.0, 0.0, 10.0)));
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            w.pet_effects(),
+            [PetEffect::Dismissed(IMP)],
+            "a pet has no spawn row, so nothing else on the tick reaps it: left alone it outlives \
+             its owner as an unownable mob, or lingers as a corpse forever ({case})"
+        );
+    }
+
+    let mut orphan = Scenario::new(SETTLED).pet(IMP, HUNTER, p(0.0, 0.0, 10.0));
+    let tick = orphan.tick(true, catch_all());
+    run_cycle(&mut orphan, tick);
+    assert_eq!(
+        orphan.pet_effects(),
+        [PetEffect::Dismissed(IMP)],
+        "an owner who logged out leaves no row at all, and their pet must go with them"
+    );
+}
+
+#[test]
+fn a_frozen_pet_holds_still_and_a_feared_one_is_moved_by_fear_alone() {
+    let mut rooted = warlock_and_imp(p(-20.0, 0.0, 10.0)).rooted(IMP);
+    let tick = rooted.tick(true, catch_all());
+    run_cycle(&mut rooted, tick);
+    assert!(
+        rooted.effects().is_empty() && rooted.pet_effects().is_empty(),
+        "a rooted pet that still runs home to its owner is a client walking a unit the server says \
+         is pinned"
+    );
+
+    let mut feared = warlock_and_imp(p(-20.0, 0.0, 10.0))
+        .feared_by(IMP, HUNTER)
+        .rolls([u32::MAX / 2]);
+    let tick = feared.tick(true, catch_all());
+    run_cycle(&mut feared, tick);
+    assert!(
+        feared.pet_effects().is_empty() && feared.effects().len() == 1,
+        "fear is the feared pet's SOLE mover; a follow leg in the same firing shares fear's spline \
+         id and the client throws one of them away"
+    );
+    assert!(
+        feared.effects()[0].dest.x < -20.0,
+        "the surviving leg must be the fear dash AWAY from the warlock, not the follow leg back \
+         toward them; got {:?}",
+        feared.effects()[0].dest
+    );
+}
+
+#[test]
+fn a_pet_told_to_stay_stops_trailing_its_owner_but_still_fights() {
+    let stay = |w: Scenario| w.pet_bar(HUNTER, PetCommand::Stay, PetReact::Defensive);
+
+    let mut w = stay(warlock_and_imp(p(-20.0, 0.0, 10.0)));
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+    assert!(
+        w.effects().is_empty(),
+        "STAY is how a player parks a pet on a spot; one that trails them anyway cannot be left \
+         behind to hold a pull"
+    );
+
+    let mut w = stay(
+        warlock_and_imp(p(-20.0, 0.0, 10.0))
+            .creature(WOLF, p(20.0, 0.0, 10.0))
+            .attacking(HUNTER, WOLF),
+    );
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+    assert_eq!(
+        w.pet_effects(),
+        [PetEffect::Took(IMP, WOLF)],
+        "STAY governs movement, not fighting: a parked pet that refuses to engage is a pet the \
+         player has to un-park to use"
+    );
+}
+
+#[test]
+fn a_pet_whose_owner_stopped_fighting_drops_its_own_attack() {
+    let mut w = warlock_and_imp(p(0.0, 0.0, 10.0))
+        .creature(WOLF, p(20.0, 0.0, 10.0))
+        .attacking(IMP, WOLF);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.pet_effects(),
+        [PetEffect::StoodDown(IMP)],
+        "the owner walked away from the fight, so the pet must too — one that keeps its melee row \
+         holds the whole camp in combat and drags it after the player"
+    );
+    assert!(
+        w.effects().is_empty() && w.victims().is_empty(),
+        "a pet that stood down this firing must not also be chased into the fight it just left"
+    );
+}
+
+#[test]
+fn a_wounded_pet_armed_this_firing_closes_instead_of_routing() {
+    let mut w = warlock_and_imp(p(0.0, 0.0, 10.0))
+        .hurt(IMP, 10)
+        .creature(WOLF, p(20.0, 0.0, 10.0))
+        .attacking(HUNTER, WOLF);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    let leg = w.effects();
+    assert_eq!(leg.len(), 1, "one leg per firing, and it is the chase's");
+    assert!(
+        leg[0].dest.x > 0.0 && w.rout_ends_ms(IMP) == 0,
+        "an engagement armed by the pet phase is visible to the rout in the same cycle, and a pet \
+         is not of a kind that runs: one that flees at low health abandons the fight its owner is \
+         in the middle of"
+    );
+}
+
+#[test]
+fn a_pet_whose_owner_changed_instance_is_snapped_across_rather_than_walked() {
+    let mut w = warlock_and_imp(p(-20.0, 0.0, 10.0)).in_instance(IMP, 7);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.pet_effects(),
+        [PetEffect::Restaged(IMP, p(0.0, 0.0, 10.0), MAP, INSTANCE)],
+        "no movement leg crosses a map or an instance, so a pet left behind by its owner's \
+         teleport has to be re-placed instead — walking it strands it in the copy of the world its \
+         owner left"
+    );
+    assert!(
+        w.effects().is_empty(),
+        "the snap must relay no leg; the AOI create/destroy carries the pet across"
+    );
+    let imp = w.at(IMP);
+    let grid = spatial::grid_cell(0.0, 0.0);
+    assert_eq!(
+        (imp.at, imp.grid, imp.cell),
+        (p(0.0, 0.0, 10.0), grid, spatial::grid_cell_id(grid.0, grid.1)),
+        "position, grid address and packed cell must move together, or the pet is delivered to the \
+         wrong players from its new instance"
     );
 }
