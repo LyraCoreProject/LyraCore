@@ -10,6 +10,7 @@
 //!   - [`pet`]   — the warlock pet system (summon/despawn/follow), riding the creature machinery above
 
 mod ai;
+pub(crate) mod cycle;
 mod eventai;
 mod pet;
 mod spawn;

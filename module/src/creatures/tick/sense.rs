@@ -330,7 +330,7 @@ fn pass_assist(
 /// onto the same player (`pass_assist`). Issue #383 split the two into their own functions (each
 /// under half the size, single responsibility); this thin wrapper preserves the ONE pipeline call
 /// site and the ONE combined `rows-visited` stat the log line reports.
-pub(super) fn pass_aggro_assist(ctx: &ReducerContext, active: &std::collections::HashSet<u64>) -> usize {
+pub(crate) fn pass_aggro_assist(ctx: &ReducerContext, active: &std::collections::HashSet<u64>) -> usize {
     let (aggro_events, visited_aggro) = pass_aggro(ctx, active);
     let visited_assist = pass_assist(ctx, active, aggro_events);
     visited_aggro + visited_assist
@@ -358,7 +358,7 @@ pub(super) fn pass_aggro_assist(ctx: &ReducerContext, active: &std::collections:
 /// and its melee target share an instance by construction (arming is same-instance-gated everywhere),
 /// so the ATTACKER's instance is the pair's. With only the catch-all row this admits every candidate
 /// (equivalence: ai.rs `tick_scope_default_config_…`). Returns covered candidates visited.
-pub(super) fn pass_cast(ctx: &ReducerContext, scope: &TickScope) -> usize {
+pub(crate) fn pass_cast(ctx: &ReducerContext, scope: &TickScope) -> usize {
     let mut visited = 0usize;
     let entities = ctx.db.game_world_entity();
 
@@ -521,7 +521,7 @@ fn creature_cast_eligibility(
 /// creature a player dragged far away, per the item's engaged-always-active rule.
 /// Work-item 229: gated per candidate on `scope.covers(c.instance_id)` (attacker's instance = the
 /// pair's, same as pass_cast). Returns covered candidates visited.
-pub(super) fn pass_threat_retarget(ctx: &ReducerContext, scope: &TickScope) -> usize {
+pub(crate) fn pass_threat_retarget(ctx: &ReducerContext, scope: &TickScope) -> usize {
     let mut visited = 0usize;
     let entities = ctx.db.game_world_entity();
 
@@ -610,7 +610,7 @@ pub(super) fn pass_threat_retarget(ctx: &ReducerContext, scope: &TickScope) -> u
 /// AMOUNT is cadence-quantized, so a second (faster) row running this would literally multiply
 /// everyone's regen rate (see `TickScope::runs_global_passes`). Returns entity rows scanned — ONE pass
 /// now feeds both the health and the power loop (perf catalog 1.6, partial), so this halved.
-pub(super) fn pass_regen(ctx: &ReducerContext) -> usize {
+pub(crate) fn pass_regen(ctx: &ReducerContext) -> usize {
     let mut visited = 0usize;
     let entities = ctx.db.game_world_entity();
     // Derive now_ms once for the FSR (five-second rule) mana-regen gate.

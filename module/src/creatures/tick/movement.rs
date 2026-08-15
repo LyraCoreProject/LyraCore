@@ -30,7 +30,7 @@ use super::*;
 /// if it had never paused.
 /// Work-item 229: instance scope is inherited from `active` (built from covered players only) — no
 /// separate gate needed. Returns candidates visited (guids past the active gate).
-pub(super) fn pass_patrol(ctx: &ReducerContext, active: &std::collections::HashSet<u64>) -> usize {
+pub(crate) fn pass_patrol(ctx: &ReducerContext, active: &std::collections::HashSet<u64>) -> usize {
     let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
     let entities = ctx.db.game_world_entity();
     let waypoints = ctx.db.game_creature_waypoint();
@@ -180,7 +180,7 @@ fn angle_diff(from: f32, to: f32) -> f32 {
     d
 }
 
-pub(super) fn pass_chase(ctx: &ReducerContext, scope: &TickScope) -> usize {
+pub(crate) fn pass_chase(ctx: &ReducerContext, scope: &TickScope) -> usize {
     let mut visited = 0usize;
     let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
     let entities = ctx.db.game_world_entity();
@@ -373,7 +373,7 @@ pub(super) fn pass_chase(ctx: &ReducerContext, scope: &TickScope) -> usize {
 /// Work-item 229: instance scope inherited from `active`; `tick_secs` = the firing row's interval
 /// (cadence-invariant walk-home speed, exactly `MOVE_TICK_SECS` on the default row). Returns
 /// candidates visited (guids past the active gate).
-pub(super) fn pass_return(
+pub(crate) fn pass_return(
     ctx: &ReducerContext,
     moved_this_tick: &mut std::collections::HashSet<u64>,
     active: &std::collections::HashSet<u64>,
@@ -499,7 +499,7 @@ pub(super) fn pass_return(
 /// Work-item 229: instance scope inherited from `active`. The hop step stays `walk * 4.0` (the SENSE
 /// cadence, ~4s for EVERY row per `is_sense_tick_for_interval`) — not the per-firing `tick_secs` —
 /// because this pass runs on sense ticks only. Returns candidates visited (past the active gate).
-pub(super) fn pass_wander(
+pub(crate) fn pass_wander(
     ctx: &ReducerContext,
     moved_this_tick: &std::collections::HashSet<u64>,
     active: &std::collections::HashSet<u64>,
@@ -655,7 +655,7 @@ pub(super) fn pass_wander(
 /// as `pass_chase` — the flee leg is one full `FLEE_LEG_YD` dash, re-rolled only when the previous
 /// committed leg finishes (the `game_creature_spline` liveness check below), not sized per firing.
 /// Returns covered candidates visited.
-pub(super) fn pass_flee(ctx: &ReducerContext, scope: &TickScope) -> usize {
+pub(crate) fn pass_flee(ctx: &ReducerContext, scope: &TickScope) -> usize {
     let mut visited = 0usize;
     let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
     let entities = ctx.db.game_world_entity();
@@ -788,7 +788,7 @@ pub(super) fn pass_flee(ctx: &ReducerContext, scope: &TickScope) -> usize {
 /// instance — its sole mover must fire exactly once per its covering row). The dash distance scales
 /// with `tick_secs` (`fear_step_for_tick` — verbatim `FEAR_STEP` on the default row) so a fast
 /// dedicated row doesn't multiply terror speed. Returns covered candidates visited.
-pub(super) fn pass_fear_flee(ctx: &ReducerContext, scope: &TickScope, tick_secs: f32) -> usize {
+pub(crate) fn pass_fear_flee(ctx: &ReducerContext, scope: &TickScope, tick_secs: f32) -> usize {
     let mut visited = 0usize;
     let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
     let entities = ctx.db.game_world_entity();
