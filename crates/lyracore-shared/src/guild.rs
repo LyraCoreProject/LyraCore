@@ -67,6 +67,19 @@ pub mod event_kind {
     /// The guild roster changed → the gateway re-renders from the row's payload
     /// ([`super::encode_roster`]), built in the SAME transaction as the membership change.
     pub const ROSTER: u8 = 0;
+
+    /// A member left of their own accord → `SMSG_GUILD_EVENT(Left)`. `other_guid`/`other_name` name
+    /// the member who left; sent to everyone who stayed.
+    pub const LEFT: u8 = 5;
+    /// The guild master removed a member → `SMSG_GUILD_EVENT(Removed)`. `other_guid`/`other_name`
+    /// name the member who was removed.
+    pub const REMOVED: u8 = 6;
+    /// The guild was destroyed → `SMSG_GUILD_EVENT(Disbanded)`. Sent to every member the guild had
+    /// while it still had them, because after the cascade there is no roster left to address.
+    pub const DISBANDED: u8 = 7;
+    /// The guild has a new master → `SMSG_GUILD_EVENT(LeaderChanged)`. `other_guid`/`other_name`
+    /// name the new master.
+    pub const LEADER_CHANGED: u8 = 8;
 }
 
 /// The REALM-CORE guild ops: the `op` byte of the single operator-gated `realm_guild_op` reducer
@@ -78,9 +91,22 @@ pub mod event_kind {
 ///
 /// Argument slots (`realm_guild_op(op, actor_guid, target_guid, arg_a, text)`), per op:
 /// - [`CREATE`] — `text` is the guild name; `target_guid` and `arg_a` unused.
+/// - [`LEAVE`] — `text` is the leaver's OWN name, for the departure notice; the rest unused.
+/// - [`REMOVE`] — `target_guid` is the member to remove, `text` their name; `arg_a` unused.
+/// - [`DISBAND`] — every slot but `actor_guid` unused.
+/// - [`LEADER`] — `target_guid` is the new master, `text` their name; `arg_a` unused.
 pub mod realm_op {
     /// `CMSG_GUILD_CREATE` — `actor_guid` founds a guild named `text` and becomes its master.
     pub const CREATE: u8 = 0;
+
+    /// `CMSG_GUILD_LEAVE` — `actor_guid` removes itself from its own guild.
+    pub const LEAVE: u8 = 4;
+    /// `CMSG_GUILD_REMOVE` — `actor_guid`, the guild master, removes `target_guid`.
+    pub const REMOVE: u8 = 5;
+    /// `CMSG_GUILD_DISBAND` — `actor_guid`, the guild master, destroys the guild.
+    pub const DISBAND: u8 = 6;
+    /// `CMSG_GUILD_LEADER` — `actor_guid`, the guild master, hands the guild to `target_guid`.
+    pub const LEADER: u8 = 7;
 }
 
 /// The guild reducers' `Err` strings the gateway maps to `GuildCommandResult` variants — EXACT
@@ -92,6 +118,15 @@ pub mod err {
     pub const NAME_INVALID: &str = "guild name invalid";
     pub const NOT_IN_GUILD: &str = "not in a guild";
     pub const NOT_GUILD_MASTER: &str = "not the guild master";
+    /// The named character is in no guild, in a DIFFERENT guild, or names nobody at all. One
+    /// refusal for all three: from the client's side they are the same typo.
+    pub const TARGET_NOT_IN_GUILD: &str = "target is not in this guild";
+    /// Guild-master succession is explicit. A master with members left behind must hand the guild
+    /// on or disband it; the realm never promotes anybody on its own.
+    pub const MASTER_MUST_TRANSFER_OR_DISBAND: &str =
+        "the guild master must transfer the guild or disband it";
+    /// A master removing themselves is a leave (or a disband), never a kick.
+    pub const CANNOT_REMOVE_SELF: &str = "cannot remove yourself from the guild";
 }
 
 /// Encode a `ROSTER` payload: `motd|guid,rank,public_note,officer_note;...`.
@@ -202,5 +237,55 @@ mod tests {
     #[test]
     fn realm_guild_op_codes_are_stable() {
         assert_eq!(realm_op::CREATE, 0);
+    }
+
+    /// The teardown block, pinned for the same reason: these numbers are on the wire between two
+    /// separately deployed crates, and they are also the block this ticket owns — a renumber would
+    /// silently collide with another op's.
+    #[test]
+    fn the_teardown_op_codes_and_event_kinds_are_stable() {
+        assert_eq!(
+            (
+                realm_op::LEAVE,
+                realm_op::REMOVE,
+                realm_op::DISBAND,
+                realm_op::LEADER
+            ),
+            (4, 5, 6, 7)
+        );
+        assert_eq!(
+            (
+                event_kind::LEFT,
+                event_kind::REMOVED,
+                event_kind::DISBANDED,
+                event_kind::LEADER_CHANGED
+            ),
+            (5, 6, 7, 8)
+        );
+    }
+
+    /// The gateway classifies a refusal by SUBSTRING, so one error string containing another would
+    /// silently answer the wrong `GuildCommandResult` — a kick refusal rendered as "you are in no
+    /// guild", say. No string may be a substring of any other.
+    #[test]
+    fn no_classified_error_string_shadows_another() {
+        let all = [
+            err::ALREADY_IN_GUILD,
+            err::NAME_TAKEN,
+            err::NAME_INVALID,
+            err::NOT_IN_GUILD,
+            err::NOT_GUILD_MASTER,
+            err::TARGET_NOT_IN_GUILD,
+            err::MASTER_MUST_TRANSFER_OR_DISBAND,
+            err::CANNOT_REMOVE_SELF,
+        ];
+        for (i, outer) in all.iter().enumerate() {
+            for (j, inner) in all.iter().enumerate() {
+                assert!(
+                    i == j || !outer.contains(inner),
+                    "`{outer}` contains `{inner}` — the gateway's classifier cannot tell them apart"
+                );
+            }
+        }
     }
 }

@@ -23,7 +23,8 @@ use crate::game_character;
 // strings are the SHARED wire contract: `lyracore_shared::guild` is the one definition both crates
 // import, so a reword or a renumber is a cross-crate compile error rather than a runtime drift.
 use lyracore_shared::guild::{
-    err as guild_err, valid_guild_name, DEFAULT_RANK_NAMES, DEFAULT_RANK_RIGHTS, GUILD_MASTER_RANK,
+    err as guild_err, event_kind, valid_guild_name, DEFAULT_RANK_NAMES, DEFAULT_RANK_RIGHTS,
+    GUILD_MASTER_RANK,
 };
 
 /// A guild. `name` is unique realm-wide, which one index buys because realm-core is one database.
@@ -326,6 +327,194 @@ fn disband(ctx: &ReducerContext, guild_id: u64) {
     ctx.db.game_guild().guild_id().delete(guild_id);
 }
 
+/// Queue one guild notification for `recipient_guid`.
+///
+/// `other_name` is passed IN rather than read from `game_character`, which is the one place this
+/// differs from [`crate::group::push_event`]: realm-core holds no character rows, so the gateway
+/// resolves the name and carries it in [`realm_guild_op`]'s `text` slot. The identity is bound where
+/// there IS a character row (a single-database gateway) and falls back to the unaddressable
+/// placeholder where there is not — the realm-core relay filters on `recipient_guid`.
+///
+/// The binding read goes through the by-guid transfer chokepoint, so a mid-transfer recipient reads
+/// as absent and gets the placeholder identity. That costs nothing: the guid is what addresses the
+/// row, and the destination's session picks it up from there.
+fn push_guild_event(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    kind: u8,
+    other_guid: u64,
+    other_name: &str,
+) {
+    let bound = crate::helpers::character_by_guid(ctx, recipient_guid).map(|c| c.owner_identity);
+    ctx.db.game_guild_event().insert(GuildEvent {
+        id: 0,
+        recipient_identity: crate::helpers::event_recipient_identity(bound),
+        recipient_guid,
+        kind,
+        other_guid,
+        other_name: other_name.to_string(),
+        payload: String::new(),
+        created_at: ctx.timestamp,
+    });
+}
+
+/// The guild `actor_guid` is the MASTER of. The only permission check in the guild system: rank
+/// rights are written at creation and never consulted.
+fn master_guild_of(ctx: &ReducerContext, actor_guid: u64) -> Result<u64, String> {
+    let member = guild_of(ctx, actor_guid).ok_or(guild_err::NOT_IN_GUILD)?;
+    let guild = ctx
+        .db
+        .game_guild()
+        .guild_id()
+        .find(member.guild_id)
+        .ok_or(guild_err::NOT_IN_GUILD)?;
+    if guild.master_guid != actor_guid {
+        return Err(guild_err::NOT_GUILD_MASTER.to_string());
+    }
+    Ok(member.guild_id)
+}
+
+/// Move `character_guid` to `rank` on both the member row and its character row.
+fn set_member_rank(ctx: &ReducerContext, character_guid: u64, rank: u32) {
+    let Some(mut m) = guild_of(ctx, character_guid) else {
+        return;
+    };
+    m.rank_index = rank;
+    let guild_id = m.guild_id;
+    ctx.db.game_guild_member().id().update(m);
+    set_character_guild(ctx, character_guid, guild_id, rank);
+}
+
+/// `CMSG_GUILD_LEAVE` — the caller removes themselves.
+///
+/// **Succession is explicit.** A master with other members left behind is REFUSED: they must hand
+/// the guild on with [`set_guild_master`] or destroy it with [`disband_guild`]. Promoting somebody
+/// silently is a guild-politics call the realm has no business making. A master who is the LAST
+/// member may leave, and [`remove_member`] disbands the guild as the last row goes.
+pub(crate) fn leave_guild(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    actor_name: &str,
+) -> Result<(), String> {
+    let member = guild_of(ctx, actor_guid).ok_or(guild_err::NOT_IN_GUILD)?;
+    let guild_id = member.guild_id;
+    let guild = ctx
+        .db
+        .game_guild()
+        .guild_id()
+        .find(guild_id)
+        .ok_or(guild_err::NOT_IN_GUILD)?;
+    let members = members_of(ctx, guild_id);
+    if guild.master_guid == actor_guid && members.len() > 1 {
+        return Err(guild_err::MASTER_MUST_TRANSFER_OR_DISBAND.to_string());
+    }
+    // Notified before the row goes, so the roster the notice fans out to is the one that still has
+    // the leaver in it — after `remove_member` a last-member leave has no guild left to read.
+    for other in members.iter().filter(|o| o.character_guid != actor_guid) {
+        push_guild_event(
+            ctx,
+            other.character_guid,
+            event_kind::LEFT,
+            actor_guid,
+            actor_name,
+        );
+    }
+    remove_member(ctx, actor_guid);
+    Ok(())
+}
+
+/// `CMSG_GUILD_REMOVE` — the guild master removes another member.
+///
+/// A master removing THEMSELVES is refused: that is a leave or a disband, and routing it here would
+/// walk straight into `remove_member`'s succession path, promoting somebody by accident.
+pub(crate) fn remove_from_guild(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    target_guid: u64,
+    target_name: &str,
+) -> Result<(), String> {
+    let guild_id = master_guild_of(ctx, actor_guid)?;
+    if target_guid == actor_guid {
+        return Err(guild_err::CANNOT_REMOVE_SELF.to_string());
+    }
+    if guild_of(ctx, target_guid).map(|m| m.guild_id) != Some(guild_id) {
+        return Err(guild_err::TARGET_NOT_IN_GUILD.to_string());
+    }
+    for other in members_of(ctx, guild_id)
+        .iter()
+        .filter(|o| o.character_guid != target_guid)
+    {
+        push_guild_event(
+            ctx,
+            other.character_guid,
+            event_kind::REMOVED,
+            target_guid,
+            target_name,
+        );
+    }
+    remove_member(ctx, target_guid);
+    Ok(())
+}
+
+/// `CMSG_GUILD_DISBAND` — the guild master destroys the guild.
+///
+/// The cascade has to leave ZERO rows behind. `GuildMember.character_guid` is unique across the
+/// table (enforced by [`guild_of`], not by a constraint), so one orphaned member row is a character
+/// that can never join a guild again. Members go first — each one's own guild columns zeroed with
+/// it — and [`disband`] then takes the ranks, the pending invites and the guild row.
+pub(crate) fn disband_guild(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+    let guild_id = master_guild_of(ctx, actor_guid)?;
+    for member in members_of(ctx, guild_id) {
+        push_guild_event(
+            ctx,
+            member.character_guid,
+            event_kind::DISBANDED,
+            actor_guid,
+            "",
+        );
+        ctx.db.game_guild_member().id().delete(member.id);
+        set_character_guild(ctx, member.character_guid, 0, 0);
+    }
+    disband(ctx, guild_id);
+    Ok(())
+}
+
+/// `CMSG_GUILD_LEADER` — the guild master hands the guild to another member.
+///
+/// The new master takes rank 0 and the old one drops to the second rank, which is what vanilla
+/// does: a former master keeps officer standing rather than being demoted to the bottom.
+pub(crate) fn set_guild_master(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    target_guid: u64,
+    target_name: &str,
+) -> Result<(), String> {
+    let guild_id = master_guild_of(ctx, actor_guid)?;
+    if target_guid == actor_guid {
+        return Ok(()); // handing the guild to yourself changes nothing
+    }
+    if guild_of(ctx, target_guid).map(|m| m.guild_id) != Some(guild_id) {
+        return Err(guild_err::TARGET_NOT_IN_GUILD.to_string());
+    }
+    let Some(mut guild) = ctx.db.game_guild().guild_id().find(guild_id) else {
+        return Err(guild_err::NOT_IN_GUILD.to_string());
+    };
+    guild.master_guid = target_guid;
+    ctx.db.game_guild().guild_id().update(guild);
+    promote_to_master(ctx, target_guid);
+    set_member_rank(ctx, actor_guid, GUILD_MASTER_RANK + 1);
+    for member in members_of(ctx, guild_id) {
+        push_guild_event(
+            ctx,
+            member.character_guid,
+            event_kind::LEADER_CHANGED,
+            target_guid,
+            target_name,
+        );
+    }
+    Ok(())
+}
+
 // ===========================================================================================
 //  Reducers
 // ===========================================================================================
@@ -363,6 +552,10 @@ pub fn realm_guild_op(
     let _ = (target_guid, arg_a); // slots later ops read; CREATE uses `text` alone
     match op {
         realm_op::CREATE => create_guild_for(ctx, actor_guid, &text).map(|_| ()),
+        realm_op::LEAVE => leave_guild(ctx, actor_guid, &text),
+        realm_op::REMOVE => remove_from_guild(ctx, actor_guid, target_guid, &text),
+        realm_op::DISBAND => disband_guild(ctx, actor_guid),
+        realm_op::LEADER => set_guild_master(ctx, actor_guid, target_guid, &text),
         other => Err(format!("unknown realm guild op {other}")),
     }
 }
@@ -464,5 +657,132 @@ mod tests {
             arm.starts_with("create_guild_for(ctx, actor_guid, &text)"),
             "`realm_op::CREATE` no longer runs the create core. Arm was:\n{arm}"
         );
+    }
+
+    /// The teardown ops' own half of the dispatch pin: each byte reaches its own core, with the
+    /// argument slots the shared contract documents (`target_guid` = the member acted on, `text` =
+    /// the name that goes on the notice).
+    #[test]
+    fn every_teardown_op_byte_dispatches_to_its_own_core() {
+        let body = code_of(include_str!("guild.rs"), "pub fn realm_guild_op(");
+        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        for (op, call) in [
+            ("realm_op::LEAVE =>", "leave_guild(ctx, actor_guid, &text)"),
+            (
+                "realm_op::REMOVE =>",
+                "remove_from_guild(ctx, actor_guid, target_guid, &text)",
+            ),
+            ("realm_op::DISBAND =>", "disband_guild(ctx, actor_guid)"),
+            (
+                "realm_op::LEADER =>",
+                "set_guild_master(ctx, actor_guid, target_guid, &text)",
+            ),
+        ] {
+            assert!(
+                normalized.contains(&format!("{op} {call}")),
+                "`{op}` no longer runs `{call}`. Body was:\n{body}"
+            );
+        }
+    }
+
+    /// **The disband cascade is the failure mode this ticket exists to prevent.**
+    /// `GuildMember.character_guid` is unique across the table and enforced in CODE, so one member
+    /// row left behind is a character that can never join another guild. The cascade is unreachable
+    /// without a live node, so its SHAPE is what gets pinned: every member row deleted, every
+    /// member's own guild columns zeroed, then `disband` for the ranks, invites and guild row.
+    #[test]
+    fn the_disband_cascade_clears_members_columns_ranks_invites_and_the_guild_row() {
+        let body = code_of(include_str!("guild.rs"), "pub(crate) fn disband_guild(");
+        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        for step in [
+            "for member in members_of(ctx, guild_id)",
+            "ctx.db.game_guild_member().id().delete(member.id)",
+            "set_character_guild(ctx, member.character_guid, 0, 0)",
+            "disband(ctx, guild_id)",
+        ] {
+            assert!(
+                normalized.contains(step),
+                "`disband_guild` no longer does `{step}` — an orphaned row here locks a character \
+                 out of every future guild. Body was:\n{body}"
+            );
+        }
+        // And `disband` itself is what takes the rows a member row does not own.
+        let cascade = code_of(include_str!("guild.rs"), "fn disband(");
+        for table in ["game_guild_rank()", "game_guild_invite()", "game_guild()"] {
+            assert!(
+                cascade.contains(table),
+                "`disband` no longer clears `{table}`. Body was:\n{cascade}"
+            );
+        }
+    }
+
+    /// A deleted character leaves through the SAME core a voluntary leave uses. A bare row delete
+    /// would strip a guild of its master with no succession and no last-member disband.
+    #[test]
+    fn deleting_a_character_routes_through_the_removal_core() {
+        let sweep = code_of(
+            include_str!("guild.rs"),
+            "fn sweep_delete_game_guild_member(ctx, character_guid)",
+        );
+        let normalized: String = sweep.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(
+            normalized, "{ remove_member(ctx, character_guid); }",
+            "the character-delete sweep must be exactly the removal core. Body was:\n{sweep}"
+        );
+        // …and the removal core is the one that succeeds a master and disbands a last-member guild.
+        let core = code_of(include_str!("guild.rs"), "pub(crate) fn remove_member(");
+        for step in ["disband(ctx, guild_id)", "promote_to_master(ctx, heir)"] {
+            assert!(
+                core.contains(step),
+                "`remove_member` no longer does `{step}`. Body was:\n{core}"
+            );
+        }
+    }
+
+    /// Succession is a DECISION, not a gap: the realm refuses a master who would leave members
+    /// behind rather than promoting somebody for them.
+    #[test]
+    fn a_master_with_members_left_behind_is_refused_rather_than_succeeded() {
+        let body = code_of(include_str!("guild.rs"), "pub(crate) fn leave_guild(");
+        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            normalized.contains(
+                "if guild.master_guid == actor_guid && members.len() > 1 { return \
+                 Err(guild_err::MASTER_MUST_TRANSFER_OR_DISBAND.to_string()); }"
+            ),
+            "`leave_guild` no longer refuses a master with members remaining. Body was:\n{body}"
+        );
+    }
+
+    /// The teardown gates refuse with the shared error strings, exactly as the create gate does —
+    /// the gateway picks a `GuildCommandResult` by matching them.
+    #[test]
+    fn the_teardown_gates_refuse_with_the_shared_error_strings() {
+        for (f, gates) in [
+            (
+                "fn master_guild_of(",
+                ["guild_err::NOT_IN_GUILD", "guild_err::NOT_GUILD_MASTER"].as_slice(),
+            ),
+            (
+                "pub(crate) fn remove_from_guild(",
+                &[
+                    "guild_err::CANNOT_REMOVE_SELF",
+                    "guild_err::TARGET_NOT_IN_GUILD",
+                ],
+            ),
+            (
+                "pub(crate) fn set_guild_master(",
+                &["guild_err::TARGET_NOT_IN_GUILD"],
+            ),
+        ] {
+            let body = code_of(include_str!("guild.rs"), f);
+            for gate in gates {
+                assert!(
+                    body.contains(gate),
+                    "`{f}` no longer refuses with `{gate}` — the gateway classifies \
+                     SMSG_GUILD_COMMAND_RESULT off these exact strings. Body was:\n{body}"
+                );
+            }
+        }
     }
 }

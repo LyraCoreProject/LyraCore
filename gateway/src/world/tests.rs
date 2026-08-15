@@ -593,6 +593,20 @@ struct InMemoryStore {
 }
 
 impl InMemoryStore {
+    /// Stamp the guild columns of every character a guild op moved, as the module's cores do in the
+    /// same transaction. A no-op on realm-core, which holds no `game_character` rows to stamp.
+    fn stamp_guild_columns(&self, moved: &[u64]) -> Result<()> {
+        if self.is_realm {
+            return Ok(());
+        }
+        for guid in moved {
+            let membership = self.guild.lock().unwrap().guild_of(*guid);
+            let (guild_id, rank) = membership.unwrap_or((0, 0));
+            self.sync_guild_membership(*guid, guild_id, rank)?;
+        }
+        Ok(())
+    }
+
     /// Record one player-scoped call against THIS handle's shard.
     fn rec(&self, what: &str) {
         self.calls
@@ -2292,6 +2306,29 @@ impl WorldStore for InMemoryStore {
             realm_op::CREATE => g
                 .create(actor_guid, &text, GUILD_FIXTURE_MICROS)
                 .map(|_| ()),
+            // Teardown. The module's cores stamp a moved character's own guild columns in the SAME
+            // transaction, so the arms hand back who moved and the stamp happens here — on a
+            // database that HAS character rows. Realm-core has none, and the gateway pushes there.
+            realm_op::LEAVE => {
+                let moved = g.leave(actor_guid, &text)?;
+                drop(g);
+                self.stamp_guild_columns(&moved)
+            }
+            realm_op::REMOVE => {
+                let moved = g.remove(actor_guid, target_guid, &text)?;
+                drop(g);
+                self.stamp_guild_columns(&moved)
+            }
+            realm_op::DISBAND => {
+                let moved = g.disband(actor_guid)?;
+                drop(g);
+                self.stamp_guild_columns(&moved)
+            }
+            realm_op::LEADER => {
+                let moved = g.set_master(actor_guid, target_guid, &text)?;
+                drop(g);
+                self.stamp_guild_columns(&moved)
+            }
             other => Err(anyhow!("unknown realm guild op {other}")),
         }
     }
@@ -2315,6 +2352,10 @@ impl WorldStore for InMemoryStore {
 
     fn guild_membership(&self, character_guid: u64) -> Result<Option<(u64, u32)>> {
         Ok(self.guild.lock().unwrap().guild_of(character_guid))
+    }
+
+    fn guild_member_guids(&self, guild_id: u64) -> Result<Vec<u64>> {
+        Ok(self.guild.lock().unwrap().member_guids(guild_id))
     }
 
     fn sync_guild_membership(
@@ -2684,6 +2725,46 @@ impl handlers::GuildActionStore for InMemoryStore {
 
     fn guild_of(&self, character_guid: u64) -> Result<Option<u64>> {
         super::guild::guild_of(self, character_guid)
+    }
+
+    fn guild_leave(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        let actor_name = super::guild::own_name(self, self_guid)?;
+        super::guild::run(
+            self,
+            account_id,
+            self_guid,
+            super::guild::Op::Leave { actor_name },
+        )
+    }
+
+    fn guild_remove(&self, account_id: u64, self_guid: u64, target_name: &str) -> Result<()> {
+        let target_guid = super::guild::member_by_name(self, self_guid, target_name)?;
+        super::guild::run(
+            self,
+            account_id,
+            self_guid,
+            super::guild::Op::Remove {
+                target_guid,
+                target_name: target_name.to_string(),
+            },
+        )
+    }
+
+    fn guild_disband(&self, account_id: u64, self_guid: u64) -> Result<()> {
+        super::guild::run(self, account_id, self_guid, super::guild::Op::Disband)
+    }
+
+    fn guild_set_master(&self, account_id: u64, self_guid: u64, target_name: &str) -> Result<()> {
+        let target_guid = super::guild::member_by_name(self, self_guid, target_name)?;
+        super::guild::run(
+            self,
+            account_id,
+            self_guid,
+            super::guild::Op::Leader {
+                target_guid,
+                target_name: target_name.to_string(),
+            },
+        )
     }
 }
 
@@ -4613,6 +4694,45 @@ fn guild_create_dispatches_over_the_cipher_and_replies_with_a_typed_command_resu
         store.guild.lock().unwrap().guild_of(1),
         Some((1, 0)),
         "the founder holds rank 0 of the guild the socket just created"
+    );
+}
+
+/// The ONE encrypted-socket test for the guild TEARDOWN family. Same job as the create one: it
+/// proves `CMSG_GUILD_LEAVE` reaches the seam through the real session loop and that the answer
+/// decodes as an `SMSG_GUILD_COMMAND_RESULT`. Every gate and every refusal code is covered at the
+/// seam in `handlers/guild.rs` and in the routing tests, without a socket.
+#[test]
+fn guild_leave_dispatches_over_the_cipher_and_replies_with_a_typed_command_result() {
+    use wow_world_messages::vanilla::{GuildCommand, GuildCommandResult, CMSG_GUILD_LEAVE};
+
+    let store = std::sync::Arc::new(quest_store());
+    store
+        .guild
+        .lock()
+        .unwrap()
+        .create(1, "The Silver Hand", GUILD_FIXTURE_MICROS)
+        .unwrap();
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    CMSG_GUILD_LEAVE {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(r) => {
+            assert_eq!(r.command, GuildCommand::Quit);
+            // Wire code 0 — vanilla's "no message/error", i.e. the leave succeeded.
+            assert_eq!(r.result, GuildCommandResult::PlayerNoMoreInGuild);
+        }
+        other => panic!("expected SMSG_GUILD_COMMAND_RESULT, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+
+    assert_eq!(
+        store.guild.lock().unwrap().guild_of(1),
+        None,
+        "the last member left, and the guild went with them"
     );
 }
 
@@ -7525,6 +7645,12 @@ struct FakeGuild {
     /// Every op that reached the AUTHORITY: `(op, actor, target, arg_a, text)`. The assertion that
     /// a guild op ran on realm-core rather than on the player's shard.
     ops: Vec<(u8, u64, u64, u32, String)>,
+    /// Every notification the authority queued: `(recipient_guid, kind, other_guid, other_name)`.
+    /// `game_guild_event`'s rows, which is what a broadcast IS before a relay renders it.
+    events: Vec<(u64, u8, u64, String)>,
+    /// Guild ids that have been disbanded, so a test can tell "the guild row went" from "the guild
+    /// row was never there".
+    disbanded: Vec<u64>,
 }
 
 impl FakeGuild {
@@ -7571,6 +7697,145 @@ impl FakeGuild {
             // Seeded from the shared vanilla list, exactly as the module's `seed_ranks` does.
             rank_names: DEFAULT_RANK_NAMES.iter().map(|n| n.to_string()).collect(),
         })
+    }
+
+    /// Member guids of `guild_id`, in join order.
+    fn member_guids(&self, guild_id: u64) -> Vec<u64> {
+        self.members
+            .iter()
+            .filter(|(g, ..)| *g == guild_id)
+            .map(|(_, guid, _)| *guid)
+            .collect()
+    }
+
+    fn master_of(&self, guild_id: u64) -> Option<u64> {
+        self.guilds
+            .iter()
+            .find(|(g, ..)| *g == guild_id)
+            .map(|(_, _, master, _)| *master)
+    }
+
+    fn notify(&mut self, recipients: Vec<u64>, kind: u8, other_guid: u64, other_name: &str) {
+        for recipient in recipients {
+            self.events
+                .push((recipient, kind, other_guid, other_name.to_string()));
+        }
+    }
+
+    /// The module's `remove_member`, modelled: the row goes, and the guild goes with it when that
+    /// row was the last one. Master succession on a DELETED character is the module's business and
+    /// is pinned there; nothing the gateway routes reaches this with a master still in the guild.
+    fn remove_member(&mut self, character_guid: u64) {
+        let Some((guild_id, ..)) = self
+            .members
+            .iter()
+            .find(|(_, guid, _)| *guid == character_guid)
+            .copied()
+        else {
+            return;
+        };
+        self.members.retain(|(_, guid, _)| *guid != character_guid);
+        if self.member_guids(guild_id).is_empty() {
+            self.guilds.retain(|(g, ..)| *g != guild_id);
+            self.disbanded.push(guild_id);
+        }
+    }
+
+    /// The module's `leave_guild`, modelled — including the refusal that makes succession explicit.
+    fn leave(&mut self, actor_guid: u64, actor_name: &str) -> Result<Vec<u64>> {
+        use lyracore_shared::guild::{err as guild_err, event_kind};
+        let Some((guild_id, _)) = self.guild_of(actor_guid) else {
+            return Err(anyhow!("{}", guild_err::NOT_IN_GUILD));
+        };
+        let members = self.member_guids(guild_id);
+        if self.master_of(guild_id) == Some(actor_guid) && members.len() > 1 {
+            return Err(anyhow!("{}", guild_err::MASTER_MUST_TRANSFER_OR_DISBAND));
+        }
+        let staying: Vec<u64> = members.into_iter().filter(|g| *g != actor_guid).collect();
+        self.notify(staying, event_kind::LEFT, actor_guid, actor_name);
+        self.remove_member(actor_guid);
+        Ok(vec![actor_guid])
+    }
+
+    /// The module's `remove_from_guild`, modelled: master only, never yourself, members only.
+    fn remove(&mut self, actor_guid: u64, target_guid: u64, target_name: &str) -> Result<Vec<u64>> {
+        use lyracore_shared::guild::{err as guild_err, event_kind};
+        let guild_id = self.master_guild_of(actor_guid)?;
+        if target_guid == actor_guid {
+            return Err(anyhow!("{}", guild_err::CANNOT_REMOVE_SELF));
+        }
+        if self.guild_of(target_guid).map(|(g, _)| g) != Some(guild_id) {
+            return Err(anyhow!("{}", guild_err::TARGET_NOT_IN_GUILD));
+        }
+        let staying: Vec<u64> = self
+            .member_guids(guild_id)
+            .into_iter()
+            .filter(|g| *g != target_guid)
+            .collect();
+        self.notify(staying, event_kind::REMOVED, target_guid, target_name);
+        self.remove_member(target_guid);
+        Ok(vec![target_guid])
+    }
+
+    /// The module's `disband_guild`, modelled: every member row goes, then the guild row.
+    fn disband(&mut self, actor_guid: u64) -> Result<Vec<u64>> {
+        use lyracore_shared::guild::event_kind;
+        let guild_id = self.master_guild_of(actor_guid)?;
+        let members = self.member_guids(guild_id);
+        self.notify(members.clone(), event_kind::DISBANDED, actor_guid, "");
+        self.members.retain(|(g, ..)| *g != guild_id);
+        self.guilds.retain(|(g, ..)| *g != guild_id);
+        self.disbanded.push(guild_id);
+        Ok(members)
+    }
+
+    /// The module's `set_guild_master`, modelled: the new master takes rank 0, the old one the
+    /// second rank.
+    fn set_master(
+        &mut self,
+        actor_guid: u64,
+        target_guid: u64,
+        target_name: &str,
+    ) -> Result<Vec<u64>> {
+        use lyracore_shared::guild::{err as guild_err, event_kind, GUILD_MASTER_RANK};
+        let guild_id = self.master_guild_of(actor_guid)?;
+        if target_guid == actor_guid {
+            return Ok(vec![actor_guid]);
+        }
+        if self.guild_of(target_guid).map(|(g, _)| g) != Some(guild_id) {
+            return Err(anyhow!("{}", guild_err::TARGET_NOT_IN_GUILD));
+        }
+        for (_, name, master, _) in self.guilds.iter_mut().filter(|(g, ..)| *g == guild_id) {
+            let _ = name;
+            *master = target_guid;
+        }
+        for (_, guid, rank) in self.members.iter_mut() {
+            if *guid == target_guid {
+                *rank = GUILD_MASTER_RANK;
+            } else if *guid == actor_guid {
+                *rank = GUILD_MASTER_RANK + 1;
+            }
+        }
+        let members = self.member_guids(guild_id);
+        self.notify(
+            members,
+            event_kind::LEADER_CHANGED,
+            target_guid,
+            target_name,
+        );
+        Ok(vec![actor_guid, target_guid])
+    }
+
+    /// The module's `master_guild_of`: the only permission check in the guild system.
+    fn master_guild_of(&self, actor_guid: u64) -> Result<u64> {
+        use lyracore_shared::guild::err as guild_err;
+        let Some((guild_id, _)) = self.guild_of(actor_guid) else {
+            return Err(anyhow!("{}", guild_err::NOT_IN_GUILD));
+        };
+        if self.master_of(guild_id) != Some(actor_guid) {
+            return Err(anyhow!("{}", guild_err::NOT_GUILD_MASTER));
+        }
+        Ok(guild_id)
     }
 }
 

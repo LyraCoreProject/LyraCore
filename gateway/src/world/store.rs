@@ -228,6 +228,14 @@ pub trait WorldStore:
         Ok(None)
     }
 
+    /// Every member guid of `guild_id` on THIS handle's database, in join order.
+    ///
+    /// Read by the DISBAND fan-out, which has to know who to clear the guild columns for BEFORE the
+    /// op runs — afterwards the roster it would read them from no longer exists.
+    fn guild_member_guids(&self, _guild_id: u64) -> Result<Vec<u64>> {
+        Ok(Vec::new())
+    }
+
     /// `sync_guild_membership` — stamp one character's own guild id and rank onto this database's
     /// `game_character` row. A no-op default, matching `sync_group_mirror`'s shape: a store that
     /// holds no character rows has nothing to stamp.
