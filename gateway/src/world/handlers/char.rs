@@ -169,6 +169,9 @@ fn enter_world<St: WorldStore + ?Sized>(
     if let Err(e) = crate::world::guild::on_world_entry(store, character_guid) {
         log::warn!("world: guild sync at world entry failed for guid {character_guid}: {e:#}");
     }
+    // ...and tell the rest of their guild they are here. Best-effort inside, like everything else
+    // on this path: a missing status line is not worth a failed login.
+    crate::world::guild::broadcast_presence(store, character_guid, true);
     // Enter the world: CharSelect → InWorld (a reused connection has no open loot/attack — a world-port
     // re-entry likewise starts clean, since whatever the player was attacking/looting on the old map is
     // meaningless on the new one).

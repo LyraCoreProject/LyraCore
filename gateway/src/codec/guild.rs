@@ -2,8 +2,8 @@
 
 use lyracore_shared::guild::GUILD_RANK_COUNT;
 use wow_world_messages::vanilla::{
-    GuildCommand, GuildCommandResult, SMSG_GUILD_COMMAND_RESULT, SMSG_GUILD_INFO,
-    SMSG_GUILD_QUERY_RESPONSE,
+    GuildCommand, GuildCommandResult, GuildEvent, SMSG_GUILD_COMMAND_RESULT, SMSG_GUILD_EVENT,
+    SMSG_GUILD_INFO, SMSG_GUILD_INVITE, SMSG_GUILD_QUERY_RESPONSE,
 };
 
 /// Build `SMSG_GUILD_QUERY_RESPONSE` for a guild the client asked about by id.
@@ -67,6 +67,28 @@ pub fn build_guild_command_result(
         command,
         string: subject.to_string(),
         result,
+    }
+}
+
+/// Build `SMSG_GUILD_INVITE` — the popup the invited character answers with
+/// `CMSG_GUILD_ACCEPT`/`CMSG_GUILD_DECLINE`.
+///
+/// Both strings are carried on the event row rather than looked up here: the invite is written on
+/// realm-core, which holds no character rows to resolve an inviter's name from.
+pub fn build_guild_invite(inviter_name: &str, guild_name: &str) -> SMSG_GUILD_INVITE {
+    SMSG_GUILD_INVITE {
+        player_name: inviter_name.to_string(),
+        guild_name: guild_name.to_string(),
+    }
+}
+
+/// Build `SMSG_GUILD_EVENT` — the guild's broadcast channel. `descriptions` is the client's own
+/// interpolation list for the event's localized line (one player name, for every event this system
+/// sends).
+pub fn build_guild_event(event: GuildEvent, descriptions: &[String]) -> SMSG_GUILD_EVENT {
+    SMSG_GUILD_EVENT {
+        event,
+        event_descriptions: descriptions.to_vec(),
     }
 }
 

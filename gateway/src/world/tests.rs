@@ -2292,6 +2292,12 @@ impl WorldStore for InMemoryStore {
             realm_op::CREATE => g
                 .create(actor_guid, &text, GUILD_FIXTURE_MICROS)
                 .map(|_| ()),
+            realm_op::INVITE => g.invite(actor_guid, target_guid),
+            realm_op::ANSWER => g.answer(actor_guid, arg_a == realm_op::ANSWER_ACCEPT),
+            realm_op::PRESENCE => {
+                g.presence(actor_guid, arg_a == realm_op::PRESENCE_ON);
+                Ok(())
+            }
             other => Err(anyhow!("unknown realm guild op {other}")),
         }
     }
@@ -2684,6 +2690,14 @@ impl handlers::GuildActionStore for InMemoryStore {
 
     fn guild_of(&self, character_guid: u64) -> Result<Option<u64>> {
         super::guild::guild_of(self, character_guid)
+    }
+
+    fn guild_invite(&self, account_id: u64, self_guid: u64, name: &str) -> Result<()> {
+        super::guild::invite(self, account_id, self_guid, name)
+    }
+
+    fn guild_answer_invite(&self, account_id: u64, self_guid: u64, accept: bool) -> Result<()> {
+        super::guild::answer_invite(self, account_id, self_guid, accept)
     }
 }
 
@@ -4613,6 +4627,58 @@ fn guild_create_dispatches_over_the_cipher_and_replies_with_a_typed_command_resu
         store.guild.lock().unwrap().guild_of(1),
         Some((1, 0)),
         "the founder holds rank 0 of the guild the socket just created"
+    );
+}
+
+/// The ONE encrypted-socket test for the invite handshake. Like its create sibling it proves
+/// DISPATCH and the TYPED REPLY over the cipher — that `CMSG_GUILD_INVITE` reaches the guild seam
+/// through the real session loop, that the typed name is resolved, and that the answer decodes as
+/// an `SMSG_GUILD_COMMAND_RESULT`. The gates themselves are covered at the seam, without a socket.
+#[test]
+fn guild_invite_dispatches_over_the_cipher_and_replies_with_a_typed_command_result() {
+    use wow_world_messages::vanilla::{GuildCommand, GuildCommandResult, CMSG_GUILD_INVITE};
+
+    let store = std::sync::Arc::new(InMemoryStore {
+        characters: vec![codec::CharacterView {
+            guid: 2,
+            name: "Vim".into(),
+            ..Default::default()
+        }],
+        ..quest_store()
+    });
+    // Tester (guid 1) already leads a guild — the invite gate is the master check, and founding
+    // one over the socket first would make this two tests.
+    store
+        .guild
+        .lock()
+        .unwrap()
+        .create(1, "The Silver Hand", GUILD_FIXTURE_MICROS)
+        .unwrap();
+
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    CMSG_GUILD_INVITE {
+        invited_player: "Vim".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(r) => {
+            assert_eq!(r.command, GuildCommand::Invite);
+            assert_eq!(r.string, "Vim");
+            // Wire code 0 — vanilla's "no message/error", i.e. the invite went out.
+            assert_eq!(r.result, GuildCommandResult::PlayerNoMoreInGuild);
+        }
+        other => panic!("expected SMSG_GUILD_COMMAND_RESULT, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+
+    assert_eq!(
+        store.guild.lock().unwrap().invites.as_slice(),
+        &[(2, 1, 1)],
+        "the typed name resolved to Vim, and exactly one invite is pending for them"
     );
 }
 
@@ -7525,6 +7591,11 @@ struct FakeGuild {
     /// Every op that reached the AUTHORITY: `(op, actor, target, arg_a, text)`. The assertion that
     /// a guild op ran on realm-core rather than on the player's shard.
     ops: Vec<(u8, u64, u64, u32, String)>,
+    /// Pending invites: `(target_guid, inviter_guid, guild_id)`.
+    invites: Vec<(u64, u64, u64)>,
+    /// Every notification the authority pushed: `(recipient_guid, kind, other_guid, payload)` —
+    /// the relay's input, and the only way an invite popup or a `Joined` line reaches a client.
+    events: Vec<(u64, u8, u64, String)>,
 }
 
 impl FakeGuild {
@@ -7554,6 +7625,99 @@ impl FakeGuild {
             .push((guild_id, name.to_string(), founder_guid, now_micros));
         self.members.push((guild_id, founder_guid, 0));
         Ok(guild_id)
+    }
+
+    /// The module's `invite_to_guild`, modelled: the two gates realm-core can answer for itself
+    /// (the gateway owns the other two), then one invite row and one notification.
+    fn invite(&mut self, inviter_guid: u64, target_guid: u64) -> Result<()> {
+        use lyracore_shared::guild::{err as guild_err, event_kind};
+        let (guild_id, _) = self
+            .guild_of(inviter_guid)
+            .ok_or_else(|| anyhow!("{}", guild_err::NOT_IN_GUILD))?;
+        let (_, name, master, _) = self
+            .guilds
+            .iter()
+            .find(|(g, ..)| *g == guild_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("{}", guild_err::NOT_IN_GUILD))?;
+        if master != inviter_guid {
+            return Err(anyhow!("{}", guild_err::NOT_GUILD_MASTER));
+        }
+        if self.guild_of(target_guid).is_some() {
+            return Err(anyhow!("{}", guild_err::TARGET_IN_GUILD));
+        }
+        if self.invites.iter().any(|(t, ..)| *t == target_guid) {
+            return Err(anyhow!("{}", guild_err::ALREADY_INVITED));
+        }
+        self.invites.push((target_guid, inviter_guid, guild_id));
+        self.events.push((
+            target_guid,
+            event_kind::INVITE,
+            inviter_guid,
+            // The invite popup names the guild; the inviter rides the `other_guid` slot.
+            name,
+        ));
+        Ok(())
+    }
+
+    /// The module's `answer_invite`, modelled: consume the row, then seat the character or tell
+    /// the inviter.
+    fn answer(&mut self, actor_guid: u64, accept: bool) -> Result<()> {
+        use lyracore_shared::guild::{err as guild_err, event_kind, GUILD_JOIN_RANK};
+        let at = self
+            .invites
+            .iter()
+            .position(|(t, ..)| *t == actor_guid)
+            .ok_or_else(|| anyhow!("{}", guild_err::NO_PENDING_INVITE))?;
+        let (_, inviter_guid, guild_id) = self.invites.remove(at);
+        if !accept {
+            self.events.push((
+                inviter_guid,
+                event_kind::DECLINED,
+                actor_guid,
+                String::new(),
+            ));
+            return Ok(());
+        }
+        self.members.push((guild_id, actor_guid, GUILD_JOIN_RANK));
+        let members: Vec<u64> = self
+            .members
+            .iter()
+            .filter(|(g, ..)| *g == guild_id)
+            .map(|(_, guid, _)| *guid)
+            .collect();
+        for member in members {
+            self.events
+                .push((member, event_kind::JOINED, actor_guid, String::new()));
+        }
+        Ok(())
+    }
+
+    /// The module's `broadcast_presence`, modelled: everyone in the guild except the actor.
+    fn presence(&mut self, actor_guid: u64, online: bool) {
+        use lyracore_shared::guild::event_kind;
+        let Some((guild_id, _)) = self.guild_of(actor_guid) else {
+            return;
+        };
+        let payload = if online {
+            event_kind::PRESENCE_ONLINE
+        } else {
+            event_kind::PRESENCE_OFFLINE
+        };
+        let members: Vec<u64> = self
+            .members
+            .iter()
+            .filter(|(g, guid, _)| *g == guild_id && *guid != actor_guid)
+            .map(|(_, guid, _)| *guid)
+            .collect();
+        for member in members {
+            self.events.push((
+                member,
+                event_kind::PRESENCE,
+                actor_guid,
+                payload.to_string(),
+            ));
+        }
     }
 
     fn view(&self, guild_id: u64) -> Option<super::guild::GuildView> {

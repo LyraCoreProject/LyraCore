@@ -263,6 +263,273 @@ fn an_unsharded_gateway_runs_every_guild_op_on_the_players_own_shard() {
     );
 }
 
+// --- the invite handshake ---------------------------------------------------------------------
+
+fn invite(store: &InMemoryStore, self_guid: u64, name: &str) -> Result<()> {
+    guild::invite(store, 7, self_guid, name)
+}
+
+/// **AC2, and the reason guild state sits on realm-core at all.** The master stands on `world` and
+/// the invitee is inside a dungeon on `instances`: the invite still lands, and the popup is written
+/// for the target. Resolving the typed name inside the calling database — what the pre-realm-core
+/// party code did — answers "no player named Vim" for a character who plainly exists.
+#[test]
+fn an_invite_crosses_a_shard_boundary_and_reaches_the_target() {
+    use lyracore_shared::guild::{event_kind, realm_op};
+    let (realm, world, _instances, _calls) = guild_topology();
+    create(world.as_ref(), GINGER, "The Silver Hand").unwrap();
+
+    invite(world.as_ref(), GINGER, "Vim").expect("the invitee is on the other shard, not missing");
+
+    let g = realm.guild.lock().unwrap();
+    assert_eq!(
+        g.ops.last(),
+        Some(&(realm_op::INVITE, GINGER, VIM, 0, "Ginger".to_string())),
+        "the authority ran the invite with the target resolved and the inviter's own name in `text`"
+    );
+    assert_eq!(
+        g.invites.as_slice(),
+        &[(VIM, GINGER, 1)],
+        "exactly one pending invite"
+    );
+    assert_eq!(
+        g.events.as_slice(),
+        &[(
+            VIM,
+            event_kind::INVITE,
+            GINGER,
+            "The Silver Hand".to_string()
+        )],
+        "exactly one notification, addressed to the target"
+    );
+}
+
+/// The name is resolved across every shard, and being in the world is the disambiguator: character
+/// names are unique per DATABASE, so the same name can name two people, and only one of them can
+/// answer a popup. A name nobody online carries is `no such player`, which the seam turns into
+/// `GuildPlayerNotFoundS`.
+#[test]
+fn an_invite_to_a_name_nobody_online_carries_is_refused_before_the_authority_hears_it() {
+    use lyracore_shared::guild::err;
+    let calls: ShardCallLog = Default::default();
+    let realm = std::sync::Arc::new(InMemoryStore {
+        shard: "lyracore-realm".into(),
+        calls: calls.clone(),
+        is_realm: true,
+        ..Default::default()
+    });
+    // Vim has a character row on this shard but no live entity: logged out, dialog unanswerable.
+    let world = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        realm: Some(realm.clone()),
+        characters: vec![character(GINGER, "Ginger"), character(VIM, "Vim")],
+        live_guids: vec![GINGER],
+        ..Default::default()
+    });
+    *world.peers.lock().unwrap() = vec![world.clone()];
+    create(world.as_ref(), GINGER, "The Silver Hand").unwrap();
+
+    let missing = invite(world.as_ref(), GINGER, "Nobody").expect_err("no such character anywhere");
+    assert!(format!("{missing:#}").contains(err::TARGET_NOT_FOUND));
+
+    let offline = invite(world.as_ref(), GINGER, "Vim").expect_err("nobody can answer the popup");
+    assert!(format!("{offline:#}").contains(err::TARGET_NOT_FOUND));
+
+    assert!(
+        realm.guild.lock().unwrap().invites.is_empty(),
+        "a name the gateway could not resolve never reaches the authority"
+    );
+}
+
+/// AC4/AC5: accepting seats the character at the join rank on the AUTHORITY, tells every member,
+/// and — the thing that rots silently if it is skipped — pushes the new member's own guild columns
+/// onto every connected shard, so `SMSG_CHAR_ENUM` stops saying they are guildless.
+#[test]
+fn accepting_seats_the_new_member_tells_the_guild_and_pushes_their_guild_columns() {
+    use lyracore_shared::guild::{event_kind, GUILD_JOIN_RANK};
+    let (realm, world, instances, _calls) = guild_topology();
+    create(world.as_ref(), GINGER, "The Silver Hand").unwrap();
+    invite(world.as_ref(), GINGER, "Vim").unwrap();
+
+    guild::answer_invite(instances.as_ref(), 7, VIM, true).expect("Vim joins from the other shard");
+
+    let g = realm.guild.lock().unwrap();
+    assert_eq!(g.guild_of(VIM), Some((1, GUILD_JOIN_RANK)));
+    assert!(g.invites.is_empty(), "the dialog is consumed");
+    let joined: Vec<u64> = g
+        .events
+        .iter()
+        .filter(|(_, kind, ..)| *kind == event_kind::JOINED)
+        .map(|(recipient, ..)| *recipient)
+        .collect();
+    assert_eq!(
+        joined,
+        vec![GINGER, VIM],
+        "every member hears it, the new one included"
+    );
+    drop(g);
+
+    for shard in [&world, &instances] {
+        assert!(
+            shard
+                .guild_columns
+                .lock()
+                .unwrap()
+                .contains(&(VIM, 1, GUILD_JOIN_RANK)),
+            "shard {} must carry the new member's guild id and rank",
+            shard.shard
+        );
+    }
+}
+
+/// AC6: a decline consumes the same dialog, seats nobody, and notifies the INVITER — who is on the
+/// other shard, which is the only reason the notification has to be written on the authority.
+#[test]
+fn declining_consumes_the_invite_seats_nobody_and_notifies_the_inviter() {
+    use lyracore_shared::guild::event_kind;
+    let (realm, world, instances, _calls) = guild_topology();
+    create(world.as_ref(), GINGER, "The Silver Hand").unwrap();
+    invite(world.as_ref(), GINGER, "Vim").unwrap();
+
+    guild::answer_invite(instances.as_ref(), 7, VIM, false).expect("Vim refuses");
+
+    let g = realm.guild.lock().unwrap();
+    assert_eq!(g.guild_of(VIM), None, "a decline seats nobody");
+    assert!(g.invites.is_empty(), "the dialog is consumed either way");
+    assert_eq!(
+        g.events.last(),
+        Some(&(GINGER, event_kind::DECLINED, VIM, String::new())),
+        "the inviter is the one who hears about it"
+    );
+}
+
+/// AC7: answering an invite that is not there — never sent, already answered, or reaped by the
+/// two-minute GC — refuses with the shared string the seam drops silently. Nothing is written.
+#[test]
+fn answering_an_invite_that_is_not_there_writes_nothing() {
+    use lyracore_shared::guild::err;
+    let (realm, _world, instances, _calls) = guild_topology();
+
+    let e = guild::answer_invite(instances.as_ref(), 7, VIM, true).expect_err("no dialog is open");
+
+    assert!(format!("{e:#}").contains(err::NO_PENDING_INVITE));
+    assert!(realm.guild.lock().unwrap().members.is_empty());
+}
+
+/// AC9: signing on and off tells the REST of the guild, and nobody else. The op carries the
+/// member's own name, because realm-core has no character row to read one from.
+#[test]
+fn signing_on_and_off_broadcasts_to_the_rest_of_the_guild() {
+    use lyracore_shared::guild::{event_kind, realm_op};
+    let (realm, world, instances, _calls) = guild_topology();
+    create(world.as_ref(), GINGER, "The Silver Hand").unwrap();
+    invite(world.as_ref(), GINGER, "Vim").unwrap();
+    guild::answer_invite(instances.as_ref(), 7, VIM, true).unwrap();
+    realm.guild.lock().unwrap().events.clear();
+
+    guild::broadcast_presence(instances.as_ref(), VIM, true);
+    guild::broadcast_presence(instances.as_ref(), VIM, false);
+
+    let g = realm.guild.lock().unwrap();
+    assert_eq!(
+        g.events.as_slice(),
+        &[
+            (
+                GINGER,
+                event_kind::PRESENCE,
+                VIM,
+                event_kind::PRESENCE_ONLINE.to_string()
+            ),
+            (
+                GINGER,
+                event_kind::PRESENCE,
+                VIM,
+                event_kind::PRESENCE_OFFLINE.to_string()
+            ),
+        ],
+        "only the OTHER members hear it"
+    );
+    assert_eq!(
+        g.ops.last(),
+        Some(&(
+            realm_op::PRESENCE,
+            VIM,
+            0,
+            realm_op::PRESENCE_OFF,
+            "Vim".to_string()
+        ))
+    );
+}
+
+/// A guildless character costs no reducer call at all: this runs on every login and every logout,
+/// and most characters are in no guild.
+#[test]
+fn a_guildless_character_broadcasts_no_presence_at_all() {
+    let (_realm, _world, instances, calls) = guild_topology();
+
+    guild::broadcast_presence(instances.as_ref(), VIM, true);
+
+    assert!(
+        !calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, call)| call == "realm_guild_op"),
+        "nobody to tell, so nothing to say"
+    );
+}
+
+/// **AC10, the single-database assertion for the handshake.** An unsharded gateway runs invite,
+/// accept and decline on the player's OWN shard, byte-identically — that one database already is
+/// the authority, so there is no second copy to diverge from.
+#[test]
+fn an_unsharded_gateway_runs_the_invite_handshake_on_the_players_own_shard() {
+    use lyracore_shared::guild::{event_kind, realm_op, GUILD_JOIN_RANK};
+    let calls: ShardCallLog = Default::default();
+    let store = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        characters: vec![character(GINGER, "Ginger"), character(VIM, "Vim")],
+        live_guids: vec![GINGER, VIM],
+        ..Default::default() // no `realm`, no `peers` — the unconfigured gateway
+    });
+    assert!(store.realm_store().is_none());
+
+    create(store.as_ref(), GINGER, "The Silver Hand").unwrap();
+    invite(store.as_ref(), GINGER, "Vim").expect("the invite runs on the one database");
+    guild::answer_invite(store.as_ref(), 7, VIM, true).expect("and so does the accept");
+
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(shard, _)| shard == "world"),
+        "every call must land on the player's own database"
+    );
+    let g = store.guild.lock().unwrap();
+    assert_eq!(
+        g.ops.as_slice(),
+        &[
+            (realm_op::INVITE, GINGER, VIM, 0, "Ginger".to_string()),
+            (
+                realm_op::ANSWER,
+                VIM,
+                0,
+                realm_op::ANSWER_ACCEPT,
+                "Vim".to_string()
+            ),
+        ],
+        "the same op bytes and the same slots the sharded plane sends"
+    );
+    assert_eq!(g.guild_of(VIM), Some((1, GUILD_JOIN_RANK)));
+    assert!(g
+        .events
+        .iter()
+        .any(|(recipient, kind, ..)| *recipient == VIM && *kind == event_kind::JOINED));
+}
+
 /// The module owns the create gates, so the routing's job is to carry the refusal back unchanged —
 /// the gateway classifies `SMSG_GUILD_COMMAND_RESULT` off these exact strings.
 #[test]

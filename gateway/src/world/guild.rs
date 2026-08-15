@@ -47,12 +47,22 @@ pub struct GuildView {
 pub(crate) enum Op {
     /// `CMSG_GUILD_CREATE`, name already validated by nobody — the module owns that gate.
     Create(String),
+    /// `CMSG_GUILD_INVITE`, target already resolved realm-wide by [`resolve_target`].
+    ///
+    /// `actor_name` rides along because realm-core holds no `game_character` rows: the invite
+    /// popup names the inviter, and the authority cannot look that name up for itself.
+    Invite { target: u64, actor_name: String },
+    /// `CMSG_GUILD_ACCEPT`. `actor_name` is what the `Joined` broadcast carries.
+    Accept { actor_name: String },
+    /// `CMSG_GUILD_DECLINE`. `actor_name` is what the inviter's notification carries.
+    Decline { actor_name: String },
 }
 
 /// Run one guild op for the session that owns `self_guid`.
 ///
 /// Unsharded → the player's own connection calls the player-facing reducer on the player's own
-/// shard, and nothing else happens.
+/// shard, and nothing else happens. Ops with no player-facing reducer run the operator-gated
+/// `realm_guild_op` against that same shard instead, which with one database is the same thing.
 ///
 /// Sharded → realm-core runs the op, then the acting character's own guild columns are pushed onto
 /// every connected world shard. The push is best-effort BY DESIGN (see [`push_membership`]); the
@@ -66,14 +76,148 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     let Some(realm) = store.realm_store() else {
         return match op {
             Op::Create(name) => store.create_guild(account_id, self_guid, &name),
+            // The invite handshake has no player-facing reducer to call, and adding one would cost
+            // a hand-spliced SDK binding per verb. With ONE database, "realm-core" and "the world
+            // shard" ARE the same physical database, so the operator-gated op run against the
+            // player's own shard cannot diverge from itself — there is no second copy to contradict
+            // it. `party::run_bot_invite` makes the same argument for the same reason.
+            handshake @ (Op::Invite { .. } | Op::Accept { .. } | Op::Decline { .. }) => {
+                let (code, target, arg_a, text) = handshake_slots(handshake);
+                store.realm_guild_op(code, self_guid, target, arg_a, text)
+            }
         };
     };
     let (code, target, arg_a, text) = match op {
         Op::Create(name) => (realm_op::CREATE, 0, 0, name),
+        handshake @ (Op::Invite { .. } | Op::Accept { .. } | Op::Decline { .. }) => {
+            handshake_slots(handshake)
+        }
     };
     realm.realm_guild_op(code, self_guid, target, arg_a, text)?;
     push_membership(store, realm.as_ref(), self_guid);
     Ok(())
+}
+
+/// Pack one invite-handshake op into `realm_guild_op`'s frozen argument slots. One place, used by
+/// both planes, so the single-database path cannot drift from the realm-core one.
+fn handshake_slots(op: Op) -> (u8, u64, u32, String) {
+    match op {
+        Op::Invite {
+            target,
+            actor_name: name,
+        } => (realm_op::INVITE, target, 0, name),
+        Op::Accept { actor_name: name } => (realm_op::ANSWER, 0, realm_op::ANSWER_ACCEPT, name),
+        Op::Decline { actor_name: name } => (realm_op::ANSWER, 0, realm_op::ANSWER_DECLINE, name),
+        // Unreachable: every call site matches the handshake ops explicitly, so a new op reaches
+        // this only by being added to the pattern above without being packed.
+        Op::Create(name) => (realm_op::CREATE, 0, 0, name),
+    }
+}
+
+/// The acting character's own name, from whichever shard holds it.
+///
+/// Every op past `CREATE` carries it into `realm_guild_op`'s `text` slot: realm-core has no
+/// `game_character` rows, so a notification written there can only name whoever the gateway named.
+/// An unresolvable character sends an empty name rather than failing the op — a popup with a blank
+/// inviter is recoverable, a refused invite is not.
+fn actor_name<St: WorldStore + ?Sized>(store: &St, self_guid: u64) -> String {
+    super::party::character_anywhere(store, self_guid)
+        .ok()
+        .flatten()
+        .map(|c| c.name)
+        .unwrap_or_default()
+}
+
+/// Resolve `CMSG_GUILD_INVITE`'s typed name to the character it means, across every shard.
+///
+/// **This is why guild state is on realm-core at all.** Resolving inside the calling database
+/// answers "no player named X" for a character who is merely standing on another shard, which is
+/// the defect the party slice already hit.
+///
+/// Every candidate is considered, not the first: character names are unique per DATABASE, not per
+/// realm, so the same name can name two people. Being in the world is the disambiguator, and it is
+/// also a gate in its own right — an offline character has no client to answer the popup, so an
+/// invite to one is `GuildPlayerNotFoundS` exactly as an invite to a stranger is.
+fn resolve_target<St: WorldStore + ?Sized>(store: &St, name: &str) -> Result<u64> {
+    for candidate in super::party::resolve_all_by_name(store, name)? {
+        if super::party::live_anywhere(store, candidate) {
+            return Ok(candidate);
+        }
+    }
+    anyhow::bail!(lyracore_shared::guild::err::TARGET_NOT_FOUND)
+}
+
+/// `CMSG_GUILD_INVITE`: resolve the typed name realm-wide, then run the invite on the authority.
+pub(crate) fn invite<St: WorldStore + ?Sized>(
+    store: &St,
+    account_id: u64,
+    self_guid: u64,
+    name: &str,
+) -> Result<()> {
+    let target = resolve_target(store, name)?;
+    let op = Op::Invite {
+        target,
+        actor_name: actor_name(store, self_guid),
+    };
+    run(store, account_id, self_guid, op)
+}
+
+/// `CMSG_GUILD_ACCEPT` / `CMSG_GUILD_DECLINE`: answer the pending invite as the acting character.
+pub(crate) fn answer_invite<St: WorldStore + ?Sized>(
+    store: &St,
+    account_id: u64,
+    self_guid: u64,
+    accept: bool,
+) -> Result<()> {
+    let actor_name = actor_name(store, self_guid);
+    let op = if accept {
+        Op::Accept { actor_name }
+    } else {
+        Op::Decline { actor_name }
+    };
+    run(store, account_id, self_guid, op)
+}
+
+/// Tell the rest of `self_guid`'s guild that they signed on (`online`) or off.
+///
+/// Deliberately NOT an [`Op`] through [`run`]: presence changes no membership, so the guild-column
+/// push `run` performs after every op would be a realm read and a write to every shard for nothing.
+/// The authority's own broadcast is the whole effect.
+///
+/// Best-effort throughout. This runs on the login and logout paths, and neither may fail over a
+/// notification: a missed `SignedOn` costs one chat line, a failed login costs the session.
+pub(crate) fn broadcast_presence<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: u64,
+    online: bool,
+) {
+    match guild_of(store, self_guid) {
+        Ok(Some(_)) => {}
+        // Guildless: nobody to tell, and no reason to spend a reducer call finding that out again.
+        Ok(None) => return,
+        Err(e) => {
+            log::warn!(
+                "guild: could not read membership for {self_guid} ({e:#}) — no presence broadcast"
+            );
+            return;
+        }
+    }
+    let arg_a = if online {
+        realm_op::PRESENCE_ON
+    } else {
+        realm_op::PRESENCE_OFF
+    };
+    let name = actor_name(store, self_guid);
+    let pushed = match store.realm_store() {
+        Some(realm) => realm.realm_guild_op(realm_op::PRESENCE, self_guid, 0, arg_a, name),
+        None => store.realm_guild_op(realm_op::PRESENCE, self_guid, 0, arg_a, name),
+    };
+    if let Err(e) = pushed {
+        log::warn!(
+            "guild: could not broadcast {} for {self_guid} ({e:#}) — their guild sees no status line",
+            if online { "sign-on" } else { "sign-off" }
+        );
+    }
 }
 
 /// Push `self_guid`'s own guild id and rank, as the authority has them, onto every connected world

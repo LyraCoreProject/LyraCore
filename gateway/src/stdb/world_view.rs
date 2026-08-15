@@ -293,6 +293,9 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
     wire_insert(db.game_trade_event(), "game_trade_event.insert", &view, |v, row| {
         trade_event_appeared(v, row)
     });
+    wire_insert(db.game_guild_event(), "game_guild_event.insert", &view, |v, row| {
+        guild_event_appeared(v, row)
+    });
 
     // ---- game_aura ------------------------------------------------------------------------------
     // The aura composite: array sync (visibility-gated), self-only duration/run-speed/armor,
@@ -407,6 +410,9 @@ pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord:
     });
     wire_insert(db.game_group_event(), "realm.game_group_event.insert", &view, move |v, row| {
         group_event_appeared(v, &coord, row)
+    });
+    wire_insert(db.game_guild_event(), "realm.game_guild_event.insert", &view, |v, row| {
+        guild_event_appeared(v, row)
     });
 }
 
@@ -1019,6 +1025,27 @@ fn group_event_appeared(view: &WorldView, coord: &Coordinator, row: &GroupEvent)
     let tx = viewer.tx.clone();
     enqueue(&tx, move || {
         super::subscriptions::group_event_outbound(&coord, self_guid, &row)
+    });
+}
+
+/// A guild notification landed → the kind-decoded packet to the row's RECIPIENT and nobody else
+/// (same shape as [`whisper_appeared`]). Guild state is authoritative on realm-core, so this is
+/// armed there as well as on every shard — and the recipient lookup is gateway-wide, which is what
+/// carries an invite popup to a target standing on a different database than the inviter.
+fn guild_event_appeared(view: &WorldView, row: &GuildEvent) {
+    let Some(session) = view.entities.session_of_owner(row.recipient_guid) else {
+        return;
+    };
+    let Some(viewer) = view.viewer(session) else {
+        return;
+    };
+    if !super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid) {
+        return;
+    }
+    let row = row.clone();
+    let tx = viewer.tx.clone();
+    enqueue(&tx, move || {
+        super::subscriptions::guild_event_outbound(&row)
     });
 }
 
