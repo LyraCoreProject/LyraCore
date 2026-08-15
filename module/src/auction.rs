@@ -8,6 +8,8 @@ use lyracore_shared::auction::bid_outcome::{
 };
 
 use crate::{game_item_instance, game_item_template, game_world_entity};
+#[cfg(feature = "debug_reducers")]
+use crate::mail::game_mail;
 
 /// One active listing in the shared Stormwind market. The complete item-instance snapshot is the
 /// item while it is listed; no inventory row exists until ordinary mail returns or delivers it.
@@ -1863,6 +1865,199 @@ pub fn expire_auction(ctx: &ReducerContext, schedule: AuctionExpiry) -> Result<(
         return Err("scheduler only".to_string());
     }
     expire_unbid(&mut CtxExpiry { ctx }, schedule.auction_id)
+}
+
+#[cfg(feature = "debug_reducers")]
+const BUYOUT_FIXTURE_AUCTION_ID: u32 = 509_050;
+#[cfg(feature = "debug_reducers")]
+const BUYOUT_FIXTURE_OPERATION_ID: u64 = 509_050;
+#[cfg(feature = "debug_reducers")]
+const BUYOUT_FIXTURE_SELLER_GUID: u64 = 509_050;
+#[cfg(feature = "debug_reducers")]
+const BUYOUT_FIXTURE_WINNER_GUID: u64 = 509_051;
+#[cfg(feature = "debug_reducers")]
+const BUYOUT_FIXTURE_DISPLACED_GUID: u64 = 509_052;
+
+/// Stage one reserved Auction row for the standalone buyout integration test.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_stage_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+
+    ctx.db
+        .game_auction_expiry()
+        .auction_id()
+        .delete(BUYOUT_FIXTURE_AUCTION_ID);
+    ctx.db
+        .game_auction()
+        .id()
+        .delete(BUYOUT_FIXTURE_AUCTION_ID);
+    ctx.db
+        .game_auction_bid_decision()
+        .operation_id()
+        .delete(BUYOUT_FIXTURE_OPERATION_ID);
+
+    let mails = ctx.db.game_mail();
+    for recipient_guid in [
+        BUYOUT_FIXTURE_SELLER_GUID,
+        BUYOUT_FIXTURE_WINNER_GUID,
+        BUYOUT_FIXTURE_DISPLACED_GUID,
+    ] {
+        let stale: Vec<u64> = mails
+            .by_recipient()
+            .filter(&recipient_guid)
+            .filter(|mail| {
+                matches!(
+                    mail.subject.as_str(),
+                    "Auction outbid" | "Auction won" | "Auction sold"
+                )
+            })
+            .map(|mail| mail.id)
+            .collect();
+        for id in stale {
+            mails.id().delete(id);
+        }
+    }
+
+    let expires_micros = ctx
+        .timestamp
+        .to_micros_since_unix_epoch()
+        .checked_add(3_600_000_000)
+        .ok_or_else(|| "auction buyout fixture expiry overflow".to_string())?;
+    let expires_at = Timestamp::from_micros_since_unix_epoch(expires_micros);
+    ctx.db.game_auction().insert(Auction {
+        id: BUYOUT_FIXTURE_AUCTION_ID,
+        listing_operation_id: BUYOUT_FIXTURE_OPERATION_ID - 1,
+        house: lyracore_shared::auction::STORMWIND_HOUSE_ID,
+        owner_guid: BUYOUT_FIXTURE_SELLER_GUID,
+        item_guid: 509_053,
+        item_entry: 509_050,
+        item_stack_count: 2,
+        item_durability: 17,
+        item_enchant_id: 9,
+        item_soulbound: false,
+        start_bid: 100,
+        buyout: 500,
+        highest_bidder_guid: BUYOUT_FIXTURE_DISPLACED_GUID,
+        highest_bid: 201,
+        deposit: 10,
+        created_at: ctx.timestamp,
+        expires_at,
+        revision: 3,
+    });
+    ctx.db.game_auction_expiry().insert(AuctionExpiry {
+        scheduled_id: 0,
+        scheduled_at: ScheduleAt::Time(expires_at),
+        auction_id: BUYOUT_FIXTURE_AUCTION_ID,
+    });
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+fn buyout_fixture_mail(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    subject: &str,
+) -> Result<crate::Mail, String> {
+    let mut matches: Vec<_> = ctx
+        .db
+        .game_mail()
+        .by_recipient()
+        .filter(&recipient_guid)
+        .filter(|mail| mail.subject == subject)
+        .collect();
+    if matches.len() != 1 {
+        return Err(format!(
+            "expected one {subject:?} mail for {recipient_guid}, found {}",
+            matches.len()
+        ));
+    }
+    Ok(matches.remove(0))
+}
+
+/// Verify the real realm reducer committed exact settlement rows in a prior transaction.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_verify_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    if ctx
+        .db
+        .game_auction()
+        .id()
+        .find(BUYOUT_FIXTURE_AUCTION_ID)
+        .is_some()
+        || ctx
+            .db
+            .game_auction_expiry()
+            .auction_id()
+            .find(BUYOUT_FIXTURE_AUCTION_ID)
+            .is_some()
+    {
+        return Err("settled Auction or expiry schedule is still active".to_string());
+    }
+
+    let decision = ctx
+        .db
+        .game_auction_bid_decision()
+        .operation_id()
+        .find(BUYOUT_FIXTURE_OPERATION_ID)
+        .ok_or_else(|| "buyout decision was not committed".to_string())?;
+    if decision.bidder_guid != BUYOUT_FIXTURE_WINNER_GUID
+        || decision.auction_id != BUYOUT_FIXTURE_AUCTION_ID
+        || decision.offer != 900
+        || decision.outcome != BID_ACCEPTED
+        || decision.revision != 0
+        || decision.result_bidder_guid != BUYOUT_FIXTURE_DISPLACED_GUID
+        || decision.result_bid != 201
+        || decision.accepted_price != 500
+    {
+        return Err("buyout decision payload changed".to_string());
+    }
+
+    let refund = buyout_fixture_mail(
+        ctx,
+        BUYOUT_FIXTURE_DISPLACED_GUID,
+        "Auction outbid",
+    )?;
+    if refund.sender_guid != 0
+        || refund.money != 201
+        || refund.cod != 0
+        || refund.was_read
+        || !refund.body.is_empty()
+        || !refund.snapshot().is_empty()
+    {
+        return Err("displaced-bidder refund mail changed".to_string());
+    }
+
+    let winner = buyout_fixture_mail(ctx, BUYOUT_FIXTURE_WINNER_GUID, "Auction won")?;
+    if winner.sender_guid != BUYOUT_FIXTURE_SELLER_GUID
+        || winner.money != 0
+        || winner.cod != 0
+        || winner.was_read
+        || !winner.body.is_empty()
+        || winner.snapshot()
+            != (crate::items::ItemSnapshot {
+                entry: 509_050,
+                stack_count: 2,
+                durability: 17,
+                enchant_id: 9,
+                soulbound: false,
+            })
+    {
+        return Err("winner item mail changed".to_string());
+    }
+
+    let seller = buyout_fixture_mail(ctx, BUYOUT_FIXTURE_SELLER_GUID, "Auction sold")?;
+    if seller.sender_guid != BUYOUT_FIXTURE_WINNER_GUID
+        || seller.money != 485
+        || seller.cod != 0
+        || seller.was_read
+        || !seller.body.is_empty()
+        || !seller.snapshot().is_empty()
+    {
+        return Err("seller proceeds mail changed".to_string());
+    }
+    Ok(())
 }
 
 /// Character deletion must not destroy value held by or listed for that character.
