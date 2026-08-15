@@ -1,11 +1,13 @@
-//! Guild packets: the query response, the info panel, the roster, and the one error channel.
+//! Guild packets: the query response, the info panel, the roster, the guild-chat line and the one
+//! error channel.
 
 use crate::world::guild::GuildRoster;
 use lyracore_shared::guild::GUILD_RANK_COUNT;
 use wow_world_messages::vanilla::{
     Area, Class, GuildCommand, GuildCommandResult, GuildEvent, GuildMember,
-    GuildMember_GuildMemberStatus, Level, SMSG_GUILD_COMMAND_RESULT, SMSG_GUILD_EVENT,
-    SMSG_GUILD_INFO, SMSG_GUILD_INVITE, SMSG_GUILD_QUERY_RESPONSE, SMSG_GUILD_ROSTER,
+    GuildMember_GuildMemberStatus, Language, Level, PlayerChatTag, SMSG_GUILD_COMMAND_RESULT,
+    SMSG_GUILD_EVENT, SMSG_GUILD_INFO, SMSG_GUILD_INVITE, SMSG_GUILD_QUERY_RESPONSE,
+    SMSG_GUILD_ROSTER, SMSG_MESSAGECHAT, SMSG_MESSAGECHAT_ChatType,
 };
 use wow_world_messages::Guid;
 
@@ -132,6 +134,22 @@ pub fn build_guild_event(event: GuildEvent, descriptions: &[String]) -> SMSG_GUI
     }
 }
 
+/// Build `SMSG_MESSAGECHAT` for a guild (`/g`) line. `ChatType::Guild` carries a single `sender2`
+/// guid (the client resolves the speaker's name via NAME_QUERY) — the same one-field shape
+/// `build_whisper` uses, unlike `Party`'s two-credit shape. Always Universal + no tag: like
+/// whispers/party, guild lines aren't proximity/language-filtered — `realm_guild_op`'s `GUILD_CHAT`
+/// arm takes no `language` argument at all.
+pub fn build_guild_chat(sender_guid: u64, message: String) -> SMSG_MESSAGECHAT {
+    SMSG_MESSAGECHAT {
+        chat_type: SMSG_MESSAGECHAT_ChatType::Guild {
+            sender2: Guid::new(sender_guid),
+        },
+        language: Language::Universal,
+        message,
+        tag: PlayerChatTag::None,
+    }
+}
+
 /// Unix-epoch micros → `(day, month, year)` in UTC, in the shape `SMSG_GUILD_INFO` wants: the day
 /// and month are ZERO-BASED (vanilla's own encoding — the client adds one before rendering) and the
 /// year is the full year.
@@ -230,5 +248,18 @@ mod tests {
             member.status,
             GuildMember_GuildMemberStatus::Offline { time_offline: 0.0 }
         );
+    }
+
+    /// The guild-chat packet carries the speaker's guid in `ChatType::Guild`'s one-field shape —
+    /// no leader/party credit split, unlike `Party`.
+    #[test]
+    fn the_guild_chat_packet_carries_the_speakers_guid_and_the_raw_message() {
+        let m = build_guild_chat(42, "for the Alliance!".to_string());
+        assert_eq!(m.message, "for the Alliance!");
+        assert_eq!(m.language, Language::Universal);
+        match m.chat_type {
+            SMSG_MESSAGECHAT_ChatType::Guild { sender2 } => assert_eq!(sender2.guid(), 42),
+            other => panic!("expected ChatType::Guild, got {other:?}"),
+        }
     }
 }

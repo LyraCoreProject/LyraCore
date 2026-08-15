@@ -5,7 +5,9 @@
 //! reducers, reaped by the shared event GC. Range filtering (say ~25yd, yell ~300yd) and targeted
 //! emotes ("waves at X") are later refinements — today say/yell broadcast like the other event
 //! relays (single starting zone). Party chat (work-item 199) is NOT proximity-based — it rides the
-//! group system's per-recipient `game_group_event` relay (`crate::group`), not a broadcast. [event]
+//! group system's per-recipient `game_group_event` relay (`crate::group`), not a broadcast. Guild
+//! chat (`/g`) is the same construction one level down, against `crate::guild`'s own
+//! `game_guild_event` table — see `guild::guild_chat_for`. [event]
 
 use spacetimedb::{
     reducer, table, Identity, ReducerContext, Table, Timestamp,
@@ -19,10 +21,11 @@ use lyracore_shared::group::{err as group_err, event_kind as group_event_kind};
 // `use`. Re-exported implicitly like `game_whisper_event` above.
 
 /// `game_chat_event.chat_type` discriminants for the two BROADCAST chat types this table carries.
-/// Whisper and party (work-item 199) are NOT `game_chat_event` rows at all — whisper rides
-/// `game_whisper_event`, party rides `game_group_event` (`party_chat` below) — each has its own
-/// per-recipient shape that doesn't fit this broadcast table's `chat_type` byte. Guild/channel still
-/// need systems that don't exist yet, so they're rejected.
+/// Whisper, party (work-item 199), channel (065) and guild are NOT `game_chat_event` rows at all —
+/// whisper rides `game_whisper_event`, party rides `game_group_event` (`party_chat` below), channel
+/// rides `game_channel_event`, and guild rides `crate::guild`'s own `game_guild_event`
+/// (`guild::guild_chat_for`) — each has its own per-recipient or membership-scoped shape that
+/// doesn't fit this broadcast table's `chat_type` byte.
 pub const CHAT_SAY: u8 = 0;
 pub const CHAT_YELL: u8 = 1;
 

@@ -2,6 +2,7 @@
 //! plus who/friend/ignore. Pure code-motion out of `world/mod.rs`.
 
 use super::super::*;
+use super::guild;
 use super::quest;
 use super::vendor::{vendor_has_stock, vendor_open_outbound};
 
@@ -254,12 +255,15 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
         }
         // Social tier: say/yell -> send_chat (insert a broadcast game_chat_event the gateway fans back
         // as SMSG_MESSAGECHAT on every connection's subscription); whisper -> send_whisper (private,
-        // per-recipient); party -> party_chat (per-recipient, RLS-scoped to the
-        // caller's CURRENT group). Guild/channel still need systems that don't exist yet and are
-        // dropped. No reply on say/yell/party success (the speaker sees their own line via the
-        // relay — party echoes back through the SAME per-recipient event a real member would get); a
-        // rejected say/yell/whisper-target line is silently dropped, matching vanilla; a rejected
-        // party line replies only for "not in a group" (see the Party arm below).
+        // per-recipient); party -> party_chat (per-recipient, RLS-scoped to the caller's CURRENT
+        // group); guild -> world::guild::send_chat (per-recipient, RLS-scoped to the caller's guild,
+        // relayed through realm-core — see the Guild arm below); channel -> send_channel_message
+        // (per-recipient, membership-scoped). No reply on say/yell/party/guild success (the speaker
+        // sees their own line via the relay — party/guild echo back through the SAME per-recipient
+        // event a real member would get); a rejected say/yell/whisper-target/channel line is silently
+        // dropped, matching vanilla; a rejected party line replies only for "not in a group" (see the
+        // Party arm below), and a rejected guild line replies only for "not in a guild" (see the
+        // Guild arm below).
         //
         // GM playtest dot-commands: a Say line starting with `.` diverts BEFORE
         // `send_chat` — never broadcast, never inserted as a `game_chat_event` row — straight to the
@@ -358,7 +362,19 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                         }
                     }
                 }
-                _ => {} // guild/channel/etc. need systems that don't exist yet
+                // Guild (`/g`): rides the guild-chat relay (`world::guild::send_chat`), the
+                // closest precedent for which is Whisper, not Party — guild has no shard mirror
+                // (D1), so unlike party chat it must always resolve through the authority.
+                // `handlers::guild::guild_chat_action` decides the reply: a caller with no guild
+                // gets `SMSG_GUILD_COMMAND_RESULT(GuildPlayerNotInGuild)`, any other rejection
+                // (not in world / empty message) is silently dropped like say/yell, and a lost
+                // reducer transport propagates.
+                CMSG_MESSAGECHAT_ChatType::Guild => {
+                    for out in guild::guild_chat_action(store, self_guid, message)? {
+                        send(tx, out)?;
+                    }
+                }
+                _ => {} // channel is above; everything else needs systems that don't exist yet
             }
         }
         // Social tier: a text emote (/dance, /wave, …) → send_emote (insert a broadcast

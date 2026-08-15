@@ -1748,6 +1748,25 @@ pub(crate) fn guild_event_outbound(row: &GuildEvent) -> Vec<Outbound> {
         } else {
             wow_world_messages::vanilla::GuildEvent::SignedOff
         }),
+        event_kind::LEFT => wire_event(wow_world_messages::vanilla::GuildEvent::Left),
+        event_kind::REMOVED => wire_event(wow_world_messages::vanilla::GuildEvent::Removed),
+        event_kind::DISBANDED => wire_event(wow_world_messages::vanilla::GuildEvent::Disbanded),
+        event_kind::LEADER_CHANGED => {
+            wire_event(wow_world_messages::vanilla::GuildEvent::LeaderChanged)
+        }
+        event_kind::GUILD_CHAT => match lyracore_shared::guild::decode_guild_chat(&row.payload) {
+            Some(message) => Some(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                codec::build_guild_chat(row.other_guid, message),
+            ))),
+            None => {
+                log::warn!(
+                    "guild GUILD_CHAT relay: unparseable payload {:?} (event {})",
+                    row.payload,
+                    row.id
+                );
+                None
+            }
+        },
         other => {
             log::warn!("guild event relay: unknown kind {other} (id {})", row.id);
             None

@@ -1161,3 +1161,100 @@ fn every_teardown_op_reaches_realm_core_in_its_contracted_slots() {
         ]
     );
 }
+
+// ---- Guild chat (T5) ----
+
+/// AC4: two members on DIFFERENT shards exchange `/g` lines — the whole reason the relay runs on
+/// realm-core rather than against a shard-local mirror (D1: guild has none). The op must land on
+/// the authority regardless of which shard the SENDER stands on, and both members — one per shard
+/// — must get a delivery row.
+#[test]
+fn a_guild_chat_line_from_one_shard_reaches_a_member_resident_on_another() {
+    let (realm, world, instances, calls) = guild_topology();
+    create(world.as_ref(), GINGER, "The Silver Hand").unwrap();
+    // Vim joins the guild directly: no invite/accept op has landed on this branch yet, and this
+    // routing test only needs a SECOND member resident on a DIFFERENT shard than the sender.
+    realm.guild.lock().unwrap().members.push((1, VIM, 4));
+
+    guild::send_chat(instances.as_ref(), VIM, "for the Horde!".into())
+        .expect("the line reaches the authority from the SENDER's own shard");
+
+    let log = calls.lock().unwrap().clone();
+    assert!(
+        log.iter()
+            .any(|(shard, call)| shard == "lyracore-realm" && call == "realm_guild_op"),
+        "the chat op must land on the realm database"
+    );
+    assert!(
+        !log.iter()
+            .any(|(shard, call)| shard == "instances" && call == "realm_guild_op"),
+        "the sender's own shard must never run the op directly — it holds no guild rows at all"
+    );
+
+    let mut recipients: Vec<u64> = realm
+        .guild
+        .lock()
+        .unwrap()
+        .events
+        .iter()
+        .map(|(guid, ..)| *guid)
+        .collect();
+    recipients.sort_unstable();
+    assert_eq!(
+        recipients,
+        vec![GINGER, VIM],
+        "both members — one resident on EACH shard — get a delivery row, including the sender's \
+         own echo"
+    );
+}
+
+/// A caller with no guild is refused with the shared error string, from any shard — the routing's
+/// job is to carry the authority's refusal back unchanged, same as create's.
+#[test]
+fn a_guild_chat_line_from_a_guildless_character_is_refused() {
+    use lyracore_shared::guild::err;
+    let (_realm, world, _instances, _calls) = guild_topology();
+
+    let refused =
+        guild::send_chat(world.as_ref(), GINGER, "anyone there?".into()).expect_err("guildless");
+
+    assert!(format!("{refused:#}").contains(err::NOT_IN_GUILD));
+}
+
+/// **The single-database assertion.** An unsharded gateway runs `/g` through the SAME
+/// `realm_guild_op` reducer on the player's own (only) shard — byte-identical to the sharded path
+/// from the client's side, exactly as `an_unsharded_gateway_runs_every_guild_op_on_the_players_own_\
+/// shard` pins for create.
+#[test]
+fn an_unsharded_gateway_relays_guild_chat_on_the_players_own_shard() {
+    let calls: ShardCallLog = Default::default();
+    let store = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        characters: vec![character(GINGER, "Ginger")],
+        live_guids: vec![GINGER],
+        ..Default::default() // no `realm`, no `peers` — the unconfigured gateway
+    });
+    create(store.as_ref(), GINGER, "The Silver Hand").expect("the legacy create path answers");
+
+    guild::send_chat(store.as_ref(), GINGER, "hello, self".into())
+        .expect("chat runs on the player's own database");
+
+    let log = calls.lock().unwrap().clone();
+    assert!(
+        log.iter()
+            .any(|(shard, call)| shard == "world" && call == "realm_guild_op"),
+        "an unsharded gateway must still drive the chat op through `realm_guild_op` — on ITS OWN \
+         (only) database, which already is the authority"
+    );
+    assert_eq!(
+        store.guild.lock().unwrap().events,
+        vec![(
+            GINGER,
+            lyracore_shared::guild::event_kind::GUILD_CHAT,
+            GINGER,
+            "hello, self".to_string()
+        )],
+        "the lone member — the sender — gets their own echo row"
+    );
+}

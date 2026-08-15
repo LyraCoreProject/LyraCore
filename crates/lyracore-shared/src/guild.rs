@@ -117,8 +117,13 @@ pub mod event_kind {
     /// The guild has a new master → `SMSG_GUILD_EVENT(LeaderChanged)`. `other_guid`/`other_name`
     /// name the new master.
     pub const LEADER_CHANGED: u8 = 8;
+    /// A guild (`/g`) chat line, one row per recipient (every OTHER online member, plus an echo
+    /// to the sender) → `SMSG_MESSAGECHAT` with `ChatType::Guild`. `other_guid`/`other_name`
+    /// (resolved by the pusher, same convention [`ROSTER`] and `crate::group::event_kind` use) =
+    /// the SPEAKER; `payload` = the message text via [`encode_guild_chat`]. Mirrors
+    /// `crate::group::event_kind::PARTY_CHAT`.
+    pub const GUILD_CHAT: u8 = 11;
 }
-
 /// The REALM-CORE guild ops: the `op` byte of the single operator-gated `realm_guild_op` reducer
 /// the gateway drives realm-wide guild state with.
 ///
@@ -138,6 +143,7 @@ pub mod event_kind {
 /// - [`REMOVE`] — `target_guid` is the member to remove, `text` their name; `arg_a` unused.
 /// - [`DISBAND`] — every slot but `actor_guid` unused.
 /// - [`LEADER`] — `target_guid` is the new master, `text` their name; `arg_a` unused.
+/// - [`GUILD_CHAT`] — `text` is the message; `target_guid` and `arg_a` unused.
 pub mod realm_op {
     /// `CMSG_GUILD_CREATE` — `actor_guid` founds a guild named `text` and becomes its master.
     pub const CREATE: u8 = 0;
@@ -171,6 +177,8 @@ pub mod realm_op {
     pub const DISBAND: u8 = 6;
     /// `CMSG_GUILD_LEADER` — `actor_guid`, the guild master, hands the guild to `target_guid`.
     pub const LEADER: u8 = 7;
+    /// `CMSG_MESSAGECHAT` (`ChatType::Guild`) — `actor_guid` speaks `text` to its guild.
+    pub const GUILD_CHAT: u8 = 10;
 }
 
 /// The guild reducers' `Err` strings the gateway maps to `GuildCommandResult` variants — EXACT
@@ -240,6 +248,21 @@ pub fn decode_roster(payload: &str) -> Option<(String, Vec<(u64, u32, String, St
         members.push((guid, rank, public_note, officer_note));
     }
     (!members.is_empty()).then_some((motd.to_string(), members))
+}
+
+/// Encode a `GUILD_CHAT` payload: just the raw message text. Unlike [`encode_roster`]'s
+/// multi-field grammar, there is nothing else to combine — the speaker's guid/name already ride
+/// `GuildEvent.other_guid`/`other_name` — so this is a pass-through, mirroring
+/// [`crate::group::encode_party_chat`].
+pub fn encode_guild_chat(message: &str) -> String {
+    message.to_string()
+}
+
+/// Decode a `GUILD_CHAT` payload back to the message text. Never fails (any string is a valid
+/// message) — `Option` only for call-site symmetry with the other decoders, all of which DO fail
+/// closed on malformed input.
+pub fn decode_guild_chat(payload: &str) -> Option<String> {
+    Some(payload.to_string())
 }
 
 /// Replace the roster grammar's delimiters so a hostile MOTD or note cannot forge a member row.
@@ -415,5 +438,19 @@ mod tests {
                 );
             }
         }
+        assert_eq!(realm_op::GUILD_CHAT, 10);
+        assert_eq!(event_kind::GUILD_CHAT, 11);
+    }
+
+    #[test]
+    fn guild_chat_payload_round_trips_verbatim() {
+        let message = "for the Alliance!".to_string();
+        let wire = encode_guild_chat(&message);
+        assert_eq!(decode_guild_chat(&wire), Some(message));
+        // Unlike the roster grammar, a guild-chat payload has no delimiters to strip — it is the
+        // sole field, so it must survive untouched (even one containing the roster's own framing
+        // characters, which belong to a different kind's grammar entirely).
+        assert_eq!(decode_guild_chat(""), Some(String::new()));
+        assert_eq!(decode_guild_chat("a|b;c,d"), Some("a|b;c,d".to_string()));
     }
 }

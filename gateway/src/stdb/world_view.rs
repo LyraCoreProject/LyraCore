@@ -272,12 +272,13 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         melee_disengaged(v, shard, row)
     });
 
-    // ---- game_resurrect_request / game_whisper_event / game_group_event / game_trade_event ----
+    // ---- game_resurrect_request / game_whisper_event / game_group_event / game_guild_event /
+    // ---- game_trade_event ----
     // The PRIVATE tier: every row is addressed to exactly one recipient, and on this feed the
     // gateway owns the guarantee RLS used to give. Delivery is recipient-keyed (the owner-session
     // lookup) + the explicit `private_recipient_audience` predicate — never a viewer fan.
-    // (The realm-core whisper/group twins for CROSS-shard delivery ride the same dispatchers,
-    // armed once per realm-core connection by `arm_realm_private` below.)
+    // (The realm-core whisper/group/guild twins for CROSS-shard delivery ride the same
+    // dispatchers, armed once per realm-core connection by `arm_realm_private` below.)
     wire_insert(db.game_resurrect_request(), "game_resurrect_request.insert", &view, |v, row| {
         resurrect_offered(v, row)
     });
@@ -290,11 +291,11 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
             group_event_appeared(v, &coord, row)
         });
     }
-    wire_insert(db.game_trade_event(), "game_trade_event.insert", &view, |v, row| {
-        trade_event_appeared(v, row)
-    });
     wire_insert(db.game_guild_event(), "game_guild_event.insert", &view, |v, row| {
         guild_event_appeared(v, row)
+    });
+    wire_insert(db.game_trade_event(), "game_trade_event.insert", &view, |v, row| {
+        trade_event_appeared(v, row)
     });
 
     // ---- game_aura ------------------------------------------------------------------------------
@@ -1031,7 +1032,9 @@ fn group_event_appeared(view: &WorldView, coord: &Coordinator, row: &GroupEvent)
 /// A guild notification landed → the kind-decoded packet to the row's RECIPIENT and nobody else
 /// (same shape as [`whisper_appeared`]). Guild state is authoritative on realm-core, so this is
 /// armed there as well as on every shard — and the recipient lookup is gateway-wide, which is what
-/// carries an invite popup to a target standing on a different database than the inviter.
+/// carries an invite popup, a `/g` line or a MOTD to a member standing on a different database
+/// than the actor. No `coord`: nothing on the guild table needs a detail JOIN, because realm-core
+/// holds no character rows and every string the packet needs is stamped on the row at write time.
 fn guild_event_appeared(view: &WorldView, row: &GuildEvent) {
     let Some(session) = view.entities.session_of_owner(row.recipient_guid) else {
         return;
