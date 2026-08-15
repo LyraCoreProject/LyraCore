@@ -12,14 +12,16 @@ use spacetimedb::{ReducerContext, Table};
 
 use super::{
     run_cycle, AggroTarget, CreatureWorld, CycleOutcome, EngageSink, Engagement, Gait, Home,
-    IdleCreature, IdleSink, Leg, LegInFlight, LegacyPasses, MotionSink, Point, Pull, Sensor,
-    TickContext, Waypoint,
+    IdleCreature, IdleSink, Leg, LegInFlight, LegacyPasses, MotionSink, Point, Pull, Pursuit,
+    PursuitSink, Sensor, TickContext, Waypoint,
 };
 use crate::creatures::ai::TickScope;
-use crate::creatures::tick::{self, TickSweep};
+use crate::creatures::cast_condition;
+use crate::creatures::tick::{self, CreatureSpline, TickSweep};
 use crate::{
-    game_creature_spawn, game_creature_spline, game_creature_template, game_creature_waypoint,
-    game_melee_attack, game_world_entity, MeleeAttack,
+    game_creature_cast, game_creature_spawn, game_creature_spell, game_creature_spline,
+    game_creature_template, game_creature_waypoint, game_melee_attack, game_spell,
+    game_world_entity, MeleeAttack,
 };
 
 /// `tick_creatures`' one call into the cycle. The adapter never leaves this module.
@@ -62,6 +64,54 @@ impl CtxWorld<'_> {
     }
 }
 
+/// The spline row as the cycle reads a leg. `mover_gone` is the caller's to answer: the advance
+/// phase has to reap orphans, while a chaser's leg belongs to a creature it just resolved.
+fn as_leg(s: CreatureSpline, mover_gone: bool) -> LegInFlight {
+    LegInFlight {
+        guid: s.guid,
+        start: Point {
+            x: s.sx,
+            y: s.sy,
+            z: s.sz,
+        },
+        dest: Point {
+            x: s.dx,
+            y: s.dy,
+            z: s.dz,
+        },
+        started_micros: s.start_micros,
+        dur_ms: s.dur_ms,
+        map_id: s.map_id,
+        instance_id: s.instance_id,
+        mover_gone,
+    }
+}
+
+/// The longest ENEMY-cast range (yd) creature `entry` can bring to bear — the rotation nukes and
+/// debuffs that target the melee victim, plus the legacy single-spell cast row, mapped through
+/// `game_spell.range_yd`. 0 means it is no offensive caster (melee-only mobs, pure healers and
+/// buff-bots), and chase then closes to melee.
+fn caster_hold_range_yd(ctx: &ReducerContext, entry: u32) -> f32 {
+    let spells = ctx.db.game_spell();
+    let mut max_r = 0u32;
+    for r in ctx.db.game_creature_spell().by_entry().filter(&entry) {
+        if matches!(
+            r.condition,
+            cast_condition::ALWAYS | cast_condition::TARGET_MISSING_AURA
+        ) {
+            if let Some(h) = spells.spell_id().find(r.spell_id) {
+                max_r = max_r.max(h.range_yd);
+            }
+        }
+    }
+    if let Some(c) = ctx.db.game_creature_cast().creature_entry().find(entry) {
+        if let Some(h) = spells.spell_id().find(c.spell_id) {
+            max_r = max_r.max(h.range_yd);
+        }
+    }
+    max_r as f32
+}
+
 impl MotionSink for CtxWorld<'_> {
     fn legs_in_flight(&self) -> Vec<LegInFlight> {
         let entities = self.ctx.db.game_world_entity();
@@ -69,23 +119,9 @@ impl MotionSink for CtxWorld<'_> {
             .db
             .game_creature_spline()
             .iter()
-            .map(|s| LegInFlight {
-                guid: s.guid,
-                start: Point {
-                    x: s.sx,
-                    y: s.sy,
-                    z: s.sz,
-                },
-                dest: Point {
-                    x: s.dx,
-                    y: s.dy,
-                    z: s.dz,
-                },
-                started_micros: s.start_micros,
-                dur_ms: s.dur_ms,
-                map_id: s.map_id,
-                instance_id: s.instance_id,
-                mover_gone: entities.guid().find(s.guid).is_none(),
+            .map(|s| {
+                let gone = entities.guid().find(s.guid).is_none();
+                as_leg(s, gone)
             })
             .collect()
     }
@@ -349,6 +385,75 @@ impl EngageSink for CtxWorld<'_> {
     }
 }
 
+impl PursuitSink for CtxWorld<'_> {
+    fn pursuits(&self, scope: &TickScope) -> Vec<Pursuit> {
+        let entities = self.ctx.db.game_world_entity();
+        let splines = self.ctx.db.game_creature_spline();
+        // The engaged rows ARE the candidate set (one per attacker, few), so this stays O(fights)
+        // rather than scanning the world. A player's own attack row is dropped by `movable_creature`.
+        self.ctx
+            .db
+            .game_melee_attack()
+            .iter()
+            .filter_map(|row| {
+                let c = tick::movable_creature(self.ctx, row.attacker_guid, scope)?;
+                let victim = entities.guid().find(row.target_guid)?;
+                Some(Pursuit {
+                    guid: c.guid,
+                    at: Point {
+                        x: c.x,
+                        y: c.y,
+                        z: c.z,
+                    },
+                    orientation: c.orientation,
+                    victim_at: Point {
+                        x: victim.x,
+                        y: victim.y,
+                        z: victim.z,
+                    },
+                    victim_last_move_ms: victim.last_move_ms,
+                    routing: tick::creature_is_routing(self.ctx, &c),
+                    leg: splines.guid().find(c.guid).map(|s| as_leg(s, false)),
+                })
+            })
+            .collect()
+    }
+    fn caster_hold_range(&self, guid: u64) -> f32 {
+        self.ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(guid)
+            .map_or(0.0, |c| caster_hold_range_yd(self.ctx, c.entry))
+    }
+    fn face(&mut self, guid: u64, orientation: f32, spline_id: u32) {
+        let entities = self.ctx.db.game_world_entity();
+        // Re-find rather than carry the snapshot the decision was made from, so another write to
+        // this row inside the same tick is not clobbered by a stale copy.
+        let Some(mut e) = entities.guid().find(guid) else {
+            return;
+        };
+        e.orientation = orientation;
+        let (pos, map_id, instance_id, grid) = (
+            (e.x, e.y, e.z),
+            e.map_id,
+            e.instance_id,
+            (e.grid_x, e.grid_y),
+        );
+        entities.guid().update(e);
+        tick::emit_facing_spline(
+            self.ctx,
+            guid,
+            pos,
+            orientation,
+            spline_id,
+            map_id,
+            instance_id,
+            grid,
+        );
+    }
+}
+
 impl CreatureWorld for CtxWorld<'_> {
     fn awake_creatures(&self, scope: &TickScope) -> TickSweep {
         tick::active_cell_creatures(self.ctx, scope)
@@ -377,9 +482,6 @@ impl LegacyPasses for CtxWorld<'_> {
     }
     fn legacy_threat_retarget(&mut self, scope: &TickScope) -> usize {
         tick::pass_threat_retarget(self.ctx, scope)
-    }
-    fn legacy_chase(&mut self, scope: &TickScope) -> usize {
-        tick::pass_chase(self.ctx, scope)
     }
     fn legacy_regen(&mut self) -> usize {
         tick::pass_regen(self.ctx)

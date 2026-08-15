@@ -792,8 +792,9 @@ mod tests {
 
     /// Work-item 230's engaged-creature-never-dormant rule ("a player could drag one far away") only
     /// holds if a creature glued to a player by combat can never wander past the active-cell radius
-    /// before the active set would have covered it anyway. `pass_chase`/`pass_flee` don't consult the
-    /// active set at all (see their doc comments in tick.rs) — that's the primary guarantee — but this
+    /// before the active set would have covered it anyway. the chase phase and
+    /// `pass_flee` don't consult the active set at all (see their doc comments) — that's the primary
+    /// guarantee — but this
     /// pins the geometric invariant too: the chase cutoff (the farthest a target can be and still be
     /// pursued) must stay inside `combat_active_radius`, so even a hypothetical future re-gate could
     /// never sleep a still-engaged creature out from under its target.

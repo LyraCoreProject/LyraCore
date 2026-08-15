@@ -15,6 +15,8 @@ struct XCreature {
     grid: (i32, i32),
     cell: i64,
     last_move_ms: u32,
+    /// Where it looks. Only the facing turn writes it.
+    orientation: f32,
     /// The ETA gate an idle leg arms, and the route cursor patrol walks by.
     leg_ends_ms: u32,
     wp_target: u64,
@@ -69,8 +71,14 @@ struct Scenario {
     effects: RefCell<Vec<MoveEffect>>,
     /// The players in the world, in the order the world reads them.
     players: RefCell<Vec<AggroTarget>>,
-    /// Live melee engagements — what aggro arms and combat entry reads.
+    /// Live melee engagements — what aggro arms, and what combat entry and chase read.
     fights: RefCell<Vec<Engagement>>,
+    /// Creatures inside an open rout window: the rout leg is their sole mover.
+    routing: RefCell<HashSet<u64>>,
+    /// The longest offensive spell range a creature fights from; absent means melee-only.
+    hold_ranges: RefCell<HashMap<u64, f32>>,
+    /// Determinism input: when each PLAYER last moved. A creature's own move clock is on its row.
+    player_moved_ms: RefCell<HashMap<u64, u32>>,
     /// Faction pairs at war, directed. Anything absent is not hostile, as missing data is.
     at_war: RefCell<HashSet<(u32, u32)>>,
     /// `(looker, unseen)` pairs with something solid in between.
@@ -106,6 +114,7 @@ impl Scenario {
                 grid: (gx, gy),
                 cell: spatial::grid_cell_id(gx, gy),
                 last_move_ms: 0,
+                orientation: 0.0,
                 leg_ends_ms: 0,
                 wp_target: 0,
                 level: 10,
@@ -225,6 +234,31 @@ impl Scenario {
             player_never_swung: false,
         });
         self
+    }
+
+    /// The creature is inside an open rout window, so the rout leg owns its movement.
+    fn routing(self, guid: u64) -> Self {
+        self.routing.borrow_mut().insert(guid);
+        self
+    }
+
+    /// The creature is an offensive caster: it fights from `yards` away instead of closing.
+    fn caster(self, guid: u64, yards: f32) -> Self {
+        self.hold_ranges.borrow_mut().insert(guid, yards);
+        self
+    }
+
+    /// The player RUNS to `at`: it stands there and its move clock reads now, so a chaser treats it
+    /// as a kiter rather than a planted target.
+    fn kiting(self, guid: u64, at: Point) -> Self {
+        let now_ms = (self.now_micros.get() / 1000) as u32;
+        self.player_moved_ms.borrow_mut().insert(guid, now_ms);
+        self.tweak_player(guid, |p| p.at = at)
+    }
+
+    /// The creature looks this way — what the facing turn measures its correction against.
+    fn facing(self, guid: u64, orientation: f32) -> Self {
+        self.tweak(guid, |c| c.orientation = orientation)
     }
 
     /// A player's auto-attack toggle armed at something it has never reached.
@@ -395,6 +429,20 @@ impl MotionSink for Scenario {
             facing: false,
             facing_angle: 0.0,
         });
+        // The stop REPLACES the leg it interrupts (the writer upserts one row per mover), so the
+        // next cycle reads it as landed and reaps it instead of resuming the old destination.
+        let mut legs = self.legs.borrow_mut();
+        legs.retain(|l| l.guid != leg.guid);
+        legs.push(LegInFlight {
+            guid: leg.guid,
+            start: at,
+            dest: at,
+            started_micros: self.now_micros.get(),
+            dur_ms: 0,
+            map_id: leg.map_id,
+            instance_id: leg.instance_id,
+            mover_gone: false,
+        });
     }
     fn drop_leg(&mut self, guid: u64) {
         self.legs.borrow_mut().retain(|l| l.guid != guid);
@@ -414,6 +462,20 @@ impl Scenario {
             c.last_move_ms = ms;
         }
         Some((gx, gy))
+    }
+
+    /// A fight's victim wherever it stands — a creature row or a player — as its position and move
+    /// clock. Chase reads both: a kiter is run down, a planted one is stood next to and faced.
+    fn unit(&self, guid: u64) -> Option<(Point, u32)> {
+        if let Some(c) = self.creatures.borrow().get(&guid) {
+            return Some((c.at, c.last_move_ms));
+        }
+        let moved = self.player_moved_ms.borrow().get(&guid).copied();
+        self.players
+            .borrow()
+            .iter()
+            .find(|p| p.guid == guid)
+            .map(|p| (p.at, moved.unwrap_or(0)))
     }
 
     fn snapshot(&self) -> Vec<(u64, Point)> {
@@ -471,8 +533,15 @@ impl IdleSink for Scenario {
     fn home_of(&self, guid: u64) -> Option<Home> {
         self.homes.borrow().get(&guid).copied()
     }
+    /// Either side of a live fight is engaged, the way a melee row makes it so in the world — plus
+    /// whatever a scenario marked engaged without arming a fight.
     fn engaged(&self, guid: u64) -> bool {
         self.engaged.borrow().contains(&guid)
+            || self
+                .fights
+                .borrow()
+                .iter()
+                .any(|f| f.attacker == guid || f.victim == guid)
     }
     fn speed_of(&self, _guid: u64, gait: Gait) -> f32 {
         match gait {
@@ -613,6 +682,57 @@ impl EngageSink for Scenario {
     }
 }
 
+// The in-memory chase world. A fight whose attacker is not a creature row is a PLAYER's own attack
+// row, which the production adapter drops for the same reason: chase moves creatures.
+impl PursuitSink for Scenario {
+    fn pursuits(&self, scope: &TickScope) -> Vec<Pursuit> {
+        let creatures = self.creatures.borrow();
+        let legs = self.legs.borrow();
+        self.fights
+            .borrow()
+            .iter()
+            .filter_map(|f| {
+                let c = creatures.get(&f.attacker)?;
+                let (victim_at, victim_last_move_ms) = self.unit(f.victim)?;
+                scope.covers(c.instance_id).then_some(Pursuit {
+                    guid: f.attacker,
+                    at: c.at,
+                    orientation: c.orientation,
+                    victim_at,
+                    victim_last_move_ms,
+                    routing: self.routing.borrow().contains(&f.attacker),
+                    leg: legs.iter().find(|l| l.guid == f.attacker).cloned(),
+                })
+            })
+            .collect()
+    }
+    fn caster_hold_range(&self, guid: u64) -> f32 {
+        self.hold_ranges.borrow().get(&guid).copied().unwrap_or(0.0)
+    }
+    fn face(&mut self, guid: u64, orientation: f32, spline_id: u32) {
+        let Some(c) = self.creatures.borrow_mut().get_mut(&guid).map(|c| {
+            c.orientation = orientation;
+            *c
+        }) else {
+            return;
+        };
+        self.effects.borrow_mut().push(MoveEffect {
+            guid,
+            start: c.at,
+            dest: c.at,
+            dur_ms: 0,
+            spline_id,
+            run: false,
+            map_id: c.map_id,
+            instance_id: c.instance_id,
+            grid: c.grid,
+            cell: c.cell,
+            facing: true,
+            facing_angle: orientation,
+        });
+    }
+}
+
 // Not migrated yet: the cycle SEQUENCES these, the harness cannot run them.
 impl LegacyPasses for Scenario {
     fn legacy_pet(&mut self, _scope: &TickScope, _now_ms: u32, _pets: &[u64]) -> usize {
@@ -622,9 +742,6 @@ impl LegacyPasses for Scenario {
         0
     }
     fn legacy_threat_retarget(&mut self, _scope: &TickScope) -> usize {
-        0
-    }
-    fn legacy_chase(&mut self, _scope: &TickScope) -> usize {
         0
     }
     fn legacy_regen(&mut self) -> usize {
@@ -1445,5 +1562,239 @@ fn a_creature_that_pulls_is_in_combat_before_the_same_cycle_ends() {
         [HUNTER, WOLF],
         "aggro IS combat: a creature that pulled must not wait a whole firing for its flag, or the \
          player sees a mob running at them while still reading as out of combat"
+    );
+}
+
+/// A clock late enough that a unit which has never moved reads as STANDING STILL: chase plants a
+/// creature only next to a victim whose move clock has gone quiet for `CHASE_TARGET_MOVING_MS`.
+const SETTLED: u64 = 4_000_000;
+
+/// A wolf at the origin and a hostile player, on the settled clock — the shape every fight scenario
+/// starts from. The wolf is NOT awake: chase is driven by the engagements, not by the sweep.
+fn wolf_fighting(player_at: Point) -> Scenario {
+    Scenario::new(SETTLED)
+        .creature(WOLF, p(0.0, 0.0, 10.0))
+        .at_war(BEASTS, ALLIANCE)
+        .player(HUNTER, player_at)
+}
+
+#[test]
+fn a_creature_that_notices_a_player_closes_on_it_in_the_same_cycle() {
+    let mut w = wolf_fighting(p(15.0, 0.0, 10.0)).awake([WOLF]);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(w.pulls(), [(WOLF, HUNTER, Pull::Noticed)]);
+    let effects = w.effects();
+    assert_eq!(
+        effects.iter().map(|e| (e.dest, e.run)).collect::<Vec<_>>(),
+        [(p(11.0, 0.0, 10.0), true)],
+        "a creature that pulls must start closing in the SAME firing, at a run and to just inside \
+         melee reach; waiting a firing to move is a mob that stares at the player it just aggroed"
+    );
+}
+
+#[test]
+fn an_engaged_creature_outside_every_active_cell_still_chases() {
+    for (scope, legs) in [(catch_all(), 1), (TickScope::Only(7), 0)] {
+        let mut w = wolf_fighting(p(15.0, 0.0, 10.0)).attacking(WOLF, HUNTER);
+        let tick = w.tick(false, scope);
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            w.effects().len(),
+            legs,
+            "a fight is driven by its engagement, not by the sweep, or a player freezes the mob on \
+             them by walking out of every active cell; a firing that does not cover the fight's \
+             instance must still leave it alone, or two rows step the same chaser at double speed"
+        );
+    }
+}
+
+#[test]
+fn a_victim_past_the_pursuit_cutoff_is_left_alone() {
+    let cutoff = CHASE_LEASH_SQ.sqrt();
+    for (dist, legs) in [(cutoff - 5.0, 1), (cutoff + 5.0, 0)] {
+        let mut w = wolf_fighting(p(dist, 0.0, 10.0)).attacking(WOLF, HUNTER);
+        let tick = w.tick(false, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            w.effects().len(),
+            legs,
+            "the pursuit timer ends a fight, distance does not — but a chaser that keeps closing \
+             past the cutoff walks out of its own active cell and drags the fight across the zone \
+             ({dist} yards)"
+        );
+    }
+}
+
+#[test]
+fn a_chaser_rides_one_committed_leg_until_its_victim_veers() {
+    let mut w = wolf_fighting(p(20.0, 0.0, 10.0))
+        .kiting(HUNTER, p(20.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    // The kiter keeps running straight: the chaser is already pointed at it.
+    w.advance_clock(500_000);
+    w = w.kiting(HUNTER, p(23.0, 0.0, 10.0));
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+    assert_eq!(
+        w.effects().len(),
+        1,
+        "a chaser must RIDE its committed leg while the kiter holds its heading; re-throwing a leg \
+         every firing makes the client re-compute the path each time, which is the visible jitter \
+         the committed leg exists to remove"
+    );
+
+    // The kiter cuts away: the held heading no longer points at it.
+    w.advance_clock(500_000);
+    w = w.kiting(HUNTER, p(23.0, 20.0, 10.0));
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+    assert_eq!(
+        w.effects().len(),
+        2,
+        "a chaser that never re-aims loses a kiter the moment they turn — the leg must be re-thrown \
+         once the victim veers off it"
+    );
+}
+
+#[test]
+fn a_creature_that_reaches_a_standing_victim_stops_and_faces_it() {
+    // Half way through a leg thrown at the player, who has since stopped two yards ahead of it.
+    let mut w = wolf_fighting(p(7.0, 0.0, 10.0))
+        .facing(WOLF, std::f32::consts::PI)
+        .attacking(WOLF, HUNTER)
+        .flying(
+            WOLF,
+            p(0.0, 0.0, 10.0),
+            p(10.0, 0.0, 10.0),
+            SETTLED - 500_000,
+            LEG_MS,
+        );
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    let stop_and_turn: Vec<(Point, u32, bool, f32)> = w
+        .effects()
+        .iter()
+        .map(|e| (e.dest, e.dur_ms, e.facing, e.facing_angle))
+        .collect();
+    assert_eq!(
+        stop_and_turn,
+        [
+            (p(5.0, 0.0, 10.0), 0, false, 0.0),
+            (p(5.0, 0.0, 10.0), 0, true, 0.0),
+        ],
+        "a lead-chase aimed PAST the victim would ride on through them, so the client has to be \
+         told to stop where the server planted the creature; and a spline is the only thing a \
+         client derives creature facing from, so without the zero-duration turn the mob fights the \
+         whole fight looking the way it came"
+    );
+    assert_eq!(
+        w.at(WOLF).orientation,
+        0.0,
+        "the authoritative heading must move with the turn, or the next firing turns again"
+    );
+
+    w.advance_clock(500_000);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+    assert_eq!(
+        w.effects().len(),
+        2,
+        "a settled fight must go SILENT: a stop or a turn re-sent every firing is a packet per \
+         creature per tick for every mob standing in melee"
+    );
+}
+
+#[test]
+fn a_creature_whose_victim_kites_out_of_reach_keeps_chasing() {
+    // Inside melee reach, but running: vanilla mobs run a kiter down and swing on the move.
+    let mut w = wolf_fighting(p(4.0, 0.0, 10.0))
+        .kiting(HUNTER, p(4.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.effects()
+            .iter()
+            .map(|e| (e.dest, e.dur_ms > 0, e.run))
+            .collect::<Vec<_>>(),
+        [(p(12.0, 0.0, 10.0), true, true)],
+        "planting into attack stance the moment a moving victim touches melee reach is the \
+         run/stand/run flicker of chasing someone who never stops; the mob must keep running and \
+         aim PAST them"
+    );
+}
+
+#[test]
+fn an_offensive_caster_holds_at_its_spell_range() {
+    let cases: [(&str, Twist, usize); 3] = [
+        ("inside its range", |w| w, 0),
+        (
+            "its victim stepped out of range",
+            |w| w.tweak_player(HUNTER, |hunter| hunter.at = p(30.0, 0.0, 10.0)),
+            1,
+        ),
+        ("a wall between them", |w| w.wall_between(WOLF, HUNTER), 1),
+    ];
+    for (case, twist, legs) in cases {
+        let mut w = twist(
+            wolf_fighting(p(20.0, 0.0, 10.0))
+                .caster(WOLF, 30.0)
+                .attacking(WOLF, HUNTER),
+        );
+        let tick = w.tick(false, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            w.effects().len(),
+            legs,
+            "a caster that face-tanks instead of standing at its range never casts the spell it \
+             was authored around; one that holds through a wall it cannot cast through stands \
+             there doing nothing at all ({case})"
+        );
+    }
+}
+
+#[test]
+fn a_routing_or_suppressed_creature_is_not_moved_by_chase() {
+    let held: [(&str, Twist); 2] = [
+        ("routing", |w| w.routing(WOLF)),
+        ("rooted", |w| w.rooted(WOLF)),
+    ];
+    for (case, hold) in held {
+        let mut w = hold(wolf_fighting(p(15.0, 0.0, 10.0)).attacking(WOLF, HUNTER));
+        let tick = w.tick(false, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert!(
+            w.effects().is_empty(),
+            "the rout leg and fear are the SOLE movers of the creatures they own; a chase leg in \
+             the same firing shares their spline id and the client throws one of the two away \
+             ({case})"
+        );
+    }
+}
+
+#[test]
+fn a_blocked_chase_goes_around_instead_of_through() {
+    let mut w = wolf_fighting(p(20.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .detour(WOLF, (0.0, 20.0));
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.effects().first().map(|e| e.dest),
+        Some(p(0.0, 16.0, 10.0)),
+        "a chase leg must head for the detour corner navigation returns, or the mob walks into the \
+         geometry between it and its victim and stands there swinging at nothing"
     );
 }

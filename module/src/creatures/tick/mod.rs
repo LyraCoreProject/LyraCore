@@ -11,7 +11,7 @@
 //!     movement-leg grammar" toolkit (`PendingLeg`/`drain_legs`/`movable_creature`; the pure
 //!     `leg_toward` geometry lives in `creatures::ai`), and the one spline writer
 //!     (`emit_move_spline`/`emit_creature_leg`) both `movement` and `sense` depend on.
-//!   - [`movement`] — the engaged legs: chase, flee, fear-flee.
+//!   - [`movement`] — the engaged legs still here: the low-HP rout and fear-flee.
 //!   - [`lifecycle`] — the canonical despawn checklist (issue #359) + decay/respawn/GO-respawn, the
 //!     due-time passes that run regardless of proximity.
 //!   - [`sense`] — cast, threat-retarget, regen.
@@ -31,7 +31,7 @@ mod sense;
 // line here disappears with the pass it exports, as the tickets in `.scratch/creature-behavior-cycle`
 // migrate each body into the cycle.
 pub(crate) use lifecycle::{pass_decay, pass_gameobject_respawn, pass_respawn};
-pub(crate) use movement::{pass_chase, pass_fear_flee, pass_flee};
+pub(crate) use movement::{pass_fear_flee, pass_flee};
 pub(crate) use sense::{pass_cast, pass_regen, pass_threat_retarget};
 
 // Re-export so `crate::creatures::tick::despawn_creature_entity` (and, via `creatures::mod.rs`'s own
@@ -545,8 +545,8 @@ pub(crate) fn pass_combat_drop(ctx: &ReducerContext, flagged: &[u64]) -> usize {
     visited
 }
 
-/// The ONE shared creature move-leg writer (work-item 181): every movement pass (patrol / chase /
-/// return / wander / flee / fear-flee) funnels its ALREADY-STEPPED landing point through here, so a
+/// The ONE shared creature move-leg writer (work-item 181): every movement decision (the cycle's
+/// idle and chase legs, flee, fear-flee) funnels its ALREADY-STEPPED landing point through here, so a
 /// single ground-snap / anti-desync fix (work-item 174) applies to ALL of them at once. The per-pass
 /// STEP is computed by the caller BEFORE this call (different math per pass — waypoint segment / chase
 /// step / walk-home / wander hop / flee dash); this owns only what every pass shares:
@@ -618,7 +618,7 @@ pub(crate) fn emit_move_spline(
 /// every other creature leg (one AOI-scoped table, one gateway subscription) rather than a new one;
 /// the gateway distinguishes it by the `facing` flag and emits `SMSG_MONSTER_MOVE`'s `FacingAngle`
 /// variant instead of `Normal`. Callers own the epsilon gate (don't call this every tick — see
-/// `pass_chase`'s stand-and-swing branch) and the entity row's `orientation` write; this is purely
+/// the cycle's chase phase) and the entity row's `orientation` write; this is purely
 /// the relay half, mirroring [`emit_move_spline`]'s split.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_facing_spline(
@@ -685,7 +685,7 @@ pub(crate) fn emit_creature_leg(
         return;
     }
     // ONE WRITER (work-item 181/383): funnel the row build + upsert through `emit_move_spline` — the
-    // SAME call `pass_advance_splines`'s CC-freeze/arrival paths and `pass_chase`'s in-place stop
+    // SAME call the cycle's spline-advance halt and its chase stop
     // already use, so "one spline writer" is a fact the type system enforces, not doctrine repeated at
     // each call site. Was: a `game_creature_move_event` INSERT (globally subscribed — so every leg was
     // delivered to EVERY connected session and then discarded by most of them via the `created`-set
@@ -765,7 +765,13 @@ fn drain_legs(
 /// else { continue }; if c.is_player() || c.dead { continue }; if !scope.covers(c.instance_id) {
 /// continue }` into one check — every call site still increments its own `visited` counter only on
 /// `Some`, matching the existing "gate first, then count" order everywhere.
-fn movable_creature(ctx: &ReducerContext, guid: u64, scope: &TickScope) -> Option<WorldEntity> {
+///
+/// `pub(crate)` for the cycle's production adapter, which opens the chase candidate list with it.
+pub(crate) fn movable_creature(
+    ctx: &ReducerContext,
+    guid: u64,
+    scope: &TickScope,
+) -> Option<WorldEntity> {
     let c = ctx.db.game_world_entity().guid().find(guid)?;
     if c.is_player() || c.dead || !scope.covers(c.instance_id) {
         return None;

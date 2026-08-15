@@ -18,7 +18,7 @@ use super::*;
 /// currently be the ATTACKER in a `game_melee_attack` row (combat-engaged), and the item requires an
 /// engaged creature to never sleep regardless of distance ("a player could drag one far away").
 ///
-/// Work-item 233: outer-loops `game_melee_attack` directly (the pass_chase/pass_threat_retarget
+/// Work-item 233: outer-loops `game_melee_attack` directly (the chase/`pass_threat_retarget`
 /// precedent) instead of `entities.iter()` + a per-row `melee.attacker_guid().find(..)` gate. Every
 /// candidate here was ALREADY required to be a melee attacker (the `let Some(row) = ... else continue`
 /// this replaces) — nothing that used to reach the cast logic is excluded, and nothing new is admitted;

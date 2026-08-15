@@ -16,7 +16,8 @@ use spacetimedb::log;
 use super::ai::{
     aggro_radius, finite_point, is_aggro_candidate, leg_in_flight, leg_toward,
     nearest_waypoint_idx, next_waypoint_idx, spline_t, stealth_detect_range, wander_point,
-    within_assist_radius, TickScope, MOVE_TICK_SECS, RETURN_LEASH_SQ, SENSE_EVERY_N_TICKS,
+    within_assist_radius, TickScope, CHASE_LEAD_YD, CHASE_LEASH_SQ, CHASE_MELEE_SQ,
+    CHASE_REPATH_COS, CHASE_TARGET_MOVING_MS, MOVE_TICK_SECS, RETURN_LEASH_SQ, SENSE_EVERY_N_TICKS,
     WANDER_CHANCE_PCT, WANDER_RADIUS,
 };
 use super::tick::TickSweep;
@@ -91,8 +92,10 @@ pub(crate) trait MotionSink {
     /// Move the creature to `at` — position, grid address and packed cell in one write — and stamp
     /// its move clock at `moved_ms`.
     fn commit_position(&mut self, guid: u64, at: Point, moved_ms: u32);
-    /// Freeze a suppressed mover where it renders and tell the client to stop there: the position
-    /// moves, the move clock does not, and the emitted leg has zero duration.
+    /// Stop this mover at `at` and tell the client to halt there: the position moves, the move clock
+    /// does not, and the emitted leg has zero duration, REPLACING the leg it interrupts so the next
+    /// cycle reads it as landed. Both a suppressed mover frozen mid-leg and a chaser that reached
+    /// its victim end this way.
     fn halt(&mut self, leg: &LegInFlight, at: Point, spline_id: u32);
     /// Forget this creature's leg — arrived, orphaned or refused.
     fn drop_leg(&mut self, guid: u64);
@@ -249,8 +252,43 @@ pub(crate) trait EngageSink {
     fn enter_combat(&mut self, guid: u64);
 }
 
+/// One creature closing on the unit it fights, with everything that decision reads: where both
+/// stand, how recently the victim moved, and the leg the chaser is already running.
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) struct Pursuit {
+    pub guid: u64,
+    pub at: Point,
+    /// Where the creature currently looks — the facing turn is idempotent against it.
+    pub orientation: f32,
+    pub victim_at: Point,
+    /// The victim's move clock. A kiter is run down on the move; a planted one is stood next to.
+    pub victim_last_move_ms: u32,
+    /// Inside an open rout window: the rout leg is this creature's sole mover this firing.
+    pub routing: bool,
+    /// The leg it is already riding. Both the re-aim decision and the stop read it.
+    pub leg: Option<LegInFlight>,
+}
+
+/// Chase's surface: the fights worth closing, how far a caster fights from, and where a creature
+/// looks. It shares the movers the idle phases use — `speed_of`, `navigate`, `commit_leg` — and
+/// `halt` with spline advance, so a chase leg is written by the one leg writer like every other.
+pub(crate) trait PursuitSink {
+    /// Every live engagement this firing covers whose attacker is a creature that could move and
+    /// whose victim is still in the world. NOT scoped to the active-cell sweep: a fight dragged out
+    /// of every active cell must keep running.
+    fn pursuits(&self, scope: &TickScope) -> Vec<Pursuit>;
+    /// The longest range this creature can bring an offensive spell to bear from; 0 for anything
+    /// that has to close to melee.
+    fn caster_hold_range(&self, guid: u64) -> f32;
+    /// Turn the creature to `orientation` and tell the clients that can see it. A spline is the only
+    /// thing a client derives creature facing from, so this is a zero-duration facing packet.
+    fn face(&mut self, guid: u64, orientation: f32, spline_id: u32);
+}
+
 /// The whole world one cycle touches.
-pub(crate) trait CreatureWorld: MotionSink + IdleSink + EngageSink + LegacyPasses {
+pub(crate) trait CreatureWorld:
+    MotionSink + IdleSink + EngageSink + PursuitSink + LegacyPasses
+{
     /// The creatures near a covered player this firing, plus the pet and in-combat candidate lists
     /// the same sweep harvests. Read ONCE per cycle and shared by every pass that scopes to it.
     fn awake_creatures(&self, scope: &TickScope) -> TickSweep;
@@ -268,7 +306,6 @@ pub(crate) trait LegacyPasses {
     fn legacy_pet(&mut self, scope: &TickScope, now_ms: u32, pets: &[u64]) -> usize;
     fn legacy_cast(&mut self, scope: &TickScope) -> usize;
     fn legacy_threat_retarget(&mut self, scope: &TickScope) -> usize;
-    fn legacy_chase(&mut self, scope: &TickScope) -> usize;
     fn legacy_regen(&mut self) -> usize;
     fn legacy_combat_drop(&mut self, in_combat: &[u64]) -> usize;
     fn legacy_flee(&mut self, scope: &TickScope) -> usize;
@@ -319,7 +356,7 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
             w.legacy_threat_retarget(&tick.scope) as u64,
         ));
     }
-    rows.push(("chase", w.legacy_chase(&tick.scope) as u64));
+    rows.push(("chase", chase(w, &tick) as u64));
     rows.push(("combat_enter", combat_entry(w, &tick.scope) as u64));
     rows.push(("idle", idle_movement(w, &tick, &active) as u64));
     if tick.sense && global {
@@ -592,6 +629,142 @@ fn assist<W: EngageSink>(w: &mut W, active: &HashSet<u64>, mut calls: Vec<Called
     neighbors.len()
 }
 
+/// How far short of a STANDING victim a closing leg lands: just inside the 5-yard melee band, so the
+/// next swing connects and the leg never walks onto the victim.
+const MELEE_STOP_SHORT_YD: f32 = 4.0;
+
+/// A caster holds inside this fraction of its longest spell range, so a victim's small strafes do
+/// not yo-yo it across the boundary.
+const CASTER_HOLD_MARGIN: f32 = 0.9;
+
+/// The least bearing drift (radians, ~17°) that is worth turning for. Below it the correction would
+/// be imperceptible and would re-throw a facing packet every firing; the epsilon is what makes "have
+/// I already turned to face it" idempotent firing over firing.
+const FACING_EPSILON_RAD: f32 = 0.3;
+
+/// Shortest signed angular distance from `from` to `to`, wrapped into `(-PI, PI]` — so a bearing that
+/// crosses the ±PI seam (orientation 3.0, target bearing -3.0) reads as a small turn rather than a
+/// near-full circle. Pure — unit-tested below.
+fn angle_diff(from: f32, to: f32) -> f32 {
+    let two_pi = std::f32::consts::TAU;
+    let mut d = (to - from) % two_pi;
+    if d > std::f32::consts::PI {
+        d -= two_pi;
+    } else if d < -std::f32::consts::PI {
+        d += two_pi;
+    }
+    d
+}
+
+/// CHASE — an engaged creature closes on the unit it fights. It commits to ONE long run leg and
+/// rides it for several firings, re-aiming only when the leg lands or the victim veers off the
+/// heading it was thrown along; an offensive caster holds at spell range instead of face-tanking;
+/// and a creature that reaches a victim standing inside melee reach stops and turns to face it.
+///
+/// The engagements are the candidate set, so this phase ignores the active-cell sweep — a player
+/// cannot freeze a fight by dragging it away — and stays O(fights running). A routing or
+/// crowd-controlled creature is skipped, leaving the rout leg and fear as its sole movers, and every
+/// chaser gets at most one leg per firing: a second would share the first's `spline_id` and the
+/// client would throw it away. Visited in guid order. Returns the covered pursuits considered.
+fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
+    w: &mut W,
+    tick: &TickContext,
+) -> usize {
+    let mut pursuits = w.pursuits(&tick.scope);
+    pursuits.sort_unstable_by_key(|c| c.guid);
+    let visited = pursuits.len();
+    for c in pursuits {
+        if c.routing || w.movement_suppressed(c.guid) {
+            continue;
+        }
+        let gap_sq = dist_sq(c.at, c.victim_at);
+        // Past the pursuit cutoff the creature stops closing: the engagement's own timer ends the
+        // fight, distance does not, and walking home is the return phase's job afterwards.
+        if gap_sq > CHASE_LEASH_SQ {
+            continue;
+        }
+        // A creature plants into attack stance only for a victim that STOPPED. It runs a kiter down
+        // continuously — the swing pass hits on the move — which is what removes the
+        // run/attack-stance/run flicker of chasing someone who never stands still.
+        let victim_moving =
+            tick.now_ms.wrapping_sub(c.victim_last_move_ms) < CHASE_TARGET_MOVING_MS;
+        if gap_sq <= CHASE_MELEE_SQ && !victim_moving {
+            stand_and_face(w, tick, &c);
+            continue;
+        }
+        // An offensive caster stands and casts (the cast phase already fired this firing) while its
+        // victim is inside spell range and in plain sight. A wall-blocked one closes instead, which
+        // is the verdict the cast phase reached about that same line.
+        let hold = w.caster_hold_range(c.guid) * CASTER_HOLD_MARGIN;
+        if hold > 0.0 && gap_sq <= hold * hold && w.line_of_sight(c.guid, c.victim_at) {
+            continue;
+        }
+        let gap = gap_sq.sqrt();
+        let dir = (
+            (c.victim_at.x - c.at.x) / gap,
+            (c.victim_at.y - c.at.y) / gap,
+        );
+        // Aim PAST a moving victim, so one leg carries several firings of a straight-line kite; aim
+        // at melee reach for a standing one, so the stand above ends the approach.
+        let leg_len = if victim_moving {
+            gap + CHASE_LEAD_YD
+        } else {
+            (gap - MELEE_STOP_SHORT_YD).max(0.0)
+        };
+        let aim = (c.at.x + dir.0 * leg_len, c.at.y + dir.1 * leg_len);
+        let step = w.navigate(c.guid, aim, leg_len);
+        if step == (c.at.x, c.at.y) || !needs_new_leg(c.leg.as_ref(), dir) {
+            continue;
+        }
+        let run = w.speed_of(c.guid, Gait::Run);
+        let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, run) else {
+            continue; // nothing to close — the client rejects a zero-length leg
+        };
+        // The victim's height is only the FALLBACK: the writer snaps the landing point to the ground
+        // under it, which matters on a slope and where the point is a detour corner nowhere near the
+        // victim.
+        let leg = Leg {
+            to: (x, y),
+            z_fallback: c.victim_at.z,
+            dur_ms,
+            gait: Gait::Run,
+            hold_until_landed: false,
+        };
+        w.commit_leg(c.guid, leg, tick.now_ms);
+    }
+    visited
+}
+
+/// Does this chaser need a NEW leg? One whose leg has landed does. One still riding a leg keeps it
+/// while the victim stays roughly on the heading the leg was thrown along, which is what stops the
+/// client re-computing its path every firing.
+fn needs_new_leg(leg: Option<&LegInFlight>, dir: (f32, f32)) -> bool {
+    let Some(leg) = leg else {
+        return true;
+    };
+    let (lx, ly) = (leg.dest.x - leg.start.x, leg.dest.y - leg.start.y);
+    let len = (lx * lx + ly * ly).sqrt();
+    len <= 0.001 || (lx / len) * dir.0 + (ly / len) * dir.1 < CHASE_REPATH_COS
+}
+
+/// The victim is inside melee reach and standing still. Stop the leg the chaser was riding, so a
+/// lead aimed past a now-stopped victim does not carry it PAST them, and turn it to face what it is
+/// swinging at — a stand-and-swing creature throws no further movement leg, and a spline is the only
+/// thing a client derives creature facing from, so without this it keeps its pre-combat heading for
+/// the whole fight. Both effects are idempotent — the stop reaps its own leg on the next advance,
+/// the turn is epsilon-gated — so a settled fight goes silent.
+fn stand_and_face<W: MotionSink + PursuitSink>(w: &mut W, tick: &TickContext, c: &Pursuit) {
+    // ponytail: the stop reuses advance's `halt`, which also re-places the creature. Ceiling: one
+    // row write of the position it already holds, each time a fight settles.
+    if let Some(leg) = &c.leg {
+        w.halt(leg, c.at, tick.now_ms);
+    }
+    let bearing = (c.victim_at.y - c.at.y).atan2(c.victim_at.x - c.at.x);
+    if angle_diff(c.orientation, bearing).abs() > FACING_EPSILON_RAD {
+        w.face(c.guid, bearing, tick.now_ms);
+    }
+}
+
 /// COMBAT ENTRY — every unit in a live engagement this firing covers gets the in-combat flag and a
 /// refreshed combat-drop deadline. It covers a pure caster too: casting at a creature makes the
 /// creature retaliate, so the caster is the VICTIM of an engagement and is flagged from here.
@@ -693,4 +866,51 @@ fn loiter<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature, home: Ho
         hold_until_landed: true,
     };
     w.commit_leg(c.guid, leg, tick.now_ms);
+}
+
+/// The facing correction's precise edges. A scenario test proves that a creature reaching a standing
+/// victim turns to face it; these pin the seam-crossing and epsilon arithmetic that decides it,
+/// which is cheaper and sharper to state directly than through a fight.
+#[cfg(test)]
+mod facing_tests {
+    use super::*;
+    use std::f32::consts::{FRAC_PI_2, PI, TAU};
+
+    #[test]
+    fn zero_drift_is_zero() {
+        assert_eq!(angle_diff(1.0, 1.0), 0.0);
+    }
+
+    #[test]
+    fn a_quarter_turn_reads_as_a_quarter_turn_either_direction() {
+        assert!((angle_diff(0.0, FRAC_PI_2) - FRAC_PI_2).abs() < 1e-6);
+        assert!((angle_diff(0.0, -FRAC_PI_2) - (-FRAC_PI_2)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_pi_seam_takes_the_short_way_round() {
+        // orientation just past +PI, target bearing just past -PI: only ~0.2 rad apart going
+        // "outward" across the seam, NOT the ~2*PI-0.2 rad the naive subtraction would give.
+        let from = PI - 0.1;
+        let to = -PI + 0.1;
+        let d = angle_diff(from, to);
+        assert!(
+            d.abs() < 0.3,
+            "expected a short turn across the seam, got {d}"
+        );
+    }
+
+    #[test]
+    fn a_full_turn_collapses_to_no_turn() {
+        assert!(angle_diff(0.5, 0.5 + TAU).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_epsilon_gate_is_silent_below_threshold_and_fires_above_it() {
+        let orientation = 0.0_f32;
+        let just_under = FACING_EPSILON_RAD - 0.01;
+        let just_over = FACING_EPSILON_RAD + 0.01;
+        assert!(angle_diff(orientation, just_under).abs() <= FACING_EPSILON_RAD);
+        assert!(angle_diff(orientation, just_over).abs() > FACING_EPSILON_RAD);
+    }
 }
