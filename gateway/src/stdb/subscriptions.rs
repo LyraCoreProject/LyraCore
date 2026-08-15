@@ -1743,17 +1743,22 @@ pub(crate) fn guild_event_outbound(row: &GuildEvent) -> Vec<Outbound> {
                 GuildCommandResult::GuildPlayerNotInGuildS,
             ),
         ))),
-        event_kind::PRESENCE => wire_event(if row.payload == event_kind::PRESENCE_ONLINE {
-            wow_world_messages::vanilla::GuildEvent::SignedOn
-        } else {
-            wow_world_messages::vanilla::GuildEvent::SignedOff
-        }),
+        event_kind::SIGNED_ON => wire_event(wow_world_messages::vanilla::GuildEvent::SignedOn),
+        event_kind::SIGNED_OFF => wire_event(wow_world_messages::vanilla::GuildEvent::SignedOff),
         event_kind::LEFT => wire_event(wow_world_messages::vanilla::GuildEvent::Left),
         event_kind::REMOVED => wire_event(wow_world_messages::vanilla::GuildEvent::Removed),
         event_kind::DISBANDED => wire_event(wow_world_messages::vanilla::GuildEvent::Disbanded),
         event_kind::LEADER_CHANGED => {
             wire_event(wow_world_messages::vanilla::GuildEvent::LeaderChanged)
         }
+        // The MOTD's own line is the interpolation, not a player name: vanilla renders
+        // `SMSG_GUILD_EVENT(Motd)`'s first description verbatim as the message of the day.
+        event_kind::MOTD => Some(ServerOpcodeMessage::SMSG_GUILD_EVENT(Box::new(
+            codec::build_guild_event(
+                wow_world_messages::vanilla::GuildEvent::Motd,
+                std::slice::from_ref(&row.payload),
+            ),
+        ))),
         event_kind::GUILD_CHAT => match lyracore_shared::guild::decode_guild_chat(&row.payload) {
             Some(message) => Some(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
                 codec::build_guild_chat(row.other_guid, message),
@@ -3700,14 +3705,31 @@ mod tests {
             guild_event(event_kind::JOINED, ""),
             (WireEvent::Joined, vec!["Ginger".to_string()])
         );
+        for (kind, event) in [
+            (event_kind::SIGNED_ON, WireEvent::SignedOn),
+            (event_kind::SIGNED_OFF, WireEvent::SignedOff),
+            (event_kind::LEFT, WireEvent::Left),
+            (event_kind::REMOVED, WireEvent::Removed),
+            (event_kind::DISBANDED, WireEvent::Disbanded),
+            (event_kind::LEADER_CHANGED, WireEvent::LeaderChanged),
+        ] {
+            assert_eq!(
+                guild_event(kind, ""),
+                (event, vec!["Ginger".to_string()]),
+                "kind {kind} must reach a member as its own SMSG_GUILD_EVENT variant"
+            );
+        }
         assert_eq!(
-            guild_event(event_kind::PRESENCE, event_kind::PRESENCE_ONLINE),
-            (WireEvent::SignedOn, vec!["Ginger".to_string()])
+            guild_event(event_kind::MOTD, "Raid at eight"),
+            (WireEvent::Motd, vec!["Raid at eight".to_string()]),
+            "the MOTD's own text is the interpolation, not the setter's name"
         );
-        assert_eq!(
-            guild_event(event_kind::PRESENCE, event_kind::PRESENCE_OFFLINE),
-            (WireEvent::SignedOff, vec!["Ginger".to_string()])
-        );
+        match one(event_kind::GUILD_CHAT, "for the Alliance!") {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(m) => {
+                assert_eq!(m.message, "for the Alliance!");
+            }
+            other => panic!("expected SMSG_MESSAGECHAT, got {other}"),
+        }
         // A decline rides the command-result channel: vanilla's SMSG_GUILD_DECLINE is not in the
         // message crate, and a guild refusal is never a system chat line.
         match one(event_kind::DECLINED, "") {

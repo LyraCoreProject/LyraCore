@@ -739,10 +739,10 @@ pub(crate) fn broadcast_presence(
     let Some(membership) = guild_of(ctx, actor_guid) else {
         return;
     };
-    let payload = if online {
-        event_kind::PRESENCE_ONLINE
+    let kind = if online {
+        event_kind::SIGNED_ON
     } else {
-        event_kind::PRESENCE_OFFLINE
+        event_kind::SIGNED_OFF
     };
     for member in members_of(ctx, membership.guild_id) {
         if member.character_guid == actor_guid {
@@ -751,10 +751,10 @@ pub(crate) fn broadcast_presence(
         push_event(
             ctx,
             member.character_guid,
-            event_kind::PRESENCE,
+            kind,
             actor_guid,
             actor_name,
-            payload.to_string(),
+            String::new(),
         );
     }
 }

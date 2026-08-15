@@ -436,18 +436,8 @@ fn signing_on_and_off_broadcasts_to_the_rest_of_the_guild() {
     assert_eq!(
         g.events.as_slice(),
         &[
-            (
-                GINGER,
-                event_kind::PRESENCE,
-                VIM,
-                event_kind::PRESENCE_ONLINE.to_string()
-            ),
-            (
-                GINGER,
-                event_kind::PRESENCE,
-                VIM,
-                event_kind::PRESENCE_OFFLINE.to_string()
-            ),
+            (GINGER, event_kind::SIGNED_ON, VIM, String::new()),
+            (GINGER, event_kind::SIGNED_OFF, VIM, String::new()),
         ],
         "only the OTHER members hear it"
     );

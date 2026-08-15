@@ -8082,10 +8082,10 @@ impl FakeGuild {
         let Some((guild_id, _)) = self.guild_of(actor_guid) else {
             return;
         };
-        let payload = if online {
-            event_kind::PRESENCE_ONLINE
+        let kind = if online {
+            event_kind::SIGNED_ON
         } else {
-            event_kind::PRESENCE_OFFLINE
+            event_kind::SIGNED_OFF
         };
         let members: Vec<u64> = self
             .members
@@ -8094,12 +8094,7 @@ impl FakeGuild {
             .map(|(_, guid, _)| *guid)
             .collect();
         for member in members {
-            self.events.push((
-                member,
-                event_kind::PRESENCE,
-                actor_guid,
-                payload.to_string(),
-            ));
+            self.events.push((member, kind, actor_guid, String::new()));
         }
     }
 

@@ -70,19 +70,20 @@ pub fn valid_guild_name(name: &str) -> bool {
 
 /// Guild-event kinds (`game_guild_event.kind`) — what SMSG the gateway relays. The same
 /// per-recipient relay shape [`crate::group::event_kind`] uses, on the guild's own table.
+///
+/// One kind per PACKET the relay can build. Where a broadcast has two directions the wire keeps
+/// apart, the kinds are kept apart too ([`SIGNED_ON`]/[`SIGNED_OFF`]) rather than folded behind a
+/// payload flag: a relay that had to read the payload to pick the packet variant is exactly the
+/// drift this contract exists to prevent.
 pub mod event_kind {
-    /// The guild roster changed → the gateway re-renders from the row's payload
-    /// ([`super::encode_roster`]), built in the SAME transaction as the membership change.
-    pub const ROSTER: u8 = 0;
-
     /// A guild invite was extended to the recipient → `SMSG_GUILD_INVITE`. `other_name` is the
     /// inviter's name and `payload` the guild's name, both filled at write time: realm-core holds
     /// no character rows, so nothing downstream can look either of them up.
-    pub const INVITE: u8 = 1;
+    pub const INVITE: u8 = 0;
 
     /// A character joined the guild → `SMSG_GUILD_EVENT(Joined)`. Written for every member,
     /// including the one who just joined. `other_name` is the joiner.
-    pub const JOINED: u8 = 2;
+    pub const JOINED: u8 = 1;
 
     /// The recipient's invite was declined → `SMSG_GUILD_COMMAND_RESULT` to the INVITER.
     /// `other_name` is the character who declined.
@@ -90,44 +91,43 @@ pub mod event_kind {
     /// Vanilla answers this with `SMSG_GUILD_DECLINE`, which `wow_world_messages` 0.3 does not
     /// carry. The command-result channel is the one alternative the guild system allows — a system
     /// chat line is never it.
-    pub const DECLINED: u8 = 3;
+    pub const DECLINED: u8 = 2;
 
-    /// A member signed on or off → `SMSG_GUILD_EVENT(SignedOn)` / `(SignedOff)` to the rest of the
-    /// guild. `other_name` is the member; `payload` is [`PRESENCE_ONLINE`] or
-    /// [`PRESENCE_OFFLINE`].
-    ///
-    /// One kind rather than two because the reserved contract block is four kinds wide and the
-    /// invite handshake needs the other three. The two directions are the same broadcast with a
-    /// flipped bit, so they cost one payload byte instead of a number.
-    pub const PRESENCE: u8 = 4;
+    /// A member entered the world → `SMSG_GUILD_EVENT(SignedOn)` to the rest of the guild.
+    /// `other_guid`/`other_name` name the member.
+    pub const SIGNED_ON: u8 = 3;
 
-    /// [`PRESENCE`]'s payload for a member who just signed on.
-    pub const PRESENCE_ONLINE: &str = "1";
-    /// [`PRESENCE`]'s payload for a member who just signed off.
-    pub const PRESENCE_OFFLINE: &str = "0";
+    /// A member left it → `SMSG_GUILD_EVENT(SignedOff)`, otherwise identical to [`SIGNED_ON`].
+    pub const SIGNED_OFF: u8 = 4;
+
     /// A member left of their own accord → `SMSG_GUILD_EVENT(Left)`. `other_guid`/`other_name` name
     /// the member who left; sent to everyone who stayed.
     pub const LEFT: u8 = 5;
+
     /// The guild master removed a member → `SMSG_GUILD_EVENT(Removed)`. `other_guid`/`other_name`
     /// name the member who was removed.
     pub const REMOVED: u8 = 6;
+
     /// The guild was destroyed → `SMSG_GUILD_EVENT(Disbanded)`. Sent to every member the guild had
     /// while it still had them, because after the cascade there is no roster left to address.
     pub const DISBANDED: u8 = 7;
+
     /// The guild has a new master → `SMSG_GUILD_EVENT(LeaderChanged)`. `other_guid`/`other_name`
     /// name the new master.
     pub const LEADER_CHANGED: u8 = 8;
-    /// A guild (`/g`) chat line, one row per recipient (every OTHER online member, plus an echo
-    /// to the sender) → `SMSG_MESSAGECHAT` with `ChatType::Guild`. `other_guid`/`other_name`
-    /// (resolved by the pusher, same convention [`ROSTER`] and `crate::group::event_kind` use) =
-    /// the SPEAKER; `payload` = the message text via [`encode_guild_chat`]. Mirrors
-    /// `crate::group::event_kind::PARTY_CHAT`.
-    pub const GUILD_CHAT: u8 = 11;
+
+    /// A guild (`/g`) chat line, one row per recipient (every OTHER online member, plus an echo to
+    /// the sender) → `SMSG_MESSAGECHAT` with `ChatType::Guild`. `other_guid` is the SPEAKER;
+    /// `payload` is the message text via [`super::encode_guild_chat`]. `other_name` stays empty:
+    /// the packet carries the speaker's guid alone and the client resolves the name itself.
+    pub const GUILD_CHAT: u8 = 9;
+
     /// The MOTD changed → `SMSG_GUILD_EVENT(Motd, [new_motd])`. `other_guid` is the setter (always
     /// the guild master at write time); `payload` is the new MOTD text, which may be empty. One row
     /// per member, dropped in the same transaction as the write.
-    pub const MOTD: u8 = 13;
+    pub const MOTD: u8 = 10;
 }
+
 /// The REALM-CORE guild ops: the `op` byte of the single operator-gated `realm_guild_op` reducer
 /// the gateway drives realm-wide guild state with.
 ///
@@ -135,15 +135,19 @@ pub mod event_kind {
 /// [`crate::group::realm_op`] states: every gateway-callable reducer costs a hand-maintained SDK
 /// binding, and the argument SHAPE is what actually has to be pinned. It is pinned here.
 ///
-/// Argument slots (`realm_guild_op(op, actor_guid, target_guid, arg_a, text)`), per op:
+/// An op tag names a VERB on the authority, not a packet, so a verb that takes a yes/no parameter
+/// spends `arg_a` on it rather than a second tag ([`ANSWER`], [`PRESENCE`]). That is the opposite
+/// of [`super::event_kind`]'s rule, and deliberately: kinds select packets, tags select cores.
+///
+/// Argument slots (`realm_guild_op(op, actor_guid, target_guid, arg_a, text)`), per op. Every op
+/// past [`CREATE`] puts the ACTING character's own name in `text` unless noted, because realm-core
+/// holds no character rows: a notification written there can only carry a name the gateway supplied.
+///
 /// - [`CREATE`] — `text` is the guild name; `target_guid` and `arg_a` unused.
-/// - [`INVITE`] — `target_guid` is the invitee; `text` is the ACTOR's name; `arg_a` unused.
+/// - [`INVITE`] — `target_guid` is the invitee; `text` is the actor's name; `arg_a` unused.
 /// - [`ANSWER`] — `arg_a` is [`ANSWER_ACCEPT`] or [`ANSWER_DECLINE`]; `text` is the actor's name.
 /// - [`PRESENCE`] — `arg_a` is [`PRESENCE_ON`] or [`PRESENCE_OFF`]; `text` is the actor's name.
-///
-/// Every op past `CREATE` puts the ACTING character's own name in `text`, because realm-core holds
-/// no character rows: a notification written there can only carry a name the gateway supplied.
-/// - [`LEAVE`] — `text` is the leaver's OWN name, for the departure notice; the rest unused.
+/// - [`LEAVE`] — `text` is the leaver's own name, for the departure notice; the rest unused.
 /// - [`REMOVE`] — `target_guid` is the member to remove, `text` their name; `arg_a` unused.
 /// - [`DISBAND`] — every slot but `actor_guid` unused.
 /// - [`LEADER`] — `target_guid` is the new master, `text` their name; `arg_a` unused.
@@ -161,13 +165,45 @@ pub mod realm_op {
 
     /// `CMSG_GUILD_ACCEPT` / `CMSG_GUILD_DECLINE` — `actor_guid` answers its own pending invite.
     ///
-    /// One op with a yes/no slot rather than two: both arms consume the same `GuildInvite` row, and
-    /// the contract's reserved block is three ops wide with [`PRESENCE`] needing one of them. The
-    /// client vocabulary keeps the two verbs apart (`world::guild::Op`); only the wire tag is shared.
+    /// One op with a yes/no slot rather than two: both arms consume the same `GuildInvite` row in
+    /// one transaction, so they are one verb with a parameter. The client vocabulary keeps the two
+    /// apart (`world::guild::Op`); only the wire tag is shared.
     pub const ANSWER: u8 = 2;
 
-    /// A member signed on or off — `actor_guid` tells the rest of its guild.
+    /// A member signed on or off — `actor_guid` tells the rest of its guild. `arg_a` carries the
+    /// direction, for the reason [`ANSWER`] gives.
     pub const PRESENCE: u8 = 3;
+
+    /// `CMSG_GUILD_LEAVE` — `actor_guid` removes itself from its own guild.
+    pub const LEAVE: u8 = 4;
+
+    /// `CMSG_GUILD_REMOVE` — `actor_guid`, the guild master, removes `target_guid`.
+    pub const REMOVE: u8 = 5;
+
+    /// `CMSG_GUILD_DISBAND` — `actor_guid`, the guild master, destroys the guild.
+    pub const DISBAND: u8 = 6;
+
+    /// `CMSG_GUILD_LEADER` — `actor_guid`, the guild master, hands the guild to `target_guid`.
+    pub const LEADER: u8 = 7;
+
+    /// `CMSG_MESSAGECHAT` (`ChatType::Guild`) — `actor_guid` speaks `text` to its guild.
+    pub const GUILD_CHAT: u8 = 8;
+
+    /// `CMSG_GUILD_MOTD` — `actor_guid` (must be the guild master) sets the guild's MOTD to `text`.
+    /// An empty `text` is a valid write: it CLEARS the MOTD rather than being refused.
+    pub const SET_MOTD: u8 = 9;
+
+    /// `CMSG_GUILD_INFO_TEXT` — same gate and shape as [`SET_MOTD`], for `Guild.info_text`. Unlike
+    /// the MOTD, a change here never drops a [`super::event_kind::MOTD`] notification.
+    pub const SET_INFO_TEXT: u8 = 10;
+
+    /// `CMSG_GUILD_SET_PUBLIC_NOTE` — `target_guid`'s public note becomes `text`. `actor_guid` must
+    /// be `target_guid` itself (a member may always set their OWN public note) or the guild master.
+    pub const SET_PUBLIC_NOTE: u8 = 11;
+
+    /// `CMSG_GUILD_SET_OFFICER_NOTE` — same shape as [`SET_PUBLIC_NOTE`], but master-only: unlike
+    /// the public note, a member may never set even their own officer note.
+    pub const SET_OFFICER_NOTE: u8 = 12;
 
     /// [`ANSWER`]'s `arg_a` for joining the guild.
     pub const ANSWER_ACCEPT: u32 = 1;
@@ -177,28 +213,6 @@ pub mod realm_op {
     pub const PRESENCE_ON: u32 = 1;
     /// [`PRESENCE`]'s `arg_a` for a member who just left it.
     pub const PRESENCE_OFF: u32 = 0;
-    /// `CMSG_GUILD_LEAVE` — `actor_guid` removes itself from its own guild.
-    pub const LEAVE: u8 = 4;
-    /// `CMSG_GUILD_REMOVE` — `actor_guid`, the guild master, removes `target_guid`.
-    pub const REMOVE: u8 = 5;
-    /// `CMSG_GUILD_DISBAND` — `actor_guid`, the guild master, destroys the guild.
-    pub const DISBAND: u8 = 6;
-    /// `CMSG_GUILD_LEADER` — `actor_guid`, the guild master, hands the guild to `target_guid`.
-    pub const LEADER: u8 = 7;
-    /// `CMSG_MESSAGECHAT` (`ChatType::Guild`) — `actor_guid` speaks `text` to its guild.
-    pub const GUILD_CHAT: u8 = 10;
-    /// `CMSG_GUILD_MOTD` — `actor_guid` (must be the guild master) sets the guild's MOTD to `text`.
-    /// An empty `text` is a valid write: it CLEARS the MOTD rather than being refused.
-    pub const SET_MOTD: u8 = 12;
-    /// `CMSG_GUILD_INFO_TEXT` — same gate and shape as [`SET_MOTD`], for `Guild.info_text`. Unlike
-    /// the MOTD, a change here never drops a [`super::event_kind::MOTD`] notification.
-    pub const SET_INFO_TEXT: u8 = 13;
-    /// `CMSG_GUILD_SET_PUBLIC_NOTE` — `target_guid`'s public note becomes `text`. `actor_guid` must
-    /// be `target_guid` itself (a member may always set their OWN public note) or the guild master.
-    pub const SET_PUBLIC_NOTE: u8 = 14;
-    /// `CMSG_GUILD_SET_OFFICER_NOTE` — same shape as [`SET_PUBLIC_NOTE`], but master-only: unlike
-    /// the public note, a member may never set even their own officer note.
-    pub const SET_OFFICER_NOTE: u8 = 15;
 }
 
 /// The guild reducers' `Err` strings the gateway maps to `GuildCommandResult` variants — EXACT
@@ -238,43 +252,6 @@ pub mod err {
     pub const PLAYER_NOT_FOUND: &str = "guild note target not found";
 }
 
-/// Encode a `ROSTER` payload: `motd|guid,rank,public_note,officer_note;...`.
-///
-/// Only what REALM-CORE owns is in it. Names, levels, classes, areas and online flags are absent
-/// on purpose — the directory database holds no character rows, so the gateway fills those at
-/// render time from the shards. Free-text fields get the frame delimiters stripped HERE; the
-/// encoder owns the grammar, so it owns the defense.
-pub fn encode_roster(motd: &str, members: &[(u64, u32, String, String)]) -> String {
-    let members: Vec<String> = members
-        .iter()
-        .map(|(guid, rank, public_note, officer_note)| {
-            format!(
-                "{guid},{rank},{},{}",
-                strip_frame(public_note),
-                strip_frame(officer_note)
-            )
-        })
-        .collect();
-    format!("{}|{}", strip_frame(motd), members.join(";"))
-}
-
-/// Decode a `ROSTER` payload back to `(motd, [(guid, rank, public_note, officer_note)])`. `None`
-/// on any malformed input — the gateway fails closed rather than rendering a corrupt roster.
-#[allow(clippy::type_complexity)]
-pub fn decode_roster(payload: &str) -> Option<(String, Vec<(u64, u32, String, String)>)> {
-    let (motd, rest) = payload.split_once('|')?;
-    let mut members = Vec::new();
-    for entry in rest.split(';').filter(|e| !e.is_empty()) {
-        let mut parts = entry.split(',');
-        let guid: u64 = parts.next()?.parse().ok()?;
-        let rank: u32 = parts.next()?.parse().ok()?;
-        let public_note = parts.next()?.to_string();
-        let officer_note = parts.next()?.to_string();
-        members.push((guid, rank, public_note, officer_note));
-    }
-    (!members.is_empty()).then_some((motd.to_string(), members))
-}
-
 /// Encode a `GUILD_CHAT` payload: just the raw message text. Unlike [`encode_roster`]'s
 /// multi-field grammar, there is nothing else to combine — the speaker's guid/name already ride
 /// `GuildEvent.other_guid`/`other_name` — so this is a pass-through, mirroring
@@ -288,11 +265,6 @@ pub fn encode_guild_chat(message: &str) -> String {
 /// closed on malformed input.
 pub fn decode_guild_chat(payload: &str) -> Option<String> {
     Some(payload.to_string())
-}
-
-/// Replace the roster grammar's delimiters so a hostile MOTD or note cannot forge a member row.
-fn strip_frame(text: &str) -> String {
-    text.replace(['|', ';', ','], "_")
 }
 
 #[cfg(test)]
@@ -330,51 +302,55 @@ mod tests {
         assert!(!valid_guild_name("New\nline"));
     }
 
-    #[test]
-    fn roster_round_trips_including_the_delimiter_defense() {
-        let members = vec![
-            (2u64, 0u32, "founder".to_string(), "trusted".to_string()),
-            (3, 4, "a|b;c,d".to_string(), String::new()), // hostile note → encoder strips the frame
-        ];
-        let wire = encode_roster("Welcome, all", &members);
-        let (motd, decoded) = decode_roster(&wire).unwrap();
-        assert_eq!(motd, "Welcome_ all", "the MOTD is framed too");
-        assert_eq!(
-            decoded[0],
-            (2, 0, "founder".to_string(), "trusted".to_string())
-        );
-        assert_eq!(decoded[1], (3, 4, "a_b_c_d".to_string(), String::new()));
-    }
-
-    #[test]
-    fn roster_decode_fails_closed_on_garbage() {
-        assert!(decode_roster("").is_none()); // no frame separator at all
-        assert!(decode_roster("motd|").is_none()); // empty roster
-        assert!(decode_roster("motd|x,0,,").is_none()); // non-numeric guid
-        assert!(decode_roster("motd|5,x,,").is_none()); // non-numeric rank
-        assert!(decode_roster("motd|5,0").is_none()); // missing both note fields
-        assert!(decode_roster("motd|5,0,note").is_none()); // missing the officer note
-    }
-
     /// The op byte is a WIRE value: the gateway sends it, the module dispatches on it, and the two
-    /// are deployed separately. Pinned, not merely defined.
+    /// are deployed separately. Pinned as a CONTIGUOUS block, so a renumber that leaves a gap or
+    /// reuses a tag fails here rather than at a client.
     #[test]
-    fn realm_guild_op_codes_are_stable() {
-        assert_eq!(realm_op::CREATE, 0);
-        assert_eq!(realm_op::INVITE, 1);
-        assert_eq!(realm_op::ANSWER, 2);
-        assert_eq!(realm_op::PRESENCE, 3);
+    fn realm_guild_op_codes_are_a_contiguous_collision_free_block() {
+        let tags = [
+            realm_op::CREATE,
+            realm_op::INVITE,
+            realm_op::ANSWER,
+            realm_op::PRESENCE,
+            realm_op::LEAVE,
+            realm_op::REMOVE,
+            realm_op::DISBAND,
+            realm_op::LEADER,
+            realm_op::GUILD_CHAT,
+            realm_op::SET_MOTD,
+            realm_op::SET_INFO_TEXT,
+            realm_op::SET_PUBLIC_NOTE,
+            realm_op::SET_OFFICER_NOTE,
+        ];
+        assert_eq!(
+            tags.to_vec(),
+            (0..tags.len() as u8).collect::<Vec<_>>(),
+            "op tags are declaration-ordered, gapless and unique"
+        );
     }
 
     /// The event kind is the other wire value: the module writes it, the gateway's relay decodes it
-    /// into a packet, and the two are deployed separately.
+    /// into a packet, and the two are deployed separately. Pinned the same way, for the same reason.
     #[test]
-    fn guild_event_kinds_are_stable() {
-        assert_eq!(event_kind::ROSTER, 0);
-        assert_eq!(event_kind::INVITE, 1);
-        assert_eq!(event_kind::JOINED, 2);
-        assert_eq!(event_kind::DECLINED, 3);
-        assert_eq!(event_kind::PRESENCE, 4);
+    fn guild_event_kinds_are_a_contiguous_collision_free_block() {
+        let kinds = [
+            event_kind::INVITE,
+            event_kind::JOINED,
+            event_kind::DECLINED,
+            event_kind::SIGNED_ON,
+            event_kind::SIGNED_OFF,
+            event_kind::LEFT,
+            event_kind::REMOVED,
+            event_kind::DISBANDED,
+            event_kind::LEADER_CHANGED,
+            event_kind::GUILD_CHAT,
+            event_kind::MOTD,
+        ];
+        assert_eq!(
+            kinds.to_vec(),
+            (0..kinds.len() as u8).collect::<Vec<_>>(),
+            "event kinds are declaration-ordered, gapless and unique"
+        );
     }
 
     /// A new member joins at the lowest rank that has a NAME. Rank 9 exists only so the packet's
@@ -415,31 +391,6 @@ mod tests {
         }
     }
 
-    /// The teardown block, pinned for the same reason: these numbers are on the wire between two
-    /// separately deployed crates, and they are also the block this ticket owns — a renumber would
-    /// silently collide with another op's.
-    #[test]
-    fn the_teardown_op_codes_and_event_kinds_are_stable() {
-        assert_eq!(
-            (
-                realm_op::LEAVE,
-                realm_op::REMOVE,
-                realm_op::DISBAND,
-                realm_op::LEADER
-            ),
-            (4, 5, 6, 7)
-        );
-        assert_eq!(
-            (
-                event_kind::LEFT,
-                event_kind::REMOVED,
-                event_kind::DISBANDED,
-                event_kind::LEADER_CHANGED
-            ),
-            (5, 6, 7, 8)
-        );
-    }
-
     /// The gateway classifies a refusal by SUBSTRING, so one error string containing another would
     /// silently answer the wrong `GuildCommandResult` — a kick refusal rendered as "you are in no
     /// guild", say. No string may be a substring of any other.
@@ -463,8 +414,6 @@ mod tests {
                 );
             }
         }
-        assert_eq!(realm_op::GUILD_CHAT, 10);
-        assert_eq!(event_kind::GUILD_CHAT, 11);
     }
 
     #[test]
@@ -477,16 +426,5 @@ mod tests {
         // characters, which belong to a different kind's grammar entirely).
         assert_eq!(decode_guild_chat(""), Some(String::new()));
         assert_eq!(decode_guild_chat("a|b;c,d"), Some("a|b;c,d".to_string()));
-    }
-
-    /// The MOTD/notes family's own reserved number block — a WIRE value the module dispatches on
-    /// and the gateway relay decodes, deployed separately. Pinned, not merely defined.
-    #[test]
-    fn motd_and_note_realm_ops_and_event_kind_are_stable() {
-        assert_eq!(realm_op::SET_MOTD, 12);
-        assert_eq!(realm_op::SET_INFO_TEXT, 13);
-        assert_eq!(realm_op::SET_PUBLIC_NOTE, 14);
-        assert_eq!(realm_op::SET_OFFICER_NOTE, 15);
-        assert_eq!(event_kind::MOTD, 13);
     }
 }
