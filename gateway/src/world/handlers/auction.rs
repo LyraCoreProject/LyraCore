@@ -5,6 +5,7 @@ use super::super::*;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct AuctionEntity {
     pub(crate) type_mask: u32,
+    pub(crate) entry: u32,
     pub(crate) map_id: u32,
     pub(crate) instance_id: u64,
     pub(crate) x: f32,
@@ -126,6 +127,7 @@ impl AuctionActionStore for crate::stdb::Coordinator {
         };
         let view = |entity: crate::stdb::bindings::WorldEntity| AuctionEntity {
             type_mask: entity.type_mask,
+            entry: entity.entry,
             map_id: entity.map_id,
             instance_id: entity.instance_id,
             x: entity.x,
@@ -404,23 +406,12 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
         }
         ClientOpcodeMessage::CMSG_AUCTION_PLACE_BID(message) => {
             let auction_id = message.auction_id;
-            let Some(player_guid) = player.self_guid else {
-                return Ok(bid_result(auction_id, PlaceBidOutcome::Database));
-            };
             let auctioneer_guid = message.auctioneer.guid();
-            let entities = match store.auction_entities(player_guid, auctioneer_guid) {
-                Ok(entities) => entities,
-                Err(error)
-                    if classify_auction_action_error(&error)
-                        == AuctionActionErrorClass::GameplayRefusal =>
-                {
-                    return Ok(bid_result(auction_id, PlaceBidOutcome::Database));
-                }
-                Err(error) => return Err(error),
-            };
-            if !interaction_allowed(entities) {
+            let Some(player_guid) =
+                validated_auction_player_guid(store, player, auctioneer_guid)?
+            else {
                 return Ok(bid_result(auction_id, PlaceBidOutcome::Database));
-            }
+            };
             let outcome = match store.place_bid(PlaceBidRequest {
                 actor_guid: player_guid,
                 auctioneer_guid,
@@ -439,23 +430,12 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
             return Ok(bid_result(auction_id, outcome));
         }
         ClientOpcodeMessage::CMSG_AUCTION_SELL_ITEM(message) => {
-            let Some(player_guid) = player.self_guid else {
-                return Ok(create_result(CreateAuctionOutcome::Database));
-            };
             let auctioneer_guid = message.auctioneer.guid();
-            let entities = match store.auction_entities(player_guid, auctioneer_guid) {
-                Ok(entities) => entities,
-                Err(error)
-                    if classify_auction_action_error(&error)
-                        == AuctionActionErrorClass::GameplayRefusal =>
-                {
-                    return Ok(create_result(CreateAuctionOutcome::Database));
-                }
-                Err(error) => return Err(error),
-            };
-            if !interaction_allowed(entities) {
+            let Some(player_guid) =
+                validated_auction_player_guid(store, player, auctioneer_guid)?
+            else {
                 return Ok(create_result(CreateAuctionOutcome::Database));
-            }
+            };
             let outcome = match store.create_auction(CreateAuctionRequest {
                 actor_guid: player_guid,
                 auctioneer_guid,
@@ -477,31 +457,12 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
         }
         other => return Ok(AuctionActionOutcome::PassThrough(other)),
     };
-    let Some(player_guid) = player.self_guid else {
-        return Ok(AuctionActionOutcome::Handled {
-            outbound: Vec::new(),
-        });
-    };
     let auctioneer_guid = auctioneer.guid();
-    let entities = match store.auction_entities(player_guid, auctioneer_guid) {
-        Ok(entities) => entities,
-        Err(error)
-            if classify_auction_action_error(&error)
-                == AuctionActionErrorClass::GameplayRefusal =>
-        {
-            log::debug!(
-                "world: auctioneer {auctioneer_guid} interaction unavailable for player \
-                 {player_guid}: {error}"
-            );
-            None
-        }
-        Err(error) => return Err(error),
-    };
-    if !interaction_allowed(entities) {
+    let Some(player_guid) = validated_auction_player_guid(store, player, auctioneer_guid)? else {
         return Ok(AuctionActionOutcome::Handled {
             outbound: Vec::new(),
         });
-    }
+    };
     use wow_world_messages::vanilla::{AuctionHouse, MSG_AUCTION_HELLO_Server};
     let message = match request {
         AuctionRequest::Hello(auctioneer) => {
@@ -562,6 +523,7 @@ fn interaction_allowed(entities: Option<AuctionInteraction>) -> bool {
         && auctioneer.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT == 0
         && !auctioneer.dead
         && auctioneer.npc_flags & lyracore_shared::constants::npc_flags::AUCTIONEER != 0
+        && lyracore_shared::auction::is_stormwind_auctioneer(auctioneer.entry)
         && actor.map_id == auctioneer.map_id
         && actor.instance_id == auctioneer.instance_id
         && dx * dx + dy * dy + dz * dz <= lyracore_shared::auction::INTERACTION_RANGE_SQ
@@ -649,6 +611,7 @@ mod tests {
             },
             auctioneer: AuctionEntity {
                 type_mask: lyracore_shared::constants::type_mask::CREATURE,
+                entry: 8_670,
                 npc_flags: lyracore_shared::constants::npc_flags::AUCTIONEER,
                 x: 10.0,
                 ..Default::default()
@@ -790,7 +753,7 @@ mod tests {
                 if message.total_amount_of_auctions == 51
                     && message.auctions.len() == 1
                     && message.auctions[0].id == 8
-                    && message.auctions[0].minimum_bid == 11
+                    && message.auctions[0].minimum_bid == 212
         ));
     }
 
@@ -837,7 +800,7 @@ mod tests {
                 if message.total_amount_of_auctions == 52
                     && message.auctions.len() == 1
                     && message.auctions[0].id == 19
-                    && message.auctions[0].minimum_bid == 5
+                    && message.auctions[0].minimum_bid == 105
                     && message.auctions[0].time_left == std::time::Duration::from_millis(3_000)
         ));
     }
@@ -892,7 +855,7 @@ mod tests {
                 if message.total_amount_of_auctions == 52
                     && message.auctions.len() == 1
                     && message.auctions[0].id == 19
-                    && message.auctions[0].minimum_bid == 6
+                    && message.auctions[0].minimum_bid == 113
                     && message.auctions[0].highest_bid == 107
                     && message.auctions[0].highest_bidder.guid() == 8
         ));
@@ -1326,6 +1289,38 @@ mod tests {
                     .is_empty(),
                 "invalid interaction case {index} must be a handled refusal"
             );
+        }
+    }
+
+    #[test]
+    fn only_supported_stormwind_auctioneers_open_the_market() {
+        let AuctionInteraction {
+            player,
+            auctioneer,
+        } = valid_interaction();
+
+        for entry in [8_670, 8_719, 15_659] {
+            let outbound = hello_outbound(&store_with(Some(AuctionInteraction {
+                player,
+                auctioneer: AuctionEntity {
+                    entry,
+                    ..auctioneer
+                },
+            })))
+            .unwrap();
+            assert_eq!(outbound.len(), 1, "Stormwind auctioneer {entry}");
+        }
+
+        for entry in [9_858, 15_675] {
+            assert!(hello_outbound(&store_with(Some(AuctionInteraction {
+                player,
+                auctioneer: AuctionEntity {
+                    entry,
+                    ..auctioneer
+                },
+            })))
+            .unwrap()
+            .is_empty(), "unsupported auctioneer {entry} must be refused");
         }
     }
 

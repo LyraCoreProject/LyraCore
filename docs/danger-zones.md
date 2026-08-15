@@ -122,7 +122,8 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
   sequence, so any later `id: 0` insert (from a reducer) or SQL `VALUES (0, …)` allocates a COLLIDING
   id: reducers PANIC with errno-12 and the whole transaction rolls back (a seed that "does nothing" is
   usually this), and SQL inserts fail silently. Fixture and scenario rows must therefore use FIXED
-  reserved ids (the 509xxxx range) with a delete-first. Same class: `SpellEffect.id` is a
+  reserved ids (the decimal 5,090,000–5,099,999 `509xxxx` range, written `509_0000`–`509_9999`
+  in Rust) with a delete-first. Same class: `SpellEffect.id` is a
   deterministic primary key, `(spell_id << 2) | index` — never plain-insert one the importer may also
   write; use the fixtures' `upsert_effect`. Found live 2026-07-15.
 - **`#[default(0)]` on a u64 is a real, deploy-only break.** It encodes four bytes where eight are
@@ -152,7 +153,8 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
   ids will corrupt imported content: deleting and reinserting faction-template rows 14/1 breaks the
   imported Monster/Player templates until the next import, item entries 50/52 are real imported items,
   and granting reputation on a real faction that was imported without a reputation bar silently does
-  nothing. All fixture data must live at RESERVED ids (509xxxx items and factions, 50900 quests,
+  nothing. All fixture data must live at RESERVED ids (decimal 5,090,000–5,099,999 `509xxxx`
+  items and factions, 50900 quests,
   5090x faction templates), and staging helpers must be import-aware — no-ops when the real rows
   exist. Teardown assertions must compare against a PRE-TEST count, never against zero.
 - **`spacetime sql` prints whole floats WITHOUT a decimal point.** Any regex reading a coordinate back

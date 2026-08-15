@@ -23,7 +23,8 @@ pub struct AuctionView {
 }
 
 pub fn build_auction_list_item(view: &AuctionView, now_micros: i64) -> AuctionListItem {
-    let minimum_bid = lyracore_shared::auction::bid_increment(view.highest_bid);
+    let minimum_bid = lyracore_shared::auction::minimum_next_bid(view.start_bid, view.highest_bid)
+        .unwrap_or(u32::MAX);
     let remaining_millis = view.expires_at_micros.saturating_sub(now_micros).max(0) / 1_000;
     AuctionListItem {
         id: view.id,
@@ -117,7 +118,7 @@ mod tests {
         assert_eq!(mapped.item_charges, 0);
         assert_eq!(mapped.item_owner.guid(), 10);
         assert_eq!(mapped.start_bid, 100);
-        assert_eq!(mapped.minimum_bid, 11);
+        assert_eq!(mapped.minimum_bid, 212);
         assert_eq!(mapped.buyout_amount, 500);
         assert_eq!(mapped.time_left, Duration::from_millis(2_500));
         assert_eq!(mapped.highest_bidder.guid(), 20);
@@ -125,7 +126,7 @@ mod tests {
 
         let mut unbid = view();
         unbid.highest_bid = 0;
-        assert_eq!(build_auction_list_item(&unbid, 1_000_000).minimum_bid, 0);
+        assert_eq!(build_auction_list_item(&unbid, 1_000_000).minimum_bid, 100);
 
         assert_eq!(
             build_auction_list_item(&view(), 4_000_000).time_left,

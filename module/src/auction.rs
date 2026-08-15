@@ -179,6 +179,11 @@ fn seller_proceeds(winning_price: u32, deposit: u32) -> Option<u32> {
     u32::try_from(after_cut.checked_add(u64::from(deposit))?).ok()
 }
 
+fn listing_proceeds_are_representable(terms: ListingTerms, deposit: u32) -> bool {
+    seller_proceeds(terms.start_bid, deposit).is_some()
+        && (terms.buyout == 0 || seller_proceeds(terms.buyout, deposit).is_some())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ListingItem {
     guid: u64,
@@ -566,13 +571,7 @@ fn refundable_bid_value(decision: BidDecision, offer: u32) -> Option<u32> {
 }
 
 fn minimum_next_bid(auction: BidAuction) -> Result<u32, BidDecision> {
-    if auction.highest_bid == 0 {
-        return Ok(auction.start_bid);
-    }
-    let increment = lyracore_shared::auction::bid_increment(auction.highest_bid);
-    auction
-        .highest_bid
-        .checked_add(increment)
+    lyracore_shared::auction::minimum_next_bid(auction.start_bid, auction.highest_bid)
         .ok_or(BidDecision::Database)
 }
 
@@ -1546,7 +1545,10 @@ fn validate_market_listing(ctx: &ReducerContext, listing: &PreparedListing) -> R
         .checked_mul(MICROS_PER_MINUTE)
         .and_then(|duration| listing.created_micros.checked_add(duration))
         .ok_or_else(|| tagged(ListingRefusal::InvalidTerms, "auction expiry overflow"))?;
-    if listing.deposit != expected_deposit || listing.expires_micros != expected_expiry {
+    if listing.deposit != expected_deposit
+        || !listing_proceeds_are_representable(listing.request.terms, expected_deposit)
+        || listing.expires_micros != expected_expiry
+    {
         return Err(tagged(
             ListingRefusal::InvalidTerms,
             "held listing payload changed",
@@ -1909,15 +1911,15 @@ pub fn expire_auction(ctx: &ReducerContext, schedule: AuctionExpiry) -> Result<(
 }
 
 #[cfg(feature = "debug_reducers")]
-const BUYOUT_FIXTURE_AUCTION_ID: u32 = 509_050;
+const BUYOUT_FIXTURE_AUCTION_ID: u32 = 509_0050;
 #[cfg(feature = "debug_reducers")]
-const BUYOUT_FIXTURE_OPERATION_ID: u64 = 509_050;
+const BUYOUT_FIXTURE_OPERATION_ID: u64 = 509_0050;
 #[cfg(feature = "debug_reducers")]
-const BUYOUT_FIXTURE_SELLER_GUID: u64 = 509_050;
+const BUYOUT_FIXTURE_SELLER_GUID: u64 = 509_0050;
 #[cfg(feature = "debug_reducers")]
-const BUYOUT_FIXTURE_WINNER_GUID: u64 = 509_051;
+const BUYOUT_FIXTURE_WINNER_GUID: u64 = 509_0051;
 #[cfg(feature = "debug_reducers")]
-const BUYOUT_FIXTURE_DISPLACED_GUID: u64 = 509_052;
+const BUYOUT_FIXTURE_DISPLACED_GUID: u64 = 509_0052;
 
 /// Stage one reserved Auction row for the standalone buyout integration test.
 #[cfg(feature = "debug_reducers")]
@@ -1971,8 +1973,8 @@ pub fn debug_stage_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), St
         listing_operation_id: BUYOUT_FIXTURE_OPERATION_ID - 1,
         house: lyracore_shared::auction::STORMWIND_HOUSE_ID,
         owner_guid: BUYOUT_FIXTURE_SELLER_GUID,
-        item_guid: 509_053,
-        item_entry: 509_050,
+        item_guid: 509_0053,
+        item_entry: 509_0050,
         item_stack_count: 2,
         item_durability: 17,
         item_enchant_id: 9,
@@ -2078,7 +2080,7 @@ pub fn debug_verify_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), S
         || !winner.body.is_empty()
         || winner.snapshot()
             != (crate::items::ItemSnapshot {
-                entry: 509_050,
+                entry: 509_0050,
                 stack_count: 2,
                 durability: 17,
                 enchant_id: 9,
@@ -2102,16 +2104,16 @@ pub fn debug_verify_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), S
 }
 
 #[cfg(feature = "debug_reducers")]
-const EXPIRY_FIXTURE_AUCTION_ID: u32 = 509_060;
+const EXPIRY_FIXTURE_AUCTION_ID: u32 = 509_0060;
 #[cfg(feature = "debug_reducers")]
-const EXPIRY_FIXTURE_OPERATION_ID: u64 = 509_060;
+const EXPIRY_FIXTURE_OPERATION_ID: u64 = 509_0060;
 #[cfg(feature = "debug_reducers")]
-const EXPIRY_FIXTURE_SELLER_GUID: u64 = 509_060;
+const EXPIRY_FIXTURE_SELLER_GUID: u64 = 509_0060;
 #[cfg(feature = "debug_reducers")]
-const EXPIRY_FIXTURE_WINNER_GUID: u64 = 509_061;
+const EXPIRY_FIXTURE_WINNER_GUID: u64 = 509_0061;
 #[cfg(feature = "debug_reducers")]
 const EXPIRY_FIXTURE_ITEM: crate::items::ItemSnapshot = crate::items::ItemSnapshot {
-    entry: 509_060,
+    entry: 509_0060,
     stack_count: 2,
     durability: 17,
     enchant_id: 9,
@@ -2166,7 +2168,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
             operation_id: EXPIRY_FIXTURE_OPERATION_ID,
             auction_id: EXPIRY_FIXTURE_AUCTION_ID,
             actor_guid: EXPIRY_FIXTURE_SELLER_GUID,
-            item_guid: 509_063,
+            item_guid: 509_0063,
             item_entry: EXPIRY_FIXTURE_ITEM.entry,
             item_stack_count: EXPIRY_FIXTURE_ITEM.stack_count,
             item_durability: EXPIRY_FIXTURE_ITEM.durability,
@@ -2184,7 +2186,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
         listing_operation_id: EXPIRY_FIXTURE_OPERATION_ID,
         house: lyracore_shared::auction::STORMWIND_HOUSE_ID,
         owner_guid: EXPIRY_FIXTURE_SELLER_GUID,
-        item_guid: 509_063,
+        item_guid: 509_0063,
         item_entry: EXPIRY_FIXTURE_ITEM.entry,
         item_stack_count: EXPIRY_FIXTURE_ITEM.stack_count,
         item_durability: EXPIRY_FIXTURE_ITEM.durability,
@@ -2326,6 +2328,9 @@ fn prepare_listing(
         terms.duration_minutes,
     )
     .ok_or(ListingRefusal::InvalidTerms)?;
+    if !listing_proceeds_are_representable(terms, deposit) {
+        return Err(ListingRefusal::InvalidTerms);
+    }
     if seller_money < deposit {
         return Err(ListingRefusal::NotEnoughMoney);
     }
@@ -2689,6 +2694,50 @@ mod tests {
             now_micros: 1_000,
             hold: None,
             receipt: None,
+        }
+    }
+
+    #[test]
+    fn listing_rejects_overflowing_possible_proceeds_before_moving_value() {
+        for terms in [
+            ListingTerms {
+                start_bid: u32::MAX,
+                buyout: 0,
+                duration_minutes: 720,
+            },
+            ListingTerms {
+                start_bid: 10,
+                buyout: u32::MAX,
+                duration_minutes: 720,
+            },
+        ] {
+            let mut local = local();
+            local.money = Some(u32::MAX);
+            local.item.as_mut().unwrap().sell_price = u32::MAX;
+            let before = local.clone();
+            let request = ListingRequest { terms, ..request() };
+
+            assert_eq!(
+                create_local_listing(&mut local, request),
+                Err(ListingRefusal::InvalidTerms)
+            );
+            assert_eq!(local.money, before.money);
+            assert_eq!(local.item, before.item);
+            assert!(local.committed.is_none());
+
+            let mut source = source();
+            source.money = Some(u32::MAX);
+            source.item.as_mut().unwrap().sell_price = u32::MAX;
+            let before = source.clone();
+
+            assert_eq!(
+                fence_listing(&mut source, request),
+                Err(ListingRefusal::InvalidTerms)
+            );
+            assert_eq!(source.money, before.money);
+            assert_eq!(source.item, before.item);
+            assert!(source.hold.is_none());
+            assert!(source.receipt.is_none());
         }
     }
 

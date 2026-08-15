@@ -3,6 +3,13 @@
 /// Vanilla's Stormwind auction-house identifier (`AuctionHouse::Stormwind`).
 pub const STORMWIND_HOUSE_ID: u32 = 1;
 
+/// Creature entries for Chilton, Fitch, and Jaxon in the Stormwind Trade District.
+pub const STORMWIND_AUCTIONEER_ENTRIES: [u32; 3] = [8_670, 8_719, 15_659];
+
+pub fn is_stormwind_auctioneer(entry: u32) -> bool {
+    STORMWIND_AUCTIONEER_ENTRIES.contains(&entry)
+}
+
 /// Maximum squared 3-D distance for a player to use a named auctioneer: 10 yards.
 pub const INTERACTION_RANGE_SQ: f32 = 100.0;
 
@@ -14,6 +21,15 @@ pub fn bid_increment(current_bid: u32) -> u32 {
         u32::try_from(u64::from(current_bid).div_ceil(20))
             .unwrap_or(u32::MAX)
             .max(1)
+    }
+}
+
+/// Full next offer required by the auction protocol row and the bid validator.
+pub fn minimum_next_bid(start_bid: u32, current_bid: u32) -> Option<u32> {
+    if current_bid == 0 {
+        Some(start_bid)
+    } else {
+        current_bid.checked_add(bid_increment(current_bid))
     }
 }
 
@@ -44,5 +60,21 @@ mod tests {
         assert_eq!(super::bid_increment(20), 1);
         assert_eq!(super::bid_increment(21), 2);
         assert_eq!(super::bid_increment(u32::MAX), 214_748_365);
+    }
+
+    #[test]
+    fn minimum_next_bid_is_the_full_required_offer() {
+        assert_eq!(super::minimum_next_bid(100, 0), Some(100));
+        assert_eq!(super::minimum_next_bid(100, 201), Some(212));
+        assert_eq!(super::minimum_next_bid(100, u32::MAX), None);
+    }
+
+    #[test]
+    fn stormwind_market_accepts_only_its_three_auctioneers() {
+        for entry in super::STORMWIND_AUCTIONEER_ENTRIES {
+            assert!(super::is_stormwind_auctioneer(entry));
+        }
+        assert!(!super::is_stormwind_auctioneer(9_858));
+        assert!(!super::is_stormwind_auctioneer(15_675));
     }
 }

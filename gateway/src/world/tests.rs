@@ -5409,6 +5409,7 @@ fn stormwind_auction_interaction() -> AuctionInteraction {
         },
         auctioneer: AuctionEntity {
             type_mask: lyracore_shared::constants::type_mask::CREATURE,
+            entry: 8_670,
             npc_flags: lyracore_shared::constants::npc_flags::AUCTIONEER,
             x: 5.0,
             ..Default::default()
