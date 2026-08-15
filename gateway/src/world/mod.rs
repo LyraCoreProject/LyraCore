@@ -32,6 +32,7 @@ use wow_world_messages::vanilla::{
 };
 
 mod coalesce;
+pub mod guild;
 mod handlers;
 pub mod login_queue;
 pub mod loot;
@@ -44,11 +45,12 @@ pub mod transfer;
 pub mod whisper;
 use coalesce::CoalesceState;
 use handlers::{
-    dispatch_cast, dispatch_item_action, dispatch_melee_action, dispatch_quest_action,
-    dispatch_vendor_action, handle_bank, handle_char, handle_combat, handle_loot, handle_mail,
-    handle_query, handle_trade, handle_trainer, CastOutcome, CastPlayer, CastTransition,
-    ItemActionOutcome, ItemActionPlayer, MeleeActionOutcome, MeleeActionPlayer, QuestActionOutcome,
-    QuestActionPlayer, VendorActionOutcome, VendorActionPlayer,
+    dispatch_cast, dispatch_guild_action, dispatch_item_action, dispatch_melee_action,
+    dispatch_quest_action, dispatch_vendor_action, handle_bank, handle_char, handle_combat,
+    handle_loot, handle_mail, handle_query, handle_trade, handle_trainer, CastOutcome, CastPlayer,
+    CastTransition, GuildActionOutcome, GuildActionPlayer, ItemActionOutcome, ItemActionPlayer,
+    MeleeActionOutcome, MeleeActionPlayer, QuestActionOutcome, QuestActionPlayer,
+    VendorActionOutcome, VendorActionPlayer,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
@@ -1278,6 +1280,22 @@ fn dispatch<St: WorldStore + ?Sized>(
             return Ok(());
         }
         QuestActionOutcome::PassThrough(msg) => msg,
+    };
+    let msg = match dispatch_guild_action(
+        store,
+        GuildActionPlayer {
+            account_id: conn.account_id,
+            self_guid: social::self_guid(conn),
+        },
+        msg,
+    )? {
+        GuildActionOutcome::Handled { outbound } => {
+            for message in outbound {
+                send(tx, message)?;
+            }
+            return Ok(());
+        }
+        GuildActionOutcome::PassThrough(msg) => msg,
     };
     let Some(msg) = handle_social(tx, store, conn, msg)? else {
         return Ok(());

@@ -6,12 +6,20 @@
 //! two implementors); the section markers below are load-bearing navigation, not a split.
 
 use super::handlers::{
-    CastStore, ItemActionStore, MeleeActionStore, QuestActionStore, VendorActionStore,
+    CastStore, GuildActionStore, ItemActionStore, MeleeActionStore, QuestActionStore,
+    VendorActionStore,
 };
 use super::*;
 
 pub trait WorldStore:
-    CastStore + ItemActionStore + MeleeActionStore + QuestActionStore + VendorActionStore + Send + Sync
+    CastStore
+    + GuildActionStore
+    + ItemActionStore
+    + MeleeActionStore
+    + QuestActionStore
+    + VendorActionStore
+    + Send
+    + Sync
 {
     /// Look up the shared session key K (+ account id) for an (already uppercased) account
     /// name. `None` when no live session exists for that account (reject the handshake).
@@ -179,6 +187,56 @@ pub trait WorldStore:
     /// `sync_group_mirror` — replace this shard's mirror of one party with realm-core's roster.
     /// An empty `roster.members` is the disband tombstone.
     fn sync_group_mirror(&self, _roster: &party::GroupRoster) -> Result<()> {
+        Ok(())
+    }
+
+    // --- Realm-wide guild state. Every one defaults to the single-database posture, so an
+    // --- unsharded store — and every mock that does not model a realm — is unchanged. There is no
+    // --- roster mirror here: `sync_guild_membership` pushes the character's OWN two columns.
+
+    /// `realm_guild_op` — run one guild op against the database this handle names. Called on the
+    /// realm-core handle; the op byte and argument slots are `lyracore_shared::guild::realm_op`.
+    fn realm_guild_op(
+        &self,
+        _op: u8,
+        _actor_guid: u64,
+        _target_guid: u64,
+        _arg_a: u32,
+        _text: String,
+    ) -> Result<()> {
+        Err(anyhow!("this store does not host realm-wide guild state"))
+    }
+
+    /// `create_guild` — the SINGLE-DATABASE guild path (`world::guild::run`'s `None` arm), calling
+    /// the player-facing reducer on the player's own shard. Takes the caller's `self_guid` as well
+    /// as its account for the reason the party path does: the account identifies the player
+    /// CONNECTION, the guid identifies the CHARACTER to the authority on the other arm.
+    fn create_guild(&self, _account_id: u64, _self_guid: u64, _name: &str) -> Result<()> {
+        Err(anyhow!("this store does not host guilds"))
+    }
+
+    /// The guild `guild_id` names, as THIS handle's database sees it. `None` = no such guild.
+    /// Named apart from `GuildActionStore::guild_view`, which is the ALREADY-ROUTED read one level
+    /// up; this one answers for a single database.
+    fn guild_snapshot(&self, _guild_id: u64) -> Result<Option<guild::GuildView>> {
+        Ok(None)
+    }
+
+    /// `character_guid`'s `(guild_id, rank_index)` membership on THIS handle's database. `None` =
+    /// guildless. The read [`sync_guild_membership`](Self::sync_guild_membership) pushes.
+    fn guild_membership(&self, _character_guid: u64) -> Result<Option<(u64, u32)>> {
+        Ok(None)
+    }
+
+    /// `sync_guild_membership` — stamp one character's own guild id and rank onto this database's
+    /// `game_character` row. A no-op default, matching `sync_group_mirror`'s shape: a store that
+    /// holds no character rows has nothing to stamp.
+    fn sync_guild_membership(
+        &self,
+        _character_guid: u64,
+        _guild_id: u64,
+        _guild_rank: u32,
+    ) -> Result<()> {
         Ok(())
     }
 

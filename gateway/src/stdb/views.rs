@@ -27,6 +27,7 @@ pub(crate) fn character_view(c: Character) -> crate::codec::CharacterView {
         equipment: Default::default(), // filled by Coordinator::characters from item tables
         played_total_secs: c.played_total_secs,
         session_start_micros: c.session_start_micros,
+        guild_id: c.guild_id,
     }
 }
 

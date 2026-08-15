@@ -1046,6 +1046,38 @@ impl WorldStore for Coordinator {
         self.sync_group_mirror(roster)
     }
 
+    fn realm_guild_op(
+        &self,
+        op: u8,
+        actor_guid: u64,
+        target_guid: u64,
+        arg_a: u32,
+        text: String,
+    ) -> Result<()> {
+        self.realm_guild_op(op, actor_guid, target_guid, arg_a, text)
+    }
+
+    fn create_guild(&self, account_id: u64, self_guid: u64, name: &str) -> Result<()> {
+        self.create_guild(account_id, self_guid, name)
+    }
+
+    fn guild_snapshot(&self, guild_id: u64) -> Result<Option<crate::world::guild::GuildView>> {
+        Ok(self.guild_view(guild_id))
+    }
+
+    fn guild_membership(&self, character_guid: u64) -> Result<Option<(u64, u32)>> {
+        Ok(self.guild_membership(character_guid))
+    }
+
+    fn sync_guild_membership(
+        &self,
+        character_guid: u64,
+        guild_id: u64,
+        guild_rank: u32,
+    ) -> Result<()> {
+        self.sync_guild_membership(character_guid, guild_id, guild_rank)
+    }
+
     fn realm_whisper(
         &self,
         sender_guid: u64,

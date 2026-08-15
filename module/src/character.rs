@@ -176,4 +176,20 @@ pub struct Character {
     /// Gateway-subscribed (`game_character`) → hand-synced in `character_type.rs` + `schema_parity.rs`.
     #[default(0)]
     pub bank_bag_slots: u8,
+    /// The guild this character belongs to (0 = none) — the ONLY guild state a world shard holds
+    /// (there is no roster mirror). The roster is authoritative on realm-core; this pair is stamped
+    /// by `guild::set_character_guild` when membership changes on this database and pushed by the
+    /// gateway (`guild::sync_guild_membership`) when it changed on another. Read by
+    /// `SMSG_CHAR_ENUM` and the guild unit fields.
+    /// `#[default(0u64)]` — TYPED: a bare `0` encodes as 4 bytes and `publish` rejects the migration
+    /// for a u64 column ("data too short for u64", the `last_logout_micros` precedent). END-appended
+    /// → auto-migrates. Gateway-subscribed (`game_character`) → hand-synced in `character_type.rs` +
+    /// `schema_parity.rs`.
+    #[default(0u64)]
+    pub guild_id: u64,
+    /// The character's rank inside `guild_id` (0 = guild master), meaningless while `guild_id` is 0.
+    /// `#[default(0)]` (a bare int literal is 4 bytes, which is exactly a u32) + END-appended →
+    /// auto-migrates. Gateway-subscribed → hand-synced in `character_type.rs` + widened parity.
+    #[default(0)]
+    pub guild_rank: u32,
 }

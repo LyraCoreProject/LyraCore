@@ -5,10 +5,10 @@ use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table};
 
 use crate::{
     game_addon_message, game_bot_invite_intent, game_channel_event, game_chat_event,
-    game_combat_event, game_emote_event, game_group_event, game_group_invite, game_levelup_event,
-    game_movement_violation, game_roll_event, game_spell_cast_event, game_spell_impact_event,
-    game_teleport_event, game_trade_event, game_trade_session, game_whisper_event, game_xp_event,
-    EVENT_TTL_MICROS, INVITE_TTL_MICROS,
+    game_combat_event, game_emote_event, game_group_event, game_group_invite, game_guild_event,
+    game_guild_invite, game_levelup_event, game_movement_violation, game_roll_event,
+    game_spell_cast_event, game_spell_impact_event, game_teleport_event, game_trade_event,
+    game_trade_session, game_whisper_event, game_xp_event, EVENT_TTL_MICROS, INVITE_TTL_MICROS,
 };
 use crate::breath_relay::game_breath_relay_event;
 // `rest` isn't re-exported at crate scope (`mod rest;`, no `pub use rest::*;` in lib.rs) — every
@@ -83,6 +83,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_addon_message); // addon-bridge UI messages (184, RLS-scoped)
     reap!(game_roll_event); // /roll broadcast results
     reap!(game_group_event); // group invite/roster notifications (RLS-scoped)
+    reap!(game_guild_event); // guild roster/event notifications (RLS-scoped)
     reap!(game_trade_event); // trade-status relay rows (#120, RLS-scoped)
     reap!(game_bot_invite_intent); // bot-decided invites awaiting gateway pickup (issue #54)
     reap!(game_movement_violation); // recent anti-cheat diagnostics (issue #211)
@@ -99,8 +100,18 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     // weight: accepting a reaped invite fails as "no pending invite", exactly like accepting one
     // that was never sent.
     {
-        let t = ctx.db.game_group_invite();
         let invite_cutoff = ctx.timestamp.to_micros_since_unix_epoch() - INVITE_TTL_MICROS;
+        let t = ctx.db.game_group_invite();
+        let stale: Vec<u64> = t
+            .iter()
+            .filter(|e| e.created_at.to_micros_since_unix_epoch() < invite_cutoff)
+            .map(|e| e.id)
+            .collect();
+        for id in stale {
+            t.id().delete(id);
+        }
+        // Guild invites are the same dialog on the same TTL.
+        let t = ctx.db.game_guild_invite();
         let stale: Vec<u64> = t
             .iter()
             .filter(|e| e.created_at.to_micros_since_unix_epoch() < invite_cutoff)

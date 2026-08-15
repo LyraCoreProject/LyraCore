@@ -163,6 +163,12 @@ fn enter_world<St: WorldStore + ?Sized>(
     if let Err(e) = party::on_world_entry(tx, store, character_guid) {
         log::warn!("world: party sync at world entry failed for guid {character_guid}: {e:#}");
     }
+    // The same push for the character's own guild columns — the only guild state a world shard
+    // holds. Also a no-op on a single-database gateway, and logged rather than propagated for the
+    // same reason: a stale guild id costs a name plate, and failing the login over it is worse.
+    if let Err(e) = crate::world::guild::on_world_entry(store, character_guid) {
+        log::warn!("world: guild sync at world entry failed for guid {character_guid}: {e:#}");
+    }
     // Enter the world: CharSelect → InWorld (a reused connection has no open loot/attack — a world-port
     // re-entry likewise starts clean, since whatever the player was attacking/looting on the old map is
     // meaningless on the new one).

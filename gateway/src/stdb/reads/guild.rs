@@ -1,0 +1,56 @@
+//! Guild cache-accessor methods. Which database the handle points at is the whole meaning of the
+//! answer — on the realm-core handle these are the authority, and on a single-database gateway that
+//! one database is the authority. Nothing here knows which; routing is `world::guild`'s job.
+
+use spacetimedb_sdk::Table;
+
+use super::super::bindings::*;
+use super::super::connection::Coordinator;
+use crate::world::guild::GuildView;
+
+impl Coordinator {
+    /// One guild, with its member count and its rank names already folded in. A cache read, so it
+    /// is cheap enough to run inside an SDK callback: no reducer call, no round trip.
+    ///
+    /// Rank names come back in rank order, and there are exactly
+    /// `lyracore_shared::guild::GUILD_RANK_COUNT` of them for any guild the module wrote.
+    pub fn guild_view(&self, guild_id: u64) -> Option<GuildView> {
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        let guild = db.game_guild().guild_id().find(&guild_id)?;
+        let member_count = db
+            .game_guild_member()
+            .iter()
+            .filter(|m| m.guild_id == guild_id)
+            .count() as u32;
+        let mut ranks: Vec<(u32, String)> = db
+            .game_guild_rank()
+            .iter()
+            .filter(|r| r.guild_id == guild_id)
+            .map(|r| (r.rank_index, r.name))
+            .collect();
+        ranks.sort_by_key(|(index, _)| *index);
+        Some(GuildView {
+            guild_id,
+            name: guild.name,
+            master_guid: guild.master_guid,
+            motd: guild.motd,
+            info_text: guild.info_text,
+            created_micros: guild.created_at.to_micros_since_unix_epoch(),
+            member_count,
+            rank_names: ranks.into_iter().map(|(_, name)| name).collect(),
+        })
+    }
+
+    /// `character_guid`'s `(guild_id, rank_index)`, or `None` when it is in no guild.
+    pub fn guild_membership(&self, character_guid: u64) -> Option<(u64, u32)> {
+        let guard = self.0.coord();
+        let found = guard
+            .conn
+            .db
+            .game_guild_member()
+            .iter()
+            .find(|m| m.character_guid == character_guid)?;
+        Some((found.guild_id, found.rank_index))
+    }
+}

@@ -406,6 +406,20 @@ parity_test!(parity_game_group_member, "game_group_member", lyracore_module::Gro
 parity_test!(parity_game_group_event, "game_group_event", lyracore_module::GroupEvent, bindings::group_event_type::GroupEvent, {
     id, recipient_identity, kind, other_guid, other_name, created_at, payload, recipient_guid,
 });
+// Guild state, authoritative on realm-core. No shard mirror — the character's own guild id and
+// rank ride `game_character`, so these four are read from whichever handle the routing picked.
+parity_test!(parity_game_guild, "game_guild", lyracore_module::Guild, bindings::guild_type::Guild, {
+    guild_id, name, master_guid, motd, info_text, created_at,
+});
+parity_test!(parity_game_guild_member, "game_guild_member", lyracore_module::GuildMember, bindings::guild_member_type::GuildMember, {
+    id, guild_id, character_guid, rank_index, public_note, officer_note, joined_at,
+});
+parity_test!(parity_game_guild_rank, "game_guild_rank", lyracore_module::GuildRank, bindings::guild_rank_type::GuildRank, {
+    id, guild_id, rank_index, name, rights,
+});
+parity_test!(parity_game_guild_event, "game_guild_event", lyracore_module::GuildEvent, bindings::guild_event_type::GuildEvent, {
+    id, recipient_identity, recipient_guid, kind, other_guid, other_name, payload, created_at,
+});
 // The private per-recipient trade-status relay (#120) — the `game_group_event` shape minus the
 // name/payload columns (no trade status carries either).
 parity_test!(parity_game_trade_event, "game_trade_event", lyracore_module::TradeEvent, bindings::trade_event_type::TradeEvent, {
@@ -452,7 +466,7 @@ parity_test!(parity_game_character, "game_character", lyracore_module::Character
     first_login, online, money, rested_xp, last_logout_micros, home_map, home_zone, home_x,
     home_y, home_z, played_total_secs, session_start_micros, health, power, respec_count,
     death_expire_micros, pending_instance_id, gm_level, pending_ghost, resting, rested_since_micros,
-    pending_godmode, pending_run_speed_mult_bp, bank_bag_slots,
+    pending_godmode, pending_run_speed_mult_bp, bank_bag_slots, guild_id, guild_rank,
 });
 parity_test!(parity_game_world_entity, "game_world_entity", lyracore_module::WorldEntity, bindings::world_entity_type::WorldEntity, {
     guid, owner_identity, account_id, map_id, x, y, z, orientation, grid_x, grid_y,
@@ -731,6 +745,10 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_group",
     "game_group_member",
     "game_group_event",
+    "game_guild",
+    "game_guild_member",
+    "game_guild_rank",
+    "game_guild_event",
     "game_trade_event",
     "game_whisper_event",
     "game_loot_roll",

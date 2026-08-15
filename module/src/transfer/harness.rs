@@ -605,6 +605,10 @@ fn fixture_character(guid: u64, name: &str) -> crate::character::Character {
         pending_run_speed_mult_bp: 30_000,
         // Distinguishable from the column default so a slot count that fails to travel shows up.
         bank_bag_slots: 3,
+        // Guild membership rides the character row (there is no roster mirror), so these two must
+        // travel like every other column — distinguishable from the 0/0 default for that reason.
+        guild_id: 77,
+        guild_rank: 2,
     }
 }
 

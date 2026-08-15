@@ -904,6 +904,8 @@ pub fn create_character(
         pending_godmode: false, // 289: GM playtest carry — off until `.god` + a map change
         pending_run_speed_mult_bp: crate::world::RUN_SPEED_BP_1X, // 289: 1× until `.speed` + a map change
         bank_bag_slots: 0,                                        // none bought yet
+        guild_id: 0,                                              // guildless until they found one
+        guild_rank: 0,
     };
 
     // `try_insert` rather than `insert`: if a same-name character was created between the find()

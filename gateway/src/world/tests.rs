@@ -38,6 +38,11 @@ fn world_session_socket_pair_times_out_when_the_server_writes_nothing() {
 #[path = "party_tests.rs"]
 mod party_tests;
 
+/// The realm-wide guild routing tests. A sibling of `party_tests` for the same reason — it reaches
+/// `InMemoryStore` and its fake realm-core topology without widening anything.
+#[path = "guild_tests.rs"]
+mod guild_tests;
+
 /// The realm-wide whisper routing tests. A sibling of `party_tests` for the
 /// same reason — it reaches `InMemoryStore` (and `party_tests`' live topology) without widening
 /// anything.
@@ -463,6 +468,17 @@ struct InMemoryStore {
     /// reachable in production — a concurrent op on another socket — and what it must not do is leave
     /// the invite dialog hanging.
     party_accept_error: Option<String>,
+    /// The AUTHORITATIVE guild state, when this handle is the realm-core one — read through
+    /// `is_realm`, exactly as `party` is. A world shard's staying empty is how a test tells "the
+    /// guild op went to the authority" from "it quietly went back to being shard-local".
+    guild: std::sync::Arc<std::sync::Mutex<FakeGuild>>,
+    /// What `sync_guild_membership` wrote onto THIS shard: `(character_guid, guild_id, rank)`,
+    /// latest per character. The whole of a world shard's guild state, made observable — there is
+    /// no roster mirror to inspect.
+    guild_columns: std::sync::Mutex<Vec<(u64, u64, u32)>>,
+    /// When set, `sync_guild_membership` fails with this message — a world shard that cannot be
+    /// reached, which must not fail a guild op the authority already took.
+    guild_sync_error: Option<String>,
     /// The transfer step to fail at, simulating a gateway killed before that step's
     /// transaction committed. `None` = nothing fails.
     kill_at: Option<String>,
@@ -2258,6 +2274,65 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
 
+    /// The module's `realm_guild_op`, modelled — the authority arm of `world::guild::run`.
+    fn realm_guild_op(
+        &self,
+        op: u8,
+        actor_guid: u64,
+        target_guid: u64,
+        arg_a: u32,
+        text: String,
+    ) -> Result<()> {
+        use lyracore_shared::guild::realm_op;
+        self.rec("realm_guild_op");
+        let mut g = self.guild.lock().unwrap();
+        g.ops
+            .push((op, actor_guid, target_guid, arg_a, text.clone()));
+        match op {
+            realm_op::CREATE => g
+                .create(actor_guid, &text, GUILD_FIXTURE_MICROS)
+                .map(|_| ()),
+            other => Err(anyhow!("unknown realm guild op {other}")),
+        }
+    }
+
+    /// The single-database guild path — `create_guild` on the player's OWN shard, which on an
+    /// unsharded gateway already is the authority. The character's guild columns are stamped in the
+    /// same call, exactly as the module's create core does in one transaction.
+    fn create_guild(&self, _account_id: u64, self_guid: u64, name: &str) -> Result<()> {
+        self.rec("create_guild");
+        let guild_id = self
+            .guild
+            .lock()
+            .unwrap()
+            .create(self_guid, name, GUILD_FIXTURE_MICROS)?;
+        self.sync_guild_membership(self_guid, guild_id, 0)
+    }
+
+    fn guild_snapshot(&self, guild_id: u64) -> Result<Option<super::guild::GuildView>> {
+        Ok(self.guild.lock().unwrap().view(guild_id))
+    }
+
+    fn guild_membership(&self, character_guid: u64) -> Result<Option<(u64, u32)>> {
+        Ok(self.guild.lock().unwrap().guild_of(character_guid))
+    }
+
+    fn sync_guild_membership(
+        &self,
+        character_guid: u64,
+        guild_id: u64,
+        guild_rank: u32,
+    ) -> Result<()> {
+        self.rec("sync_guild_membership");
+        if let Some(e) = &self.guild_sync_error {
+            return Err(anyhow!("{e}"));
+        }
+        let mut columns = self.guild_columns.lock().unwrap();
+        columns.retain(|(guid, ..)| *guid != character_guid);
+        columns.push((character_guid, guild_id, guild_rank));
+        Ok(())
+    }
+
     fn group_roster(&self, character_guid: u64) -> Result<Option<super::party::GroupRoster>> {
         if self.is_realm {
             let p = self.party.lock().unwrap();
@@ -2584,6 +2659,31 @@ impl CastStore for InMemoryStore {
     }
     fn item_template(&self, _entry: u32) -> Result<Option<codec::ItemTemplateView>> {
         Ok(None)
+    }
+}
+
+/// The founding date every fixture guild carries: 2026-08-15T00:00:00Z, distinguishable from 0 so a
+/// date that fails to reach the info panel shows up as a wrong value rather than two zeroes.
+const GUILD_FIXTURE_MICROS: i64 = 20_680 * 86_400 * 1_000_000;
+
+/// The guild seam, routed exactly as production routes it: these three go through `world::guild`,
+/// so the socket tests exercise the realm-vs-own-shard decision rather than a second copy of it.
+impl handlers::GuildActionStore for InMemoryStore {
+    fn guild_create(&self, account_id: u64, self_guid: u64, name: &str) -> Result<()> {
+        super::guild::run(
+            self,
+            account_id,
+            self_guid,
+            super::guild::Op::Create(name.to_string()),
+        )
+    }
+
+    fn guild_view(&self, guild_id: u64) -> Result<Option<super::guild::GuildView>> {
+        super::guild::view(self, guild_id)
+    }
+
+    fn guild_of(&self, character_guid: u64) -> Result<Option<u64>> {
+        super::guild::guild_of(self, character_guid)
     }
 }
 
@@ -4477,6 +4577,43 @@ fn add_friend_unknown_name_replies_not_found() {
     }
     drop(client);
     server.join().unwrap();
+}
+
+/// The ONE encrypted-socket test for the guild family. It proves DISPATCH and the TYPED REPLY over
+/// the cipher — that `CMSG_GUILD_CREATE` reaches the guild seam through the real session loop and
+/// that the answer comes back as a decodable `SMSG_GUILD_COMMAND_RESULT`. It is deliberately not a
+/// validation test: every gate and every refusal code is covered at the seam in
+/// `handlers/guild.rs`, without a socket.
+#[test]
+fn guild_create_dispatches_over_the_cipher_and_replies_with_a_typed_command_result() {
+    use wow_world_messages::vanilla::{GuildCommand, GuildCommandResult, CMSG_GUILD_CREATE};
+
+    let store = std::sync::Arc::new(quest_store());
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    CMSG_GUILD_CREATE {
+        guild_name: "The Silver Hand".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(r) => {
+            assert_eq!(r.command, GuildCommand::Create);
+            assert_eq!(r.string, "The Silver Hand");
+            // Wire code 0 — vanilla's "no message/error", i.e. the create succeeded.
+            assert_eq!(r.result, GuildCommandResult::PlayerNoMoreInGuild);
+        }
+        other => panic!("expected SMSG_GUILD_COMMAND_RESULT, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+
+    assert_eq!(
+        store.guild.lock().unwrap().guild_of(1),
+        Some((1, 0)),
+        "the founder holds rank 0 of the guild the socket just created"
+    );
 }
 
 #[test]
@@ -7373,6 +7510,68 @@ struct FakeParty {
     ops: Vec<(u8, u64, u64, u8, u8)>,
     /// Every notification the authority pushed: `(recipient_guid, kind)` — the relay's input.
     events: Vec<(u64, u8)>,
+}
+
+/// The realm-wide GUILD authority, modelled — [`FakeParty`]'s sibling, with the same limits: what
+/// executes is the gateway's production routing (`world::guild`) against a faithful stand-in, and
+/// the module owns the rules themselves.
+#[derive(Default)]
+struct FakeGuild {
+    next_guild_id: u64,
+    /// guild_id → (name, master_guid, created_micros).
+    guilds: Vec<(u64, String, u64, i64)>,
+    /// (guild_id, character_guid, rank_index), in join order.
+    members: Vec<(u64, u64, u32)>,
+    /// Every op that reached the AUTHORITY: `(op, actor, target, arg_a, text)`. The assertion that
+    /// a guild op ran on realm-core rather than on the player's shard.
+    ops: Vec<(u8, u64, u64, u32, String)>,
+}
+
+impl FakeGuild {
+    fn guild_of(&self, guid: u64) -> Option<(u64, u32)> {
+        self.members
+            .iter()
+            .find(|(_, g, _)| *g == guid)
+            .map(|(gid, _, rank)| (*gid, *rank))
+    }
+
+    /// The module's `create_guild_for`, modelled: the three gates the ROUTING depends on, in the
+    /// module's order, refusing with the shared error strings the gateway classifies.
+    fn create(&mut self, founder_guid: u64, name: &str, now_micros: i64) -> Result<u64> {
+        use lyracore_shared::guild::{err as guild_err, valid_guild_name};
+        if !valid_guild_name(name) {
+            return Err(anyhow!("{}", guild_err::NAME_INVALID));
+        }
+        if self.guild_of(founder_guid).is_some() {
+            return Err(anyhow!("{}", guild_err::ALREADY_IN_GUILD));
+        }
+        if self.guilds.iter().any(|(_, n, ..)| n == name) {
+            return Err(anyhow!("{}", guild_err::NAME_TAKEN));
+        }
+        self.next_guild_id += 1;
+        let guild_id = self.next_guild_id;
+        self.guilds
+            .push((guild_id, name.to_string(), founder_guid, now_micros));
+        self.members.push((guild_id, founder_guid, 0));
+        Ok(guild_id)
+    }
+
+    fn view(&self, guild_id: u64) -> Option<super::guild::GuildView> {
+        use lyracore_shared::guild::DEFAULT_RANK_NAMES;
+        let (gid, name, master, created) =
+            self.guilds.iter().find(|(g, ..)| *g == guild_id).cloned()?;
+        Some(super::guild::GuildView {
+            guild_id: gid,
+            name,
+            master_guid: master,
+            motd: String::new(),
+            info_text: String::new(),
+            created_micros: created,
+            member_count: self.members.iter().filter(|(g, ..)| *g == guild_id).count() as u32,
+            // Seeded from the shared vanilla list, exactly as the module's `seed_ranks` does.
+            rank_names: DEFAULT_RANK_NAMES.iter().map(|n| n.to_string()).collect(),
+        })
+    }
 }
 
 impl FakeParty {
