@@ -16,6 +16,7 @@ pub(super) struct GwAuctionFinishBidArgs {
     pub result_bidder_guid: u64,
     pub result_bid: u32,
     pub minimum_increment: u32,
+    pub accepted_price: u32,
 }
 
 impl From<GwAuctionFinishBidArgs> for super::Reducer {
@@ -30,6 +31,7 @@ impl From<GwAuctionFinishBidArgs> for super::Reducer {
             result_bidder_guid: args.result_bidder_guid,
             result_bid: args.result_bid,
             minimum_increment: args.minimum_increment,
+            accepted_price: args.accepted_price,
         }
     }
 }
@@ -60,6 +62,7 @@ pub trait gw_auction_finish_bid {
         result_bidder_guid: u64,
         result_bid: u32,
         minimum_increment: u32,
+        accepted_price: u32,
     ) -> __sdk::Result<()> {
         self.gw_auction_finish_bid_then(
             operation_id,
@@ -71,6 +74,7 @@ pub trait gw_auction_finish_bid {
             result_bidder_guid,
             result_bid,
             minimum_increment,
+            accepted_price,
             |_, _| {},
         )
     }
@@ -92,6 +96,7 @@ pub trait gw_auction_finish_bid {
         result_bidder_guid: u64,
         result_bid: u32,
         minimum_increment: u32,
+        accepted_price: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -111,6 +116,7 @@ impl gw_auction_finish_bid for super::RemoteReducers {
         result_bidder_guid: u64,
         result_bid: u32,
         minimum_increment: u32,
+        accepted_price: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -127,6 +133,7 @@ impl gw_auction_finish_bid for super::RemoteReducers {
                 result_bidder_guid,
                 result_bid,
                 minimum_increment,
+                accepted_price,
             },
             callback,
         )

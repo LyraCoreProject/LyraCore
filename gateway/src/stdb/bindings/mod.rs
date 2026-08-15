@@ -2038,6 +2038,7 @@ pub enum Reducer {
         result_bidder_guid: u64,
         result_bid: u32,
         minimum_increment: u32,
+        accepted_price: u32,
     },
     GwAuctionHoldBid {
         operation_id: u64,
@@ -4238,6 +4239,7 @@ Reducer::DebugTakeLoot{
                 result_bidder_guid,
                 result_bid,
                 minimum_increment,
+                accepted_price,
 }             => __sats::bsatn::to_vec(&gw_auction_finish_bid_reducer::GwAuctionFinishBidArgs {
                 operation_id: operation_id.clone(),
                 bidder_guid: bidder_guid.clone(),
@@ -4248,6 +4250,7 @@ Reducer::DebugTakeLoot{
                 result_bidder_guid: result_bidder_guid.clone(),
                 result_bid: result_bid.clone(),
                 minimum_increment: minimum_increment.clone(),
+                accepted_price: accepted_price.clone(),
 }),
             Reducer::GwAuctionHoldBid{
                 operation_id,

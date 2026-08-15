@@ -1,4 +1,4 @@
-//! Durable Stormwind auction listings and value-preserving listing transport.
+//! Durable Stormwind auctions, value-preserving bid transport, and atomic buyout settlement.
 
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
@@ -91,7 +91,8 @@ pub struct AuctionOperationReceipt {
 }
 
 /// Source-shard copper fence for one caller-identified bid. `outcome == 0` is pending; every
-/// nonzero outcome is terminal and retains the full payload plus any refund awaiting realm relay.
+/// nonzero outcome is terminal. `accepted_price` records realm-core's normalized charge, while
+/// `deferred_refund` retains any remainder that could not fit back in the bidder's purse.
 #[table(
     accessor = game_auction_bid_hold,
     index(accessor = by_bidder, btree(columns = [bidder_guid]))
@@ -109,10 +110,12 @@ pub struct AuctionBidHold {
     pub minimum_increment: u32,
     #[default(0)]
     pub deferred_refund: u32,
+    #[default(0)]
+    pub accepted_price: u32,
 }
 
-/// Realm-core's terminal serialized decision for one bid payload. Auction changes, displaced mail,
-/// and any later source-refund mail are exact-once updates recorded on this row.
+/// Realm-core's terminal serialized decision for one bid payload. Auction changes, buyout mail,
+/// displaced mail, and any later source-refund mail are exact-once updates recorded on this row.
 #[table(accessor = game_auction_bid_decision)]
 pub struct AuctionBidDecision {
     #[primary_key]
@@ -127,6 +130,8 @@ pub struct AuctionBidDecision {
     pub minimum_increment: u32,
     #[default(0)]
     pub deferred_refund: u32,
+    #[default(0)]
+    pub accepted_price: u32,
 }
 
 /// One one-shot scheduler row for each active Auction.
@@ -164,6 +169,12 @@ fn listing_deposit(sell_price: u32, stack_count: u32, duration_minutes: u32) -> 
         .checked_mul(multiplier)?
         / 100;
     u32::try_from(deposit.max(1)).ok()
+}
+
+fn seller_proceeds(winning_price: u32, deposit: u32) -> Option<u32> {
+    let cut = u64::from(winning_price).checked_mul(5)? / 100;
+    let after_cut = u64::from(winning_price).checked_sub(cut)?;
+    u32::try_from(after_cut.checked_add(u64::from(deposit))?).ok()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -240,9 +251,16 @@ struct BidRequest {
 struct BidAuction {
     id: u32,
     owner_guid: u64,
+    item_entry: u32,
+    item_stack_count: u32,
+    item_durability: u32,
+    item_enchant_id: u32,
+    item_soulbound: bool,
     highest_bidder_guid: u64,
     highest_bid: u32,
     start_bid: u32,
+    buyout: u32,
+    deposit: u32,
     expires_micros: i64,
     revision: u64,
 }
@@ -250,6 +268,7 @@ struct BidAuction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BidDecision {
     Accepted {
+        price: u32,
         revision: u64,
         displaced_bidder_guid: u64,
         displaced_bid: u32,
@@ -272,6 +291,7 @@ struct BidDecisionFields {
     result_bidder_guid: u64,
     result_bid: u32,
     minimum_increment: u32,
+    accepted_price: u32,
 }
 
 fn bid_decision_fields(decision: BidDecision) -> BidDecisionFields {
@@ -281,9 +301,11 @@ fn bid_decision_fields(decision: BidDecision) -> BidDecisionFields {
         result_bidder_guid: 0,
         result_bid: 0,
         minimum_increment: 0,
+        accepted_price: 0,
     };
     match decision {
         BidDecision::Accepted {
+            price,
             revision,
             displaced_bidder_guid,
             displaced_bid,
@@ -292,6 +314,7 @@ fn bid_decision_fields(decision: BidDecision) -> BidDecisionFields {
             fields.revision = revision;
             fields.result_bidder_guid = displaced_bidder_guid;
             fields.result_bid = displaced_bid;
+            fields.accepted_price = price;
         }
         BidDecision::ItemNotFound => fields.outcome = BID_ITEM_NOT_FOUND,
         BidDecision::HigherBid {
@@ -311,10 +334,15 @@ fn bid_decision_fields(decision: BidDecision) -> BidDecisionFields {
     fields
 }
 
-fn bid_decision_from_fields(fields: BidDecisionFields) -> Option<BidDecision> {
+fn bid_decision_from_fields(fields: BidDecisionFields, legacy_offer: u32) -> Option<BidDecision> {
     match fields.outcome {
         BID_PENDING => None,
         BID_ACCEPTED => Some(BidDecision::Accepted {
+            price: if fields.accepted_price == 0 {
+                legacy_offer
+            } else {
+                fields.accepted_price
+            },
             revision: fields.revision,
             displaced_bidder_guid: fields.result_bidder_guid,
             displaced_bid: fields.result_bid,
@@ -408,6 +436,16 @@ fn split_bid_refund(purse: u32, refund: u32) -> (u32, u32) {
     (purse + purse_credit, refund - purse_credit)
 }
 
+fn refundable_bid_value(decision: BidDecision, offer: u32) -> Option<u32> {
+    match decision {
+        BidDecision::Accepted { price, .. } if price != 0 && price <= offer => {
+            offer.checked_sub(price)
+        }
+        BidDecision::Accepted { .. } => None,
+        _ => Some(offer),
+    }
+}
+
 fn minimum_next_bid(auction: BidAuction) -> Result<u32, BidDecision> {
     if auction.highest_bid == 0 {
         return Ok(auction.start_bid);
@@ -435,9 +473,15 @@ fn decide_bid(auction: Option<BidAuction>, request: BidRequest, now_micros: i64)
     if auction.owner_guid == request.bidder_guid {
         return BidDecision::BidOwn;
     }
+    let is_buyout = auction.buyout != 0 && request.offer >= auction.buyout;
     let minimum_increment = lyracore_shared::auction::bid_increment(auction.highest_bid);
-    let Ok(minimum) = minimum_next_bid(auction) else {
-        return BidDecision::Database;
+    let minimum = if is_buyout {
+        None
+    } else {
+        let Ok(minimum) = minimum_next_bid(auction) else {
+            return BidDecision::Database;
+        };
+        Some(minimum)
     };
     if auction.highest_bid != 0 && request.offer <= auction.highest_bid {
         return BidDecision::HigherBid {
@@ -446,13 +490,31 @@ fn decide_bid(auction: Option<BidAuction>, request: BidRequest, now_micros: i64)
             minimum_increment,
         };
     }
+    if is_buyout {
+        if seller_proceeds(auction.buyout, auction.deposit).is_none() {
+            return BidDecision::Database;
+        }
+        return BidDecision::Accepted {
+            price: auction.buyout,
+            revision: 0,
+            displaced_bidder_guid: auction.highest_bidder_guid,
+            displaced_bid: auction.highest_bid,
+        };
+    }
+    let Some(minimum) = minimum else {
+        return BidDecision::Database;
+    };
     if request.offer < minimum {
         return BidDecision::BidIncrement;
+    }
+    if seller_proceeds(request.offer, auction.deposit).is_none() {
+        return BidDecision::Database;
     }
     let Some(revision) = auction.revision.checked_add(1) else {
         return BidDecision::Database;
     };
     BidDecision::Accepted {
+        price: request.offer,
         revision,
         displaced_bidder_guid: auction.highest_bidder_guid,
         displaced_bid: auction.highest_bid,
@@ -491,13 +553,12 @@ fn relay_bid_refund<S: BidRefundSink>(
     if amount == 0 {
         return Ok(());
     }
-    if amount > request.offer {
-        return Err(BidRefusal::Database);
-    }
     let (existing_request, decision, recorded) = sink
         .refund_decision(request.operation_id)
         .ok_or(BidRefusal::Database)?;
-    if existing_request != request || matches!(decision, BidDecision::Accepted { .. }) {
+    if existing_request != request
+        || refundable_bid_value(decision, request.offer).is_none_or(|limit| amount > limit)
+    {
         return Err(BidRefusal::Database);
     }
     if recorded != 0 {
@@ -515,14 +576,16 @@ fn confirm_bid_refund<S: BidSource>(
     request: BidRequest,
     amount: u32,
 ) -> Result<(), BidRefusal> {
-    if amount == 0 || amount > request.offer {
+    if amount == 0 {
         return Err(BidRefusal::Database);
     }
     let hold = source
         .hold(request.operation_id)
         .ok_or(BidRefusal::Database)?;
     let decision = hold.decision.ok_or(BidRefusal::Database)?;
-    if hold.request != request || matches!(decision, BidDecision::Accepted { .. }) {
+    if hold.request != request
+        || refundable_bid_value(decision, request.offer).is_none_or(|limit| amount > limit)
+    {
         return Err(BidRefusal::Database);
     }
     if hold.deferred_refund == 0 {
@@ -1018,13 +1081,17 @@ impl BidSource for CtxBidSource<'_> {
                     auction_id: row.auction_id,
                     offer: row.offer,
                 },
-                decision: bid_decision_from_fields(BidDecisionFields {
-                    outcome: row.outcome,
-                    revision: row.revision,
-                    result_bidder_guid: row.result_bidder_guid,
-                    result_bid: row.result_bid,
-                    minimum_increment: row.minimum_increment,
-                }),
+                decision: bid_decision_from_fields(
+                    BidDecisionFields {
+                        outcome: row.outcome,
+                        revision: row.revision,
+                        result_bidder_guid: row.result_bidder_guid,
+                        result_bid: row.result_bid,
+                        minimum_increment: row.minimum_increment,
+                        accepted_price: row.accepted_price,
+                    },
+                    row.offer,
+                ),
                 deferred_refund: row.deferred_refund,
             })
     }
@@ -1047,6 +1114,7 @@ impl BidSource for CtxBidSource<'_> {
             result_bidder_guid: 0,
             result_bid: 0,
             minimum_increment: 0,
+            accepted_price: 0,
             deferred_refund: 0,
         });
         Ok(())
@@ -1057,10 +1125,11 @@ impl BidSource for CtxBidSource<'_> {
         request: BidRequest,
         decision: BidDecision,
     ) -> Result<(), BidRefusal> {
-        let deferred_refund = if !matches!(decision, BidDecision::Accepted { .. }) {
+        let refund = refundable_bid_value(decision, request.offer).ok_or(BidRefusal::Database)?;
+        let deferred_refund = if refund != 0 {
             let mut bidder = crate::helpers::acting_entity_by_guid(self.ctx, request.bidder_guid)
                 .ok_or(BidRefusal::Database)?;
-            let (money, deferred_refund) = split_bid_refund(bidder.money, request.offer);
+            let (money, deferred_refund) = split_bid_refund(bidder.money, refund);
             bidder.money = money;
             self.ctx.db.game_world_entity().guid().update(bidder);
             deferred_refund
@@ -1082,6 +1151,7 @@ impl BidSource for CtxBidSource<'_> {
                 result_bidder_guid: fields.result_bidder_guid,
                 result_bid: fields.result_bid,
                 minimum_increment: fields.minimum_increment,
+                accepted_price: fields.accepted_price,
                 deferred_refund,
             });
         Ok(())
@@ -1123,13 +1193,17 @@ impl BidMarket for CtxBidMarket<'_> {
             .game_auction_bid_decision()
             .operation_id()
             .find(operation_id)?;
-        let decision = bid_decision_from_fields(BidDecisionFields {
-            outcome: row.outcome,
-            revision: row.revision,
-            result_bidder_guid: row.result_bidder_guid,
-            result_bid: row.result_bid,
-            minimum_increment: row.minimum_increment,
-        })?;
+        let decision = bid_decision_from_fields(
+            BidDecisionFields {
+                outcome: row.outcome,
+                revision: row.revision,
+                result_bidder_guid: row.result_bidder_guid,
+                result_bid: row.result_bid,
+                minimum_increment: row.minimum_increment,
+                accepted_price: row.accepted_price,
+            },
+            row.offer,
+        )?;
         Some((
             BidRequest {
                 operation_id: row.operation_id,
@@ -1151,9 +1225,16 @@ impl BidMarket for CtxBidMarket<'_> {
             .map(|auction| BidAuction {
                 id: auction.id,
                 owner_guid: auction.owner_guid,
+                item_entry: auction.item_entry,
+                item_stack_count: auction.item_stack_count,
+                item_durability: auction.item_durability,
+                item_enchant_id: auction.item_enchant_id,
+                item_soulbound: auction.item_soulbound,
                 highest_bidder_guid: auction.highest_bidder_guid,
                 highest_bid: auction.highest_bid,
                 start_bid: auction.start_bid,
+                buyout: auction.buyout,
+                deposit: auction.deposit,
                 expires_micros: auction.expires_at.to_micros_since_unix_epoch(),
                 revision: auction.revision,
             })
@@ -1170,6 +1251,7 @@ impl BidMarket for CtxBidMarket<'_> {
         decision: BidDecision,
     ) -> Result<(), BidRefusal> {
         if let BidDecision::Accepted {
+            price,
             revision,
             displaced_bidder_guid,
             displaced_bid,
@@ -1189,10 +1271,6 @@ impl BidMarket for CtxBidMarket<'_> {
             {
                 return Err(BidRefusal::Database);
             }
-            row.highest_bidder_guid = request.bidder_guid;
-            row.highest_bid = request.offer;
-            row.revision = revision;
-            self.ctx.db.game_auction().id().update(row);
             if displaced_bidder_guid != 0 {
                 crate::mail::insert_mail(
                     self.ctx,
@@ -1204,6 +1282,51 @@ impl BidMarket for CtxBidMarket<'_> {
                     0,
                     &crate::items::ItemSnapshot::default(),
                 );
+            }
+            if revision == 0 {
+                if expected.buyout == 0 || price != expected.buyout {
+                    return Err(BidRefusal::Database);
+                }
+                let proceeds =
+                    seller_proceeds(price, expected.deposit).ok_or(BidRefusal::Database)?;
+                let item = crate::items::ItemSnapshot {
+                    entry: row.item_entry,
+                    stack_count: row.item_stack_count,
+                    durability: row.item_durability,
+                    enchant_id: row.item_enchant_id,
+                    soulbound: row.item_soulbound,
+                };
+                self.ctx
+                    .db
+                    .game_auction_expiry()
+                    .auction_id()
+                    .delete(row.id);
+                self.ctx.db.game_auction().id().delete(row.id);
+                crate::mail::insert_mail(
+                    self.ctx,
+                    request.bidder_guid,
+                    row.owner_guid,
+                    "Auction won".to_string(),
+                    String::new(),
+                    0,
+                    0,
+                    &item,
+                );
+                crate::mail::insert_mail(
+                    self.ctx,
+                    row.owner_guid,
+                    request.bidder_guid,
+                    "Auction sold".to_string(),
+                    String::new(),
+                    proceeds,
+                    0,
+                    &crate::items::ItemSnapshot::default(),
+                );
+            } else {
+                row.highest_bidder_guid = request.bidder_guid;
+                row.highest_bid = price;
+                row.revision = revision;
+                self.ctx.db.game_auction().id().update(row);
             }
         }
         let fields = bid_decision_fields(decision);
@@ -1220,6 +1343,7 @@ impl BidMarket for CtxBidMarket<'_> {
                 result_bidder_guid: fields.result_bidder_guid,
                 result_bid: fields.result_bid,
                 minimum_increment: fields.minimum_increment,
+                accepted_price: fields.accepted_price,
                 deferred_refund: 0,
             });
         Ok(())
@@ -1237,13 +1361,17 @@ impl BidRefundSink for CtxBidMarket<'_> {
             .game_auction_bid_decision()
             .operation_id()
             .find(operation_id)?;
-        let decision = bid_decision_from_fields(BidDecisionFields {
-            outcome: row.outcome,
-            revision: row.revision,
-            result_bidder_guid: row.result_bidder_guid,
-            result_bid: row.result_bid,
-            minimum_increment: row.minimum_increment,
-        })?;
+        let decision = bid_decision_from_fields(
+            BidDecisionFields {
+                outcome: row.outcome,
+                revision: row.revision,
+                result_bidder_guid: row.result_bidder_guid,
+                result_bid: row.result_bid,
+                minimum_increment: row.minimum_increment,
+                accepted_price: row.accepted_price,
+            },
+            row.offer,
+        )?;
         Some((
             bid_request(row.operation_id, row.bidder_guid, row.auction_id, row.offer),
             decision,
@@ -1548,8 +1676,8 @@ pub fn realm_auction_settle_listing(ctx: &ReducerContext, operation_id: u64) -> 
         .map_err(|refusal| tagged(refusal, "listing Hold is not confirmed"))
 }
 
-/// Single-database bid: full-offer Hold, realm decision, Auction update, refund mail, and terminal
-/// source outcome commit atomically.
+/// Single-database bid: full-offer Hold, realm decision, Auction update or buyout settlement,
+/// ordinary mail, and terminal source outcome commit atomically.
 #[reducer]
 pub fn gw_auction_bid_local(
     ctx: &ReducerContext,
@@ -1614,7 +1742,7 @@ pub fn realm_auction_decide_bid(
     .map_err(|refusal| tagged_bid(refusal, "bid decision conflict"))
 }
 
-/// Sharded bid phase 3: consume an accepted Hold or restore a rejected Hold exactly once.
+/// Sharded bid phase 3: consume the normalized accepted price or restore refused value exactly once.
 #[reducer]
 #[allow(clippy::too_many_arguments)]
 pub fn gw_auction_finish_bid(
@@ -1628,15 +1756,20 @@ pub fn gw_auction_finish_bid(
     result_bidder_guid: u64,
     result_bid: u32,
     minimum_increment: u32,
+    accepted_price: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let decision = bid_decision_from_fields(BidDecisionFields {
-        outcome,
-        revision,
-        result_bidder_guid,
-        result_bid,
-        minimum_increment,
-    })
+    let decision = bid_decision_from_fields(
+        BidDecisionFields {
+            outcome,
+            revision,
+            result_bidder_guid,
+            result_bid,
+            minimum_increment,
+            accepted_price,
+        },
+        offer,
+    )
     .ok_or_else(|| tagged_bid(BidRefusal::Database, "bid decision is pending"))?;
     finish_bid(
         &mut CtxBidSource { ctx },
@@ -1762,6 +1895,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn seller_proceeds_apply_the_stormwind_cut_and_return_the_deposit_checked() {
+        assert_eq!(seller_proceeds(100, 10), Some(105));
+        assert_eq!(seller_proceeds(19, 1), Some(20));
+        assert_eq!(seller_proceeds(20, 1), Some(20));
+        assert_eq!(seller_proceeds(u32::MAX, u32::MAX), None);
+    }
+
+    #[test]
     fn listing_deposit_uses_the_stormwind_rate_and_supported_duration_ladder() {
         assert_eq!(listing_deposit(100, 2, 720), Some(10));
         assert_eq!(listing_deposit(100, 2, 1_440), Some(20));
@@ -1785,6 +1926,26 @@ mod tests {
                 soulbound: false,
             },
             sell_price: 100,
+        }
+    }
+
+    fn active_bid_auction() -> BidAuction {
+        let snapshot = item(23).snapshot;
+        BidAuction {
+            id: 41,
+            owner_guid: 7,
+            item_entry: snapshot.entry,
+            item_stack_count: snapshot.stack_count,
+            item_durability: snapshot.durability,
+            item_enchant_id: snapshot.enchant_id,
+            item_soulbound: snapshot.soulbound,
+            highest_bidder_guid: 0,
+            highest_bid: 0,
+            start_bid: 100,
+            buyout: 0,
+            deposit: 10,
+            expires_micros: 2_000,
+            revision: 3,
         }
     }
 
@@ -2262,15 +2423,7 @@ mod tests {
 
     #[test]
     fn realm_bid_decision_enforces_the_vanilla_price_ladder_and_revision() {
-        let active = BidAuction {
-            id: 41,
-            owner_guid: 7,
-            highest_bidder_guid: 0,
-            highest_bid: 0,
-            start_bid: 100,
-            expires_micros: 2_000,
-            revision: 3,
-        };
+        let active = active_bid_auction();
         let request = BidRequest {
             operation_id: 900,
             bidder_guid: 8,
@@ -2281,6 +2434,7 @@ mod tests {
         assert_eq!(
             decide_bid(Some(active), request, 1_000),
             BidDecision::Accepted {
+                price: 100,
                 revision: 4,
                 displaced_bidder_guid: 0,
                 displaced_bid: 0,
@@ -2340,12 +2494,77 @@ mod tests {
             decide_bid(
                 Some(BidAuction {
                     highest_bid: u32::MAX,
+                    buyout: 0,
                     ..bid
                 }),
                 request,
                 1_000,
             ),
             BidDecision::Database
+        ));
+    }
+
+    #[test]
+    fn realm_buyout_normalizes_the_offer_and_checks_settlement_arithmetic() {
+        let active = BidAuction {
+            highest_bidder_guid: 9,
+            highest_bid: 201,
+            buyout: 500,
+            ..active_bid_auction()
+        };
+        let request = BidRequest {
+            operation_id: 905,
+            bidder_guid: 8,
+            auction_id: 41,
+            offer: 900,
+        };
+
+        for offer in [500, 900] {
+            assert_eq!(
+                decide_bid(Some(active), BidRequest { offer, ..request }, 1_000),
+                BidDecision::Accepted {
+                    price: 500,
+                    revision: 0,
+                    displaced_bidder_guid: 9,
+                    displaced_bid: 201,
+                }
+            );
+        }
+        assert_eq!(
+            decide_bid(
+                Some(BidAuction {
+                    deposit: u32::MAX,
+                    buyout: u32::MAX,
+                    ..active
+                }),
+                BidRequest {
+                    offer: u32::MAX,
+                    ..request
+                },
+                1_000,
+            ),
+            BidDecision::Database
+        );
+        assert!(matches!(
+            decide_bid(
+                Some(BidAuction {
+                    highest_bidder_guid: 9,
+                    highest_bid: u32::MAX - 1,
+                    buyout: u32::MAX,
+                    deposit: 1,
+                    ..active
+                }),
+                BidRequest {
+                    offer: u32::MAX,
+                    ..request
+                },
+                1_000,
+            ),
+            BidDecision::Accepted {
+                price: u32::MAX,
+                revision: 0,
+                ..
+            }
         ));
     }
 
@@ -2391,8 +2610,10 @@ mod tests {
             request: BidRequest,
             decision: BidDecision,
         ) -> Result<(), BidRefusal> {
-            if !matches!(decision, BidDecision::Accepted { .. }) {
-                let (money, deferred_refund) = split_bid_refund(self.money, request.offer);
+            let refund =
+                refundable_bid_value(decision, request.offer).ok_or(BidRefusal::Database)?;
+            if refund != 0 {
+                let (money, deferred_refund) = split_bid_refund(self.money, refund);
                 self.money = money;
                 self.deferred_refund += deferred_refund;
             }
@@ -2425,6 +2646,7 @@ mod tests {
         };
         let rejected = BidDecision::BidIncrement;
         let accepted = BidDecision::Accepted {
+            price: 107,
             revision: 4,
             displaced_bidder_guid: 9,
             displaced_bid: 101,
@@ -2474,6 +2696,36 @@ mod tests {
         assert_eq!(finish_bid(&mut acceptance, request, accepted), Ok(accepted));
         assert_eq!(acceptance.money, 93, "accepted value is consumed once");
 
+        let normalized = BidDecision::Accepted {
+            price: 100,
+            revision: 4,
+            displaced_bidder_guid: 9,
+            displaced_bid: 101,
+        };
+        let mut normalized_acceptance = FakeBidSource::new(200);
+        assert_eq!(fence_bid(&mut normalized_acceptance, request), Ok(()));
+        assert_eq!(
+            finish_bid(&mut normalized_acceptance, request, normalized),
+            Ok(normalized)
+        );
+        assert_eq!(normalized_acceptance.money, 100);
+        assert_eq!(
+            finish_bid(&mut normalized_acceptance, request, normalized),
+            Ok(normalized)
+        );
+        assert_eq!(normalized_acceptance.money, 100);
+
+        let mut interrupted_normalization = FakeBidSource::new(200);
+        fence_bid(&mut interrupted_normalization, request).unwrap();
+        interrupted_normalization.money = u32::MAX;
+        finish_bid(&mut interrupted_normalization, request, normalized).unwrap();
+        assert_eq!(interrupted_normalization.deferred_refund, 7);
+        assert_eq!(
+            confirm_bid_refund(&mut interrupted_normalization, request, 7),
+            Ok(())
+        );
+        assert_eq!(interrupted_normalization.deferred_refund, 0);
+
         assert_eq!(
             finish_bid(&mut acceptance, BidRequest { offer: 108, ..request }, accepted),
             Err(BidRefusal::Database),
@@ -2513,10 +2765,21 @@ mod tests {
     }
 
     #[derive(Clone)]
+    struct FakeSettlementMail {
+        recipient_guid: u64,
+        sender_guid: u64,
+        subject: &'static str,
+        money: u32,
+        item: crate::items::ItemSnapshot,
+    }
+
+    #[derive(Clone)]
     struct FakeBidMarket {
         auction: Option<BidAuction>,
         decision: Option<(BidRequest, BidDecision)>,
         refunds: Vec<(u64, u32)>,
+        settlement_mail: Vec<FakeSettlementMail>,
+        expiry_armed: bool,
         now_micros: i64,
     }
 
@@ -2541,19 +2804,45 @@ mod tests {
             decision: BidDecision,
         ) -> Result<(), BidRefusal> {
             if let BidDecision::Accepted {
+                price,
                 revision,
                 displaced_bidder_guid,
                 displaced_bid,
             } = decision
             {
                 let mut auction = auction.expect("only an active Auction can accept a bid");
-                auction.highest_bidder_guid = request.bidder_guid;
-                auction.highest_bid = request.offer;
-                auction.revision = revision;
-                self.auction = Some(auction);
                 if displaced_bidder_guid != 0 {
-                    self.refunds
-                        .push((displaced_bidder_guid, displaced_bid));
+                    self.refunds.push((displaced_bidder_guid, displaced_bid));
+                }
+                if revision == 0 {
+                    self.expiry_armed = false;
+                    self.settlement_mail.push(FakeSettlementMail {
+                        recipient_guid: request.bidder_guid,
+                        sender_guid: auction.owner_guid,
+                        subject: "Auction won",
+                        money: 0,
+                        item: crate::items::ItemSnapshot {
+                            entry: auction.item_entry,
+                            stack_count: auction.item_stack_count,
+                            durability: auction.item_durability,
+                            enchant_id: auction.item_enchant_id,
+                            soulbound: auction.item_soulbound,
+                        },
+                    });
+                    self.settlement_mail.push(FakeSettlementMail {
+                        recipient_guid: auction.owner_guid,
+                        sender_guid: request.bidder_guid,
+                        subject: "Auction sold",
+                        money: seller_proceeds(price, auction.deposit)
+                            .expect("accepted buyout arithmetic was checked"),
+                        item: crate::items::ItemSnapshot::default(),
+                    });
+                    self.auction = None;
+                } else {
+                    auction.highest_bidder_guid = request.bidder_guid;
+                    auction.highest_bid = price;
+                    auction.revision = revision;
+                    self.auction = Some(auction);
                 }
             }
             self.decision = Some((request, decision));
@@ -2617,12 +2906,16 @@ mod tests {
 
         sink.recorded = 0;
         sink.decision = BidDecision::Accepted {
+            price: 100,
             revision: 4,
             displaced_bidder_guid: 9,
             displaced_bid: 101,
         };
+        assert_eq!(relay_bid_refund(&mut sink, request, 7), Ok(()));
+        assert_eq!(relay_bid_refund(&mut sink, request, 7), Ok(()));
+        assert_eq!(sink.mails, vec![(8, 7), (8, 7)]);
         assert_eq!(
-            relay_bid_refund(&mut sink, request, 7),
+            relay_bid_refund(&mut sink, request, 8),
             Err(BidRefusal::Database)
         );
     }
@@ -2637,20 +2930,19 @@ mod tests {
         };
         let mut market = FakeBidMarket {
             auction: Some(BidAuction {
-                id: 41,
-                owner_guid: 7,
                 highest_bidder_guid: 9,
                 highest_bid: 101,
-                start_bid: 100,
-                expires_micros: 2_000,
-                revision: 3,
+                ..active_bid_auction()
             }),
             decision: None,
             refunds: Vec::new(),
+            settlement_mail: Vec::new(),
+            expiry_armed: true,
             now_micros: 1_000,
         };
 
         let expected = BidDecision::Accepted {
+            price: 107,
             revision: 4,
             displaced_bidder_guid: 9,
             displaced_bid: 101,
@@ -2675,57 +2967,179 @@ mod tests {
     }
 
     #[test]
-    fn local_and_interrupted_sharded_bids_have_equivalent_value_and_market_state() {
+    fn local_and_interrupted_sharded_bids_and_buyouts_have_equivalent_state() {
+        for (operation_id, offer) in [(903, 107), (904, 900)] {
+            let request = BidRequest {
+                operation_id,
+                bidder_guid: 8,
+                auction_id: 41,
+                offer,
+            };
+            let source = FakeBidSource::new(1_000);
+            let market = FakeBidMarket {
+                auction: Some(BidAuction {
+                    highest_bidder_guid: 9,
+                    highest_bid: 101,
+                    buyout: 500,
+                    ..active_bid_auction()
+                }),
+                decision: None,
+                refunds: Vec::new(),
+                settlement_mail: Vec::new(),
+                expiry_armed: true,
+                now_micros: 1_000,
+            };
+
+            let mut local_source = source;
+            let mut local_market = market.clone();
+            let expected = drive_bid(&mut local_source, &mut local_market, request).unwrap();
+
+            for killed_after in 0..=2 {
+                let mut sharded_source = source;
+                let mut sharded_market = market.clone();
+                if killed_after >= 1 {
+                    fence_bid(&mut sharded_source, request).unwrap();
+                }
+                if killed_after >= 2 {
+                    resolve_bid(&mut sharded_market, request).unwrap();
+                }
+
+                assert_eq!(
+                    drive_bid(&mut sharded_source, &mut sharded_market, request),
+                    Ok(expected)
+                );
+                assert_eq!(sharded_source.money, local_source.money);
+                assert_eq!(sharded_source.hold, local_source.hold);
+                assert_eq!(sharded_market.auction, local_market.auction);
+                assert_eq!(sharded_market.refunds, local_market.refunds);
+                assert_eq!(
+                    sharded_market.settlement_mail.len(),
+                    local_market.settlement_mail.len()
+                );
+                assert_eq!(sharded_market.expiry_armed, local_market.expiry_armed);
+                assert_eq!(
+                    drive_bid(&mut sharded_source, &mut sharded_market, request),
+                    Ok(expected)
+                );
+                assert_eq!(sharded_market.refunds, vec![(9, 101)]);
+                assert_eq!(
+                    sharded_market.settlement_mail.len(),
+                    usize::from(offer >= 500) * 2
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn buyout_atomically_delivers_exact_mail_and_conserves_copper() {
         let request = BidRequest {
-            operation_id: 903,
+            operation_id: 906,
             bidder_guid: 8,
             auction_id: 41,
-            offer: 107,
+            offer: 900,
         };
-        let source = FakeBidSource::new(200);
-        let market = FakeBidMarket {
+        let mut source = FakeBidSource::new(1_000);
+        let mut market = FakeBidMarket {
             auction: Some(BidAuction {
-                id: 41,
-                owner_guid: 7,
                 highest_bidder_guid: 9,
-                highest_bid: 101,
-                start_bid: 100,
-                expires_micros: 2_000,
-                revision: 3,
+                highest_bid: 201,
+                buyout: 500,
+                ..active_bid_auction()
             }),
             decision: None,
             refunds: Vec::new(),
+            settlement_mail: Vec::new(),
+            expiry_armed: true,
             now_micros: 1_000,
         };
 
-        let mut local_source = source;
-        let mut local_market = market.clone();
-        let expected = drive_bid(&mut local_source, &mut local_market, request).unwrap();
+        assert_eq!(
+            drive_bid(&mut source, &mut market, request),
+            Ok(BidDecision::Accepted {
+                price: 500,
+                revision: 0,
+                displaced_bidder_guid: 9,
+                displaced_bid: 201,
+            })
+        );
+        assert_eq!(source.money, 500);
+        assert!(market.auction.is_none());
+        assert!(!market.expiry_armed);
+        assert_eq!(market.refunds, vec![(9, 201)]);
+        assert_eq!(market.settlement_mail.len(), 2);
+        assert_eq!(market.settlement_mail[0].recipient_guid, 8);
+        assert_eq!(market.settlement_mail[0].sender_guid, 7);
+        assert_eq!(market.settlement_mail[0].subject, "Auction won");
+        assert_eq!(market.settlement_mail[0].money, 0);
+        assert_eq!(market.settlement_mail[0].item, item(23).snapshot);
+        assert_eq!(market.settlement_mail[1].recipient_guid, 7);
+        assert_eq!(market.settlement_mail[1].sender_guid, 8);
+        assert_eq!(market.settlement_mail[1].subject, "Auction sold");
+        assert_eq!(market.settlement_mail[1].money, 485);
+        assert!(market.settlement_mail[1].item.is_empty());
+        assert_eq!(1_000_u64 + 201 + 10, 500_u64 + 201 + 485 + 25);
 
-        for killed_after in 0..=2 {
-            let mut sharded_source = source;
-            let mut sharded_market = market.clone();
-            if killed_after >= 1 {
-                fence_bid(&mut sharded_source, request).unwrap();
-            }
-            if killed_after >= 2 {
-                resolve_bid(&mut sharded_market, request).unwrap();
-            }
+        assert_eq!(
+            drive_bid(&mut source, &mut market, request),
+            Ok(BidDecision::Accepted {
+                price: 500,
+                revision: 0,
+                displaced_bidder_guid: 9,
+                displaced_bid: 201,
+            })
+        );
+        assert_eq!(source.money, 500);
+        assert_eq!(market.refunds, vec![(9, 201)]);
+        assert_eq!(market.settlement_mail.len(), 2);
+    }
 
-            assert_eq!(
-                drive_bid(&mut sharded_source, &mut sharded_market, request),
-                Ok(expected)
-            );
-            assert_eq!(sharded_source.money, local_source.money);
-            assert_eq!(sharded_source.hold, local_source.hold);
-            assert_eq!(sharded_market.auction, local_market.auction);
-            assert_eq!(sharded_market.refunds, local_market.refunds);
-            assert_eq!(
-                drive_bid(&mut sharded_source, &mut sharded_market, request),
-                Ok(expected)
-            );
-            assert_eq!(sharded_market.refunds, vec![(9, 101)]);
-        }
+    #[test]
+    fn concurrent_buyouts_have_one_winner_and_restore_the_loser_once() {
+        let winner = BidRequest {
+            operation_id: 907,
+            bidder_guid: 8,
+            auction_id: 41,
+            offer: 900,
+        };
+        let loser = BidRequest {
+            operation_id: 908,
+            bidder_guid: 10,
+            auction_id: 41,
+            offer: 500,
+        };
+        let mut winner_source = FakeBidSource::new(1_000);
+        let mut loser_source = FakeBidSource::new(700);
+        let mut market = FakeBidMarket {
+            auction: Some(BidAuction {
+                buyout: 500,
+                ..active_bid_auction()
+            }),
+            decision: None,
+            refunds: Vec::new(),
+            settlement_mail: Vec::new(),
+            expiry_armed: true,
+            now_micros: 1_000,
+        };
+
+        assert!(matches!(
+            drive_bid(&mut winner_source, &mut market, winner),
+            Ok(BidDecision::Accepted { price: 500, .. })
+        ));
+        market.decision = None;
+        assert_eq!(
+            drive_bid(&mut loser_source, &mut market, loser),
+            Ok(BidDecision::ItemNotFound)
+        );
+        assert_eq!(winner_source.money, 500);
+        assert_eq!(loser_source.money, 700);
+        assert_eq!(market.settlement_mail.len(), 2);
+
+        assert_eq!(
+            drive_bid(&mut loser_source, &mut market, loser),
+            Ok(BidDecision::ItemNotFound)
+        );
+        assert_eq!(loser_source.money, 700);
+        assert_eq!(market.settlement_mail.len(), 2);
     }
 
     #[test]

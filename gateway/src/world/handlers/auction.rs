@@ -1083,6 +1083,28 @@ mod tests {
     }
 
     #[test]
+    fn a_normalized_buyout_uses_the_exact_bid_success_mapping() {
+        let store = store_with(Some(valid_interaction()));
+        *store.bid_result.lock().unwrap() = Ok(PlaceBidOutcome::Accepted {
+            minimum_increment: 25,
+        });
+
+        let outbound = bid_outbound(&store).unwrap();
+
+        assert!(matches!(
+            outbound.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(message))]
+                if message.auction_id == 41
+                    && message.action
+                        == SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction::BidPlaced {
+                            result: SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult::Ok {
+                                auction_outbid1: 25,
+                            },
+                        }
+        ));
+    }
+
+    #[test]
     fn bid_refusals_use_the_specific_vanilla_result_variants() {
         let cases = [
             (

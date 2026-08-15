@@ -430,7 +430,7 @@ impl Coordinator {
     }
 
     /// Place one full-offer bid. The sharded path fences the bidder purse before realm-core makes
-    /// its serialized Auction decision; both paths finish with the same terminal Hold outcome.
+    /// its serialized Auction decision; both paths finish with the same normalized terminal Hold.
     pub(crate) fn place_bid(
         &self,
         request: crate::world::PlaceBidRequest,
@@ -543,7 +543,8 @@ impl Coordinator {
                 decision.revision,
                 decision.result_bidder_guid,
                 decision.result_bid,
-                decision.minimum_increment
+                decision.minimum_increment,
+                decision.accepted_price
             )
         )
     }
@@ -2989,7 +2990,13 @@ fn bid_outcome(hold: &AuctionBidHold) -> Result<crate::world::PlaceBidOutcome> {
     use lyracore_shared::auction::bid_outcome;
     Ok(match hold.outcome {
         bid_outcome::ACCEPTED => PlaceBidOutcome::Accepted {
-            minimum_increment: lyracore_shared::auction::bid_increment(hold.offer),
+            minimum_increment: lyracore_shared::auction::bid_increment(
+                if hold.accepted_price == 0 {
+                    hold.offer
+                } else {
+                    hold.accepted_price
+                },
+            ),
         },
         bid_outcome::ITEM_NOT_FOUND => PlaceBidOutcome::ItemNotFound,
         bid_outcome::HIGHER_BID => PlaceBidOutcome::HigherBid {
@@ -3071,6 +3078,7 @@ mod auction_reducer_tests {
             result_bidder_guid: 0,
             result_bid: 0,
             minimum_increment: 0,
+            accepted_price: 0,
             deferred_refund: 3,
         };
         let decision = AuctionBidDecision {
@@ -3083,6 +3091,7 @@ mod auction_reducer_tests {
             result_bidder_guid: hold.result_bidder_guid,
             result_bid: hold.result_bid,
             minimum_increment: hold.minimum_increment,
+            accepted_price: hold.accepted_price,
             deferred_refund: hold.deferred_refund,
         };
 
@@ -3112,5 +3121,29 @@ mod auction_reducer_tests {
             },
             bidder_guid
         ));
+    }
+
+    #[test]
+    fn normalized_buyout_price_drives_the_exact_success_command_value() {
+        let hold = AuctionBidHold {
+            operation_id: 7,
+            bidder_guid: 8,
+            auction_id: 9,
+            offer: 900,
+            outcome: lyracore_shared::auction::bid_outcome::ACCEPTED,
+            revision: 0,
+            result_bidder_guid: 0,
+            result_bid: 0,
+            minimum_increment: 0,
+            accepted_price: 500,
+            deferred_refund: 0,
+        };
+
+        assert_eq!(
+            bid_outcome(&hold).unwrap(),
+            crate::world::PlaceBidOutcome::Accepted {
+                minimum_increment: 25,
+            }
+        );
     }
 }

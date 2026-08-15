@@ -246,8 +246,9 @@ RAM.
 snapshot while no inventory row exists. Private `game_auction_hold` is the source-shard value fence;
 private `game_auction_operation_receipt` makes listing retries idempotent after that Hold is deleted.
 Private `game_auction_bid_hold` fences a bidder's complete offer and retains the terminal source
-outcome and any purse-overflow refund awaiting relay; private `game_auction_bid_decision` is
-realm-core's serialized, replay-safe decision and exact-once refund-mail receipt.
+outcome, normalized accepted price, and any purse-overflow refund awaiting relay; private
+`game_auction_bid_decision` is realm-core's serialized, replay-safe decision and exact-once
+settlement/refund-mail receipt.
 `game_auction_expiry` is a private one-shot schedule at the listing's original deadline. These
 tables are additive and are deliberately excluded from character transfer manifests; deletion is
 refused while a character owns Auction value.
