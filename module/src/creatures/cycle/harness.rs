@@ -24,6 +24,9 @@ struct XCreature {
     /// What a heal-when-low rotation line reads. Full health unless a scenario hurts it.
     health: u32,
     max_health: u32,
+    /// The power bar regeneration ticks. `max_power` 0 — every creature — has no bar at all.
+    power: u32,
+    max_power: u32,
     // --- what the engagement phases read; every one has a quiet default a builder overrides.
     level: u32,
     faction_template: u32,
@@ -108,6 +111,13 @@ struct Scenario {
     pulls: RefCell<Vec<(u64, u64, Pull)>>,
     /// Ordered units the cycle flagged in combat, oldest first.
     flagged: RefCell<Vec<u64>>,
+    /// The in-combat flag as state: `unit -> the ms its flag stops being earned`. Combat entry
+    /// stamps it, combat exit clears it, the way the world's own flag works.
+    combat_flags: RefCell<HashMap<u64, u64>>,
+    /// Ordered units the cycle dropped out of combat, oldest first.
+    unflagged: RefCell<Vec<u64>>,
+    /// Units carrying a combat-regen aura — the only ones that heal while they fight.
+    combat_regen: RefCell<HashSet<u64>>,
     /// Authored spell rotations, per creature (the world keys them by template).
     rotations: RefCell<HashMap<u64, Vec<SpellOption>>>,
     /// The single spell a creature with no rotation falls back to.
@@ -165,6 +175,8 @@ impl Scenario {
                 wp_target: 0,
                 health: 100,
                 max_health: 100,
+                power: 0,
+                max_power: 0,
                 level: 10,
                 faction_template: BEASTS,
                 map_id: MAP,
@@ -408,6 +420,37 @@ impl Scenario {
 
     fn flagged(&self) -> Vec<u64> {
         self.flagged.borrow().clone()
+    }
+
+    /// The unit carries the in-combat flag until `until_ms`, and the sweep harvested it into this
+    /// firing's candidates — the two always travel together, because the sweep IS the flag scan.
+    fn in_combat_until(self, guid: u64, until_ms: u64) -> Self {
+        self.combat_flags.borrow_mut().insert(guid, until_ms);
+        self.awake.borrow_mut().in_combat.push(guid);
+        self
+    }
+
+    /// Is this unit still flagged in combat?
+    fn in_combat(&self, guid: u64) -> bool {
+        self.combat_flags.borrow().contains_key(&guid)
+    }
+
+    fn unflagged(&self) -> Vec<u64> {
+        self.unflagged.borrow().clone()
+    }
+
+    /// Give the unit a power bar, the way only a player has one.
+    fn power(self, guid: u64, power: u32, max_power: u32) -> Self {
+        self.tweak(guid, |c| {
+            c.power = power;
+            c.max_power = max_power;
+        })
+    }
+
+    /// A combat-regen aura (the Troll Regeneration racial): this unit heals even while it fights.
+    fn combat_regen(self, guid: u64) -> Self {
+        self.combat_regen.borrow_mut().insert(guid);
+        self
     }
 
     /// Summon `guid` as `owner`'s pet at `at`: a creature row plus the owner link, harvested into
@@ -899,6 +942,84 @@ impl EngageSink for Scenario {
     }
     fn enter_combat(&mut self, guid: u64) {
         self.flagged.borrow_mut().push(guid);
+        let now_ms = self.now_micros.get() / 1000;
+        self.combat_flags
+            .borrow_mut()
+            .insert(guid, now_ms + crate::combat::COMBAT_DROP_MS);
+    }
+    fn flagged_in_combat(&self, candidates: &[u64]) -> Vec<Combatant> {
+        let flags = self.combat_flags.borrow();
+        candidates
+            .iter()
+            .filter_map(|guid| {
+                flags.get(guid).map(|until_ms| Combatant {
+                    guid: *guid,
+                    combat_until_ms: *until_ms,
+                })
+            })
+            .collect()
+    }
+    fn leave_combat(&mut self, guid: u64) {
+        self.unflagged.borrow_mut().push(guid);
+        self.combat_flags.borrow_mut().remove(&guid);
+    }
+}
+
+/// What a full out-of-combat tick recovers here. The RATES are `combat::tables`' in production;
+/// this stands in for them, because what the cycle decides is WHO recovers and WHEN, never how much.
+const REGEN_TICK: u32 = 5;
+/// What a combat-regen aura leaves of that tick — a fraction, as the in-combat rate is.
+const COMBAT_REGEN_TICK: u32 = 1;
+
+// The in-memory regeneration world. A scenario holds only creature rows, so a unit with a power bar
+// stands in for the player half the production pass also covers.
+impl RegenSink for Scenario {
+    fn recovering(&self, flagged: &[u64]) -> Vec<Recovering> {
+        let fights = self.fights.borrow();
+        let corpses = self.corpses.borrow();
+        let mut units: Vec<Recovering> = self
+            .creatures
+            .borrow()
+            .iter()
+            .filter(|(guid, c)| {
+                !corpses.contains(*guid) && (c.health < c.max_health || c.max_power > 0)
+            })
+            .map(|(guid, c)| Recovering {
+                guid: *guid,
+                health: c.health,
+                max_health: c.max_health,
+                power: c.power,
+                max_power: c.max_power,
+                // Both halves the world reads: either side of a live fight, plus the flag the sweep
+                // harvested for a unit with no melee row of its own.
+                in_combat: flagged.contains(guid)
+                    || fights
+                        .iter()
+                        .any(|f| f.attacker == *guid || f.victim == *guid),
+            })
+            .collect();
+        units.sort_unstable_by_key(|u| u.guid);
+        units
+    }
+    fn healed_to(&self, u: &Recovering) -> u32 {
+        (u.health + REGEN_TICK).min(u.max_health)
+    }
+    fn combat_healed_to(&self, u: &Recovering) -> Option<u32> {
+        self.combat_regen
+            .borrow()
+            .contains(&u.guid)
+            .then(|| (u.health + COMBAT_REGEN_TICK).min(u.max_health))
+    }
+    fn powered_to(&self, u: &Recovering) -> u32 {
+        (u.power + REGEN_TICK).min(u.max_power)
+    }
+    fn restore(&mut self, guid: u64, health: Option<u32>, power: Option<u32>) {
+        let mut creatures = self.creatures.borrow_mut();
+        let Some(c) = creatures.get_mut(&guid) else {
+            return;
+        };
+        c.health = health.unwrap_or(c.health);
+        c.power = power.unwrap_or(c.power);
     }
 }
 
@@ -1225,16 +1346,6 @@ impl PetSink for Scenario {
             c.map_id = map_id;
             c.instance_id = instance_id;
         }
-    }
-}
-
-// Not migrated yet: the cycle SEQUENCES these, the harness cannot run them.
-impl LegacyPasses for Scenario {
-    fn legacy_regen(&mut self) -> usize {
-        0
-    }
-    fn legacy_combat_drop(&mut self, _in_combat: &[u64]) -> usize {
-        0
     }
 }
 
@@ -3051,4 +3162,210 @@ fn a_pet_whose_owner_changed_instance_is_snapped_across_rather_than_walked() {
         "position, grid address and packed cell must move together, or the pet is delivered to the \
          wrong players from its new instance"
     );
+}
+
+/// The `SETTLED` clock in ms — what a combat-drop deadline is measured against.
+const SETTLED_MS: u64 = SETTLED / 1000;
+
+#[test]
+fn a_creature_that_engaged_and_chased_this_cycle_is_not_healed_by_the_same_cycle() {
+    // The fight is armed by the aggro phase of THIS cycle, so regeneration's gate can only see it
+    // by running after that phase.
+    let mut w = wolf_fighting(p(15.0, 0.0, 10.0))
+        .awake([WOLF])
+        .hurt(WOLF, 10);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert!(
+        !w.pulls().is_empty() && !w.effects().is_empty(),
+        "the wolf must have pulled and closed on the player this firing, or the ordering under \
+         test never happens"
+    );
+    assert_eq!(
+        w.at(WOLF).health,
+        10,
+        "a creature healing while it fights cannot be killed at the rate the fight damages it; \
+         regeneration has to run after chase so its gate sees the still-engaged chaser"
+    );
+}
+
+#[test]
+fn an_out_of_combat_unit_recovers_both_bars_and_is_not_moved_by_it() {
+    let mut w = Scenario::new(HALF_WAY)
+        .creature(WOLF, p(0.0, 0.0, 10.0))
+        .awake([WOLF])
+        .hurt(WOLF, 10)
+        .power(WOLF, 20, 100);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    let wolf = w.at(WOLF);
+    assert_eq!(
+        (wolf.health, wolf.power),
+        (15, 25),
+        "a unit out of combat recovers both bars every sense firing; one that recovers neither \
+         never returns to full and has to be killed a second time at the health the last fight \
+         left it"
+    );
+    assert!(
+        w.effects().is_empty() && wolf.at == p(0.0, 0.0, 10.0),
+        "regeneration writes health and power only — writing a whole row back would revert a \
+         position another phase decided this firing"
+    );
+}
+
+#[test]
+fn a_unit_in_combat_heals_only_through_a_combat_regen_aura() {
+    let cases: [(&str, Twist, u32); 2] = [
+        ("no aura, the vanilla default", |w| w, 10),
+        ("carrying Troll Regeneration", |w| w.combat_regen(WOLF), 11),
+    ];
+    for (case, twist, health) in cases {
+        // Flagged in combat with no melee row of its own: a pure caster, which is the half of the
+        // in-combat verdict the engagement rows do not answer.
+        let mut w = twist(
+            Scenario::new(SETTLED)
+                .creature(WOLF, p(0.0, 0.0, 10.0))
+                .hurt(WOLF, 10)
+                .in_combat_until(WOLF, SETTLED_MS + 1000),
+        );
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            w.at(WOLF).health,
+            health,
+            "fighting is what stops regeneration, and an aura is the only thing that gives any of \
+             it back — healing everyone in combat at the free rate makes every fight unwinnable \
+             for the side that deals less damage ({case})"
+        );
+    }
+}
+
+#[test]
+fn a_unit_past_its_combat_deadline_loses_the_flag_and_one_inside_it_keeps_it() {
+    let mut w = Scenario::new(SETTLED)
+        .creature(WOLF, p(0.0, 0.0, 10.0))
+        .in_combat_until(WOLF, SETTLED_MS - 1000)
+        .creature(PACK_MATE, p(5.0, 0.0, 10.0))
+        .in_combat_until(PACK_MATE, SETTLED_MS + 1000);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.unflagged(),
+        [WOLF],
+        "the flag lifts about six seconds after the last hostile action, not the instant the \
+         swinging stops; lifting it early lets a player eat and drink mid-fight, and never lifting \
+         it leaves them stuck in combat"
+    );
+    assert!(
+        !w.in_combat(WOLF) && w.in_combat(PACK_MATE),
+        "only the expired deadline may clear"
+    );
+}
+
+#[test]
+fn combat_entry_outlasts_combat_exit_in_the_same_cycle() {
+    let mut w = wolf_fighting(p(5.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .in_combat_until(WOLF, SETTLED_MS - 1000);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert!(
+        w.unflagged().is_empty() && w.in_combat(WOLF),
+        "entry stamps a deadline in the future and exit only clears one already behind us, so a \
+         creature in a live fight can never be dropped out of combat by the firing that just \
+         re-armed it"
+    );
+}
+
+#[test]
+fn a_creature_the_leash_dropped_walks_home_and_leaves_combat_in_one_cycle() {
+    // The leash pass in `tick_melee` already evaded this creature: its engagement is gone and its
+    // combat deadline has run out. What is left is what the cycle owns.
+    let mut evaded = Scenario::new(SETTLED)
+        .creature(WOLF, p(0.0, 20.0, 10.0))
+        .awake([WOLF])
+        .home(WOLF, p(0.0, 0.0, 10.0), false)
+        .hurt(WOLF, 10)
+        .in_combat_until(WOLF, SETTLED_MS - 1000);
+    let tick = evaded.tick(true, catch_all());
+    run_cycle(&mut evaded, tick);
+
+    let legs = evaded.effects();
+    assert_eq!(legs.len(), 1, "one leg per firing, and it is the walk home");
+    assert!(
+        legs[0].dest.y < 20.0 && legs[0].run,
+        "a creature the leash let go has to run back to its post, or it stands where the player \
+         abandoned it; got {:?}",
+        legs[0].dest
+    );
+    assert_eq!(
+        (evaded.unflagged(), evaded.at(WOLF).health),
+        (vec![WOLF], 10),
+        "the flag lifts this firing, and the recovery it gates starts on the NEXT one — a unit \
+         healed by the same firing that released it recovers a tick early for free"
+    );
+
+    // The same creature with the pursuit still live: the fight owns it, so nothing walks it home.
+    let mut pursuing = Scenario::new(SETTLED)
+        .creature(WOLF, p(0.0, 20.0, 10.0))
+        .awake([WOLF])
+        .home(WOLF, p(0.0, 0.0, 10.0), false)
+        .at_war(BEASTS, ALLIANCE)
+        .player(HUNTER, p(0.0, 40.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .in_combat_until(WOLF, SETTLED_MS - 1000);
+    let tick = pursuing.tick(true, catch_all());
+    run_cycle(&mut pursuing, tick);
+
+    let legs = pursuing.effects();
+    assert_eq!(legs.len(), 1, "one leg per firing, and it is the chase");
+    assert!(
+        legs[0].dest.y > 20.0 && pursuing.in_combat(WOLF),
+        "a live pursuit keeps the creature engaged and closing; walking it home mid-fight is how a \
+         player loses a mob that is still swinging at them; got {:?}",
+        legs[0].dest
+    );
+}
+
+#[test]
+fn regeneration_and_combat_exit_run_only_on_the_catch_all_sense_firing() {
+    let cases: [(&str, bool, TickScope, u32, Vec<u64>); 3] = [
+        (
+            "the catch-all sense firing",
+            true,
+            catch_all(),
+            15,
+            vec![WOLF],
+        ),
+        ("a movement-only firing", false, catch_all(), 10, vec![]),
+        (
+            "a dedicated instance firing",
+            true,
+            TickScope::Only(7),
+            10,
+            vec![],
+        ),
+    ];
+    for (case, sense, scope, health, unflagged) in cases {
+        let mut w = Scenario::new(SETTLED)
+            .creature(WOLF, p(5.0, 0.0, 10.0))
+            .in_combat_until(WOLF, SETTLED_MS - 1000)
+            .creature(PACK_MATE, p(0.0, 0.0, 10.0))
+            .hurt(PACK_MATE, 10);
+        let tick = w.tick(sense, scope);
+        run_cycle(&mut w, tick);
+
+        assert_eq!(
+            (w.at(PACK_MATE).health, w.unflagged()),
+            (health, unflagged),
+            "the recovery amount is quantized to the sense cadence and every instance is covered \
+             from the catch-all firing, so a second schedule row running either pass multiplies \
+             the whole world's regen rate and sweeps the deadlines twice ({case})"
+        );
+    }
 }

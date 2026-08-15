@@ -11,10 +11,11 @@ use lyracore_shared::{constants, spatial};
 use spacetimedb::{ReducerContext, Table};
 
 use super::{
-    run_cycle, AggroTarget, CastSink, CastWhen, Caster, CreatureWorld, CycleOutcome, EngageSink,
-    Engagement, FearSink, Fighter, Gait, Home, IdleCreature, IdleSink, Leg, LegInFlight,
-    LegacyPasses, MotionSink, Panicked, Pet, PetCommand, PetOwner, PetReact, PetSink, Point, Pull,
-    Pursuit, PursuitSink, RoutSink, Router, Sensor, SpellOption, ThreatSink, TickContext, Waypoint,
+    run_cycle, AggroTarget, CastSink, CastWhen, Caster, Combatant, CreatureWorld, CycleOutcome,
+    EngageSink, Engagement, FearSink, Fighter, Gait, Home, IdleCreature, IdleSink, Leg,
+    LegInFlight, MotionSink, Panicked, Pet, PetCommand, PetOwner, PetReact, PetSink, Point, Pull,
+    Pursuit, PursuitSink, Recovering, RegenSink, RoutSink, Router, Sensor, SpellOption, ThreatSink,
+    TickContext, Waypoint,
 };
 use crate::creatures::ai::TickScope;
 use crate::creatures::cast_condition;
@@ -376,6 +377,105 @@ impl EngageSink for CtxWorld<'_> {
     }
     fn enter_combat(&mut self, guid: u64) {
         crate::combat::enter_combat(self.ctx, guid);
+    }
+    fn flagged_in_combat(&self, candidates: &[u64]) -> Vec<Combatant> {
+        let entities = self.ctx.db.game_world_entity();
+        candidates
+            .iter()
+            .filter_map(|guid| entities.guid().find(guid))
+            .filter(|e| e.unit_flags & constants::unit_flags::IN_COMBAT != 0)
+            .map(|e| Combatant {
+                guid: e.guid,
+                combat_until_ms: e.combat_until_ms,
+            })
+            .collect()
+    }
+    fn leave_combat(&mut self, guid: u64) {
+        let entities = self.ctx.db.game_world_entity();
+        if let Some(mut e) = entities.guid().find(guid) {
+            e.unit_flags &= !constants::unit_flags::IN_COMBAT;
+            entities.guid().update(e);
+        }
+    }
+}
+
+impl RegenSink for CtxWorld<'_> {
+    // KNOWN DEBT, inherited verbatim with the pass: no index answers "hurt, or carrying a power
+    // bar", so the candidates cost one entity read per sense firing. Budgeted in `tripwires.rs`.
+    fn recovering(&self, flagged: &[u64]) -> Vec<Recovering> {
+        // Both halves of "in combat": every side of a live engagement, plus the flag the sweep
+        // harvested at the top of this cycle (a pure caster or a Bloodrage warrior carries the flag
+        // with no melee row at all).
+        let mut in_combat = crate::combat::melee_combatant_guids(self.ctx);
+        in_combat.extend_from_slice(flagged);
+        self.ctx
+            .db
+            .game_world_entity()
+            .iter()
+            .filter(|e| !e.dead && (e.health < e.max_health || e.max_power > 0))
+            .map(|e| Recovering {
+                guid: e.guid,
+                health: e.health,
+                max_health: e.max_health,
+                power: e.power,
+                max_power: e.max_power,
+                in_combat: in_combat.contains(&e.guid),
+            })
+            .collect()
+    }
+    // ponytail: each rate re-finds the unit's row, where the old pass computed from the one snapshot
+    // it had scanned. Ceiling: up to three PK point reads per recovering unit per sense firing. The
+    // alternative is carrying spirit, level, power type and the five-second-rule clock in the
+    // cycle's own vocabulary, which is the schema wearing a behavior hat.
+    fn healed_to(&self, u: &Recovering) -> u32 {
+        self.ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(u.guid)
+            .map_or(u.health, |e| crate::combat::regen_entity_health(&e))
+    }
+    fn combat_healed_to(&self, u: &Recovering) -> Option<u32> {
+        let pct = u32::try_from(crate::spell::combat_health_regen_pct(self.ctx, u.guid))
+            .ok()
+            .filter(|pct| *pct > 0)?;
+        let e = self.ctx.db.game_world_entity().guid().find(u.guid)?;
+        Some(crate::combat::regen_health_in_combat(
+            e.health,
+            e.max_health,
+            e.spirit,
+            e.level,
+            pct,
+        ))
+    }
+    fn powered_to(&self, u: &Recovering) -> u32 {
+        let now_ms = (self.ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
+        self.ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(u.guid)
+            .map_or(u.power, |e| {
+                crate::combat::regen_entity_power(&e, u.in_combat, now_ms)
+            })
+    }
+    // ponytail: one row write per unit, where the old pass wrote health and power in two separate
+    // loops. Ceiling: a unit recovering both bars relays one update instead of two.
+    fn restore(&mut self, guid: u64, health: Option<u32>, power: Option<u32>) {
+        let entities = self.ctx.db.game_world_entity();
+        // The LIVE row, never the snapshot the decision was made from: a movement write earlier in
+        // this cycle must not be reverted by writing a stale position back.
+        let Some(mut live) = entities.guid().find(guid) else {
+            return;
+        };
+        let (next_health, next_power) =
+            (health.unwrap_or(live.health), power.unwrap_or(live.power));
+        if (next_health, next_power) == (live.health, live.power) {
+            return;
+        }
+        live.health = next_health;
+        live.power = next_power;
+        entities.guid().update(live);
     }
 }
 
@@ -796,14 +896,5 @@ impl CreatureWorld for CtxWorld<'_> {
     }
     fn run_package_passes(&mut self) {
         crate::hooks::run_package_tick_passes(self.ctx);
-    }
-}
-
-impl LegacyPasses for CtxWorld<'_> {
-    fn legacy_regen(&mut self) -> usize {
-        tick::pass_regen(self.ctx)
-    }
-    fn legacy_combat_drop(&mut self, in_combat: &[u64]) -> usize {
-        tick::pass_combat_drop(self.ctx, in_combat)
     }
 }

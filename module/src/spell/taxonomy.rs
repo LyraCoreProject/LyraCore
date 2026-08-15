@@ -131,7 +131,7 @@ pub(crate) const A_MOD_DAMAGE_TAKEN: u8 = 0xA6; // signed % modifier to INCOMING
 pub(crate) const A_SEAL: u8 = 0xA7; // proc-on-swing holy-damage seal (Seal of Righteousness): a landed melee swing reads it + adds holy; amount = per-swing seal value (weapon-speed-scaled); single active seal; consumed by E_JUDGEMENT
 pub(crate) const A_STEALTH: u8 = 0xA8; // presence marker: the unit is stealthed — creatures skip it as an aggro target; removed (broken) by the caster's own swing/non-Stealth cast
 /// Passive aura: X% of normal OUT-of-combat health regen continues DURING COMBAT. `amount` = the
-/// percent (10 for Troll Regeneration racial). The regen gate in `pass_regen` sums all active
+/// percent (10 for Troll Regeneration racial). The cycle's regeneration phase sums all active
 /// `A_COMBAT_HEALTH_REGEN_PCT` auras on the entity → allows `pct%` of `health_regen_per_tick`
 /// during combat. 0 active auras → 0 combat regen (today's behaviour). Composed additively (two
 /// such auras at 10% each grant 20%); percent is capped at 100 before the multiply. Data only —

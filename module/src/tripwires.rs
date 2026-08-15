@@ -293,8 +293,7 @@ mod partition_discipline_tripwire {
         // Issue #383 split tick.rs into tick/{mod,movement,lifecycle,sense}.rs; this budget-5 entry
         // splits with it, same total (3 + 2 = 5), same reasoning as the pre-split note below.
         ("module/src/creatures/tick/mod.rs", 3, "per-tick world sweep that locates every player (`active_cell_creatures`, feeding the pets/in_combat/active-cell sets) plus the 2 throttled work-item 230/233 rows-visited counters (`log_active_cell_stats`/`log_narrowed_pass_stats`) — perf-catalog Tier 1 took the OLD combined file from 10 to 7 (1.6/1.7/1.10), and the `timer_never` sentinel took corpse-decay and respawn-due (now in lifecycle.rs) off the list entirely"),
-        ("module/src/creatures/tick/sense.rs", 1, "`pass_regen`'s health/power candidate scan — same KNOWN DEBT as mod.rs above, split along with the file"),
-        ("module/src/creatures/cycle/ctx.rs", 1, "the aggro phase's sense-tick player snapshot, moved here verbatim with the pass — the KNOWN DEBT sense.rs used to carry, not a new scan (there is still no players-only index)"),
+        ("module/src/creatures/cycle/ctx.rs", 2, "the aggro phase's sense-tick player snapshot (no players-only index) plus regeneration's health/power candidate read (no `hurt or has a power bar` index) — both moved here verbatim with their passes, the KNOWN DEBT tick/sense.rs used to carry, not new scans"),
         ("module/src/spell/cast/targeting.rs", 1, "AoE/chain target resolution by full-iter + squared distance; a textbook `helpers::entities_near` call (perf-catalog Tier 1)"),
         // #368: both nearest-trainer scans now route through `helpers::nearest_entity` (an
         // indexed `by_map` scan, partition-scoped) — this file's raw-scan count dropped to 0, so

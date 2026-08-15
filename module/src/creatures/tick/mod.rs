@@ -7,12 +7,11 @@
 //! ticket by ticket.
 //!
 //!   - `mod.rs` (this file) — the two tables + the schedule table, the `tick_creatures` shell, the
-//!     active-cell sweep and rows-visited evidence logs, `pass_combat_drop`, the shared candidate
-//!     gate `movable_creature`, the rout predicates, and the one spline writer
+//!     active-cell sweep and rows-visited evidence logs, the shared candidate gate
+//!     `movable_creature`, the rout predicates, and the one spline writer
 //!     (`emit_move_spline`/`emit_creature_leg`) every movement decision funnels through.
 //!   - [`lifecycle`] — the canonical despawn checklist (issue #359) + decay/respawn/GO-respawn, the
 //!     due-time passes that run regardless of proximity.
-//!   - [`sense`] — regen.
 
 use lyracore_shared::spatial;
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
@@ -22,13 +21,10 @@ use crate::{game_aura, game_entity_motion, game_melee_attack, game_world_entity,
 use super::*;
 
 mod lifecycle;
-mod sense;
 
-// The behavior cycle (`creatures::cycle`) owns WHEN each pass runs, so it needs to name them. Every
-// line here disappears with the pass it exports, as the tickets in `.scratch/creature-behavior-cycle`
-// migrate each body into the cycle.
+// The behavior cycle (`creatures::cycle`) owns WHEN each pass runs, so it needs to name them. These
+// three are not behavior — they keep their owner here and the cycle only sequences them.
 pub(crate) use lifecycle::{pass_decay, pass_gameobject_respawn, pass_respawn};
-pub(crate) use sense::pass_regen;
 
 // Re-export so `crate::creatures::tick::despawn_creature_entity` (and, via `creatures::mod.rs`'s own
 // `pub use tick::*`, `crate::creatures::despawn_creature_entity`) still resolves — `encounter.rs`/
@@ -332,7 +328,7 @@ pub(crate) fn active_cell_creatures(ctx: &ReducerContext, scope: &TickScope) -> 
     let entities = ctx.db.game_world_entity();
     let radius = active_cell_radius(ctx);
     let mut out = std::collections::HashSet::new();
-    // Perf catalog 1.10 + 1.7: the pet phase and `pass_combat_drop` each used to run their OWN full
+    // Perf catalog 1.10 + 1.7: the pet phase and the combat-exit pass each used to run their OWN full
     // `entities.iter()` scan per sense tick — one for `owner_guid != 0`, one for the IN_COMBAT bit.
     // This scan is already mandatory (it locates the players the active-cell set is built from) and
     // already visits every row, so both guid lists ride along for the cost of two bit tests: no new
@@ -393,7 +389,8 @@ pub(crate) struct TickSweep {
     pub(crate) active: std::collections::HashSet<u64>,
     /// Live pets (`owner_guid != 0`), in table order — the cycle's pet-phase candidate list.
     pub(crate) pets: Vec<u64>,
-    /// Units carrying `UNIT_FLAG_IN_COMBAT`, in table order — `pass_combat_drop`'s candidate list.
+    /// Units carrying `UNIT_FLAG_IN_COMBAT`, in table order — the candidate list the cycle's combat
+    /// exit sweeps, and the flag half of regeneration's in-combat verdict.
     pub(crate) in_combat: Vec<u64>,
 }
 
@@ -467,9 +464,10 @@ fn scope_label(scope: &TickScope) -> String {
 ///
 /// COUNTER SEMANTICS (review finding — the two families are NOT comparable to each other): scoped
 /// passes count POST-GATE candidates (rows this scope actually considered — these must not grow
-/// when another instance is armed/populated), while the `*`-suffixed global passes count FULL
-/// TABLE ROWS SCANNED — those grow with world size BY DESIGN (they cover all instances from the
-/// catch-all firing) and answer 233-style scan questions, not scoping ones.
+/// when another instance is armed/populated), while the `*`-suffixed global passes count what they
+/// visited across ALL instances (full table rows for decay and respawn, the harvested candidate
+/// list for regen and combat exit) — those grow with world size BY DESIGN and answer 233-style scan
+/// questions, not scoping ones.
 ///
 /// WINDOW: `max(own interval, 500ms)` — an interval-spaced firing lattice always has exactly one
 /// point in any half-open window of its own interval's length, so EVERY row logs once a minute;
@@ -499,47 +497,6 @@ fn log_pass_stats(
     log::info!(
         "tick_creatures pass rows-visited (work-item 229): scope={scope_label} sense={sense} {body} (*=full-table scan, scales with world not instances)"
     );
-}
-
-/// Sense pass — clear `UNIT_FLAG_IN_COMBAT` from any unit past its combat-drop deadline (no hostile
-/// action for ~`COMBAT_DROP_MS`). A still-fighting unit keeps re-stamping `combat_until_ms` (via
-/// `pass_combat_enter` / `apply_target_damage`) so it's never cleared mid-combat. Covers ALL entities —
-/// players AND creatures — because a player's flag would otherwise stick forever (players aren't ticked
-/// elsewhere). Work-item 230 classification: STAYS GLOBAL — `combat_until_ms` is a due-time (like
-/// respawn/decay), not a proximity concern, and it covers PLAYERS too (not just creatures), so
-/// intersecting it with the creature-only active-cell set would silently stop clearing a dormant
-/// creature's flag while it's out of view. Perf catalog 1.7 kept that global reach while removing the
-/// dedicated scan: the candidates come from `TickSweep::in_combat`, harvested by the entity pass
-/// `active_cell_creatures` already runs every tick.
-/// Work-item 229: catch-all firing only (see `TickScope::runs_global_passes`), still covering ALL
-/// instances — a dedicated row never runs it, so the deadline sweep happens exactly once per sense
-/// tick, as before. Returns entity rows scanned.
-pub(crate) fn pass_combat_drop(ctx: &ReducerContext, flagged: &[u64]) -> usize {
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
-    let entities = ctx.db.game_world_entity();
-    let mut visited = 0usize;
-    // Perf catalog 1.7: candidates come from `TickSweep::in_combat` — the flag bits harvested by the
-    // active-cell scan that runs every tick regardless — instead of a dedicated full entity scan. The
-    // predicate is re-applied to the LIVE row here (not the snapshot), which is if anything stricter:
-    // `enter_combat` only ever stamps a FUTURE deadline, so a unit that gained the flag mid-tick can
-    // never already be expired, and one that lost it mid-tick fails the re-check and is skipped.
-    let expired: Vec<u64> = flagged
-        .iter()
-        .inspect(|_| visited += 1)
-        .filter_map(|guid| entities.guid().find(guid))
-        .filter(|e| {
-            e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0
-                && now_ms >= e.combat_until_ms
-        })
-        .map(|e| e.guid)
-        .collect();
-    for guid in expired {
-        if let Some(mut e) = entities.guid().find(guid) {
-            e.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
-            entities.guid().update(e);
-        }
-    }
-    visited
 }
 
 /// The ONE shared creature move-leg writer (work-item 181): every movement decision (the cycle's

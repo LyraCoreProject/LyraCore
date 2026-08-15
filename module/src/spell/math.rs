@@ -479,8 +479,8 @@ pub(crate) fn combat_field_bonus(ctx: &ReducerContext, unit_guid: u64, field: u8
 /// Sum the in-combat health regen percent for `unit_guid`: every `A_COMBAT_HEALTH_REGEN_PCT` aura
 /// on the unit contributes `amount × stacks`. 0 = no aura (today's behaviour — zero combat regen).
 /// Positive only in practice (a passive racial/talent), but the signed return matches the rest of
-/// the aura-sum family so it can compose cleanly. Read by `pass_regen` in `creatures/tick.rs` to
-/// decide whether and how much health to tick during a combat frame. [entity]
+/// the aura-sum family so it can compose cleanly. Read by the cycle's regeneration phase to decide
+/// whether and how much health to tick during a combat frame. [entity]
 pub(crate) fn combat_health_regen_pct(ctx: &ReducerContext, unit_guid: u64) -> i32 {
     sum_active_auras(ctx, unit_guid, |a| a.eff_kind == A_COMBAT_HEALTH_REGEN_PCT)
 }

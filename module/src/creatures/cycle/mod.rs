@@ -239,7 +239,16 @@ pub(crate) struct Engagement {
     pub player_never_swung: bool,
 }
 
-/// Engagement's surface: who can notice whom, and the fight that follows.
+/// A unit still carrying the in-combat flag, and the moment that flag stops being earned. Every
+/// hostile action pushes the deadline forward, so a live fight never reaches it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Combatant {
+    pub guid: u64,
+    pub combat_until_ms: u64,
+}
+
+/// Engagement's surface: who can notice whom, the fight that follows, and both ends of the combat
+/// flag that fight raises.
 pub(crate) trait EngageSink {
     /// Every player in the world, with stealth already resolved.
     fn players(&self) -> Vec<AggroTarget>;
@@ -256,6 +265,47 @@ pub(crate) trait EngageSink {
     fn engagements(&self) -> Vec<Engagement>;
     /// Flag the unit in combat and push its combat-drop deadline out.
     fn enter_combat(&mut self, guid: u64);
+    /// Which of `candidates` still carry the flag, and until when. Read LIVE: the list was harvested
+    /// before this cycle's combat entry ran, so a unit on it may have been re-stamped since.
+    fn flagged_in_combat(&self, candidates: &[u64]) -> Vec<Combatant>;
+    /// Drop the combat flag, and nothing else: the unit keeps its target, its threat and any fight
+    /// it is still in. Only the flag observers read is cleared.
+    fn leave_combat(&mut self, guid: u64);
+}
+
+/// A unit regeneration considers this firing: the two bars, and whether a fight gates them. Health
+/// and power ride ONE candidate because they read the same in-combat verdict.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Recovering {
+    pub guid: u64,
+    pub health: u32,
+    pub max_health: u32,
+    pub power: u32,
+    /// 0 for a creature — only a unit that has a bar ticks power at all.
+    pub max_power: u32,
+    /// In a live engagement, or flagged in combat without one (a pure caster, a Bloodrage warrior).
+    pub in_combat: bool,
+}
+
+/// Regeneration's surface. The RATES stay in `combat::tables`: the cycle owns when recovery happens
+/// and which bar is due, never how much of it. PLAYERS are candidates too — their bars are not
+/// creature behavior, but nothing else ticks them.
+pub(crate) trait RegenSink {
+    /// Every live unit that could recover this firing: hurt, or carrying a power bar. `flagged` is
+    /// the sweep's in-combat harvest, which the world completes with the live engagement rows.
+    fn recovering(&self, flagged: &[u64]) -> Vec<Recovering>;
+    /// The health this unit recovers to out of combat, at its own spirit- and level-scaled rate.
+    fn healed_to(&self, u: &Recovering) -> u32;
+    /// The health it recovers to WHILE FIGHTING, which only a combat-regen aura grants at all.
+    /// `None` is the ordinary answer: a unit in a fight heals nothing.
+    fn combat_healed_to(&self, u: &Recovering) -> Option<u32>;
+    /// The power it ticks to, up or down: mana once the five-second rule lapses, energy always,
+    /// rage decaying out of combat.
+    fn powered_to(&self, u: &Recovering) -> u32;
+    /// Write recovered health and power onto the LIVE row — those two fields and nothing else. A leg
+    /// committed earlier in this cycle has to survive, and writing back a whole snapshot row would
+    /// revert the position it moved to.
+    fn restore(&mut self, guid: u64, health: Option<u32>, power: Option<u32>);
 }
 
 /// An engaged creature the cast phase considers, with everything a rotation condition reads.
@@ -559,7 +609,7 @@ pub(crate) trait CreatureWorld:
     + RoutSink
     + FearSink
     + PetSink
-    + LegacyPasses
+    + RegenSink
 {
     /// The creatures near a covered player this firing, plus the pet and in-combat candidate lists
     /// the same sweep harvests. Read ONCE per cycle and shared by every pass that scopes to it.
@@ -571,14 +621,6 @@ pub(crate) trait CreatureWorld:
     fn run_package_passes(&mut self);
 }
 
-// ponytail: migration scaffolding. Every method here is deleted by the ticket that migrates its
-// pass; ticket 09 deletes the trait. See .scratch/creature-behavior-cycle/.
-/// Passes still living in `creatures::tick` — the cycle owns WHEN they run, not yet HOW.
-pub(crate) trait LegacyPasses {
-    fn legacy_regen(&mut self) -> usize;
-    fn legacy_combat_drop(&mut self, in_combat: &[u64]) -> usize;
-}
-
 /// ONE firing's complete behavior transition. The order below is load-bearing:
 ///   1. advance splines FIRST — every range read must see where a creature renders, not its leg end.
 ///   2. aggro and pet engagement before chase — a creature aggroed this sense tick closes the same
@@ -588,9 +630,12 @@ pub(crate) trait LegacyPasses {
 ///      every creature that pulled carries its combat flag before the firing ends.
 ///   4. chase before regen — regen's in-combat gate must see the still-engaged chaser.
 ///   5. walking home before loitering — one idle leg per creature per firing, home wins.
-///   6. rout and fear movement LAST, after regen.
-///   7. decay before respawn (inside world maintenance — decay arms a future respawn).
-///   8. package passes after every core pass.
+///   6. regen before combat exit — a unit that leaves the fight this firing recovers from the NEXT
+///      one — and combat entry before both, which always wins: entry stamps a deadline in the
+///      future, exit only clears one already behind us.
+///   7. rout and fear movement LAST, after regen.
+///   8. decay before respawn (inside world maintenance — decay arms a future respawn).
+///   9. package passes after every core pass.
 ///
 /// The active-cell sweep runs once, before all passes, and its candidate set is shared: a creature
 /// absent from it is dormant this firing for every pass that scopes to it (patrol, aggro/assist,
@@ -624,8 +669,8 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
     rows.push(("combat_enter", combat_entry(w, &tick.scope) as u64));
     rows.push(("idle", idle_movement(w, &tick, &active) as u64));
     if tick.sense && global {
-        rows.push(("regen*", w.legacy_regen() as u64));
-        rows.push(("combat_drop*", w.legacy_combat_drop(&in_combat) as u64));
+        rows.push(("regen*", regenerate(w, &in_combat) as u64));
+        rows.push(("combat_drop*", combat_exit(w, &tick, &in_combat) as u64));
     }
     rows.push(("rout", rout(w, &tick) as u64));
     rows.push(("fear", fear(w, &tick) as u64));
@@ -1405,6 +1450,62 @@ fn loiter<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature, home: Ho
         hold_until_landed: true,
     };
     w.commit_leg(c.guid, leg, tick.now_ms);
+}
+
+/// REGENERATION — every unit recovers health and power once per sense firing. Out of combat a hurt
+/// unit heals freely; in a fight it heals only through a combat-regen aura, because fighting is what
+/// stops regeneration. That gate is the whole of the cycle's rule here — the RATES are
+/// `combat::tables`', and PLAYERS are candidates too, since nothing else ticks their bars.
+///
+/// It runs AFTER chase, so the gate sees a creature that closed on its victim this very firing and
+/// leaves it unhealed, and BEFORE rout and fear, whose legs it must not revert: only the two bars
+/// are written, on the live row, so a position decided earlier in the cycle survives.
+///
+/// Catch-all firing only. The per-firing amount is quantized to the sense cadence, so a second,
+/// faster schedule row running this would literally multiply everyone's recovery rate. Returns the
+/// candidates considered.
+fn regenerate<W: RegenSink>(w: &mut W, flagged: &[u64]) -> usize {
+    let units = w.recovering(flagged);
+    let visited = units.len();
+    for u in &units {
+        let health = match (u.health < u.max_health, u.in_combat) {
+            (false, _) => None, // already full
+            (true, true) => w.combat_healed_to(u),
+            (true, false) => Some(w.healed_to(u)),
+        }
+        .filter(|next| *next != u.health);
+        let power = (u.max_power > 0)
+            .then(|| w.powered_to(u))
+            .filter(|next| *next != u.power);
+        if health.is_some() || power.is_some() {
+            w.restore(u.guid, health, power);
+        }
+    }
+    visited
+}
+
+/// COMBAT EXIT — a unit whose combat-drop deadline has passed loses the in-combat flag, which is how
+/// a fight ends about six seconds after the last hostile action rather than the instant the swinging
+/// stops. It is combat entry's exact counterpart, and entry ALWAYS wins in a firing they both touch:
+/// entry stamps a deadline in the future, exit only clears one already behind us.
+///
+/// The candidates are the sweep's flag harvest, so this costs no scan of its own; the flag and the
+/// deadline are re-read from the live row, because entry ran earlier in this same cycle. It covers
+/// PLAYERS as well as creatures — nothing else ticks a player, so a player's flag would otherwise
+/// stick forever. Catch-all firing only, still covering every instance. Returns the candidates.
+fn combat_exit<W: EngageSink>(w: &mut W, tick: &TickContext, flagged: &[u64]) -> usize {
+    let now_ms = tick.now_micros / 1000;
+    // Collect-then-clear: dropping a flag writes the rows this list was read from.
+    let expired: Vec<u64> = w
+        .flagged_in_combat(flagged)
+        .into_iter()
+        .filter(|c| now_ms >= c.combat_until_ms)
+        .map(|c| c.guid)
+        .collect();
+    for guid in expired {
+        w.leave_combat(guid);
+    }
+    flagged.len()
 }
 
 /// ROUT — a creature wounded past the flee threshold, of a kind that runs, breaks off and sprints
