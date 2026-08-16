@@ -4,32 +4,15 @@ use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Table, T
 
 use crate::game_world_entity;
 
-pub mod duel_state {
-    pub const REQUESTED: u8 = 0;
-    pub const COUNTDOWN: u8 = 1;
-    pub const ACTIVE: u8 = 2;
-}
-
-pub mod duel_event_kind {
-    pub const REQUESTED: u8 = 0;
-    pub const COUNTDOWN: u8 = 1;
-    pub const ACTIVE: u8 = 2;
-    pub const COMPLETE: u8 = 3;
-    pub const OUT_OF_BOUNDS: u8 = 4;
-    pub const IN_BOUNDS: u8 = 5;
-}
-
-pub mod duel_completion_kind {
-    pub const INTERRUPTED: u8 = 0;
-    pub const SURRENDERED: u8 = 1;
-    pub const WON: u8 = 2;
-    pub const FLED: u8 = 3;
-}
+pub use lyracore_shared::duel::completion_kind as duel_completion_kind;
+pub use lyracore_shared::duel::event_kind as duel_event_kind;
+pub use lyracore_shared::duel::state as duel_state;
 
 pub(crate) const COUNTDOWN_MICROS: i64 = 3_000_000;
 pub(crate) const DUEL_TICK_MICROS: i64 = 250_000;
 pub(crate) const DUEL_BOUNDARY_YARDS: f32 = 50.0;
 pub(crate) const FLEE_GRACE_MICROS: i64 = 10_000_000;
+pub(crate) const REQUEST_TIMEOUT_MICROS: i64 = 60_000_000;
 
 /// One live Duel, indexed from either participant. Clients learn it only through [`DuelEvent`].
 #[table(
@@ -90,6 +73,8 @@ pub struct DuelEvent {
     pub flag_z: f32,
     pub flag_orientation: f32,
     pub created_at: Timestamp,
+    pub winner_name: String,
+    pub loser_name: String,
 }
 
 /// The module clock that advances accepted Duels after their three-second countdown.
@@ -190,8 +175,16 @@ pub(crate) fn duel_involving(ctx: &ReducerContext, guid: u64) -> Option<Duel> {
 /// Whether these two characters are the two sides of the same active Duel. This is the sole
 /// friendly-fire exception: requested and countdown Duels deliberately do not authorize damage.
 pub(crate) fn active_opponents(ctx: &ReducerContext, attacker_guid: u64, target_guid: u64) -> bool {
-    duel_involving(ctx, attacker_guid)
-        .is_some_and(|duel| active_pair(&duel, attacker_guid, target_guid))
+    active_duel_between(ctx, attacker_guid, target_guid).is_some()
+}
+
+/// The active Duel shared by this exact pair, if any.
+pub(crate) fn active_duel_between(
+    ctx: &ReducerContext,
+    attacker_guid: u64,
+    target_guid: u64,
+) -> Option<Duel> {
+    duel_involving(ctx, attacker_guid).filter(|duel| active_pair(duel, attacker_guid, target_guid))
 }
 
 fn active_pair(duel: &Duel, attacker_guid: u64, target_guid: u64) -> bool {
@@ -201,10 +194,19 @@ fn active_pair(duel: &Duel, attacker_guid: u64, target_guid: u64) -> bool {
             || (duel.challenged_guid == attacker_guid && duel.initiator_guid == target_guid))
 }
 
-fn duel_flag_guid(duel_id: u64) -> u64 {
+fn duel_flag_guid(initiator_guid: u64, duel_id: u64) -> Option<u64> {
     const HIGHGUID_GAMEOBJECT: u64 = 0xF110u64 << 48;
     const DUEL_FLAG_BAND: u64 = 1u64 << 45;
-    HIGHGUID_GAMEOBJECT | DUEL_FLAG_BAND | (duel_id & (DUEL_FLAG_BAND - 1))
+    // Character GUID range slots are realm-wide and Duel ids are shard-local. Packing both makes
+    // the arbiter unique across shards and across successive Duels, so a stale client action can
+    // never name a later Duel. Refuse after a billion Duels on one shard instead of wrapping.
+    let range_size = crate::realm_core::GUID_RANGE_SIZE;
+    if duel_id >= range_size {
+        return None;
+    }
+    let shard_slot = initiator_guid / range_size;
+    let payload = shard_slot.checked_mul(range_size)?.checked_add(duel_id)?;
+    (payload < DUEL_FLAG_BAND).then_some(HIGHGUID_GAMEOBJECT | DUEL_FLAG_BAND | payload)
 }
 
 fn push_event(
@@ -238,6 +240,12 @@ fn push_event(
         flag_z: duel.flag_z,
         flag_orientation: duel.flag_orientation,
         created_at: ctx.timestamp,
+        winner_name: crate::helpers::character_by_guid(ctx, winner_guid)
+            .map(|character| character.name)
+            .unwrap_or_default(),
+        loser_name: crate::helpers::character_by_guid(ctx, loser_guid)
+            .map(|character| character.name)
+            .unwrap_or_default(),
     });
 }
 
@@ -288,7 +296,11 @@ pub(crate) fn request_duel(
         created_at_micros: ctx.timestamp.to_micros_since_unix_epoch(),
     });
     let mut duel = inserted;
-    duel.flag_guid = duel_flag_guid(duel.id);
+    let Some(flag_guid) = duel_flag_guid(duel.initiator_guid, duel.id) else {
+        ctx.db.game_duel().id().delete(duel.id);
+        return;
+    };
+    duel.flag_guid = flag_guid;
     let duel = ctx.db.game_duel().id().update(duel);
     push_both(ctx, &duel, duel_event_kind::REQUESTED);
 }
@@ -315,6 +327,11 @@ pub(crate) fn accept_duel(ctx: &ReducerContext, actor_guid: u64, flag_guid: u64)
 
 pub(crate) fn countdown_due(state: u8, deadline_micros: i64, now_micros: i64) -> bool {
     state == duel_state::COUNTDOWN && now_micros >= deadline_micros
+}
+
+fn request_expired(state: u8, created_at_micros: i64, now_micros: i64) -> bool {
+    state == duel_state::REQUESTED
+        && now_micros.saturating_sub(created_at_micros) >= REQUEST_TIMEOUT_MICROS
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -483,7 +500,19 @@ pub(crate) fn interrupt_duel_for(ctx: &ReducerContext, character_guid: u64) {
     }
 }
 
-/// Before activation cancel means interruption. Once active it is a surrender, with the other
+fn cancellation_result(duel: &Duel, actor_guid: u64) -> (u8, u64, u64) {
+    if duel.state != duel_state::ACTIVE {
+        return (duel_completion_kind::INTERRUPTED, 0, 0);
+    }
+    let winner = if actor_guid == duel.initiator_guid {
+        duel.challenged_guid
+    } else {
+        duel.initiator_guid
+    };
+    (duel_completion_kind::FLED, winner, actor_guid)
+}
+
+/// Before activation cancel means interruption. Once active it is a fled result, with the other
 /// participant already recorded as winner for the combat slice to project.
 pub(crate) fn cancel_duel(ctx: &ReducerContext, actor_guid: u64, flag_guid: u64) {
     let Some(duel) = duel_involving(ctx, actor_guid) else {
@@ -492,16 +521,7 @@ pub(crate) fn cancel_duel(ctx: &ReducerContext, actor_guid: u64, flag_guid: u64)
     if duel.flag_guid != flag_guid {
         return;
     }
-    let (kind, winner, loser) = if duel.state == duel_state::ACTIVE {
-        let winner = if actor_guid == duel.initiator_guid {
-            duel.challenged_guid
-        } else {
-            duel.initiator_guid
-        };
-        (duel_completion_kind::SURRENDERED, winner, actor_guid)
-    } else {
-        (duel_completion_kind::INTERRUPTED, 0, 0)
-    };
+    let (kind, winner, loser) = cancellation_result(&duel, actor_guid);
     complete_duel(ctx, duel.id, kind, winner, loser);
 }
 
@@ -519,6 +539,10 @@ pub fn tick_duels(ctx: &ReducerContext, _schedule: DuelSchedule) {
         if !is_live_duel_participant(&duel, initiator.as_ref())
             || !is_live_duel_participant(&duel, challenged.as_ref())
         {
+            complete_duel(ctx, duel.id, duel_completion_kind::INTERRUPTED, 0, 0);
+            continue;
+        }
+        if request_expired(duel.state, duel.created_at_micros, now) {
             complete_duel(ctx, duel.id, duel_completion_kind::INTERRUPTED, 0, 0);
             continue;
         }
@@ -644,10 +668,55 @@ mod tests {
     }
 
     #[test]
+    fn pending_cancel_interrupts_while_active_cancel_surrenders_to_the_opponent() {
+        let mut duel = duel();
+        assert_eq!(
+            cancellation_result(&duel, duel.challenged_guid),
+            (duel_completion_kind::INTERRUPTED, 0, 0)
+        );
+        duel.state = duel_state::ACTIVE;
+        assert_eq!(
+            cancellation_result(&duel, duel.challenged_guid),
+            (
+                duel_completion_kind::FLED,
+                duel.initiator_guid,
+                duel.challenged_guid
+            )
+        );
+        assert_eq!(
+            cancellation_result(&duel, duel.initiator_guid),
+            (
+                duel_completion_kind::FLED,
+                duel.challenged_guid,
+                duel.initiator_guid
+            )
+        );
+    }
+
+    #[test]
     fn countdown_activates_at_the_exact_boundary() {
         assert!(!countdown_due(duel_state::COUNTDOWN, 3_000_000, 2_999_999));
         assert!(countdown_due(duel_state::COUNTDOWN, 3_000_000, 3_000_000));
         assert!(!countdown_due(duel_state::ACTIVE, 3_000_000, 3_000_000));
+    }
+
+    #[test]
+    fn abandoned_request_expires_at_the_exact_timeout() {
+        assert!(!request_expired(
+            duel_state::REQUESTED,
+            1_000,
+            1_000 + REQUEST_TIMEOUT_MICROS - 1
+        ));
+        assert!(request_expired(
+            duel_state::REQUESTED,
+            1_000,
+            1_000 + REQUEST_TIMEOUT_MICROS
+        ));
+        assert!(!request_expired(
+            duel_state::COUNTDOWN,
+            1_000,
+            1_000 + REQUEST_TIMEOUT_MICROS
+        ));
     }
 
     #[test]
@@ -709,10 +778,18 @@ mod tests {
     }
 
     #[test]
-    fn stable_flag_identity_is_unique_per_duel_and_repeatable() {
-        assert_eq!(duel_flag_guid(7), duel_flag_guid(7));
-        assert_ne!(duel_flag_guid(7), duel_flag_guid(8));
-        assert_eq!(duel_flag_guid(7) >> 48, 0xF110);
+    fn flag_identity_is_unique_across_duels_and_shards_without_wrapping() {
+        let first = duel_flag_guid(7, 1).unwrap();
+        assert_eq!(first, duel_flag_guid(7, 1).unwrap());
+        assert_ne!(first, duel_flag_guid(7, 2).unwrap());
+        assert_ne!(first, duel_flag_guid(1_000_000_007, 1).unwrap());
+        assert_eq!(first >> 48, 0xF110);
+        assert_ne!(
+            duel_flag_guid(1_000_000_007, 99),
+            duel_flag_guid(2_000_000_007, 99),
+            "realm-wide character GUID ranges must produce distinct flag GUIDs across shards"
+        );
+        assert_eq!(duel_flag_guid(7, crate::realm_core::GUID_RANGE_SIZE), None);
     }
 
     #[test]

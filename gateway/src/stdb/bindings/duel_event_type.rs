@@ -26,6 +26,8 @@ pub struct DuelEvent {
     pub flag_z: f32,
     pub flag_orientation: f32,
     pub created_at: __sdk::Timestamp,
+    pub winner_name: String,
+    pub loser_name: String,
 }
 
 impl __sdk::InModule for DuelEvent {
@@ -55,6 +57,8 @@ pub struct DuelEventCols {
     pub flag_z: __sdk::__query_builder::Col<DuelEvent, f32>,
     pub flag_orientation: __sdk::__query_builder::Col<DuelEvent, f32>,
     pub created_at: __sdk::__query_builder::Col<DuelEvent, __sdk::Timestamp>,
+    pub winner_name: __sdk::__query_builder::Col<DuelEvent, String>,
+    pub loser_name: __sdk::__query_builder::Col<DuelEvent, String>,
 }
 
 impl __sdk::__query_builder::HasCols for DuelEvent {
@@ -80,6 +84,8 @@ impl __sdk::__query_builder::HasCols for DuelEvent {
             flag_z: __sdk::__query_builder::Col::new(table_name, "flag_z"),
             flag_orientation: __sdk::__query_builder::Col::new(table_name, "flag_orientation"),
             created_at: __sdk::__query_builder::Col::new(table_name, "created_at"),
+            winner_name: __sdk::__query_builder::Col::new(table_name, "winner_name"),
+            loser_name: __sdk::__query_builder::Col::new(table_name, "loser_name"),
         }
     }
 }

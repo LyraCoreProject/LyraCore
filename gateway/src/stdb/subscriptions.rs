@@ -1548,24 +1548,11 @@ pub(crate) fn trade_event_outbound(row: &TradeEvent) -> Vec<Outbound> {
 pub(crate) fn duel_event_outbound(
     row: &DuelEvent,
     template: Option<&codec::GameObjectTemplateView>,
-    winner_name: Option<String>,
-    loser_name: Option<String>,
 ) -> Vec<Outbound> {
+    use lyracore_shared::duel::{completion_kind, event_kind};
     use wow_world_messages::vanilla::{
-        SMSG_DUEL_COMPLETE, SMSG_DUEL_COUNTDOWN, SMSG_DUEL_REQUESTED, SMSG_DUEL_WINNER,
+        SMSG_DUEL_COMPLETE, SMSG_DUEL_COUNTDOWN, SMSG_DUEL_REQUESTED,
     };
-    use wow_world_base::shared::duel_winner_reason_vanilla_tbc_wrath::DuelWinnerReason;
-
-    const REQUESTED: u8 = 0;
-    const COUNTDOWN: u8 = 1;
-    const ACTIVE: u8 = 2;
-    const COMPLETE: u8 = 3;
-    const OUT_OF_BOUNDS: u8 = 4;
-    const IN_BOUNDS: u8 = 5;
-    const INTERRUPTED: u8 = 0;
-    const SURRENDERED: u8 = 1;
-    const WON: u8 = 2;
-    const FLED: u8 = 3;
 
     let raw_values = |guid, arbiter, team| {
         let (opcode, body) = codec::build_duel_player_values(guid, arbiter, team);
@@ -1573,7 +1560,7 @@ pub(crate) fn duel_event_outbound(
     };
 
     match row.kind {
-        REQUESTED => {
+        event_kind::REQUESTED => {
             let Some(template) = template else {
                 log::warn!(
                     "duel relay: missing duel-flag template {} (event {})",
@@ -1618,7 +1605,7 @@ pub(crate) fn duel_event_outbound(
                 ))),
             ]
         }
-        COUNTDOWN => vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_COUNTDOWN(
+        event_kind::COUNTDOWN => vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_COUNTDOWN(
             SMSG_DUEL_COUNTDOWN {
                 // The library labels this Duration as seconds, but writes `as_secs()` directly.
                 // Vanilla's field is milliseconds and CMaNGOS writes 3000, so 3000 seconds here
@@ -1626,32 +1613,20 @@ pub(crate) fn duel_event_outbound(
                 time: Duration::from_secs(3_000),
             },
         ))],
-        ACTIVE => vec![
+        event_kind::ACTIVE => vec![
             raw_values(row.initiator_guid, None, Some(1)),
             raw_values(row.challenged_guid, None, Some(2)),
         ],
-        OUT_OF_BOUNDS => vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_OUTOFBOUNDS)],
-        IN_BOUNDS => vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_INBOUNDS)],
-        COMPLETE => {
+        event_kind::OUT_OF_BOUNDS => vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_OUTOFBOUNDS)],
+        event_kind::IN_BOUNDS => vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_INBOUNDS)],
+        event_kind::COMPLETE => {
             let mut outbound = vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_COMPLETE(
                 SMSG_DUEL_COMPLETE {
-                    ended_without_interruption: row.completion_kind != INTERRUPTED,
+                    ended_without_interruption: row.completion_kind
+                        != completion_kind::INTERRUPTED,
                 },
             ))];
-            if let (Some(winner_name), Some(loser_name)) = (winner_name, loser_name) {
-                let reason = match row.completion_kind {
-                    WON => DuelWinnerReason::Won,
-                    SURRENDERED | FLED => DuelWinnerReason::Fled,
-                    _ => unreachable!("winner names only accompany a terminal Duel result"),
-                };
-                outbound.push(Outbound::One(ServerOpcodeMessage::SMSG_DUEL_WINNER(Box::new(
-                    SMSG_DUEL_WINNER {
-                        reason,
-                        opponent_name: loser_name,
-                        initiator_name: winner_name,
-                    },
-                ))));
-            }
+            outbound.extend(duel_winner_outbound(row));
             outbound.extend([
                 raw_values(row.initiator_guid, Some(0), Some(0)),
                 raw_values(row.challenged_guid, Some(0), Some(0)),
@@ -1666,6 +1641,34 @@ pub(crate) fn duel_event_outbound(
             Vec::new()
         }
     }
+}
+
+/// The one winner announcement for a completed Duel. Participant relays include it after
+/// `SMSG_DUEL_COMPLETE`; the shared view also fans it to nearby non-participants.
+pub(crate) fn duel_winner_outbound(row: &DuelEvent) -> Vec<Outbound> {
+    use lyracore_shared::duel::completion_kind;
+    use wow_world_base::shared::duel_winner_reason_vanilla_tbc_wrath::DuelWinnerReason;
+    use wow_world_messages::vanilla::SMSG_DUEL_WINNER;
+
+    if row.winner_guid == 0
+        || row.loser_guid == 0
+        || row.winner_name.is_empty()
+        || row.loser_name.is_empty()
+    {
+        return Vec::new();
+    }
+    let reason = match row.completion_kind {
+        completion_kind::WON => DuelWinnerReason::Won,
+        completion_kind::FLED => DuelWinnerReason::Fled,
+        _ => return Vec::new(),
+    };
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_WINNER(Box::new(
+        SMSG_DUEL_WINNER {
+            reason,
+            opponent_name: row.loser_name.clone(),
+            initiator_name: row.winner_name.clone(),
+        },
+    )))]
 }
 
 /// Decode an `OFFER_*` payload into the fixed-444-byte `SMSG_TRADE_STATUS_EXTENDED` (#121):
@@ -3827,6 +3830,8 @@ mod tests {
             flag_z: 5.0,
             flag_orientation: 1.25,
             created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            winner_name: String::new(),
+            loser_name: String::new(),
         }
     }
 
@@ -3840,7 +3845,7 @@ mod tests {
             data1: 0,
         };
         let row = duel_event(0, 0);
-        let out = duel_event_outbound(&row, Some(&template), None, None);
+        let out = duel_event_outbound(&row, Some(&template));
 
         assert_eq!(out.len(), 5);
         let requests: Vec<_> = out
@@ -3857,17 +3862,18 @@ mod tests {
 
     #[test]
     fn duel_countdown_active_and_interruption_project_the_expected_edges() {
-        let countdown = duel_event_outbound(&duel_event(1, 0), None, None, None);
+        let countdown = duel_event_outbound(&duel_event(1, 0), None);
         assert!(matches!(
             countdown.as_slice(),
-            [Outbound::One(ServerOpcodeMessage::SMSG_DUEL_COUNTDOWN(_))]
+            [Outbound::One(ServerOpcodeMessage::SMSG_DUEL_COUNTDOWN(message))]
+                if message.time.as_secs() == 3_000
         ));
 
-        let active = duel_event_outbound(&duel_event(2, 0), None, None, None);
+        let active = duel_event_outbound(&duel_event(2, 0), None);
         assert_eq!(active.len(), 2);
         assert!(active.iter().all(|out| matches!(out, Outbound::Raw { .. })));
 
-        let interrupted = duel_event_outbound(&duel_event(3, 0), None, None, None);
+        let interrupted = duel_event_outbound(&duel_event(3, 0), None);
         assert_eq!(interrupted.len(), 4);
         assert!(matches!(
             &interrupted[0],
@@ -3885,7 +3891,9 @@ mod tests {
         let mut won = duel_event(3, 2);
         won.winner_guid = 10;
         won.loser_guid = 20;
-        let out = duel_event_outbound(&won, None, Some("Winner".into()), Some("Loser".into()));
+        won.winner_name = "Winner".into();
+        won.loser_name = "Loser".into();
+        let out = duel_event_outbound(&won, None);
         assert!(matches!(
             out.as_slice(),
             [
@@ -3897,7 +3905,12 @@ mod tests {
                 && message.opponent_name == "Loser"
         ));
 
-        let fled = duel_event_outbound(&duel_event(3, 1), None, Some("Winner".into()), Some("Loser".into()));
+        let mut fled_event = duel_event(3, 3);
+        fled_event.winner_guid = 10;
+        fled_event.loser_guid = 20;
+        fled_event.winner_name = "Winner".into();
+        fled_event.loser_name = "Loser".into();
+        let fled = duel_event_outbound(&fled_event, None);
         assert!(matches!(
             &fled[1],
             Outbound::One(ServerOpcodeMessage::SMSG_DUEL_WINNER(message))
@@ -3907,13 +3920,13 @@ mod tests {
 
     #[test]
     fn duel_boundary_edges_project_only_the_recipient_transition() {
-        let out_of_bounds = duel_event_outbound(&duel_event(4, 0), None, None, None);
+        let out_of_bounds = duel_event_outbound(&duel_event(4, 0), None);
         assert!(matches!(
             out_of_bounds.as_slice(),
             [Outbound::One(ServerOpcodeMessage::SMSG_DUEL_OUTOFBOUNDS)]
         ));
 
-        let in_bounds = duel_event_outbound(&duel_event(5, 0), None, None, None);
+        let in_bounds = duel_event_outbound(&duel_event(5, 0), None);
         assert!(matches!(
             in_bounds.as_slice(),
             [Outbound::One(ServerOpcodeMessage::SMSG_DUEL_INBOUNDS)]

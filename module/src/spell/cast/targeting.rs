@@ -205,7 +205,6 @@ pub(crate) fn select_targets(
             // Full-iter + squared-distance scan (the module's established spatial idiom — see
             // creatures/tick.rs aggro). Re-checks faction PER resolved target (the per-cast gate at
             // resolve_cast_at only validates the EXPLICIT target; a PBAoE bypasses it via explicit==0).
-            let caster_ft = caster.faction_template;
             let mut hits: Vec<u64> = entities
                 .iter()
                 .filter(|c| c.map_id == a_map && c.instance_id == a_inst && !c.dead)
@@ -217,17 +216,10 @@ pub(crate) fn select_targets(
                     }
                     // Compute ONLY the faction side this AoE needs (one lookup, not both); the unused side
                     // is a dummy `false` — want_enemy selects which side aoe_keep actually reads.
-                    let duel_opponents = crate::duel::active_opponents(ctx, caster_guid, c.guid);
                     let (hostile, friendly) = if want_enemy {
-                        (
-                            crate::faction::is_hostile(ctx, caster_ft, c.faction_template) || duel_opponents,
-                            false,
-                        )
+                        (crate::combat::is_hostile_target(ctx, &caster, &c), false)
                     } else {
-                        (
-                            false,
-                            crate::faction::is_friendly(ctx, caster_ft, c.faction_template) && !duel_opponents,
-                        )
+                        (false, crate::combat::may_help(ctx, &caster, &c))
                     };
                     aoe_keep(d2, r2, want_enemy, c.guid == caster_guid, hostile, friendly)
                         .then_some(c.guid)

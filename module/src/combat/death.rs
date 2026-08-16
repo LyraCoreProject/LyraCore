@@ -375,6 +375,7 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
     if !victim.is_player() || victim.dead {
         return false;
     }
+    crate::duel::interrupt_duel_for(ctx, victim_guid);
     victim.health = 0;
     victim.dead = true;
     victim.combat_until_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
@@ -439,6 +440,14 @@ pub(crate) struct HitOutcome {
     /// The hit went through `kill_creature` / `kill_player`. False for a spell hit that floored a
     /// player at 1 hp, and false for any hit the target survived.
     pub killed: bool,
+    /// The hit ended an active Duel at one health. Callers must not re-arm combat afterward.
+    pub duel_completed: bool,
+}
+
+impl HitOutcome {
+    pub(crate) fn combat_ended(self) -> bool {
+        self.killed || self.duel_completed
+    }
 }
 
 /// Pure: does a hit of `dmg` reduce a target at `health` to 0? A 0-damage hit (a miss, a fully
@@ -527,7 +536,10 @@ pub(crate) fn apply_hit(
     dmg: u32,
     source: HitSource,
 ) -> HitOutcome {
-    let miss = HitOutcome { killed: false };
+    let miss = HitOutcome {
+        killed: false,
+        duel_completed: false,
+    };
     let entities = ctx.db.game_world_entity();
     let Some(mut target) = entities.guid().find(target_guid) else {
         return miss; // the target left the world between the roll and here
@@ -540,6 +552,12 @@ pub(crate) fn apply_hit(
     // (the queued-strike rage deduction, an earlier engagement's swing), and the spell path may have
     // no attacker row at all (an environmental / departed caster → not a player, no threat).
     let attacker = entities.guid().find(attacker_guid);
+    if attacker
+        .as_ref()
+        .is_some_and(|attacker| !crate::combat::may_harm(ctx, attacker, &target))
+    {
+        return miss;
+    }
     let attacker_is_player = attacker.as_ref().map(|a| a.is_player()).unwrap_or(false);
     let attacker_owner = attacker.as_ref().map(|a| a.owner_guid).unwrap_or(0);
     let target_is_player = target.is_player();
@@ -571,12 +589,20 @@ pub(crate) fn apply_hit(
     {
         target.health = 1;
         entities.guid().update(target);
-        if let Some(duel) = crate::duel::duel_involving(ctx, attacker_guid) {
-            crate::duel::complete_duel(ctx, duel.id, crate::duel::duel_completion_kind::WON, attacker_guid, target_guid);
+        if let Some(duel) = crate::duel::active_duel_between(ctx, attacker_guid, target_guid) {
+            crate::duel::complete_duel(
+                ctx,
+                duel.id,
+                crate::duel::duel_completion_kind::WON,
+                attacker_guid,
+                target_guid,
+            );
         }
-        return HitOutcome { killed: false };
+        return HitOutcome {
+            killed: false,
+            duel_completed: true,
+        };
     }
-
     // A spell hit on a PLAYER is the one non-fatal ordinary 0-hp case (floored at 1 below).
     let killed = is_lethal(target.health, dmg) && (weapon || !target_is_player);
     if killed {
@@ -596,9 +622,11 @@ pub(crate) fn apply_hit(
                 },
             );
         }
-        return HitOutcome { killed: true };
+        return HitOutcome {
+            killed: true,
+            duel_completed: false,
+        };
     }
-
     // 3. The survivor path.
     // Capture the threat predicate before `target` is moved by the write below.
     let accrues_threat = attacker_is_player && !target_is_player;
@@ -621,6 +649,7 @@ pub(crate) fn apply_hit(
         // tail (a swing that fired flags combat even on a miss), so this would be redundant for them.
         enter_combat(ctx, target_guid);
     }
+
     // 4. Break-on-damage drops the target's break-on-damage CC (polymorph etc.) and interrupts its
     // in-progress timed cast (direct damage → `periodic = false`). The attacker guid rides along for a
     // WEAPON hit so an `A_PROC_ON_HIT` aura on the target (Frost Armor) can reactively chill the
@@ -648,13 +677,15 @@ pub(crate) fn apply_hit(
             crate::spell::arm_spell_retaliation(ctx, attacker_guid, target_guid);
         }
     }
-    HitOutcome { killed: false }
+    HitOutcome {
+        killed: false,
+        duel_completed: false,
+    }
 }
-
 
 #[cfg(test)]
 mod lethality_tests {
-    use super::is_lethal;
+    use super::{is_lethal, HitOutcome};
 
     // The one shared lethality predicate: the melee swing needs it up front for its wire event's
     // `killing_blow` flag and `apply_hit` needs it again for the fork, so they must not be two
@@ -682,6 +713,19 @@ mod lethality_tests {
         assert!(duel_floor < player_death);
         assert!(body.contains("target.health = 1;"));
         assert!(body.contains("duel_completion_kind::WON"));
+    }
+
+    #[test]
+    fn duel_completion_is_a_combat_terminal_without_becoming_a_death() {
+        let outcome = HitOutcome {
+            killed: false,
+            duel_completed: true,
+        };
+        assert!(outcome.combat_ended());
+
+        let body =
+            crate::test_scan::code_of(include_str!("death.rs"), "pub(crate) fn kill_player(");
+        assert!(body.contains("crate::duel::interrupt_duel_for(ctx, victim_guid)"));
     }
 }
 

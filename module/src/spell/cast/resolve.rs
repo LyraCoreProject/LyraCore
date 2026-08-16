@@ -514,19 +514,8 @@ fn check_cast_gates(
             });
         if hits_enemy || hits_ally {
             if let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) {
-                let friendly = crate::faction::is_friendly(
-                    ctx,
-                    caster.faction_template,
-                    target.faction_template,
-                );
-                let hostile = crate::faction::is_hostile(
-                    ctx,
-                    caster.faction_template,
-                    target.faction_template,
-                );
-                let duel_opponents = crate::duel::active_opponents(ctx, caster_guid, target_guid);
-                let friendly = friendly && !duel_opponents;
-                let hostile = hostile || duel_opponents;
+                let friendly = !crate::combat::may_harm(ctx, caster, &target);
+                let hostile = !crate::combat::may_help(ctx, caster, &target);
                 if let Some(class) =
                     faction_target_violation(hits_enemy, hits_ally, friendly, hostile)
                 {

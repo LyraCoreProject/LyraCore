@@ -1047,35 +1047,51 @@ fn trade_event_appeared(view: &WorldView, row: &TradeEvent) {
     });
 }
 
-/// A Duel lifecycle edge landed for one participant. The static flag template is resolved on the
-/// holding shard inside the viewer job; the module row carries every other packet field.
+/// A Duel lifecycle edge landed for one participant. Private packets go only to that participant;
+/// the initiator-addressed completion row also drives the one nearby winner announcement.
 fn duel_event_appeared(view: &WorldView, coord: &Coordinator, row: &DuelEvent) {
-    let Some(session) = view.entities.session_of_owner(row.recipient_guid) else {
-        return;
-    };
-    let Some(viewer) = view.viewer(session) else {
-        return;
-    };
-    if !super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid) {
+    if let Some(viewer) = view
+        .entities
+        .session_of_owner(row.recipient_guid)
+        .and_then(|session| view.viewer(session))
+        .filter(|viewer| {
+            super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid)
+        })
+    {
+        let row = row.clone();
+        let coord = coord.clone();
+        let tx = viewer.tx.clone();
+        enqueue(&tx, move || {
+            let template = (row.kind == lyracore_shared::duel::event_kind::REQUESTED)
+                .then(|| coord.gameobject_template(row.flag_entry).ok().flatten())
+                .flatten();
+            super::subscriptions::duel_event_outbound(&row, template.as_ref())
+        });
+    }
+
+    // The module writes two participant rows. Use the initiator-addressed copy as the one AOI fan
+    // trigger, and exclude both private recipients so each client receives one winner packet.
+    if row.kind != lyracore_shared::duel::event_kind::COMPLETE
+        || row.recipient_guid != row.initiator_guid
+        || row.winner_guid == 0
+    {
         return;
     }
-    let row = row.clone();
-    let coord = coord.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
-        let template = coord.gameobject_template(row.flag_entry).ok().flatten();
-        let names = if row.kind == 3 && row.winner_guid != 0 && row.loser_guid != 0 {
-            let guard = coord.0.coord();
-            let db = &guard.conn.db;
-            (
-                db.game_character().guid().find(&row.winner_guid).map(|c| c.name),
-                db.game_character().guid().find(&row.loser_guid).map(|c| c.name),
-            )
-        } else {
-            (None, None)
+    let key = CellKey::of_position(row.map_id, row.instance_id, row.flag_x, row.flag_y);
+    let row = Arc::new(row.clone());
+    for session in view.entities.viewers_of(key) {
+        let Some(viewer) = view.viewer(session) else {
+            continue;
         };
-        super::subscriptions::duel_event_outbound(&row, template.as_ref(), names.0, names.1)
-    });
+        if !duel_winner_audience(viewer.self_guid, row.initiator_guid, row.challenged_guid) {
+            continue;
+        }
+        let row = row.clone();
+        let tx = viewer.tx.clone();
+        enqueue(&tx, move || {
+            super::subscriptions::duel_winner_outbound(&row)
+        });
+    }
 }
 
 /// A group/loot-roll/quest-share event landed → the kind-decoded packet to the row's RECIPIENT
@@ -1237,9 +1253,13 @@ fn shard_audience(viewer_shard: Option<ShardId>, row_shard: ShardId) -> bool {
     viewer_shard == Some(row_shard)
 }
 
+fn duel_winner_audience(viewer_guid: u64, initiator_guid: u64, challenged_guid: u64) -> bool {
+    viewer_guid != 0 && viewer_guid != initiator_guid && viewer_guid != challenged_guid
+}
+
 #[cfg(test)]
 mod family_audience_tests {
-    use super::{shard_audience, WorldView};
+    use super::{duel_winner_audience, shard_audience, WorldView};
     use crate::stdb::subscriptions::private_recipient_audience;
 
     #[test]
@@ -1262,6 +1282,20 @@ mod family_audience_tests {
             !private_recipient_audience(0, 0),
             "the all-zero case is a leak, not a match — both sides unset must still deny"
         );
+    }
+
+    #[test]
+    fn duel_winner_aoi_fan_excludes_the_two_private_recipients() {
+        assert!(!duel_winner_audience(10, 10, 20));
+        assert!(!duel_winner_audience(20, 10, 20));
+        assert!(duel_winner_audience(30, 10, 20));
+        assert!(!duel_winner_audience(0, 10, 20));
+
+        let source = include_str!("world_view.rs");
+        let body = crate::test_scan::code_of(source, "fn duel_event_appeared(");
+        assert!(body.contains("CellKey::of_position"));
+        assert!(body.contains("view.entities.viewers_of(key)"));
+        assert!(body.contains("duel_winner_outbound"));
     }
 
     #[test]

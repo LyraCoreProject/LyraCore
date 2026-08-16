@@ -193,6 +193,46 @@ pub(crate) fn is_engaged(ctx: &ReducerContext, guid: u64) -> bool {
     melee.attacker_guid().find(guid).is_some() || melee.by_target().filter(&guid).next().is_some()
 }
 
+fn may_harm_decision(same_unit: bool, active_duel: bool, friendly: bool) -> bool {
+    same_unit || active_duel || !friendly
+}
+
+fn may_help_decision(same_unit: bool, active_duel: bool, hostile: bool) -> bool {
+    same_unit || (!active_duel && !hostile)
+}
+
+/// Current harmful-target authorization. An active Duel overrides friendship only for its exact
+/// pair; neutral and hostile targets retain the ordinary faction behavior.
+pub(crate) fn may_harm(ctx: &ReducerContext, attacker: &WorldEntity, target: &WorldEntity) -> bool {
+    may_harm_decision(
+        attacker.guid == target.guid,
+        crate::duel::active_opponents(ctx, attacker.guid, target.guid),
+        crate::faction::is_friendly(ctx, attacker.faction_template, target.faction_template),
+    )
+}
+
+/// Current helpful-target authorization. Active Duel opponents are hostile to one another even
+/// when their ordinary faction relation is friendly.
+pub(crate) fn may_help(ctx: &ReducerContext, helper: &WorldEntity, target: &WorldEntity) -> bool {
+    may_help_decision(
+        helper.guid == target.guid,
+        crate::duel::active_opponents(ctx, helper.guid, target.guid),
+        crate::faction::is_hostile(ctx, helper.faction_template, target.faction_template),
+    )
+}
+
+/// Whether an enemy-only area selector should include `target`. Unlike direct attacks, ordinary
+/// neutral units are not selected automatically; an active Duel opponent is the narrow exception.
+pub(crate) fn is_hostile_target(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    target: &WorldEntity,
+) -> bool {
+    attacker.guid != target.guid
+        && (crate::duel::active_opponents(ctx, attacker.guid, target.guid)
+            || crate::faction::is_hostile(ctx, attacker.faction_template, target.faction_template))
+}
+
 /// Every guid currently in combat, for bulk in-combat gates (e.g. regen).
 ///
 /// Includes both sides of every live melee engagement AND any entity whose
@@ -428,10 +468,7 @@ fn validate_attack_target(
     // e.g. Elwynn wolves, which are huntable) stay attackable, matching vanilla; only friendly (green)
     // units are protected. The gateway maps this to SMSG_ATTACKSWING_CANT_ATTACK so the client leaves
     // stance. SKIPPED when faction data isn't loaded (table empty) so missing data never blocks combat.
-    if ctx.db.game_faction_template().count() > 0
-        && crate::faction::is_friendly(ctx, attacker.faction_template, target.faction_template)
-        && !crate::duel::active_opponents(ctx, attacker.guid, target.guid)
-    {
+    if ctx.db.game_faction_template().count() > 0 && !may_harm(ctx, attacker, &target) {
         return Err(lyracore_shared::ERR_ATTACK_FRIENDLY.to_string());
     }
     Ok(target)
@@ -602,4 +639,25 @@ pub(crate) fn stop_attack_for(ctx: &ReducerContext, attacker_guid: u64) {
         .game_melee_attack()
         .attacker_guid()
         .delete(attacker_guid);
+}
+
+#[cfg(test)]
+mod duel_relation_tests {
+    use super::{may_harm_decision, may_help_decision};
+
+    #[test]
+    fn active_duel_is_the_only_friendly_fire_exception() {
+        assert!(!may_harm_decision(false, false, true));
+        assert!(may_harm_decision(false, true, true));
+        assert!(may_harm_decision(false, false, false));
+        assert!(may_harm_decision(true, false, true));
+    }
+
+    #[test]
+    fn active_opponents_stop_being_helpful_targets() {
+        assert!(may_help_decision(false, false, false));
+        assert!(!may_help_decision(false, true, false));
+        assert!(!may_help_decision(false, false, true));
+        assert!(may_help_decision(true, false, true));
+    }
 }

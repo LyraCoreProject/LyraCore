@@ -10,6 +10,7 @@
 pub mod auction;
 pub mod bank;
 pub mod constants;
+pub mod duel;
 pub mod env;
 pub mod faction;
 pub mod group;
