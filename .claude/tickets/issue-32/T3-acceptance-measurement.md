@@ -57,4 +57,3 @@ module reducers or the gateway batching component beyond consuming T1's observat
 ## Definition of done
 
 Relevant Rust formatting, clippy and tests are clean; script tests pass; no live service is touched.
-

@@ -60,4 +60,3 @@ T1 gateway batching seam (serial tracer)
 
 Every implementation agent reads this file and its own ticket. T2 and T3 branch from integrated T1.
 T4 starts only after both parallel branches are integrated.
-

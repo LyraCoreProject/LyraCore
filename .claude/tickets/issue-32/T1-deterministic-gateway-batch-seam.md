@@ -49,4 +49,3 @@ reducers, load sampling, benchmark scripts or docs.
 ## Definition of done
 
 `cargo fmt`, `cargo clippy -p lyracore-gateway`, and `cargo test -p lyracore-gateway` are clean.
-

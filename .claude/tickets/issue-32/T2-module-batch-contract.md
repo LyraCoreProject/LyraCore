@@ -49,4 +49,3 @@ edit gateway coordinator code, load sampling, benchmark scripts or docs.
 ## Definition of done
 
 `cargo fmt`, `cargo clippy -p lyracore-module`, and `cargo test -p lyracore-module` are clean.
-
