@@ -19,6 +19,7 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use wow_dbc::vanilla_tables::area_table::AreaTable as DbcAreaTable;
 use wow_dbc::vanilla_tables::area_trigger::AreaTrigger as DbcAreaTrigger;
+use wow_dbc::vanilla_tables::auction_house::AuctionHouse as DbcAuctionHouse;
 use wow_dbc::vanilla_tables::char_base_info::CharBaseInfo as DbcCharBaseInfo;
 use wow_dbc::vanilla_tables::char_start_outfit::CharStartOutfit as DbcCharStartOutfit;
 use wow_dbc::vanilla_tables::chr_races::{ChrRaces, ChrRacesKey};
@@ -123,6 +124,8 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     // (P1: per-race display + faction). All no-Timestamp → plain SQL.
     let (faction_stmts, fn_count) = faction_template_sql(&mut chain)?;
     let (gf_stmts, gf_count) = faction_sql(&mut chain)?;
+    let auction_houses: DbcAuctionHouse = read_table(&mut chain)?;
+    let (auction_house_stmts, auction_house_count) = auction_house_sql(&auction_houses)?;
     let (cbi_stmts, cbi_count) = char_base_info_sql(&mut chain)?;
     let (race_stmts, race_count) = race_info_sql(&races);
     let (si_stmts, si_count) = start_item_sql(&mut chain)?;
@@ -187,6 +190,8 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         eprintln!("dbc: loaded {fn_count} faction templates into game_faction_template.");
         crate::run_sql_statements(args, &gf_stmts, "game_faction")?;
         eprintln!("dbc: loaded {gf_count} factions into game_faction.");
+        crate::run_sql_statements(args, &auction_house_stmts, "auctionhouse")?;
+        eprintln!("dbc: loaded {auction_house_count} auction houses into game_auction_house.");
         crate::run_sql_statements(args, &cbi_stmts, "charbaseinfo")?;
         eprintln!("dbc: loaded {cbi_count} (race,class) combos into game_char_base_info.");
         crate::run_sql_statements(args, &race_stmts, "race")?;
@@ -215,7 +220,7 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
             taxi_counts.nodes, taxi_counts.paths, taxi_counts.path_nodes
         );
     } else {
-        println!("-- DRY RUN: load {fn_count} faction templates + {gf_count} factions + {cbi_count} (race,class) combos + {race_count} races:");
+        println!("-- DRY RUN: load {fn_count} faction templates + {gf_count} factions + {auction_house_count} auction houses + {cbi_count} (race,class) combos + {race_count} races:");
         println!("{};", faction_stmts[0]);
         if let Some(ins) = faction_stmts.get(1) {
             println!(
@@ -235,6 +240,7 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     println!("SkillLine: {sl_count} lines");
     println!("SkillLineAbility: {sa_count} abilities ({autolearn_count} autolearn)");
     println!("SkillRaceClassInfo: {sav_count} availability rows");
+    println!("AuctionHouse: {auction_house_count} houses");
     // Work-item 209 coverage prints (always printed, like the skill lines above).
     println!("AreaTable: {area_count} areas");
     println!("AreaTrigger: {trigger_count} triggers");
@@ -258,6 +264,73 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         taxi_counts.nodes, taxi_counts.paths, taxi_counts.path_nodes
     );
     Ok(())
+}
+
+/// Clear+reload SQL for `game_auction_house` from `AuctionHouse.dbc`. The DBC owns the house id,
+/// parent faction, listing deposit percentage, sale consignment percentage, and localized name.
+/// Validate the complete catalogue before returning its first DELETE so malformed or truncated
+/// client data cannot replace a working catalogue. Output is ordered by id rather than DBC record
+/// order to keep dry runs and imports reproducible.
+fn auction_house_sql(table: &DbcAuctionHouse) -> Result<(Vec<String>, usize)> {
+    if table.rows().is_empty() {
+        bail!("AuctionHouse.dbc contains no rows");
+    }
+
+    let mut seen_ids = HashSet::new();
+    let mut seen_factions = HashSet::new();
+    let mut rows = Vec::with_capacity(table.rows().len());
+    for row in table.rows() {
+        let id = row.id.id;
+        if id == 0 {
+            bail!("AuctionHouse.dbc contains invalid house id 0");
+        }
+        if !seen_ids.insert(id) {
+            bail!("AuctionHouse.dbc contains duplicate house id {id}");
+        }
+        if row.faction.id == 0 {
+            bail!("AuctionHouse.dbc house {id} has invalid parent faction 0");
+        }
+        if !seen_factions.insert(row.faction.id) {
+            bail!(
+                "AuctionHouse.dbc contains duplicate parent faction {}",
+                row.faction.id
+            );
+        }
+        if !(0..=100).contains(&row.deposit_rate) {
+            bail!(
+                "AuctionHouse.dbc house {id} has invalid deposit rate {} (expected 0..=100)",
+                row.deposit_rate
+            );
+        }
+        if !(0..=100).contains(&row.consignment_rate) {
+            bail!(
+                "AuctionHouse.dbc house {id} has invalid consignment rate {} (expected 0..=100)",
+                row.consignment_rate
+            );
+        }
+        rows.push((
+            id,
+            format!(
+                "({id},{},{},{},{})",
+                row.faction.id,
+                row.deposit_rate,
+                row.consignment_rate,
+                sql_text(&row.name.en_gb)
+            ),
+        ));
+    }
+    rows.sort_unstable_by_key(|(id, _)| *id);
+
+    let count = rows.len();
+    let rows: Vec<String> = rows.into_iter().map(|(_, sql)| sql).collect();
+    let mut stmts = vec!["DELETE FROM game_auction_house WHERE id >= 0".to_string()];
+    push_insert(
+        &mut stmts,
+        "game_auction_house",
+        "id,faction,deposit_rate,consignment_rate,name",
+        &rows,
+    );
+    Ok((stmts, count))
 }
 
 /// Clear+reload SQL for `game_faction` from `Faction.dbc` (Elwynn faction system): each parent faction's
@@ -1152,6 +1225,7 @@ mod tests {
     use super::*;
     use wow_dbc::vanilla_tables::area_table::{AreaTableKey, AreaTableRow};
     use wow_dbc::vanilla_tables::area_trigger::{AreaTriggerKey, AreaTriggerRow};
+    use wow_dbc::vanilla_tables::auction_house::{AuctionHouseKey, AuctionHouseRow};
     use wow_dbc::vanilla_tables::chr_classes::ChrClassesKey;
     use wow_dbc::vanilla_tables::chr_races::ChrRacesKey as SkillChrRacesKey;
     use wow_dbc::vanilla_tables::creature_family::{CreatureFamilyKey, CreatureFamilyRow};
@@ -1180,6 +1254,74 @@ mod tests {
     use wow_dbc::vanilla_tables::zone_music::ZoneMusicKey;
     use wow_dbc::LocalizedString;
     use wow_world_base::vanilla::AreaFlags;
+
+    fn auction_house_row(
+        id: u32,
+        faction: u32,
+        deposit_rate: i32,
+        consignment_rate: i32,
+        name: &str,
+    ) -> AuctionHouseRow {
+        AuctionHouseRow {
+            id: AuctionHouseKey::new(id),
+            faction: wow_dbc::vanilla_tables::faction::FactionKey::new(faction),
+            deposit_rate,
+            consignment_rate,
+            name: LocalizedString {
+                en_gb: name.to_string(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn auction_house_sql_is_validated_deterministic_and_escapes_names() {
+        let table = DbcAuctionHouse {
+            rows: vec![
+                auction_house_row(7, 120, 25, 15, "Booty Bay's Auction House"),
+                auction_house_row(1, 12, 5, 5, "Stormwind Auction House"),
+            ],
+        };
+
+        let (first, count) = auction_house_sql(&table).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(first[0], "DELETE FROM game_auction_house WHERE id >= 0");
+        assert_eq!(
+            first[1],
+            "INSERT INTO game_auction_house (id,faction,deposit_rate,consignment_rate,name) VALUES (1,12,5,5,'Stormwind Auction House'),(7,120,25,15,'Booty Bay''s Auction House')"
+        );
+
+        let reversed = DbcAuctionHouse {
+            rows: table.rows.into_iter().rev().collect(),
+        };
+        assert_eq!(auction_house_sql(&reversed).unwrap().0, first);
+
+        for invalid in [
+            DbcAuctionHouse {
+                rows: vec![auction_house_row(1, 0, 5, 5, "missing faction")],
+            },
+            DbcAuctionHouse {
+                rows: vec![auction_house_row(1, 12, -1, 5, "negative deposit")],
+            },
+            DbcAuctionHouse {
+                rows: vec![auction_house_row(1, 12, 5, 101, "excessive cut")],
+            },
+            DbcAuctionHouse {
+                rows: vec![
+                    auction_house_row(1, 12, 5, 5, "first"),
+                    auction_house_row(1, 29, 5, 5, "duplicate"),
+                ],
+            },
+            DbcAuctionHouse {
+                rows: vec![
+                    auction_house_row(1, 12, 5, 5, "first"),
+                    auction_house_row(2, 12, 5, 5, "ambiguous faction"),
+                ],
+            },
+        ] {
+            assert!(auction_house_sql(&invalid).is_err());
+        }
+    }
 
     #[allow(clippy::too_many_arguments)]
     fn area_table_row(

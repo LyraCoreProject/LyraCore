@@ -27,9 +27,9 @@ impl Coordinator {
     /// Does `npc_guid` REFUSE to interact with `player_guid` (vanilla
     /// `Unit::GetReactionTo` for the gossip/vendor/trainer/questgiver windows)? The NPC's
     /// faction_template resolves to its parent faction:
-    /// - parent has a REP BAR (`reputation_index >= 0`) → reaction = the player's standing RANK
-    ///   (their `game_player_reputation` row, else the faction's `base_standing`); refuse at
-    ///   Unfriendly (2) or below — Neutral+ interacts.
+    /// - parent has a REP BAR (`reputation_index >= 0`) and the player has a standing row → use
+    ///   its rank and At-War state; refuse at Unfriendly (2) or below.
+    /// - no player standing row or no rep bar → FactionTemplate mask fallback, which is race-safe.
     /// - no rep bar → FactionTemplate mask fallback: refuse when the NPC is HOSTILE to the player.
     ///
     /// Missing data anywhere → do NOT refuse (fail-open: an unfactioned fixture NPC keeps working).
@@ -53,12 +53,13 @@ impl Coordinator {
                     .game_player_reputation()
                     .iter()
                     .find(|r| r.character_guid == player_guid && r.faction_id == parent.faction_id);
-                // The At-War checkbox forces hostile regardless of standing (vanilla).
-                if row.as_ref().map(|r| r.at_war).unwrap_or(false) {
-                    return Ok(true);
+                if let Some(row) = row {
+                    // The At-War checkbox forces hostile regardless of standing (vanilla).
+                    if row.at_war {
+                        return Ok(true);
+                    }
+                    return Ok(reputation_rank(row.standing) <= RANK_UNFRIENDLY);
                 }
-                let standing = row.map(|r| r.standing).unwrap_or(parent.base_standing);
-                return Ok(reputation_rank(standing) <= RANK_UNFRIENDLY);
             }
         }
         let Some(player_ft) = templates.id().find(&player.faction_template) else {

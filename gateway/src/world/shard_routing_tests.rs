@@ -39,7 +39,7 @@ fn sharded_stores_with_home_entity(
         shard: "instances".into(),
         calls: calls.clone(),
         login_entity: Some(warrior_entity()),
-        auction_interaction: Some(stormwind_auction_interaction()),
+        auction_interaction: Some(imported_auction_interaction()),
         worldport_entity: Some(ported),
         ..Default::default()
     });

@@ -18,6 +18,7 @@ pub mod auction_bid_decision_type;
 pub mod auction_bid_hold_type;
 pub mod auction_expiry_type;
 pub mod auction_hold_type;
+pub mod auction_house_definition_type;
 pub mod auction_operation_receipt_type;
 pub mod auction_type;
 pub mod aura_schedule_type;
@@ -227,6 +228,7 @@ pub mod game_auction_bid_decision_table;
 pub mod game_auction_bid_hold_table;
 pub mod game_auction_expiry_table;
 pub mod game_auction_hold_table;
+pub mod game_auction_house_table;
 pub mod game_auction_operation_receipt_table;
 pub mod game_auction_table;
 pub mod game_aura_schedule_table;
@@ -694,6 +696,7 @@ pub use auction_bid_decision_type::AuctionBidDecision;
 pub use auction_bid_hold_type::AuctionBidHold;
 pub use auction_expiry_type::AuctionExpiry;
 pub use auction_hold_type::AuctionHold;
+pub use auction_house_definition_type::AuctionHouseDefinition;
 pub use auction_operation_receipt_type::AuctionOperationReceipt;
 pub use auction_type::Auction;
 pub use aura_schedule_type::AuraSchedule;
@@ -903,6 +906,7 @@ pub use game_auction_bid_decision_table::*;
 pub use game_auction_bid_hold_table::*;
 pub use game_auction_expiry_table::*;
 pub use game_auction_hold_table::*;
+pub use game_auction_house_table::*;
 pub use game_auction_operation_receipt_table::*;
 pub use game_auction_table::*;
 pub use game_aura_schedule_table::*;
@@ -2033,13 +2037,16 @@ pub enum Reducer {
     GwAuctionBidLocal {
         operation_id: u64,
         bidder_guid: u64,
+        auctioneer_guid: u64,
         auction_id: u32,
+        house: u32,
         offer: u32,
     },
     GwAuctionConfirmBidRefund {
         operation_id: u64,
         bidder_guid: u64,
         auction_id: u32,
+        house: u32,
         offer: u32,
         deferred_refund: u32,
     },
@@ -2047,6 +2054,7 @@ pub enum Reducer {
         operation_id: u64,
         bidder_guid: u64,
         auction_id: u32,
+        house: u32,
         offer: u32,
         outcome: u8,
         revision: u64,
@@ -2058,13 +2066,17 @@ pub enum Reducer {
     GwAuctionHoldBid {
         operation_id: u64,
         bidder_guid: u64,
+        auctioneer_guid: u64,
         auction_id: u32,
+        house: u32,
         offer: u32,
     },
     GwAuctionHoldListing {
         operation_id: u64,
         seller_guid: u64,
         item_guid: u64,
+        auctioneer_guid: u64,
+        house: u32,
         start_bid: u32,
         buyout: u32,
         duration_minutes: u32,
@@ -2073,6 +2085,8 @@ pub enum Reducer {
         operation_id: u64,
         seller_guid: u64,
         item_guid: u64,
+        auctioneer_guid: u64,
+        house: u32,
         start_bid: u32,
         buyout: u32,
         duration_minutes: u32,
@@ -2482,6 +2496,9 @@ pub enum Reducer {
         item_durability: u32,
         item_enchant_id: u32,
         item_soulbound: bool,
+        house: u32,
+        deposit_rate: u32,
+        consignment_rate: u32,
         start_bid: u32,
         buyout: u32,
         duration_minutes: u32,
@@ -2497,12 +2514,14 @@ pub enum Reducer {
         operation_id: u64,
         bidder_guid: u64,
         auction_id: u32,
+        house: u32,
         offer: u32,
     },
     RealmAuctionRefundBid {
         operation_id: u64,
         bidder_guid: u64,
         auction_id: u32,
+        house: u32,
         offer: u32,
         deferred_refund: u32,
     },
@@ -4238,24 +4257,30 @@ Reducer::DebugVerifyCombatRegen{
             Reducer::GwAuctionBidLocal{
                 operation_id,
                 bidder_guid,
+                auctioneer_guid,
                 auction_id,
+                house,
                 offer,
 }             => __sats::bsatn::to_vec(&gw_auction_bid_local_reducer::GwAuctionBidLocalArgs {
                 operation_id: operation_id.clone(),
                 bidder_guid: bidder_guid.clone(),
+                auctioneer_guid: auctioneer_guid.clone(),
                 auction_id: auction_id.clone(),
+                house: house.clone(),
                 offer: offer.clone(),
 }),
             Reducer::GwAuctionConfirmBidRefund{
                 operation_id,
                 bidder_guid,
                 auction_id,
+                house,
                 offer,
                 deferred_refund,
 }             => __sats::bsatn::to_vec(&gw_auction_confirm_bid_refund_reducer::GwAuctionConfirmBidRefundArgs {
                 operation_id: operation_id.clone(),
                 bidder_guid: bidder_guid.clone(),
                 auction_id: auction_id.clone(),
+                house: house.clone(),
                 offer: offer.clone(),
                 deferred_refund: deferred_refund.clone(),
 }),
@@ -4263,6 +4288,7 @@ Reducer::DebugVerifyCombatRegen{
                 operation_id,
                 bidder_guid,
                 auction_id,
+                house,
                 offer,
                 outcome,
                 revision,
@@ -4274,6 +4300,7 @@ Reducer::DebugVerifyCombatRegen{
                 operation_id: operation_id.clone(),
                 bidder_guid: bidder_guid.clone(),
                 auction_id: auction_id.clone(),
+                house: house.clone(),
                 offer: offer.clone(),
                 outcome: outcome.clone(),
                 revision: revision.clone(),
@@ -4285,18 +4312,24 @@ Reducer::DebugVerifyCombatRegen{
             Reducer::GwAuctionHoldBid{
                 operation_id,
                 bidder_guid,
+                auctioneer_guid,
                 auction_id,
+                house,
                 offer,
 }             => __sats::bsatn::to_vec(&gw_auction_hold_bid_reducer::GwAuctionHoldBidArgs {
                 operation_id: operation_id.clone(),
                 bidder_guid: bidder_guid.clone(),
+                auctioneer_guid: auctioneer_guid.clone(),
                 auction_id: auction_id.clone(),
+                house: house.clone(),
                 offer: offer.clone(),
 }),
             Reducer::GwAuctionHoldListing{
                 operation_id,
                 seller_guid,
                 item_guid,
+                auctioneer_guid,
+                house,
                 start_bid,
                 buyout,
                 duration_minutes,
@@ -4304,6 +4337,8 @@ Reducer::DebugVerifyCombatRegen{
                 operation_id: operation_id.clone(),
                 seller_guid: seller_guid.clone(),
                 item_guid: item_guid.clone(),
+                auctioneer_guid: auctioneer_guid.clone(),
+                house: house.clone(),
                 start_bid: start_bid.clone(),
                 buyout: buyout.clone(),
                 duration_minutes: duration_minutes.clone(),
@@ -4312,6 +4347,8 @@ Reducer::DebugVerifyCombatRegen{
                 operation_id,
                 seller_guid,
                 item_guid,
+                auctioneer_guid,
+                house,
                 start_bid,
                 buyout,
                 duration_minutes,
@@ -4319,6 +4356,8 @@ Reducer::DebugVerifyCombatRegen{
                 operation_id: operation_id.clone(),
                 seller_guid: seller_guid.clone(),
                 item_guid: item_guid.clone(),
+                auctioneer_guid: auctioneer_guid.clone(),
+                house: house.clone(),
                 start_bid: start_bid.clone(),
                 buyout: buyout.clone(),
                 duration_minutes: duration_minutes.clone(),
@@ -5030,6 +5069,9 @@ Reducer::ProvisionAccount{
                 item_durability,
                 item_enchant_id,
                 item_soulbound,
+                house,
+                deposit_rate,
+                consignment_rate,
                 start_bid,
                 buyout,
                 duration_minutes,
@@ -5045,6 +5087,9 @@ Reducer::ProvisionAccount{
                 item_durability: item_durability.clone(),
                 item_enchant_id: item_enchant_id.clone(),
                 item_soulbound: item_soulbound.clone(),
+                house: house.clone(),
+                deposit_rate: deposit_rate.clone(),
+                consignment_rate: consignment_rate.clone(),
                 start_bid: start_bid.clone(),
                 buyout: buyout.clone(),
                 duration_minutes: duration_minutes.clone(),
@@ -5063,23 +5108,27 @@ Reducer::ProvisionAccount{
                 operation_id,
                 bidder_guid,
                 auction_id,
+                house,
                 offer,
 }             => __sats::bsatn::to_vec(&realm_auction_decide_bid_reducer::RealmAuctionDecideBidArgs {
                 operation_id: operation_id.clone(),
                 bidder_guid: bidder_guid.clone(),
                 auction_id: auction_id.clone(),
+                house: house.clone(),
                 offer: offer.clone(),
 }),
             Reducer::RealmAuctionRefundBid{
                 operation_id,
                 bidder_guid,
                 auction_id,
+                house,
                 offer,
                 deferred_refund,
 }             => __sats::bsatn::to_vec(&realm_auction_refund_bid_reducer::RealmAuctionRefundBidArgs {
                 operation_id: operation_id.clone(),
                 bidder_guid: bidder_guid.clone(),
                 auction_id: auction_id.clone(),
+                house: house.clone(),
                 offer: offer.clone(),
                 deferred_refund: deferred_refund.clone(),
 }),
@@ -5493,6 +5542,7 @@ pub struct DbUpdate {
     game_auction_bid_hold: __sdk::TableUpdate<AuctionBidHold>,
     game_auction_expiry: __sdk::TableUpdate<AuctionExpiry>,
     game_auction_hold: __sdk::TableUpdate<AuctionHold>,
+    game_auction_house: __sdk::TableUpdate<AuctionHouseDefinition>,
     game_auction_operation_receipt: __sdk::TableUpdate<AuctionOperationReceipt>,
     game_aura: __sdk::TableUpdate<Aura>,
     game_aura_schedule: __sdk::TableUpdate<AuraSchedule>,
@@ -5707,6 +5757,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_auction_hold" => db_update
                     .game_auction_hold
                     .append(game_auction_hold_table::parse_table_update(table_update)?),
+                "game_auction_house" => db_update
+                    .game_auction_house
+                    .append(game_auction_house_table::parse_table_update(table_update)?),
                 "game_auction_operation_receipt" => {
                     db_update.game_auction_operation_receipt.append(
                         game_auction_operation_receipt_table::parse_table_update(table_update)?,
@@ -6303,6 +6356,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_auction_hold = cache
             .apply_diff_to_table::<AuctionHold>("game_auction_hold", &self.game_auction_hold)
             .with_updates_by_pk(|row| &row.operation_id);
+        diff.game_auction_house = cache
+            .apply_diff_to_table::<AuctionHouseDefinition>(
+                "game_auction_house",
+                &self.game_auction_house,
+            )
+            .with_updates_by_pk(|row| &row.id);
         diff.game_auction_operation_receipt = cache
             .apply_diff_to_table::<AuctionOperationReceipt>(
                 "game_auction_operation_receipt",
@@ -7069,6 +7128,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_auction_hold" => db_update
                     .game_auction_hold
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_auction_house" => db_update
+                    .game_auction_house
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_auction_operation_receipt" => db_update
                     .game_auction_operation_receipt
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -7634,6 +7696,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_auction_hold" => db_update
                     .game_auction_hold
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_auction_house" => db_update
+                    .game_auction_house
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_auction_operation_receipt" => db_update
                     .game_auction_operation_receipt
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -8179,6 +8244,7 @@ pub struct AppliedDiff<'r> {
     game_auction_bid_hold: __sdk::TableAppliedDiff<'r, AuctionBidHold>,
     game_auction_expiry: __sdk::TableAppliedDiff<'r, AuctionExpiry>,
     game_auction_hold: __sdk::TableAppliedDiff<'r, AuctionHold>,
+    game_auction_house: __sdk::TableAppliedDiff<'r, AuctionHouseDefinition>,
     game_auction_operation_receipt: __sdk::TableAppliedDiff<'r, AuctionOperationReceipt>,
     game_aura: __sdk::TableAppliedDiff<'r, Aura>,
     game_aura_schedule: __sdk::TableAppliedDiff<'r, AuraSchedule>,
@@ -8406,6 +8472,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<AuctionHold>(
             "game_auction_hold",
             &self.game_auction_hold,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<AuctionHouseDefinition>(
+            "game_auction_house",
+            &self.game_auction_house,
             event,
         );
         callbacks.invoke_table_row_callbacks::<AuctionOperationReceipt>(
@@ -9904,6 +9975,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_auction_bid_hold_table::register_table(client_cache);
         game_auction_expiry_table::register_table(client_cache);
         game_auction_hold_table::register_table(client_cache);
+        game_auction_house_table::register_table(client_cache);
         game_auction_operation_receipt_table::register_table(client_cache);
         game_aura_table::register_table(client_cache);
         game_aura_schedule_table::register_table(client_cache);
@@ -10090,6 +10162,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_auction_bid_hold",
         "game_auction_expiry",
         "game_auction_hold",
+        "game_auction_house",
         "game_auction_operation_receipt",
         "game_aura",
         "game_aura_schedule",

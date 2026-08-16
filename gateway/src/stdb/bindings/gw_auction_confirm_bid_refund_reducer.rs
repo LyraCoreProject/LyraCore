@@ -10,6 +10,7 @@ pub(super) struct GwAuctionConfirmBidRefundArgs {
     pub operation_id: u64,
     pub bidder_guid: u64,
     pub auction_id: u32,
+    pub house: u32,
     pub offer: u32,
     pub deferred_refund: u32,
 }
@@ -20,6 +21,7 @@ impl From<GwAuctionConfirmBidRefundArgs> for super::Reducer {
             operation_id: args.operation_id,
             bidder_guid: args.bidder_guid,
             auction_id: args.auction_id,
+            house: args.house,
             offer: args.offer,
             deferred_refund: args.deferred_refund,
         }
@@ -46,6 +48,7 @@ pub trait gw_auction_confirm_bid_refund {
         operation_id: u64,
         bidder_guid: u64,
         auction_id: u32,
+        house: u32,
         offer: u32,
         deferred_refund: u32,
     ) -> __sdk::Result<()> {
@@ -53,6 +56,7 @@ pub trait gw_auction_confirm_bid_refund {
             operation_id,
             bidder_guid,
             auction_id,
+            house,
             offer,
             deferred_refund,
             |_, _| {},
@@ -70,6 +74,7 @@ pub trait gw_auction_confirm_bid_refund {
         operation_id: u64,
         bidder_guid: u64,
         auction_id: u32,
+        house: u32,
         offer: u32,
         deferred_refund: u32,
 
@@ -85,6 +90,7 @@ impl gw_auction_confirm_bid_refund for super::RemoteReducers {
         operation_id: u64,
         bidder_guid: u64,
         auction_id: u32,
+        house: u32,
         offer: u32,
         deferred_refund: u32,
 
@@ -97,6 +103,7 @@ impl gw_auction_confirm_bid_refund for super::RemoteReducers {
                 operation_id,
                 bidder_guid,
                 auction_id,
+                house,
                 offer,
                 deferred_refund,
             },

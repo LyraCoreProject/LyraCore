@@ -21,6 +21,9 @@ pub struct AuctionHold {
     pub deposit: u32,
     pub created_micros: i64,
     pub expires_micros: i64,
+    pub house: u32,
+    pub deposit_rate: u32,
+    pub consignment_rate: u32,
 }
 
 impl __sdk::InModule for AuctionHold {
@@ -45,6 +48,9 @@ pub struct AuctionHoldCols {
     pub deposit: __sdk::__query_builder::Col<AuctionHold, u32>,
     pub created_micros: __sdk::__query_builder::Col<AuctionHold, i64>,
     pub expires_micros: __sdk::__query_builder::Col<AuctionHold, i64>,
+    pub house: __sdk::__query_builder::Col<AuctionHold, u32>,
+    pub deposit_rate: __sdk::__query_builder::Col<AuctionHold, u32>,
+    pub consignment_rate: __sdk::__query_builder::Col<AuctionHold, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for AuctionHold {
@@ -65,6 +71,9 @@ impl __sdk::__query_builder::HasCols for AuctionHold {
             deposit: __sdk::__query_builder::Col::new(table_name, "deposit"),
             created_micros: __sdk::__query_builder::Col::new(table_name, "created_micros"),
             expires_micros: __sdk::__query_builder::Col::new(table_name, "expires_micros"),
+            house: __sdk::__query_builder::Col::new(table_name, "house"),
+            deposit_rate: __sdk::__query_builder::Col::new(table_name, "deposit_rate"),
+            consignment_rate: __sdk::__query_builder::Col::new(table_name, "consignment_rate"),
         }
     }
 }

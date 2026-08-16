@@ -1,14 +1,4 @@
-//! Shared auction-house identities used by durable state and the vanilla wire adapter.
-
-/// Vanilla's Stormwind auction-house identifier (`AuctionHouse::Stormwind`).
-pub const STORMWIND_HOUSE_ID: u32 = 1;
-
-/// Creature entries for Chilton, Fitch, and Jaxon in the Stormwind Trade District.
-pub const STORMWIND_AUCTIONEER_ENTRIES: [u32; 3] = [8_670, 8_719, 15_659];
-
-pub fn is_stormwind_auctioneer(entry: u32) -> bool {
-    STORMWIND_AUCTIONEER_ENTRIES.contains(&entry)
-}
+//! Shared auction-house protocol rules.
 
 /// Maximum squared 3-D distance for a player to use a named auctioneer: 10 yards.
 pub const INTERACTION_RANGE_SQ: f32 = 100.0;
@@ -67,14 +57,5 @@ mod tests {
         assert_eq!(super::minimum_next_bid(100, 0), Some(100));
         assert_eq!(super::minimum_next_bid(100, 201), Some(212));
         assert_eq!(super::minimum_next_bid(100, u32::MAX), None);
-    }
-
-    #[test]
-    fn stormwind_market_accepts_only_its_three_auctioneers() {
-        for entry in super::STORMWIND_AUCTIONEER_ENTRIES {
-            assert!(super::is_stormwind_auctioneer(entry));
-        }
-        assert!(!super::is_stormwind_auctioneer(9_858));
-        assert!(!super::is_stormwind_auctioneer(15_675));
     }
 }

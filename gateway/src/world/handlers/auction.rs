@@ -1,6 +1,7 @@
-//! Stormwind auction-house protocol family.
+//! Auction-house protocol family.
 
 use super::super::*;
+use spacetimedb_sdk::Table;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct AuctionEntity {
@@ -12,14 +13,24 @@ pub(crate) struct AuctionEntity {
     pub(crate) y: f32,
     pub(crate) z: f32,
     pub(crate) dead: bool,
+    pub(crate) health: u32,
+    pub(crate) unit_flags: u32,
     pub(crate) npc_flags: u32,
-    pub(crate) race: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AuctionHousePolicy {
+    pub(crate) id: u32,
+    pub(crate) deposit_rate: u32,
+    pub(crate) consignment_rate: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct AuctionInteraction {
     pub(crate) player: AuctionEntity,
     pub(crate) auctioneer: AuctionEntity,
+    pub(crate) house: AuctionHousePolicy,
+    pub(crate) refuses_interaction: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +41,7 @@ pub(crate) struct CreateAuctionRequest {
     pub(crate) start_bid: u32,
     pub(crate) buyout: u32,
     pub(crate) duration_minutes: u32,
+    pub(crate) house_id: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +58,7 @@ pub(crate) struct PlaceBidRequest {
     pub(crate) auctioneer_guid: u64,
     pub(crate) auction_id: u32,
     pub(crate) offer: u32,
+    pub(crate) house_id: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,7 +95,9 @@ pub(crate) struct AuctionBrowseRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AuctionQuery {
     Browse(AuctionBrowseRequest),
-    Owner { offset: u32 },
+    Owner {
+        offset: u32,
+    },
     Bidder {
         offset: u32,
         outbid_auction_ids: Vec<u32>,
@@ -107,7 +122,12 @@ pub(crate) trait AuctionActionStore: Send + Sync {
 
     fn place_bid(&self, request: PlaceBidRequest) -> Result<PlaceBidOutcome>;
 
-    fn auction_query(&self, player_guid: u64, query: AuctionQuery) -> Result<AuctionPage>;
+    fn auction_query(
+        &self,
+        player_guid: u64,
+        house_id: u32,
+        query: AuctionQuery,
+    ) -> Result<AuctionPage>;
 }
 
 impl AuctionActionStore for crate::stdb::Coordinator {
@@ -116,30 +136,60 @@ impl AuctionActionStore for crate::stdb::Coordinator {
         player_guid: u64,
         auctioneer_guid: u64,
     ) -> Result<Option<AuctionInteraction>> {
-        use crate::stdb::bindings::GameWorldEntityTableAccess;
-        let guard = self.0.coord();
-        let entities = guard.conn.db.game_world_entity();
-        let (Some(player), Some(auctioneer)) = (
-            entities.guid().find(&player_guid),
-            entities.guid().find(&auctioneer_guid),
-        ) else {
-            return Ok(None);
+        use crate::stdb::bindings::{
+            GameAuctionHouseTableAccess, GameFactionTemplateTableAccess, GameWorldEntityTableAccess,
         };
-        let view = |entity: crate::stdb::bindings::WorldEntity| AuctionEntity {
-            type_mask: entity.type_mask,
-            entry: entity.entry,
-            map_id: entity.map_id,
-            instance_id: entity.instance_id,
-            x: entity.x,
-            y: entity.y,
-            z: entity.z,
-            dead: entity.dead,
-            npc_flags: entity.npc_flags,
-            race: (entity.unit_bytes_0 & 0xff) as u8,
+        let (player, auctioneer, house) = {
+            let guard = self.0.coord();
+            let db = &guard.conn.db;
+            let entities = db.game_world_entity();
+            let (Some(player), Some(auctioneer)) = (
+                entities.guid().find(&player_guid),
+                entities.guid().find(&auctioneer_guid),
+            ) else {
+                return Ok(None);
+            };
+            let Some(faction) = db
+                .game_faction_template()
+                .id()
+                .find(&auctioneer.faction_template)
+                .map(|template| template.faction)
+            else {
+                return Ok(None);
+            };
+            let Some(house) = db
+                .game_auction_house()
+                .iter()
+                .find(|house| house.faction == faction)
+                .map(|house| AuctionHousePolicy {
+                    id: house.id,
+                    deposit_rate: house.deposit_rate,
+                    consignment_rate: house.consignment_rate,
+                })
+            else {
+                return Ok(None);
+            };
+            let view = |entity: crate::stdb::bindings::WorldEntity| AuctionEntity {
+                type_mask: entity.type_mask,
+                entry: entity.entry,
+                map_id: entity.map_id,
+                instance_id: entity.instance_id,
+                x: entity.x,
+                y: entity.y,
+                z: entity.z,
+                dead: entity.dead,
+                health: entity.health,
+                unit_flags: entity.unit_flags,
+                npc_flags: entity.npc_flags,
+            };
+            (view(player), view(auctioneer), house)
         };
+        let refuses_interaction = self.npc_refuses_interaction(auctioneer_guid, player_guid)?;
         Ok(Some(AuctionInteraction {
-            player: view(player),
-            auctioneer: view(auctioneer),
+            player,
+            auctioneer,
+            house,
+            refuses_interaction,
         }))
     }
 
@@ -151,8 +201,13 @@ impl AuctionActionStore for crate::stdb::Coordinator {
         crate::stdb::Coordinator::place_bid(self, request)
     }
 
-    fn auction_query(&self, player_guid: u64, query: AuctionQuery) -> Result<AuctionPage> {
-        crate::stdb::Coordinator::auction_query(self, player_guid, query)
+    fn auction_query(
+        &self,
+        player_guid: u64,
+        house_id: u32,
+        query: AuctionQuery,
+    ) -> Result<AuctionPage> {
+        crate::stdb::Coordinator::auction_query(self, player_guid, house_id, query)
     }
 }
 
@@ -233,7 +288,7 @@ pub(crate) fn dispatch_auction_browse_action<St: AuctionActionStore + ?Sized>(
     player: AuctionActionPlayer,
     request: AuctionBrowseRequest,
 ) -> Result<AuctionActionOutcome> {
-    let Some(player_guid) =
+    let Some((player_guid, house)) =
         validated_auction_player_guid(store, player, request.auctioneer_guid)?
     else {
         return Ok(AuctionActionOutcome::Handled {
@@ -244,7 +299,7 @@ pub(crate) fn dispatch_auction_browse_action<St: AuctionActionStore + ?Sized>(
             )],
         });
     };
-    let page = store.auction_query(player_guid, AuctionQuery::Browse(request))?;
+    let page = store.auction_query(player_guid, house.id, AuctionQuery::Browse(request))?;
     Ok(AuctionActionOutcome::Handled {
         outbound: vec![Outbound::One(
             ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(Box::new(
@@ -258,7 +313,7 @@ fn validated_auction_player_guid<St: AuctionActionStore + ?Sized>(
     store: &St,
     player: AuctionActionPlayer,
     auctioneer_guid: u64,
-) -> Result<Option<u64>> {
+) -> Result<Option<(u64, AuctionHousePolicy)>> {
     let Some(player_guid) = player.self_guid else {
         return Ok(None);
     };
@@ -276,7 +331,9 @@ fn validated_auction_player_guid<St: AuctionActionStore + ?Sized>(
         }
         Err(error) => return Err(error),
     };
-    Ok(interaction_allowed(entities).then_some(player_guid))
+    Ok(entities
+        .filter(|interaction| interaction_allowed(*interaction))
+        .map(|interaction| (player_guid, interaction.house)))
 }
 
 fn create_result(outcome: CreateAuctionOutcome) -> AuctionActionOutcome {
@@ -395,19 +452,17 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
         ClientOpcodeMessage::CMSG_AUCTION_LIST_OWNER_ITEMS(message) => {
             (message.auctioneer, AuctionRequest::Owner(message.list_from))
         }
-        ClientOpcodeMessage::CMSG_AUCTION_LIST_BIDDER_ITEMS(message) => {
-            (
-                message.auctioneer,
-                AuctionRequest::Bidder {
-                    offset: message.start_from_page,
-                    outbid_auction_ids: message.outbid_item_ids,
-                },
-            )
-        }
+        ClientOpcodeMessage::CMSG_AUCTION_LIST_BIDDER_ITEMS(message) => (
+            message.auctioneer,
+            AuctionRequest::Bidder {
+                offset: message.start_from_page,
+                outbid_auction_ids: message.outbid_item_ids,
+            },
+        ),
         ClientOpcodeMessage::CMSG_AUCTION_PLACE_BID(message) => {
             let auction_id = message.auction_id;
             let auctioneer_guid = message.auctioneer.guid();
-            let Some(player_guid) =
+            let Some((player_guid, house)) =
                 validated_auction_player_guid(store, player, auctioneer_guid)?
             else {
                 return Ok(bid_result(auction_id, PlaceBidOutcome::Database));
@@ -417,6 +472,7 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
                 auctioneer_guid,
                 auction_id,
                 offer: message.price.as_int(),
+                house_id: house.id,
             }) {
                 Ok(outcome) => outcome,
                 Err(error)
@@ -431,7 +487,7 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
         }
         ClientOpcodeMessage::CMSG_AUCTION_SELL_ITEM(message) => {
             let auctioneer_guid = message.auctioneer.guid();
-            let Some(player_guid) =
+            let Some((player_guid, house)) =
                 validated_auction_player_guid(store, player, auctioneer_guid)?
             else {
                 return Ok(create_result(CreateAuctionOutcome::Database));
@@ -443,6 +499,7 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
                 start_bid: message.starting_bid,
                 buyout: message.buyout,
                 duration_minutes: message.auction_duration_in_minutes,
+                house_id: house.id,
             }) {
                 Ok(outcome) => outcome,
                 Err(error)
@@ -458,7 +515,8 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
         other => return Ok(AuctionActionOutcome::PassThrough(other)),
     };
     let auctioneer_guid = auctioneer.guid();
-    let Some(player_guid) = validated_auction_player_guid(store, player, auctioneer_guid)? else {
+    let Some((player_guid, house)) = validated_auction_player_guid(store, player, auctioneer_guid)?
+    else {
         return Ok(AuctionActionOutcome::Handled {
             outbound: Vec::new(),
         });
@@ -468,12 +526,13 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
         AuctionRequest::Hello(auctioneer) => {
             ServerOpcodeMessage::MSG_AUCTION_HELLO(Box::new(MSG_AUCTION_HELLO_Server {
                 auctioneer,
-                auction_house: AuctionHouse::try_from(lyracore_shared::auction::STORMWIND_HOUSE_ID)
-                    .expect("the shared Stormwind house id must be a vanilla AuctionHouse"),
+                auction_house: AuctionHouse::try_from(house.id)
+                    .map_err(|error| anyhow!("imported auction house {}: {error}", house.id))?,
             }))
         }
         AuctionRequest::Owner(offset) => {
-            let page = store.auction_query(player_guid, AuctionQuery::Owner { offset })?;
+            let page =
+                store.auction_query(player_guid, house.id, AuctionQuery::Owner { offset })?;
             ServerOpcodeMessage::SMSG_AUCTION_OWNER_LIST_RESULT(Box::new(
                 codec::build_auction_owner_list_result(&page.rows, page.total, page.now_micros),
             ))
@@ -484,17 +543,14 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
         } => {
             let page = store.auction_query(
                 player_guid,
+                house.id,
                 AuctionQuery::Bidder {
                     offset,
                     outbid_auction_ids,
                 },
             )?;
             ServerOpcodeMessage::SMSG_AUCTION_BIDDER_LIST_RESULT(Box::new(
-                codec::build_auction_bidder_list_result(
-                    &page.rows,
-                    page.total,
-                    page.now_micros,
-                ),
+                codec::build_auction_bidder_list_result(&page.rows, page.total, page.now_micros),
             ))
         }
     };
@@ -503,27 +559,27 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
     })
 }
 
-fn interaction_allowed(entities: Option<AuctionInteraction>) -> bool {
-    let Some(AuctionInteraction {
+fn interaction_allowed(entities: AuctionInteraction) -> bool {
+    let AuctionInteraction {
         player: actor,
         auctioneer,
-    }) = entities
-    else {
-        return false;
-    };
+        refuses_interaction,
+        ..
+    } = entities;
     let dx = actor.x - auctioneer.x;
     let dy = actor.y - auctioneer.y;
     let dz = actor.z - auctioneer.z;
     actor.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0
         && !actor.dead
-        && lyracore_shared::faction::team_for_race(actor.race)
-            == lyracore_shared::faction::TEAM_ALLIANCE
+        && actor.health != 0
+        && !refuses_interaction
         && auctioneer.type_mask & lyracore_shared::constants::type_mask::CREATURE
             == lyracore_shared::constants::type_mask::CREATURE
         && auctioneer.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT == 0
         && !auctioneer.dead
+        && auctioneer.health != 0
+        && auctioneer.unit_flags & lyracore_shared::constants::unit_flags::NOT_SELECTABLE == 0
         && auctioneer.npc_flags & lyracore_shared::constants::npc_flags::AUCTIONEER != 0
-        && lyracore_shared::auction::is_stormwind_auctioneer(auctioneer.entry)
         && actor.map_id == auctioneer.map_id
         && actor.instance_id == auctioneer.instance_id
         && dx * dx + dy * dy + dz * dz <= lyracore_shared::auction::INTERACTION_RANGE_SQ
@@ -533,6 +589,7 @@ fn interaction_allowed(entities: Option<AuctionInteraction>) -> bool {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    use wow_world_messages::shared::Gold;
     use wow_world_messages::vanilla::{
         Guid, MSG_AUCTION_HELLO_Client, SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction,
         SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult,
@@ -540,7 +597,6 @@ mod tests {
         CMSG_AUCTION_LIST_ITEMS, CMSG_AUCTION_LIST_OWNER_ITEMS, CMSG_AUCTION_PLACE_BID,
         CMSG_AUCTION_SELL_ITEM,
     };
-    use wow_world_messages::shared::Gold;
 
     struct InMemoryAuctionActions {
         result: Mutex<Result<Option<AuctionInteraction>, String>>,
@@ -550,7 +606,7 @@ mod tests {
         bids: Mutex<Vec<PlaceBidRequest>>,
         bid_result: Mutex<Result<PlaceBidOutcome, String>>,
         query_result: Mutex<Result<AuctionPage, String>>,
-        queries: Mutex<Vec<(u64, AuctionQuery)>>,
+        queries: Mutex<Vec<(u64, u32, AuctionQuery)>>,
     }
 
     impl AuctionActionStore for InMemoryAuctionActions {
@@ -591,8 +647,16 @@ mod tests {
                 .map_err(|error| anyhow::anyhow!(error.clone()))
         }
 
-        fn auction_query(&self, player_guid: u64, query: AuctionQuery) -> Result<AuctionPage> {
-            self.queries.lock().unwrap().push((player_guid, query));
+        fn auction_query(
+            &self,
+            player_guid: u64,
+            house_id: u32,
+            query: AuctionQuery,
+        ) -> Result<AuctionPage> {
+            self.queries
+                .lock()
+                .unwrap()
+                .push((player_guid, house_id, query));
             self.query_result
                 .lock()
                 .unwrap()
@@ -606,16 +670,22 @@ mod tests {
         AuctionInteraction {
             player: AuctionEntity {
                 type_mask: lyracore_shared::constants::type_mask::PLAYER,
-                race: 1,
+                health: 1,
                 ..Default::default()
             },
             auctioneer: AuctionEntity {
                 type_mask: lyracore_shared::constants::type_mask::CREATURE,
-                entry: 8_670,
                 npc_flags: lyracore_shared::constants::npc_flags::AUCTIONEER,
+                health: 1,
                 x: 10.0,
                 ..Default::default()
             },
+            house: AuctionHousePolicy {
+                id: 4,
+                deposit_rate: 5,
+                consignment_rate: 5,
+            },
+            refuses_interaction: false,
         }
     }
 
@@ -742,7 +812,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             store.queries.lock().unwrap().as_slice(),
-            &[(7, AuctionQuery::Browse(request))]
+            &[(7, 4, AuctionQuery::Browse(request))]
         );
         let AuctionActionOutcome::Handled { outbound } = outcome else {
             panic!("browse must be handled")
@@ -789,7 +859,7 @@ mod tests {
 
         assert_eq!(
             store.queries.lock().unwrap().as_slice(),
-            &[(7, AuctionQuery::Owner { offset: 50 })]
+            &[(7, 4, AuctionQuery::Owner { offset: 50 })]
         );
         let AuctionActionOutcome::Handled { outbound } = outcome else {
             panic!("owner view must be handled")
@@ -840,6 +910,7 @@ mod tests {
             store.queries.lock().unwrap().as_slice(),
             &[(
                 8,
+                4,
                 AuctionQuery::Bidder {
                     offset: 50,
                     outbid_auction_ids: vec![19, 88],
@@ -916,7 +987,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reachable_stormwind_auctioneer_opens_the_named_house() {
+    fn a_reachable_auctioneer_opens_its_imported_house() {
         let store = store_with(Some(valid_interaction()));
         let outcome = dispatch_auction_action(
             &store,
@@ -936,7 +1007,7 @@ mod tests {
             panic!("auction hello must reply with MSG_AUCTION_HELLO");
         };
         assert_eq!(message.auctioneer.guid(), 42);
-        assert_eq!(message.auction_house.as_int(), 1);
+        assert_eq!(message.auction_house.as_int(), 4);
         assert_eq!(store.lookups.lock().unwrap().as_slice(), &[(7, 42)]);
     }
 
@@ -1015,6 +1086,7 @@ mod tests {
                 start_bid: 100,
                 buyout: 500,
                 duration_minutes: 720,
+                house_id: 4,
             }]
         );
     }
@@ -1030,6 +1102,7 @@ mod tests {
                 auctioneer_guid: 42,
                 auction_id: 41,
                 offer: 107,
+                house_id: 4,
             }]
         );
         assert!(matches!(
@@ -1208,6 +1281,8 @@ mod tests {
         let AuctionInteraction {
             player: valid_actor,
             auctioneer: valid_auctioneer,
+            house,
+            refuses_interaction,
         } = valid_interaction();
         let cases = [
             AuctionInteraction {
@@ -1216,13 +1291,8 @@ mod tests {
                     ..valid_actor
                 },
                 auctioneer: valid_auctioneer,
-            },
-            AuctionInteraction {
-                player: AuctionEntity {
-                    race: 2,
-                    ..valid_actor
-                },
-                auctioneer: valid_auctioneer,
+                house,
+                refuses_interaction,
             },
             AuctionInteraction {
                 player: AuctionEntity {
@@ -1230,6 +1300,8 @@ mod tests {
                     ..valid_actor
                 },
                 auctioneer: valid_auctioneer,
+                house,
+                refuses_interaction,
             },
             AuctionInteraction {
                 player: valid_actor,
@@ -1237,6 +1309,14 @@ mod tests {
                     dead: true,
                     ..valid_auctioneer
                 },
+                house,
+                refuses_interaction,
+            },
+            AuctionInteraction {
+                player: valid_actor,
+                auctioneer: valid_auctioneer,
+                house,
+                refuses_interaction: true,
             },
             AuctionInteraction {
                 player: valid_actor,
@@ -1244,6 +1324,8 @@ mod tests {
                     type_mask: lyracore_shared::constants::type_mask::PLAYER,
                     ..valid_auctioneer
                 },
+                house,
+                refuses_interaction,
             },
             AuctionInteraction {
                 player: valid_actor,
@@ -1251,6 +1333,8 @@ mod tests {
                     type_mask: lyracore_shared::constants::type_mask::OBJECT,
                     ..valid_auctioneer
                 },
+                house,
+                refuses_interaction,
             },
             AuctionInteraction {
                 player: valid_actor,
@@ -1258,6 +1342,8 @@ mod tests {
                     npc_flags: 0,
                     ..valid_auctioneer
                 },
+                house,
+                refuses_interaction,
             },
             AuctionInteraction {
                 player: valid_actor,
@@ -1265,6 +1351,8 @@ mod tests {
                     map_id: 1,
                     ..valid_auctioneer
                 },
+                house,
+                refuses_interaction,
             },
             AuctionInteraction {
                 player: valid_actor,
@@ -1272,6 +1360,8 @@ mod tests {
                     instance_id: 1,
                     ..valid_auctioneer
                 },
+                house,
+                refuses_interaction,
             },
             AuctionInteraction {
                 player: valid_actor,
@@ -1279,6 +1369,8 @@ mod tests {
                     x: 10.01,
                     ..valid_auctioneer
                 },
+                house,
+                refuses_interaction,
             },
         ];
 
@@ -1293,34 +1385,26 @@ mod tests {
     }
 
     #[test]
-    fn only_supported_stormwind_auctioneers_open_the_market() {
+    fn auctioneer_entry_is_not_part_of_market_selection() {
         let AuctionInteraction {
             player,
             auctioneer,
+            house,
+            refuses_interaction,
         } = valid_interaction();
 
-        for entry in [8_670, 8_719, 15_659] {
+        for entry in [8_670, 9_858, 15_675] {
             let outbound = hello_outbound(&store_with(Some(AuctionInteraction {
                 player,
                 auctioneer: AuctionEntity {
                     entry,
                     ..auctioneer
                 },
+                house,
+                refuses_interaction,
             })))
             .unwrap();
-            assert_eq!(outbound.len(), 1, "Stormwind auctioneer {entry}");
-        }
-
-        for entry in [9_858, 15_675] {
-            assert!(hello_outbound(&store_with(Some(AuctionInteraction {
-                player,
-                auctioneer: AuctionEntity {
-                    entry,
-                    ..auctioneer
-                },
-            })))
-            .unwrap()
-            .is_empty(), "unsupported auctioneer {entry} must be refused");
+            assert_eq!(outbound.len(), 1, "import-resolved auctioneer {entry}");
         }
     }
 

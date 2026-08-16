@@ -68,8 +68,8 @@ routing fact; module game logic never reads one, and a tripwire test fails the b
 
 ### 2.1 The module owns
 
-- **Every durable table** — 175 `#[table]` declarations (166 in the core module, plus 9
-  contributed by in-tree extension packages), of which 108 are `public` and 67 private. Full
+- **Every durable table** — 176 `#[table]` declarations (167 in the core module, plus 9
+  contributed by in-tree extension packages), of which 109 are `public` and 67 private. Full
   inventory is covered in depth in the maintainers' internal docs; §4 below is the summary.
 - **Every state transition** — 240 `#[reducer]` functions in the core module (116 of them in a
   default build, the rest behind the `debug_reducers` feature), plus more from any installed
@@ -262,9 +262,9 @@ connectivity.
 Full inventory and the load-bearing row shapes are covered in depth in the maintainers' internal
 docs. The summary:
 
-- **175 tables**, `game_`-prefixed for core and `pkg_<name>_`-prefixed for packages. External gtker
+- **176 tables**, `game_`-prefixed for core and `pkg_<name>_`-prefixed for packages. External gtker
   crates keep their `wow_` names and are never renamed.
-- **108 public / 67 private.** `public` means "subscribable by a client connection". Private tables
+- **109 public / 67 private.** `public` means "subscribable by a client connection". Private tables
   (`game_account`, `game_session`, `game_operator`, every region/transfer/instance/realm-core table)
   are readable only over the owner token.
 - **16 `#[client_visibility_filter]` RLS filters**, every one of the same shape

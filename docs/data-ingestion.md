@@ -71,7 +71,9 @@ confusion to avoid:
 
 - **From DBCs (the server-computed subset):** spells, talents, areas, faction-template relations,
   creature displays/scales/model bounds, map and start-position data, stat curves, and the complete
-  taxi catalogue. `TaxiNodes.dbc` supplies each node's map position, name, and faction mount
+  taxi and auction-house catalogues. `AuctionHouse.dbc` supplies each market's id, parent faction,
+  deposit percentage, consignment percentage, and localized name. `TaxiNodes.dbc` supplies each
+  node's map position, name, and faction mount
   displays; its DBC id becomes both the storage id and the bounded client/wire id. `TaxiPath.dbc`
   supplies directed endpoints and fares; `TaxiPathNode.dbc` supplies ordered geometry, raw signed
   `int32` flag containers, and non-negative signed `int32` delays.

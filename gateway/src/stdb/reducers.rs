@@ -291,6 +291,8 @@ impl Coordinator {
                 operation_id,
                 request.actor_guid,
                 request.item_guid,
+                request.auctioneer_guid,
+                request.house_id,
                 request.start_bid,
                 request.buyout,
                 request.duration_minutes
@@ -310,6 +312,8 @@ impl Coordinator {
                 operation_id,
                 request.actor_guid,
                 request.item_guid,
+                request.auctioneer_guid,
+                request.house_id,
                 request.start_bid,
                 request.buyout,
                 request.duration_minutes
@@ -330,6 +334,9 @@ impl Coordinator {
                 hold.item_durability,
                 hold.item_enchant_id,
                 hold.item_soulbound,
+                hold.house,
+                hold.deposit_rate,
+                hold.consignment_rate,
                 hold.start_bid,
                 hold.buyout,
                 hold.duration_minutes,
@@ -487,7 +494,9 @@ impl Coordinator {
             gw_auction_bid_local_then(
                 operation_id,
                 request.actor_guid,
+                request.auctioneer_guid,
                 request.auction_id,
+                request.house_id,
                 request.offer
             )
         )
@@ -504,7 +513,9 @@ impl Coordinator {
             gw_auction_hold_bid_then(
                 operation_id,
                 request.actor_guid,
+                request.auctioneer_guid,
                 request.auction_id,
+                request.house_id,
                 request.offer
             )
         )
@@ -518,6 +529,7 @@ impl Coordinator {
                 hold.operation_id,
                 hold.bidder_guid,
                 hold.auction_id,
+                hold.house,
                 hold.offer
             )
         )
@@ -538,6 +550,7 @@ impl Coordinator {
                 hold.operation_id,
                 hold.bidder_guid,
                 hold.auction_id,
+                hold.house,
                 hold.offer,
                 decision.outcome,
                 decision.revision,
@@ -557,6 +570,7 @@ impl Coordinator {
                 hold.operation_id,
                 hold.bidder_guid,
                 hold.auction_id,
+                hold.house,
                 hold.offer,
                 hold.deferred_refund
             )
@@ -571,6 +585,7 @@ impl Coordinator {
                 hold.operation_id,
                 hold.bidder_guid,
                 hold.auction_id,
+                hold.house,
                 hold.offer,
                 hold.deferred_refund
             )
@@ -592,6 +607,7 @@ impl Coordinator {
                     || hold.deferred_refund != 0)
                     && hold.bidder_guid == request.actor_guid
                     && hold.auction_id == request.auction_id
+                    && hold.house == request.house_id
                     && hold.offer == request.offer
             })
     }
@@ -2891,6 +2907,7 @@ trait AuctionRequestFields {
     fn start_bid(&self) -> u32;
     fn buyout(&self) -> u32;
     fn duration_minutes(&self) -> u32;
+    fn house_id(&self) -> u32;
 }
 
 impl AuctionRequestFields for AuctionHold {
@@ -2908,6 +2925,9 @@ impl AuctionRequestFields for AuctionHold {
     }
     fn duration_minutes(&self) -> u32 {
         self.duration_minutes
+    }
+    fn house_id(&self) -> u32 {
+        self.house
     }
 }
 
@@ -2927,6 +2947,9 @@ impl AuctionRequestFields for AuctionOperationReceipt {
     fn duration_minutes(&self) -> u32 {
         self.duration_minutes
     }
+    fn house_id(&self) -> u32 {
+        self.house
+    }
 }
 
 fn same_auction_request(
@@ -2938,6 +2961,7 @@ fn same_auction_request(
         && row.start_bid() == request.start_bid
         && row.buyout() == request.buyout
         && row.duration_minutes() == request.duration_minutes
+        && row.house_id() == request.house_id
 }
 
 fn next_auction_operation_id() -> Result<u64> {
@@ -2970,6 +2994,7 @@ fn bid_payload_matches(hold: &AuctionBidHold, decision: &AuctionBidDecision) -> 
     hold.operation_id == decision.operation_id
         && hold.bidder_guid == decision.bidder_guid
         && hold.auction_id == decision.auction_id
+        && hold.house == decision.house
         && hold.offer == decision.offer
 }
 
@@ -3072,6 +3097,7 @@ mod auction_reducer_tests {
             operation_id: 7,
             bidder_guid: 8,
             auction_id: 9,
+            house: 4,
             offer: 10,
             outcome: lyracore_shared::auction::bid_outcome::BID_INCREMENT,
             revision: 0,
@@ -3085,6 +3111,7 @@ mod auction_reducer_tests {
             operation_id: hold.operation_id,
             bidder_guid: hold.bidder_guid,
             auction_id: hold.auction_id,
+            house: hold.house,
             offer: hold.offer,
             outcome: hold.outcome,
             revision: hold.revision,
@@ -3129,6 +3156,7 @@ mod auction_reducer_tests {
             operation_id: 7,
             bidder_guid: 8,
             auction_id: 9,
+            house: 4,
             offer: 900,
             outcome: lyracore_shared::auction::bid_outcome::ACCEPTED,
             revision: 0,

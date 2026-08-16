@@ -1,4 +1,4 @@
-//! Durable Stormwind auctions, value-preserving bid transport, and atomic buyout settlement.
+//! Durable imported auction houses, value-preserving bid transport, and atomic settlement.
 
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
@@ -7,11 +7,22 @@ use lyracore_shared::auction::bid_outcome::{
     HIGHER_BID as BID_HIGHER, ITEM_NOT_FOUND as BID_ITEM_NOT_FOUND, PENDING as BID_PENDING,
 };
 
-use crate::{game_item_instance, game_item_template, game_world_entity};
 #[cfg(feature = "debug_reducers")]
 use crate::mail::game_mail;
+use crate::{game_faction_template, game_item_instance, game_item_template, game_world_entity};
 
-/// One active listing in the shared Stormwind market. The complete item-instance snapshot is the
+/// Client-authored auction-house policy imported from `AuctionHouse.dbc`.
+#[table(accessor = game_auction_house, public)]
+pub struct AuctionHouseDefinition {
+    #[primary_key]
+    pub id: u32,
+    pub faction: u32,
+    pub deposit_rate: u32,
+    pub consignment_rate: u32,
+    pub name: String,
+}
+
+/// One active listing in its imported house market. The complete item-instance snapshot is the
 /// item while it is listed; no inventory row exists until ordinary mail returns or delivers it.
 #[table(
     accessor = game_auction,
@@ -40,6 +51,8 @@ pub struct Auction {
     pub created_at: Timestamp,
     pub expires_at: Timestamp,
     pub revision: u64,
+    pub deposit_rate: u32,
+    pub consignment_rate: u32,
 }
 
 /// Source-shard value reserved by a sharded listing operation. A matching operation receipt makes
@@ -65,6 +78,9 @@ pub struct AuctionHold {
     pub deposit: u32,
     pub created_micros: i64,
     pub expires_micros: i64,
+    pub house: u32,
+    pub deposit_rate: u32,
+    pub consignment_rate: u32,
 }
 
 /// Durable idempotency receipt. The full listing payload makes identical replay distinguishable
@@ -90,6 +106,9 @@ pub struct AuctionOperationReceipt {
     pub deposit: u32,
     pub created_micros: i64,
     pub expires_micros: i64,
+    pub house: u32,
+    pub deposit_rate: u32,
+    pub consignment_rate: u32,
 }
 
 /// Source-shard copper fence for one caller-identified bid. `outcome == 0` is pending; every
@@ -114,6 +133,7 @@ pub struct AuctionBidHold {
     pub deferred_refund: u32,
     #[default(0)]
     pub accepted_price: u32,
+    pub house: u32,
 }
 
 /// Realm-core's terminal serialized decision for one bid payload. Auction changes, buyout mail,
@@ -134,6 +154,7 @@ pub struct AuctionBidDecision {
     pub deferred_refund: u32,
     #[default(0)]
     pub accepted_price: u32,
+    pub house: u32,
 }
 
 /// One one-shot scheduler row for each active Auction.
@@ -163,25 +184,121 @@ fn duration_multiplier(duration_minutes: u32) -> Option<u64> {
     }
 }
 
-fn listing_deposit(sell_price: u32, stack_count: u32, duration_minutes: u32) -> Option<u32> {
+fn valid_rate(rate: u32) -> bool {
+    rate <= 100
+}
+
+fn listing_deposit(
+    sell_price: u32,
+    stack_count: u32,
+    duration_minutes: u32,
+    deposit_rate: u32,
+) -> Option<u32> {
+    if !valid_rate(deposit_rate) {
+        return None;
+    }
     let multiplier = duration_multiplier(duration_minutes)?;
     let deposit = u64::from(sell_price)
         .checked_mul(u64::from(stack_count))?
-        .checked_mul(5)?
+        .checked_mul(u64::from(deposit_rate))?
         .checked_mul(multiplier)?
         / 100;
     u32::try_from(deposit.max(1)).ok()
 }
 
-fn seller_proceeds(winning_price: u32, deposit: u32) -> Option<u32> {
-    let cut = u64::from(winning_price).checked_mul(5)? / 100;
+fn seller_proceeds(winning_price: u32, deposit: u32, consignment_rate: u32) -> Option<u32> {
+    if !valid_rate(consignment_rate) {
+        return None;
+    }
+    let cut = u64::from(winning_price).checked_mul(u64::from(consignment_rate))? / 100;
     let after_cut = u64::from(winning_price).checked_sub(cut)?;
     u32::try_from(after_cut.checked_add(u64::from(deposit))?).ok()
 }
 
-fn listing_proceeds_are_representable(terms: ListingTerms, deposit: u32) -> bool {
-    seller_proceeds(terms.start_bid, deposit).is_some()
-        && (terms.buyout == 0 || seller_proceeds(terms.buyout, deposit).is_some())
+fn listing_proceeds_are_representable(
+    terms: ListingTerms,
+    deposit: u32,
+    consignment_rate: u32,
+) -> bool {
+    seller_proceeds(terms.start_bid, deposit, consignment_rate).is_some()
+        && (terms.buyout == 0 || seller_proceeds(terms.buyout, deposit, consignment_rate).is_some())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AuctionHousePolicy {
+    id: u32,
+    deposit_rate: u32,
+    consignment_rate: u32,
+}
+
+fn imported_house_policy(ctx: &ReducerContext, house: u32) -> Result<AuctionHousePolicy, String> {
+    let row = ctx
+        .db
+        .game_auction_house()
+        .id()
+        .find(house)
+        .ok_or_else(|| {
+            tagged(
+                ListingRefusal::InvalidTerms,
+                "auction house is not imported",
+            )
+        })?;
+    if row.id == 0 || !valid_rate(row.deposit_rate) || !valid_rate(row.consignment_rate) {
+        return Err(tagged(
+            ListingRefusal::InvalidTerms,
+            "imported auction house policy is invalid",
+        ));
+    }
+    Ok(AuctionHousePolicy {
+        id: row.id,
+        deposit_rate: row.deposit_rate,
+        consignment_rate: row.consignment_rate,
+    })
+}
+
+fn auction_house_for_interaction(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    auctioneer_guid: u64,
+) -> Option<AuctionHousePolicy> {
+    let player = crate::helpers::acting_entity_by_guid(ctx, player_guid)?;
+    let auctioneer = ctx.db.game_world_entity().guid().find(auctioneer_guid)?;
+    if !player.is_player()
+        || player.dead
+        || player.health == 0
+        || auctioneer.dead
+        || auctioneer.health == 0
+        || auctioneer.is_player()
+        || auctioneer.type_mask & lyracore_shared::constants::type_mask::CREATURE
+            != lyracore_shared::constants::type_mask::CREATURE
+        || auctioneer.npc_flags & lyracore_shared::constants::npc_flags::AUCTIONEER == 0
+        || auctioneer.unit_flags & lyracore_shared::constants::unit_flags::NOT_SELECTABLE != 0
+        || player.map_id != auctioneer.map_id
+        || player.instance_id != auctioneer.instance_id
+        || crate::helpers::dist_sq(&player, &auctioneer)
+            > lyracore_shared::auction::INTERACTION_RANGE_SQ
+        || crate::reputation::npc_refuses_interaction(ctx, &auctioneer, &player)
+    {
+        return None;
+    }
+    let faction = ctx
+        .db
+        .game_faction_template()
+        .id()
+        .find(auctioneer.faction_template)?
+        .faction;
+    ctx.db
+        .game_auction_house()
+        .iter()
+        .find(|house| house.faction == faction)
+        .filter(|house| {
+            house.id != 0 && valid_rate(house.deposit_rate) && valid_rate(house.consignment_rate)
+        })
+        .map(|house| AuctionHousePolicy {
+            id: house.id,
+            deposit_rate: house.deposit_rate,
+            consignment_rate: house.consignment_rate,
+        })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -216,6 +333,7 @@ struct ListingRequest {
     operation_id: u64,
     seller_guid: u64,
     item_guid: u64,
+    house: AuctionHousePolicy,
     terms: ListingTerms,
 }
 
@@ -251,12 +369,14 @@ struct BidRequest {
     operation_id: u64,
     bidder_guid: u64,
     auction_id: u32,
+    house: u32,
     offer: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BidAuction {
     id: u32,
+    house: u32,
     owner_guid: u64,
     item: crate::items::ItemSnapshot,
     highest_bidder_guid: u64,
@@ -264,6 +384,7 @@ struct BidAuction {
     start_bid: u32,
     buyout: u32,
     deposit: u32,
+    consignment_rate: u32,
     expires_micros: i64,
     revision: u64,
 }
@@ -321,8 +442,9 @@ fn sale_settlement_mail(
     winner_guid: u64,
     winning_price: u32,
     deposit: u32,
+    consignment_rate: u32,
 ) -> Option<[AuctionMail; 2]> {
-    let proceeds = seller_proceeds(winning_price, deposit)?;
+    let proceeds = seller_proceeds(winning_price, deposit, consignment_rate)?;
     Some([
         AuctionMail {
             recipient_guid: winner_guid,
@@ -355,6 +477,7 @@ fn buyout_settlement_mail(
         winner_guid,
         price,
         auction.deposit,
+        auction.consignment_rate,
     )
 }
 
@@ -500,11 +623,8 @@ trait BidSource {
     fn money(&self, bidder_guid: u64) -> Option<u32>;
     fn hold(&self, operation_id: u64) -> Option<HeldBid>;
     fn create_hold(&mut self, request: BidRequest) -> Result<(), BidRefusal>;
-    fn finish_hold(
-        &mut self,
-        request: BidRequest,
-        decision: BidDecision,
-    ) -> Result<(), BidRefusal>;
+    fn finish_hold(&mut self, request: BidRequest, decision: BidDecision)
+        -> Result<(), BidRefusal>;
     fn confirm_refund(&mut self, request: BidRequest) -> Result<(), BidRefusal>;
 }
 
@@ -512,6 +632,7 @@ fn fence_bid<S: BidSource>(source: &mut S, request: BidRequest) -> Result<(), Bi
     if request.operation_id == 0
         || request.bidder_guid == 0
         || request.auction_id == 0
+        || request.house == 0
         || request.offer == 0
     {
         return Err(BidRefusal::Database);
@@ -579,12 +700,15 @@ fn decide_bid(auction: Option<BidAuction>, request: BidRequest, now_micros: i64)
     if request.operation_id == 0
         || request.bidder_guid == 0
         || request.auction_id == 0
+        || request.house == 0
         || request.offer == 0
     {
         return BidDecision::Database;
     }
     let Some(auction) = auction.filter(|auction| {
-        auction.id == request.auction_id && auction.expires_micros > now_micros
+        auction.id == request.auction_id
+            && auction.house == request.house
+            && auction.expires_micros > now_micros
     }) else {
         return BidDecision::ItemNotFound;
     };
@@ -609,7 +733,7 @@ fn decide_bid(auction: Option<BidAuction>, request: BidRequest, now_micros: i64)
         };
     }
     if is_buyout {
-        if seller_proceeds(auction.buyout, auction.deposit).is_none() {
+        if seller_proceeds(auction.buyout, auction.deposit, auction.consignment_rate).is_none() {
             return BidDecision::Database;
         }
         return BidDecision::Accepted(BidAcceptance {
@@ -625,7 +749,7 @@ fn decide_bid(auction: Option<BidAuction>, request: BidRequest, now_micros: i64)
     if request.offer < minimum {
         return BidDecision::BidIncrement;
     }
-    if seller_proceeds(request.offer, auction.deposit).is_none() {
+    if seller_proceeds(request.offer, auction.deposit, auction.consignment_rate).is_none() {
         return BidDecision::Database;
     }
     let Some(revision) = auction.revision.checked_add(1) else {
@@ -652,15 +776,8 @@ trait BidMarket {
 }
 
 trait BidRefundSink {
-    fn refund_decision(
-        &self,
-        operation_id: u64,
-    ) -> Option<(BidRequest, BidDecision, u32)>;
-    fn commit_refund(
-        &mut self,
-        request: BidRequest,
-        amount: u32,
-    ) -> Result<(), BidRefusal>;
+    fn refund_decision(&self, operation_id: u64) -> Option<(BidRequest, BidDecision, u32)>;
+    fn commit_refund(&mut self, request: BidRequest, amount: u32) -> Result<(), BidRefusal>;
 }
 
 fn relay_bid_refund<S: BidRefundSink>(
@@ -773,7 +890,7 @@ fn prepare_from_source<S: ListingSource>(
     sink: &S,
     request: ListingRequest,
 ) -> Result<PreparedListing, ListingRefusal> {
-    if request.operation_id == 0 {
+    if request.operation_id == 0 || request.house.id == 0 {
         return Err(ListingRefusal::InvalidTerms);
     }
     let item = sink.item(request.item_guid);
@@ -785,6 +902,7 @@ fn prepare_from_source<S: ListingSource>(
         request.seller_guid,
         seller_money,
         request.terms,
+        request.house,
     )?;
     let created_micros = sink.now_micros();
     let expires_micros = i64::from(request.terms.duration_minutes)
@@ -930,6 +1048,7 @@ fn expiry_completion(auction: &ActiveAuction) -> Result<ExpiryCompletion, String
                 winner_guid,
                 winning_price,
                 auction.listing.deposit,
+                auction.listing.request.house.consignment_rate,
             )
             .map(ExpiryCompletion::Sold)
             .ok_or_else(|| format!("auction {} sale settlement overflow", auction.id))
@@ -965,6 +1084,11 @@ fn listing_from_hold(row: AuctionHold) -> PreparedListing {
             operation_id: row.operation_id,
             seller_guid: row.seller_guid,
             item_guid: row.item_guid,
+            house: AuctionHousePolicy {
+                id: row.house,
+                deposit_rate: row.deposit_rate,
+                consignment_rate: row.consignment_rate,
+            },
             terms: ListingTerms {
                 start_bid: row.start_bid,
                 buyout: row.buyout,
@@ -1000,6 +1124,9 @@ fn hold_from_listing(listing: PreparedListing) -> AuctionHold {
         deposit: listing.deposit,
         created_micros: listing.created_micros,
         expires_micros: listing.expires_micros,
+        house: listing.request.house.id,
+        deposit_rate: listing.request.house.deposit_rate,
+        consignment_rate: listing.request.house.consignment_rate,
     }
 }
 
@@ -1010,6 +1137,11 @@ fn listing_from_receipt(row: AuctionOperationReceipt) -> ListingReceipt {
                 operation_id: row.operation_id,
                 seller_guid: row.actor_guid,
                 item_guid: row.item_guid,
+                house: AuctionHousePolicy {
+                    id: row.house,
+                    deposit_rate: row.deposit_rate,
+                    consignment_rate: row.consignment_rate,
+                },
                 terms: ListingTerms {
                     start_bid: row.start_bid,
                     buyout: row.buyout,
@@ -1048,6 +1180,9 @@ fn receipt_from_listing(listing: PreparedListing, auction_id: u32) -> AuctionOpe
         deposit: listing.deposit,
         created_micros: listing.created_micros,
         expires_micros: listing.expires_micros,
+        house: listing.request.house.id,
+        deposit_rate: listing.request.house.deposit_rate,
+        consignment_rate: listing.request.house.consignment_rate,
     }
 }
 
@@ -1085,7 +1220,7 @@ fn insert_active_auction(ctx: &ReducerContext, listing: &PreparedListing) -> u32
     let auction = ctx.db.game_auction().insert(Auction {
         id: 0,
         listing_operation_id: listing.request.operation_id,
-        house: lyracore_shared::auction::STORMWIND_HOUSE_ID,
+        house: listing.request.house.id,
         owner_guid: listing.request.seller_guid,
         item_guid: listing.request.item_guid,
         item_entry: listing.snapshot.entry,
@@ -1101,6 +1236,8 @@ fn insert_active_auction(ctx: &ReducerContext, listing: &PreparedListing) -> u32
         created_at,
         expires_at,
         revision: 0,
+        deposit_rate: listing.request.house.deposit_rate,
+        consignment_rate: listing.request.house.consignment_rate,
     });
     ctx.db.game_auction_expiry().insert(AuctionExpiry {
         scheduled_id: 0,
@@ -1226,6 +1363,7 @@ impl BidSource for CtxBidSource<'_> {
                     operation_id: row.operation_id,
                     bidder_guid: row.bidder_guid,
                     auction_id: row.auction_id,
+                    house: row.house,
                     offer: row.offer,
                 },
                 decision: held_bid_decision(&row),
@@ -1245,6 +1383,7 @@ impl BidSource for CtxBidSource<'_> {
             operation_id: request.operation_id,
             bidder_guid: request.bidder_guid,
             auction_id: request.auction_id,
+            house: request.house,
             offer: request.offer,
             outcome: BID_PENDING,
             revision: 0,
@@ -1282,6 +1421,7 @@ impl BidSource for CtxBidSource<'_> {
                 operation_id: request.operation_id,
                 bidder_guid: request.bidder_guid,
                 auction_id: request.auction_id,
+                house: request.house,
                 offer: request.offer,
                 outcome: fields.outcome,
                 revision: fields.revision,
@@ -1304,6 +1444,7 @@ impl BidSource for CtxBidSource<'_> {
             .ok_or(BidRefusal::Database)?;
         if row.bidder_guid != request.bidder_guid
             || row.auction_id != request.auction_id
+            || row.house != request.house
             || row.offer != request.offer
         {
             return Err(BidRefusal::Database);
@@ -1336,6 +1477,7 @@ impl BidMarket for CtxBidMarket<'_> {
                 operation_id: row.operation_id,
                 bidder_guid: row.bidder_guid,
                 auction_id: row.auction_id,
+                house: row.house,
                 offer: row.offer,
             },
             decision,
@@ -1348,9 +1490,9 @@ impl BidMarket for CtxBidMarket<'_> {
             .game_auction()
             .id()
             .find(auction_id)
-            .filter(|auction| auction.house == lyracore_shared::auction::STORMWIND_HOUSE_ID)
             .map(|auction| BidAuction {
                 id: auction.id,
+                house: auction.house,
                 owner_guid: auction.owner_guid,
                 item: crate::items::ItemSnapshot {
                     entry: auction.item_entry,
@@ -1364,6 +1506,7 @@ impl BidMarket for CtxBidMarket<'_> {
                 start_bid: auction.start_bid,
                 buyout: auction.buyout,
                 deposit: auction.deposit,
+                consignment_rate: auction.consignment_rate,
                 expires_micros: auction.expires_at.to_micros_since_unix_epoch(),
                 revision: auction.revision,
             })
@@ -1431,6 +1574,7 @@ impl BidMarket for CtxBidMarket<'_> {
                 operation_id: request.operation_id,
                 bidder_guid: request.bidder_guid,
                 auction_id: request.auction_id,
+                house: request.house,
                 offer: request.offer,
                 outcome: fields.outcome,
                 revision: fields.revision,
@@ -1445,10 +1589,7 @@ impl BidMarket for CtxBidMarket<'_> {
 }
 
 impl BidRefundSink for CtxBidMarket<'_> {
-    fn refund_decision(
-        &self,
-        operation_id: u64,
-    ) -> Option<(BidRequest, BidDecision, u32)> {
+    fn refund_decision(&self, operation_id: u64) -> Option<(BidRequest, BidDecision, u32)> {
         let row = self
             .ctx
             .db
@@ -1457,17 +1598,19 @@ impl BidRefundSink for CtxBidMarket<'_> {
             .find(operation_id)?;
         let decision = realm_bid_decision(&row)?;
         Some((
-            bid_request(row.operation_id, row.bidder_guid, row.auction_id, row.offer),
+            bid_request(
+                row.operation_id,
+                row.bidder_guid,
+                row.auction_id,
+                row.house,
+                row.offer,
+            ),
             decision,
             row.deferred_refund,
         ))
     }
 
-    fn commit_refund(
-        &mut self,
-        request: BidRequest,
-        amount: u32,
-    ) -> Result<(), BidRefusal> {
+    fn commit_refund(&mut self, request: BidRequest, amount: u32) -> Result<(), BidRefusal> {
         let mut row = self
             .ctx
             .db
@@ -1477,6 +1620,7 @@ impl BidRefundSink for CtxBidMarket<'_> {
             .ok_or(BidRefusal::Database)?;
         if row.bidder_guid != request.bidder_guid
             || row.auction_id != request.auction_id
+            || row.house != request.house
             || row.offer != request.offer
             || row.deferred_refund != 0
         {
@@ -1502,11 +1646,18 @@ impl BidRefundSink for CtxBidMarket<'_> {
     }
 }
 
-fn bid_request(operation_id: u64, bidder_guid: u64, auction_id: u32, offer: u32) -> BidRequest {
+fn bid_request(
+    operation_id: u64,
+    bidder_guid: u64,
+    auction_id: u32,
+    house: u32,
+    offer: u32,
+) -> BidRequest {
     BidRequest {
         operation_id,
         bidder_guid,
         auction_id,
+        house,
         offer,
     }
 }
@@ -1521,6 +1672,9 @@ fn tagged_bid(refusal: BidRefusal, detail: &str) -> String {
 
 fn validate_market_listing(ctx: &ReducerContext, listing: &PreparedListing) -> Result<(), String> {
     if listing.request.operation_id == 0
+        || listing.request.house.id == 0
+        || !valid_rate(listing.request.house.deposit_rate)
+        || !valid_rate(listing.request.house.consignment_rate)
         || listing.snapshot.stack_count == 0
         || listing.snapshot.soulbound
         || listing.request.terms.start_bid == 0
@@ -1539,6 +1693,7 @@ fn validate_market_listing(ctx: &ReducerContext, listing: &PreparedListing) -> R
         template.sell_price,
         listing.snapshot.stack_count,
         listing.request.terms.duration_minutes,
+        listing.request.house.deposit_rate,
     )
     .ok_or_else(|| tagged(ListingRefusal::InvalidTerms, "invalid listing arithmetic"))?;
     let expected_expiry = i64::from(listing.request.terms.duration_minutes)
@@ -1546,7 +1701,11 @@ fn validate_market_listing(ctx: &ReducerContext, listing: &PreparedListing) -> R
         .and_then(|duration| listing.created_micros.checked_add(duration))
         .ok_or_else(|| tagged(ListingRefusal::InvalidTerms, "auction expiry overflow"))?;
     if listing.deposit != expected_deposit
-        || !listing_proceeds_are_representable(listing.request.terms, expected_deposit)
+        || !listing_proceeds_are_representable(
+            listing.request.terms,
+            expected_deposit,
+            listing.request.house.consignment_rate,
+        )
         || listing.expires_micros != expected_expiry
     {
         return Err(tagged(
@@ -1604,6 +1763,9 @@ fn listing_request(
     operation_id: u64,
     seller_guid: u64,
     item_guid: u64,
+    house: u32,
+    deposit_rate: u32,
+    consignment_rate: u32,
     start_bid: u32,
     buyout: u32,
     duration_minutes: u32,
@@ -1612,6 +1774,11 @@ fn listing_request(
         operation_id,
         seller_guid,
         item_guid,
+        house: AuctionHousePolicy {
+            id: house,
+            deposit_rate,
+            consignment_rate,
+        },
         terms: ListingTerms {
             start_bid,
             buyout,
@@ -1628,17 +1795,47 @@ pub fn gw_auction_list_local(
     operation_id: u64,
     seller_guid: u64,
     item_guid: u64,
+    auctioneer_guid: u64,
+    house: u32,
     start_bid: u32,
     buyout: u32,
     duration_minutes: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let requested_house = house;
+    let existing_house = ctx
+        .db
+        .game_auction_operation_receipt()
+        .operation_id()
+        .find(operation_id)
+        .map(listing_from_receipt)
+        .map(|receipt| receipt.listing.request.house);
+    let replay = existing_house.is_some();
+    let house = match existing_house {
+        Some(policy) if policy.id == requested_house => policy,
+        Some(_) => {
+            return Err(tagged(
+                ListingRefusal::InvalidTerms,
+                "listing operation id conflict",
+            ));
+        }
+        None => imported_house_policy(ctx, requested_house)?,
+    };
+    if !replay && auction_house_for_interaction(ctx, seller_guid, auctioneer_guid) != Some(house) {
+        return Err(tagged(
+            ListingRefusal::InvalidTerms,
+            "auctioneer refused interaction",
+        ));
+    }
     create_local_listing(
         &mut CtxSource { ctx },
         listing_request(
             operation_id,
             seller_guid,
             item_guid,
+            house.id,
+            house.deposit_rate,
+            house.consignment_rate,
             start_bid,
             buyout,
             duration_minutes,
@@ -1656,17 +1853,55 @@ pub fn gw_auction_hold_listing(
     operation_id: u64,
     seller_guid: u64,
     item_guid: u64,
+    auctioneer_guid: u64,
+    house: u32,
     start_bid: u32,
     buyout: u32,
     duration_minutes: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let requested_house = house;
+    let existing_house = ctx
+        .db
+        .game_auction_hold()
+        .operation_id()
+        .find(operation_id)
+        .map(listing_from_hold)
+        .map(|listing| listing.request.house)
+        .or_else(|| {
+            ctx.db
+                .game_auction_operation_receipt()
+                .operation_id()
+                .find(operation_id)
+                .map(listing_from_receipt)
+                .map(|receipt| receipt.listing.request.house)
+        });
+    let replay = existing_house.is_some();
+    let house = match existing_house {
+        Some(policy) if policy.id == requested_house => policy,
+        Some(_) => {
+            return Err(tagged(
+                ListingRefusal::InvalidTerms,
+                "listing operation id conflict",
+            ));
+        }
+        None => imported_house_policy(ctx, requested_house)?,
+    };
+    if !replay && auction_house_for_interaction(ctx, seller_guid, auctioneer_guid) != Some(house) {
+        return Err(tagged(
+            ListingRefusal::InvalidTerms,
+            "auctioneer refused interaction",
+        ));
+    }
     fence_listing(
         &mut CtxSource { ctx },
         listing_request(
             operation_id,
             seller_guid,
             item_guid,
+            house.id,
+            house.deposit_rate,
+            house.consignment_rate,
             start_bid,
             buyout,
             duration_minutes,
@@ -1688,6 +1923,9 @@ pub fn realm_auction_commit_listing(
     item_durability: u32,
     item_enchant_id: u32,
     item_soulbound: bool,
+    house: u32,
+    deposit_rate: u32,
+    consignment_rate: u32,
     start_bid: u32,
     buyout: u32,
     duration_minutes: u32,
@@ -1701,6 +1939,9 @@ pub fn realm_auction_commit_listing(
             operation_id,
             seller_guid,
             item_guid,
+            house,
+            deposit_rate,
+            consignment_rate,
             start_bid,
             buyout,
             duration_minutes,
@@ -1766,11 +2007,28 @@ pub fn gw_auction_bid_local(
     ctx: &ReducerContext,
     operation_id: u64,
     bidder_guid: u64,
+    auctioneer_guid: u64,
     auction_id: u32,
+    house: u32,
     offer: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let request = bid_request(operation_id, bidder_guid, auction_id, offer);
+    let replay = ctx
+        .db
+        .game_auction_bid_hold()
+        .operation_id()
+        .find(operation_id)
+        .is_some();
+    if !replay
+        && auction_house_for_interaction(ctx, bidder_guid, auctioneer_guid)
+            .is_none_or(|policy| policy.id != house)
+    {
+        return Err(tagged_bid(
+            BidRefusal::Database,
+            "auctioneer refused interaction",
+        ));
+    }
+    let request = bid_request(operation_id, bidder_guid, auction_id, house, offer);
     drive_bid(
         &mut CtxBidSource { ctx },
         &mut CtxBidMarket { ctx },
@@ -1796,13 +2054,30 @@ pub fn gw_auction_hold_bid(
     ctx: &ReducerContext,
     operation_id: u64,
     bidder_guid: u64,
+    auctioneer_guid: u64,
     auction_id: u32,
+    house: u32,
     offer: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let replay = ctx
+        .db
+        .game_auction_bid_hold()
+        .operation_id()
+        .find(operation_id)
+        .is_some();
+    if !replay
+        && auction_house_for_interaction(ctx, bidder_guid, auctioneer_guid)
+            .is_none_or(|policy| policy.id != house)
+    {
+        return Err(tagged_bid(
+            BidRefusal::Database,
+            "auctioneer refused interaction",
+        ));
+    }
     fence_bid(
         &mut CtxBidSource { ctx },
-        bid_request(operation_id, bidder_guid, auction_id, offer),
+        bid_request(operation_id, bidder_guid, auction_id, house, offer),
     )
     .map_err(|refusal| tagged_bid(refusal, "bid Hold rejected"))
 }
@@ -1814,12 +2089,13 @@ pub fn realm_auction_decide_bid(
     operation_id: u64,
     bidder_guid: u64,
     auction_id: u32,
+    house: u32,
     offer: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     resolve_bid(
         &mut CtxBidMarket { ctx },
-        bid_request(operation_id, bidder_guid, auction_id, offer),
+        bid_request(operation_id, bidder_guid, auction_id, house, offer),
     )
     .map(|_| ())
     .map_err(|refusal| tagged_bid(refusal, "bid decision conflict"))
@@ -1833,6 +2109,7 @@ pub fn gw_auction_finish_bid(
     operation_id: u64,
     bidder_guid: u64,
     auction_id: u32,
+    house: u32,
     offer: u32,
     outcome: u8,
     revision: u64,
@@ -1856,7 +2133,7 @@ pub fn gw_auction_finish_bid(
     .ok_or_else(|| tagged_bid(BidRefusal::Database, "bid decision is pending"))?;
     finish_bid(
         &mut CtxBidSource { ctx },
-        bid_request(operation_id, bidder_guid, auction_id, offer),
+        bid_request(operation_id, bidder_guid, auction_id, house, offer),
         decision,
     )
     .map(|_| ())
@@ -1870,13 +2147,14 @@ pub fn realm_auction_refund_bid(
     operation_id: u64,
     bidder_guid: u64,
     auction_id: u32,
+    house: u32,
     offer: u32,
     deferred_refund: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     relay_bid_refund(
         &mut CtxBidMarket { ctx },
-        bid_request(operation_id, bidder_guid, auction_id, offer),
+        bid_request(operation_id, bidder_guid, auction_id, house, offer),
         deferred_refund,
     )
     .map_err(|refusal| tagged_bid(refusal, "bid refund conflict"))
@@ -1889,13 +2167,14 @@ pub fn gw_auction_confirm_bid_refund(
     operation_id: u64,
     bidder_guid: u64,
     auction_id: u32,
+    house: u32,
     offer: u32,
     deferred_refund: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     confirm_bid_refund(
         &mut CtxBidSource { ctx },
-        bid_request(operation_id, bidder_guid, auction_id, offer),
+        bid_request(operation_id, bidder_guid, auction_id, house, offer),
         deferred_refund,
     )
     .map_err(|refusal| tagged_bid(refusal, "bid refund confirmation conflict"))
@@ -1931,10 +2210,7 @@ pub fn debug_stage_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), St
         .game_auction_expiry()
         .auction_id()
         .delete(BUYOUT_FIXTURE_AUCTION_ID);
-    ctx.db
-        .game_auction()
-        .id()
-        .delete(BUYOUT_FIXTURE_AUCTION_ID);
+    ctx.db.game_auction().id().delete(BUYOUT_FIXTURE_AUCTION_ID);
     ctx.db
         .game_auction_bid_decision()
         .operation_id()
@@ -1971,7 +2247,7 @@ pub fn debug_stage_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), St
     ctx.db.game_auction().insert(Auction {
         id: BUYOUT_FIXTURE_AUCTION_ID,
         listing_operation_id: BUYOUT_FIXTURE_OPERATION_ID - 1,
-        house: lyracore_shared::auction::STORMWIND_HOUSE_ID,
+        house: 1,
         owner_guid: BUYOUT_FIXTURE_SELLER_GUID,
         item_guid: 509_0053,
         item_entry: 509_0050,
@@ -1987,6 +2263,8 @@ pub fn debug_stage_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), St
         created_at: ctx.timestamp,
         expires_at,
         revision: 3,
+        deposit_rate: 5,
+        consignment_rate: 5,
     });
     ctx.db.game_auction_expiry().insert(AuctionExpiry {
         scheduled_id: 0,
@@ -2057,11 +2335,7 @@ pub fn debug_verify_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), S
         return Err("buyout decision payload changed".to_string());
     }
 
-    let refund = auction_fixture_mail(
-        ctx,
-        BUYOUT_FIXTURE_DISPLACED_GUID,
-        "Auction outbid",
-    )?;
+    let refund = auction_fixture_mail(ctx, BUYOUT_FIXTURE_DISPLACED_GUID, "Auction outbid")?;
     if refund.sender_guid != 0
         || refund.money != 201
         || refund.cod != 0
@@ -2130,10 +2404,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
         .game_auction_expiry()
         .auction_id()
         .delete(EXPIRY_FIXTURE_AUCTION_ID);
-    ctx.db
-        .game_auction()
-        .id()
-        .delete(EXPIRY_FIXTURE_AUCTION_ID);
+    ctx.db.game_auction().id().delete(EXPIRY_FIXTURE_AUCTION_ID);
     ctx.db
         .game_auction_operation_receipt()
         .operation_id()
@@ -2180,11 +2451,14 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
             deposit: 10,
             created_micros,
             expires_micros,
+            house: 1,
+            deposit_rate: 5,
+            consignment_rate: 5,
         });
     ctx.db.game_auction().insert(Auction {
         id: EXPIRY_FIXTURE_AUCTION_ID,
         listing_operation_id: EXPIRY_FIXTURE_OPERATION_ID,
-        house: lyracore_shared::auction::STORMWIND_HOUSE_ID,
+        house: 1,
         owner_guid: EXPIRY_FIXTURE_SELLER_GUID,
         item_guid: 509_0063,
         item_entry: EXPIRY_FIXTURE_ITEM.entry,
@@ -2200,6 +2474,8 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
         created_at,
         expires_at,
         revision: 3,
+        deposit_rate: 5,
+        consignment_rate: 5,
     });
     ctx.db.game_auction_expiry().insert(AuctionExpiry {
         scheduled_id: 0,
@@ -2306,6 +2582,7 @@ fn prepare_listing(
     seller_guid: u64,
     seller_money: u32,
     terms: ListingTerms,
+    house: AuctionHousePolicy,
 ) -> Result<u32, ListingRefusal> {
     let Some(item) = item else {
         return Err(ListingRefusal::ItemNotFound);
@@ -2326,9 +2603,10 @@ fn prepare_listing(
         item.sell_price,
         item.snapshot.stack_count,
         terms.duration_minutes,
+        house.deposit_rate,
     )
     .ok_or(ListingRefusal::InvalidTerms)?;
-    if !listing_proceeds_are_representable(terms, deposit) {
+    if !listing_proceeds_are_representable(terms, deposit, house.consignment_rate) {
         return Err(ListingRefusal::InvalidTerms);
     }
     if seller_money < deposit {
@@ -2341,22 +2619,34 @@ fn prepare_listing(
 mod tests {
     use super::*;
 
-    #[test]
-    fn seller_proceeds_apply_the_stormwind_cut_and_return_the_deposit_checked() {
-        assert_eq!(seller_proceeds(100, 10), Some(105));
-        assert_eq!(seller_proceeds(19, 1), Some(20));
-        assert_eq!(seller_proceeds(20, 1), Some(20));
-        assert_eq!(seller_proceeds(u32::MAX, u32::MAX), None);
+    fn policy() -> AuctionHousePolicy {
+        AuctionHousePolicy {
+            id: 1,
+            deposit_rate: 5,
+            consignment_rate: 5,
+        }
     }
 
     #[test]
-    fn listing_deposit_uses_the_stormwind_rate_and_supported_duration_ladder() {
-        assert_eq!(listing_deposit(100, 2, 720), Some(10));
-        assert_eq!(listing_deposit(100, 2, 1_440), Some(20));
-        assert_eq!(listing_deposit(100, 2, 2_880), Some(40));
-        assert_eq!(listing_deposit(1, 1, 720), Some(1));
-        assert_eq!(listing_deposit(100, 1, 60), None);
-        assert_eq!(listing_deposit(u32::MAX, u32::MAX, 2_880), None);
+    fn seller_proceeds_apply_the_imported_cut_and_return_the_deposit_checked() {
+        assert_eq!(seller_proceeds(100, 10, 5), Some(105));
+        assert_eq!(seller_proceeds(100, 10, 15), Some(95));
+        assert_eq!(seller_proceeds(19, 1, 5), Some(20));
+        assert_eq!(seller_proceeds(20, 1, 5), Some(20));
+        assert_eq!(seller_proceeds(u32::MAX, u32::MAX, 5), None);
+        assert_eq!(seller_proceeds(100, 10, 101), None);
+    }
+
+    #[test]
+    fn listing_deposit_uses_the_imported_rate_and_supported_duration_ladder() {
+        assert_eq!(listing_deposit(100, 2, 720, 5), Some(10));
+        assert_eq!(listing_deposit(100, 2, 720, 25), Some(50));
+        assert_eq!(listing_deposit(100, 2, 1_440, 5), Some(20));
+        assert_eq!(listing_deposit(100, 2, 2_880, 5), Some(40));
+        assert_eq!(listing_deposit(1, 1, 720, 5), Some(1));
+        assert_eq!(listing_deposit(100, 1, 60, 5), None);
+        assert_eq!(listing_deposit(u32::MAX, u32::MAX, 2_880, 5), None);
+        assert_eq!(listing_deposit(100, 1, 720, 101), None);
     }
 
     fn item(slot: u8) -> ListingItem {
@@ -2380,6 +2670,7 @@ mod tests {
         let snapshot = item(23).snapshot;
         BidAuction {
             id: 41,
+            house: 1,
             owner_guid: 7,
             item: snapshot,
             highest_bidder_guid: 0,
@@ -2387,6 +2678,7 @@ mod tests {
             start_bid: 100,
             buyout: 0,
             deposit: 10,
+            consignment_rate: 5,
             expires_micros: 2_000,
             revision: 3,
         }
@@ -2425,12 +2717,18 @@ mod tests {
 
     #[test]
     fn listing_accepts_only_one_owned_mailable_bag_stack_and_valid_terms() {
-        assert_eq!(prepare_listing(Some(&item(23)), 7, 10, terms()), Ok(10));
-        assert_eq!(prepare_listing(Some(&item(120)), 7, 10, terms()), Ok(10));
+        assert_eq!(
+            prepare_listing(Some(&item(23)), 7, 10, terms(), policy()),
+            Ok(10)
+        );
+        assert_eq!(
+            prepare_listing(Some(&item(120)), 7, 10, terms(), policy()),
+            Ok(10)
+        );
 
         for slot in [15, 19, 39, 63, 119, 192] {
             assert_eq!(
-                prepare_listing(Some(&item(slot)), 7, 10, terms()),
+                prepare_listing(Some(&item(slot)), 7, 10, terms(), policy()),
                 Err(ListingRefusal::ItemNotFound),
                 "slot {slot} must not be auctionable"
             );
@@ -2439,30 +2737,30 @@ mod tests {
         let mut foreign = item(23);
         foreign.owner_guid = 8;
         assert_eq!(
-            prepare_listing(Some(&foreign), 7, 10, terms()),
+            prepare_listing(Some(&foreign), 7, 10, terms(), policy()),
             Err(ListingRefusal::ItemNotFound)
         );
 
         let mut soulbound = item(23);
         soulbound.snapshot.soulbound = true;
         assert_eq!(
-            prepare_listing(Some(&soulbound), 7, 10, terms()),
+            prepare_listing(Some(&soulbound), 7, 10, terms(), policy()),
             Err(ListingRefusal::ItemNotFound)
         );
 
         let mut not_mailable = item(120);
         not_mailable.mailable = false;
         assert_eq!(
-            prepare_listing(Some(&not_mailable), 7, 10, terms()),
+            prepare_listing(Some(&not_mailable), 7, 10, terms(), policy()),
             Err(ListingRefusal::ItemNotFound)
         );
 
         assert_eq!(
-            prepare_listing(None, 7, 10, terms()),
+            prepare_listing(None, 7, 10, terms(), policy()),
             Err(ListingRefusal::ItemNotFound)
         );
         assert_eq!(
-            prepare_listing(Some(&item(23)), 7, 9, terms()),
+            prepare_listing(Some(&item(23)), 7, 9, terms(), policy()),
             Err(ListingRefusal::NotEnoughMoney)
         );
 
@@ -2482,7 +2780,7 @@ mod tests {
             },
         ] {
             assert_eq!(
-                prepare_listing(Some(&item(23)), 7, 10, invalid),
+                prepare_listing(Some(&item(23)), 7, 10, invalid, policy()),
                 Err(ListingRefusal::InvalidTerms)
             );
         }
@@ -2537,6 +2835,7 @@ mod tests {
             operation_id: 900,
             seller_guid: 7,
             item_guid: 70,
+            house: policy(),
             terms: terms(),
         }
     }
@@ -3002,7 +3301,7 @@ mod tests {
     }
 
     #[test]
-    fn replayed_bid_expiry_mails_the_exact_item_and_stormwind_proceeds_once() {
+    fn replayed_bid_expiry_mails_the_exact_item_and_imported_rate_proceeds_once() {
         let listing = PreparedListing {
             request: request(),
             snapshot: item(23).snapshot,
@@ -3057,6 +3356,7 @@ mod tests {
             operation_id: 900,
             bidder_guid: 8,
             auction_id: 41,
+            house: 1,
             offer: 100,
         };
 
@@ -3072,7 +3372,14 @@ mod tests {
         };
         assert_eq!(minimum_next_bid(bid), Ok(107));
         assert_eq!(
-            decide_bid(Some(bid), BidRequest { offer: 101, ..request }, 1_000),
+            decide_bid(
+                Some(bid),
+                BidRequest {
+                    offer: 101,
+                    ..request
+                },
+                1_000
+            ),
             BidDecision::HigherBid {
                 bidder_guid: 9,
                 current_bid: 101,
@@ -3080,11 +3387,25 @@ mod tests {
             }
         );
         assert_eq!(
-            decide_bid(Some(bid), BidRequest { offer: 106, ..request }, 1_000),
+            decide_bid(
+                Some(bid),
+                BidRequest {
+                    offer: 106,
+                    ..request
+                },
+                1_000
+            ),
             BidDecision::BidIncrement
         );
         assert_eq!(
-            decide_bid(Some(active), BidRequest { offer: 99, ..request }, 1_000),
+            decide_bid(
+                Some(active),
+                BidRequest {
+                    offer: 99,
+                    ..request
+                },
+                1_000
+            ),
             BidDecision::BidIncrement
         );
         assert_eq!(
@@ -3101,6 +3422,17 @@ mod tests {
         assert_eq!(decide_bid(None, request, 1_000), BidDecision::ItemNotFound);
         assert_eq!(
             decide_bid(
+                Some(active),
+                BidRequest {
+                    house: 7,
+                    ..request
+                },
+                1_000,
+            ),
+            BidDecision::ItemNotFound
+        );
+        assert_eq!(
+            decide_bid(
                 Some(BidAuction {
                     expires_micros: 1_000,
                     ..active
@@ -3111,7 +3443,14 @@ mod tests {
             BidDecision::ItemNotFound
         );
         assert_eq!(
-            decide_bid(Some(active), BidRequest { operation_id: 0, ..request }, 1_000),
+            decide_bid(
+                Some(active),
+                BidRequest {
+                    operation_id: 0,
+                    ..request
+                },
+                1_000
+            ),
             BidDecision::Database
         );
         assert!(matches!(
@@ -3140,6 +3479,7 @@ mod tests {
             operation_id: 905,
             bidder_guid: 8,
             auction_id: 41,
+            house: 1,
             offer: 900,
         };
 
@@ -3261,6 +3601,7 @@ mod tests {
             operation_id: 901,
             bidder_guid: 8,
             auction_id: 41,
+            house: 1,
             offer: 107,
         };
         let rejected = BidDecision::BidIncrement;
@@ -3289,8 +3630,7 @@ mod tests {
             Ok(rejected)
         );
         assert_eq!(
-            overflowed_rejection.deferred_refund,
-            request.offer,
+            overflowed_rejection.deferred_refund, request.offer,
             "replay cannot defer the refund twice"
         );
         assert_eq!(
@@ -3336,7 +3676,14 @@ mod tests {
         assert_eq!(interrupted_normalization.deferred_refund, 0);
 
         assert_eq!(
-            finish_bid(&mut acceptance, BidRequest { offer: 108, ..request }, accepted),
+            finish_bid(
+                &mut acceptance,
+                BidRequest {
+                    offer: 108,
+                    ..request
+                },
+                accepted
+            ),
             Err(BidRefusal::Database),
             "changed-payload identifier reuse fails closed"
         );
@@ -3487,19 +3834,15 @@ mod tests {
     }
 
     impl BidRefundSink for FakeBidRefundSink {
-        fn refund_decision(
-            &self,
-            operation_id: u64,
-        ) -> Option<(BidRequest, BidDecision, u32)> {
-            (self.request.operation_id == operation_id)
-                .then_some((self.request, self.decision, self.recorded))
+        fn refund_decision(&self, operation_id: u64) -> Option<(BidRequest, BidDecision, u32)> {
+            (self.request.operation_id == operation_id).then_some((
+                self.request,
+                self.decision,
+                self.recorded,
+            ))
         }
 
-        fn commit_refund(
-            &mut self,
-            request: BidRequest,
-            amount: u32,
-        ) -> Result<(), BidRefusal> {
+        fn commit_refund(&mut self, request: BidRequest, amount: u32) -> Result<(), BidRefusal> {
             self.recorded = amount;
             self.mails.push((request.bidder_guid, amount));
             Ok(())
@@ -3512,6 +3855,7 @@ mod tests {
             operation_id: 904,
             bidder_guid: 8,
             auction_id: 41,
+            house: 1,
             offer: 107,
         };
         let mut sink = FakeBidRefundSink {
@@ -3525,7 +3869,14 @@ mod tests {
         assert_eq!(relay_bid_refund(&mut sink, request, 7), Ok(()));
         assert_eq!(sink.mails, vec![(8, 7)]);
         assert_eq!(
-            relay_bid_refund(&mut sink, BidRequest { offer: 108, ..request }, 7),
+            relay_bid_refund(
+                &mut sink,
+                BidRequest {
+                    offer: 108,
+                    ..request
+                },
+                7
+            ),
             Err(BidRefusal::Database)
         );
         assert_eq!(
@@ -3550,6 +3901,7 @@ mod tests {
             operation_id: 902,
             bidder_guid: 8,
             auction_id: 41,
+            house: 1,
             offer: 107,
         };
         let mut market = FakeBidMarket {
@@ -3581,7 +3933,13 @@ mod tests {
         );
 
         assert_eq!(
-            resolve_bid(&mut market, BidRequest { offer: 108, ..request }),
+            resolve_bid(
+                &mut market,
+                BidRequest {
+                    offer: 108,
+                    ..request
+                }
+            ),
             Err(BidRefusal::Database)
         );
         assert_eq!(
@@ -3597,6 +3955,7 @@ mod tests {
                 operation_id,
                 bidder_guid: 8,
                 auction_id: 41,
+                house: 1,
                 offer,
             };
             let source = FakeBidSource::new(1_000);
@@ -3671,6 +4030,7 @@ mod tests {
         FakeBidMarket {
             auction: Some(BidAuction {
                 id: 41,
+                house: listing.request.house.id,
                 owner_guid: listing.request.seller_guid,
                 item: listing.snapshot,
                 highest_bidder_guid: 0,
@@ -3678,6 +4038,7 @@ mod tests {
                 start_bid: listing.request.terms.start_bid,
                 buyout: listing.request.terms.buyout,
                 deposit: listing.deposit,
+                consignment_rate: listing.request.house.consignment_rate,
                 expires_micros: listing.expires_micros,
                 revision: 0,
             }),
@@ -3749,7 +4110,9 @@ mod tests {
                     ),
                     crate::mail::TakeItem::NothingToTake,
                 );
-                outcome.collected_items.push((mail.recipient_guid, mail.item));
+                outcome
+                    .collected_items
+                    .push((mail.recipient_guid, mail.item));
             }
             outcome.collected_mail.push(mail);
         }
@@ -3768,6 +4131,7 @@ mod tests {
             operation_id: 911,
             bidder_guid: 8,
             auction_id: 41,
+            house: 1,
             offer: 10,
         };
         let mut bidder = FakeBidSource::new(100);
@@ -3776,6 +4140,7 @@ mod tests {
             operation_id: 912,
             bidder_guid: 9,
             auction_id: 41,
+            house: 1,
             offer: 50,
         };
         let mut buyer = FakeBidSource::new(100);
@@ -3803,6 +4168,7 @@ mod tests {
             operation_id: 915,
             bidder_guid: 8,
             auction_id: 41,
+            house: 1,
             offer: 10,
         };
         let mut expiry_bidder = FakeBidSource::new(100);
@@ -3843,8 +4209,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            local
-                .collected_items,
+            local.collected_items,
             vec![
                 (9, item(23).snapshot),
                 (7, item(23).snapshot),
@@ -3862,6 +4227,7 @@ mod tests {
             operation_id: 906,
             bidder_guid: 8,
             auction_id: 41,
+            house: 1,
             offer: 900,
         };
         let mut source = FakeBidSource::new(1_000);
@@ -3918,12 +4284,14 @@ mod tests {
             operation_id: 907,
             bidder_guid: 8,
             auction_id: 41,
+            house: 1,
             offer: 900,
         };
         let loser = BidRequest {
             operation_id: 908,
             bidder_guid: 10,
             auction_id: 41,
+            house: 1,
             offer: 500,
         };
         let mut winner_source = FakeBidSource::new(1_000);
@@ -3987,6 +4355,7 @@ mod tests {
             operation_id: 909,
             bidder_guid: 8,
             auction_id: 41,
+            house: 1,
             offer: 500,
         };
 
@@ -4008,7 +4377,11 @@ mod tests {
         assert_eq!(buyout_market.mail, buyout_mail);
         assert_eq!(
             u64::from(buyout_source.money)
-                + buyout_market.mail.iter().map(|mail| u64::from(mail.money)).sum::<u64>()
+                + buyout_market
+                    .mail
+                    .iter()
+                    .map(|mail| u64::from(mail.money))
+                    .sum::<u64>()
                 + 25,
             700 + 201 + 10,
             "the post-buyout purse, refund, proceeds, and cut account for all copper"
@@ -4041,11 +4414,17 @@ mod tests {
             drive_bid(&mut late_buyout_source, &mut expiry_market, buyout),
             Ok(BidDecision::ItemNotFound)
         );
-        assert_eq!(late_buyout_source.money, 700, "the losing Hold is restored once");
+        assert_eq!(
+            late_buyout_source.money, 700,
+            "the losing Hold is restored once"
+        );
         assert_eq!(expiry_market.mail, expiry_mail);
         assert_eq!(
             u64::from(late_buyout_source.money)
-                + expiry_mail.iter().map(|mail| u64::from(mail.money)).sum::<u64>()
+                + expiry_mail
+                    .iter()
+                    .map(|mail| u64::from(mail.money))
+                    .sum::<u64>()
                 + 10,
             700 + 201 + 10,
             "the post-expiry purse, proceeds, and cut account for all copper"
@@ -4156,6 +4535,9 @@ mod tests {
         let cascade = body
             .find("crate::world::cascade_delete_character")
             .expect("character deletion still needs its normal cascade");
-        assert!(auction_gate < cascade, "Auction value must be fenced before deletion");
+        assert!(
+            auction_gate < cascade,
+            "Auction value must be fenced before deletion"
+        );
     }
 }

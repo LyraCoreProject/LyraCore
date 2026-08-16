@@ -9,7 +9,9 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 pub(super) struct GwAuctionHoldBidArgs {
     pub operation_id: u64,
     pub bidder_guid: u64,
+    pub auctioneer_guid: u64,
     pub auction_id: u32,
+    pub house: u32,
     pub offer: u32,
 }
 
@@ -18,7 +20,9 @@ impl From<GwAuctionHoldBidArgs> for super::Reducer {
         Self::GwAuctionHoldBid {
             operation_id: args.operation_id,
             bidder_guid: args.bidder_guid,
+            auctioneer_guid: args.auctioneer_guid,
             auction_id: args.auction_id,
+            house: args.house,
             offer: args.offer,
         }
     }
@@ -43,10 +47,20 @@ pub trait gw_auction_hold_bid {
         &self,
         operation_id: u64,
         bidder_guid: u64,
+        auctioneer_guid: u64,
         auction_id: u32,
+        house: u32,
         offer: u32,
     ) -> __sdk::Result<()> {
-        self.gw_auction_hold_bid_then(operation_id, bidder_guid, auction_id, offer, |_, _| {})
+        self.gw_auction_hold_bid_then(
+            operation_id,
+            bidder_guid,
+            auctioneer_guid,
+            auction_id,
+            house,
+            offer,
+            |_, _| {},
+        )
     }
 
     /// Request that the remote module invoke the reducer `gw_auction_hold_bid` to run as soon as possible,
@@ -59,7 +73,9 @@ pub trait gw_auction_hold_bid {
         &self,
         operation_id: u64,
         bidder_guid: u64,
+        auctioneer_guid: u64,
         auction_id: u32,
+        house: u32,
         offer: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -73,7 +89,9 @@ impl gw_auction_hold_bid for super::RemoteReducers {
         &self,
         operation_id: u64,
         bidder_guid: u64,
+        auctioneer_guid: u64,
         auction_id: u32,
+        house: u32,
         offer: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -84,7 +102,9 @@ impl gw_auction_hold_bid for super::RemoteReducers {
             GwAuctionHoldBidArgs {
                 operation_id,
                 bidder_guid,
+                auctioneer_guid,
                 auction_id,
+                house,
                 offer,
             },
             callback,

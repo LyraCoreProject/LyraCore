@@ -10,6 +10,7 @@ pub(super) struct RealmAuctionDecideBidArgs {
     pub operation_id: u64,
     pub bidder_guid: u64,
     pub auction_id: u32,
+    pub house: u32,
     pub offer: u32,
 }
 
@@ -19,6 +20,7 @@ impl From<RealmAuctionDecideBidArgs> for super::Reducer {
             operation_id: args.operation_id,
             bidder_guid: args.bidder_guid,
             auction_id: args.auction_id,
+            house: args.house,
             offer: args.offer,
         }
     }
@@ -44,9 +46,17 @@ pub trait realm_auction_decide_bid {
         operation_id: u64,
         bidder_guid: u64,
         auction_id: u32,
+        house: u32,
         offer: u32,
     ) -> __sdk::Result<()> {
-        self.realm_auction_decide_bid_then(operation_id, bidder_guid, auction_id, offer, |_, _| {})
+        self.realm_auction_decide_bid_then(
+            operation_id,
+            bidder_guid,
+            auction_id,
+            house,
+            offer,
+            |_, _| {},
+        )
     }
 
     /// Request that the remote module invoke the reducer `realm_auction_decide_bid` to run as soon as possible,
@@ -60,6 +70,7 @@ pub trait realm_auction_decide_bid {
         operation_id: u64,
         bidder_guid: u64,
         auction_id: u32,
+        house: u32,
         offer: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -74,6 +85,7 @@ impl realm_auction_decide_bid for super::RemoteReducers {
         operation_id: u64,
         bidder_guid: u64,
         auction_id: u32,
+        house: u32,
         offer: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -85,6 +97,7 @@ impl realm_auction_decide_bid for super::RemoteReducers {
                 operation_id,
                 bidder_guid,
                 auction_id,
+                house,
                 offer,
             },
             callback,

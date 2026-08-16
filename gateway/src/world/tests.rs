@@ -2709,6 +2709,7 @@ impl AuctionActionStore for InMemoryStore {
     fn auction_query(
         &self,
         _player_guid: u64,
+        _house_id: u32,
         _query: super::handlers::AuctionQuery,
     ) -> Result<super::handlers::AuctionPage> {
         Ok(super::handlers::AuctionPage {
@@ -5400,27 +5401,34 @@ fn played_time_replies_with_the_durable_total_plus_the_live_session_span() {
     server.join().unwrap();
 }
 
-fn stormwind_auction_interaction() -> AuctionInteraction {
+fn imported_auction_interaction() -> AuctionInteraction {
     AuctionInteraction {
         player: AuctionEntity {
             type_mask: lyracore_shared::constants::type_mask::PLAYER,
-            race: 1,
+            health: 1,
             ..Default::default()
         },
         auctioneer: AuctionEntity {
             type_mask: lyracore_shared::constants::type_mask::CREATURE,
             entry: 8_670,
             npc_flags: lyracore_shared::constants::npc_flags::AUCTIONEER,
+            health: 1,
             x: 5.0,
             ..Default::default()
         },
+        house: super::handlers::AuctionHousePolicy {
+            id: 1,
+            deposit_rate: 5,
+            consignment_rate: 5,
+        },
+        refuses_interaction: false,
     }
 }
 
 #[test]
 fn auction_house_round_trip_stays_typed_and_ordered_over_an_encrypted_session() {
     let store = std::sync::Arc::new(InMemoryStore {
-        auction_interaction: Some(stormwind_auction_interaction()),
+        auction_interaction: Some(imported_auction_interaction()),
         ..quest_store()
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);

@@ -25,6 +25,8 @@ pub struct Auction {
     pub created_at: __sdk::Timestamp,
     pub expires_at: __sdk::Timestamp,
     pub revision: u64,
+    pub deposit_rate: u32,
+    pub consignment_rate: u32,
 }
 
 impl __sdk::InModule for Auction {
@@ -53,6 +55,8 @@ pub struct AuctionCols {
     pub created_at: __sdk::__query_builder::Col<Auction, __sdk::Timestamp>,
     pub expires_at: __sdk::__query_builder::Col<Auction, __sdk::Timestamp>,
     pub revision: __sdk::__query_builder::Col<Auction, u64>,
+    pub deposit_rate: __sdk::__query_builder::Col<Auction, u32>,
+    pub consignment_rate: __sdk::__query_builder::Col<Auction, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for Auction {
@@ -83,6 +87,8 @@ impl __sdk::__query_builder::HasCols for Auction {
             created_at: __sdk::__query_builder::Col::new(table_name, "created_at"),
             expires_at: __sdk::__query_builder::Col::new(table_name, "expires_at"),
             revision: __sdk::__query_builder::Col::new(table_name, "revision"),
+            deposit_rate: __sdk::__query_builder::Col::new(table_name, "deposit_rate"),
+            consignment_rate: __sdk::__query_builder::Col::new(table_name, "consignment_rate"),
         }
     }
 }

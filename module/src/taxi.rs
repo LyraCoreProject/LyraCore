@@ -6,9 +6,8 @@
 use spacetimedb::{table, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use crate::{
-    game_character, game_faction, game_faction_template, game_player_reputation, game_taxi_node,
-    game_taxi_path, game_taxi_path_node, game_world_entity, GameTaxiNode, GameTaxiPath,
-    GameTaxiPathNode, WorldEntity,
+    game_character, game_taxi_node, game_taxi_path, game_taxi_path_node, game_world_entity,
+    GameTaxiNode, GameTaxiPath, GameTaxiPathNode, WorldEntity,
 };
 
 /// Normal NPC interaction distance: (10 yd)², shared in value with vendor/trainer/quest gates.
@@ -241,34 +240,6 @@ fn flight_master_is_selectable(unit_flags: u32) -> bool {
     unit_flags & lyracore_shared::constants::unit_flags::NOT_SELECTABLE == 0
 }
 
-/// Module-side reaction gate for taxi interactions. Missing faction data fails open, matching the
-/// existing service behavior; an At-War rep row or Unfriendly-and-below standing refuses.
-fn npc_refuses_interaction(ctx: &ReducerContext, npc: &WorldEntity, player: &WorldEntity) -> bool {
-    let templates = ctx.db.game_faction_template();
-    let Some(npc_ft) = templates.id().find(npc.faction_template) else {
-        return false;
-    };
-    if let Some(parent) = ctx.db.game_faction().faction_id().find(npc_ft.faction) {
-        if parent.reputation_index >= 0 {
-            let row = ctx
-                .db
-                .game_player_reputation()
-                .by_character()
-                .filter(&player.guid)
-                .find(|r| r.faction_id == parent.faction_id);
-            if row.as_ref().is_some_and(|r| r.at_war) {
-                return true;
-            }
-            let standing = row.map_or(parent.base_standing, |r| r.standing);
-            return crate::reputation::reputation_rank(standing) <= 2;
-        }
-    }
-    templates
-        .id()
-        .find(player.faction_template)
-        .is_some_and(|player_ft| crate::faction::compute_hostile(&npc_ft, &player_ft))
-}
-
 /// Resolve every fact needed by status/open at one chokepoint. Source lookup deliberately returns
 /// the storage-id row; only operation results expose `client_node_id`.
 fn resolve_flight_master(
@@ -304,7 +275,7 @@ fn resolve_flight_master(
     if crate::helpers::dist_sq(&player, &npc) > TAXI_INTERACTION_RANGE_SQ {
         return Err(TaxiGateDenied::OutOfRange);
     }
-    if npc_refuses_interaction(ctx, &npc, &player) {
+    if crate::reputation::npc_refuses_interaction(ctx, &npc, &player) {
         return Err(TaxiGateDenied::Hostile);
     }
 

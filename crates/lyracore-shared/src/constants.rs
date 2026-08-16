@@ -406,7 +406,6 @@ mod tests {
     #[test]
     fn vanilla_auction_vocabulary_uses_the_build_5875_values() {
         assert_eq!(npc_flags::AUCTIONEER, 0x1000);
-        assert_eq!(crate::auction::STORMWIND_HOUSE_ID, 1);
     }
 
     /// Work-item 041: pin the shared GameObject QUESTGIVER type id against cmangos — this is the

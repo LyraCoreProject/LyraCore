@@ -1,4 +1,4 @@
-//! Read-only Stormwind market queries and their pure filter/pagination seam.
+//! Read-only auction market queries and their pure filter/pagination seam.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -64,6 +64,7 @@ fn paginate(mut rows: Vec<Auction>, offset: u32) -> (Vec<Auction>, u32) {
 
 fn select_active_page(
     rows: impl IntoIterator<Item = Auction>,
+    house_id: u32,
     now_micros: i64,
     offset: u32,
     mut matches: impl FnMut(&Auction) -> bool,
@@ -71,7 +72,7 @@ fn select_active_page(
     paginate(
         rows.into_iter()
             .filter(|row| {
-                row.house == lyracore_shared::auction::STORMWIND_HOUSE_ID
+                row.house == house_id
                     && row.expires_at.to_micros_since_unix_epoch() > now_micros
                     && matches(row)
             })
@@ -113,6 +114,7 @@ impl Coordinator {
     pub(crate) fn auction_query(
         &self,
         player_guid: u64,
+        house_id: u32,
         query: AuctionQuery,
     ) -> Result<AuctionPage> {
         let (player_level, player_class) = {
@@ -140,6 +142,7 @@ impl Coordinator {
         };
         let (rows, total) = select_active_page(
             db.game_auction().iter(),
+            house_id,
             now_micros,
             offset,
             |row| match &query {
@@ -164,8 +167,7 @@ impl Coordinator {
                     }),
                 AuctionQuery::Owner { .. } => row.owner_guid == player_guid,
                 AuctionQuery::Bidder {
-                    outbid_auction_ids,
-                    ..
+                    outbid_auction_ids, ..
                 } => bidder_matches(row, player_guid, outbid_auction_ids),
             },
         );
@@ -279,7 +281,7 @@ mod tests {
         Auction {
             id,
             listing_operation_id: u64::from(id),
-            house: lyracore_shared::auction::STORMWIND_HOUSE_ID,
+            house: 4,
             owner_guid: 1,
             item_guid: u64::from(id),
             item_entry: 25,
@@ -295,6 +297,8 @@ mod tests {
             created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
             expires_at: spacetimedb_sdk::Timestamp::from_micros_since_unix_epoch(i64::MAX),
             revision: 0,
+            deposit_rate: 5,
+            consignment_rate: 5,
         }
     }
 
@@ -329,7 +333,7 @@ mod tests {
         let owned = auction(5);
 
         let rows = vec![expired, at_deadline, other_house, other_owner, owned];
-        let (page, total) = select_active_page(rows, 20, 0, |row| row.owner_guid == 1);
+        let (page, total) = select_active_page(rows, 4, 20, 0, |row| row.owner_guid == 1);
         assert_eq!(total, 1);
         assert_eq!(page.iter().map(|row| row.id).collect::<Vec<_>>(), vec![5]);
     }
@@ -344,12 +348,9 @@ mod tests {
         displaced.highest_bid = 113;
 
         let requested_outbid_ids = [19, 88];
-        let (page, total) = select_active_page(
-            vec![displaced, highest],
-            20,
-            0,
-            |row| bidder_matches(row, 8, &requested_outbid_ids),
-        );
+        let (page, total) = select_active_page(vec![displaced, highest], 4, 20, 0, |row| {
+            bidder_matches(row, 8, &requested_outbid_ids)
+        });
         assert_eq!(total, 1);
         assert_eq!(page.iter().map(|row| row.id).collect::<Vec<_>>(), vec![5]);
     }
