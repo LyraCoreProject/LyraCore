@@ -36,6 +36,28 @@ pub struct HunterPet {
     pub loyalty_updated_at: Timestamp,
 }
 
+/// Client-facing Hunter-pet state. This intentionally omits care timestamps, loyalty progress and
+/// rename eligibility; the gateway needs only these fields to render the owner's live pet.
+#[table(
+    accessor = game_hunter_pet_protocol,
+    public,
+    index(accessor = by_owner, btree(columns = [owner_guid]))
+)]
+pub struct HunterPetProtocol {
+    #[primary_key]
+    pub pet_id: u64,
+    pub owner_guid: u64,
+    pub live_pet_guid: u64,
+    pub creature_entry: u32,
+    pub name: String,
+    pub name_timestamp: u32,
+    pub level: u32,
+    pub pet_xp: u32,
+    pub next_level_xp: u32,
+    pub happiness: u32,
+    pub loyalty_level: u8,
+}
+
 crate::character_owned!(delete, fn sweep_delete_game_hunter_pet(ctx, character_guid) {
     if let Some(row) = ctx.db.game_hunter_pet().by_owner().filter(&character_guid).next() {
         ctx.db.game_hunter_pet().pet_id().delete(row.pet_id);
@@ -43,6 +65,16 @@ crate::character_owned!(delete, fn sweep_delete_game_hunter_pet(ctx, character_g
 });
 crate::character_owned!(transfer, fn sweep_transfer_game_hunter_pet(ctx, character_guid, io) {
     table = game_hunter_pet,
+    by = by_owner,
+    keep_key,
+});
+crate::character_owned!(delete, fn sweep_delete_game_hunter_pet_protocol(ctx, character_guid) {
+    if let Some(row) = ctx.db.game_hunter_pet_protocol().by_owner().filter(&character_guid).next() {
+        ctx.db.game_hunter_pet_protocol().pet_id().delete(row.pet_id);
+    }
+});
+crate::character_owned!(transfer, fn sweep_transfer_game_hunter_pet_protocol(ctx, character_guid, io) {
+    table = game_hunter_pet_protocol,
     by = by_owner,
     keep_key,
 });
@@ -80,6 +112,31 @@ pub fn hunter_pet_for_owner(ctx: &ReducerContext, owner_guid: u64) -> Option<Hun
 
 pub fn hunter_pet_by_id(ctx: &ReducerContext, pet_id: u64) -> Option<HunterPet> {
     ctx.db.game_hunter_pet().pet_id().find(pet_id)
+}
+
+/// Publish the bounded protocol projection after a durable identity write. Care/progression modules
+/// call this at their identity-update seam so the gateway sees one owner-addressed delta.
+pub fn publish_hunter_pet_protocol(ctx: &ReducerContext, pet: &HunterPet, live_pet_guid: u64) {
+    let row = HunterPetProtocol {
+        pet_id: pet.pet_id,
+        owner_guid: pet.owner_guid,
+        live_pet_guid,
+        creature_entry: pet.creature_entry,
+        name: pet.name.clone(),
+        name_timestamp: (pet.created_at.to_micros_since_unix_epoch() / 1_000_000)
+            .clamp(0, u32::MAX as i64) as u32,
+        level: pet.level,
+        pet_xp: pet.pet_xp,
+        next_level_xp: crate::xp::xp_to_next_level(pet.level),
+        happiness: pet.happiness,
+        loyalty_level: pet.loyalty_level,
+    };
+    let table = ctx.db.game_hunter_pet_protocol();
+    if table.pet_id().find(row.pet_id).is_some() {
+        table.pet_id().update(row);
+    } else {
+        table.insert(row);
+    }
 }
 
 pub fn live_pet_kind(ctx: &ReducerContext, pet_guid: u64) -> PetKind {
@@ -266,7 +323,7 @@ pub(crate) fn tame_creature(
     entities.insert(target);
 
     let now = ctx.timestamp;
-    ctx.db.game_hunter_pet().insert(HunterPet {
+    let hunter_pet = HunterPet {
         pet_id,
         owner_guid: caster.guid,
         creature_entry,
@@ -281,11 +338,13 @@ pub(crate) fn tame_creature(
         created_at: now,
         care_updated_at: now,
         loyalty_updated_at: now,
-    });
+    };
+    let hunter_pet = ctx.db.game_hunter_pet().insert(hunter_pet);
     ctx.db.game_live_pet_kind().insert(LivePetKind {
         pet_guid,
         hunter_pet_id: pet_id,
     });
+    publish_hunter_pet_protocol(ctx, &hunter_pet, pet_guid);
     Ok(())
 }
 

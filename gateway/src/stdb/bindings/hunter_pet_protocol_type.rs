@@ -1,0 +1,75 @@
+// Hand-spliced from the module schema because the SpacetimeDB generator is unavailable in this
+// environment. A future full regeneration overwrites this with the equivalent generated binding.
+
+#![allow(unused, clippy::all)]
+use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
+
+#[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
+#[sats(crate = __lib)]
+pub struct HunterPetProtocol {
+    pub pet_id: u64,
+    pub owner_guid: u64,
+    pub live_pet_guid: u64,
+    pub creature_entry: u32,
+    pub name: String,
+    pub name_timestamp: u32,
+    pub level: u32,
+    pub pet_xp: u32,
+    pub next_level_xp: u32,
+    pub happiness: u32,
+    pub loyalty_level: u8,
+}
+
+impl __sdk::InModule for HunterPetProtocol {
+    type Module = super::RemoteModule;
+}
+
+pub struct HunterPetProtocolCols {
+    pub pet_id: __sdk::__query_builder::Col<HunterPetProtocol, u64>,
+    pub owner_guid: __sdk::__query_builder::Col<HunterPetProtocol, u64>,
+    pub live_pet_guid: __sdk::__query_builder::Col<HunterPetProtocol, u64>,
+    pub creature_entry: __sdk::__query_builder::Col<HunterPetProtocol, u32>,
+    pub name: __sdk::__query_builder::Col<HunterPetProtocol, String>,
+    pub name_timestamp: __sdk::__query_builder::Col<HunterPetProtocol, u32>,
+    pub level: __sdk::__query_builder::Col<HunterPetProtocol, u32>,
+    pub pet_xp: __sdk::__query_builder::Col<HunterPetProtocol, u32>,
+    pub next_level_xp: __sdk::__query_builder::Col<HunterPetProtocol, u32>,
+    pub happiness: __sdk::__query_builder::Col<HunterPetProtocol, u32>,
+    pub loyalty_level: __sdk::__query_builder::Col<HunterPetProtocol, u8>,
+}
+
+impl __sdk::__query_builder::HasCols for HunterPetProtocol {
+    type Cols = HunterPetProtocolCols;
+    fn cols(table_name: &'static str) -> Self::Cols {
+        HunterPetProtocolCols {
+            pet_id: __sdk::__query_builder::Col::new(table_name, "pet_id"),
+            owner_guid: __sdk::__query_builder::Col::new(table_name, "owner_guid"),
+            live_pet_guid: __sdk::__query_builder::Col::new(table_name, "live_pet_guid"),
+            creature_entry: __sdk::__query_builder::Col::new(table_name, "creature_entry"),
+            name: __sdk::__query_builder::Col::new(table_name, "name"),
+            name_timestamp: __sdk::__query_builder::Col::new(table_name, "name_timestamp"),
+            level: __sdk::__query_builder::Col::new(table_name, "level"),
+            pet_xp: __sdk::__query_builder::Col::new(table_name, "pet_xp"),
+            next_level_xp: __sdk::__query_builder::Col::new(table_name, "next_level_xp"),
+            happiness: __sdk::__query_builder::Col::new(table_name, "happiness"),
+            loyalty_level: __sdk::__query_builder::Col::new(table_name, "loyalty_level"),
+        }
+    }
+}
+
+pub struct HunterPetProtocolIxCols {
+    pub pet_id: __sdk::__query_builder::IxCol<HunterPetProtocol, u64>,
+    pub owner_guid: __sdk::__query_builder::IxCol<HunterPetProtocol, u64>,
+}
+
+impl __sdk::__query_builder::HasIxCols for HunterPetProtocol {
+    type IxCols = HunterPetProtocolIxCols;
+    fn ix_cols(table_name: &'static str) -> Self::IxCols {
+        HunterPetProtocolIxCols {
+            pet_id: __sdk::__query_builder::IxCol::new(table_name, "pet_id"),
+            owner_guid: __sdk::__query_builder::IxCol::new(table_name, "owner_guid"),
+        }
+    }
+}
+
+impl __sdk::__query_builder::CanBeLookupTable for HunterPetProtocol {}

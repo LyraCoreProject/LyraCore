@@ -14,7 +14,7 @@ use super::*;
 /// `build_health_values` for the full root-cause). `apply` sets just the caller's field(s) on the
 /// reset mask; the output bytes are identical to the pre-extraction inline form (pinned by the codec
 /// golden/crash-trap tests). Do NOT migrate this onto the raw encoder.
-fn unit_values(guid: u64, apply: impl FnOnce(&mut UpdateUnit)) -> SMSG_UPDATE_OBJECT {
+pub(super) fn unit_values(guid: u64, apply: impl FnOnce(&mut UpdateUnit)) -> SMSG_UPDATE_OBJECT {
     let mut unit = UpdateUnit::builder().finalize();
     unit.dirty_reset();
     apply(&mut unit);

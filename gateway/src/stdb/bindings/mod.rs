@@ -310,6 +310,7 @@ pub mod game_group_table;
 pub mod game_guid_allocator_table;
 pub mod game_guid_range_registry_table;
 pub mod game_guid_range_table;
+pub mod game_hunter_pet_protocol_table;
 pub mod game_import_meta_table;
 pub mod game_instance_binding_table;
 pub mod game_instance_binding_type;
@@ -531,6 +532,7 @@ pub mod gw_unaccept_trade_reducer;
 pub mod gw_unequip_item_reducer;
 pub mod gw_use_gameobject_reducer;
 pub mod gw_use_item_reducer;
+pub mod hunter_pet_protocol_type;
 pub mod import_character_blob_reducer;
 pub mod import_character_reducer;
 pub mod import_creature_spawns_append_reducer;
@@ -988,6 +990,7 @@ pub use game_group_table::*;
 pub use game_guid_allocator_table::*;
 pub use game_guid_range_registry_table::*;
 pub use game_guid_range_table::*;
+pub use game_hunter_pet_protocol_table::*;
 pub use game_import_meta_table::*;
 pub use game_instance_binding_table::*;
 pub use game_instance_binding_type::GameInstanceBinding;
@@ -1209,6 +1212,7 @@ pub use gw_unaccept_trade_reducer::gw_unaccept_trade;
 pub use gw_unequip_item_reducer::gw_unequip_item;
 pub use gw_use_gameobject_reducer::gw_use_gameobject;
 pub use gw_use_item_reducer::gw_use_item;
+pub use hunter_pet_protocol_type::HunterPetProtocol;
 pub use import_character_blob_reducer::import_character_blob;
 pub use import_character_reducer::import_character;
 pub use import_creature_spawns_append_reducer::import_creature_spawns_append;
@@ -5566,6 +5570,7 @@ pub struct DbUpdate {
     game_class_level_stats: __sdk::TableUpdate<ClassLevelStats>,
     game_combat_event: __sdk::TableUpdate<CombatEvent>,
     game_combo_point: __sdk::TableUpdate<ComboPoint>,
+    game_hunter_pet_protocol: __sdk::TableUpdate<HunterPetProtocol>,
     game_config: __sdk::TableUpdate<ServerConfig>,
     game_corpse: __sdk::TableUpdate<Corpse>,
     game_corpse_loot: __sdk::TableUpdate<CorpseLoot>,
@@ -5831,6 +5836,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_combo_point" => db_update
                     .game_combo_point
                     .append(game_combo_point_table::parse_table_update(table_update)?),
+                "game_hunter_pet_protocol" => db_update.game_hunter_pet_protocol.append(
+                    game_hunter_pet_protocol_table::parse_table_update(table_update)?,
+                ),
                 "game_config" => db_update
                     .game_config
                     .append(game_config_table::parse_table_update(table_update)?),
@@ -6470,6 +6478,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_combo_point = cache
             .apply_diff_to_table::<ComboPoint>("game_combo_point", &self.game_combo_point)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_hunter_pet_protocol = cache
+            .apply_diff_to_table::<HunterPetProtocol>(
+                "game_hunter_pet_protocol",
+                &self.game_hunter_pet_protocol,
+            )
+            .with_updates_by_pk(|row| &row.pet_id);
         diff.game_config = cache
             .apply_diff_to_table::<ServerConfig>("game_config", &self.game_config)
             .with_updates_by_pk(|row| &row.id);
@@ -7200,6 +7214,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_combo_point" => db_update
                     .game_combo_point
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_hunter_pet_protocol" => db_update
+                    .game_hunter_pet_protocol
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_config" => db_update
                     .game_config
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -7768,6 +7785,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_combo_point" => db_update
                     .game_combo_point
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_hunter_pet_protocol" => db_update
+                    .game_hunter_pet_protocol
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_config" => db_update
                     .game_config
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -8268,6 +8288,7 @@ pub struct AppliedDiff<'r> {
     game_class_level_stats: __sdk::TableAppliedDiff<'r, ClassLevelStats>,
     game_combat_event: __sdk::TableAppliedDiff<'r, CombatEvent>,
     game_combo_point: __sdk::TableAppliedDiff<'r, ComboPoint>,
+    game_hunter_pet_protocol: __sdk::TableAppliedDiff<'r, HunterPetProtocol>,
     game_config: __sdk::TableAppliedDiff<'r, ServerConfig>,
     game_corpse: __sdk::TableAppliedDiff<'r, Corpse>,
     game_corpse_loot: __sdk::TableAppliedDiff<'r, CorpseLoot>,
@@ -8588,6 +8609,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<ComboPoint>(
             "game_combo_point",
             &self.game_combo_point,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<HunterPetProtocol>(
+            "game_hunter_pet_protocol",
+            &self.game_hunter_pet_protocol,
             event,
         );
         callbacks.invoke_table_row_callbacks::<ServerConfig>(
@@ -9999,6 +10025,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_class_level_stats_table::register_table(client_cache);
         game_combat_event_table::register_table(client_cache);
         game_combo_point_table::register_table(client_cache);
+        game_hunter_pet_protocol_table::register_table(client_cache);
         game_config_table::register_table(client_cache);
         game_corpse_table::register_table(client_cache);
         game_corpse_loot_table::register_table(client_cache);
@@ -10186,6 +10213,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_class_level_stats",
         "game_combat_event",
         "game_combo_point",
+        "game_hunter_pet_protocol",
         "game_config",
         "game_corpse",
         "game_corpse_loot",

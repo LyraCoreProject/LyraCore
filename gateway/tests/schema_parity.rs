@@ -474,6 +474,10 @@ parity_test!(parity_game_world_entity, "game_world_entity", lyracore_module::Wor
     sheet_ap_base, sheet_ap_mods, sheet_dmg_min, sheet_dmg_max, sheet_crit_bp, unit_bytes_2,
     bank_bag_slots, mount_display_id,
 });
+parity_test!(parity_game_hunter_pet_protocol, "game_hunter_pet_protocol", lyracore_module::HunterPetProtocol, bindings::hunter_pet_protocol_type::HunterPetProtocol, {
+    pet_id, owner_guid, live_pet_guid, creature_entry, name, name_timestamp, level, pet_xp,
+    next_level_xp, happiness, loyalty_level,
+});
 // `game_config` became gateway-subscribed so the startup instance-hosting check can read
 // `hosts_instances` back instead of guessing. The generated binding was STALE when that subscription
 // landed — a later change END-appended `hosts_instances` to the module table and

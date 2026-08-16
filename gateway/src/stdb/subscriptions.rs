@@ -32,7 +32,7 @@ use super::world_index::CellKey;
 use super::world_view::{self, Viewer, WorldView};
 use super::bindings::*;
 use super::connection::Coordinator;
-use super::views::{corpse_view, entity_view, go_view};
+use super::views::{corpse_view, entity_view, go_view, hunter_pet_protocol_view};
 
 /// RAII guard for one world session's relay callbacks + shared-view registration, held by the
 /// world connection. The coordinator connections outlive every session, so the callbacks MUST be
@@ -619,6 +619,17 @@ pub(crate) fn offer_peer_create_for(
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
             Box::new(codec::build_owner_summon_values(viewer.self_guid, row.guid)),
         )));
+        if let Some(pet) = db
+            .game_hunter_pet_protocol()
+            .iter()
+            .find(|pet| pet.live_pet_guid == row.guid && pet.owner_guid == viewer.self_guid)
+        {
+            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(codec::build_hunter_pet_values(&hunter_pet_protocol_view(
+                    pet,
+                ))),
+            )));
+        }
         let spells: Vec<u32> = db
             .game_creature_cast()
             .iter()
@@ -2537,6 +2548,7 @@ impl Coordinator {
             tx.clone(),
             initial_rep_factions.clone(),
         ));
+        teardowns.extend(self.register_hunter_pet_relays(self_guid, tx.clone()));
 
         // Freeze the login-apply item snapshot (the coordinator's cache is the only copy —
         // filter to this owner; the row callbacks that replay these guids arrive after and get
@@ -3616,6 +3628,71 @@ impl Coordinator {
                     .db
                     .game_player_reputation()
                     .remove_on_update(on_rep_update);
+            }),
+        ]
+    }
+
+    fn register_hunter_pet_relays(
+        &self,
+        self_guid: u64,
+        tx: SessionTx,
+    ) -> Vec<Box<dyn FnOnce() + Send>> {
+        let insert_tx = tx.clone();
+        let on_insert = self
+            .0
+            .coord()
+            .conn
+            .db
+            .game_hunter_pet_protocol()
+            .on_insert(move |_ctx, row| {
+                if row.owner_guid != self_guid {
+                    return;
+                }
+                let pet = hunter_pet_protocol_view(row.clone());
+                let _ = insert_tx.send(Outbound::One(
+                    ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                        codec::build_hunter_pet_values(&pet),
+                    )),
+                ));
+            });
+        let update_tx = tx;
+        let on_update = self
+            .0
+            .coord()
+            .conn
+            .db
+            .game_hunter_pet_protocol()
+            .on_update(move |_ctx, old, row| {
+                if row.owner_guid != self_guid || old == row {
+                    return;
+                }
+                let pet = hunter_pet_protocol_view(row.clone());
+                let _ = update_tx.send(Outbound::One(
+                    ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                        codec::build_hunter_pet_values(&pet),
+                    )),
+                ));
+            });
+        let td_insert = self.clone();
+        let td_update = self.clone();
+        vec![
+            Box::new(move || {
+                td_insert
+                    .0
+                    .coord()
+                    .conn
+                    .db
+                    .game_hunter_pet_protocol()
+                    .remove_on_insert(on_insert);
+            }),
+            Box::new(move || {
+                td_update
+                    .0
+                    .coord()
+                    .conn
+                    .db
+                    .game_hunter_pet_protocol()
+                    .remove_on_update(on_update);
             }),
         ]
     }
