@@ -263,6 +263,7 @@ fn award_killer_rewards(
             rank,
             share_count,
         );
+        crate::creatures::award_hunter_pet_kill_progression(ctx, *recipient, target.level, rank);
         crate::quest::on_creature_killed(ctx, *recipient, target.entry);
     }
     // Soul shard generation: if `killer_guid` is channeling Drain Soul (1120) on this dying

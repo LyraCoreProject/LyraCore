@@ -676,8 +676,19 @@ mod tests {
     // The stat-roll tests live here too (lifted with the geometry tests); their subjects are in the
     // sibling `spawn` module, reached via the parent `creatures` re-export.
     use crate::creatures::{
-        rank_hp_multiplier_permille, rolled_creature_stats, scale_health_for_rank, CreatureFamily,
+        rank_hp_multiplier_permille, rolled_creature_stats, scale_creature_damage_for_level,
+        scale_health_for_rank, CreatureFamily,
     };
+
+    #[test]
+    fn creature_damage_scales_from_template_to_live_level_without_overflow() {
+        assert_eq!(scale_creature_damage_for_level(5, 10, 10, 10), (5, 10));
+        assert_eq!(scale_creature_damage_for_level(5, 10, 10, 12), (6, 12));
+        assert_eq!(
+            scale_creature_damage_for_level(u32::MAX, u32::MAX, 1, 60),
+            (u32::MAX, u32::MAX)
+        );
+    }
 
     #[test]
     fn hp_pct_below_threshold_and_flee_delegation() {

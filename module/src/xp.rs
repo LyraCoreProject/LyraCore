@@ -112,7 +112,7 @@ pub(crate) fn xp_for_kill(mob_level: u32, player_level: u32) -> u32 {
 /// Vanilla kill-XP multiplier by creature `rank` (cmangos classification: 0=normal, 1=elite,
 /// 2=rare-elite, 3=boss/world-boss, 4=rare). Elites (1/2/3) pay 2× — matching vanilla's `if IsElite()
 /// xp *= 2`; normal + rare pay 1×. An unknown rank → 1× (never amplify an unrecognized value). Pure.
-fn rank_xp_multiplier(rank: u8) -> u32 {
+pub(crate) fn rank_xp_multiplier(rank: u8) -> u32 {
     match rank {
         1..=3 => 2, // elite / rare-elite / world-boss
         _ => 1,     // normal (0), rare (4), unknown

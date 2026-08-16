@@ -517,6 +517,25 @@ pub fn scale_health_for_rank(base_health: u32, rank: u8) -> u32 {
     ((base_health as u64 * permille as u64) / 1000).min(u32::MAX as u64) as u32
 }
 
+/// Scale a template's minimum-level damage range to a live creature level. This keeps ordinary
+/// minimum-level spawns unchanged and gives higher rolled creatures and advancing Hunter pets the
+/// same monotonic, overflow-safe damage refresh.
+pub fn scale_creature_damage_for_level(
+    min: u32,
+    max: u32,
+    template_level: u32,
+    live_level: u32,
+) -> (u32, u32) {
+    if template_level == 0 || live_level == template_level {
+        return (min, max);
+    }
+    let scale = |value: u32| {
+        (u64::from(value) * u64::from(live_level) / u64::from(template_level))
+            .min(u64::from(u32::MAX)) as u32
+    };
+    (scale(min).max(1), scale(max).max(1))
+}
+
 /// Insert a freshly-built creature `game_world_entity` row and fire the `on_creature_spawn` notify
 /// hook. The SINGLE chokepoint every creature-entity insert routes through — world
 /// seed, respawn pass, debug spawn, pet summon — so a package hook sees every creature that enters
