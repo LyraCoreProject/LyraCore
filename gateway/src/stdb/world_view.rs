@@ -76,9 +76,29 @@ pub(crate) struct Viewer {
     /// deterministic layout the CREATE used. Shared with the per-player skill
     /// relays exactly like `created`/`gates`: one instance, whichever leg the flag picks.
     pub(crate) skill_slots: Arc<Mutex<(HashMap<u32, u8>, u8)>>,
+    /// Areas known before this viewer entered the world. Reconnect replays use the same set, so
+    /// restoring fog never repeats the discovery feedback.
+    pub(crate) explored: Mutex<ExplorationReplay>,
     /// This viewer's motion-coalescing buffer. Shared-dispatch-only state (no per-player
     /// twin), so it is constructed inline and pinned by no tripwire.
     pub(crate) motion_pending: Arc<MotionPending>,
+}
+
+/// Per-viewer exploration replay state. `area_bit` is stable across a transfer's re-minted row
+/// ids, so it identifies discoveries rather than the table's surrogate key.
+#[derive(Default)]
+pub(crate) struct ExplorationReplay {
+    announced: HashSet<i32>,
+}
+
+impl ExplorationReplay {
+    pub(crate) fn seed(&mut self, area_bits: impl IntoIterator<Item = i32>) {
+        self.announced.extend(area_bits);
+    }
+
+    fn admit_once(&mut self, area_bit: i32) -> bool {
+        self.announced.insert(area_bit)
+    }
 }
 
 /// Dense-crowd coalescing: the pump UPSERTS the latest motion row per mover here and queues
@@ -351,6 +371,27 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         "game_character_quest.delete",
         &view,
         move |v, row| quest_deleted(v, &quest_delete_coord, row),
+    );
+    {
+        let coord = coord.clone();
+        wire_insert(
+            db.game_character_explored(),
+            "game_character_explored.insert",
+            &view,
+            move |v, row| exploration_appeared(v, &coord, row),
+        );
+    }
+    wire_insert(
+        db.game_player_reputation(),
+        "game_player_reputation.insert",
+        &view,
+        |v, row| reputation_appeared(v, row),
+    );
+    wire_update(
+        db.game_player_reputation(),
+        "game_player_reputation.update",
+        &view,
+        |v, _old, row| reputation_appeared(v, row),
     );
 
     // ---- game_world_entity -----------------------------------------------------------------
@@ -1108,16 +1149,91 @@ fn quest_deleted(view: &WorldView, coord: &Coordinator, row: &CharacterQuest) {
     });
 }
 
+/// An explored-area row restores the complete fog word first, then reports a new discovery.
+/// Cache reads and replay-state mutation stay on the addressed session's writer queue.
+fn exploration_appeared(view: &WorldView, coord: &Coordinator, row: &CharacterExplored) {
+    let Some(viewer) = view.viewer_of_owner(OwnerGuid(row.character_guid)) else {
+        return;
+    };
+    let (row, coord) = (row.clone(), coord.clone());
+    let tx = viewer.tx.clone();
+    enqueue(&tx, move || exploration_outbound(&coord, &viewer, &row));
+}
+
+fn exploration_outbound(
+    coord: &Coordinator,
+    viewer: &Viewer,
+    row: &CharacterExplored,
+) -> Vec<Outbound> {
+    if row.area_bit < 0 {
+        return Vec::new();
+    }
+    let word_idx = (row.area_bit / 32) as u16;
+    let lo = word_idx as i32 * 32;
+    let word = {
+        let guard = coord.0.coord();
+        guard
+            .conn
+            .db
+            .game_character_explored()
+            .iter()
+            .filter(|candidate| {
+                candidate.character_guid == viewer.self_guid
+                    && candidate.area_bit >= lo
+                    && candidate.area_bit < lo + 32
+            })
+            .fold(0u32, |word, candidate| {
+                word | (1u32 << (candidate.area_bit - lo))
+            })
+    };
+    exploration_outbound_for_word(viewer, row, word_idx, word)
+}
+
+fn exploration_outbound_for_word(
+    viewer: &Viewer,
+    row: &CharacterExplored,
+    word_idx: u16,
+    word: u32,
+) -> Vec<Outbound> {
+    let (opcode, body) =
+        crate::codec::build_explored_zones_values(viewer.self_guid, word_idx, word);
+    let mut outbound = vec![Outbound::Raw { opcode, body }];
+    if viewer.explored.lock().unwrap().admit_once(row.area_bit) {
+        let (opcode, body) =
+            crate::codec::build_exploration_experience_raw(row.area_id, row.experience);
+        outbound.push(Outbound::Raw { opcode, body });
+    }
+    outbound
+}
+
+/// A standing row is delivered only to its owner. The wire packet uses the Faction.dbc
+/// ReputationListID, never the game's faction id.
+fn reputation_appeared(view: &WorldView, row: &PlayerReputation) {
+    let Some(viewer) = view.viewer_of_owner(OwnerGuid(row.character_guid)) else {
+        return;
+    };
+    let row = row.clone();
+    let tx = viewer.tx.clone();
+    enqueue(&tx, move || reputation_outbound(&row));
+}
+
+fn reputation_outbound(row: &PlayerReputation) -> Vec<Outbound> {
+    if row.reputation_index < 0 {
+        return Vec::new();
+    }
+    crate::codec::build_set_faction_standing_raw(row.reputation_index as u32, row.standing)
+        .map(|(opcode, body)| vec![Outbound::Raw { opcode, body }])
+        .unwrap_or_default()
+}
+
 /// A rest-state flip landed on a shard's coordinator feed. Self-only family: the row names its
 /// owner and the owner is the ONLY lawful recipient, so the audience predicate IS the
 /// owner-session lookup — there is no candidate set to filter,
 /// and a row whose owner has no live session here is dropped.
 ///
-/// The per-player leg's `ReplayGate` (login initial-sync suppression) has no shared twin by
-/// construction: nothing re-subscribes per session on this path, so rows arriving after arming are
-/// live flips. (A coordinator watchdog re-arm can replay rows still inside their GC TTL — an
-/// idempotent re-send of the current rest byte, the same class every coordinator-ridden 279 relay
-/// already accepts.)
+/// This family needs no replay state: nothing re-subscribes per session on this path, so rows
+/// arriving after arming are live flips. A coordinator watchdog re-arm can replay rows still
+/// inside their GC TTL, which idempotently re-sends the current rest byte.
 fn rest_state_appeared(view: &WorldView, row: &RestStateEvent) {
     let Some(session) = view.session_of_owner(row.character_guid) else {
         return;
@@ -1462,12 +1578,14 @@ fn channel_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: 
 #[cfg(test)]
 mod family_audience_tests {
     use super::{
-        addon_message_appeared, levelup_appeared, teleport_appeared, xp_appeared, BoundIdentity,
+        addon_message_appeared, exploration_outbound_for_word, levelup_appeared,
+        reputation_appeared, teleport_appeared, xp_appeared, BoundIdentity, ExplorationReplay,
         MotionPending, OwnerGuid, Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::bindings::{
-        AddonMessage, CharacterQuest, LevelupEvent, TeleportEvent, XpEvent,
+        AddonMessage, CharacterExplored, CharacterQuest, LevelupEvent, PlayerReputation,
+        TeleportEvent, XpEvent,
     };
     use crate::stdb::subscriptions::{private_recipient_audience, quest_update_packets};
     use crate::stdb::world_index::{CellKey, EntityLayer};
@@ -1502,6 +1620,7 @@ mod family_audience_tests {
             created: Arc::new(Mutex::new(HashSet::new())),
             gates: Arc::new(ViewerGates::default()),
             skill_slots: Arc::new(Mutex::new((HashMap::new(), 0))),
+            explored: Mutex::new(ExplorationReplay::default()),
             motion_pending: Arc::new(MotionPending::default()),
         })
     }
@@ -1510,6 +1629,28 @@ mod family_audience_tests {
         match rx.try_recv().expect("one addressed writer job") {
             Outbound::Job(job) => job(),
             _ => panic!("shared owner dispatch must enqueue packet work as a writer job"),
+        }
+    }
+
+    fn explored(area_bit: i32, area_id: u32, experience: u32) -> CharacterExplored {
+        CharacterExplored {
+            id: 1,
+            character_guid: 9001,
+            area_bit,
+            area_id,
+            experience,
+        }
+    }
+
+    fn reputation(character_guid: u64, reputation_index: i32, standing: i32) -> PlayerReputation {
+        PlayerReputation {
+            id: 1,
+            character_guid,
+            owner_identity: identity(1),
+            faction_id: 72,
+            standing,
+            reputation_index,
+            at_war: false,
         }
     }
 
@@ -1670,6 +1811,7 @@ mod family_audience_tests {
             created: old.created.clone(),
             gates: old.gates.clone(),
             skill_slots: old.skill_slots.clone(),
+            explored: Mutex::new(ExplorationReplay::default()),
             motion_pending: old.motion_pending.clone(),
         });
         view.add_viewer_on_shard(old.clone(), CellKey::at(0, 0, 0, 0), 3);
@@ -1812,6 +1954,67 @@ mod family_audience_tests {
     }
 
     #[test]
+    fn exploration_replays_fog_before_discovery_and_reconnects_stay_quiet() {
+        let viewer = viewer(1, 9001);
+        viewer.explored.lock().unwrap().seed([40]);
+
+        let resident = explored(40, 87, 120);
+        let resident_out = exploration_outbound_for_word(&viewer, &resident, 1, 1 << 8);
+        let (fog_opcode, fog_body) = crate::codec::build_explored_zones_values(9001, 1, 1 << 8);
+        match resident_out.as_slice() {
+            [Outbound::Raw { opcode, body }] => {
+                assert_eq!((*opcode, body), (fog_opcode, &fog_body));
+            }
+            _ => panic!("a seeded area restores fog without discovery feedback"),
+        }
+
+        let fresh = explored(41, 88, 121);
+        let fresh_out = exploration_outbound_for_word(&viewer, &fresh, 1, (1 << 8) | (1 << 9));
+        let (new_fog_opcode, new_fog_body) =
+            crate::codec::build_explored_zones_values(9001, 1, (1 << 8) | (1 << 9));
+        let (discovery_opcode, discovery_body) =
+            crate::codec::build_exploration_experience_raw(88, 121);
+        match fresh_out.as_slice() {
+            [
+                Outbound::Raw { opcode: fog_opcode, body: fog_body },
+                Outbound::Raw { opcode: toast_opcode, body: toast_body },
+            ] => {
+                assert_eq!((*fog_opcode, fog_body), (new_fog_opcode, &new_fog_body));
+                assert_eq!((*toast_opcode, toast_body), (discovery_opcode, &discovery_body));
+            }
+            _ => panic!("fog VALUES must precede discovery feedback for a new area"),
+        }
+    }
+
+    #[test]
+    fn reputation_insert_and_update_route_only_to_the_owner_by_reputation_index() {
+        let view = WorldView::new(true);
+        let (owner_tx, owner_rx) = SessionTx::with_depth(0);
+        let (other_tx, other_rx) = SessionTx::with_depth(0);
+        let owner = viewer_with_tx(1, 9001, identity(1), owner_tx);
+        let other = viewer_with_tx(2, 9002, identity(2), other_tx);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        view.add_viewer_on_shard(owner, anchor, 0);
+        view.add_viewer_on_shard(other, anchor, 0);
+
+        reputation_appeared(&view, &reputation(9001, 19, 3175));
+        reputation_appeared(&view, &reputation(9001, 19, 3200));
+
+        assert!(other_rx.try_recv().is_err(), "an unrelated owner receives nothing");
+        for standing in [3175, 3200] {
+            let (opcode, body) = crate::codec::build_set_faction_standing_raw(19, standing)
+                .expect("a valid reputation index has a packet");
+            match queued_job(&owner_rx).as_slice() {
+                [Outbound::Raw { opcode: actual_opcode, body: actual_body }] => {
+                    assert_eq!((*actual_opcode, actual_body), (opcode, &body));
+                }
+                _ => panic!("the reputation row must use its reputation_index, not faction_id"),
+            }
+        }
+        assert!(owner_rx.try_recv().is_err(), "each reputation row queues exactly one job");
+    }
+
+    #[test]
     fn migrated_owner_callbacks_are_armed_once_and_not_registered_per_session() {
         let source = include_str!("world_view.rs");
         let start = source.find("pub(crate) fn arm_shard").unwrap();
@@ -1825,11 +2028,12 @@ mod family_audience_tests {
             "game_addon_message",
             "game_xp_event",
             "game_levelup_event",
+            "game_character_explored",
+            "game_player_reputation",
         ] {
             assert_eq!(
-                arm.matches(&format!("wire_insert(db.{table}()"))
-                    .count(),
-                1,
+                arm.matches(&format!("db.{table}()")).count(),
+                if table == "game_player_reputation" { 2 } else { 1 },
                 "{table} must have one shared callback per arm_shard call"
             );
         }
@@ -1853,12 +2057,31 @@ mod family_audience_tests {
             "register_addon_relays",
             "register_xp_levelup_relays",
             "register_quest_relays",
+            "register_explored_relays",
+            "register_reputation_relays",
+            "initial_rep_factions",
         ] {
             assert!(
                 !subscriptions.contains(registrar),
                 "{registrar} must not survive in subscribe_player_events"
             );
         }
+
+        let exploration = source
+            .split("fn exploration_appeared")
+            .nth(1)
+            .and_then(|body| body.split("fn exploration_outbound").next())
+            .expect("the exploration owner relay");
+        assert!(
+            exploration.contains("viewer_of_owner(OwnerGuid(row.character_guid))")
+                && exploration.contains("enqueue(&tx, move || exploration_outbound"),
+            "exploration must select its owner then defer all work to that viewer's writer"
+        );
+        assert!(
+            subscriptions.find("explored.seed(").unwrap()
+                < subscriptions.find("view.add_viewer(").unwrap(),
+            "resident exploration state must be seeded before viewer registration"
+        );
 
         assert_eq!(
             include_str!("connection.rs")

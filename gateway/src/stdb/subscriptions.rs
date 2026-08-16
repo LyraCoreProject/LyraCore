@@ -2325,66 +2325,6 @@ pub(crate) fn entity_update_to_outbound(
     out
 }
 
-/// Login-replay suppression for the per-player relays that see their table's HISTORY replayed as
-/// `on_insert` when the base subscription's initial update is applied (exploration's "Discovered"
-/// toast, the rest-state PLAYER_BYTES_2 flip). Both must relay only what happens LIVE, after the
-/// player is in the world.
-///
-/// **Why a flag and not just a frozen id set.** The previous shape froze the row ids
-/// present at login and skipped those — two ways to misfire, and the live run hit both:
-///
-///  1. **Re-minted ids.** `sweep_transfer_game_character_explored` sets `r.id = 0` so the
-///     destination's `auto_inc` mints fresh ids, and every imported row read as a new discovery —
-///     the reported symptom (one "Discovered: <area> — N experience gained" per explored area, per
-///     shard crossing, quoting XP that was never granted). Hence [`Self::admit_once`] keys on
-///     `area_bit`, which is what drives the fog word and is stable across a re-mint.
-///  2. **The freeze RACES the replay.** The set was frozen on the calling thread after the
-///     subscription ack, but the SDK applies the update to the client cache, fires `on_applied`
-///     (which is what releases that thread) and THEN invokes the row callbacks — on its own
-///     `run_threaded` pump. So the replay callbacks can run before the set is frozen, and keying
-///     that set differently would not change it. The gate is therefore CLOSED until the freeze
-///     completes: nothing the initial apply replays can toast, whatever order the two threads run
-///     in, because a genuinely live discovery cannot happen before the player is in the world.
-///
-/// The cache is written before either callback runs, so a row whose replay lost the race is still
-/// captured by the seed passed to [`Self::open`].
-#[derive(Default)]
-pub(crate) struct ReplayGate {
-    /// False until the initial-apply snapshot has been taken. Everything before that is history.
-    open: bool,
-    /// Exploration only: `area_bit`s already announced (or present at login). A STABLE key —
-    /// unlike the `auto_inc` row id, it survives the re-mint a cross-database transfer performs.
-    announced: HashSet<i32>,
-}
-
-impl ReplayGate {
-    /// Take the initial-apply snapshot and open the gate. `already` is the set of `area_bit`s the
-    /// client cache holds for this character at that moment (empty for the keyless relays).
-    fn open(&mut self, already: impl IntoIterator<Item = i32>) {
-        self.announced.extend(already);
-        self.open = true;
-    }
-
-    /// One arriving exploration row: announce it only once the gate is open AND this `area_bit`
-    /// has not been announced before (a re-minted duplicate of an area the character already
-    /// explored is not a discovery).
-    fn admit_once(&mut self, area_bit: i32) -> bool {
-        self.open && self.announced.insert(area_bit)
-    }
-}
-
-/// The "Discovered: &lt;area&gt;" toast for one arriving `game_character_explored` row, or `None`
-/// when the row is a login/import REPLAY rather than a live discovery. Pure (bar the gate it
-/// mutates) → unit-tested; the fog VALUES deliberately does NOT go through here, since it must fire
-/// for every row so the map restores. See [`ReplayGate`] for what the gate is protecting against.
-fn discovery_packet(gate: &Mutex<ReplayGate>, row: &CharacterExplored) -> Option<Outbound> {
-    if !gate.lock().unwrap().admit_once(row.area_bit) {
-        return None;
-    }
-    let (opcode, body) = codec::build_exploration_experience_raw(row.area_id, row.experience);
-    Some(Outbound::Raw { opcode, body })
-}
-
 /// SMSG_UPDATE_AURA_DURATION (buff timer): the 1.12 UpdateMask aura array carries NO duration,
 /// so without this the client shows "0 seconds"/flashing icon. Only for THIS player's own auras
 /// (the slot indexes the player's aura array) with a finite window; the duration is the full
@@ -2527,11 +2467,9 @@ pub(crate) fn quest_update_packets(
 impl Coordinator {
     // The relay registration hands each callback its own `Coordinator` clone; the arity is the number of relays, not an accidental type.
     #[allow(clippy::type_complexity)]
-    /// Register this session's remaining stuck-state relays and turn row deltas into outbound SMSG
-    /// pushed onto `tx` (Phase 6/7). Item instances, reputation, and exploration still own session
-    /// callbacks. Quest log, XP, level-up, teleport, addon, and broadcast-shaped families ride the
-    /// shared per-shard dispatch in `world_view::arm_shard`, keyed to the `Viewer` registered near
-    /// the end of this function.
+    /// Register this session's remaining item relay and prepare state for shared per-shard
+    /// dispatch. Every other owner-scoped family is keyed to the `Viewer` registered near the end
+    /// of this function.
     ///
     /// TEARDOWN CONTRACT: each `register_<group>_relays` method below returns its OWN teardown
     /// closures, one per callback it registers; this function only `extend`s them into
@@ -2616,7 +2554,7 @@ impl Coordinator {
             std::sync::Arc::new(std::sync::Mutex::new((map, next_free)))
         };
 
-        let explored_replay: Arc<Mutex<ReplayGate>> = Arc::new(Mutex::new(ReplayGate::default()));
+        let mut explored = world_view::ExplorationReplay::default();
 
         // The bound identity WITHOUT touching a per-player connection — synthetic under the
         // flag (what establish_session bound and the module stamps on event rows), the cached
@@ -2633,31 +2571,14 @@ impl Coordinator {
         // login-sequence tail below reaches into the same set.
         let initial_item_guids: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<u64>>> =
             std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
-        // Same replay gate for REPUTATION rows (live find 2026-07-11): login standings travel
-        // silently in SMSG_INITIALIZE_FACTIONS; the apply-replayed rows must not re-announce
-        // ("you are now Friendly with Stormwind" at every login). Keyed by faction_id (rows are
-        // already self-filtered). Minted here for the same reason as `initial_item_guids` above.
-        let initial_rep_factions: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<u32>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
-
         // One registrar call per surviving table group, in the same order the registrations used
         // to happen top-to-bottom in this function; each returns its OWN teardowns (the CARVE
         // note above).
         let mut teardowns: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
-        teardowns.extend(self.register_explored_relays(
-            self_guid,
-            tx.clone(),
-            explored_replay.clone(),
-        ));
         teardowns.extend(self.register_item_relays(
             self_guid,
             tx.clone(),
             initial_item_guids.clone(),
-        ));
-        teardowns.extend(self.register_reputation_relays(
-            self_guid,
-            tx.clone(),
-            initial_rep_factions.clone(),
         ));
 
         // Freeze the login-apply item snapshot (the coordinator's cache is the only copy —
@@ -2677,31 +2598,11 @@ impl Coordinator {
             );
         }
         {
-            let mut set = initial_rep_factions.lock().unwrap();
+            // Seed the viewer's replay state before registration. The shared coordinator was
+            // subscribed before this session existed, so resident reputation rows cannot replay
+            // into the new viewer; exploration keeps this state because reconnect replays rows.
             let guard = self.0.coord();
-            set.extend(
-                guard
-                    .conn
-                    .db
-                    .game_player_reputation()
-                    .iter()
-                    .filter(|r| r.character_guid == self_guid)
-                    .map(|r| r.faction_id),
-            );
-        }
-        {
-            // Exploration: OPEN the discovery gate, seeded with the area_bits the character
-            // has already explored (whether they arrived by login or by a cross-database import — the
-            // cache is written before the replay callbacks run, so both are in here). Their on_insert
-            // replay therefore skips the "Discovered" popup while the fog VALUES still fires for all.
-            // Only a genuinely new area_bit, discovered after this point, toasts.
-            //
-            // Seeded from the COORDINATOR cache: it predates this session and holds
-            // the same rows for this character in both flag states, while the per-player cache
-            // stops carrying the explored query under the flag. The gate now also guards the
-            // coordinator twin's toast branch, so the seed source must not depend on the flag.
-            let guard = self.0.coord();
-            explored_replay.lock().unwrap().open(
+            explored.seed(
                 guard
                     .conn
                     .db
@@ -2748,6 +2649,7 @@ impl Coordinator {
             created: created.clone(),
             gates: viewer_gates.clone(),
             skill_slots: skill_slots.clone(),
+            explored: Mutex::new(explored),
             motion_pending: Arc::new(world_view::MotionPending::default()),
         });
         if let Err(error) = view.add_viewer(
@@ -2831,72 +2733,6 @@ impl Coordinator {
         })
     }
 
-    /// EXPLORATION FOG relay, coordinator twin — game_character_explored (insert). Sends the same
-    /// idempotent fog VALUES the per-player leg sends (see `world_view`), from a connection that
-    /// never churns — the coordinator-relay rule's guarantee, see `stdb::connection`.
-    /// `explored_replay` is minted by the dispatcher, not here: the discovery-gate OPEN in the
-    /// login-sequence tail seeds the SAME gate this closure's toast branch reads.
-    fn register_explored_relays(
-        &self,
-        self_guid: u64,
-        tx: SessionTx,
-        explored_replay: Arc<Mutex<ReplayGate>>,
-    ) -> Vec<Box<dyn FnOnce() + Send>> {
-        // ======================================================================================
-        //  EXPLORATION FOG, coordinator twin — game_character_explored (insert)
-        //  The coordinator-relay rule's guarantee (see `stdb::connection`) for the per-player leg
-        //  above: re-sends the same idempotent fog VALUES from a connection that never churns, so a
-        //  fresh-login discovery can't be dropped by AOI resubscription.
-        // ======================================================================================
-        // Fog-word GUARANTEE for live discoveries (the coordinator-relay rule, see
-        // `stdb::connection`; live find 2026-07-19): the fresh-login
-        // first-movement discovery is exactly the AOI-churn window where the per-player callback
-        // drops — a new character discovered Northshire server-side and the map never cleared. The
-        // coordinator re-sends the same idempotent full-word VALUES for every fresh insert (double
-        // fog with the per-player relay is harmless); flag-off the "Discovered" popup deliberately
-        // stays on the per-player path only, so it never toasts twice — flag-on the
-        // per-player leg is gone, so THIS callback carries the toast, behind the same
-        // `ReplayGate` (a coordinator reconnect re-applies the subscription and replays every
-        // cached row; the gate's area_bit key is what keeps that from toasting the whole map).
-        // Login restore: flag-off rides the per-player initial-sync; flag-on it is the explicit
-        // fog sweep at world entry below.
-        let explored_coord_tx = tx.clone();
-        let explored_coord_gate = explored_replay.clone();
-        let on_explored_coord =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_character_explored()
-                .on_insert(move |ctx, row| {
-                    if row.character_guid != self_guid || row.area_bit < 0 {
-                        return;
-                    }
-                    let word_idx = (row.area_bit / 32) as u16;
-                    let lo = word_idx as i32 * 32;
-                    let mut word: u32 = 0;
-                    for r in ctx.db.game_character_explored().iter() {
-                        if r.character_guid == self_guid && r.area_bit >= lo && r.area_bit < lo + 32
-                        {
-                            word |= 1u32 << (r.area_bit - lo);
-                        }
-                    }
-                    let (opcode, body) =
-                        codec::build_explored_zones_values(self_guid, word_idx, word);
-                    let _ = explored_coord_tx.send(Outbound::Raw { opcode, body });
-                    if let Some(out) = discovery_packet(&explored_coord_gate, row) {
-                        let _ = explored_coord_tx.send(out);
-                    }
-                });
-        let td_ex = self.clone();
-        vec![Box::new(move || {
-            let l = td_ex.0.coord();
-            l.conn
-                .db
-                .game_character_explored()
-                .remove_on_insert(on_explored_coord);
-        })]
-    }
 
     /// ITEM INSTANCE relays, coordinator-registered — game_item_instance
     /// (insert/update/delete): bag CREATE/DESTROY, the PLAYER_FIELD_INV_SLOT pointer,
@@ -3294,103 +3130,6 @@ impl Coordinator {
         ]
     }
 
-    /// REPUTATION relays, coordinator-registered — game_player_reputation (insert/update):
-    /// SMSG_SET_FACTION_STANDING on a standing change for this player, the same
-    /// coordinator/replay-gate shape as XP and quest-log. `initial_rep_factions` is minted by the
-    /// dispatcher, not here: the login-apply standings snapshot in the login-sequence tail reaches
-    /// into the same set.
-    fn register_reputation_relays(
-        &self,
-        self_guid: u64,
-        tx: SessionTx,
-        initial_rep_factions: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<u32>>>,
-    ) -> Vec<Box<dyn FnOnce() + Send>> {
-        // ======================================================================================
-        //  REPUTATION, coordinator-registered — game_player_reputation (insert/update)
-        //  SMSG_SET_FACTION_STANDING on a standing change for this player; the same
-        //  coordinator/replay-gate shape as XP and quest-log above.
-        // ======================================================================================
-        // Reputation relay: a stored standing for THIS player changed (quest turn-in rep gain) →
-        // SMSG_SET_FACTION_STANDING so the client's reputation bar moves WITHOUT a relog. RLS scopes the
-        // table to this player; the character_guid guard is belt-and-suspenders. build_set_faction_standing
-        // returns None for a faction id the client enum doesn't know (nothing to show) → skip silently.
-        let rep_ins_tx = tx.clone();
-        let rep_gate = initial_rep_factions.clone();
-        let on_rep_insert =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_player_reputation()
-                .on_insert(move |_ctx, row| {
-                    if row.character_guid != self_guid {
-                        return;
-                    }
-                    // Login-apply replay: this standing already reached the client via
-                    // INITIALIZE_FACTIONS — a re-relay makes the client toast it as a fresh gain.
-                    //
-                    // AUDIT against the explored-area duplicate-discovery bug — deliberately left keyed
-                    // as it is, on BOTH counts. (a) `faction_id` is the
-                    // game's own faction id, not a surrogate PK, so a transfer's re-mint cannot change it —
-                    // the exploration defect has no analogue here. (b) The freeze/replay race cannot reach
-                    // it either: this callback rides the COORDINATOR connection, whose subscription is
-                    // long-lived and was applied long before this player logged in, so a player's login
-                    // replays nothing here and the rows an import writes land while this callback is not
-                    // yet registered. It fires only on a real post-registration insert.
-                    if rep_gate.lock().unwrap().contains(&row.faction_id) {
-                        return;
-                    }
-                    // Send the Faction.dbc ReputationListID (the small 0..63 index the client addresses), NOT
-                    // faction_id — sending the id crashed the client. A `< 0` row has no rep bar → skip (stale
-                    // pre-migration -1 rows self-heal: the next grant re-stamps the real index).
-                    if row.reputation_index >= 0 {
-                        if let Some((opcode, body)) = codec::build_set_faction_standing_raw(
-                            row.reputation_index as u32,
-                            row.standing,
-                        ) {
-                            let _ = rep_ins_tx.send(Outbound::Raw { opcode, body });
-                        }
-                    }
-                });
-        let rep_upd_tx = tx.clone();
-        let on_rep_update =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_player_reputation()
-                .on_update(move |_ctx, _old, row| {
-                    if row.character_guid != self_guid {
-                        return;
-                    }
-                    if row.reputation_index >= 0 {
-                        if let Some((opcode, body)) = codec::build_set_faction_standing_raw(
-                            row.reputation_index as u32,
-                            row.standing,
-                        ) {
-                            let _ = rep_upd_tx.send(Outbound::Raw { opcode, body });
-                        }
-                    }
-                });
-        let td_ri = self.clone();
-        let td_ru = self.clone();
-        vec![
-            Box::new(move || {
-                let l = td_ri.0.coord();
-                l.conn
-                    .db
-                    .game_player_reputation()
-                    .remove_on_insert(on_rep_insert);
-            }),
-            Box::new(move || {
-                let l = td_ru.0.coord();
-                l.conn
-                    .db
-                    .game_player_reputation()
-                    .remove_on_update(on_rep_update);
-            }),
-        ]
-    }
 }
 
 impl Coordinator {
@@ -4430,89 +4169,6 @@ mod tests {
         assert!(!instance_relay_gate(7, None));
     }
 
-    // -------------------------------------------------------------------------------------------
-    //  The shard transfer must not re-announce every explored area
-    // -------------------------------------------------------------------------------------------
-
-    /// One `game_character_explored` row. `id` is the `auto_inc` surrogate the destination RE-MINTS
-    /// on import — the field the old gate keyed on, and the whole of the defect.
-    fn explored(id: u64, area_bit: i32, area_id: u32, experience: u32) -> CharacterExplored {
-        CharacterExplored {
-            id,
-            character_guid: 7,
-            area_bit,
-            area_id,
-            experience,
-        }
-    }
-
-    /// The reported live symptom, end to end through the REAL relay decision: a character arrives on
-    /// another database, its explored rows are re-inserted with FRESH ids, and not one of them may
-    /// toast "Discovered: <area> — N experience gained".
-    #[test]
-    fn an_imported_explored_row_with_a_re_minted_id_emits_no_discovery_packet_issue_41() {
-        let login = [explored(1, 40, 87, 120), explored(2, 87, 12, 60)];
-        let gate = Mutex::new(ReplayGate::default());
-
-        // Login / initial apply: the replay callbacks and the snapshot race (see `ReplayGate`), so
-        // assert BOTH orders. Replay-first — the order that produced the live symptom:
-        for row in &login {
-            assert!(
-                discovery_packet(&gate, row).is_none(),
-                "the initial-apply replay must never toast, gate closed"
-            );
-        }
-        gate.lock().unwrap().open(login.iter().map(|r| r.area_bit));
-
-        // Now the transfer: the SAME areas arrive as brand-new rows with re-minted ids (and, since
-        // `experience` stores the XP granted at the ORIGINAL discovery, a convincingly wrong number).
-        for row in [explored(9001, 40, 87, 120), explored(9002, 87, 12, 60)] {
-            assert!(
-                discovery_packet(&gate, &row).is_none(),
-                "a re-minted row for an already-explored area_bit is not a discovery"
-            );
-        }
-
-        // Snapshot-first (the other side of the race) must reach the same verdict.
-        let gate = Mutex::new(ReplayGate::default());
-        gate.lock().unwrap().open(login.iter().map(|r| r.area_bit));
-        for row in [explored(9001, 40, 87, 120), explored(9002, 87, 12, 60)] {
-            assert!(discovery_packet(&gate, &row).is_none());
-        }
-    }
-
-    /// …while a GENUINELY new area still toasts, exactly once, carrying its own area/XP.
-    #[test]
-    fn a_fresh_discovery_still_emits_its_packet_once_issue_41() {
-        let gate = Mutex::new(ReplayGate::default());
-        gate.lock().unwrap().open([40, 87]);
-
-        let fresh = explored(9003, 108, 9, 155);
-        let Some(Outbound::Raw { opcode, body }) = discovery_packet(&gate, &fresh) else {
-            panic!("a never-before-explored area_bit must toast a discovery packet");
-        };
-        let (want_op, want_body) = codec::build_exploration_experience_raw(9, 155);
-        assert_eq!((opcode, body), (want_op, want_body));
-
-        // Idempotent: the same area arriving again (a later transfer, a duplicated relay) is silent.
-        assert!(
-            discovery_packet(&gate, &explored(9004, 108, 9, 155)).is_none(),
-            "an area announced once must never announce again"
-        );
-    }
-
-    /// Nothing announces until the snapshot is taken and the gate opened.
-    #[test]
-    fn the_replay_gate_admits_nothing_before_it_is_opened_issue_41() {
-        let mut gate = ReplayGate::default();
-        assert!(
-            !gate.admit_once(9),
-            "a historical exploration row replayed at login must not toast a discovery"
-        );
-        gate.open([]);
-        assert!(gate.admit_once(9), "a live discovery after login must announce");
-    }
-
     /// The non-test half of this file as the source scans below may read it: `//` comments STRIPPED
     /// and every whitespace run collapsed to one space.
     ///
@@ -4712,66 +4368,6 @@ mod tests {
                 && whisper.contains("private_recipient_audience(row.recipient_guid, viewer.self_guid)"),
             "whisper_appeared is no longer recipient-keyed — on an owner-token read that is a \
              privacy leak: every session would receive every player's private whispers"
-        );
-    }
-
-    /// Tripwire: the exploration relay must route its popup through [`discovery_packet`], which is
-    /// the only thing the tests above can see, AND must actually SEND what it returns. Deleting the
-    /// call and inlining the codec would restore the defect with every test above still green, so
-    /// the ONE remaining call site of `build_exploration_experience_raw` in this file has to be the
-    /// gated one — and the gated one has to reach the wire (mutation: `let _ = discovery_packet(..)`
-    /// kept the identifier and killed the feature, green).
-    #[test]
-    fn the_discovery_popup_has_exactly_one_gated_call_site_issue_41() {
-        let body = scanned_source();
-        assert_eq!(
-            body.matches("build_exploration_experience_raw").count(),
-            1,
-            "the \"Discovered\" popup must be built in `discovery_packet` and nowhere else — an \
-             ungated second call site is the explored-area duplicate-discovery defect wearing a \
-             different hat"
-        );
-        assert_eq!(
-            body.matches("discovery_packet(&explored_coord_gate, row)").count(),
-            1,
-            "the game_character_explored on_insert relay must ask `discovery_packet` whether to toast"
-        );
-        assert!(
-            body.contains(
-                "if let Some(out) = discovery_packet(&explored_coord_gate, row) { let _ = explored_coord_tx.send(out); }"
-            ),
-            "`discovery_packet`'s answer must be SENT — asking the gate and dropping the packet \
-             leaves every test in this module green while no player ever sees a \"Discovered\" line \
-             again (the inverse of the explored-area duplicate-discovery defect, and the mutation \
-             that survived the identifier-only scan)"
-        );
-    }
-
-    /// Tripwire for the OTHER half of the wiring, and the one mutation the behavioural tests
-    /// above cannot see: the discovery gate has to be OPENED, seeded from the coordinator cache's
-    /// `area_bit`s. Deleting the `open` call leaves every test green while silently killing the
-    /// feature (no discovery ever toasts again); seeding with row ids instead of `area_bit`s
-    /// re-toasts every explored area after a cross-database transfer's auto_inc re-mint.
-    ///
-    /// Note: still a source scan — the weakest form of tripwire. It is what is available:
-    /// opening the gate happens inside `subscribe_player_events`, which needs a live SpacetimeDB
-    /// connection, so no test in this crate can execute it. It reads [`scanned_source`], so a
-    /// comment quoting the call no longer satisfies it. The behavioural half (`ReplayGate` +
-    /// `discovery_packet`) is covered for real above.
-    #[test]
-    fn the_discovery_gate_is_opened_and_seeded_with_area_bits_issue_41() {
-        let body = scanned_source();
-        assert_eq!(
-            body.matches("explored_replay.lock().unwrap().open(")
-                .count(),
-            1,
-            "the discovery gate must be opened exactly once"
-        );
-        assert_eq!(
-            body.matches(".map(|r| r.area_bit),").count(),
-            1,
-            "the discovery gate must be seeded with area_bits — the key that survives the \
-             destination's auto_inc re-mint; seeding it with row ids is the defect"
         );
     }
 
