@@ -1992,12 +1992,13 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                  }) .collect() } }",
             ),
             (
-                // Taxi refusal precedes trade teardown; after that, trade teardown still precedes
-                // the escrow write that flips the in-transit fence.
+                // Taxi refusal precedes ephemeral-session teardown; after that, trade and Duel
+                // teardown still precede the escrow write that flips the in-transit fence.
                 "pub fn begin_transfer(",
                 "{ require_operator(ctx)?; if crate::taxi::is_in_flight(ctx, character_guid) { return \
                  Err(\"PLAYER_IN_TAXI_FLIGHT\".to_string()); } \
                  crate::trade::cancel_trade_for(ctx, character_guid); \
+                 crate::duel::interrupt_duel_for(ctx, character_guid); \
                  apply_begin( &mut CtxShard { ctx }, transfer_id, character_guid, \
                  Destination { map_id: dest_map_id, instance_id: dest_instance_id, x: dest_x, y: dest_y, z: \
                  dest_z, o: dest_o, }, cross_database, ) }",

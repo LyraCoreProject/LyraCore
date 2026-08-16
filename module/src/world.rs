@@ -660,6 +660,9 @@ pub(crate) fn teleport_player(
     };
     let recipient_identity = e.owner_identity;
     let cross_map = is_cross_map_teleport(e.map_id, map_id);
+    if e.map_id != map_id || e.instance_id != instance_id {
+        crate::duel::interrupt_duel_for(ctx, player_guid);
+    }
     // #461: a movement packet staged before the teleport describes the OLD position. Left queued, the
     // next `publish_motion` firing would relay it up to a tick AFTER the teleport landed and snap
     // every nearby peer's view of this player back to where they were. Drop it in both branches —
@@ -1923,6 +1926,7 @@ pub(crate) fn remove_from_world(ctx: &ReducerContext, owner: Identity) {
             character_guid: entity.guid,
         },
     );
+    crate::duel::interrupt_duel_for(ctx, entity.guid);
     // Persist position + progression back to the character so next login resumes in place with the
     // ding/loot intact.
     persist_entity(ctx, &entity, true);

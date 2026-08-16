@@ -877,11 +877,11 @@ pub fn begin_transfer(
     if crate::taxi::is_in_flight(ctx, character_guid) {
         return Err("PLAYER_IN_TAXI_FLIGHT".to_string());
     }
-    // Trade teardown BEFORE the escrow write flips the in-transit fence (#123): the partner's
-    // `TradeCanceled` still addresses a resolvable character, and the not_transported sweep then
-    // has no session left to silently drop. Shard-side concern, so it lives here in the reducer
-    // wrapper, not in the sink-abstracted `apply_begin` the harness executes.
+    // Live sessions end before the escrow write flips the in-transit fence: their partner-facing
+    // relay rows still address a resolvable character, and the not_transported sweep cannot drop
+    // them silently. This remains shard-side, outside the sink-abstracted `apply_begin` harness.
     crate::trade::cancel_trade_for(ctx, character_guid);
+    crate::duel::interrupt_duel_for(ctx, character_guid);
     apply_begin(
         &mut CtxShard { ctx },
         transfer_id,

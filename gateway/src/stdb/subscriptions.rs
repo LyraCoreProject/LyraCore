@@ -1560,6 +1560,8 @@ pub(crate) fn duel_event_outbound(
     const COUNTDOWN: u8 = 1;
     const ACTIVE: u8 = 2;
     const COMPLETE: u8 = 3;
+    const OUT_OF_BOUNDS: u8 = 4;
+    const IN_BOUNDS: u8 = 5;
     const INTERRUPTED: u8 = 0;
     const SURRENDERED: u8 = 1;
     const WON: u8 = 2;
@@ -1628,6 +1630,8 @@ pub(crate) fn duel_event_outbound(
             raw_values(row.initiator_guid, None, Some(1)),
             raw_values(row.challenged_guid, None, Some(2)),
         ],
+        OUT_OF_BOUNDS => vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_OUTOFBOUNDS)],
+        IN_BOUNDS => vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_INBOUNDS)],
         COMPLETE => {
             let mut outbound = vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_COMPLETE(
                 SMSG_DUEL_COMPLETE {
@@ -3898,6 +3902,21 @@ mod tests {
             &fled[1],
             Outbound::One(ServerOpcodeMessage::SMSG_DUEL_WINNER(message))
                 if message.reason == wow_world_base::shared::duel_winner_reason_vanilla_tbc_wrath::DuelWinnerReason::Fled
+        ));
+    }
+
+    #[test]
+    fn duel_boundary_edges_project_only_the_recipient_transition() {
+        let out_of_bounds = duel_event_outbound(&duel_event(4, 0), None, None, None);
+        assert!(matches!(
+            out_of_bounds.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_DUEL_OUTOFBOUNDS)]
+        ));
+
+        let in_bounds = duel_event_outbound(&duel_event(5, 0), None, None, None);
+        assert!(matches!(
+            in_bounds.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_DUEL_INBOUNDS)]
         ));
     }
 
