@@ -8,16 +8,19 @@
 //!   - [`ai`]    — pure movement/flee/chase/wander geometry + the AI tuning consts (+ the unit tests)
 //!   - [`tick`]  — the move-event tables + the `tick_creatures` pass pipeline
 //!   - [`pet`]   — the warlock pet system (summon/despawn/follow), riding the creature machinery above
+//!   - [`hunter_pet`] — durable Hunter-pet identity and the completed-tame transition
 
 mod ai;
 pub(crate) mod cycle;
 mod eventai;
+mod hunter_pet;
 mod pet;
 mod spawn;
 pub(crate) mod tick;
 
 pub use ai::*;
 pub use eventai::*;
+pub use hunter_pet::*;
 pub use pet::*;
 pub use spawn::*;
 pub use tick::*;

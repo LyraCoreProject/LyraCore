@@ -238,6 +238,7 @@ pub fn despawn_pets(ctx: &ReducerContext, owner_guid: u64) {
         crate::motion::drop_pending(ctx, pet.guid); // #461: the staged payload dies with it too
         ctx.db.game_entity_motion().guid().delete(pet.guid); // motion row dies with the entity (2.1)
         ctx.db.game_world_entity().guid().delete(pet.guid);
+        super::clear_live_pet_kind(ctx, pet.guid);
     }
     // Clear any pet-bar command state (the pet is ephemeral — no stale row across re-summon/logout;
     // a re-summon thus resets to the Follow + Defensive default, matching vanilla).
@@ -282,7 +283,7 @@ const HIGHGUID_UNIT: u64 = 0xF130;
 /// `(entry << 24) | db_guid` (always >= 1<<24 since entry >= 1), so the pet's low never collides with a
 /// creature. Stable so a re-summon's `pet_of` scan + the despawn delete agree + the `on_delete` relay is
 /// clean. Pure.
-fn pet_guid_for(owner_guid: u64) -> u64 {
+pub(crate) fn pet_guid_for(owner_guid: u64) -> u64 {
     (HIGHGUID_UNIT << 48) | (owner_guid & 0x0000_FFFF_FFFF_FFFF)
 }
 
@@ -306,7 +307,9 @@ pub fn summon_pet(ctx: &ReducerContext, caster_guid: u64, entry: u32) {
     despawn_pets(ctx, caster_guid);
     match build_pet_entity(ctx, &caster, entry) {
         Some(pet) => {
+            let pet_guid = pet.guid;
             super::spawn::insert_creature_entity(ctx, pet);
+            super::mark_summoned_pet(ctx, pet_guid);
         }
         None => spacetimedb::log::info!(
             "E_SUMMON_PET: creature template {entry} not loaded — no pet summoned for {caster_guid}"

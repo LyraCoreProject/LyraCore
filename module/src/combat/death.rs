@@ -60,6 +60,7 @@ pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Opti
     if target.owner_guid != 0 {
         disengage(ctx, target_guid);
         entities.guid().delete(target_guid);
+        crate::creatures::clear_live_pet_kind(ctx, target_guid);
         // Notify-hook: a pet death is still a death — fired after the despawn is committed.
         crate::hooks::fire_on_death(
             ctx,

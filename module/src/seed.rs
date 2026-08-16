@@ -990,6 +990,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
                                  // only from debug_seed_scenario_fixtures, so every fresh shard agrees regardless of whether the
                                  // wire-suite harness ever ran against it (see seed::fixtures::seed_fixture_catalogue's doc).
     seed_fixture_catalogue(ctx);
+    seed_hunter_tame_fixture(ctx); // Hunter + completed tame + tameable boar tracer fixture
     seed_stacking_probe_fixture(ctx); // the live stacking-family probe's four family members
     seed_soul_shard_item(ctx); // Soul Shard item template (6265)
     seed_drain_soul_fixture(ctx); // Drain Soul (1120) channel — soul-shard generation
