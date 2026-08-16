@@ -23,6 +23,7 @@ mod account_sessions; // per-account session-epoch + live-socket registry, split
 pub(crate) mod aoi; // `world/mod.rs`'s 10s task reads `aoi::AOI_RECENTERS` for the AOISTAT line
 mod armor; // the gateway-side EFFECTIVE-armor fold for the character sheet (Approach B)
 mod connection;
+mod movement_batch;
 mod reads;
 mod reducers;
 pub(crate) mod subscriptions;

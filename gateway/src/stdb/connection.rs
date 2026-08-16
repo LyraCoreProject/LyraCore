@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use super::account_sessions::SessionEpochs;
 use super::bindings::*;
+use super::movement_batch::MovementBatch;
 
 /// Shared handle to the privileged coordination connection **of one shard**.
 ///
@@ -270,7 +271,7 @@ pub(crate) struct CoordinatorInner {
     /// heartbeat and the 40ms flush task sends the whole tick as ONE `gw_movement_batch`
     /// transaction (was: one transaction per heartbeat — ~10k tx/s of per-transaction machinery
     /// at 2000 players, the measured 92%-writer wall).
-    pub(crate) motion_batch: Mutex<Vec<super::bindings::GwMove>>,
+    pub(crate) motion_batch: MovementBatch,
     /// Re-arm hook for a connection-scoped relay that has no per-login registration point to
     /// self-heal through after a reconnect (the bot-invite relay is the first of these, and
     /// as of now the only one — every OTHER coordinator relay re-registers itself on the fresh
@@ -1564,7 +1565,7 @@ impl Coordinator {
             sharded_tables,
             call_pipes,
             call_pipe_next: std::sync::atomic::AtomicUsize::new(0),
-            motion_batch: Mutex::new(Vec::new()),
+            motion_batch: MovementBatch::new(),
             on_reconnect: Mutex::new(Vec::new()),
         });
         spawn_coordinator_watchdog(inner.clone());
@@ -1579,25 +1580,20 @@ impl Coordinator {
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
                     tick.tick().await;
-                    let batch: Vec<super::bindings::GwMove> = {
-                        let mut b = inner.motion_batch.lock().unwrap_or_else(|p| p.into_inner());
-                        if b.is_empty() {
-                            continue;
-                        }
-                        std::mem::take(&mut *b)
-                    };
                     // Batch shape: cap each call at 128 moves and spread the chunks across
                     // the pipe pool — a single ~400-move transaction head-of-line-blocked login
                     // calls for its whole execution (the measured 1970→1071 seat regression);
                     // several ~5ms transactions interleave with them instead.
-                    for chunk in batch.chunks(128) {
-                        let n = chunk.len();
+                    let failures = inner.motion_batch.drain(|chunk| {
                         let pipe = inner.call_pipe();
-                        if let Err(e) = pipe.conn.reducers.gw_movement_batch(chunk.to_vec()) {
-                            log::warn!(
-                                "gw_movement_batch send failed ({n} moves dropped this tick): {e}"
-                            );
-                        }
+                        pipe.conn.reducers.gw_movement_batch(chunk)
+                    });
+                    for failure in failures {
+                        let n = failure.dropped;
+                        let e = failure.error;
+                        log::warn!(
+                            "gw_movement_batch send failed ({n} moves dropped this tick): {e}"
+                        );
                     }
                 }
             });
