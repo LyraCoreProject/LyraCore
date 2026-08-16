@@ -460,10 +460,6 @@ impl WorldStore for Coordinator {
         self.effective_armor(guid)
     }
 
-    fn vendor_items(&self, vendor_guid: u64) -> Result<Vec<codec::VendorItemView>> {
-        self.vendor_items(vendor_guid)
-    }
-
     fn npc_refuses_interaction(&self, npc_guid: u64, player_guid: u64) -> Result<bool> {
         self.npc_refuses_interaction(npc_guid, player_guid)
     }
@@ -644,24 +640,6 @@ impl WorldStore for Coordinator {
         spell_id: u32,
     ) -> Result<()> {
         self.buy_trainer_spell(account_id, self_guid, trainer_guid, spell_id)
-    }
-
-    fn item_slot_by_guid(&self, account_id: u64, item_guid: u64) -> Option<u8> {
-        self.item_slot_by_guid(account_id, item_guid)
-    }
-
-    fn disenchant_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()> {
-        self.disenchant_item(account_id, self_guid, slot)
-    }
-
-    fn enchant_item_on_slot(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        slot: u8,
-        enchant_id: u32,
-    ) -> Result<()> {
-        self.enchant_item_on_slot(account_id, self_guid, slot, enchant_id)
     }
 
     fn talent_grant_spell(&self, talent_id: u32) -> u32 {

@@ -259,7 +259,7 @@ mod tests {
             subs: PlayerSubscriptions::empty(),
             session_epoch: 1,
             attacking_target,
-            looting_target: None,
+            open_loot: OpenLootState::default(),
             ranged_repeat,
         })
     }

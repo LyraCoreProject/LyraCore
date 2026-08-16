@@ -385,10 +385,6 @@ pub trait WorldStore:
     /// folded here (they self-correct via the on_aura relay). Mirrors the module's combat `effective_armor`.
     fn effective_armor(&self, guid: u64) -> u32;
 
-    /// Read a vendor's stock for `SMSG_LIST_INVENTORY` (Tier 2 / vendors): resolve the vendor's
-    /// creature entry from its entity row, join `game_npc_vendor` × `game_item_template`.
-    fn vendor_items(&self, vendor_guid: u64) -> Result<Vec<codec::VendorItemView>>;
-
     /// Standing-derived reaction gate: does this NPC refuse `player_guid` its
     /// interaction WINDOW? Rep-bar factions refuse at Unfriendly-or-below standing; bar-less
     /// factions fall back to the FactionTemplate hostility masks. Fail-open on missing data.
@@ -417,24 +413,6 @@ pub trait WorldStore:
         self_guid: u64,
         trainer_guid: u64,
         spell_id: u32,
-    ) -> Result<()>;
-
-    /// Given an item-instance GUID from a client spell-target, return the bag slot for that item
-    /// (so the disenchant / enchant_item reducer can receive a slot, not a GUID).
-    fn item_slot_by_guid(&self, account_id: u64, item_guid: u64) -> Option<u8>;
-
-    /// Disenchant the item in `slot` (`CMSG_CAST_SPELL` spell 13262). The module validates skill +
-    /// item disenchantability and yields Strange Dust into the bag.
-    fn disenchant_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()>;
-
-    /// Apply `enchant_id` to the item in `slot` (`CMSG_CAST_SPELL` for enchant spell). The module
-    /// validates skill, consumes reagent dust, and stamps enchant_id on the item instance.
-    fn enchant_item_on_slot(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        slot: u8,
-        enchant_id: u32,
     ) -> Result<()>;
 
     /// Return the `grant_spell_id` for `talent_id` (0 = passive, no ability granted), so the gateway
