@@ -101,7 +101,7 @@ impl Drop for PlayerSubscriptions {
         // dispatch may still enqueue for this session, which is harmless (the writer is draining or
         // gone) but pointless.
         if let (Some(view), Some(viewer)) = (self.view.take(), self.viewer.take()) {
-            view.remove_viewer(viewer.session, viewer.self_guid);
+            view.remove_viewer(viewer.session);
         }
     }
 }
@@ -2630,10 +2630,16 @@ impl Coordinator {
             skill_slots: skill_slots.clone(),
             motion_pending: Arc::new(world_view::MotionPending::default()),
         });
-        view.add_viewer(
+        if let Err(error) = view.add_viewer(
+            self,
             viewer.clone(),
             CellKey::of_position(login_map, login_instance, login_x, login_y),
-        );
+        ) {
+            for teardown in teardowns.drain(..) {
+                teardown();
+            }
+            return Err(error);
+        }
         world_view::sweep_into_view(&view, &viewer);
 
         // Corpse resident sweep: corpse rows ride the base subscription
@@ -4872,7 +4878,7 @@ mod tests {
             );
         }
         assert!(
-            code.contains("view.add_viewer( viewer.clone(), CellKey::of_position(login_map, login_instance, login_x, login_y), );"),
+            code.contains("view.add_viewer( self, viewer.clone(), CellKey::of_position(login_map, login_instance, login_x, login_y), )"),
             "the session is no longer registered with the shared AOI view at its LOGIN cell — \
              without the registration the client sees an empty world; with the wrong anchor it sees \
              somebody else's neighbourhood"

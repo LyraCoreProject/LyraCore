@@ -41,6 +41,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
+use anyhow::{anyhow, Result};
 use spacetimedb_sdk::{Table, TableWithPrimaryKey};
 
 use super::aoi::{ViewerGates, AOI_RECENTERS};
@@ -93,12 +94,60 @@ pub(crate) struct MotionPending {
     pub(crate) flush_queued: std::sync::atomic::AtomicBool,
 }
 
+struct RegisteredViewer {
+    viewer: Arc<Viewer>,
+    shard: ShardId,
+}
+
+#[derive(Default)]
+struct ViewerRegistry {
+    by_session: HashMap<SessionId, RegisteredViewer>,
+    session_of_owner: HashMap<u64, SessionId>,
+    sessions_by_shard: HashMap<ShardId, HashSet<SessionId>>,
+}
+
+impl ViewerRegistry {
+    fn register(&mut self, viewer: Arc<Viewer>, shard: ShardId) {
+        let session = viewer.session;
+        if let Some(previous) = self.by_session.remove(&session) {
+            self.remove_indexes(session, &previous);
+        }
+        self.session_of_owner.insert(viewer.self_guid, session);
+        self.sessions_by_shard
+            .entry(shard)
+            .or_default()
+            .insert(session);
+        self.by_session
+            .insert(session, RegisteredViewer { viewer, shard });
+    }
+
+    fn remove(&mut self, session: SessionId) {
+        let Some(registered) = self.by_session.remove(&session) else {
+            return;
+        };
+        self.remove_indexes(session, &registered);
+    }
+
+    fn remove_indexes(&mut self, session: SessionId, registered: &RegisteredViewer) {
+        let owner = registered.viewer.self_guid;
+        if self.session_of_owner.get(&owner) == Some(&session) {
+            self.session_of_owner.remove(&owner);
+        }
+        if let Some(sessions) = self.sessions_by_shard.get_mut(&registered.shard) {
+            sessions.remove(&session);
+            if sessions.is_empty() {
+                self.sessions_by_shard.remove(&registered.shard);
+            }
+        }
+    }
+}
+
 /// The gateway-wide shared view: one layered spatial index, the live viewer registry, and the
 /// shard table the index's [`ShardId`]s point into.
 pub(crate) struct WorldView {
     /// One authoritative viewer anchor with independent world-entity and game-object layers.
     pub(crate) spatial: WorldIndex,
-    viewers: RwLock<HashMap<SessionId, Arc<Viewer>>>,
+    viewers: RwLock<ViewerRegistry>,
     /// [`ShardId`] → that shard's coordinator handle. Written once at startup, read on every
     /// dispatch; the order fixes the ids, so it must never be reordered after arming.
     shards: RwLock<Vec<Coordinator>>,
@@ -109,14 +158,44 @@ impl WorldView {
     pub(crate) fn new(cell_scoped: bool) -> Self {
         Self {
             spatial: WorldIndex::new(cell_scoped),
-            viewers: RwLock::new(HashMap::new()),
+            viewers: RwLock::new(ViewerRegistry::default()),
             shards: RwLock::new(Vec::new()),
             next_session: AtomicU64::new(1),
         }
     }
 
     fn viewer(&self, session: SessionId) -> Option<Arc<Viewer>> {
-        self.viewers.read().unwrap().get(&session).cloned()
+        self.viewers
+            .read()
+            .unwrap()
+            .by_session
+            .get(&session)
+            .map(|registered| registered.viewer.clone())
+    }
+
+    fn session_of_owner(&self, self_guid: u64) -> Option<SessionId> {
+        self.viewers
+            .read()
+            .unwrap()
+            .session_of_owner
+            .get(&self_guid)
+            .copied()
+    }
+
+    fn viewers_on_shard(&self, shard: ShardId) -> Vec<Arc<Viewer>> {
+        let registry = self.viewers.read().unwrap();
+        registry
+            .sessions_by_shard
+            .get(&shard)
+            .into_iter()
+            .flatten()
+            .filter_map(|session| {
+                registry
+                    .by_session
+                    .get(session)
+                    .map(|registered| registered.viewer.clone())
+            })
+            .collect()
     }
 
     fn shard(&self, id: ShardId) -> Option<Coordinator> {
@@ -129,19 +208,53 @@ impl WorldView {
         self.next_session.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Register a live session. The caller supplies the anchor (its login position) so the first
-    /// sweep sees the right box.
-    pub(crate) fn add_viewer(&self, viewer: Arc<Viewer>, anchor: CellKey) {
-        self.spatial.add_viewer(viewer.session, viewer.self_guid, anchor);
-        self.viewers
-            .write()
-            .unwrap()
-            .insert(viewer.session, viewer);
+    /// Register a live session on the shard owned by `coord`. The coordinator must be one of the
+    /// stable handles installed by [`Self::set_shards`].
+    pub(crate) fn add_viewer(
+        &self,
+        coord: &Coordinator,
+        viewer: Arc<Viewer>,
+        anchor: CellKey,
+    ) -> Result<()> {
+        let shards = self.shards.read().unwrap();
+        let shard = shards
+            .iter()
+            .position(|registered| registered.shard_name() == coord.shard_name())
+            .ok_or_else(|| {
+                anyhow!(
+                    "cannot register viewer {}: coordinator shard `{}` is absent from the world-view shard table ({:?})",
+                    viewer.session,
+                    coord.shard_name(),
+                    shards.iter().map(|known| known.shard_name()).collect::<Vec<_>>()
+                )
+            })?;
+        drop(shards);
+        self.add_viewer_on_shard(viewer, anchor, shard);
+        Ok(())
     }
 
-    pub(crate) fn remove_viewer(&self, session: SessionId, self_guid: u64) {
-        self.spatial.remove_viewer(session, self_guid);
-        self.viewers.write().unwrap().remove(&session);
+    fn add_viewer_on_shard(&self, viewer: Arc<Viewer>, anchor: CellKey, shard: ShardId) {
+        let mut registry = self.viewers.write().unwrap();
+        self.spatial.add_viewer(viewer.session, anchor);
+        registry.register(viewer, shard);
+    }
+
+    pub(crate) fn remove_viewer(&self, session: SessionId) {
+        let mut registry = self.viewers.write().unwrap();
+        self.spatial.remove_viewer(session);
+        registry.remove(session);
+    }
+
+    /// Geometric recipients plus the row owner's session. The owner lookup lives in the viewer
+    /// registry because it is session identity, not spatial state.
+    fn world_entity_recipients(&self, guid: u64, key: CellKey) -> Vec<SessionId> {
+        let mut recipients = self.spatial.viewers_of(EntityLayer::WorldEntity, key);
+        if let Some(owner) = self.session_of_owner(guid) {
+            if !recipients.contains(&owner) {
+                recipients.push(owner);
+            }
+        }
+        recipients
     }
 
     // ===========================================================================================
@@ -502,7 +615,7 @@ fn entity_appeared(view: &WorldView, shard: ShardId, row: &WorldEntity) {
     view.spatial
         .upsert_entity(EntityLayer::WorldEntity, row.guid, key, shard);
     let row = Arc::new(row.clone());
-    for session in view.spatial.world_entity_recipients(row.guid, key) {
+    for session in view.world_entity_recipients(row.guid, key) {
         offer_create_job(view, shard, session, &row);
     }
 }
@@ -519,7 +632,7 @@ fn entity_changed(view: &WorldView, shard: ShardId, old: &WorldEntity, new: &Wor
     let previous = view
         .spatial
         .upsert_entity(EntityLayer::WorldEntity, new.guid, key, shard);
-    let new_recipients = view.spatial.world_entity_recipients(new.guid, key);
+    let new_recipients = view.world_entity_recipients(new.guid, key);
     if let Some(old_key) = previous {
         if old_key != key {
             let still: HashSet<SessionId> = new_recipients.iter().copied().collect();
@@ -546,7 +659,7 @@ fn entity_vanished(view: &WorldView, row: &WorldEntity) {
         .spatial
         .remove_entity(EntityLayer::WorldEntity, row.guid)
         .unwrap_or_else(|| entity_key(row));
-    for session in view.spatial.world_entity_recipients(row.guid, key) {
+    for session in view.world_entity_recipients(row.guid, key) {
         destroy_job(view, session, row.guid, row.owner_guid);
     }
 }
@@ -761,20 +874,9 @@ fn maybe_queue_motion_flush(_view: &WorldView, viewer: &Arc<Viewer>) {
 /// Every viewer a shard-broadcast family may reach: the sessions whose characters `shard`'s
 /// database owns — the same audience the per-player subscriptions produced (each player connection
 /// was to its own shard's database, and the base queries were unscoped `SELECT *`s). Filtered by
-/// [`shard_audience`]; family-specific gates (instance, range) run per viewer at the call site.
+/// direct shard membership; family-specific gates (instance, range) run per viewer at the call site.
 fn viewers_on_shard(view: &WorldView, shard: ShardId) -> Vec<Arc<Viewer>> {
-    view.viewers
-        .read()
-        .unwrap()
-        .values()
-        .filter(|v| {
-            shard_audience(
-                view.spatial.shard_of(EntityLayer::WorldEntity, v.self_guid),
-                shard,
-            )
-        })
-        .cloned()
-        .collect()
+    view.viewers_on_shard(shard)
 }
 
 /// A /roll landed on `shard`'s coordinator feed. Rolls are public (vanilla broadcasts every /roll,
@@ -822,7 +924,7 @@ fn taxi_spline(view: &WorldView, row: &TaxiPassengerSpline) {
     let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
     let mut sessions: std::collections::HashSet<_> =
         view.spatial.viewers_of(EntityLayer::WorldEntity, key).into_iter().collect();
-    if let Some(owner) = view.spatial.session_of_owner(row.character_guid) {
+    if let Some(owner) = view.session_of_owner(row.character_guid) {
         sessions.insert(owner);
     }
     let row = row.clone();
@@ -844,7 +946,7 @@ fn taxi_spline(view: &WorldView, row: &TaxiPassengerSpline) {
 
 /// A rest-state flip landed on a shard's coordinator feed. Self-only family: the row names its
 /// owner and the owner is the ONLY lawful recipient, so the audience predicate IS the
-/// owner-session lookup (`WorldIndex::session_of_owner`) — there is no candidate set to filter,
+/// owner-session lookup — there is no candidate set to filter,
 /// and a row whose owner has no live session here is dropped.
 ///
 /// The per-player leg's `ReplayGate` (login initial-sync suppression) has no shared twin by
@@ -853,7 +955,7 @@ fn taxi_spline(view: &WorldView, row: &TaxiPassengerSpline) {
 /// idempotent re-send of the current rest byte, the same class every coordinator-ridden 279 relay
 /// already accepts.)
 fn rest_state_appeared(view: &WorldView, row: &RestStateEvent) {
-    let Some(session) = view.spatial.session_of_owner(row.character_guid) else {
+    let Some(session) = view.session_of_owner(row.character_guid) else {
         return;
     };
     let Some(viewer) = view.viewer(session) else {
@@ -867,7 +969,7 @@ fn rest_state_appeared(view: &WorldView, row: &RestStateEvent) {
 
 /// Breath relay events are delivered only to their owner.
 fn breath_relay_appeared(view: &WorldView, row: &BreathRelayEvent) {
-    let Some(session) = view.spatial.session_of_owner(row.character_guid) else {
+    let Some(session) = view.session_of_owner(row.character_guid) else {
         return;
     };
     let Some(viewer) = view.viewer(session) else {
@@ -889,7 +991,7 @@ fn breath_relay_appeared(view: &WorldView, row: &BreathRelayEvent) {
 /// audience as [`rest_state_appeared`] — the slot allocation runs in the job on the owner's own
 /// writer thread, against the viewer's `skill_slots` (the same map the per-player leg uses).
 fn skill_changed(view: &WorldView, row: &PlayerSkill) {
-    let Some(session) = view.spatial.session_of_owner(row.character_guid) else {
+    let Some(session) = view.session_of_owner(row.character_guid) else {
         return;
     };
     let Some(viewer) = view.viewer(session) else {
@@ -988,7 +1090,7 @@ fn melee_disengaged(view: &WorldView, shard: ShardId, row: &MeleeAttack) {
 
 /// A resurrect offer landed → SMSG_RESURRECT_REQUEST to the offer's TARGET and nobody else.
 fn resurrect_offered(view: &WorldView, row: &ResurrectRequest) {
-    let Some(session) = view.spatial.session_of_owner(row.target_guid) else {
+    let Some(session) = view.session_of_owner(row.target_guid) else {
         return;
     };
     let Some(viewer) = view.viewer(session) else {
@@ -1008,7 +1110,7 @@ fn resurrect_offered(view: &WorldView, row: &ResurrectRequest) {
 /// relocation the 4c plan names: the lookup is by the recipient's guid, so a non-recipient
 /// session is structurally unreachable, and the explicit predicate re-asserts it.
 fn whisper_appeared(view: &WorldView, row: &WhisperEvent) {
-    let Some(session) = view.spatial.session_of_owner(row.recipient_guid) else {
+    let Some(session) = view.session_of_owner(row.recipient_guid) else {
         return;
     };
     let Some(viewer) = view.viewer(session) else {
@@ -1027,7 +1129,7 @@ fn whisper_appeared(view: &WorldView, row: &WhisperEvent) {
 /// A trade status landed → the `SMSG_TRADE_STATUS` packet to the row's RECIPIENT and nobody
 /// else (same shape as [`whisper_appeared`]) (#120).
 fn trade_event_appeared(view: &WorldView, row: &TradeEvent) {
-    let Some(session) = view.spatial.session_of_owner(row.recipient_guid) else {
+    let Some(session) = view.session_of_owner(row.recipient_guid) else {
         return;
     };
     let Some(viewer) = view.viewer(session) else {
@@ -1047,7 +1149,7 @@ fn trade_event_appeared(view: &WorldView, row: &TradeEvent) {
 /// and nobody else (same shape as [`whisper_appeared`]; `coord` feeds the QUEST_SHARE detail
 /// JOIN inside the job).
 fn group_event_appeared(view: &WorldView, coord: &Coordinator, row: &GroupEvent) {
-    let Some(session) = view.spatial.session_of_owner(row.recipient_guid) else {
+    let Some(session) = view.session_of_owner(row.recipient_guid) else {
         return;
     };
     let Some(viewer) = view.viewer(session) else {
@@ -1193,18 +1295,9 @@ fn channel_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: 
     }
 }
 
-/// The shared shard-identity predicate every non-spatial broadcast family starts from (via
-/// [`viewers_on_shard`]): a viewer is in a row's audience iff the shard that owns their character
-/// is the shard the row landed on. `None` (the viewer's own entity not indexed yet — the login
-/// race window) denies, matching the per-player path where a not-yet-applied subscription
-/// delivers nothing.
-fn shard_audience(viewer_shard: Option<ShardId>, row_shard: ShardId) -> bool {
-    viewer_shard == Some(row_shard)
-}
-
 #[cfg(test)]
 mod family_audience_tests {
-    use super::{shard_audience, MotionPending, Viewer, WorldView};
+    use super::{MotionPending, Viewer, WorldView};
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::subscriptions::private_recipient_audience;
     use crate::stdb::world_index::{CellKey, EntityLayer};
@@ -1227,13 +1320,6 @@ mod family_audience_tests {
         })
     }
 
-    #[test]
-    fn shard_broadcasts_reach_only_the_rows_shard_and_deny_unindexed_viewers() {
-        assert!(shard_audience(Some(0), 0));
-        assert!(!shard_audience(Some(1), 0), "another shard's viewer must not hear the broadcast");
-        assert!(!shard_audience(None, 0), "an unindexed viewer (login race) is denied, not defaulted in");
-    }
-
     /// The private tier's whole privacy guarantee (whisper/group/resurrect): the addressee and
     /// NOBODY else. The zero cases are the leak vectors — an unset recipient must never match a
     /// real viewer and a real recipient must never match a half-initialized viewer.
@@ -1251,15 +1337,15 @@ mod family_audience_tests {
 
     #[test]
     fn breath_relay_owner_lookup_selects_only_its_own_session() {
-        let index = WorldView::new(true).spatial;
+        let view = WorldView::new(true);
         // No owner session on this gateway: the relay must be dropped.
-        assert_eq!(index.session_of_owner(41), None);
-        // WorldIndex's public tests pin the registration mechanics; the callback source scan below
+        assert_eq!(view.session_of_owner(41), None);
+        // The registry tests pin the registration mechanics; the callback source scan below
         // pins that breath events actually take this exact lookup rather than an AOI broadcast.
         let source = include_str!("world_view.rs");
         let start = source.find("fn breath_relay_appeared").unwrap();
         let body = &source[start..];
-        assert!(body.contains("view.spatial.session_of_owner(row.character_guid)"));
+        assert!(body.contains("view.session_of_owner(row.character_guid)"));
         assert!(!body[..body.find("fn skill_changed").unwrap()]
             .contains("viewers_on_shard"), "breath rows must never broadcast to shard viewers");
     }
@@ -1268,7 +1354,7 @@ mod family_audience_tests {
     fn one_recenter_reports_both_layers_and_keeps_equal_guids_independent() {
         let view = WorldView::new(true);
         let viewer = viewer(1, 9001);
-        view.add_viewer(viewer.clone(), CellKey::at(0, 0, 0, 0));
+        view.add_viewer_on_shard(viewer.clone(), CellKey::at(0, 0, 0, 0), 0);
 
         // Moving the anchor one cell right adds x=3 to the 5x5 neighbourhood. The same GUID in
         // both row tables must appear once in each independent layer delta.
@@ -1306,14 +1392,98 @@ mod family_audience_tests {
         let old = viewer(1, 9001);
         let new = viewer(2, 9001);
         let anchor = CellKey::at(0, 0, 0, 0);
-        view.add_viewer(old.clone(), anchor);
-        view.add_viewer(new.clone(), anchor);
+        view.add_viewer_on_shard(old.clone(), anchor, 0);
+        view.add_viewer_on_shard(new.clone(), anchor, 0);
 
-        view.remove_viewer(old.session, old.self_guid);
-        assert_eq!(view.spatial.session_of_owner(9001), Some(new.session));
+        view.remove_viewer(old.session);
+        assert_eq!(view.session_of_owner(9001), Some(new.session));
         assert!(view.viewer(new.session).is_some());
-        view.remove_viewer(old.session, old.self_guid); // idempotent
-        assert_eq!(view.spatial.session_of_owner(9001), Some(new.session));
+        view.remove_viewer(old.session); // idempotent
+        assert_eq!(view.session_of_owner(9001), Some(new.session));
+    }
+
+    #[test]
+    fn shard_membership_is_direct_and_does_not_wait_for_the_self_entity_row() {
+        let view = WorldView::new(true);
+        let first = viewer(1, 9001);
+        let second = viewer(2, 9002);
+        view.add_viewer_on_shard(first.clone(), CellKey::at(0, 0, 0, 0), 0);
+        view.add_viewer_on_shard(second.clone(), CellKey::at(1, 0, 0, 0), 1);
+
+        assert_eq!(view.spatial.shard_of(EntityLayer::WorldEntity, 9001), None);
+        assert_eq!(
+            view.viewers_on_shard(0)
+                .into_iter()
+                .map(|viewer| viewer.session)
+                .collect::<HashSet<_>>(),
+            HashSet::from([first.session])
+        );
+        assert_eq!(
+            view.viewers_on_shard(1)
+                .into_iter()
+                .map(|viewer| viewer.session)
+                .collect::<HashSet<_>>(),
+            HashSet::from([second.session])
+        );
+    }
+
+    #[test]
+    fn a_single_shard_selects_every_registered_viewer() {
+        let view = WorldView::new(true);
+        let first = viewer(1, 9001);
+        let second = viewer(2, 9002);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        view.add_viewer_on_shard(first.clone(), anchor, 0);
+        view.add_viewer_on_shard(second.clone(), anchor, 0);
+
+        assert_eq!(
+            view.viewers_on_shard(0)
+                .into_iter()
+                .map(|viewer| viewer.session)
+                .collect::<HashSet<_>>(),
+            HashSet::from([first.session, second.session])
+        );
+    }
+
+    #[test]
+    fn removal_immediately_cleans_shard_owner_and_spatial_membership() {
+        let view = WorldView::new(true);
+        let viewer = viewer(7, 4242);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        view.add_viewer_on_shard(viewer.clone(), anchor, 3);
+
+        view.remove_viewer(viewer.session);
+
+        assert!(view.viewers_on_shard(3).is_empty());
+        assert_eq!(view.session_of_owner(viewer.self_guid), None);
+        assert_eq!(view.spatial.viewer_cell(viewer.session), None);
+        view.remove_viewer(viewer.session);
+    }
+
+    #[test]
+    fn a_player_always_receives_their_own_row_before_the_anchor_catches_up() {
+        let view = WorldView::new(true);
+        let viewer = viewer(7, 4242);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        view.add_viewer_on_shard(viewer.clone(), anchor, 0);
+        let far = CellKey::at(0, 0, 99, 99);
+
+        assert!(view
+            .spatial
+            .viewers_of(EntityLayer::WorldEntity, far)
+            .is_empty());
+        assert_eq!(
+            view.world_entity_recipients(viewer.self_guid, far),
+            vec![viewer.session]
+        );
+        assert_eq!(
+            view.world_entity_recipients(viewer.self_guid, anchor),
+            vec![viewer.session]
+        );
+        view.remove_viewer(viewer.session);
+        assert!(view
+            .world_entity_recipients(viewer.self_guid, far)
+            .is_empty());
     }
 
     #[test]
