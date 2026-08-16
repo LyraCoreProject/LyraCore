@@ -331,6 +331,27 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
     wire_insert(db.game_levelup_event(), "game_levelup_event.insert", &view, |v, row| {
         levelup_appeared(v, row)
     });
+    let quest_insert_coord = coord.clone();
+    wire_insert(
+        db.game_character_quest(),
+        "game_character_quest.insert",
+        &view,
+        move |v, row| quest_inserted(v, &quest_insert_coord, row),
+    );
+    let quest_update_coord = coord.clone();
+    wire_update(
+        db.game_character_quest(),
+        "game_character_quest.update",
+        &view,
+        move |v, old, row| quest_updated(v, &quest_update_coord, old, row),
+    );
+    let quest_delete_coord = coord.clone();
+    wire_delete(
+        db.game_character_quest(),
+        "game_character_quest.delete",
+        &view,
+        move |v, row| quest_deleted(v, &quest_delete_coord, row),
+    );
 
     // ---- game_world_entity -----------------------------------------------------------------
     wire_insert(db.game_world_entity(), "game_world_entity.insert", &view, move |v, row| {
@@ -1041,6 +1062,52 @@ fn levelup_appeared(view: &WorldView, row: &LevelupEvent) {
     });
 }
 
+/// A quest-log insert names one owner. The full log is read after the delta on that owner's writer.
+fn quest_inserted(view: &WorldView, coord: &Coordinator, row: &CharacterQuest) {
+    let Some(viewer) = view.viewer_of_owner(OwnerGuid(row.character_guid)) else {
+        return;
+    };
+    let (coord, self_guid, tx) = (coord.clone(), viewer.self_guid, viewer.tx.clone());
+    enqueue(&tx, move || {
+        let guard = coord.0.coord();
+        super::subscriptions::quest_log_outbound(&guard.conn.db, self_guid)
+            .into_iter()
+            .collect()
+    });
+}
+
+/// A quest update keeps kill feedback, timer failure, then the full quest-log sync in one writer job.
+fn quest_updated(view: &WorldView, coord: &Coordinator, old: &CharacterQuest, row: &CharacterQuest) {
+    let Some(viewer) = view.viewer_of_owner(OwnerGuid(row.character_guid)) else {
+        return;
+    };
+    let (coord, self_guid, old, row, tx) = (
+        coord.clone(),
+        viewer.self_guid,
+        old.clone(),
+        row.clone(),
+        viewer.tx.clone(),
+    );
+    enqueue(&tx, move || {
+        let guard = coord.0.coord();
+        super::subscriptions::quest_update_outbound(&guard.conn.db, self_guid, &old, &row)
+    });
+}
+
+/// A quest deletion re-sends the full log, including the all-zero final-log clear.
+fn quest_deleted(view: &WorldView, coord: &Coordinator, row: &CharacterQuest) {
+    let Some(viewer) = view.viewer_of_owner(OwnerGuid(row.character_guid)) else {
+        return;
+    };
+    let (coord, self_guid, tx) = (coord.clone(), viewer.self_guid, viewer.tx.clone());
+    enqueue(&tx, move || {
+        let guard = coord.0.coord();
+        super::subscriptions::quest_log_outbound(&guard.conn.db, self_guid)
+            .into_iter()
+            .collect()
+    });
+}
+
 /// A rest-state flip landed on a shard's coordinator feed. Self-only family: the row names its
 /// owner and the owner is the ONLY lawful recipient, so the audience predicate IS the
 /// owner-session lookup — there is no candidate set to filter,
@@ -1399,8 +1466,10 @@ mod family_audience_tests {
         MotionPending, OwnerGuid, Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
-    use crate::stdb::bindings::{AddonMessage, LevelupEvent, TeleportEvent, XpEvent};
-    use crate::stdb::subscriptions::private_recipient_audience;
+    use crate::stdb::bindings::{
+        AddonMessage, CharacterQuest, LevelupEvent, TeleportEvent, XpEvent,
+    };
+    use crate::stdb::subscriptions::{private_recipient_audience, quest_update_packets};
     use crate::stdb::world_index::{CellKey, EntityLayer};
     use crate::world::{Outbound, SessionTx};
     use std::collections::{HashMap, HashSet};
@@ -1530,6 +1599,61 @@ mod family_audience_tests {
                 .map(|viewer| viewer.session),
             Some(new.session)
         );
+    }
+
+    #[test]
+    fn quest_owner_routing_follows_a_transfer_to_its_destination_viewer() {
+        let view = WorldView::new(true);
+        let source = viewer(1, 9001);
+        let destination = viewer(2, 9001);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        view.add_viewer_on_shard(source.clone(), anchor, 0);
+        view.remove_viewer(source.session);
+        view.add_viewer_on_shard(destination.clone(), anchor, 1);
+
+        assert_eq!(
+            view.viewer_of_owner(OwnerGuid(9001))
+                .map(|viewer| viewer.session),
+            Some(destination.session),
+            "a later quest row must route only to the destination viewer"
+        );
+    }
+
+    #[test]
+    fn quest_update_orders_kills_then_timer_then_full_log() {
+        let old = CharacterQuest {
+            id: 1,
+            character_guid: 9001,
+            owner_identity: identity(1),
+            quest_entry: 77,
+            counts: vec![1],
+            rewarded: false,
+            deadline_micros: 0,
+            failed: false,
+        };
+        let updated = CharacterQuest {
+            counts: vec![2],
+            failed: true,
+            ..old.clone()
+        };
+        let outbound = quest_update_packets(
+            &old,
+            &updated,
+            &[(0, 0, 123, 4)],
+            Some(Outbound::Raw {
+                opcode: 1,
+                body: vec![0],
+            }),
+        );
+
+        assert!(matches!(
+            outbound.as_slice(),
+            [
+                Outbound::One(ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_KILL(_)),
+                Outbound::One(ServerOpcodeMessage::SMSG_QUESTUPDATE_FAILEDTIMER(_)),
+                Outbound::Raw { .. },
+            ]
+        ));
     }
 
     #[test]
@@ -1709,12 +1833,26 @@ mod family_audience_tests {
                 "{table} must have one shared callback per arm_shard call"
             );
         }
+        for (helper, label) in [
+            ("wire_insert", "game_character_quest.insert"),
+            ("wire_update", "game_character_quest.update"),
+            ("wire_delete", "game_character_quest.delete"),
+        ] {
+            assert_eq!(
+                arm.matches(&format!("{helper}(\n        db.game_character_quest()"))
+                    .count(),
+                1,
+                "game_character_quest must have one {helper} callback per arm_shard call"
+            );
+            assert!(arm.contains(&format!("\"{label}\"")));
+        }
 
         let subscriptions = include_str!("subscriptions.rs");
         for registrar in [
             "register_teleport_relays",
             "register_addon_relays",
             "register_xp_levelup_relays",
+            "register_quest_relays",
         ] {
             assert!(
                 !subscriptions.contains(registrar),
@@ -1728,6 +1866,22 @@ mod family_audience_tests {
                 .count(),
             2,
             "arm_shard must run once at connect and once from the reconnect hook"
+        );
+
+        for handler in ["quest_inserted", "quest_updated", "quest_deleted"] {
+            let start = source.find(&format!("fn {handler}")).unwrap();
+            let body = &source[start..];
+            assert!(
+                body.contains("view.viewer_of_owner(OwnerGuid(row.character_guid))")
+                    && body.contains("enqueue(&tx, move ||")
+                    && body.contains("coord.0.coord()"),
+                "{handler} must select one owner and defer cache reads and packet construction to its writer job"
+            );
+        }
+        let update = &source[source.find("fn quest_updated").unwrap()..];
+        assert!(
+            update.contains("quest_update_outbound(&guard.conn.db, self_guid, &old, &row)"),
+            "quest update must preserve its feedback and full-log ordering in one writer job"
         );
     }
 

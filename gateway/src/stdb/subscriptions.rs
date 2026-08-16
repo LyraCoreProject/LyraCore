@@ -2446,12 +2446,90 @@ fn run_speed_packet(
     ))
 }
 
+/// Build the full quest-log update from the coordinator cache. The empty mask deliberately clears
+/// every quest-log field when the final quest leaves the log.
+pub(crate) fn quest_log_outbound(
+    db: &crate::stdb::bindings::RemoteTables,
+    self_guid: u64,
+) -> Option<Outbound> {
+    if !crate::config::quest_log_fields_enabled() {
+        return None;
+    }
+    let quests: Vec<_> = db.game_character_quest().iter().collect();
+    let slots = super::reads::build_quest_log_slots(db, &quests, self_guid);
+    let mask = codec::update_mask::full_quest_log_mask(&slots);
+    let (opcode, body) = codec::build_values_update_raw(self_guid, &mask);
+    Some(Outbound::Raw { opcode, body })
+}
+
+/// Build all packets for one quest update, in the order the client expects.
+pub(crate) fn quest_update_outbound(
+    db: &crate::stdb::bindings::RemoteTables,
+    self_guid: u64,
+    old: &CharacterQuest,
+    row: &CharacterQuest,
+) -> Vec<Outbound> {
+    let objectives: Vec<_> = db
+        .game_quest_objective()
+        .iter()
+        .filter(|objective| objective.quest_entry == row.quest_entry)
+        .map(|objective| {
+            (
+                objective.kind,
+                objective.obj_index,
+                objective.target_entry,
+                objective.required_count,
+            )
+        })
+        .collect();
+    quest_update_packets(old, row, &objectives, quest_log_outbound(db, self_guid))
+}
+
+/// Build the feedback that precedes a full quest-log sync for one update.
+pub(crate) fn quest_update_feedback(
+    old: &CharacterQuest,
+    row: &CharacterQuest,
+    objectives: &[(u8, u8, u32, u32)],
+) -> Vec<Outbound> {
+    let mut outbound = codec::kill_progress_add_kills(
+        row.quest_entry,
+        &old.counts,
+        &row.counts,
+        objectives,
+    )
+    .into_iter()
+    .map(|packet| Outbound::One(ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_KILL(Box::new(packet))))
+    .collect::<Vec<_>>();
+    if !old.failed && row.failed {
+        outbound.push(Outbound::One(
+            ServerOpcodeMessage::SMSG_QUESTUPDATE_FAILEDTIMER(
+                codec::build_questupdate_failedtimer(row.quest_entry),
+            ),
+        ));
+    }
+    outbound
+}
+
+/// Append a post-update full-log sync after kill and timer feedback.
+pub(crate) fn quest_update_packets(
+    old: &CharacterQuest,
+    row: &CharacterQuest,
+    objectives: &[(u8, u8, u32, u32)],
+    quest_log: Option<Outbound>,
+) -> Vec<Outbound> {
+    let mut outbound = quest_update_feedback(old, row, objectives);
+    if let Some(packet) = quest_log {
+        outbound.push(packet);
+    }
+    outbound
+}
+
 impl Coordinator {
     // The relay registration hands each callback its own `Coordinator` clone; the arity is the number of relays, not an accidental type.
     #[allow(clippy::type_complexity)]
     /// Register this session's remaining stuck-state relays and turn row deltas into outbound SMSG
-    /// pushed onto `tx` (Phase 6/7). Quest log, item instances, reputation, and exploration still
-    /// own session callbacks. XP, level-up, teleport, addon, and broadcast-shaped families ride the
+    /// pushed onto `tx` (Phase 6/7). Item instances, reputation, and exploration still own session
+    /// callbacks. Quest log, XP, level-up, teleport, addon, and broadcast-shaped families ride the
     /// shared per-shard dispatch in `world_view::arm_shard`, keyed to the `Viewer` registered near
     /// the end of this function.
     ///
@@ -2571,7 +2649,6 @@ impl Coordinator {
             tx.clone(),
             explored_replay.clone(),
         ));
-        teardowns.extend(self.register_quest_relays(self_guid, tx.clone()));
         teardowns.extend(self.register_item_relays(
             self_guid,
             tx.clone(),
@@ -2819,168 +2896,6 @@ impl Coordinator {
                 .game_character_explored()
                 .remove_on_insert(on_explored_coord);
         })]
-    }
-
-    /// QUEST LOG relays, coordinator-registered — game_character_quest (insert/update/delete):
-    /// full PLAYER_QUEST_LOG re-sync (raw-send) on any change to this player's log.
-    fn register_quest_relays(
-        &self,
-        self_guid: u64,
-        tx: SessionTx,
-    ) -> Vec<Box<dyn FnOnce() + Send>> {
-        // ======================================================================================
-        //  QUEST LOG, coordinator-registered — game_character_quest (insert/update/delete)
-        //  Full PLAYER_QUEST_LOG re-sync (raw-send) on any change to this player's log; moved off
-        //  the per-player connection by the coordinator-relay rule for the same reason as
-        //  XP/level-up above.
-        // ======================================================================================
-        // Quest-log array sync (Phase 2, raw-send path). On ANY change to this player's quest log
-        // (accept / kill-progress / turn-in), re-send the FULL PLAYER_QUEST_LOG block (full sync so a
-        // turned-in quest's slot clears). Reads ctx.db (the connection that fired) so the change is
-        // already visible; shares build_quest_log_slots with the login read so slots line up. GATED
-        // behind LYRACORE_QUEST_LOG (default ON) — returns None when set to 0 (escape hatch; the quest-log
-        // descriptor layout is verified against the live 5875 client).
-        fn quest_log_sync(
-            db: &crate::stdb::bindings::RemoteTables,
-            self_guid: u64,
-        ) -> Option<Outbound> {
-            if !crate::config::quest_log_fields_enabled() {
-                return None;
-            }
-            // build_quest_log_slots is now INVENTORY-AWARE (collect-quest completion), so it reads `db`
-            // (game_quest_objective + game_item_instance). Both callers pass the COORDINATOR's cache
-            // (`quest_log_sync` is only ever invoked from coordinator-registered callbacks per the
-            // coordinator-relay rule), which
-            // holds every player's rows and is the only place game_quest_objective lives since the
-            // connection reclaim.
-            let quests: Vec<_> = db.game_character_quest().iter().collect();
-            let slots = super::reads::build_quest_log_slots(db, &quests, self_guid);
-            // Send the FULL quest-log sync on EVERY change, including the empty case. Turning in the LAST
-            // quest flips its `rewarded` flag (an UPDATE, kept row) → build_quest_log_slots (filters
-            // !rewarded) returns EMPTY → full_quest_log_mask(&[]) zeroes all 60 slot fields, which is HOW the
-            // client removes the quest (slot 0's quest_id 783 → 0). This MUST be sent or the turned-in quest
-            // lingers in the log and the questgiver's overhead `?` stays stale until the next quest-log change
-            // (e.g. accepting the follow-up) forces a relay. An earlier empty-slots guard skipped this on a
-            // MISDIAGNOSIS — the real McBride crash was SMSG_SET_FACTION_STANDING sending faction_id instead of
-            // the rep-index (fixed in dee80cb). The all-zero mask is structurally identical to the working
-            // "1 quest left" case (19 slots already zeroed); a zeroed slot 0 is the same clear, not a crash.
-            let mask = codec::update_mask::full_quest_log_mask(&slots);
-            let (opcode, body) = codec::build_values_update_raw(self_guid, &mask);
-            Some(Outbound::Raw { opcode, body })
-        }
-        let quest_ins_tx = tx.clone();
-        // COORDINATOR-registered per the coordinator-relay rule: quest-log rows ride kill and
-        // turn-in transactions — large, movement-concurrent, and a lost update leaves the quest
-        // log desynced until relog. The coordinator sees EVERY player's rows (owner RLS bypass),
-        // so each closure now guards on character_guid; quest_log_sync reads the coordinator
-        // cache, which is a superset, and already filters by self_guid.
-        let on_quest_insert =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_character_quest()
-                .on_insert(move |ctx, row| {
-                    if row.character_guid != self_guid {
-                        return;
-                    }
-                    if let Some(o) = quest_log_sync(&ctx.db, self_guid) {
-                        let _ = quest_ins_tx.send(o);
-                    }
-                });
-        let quest_upd_tx = tx.clone();
-        let on_quest_update =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_character_quest()
-                .on_update(move |ctx, old, row| {
-                    if row.character_guid != self_guid {
-                        return;
-                    }
-                    // Kill-progress feedback: emit SMSG_QUESTUPDATE_ADD_KILL ("Creature slain: n/N") for each
-                    // KILL objective whose count INCREASED this update. Diff logic is the unit-tested pure
-                    // `codec::kill_progress_add_kills`; here we just gather this quest's objectives and relay.
-                    let objs: Vec<(u8, u8, u32, u32)> = ctx
-                        .db
-                        .game_quest_objective()
-                        .iter()
-                        .filter(|o| o.quest_entry == row.quest_entry)
-                        .map(|o| (o.kind, o.obj_index, o.target_entry, o.required_count))
-                        .collect();
-                    for m in codec::kill_progress_add_kills(
-                        row.quest_entry,
-                        &old.counts,
-                        &row.counts,
-                        &objs,
-                    ) {
-                        let _ = quest_upd_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_KILL(Box::new(m)),
-                        ));
-                    }
-                    // Timed-quest expiry: the tick flips `failed` false->true — relay
-                    // SMSG_QUESTUPDATE_FAILEDTIMER so the client's quest-log entry shows FAILED. Diffed (not a
-                    // bare `if row.failed`) so this fires exactly once, on the transition, never on every
-                    // subsequent update to an already-failed row.
-                    if !old.failed && row.failed {
-                        let _ = quest_upd_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_QUESTUPDATE_FAILEDTIMER(
-                                codec::build_questupdate_failedtimer(row.quest_entry),
-                            ),
-                        ));
-                    }
-                    if let Some(o) = quest_log_sync(&ctx.db, self_guid) {
-                        let _ = quest_upd_tx.send(o);
-                    }
-                });
-        let quest_del_tx = tx.clone();
-        let on_quest_delete =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_character_quest()
-                .on_delete(move |ctx, row| {
-                    if row.character_guid != self_guid {
-                        return;
-                    }
-                    // The second live defect from the warm-handoff work, alongside items: finish_transfer's
-                    // cascade deletes every
-                    // game_character_quest row for this character on the SOURCE database — without this guard,
-                    // quest_log_sync would read the now-empty set and send an all-zero PLAYER_QUEST_LOG VALUES,
-                    // visually wiping the quest log on the client for the brief window before the OLD subs are
-                    // torn down, even though the destination's import holds the byte-identical rows.
-                    if let Some(o) = quest_log_sync(&ctx.db, self_guid) {
-                        let _ = quest_del_tx.send(o);
-                    }
-                });
-        let td_qi = self.clone();
-        let td_qu = self.clone();
-        let td_qd = self.clone();
-        vec![
-            Box::new(move || {
-                let l = td_qi.0.coord();
-                l.conn
-                    .db
-                    .game_character_quest()
-                    .remove_on_insert(on_quest_insert);
-            }),
-            Box::new(move || {
-                let l = td_qu.0.coord();
-                l.conn
-                    .db
-                    .game_character_quest()
-                    .remove_on_update(on_quest_update);
-            }),
-            Box::new(move || {
-                let l = td_qd.0.coord();
-                l.conn
-                    .db
-                    .game_character_quest()
-                    .remove_on_delete(on_quest_delete);
-            }),
-        ]
     }
 
     /// ITEM INSTANCE relays, coordinator-registered — game_item_instance
