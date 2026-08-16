@@ -1,3 +1,4 @@
+
 use super::party_tests::{character, DORMANT, GINGER, TRIN, VIM};
 use super::*;
 const MAILBOX: u64 = 0xF110_0000_0000_0042;

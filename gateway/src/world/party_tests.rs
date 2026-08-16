@@ -1092,8 +1092,7 @@ fn a_bot_invite_forms_a_party_on_realm_core_across_a_shard_boundary() {
         "the op must reach realm-core; calls were {log:?}"
     );
     assert!(
-        !log.iter()
-            .any(|(_, call)| call == "group_invite" || call == "group_accept"),
+        !log.iter().any(|(_, call)| call == "group_invite" || call == "group_accept"),
         "a bot invite must not write either shard's own party tables directly — that is the \
          serendipity-invite shard-local-write bug. \
          Calls were {log:?}"
