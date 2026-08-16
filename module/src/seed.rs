@@ -37,12 +37,13 @@ use crate::{
     game_gameobject_pool, game_gameobject_pool_member, game_gameobject_template,
     game_gateway_lease_reaper_schedule, game_graveyard, game_graveyard_zone,
     game_ground_area_schedule, game_instance_reaper_schedule, game_item_template,
-    game_melee_schedule, game_motion_publish_schedule, game_realm, game_spell, game_spell_effect,
-    game_start_position, Account, AuraSchedule, BreathSchedule, Character, CreatureLoot,
-    CreatureMoveSchedule, CreatureSpawn, CreatureTemplate, CreatureWaypoint, EventReaperSchedule,
-    GameObject, GameObjectPool, GameObjectPoolMember, GameObjectTemplate, GraveyardLoc,
-    GraveyardZone, GroundAreaSchedule, ItemTemplate, MeleeSchedule, Realm, ServerConfig, Spell,
-    SpellEffect, StartPosition, EVENT_TTL_MICROS,
+    game_melee_schedule, game_motion_publish_schedule, game_pet_care_schedule, game_realm,
+    game_spell, game_spell_effect, game_start_position, Account, AuraSchedule, BreathSchedule,
+    Character, CreatureLoot, CreatureMoveSchedule, CreatureSpawn, CreatureTemplate,
+    CreatureWaypoint, EventReaperSchedule, GameObject, GameObjectPool, GameObjectPoolMember,
+    GameObjectTemplate, GraveyardLoc, GraveyardZone, GroundAreaSchedule, ItemTemplate,
+    MeleeSchedule, PetCareSchedule, Realm, ServerConfig, Spell, SpellEffect, StartPosition,
+    EVENT_TTL_MICROS,
 };
 
 #[reducer(init)]
@@ -1345,6 +1346,13 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
     ctx.db.game_melee_schedule().insert(MeleeSchedule {
         scheduled_id: 0,
         scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(100_000)),
+    });
+
+    ctx.db.game_pet_care_schedule().insert(PetCareSchedule {
+        scheduled_id: 0,
+        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
+            crate::creatures::CARE_INTERVAL_MICROS,
+        )),
     });
 
     // Aura-expiry tick every 1s (tracer): drops auras whose timer elapsed (mirrors the melee tick).

@@ -58,6 +58,7 @@ pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Opti
     // a stale, lootable corpse until the owner re-summons/logs out/dies. Delete it + free its engagements;
     // the owner can re-summon. (A pet kill credits no XP — an enemy killing your Imp gains nothing.)
     if target.owner_guid != 0 {
+        crate::creatures::on_pet_death(ctx, target_guid);
         disengage(ctx, target_guid);
         entities.guid().delete(target_guid);
         crate::creatures::clear_live_pet_kind(ctx, target_guid);

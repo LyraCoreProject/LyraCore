@@ -387,6 +387,7 @@ pub(crate) fn tough_jerky_template(entry: u32) -> ItemTemplate {
         buy_price: 10,
         sell_price: 2,
         max_stack: 20,
+        food_type: 1, // Meat
         spellid_1: 50115,                     // "Eating" — A_PERIODIC_HEAL food HoT
         spelltrigger_1: 0,                    // on-use
         bonding: crate::items::bonding::NONE, // plain food — unbound/tradeable
@@ -514,6 +515,7 @@ pub(crate) fn base_item(entry: u32, name: &str) -> ItemTemplate {
         start_quest: 0,
         bag_family: 0,
         buy_count: 1,
+        food_type: 0,
     }
 }
 

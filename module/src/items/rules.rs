@@ -587,6 +587,7 @@ pub(crate) mod tests {
             start_quest: 0,
             bag_family: 0,
             buy_count: 1,
+            food_type: 0,
         }
     }
 

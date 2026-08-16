@@ -562,7 +562,12 @@ pub(crate) fn roll_swing(
     attacker: &WorldEntity,
     target: &WorldEntity,
 ) -> (u32, u8, u32) {
-    roll_swing_with_range(ctx, attacker, target, swing_range_ctx(ctx, attacker))
+    let range = crate::creatures::scale_hunter_pet_swing(
+        ctx,
+        attacker.guid,
+        swing_range_ctx(ctx, attacker),
+    );
+    roll_swing_with_range(ctx, attacker, target, range)
 }
 
 /// The shared core of `roll_swing`: identical attack-table roll + mitigation, but takes the `[min, max]`

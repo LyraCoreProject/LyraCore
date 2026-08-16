@@ -58,6 +58,7 @@ const E_SET_STANCE: u8 = 0x14; // set the caster's Warrior stance (Battle/Defens
 const E_SUMMON_PET: u8 = 0x15; // summon a persistent pet creature owned by the caster (Summon Imp); mapped from the raw vanilla Summon effect (56), with the misc_value (the summoned creature entry) routed into p0 (p0_kind = P_ENTRY) (lockstep with module taxonomy)
 const E_HEAL_MAX_HEALTH: u8 = 0x16; // heal the target to FULL max health (Lay on Hands); mapped from the raw vanilla HealMaxHealth effect (67), split out of E_HEAL because its base_points is ~0 (the magnitude is "fill to max", not a flat N) (lockstep with module taxonomy)
 const E_TAME_CREATURE: u8 = 0x20; // completed Hunter tame; raw vanilla TameCreature effect (55), lockstep with module taxonomy
+const E_FEED_PET: u8 = 0x21; // feed a Hunter pet from the explicit item target; raw effect 101
 const E_POWER_BURN: u8 = 0x19; // drain target mana into damage (Mana Burn); mapped from the raw vanilla PowerBurn effect (62), p1 = EffectMultipleValue*100 basis-points (lockstep with module taxonomy, work-items 117)
 const E_BLINK: u8 = 0x1A; // teleport the caster ~20yd FORWARD along its facing (Mage Blink, 116); reclassified BY NAME from the dead SCRIPT teleport effect (lockstep with module taxonomy)
 const E_PERSISTENT_AREA: u8 = 0x1B; // ground-AoE (118, Consecration): spawns a fixed-position game_ground_area whose tick damages hostiles inside; reclassified BY NAME from the ground A_PERIODIC_DAMAGE effect (lockstep with module taxonomy)
@@ -410,6 +411,7 @@ fn instant_effect_to_kind(effect_id: i32) -> u8 {
         24 => E_CREATE_ITEM, // CreateItem (conjure / quest item) — p0 = item entry
         68 => E_INTERRUPT, // InterruptCast (Kick) — cancel the target's in-progress cast
         55 => E_TAME_CREATURE, // TameCreature — explicit wild target, no spell-id branch
+        101 => E_FEED_PET, // FeedPet — explicit item target is routed by the gateway/manual cast seam
         56 => E_SUMMON_PET, // Summon (Summon Imp et al.) — p0 = the summoned creature entry (misc_value)
         62 => E_POWER_BURN, // PowerBurn (Priest Mana Burn) — p1 = EffectMultipleValue*100 (work-items 117)
         33 | 59 => E_OPEN_LOCK, // OpenLock (33) / OpenLockItem (59) — Pick Lock (work-item 119): gateway-intercepted, routed to the pick_lock reducer by kind (Pick Lock 1804 carries the raw OpenLock effect; the item-lock variant 59 covers a lockpick-on-item spell)
@@ -1739,6 +1741,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_SUMMON_PET => "E_SUMMON_PET",
         E_HEAL_MAX_HEALTH => "E_HEAL_MAX_HEALTH",
         E_TAME_CREATURE => "E_TAME_CREATURE",
+        E_FEED_PET => "E_FEED_PET",
         E_POWER_BURN => "E_POWER_BURN",
         E_SCRIPTED => "E_SCRIPTED",
         A_PERIODIC_DAMAGE => "A_PERIODIC_DAMAGE",
@@ -2289,6 +2292,12 @@ mod tests {
             resolve_instant_params(E_TAME_CREATURE, 123, 456),
             (0, P_NONE)
         );
+    }
+
+    #[test]
+    fn feed_pet_effect_maps_without_a_spell_id_branch() {
+        assert_eq!(instant_effect_to_kind(101), E_FEED_PET);
+        assert_eq!(resolve_instant_params(E_FEED_PET, 123, 456), (0, P_NONE));
     }
 
     #[test]

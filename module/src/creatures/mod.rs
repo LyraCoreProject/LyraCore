@@ -15,6 +15,7 @@ pub(crate) mod cycle;
 mod eventai;
 mod hunter_pet;
 mod pet;
+mod pet_care;
 mod spawn;
 pub(crate) mod tick;
 
@@ -22,5 +23,6 @@ pub use ai::*;
 pub use eventai::*;
 pub use hunter_pet::*;
 pub use pet::*;
+pub use pet_care::*;
 pub use spawn::*;
 pub use tick::*;
