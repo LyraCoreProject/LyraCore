@@ -211,6 +211,26 @@ pub struct GwMove {
     pub move_time_ms: u32,
 }
 
+/// Apply a batch entry-by-entry. Suppressed and failed entries are isolated from their neighbors.
+fn apply_movement_batch(
+    moves: Vec<GwMove>,
+    mut suppressed: impl FnMut(u64) -> bool,
+    mut apply: impl FnMut(GwMove) -> Result<(), String>,
+) {
+    for movement in moves {
+        if suppressed(movement.actor_guid) {
+            continue;
+        }
+        let actor_guid = movement.actor_guid;
+        if let Err(error) = apply(movement) {
+            spacetimedb::log::debug!(
+                "gw_movement_batch: move for {} rejected: {error}",
+                actor_guid
+            );
+        }
+    }
+}
+
 /// #482: ONE transaction per gateway tick instead of one per player heartbeat. The measured wall
 /// behind this: ~10k `gw_movement_update` transactions/s at ~43µs of per-transaction machinery
 /// each put the writer at 92% while the actual row work (the batched `publish_motion` side) was
@@ -221,37 +241,24 @@ pub struct GwMove {
 #[reducer]
 pub fn gw_movement_batch(ctx: &ReducerContext, moves: Vec<GwMove>) -> Result<(), String> {
     require_operator(ctx)?;
-    for m in moves {
-        if crate::taxi::movement_is_suppressed(ctx, m.actor_guid) {
-            continue;
-        }
-        let mover = match actor(ctx, m.actor_guid) {
-            Ok(e) => e,
-            Err(e) => {
-                spacetimedb::log::debug!(
-                    "gw_movement_batch: entry for {} skipped: {e}",
-                    m.actor_guid
-                );
-                continue;
-            }
-        };
-        if let Err(e) = crate::world::apply_movement_update(
-            ctx,
-            mover,
-            m.opcode,
-            m.movement_info,
-            m.x,
-            m.y,
-            m.z,
-            m.o,
-            m.move_time_ms,
-        ) {
-            spacetimedb::log::debug!(
-                "gw_movement_batch: move for {} rejected: {e}",
-                m.actor_guid
-            );
-        }
-    }
+    apply_movement_batch(
+        moves,
+        |actor_guid| crate::taxi::movement_is_suppressed(ctx, actor_guid),
+        |m| {
+            let mover = actor(ctx, m.actor_guid)?;
+            crate::world::apply_movement_update(
+                ctx,
+                mover,
+                m.opcode,
+                m.movement_info,
+                m.x,
+                m.y,
+                m.z,
+                m.o,
+                m.move_time_ms,
+            )
+        },
+    );
     // #482: drain the staged motion INSIDE this transaction — the subscription sweep is paid
     // once per batch either way (#461's whole point), and inline draining removes the publish
     // schedule's 50ms latency quantum plus the pending-row churn for this path.
@@ -1230,7 +1237,58 @@ pub fn gw_gm_command(ctx: &ReducerContext, actor_guid: u64, text: String) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::{lease_expired, LEASE_REAP_MICROS, LEASE_TTL_MICROS};
+    use super::{apply_movement_batch, lease_expired, GwMove, LEASE_REAP_MICROS, LEASE_TTL_MICROS};
+    use std::collections::{HashMap, HashSet};
+
+    const HEARTBEAT: u16 = lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT as u16;
+    const START: u16 = lyracore_shared::opcodes::movement::MSG_MOVE_START_FORWARD as u16;
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct MotionState {
+        x: f32,
+        move_time_ms: u32,
+        relay: Option<(u16, Vec<u8>)>,
+    }
+
+    fn movement(actor_guid: u64, opcode: u16, x: f32, move_time_ms: u32, body: &[u8]) -> GwMove {
+        GwMove {
+            actor_guid,
+            opcode,
+            movement_info: body.to_vec(),
+            x,
+            y: 2.0,
+            z: 3.0,
+            o: 0.5,
+            move_time_ms,
+        }
+    }
+
+    fn apply_model(states: &mut HashMap<u64, MotionState>, movement: GwMove) -> Result<(), String> {
+        let state = states
+            .get_mut(&movement.actor_guid)
+            .ok_or_else(|| "mover not in world".to_string())?;
+        if crate::world::movement_is_accepted(
+            state.move_time_ms,
+            movement.move_time_ms,
+            movement.x,
+            movement.y,
+            movement.z,
+            movement.o,
+        ) {
+            state.x = movement.x;
+            state.move_time_ms = movement.move_time_ms;
+            state.relay = Some((movement.opcode, movement.movement_info));
+        }
+        Ok(())
+    }
+
+    fn state(x: f32, move_time_ms: u32) -> MotionState {
+        MotionState {
+            x,
+            move_time_ms,
+            relay: None,
+        }
+    }
 
     /// The lease decision, pinned by value: alive inside the TTL, dead past it, and the TTL must
     /// exceed the reap interval by enough that one delayed heartbeat cannot despawn a live
@@ -1243,6 +1301,109 @@ mod tests {
         assert!(
             LEASE_TTL_MICROS >= 3 * LEASE_REAP_MICROS,
             "TTL must tolerate at least two missed heartbeats plus a reap interval"
+        );
+    }
+
+    #[test]
+    fn missing_and_invalid_entries_do_not_reject_valid_neighbors() {
+        let mut states = HashMap::from([(1, state(0.0, 0)), (3, state(0.0, 0))]);
+        apply_movement_batch(
+            vec![
+                movement(1, HEARTBEAT, 1.0, 10, &[1]),
+                movement(2, HEARTBEAT, 2.0, 10, &[2]),
+                movement(1, HEARTBEAT, f32::NAN, 11, &[9]),
+                movement(3, HEARTBEAT, 3.0, 10, &[3]),
+            ],
+            |_| false,
+            |movement| apply_model(&mut states, movement),
+        );
+
+        assert_eq!(
+            states[&1],
+            MotionState {
+                x: 1.0,
+                move_time_ms: 10,
+                relay: Some((HEARTBEAT, vec![1]))
+            }
+        );
+        assert_eq!(
+            states[&3],
+            MotionState {
+                x: 3.0,
+                move_time_ms: 10,
+                relay: Some((HEARTBEAT, vec![3]))
+            }
+        );
+    }
+
+    #[test]
+    fn stale_batch_motion_cannot_overtake_newer_state() {
+        let mut states = HashMap::from([(7, state(0.0, 0))]);
+        apply_model(&mut states, movement(7, START, 8.0, 200, &[8])).unwrap();
+        let after_immediate = states[&7].clone();
+
+        apply_movement_batch(
+            vec![
+                movement(7, HEARTBEAT, 9.0, 200, &[9]),
+                movement(7, HEARTBEAT, 10.0, 199, &[10]),
+            ],
+            |_| false,
+            |movement| apply_model(&mut states, movement),
+        );
+
+        assert_eq!(states[&7], after_immediate);
+    }
+
+    #[test]
+    fn taxi_suppression_is_per_entry() {
+        let mut states = HashMap::from([(4, state(0.0, 0)), (5, state(0.0, 0))]);
+        let suppressed = HashSet::from([4]);
+        apply_movement_batch(
+            vec![
+                movement(4, HEARTBEAT, 4.0, 10, &[4]),
+                movement(5, HEARTBEAT, 5.0, 10, &[5]),
+            ],
+            |guid| suppressed.contains(&guid),
+            |movement| apply_model(&mut states, movement),
+        );
+
+        assert_eq!(states[&4], state(0.0, 0));
+        assert_eq!(states[&5].relay, Some((HEARTBEAT, vec![5])));
+    }
+
+    #[test]
+    fn single_and_batch_paths_commit_the_same_state_and_raw_relay() {
+        let mut single = HashMap::from([(11, state(0.0, 0))]);
+        let mut batch = single.clone();
+        apply_model(&mut single, movement(11, START, 12.0, 50, &[1, 2, 3, 4])).unwrap();
+        apply_movement_batch(
+            vec![movement(11, START, 12.0, 50, &[1, 2, 3, 4])],
+            |_| false,
+            |movement| apply_model(&mut batch, movement),
+        );
+
+        assert_eq!(batch, single);
+        assert_eq!(batch[&11].relay, Some((START, vec![1, 2, 3, 4])));
+    }
+
+    #[test]
+    fn batch_publishes_accepted_motion_before_returning() {
+        let mut states = HashMap::from([(12, state(0.0, 0))]);
+        apply_movement_batch(
+            vec![movement(12, HEARTBEAT, 6.0, 60, &[6])],
+            |_| false,
+            |movement| apply_model(&mut states, movement),
+        );
+        assert_eq!(states[&12].relay, Some((HEARTBEAT, vec![6])));
+
+        let body = crate::test_scan::code_of(include_str!("gw.rs"), "pub fn gw_movement_batch(");
+        let apply_at = body
+            .find("apply_movement_batch(")
+            .expect("batch application");
+        let publish_at = body.find("publish_staged(ctx)").expect("inline publish");
+        assert!(
+            apply_at < publish_at,
+            "the reducer must publish after applying the whole batch"
         );
     }
     /// Every reducer in THIS file must open with its gate — `require_operator` for a gateway
