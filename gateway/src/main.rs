@@ -18,6 +18,7 @@ mod config;
 mod fd_limit;
 mod load_sample;
 mod logon;
+mod movement_batch_metrics;
 mod provision_cli;
 mod realm_core;
 mod stdb;

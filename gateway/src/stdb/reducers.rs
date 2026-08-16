@@ -805,7 +805,7 @@ impl Coordinator {
         // tick carries the whole realm's heartbeats instead of one transaction each (the
         // measured 92%-writer wall). Per-move rejection logging moved module-side (the batch
         // reducer logs and skips), so no per-entry completion exists here.
-        self.0.motion_batch.lock().unwrap().push(GwMove {
+        self.0.motion_batch.push(GwMove {
             actor_guid,
             opcode,
             movement_info: movement_info.to_vec(),

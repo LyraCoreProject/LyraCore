@@ -1212,6 +1212,22 @@ pub(crate) struct MovementPlan {
     pub moved: bool,
 }
 
+/// Whether a movement sample may replace the actor's current motion snapshot.
+pub(crate) fn movement_is_accepted(
+    last_move_ms: u32,
+    move_time_ms: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    o: f32,
+) -> bool {
+    (move_time_ms == 0 || move_time_ms > last_move_ms)
+        && x.is_finite()
+        && y.is_finite()
+        && z.is_finite()
+        && o.is_finite()
+}
+
 /// Build the plan `movement_update` executes. Pure — no `ReducerContext` — so every decision this
 /// used to make inline (and that the old source-scan pin existed to guard) is now a plain function of
 /// its inputs, directly unit-tested below.
@@ -1274,15 +1290,9 @@ pub(crate) fn apply_movement_update(
         return Ok(());
     }
 
-    // Drop stale / out-of-order heartbeats.
-    if move_time_ms != 0 && move_time_ms <= mover.last_move_ms {
-        return Ok(());
-    }
-
-    // Reject non-finite coordinates. A malicious client sending NaN/Inf would poison the stored
-    // position AND the AOI grid (spatial::grid_cell floors x/y → an undefined i32 cell), and peers
-    // would see the unit jump to garbage. Drop the heartbeat like a stale one (don't error-spam).
-    if !x.is_finite() || !y.is_finite() || !z.is_finite() || !o.is_finite() {
+    // Drop stale / out-of-order heartbeats and non-finite coordinates. The decision is kept pure so
+    // the gateway batch contract can exercise the exact admission rule without a ReducerContext.
+    if !movement_is_accepted(mover.last_move_ms, move_time_ms, x, y, z, o) {
         return Ok(());
     }
 
