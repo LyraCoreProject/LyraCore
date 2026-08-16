@@ -1578,6 +1578,7 @@ impl Coordinator {
             tokio::spawn(async move {
                 let mut tick = tokio::time::interval(Duration::from_millis(40));
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                let mut ticks_until_metrics = 250u16;
                 loop {
                     tick.tick().await;
                     // Batch shape: cap each call at 128 moves and spread the chunks across
@@ -1585,8 +1586,12 @@ impl Coordinator {
                     // calls for its whole execution (the measured 1970→1071 seat regression);
                     // several ~5ms transactions interleave with them instead.
                     let failures = inner.motion_batch.drain(|chunk| {
+                        let entries = chunk.len();
                         let pipe = inner.call_pipe();
-                        pipe.conn.reducers.gw_movement_batch(chunk)
+                        let result = pipe.conn.reducers.gw_movement_batch(chunk);
+                        crate::movement_batch_metrics::MOVEMENT_BATCH_METRICS
+                            .observe(entries, result.is_ok());
+                        result
                     });
                     for failure in failures {
                         let n = failure.dropped;
@@ -1594,6 +1599,16 @@ impl Coordinator {
                         log::warn!(
                             "gw_movement_batch send failed ({n} moves dropped this tick): {e}"
                         );
+                    }
+                    ticks_until_metrics -= 1;
+                    if ticks_until_metrics == 0 {
+                        log::info!(
+                            "{}",
+                            crate::movement_batch_metrics::MOVEMENT_BATCH_METRICS
+                                .snapshot()
+                                .log_line()
+                        );
+                        ticks_until_metrics = 250;
                     }
                 }
             });
