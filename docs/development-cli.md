@@ -54,6 +54,7 @@ lyracore import [--accept] [--client-data PATH]
 lyracore config
 lyracore config set client-data PATH
 lyracore character gm NAME true|false
+lyracore production status --server SERVER --gateway-log PATH --realm-core DB DATABASE ...
 lyracore update
 ```
 
@@ -71,6 +72,7 @@ lyracore update
 | `import` | replace the seed fixture with the real world — consent notice, then the ETL on every database the fixture populates |
 | `config` | show, or set, the client-data path `import` and `doctor` remember |
 | `character gm` | flip GM commands on or off for a character, on whichever world shard has it |
+| `production status` | read-only checks for an explicitly named production topology and the latest gateway start |
 | `update` | pull the latest LyraCore into this checkout and tell you how to restart it |
 
 **The CLI shells out to nothing in `scripts/`.** It drives this checkout through its *files* —
@@ -162,7 +164,7 @@ sql, so it is safe against a live stack:
 0. `rustc` and the `spacetime` CLI **exactly** match the versions this checkout pins
    (`rust-toolchain.toml`, `module/Cargo.toml`). Exact, not a floor — `doctor` asks for a minimum,
    a deploy gate cannot, because a CLI *ahead* of the pin publishes a schema this repo never tested
-   against. A drifted CLI is a hard failure but does **not** skip checks 2–3.
+   against. A missing or drifted CLI is a hard failure but does **not** skip checks 2–3.
 1. the module builds with `--features=debug_reducers` — the feature a publish bakes in and the
    default test config never compiles.
 2. real offline wasm schema extraction (`spacetime generate` into a scratch directory that deletes
@@ -192,6 +194,26 @@ it as the destructive wipe, anything else with the general refusal. Nothing is f
 
 This is the same contract the maintainers' internal deploy script carries — each of those cases is a
 unit test in the CLI too. [`docs/danger-zones.md`](./danger-zones.md) §1 remains authoritative.
+
+## `production status` — read-only evidence for a named topology
+
+```bash
+./lyracore production status \
+  --server local \
+  --gateway-log /tmp/gw.log \
+  --realm-core lyracore-realm \
+  lyracore lyracore-world-1 lyracore-instances lyracore-realm
+```
+
+This command does not infer production from the contributor fixture. The server, log path,
+realm-core, and complete database set are required. The server value is forwarded unchanged to
+SpacetimeDB inventory and schema probes. The command checks that every named database is reachable,
+isolates the latest gateway-start segment, compares configured and expected topology, requires a
+distinct coordinator connection per database, and verifies realm-core plus logon/world listener markers.
+Address and missing-occupancy signals are warnings; unreachable databases, missing connections,
+startup errors, or missing listeners fail the command. It performs no publish, reducer call, SQL
+write, or service action. It is the canonical log parser for the production runbook; verify the
+operating system's actual sockets separately.
 
 Runtime files live in the git-ignored `.lyracore/` — `state.json` for the processes the CLI started,
 `logs/{spacetime,gateway}.log`, and `coordinator-token` (mode `0600`) if this host had no

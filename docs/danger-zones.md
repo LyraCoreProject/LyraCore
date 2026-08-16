@@ -397,9 +397,13 @@ setsid nohup env \
   RUST_LOG=info \
   ./target/debug/lyracore-gateway </dev/null >/tmp/gw.log 2>&1 &
 sleep 4
-grep -E "world listening" /tmp/gw.log             # healthy marker; also check decode-errors == 0
-grep -oE 'databases \[.*\]' /tmp/gw.log           # MUST list all FOUR, or something above was dropped
-grep -c "coordinator connected to shard" /tmp/gw.log   # MUST be 4 — see the caveat below
+./lyracore production status \
+  --server local \
+  --gateway-log /tmp/gw.log \
+  --realm-core lyracore-realm \
+  lyracore lyracore-world-1 lyracore-instances lyracore-realm
+# Also inspect the process identity and real sockets. Log listener markers do not prove the process
+# still owns them.
 
 # What each one buys, and how it fails if you leave it out — all three fail QUIETLY:
 #   LYRACORE_SHARD_MAP      one database. Kalimdor and the instance pool are simply not there.
@@ -430,9 +434,13 @@ grep -c "coordinator connected to shard" /tmp/gw.log   # MUST be 4 — see the c
 # success. The maintainers run a cross-shard catalogue check here; it is not in this repository.
 ```
 
-### ⚠ The `databases [...]` grep proves CONFIGURATION, not connectivity
+### ⚠ Status distinguishes configuration from connectivity
 
-Two things about that line, both of which have made a broken start-up look fine:
+`./lyracore production status` parses these latest-start markers separately. It avoids a fragile
+connection count, but it cannot prove a process still owns a port; retain the socket inspection in
+the recipe above.
+
+Two facts that have made a broken startup look fine:
 
 1. It is printed behind an `if conns.len() > 1` guard (`gateway/src/stdb/connection.rs`), so a
    **single-database gateway prints no database list at all**. An empty grep result is exactly what
@@ -444,7 +452,7 @@ Two things about that line, both of which have made a broken start-up look fine:
    both non-fatal.
 
 `coordinator connected to shard <db>` (`connection.rs`) is printed once per **successful**
-connection and is the line that actually proves connectivity. Count it.
+connection. `production status` verifies one distinct marker per expected database.
 
 ### ⚠ `pkill -x lyracore-gatewa` — the 15-character truncation, not a typo
 

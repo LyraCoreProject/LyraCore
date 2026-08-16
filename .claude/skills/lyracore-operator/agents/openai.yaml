@@ -1,0 +1,4 @@
+interface:
+  display_name: "LyraCore Operator"
+  short_description: "Update and diagnose LyraCore realms safely"
+  default_prompt: "Use $lyracore-operator to update or diagnose this LyraCore realm."
