@@ -540,6 +540,10 @@ struct InMemoryStore {
     /// Trainer rows `trainer_list` returns for ANY (player, trainer) pair — the
     /// CMSG_TRAINER_LIST fixture. Empty by default (an empty trainer window).
     trainer_spells: Vec<codec::TrainerSpellView>,
+    /// Optional resolved rank a trainer buy grants. `None` models a self-contained spell.
+    trainer_resolved_rank: Option<u32>,
+    /// Optional already-known predecessor of `trainer_resolved_rank`.
+    trainer_superseded_old_rank: Option<u32>,
     /// Recorded `repop` calls — the caller's self_guid, one entry per CMSG_REPOP_REQUEST.
     repopped: std::sync::Mutex<Vec<u64>>,
     /// Recorded `reclaim_corpse` calls — `(self_guid, corpse_guid)` off CMSG_RECLAIM_CORPSE.
@@ -1779,7 +1783,7 @@ impl WorldStore for InMemoryStore {
         Ok(self.player_actions.clone())
     }
     fn resolve_learn_target(&self, spell_id: u32) -> u32 {
-        spell_id // mock: self-contained ranks (no wrapper table in the mock store)
+        self.trainer_resolved_rank.unwrap_or(spell_id)
     }
     fn entity_in_world(&self, guid: u64) -> bool {
         self.entity_presence_checks
@@ -1849,7 +1853,7 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
     fn superseded_old_rank(&self, _new_spell: u32, _player_guid: u64) -> Option<u32> {
-        None
+        self.trainer_superseded_old_rank
     }
     fn send_chat(
         &self,
@@ -6404,6 +6408,45 @@ fn trainer_buy_success_replies_succeeded_then_pushes_the_learned_spell() {
     match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
         ServerOpcodeMessage::SMSG_LEARNED_SPELL(m) => assert_eq!(m.id, 1234),
         other => panic!("expected SMSG_LEARNED_SPELL, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn trainer_buy_rank_upgrade_supersedes_the_previous_non_mana_rank() {
+    // A non-mana rank chain collapses in the spellbook. The offered spell is a wrapper here so
+    // this also proves the live packet uses the granted rank, not the trainer-list spell id.
+    let mut s = quest_store();
+    s.trainer_resolved_rank = Some(3100); // Journeyman Blacksmithing
+    s.trainer_superseded_old_rank = Some(2018); // Apprentice Blacksmithing
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_TRAINER_BUY_SPELL {
+        guid: Guid::new(70),
+        id: 9000,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_TRAINER_BUY_SUCCEEDED(m) => {
+            assert_eq!(m.guid.guid(), 70);
+            assert_eq!(m.id, 9000);
+        }
+        other => panic!("expected SMSG_TRAINER_BUY_SUCCEEDED, got {other}"),
+    }
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SUPERCEDED_SPELL(m) => {
+            assert_eq!(
+                m.new_spell_id, 2018,
+                "first wire slot carries the OLD rank (cmangos order)"
+            );
+            assert_eq!(
+                m.old_spell_id, 3100,
+                "second wire slot carries the NEW rank"
+            );
+        }
+        other => panic!("expected SMSG_SUPERCEDED_SPELL, got {other}"),
     }
     drop(client);
     server.join().unwrap();
