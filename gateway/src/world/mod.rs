@@ -244,64 +244,14 @@ pub enum EnchantRoute {
     Disenchant,
 }
 
-/// Storage/coordination the world handshake needs. Implemented by [`Coordinator`] directly in
-/// production (see `stdb::world_store`) and by an in-memory fake in tests.
-///
-/// Later phases extend this trait (character list, login, movement); Phase 2 needs only the
-/// session-key lookup that proves the stateless/shared-K coordination with the logon tier.
-/// Per-session movement outcome slot for the non-blocking submit path.
-///
-/// Fire-and-forget moves the error from the caller's `Result` to a later callback, so two things
-/// need somewhere to live: the error itself (applied on the session's next packet, preserving the
-/// desync-tolerance behaviour exactly) and the number of submissions still outstanding.
-///
-/// `in_flight` is what stops fire-and-forget turning a throughput limit into an unbounded-memory
-/// one: past `MAX_IN_FLIGHT_MOVES` the session coalesces instead of submitting, which is the same
-/// thing the coalescer already does for a fast-moving client — bounded work, newest position wins,
-/// no queue to grow.
-/// Global submit/complete counts for the non-blocking movement path.
-///
-/// The gateway forwards ~400 movements/s at 200 players while the module reports ~200
-/// `movement_update` transactions/s. These two counters split the difference cleanly:
-///   * `submitted == completed == ~400/s` -> the SDK delivered every call and got a response, so
-///     the module DID run them and its transaction metric is undercounting.
-///   * `completed ~200/s` -> half the calls never completed, so they are being dropped between the
-///     gateway's send and the module -- a real loss of player movement.
-///
 /// Movements submitted in a 10s window below which the relay-health check stays quiet. A
 /// handful of movements with no relay traffic is just a lone player with nobody nearby to relay to;
 /// hundreds is the broken case. 100 ≈ five moving players.
 pub const MOVE_ACTIVITY_FLOOR: u64 = 100;
 
+/// Accepted movements handed to shard-local shared batches. Relay-health and fan-out diagnostics
+/// use this process-wide count as their activity denominator.
 pub static MOVE_SUBMITTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static MOVE_COMPLETED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-#[derive(Default, Debug)]
-pub struct MovementFeedback {
-    in_flight: std::sync::atomic::AtomicUsize,
-}
-
-/// Outstanding non-blocking movement submissions allowed per session before the next one is
-/// coalesced instead. Small on purpose: a vanilla client heartbeats ~2/s, so anything above a
-/// couple in flight means the server is already behind and the newest position is the only one that
-/// matters.
-pub const MAX_IN_FLIGHT_MOVES: usize = 4;
-
-impl MovementFeedback {
-    pub fn in_flight(&self) -> usize {
-        self.in_flight.load(std::sync::atomic::Ordering::Relaxed)
-    }
-    pub fn submitted(&self) {
-        self.in_flight
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        MOVE_SUBMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    }
-    pub fn completed(&self) {
-        self.in_flight
-            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-        MOVE_COMPLETED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    }
-}
 
 /// The connection's world-phase sub-state. Encodes the in-world invariant in the TYPE: the relay
 /// subscriptions, the combat/loot targets, and the session epoch exist ONLY while in-world, so the
@@ -373,13 +323,6 @@ pub struct WorldConn {
     /// condition-filtered list, so re-deriving that list at click time renumbers it under a quest
     /// accepted while the window was open.
     pub(crate) gossip_menu: Option<GossipMenuSnapshot>,
-    /// Non-blocking movement submission/backpressure state. Shared batches have no per-entry
-    /// reducer verdict, so entity presence drives the desync policy before submission.
-    move_feedback: std::sync::Arc<MovementFeedback>,
-    /// Movement packets dropped because `MAX_IN_FLIGHT_MOVES` was already outstanding. Logged at
-    /// teardown next to the coalescing ratio — if this is large the server is behind, and it is the
-    /// number that says so rather than a silent stall.
-    move_submit_dropped: u64,
     /// Multi-shard routing: the HOME-shard store handle for the character this session is
     /// playing, resolved at `CMSG_PLAYER_LOGIN` (and re-resolved on a world-port, which can change
     /// map and therefore shard) from the character's location via `WorldStore::home_shard`. `None`
@@ -667,8 +610,6 @@ pub fn world_handshake_with_queue<S: Read + Write, St: WorldStore + ?Sized>(
             state: WorldState::CharSelect,
             move_coalesce: CoalesceState::default(),
             gossip_menu: None,
-            move_feedback: std::sync::Arc::new(MovementFeedback::default()),
-            move_submit_dropped: 0,
             home: None,                     // resolved at CMSG_PLAYER_LOGIN
             session_key: Some(session_key), // for establish_session on a non-realm shard
             move_desync_drops: 0,
@@ -1104,11 +1045,10 @@ pub fn run_world_session_with_queue<S: DuplexStream, St: WorldStore + ?Sized>(
     // Movement-coalescing measurement: how much did coalescing actually cut? Logged once per
     // connection at disconnect, not per-packet — a live run's tail shows the ratio directly.
     log::debug!(
-        "world: movement coalescing account={} received={} forwarded={} submit_dropped={}",
+        "world: movement coalescing account={} received={} forwarded={}",
         conn.account_id,
         conn.move_coalesce.received(),
         conn.move_coalesce.forwarded(),
-        conn.move_submit_dropped,
     );
 
     // Teardown: if still in-world, drop the relay subs (stops callbacks; peers get DESTROY via the
@@ -1477,11 +1417,10 @@ fn dispatch_raw_auction_browse<St: WorldStore + ?Sized>(
     }
 }
 
-/// Actually forward one (already-classified) movement packet to the module + recenter AOI —
-/// exactly what the pre-coalescing inline code did, unconditionally, for every packet. Now called once
-/// per packet `CoalesceState` decides to forward (immediately for a state change, later for a
-/// coalesced heartbeat), so a forwarded packet's on-wire effect is unchanged; only its TIMING can
-/// differ (a pure heartbeat may forward later than it arrived; nothing else does).
+/// Enqueue one already-classified movement packet on the shard's shared batch, then recenter AOI.
+/// Called once per packet `CoalesceState` decides to forward: immediately for a state change, later
+/// for a coalesced heartbeat. A forwarded packet's on-wire effect is unchanged; only a pure
+/// heartbeat's timing can differ.
 fn forward_movement<St: WorldStore + ?Sized>(
     store: &St,
     conn: &mut WorldConn,
@@ -1513,18 +1452,8 @@ fn forward_movement<St: WorldStore + ?Sized>(
     // unconditional swallow turns a socket that used to close cleanly into a player walking around a
     // frozen world forever, never disconnected, with no error — the very outcome `is_desync_error`
     // was introduced to prevent. So: drop the port tail, then give up. See MOVE_DESYNC_TOLERANCE.
-    // NON-BLOCKING SUBMIT. This runs on the session's own socket-reader
-    // thread, so blocking here meant a player's NEXT packet could not be read until the previous
-    // movement round-tripped to the database and back — measured as a hard ~200 committed
-    // movement_update/s across the WHOLE server, unchanged from 100 to 200 players, with the
-    // database contributing 2.1 ms of a ~996 ms round-trip.
-    //
-    // BACKPRESSURE: past MAX_IN_FLIGHT_MOVES outstanding submissions we drop this packet rather than
-    // queue it. That is not a loss of fidelity — a movement packet is a POSITION SNAPSHOT, the next
-    // one supersedes it, and the coalescer already discards intermediate heartbeats for exactly this
-    // reason. Without a bound, fire-and-forget converts a throughput ceiling into unbounded memory.
-    // A shared movement batch logs and skips individual reducer rejections, so it cannot supply a
-    // per-entry callback. The coordinator cache is the authoritative desync signal before queueing.
+    // The shared batch has no per-entry reducer verdict. The coordinator cache remains the
+    // authoritative desync signal before enqueueing.
     if !store.entity_in_world(self_guid) {
         conn.move_desync_drops += 1;
         if conn.move_desync_drops > MOVE_DESYNC_TOLERANCE {
@@ -1545,12 +1474,7 @@ fn forward_movement<St: WorldStore + ?Sized>(
         return Ok(());
     }
     conn.move_desync_drops = 0;
-    let feedback = conn.move_feedback.clone();
-    if feedback.in_flight() >= MAX_IN_FLIGHT_MOVES {
-        conn.move_submit_dropped += 1;
-        return Ok(());
-    }
-    store.movement_update_nowait(conn.account_id, self_guid, opcode, info, &feedback)?;
+    store.movement_update(conn.account_id, self_guid, opcode, info)?;
     // AOI: recenter this player's grid-scoped entity subscription if they crossed a cell. No-op
     // when AOI is disabled (no tracker) or the player stayed in-cell. Same-map (the tracker holds
     // the login map; teleport/zone changes re-anchor in a later phase).
@@ -1638,10 +1562,10 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
                 crate::stdb::subscriptions::MOTION_SENT.load(Relaxed),
                 crate::stdb::subscriptions::MOTION_DROPPED.load(Relaxed),
             );
+            let sub = MOVE_SUBMITTED.load(Relaxed);
             // Only on CHANGE, plus one line on the transition to idle — a long-lived server with
             // nobody moving must not print this forever.
             if c != pc || s != ps || d != pd {
-                let (sub, comp) = (MOVE_SUBMITTED.load(Relaxed), MOVE_COMPLETED.load(Relaxed));
                 // The ratios are FORMATTED here, not left to the operator's
                 // arithmetic — 371 co-located clients under-delivered peer movement by 37 % and
                 // this line said nothing, because raw totals climb just as fast when each one is
@@ -1657,7 +1581,6 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
                         d - pd,
                         sub.saturating_sub(prev_sub),
                         sub,
-                        comp,
                     )
                 );
                 idle_logged = false;
@@ -1688,14 +1611,13 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
             // being SUBMITTED (players are active) while the relay callback fires almost never can
             // only mean delivery is broken. Deliberately a loud WARN and not a silent metric — the
             // whole defect is that nothing said anything.
-            let (sub, comp) = (MOVE_SUBMITTED.load(Relaxed), MOVE_COMPLETED.load(Relaxed));
             let submitted_delta = sub.saturating_sub(prev_sub);
             if submitted_delta > MOVE_ACTIVITY_FLOOR && c.saturating_sub(pc) * 10 < submitted_delta
             {
                 log::warn!(
                     "MOTION RELAY LOOKS DEAD: {submitted_delta} movements submitted in the \
                      last 10s but the relay callback fired only {} times — peers are almost \
-                     certainly frozen for connected players. calls={c} sent={s} completed={comp}. \
+                     certainly frozen for connected players. calls={c} sent={s}. \
                      The historical cause (the AOI recenter resubscribing a SHORTER query set, so \
                      the first cell crossing dropped game_entity_motion) cannot recur — the shared- \
                      call path removed the per-player AOI subscription entirely. This firing now \
