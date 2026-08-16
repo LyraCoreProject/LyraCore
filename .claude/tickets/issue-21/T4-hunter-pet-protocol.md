@@ -48,4 +48,3 @@ changes isolated. Do not change Hunter gameplay rules.
 ## Definition of done
 
 `cargo fmt`, gateway tests and focused clippy are clean. Commit only this slice.
-

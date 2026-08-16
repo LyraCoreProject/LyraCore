@@ -7,8 +7,8 @@
 //! navigation, not a split.
 
 use super::handlers::{
-    AuctionActionStore, CastStore, ItemActionStore, MeleeActionStore, QuestActionStore,
-    LootWindowStore, TaxiActionStore, VendorActionStore,
+    AuctionActionStore, CastStore, ItemActionStore, LootWindowStore, MeleeActionStore,
+    QuestActionStore, TaxiActionStore, VendorActionStore,
 };
 use super::*;
 
@@ -353,10 +353,10 @@ pub trait WorldStore:
     /// Look up a creature template by entry to answer `CMSG_CREATURE_QUERY` (Tier 2 / NPCs).
     fn creature_template(&self, entry: u32) -> Result<Option<codec::CreatureView>>;
 
-    /// Resolve an owner-visible live pet name. Unknown, stale or foreign queries return no row.
+    /// Resolve the public name of a live pet for an in-world requester.
     fn pet_name(
         &self,
-        _owner_guid: u64,
+        _requester_guid: u64,
         _pet_number: u32,
         _pet_guid: u64,
     ) -> Result<Option<codec::PetNameView>> {

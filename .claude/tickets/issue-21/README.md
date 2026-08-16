@@ -71,4 +71,3 @@ T1 durable identity + completed tame (serial tracer)
 - No production realm, database or deployed gateway may be touched.
 - Each ticket must format and run the focused crate tests it changes. T5 runs the complete relevant
   workspace checks.
-

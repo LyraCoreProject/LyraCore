@@ -51,4 +51,3 @@ happiness and damage; T4 owns gateway wire fields.
 ## Definition of done
 
 `cargo fmt`, module tests and focused clippy are clean. Commit only this slice.
-

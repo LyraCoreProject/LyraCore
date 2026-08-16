@@ -432,11 +432,11 @@ impl WorldStore for Coordinator {
 
     fn pet_name(
         &self,
-        owner_guid: u64,
+        requester_guid: u64,
         pet_number: u32,
         pet_guid: u64,
     ) -> Result<Option<codec::PetNameView>> {
-        self.pet_name(owner_guid, pet_number, pet_guid)
+        self.pet_name(requester_guid, pet_number, pet_guid)
     }
 
     fn gameobject_template(&self, entry: u32) -> Result<Option<codec::GameObjectTemplateView>> {

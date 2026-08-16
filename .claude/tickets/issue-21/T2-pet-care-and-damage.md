@@ -51,4 +51,3 @@ damage/death hooks. Do not implement XP/level progression or gateway pet queries
 ## Definition of done
 
 `cargo fmt`, importer/module tests and focused clippy are clean. Commit only this slice.
-
