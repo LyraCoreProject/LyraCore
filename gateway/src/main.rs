@@ -394,7 +394,7 @@ mod bot_invite_relay_wiring_tripwire {
     fn the_watchdog_invokes_the_reconnect_hook_after_the_swap() {
         let src = include_str!("stdb/connection.rs");
         let body = code_of(src, "fn spawn_coordinator_watchdog(");
-        let replacement_at = body.find("replace_live_slot(").expect(
+        let replacement_at = body.find("replace_live_conn(").expect(
             "the watchdog no longer installs the fresh LiveConn through the shared replacement \
              operation — reconnect is broken",
         );

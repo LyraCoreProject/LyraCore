@@ -48,35 +48,33 @@ pub(crate) struct ShardSet {
     world: Arc<super::world_view::WorldView>,
 }
 
-/// The live privileged connection + the handles that keep its pump/subscription alive. Swapped
-/// wholesale by the watchdog on a reconnect (the old one's pump thread has already exited and its
-/// subscription is dead, so dropping it is clean).
+/// One live SDK connection generation and the handles that keep its pump and subscription alive.
+/// Coordinator generations own the shard cache; call-pipe generations carry only the reducer
+/// liveness subscription. Recovery replaces either role as one unit.
 pub(crate) struct LiveConn {
-    /// Privileged (owner) connection: reads every table (RLS bypass) and is the cache the
-    /// gateway reads through. Player verbs go through the module's operator-gated `gw_*` surface
-    /// over the call pipes, with the actor named by guid.
+    /// Privileged owner connection. Coordinators use its subscription cache for reads; call pipes
+    /// use it only for the module's operator-gated reducer surface.
     pub(crate) conn: DbConnection,
     /// Completes reducer waits as soon as this connection's transport dies. It belongs to the
     /// connection generation, so a watchdog replacement cannot fail calls on the fresh socket.
     pub(crate) reducer_completion: Arc<ReducerCompletion>,
     /// Keeps the SDK message-pump thread alive for the connection's lifetime.
     _pump: std::thread::JoinHandle<()>,
-    /// Keeps the privileged subscription active for the connection's lifetime.
+    /// Keeps this role's subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
 }
 
 impl LiveConn {
-    /// A reducer connection is usable only while both its transport and its liveness subscription
+    /// A connection generation is usable only while both its transport and subscription
     /// are alive. A module republish can invalidate the latter without closing the socket.
     fn is_healthy(&self) -> bool {
         self.conn.is_active() && self._sub.is_active()
     }
 }
 
-/// Install a fresh resource before role-specific recovery work, then tear down the replaced
-/// resource. The write guard is deliberately scoped to the swap: reconnect hooks and connection
-/// teardown may both need to read or write the live slot.
-fn replace_live_slot<T>(
+/// Install a fresh resource before post-install work, then tear down the replaced resource. This
+/// generic seam keeps the ordering and lock lifetime deterministic without constructing SDK types.
+fn replace_slot_ordered<T>(
     slot: &RwLock<T>,
     fresh: T,
     role_label: &str,
@@ -90,20 +88,39 @@ fn replace_live_slot<T>(
         });
         std::mem::replace(&mut *live, fresh)
     };
-    log::info!("{role_label} replacement installed");
     post_install();
     teardown(old);
 }
 
-fn teardown_live_conn(old: LiveConn, role_label: &str) {
-    if let Err(error) = old.conn.disconnect() {
-        log::warn!("{role_label} old connection disconnect failed during teardown: {error}");
-    }
-    if let Err(error) = old._pump.join() {
-        log::warn!("{role_label} old pump thread panicked during teardown: {error:?}");
-    } else {
-        log::info!("{role_label} old connection teardown complete");
-    }
+/// Replace one live SDK generation. The fresh generation is visible before role-specific work;
+/// that work, disconnect, and pump join all run without the live-slot write lock.
+fn replace_live_conn(
+    slot: &RwLock<LiveConn>,
+    fresh: LiveConn,
+    role_label: &str,
+    post_install: impl FnOnce(),
+) {
+    replace_slot_ordered(
+        slot,
+        fresh,
+        role_label,
+        || {
+            log::info!("{role_label} replacement installed");
+            post_install();
+        },
+        |old| {
+            if let Err(error) = old.conn.disconnect() {
+                log::warn!(
+                    "{role_label} old connection disconnect failed during teardown: {error}"
+                );
+            }
+            if let Err(error) = old._pump.join() {
+                log::warn!("{role_label} old pump thread panicked during teardown: {error:?}");
+            } else {
+                log::info!("{role_label} old connection teardown complete");
+            }
+        },
+    );
 }
 
 /// One replaceable reducer-only connection. Reconnection happens off the watchdog thread; this
@@ -305,22 +322,10 @@ pub(crate) struct CoordinatorInner {
     /// transaction (was: one transaction per heartbeat — ~10k tx/s of per-transaction machinery
     /// at 2000 players, the measured 92%-writer wall).
     pub(crate) motion_batch: MovementBatch,
-    /// Re-arm hook for a connection-scoped relay that has no per-login registration point to
-    /// self-heal through after a reconnect (the bot-invite relay is the first of these, and
-    /// as of now the only one — every OTHER coordinator relay re-registers itself on the fresh
-    /// connection implicitly, because it is armed from inside a per-session LOGIN, which happens
-    /// again after any reconnect. This one is armed once at gateway startup with no login to hang a
-    /// re-arm off, so without this hook a reconnect (the watchdog's own doc comment: "self-heal
-    /// across a SpacetimeDB migration" — a module republish, which this project does routinely) would
-    /// leave it silently registered on a dead, disconnected `LiveConn` forever).
-    ///
-    /// `None` until [`super::subscriptions::Coordinator::spawn_bot_invite_relay`] sets it (nothing to
-    /// re-arm if that was never called); the watchdog invokes whatever is set, if anything, right
-    /// after each successful reconnect swap — AFTER, because the hook re-reads `coord()`, which must
-    /// already be the fresh connection.
-    /// A LIST, not a slot: there are now two one-shot coordinator relays per shard — the
-    /// bot-invite relay and the shared AOI dispatch — and a slot would silently let whichever
-    /// armed second overwrite the first's re-arm.
+    /// Re-arm hooks for connection-scoped coordinator relays with no per-login recovery point.
+    /// The list is empty until those relays register at startup. After each successful coordinator
+    /// replacement, the watchdog clones the list and invokes every hook against the fresh
+    /// generation without holding this mutex or the live-slot lock.
     pub(crate) on_reconnect: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
 }
 
@@ -500,12 +505,11 @@ fn repair_dead_call_pipes(inner: &Arc<CoordinatorInner>) {
                 let role_label = call_pipe_role_label(&db_name, index);
                 match connect_call_pipe(uri, db_name, token, index) {
                     Ok(fresh) => {
-                        replace_live_slot(
+                        replace_live_conn(
                             &repair.call_pipes[index].live,
                             fresh,
                             &role_label,
                             || {},
-                            |old| teardown_live_conn(old, &role_label),
                         );
                     }
                     Err(error) => {
@@ -916,20 +920,14 @@ fn spawn_coordinator_watchdog(inner: Arc<CoordinatorInner>) -> std::thread::Join
                 Ok(fresh) => {
                     // Re-arm any relay with no per-login point to self-heal through — MUST run
                     // after the install: each hook re-reads `inner.coord()` and must see fresh.
-                    // `replace_live_slot` also guarantees hooks and teardown run without its write
+                    // `replace_live_conn` also guarantees hooks and teardown run without its write
                     // guard, with teardown ordered after every hook.
-                    replace_live_slot(
-                        &inner.live,
-                        fresh,
-                        &role_label,
-                        || {
-                            let hooks = inner.on_reconnect.lock().unwrap().clone();
-                            for hook in hooks {
-                                hook();
-                            }
-                        },
-                        |old| teardown_live_conn(old, &role_label),
-                    );
+                    replace_live_conn(&inner.live, fresh, &role_label, || {
+                        let hooks = inner.on_reconnect.lock().unwrap().clone();
+                        for hook in hooks {
+                            hook();
+                        }
+                    });
                 }
                 Err(error) => {
                     log::error!("{role_label} reconnect failed (will retry): {error:#}")
@@ -1331,7 +1329,7 @@ mod coordinator_query_tests {
 
 #[cfg(test)]
 mod live_replacement_tests {
-    use super::replace_live_slot;
+    use super::replace_slot_ordered;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Mutex, RwLock};
 
@@ -1341,7 +1339,7 @@ mod live_replacement_tests {
         let post_install_calls = AtomicUsize::new(0);
         let events = Mutex::new(Vec::new());
 
-        replace_live_slot(
+        replace_slot_ordered(
             &slot,
             "fresh",
             "test database coordinator",
