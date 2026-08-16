@@ -54,8 +54,8 @@ publish presents as an unrelated mid-session hang, not a loud "no such table".
 
 ## 2. Inventory
 
-**169 tables** — 160 of them in `module/src/**`, the remaining 9 contributed by extension packages
-compiled into the same module. **107 public, 62 private.**
+**176 tables** — 167 of them in `module/src/**`, the remaining 9 contributed by extension packages
+compiled into the same module. **109 public, 67 private.**
 
 | Domain | Tables | Public | Where |
 |---|---:|---:|---|
@@ -69,6 +69,7 @@ compiled into the same module. **107 public, 62 private.**
 | Talent tree (static) | 2 | 2 | `talent.rs` |
 | Quest | 9 | 8 | `quest.rs` |
 | Item / vendor | 4 | 3 | `items/tables.rs` |
+| Auction house | 7 | 2 | `auction.rs` |
 | Creature (template, spawn, AI, pet, trainer) | 15 | 11 | `creatures/*`, `trainer.rs` |
 | GameObject | 6 | 6 | `gameobject.rs` |
 | Loot | 9 | 6 | `loot.rs` |
@@ -239,6 +240,22 @@ character is **in transit**, and four chokepoints refuse to act on it. The escro
 recovery authority; the transfer id is the character guid, so recovery needs nothing from gateway
 RAM.
 
+### Auction listing state (`module/src/auction.rs`)
+
+`game_auction_house` is the public `AuctionHouse.dbc` catalogue used to resolve an auctioneer's
+house and economic policy through its imported faction. `game_auction` is the public active market;
+its item columns are the complete item-instance snapshot while no inventory row exists, and its
+house and rate columns preserve the listing-time policy. Private `game_auction_hold` is the source-shard value fence;
+private `game_auction_operation_receipt` makes listing retries idempotent after that Hold is deleted.
+Private `game_auction_bid_hold` fences a bidder's complete offer and retains the terminal source
+outcome, normalized accepted price, and any purse-overflow refund awaiting relay; private
+`game_auction_bid_decision` is realm-core's serialized, replay-safe decision and exact-once
+settlement/refund-mail receipt.
+`game_auction_expiry` is a private one-shot schedule at the listing's original deadline. These
+callbacks return an unbid item or settle a winning bid with exact item and proceeds mail, then no-op
+when replayed. These tables are additive and are deliberately excluded from character transfer
+manifests; deletion is refused while a character owns Auction value.
+
 ---
 
 ## 4. Row-level security
@@ -311,7 +328,7 @@ is the cache the gateway reads through.
 
 ## 6. Scheduled tables
 
-Eleven scheduled tables drive every periodic and deferred effect in the game. Nothing on a gateway
+Twelve scheduled tables drive every periodic and deferred effect in the game. Nothing on a gateway
 timer decides gameplay.
 
 | Scheduled table | Reducer | Cadence | Where |
@@ -327,6 +344,7 @@ timer decides gameplay.
 | `game_pending_spell_impact` | `fire_spell_impact` | one-shot at projectile landing | `spell/tables.rs:515` |
 | `game_ranged_impact_schedule` | `ranged_impact` | one-shot at shot landing | `combat/mod.rs:1196` |
 | `game_taxi_flight_schedule` | `advance_taxi_flight` | 250 ms while a passenger is active | `taxi.rs` |
+| `game_auction_expiry` | `expire_auction` | one-shot at listing expiry | `auction.rs` |
 
 The interval rows are inserted by `init` (`module/src/seed.rs:1358–1408`), except the transfer reaper
 which `begin_transfer` arms lazily and idempotently. Scheduled reducers self-gate on

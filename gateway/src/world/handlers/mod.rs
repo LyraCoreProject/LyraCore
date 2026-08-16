@@ -5,12 +5,13 @@ use super::*;
 
 // Two shapes live here. A `handle_*` handler is code-motion of the former dispatch match arms
 // (bodies verbatim): it sends on the socket itself and returns `Ok(None)` once it consumes its
-// opcode, else `Ok(Some(msg))` to pass the message on. A `dispatch_*_action` seam — item, melee,
-// quest and vendor — owns a whole protocol family instead: it takes a narrow store trait and a
-// player context, decides refusal-versus-fatal itself, and returns the outbound batch for the
+// opcode, else `Ok(Some(msg))` to pass the message on. A `dispatch_*_action` seam — auction, item,
+// melee, quest and vendor — owns a whole protocol family instead: it takes a narrow store trait and
+// a player context, decides refusal-versus-fatal itself, and returns the outbound batch for the
 // world session to send, so the family can be tested without a socket.
 
 mod bank;
+mod auction;
 mod cast;
 mod char;
 mod combat;
@@ -26,6 +27,15 @@ mod trainer;
 mod vendor;
 
 pub(crate) use bank::handle_bank;
+pub(crate) use auction::{
+    decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action,
+    AuctionActionOutcome, AuctionActionPlayer, AuctionActionStore, AuctionBrowseRequest,
+    AuctionPage, AuctionQuery, CreateAuctionOutcome, CreateAuctionRequest, PlaceBidOutcome,
+    PlaceBidRequest,
+    CMSG_AUCTION_LIST_ITEMS_OPCODE,
+};
+#[cfg(test)]
+pub(crate) use auction::{AuctionEntity, AuctionHousePolicy, AuctionInteraction};
 pub(crate) use cast::{dispatch_cast, CastOutcome, CastPlayer, CastStore, CastTransition};
 pub(crate) use char::handle_char;
 pub(crate) use combat::handle_combat;

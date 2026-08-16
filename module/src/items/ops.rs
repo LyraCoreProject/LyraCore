@@ -255,7 +255,7 @@ pub(crate) fn has_free_slot(ctx: &ReducerContext, player_guid: u64) -> bool {
     free_slot(ctx, player_guid).is_ok()
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub(crate) struct ItemSnapshot {
     pub entry: u32,
     pub stack_count: u32,

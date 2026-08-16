@@ -2,25 +2,25 @@
 //!
 //! The byte layouts — including the update mask, packed guids, and the movement block — are
 //! owned by `wow_world_messages`. This module is the thin mapping from the gateway's flattened
-//! row views (`CharacterView`, `EntityView`) to the crate's typed messages: char enum, the
+//! row views, such as `CharacterView`, `EntityView`, and `AuctionView`, to the crate's typed
+//! messages: char enum, the
 //! `CREATE_OBJECT2` self/peer spawn (built via the crate's `UpdatePlayer::builder()`, which
 //! owns the descriptor bit indices), the post-login
 //! sequence, the `MSG_MOVE_*` relay, and destroy. Header framing/cipher is delegated to
 //! `wow_srp` by the message write methods.
 //!
-//! The production body is split into packet-family submodules (`char`, `entity`, `values`,
-//! `corpse`, `loot`, `leveling`, `combat`, `npc`, `item`, `movement`) behind this thin facade,
-//! which re-exports every previously-public symbol so external call sites keep reaching them as
-//! `crate::codec::<sym>`. The split is pure code-motion; the shared `use` imports below stay here
-//! and the submodules pull them in via `use super::*`. The crash-critical partial-VALUES builders
-//! live (verbatim) in `values`.
+//! The production body is split into packet-family submodules behind this thin facade, which
+//! re-exports their public symbols as `crate::codec::<sym>`. The shared `use` imports below stay
+//! here and the older submodules pull them in via `use super::*`. The crash-critical partial-VALUES
+//! builders live in `values`.
 
 pub mod addon;
 pub mod social;
 pub mod update_mask;
 
-// Packet-family submodules (pure code-motion out of the old monolithic body).
+// Packet-family submodules.
 mod char;
+mod auction;
 mod breath;
 mod combat;
 mod corpse;
@@ -45,9 +45,9 @@ pub use social::{
     WhoPlayerView,
 };
 
-// Re-export the family submodules so every previously-public symbol stays reachable as
-// `crate::codec::<sym>` (≈50 external call sites depend on this).
+// Re-export packet-family surfaces through `crate::codec::<sym>`.
 pub use char::*;
+pub use auction::*;
 pub use breath::*;
 pub use combat::*;
 pub use corpse::*;

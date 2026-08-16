@@ -45,7 +45,14 @@ pub(crate) mod character_owned_tripwire {
     ///   `corpse_guid_for(character_guid)` lookup (not a `by_owner`-style scan).
     /// - `game_combo_point`: transient combat state (docs' "auras, combo points, lockouts, pending
     ///   casts are exempt" carve-out) — dies with the live session, not the durable character.
-    const EXEMPT_ACCESSORS: &[&str] = &["game_world_entity", "game_corpse", "game_combo_point"];
+    /// - `game_auction`: realm-owned market value. Character deletion refuses while a seller owns
+    ///   an active Auction, because sweeping the row would destroy its item and deposit.
+    const EXEMPT_ACCESSORS: &[&str] = &[
+        "game_world_entity",
+        "game_corpse",
+        "game_combo_point",
+        "game_auction",
+    ];
 
     /// Every `.rs` file that compiles into this crate: core `src/` plus each drop-in
     /// `packages/*/src/` (build.rs compiles those in, so every source-scanning tripwire must see

@@ -1,0 +1,144 @@
+use std::ffi::OsString;
+use std::fs;
+use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+pub struct Standalone {
+    child: Child,
+    data_dir: PathBuf,
+    spacetime: OsString,
+    server: String,
+    database: String,
+}
+
+impl Standalone {
+    pub fn start(test_name: &str) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("failed to reserve a local port");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!(
+            "lyracore-{test_name}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir(&data_dir).expect("failed to create standalone data directory");
+
+        let spacetime = std::env::var_os("SPACETIME_BIN").unwrap_or_else(|| "spacetime".into());
+        let address = format!("127.0.0.1:{port}");
+        let server = format!("http://{address}");
+        let child = Command::new(&spacetime)
+            .args([
+                "start",
+                "--listen-addr",
+                &address,
+                "--data-dir",
+                data_dir.to_str().unwrap(),
+                "--in-memory",
+                "--non-interactive",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to start standalone");
+        let database = format!("{test_name}-{}-{nonce}", std::process::id());
+        let mut standalone = Self {
+            child,
+            data_dir,
+            spacetime,
+            server,
+            database,
+        };
+        standalone.wait_for_server(&address);
+        standalone
+    }
+
+    pub fn publish_module(&self) {
+        let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workspace = module_dir.parent().unwrap();
+        assert_success(Command::new(&self.spacetime).current_dir(workspace).args([
+            "publish",
+            "-s",
+            &self.server,
+            "--module-path",
+            module_dir.to_str().unwrap(),
+            "--build-options=--features=debug_reducers",
+            "-y",
+            &self.database,
+        ]));
+    }
+
+    pub fn call(&self, reducer: &str, args: &[&str]) -> Output {
+        let mut command = Command::new(&self.spacetime);
+        command.args(["call", "-s", &self.server, &self.database, reducer]);
+        command.args(args);
+        command.output().expect("failed to call reducer")
+    }
+
+    pub fn assert_call(&self, reducer: &str, args: &[&str]) {
+        assert_output_success(self.call(reducer, args));
+    }
+
+    #[allow(dead_code)] // This shared method is used only by the expiry integration target.
+    pub fn wait_until_call_succeeds(&self, reducer: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let output = self.call(reducer, &[]);
+            if output.status.success() {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{reducer} did not succeed in time\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn wait_for_server(&mut self, address: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if TcpStream::connect(address).is_ok() {
+                return;
+            }
+            if let Some(status) = self.child.try_wait().expect("failed to poll standalone") {
+                panic!("standalone exited before accepting connections: {status}");
+            }
+            assert!(
+                Instant::now() < deadline,
+                "standalone did not start in time"
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+impl Drop for Standalone {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = fs::remove_dir_all(&self.data_dir);
+    }
+}
+
+fn assert_success(command: &mut Command) {
+    assert_output_success(command.output().expect("failed to start command"));
+}
+
+fn assert_output_success(output: Output) {
+    assert!(
+        output.status.success(),
+        "command failed with {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}

@@ -137,6 +137,39 @@ pub(crate) fn vendor_discount_pct(
     reputation_discount_pct(standing)
 }
 
+/// Whether an NPC's imported faction relationship refuses a player interaction.
+/// Missing faction data fails open so unfactioned fixtures remain usable.
+pub(crate) fn npc_refuses_interaction(
+    ctx: &ReducerContext,
+    npc: &crate::WorldEntity,
+    player: &crate::WorldEntity,
+) -> bool {
+    let templates = ctx.db.game_faction_template();
+    let Some(npc_ft) = templates.id().find(npc.faction_template) else {
+        return false;
+    };
+    if let Some(parent) = ctx.db.game_faction().faction_id().find(npc_ft.faction) {
+        if parent.reputation_index >= 0 {
+            let row = ctx
+                .db
+                .game_player_reputation()
+                .by_character()
+                .filter(&player.guid)
+                .find(|row| row.faction_id == parent.faction_id);
+            if let Some(row) = row {
+                if row.at_war {
+                    return true;
+                }
+                return reputation_rank(row.standing) <= 2;
+            }
+        }
+    }
+    templates
+        .id()
+        .find(player.faction_template)
+        .is_some_and(|player_ft| crate::faction::compute_hostile(&npc_ft, &player_ft))
+}
+
 /// Add `amount` reputation (may be negative) for `player_guid` with `faction_id`, clamped to
 /// [`REP_MIN`, `REP_MAX`]. Adds to the existing row, or creates one seeded at the faction's `base_standing`
 /// (the Human starting value). NO-OP when the faction has no reputation bar

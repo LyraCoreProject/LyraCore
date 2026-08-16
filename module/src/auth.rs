@@ -970,6 +970,9 @@ pub fn delete_character(
     if crate::helpers::character_by_guid(ctx, character_guid).is_none() {
         return Err("CHAR_IN_TRANSIT".to_string());
     }
+    if crate::auction::character_has_auction_value(ctx, character_guid) {
+        return Err("CHAR_HAS_AUCTION_VALUE".to_string());
+    }
     crate::world::cascade_delete_character(ctx, character_guid);
     Ok(())
 }

@@ -44,12 +44,18 @@ pub mod transfer;
 pub mod whisper;
 use coalesce::CoalesceState;
 use handlers::{
-    dispatch_cast, dispatch_item_action, dispatch_melee_action, dispatch_quest_action,
-    dispatch_taxi_action, dispatch_vendor_action, handle_bank, handle_char, handle_combat, handle_loot,
-    handle_mail, handle_query, handle_trade, handle_trainer, CastOutcome, CastPlayer, CastTransition,
-    ItemActionOutcome, ItemActionPlayer, MeleeActionOutcome, MeleeActionPlayer,
-    queue_reply_then_arm, QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome, TaxiActionPlayer,
-    VendorActionOutcome, VendorActionPlayer,
+    decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action, dispatch_cast,
+    dispatch_item_action, dispatch_melee_action, dispatch_quest_action, dispatch_taxi_action,
+    dispatch_vendor_action, handle_bank, handle_char, handle_combat, handle_loot, handle_mail,
+    handle_query, handle_trade, handle_trainer, queue_reply_then_arm, AuctionActionOutcome,
+    AuctionActionPlayer, CastOutcome, CastPlayer, CastTransition, ItemActionOutcome,
+    ItemActionPlayer, MeleeActionOutcome, MeleeActionPlayer, QuestActionOutcome, QuestActionPlayer,
+    TaxiActionOutcome, TaxiActionPlayer, VendorActionOutcome, VendorActionPlayer,
+    CMSG_AUCTION_LIST_ITEMS_OPCODE,
+};
+pub(crate) use handlers::{
+    AuctionBrowseRequest, AuctionPage, AuctionQuery, CreateAuctionOutcome, CreateAuctionRequest,
+    PlaceBidOutcome, PlaceBidRequest,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
@@ -1070,6 +1076,14 @@ pub fn run_world_session_with_queue<S: DuplexStream, St: WorldStore + ?Sized>(
                     continue; // addon frames NEVER reach the normal chat path or other players
                 }
             }
+            if hdr.opcode == CMSG_AUCTION_LIST_ITEMS_OPCODE {
+                let request =
+                    decode_auction_browse(&body).map_err(|e| anyhow!("world read error: {e}"))?;
+                on_home_shard!(conn, store, |st| {
+                    dispatch_raw_auction_browse(&tx, st, &mut conn, request)
+                })?;
+                continue;
+            }
             let mut framed = Vec::with_capacity(6 + body.len());
             framed.extend_from_slice(&hdr.size.to_be_bytes());
             framed.extend_from_slice(&hdr.opcode.to_le_bytes());
@@ -1226,6 +1240,21 @@ fn dispatch<St: WorldStore + ?Sized>(
     let Some(msg) = handle_loot(tx, store, conn, msg)? else {
         return Ok(());
     };
+    let msg = match dispatch_auction_action(
+        store,
+        AuctionActionPlayer {
+            self_guid: social::self_guid(conn),
+        },
+        msg,
+    )? {
+        AuctionActionOutcome::Handled { outbound } => {
+            for message in outbound {
+                send(tx, message)?;
+            }
+            return Ok(());
+        }
+        AuctionActionOutcome::PassThrough(msg) => msg,
+    };
     let msg = match dispatch_vendor_action(
         store,
         VendorActionPlayer {
@@ -1368,6 +1397,34 @@ fn dispatch<St: WorldStore + ?Sized>(
         log::debug!("world: ignoring {msg} (account {})", conn.account_id);
     }
     Ok(())
+}
+
+fn dispatch_raw_auction_browse<St: WorldStore + ?Sized>(
+    tx: &SessionTx,
+    store: &St,
+    conn: &mut WorldConn,
+    request: AuctionBrowseRequest,
+) -> Result<()> {
+    if let Some((opcode, info)) = conn.move_coalesce.flush_now() {
+        forward_movement(store, conn, opcode, &info)?;
+    }
+    match dispatch_auction_browse_action(
+        store,
+        AuctionActionPlayer {
+            self_guid: social::self_guid(conn),
+        },
+        request,
+    )? {
+        AuctionActionOutcome::Handled { outbound } => {
+            for message in outbound {
+                send(tx, message)?;
+            }
+            Ok(())
+        }
+        AuctionActionOutcome::PassThrough(_) => Err(anyhow!(
+            "raw auction browse was not handled by auction dispatcher"
+        )),
+    }
 }
 
 /// Actually forward one (already-classified) movement packet to the module + recenter AOI —

@@ -138,6 +138,12 @@ impl Sentinel for spacetimedb_lib::Timestamp {
     }
 }
 
+impl Sentinel for spacetimedb_lib::ScheduleAt {
+    fn sentinel() -> Self {
+        spacetimedb_lib::ScheduleAt::Time(spacetimedb_lib::Timestamp::UNIX_EPOCH)
+    }
+}
+
 /// Covers `Option<Identity>` and `Vec<u8>`/`Vec<u32>` (the only generic-container field types
 /// among the subscribed tables) without needing a type-specific entry each.
 impl<T: Sentinel> Sentinel for Option<T> {
@@ -712,6 +718,35 @@ parity_test!(parity_game_mail_escrow, "game_mail_escrow", lyracore_module::MailE
     delivered, payout, mail_id, item_entry, item_stack_count, item_durability, item_enchant_id,
     item_soulbound, cod,
 });
+parity_test!(parity_game_auction, "game_auction", lyracore_module::Auction, bindings::auction_type::Auction, {
+    id, listing_operation_id, house, owner_guid, item_guid, item_entry, item_stack_count,
+    item_durability, item_enchant_id, item_soulbound, start_bid, buyout, highest_bidder_guid,
+    highest_bid, deposit, created_at, expires_at, revision, deposit_rate, consignment_rate,
+});
+parity_test!(parity_game_auction_bid_decision, "game_auction_bid_decision", lyracore_module::AuctionBidDecision, bindings::auction_bid_decision_type::AuctionBidDecision, {
+    operation_id, bidder_guid, auction_id, offer, outcome, revision, result_bidder_guid,
+    result_bid, minimum_increment, deferred_refund, accepted_price, house,
+});
+parity_test!(parity_game_auction_bid_hold, "game_auction_bid_hold", lyracore_module::AuctionBidHold, bindings::auction_bid_hold_type::AuctionBidHold, {
+    operation_id, bidder_guid, auction_id, offer, outcome, revision, result_bidder_guid,
+    result_bid, minimum_increment, deferred_refund, accepted_price, house,
+});
+parity_test!(parity_game_auction_hold, "game_auction_hold", lyracore_module::AuctionHold, bindings::auction_hold_type::AuctionHold, {
+    operation_id, seller_guid, item_guid, item_entry, item_stack_count, item_durability,
+    item_enchant_id, item_soulbound, start_bid, buyout, duration_minutes, deposit, created_micros,
+    expires_micros, house, deposit_rate, consignment_rate,
+});
+parity_test!(parity_game_auction_operation_receipt, "game_auction_operation_receipt", lyracore_module::AuctionOperationReceipt, bindings::auction_operation_receipt_type::AuctionOperationReceipt, {
+    operation_id, auction_id, actor_guid, item_guid, item_entry, item_stack_count, item_durability,
+    item_enchant_id, item_soulbound, start_bid, buyout, duration_minutes, deposit, created_micros,
+    expires_micros, house, deposit_rate, consignment_rate,
+});
+parity_test!(parity_game_auction_house, "game_auction_house", lyracore_module::AuctionHouseDefinition, bindings::auction_house_definition_type::AuctionHouseDefinition, {
+    id, faction, deposit_rate, consignment_rate, name,
+});
+parity_test!(parity_game_auction_expiry, "game_auction_expiry", lyracore_module::AuctionExpiry, bindings::auction_expiry_type::AuctionExpiry, {
+    scheduled_id, scheduled_at, auction_id,
+});
 parity_test!(parity_game_faction, "game_faction", lyracore_module::Faction, bindings::faction_type::Faction, {
     faction_id, reputation_index, base_standing,
 });
@@ -820,6 +855,12 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_character_contact",
     "game_mail",
     "game_mail_escrow",
+    "game_auction",
+    "game_auction_bid_decision",
+    "game_auction_bid_hold",
+    "game_auction_hold",
+    "game_auction_house",
+    "game_auction_operation_receipt",
     "game_faction",
     "game_faction_template",
 ];
