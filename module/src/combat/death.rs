@@ -563,7 +563,21 @@ pub(crate) fn apply_hit(
         }
     }
 
-    // 2. The lethal fork. A spell hit on a PLAYER is the one non-fatal 0-hp case (floored at 1 below).
+    // 2. The lethal fork. An active opponent Duel floors its loser at one health and completes
+    // before any player-death work can run, regardless of whether the damage was weapon or spell.
+    if target_is_player
+        && is_lethal(target.health, dmg)
+        && crate::duel::active_opponents(ctx, attacker_guid, target_guid)
+    {
+        target.health = 1;
+        entities.guid().update(target);
+        if let Some(duel) = crate::duel::duel_involving(ctx, attacker_guid) {
+            crate::duel::complete_duel(ctx, duel.id, crate::duel::duel_completion_kind::WON, attacker_guid, target_guid);
+        }
+        return HitOutcome { killed: false };
+    }
+
+    // A spell hit on a PLAYER is the one non-fatal ordinary 0-hp case (floored at 1 below).
     let killed = is_lethal(target.health, dmg) && (weapon || !target_is_player);
     if killed {
         if target_is_player {
@@ -658,6 +672,16 @@ mod lethality_tests {
         assert!(is_lethal(10, 10)); // exactly lethal
         assert!(is_lethal(10, 11)); // overkill
         assert!(!is_lethal(10, 9)); // one short — the target survives at 1 hp
+    }
+
+    #[test]
+    fn active_duel_lethal_hits_bypass_the_player_death_chokepoint() {
+        let body = crate::test_scan::code_of(include_str!("death.rs"), "pub(crate) fn apply_hit(");
+        let duel_floor = body.find("crate::duel::active_opponents").expect("duel finisher is checked in the shared damage seam");
+        let player_death = body.find("kill_player(ctx, target_guid, attacker_guid)").expect("ordinary player death remains behind the shared seam");
+        assert!(duel_floor < player_death);
+        assert!(body.contains("target.health = 1;"));
+        assert!(body.contains("duel_completion_kind::WON"));
     }
 }
 

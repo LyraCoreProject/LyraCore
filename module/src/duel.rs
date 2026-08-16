@@ -183,6 +183,20 @@ pub(crate) fn duel_involving(ctx: &ReducerContext, guid: u64) -> Option<Duel> {
         .or_else(|| duels.by_challenged().filter(&guid).next())
 }
 
+/// Whether these two characters are the two sides of the same active Duel. This is the sole
+/// friendly-fire exception: requested and countdown Duels deliberately do not authorize damage.
+pub(crate) fn active_opponents(ctx: &ReducerContext, attacker_guid: u64, target_guid: u64) -> bool {
+    duel_involving(ctx, attacker_guid)
+        .is_some_and(|duel| active_pair(&duel, attacker_guid, target_guid))
+}
+
+fn active_pair(duel: &Duel, attacker_guid: u64, target_guid: u64) -> bool {
+    duel.state == duel_state::ACTIVE
+        && attacker_guid != target_guid
+        && ((duel.initiator_guid == attacker_guid && duel.challenged_guid == target_guid)
+            || (duel.challenged_guid == attacker_guid && duel.initiator_guid == target_guid))
+}
+
 fn duel_flag_guid(duel_id: u64) -> u64 {
     const HIGHGUID_GAMEOBJECT: u64 = 0xF110u64 << 48;
     const DUEL_FLAG_BAND: u64 = 1u64 << 45;
@@ -312,6 +326,7 @@ pub(crate) fn complete_duel(
         return false;
     };
     duels.id().delete(duel_id);
+    crate::combat::stop_duel_combat(ctx, duel.initiator_guid, duel.challenged_guid);
     push_event(
         ctx,
         &duel,
@@ -473,6 +488,19 @@ mod tests {
     }
 
     #[test]
+    fn only_active_participants_are_combat_opponents() {
+        let mut duel = duel();
+        assert!(!active_pair(&duel, 1, 2));
+        duel.state = duel_state::COUNTDOWN;
+        assert!(!active_pair(&duel, 1, 2));
+        duel.state = duel_state::ACTIVE;
+        assert!(active_pair(&duel, 1, 2));
+        assert!(active_pair(&duel, 2, 1));
+        assert!(!active_pair(&duel, 1, 3));
+        assert!(!active_pair(&duel, 1, 1));
+    }
+
+    #[test]
     fn stable_flag_identity_is_unique_per_duel_and_repeatable() {
         assert_eq!(duel_flag_guid(7), duel_flag_guid(7));
         assert_ne!(duel_flag_guid(7), duel_flag_guid(8));
@@ -492,6 +520,7 @@ mod tests {
         let body = &source[start..end];
         assert!(body.contains("let Some(duel) = duels.id().find(duel_id) else"));
         assert!(body.contains("return false;"));
+        assert!(body.contains("crate::combat::stop_duel_combat"));
         assert!(
             body.find("duels.id().delete(duel_id)").unwrap() < body.find("push_event(").unwrap(),
             "state must disappear before any completion edge is emitted"

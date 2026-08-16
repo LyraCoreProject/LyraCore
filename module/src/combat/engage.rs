@@ -137,6 +137,31 @@ pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
     }
 }
 
+/// Remove only the two attack rows belonging to a Duel. Other combat remains intact; each
+/// participant's combat flag clears only when no other engagement still touches them.
+pub(crate) fn stop_duel_combat(ctx: &ReducerContext, first_guid: u64, second_guid: u64) {
+    let melee = ctx.db.game_melee_attack();
+    for attacker_guid in [first_guid, second_guid] {
+        if melee.attacker_guid().find(attacker_guid).is_some_and(|attack| {
+            (attacker_guid == first_guid && attack.target_guid == second_guid)
+                || (attacker_guid == second_guid && attack.target_guid == first_guid)
+        }) {
+            melee.attacker_guid().delete(attacker_guid);
+        }
+    }
+    let entities = ctx.db.game_world_entity();
+    for guid in [first_guid, second_guid] {
+        if is_engaged(ctx, guid) {
+            continue;
+        }
+        if let Some(mut entity) = entities.guid().find(guid) {
+            entity.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
+            entity.combat_until_ms = 0;
+            entities.guid().update(entity);
+        }
+    }
+}
+
 /// Zero a CREATURE's `target_guid` when it leaves combat (evade / flee / death) so the client stops
 /// showing a stale target on a disengaged mob. Skips PLAYERS: a player's `target_guid` is their
 /// SELECTION (`CMSG_SET_SELECTION`), which persists out of combat. No-op when already 0 (common path).
@@ -405,6 +430,7 @@ fn validate_attack_target(
     // stance. SKIPPED when faction data isn't loaded (table empty) so missing data never blocks combat.
     if ctx.db.game_faction_template().count() > 0
         && crate::faction::is_friendly(ctx, attacker.faction_template, target.faction_template)
+        && !crate::duel::active_opponents(ctx, attacker.guid, target.guid)
     {
         return Err(lyracore_shared::ERR_ATTACK_FRIENDLY.to_string());
     }
@@ -577,4 +603,3 @@ pub(crate) fn stop_attack_for(ctx: &ReducerContext, attacker_guid: u64) {
         .attacker_guid()
         .delete(attacker_guid);
 }
-

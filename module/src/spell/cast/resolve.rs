@@ -524,6 +524,9 @@ fn check_cast_gates(
                     caster.faction_template,
                     target.faction_template,
                 );
+                let duel_opponents = crate::duel::active_opponents(ctx, caster_guid, target_guid);
+                let friendly = friendly && !duel_opponents;
+                let hostile = hostile || duel_opponents;
                 if let Some(class) =
                     faction_target_violation(hits_enemy, hits_ally, friendly, hostile)
                 {

@@ -718,7 +718,9 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                     if dx * dx + dy * dy + dz * dz > r2 {
                         return None;
                     }
-                    crate::faction::is_hostile(ctx, caster_ft, c.faction_template).then_some(c.guid)
+                    (crate::faction::is_hostile(ctx, caster_ft, c.faction_template)
+                        || crate::duel::active_opponents(ctx, a.caster_guid, c.guid))
+                    .then_some(c.guid)
                 })
                 .take(AOE_MAX_TARGETS)
                 .collect();

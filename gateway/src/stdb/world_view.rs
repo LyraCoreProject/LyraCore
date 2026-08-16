@@ -1064,7 +1064,17 @@ fn duel_event_appeared(view: &WorldView, coord: &Coordinator, row: &DuelEvent) {
     let tx = viewer.tx.clone();
     enqueue(&tx, move || {
         let template = coord.gameobject_template(row.flag_entry).ok().flatten();
-        super::subscriptions::duel_event_outbound(&row, template.as_ref())
+        let names = if row.kind == 3 && row.winner_guid != 0 && row.loser_guid != 0 {
+            let guard = coord.0.coord();
+            let db = &guard.conn.db;
+            (
+                db.game_character().guid().find(&row.winner_guid).map(|c| c.name),
+                db.game_character().guid().find(&row.loser_guid).map(|c| c.name),
+            )
+        } else {
+            (None, None)
+        };
+        super::subscriptions::duel_event_outbound(&row, template.as_ref(), names.0, names.1)
     });
 }
 

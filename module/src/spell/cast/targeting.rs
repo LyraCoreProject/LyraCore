@@ -217,15 +217,16 @@ pub(crate) fn select_targets(
                     }
                     // Compute ONLY the faction side this AoE needs (one lookup, not both); the unused side
                     // is a dummy `false` — want_enemy selects which side aoe_keep actually reads.
+                    let duel_opponents = crate::duel::active_opponents(ctx, caster_guid, c.guid);
                     let (hostile, friendly) = if want_enemy {
                         (
-                            crate::faction::is_hostile(ctx, caster_ft, c.faction_template),
+                            crate::faction::is_hostile(ctx, caster_ft, c.faction_template) || duel_opponents,
                             false,
                         )
                     } else {
                         (
                             false,
-                            crate::faction::is_friendly(ctx, caster_ft, c.faction_template),
+                            crate::faction::is_friendly(ctx, caster_ft, c.faction_template) && !duel_opponents,
                         )
                     };
                     aoe_keep(d2, r2, want_enemy, c.guid == caster_guid, hostile, friendly)
