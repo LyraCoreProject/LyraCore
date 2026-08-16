@@ -1,8 +1,5 @@
-//! Per-player view subscriptions: the `PlayerSubscriptions` RAII guard (callback teardown +
-//! unsubscribe on drop) and `Coordinator::subscribe_player_events` — the 51-callback relay that
-//! turns row deltas on the per-account connection into outbound SMSG. Moved verbatim from
-//! `mod.rs`; that function's own doc comment (just above it) is the structure map, the teardown-
-//! contract pointer, and the plan to carve this 51-callback body into smaller pieces.
+//! Session relay lifetime: the `PlayerSubscriptions` RAII guard, the remaining per-session callback
+//! groups, and packet builders shared by `world_view`'s per-shard dispatch.
 //!
 //! **The shared-connection model took the four box-scoped tables out of here entirely.** Peer
 //! visibility, peer movement, creature legs and gameobjects are no longer per-player registrations:
@@ -154,6 +151,57 @@ fn build_teleport_relay(
         let [pending, new_world] = codec::build_cross_map_teleport(map_id, x, y, z, o)?;
         Ok(Outbound::Batch(vec![pending, new_world]))
     }
+}
+
+/// Build the complete teleport result on the addressed session's writer queue.
+pub(crate) fn teleport_event_outbound(row: &TeleportEvent) -> Vec<Outbound> {
+    match build_teleport_relay(
+        !row.cross_map,
+        row.mover_guid,
+        row.map_id,
+        row.x,
+        row.y,
+        row.z,
+        row.orientation,
+    ) {
+        Ok(out) => vec![out],
+        Err(error) => {
+            log::warn!("teleport relay: {error} (guid {})", row.mover_guid);
+            Vec::new()
+        }
+    }
+}
+
+/// Build one addon-language whisper using the addressed viewer as its sender.
+pub(crate) fn addon_message_outbound(self_guid: u64, row: &AddonMessage) -> Vec<Outbound> {
+    let text = codec::addon::build_bridge_envelope(&row.cmd, &row.payload);
+    let (opcode, body) = codec::addon::build_addon_smsg_raw(self_guid, &text);
+    vec![Outbound::Raw { opcode, body }]
+}
+
+/// Build the XP-gain result for one identity-addressed row.
+pub(crate) fn xp_event_outbound(row: &XpEvent) -> Vec<Outbound> {
+    let message = codec::build_log_xpgain(row.killed_guid, row.total_exp, row.is_kill);
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_LOG_XPGAIN(
+        Box::new(message),
+    ))]
+}
+
+/// Build the level-up result for one identity-addressed row.
+pub(crate) fn levelup_event_outbound(row: &LevelupEvent) -> Vec<Outbound> {
+    let message = codec::build_levelup_info(
+        row.new_level,
+        row.health_gained,
+        row.mana_gained,
+        row.strength_gained,
+        row.agility_gained,
+        row.stamina_gained,
+        row.intellect_gained,
+        row.spirit_gained,
+    );
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_LEVELUP_INFO(
+        Box::new(message),
+    ))]
 }
 
 /// Stealth presence marker (taxonomy `A_STEALTH`): a unit carrying ≥1 such aura is stealthed and must
@@ -2401,14 +2449,11 @@ fn run_speed_packet(
 impl Coordinator {
     // The relay registration hands each callback its own `Coordinator` clone; the arity is the number of relays, not an accidental type.
     #[allow(clippy::type_complexity)]
-    /// Register this session's stuck-state relays and turn row deltas into outbound SMSG pushed
-    /// onto `tx` (Phase 6/7). Every registration is pinned to `self.0.coord()` — the COORDINATOR
-    /// connection, immune to AOI-resubscription churn (the coordinator-relay rule, see
-    /// `stdb::connection`): XP, level-up, quest log, item instances, teleport, the addon bridge,
-    /// reputation, and the exploration-fog discovery toast. Everything broadcast-shaped (peer
-    /// entities, motion, combat, chat, auras, corpses, …) rides the shared per-shard dispatch in
-    /// `world_view::arm_shard` instead, keyed to this session by the `Viewer` registered near the
-    /// end of this function.
+    /// Register this session's remaining stuck-state relays and turn row deltas into outbound SMSG
+    /// pushed onto `tx` (Phase 6/7). Quest log, item instances, reputation, and exploration still
+    /// own session callbacks. XP, level-up, teleport, addon, and broadcast-shaped families ride the
+    /// shared per-shard dispatch in `world_view::arm_shard`, keyed to the `Viewer` registered near
+    /// the end of this function.
     ///
     /// TEARDOWN CONTRACT: each `register_<group>_relays` method below returns its OWN teardown
     /// closures, one per callback it registers; this function only `extend`s them into
@@ -2498,7 +2543,7 @@ impl Coordinator {
         // The bound identity WITHOUT touching a per-player connection — synthetic under the
         // flag (what establish_session bound and the module stamps on event rows), the cached
         // connection's real identity otherwise. Identical values to the old `player.identity` read.
-        // Shared by the XP/level-up relay and the addon-bridge relay below.
+        // Stored with the viewer for identity-addressed shared dispatch.
         let self_identity =
             spacetimedb_sdk::Identity::from_byte_array(self.bound_identity(account_id)?);
 
@@ -2521,7 +2566,6 @@ impl Coordinator {
         // to happen top-to-bottom in this function; each returns its OWN teardowns (the CARVE
         // note above).
         let mut teardowns: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
-        teardowns.extend(self.register_xp_levelup_relays(self_identity, tx.clone()));
         teardowns.extend(self.register_explored_relays(
             self_guid,
             tx.clone(),
@@ -2533,8 +2577,6 @@ impl Coordinator {
             tx.clone(),
             initial_item_guids.clone(),
         ));
-        teardowns.extend(self.register_teleport_relays(self_guid, tx.clone()));
-        teardowns.extend(self.register_addon_relays(self_guid, self_identity, tx.clone()));
         teardowns.extend(self.register_reputation_relays(
             self_guid,
             tx.clone(),
@@ -2622,6 +2664,7 @@ impl Coordinator {
         let viewer = Arc::new(Viewer {
             session,
             self_guid,
+            bound_identity: self_identity,
             instance_id: login_instance,
             map_id: login_map,
             tx: tx.clone(),
@@ -2709,84 +2752,6 @@ impl Coordinator {
             viewer: Some(viewer),
             view: Some(view),
         })
-    }
-
-    /// XP + LEVEL-UP relays, coordinator-registered — game_xp_event / game_levelup_event
-    /// (insert) → SMSG_LOG_XPGAIN / SMSG_LEVELUP_INFO. `self_identity` is computed once by the
-    /// dispatcher and threaded in rather than recomputed here — the same value also gates the
-    /// addon-bridge relay in [`Self::register_addon_relays`].
-    fn register_xp_levelup_relays(
-        &self,
-        self_identity: spacetimedb_sdk::Identity,
-        tx: SessionTx,
-    ) -> Vec<Box<dyn FnOnce() + Send>> {
-        // ======================================================================================
-        //  XP + LEVEL-UP, coordinator-registered — game_xp_event / game_levelup_event (insert)
-        //  SMSG_LOG_XPGAIN / SMSG_LEVELUP_INFO. Moved off the per-player connection by the
-        //  coordinator-relay rule (see `stdb::connection`): both ride kill transactions concurrent
-        //  with AOI churn on that connection.
-        // ======================================================================================
-        // XP gain (slice 1) → SMSG_LOG_XPGAIN; level-up → SMSG_LEVELUP_INFO. Both event tables are
-        // COORDINATOR-registered per the coordinator-relay rule: xp/levelup events ride KILL
-        // transactions, which can be large and concurrent with movement (AOI churn on the
-        // per-player conn) — a lost SMSG_LEVELUP_INFO was observed as the levelup_info suite
-        // flake. The coordinator bypasses the recipient RLS, so the closure now self-filters
-        // on recipient_identity (the session's bound player identity).
-        let xp_tx = tx.clone();
-        let on_xp = self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_xp_event()
-            .on_insert(move |_ctx, row| {
-                if row.recipient_identity != self_identity {
-                    return;
-                }
-                // Belt-and-suspenders — nothing about a warm handoff should produce a kill/XP event
-                // mid-swap, but this closure is self-keyed like every other relay this flag covers.
-                let m = codec::build_log_xpgain(row.killed_guid, row.total_exp, row.is_kill);
-                let _ = xp_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_LOG_XPGAIN(
-                    Box::new(m),
-                )));
-            });
-        let lvl_tx = tx.clone();
-        let on_levelup = self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_levelup_event()
-            .on_insert(move |_ctx, row| {
-                if row.recipient_identity != self_identity {
-                    return;
-                }
-                let m = codec::build_levelup_info(
-                    row.new_level,
-                    row.health_gained,
-                    row.mana_gained,
-                    row.strength_gained,
-                    row.agility_gained,
-                    row.stamina_gained,
-                    row.intellect_gained,
-                    row.spirit_gained,
-                );
-                let _ = lvl_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_LEVELUP_INFO(
-                    Box::new(m),
-                )));
-            });
-        let td_xp = self.clone();
-        let td_lvl = self.clone();
-        vec![
-            Box::new(move || {
-                let l = td_xp.0.coord();
-                l.conn.db.game_xp_event().remove_on_insert(on_xp);
-            }),
-            Box::new(move || {
-                let l = td_lvl.0.coord();
-                l.conn.db.game_levelup_event().remove_on_insert(on_levelup);
-            }),
-        ]
     }
 
     /// EXPLORATION FOG relay, coordinator twin — game_character_explored (insert). Sends the same
@@ -3412,123 +3377,6 @@ impl Coordinator {
                     .remove_on_update(on_item_update);
             }),
         ]
-    }
-
-    /// TELEPORT relay, coordinator-registered — game_teleport_event (insert):
-    /// MSG_MOVE_TELEPORT_ACK (same-map) or SMSG_TRANSFER_PENDING+SMSG_NEW_WORLD (cross-map).
-    fn register_teleport_relays(
-        &self,
-        self_guid: u64,
-        tx: SessionTx,
-    ) -> Vec<Box<dyn FnOnce() + Send>> {
-        // ======================================================================================
-        //  TELEPORT, coordinator-registered — game_teleport_event (insert)
-        //  MSG_MOVE_TELEPORT_ACK (same-map) or SMSG_TRANSFER_PENDING+SMSG_NEW_WORLD (cross-map); on
-        //  the coordinator per the coordinator-relay rule (see `stdb::connection`) because the
-        //  per-player connection's AOI resubscription churn can swallow the event mid-flight.
-        // ======================================================================================
-        // Teleport relay: a pending teleport for THIS player → MSG_MOVE_TELEPORT_ACK
-        // (same-map) or SMSG_TRANSFER_PENDING+SMSG_NEW_WORLD (cross-map). Registered on the
-        // COORDINATOR connection per the coordinator-relay rule, NOT `player.conn`: the per-player
-        // conn's AOI grid subscriptions churn mid-flight (aoi.rs recenter, subscribe-new/unsubscribe-old), and a
-        // concurrent transaction's deltas folded into an in-flight apply could swallow the event —
-        // observed 100% on an instance-CREATING portal entry (~200-row transaction): the pair was
-        // never sent and the despawned player limbo'd. The coordinator's subscription set is stable
-        // (never per-query-swapped) and its owner token bypasses the recipient RLS; this closure
-        // self-filters by mover_guid exactly as before, so routing is unchanged. Known edge: a
-        // coordinator watchdog swap drops this callback until the session relogs — that blip
-        // already disrupts every session, accepted. The branch is `still_here`: `teleport_player`
-        // updates the entity IN PLACE same-map and DESPAWNS it cross-map; `row.cross_map` is the
-        // authoritative module-side mirror of that decision. Cross-map: TRANSFER_PENDING and
-        // NEW_WORLD go out together immediately (TRANSFER_PENDING first — the wire order the
-        // 1.12.1 client requires); the client only replies
-        // `MSG_MOVE_WORLDPORT_ACK` once its OWN load finishes, handled in `world/mod.rs`'s `enter_world`.
-        let tele_tx = tx.clone();
-        let tele_coord = self.clone(); // teardown handle — the callback lives on the coordinator db
-        let on_teleport =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_teleport_event()
-                .on_insert(move |_ctx, row| {
-                    if row.mover_guid != self_guid {
-                        return;
-                    }
-                    // AUTHORITATIVE same-map/cross-map signal from the module (`cross_map`), NOT live-entity
-                    // presence: with AOI on, a far same-map teleport moves the self entity out of this viewer's
-                    // grid-scoped subscription, so `find(self_guid)` reads absent post-txn and the old proxy
-                    // wrongly chose the cross-map (NEW_WORLD/loading-screen) path — hanging the client on a
-                    // same-map `.tele` across zones. `still_here == !cross_map`.
-                    let still_here = !row.cross_map;
-                    match build_teleport_relay(
-                        still_here,
-                        row.mover_guid,
-                        row.map_id,
-                        row.x,
-                        row.y,
-                        row.z,
-                        row.orientation,
-                    ) {
-                        Ok(out) => {
-                            let _ = tele_tx.send(out);
-                        }
-                        Err(e) => log::warn!("teleport relay: {e} (guid {})", row.mover_guid),
-                    }
-                });
-        // Per the coordinator-relay rule, the teleport callback lives on the COORDINATOR db
-        // (see its registration) — remove it there.
-        vec![Box::new(move || {
-            tele_coord
-                .0
-                .coord()
-                .conn
-                .db
-                .game_teleport_event()
-                .remove_on_insert(on_teleport);
-        })]
-    }
-
-    /// ADDON MESSAGE relay, coordinator-registered — game_addon_message (insert): a queued
-    /// server→client addon message relayed as an addon-language whisper. Shares `self_identity`
-    /// with [`Self::register_xp_levelup_relays`] — both self-filter on the session's bound
-    /// identity, computed once by the dispatcher.
-    fn register_addon_relays(
-        &self,
-        self_guid: u64,
-        self_identity: spacetimedb_sdk::Identity,
-        tx: SessionTx,
-    ) -> Vec<Box<dyn FnOnce() + Send>> {
-        // ======================================================================================
-        //  ADDON MESSAGE, coordinator-registered — game_addon_message (insert)
-        //  A queued server→client addon message relayed as an addon-language whisper.
-        // ======================================================================================
-        // Addon-bridge relay: a queued server→client addon message becomes an
-        // addon-language whisper (raw-built — gtker's Language enum has no LANG_ADDON) the
-        // client surfaces to addons as CHAT_MSG_ADDON. COORDINATOR-registered (the coordinator-relay
-        // rule: this is the custom-UI state stream — a dropped frame is a stuck progress bar), so the
-        // closure self-filters on the session's bound identity.
-        let addon_tx = tx.clone();
-        let addon_identity = self_identity;
-        let on_addon = self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_addon_message()
-            .on_insert(move |_ctx, row| {
-                if row.recipient_identity != addon_identity {
-                    return;
-                }
-                let text = codec::addon::build_bridge_envelope(&row.cmd, &row.payload);
-                let (opcode, body) = codec::addon::build_addon_smsg_raw(self_guid, &text);
-                let _ = addon_tx.send(Outbound::Raw { opcode, body });
-            });
-        let td_am = self.clone();
-        vec![Box::new(move || {
-            let l = td_am.0.coord();
-            l.conn.db.game_addon_message().remove_on_insert(on_addon);
-        })]
     }
 
     /// REPUTATION relays, coordinator-registered — game_player_reputation (insert/update):
@@ -4866,6 +4714,7 @@ mod tests {
     fn the_viewer_is_registered_with_the_shared_dedup_sets_and_gates() {
         let code = scanned_source();
         for field in [
+            "bound_identity: self_identity,",
             "created: created.clone(),",
             "gates: viewer_gates.clone(),",
             "skill_slots: skill_slots.clone(),",
@@ -5015,12 +4864,8 @@ mod tests {
     //  Every player-connection callback registered here must be torn down
     // -------------------------------------------------------------------------------------------
     //
-    // The actual double-discovery-toast defect: `on_explored_insert` (game_character_explored, the toast relay) was
-    // registered on EVERY world entry and never removed from the teardown list — its coordinator-side
-    // sibling `on_explored_coord` had one, this one did not. Each accumulated registration is another
-    // live callback on the same table, so one discovery fired the "Discovered: <area>" toast once per
-    // registration; the XP relay (`on_xp`) IS torn down, so it fired exactly once — precisely the
-    // asymmetry the operator reported ("two popups, XP once").
+    // A missed removal leaves one more live callback on every world entry. The scan below keeps the
+    // remaining session-owned registrations paired with their teardown calls.
 
     /// Every `let <ident> = <expr>.on_insert(`/`.on_update(`/`.on_delete(...);` REGISTRATION in `text`
     /// (the statement bounded by the first `;` after `<ident> =` — true for every DIRECT registration

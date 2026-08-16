@@ -58,6 +58,8 @@ use crate::world::{Outbound, SessionTx};
 pub(crate) struct Viewer {
     pub(crate) session: SessionId,
     pub(crate) self_guid: u64,
+    /// The account identity stamped on identity-addressed event rows.
+    pub(crate) bound_identity: spacetimedb_sdk::Identity,
     /// The map this session is on. Constant for the session's lifetime — every path that changes
     /// a character's map (cross-map teleport, portal entry) tears the subscriptions
     /// down and calls `subscribe_player_events` again, which builds a fresh viewer.
@@ -99,10 +101,19 @@ struct RegisteredViewer {
     shard: ShardId,
 }
 
+/// A viewer address carried by owner-GUID-scoped rows.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct OwnerGuid(pub(crate) u64);
+
+/// A viewer address carried by identity-scoped rows.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct BoundIdentity(pub(crate) spacetimedb_sdk::Identity);
+
 #[derive(Default)]
 struct ViewerRegistry {
     by_session: HashMap<SessionId, RegisteredViewer>,
     session_of_owner: HashMap<u64, SessionId>,
+    session_of_identity: HashMap<spacetimedb_sdk::Identity, SessionId>,
     sessions_by_shard: HashMap<ShardId, HashSet<SessionId>>,
 }
 
@@ -113,6 +124,8 @@ impl ViewerRegistry {
             self.remove_indexes(session, &previous);
         }
         self.session_of_owner.insert(viewer.self_guid, session);
+        self.session_of_identity
+            .insert(viewer.bound_identity, session);
         self.sessions_by_shard
             .entry(shard)
             .or_default()
@@ -132,6 +145,10 @@ impl ViewerRegistry {
         let owner = registered.viewer.self_guid;
         if self.session_of_owner.get(&owner) == Some(&session) {
             self.session_of_owner.remove(&owner);
+        }
+        let identity = registered.viewer.bound_identity;
+        if self.session_of_identity.get(&identity) == Some(&session) {
+            self.session_of_identity.remove(&identity);
         }
         if let Some(sessions) = self.sessions_by_shard.get_mut(&registered.shard) {
             sessions.remove(&session);
@@ -180,6 +197,24 @@ impl WorldView {
             .session_of_owner
             .get(&self_guid)
             .copied()
+    }
+
+    pub(crate) fn viewer_of_owner(&self, owner: OwnerGuid) -> Option<Arc<Viewer>> {
+        let registry = self.viewers.read().unwrap();
+        let session = registry.session_of_owner.get(&owner.0)?;
+        registry
+            .by_session
+            .get(session)
+            .map(|registered| registered.viewer.clone())
+    }
+
+    pub(crate) fn viewer_of_identity(&self, identity: BoundIdentity) -> Option<Arc<Viewer>> {
+        let registry = self.viewers.read().unwrap();
+        let session = registry.session_of_identity.get(&identity.0)?;
+        registry
+            .by_session
+            .get(session)
+            .map(|registered| registered.viewer.clone())
     }
 
     fn viewers_on_shard(&self, shard: ShardId) -> Vec<Arc<Viewer>> {
@@ -280,6 +315,22 @@ impl WorldView {
 pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId) {
     let guard = coord.0.coord();
     let db = &guard.conn.db;
+
+    // ---- owner-scoped events ---------------------------------------------------------------
+    // These callbacks address one viewer directly and survive coordinator reconnects because
+    // `arm_shard` is re-run on the replacement connection.
+    wire_insert(db.game_teleport_event(), "game_teleport_event.insert", &view, |v, row| {
+        teleport_appeared(v, row)
+    });
+    wire_insert(db.game_addon_message(), "game_addon_message.insert", &view, |v, row| {
+        addon_message_appeared(v, row)
+    });
+    wire_insert(db.game_xp_event(), "game_xp_event.insert", &view, |v, row| {
+        xp_appeared(v, row)
+    });
+    wire_insert(db.game_levelup_event(), "game_levelup_event.insert", &view, |v, row| {
+        levelup_appeared(v, row)
+    });
 
     // ---- game_world_entity -----------------------------------------------------------------
     wire_insert(db.game_world_entity(), "game_world_entity.insert", &view, move |v, row| {
@@ -944,6 +995,52 @@ fn taxi_spline(view: &WorldView, row: &TaxiPassengerSpline) {
     }
 }
 
+/// A teleport row names one character owner. Packet construction stays on that viewer's writer.
+fn teleport_appeared(view: &WorldView, row: &TeleportEvent) {
+    let Some(viewer) = view.viewer_of_owner(OwnerGuid(row.mover_guid)) else {
+        return;
+    };
+    let row = row.clone();
+    let tx = viewer.tx.clone();
+    enqueue(&tx, move || {
+        super::subscriptions::teleport_event_outbound(&row)
+    });
+}
+
+/// Addon messages are identity-addressed, with the addressed viewer as the wire sender.
+fn addon_message_appeared(view: &WorldView, row: &AddonMessage) {
+    let Some(viewer) = view.viewer_of_identity(BoundIdentity(row.recipient_identity)) else {
+        return;
+    };
+    let row = row.clone();
+    let tx = viewer.tx.clone();
+    enqueue(&tx, move || {
+        super::subscriptions::addon_message_outbound(viewer.self_guid, &row)
+    });
+}
+
+/// XP rows are delivered to the one viewer bound to their recipient identity.
+fn xp_appeared(view: &WorldView, row: &XpEvent) {
+    let Some(viewer) = view.viewer_of_identity(BoundIdentity(row.recipient_identity)) else {
+        return;
+    };
+    let row = row.clone();
+    let tx = viewer.tx.clone();
+    enqueue(&tx, move || super::subscriptions::xp_event_outbound(&row));
+}
+
+/// Level-up rows are delivered to the one viewer bound to their recipient identity.
+fn levelup_appeared(view: &WorldView, row: &LevelupEvent) {
+    let Some(viewer) = view.viewer_of_identity(BoundIdentity(row.recipient_identity)) else {
+        return;
+    };
+    let row = row.clone();
+    let tx = viewer.tx.clone();
+    enqueue(&tx, move || {
+        super::subscriptions::levelup_event_outbound(&row)
+    });
+}
+
 /// A rest-state flip landed on a shard's coordinator feed. Self-only family: the row names its
 /// owner and the owner is the ONLY lawful recipient, so the audience predicate IS the
 /// owner-session lookup — there is no candidate set to filter,
@@ -1297,19 +1394,39 @@ fn channel_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: 
 
 #[cfg(test)]
 mod family_audience_tests {
-    use super::{MotionPending, Viewer, WorldView};
+    use super::{
+        addon_message_appeared, levelup_appeared, teleport_appeared, xp_appeared, BoundIdentity,
+        MotionPending, OwnerGuid, Viewer, WorldView,
+    };
     use crate::stdb::aoi::ViewerGates;
+    use crate::stdb::bindings::{AddonMessage, LevelupEvent, TeleportEvent, XpEvent};
     use crate::stdb::subscriptions::private_recipient_audience;
     use crate::stdb::world_index::{CellKey, EntityLayer};
-    use crate::world::SessionTx;
+    use crate::world::{Outbound, SessionTx};
     use std::collections::{HashMap, HashSet};
+    use std::sync::mpsc::Receiver;
     use std::sync::{Arc, Mutex};
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+
+    fn identity(byte: u8) -> spacetimedb_sdk::Identity {
+        spacetimedb_sdk::Identity::from_byte_array([byte; 32])
+    }
 
     fn viewer(session: u64, self_guid: u64) -> Arc<Viewer> {
         let (tx, _rx) = SessionTx::with_depth(0);
+        viewer_with_tx(session, self_guid, identity(session as u8), tx)
+    }
+
+    fn viewer_with_tx(
+        session: u64,
+        self_guid: u64,
+        bound_identity: spacetimedb_sdk::Identity,
+        tx: SessionTx,
+    ) -> Arc<Viewer> {
         Arc::new(Viewer {
             session,
             self_guid,
+            bound_identity,
             map_id: 0,
             instance_id: 0,
             tx,
@@ -1318,6 +1435,13 @@ mod family_audience_tests {
             skill_slots: Arc::new(Mutex::new((HashMap::new(), 0))),
             motion_pending: Arc::new(MotionPending::default()),
         })
+    }
+
+    fn queued_job(rx: &Receiver<Outbound>) -> Vec<Outbound> {
+        match rx.try_recv().expect("one addressed writer job") {
+            Outbound::Job(job) => job(),
+            _ => panic!("shared owner dispatch must enqueue packet work as a writer job"),
+        }
     }
 
     /// The private tier's whole privacy guarantee (whisper/group/resurrect): the addressee and
@@ -1390,7 +1514,8 @@ mod family_audience_tests {
     fn removing_an_old_session_preserves_the_new_relogin_owner_mapping() {
         let view = WorldView::new(true);
         let old = viewer(1, 9001);
-        let new = viewer(2, 9001);
+        let (new_tx, _new_rx) = SessionTx::with_depth(0);
+        let new = viewer_with_tx(2, 9001, old.bound_identity, new_tx);
         let anchor = CellKey::at(0, 0, 0, 0);
         view.add_viewer_on_shard(old.clone(), anchor, 0);
         view.add_viewer_on_shard(new.clone(), anchor, 0);
@@ -1400,6 +1525,210 @@ mod family_audience_tests {
         assert!(view.viewer(new.session).is_some());
         view.remove_viewer(old.session); // idempotent
         assert_eq!(view.session_of_owner(9001), Some(new.session));
+        assert_eq!(
+            view.viewer_of_identity(BoundIdentity(new.bound_identity))
+                .map(|viewer| viewer.session),
+            Some(new.session)
+        );
+    }
+
+    #[test]
+    fn replacing_a_session_cleans_every_old_registry_index() {
+        let view = WorldView::new(true);
+        let old = viewer(7, 9001);
+        let replacement = Arc::new(Viewer {
+            session: old.session,
+            self_guid: 9002,
+            bound_identity: identity(99),
+            map_id: 1,
+            instance_id: 2,
+            tx: old.tx.clone(),
+            created: old.created.clone(),
+            gates: old.gates.clone(),
+            skill_slots: old.skill_slots.clone(),
+            motion_pending: old.motion_pending.clone(),
+        });
+        view.add_viewer_on_shard(old.clone(), CellKey::at(0, 0, 0, 0), 3);
+        view.add_viewer_on_shard(replacement.clone(), CellKey::at(1, 2, 0, 0), 4);
+
+        assert!(view.viewer_of_owner(OwnerGuid(old.self_guid)).is_none());
+        assert!(view
+            .viewer_of_identity(BoundIdentity(old.bound_identity))
+            .is_none());
+        assert!(view.viewers_on_shard(3).is_empty());
+        assert_eq!(
+            view.viewer_of_owner(OwnerGuid(replacement.self_guid))
+                .map(|viewer| viewer.session),
+            Some(replacement.session)
+        );
+        assert_eq!(
+            view.viewer_of_identity(BoundIdentity(replacement.bound_identity))
+                .map(|viewer| viewer.session),
+            Some(replacement.session)
+        );
+        assert_eq!(view.viewers_on_shard(4).len(), 1);
+
+        view.remove_viewer(replacement.session);
+        assert!(view.viewer_of_owner(OwnerGuid(replacement.self_guid)).is_none());
+        assert!(view
+            .viewer_of_identity(BoundIdentity(replacement.bound_identity))
+            .is_none());
+        assert!(view.viewers_on_shard(4).is_empty());
+    }
+
+    #[test]
+    fn teleport_routes_one_writer_job_to_its_owner_and_keeps_cross_map_order() {
+        let view = WorldView::new(true);
+        let (owner_tx, owner_rx) = SessionTx::with_depth(0);
+        let (other_tx, other_rx) = SessionTx::with_depth(0);
+        let owner = viewer_with_tx(1, 9001, identity(1), owner_tx);
+        let other = viewer_with_tx(2, 9002, identity(2), other_tx);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        view.add_viewer_on_shard(owner.clone(), anchor, 0);
+        view.add_viewer_on_shard(other, anchor, 0);
+
+        teleport_appeared(
+            &view,
+            &TeleportEvent {
+                id: 1,
+                recipient_identity: identity(1),
+                mover_guid: owner.self_guid,
+                map_id: 36,
+                x: 10.0,
+                y: 20.0,
+                z: 30.0,
+                orientation: 1.5,
+                created_micros: 0,
+                cross_map: true,
+            },
+        );
+
+        assert!(other_rx.try_recv().is_err(), "an unrelated viewer receives nothing");
+        let out = queued_job(&owner_rx);
+        assert_eq!(out.len(), 1, "one teleport row creates one writer result");
+        match &out[0] {
+            Outbound::Batch(messages) => {
+                assert!(matches!(
+                    messages.as_slice(),
+                    [ServerOpcodeMessage::SMSG_TRANSFER_PENDING(_), ServerOpcodeMessage::SMSG_NEW_WORLD(_)]
+                ));
+            }
+            _ => panic!("cross-map teleport must remain one ordered writer batch"),
+        }
+        assert!(owner_rx.try_recv().is_err(), "the owner receives exactly one job");
+    }
+
+    #[test]
+    fn identity_events_route_once_in_fifo_order_and_addon_uses_the_viewer_guid() {
+        let view = WorldView::new(true);
+        let (owner_tx, owner_rx) = SessionTx::with_depth(0);
+        let (other_tx, other_rx) = SessionTx::with_depth(0);
+        let owner = viewer_with_tx(1, 0x1122_3344_5566_7788, identity(7), owner_tx);
+        let other = viewer_with_tx(2, 9002, identity(8), other_tx);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        view.add_viewer_on_shard(owner.clone(), anchor, 0);
+        view.add_viewer_on_shard(other, anchor, 0);
+
+        xp_appeared(
+            &view,
+            &XpEvent {
+                id: 1,
+                recipient_identity: owner.bound_identity,
+                killed_guid: 77,
+                total_exp: 123,
+                created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+                is_kill: true,
+            },
+        );
+        levelup_appeared(
+            &view,
+            &LevelupEvent {
+                id: 2,
+                recipient_identity: owner.bound_identity,
+                new_level: 10,
+                health_gained: 20,
+                created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+                mana_gained: 15,
+                strength_gained: 1,
+                agility_gained: 2,
+                stamina_gained: 3,
+                intellect_gained: 4,
+                spirit_gained: 5,
+            },
+        );
+        addon_message_appeared(
+            &view,
+            &AddonMessage {
+                id: 3,
+                recipient_identity: owner.bound_identity,
+                cmd: "progress".to_string(),
+                payload: "ready".to_string(),
+                created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            },
+        );
+
+        assert!(other_rx.try_recv().is_err(), "an unrelated identity receives nothing");
+        assert!(matches!(
+            queued_job(&owner_rx).as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_LOG_XPGAIN(_))]
+        ));
+        assert!(matches!(
+            queued_job(&owner_rx).as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_LEVELUP_INFO(_))]
+        ));
+        match queued_job(&owner_rx).as_slice() {
+            [Outbound::Raw { body, .. }] => assert_eq!(
+                &body[5..13],
+                &owner.self_guid.to_le_bytes(),
+                "the addon sender is the addressed viewer"
+            ),
+            _ => panic!("addon event must produce one raw SMSG_MESSAGECHAT"),
+        }
+        assert!(owner_rx.try_recv().is_err(), "each identity row queues exactly once");
+    }
+
+    #[test]
+    fn migrated_owner_callbacks_are_armed_once_and_not_registered_per_session() {
+        let source = include_str!("world_view.rs");
+        let start = source.find("pub(crate) fn arm_shard").unwrap();
+        let end = source[start..]
+            .find("pub(crate) fn arm_realm_private")
+            .map(|offset| start + offset)
+            .unwrap();
+        let arm = &source[start..end];
+        for table in [
+            "game_teleport_event",
+            "game_addon_message",
+            "game_xp_event",
+            "game_levelup_event",
+        ] {
+            assert_eq!(
+                arm.matches(&format!("wire_insert(db.{table}()"))
+                    .count(),
+                1,
+                "{table} must have one shared callback per arm_shard call"
+            );
+        }
+
+        let subscriptions = include_str!("subscriptions.rs");
+        for registrar in [
+            "register_teleport_relays",
+            "register_addon_relays",
+            "register_xp_levelup_relays",
+        ] {
+            assert!(
+                !subscriptions.contains(registrar),
+                "{registrar} must not survive in subscribe_player_events"
+            );
+        }
+
+        assert_eq!(
+            include_str!("connection.rs")
+                .matches("super::world_view::arm_shard(")
+                .count(),
+            2,
+            "arm_shard must run once at connect and once from the reconnect hook"
+        );
     }
 
     #[test]
