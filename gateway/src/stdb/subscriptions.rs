@@ -17,7 +17,7 @@
 use crate::codec::{self, CreateKind};
 use crate::world::{Outbound, SessionTx};
 use anyhow::Result;
-use spacetimedb_sdk::{Table, TableWithPrimaryKey};
+use spacetimedb_sdk::Table;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -2464,12 +2464,86 @@ pub(crate) fn quest_update_packets(
     outbound
 }
 
+fn item_gain_feedback(db: &RemoteTables, self_guid: u64, slot: u8, entry: u32, gained: u32, stack_add: bool) -> Vec<Outbound> {
+    if gained == 0 { return Vec::new(); }
+    let mut out = vec![Outbound::One(ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(Box::new(
+        codec::build_item_push_result(self_guid, 255, slot as u32, entry, gained, stack_add),
+    )))];
+    let wanted = db.game_character_quest().iter().any(|q| q.character_guid == self_guid && !q.rewarded && !q.failed && db.game_quest_objective().iter().any(|o| o.quest_entry == q.quest_entry && o.kind == 1 && o.target_entry == entry));
+    if wanted {
+        use wow_world_messages::vanilla::SMSG_QUESTUPDATE_ADD_ITEM;
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_ITEM(SMSG_QUESTUPDATE_ADD_ITEM { required_item_id: entry, items_required: gained })));
+    }
+    out
+}
+
+/// Build the complete live-inventory insert result for one owner.
+pub(crate) fn item_instance_insert_outbound(db: &RemoteTables, self_guid: u64, row: &ItemInstance) -> Vec<Outbound> {
+    let mut out = item_gain_feedback(db, self_guid, row.slot, row.entry, row.stack_count, false);
+    let (max_durability, container_slots) = db.game_item_template().entry().find(&row.entry).map(|t| (t.max_durability, t.container_slots)).unwrap_or((row.durability, 0));
+    let view = codec::ItemInstanceView { guid: row.guid, entry: row.entry, owner_guid: row.owner_guid, slot: row.slot, stack_count: row.stack_count, durability: row.durability, max_durability, container_slots };
+    out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_item_create_object(&view)))));
+    if let Some(values) = codec::build_inv_slot_values(self_guid, row.slot, row.guid) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
+    if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, row.entry) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
+    if let Some((bag_slot, slot_in_bag)) = bag_content_parts(row.slot) {
+        if let Some(bag) = db.game_item_instance().iter().find(|item| item.owner_guid == self_guid && item.slot == bag_slot) {
+            let (opcode, body) = codec::build_container_slot_values(bag.guid, slot_in_bag, row.guid);
+            out.push(Outbound::Raw { opcode, body });
+        }
+    }
+    if row.slot <= 18 { append_item_armor_and_sheet(db, self_guid, &mut out); }
+    out
+}
+
+/// Build the complete live-inventory delete result for one owner.
+pub(crate) fn item_instance_delete_outbound(db: &RemoteTables, self_guid: u64, row: &ItemInstance) -> Vec<Outbound> {
+    let mut out = Vec::new();
+    if let Some(values) = codec::build_inv_slot_values(self_guid, row.slot, 0) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
+    if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, 0) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
+    if let Some((bag_slot, slot_in_bag)) = bag_content_parts(row.slot) {
+        if let Some(bag) = db.game_item_instance().iter().find(|item| item.owner_guid == self_guid && item.slot == bag_slot) {
+            let (opcode, body) = codec::build_container_slot_values(bag.guid, slot_in_bag, 0);
+            out.push(Outbound::Raw { opcode, body });
+        }
+    }
+    out.push(Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(codec::build_destroy_object(row.guid))));
+    if row.slot <= 18 { append_item_armor_and_sheet(db, self_guid, &mut out); }
+    out
+}
+
+/// Build the complete live-inventory update result for one owner.
+pub(crate) fn item_instance_update_outbound(db: &RemoteTables, self_guid: u64, old: &ItemInstance, row: &ItemInstance) -> Vec<Outbound> {
+    let mut out = if row.slot == old.slot && row.stack_count > old.stack_count { item_gain_feedback(db, self_guid, row.slot, row.entry, row.stack_count - old.stack_count, true) } else { Vec::new() };
+    if old.slot != row.slot {
+        if let Some(values) = codec::build_inv_slot_values(self_guid, old.slot, 0) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
+        if let Some(values) = codec::build_inv_slot_values(self_guid, row.slot, row.guid) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
+        if let Some(values) = codec::build_visible_item_values(self_guid, old.slot, 0) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
+        if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, row.entry) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
+        for (slot, guid) in [(old.slot, 0), (row.slot, row.guid)] {
+            if let Some((bag_slot, slot_in_bag)) = bag_content_parts(slot) {
+                if let Some(bag) = db.game_item_instance().iter().find(|item| item.owner_guid == self_guid && item.slot == bag_slot) {
+                    let (opcode, body) = codec::build_container_slot_values(bag.guid, slot_in_bag, guid);
+                    out.push(Outbound::Raw { opcode, body });
+                }
+            }
+        }
+    }
+    if old.stack_count != row.stack_count || old.durability != row.durability { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_item_values(row.guid, row.stack_count, row.durability))))); }
+    if old.slot != row.slot && (old.slot <= 18 || row.slot <= 18) || row.slot <= 18 && (old.durability == 0) != (row.durability == 0) { append_item_armor_and_sheet(db, self_guid, &mut out); }
+    out
+}
+
+fn append_item_armor_and_sheet(db: &RemoteTables, self_guid: u64, out: &mut Vec<Outbound>) {
+    let armor = super::armor::effective_armor(db, self_guid);
+    out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_resistance_values(self_guid, armor)))));
+    if let Some(stats) = super::armor::sheet_stats(db, self_guid) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_sheet_stats_values(self_guid, &stats))))); }
+}
+
 impl Coordinator {
     // The relay registration hands each callback its own `Coordinator` clone; the arity is the number of relays, not an accidental type.
     #[allow(clippy::type_complexity)]
-    /// Register this session's remaining item relay and prepare state for shared per-shard
-    /// dispatch. Every other owner-scoped family is keyed to the `Viewer` registered near the end
-    /// of this function.
+    /// Prepare one live viewer for the owner-scoped and broadcast-shaped callbacks that are
+    /// registered once per shard in `world_view::arm_shard`.
     ///
     /// TEARDOWN CONTRACT: each `register_<group>_relays` method below returns its OWN teardown
     /// closures, one per callback it registers; this function only `extend`s them into
@@ -2563,40 +2637,10 @@ impl Coordinator {
         let self_identity =
             spacetimedb_sdk::Identity::from_byte_array(self.bound_identity(account_id)?);
 
-        // Item-GAIN feedback gate: the base sub's initial apply fires on_item_insert for
-        // every owned item at LOGIN — and those callbacks arrive AFTER on_applied acks (wire-observed:
-        // an on_applied-flipped boolean still let the whole bag toast at login), so the gate is the
-        // AOI dedup pattern instead: snapshot the item guids resident at apply, suppress exactly those.
-        // Minted here (not inside the item registrar) because the login-apply item snapshot in the
-        // login-sequence tail below reaches into the same set.
-        let initial_item_guids: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<u64>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
         // One registrar call per surviving table group, in the same order the registrations used
         // to happen top-to-bottom in this function; each returns its OWN teardowns (the CARVE
         // note above).
         let mut teardowns: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
-        teardowns.extend(self.register_item_relays(
-            self_guid,
-            tx.clone(),
-            initial_item_guids.clone(),
-        ));
-
-        // Freeze the login-apply item snapshot (the coordinator's cache is the only copy —
-        // filter to this owner; the row callbacks that replay these guids arrive after and get
-        // suppressed).
-        {
-            let mut set = initial_item_guids.lock().unwrap();
-            let guard = self.0.coord();
-            set.extend(
-                guard
-                    .conn
-                    .db
-                    .game_item_instance()
-                    .iter()
-                    .filter(|i| i.owner_guid == self_guid)
-                    .map(|i| i.guid),
-            );
-        }
         {
             // Seed the viewer's replay state before registration. The shared coordinator was
             // subscribed before this session existed, so resident reputation rows cannot replay
@@ -2733,402 +2777,6 @@ impl Coordinator {
         })
     }
 
-
-    /// ITEM INSTANCE relays, coordinator-registered — game_item_instance
-    /// (insert/update/delete): bag CREATE/DESTROY, the PLAYER_FIELD_INV_SLOT pointer,
-    /// SMSG_ITEM_PUSH_RESULT gain-feedback + quest item-objective toast, and the armor/sheet-stats
-    /// relay on an equip-slot or durability-broken crossing. `initial_item_guids` is minted by the
-    /// dispatcher, not here: the login-apply item snapshot in the login-sequence tail reaches into
-    /// the same set.
-    fn register_item_relays(
-        &self,
-        self_guid: u64,
-        tx: SessionTx,
-        initial_item_guids: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<u64>>>,
-    ) -> Vec<Box<dyn FnOnce() + Send>> {
-        // ======================================================================================
-        //  ITEM INSTANCE, coordinator-registered — game_item_instance (insert/update/delete)
-        //  Bag CREATE/DESTROY, the PLAYER_FIELD_INV_SLOT pointer, SMSG_ITEM_PUSH_RESULT gain-
-        //  feedback + quest item-objective toast, and the armor/sheet-stats relay on an equip-slot
-        //  or durability-broken crossing.
-        // ======================================================================================
-        // Inventory live-sync: a new item (vendor buy / loot take / quest reward) appears in the bag,
-        // a removed item (sell / consume) vanishes — WITHOUT a relog. Scoped to THIS player's own items
-        // (owner_guid). Each needs BOTH the item object (CREATE/DESTROY) AND the player's
-        // PLAYER_FIELD_INV_SLOT pointer (set/clear) so the client places/removes it in the bag cell.
-        // (The coinage half of a buy/sell already rides the game_world_entity on_update relay.)
-        // Item-GAIN feedback gate: the base sub's initial apply fires on_item_insert for
-        // every owned item at LOGIN — and those callbacks arrive AFTER on_applied acks (wire-observed:
-        // an on_applied-flipped boolean still let the whole bag toast at login), so the gate is the
-        // AOI dedup pattern instead: snapshot the item guids resident at apply, suppress exactly those.
-        // The client recomputes watched-quest ITEM objectives (tracker + "x/y" floaty) when told an
-        // item ARRIVED. COLLECT_ITEM progress is live-inventory server-side (no counter row change),
-        // so this is the only signal path. Shared by insert (new stack) + update (stack grew).
-        let item_gain_feedback = {
-            let tx = tx.clone();
-            let initial_item_guids = initial_item_guids.clone();
-            move |db: &crate::stdb::bindings::RemoteTables,
-                  item_guid: u64,
-                  slot: u8,
-                  entry: u32,
-                  gained: u32,
-                  stack_add: bool| {
-                // item_guid 0 = an UPDATE event (stack growth — never an apply-time replay);
-                // otherwise suppress the login-apply replay of already-owned rows.
-                if gained == 0
-                    || (item_guid != 0 && initial_item_guids.lock().unwrap().contains(&item_guid))
-                {
-                    return;
-                }
-                let m = codec::build_item_push_result(
-                    self_guid,
-                    255,
-                    slot as u32,
-                    entry,
-                    gained,
-                    stack_add,
-                );
-                let _ = tx.send(Outbound::One(ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(
-                    Box::new(m),
-                )));
-                // Quest item-objective toast: entry matches an incomplete COLLECT_ITEM objective of
-                // an active (un-rewarded, un-failed) quest → SMSG_QUESTUPDATE_ADD_ITEM(entry, gained).
-                let wanted = db.game_character_quest().iter().any(|q| {
-                    q.character_guid == self_guid
-                        && !q.rewarded
-                        && !q.failed
-                        && db.game_quest_objective().iter().any(|o| {
-                            o.quest_entry == q.quest_entry && o.kind == 1 && o.target_entry == entry
-                        })
-                });
-                if wanted {
-                    use wow_world_messages::vanilla::SMSG_QUESTUPDATE_ADD_ITEM;
-                    let _ = tx.send(Outbound::One(
-                        ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_ITEM(SMSG_QUESTUPDATE_ADD_ITEM {
-                            required_item_id: entry,
-                            items_required: gained,
-                        }),
-                    ));
-                }
-            }
-        };
-        let item_gain_ins = item_gain_feedback.clone();
-        let item_gain_upd = item_gain_feedback;
-        let item_ins_tx = tx.clone();
-        let on_item_insert =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_item_instance()
-                .on_insert(move |ctx, row| {
-                    if row.owner_guid != self_guid {
-                        return;
-                    }
-                    item_gain_ins(
-                        &ctx.db,
-                        row.guid,
-                        row.slot,
-                        row.entry,
-                        row.stack_count,
-                        false,
-                    );
-                    // Look up the template for max_durability + container_slots (game_item_template is
-                    // subscribed on the COORDINATOR, which is the cache `ctx.db` is here — this callback is
-                    // coordinator-registered, and the connection reclaim removed the catalogue from the per-player set).
-                    // Fall back to safe defaults if missing.
-                    let (max_durability, container_slots) = ctx
-                        .db
-                        .game_item_template()
-                        .entry()
-                        .find(&row.entry)
-                        .map(|t| (t.max_durability, t.container_slots))
-                        .unwrap_or((row.durability, 0)); // max = current durability as fallback
-                    let view = codec::ItemInstanceView {
-                        guid: row.guid,
-                        entry: row.entry,
-                        owner_guid: row.owner_guid,
-                        slot: row.slot,
-                        stack_count: row.stack_count,
-                        durability: row.durability,
-                        max_durability,
-                        container_slots,
-                    };
-                    // Item object FIRST, then the slot pointer (the pointer must reference an existing object).
-                    let _ =
-                        item_ins_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
-                            Box::new(codec::build_item_create_object(&view)),
-                        )));
-                    if let Some(o) = codec::build_inv_slot_values(self_guid, row.slot, row.guid) {
-                        let _ = item_ins_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                        ));
-                    }
-                    // An item landing directly in an EQUIPMENT slot renders on the model/paperdoll.
-                    if let Some(o) =
-                        codec::build_visible_item_values(self_guid, row.slot, row.entry)
-                    {
-                        let _ = item_ins_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                        ));
-                    }
-                    // For bag-content slots (120..=191), `build_inv_slot_values` returns None (no
-                    // PLAYER_FIELD_INV_SLOT pointer for bag contents). The slot pointer instead lives on
-                    // the container object's own CONTAINER_FIELD_SLOT_N descriptor — send a raw VALUES
-                    // update on the bag's guid so the client populates the bag window.
-                    if let Some((bag_equip_slot, slot_in_bag)) = bag_content_parts(row.slot) {
-                        if let Some(bag) = ctx
-                            .db
-                            .game_item_instance()
-                            .iter()
-                            .find(|i| i.owner_guid == self_guid && i.slot == bag_equip_slot)
-                        {
-                            let (opcode, body) =
-                                codec::build_container_slot_values(bag.guid, slot_in_bag, row.guid);
-                            let _ = item_ins_tx.send(Outbound::Raw { opcode, body });
-                        }
-                    }
-                    // Live armor: an item entering an EQUIPMENT slot (0..=18) changes worn armor → re-push the
-                    // sheet (also corrects gear armor on the initial-state inserts at login). A bag insert (slot
-                    // > 18) is skipped — it can't change worn armor.
-                    if row.slot <= 18 {
-                        let eff = super::armor::effective_armor(&ctx.db, self_guid);
-                        let _ = item_ins_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                                codec::build_resistance_values(self_guid, eff),
-                            )),
-                        ));
-                        // Paperdoll: gear moved -> re-push the paperdoll stats/AP/damage-range alongside armor
-                        // (same trigger set; the login initial-state item replay corrects the CREATE's
-                        // base-only values the same way it does armor).
-                        if let Some(st) = super::armor::sheet_stats(&ctx.db, self_guid) {
-                            let _ = item_ins_tx.send(Outbound::One(
-                                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                                    codec::build_sheet_stats_values(self_guid, &st),
-                                )),
-                            ));
-                        }
-                    }
-                });
-        let item_del_tx = tx.clone();
-        let on_item_delete =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_item_instance()
-                .on_delete(move |ctx, row| {
-                    if row.owner_guid != self_guid {
-                        return;
-                    }
-                    // The diagnosed live defect from the warm-handoff work: finish_transfer's cascade
-                    // deletes every
-                    // game_item_instance row this character owns on the SOURCE database while these OLD subs
-                    // are still registered — without this guard every item relayed SMSG_DESTROY_OBJECT +
-                    // cleared its inventory/visible-item slots on the client, even though the destination's
-                    // import holds the byte-identical rows and no equipment was actually lost.
-                    // Clear the slot pointer FIRST (so the client never points at a doomed guid), then destroy.
-                    if let Some(o) = codec::build_inv_slot_values(self_guid, row.slot, 0) {
-                        let _ = item_del_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                        ));
-                    }
-                    // An item destroyed out of an EQUIPMENT slot un-renders from the model.
-                    if let Some(o) = codec::build_visible_item_values(self_guid, row.slot, 0) {
-                        let _ = item_del_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                        ));
-                    }
-                    // For bag-content slots, clear the container's CONTAINER_FIELD_SLOT_N before destroying
-                    // the item object — same clear-first discipline as the player INV_SLOT pointer above.
-                    // on_delete fires after the row leaves the cache; the bag item itself is a different
-                    // row and is still present, so the iter() lookup succeeds.
-                    if let Some((bag_equip_slot, slot_in_bag)) = bag_content_parts(row.slot) {
-                        if let Some(bag) = ctx
-                            .db
-                            .game_item_instance()
-                            .iter()
-                            .find(|i| i.owner_guid == self_guid && i.slot == bag_equip_slot)
-                        {
-                            let (opcode, body) =
-                                codec::build_container_slot_values(bag.guid, slot_in_bag, 0);
-                            let _ = item_del_tx.send(Outbound::Raw { opcode, body });
-                        }
-                    }
-                    let _ =
-                        item_del_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
-                            codec::build_destroy_object(row.guid),
-                        )));
-                    // Live armor: deleting a WORN item (an equipment slot) drops its armor → re-push the sheet.
-                    // on_delete fires after the row leaves the cache, so the fold reads the remaining gear.
-                    if row.slot <= 18 {
-                        let eff = super::armor::effective_armor(&ctx.db, self_guid);
-                        let _ = item_del_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                                codec::build_resistance_values(self_guid, eff),
-                            )),
-                        ));
-                        // Paperdoll: gear moved -> re-push the paperdoll stats/AP/damage-range alongside armor
-                        // (same trigger set; the login initial-state item replay corrects the CREATE's
-                        // base-only values the same way it does armor).
-                        if let Some(st) = super::armor::sheet_stats(&ctx.db, self_guid) {
-                            let _ = item_del_tx.send(Outbound::One(
-                                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                                    codec::build_sheet_stats_values(self_guid, &st),
-                                )),
-                            ));
-                        }
-                    }
-                });
-        // Item CHANGES (move/equip = slot change; merge/split/consume = stack change; wear/repair =
-        // durability change). On a slot move, re-point the player's bag-slot pointers (clear old, set
-        // new); on a stack/durability change, push the item object's own fields. Without this the client
-        // shows stale slot/count/durability until relog.
-        let item_upd_tx = tx.clone();
-        let on_item_update =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_item_instance()
-                .on_update(move |ctx, old, row| {
-                    if row.owner_guid != self_guid {
-                        return;
-                    }
-                    if row.slot == old.slot && row.stack_count > old.stack_count {
-                        item_gain_upd(
-                            &ctx.db,
-                            0,
-                            row.slot,
-                            row.entry,
-                            row.stack_count - old.stack_count,
-                            true,
-                        );
-                    }
-                    if old.slot != row.slot {
-                        if let Some(o) = codec::build_inv_slot_values(self_guid, old.slot, 0) {
-                            let _ = item_upd_tx.send(Outbound::One(
-                                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                            ));
-                        }
-                        if let Some(o) = codec::build_inv_slot_values(self_guid, row.slot, row.guid)
-                        {
-                            let _ = item_upd_tx.send(Outbound::One(
-                                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                            ));
-                        }
-                        // Equip/unequip moves render/un-render the gear on the model + paperdoll —
-                        // the login create sets PLAYER_VISIBLE_ITEM but nothing relayed it mid-session,
-                        // so equipped gear was invisible until relog. Clear the old equipment slot's
-                        // entry, set the new one (each is a no-op None for non-equipment slots).
-                        if let Some(o) = codec::build_visible_item_values(self_guid, old.slot, 0) {
-                            let _ = item_upd_tx.send(Outbound::One(
-                                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                            ));
-                        }
-                        if let Some(o) =
-                            codec::build_visible_item_values(self_guid, row.slot, row.entry)
-                        {
-                            let _ = item_upd_tx.send(Outbound::One(
-                                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                            ));
-                        }
-                        // For bag-content slot moves: clear the container's old CONTAINER_FIELD_SLOT_N and
-                        // set the new one. build_inv_slot_values returns None for slots >= 120 (correct —
-                        // the player INV_SLOT pointer covers only equip/backpack); we use the raw path here
-                        // targeting the BAG object's guid instead.
-                        if let Some((old_bag_slot, old_slot_in_bag)) = bag_content_parts(old.slot) {
-                            if let Some(bag) = ctx
-                                .db
-                                .game_item_instance()
-                                .iter()
-                                .find(|i| i.owner_guid == self_guid && i.slot == old_bag_slot)
-                            {
-                                let (opcode, body) = codec::build_container_slot_values(
-                                    bag.guid,
-                                    old_slot_in_bag,
-                                    0,
-                                );
-                                let _ = item_upd_tx.send(Outbound::Raw { opcode, body });
-                            }
-                        }
-                        if let Some((new_bag_slot, new_slot_in_bag)) = bag_content_parts(row.slot) {
-                            if let Some(bag) = ctx
-                                .db
-                                .game_item_instance()
-                                .iter()
-                                .find(|i| i.owner_guid == self_guid && i.slot == new_bag_slot)
-                            {
-                                let (opcode, body) = codec::build_container_slot_values(
-                                    bag.guid,
-                                    new_slot_in_bag,
-                                    row.guid,
-                                );
-                                let _ = item_upd_tx.send(Outbound::Raw { opcode, body });
-                            }
-                        }
-                    }
-                    if old.stack_count != row.stack_count || old.durability != row.durability {
-                        let _ = item_upd_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                                codec::build_item_values(row.guid, row.stack_count, row.durability),
-                            )),
-                        ));
-                    }
-                    // Live armor: a slot change that touches the EQUIPMENT region (equip/unequip crosses 0..=18)
-                    // OR a durability change that crosses the BROKEN threshold on a worn item (a broken item grants
-                    // no armor) changes worn armor → re-push UNIT_FIELD_RESISTANCES[0]. The SDK applies the row to
-                    // the cache before this fires, so the fold reads the post-change set.
-                    let slot_crossed_equip =
-                        old.slot != row.slot && (old.slot <= 18 || row.slot <= 18);
-                    let broken_crossed =
-                        row.slot <= 18 && (old.durability == 0) != (row.durability == 0);
-                    if slot_crossed_equip || broken_crossed {
-                        let eff = super::armor::effective_armor(&ctx.db, self_guid);
-                        let _ = item_upd_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                                codec::build_resistance_values(self_guid, eff),
-                            )),
-                        ));
-                        // Paperdoll: gear moved -> re-push the paperdoll stats/AP/damage-range alongside armor
-                        // (same trigger set; the login initial-state item replay corrects the CREATE's
-                        // base-only values the same way it does armor).
-                        if let Some(st) = super::armor::sheet_stats(&ctx.db, self_guid) {
-                            let _ = item_upd_tx.send(Outbound::One(
-                                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                                    codec::build_sheet_stats_values(self_guid, &st),
-                                )),
-                            ));
-                        }
-                    }
-                });
-        let td_ii = self.clone();
-        let td_id = self.clone();
-        let td_iu = self.clone();
-        vec![
-            Box::new(move || {
-                let l = td_ii.0.coord();
-                l.conn
-                    .db
-                    .game_item_instance()
-                    .remove_on_insert(on_item_insert);
-            }),
-            Box::new(move || {
-                let l = td_id.0.coord();
-                l.conn
-                    .db
-                    .game_item_instance()
-                    .remove_on_delete(on_item_delete);
-            }),
-            Box::new(move || {
-                let l = td_iu.0.coord();
-                l.conn
-                    .db
-                    .game_item_instance()
-                    .remove_on_update(on_item_update);
-            }),
-        ]
-    }
 
 }
 

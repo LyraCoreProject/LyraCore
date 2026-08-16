@@ -393,6 +393,24 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         &view,
         |v, _old, row| reputation_appeared(v, row),
     );
+    {
+        let coord = coord.clone();
+        wire_insert(db.game_item_instance(), "game_item_instance.insert", &view, move |v, row| {
+            item_inserted(v, &coord, row)
+        });
+    }
+    {
+        let coord = coord.clone();
+        wire_update(db.game_item_instance(), "game_item_instance.update", &view, move |v, old, row| {
+            item_updated(v, &coord, old, row)
+        });
+    }
+    {
+        let coord = coord.clone();
+        wire_delete(db.game_item_instance(), "game_item_instance.delete", &view, move |v, row| {
+            item_deleted(v, &coord, row)
+        });
+    }
 
     // ---- game_world_entity -----------------------------------------------------------------
     wire_insert(db.game_world_entity(), "game_world_entity.insert", &view, move |v, row| {
@@ -1226,6 +1244,37 @@ fn reputation_outbound(row: &PlayerReputation) -> Vec<Outbound> {
         .unwrap_or_default()
 }
 
+/// Select one item owner on the pump; cache reads and packet work run on its writer queue.
+fn item_owner_job(view: &WorldView, owner_guid: u64, job: impl FnOnce(Arc<Viewer>) -> Vec<Outbound> + Send + 'static) {
+    let Some(viewer) = view.viewer_of_owner(OwnerGuid(owner_guid)) else { return; };
+    let tx = viewer.tx.clone();
+    enqueue(&tx, move || job(viewer));
+}
+
+fn item_inserted(view: &WorldView, coord: &Coordinator, row: &ItemInstance) {
+    let (coord, row) = (coord.clone(), row.clone());
+    item_owner_job(view, row.owner_guid, move |viewer| {
+        let guard = coord.0.coord();
+        super::subscriptions::item_instance_insert_outbound(&guard.conn.db, viewer.self_guid, &row)
+    });
+}
+
+fn item_updated(view: &WorldView, coord: &Coordinator, old: &ItemInstance, row: &ItemInstance) {
+    let (coord, old, row) = (coord.clone(), old.clone(), row.clone());
+    item_owner_job(view, row.owner_guid, move |viewer| {
+        let guard = coord.0.coord();
+        super::subscriptions::item_instance_update_outbound(&guard.conn.db, viewer.self_guid, &old, &row)
+    });
+}
+
+fn item_deleted(view: &WorldView, coord: &Coordinator, row: &ItemInstance) {
+    let (coord, row) = (coord.clone(), row.clone());
+    item_owner_job(view, row.owner_guid, move |viewer| {
+        let guard = coord.0.coord();
+        super::subscriptions::item_instance_delete_outbound(&guard.conn.db, viewer.self_guid, &row)
+    });
+}
+
 /// A rest-state flip landed on a shard's coordinator feed. Self-only family: the row names its
 /// owner and the owner is the ONLY lawful recipient, so the audience predicate IS the
 /// owner-session lookup — there is no candidate set to filter,
@@ -1578,7 +1627,7 @@ fn channel_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: 
 #[cfg(test)]
 mod family_audience_tests {
     use super::{
-        addon_message_appeared, exploration_outbound_for_word, levelup_appeared,
+        addon_message_appeared, exploration_outbound_for_word, item_owner_job, levelup_appeared,
         reputation_appeared, teleport_appeared, xp_appeared, BoundIdentity, ExplorationReplay,
         MotionPending, OwnerGuid, Viewer, WorldView,
     };
@@ -1885,6 +1934,32 @@ mod family_audience_tests {
     }
 
     #[test]
+    fn item_rows_route_only_to_the_owner_and_follow_transfer_replacement() {
+        let view = WorldView::new(true);
+        let (source_tx, source_rx) = SessionTx::with_depth(0);
+        let (other_tx, other_rx) = SessionTx::with_depth(0);
+        let (destination_tx, destination_rx) = SessionTx::with_depth(0);
+        let source = viewer_with_tx(1, 9001, identity(1), source_tx);
+        let other = viewer_with_tx(2, 9002, identity(2), other_tx);
+        let destination = viewer_with_tx(3, 9001, identity(1), destination_tx);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        view.add_viewer_on_shard(source.clone(), anchor, 0);
+        view.add_viewer_on_shard(other, anchor, 0);
+
+        item_owner_job(&view, source.self_guid, |_| vec![Outbound::Raw { opcode: 1, body: vec![1] }]);
+        assert!(matches!(queued_job(&source_rx).as_slice(), [Outbound::Raw { .. }]));
+        assert!(other_rx.try_recv().is_err(), "an unrelated item owner receives nothing");
+
+        view.remove_viewer(source.session);
+        item_owner_job(&view, source.self_guid, |_| vec![Outbound::Raw { opcode: 2, body: vec![2] }]);
+        assert!(source_rx.try_recv().is_err(), "a removed source viewer receives no cascade delete");
+
+        view.add_viewer_on_shard(destination, anchor, 1);
+        item_owner_job(&view, source.self_guid, |_| vec![Outbound::Raw { opcode: 3, body: vec![3] }]);
+        assert!(matches!(queued_job(&destination_rx).as_slice(), [Outbound::Raw { opcode: 3, .. }]));
+    }
+
+    #[test]
     fn identity_events_route_once_in_fifo_order_and_addon_uses_the_viewer_guid() {
         let view = WorldView::new(true);
         let (owner_tx, owner_rx) = SessionTx::with_depth(0);
@@ -2030,11 +2105,16 @@ mod family_audience_tests {
             "game_levelup_event",
             "game_character_explored",
             "game_player_reputation",
+            "game_item_instance",
         ] {
             assert_eq!(
                 arm.matches(&format!("db.{table}()")).count(),
-                if table == "game_player_reputation" { 2 } else { 1 },
-                "{table} must have one shared callback per arm_shard call"
+                match table {
+                    "game_player_reputation" => 2,
+                    "game_item_instance" => 3,
+                    _ => 1,
+                },
+                "{table} must have the expected shared callbacks per arm_shard call"
             );
         }
         for (helper, label) in [
@@ -2050,6 +2130,8 @@ mod family_audience_tests {
             );
             assert!(arm.contains(&format!("\"{label}\"")));
         }
+        assert_eq!(arm.matches("\"game_item_instance.update\"").count(), 1);
+        assert_eq!(arm.matches("\"game_item_instance.delete\"").count(), 1);
 
         let subscriptions = include_str!("subscriptions.rs");
         for registrar in [
@@ -2060,6 +2142,8 @@ mod family_audience_tests {
             "register_explored_relays",
             "register_reputation_relays",
             "initial_rep_factions",
+            "register_item_relays",
+            "initial_item_guids",
         ] {
             assert!(
                 !subscriptions.contains(registrar),
