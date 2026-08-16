@@ -774,6 +774,12 @@ pub(crate) fn apply_effect(
         return EffectHit::none(); // an aura effect deals no direct cast damage
     }
     match e.kind {
+        E_DUEL => {
+            if e.p0_kind == P_GAMEOBJECT_ENTRY {
+                crate::duel::request_duel(ctx, caster_guid, target_guid, e.p0.max(0) as u32);
+            }
+            EffectHit::none()
+        }
         E_DAMAGE => {
             // Binary spell MISS: a level-derived chance the spell fully misses (4% vs equal, up to
             // 17% vs +3) — a clean 0-damage outcome with NO threat/scaling. Rolled BEFORE everything else,

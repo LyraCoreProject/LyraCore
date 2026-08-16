@@ -61,6 +61,7 @@ const E_POWER_BURN: u8 = 0x19; // drain target mana into damage (Mana Burn); map
 const E_BLINK: u8 = 0x1A; // teleport the caster ~20yd FORWARD along its facing (Mage Blink, 116); reclassified BY NAME from the dead SCRIPT teleport effect (lockstep with module taxonomy)
 const E_PERSISTENT_AREA: u8 = 0x1B; // ground-AoE (118, Consecration): spawns a fixed-position game_ground_area whose tick damages hostiles inside; reclassified BY NAME from the ground A_PERIODIC_DAMAGE effect (lockstep with module taxonomy)
 const E_OPEN_LOCK: u8 = 0x1D; // OPEN LOCK (Pick Lock 1804, work-item 119): gateway-intercepted like E_FISH (0x1C)/E_ENCHANT_ITEM — a CMSG_CAST_SPELL for a spell carrying this kind routes to the `pick_lock` reducer (unlock a locked GameObject, gated on the caster's Lockpicking 633 skill). Mapped from the raw vanilla OpenLock (33) / OpenLockItem (59) effects (lockstep with module taxonomy). 0x1E is reserved for a future E_SUMMON_PORTAL — do NOT reuse.
+const E_DUEL: u8 = 0x20; // Duel (raw effect 83): p0 is the duel-flag gameobject template entry
 const E_DISENCHANT: u8 = 0x18; // DISENCHANT (real Disenchant 13262, work-item 282): gateway-intercepted, routed to the disenchant reducer by kind. Mapped from raw vanilla effect 99 (SPELL_EFFECT_DISENCHANT); no params (the module validates + yields dust by item). Lockstep with the module taxonomy (module/src/spell/taxonomy.rs E_DISENCHANT).
 
 // aura effects (high bit set)
@@ -107,6 +108,7 @@ const P_ITEM_ENTRY: u8 = 8;
 const P_ENTRY: u8 = 9; // p0 is a game_creature_template entry (E_SUMMON_PET — the summoned pet's creature entry)
 const P_SPELLMOD_OP: u8 = 11; // p0 is a SpellModOp (A_SPELLMOD_*)
 const P_PCT_MAX_POWER: u8 = 12; // the effect's `amount` is a PERCENT of the caster's max power (Evocation); aura_apply converts it to an absolute per-tick (lockstep with module taxonomy)
+const P_GAMEOBJECT_ENTRY: u8 = 13; // p0 is a game_gameobject_template entry (E_DUEL)
 const P_RAW: u8 = 255;
 
 // TargetKind
@@ -410,6 +412,7 @@ fn instant_effect_to_kind(effect_id: i32) -> u8 {
         68 => E_INTERRUPT, // InterruptCast (Kick) — cancel the target's in-progress cast
         56 => E_SUMMON_PET, // Summon (Summon Imp et al.) — p0 = the summoned creature entry (misc_value)
         62 => E_POWER_BURN, // PowerBurn (Priest Mana Burn) — p1 = EffectMultipleValue*100 (work-items 117)
+        83 => E_DUEL, // Duel — p0 carries the duel-flag gameobject entry
         33 | 59 => E_OPEN_LOCK, // OpenLock (33) / OpenLockItem (59) — Pick Lock (work-item 119): gateway-intercepted, routed to the pick_lock reducer by kind (Pick Lock 1804 carries the raw OpenLock effect; the item-lock variant 59 covers a lockpick-on-item spell)
         99 => E_DISENCHANT, // Disenchant (13262, work-item 282): gateway-intercepted, routed to the disenchant reducer by kind — the AUTOLEARN enchanting ability. Was falling through to E_SCRIPTED (a no-op).
         80 => E_ADD_COMBO, // AddComboPoints (work-item 101) — the curated Rogue generators (Sinister Strike/Backstab/Gouge/Garrote) carry the generic Dummy effect in-kit and are rescued BY NAME in correct_script_effect_kind below, not via this raw id, so this arm is currently unexercised by the curated kit but correct for any spell that DOES carry the raw AddComboPoints effect
@@ -825,6 +828,7 @@ fn resolve_instant_params(kind: u8, misc: u32, item_type: i32) -> (i32, u8) {
         // how E_CREATE_ITEM routes the item entry into p0. The engine's E_SUMMON_PET handler reads p0 as a
         // game_creature_template entry (Imp = 416), despawns any existing pet, then spawns it owned by the caster.
         E_SUMMON_PET => (misc as i32, P_ENTRY),
+        E_DUEL => (misc as i32, P_GAMEOBJECT_ENTRY),
         _ => (0, P_NONE), // damage/heal/trigger/taunt school is on the header; no p0
     }
 }
@@ -1316,6 +1320,7 @@ fn build_spell_sql(
                 // summon fires exactly once) AND the faction gate is bypassed (a self-cast imposes no
                 // faction constraint), so casting it while an enemy is selected still summons the pet.
                 E_SUMMON_PET => T_SELF,
+                E_DUEL => T_TARGET_ANY,
                 _ => target,
             };
             // Slice and Dice (a combo FINISHER) is cast AT the enemy you built combo on (to read + spend
@@ -1736,6 +1741,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_SUMMON_PET => "E_SUMMON_PET",
         E_HEAL_MAX_HEALTH => "E_HEAL_MAX_HEALTH",
         E_POWER_BURN => "E_POWER_BURN",
+        E_DUEL => "E_DUEL",
         E_SCRIPTED => "E_SCRIPTED",
         A_PERIODIC_DAMAGE => "A_PERIODIC_DAMAGE",
         A_PERIODIC_HEAL => "A_PERIODIC_HEAL",
@@ -2682,6 +2688,8 @@ mod tests {
         assert_eq!(resolve_instant_params(E_ENERGIZE, 1, 0), (1, P_POWER_TYPE)); // rage
         assert_eq!(resolve_instant_params(E_DISPEL, 1, 0), (1, P_SCHOOL_MASK)); // magic category
         assert_eq!(resolve_instant_params(E_DAMAGE, 4, 0), (0, P_NONE)); // school on header
+        assert_eq!(instant_effect_to_kind(83), E_DUEL);
+        assert_eq!(resolve_instant_params(E_DUEL, 21680, 0), (21680, P_GAMEOBJECT_ENTRY));
                                                                          // CreateItem: p0 = the item entry (from effect_item_type), tagged P_ITEM_ENTRY; misc ignored.
         assert_eq!(
             resolve_instant_params(E_CREATE_ITEM, 99, 2070),

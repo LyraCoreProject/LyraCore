@@ -108,6 +108,10 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     // cannot see. It dies with the source, exactly as the logout teardown would (#120).
     "game_trade_session",
     "game_trade_slot",
+    // A Duel and its one-shot relay rows are live state tied to two players on one shard. Moving
+    // either participant interrupts it; no source snapshot is meaningful on the destination.
+    "game_duel",
+    "game_duel_event",
 ];
 
 // ===========================================================================================

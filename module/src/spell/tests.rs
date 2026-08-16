@@ -498,7 +498,7 @@ fn kind_wire_values() {
 fn instant_kind_wire_values_exhaustive() {
     assert_eq!(
         ALL_INSTANT_KINDS.len(),
-        30,
+        31,
         "an instant kind was added to (or removed from) taxonomy.rs without a matching, deliberate \
          change to ALL_INSTANT_KINDS — bump this count only when the taxonomy really changed"
     );
@@ -588,7 +588,7 @@ fn apply_spell_auras_still_calls_the_passive_effect_filter() {
 
 /// Pin EVERY `P_*` param-tag value (`eff_p0_kind` — what `p0` MEANS on a given effect/aura row): the
 /// importer stamps these BY NAME and the readers (`resistance_bonus`, `is_immune_to_mechanic`, …) key off
-/// them, so a drift here would silently reinterpret a frozen `p0`. All 13 are distinct.
+/// them, so a drift here would silently reinterpret a frozen `p0`. All 14 are distinct.
 #[test]
 fn param_tag_wire_values_exhaustive() {
     assert_eq!(P_NONE, 0);
@@ -603,6 +603,7 @@ fn param_tag_wire_values_exhaustive() {
     assert_eq!(P_ENTRY, 9);
     assert_eq!(P_ENCHANT_ID, 10);
     assert_eq!(P_PCT_MAX_POWER, 12);
+    assert_eq!(P_GAMEOBJECT_ENTRY, 13);
     assert_eq!(P_RAW, 255);
     let all = [
         P_NONE,
@@ -617,6 +618,7 @@ fn param_tag_wire_values_exhaustive() {
         P_ENTRY,
         P_ENCHANT_ID,
         P_PCT_MAX_POWER,
+        P_GAMEOBJECT_ENTRY,
         P_RAW,
     ];
     for (i, a) in all.iter().enumerate() {

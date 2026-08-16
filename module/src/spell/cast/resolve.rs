@@ -501,11 +501,17 @@ fn check_cast_gates(
         // Dice's read ally too — the name-fix precedent) and imposes no real faction constraint;
         // letting it vote turned Taunt into "targets allies" and refused every yank.
         let hits_enemy = effects.iter().any(|e| {
-            e.kind != A_FLAG && matches!(e.target, T_TARGET_ENEMY | T_AREA_ENEMY | T_CHAIN_ENEMY)
+            e.kind != A_FLAG
+                && e.kind != E_DUEL
+                && matches!(e.target, T_TARGET_ENEMY | T_AREA_ENEMY | T_CHAIN_ENEMY)
         });
         let hits_ally = effects
             .iter()
-            .any(|e| e.kind != A_FLAG && matches!(e.target, T_TARGET_ALLY | T_AREA_ALLY));
+            .any(|e| {
+                e.kind != A_FLAG
+                    && e.kind != E_DUEL
+                    && matches!(e.target, T_TARGET_ALLY | T_AREA_ALLY)
+            });
         if hits_enemy || hits_ally {
             if let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) {
                 let friendly = crate::faction::is_friendly(

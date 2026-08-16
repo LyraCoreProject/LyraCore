@@ -286,7 +286,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         melee_disengaged(v, shard, row)
     });
 
-    // ---- game_resurrect_request / game_whisper_event / game_group_event / game_trade_event ----
+    // ---- recipient-keyed private event relays -----------------------------------------------
     // The PRIVATE tier: every row is addressed to exactly one recipient, and on this feed the
     // gateway owns the guarantee RLS used to give. Delivery is recipient-keyed (the owner-session
     // lookup) + the explicit `private_recipient_audience` predicate — never a viewer fan.
@@ -307,6 +307,12 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
     wire_insert(db.game_trade_event(), "game_trade_event.insert", &view, |v, row| {
         trade_event_appeared(v, row)
     });
+    {
+        let coord = coord.clone();
+        wire_insert(db.game_duel_event(), "game_duel_event.insert", &view, move |v, row| {
+            duel_event_appeared(v, &coord, row)
+        });
+    }
 
     // ---- game_aura ------------------------------------------------------------------------------
     // The aura composite: array sync (visibility-gated), self-only duration/run-speed/armor,
@@ -1038,6 +1044,27 @@ fn trade_event_appeared(view: &WorldView, row: &TradeEvent) {
     let tx = viewer.tx.clone();
     enqueue(&tx, move || {
         super::subscriptions::trade_event_outbound(&row)
+    });
+}
+
+/// A Duel lifecycle edge landed for one participant. The static flag template is resolved on the
+/// holding shard inside the viewer job; the module row carries every other packet field.
+fn duel_event_appeared(view: &WorldView, coord: &Coordinator, row: &DuelEvent) {
+    let Some(session) = view.entities.session_of_owner(row.recipient_guid) else {
+        return;
+    };
+    let Some(viewer) = view.viewer(session) else {
+        return;
+    };
+    if !super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid) {
+        return;
+    }
+    let row = row.clone();
+    let coord = coord.clone();
+    let tx = viewer.tx.clone();
+    enqueue(&tx, move || {
+        let template = coord.gameobject_template(row.flag_entry).ok().flatten();
+        super::subscriptions::duel_event_outbound(&row, template.as_ref())
     });
 }
 

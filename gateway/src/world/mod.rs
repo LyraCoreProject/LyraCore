@@ -45,11 +45,13 @@ pub mod whisper;
 use coalesce::CoalesceState;
 use handlers::{
     decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action, dispatch_cast,
-    dispatch_item_action, dispatch_loot_window, dispatch_melee_action, dispatch_quest_action,
+    dispatch_duel_action, dispatch_item_action, dispatch_loot_window, dispatch_melee_action,
+    dispatch_quest_action,
     dispatch_taxi_action, dispatch_vendor_action, handle_bank, handle_char, handle_combat,
     handle_loot, handle_mail, handle_query, handle_trade, handle_trainer, queue_reply_then_arm,
     AuctionActionOutcome, AuctionActionPlayer, CastOutcome, CastPlayer, CastTransition,
-    ItemActionOutcome, ItemActionPlayer, LootWindowOutcome, LootWindowPlayer, MeleeActionOutcome,
+    DuelActionOutcome, DuelActionPlayer, ItemActionOutcome, ItemActionPlayer, LootWindowOutcome,
+    LootWindowPlayer, MeleeActionOutcome,
     MeleeActionPlayer, OpenLootState, QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome,
     TaxiActionPlayer, VendorActionOutcome, VendorActionPlayer,
     CMSG_AUCTION_LIST_ITEMS_OPCODE, quest_giver_menu,
@@ -1389,6 +1391,22 @@ fn dispatch<St: WorldStore + ?Sized>(
     };
     let Some(msg) = handle_trade(tx, store, conn, msg)? else {
         return Ok(());
+    };
+    let msg = match dispatch_duel_action(
+        store,
+        DuelActionPlayer {
+            account_id: conn.account_id,
+            self_guid: social::self_guid(conn),
+        },
+        msg,
+    )? {
+        DuelActionOutcome::Handled { outbound } => {
+            for message in outbound {
+                send(tx, message)?;
+            }
+            return Ok(());
+        }
+        DuelActionOutcome::PassThrough(msg) => msg,
     };
     let Some(msg) = handle_query(tx, store, conn, msg)? else {
         return Ok(());
