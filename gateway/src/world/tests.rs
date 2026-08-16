@@ -2486,6 +2486,16 @@ impl WorldStore for InMemoryStore {
 /// cancellation asked for. Route variation — cast time, next-swing, ground area, enchant,
 /// disenchant, fishing and lock opening — belongs to the cast seam's own focused adapter.
 impl CastStore for InMemoryStore {
+    fn cast_item_target(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _spell_id: u32,
+        _slot: u8,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     fn cancel_aura(&self, _account_id: u64, _self_guid: u64, spell_id: u32) -> Result<()> {
         self.cancelled_auras.lock().unwrap().push(spell_id);
         Ok(())

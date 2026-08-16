@@ -1,10 +1,10 @@
 //! Durable Hunter-pet identity and the wild-creature-to-live-pet transition.
 
-use spacetimedb::{table, ReducerContext, Table, Timestamp};
+use spacetimedb::{table, ReducerContext, Table, TimeDuration, Timestamp};
 
 use crate::{
-    game_creature_family, game_creature_spawn, game_creature_template, game_entity_motion,
-    game_world_entity, WorldEntity,
+    game_creature_family, game_creature_spawn, game_creature_template, game_world_entity,
+    WorldEntity,
 };
 
 const CLASS_HUNTER: u8 = 3;
@@ -14,6 +14,7 @@ pub const PET_KIND_HUNTER: u8 = 1;
 
 /// The one durable Hunter-pet identity currently owned by a character. The table is module-private;
 /// callers use the narrow owner/id lookups below.
+#[derive(Clone)]
 #[table(
     accessor = game_hunter_pet,
     index(accessor = by_owner, btree(columns = [owner_guid]))
@@ -127,7 +128,7 @@ pub fn publish_hunter_pet_protocol(ctx: &ReducerContext, pet: &HunterPet, live_p
             .clamp(0, u32::MAX as i64) as u32,
         level: pet.level,
         pet_xp: pet.pet_xp,
-        next_level_xp: crate::xp::xp_to_next_level(pet.level),
+        next_level_xp: super::pet_xp_to_next_level(pet.level),
         happiness: pet.happiness,
         loyalty_level: pet.loyalty_level,
     };
@@ -296,12 +297,8 @@ pub(crate) fn tame_creature(
     let family_id = template.creature_family as u32;
     let pet_id = caster.guid;
 
-    // Leave combat and stop server-authored movement before changing ownership. The preserved row
-    // retains entry/family-derived template, display, level and exact current/max health ratio.
-    crate::combat::disengage(ctx, target.guid);
-    crate::motion::drop_pending(ctx, target.guid);
-    ctx.db.game_entity_motion().guid().delete(target.guid);
-
+    // The preserved row retains entry/family-derived template, display, level and exact
+    // current/max health ratio.
     target.owner_guid = caster.guid;
     target.faction_template = caster.faction_template;
     target.target_guid = 0;
@@ -311,14 +308,28 @@ pub(crate) fn tame_creature(
     target.combat_until_ms = 0;
     target.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
 
-    // Replace the wild guid with the existing owner-derived pet guid. The old wild row is destroyed,
-    // then the live pet reaches the normal creature-create relay, including summon fields and pet bar.
+    // Replace the wild guid with the existing owner-derived pet guid. Keep the authored spawn and
+    // arm its next appearance in the future: taming retires this individual creature, not the world
+    // spawn point that produced it. The live pet reaches the normal creature-create relay, including
+    // summon fields and pet bar.
     let wild_guid = target.guid;
     let pet_guid = super::pet_guid_for(caster.guid);
     let creature_entry = target.entry;
     let level = target.level;
-    entities.guid().delete(wild_guid);
-    ctx.db.game_creature_spawn().guid().delete(wild_guid);
+    super::despawn_creature_entity(ctx, wild_guid);
+    if let Some(mut spawn) = ctx.db.game_creature_spawn().guid().find(wild_guid) {
+        let delay_micros = if spawn.respawn_secs == 0 {
+            crate::combat::RESPAWN_MICROS
+        } else {
+            i64::from(spawn.respawn_secs).saturating_mul(1_000_000)
+        };
+        spawn.respawn_at = ctx
+            .timestamp
+            .checked_add(TimeDuration::from_micros(delay_micros))
+            .unwrap_or_else(|| super::timer_never(ctx));
+        spawn.despawn_at = super::timer_never(ctx);
+        ctx.db.game_creature_spawn().guid().update(spawn);
+    }
     target.guid = pet_guid;
     entities.insert(target);
 
@@ -408,5 +419,26 @@ mod tests {
         assert_eq!(classify_pet_kind(None), PetKind::Summoned);
         assert_eq!(classify_pet_kind(Some(0)), PetKind::Summoned);
         assert_eq!(classify_pet_kind(Some(42)), PetKind::Hunter { pet_id: 42 });
+    }
+
+    #[test]
+    fn tame_retires_the_entity_but_preserves_and_rearms_its_authored_spawn() {
+        let body = crate::test_scan::code_of(
+            include_str!("hunter_pet.rs"),
+            "pub(crate) fn tame_creature(",
+        );
+        assert!(body.contains("despawn_creature_entity(ctx, wild_guid)"));
+        assert!(body.contains("game_creature_spawn().guid().update(spawn)"));
+        assert!(!body.contains("game_creature_spawn().guid().delete(wild_guid)"));
+    }
+
+    #[test]
+    fn protocol_projection_uses_the_pet_xp_curve() {
+        let body = crate::test_scan::code_of(
+            include_str!("hunter_pet.rs"),
+            "pub fn publish_hunter_pet_protocol(",
+        );
+        assert!(body.contains("pet_xp_to_next_level(pet.level)"));
+        assert!(!body.contains("xp::xp_to_next_level(pet.level)"));
     }
 }

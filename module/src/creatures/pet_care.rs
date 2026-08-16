@@ -87,6 +87,7 @@ fn decay_per_interval(loyalty_level: u8, in_combat: bool) -> u32 {
 
 /// Returns `(new happiness, whole elapsed intervals consumed)`. Remainders stay on the durable
 /// timestamp so many regular calls and one catch-up call are exactly equivalent.
+#[cfg(test)]
 fn decay_elapsed(
     happiness: u32,
     loyalty_level: u8,
@@ -117,16 +118,46 @@ fn update_care(ctx: &ReducerContext, mut pet: HunterPet) {
         return;
     };
     let in_combat = live.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0;
-    let (happiness, intervals) =
-        decay_elapsed(pet.happiness, pet.loyalty_level, now - last, in_combat);
+    let intervals = (now - last).max(0) / CARE_INTERVAL_MICROS;
     if intervals == 0 {
         return;
     }
-    pet.happiness = happiness;
-    pet.care_updated_at = Timestamp::from_micros_since_unix_epoch(
-        last.saturating_add(intervals.saturating_mul(CARE_INTERVAL_MICROS)),
-    );
-    ctx.db.game_hunter_pet().pet_id().update(pet);
+    let pet_id = pet.pet_id;
+    let live_guid = live.guid;
+    for interval in 1..=intervals {
+        let old_happiness = pet.happiness;
+        pet.happiness = pet
+            .happiness
+            .saturating_sub(decay_per_interval(pet.loyalty_level, in_combat));
+        pet.care_updated_at = Timestamp::from_micros_since_unix_epoch(
+            last.saturating_add(interval.saturating_mul(CARE_INTERVAL_MICROS)),
+        );
+        ctx.db.game_hunter_pet().pet_id().update(pet.clone());
+
+        let state = match happiness_state(pet.happiness) {
+            HappinessState::Happy => super::PetHappinessState::Happy,
+            HappinessState::Content => super::PetHappinessState::Content,
+            HappinessState::Unhappy => super::PetHappinessState::Unhappy,
+        };
+        let loyalty_changed = super::update_pet_loyalty_from_care(ctx, pet_id, state);
+        pet = ctx
+            .db
+            .game_hunter_pet()
+            .pet_id()
+            .find(pet_id)
+            .expect("care pet remains present during its transaction");
+
+        // At both lower bounds every later interval is the same no-op. Advance the time anchor in
+        // one write instead of looping over an arbitrarily long scheduler outage.
+        if pet.happiness == old_happiness && !loyalty_changed {
+            pet.care_updated_at = Timestamp::from_micros_since_unix_epoch(
+                last.saturating_add(intervals.saturating_mul(CARE_INTERVAL_MICROS)),
+            );
+            ctx.db.game_hunter_pet().pet_id().update(pet.clone());
+            break;
+        }
+    }
+    super::publish_hunter_pet_protocol(ctx, &pet, live_guid);
 }
 
 #[reducer]
@@ -277,7 +308,8 @@ fn feed_item(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Result<(), Stri
     }
     let mut pet = durable.expect("validated durable pet exists");
     pet.happiness = pet.happiness.saturating_add(benefit).min(MAX_HAPPINESS);
-    ctx.db.game_hunter_pet().pet_id().update(pet);
+    ctx.db.game_hunter_pet().pet_id().update(pet.clone());
+    super::publish_hunter_pet_protocol(ctx, &pet, live.expect("validated live pet exists").guid);
     Ok(())
 }
 
@@ -295,7 +327,8 @@ pub(crate) fn on_pet_death(ctx: &ReducerContext, pet_guid: u64) {
     };
     if let Some(mut pet) = ctx.db.game_hunter_pet().pet_id().find(kind.hunter_pet_id) {
         pet.happiness = pet.happiness.saturating_sub(HAPPINESS_BAND);
-        ctx.db.game_hunter_pet().pet_id().update(pet);
+        ctx.db.game_hunter_pet().pet_id().update(pet.clone());
+        super::publish_hunter_pet_protocol(ctx, &pet, pet_guid);
     }
 }
 
@@ -382,5 +415,12 @@ mod tests {
         assert_eq!(food_mask(0), 0);
         assert_eq!(food_mask(1), 1);
         assert_eq!(food_mask(4), 8);
+    }
+
+    #[test]
+    fn scheduled_care_updates_loyalty_and_the_owner_protocol_projection() {
+        let body = crate::test_scan::code_of(include_str!("pet_care.rs"), "fn update_care(");
+        assert!(body.contains("update_pet_loyalty_from_care"));
+        assert!(body.contains("publish_hunter_pet_protocol"));
     }
 }

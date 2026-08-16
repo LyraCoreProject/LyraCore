@@ -1188,6 +1188,25 @@ impl Coordinator {
         )
     }
 
+    /// Resolve an item-target cast through the module's generic item-effect seam.
+    pub fn cast_item_target(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        spell_id: u32,
+        slot: u8,
+    ) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("cast_item_target: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_cast_item_target",
+            gw_cast_item_target_then(actor_guid, spell_id, slot)
+        )
+    }
+
     /// Cast a GROUND-TARGETED spell at a clicked world point (`CMSG_CAST_SPELL` with a DEST_LOCATION —
     /// Flamestrike/Blizzard/Rain of Fire). Same per-account attribution as `cast_spell`; the `(x,y,z)` is
     /// the ground click so the module anchors the AoE/patch there.

@@ -230,7 +230,8 @@ pub(crate) fn award_hunter_pet_kill_progression(
     if level_changed {
         refresh_live_level(ctx, &pet, next.level);
     }
-    ctx.db.game_hunter_pet().pet_id().update(pet);
+    ctx.db.game_hunter_pet().pet_id().update(pet.clone());
+    super::publish_hunter_pet_protocol(ctx, &pet, live.guid);
 }
 
 #[cfg(test)]

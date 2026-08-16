@@ -464,6 +464,7 @@ pub mod gw_cancel_aura_reducer;
 pub mod gw_cancel_cast_reducer;
 pub mod gw_cancel_trade_reducer;
 pub mod gw_cast_at_reducer;
+pub mod gw_cast_item_target_reducer;
 pub mod gw_cast_spell_at_reducer;
 pub mod gw_cast_spell_reducer;
 pub mod gw_clear_trade_item_reducer;
@@ -1144,6 +1145,7 @@ pub use gw_cancel_aura_reducer::gw_cancel_aura;
 pub use gw_cancel_cast_reducer::gw_cancel_cast;
 pub use gw_cancel_trade_reducer::gw_cancel_trade;
 pub use gw_cast_at_reducer::gw_cast_at;
+pub use gw_cast_item_target_reducer::gw_cast_item_target;
 pub use gw_cast_spell_at_reducer::gw_cast_spell_at;
 pub use gw_cast_spell_reducer::gw_cast_spell;
 pub use gw_clear_trade_item_reducer::gw_clear_trade_item;
@@ -2138,6 +2140,11 @@ pub enum Reducer {
         spell_id: u32,
         target_guid: u64,
     },
+    GwCastItemTarget {
+        actor_guid: u64,
+        spell_id: u32,
+        slot: u8,
+    },
     GwCastSpell {
         actor_guid: u64,
         spell_id: u32,
@@ -2932,6 +2939,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwCancelCast { .. } => "gw_cancel_cast",
             Reducer::GwCancelTrade { .. } => "gw_cancel_trade",
             Reducer::GwCastAt { .. } => "gw_cast_at",
+            Reducer::GwCastItemTarget { .. } => "gw_cast_item_target",
             Reducer::GwCastSpell { .. } => "gw_cast_spell",
             Reducer::GwCastSpellAt { .. } => "gw_cast_spell_at",
             Reducer::GwClearTradeItem { .. } => "gw_clear_trade_item",
@@ -4440,6 +4448,15 @@ Reducer::DebugVerifyCombatRegen{
                 actor_guid: actor_guid.clone(),
                 spell_id: spell_id.clone(),
                 target_guid: target_guid.clone(),
+}),
+            Reducer::GwCastItemTarget{
+                actor_guid,
+                spell_id,
+                slot,
+}             => __sats::bsatn::to_vec(&gw_cast_item_target_reducer::GwCastItemTargetArgs {
+                actor_guid: actor_guid.clone(),
+                spell_id: spell_id.clone(),
+                slot: slot.clone(),
 }),
             Reducer::GwCastSpell{
                 actor_guid,

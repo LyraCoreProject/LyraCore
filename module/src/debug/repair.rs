@@ -9,8 +9,9 @@ use crate::{
     game_auction, game_auction_expiry, game_aura_schedule, game_breath_schedule, game_character,
     game_createinfo_spell, game_creature_move_schedule, game_faction,
     game_gateway_lease_reaper_schedule, game_ground_area_schedule, game_instance_reaper_schedule,
-    game_item_template, game_motion_publish_schedule, game_spell, game_talent, AuctionExpiry,
-    AuraSchedule, BreathSchedule, CreatureMoveSchedule, GroundAreaSchedule,
+    game_item_template, game_motion_publish_schedule, game_pet_care_schedule, game_spell,
+    game_talent, AuctionExpiry, AuraSchedule, BreathSchedule, CreatureMoveSchedule,
+    GroundAreaSchedule, PetCareSchedule,
 };
 
 /// Consolidated post-publish repair pass (#378). SpacetimeDB's `init` reducer runs ONLY on a
@@ -177,6 +178,20 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         1
     };
 
+    // Hunter care is an authoritative module timer. Ensure it after an auto-migrate publish, where
+    // `init` does not run, without disturbing an already-armed row.
+    let pet_care_schedule = if ctx.db.game_pet_care_schedule().iter().next().is_some() {
+        0
+    } else {
+        ctx.db.game_pet_care_schedule().insert(PetCareSchedule {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
+                crate::creatures::CARE_INTERVAL_MICROS,
+            )),
+        });
+        1
+    };
+
     // --- rearms (idempotent: always replace with the canonical row) ---
     // formerly `debug_rearm_creature_tick`: re-arm the GLOBAL creature movement tick to 0.5s. Work-item
     // 229: DEDICATED per-instance rows (armed via `debug_arm_instance_tick`) are deliberately left
@@ -266,9 +281,23 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         + breath_schedule
         + ground_area_schedule
         + motion_schedule
+        + pet_care_schedule
         + auction_expiries
         + 2;
     crate::import_meta::stamp(ctx, "debug_repair_after_publish", "", "", total);
     log::info!("debug_repair_after_publish: repaired {total} fixture/schedule row(s), including missing Auction expiries");
     Ok(())
+}
+
+#[cfg(test)]
+mod pet_care_schedule_tests {
+    #[test]
+    fn post_publish_repair_ensures_the_authoritative_pet_care_clock() {
+        let body = crate::test_scan::code_of(
+            include_str!("repair.rs"),
+            "pub fn debug_repair_after_publish(",
+        );
+        assert!(body.contains("game_pet_care_schedule().iter().next().is_some()"));
+        assert!(body.contains("CARE_INTERVAL_MICROS"));
+    }
 }
