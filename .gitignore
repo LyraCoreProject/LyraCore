@@ -33,3 +33,6 @@ __pycache__/
 /mutants.out/
 /mutants.out.old/
 .scratch/
+
+# Agent-created Git worktrees are local execution state, not repository content.
+/.claude/worktrees/
