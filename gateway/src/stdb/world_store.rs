@@ -1303,7 +1303,7 @@ mod routing_call_site_tests {
              let db = self .1 .map .auth_db(|d| { \
              self.1.conns.get(d).is_some_and(|inner| { \
              let live = inner.coord(); \
-             live.conn.is_active() && live._sub.is_active() }) }) \
+             live.is_healthy() }) }) \
              .map_err(|db| { anyhow!( \
              \"realm-core database {db} is not connected — refusing to authenticate against \\ \
              the world database's stale auth cache\" ) })?; \
