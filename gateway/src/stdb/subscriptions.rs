@@ -28,7 +28,7 @@ use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::Vector3d;
 
 use super::aoi::ViewerGates;
-use super::world_index::CellKey;
+use super::world_index::{CellKey, EntityLayer};
 use super::world_view::{self, Viewer, WorldView};
 use super::bindings::*;
 use super::connection::Coordinator;
@@ -1298,7 +1298,10 @@ pub(crate) fn stealth_visibility(
             // The shared connection's cache holds the whole world, so the question has to be
             // put to the cell index instead — otherwise a stealther unstealthing on the far
             // side of the zone would CREATE for everyone.
-            if !view.entities.can_see(session, changed.target_guid) {
+            if !view
+                .spatial
+                .can_see(EntityLayer::WorldEntity, session, changed.target_guid)
+            {
                 created.lock().unwrap().remove(&changed.target_guid);
                 return Vec::new();
             }
@@ -5806,7 +5809,7 @@ mod tests {
         // And the dispatch routes them through the cell index rather than broadcasting.
         let m = decommented(top_level_fn_body_of("world_view.rs", "motion"));
         assert!(
-            m.contains("view.entities.viewers_of(key)"),
+            m.contains("view.spatial.viewers_of(EntityLayer::WorldEntity, key)"),
             "peer motion no longer asks the cell index who can see the mover — either every session \
              gets every mover (the fan-out this issue removed) or none do"
         );

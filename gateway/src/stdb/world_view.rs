@@ -46,7 +46,7 @@ use spacetimedb_sdk::{Table, TableWithPrimaryKey};
 use super::aoi::{ViewerGates, AOI_RECENTERS};
 use super::bindings::*;
 use super::connection::Coordinator;
-use super::world_index::{CellKey, SessionId, ShardId, WorldIndex};
+use super::world_index::{CellKey, EntityLayer, SessionId, ShardId, WorldIndex};
 use crate::world::{Outbound, SessionTx};
 
 /// Everything the dispatch needs to know about one live world session. Registered at world entry
@@ -93,15 +93,11 @@ pub(crate) struct MotionPending {
     pub(crate) flush_queued: std::sync::atomic::AtomicBool,
 }
 
-/// The gateway-wide shared view: the two cell indexes, the live viewer registry, and the shard
-/// table the indexes' [`ShardId`]s point into.
+/// The gateway-wide shared view: one layered spatial index, the live viewer registry, and the
+/// shard table the index's [`ShardId`]s point into.
 pub(crate) struct WorldView {
-    /// `game_world_entity` — players, creatures, pets.
-    pub(crate) entities: WorldIndex,
-    /// `game_gameobject` — kept in its OWN index rather than sharing the entity one. Nothing today
-    /// says a GO guid can never equal an entity guid, and a shared index would make that assumption
-    /// load-bearing for visibility.
-    pub(crate) gameobjects: WorldIndex,
+    /// One authoritative viewer anchor with independent world-entity and game-object layers.
+    pub(crate) spatial: WorldIndex,
     viewers: RwLock<HashMap<SessionId, Arc<Viewer>>>,
     /// [`ShardId`] → that shard's coordinator handle. Written once at startup, read on every
     /// dispatch; the order fixes the ids, so it must never be reordered after arming.
@@ -112,8 +108,7 @@ pub(crate) struct WorldView {
 impl WorldView {
     pub(crate) fn new(cell_scoped: bool) -> Self {
         Self {
-            entities: WorldIndex::new(cell_scoped),
-            gameobjects: WorldIndex::new(cell_scoped),
+            spatial: WorldIndex::new(cell_scoped),
             viewers: RwLock::new(HashMap::new()),
             shards: RwLock::new(Vec::new()),
             next_session: AtomicU64::new(1),
@@ -137,10 +132,7 @@ impl WorldView {
     /// Register a live session. The caller supplies the anchor (its login position) so the first
     /// sweep sees the right box.
     pub(crate) fn add_viewer(&self, viewer: Arc<Viewer>, anchor: CellKey) {
-        self.entities
-            .add_viewer(viewer.session, viewer.self_guid, anchor);
-        self.gameobjects
-            .add_viewer(viewer.session, viewer.self_guid, anchor);
+        self.spatial.add_viewer(viewer.session, viewer.self_guid, anchor);
         self.viewers
             .write()
             .unwrap()
@@ -148,8 +140,7 @@ impl WorldView {
     }
 
     pub(crate) fn remove_viewer(&self, session: SessionId, self_guid: u64) {
-        self.entities.remove_viewer(session, self_guid);
-        self.gameobjects.remove_viewer(session, self_guid);
+        self.spatial.remove_viewer(session, self_guid);
         self.viewers.write().unwrap().remove(&session);
     }
 
@@ -508,9 +499,10 @@ fn entity_key(row: &WorldEntity) -> CellKey {
 /// its cell.
 fn entity_appeared(view: &WorldView, shard: ShardId, row: &WorldEntity) {
     let key = entity_key(row);
-    view.entities.upsert_entity(row.guid, key, shard);
+    view.spatial
+        .upsert_entity(EntityLayer::WorldEntity, row.guid, key, shard);
     let row = Arc::new(row.clone());
-    for session in view.entities.recipients_of(row.guid, key) {
+    for session in view.spatial.world_entity_recipients(row.guid, key) {
         offer_create_job(view, shard, session, &row);
     }
 }
@@ -524,12 +516,14 @@ fn entity_appeared(view: &WorldView, shard: ShardId, row: &WorldEntity) {
 /// * nobody else is touched.
 fn entity_changed(view: &WorldView, shard: ShardId, old: &WorldEntity, new: &WorldEntity) {
     let key = entity_key(new);
-    let previous = view.entities.upsert_entity(new.guid, key, shard);
-    let new_recipients = view.entities.recipients_of(new.guid, key);
+    let previous = view
+        .spatial
+        .upsert_entity(EntityLayer::WorldEntity, new.guid, key, shard);
+    let new_recipients = view.spatial.world_entity_recipients(new.guid, key);
     if let Some(old_key) = previous {
         if old_key != key {
             let still: HashSet<SessionId> = new_recipients.iter().copied().collect();
-            for session in view.entities.viewers_of(old_key) {
+            for session in view.spatial.viewers_of(EntityLayer::WorldEntity, old_key) {
                 if !still.contains(&session) {
                     destroy_job(view, session, new.guid, new.owner_guid);
                 }
@@ -549,10 +543,10 @@ fn entity_vanished(view: &WorldView, row: &WorldEntity) {
     // the LAST known row, and if a move and a delete land in the same transaction the index is the
     // one that knows where the viewers were told it was.
     let key = view
-        .entities
-        .remove_entity(row.guid)
+        .spatial
+        .remove_entity(EntityLayer::WorldEntity, row.guid)
         .unwrap_or_else(|| entity_key(row));
-    for session in view.entities.recipients_of(row.guid, key) {
+    for session in view.spatial.world_entity_recipients(row.guid, key) {
         destroy_job(view, session, row.guid, row.owner_guid);
     }
 }
@@ -607,12 +601,14 @@ fn destroy_job(view: &WorldView, session: SessionId, guid: u64, owner_guid: u64)
 
 fn gameobject_appeared(view: &WorldView, shard: ShardId, row: &GameObject) {
     let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
-    let previous = view.gameobjects.upsert_entity(row.guid, key, shard);
-    let recipients = view.gameobjects.viewers_of(key);
+    let previous = view
+        .spatial
+        .upsert_entity(EntityLayer::GameObject, row.guid, key, shard);
+    let recipients = view.spatial.viewers_of(EntityLayer::GameObject, key);
     if let Some(old_key) = previous {
         if old_key != key {
             let still: HashSet<SessionId> = recipients.iter().copied().collect();
-            for session in view.gameobjects.viewers_of(old_key) {
+            for session in view.spatial.viewers_of(EntityLayer::GameObject, old_key) {
                 if !still.contains(&session) {
                     if let Some(viewer) = view.viewer(session) {
                         let tx = viewer.tx.clone();
@@ -643,10 +639,10 @@ fn gameobject_appeared(view: &WorldView, shard: ShardId, row: &GameObject) {
 
 fn gameobject_vanished(view: &WorldView, row: &GameObject) {
     let key = view
-        .gameobjects
-        .remove_entity(row.guid)
+        .spatial
+        .remove_entity(EntityLayer::GameObject, row.guid)
         .unwrap_or_else(|| CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y));
-    for session in view.gameobjects.viewers_of(key) {
+    for session in view.spatial.viewers_of(EntityLayer::GameObject, key) {
         let Some(viewer) = view.viewer(session) else {
             continue;
         };
@@ -667,10 +663,11 @@ fn gameobject_vanished(view: &WorldView, row: &GameObject) {
 fn motion(view: &WorldView, row: &EntityMotion) {
     let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
     let row = Arc::new(row.clone());
-    // The MOVER is deliberately not a recipient (`recipients_of`'s self leg is skipped here): a
+    // The MOVER is deliberately not a recipient (`world_entity_recipients`' self leg is skipped
+    // here): a
     // player must never receive their own movement echoed back, or they fight the server for
     // authority over their position. `relay_entity_motion` re-checks it anyway.
-    for session in view.entities.viewers_of(key) {
+    for session in view.spatial.viewers_of(EntityLayer::WorldEntity, key) {
         let Some(viewer) = view.viewer(session) else {
             continue;
         };
@@ -693,7 +690,7 @@ fn motion(view: &WorldView, row: &EntityMotion) {
 fn creature_leg(view: &WorldView, row: &CreatureSpline) {
     let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
     let row = Arc::new(row.clone());
-    for session in view.entities.viewers_of(key) {
+    for session in view.spatial.viewers_of(EntityLayer::WorldEntity, key) {
         let Some(viewer) = view.viewer(session) else {
             continue;
         };
@@ -770,7 +767,12 @@ fn viewers_on_shard(view: &WorldView, shard: ShardId) -> Vec<Arc<Viewer>> {
         .read()
         .unwrap()
         .values()
-        .filter(|v| shard_audience(view.entities.shard_of(v.self_guid), shard))
+        .filter(|v| {
+            shard_audience(
+                view.spatial.shard_of(EntityLayer::WorldEntity, v.self_guid),
+                shard,
+            )
+        })
         .cloned()
         .collect()
 }
@@ -819,8 +821,8 @@ fn dynobj_vanished(view: &WorldView, shard: ShardId, row: &DynamicObject) {
 fn taxi_spline(view: &WorldView, row: &TaxiPassengerSpline) {
     let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
     let mut sessions: std::collections::HashSet<_> =
-        view.entities.viewers_of(key).into_iter().collect();
-    if let Some(owner) = view.entities.session_of_owner(row.character_guid) {
+        view.spatial.viewers_of(EntityLayer::WorldEntity, key).into_iter().collect();
+    if let Some(owner) = view.spatial.session_of_owner(row.character_guid) {
         sessions.insert(owner);
     }
     let row = row.clone();
@@ -851,7 +853,7 @@ fn taxi_spline(view: &WorldView, row: &TaxiPassengerSpline) {
 /// idempotent re-send of the current rest byte, the same class every coordinator-ridden 279 relay
 /// already accepts.)
 fn rest_state_appeared(view: &WorldView, row: &RestStateEvent) {
-    let Some(session) = view.entities.session_of_owner(row.character_guid) else {
+    let Some(session) = view.spatial.session_of_owner(row.character_guid) else {
         return;
     };
     let Some(viewer) = view.viewer(session) else {
@@ -865,7 +867,7 @@ fn rest_state_appeared(view: &WorldView, row: &RestStateEvent) {
 
 /// Breath relay events are delivered only to their owner.
 fn breath_relay_appeared(view: &WorldView, row: &BreathRelayEvent) {
-    let Some(session) = view.entities.session_of_owner(row.character_guid) else {
+    let Some(session) = view.spatial.session_of_owner(row.character_guid) else {
         return;
     };
     let Some(viewer) = view.viewer(session) else {
@@ -887,7 +889,7 @@ fn breath_relay_appeared(view: &WorldView, row: &BreathRelayEvent) {
 /// audience as [`rest_state_appeared`] — the slot allocation runs in the job on the owner's own
 /// writer thread, against the viewer's `skill_slots` (the same map the per-player leg uses).
 fn skill_changed(view: &WorldView, row: &PlayerSkill) {
-    let Some(session) = view.entities.session_of_owner(row.character_guid) else {
+    let Some(session) = view.spatial.session_of_owner(row.character_guid) else {
         return;
     };
     let Some(viewer) = view.viewer(session) else {
@@ -986,7 +988,7 @@ fn melee_disengaged(view: &WorldView, shard: ShardId, row: &MeleeAttack) {
 
 /// A resurrect offer landed → SMSG_RESURRECT_REQUEST to the offer's TARGET and nobody else.
 fn resurrect_offered(view: &WorldView, row: &ResurrectRequest) {
-    let Some(session) = view.entities.session_of_owner(row.target_guid) else {
+    let Some(session) = view.spatial.session_of_owner(row.target_guid) else {
         return;
     };
     let Some(viewer) = view.viewer(session) else {
@@ -1006,7 +1008,7 @@ fn resurrect_offered(view: &WorldView, row: &ResurrectRequest) {
 /// relocation the 4c plan names: the lookup is by the recipient's guid, so a non-recipient
 /// session is structurally unreachable, and the explicit predicate re-asserts it.
 fn whisper_appeared(view: &WorldView, row: &WhisperEvent) {
-    let Some(session) = view.entities.session_of_owner(row.recipient_guid) else {
+    let Some(session) = view.spatial.session_of_owner(row.recipient_guid) else {
         return;
     };
     let Some(viewer) = view.viewer(session) else {
@@ -1025,7 +1027,7 @@ fn whisper_appeared(view: &WorldView, row: &WhisperEvent) {
 /// A trade status landed → the `SMSG_TRADE_STATUS` packet to the row's RECIPIENT and nobody
 /// else (same shape as [`whisper_appeared`]) (#120).
 fn trade_event_appeared(view: &WorldView, row: &TradeEvent) {
-    let Some(session) = view.entities.session_of_owner(row.recipient_guid) else {
+    let Some(session) = view.spatial.session_of_owner(row.recipient_guid) else {
         return;
     };
     let Some(viewer) = view.viewer(session) else {
@@ -1045,7 +1047,7 @@ fn trade_event_appeared(view: &WorldView, row: &TradeEvent) {
 /// and nobody else (same shape as [`whisper_appeared`]; `coord` feeds the QUEST_SHARE detail
 /// JOIN inside the job).
 fn group_event_appeared(view: &WorldView, coord: &Coordinator, row: &GroupEvent) {
-    let Some(session) = view.entities.session_of_owner(row.recipient_guid) else {
+    let Some(session) = view.spatial.session_of_owner(row.recipient_guid) else {
         return;
     };
     let Some(viewer) = view.viewer(session) else {
@@ -1202,8 +1204,28 @@ fn shard_audience(viewer_shard: Option<ShardId>, row_shard: ShardId) -> bool {
 
 #[cfg(test)]
 mod family_audience_tests {
-    use super::{shard_audience, WorldView};
+    use super::{shard_audience, MotionPending, Viewer, WorldView};
+    use crate::stdb::aoi::ViewerGates;
     use crate::stdb::subscriptions::private_recipient_audience;
+    use crate::stdb::world_index::{CellKey, EntityLayer};
+    use crate::world::SessionTx;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::{Arc, Mutex};
+
+    fn viewer(session: u64, self_guid: u64) -> Arc<Viewer> {
+        let (tx, _rx) = SessionTx::with_depth(0);
+        Arc::new(Viewer {
+            session,
+            self_guid,
+            map_id: 0,
+            instance_id: 0,
+            tx,
+            created: Arc::new(Mutex::new(HashSet::new())),
+            gates: Arc::new(ViewerGates::default()),
+            skill_slots: Arc::new(Mutex::new((HashMap::new(), 0))),
+            motion_pending: Arc::new(MotionPending::default()),
+        })
+    }
 
     #[test]
     fn shard_broadcasts_reach_only_the_rows_shard_and_deny_unindexed_viewers() {
@@ -1229,7 +1251,7 @@ mod family_audience_tests {
 
     #[test]
     fn breath_relay_owner_lookup_selects_only_its_own_session() {
-        let index = WorldView::new(true).entities;
+        let index = WorldView::new(true).spatial;
         // No owner session on this gateway: the relay must be dropped.
         assert_eq!(index.session_of_owner(41), None);
         // WorldIndex's public tests pin the registration mechanics; the callback source scan below
@@ -1237,9 +1259,82 @@ mod family_audience_tests {
         let source = include_str!("world_view.rs");
         let start = source.find("fn breath_relay_appeared").unwrap();
         let body = &source[start..];
-        assert!(body.contains("view.entities.session_of_owner(row.character_guid)"));
+        assert!(body.contains("view.spatial.session_of_owner(row.character_guid)"));
         assert!(!body[..body.find("fn skill_changed").unwrap()]
             .contains("viewers_on_shard"), "breath rows must never broadcast to shard viewers");
+    }
+
+    #[test]
+    fn one_recenter_reports_both_layers_and_keeps_equal_guids_independent() {
+        let view = WorldView::new(true);
+        let viewer = viewer(1, 9001);
+        view.add_viewer(viewer.clone(), CellKey::at(0, 0, 0, 0));
+
+        // Moving the anchor one cell right adds x=3 to the 5x5 neighbourhood. The same GUID in
+        // both row tables must appear once in each independent layer delta.
+        let entering = CellKey::at(0, 0, 3, 0);
+        view.spatial
+            .upsert_entity(EntityLayer::WorldEntity, 77, entering, 0);
+        view.spatial
+            .upsert_entity(EntityLayer::GameObject, 77, entering, 1);
+        let delta = view
+            .spatial
+            .move_viewer_delta(viewer.session, CellKey::at(0, 0, 1, 0))
+            .expect("a cell crossing recenters");
+        assert_eq!(delta.world_entities.entered, vec![(77, 0)]);
+        assert_eq!(delta.game_objects.entered, vec![(77, 1)]);
+
+        // Removing one table's row cannot erase the equal-valued GUID in the other table.
+        assert_eq!(
+            view.spatial.remove_entity(EntityLayer::WorldEntity, 77),
+            Some(entering)
+        );
+        assert!(view
+            .spatial
+            .visible_entities(EntityLayer::WorldEntity, viewer.session)
+            .is_empty());
+        assert_eq!(
+            view.spatial
+                .visible_entities(EntityLayer::GameObject, viewer.session),
+            vec![(77, 1)]
+        );
+    }
+
+    #[test]
+    fn removing_an_old_session_preserves_the_new_relogin_owner_mapping() {
+        let view = WorldView::new(true);
+        let old = viewer(1, 9001);
+        let new = viewer(2, 9001);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        view.add_viewer(old.clone(), anchor);
+        view.add_viewer(new.clone(), anchor);
+
+        view.remove_viewer(old.session, old.self_guid);
+        assert_eq!(view.spatial.session_of_owner(9001), Some(new.session));
+        assert!(view.viewer(new.session).is_some());
+        view.remove_viewer(old.session, old.self_guid); // idempotent
+        assert_eq!(view.spatial.session_of_owner(9001), Some(new.session));
+    }
+
+    #[test]
+    fn recenter_and_sweep_enqueue_world_entities_before_game_objects() {
+        let source = include_str!("world_view.rs");
+        let recenter_start = source.rfind("pub(crate) fn recenter(view:").unwrap();
+        let sweep_start = source.rfind("pub(crate) fn sweep_into_view(view:").unwrap();
+        let recenter = &source[recenter_start..sweep_start];
+        assert!(
+            recenter.find("delta.world_entities").unwrap()
+                < recenter.find("delta.game_objects").unwrap(),
+            "a recenter must enqueue world-entity visibility work before game-object work"
+        );
+
+        let seed_start = source.rfind("pub(crate) fn seed_from_caches(view:").unwrap();
+        let sweep = &source[sweep_start..seed_start];
+        assert!(
+            sweep.find("EntityLayer::WorldEntity").unwrap()
+                < sweep.find("EntityLayer::GameObject").unwrap(),
+            "the initial sweep must enqueue world-entity visibility work before game-object work"
+        );
     }
 }
 
@@ -1269,19 +1364,17 @@ fn enqueue(tx: &SessionTx, job: impl FnOnce() -> Vec<Outbound> + Send + 'static)
 /// the entering rows are read out of the shard coordinator caches already in memory.
 pub(crate) fn recenter(view: &WorldView, viewer: &Arc<Viewer>, map_id: u32, x: f32, y: f32) {
     let key = CellKey::of_position(map_id, viewer.instance_id, x, y);
-    let entity_delta = view.entities.move_viewer_delta(viewer.session, key);
-    let go_delta = view.gameobjects.move_viewer_delta(viewer.session, key);
-    if entity_delta.is_none() && go_delta.is_none() {
+    let Some(delta) = view.spatial.move_viewer_delta(viewer.session, key) else {
         return; // no crossing: the by-far-most-common per-heartbeat call, and it allocates nothing
-    }
+    };
     AOI_RECENTERS.fetch_add(1, Ordering::Relaxed);
 
     // Everything below is enqueued as a JOB rather than sent directly, for ORDERING: the shard
     // pumps are concurrently enqueueing CREATE/VALUES jobs for the same session, and putting both
     // producers on the one queue is what makes "the DESTROY for a peer I walked away from lands
     // after the CREATE that showed it to me" true rather than a race between two threads.
-    if let Some(delta) = entity_delta {
-        for (guid, shard) in delta.left {
+    {
+        for (guid, shard) in delta.world_entities.left {
             let owner_guid = view
                 .shard(shard)
                 .and_then(|c| {
@@ -1295,7 +1388,7 @@ pub(crate) fn recenter(view: &WorldView, viewer: &Arc<Viewer>, map_id: u32, x: f
                 super::subscriptions::relay_peer_destroy(&viewer, guid, owner_guid)
             });
         }
-        for (guid, shard) in delta.entered {
+        for (guid, shard) in delta.world_entities.entered {
             let Some(coord) = view.shard(shard) else {
                 continue;
             };
@@ -1316,14 +1409,14 @@ pub(crate) fn recenter(view: &WorldView, viewer: &Arc<Viewer>, map_id: u32, x: f
             });
         }
     }
-    if let Some(delta) = go_delta {
-        for (guid, _) in delta.left {
+    {
+        for (guid, _) in delta.game_objects.left {
             let viewer = viewer.clone();
             enqueue(&viewer.tx.clone(), move || {
                 super::subscriptions::relay_gameobject_destroy(&viewer, guid)
             });
         }
-        for (guid, shard) in delta.entered {
+        for (guid, shard) in delta.game_objects.entered {
             let Some(coord) = view.shard(shard) else {
                 continue;
             };
@@ -1345,7 +1438,10 @@ pub(crate) fn recenter(view: &WorldView, viewer: &Arc<Viewer>, map_id: u32, x: f
 /// resident in the coordinator caches long before this session existed — so the sweep is not a
 /// belt-and-braces measure, it is the ONLY thing that populates a fresh client's world.
 pub(crate) fn sweep_into_view(view: &WorldView, viewer: &Arc<Viewer>) {
-    for (guid, shard) in view.entities.visible_entities(viewer.session) {
+    for (guid, shard) in view
+        .spatial
+        .visible_entities(EntityLayer::WorldEntity, viewer.session)
+    {
         let Some(coord) = view.shard(shard) else {
             continue;
         };
@@ -1364,7 +1460,10 @@ pub(crate) fn sweep_into_view(view: &WorldView, viewer: &Arc<Viewer>) {
             let _ = viewer.tx.send(o);
         }
     }
-    for (guid, shard) in view.gameobjects.visible_entities(viewer.session) {
+    for (guid, shard) in view
+        .spatial
+        .visible_entities(EntityLayer::GameObject, viewer.session)
+    {
         let Some(coord) = view.shard(shard) else {
             continue;
         };
@@ -1397,18 +1496,20 @@ pub(crate) fn seed_from_caches(view: &WorldView) {
     for (id, coord) in shards.iter().enumerate() {
         let guard = coord.0.coord();
         for row in guard.conn.db.game_world_entity().iter() {
-            view.entities.upsert_entity(row.guid, entity_key(&row), id);
+            view.spatial
+                .upsert_entity(EntityLayer::WorldEntity, row.guid, entity_key(&row), id);
         }
         for row in guard.conn.db.game_gameobject().iter() {
-            view.gameobjects.upsert_entity(
+            view.spatial.upsert_entity(
+                EntityLayer::GameObject,
                 row.guid,
                 CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y),
                 id,
             );
         }
     }
-    let (entities, _, cells) = view.entities.stats();
-    let (gos, _, go_cells) = view.gameobjects.stats();
+    let (entities, _, cells) = view.spatial.stats(EntityLayer::WorldEntity);
+    let (gos, _, go_cells) = view.spatial.stats(EntityLayer::GameObject);
     log::info!(
         "shared AOI index seeded from {} shard cache(s): {entities} entities in {cells} cells, \
          {gos} gameobjects in {go_cells} cells",
