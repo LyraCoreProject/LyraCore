@@ -438,10 +438,6 @@ impl WorldStore for Coordinator {
         self.gameobject_type(go_guid)
     }
 
-    fn use_gameobject(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()> {
-        self.use_gameobject(account_id, self_guid, go_guid)
-    }
-
     fn enter_areatrigger(&self, account_id: u64, self_guid: u64, trigger_id: u32) -> Result<()> {
         self.enter_areatrigger(account_id, self_guid, trigger_id)
     }
@@ -462,10 +458,6 @@ impl WorldStore for Coordinator {
 
     fn effective_armor(&self, guid: u64) -> u32 {
         self.effective_armor(guid)
-    }
-
-    fn corpse_loot(&self, corpse_guid: u64, viewer_guid: u64) -> Result<Vec<codec::LootItemView>> {
-        self.corpse_loot(corpse_guid, viewer_guid)
     }
 
     fn npc_refuses_interaction(&self, npc_guid: u64, player_guid: u64) -> Result<bool> {
@@ -648,10 +640,6 @@ impl WorldStore for Coordinator {
         spell_id: u32,
     ) -> Result<()> {
         self.buy_trainer_spell(account_id, self_guid, trainer_guid, spell_id)
-    }
-
-    fn skin_corpse(&self, account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()> {
-        self.skin_corpse(account_id, self_guid, corpse_guid)
     }
 
     fn talent_grant_spell(&self, talent_id: u32) -> u32 {
@@ -841,24 +829,6 @@ impl WorldStore for Coordinator {
 
     fn gm_command(&self, account_id: u64, self_guid: u64, text: String) -> Result<()> {
         self.gm_command(account_id, self_guid, text)
-    }
-
-    fn loot_target_money(&self, target_guid: u64) -> Result<u32> {
-        self.loot_target_money(target_guid)
-    }
-
-    fn loot_money(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
-        self.loot_money(account_id, self_guid, target_guid)
-    }
-
-    fn take_loot(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        corpse_guid: u64,
-        loot_slot: u8,
-    ) -> Result<()> {
-        self.take_loot(account_id, self_guid, corpse_guid, loot_slot)
     }
 
     fn repop(&self, account_id: u64, self_guid: u64) -> Result<()> {

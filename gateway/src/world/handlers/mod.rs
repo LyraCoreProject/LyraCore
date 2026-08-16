@@ -40,14 +40,19 @@ pub(crate) use cast::{dispatch_cast, CastOutcome, CastPlayer, CastStore, CastTra
 pub(crate) use char::handle_char;
 pub(crate) use combat::handle_combat;
 pub(crate) use item::{dispatch_item_action, ItemActionOutcome, ItemActionPlayer, ItemActionStore};
-pub(crate) use loot::handle_loot;
+#[cfg(test)]
+pub(crate) use loot::LootWindowRequestStatus;
+pub(crate) use loot::{
+    dispatch_loot_window, handle_loot, LootWindowOutcome, LootWindowPlayer, LootWindowStore,
+    OpenLootState,
+};
 pub(crate) use mail::handle_mail;
 pub(crate) use melee::{
     dispatch_melee_action, MeleeActionOutcome, MeleeActionPlayer, MeleeActionStore,
 };
 pub(crate) use query::handle_query;
 pub(crate) use quest::{
-    dispatch_quest_action, QuestActionOutcome, QuestActionPlayer, QuestActionStore,
+    dispatch_quest_action, quest_giver_menu, QuestActionOutcome, QuestActionPlayer, QuestActionStore,
 };
 pub(crate) use taxi::{
     dispatch_taxi_action, queue_reply_then_arm, TaxiActionOutcome, TaxiActionPlayer, TaxiActionStore,

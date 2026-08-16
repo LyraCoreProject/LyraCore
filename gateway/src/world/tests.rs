@@ -1,6 +1,7 @@
 use super::handlers::{
     AuctionActionStore, AuctionEntity, AuctionInteraction, CastStore, ItemActionStore,
-    MeleeActionStore, QuestActionStore, TaxiActionStore, VendorActionStore,
+    LootWindowRequestStatus, LootWindowStore, MeleeActionStore, QuestActionStore, TaxiActionStore,
+    VendorActionStore,
 };
 use super::*;
 use std::os::unix::net::UnixStream;
@@ -123,6 +124,7 @@ use wow_world_messages::vanilla::{
     CMSG_AUTOBANK_ITEM,
     CMSG_AUTOEQUIP_ITEM,
     CMSG_AUTOSTORE_BANK_ITEM,
+    CMSG_AUTOSTORE_LOOT_ITEM,
     CMSG_BANKER_ACTIVATE,
     CMSG_BUYBACK_ITEM,
     CMSG_BUY_BANK_SLOT,
@@ -137,6 +139,7 @@ use wow_world_messages::vanilla::{
     CMSG_DEL_FRIEND,
     CMSG_DEL_IGNORE,
     CMSG_FRIEND_LIST,
+    CMSG_GAMEOBJ_USE,
     CMSG_GOSSIP_HELLO,
     CMSG_GOSSIP_SELECT_OPTION,
     CMSG_INSPECT,
@@ -294,6 +297,8 @@ struct InMemoryStore {
     corpse_money: u32,
     /// Recorded `loot_money` targets — CMSG_LOOT_MONEY must drive the TRACKED guid.
     money_looted: std::sync::Mutex<Vec<u64>>,
+    /// Recorded target and slot for `CMSG_AUTOSTORE_LOOT_ITEM`.
+    items_looted: std::sync::Mutex<Vec<(u64, u8)>>,
     /// Recorded `skin_corpse` targets (the empty-loot-window skinning fallback).
     skinned: std::sync::Mutex<Vec<u64>>,
     /// Recorded `vendor_buyback` calls: (vendor_guid, slot) — pins the 69→0 slot mapping.
@@ -345,6 +350,12 @@ struct InMemoryStore {
     /// decision is unit-tested directly in `reads.rs`, not reproduced here. Empty by default — every
     /// test that never sets this keeps seeing an empty window, byte-identical to before.
     corpse_loot_by_viewer: std::collections::HashMap<u64, Vec<codec::LootItemView>>,
+    /// Spawned GameObject type returned for the `CMSG_GAMEOBJ_USE` questgiver classification.
+    gameobject_type: Option<u8>,
+    /// Recorded non-questgiver GameObject uses owned by the loot-window seam.
+    gameobjects_used: std::sync::Mutex<Vec<u64>>,
+    /// Recorded generated-loot reads, used to prove questgivers bypass the chest lifecycle.
+    corpse_loot_reads: std::sync::Mutex<Vec<(u64, u64)>>,
     /// Recorded `group_loot_method` calls: (loot_setting, master_guid, loot_threshold).
     group_loot_methods: std::sync::Mutex<Vec<(u8, u64, u8)>>,
     /// Recorded `loot_roll` calls: (corpse_guid, loot_slot, vote).
@@ -1107,8 +1118,8 @@ impl WorldStore for InMemoryStore {
     fn gameobject_template(&self, _entry: u32) -> Result<Option<codec::GameObjectTemplateView>> {
         Ok(None)
     }
-    fn use_gameobject(&self, _account_id: u64, _self_guid: u64, _go_guid: u64) -> Result<()> {
-        Ok(())
+    fn gameobject_type(&self, _go_guid: u64) -> Result<Option<u8>> {
+        Ok(self.gameobject_type)
     }
     fn client_command(
         &self,
@@ -1132,13 +1143,6 @@ impl WorldStore for InMemoryStore {
             .as_ref()
             .map(|e| e.effective_armor)
             .unwrap_or(0)
-    }
-    fn corpse_loot(&self, _corpse_guid: u64, viewer_guid: u64) -> Result<Vec<codec::LootItemView>> {
-        Ok(self
-            .corpse_loot_by_viewer
-            .get(&viewer_guid)
-            .cloned()
-            .unwrap_or_default())
     }
     fn npc_refuses_interaction(&self, _npc_guid: u64, _player_guid: u64) -> Result<bool> {
         Ok(self.npc_refuses) // default false — every existing fixture NPC keeps interacting
@@ -1684,13 +1688,6 @@ impl WorldStore for InMemoryStore {
             None => Ok(()),
         }
     }
-    fn skin_corpse(&self, _account_id: u64, _self_guid: u64, corpse_guid: u64) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.skinned.lock().unwrap().push(corpse_guid);
-        Ok(())
-    }
     fn talent_grant_spell(&self, _talent_id: u32) -> u32 {
         self.talent_grant
     }
@@ -1922,22 +1919,6 @@ impl WorldStore for InMemoryStore {
                 Ok(())
             }
         }
-    }
-    fn loot_target_money(&self, _target_guid: u64) -> Result<u32> {
-        Ok(self.corpse_money)
-    }
-    fn loot_money(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
-        self.money_looted.lock().unwrap().push(target_guid);
-        Ok(())
-    }
-    fn take_loot(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _corpse_guid: u64,
-        _loot_slot: u8,
-    ) -> Result<()> {
-        Ok(())
     }
     fn repop(&self, _account_id: u64, self_guid: u64) -> Result<()> {
         self.repopped.lock().unwrap().push(self_guid);
@@ -2915,6 +2896,75 @@ impl ItemActionStore for InMemoryStore {
     }
 }
 
+impl LootWindowStore for InMemoryStore {
+    fn loot_target_money(&self, _target_guid: u64) -> Result<u32> {
+        Ok(self.corpse_money)
+    }
+
+    fn loot_target_items(
+        &self,
+        _target_guid: u64,
+        viewer_guid: u64,
+    ) -> Result<Vec<codec::LootItemView>> {
+        self.corpse_loot_reads
+            .lock()
+            .unwrap()
+            .push((_target_guid, viewer_guid));
+        Ok(self
+            .corpse_loot_by_viewer
+            .get(&viewer_guid)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn use_gameobject(
+        &self,
+        _account_id: u64,
+        _actor_guid: u64,
+        target_guid: u64,
+    ) -> Result<LootWindowRequestStatus> {
+        self.gameobjects_used.lock().unwrap().push(target_guid);
+        Ok(LootWindowRequestStatus::Applied)
+    }
+
+    fn skin_corpse(
+        &self,
+        _account_id: u64,
+        _actor_guid: u64,
+        target_guid: u64,
+    ) -> Result<LootWindowRequestStatus> {
+        if let Some(error) = &self.trade_error {
+            return Ok(LootWindowRequestStatus::Refused(anyhow!(error.clone())));
+        }
+        self.skinned.lock().unwrap().push(target_guid);
+        Ok(LootWindowRequestStatus::Applied)
+    }
+
+    fn loot_money(
+        &self,
+        _account_id: u64,
+        _actor_guid: u64,
+        target_guid: u64,
+    ) -> Result<LootWindowRequestStatus> {
+        self.money_looted.lock().unwrap().push(target_guid);
+        Ok(LootWindowRequestStatus::Applied)
+    }
+
+    fn take_loot(
+        &self,
+        _account_id: u64,
+        _actor_guid: u64,
+        target_guid: u64,
+        loot_slot: u8,
+    ) -> Result<LootWindowRequestStatus> {
+        self.items_looted
+            .lock()
+            .unwrap()
+            .push((target_guid, loot_slot));
+        Ok(LootWindowRequestStatus::Applied)
+    }
+}
+
 fn ns(s: &str) -> NormalizedString {
     NormalizedString::new(s).unwrap()
 }
@@ -3609,7 +3659,7 @@ fn player_login_emits_sequence_then_self_create() {
 }
 
 #[test]
-fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
+fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
     // MSG_MOVE_WORLDPORT_ACK must re-run the SAME enter_world path as
     // CMSG_PLAYER_LOGIN — rebuilding the entity (now on the NEW map the module's teleport_player
     // durably wrote to the character row) and re-subscribing with a FRESH `created` dedup set — a
@@ -3625,6 +3675,7 @@ fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
         entity_in_world: false,
         login_entity: Some(warrior_entity()),
         worldport_entity: Some(ported),
+        corpse_money: 25,
         ..tester_store(7)
     });
 
@@ -3642,6 +3693,8 @@ fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
     for _ in 0..10 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
+
+    let _ = open_loot_window(&mut client, &mut c_enc, &mut c_dec, 60);
 
     // The client finished "loading" the new map (having received TRANSFER_PENDING/NEW_WORLD from the
     // on_teleport relay, which this InMemoryStore-driven dispatch test doesn't exercise — that's
@@ -3695,8 +3748,17 @@ fn worldport_ack_reenters_the_world_at_the_new_map_with_a_fresh_subscription() {
          subscription placement is the observable)"
     );
 
+    // The old map's open window cannot authorize a targetless request after re-entry.
+    CMSG_LOOT_MONEY {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+
     drop(client);
     server.join().unwrap();
+    assert!(
+        store.money_looted.lock().unwrap().is_empty(),
+        "world-port re-entry must start with no open loot target"
+    );
 }
 
 #[test]
@@ -5247,14 +5309,17 @@ fn item_reducer_transport_loss_ends_the_world_session() {
 // ===========================================================================
 
 #[test]
-fn logout_while_out_of_combat_succeeds() {
+fn logout_while_out_of_combat_succeeds_and_clears_open_loot() {
     // combat_until_ms=0 (default, never in combat) → CMSG_LOGOUT_REQUEST must reply
     // Success/Instant + LOGOUT_COMPLETE and the logout() store reducer must be called.
     let store = std::sync::Arc::new(InMemoryStore {
         login_entity: Some(warrior_entity()),
+        corpse_money: 25,
         ..tester_store(7)
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    let _ = open_loot_window(&mut client, &mut c_enc, &mut c_dec, 60);
 
     CMSG_LOGOUT_REQUEST {}
         .write_encrypted_client(&mut client, &mut c_enc)
@@ -5280,6 +5345,10 @@ fn logout_while_out_of_combat_succeeds() {
         other => panic!("expected SMSG_LOGOUT_COMPLETE, got {other}"),
     }
 
+    CMSG_LOOT_MONEY {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+
     drop(client);
     server.join().unwrap();
 
@@ -5289,6 +5358,10 @@ fn logout_while_out_of_combat_succeeds() {
             .logout_called
             .load(std::sync::atomic::Ordering::SeqCst),
         "logout() must be called on a successful out-of-combat logout"
+    );
+    assert!(
+        store.money_looted.lock().unwrap().is_empty(),
+        "logout must discard the open loot target"
     );
 }
 
@@ -5537,6 +5610,22 @@ fn read_raw_frame<S: Read>(client: &mut S, dec: &mut DecrypterHalf) -> (u16, Vec
     let mut body = vec![0u8; (h.size as usize).saturating_sub(2)];
     client.read_exact(&mut body).unwrap();
     (h.opcode, body)
+}
+
+fn open_loot_window(
+    client: &mut UnixStream,
+    enc: &mut EncrypterHalf,
+    dec: &mut DecrypterHalf,
+    target_guid: u64,
+) -> Vec<u8> {
+    CMSG_LOOT {
+        guid: Guid::new(target_guid),
+    }
+    .write_encrypted_client(&mut *client, enc)
+    .unwrap();
+    let (opcode, body) = read_raw_frame(client, dec);
+    assert_eq!(opcode, OP_LOOT_RESPONSE);
+    body
 }
 
 /// `SpellCastTargets` carrying a UNIT target (the client's selected mob).
@@ -5792,11 +5881,145 @@ fn quest_query_answers_the_raw_definition_body_through_the_cipher() {
     server.join().unwrap();
 }
 
+#[test]
+fn questgiver_gameobject_bypasses_the_chest_lifecycle() {
+    let mut s = quest_store();
+    s.gameobject_type = Some(lyracore_shared::constants::go_type::QUESTGIVER);
+    s.quest_evals = vec![eval(1234, codec::ROLE_START, false, false)];
+    s.quest_details = vec![detail_view(1234, "A Threat Within")];
+    s.corpse_loot_by_viewer.insert(1, vec![(0, 2589, 1, 200)]);
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    CMSG_GAMEOBJ_USE {
+        guid: Guid::new(68),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(details) => {
+            assert_eq!(details.quest_id, 1234)
+        }
+        other => panic!("expected quest details from a questgiver GameObject, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+    assert!(store.gameobjects_used.lock().unwrap().is_empty());
+    assert!(store.corpse_loot_reads.lock().unwrap().is_empty());
+}
+
+#[test]
+fn non_chest_gameobject_preserves_the_general_use_path() {
+    let mut s = quest_store();
+    s.gameobject_type = Some(0);
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
+
+    CMSG_GAMEOBJ_USE {
+        guid: Guid::new(91),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.gameobjects_used.lock().unwrap().as_slice(), &[91]);
+    assert_eq!(
+        store.corpse_loot_reads.lock().unwrap().as_slice(),
+        &[(91, 1)]
+    );
+}
+
 // ── Loot window state machine ────────────────────────────────────────────────────────────────────
 
 #[test]
+fn chest_dispatch_opens_the_shared_window_and_tracks_its_target() {
+    let mut s = quest_store();
+    s.gameobject_type = Some(lyracore_shared::constants::go_type::CHEST);
+    s.corpse_loot_by_viewer.insert(1, vec![(4, 117, 2, 321)]);
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    CMSG_GAMEOBJ_USE {
+        guid: Guid::new(90),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+
+    let (opcode, body) = read_raw_frame(&mut client, &mut c_dec);
+    assert_eq!(opcode, OP_LOOT_RESPONSE);
+    assert_eq!(&body[0..8], &90u64.to_le_bytes());
+    assert_eq!(loot_item_bytes(&body, 0), (4, 117, 2, 321));
+
+    CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 4 }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_LOOT_REMOVED(removed) => assert_eq!(removed.slot, 4),
+        other => panic!("expected SMSG_LOOT_REMOVED, got {other}"),
+    }
+
+    drop(client);
+    server.join().unwrap();
+    assert_eq!(store.gameobjects_used.lock().unwrap().as_slice(), &[90]);
+    assert_eq!(
+        store.corpse_loot_reads.lock().unwrap().as_slice(),
+        &[(90, 1)]
+    );
+    assert_eq!(store.items_looted.lock().unwrap().as_slice(), &[(90, 4)]);
+}
+
+#[test]
+fn loot_before_player_login_is_handled_without_panicking() {
+    let store = std::sync::Arc::new(tester_store(7));
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let (mut c_enc, _c_dec) = client_handshake(&mut client, "TESTER", K);
+
+    CMSG_LOOT {
+        guid: Guid::new(60),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+
+    server
+        .join()
+        .expect("loot without a selected player must not panic")
+        .expect("loot without a selected player remains a handled no-op");
+    assert!(store.corpse_loot_reads.lock().unwrap().is_empty());
+    assert!(store.skinned.lock().unwrap().is_empty());
+}
+
+#[test]
+fn loot_with_a_zero_player_guid_is_handled_without_panicking() {
+    let mut entity = warrior_entity();
+    entity.guid = 0;
+    let store = std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(entity),
+        ..tester_store(7)
+    });
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 0);
+
+    CMSG_LOOT {
+        guid: Guid::new(60),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+
+    server
+        .join()
+        .expect("loot with a zero player guid must not panic");
+    assert!(store.corpse_loot_reads.lock().unwrap().is_empty());
+    assert!(store.skinned.lock().unwrap().is_empty());
+}
+
+#[test]
 fn loot_opens_the_window_and_loot_money_drives_the_tracked_guid() {
-    // CMSG_LOOT arms looting_target and replies the RAW loot window (guid + money in the body);
+    // CMSG_LOOT arms the open-loot state and replies the RAW loot window (guid + money in the body);
     // CMSG_LOOT_MONEY (which carries NO guid) must then hit the TRACKED corpse. A
     // SOLO money loot sends ONLY SMSG_LOOT_CLEAR_MONEY — the unconditional SMSG_LOOT_MONEY_NOTIFY
     // is gone (vanilla never sends it to a solo looter; the client prints its own local "You loot X
@@ -5873,37 +6096,12 @@ fn loot_money_with_zero_copper_still_clears_with_no_notify() {
 }
 
 #[test]
-fn looting_a_fully_emptied_corpse_attempts_the_skinning_fallback() {
-    // Skin fallback fires only when the loot is EMPTY: no items AND no money (the mock's defaults).
-    let store = std::sync::Arc::new(quest_store());
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_LOOT {
-        guid: Guid::new(61),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    let (op, _) = read_raw_frame(&mut client, &mut c_dec);
-    assert_eq!(
-        op, OP_LOOT_RESPONSE,
-        "the empty window still opens (safe fallback feedback)"
-    );
-    drop(client);
-    server.join().unwrap();
-    assert_eq!(store.skinned.lock().unwrap().as_slice(), &[61]);
-}
-
-#[test]
-fn loot_release_clears_the_tracked_target_so_loot_money_is_a_noop() {
+fn loot_release_clears_the_tracked_target_so_take_requests_are_noops() {
     let mut s = quest_store();
     s.corpse_money = 25; // non-empty so the skin fallback stays out of the picture
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_LOOT {
-        guid: Guid::new(60),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    let _ = read_raw_frame(&mut client, &mut c_dec);
+    let _ = open_loot_window(&mut client, &mut c_enc, &mut c_dec, 60);
     CMSG_LOOT_RELEASE {
         guid: Guid::new(60),
     }
@@ -5913,8 +6111,11 @@ fn loot_release_clears_the_tracked_target_so_loot_money_is_a_noop() {
         ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(r) => assert_eq!(r.guid.guid(), 60),
         other => panic!("expected SMSG_LOOT_RELEASE_RESPONSE, got {other}"),
     }
-    // The window is closed — a stray CMSG_LOOT_MONEY must not reach the store.
+    // The window is closed — stray targetless take requests must not reach the store.
     CMSG_LOOT_MONEY {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 3 }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
     drop(client);
@@ -5922,6 +6123,10 @@ fn loot_release_clears_the_tracked_target_so_loot_money_is_a_noop() {
     assert!(
         store.money_looted.lock().unwrap().is_empty(),
         "release cleared the tracked target"
+    );
+    assert!(
+        store.items_looted.lock().unwrap().is_empty(),
+        "release cleared the tracked target before an item take"
     );
 }
 
@@ -6033,13 +6238,6 @@ fn loot_roll_rejection_is_logged_and_ignored_not_session_fatal() {
     server.join().unwrap();
 }
 
-// ── Per-viewer quest loot ────────────────────────────────────────────────────────────────────────
-// `corpse_loot` now takes a VIEWER guid; these tests pin the WIRING — that `CMSG_LOOT`/
-// `CMSG_GAMEOBJ_USE` thread `iw.self_guid` through to the store call so two different viewers of the
-// same corpse can be served two different windows. The actual quest-need FILTER decision
-// (`quest_row_visible_to_viewer`) is unit-tested directly in `gateway/src/stdb/reads.rs` — this
-// `InMemoryStore` fixture stands in for whatever that real filter would have produced per viewer.
-
 fn loot_item_bytes(body: &[u8], index: usize) -> (u8, u32, u32, u32) {
     // Item N starts at byte 14 (8 guid + 1 method + 4 money + 1 count), 22 bytes each.
     let base = 14 + index * 22;
@@ -6050,115 +6248,7 @@ fn loot_item_bytes(body: &[u8], index: usize) -> (u8, u32, u32, u32) {
     (slot, item_id, count, display_id)
 }
 
-#[test]
-fn corpse_loot_is_threaded_with_the_viewers_own_guid_not_the_corpses() {
-    // A quest item only in viewer 1's fixture, a DIFFERENT (non-quest) item only in viewer 2's — same
-    // corpse guid (60), two separate connections sharing one store. Each must see ONLY their own row:
-    // proves `iw.self_guid` (not some corpse-keyed or global lookup) drives the `corpse_loot` call.
-    let mut s = quest_store();
-    s.corpse_loot_by_viewer
-        .insert(1, vec![(0u8, 6948, 1u32, 100u32)]); // viewer 1: quest item
-    s.corpse_loot_by_viewer
-        .insert(2, vec![(0u8, 2589, 5u32, 200u32)]); // viewer 2: a different item
-    let store = std::sync::Arc::new(s);
-
-    let (mut c1, mut e1, mut d1, s1) = enter_world(store.clone(), 1);
-    CMSG_LOOT {
-        guid: Guid::new(60),
-    }
-    .write_encrypted_client(&mut c1, &mut e1)
-    .unwrap();
-    let (op1, body1) = read_raw_frame(&mut c1, &mut d1);
-    assert_eq!(op1, OP_LOOT_RESPONSE);
-    assert_eq!(body1[13], 1, "viewer 1 sees exactly their one row");
-    assert_eq!(
-        loot_item_bytes(&body1, 0),
-        (0, 6948, 1, 100),
-        "viewer 1's own item, not viewer 2's"
-    );
-    drop(c1);
-    s1.join().unwrap();
-
-    let (mut c2, mut e2, mut d2, s2) = enter_world(store.clone(), 2);
-    CMSG_LOOT {
-        guid: Guid::new(60),
-    }
-    .write_encrypted_client(&mut c2, &mut e2)
-    .unwrap();
-    let (op2, body2) = read_raw_frame(&mut c2, &mut d2);
-    assert_eq!(op2, OP_LOOT_RESPONSE);
-    assert_eq!(body2[13], 1, "viewer 2 sees exactly their one row");
-    assert_eq!(
-        loot_item_bytes(&body2, 0),
-        (0, 2589, 5, 200),
-        "viewer 2's own item, not viewer 1's"
-    );
-    drop(c2);
-    s2.join().unwrap();
-}
-
-#[test]
-fn both_grouped_viewers_see_their_own_row_when_both_need_the_quest_item() {
-    // "Both have it -> both loot one each": the SAME shared corpse,
-    // BOTH viewers' fixtures carry a row (simulating the real filter admitting the row to each because
-    // each independently needs it) — each connection's window shows its own row unaffected by the
-    // other's presence.
-    let mut s = quest_store();
-    s.corpse_loot_by_viewer
-        .insert(1, vec![(0u8, 6948, 1u32, 100u32)]);
-    s.corpse_loot_by_viewer
-        .insert(2, vec![(0u8, 6948, 1u32, 100u32)]); // same item, viewer 2's own row
-    let store = std::sync::Arc::new(s);
-
-    for viewer in [1u64, 2u64] {
-        let (mut c, mut e, mut d, srv) = enter_world(store.clone(), viewer);
-        CMSG_LOOT {
-            guid: Guid::new(60),
-        }
-        .write_encrypted_client(&mut c, &mut e)
-        .unwrap();
-        let (op, body) = read_raw_frame(&mut c, &mut d);
-        assert_eq!(op, OP_LOOT_RESPONSE);
-        assert_eq!(
-            body[13], 1,
-            "viewer {viewer} sees their own copy of the quest row"
-        );
-        assert_eq!(
-            loot_item_bytes(&body, 0).1,
-            6948,
-            "viewer {viewer}'s own quest item"
-        );
-        drop(c);
-        srv.join().unwrap();
-    }
-}
-
-#[test]
-fn a_viewer_with_no_fixture_entry_sees_an_empty_window_non_quest_rows_unaffected() {
-    // A viewer nobody set up a fixture for (e.g. doesn't need the quest, or the corpse has no
-    // quest-only rows at all — the common case) sees an empty window, exactly the existing
-    // default behavior this slice must not disturb.
-    let store = std::sync::Arc::new(quest_store()); // corpse_loot_by_viewer empty
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    CMSG_LOOT {
-        guid: Guid::new(60),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    let (op, body) = read_raw_frame(&mut client, &mut c_dec);
-    assert_eq!(op, OP_LOOT_RESPONSE);
-    assert_eq!(
-        body[13], 0,
-        "no fixture for this viewer -> zero items, same as before 187"
-    );
-    drop(client);
-    server.join().unwrap();
-}
-
-// ── Melee attack over the socket (combat C1) ────────────────────────────────────────────────────
-// The melee seam (`handlers/melee.rs`) owns the decisions and tests them directly. What is left
-// here is what the seam cannot reach: opcode dispatch, the encoded attack messages on the wire,
-// and the session teardown a fatal melee error causes.
+// ── CMSG_ATTACKSWING error split + happy path (combat C1) ───────────────────────────────────────
 
 #[test]
 fn attackswing_ok_replies_attackstart_and_stop_echoes_then_clears() {

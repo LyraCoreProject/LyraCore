@@ -171,7 +171,7 @@ fn enter_world<St: WorldStore + ?Sized>(
         subs,
         session_epoch,
         attacking_target: None,
-        looting_target: None,
+        open_loot: OpenLootState::default(),
         ranged_repeat: false,
     });
     // Phase 2: the quest-log window. Sent as a separate raw VALUES update AFTER the CREATE

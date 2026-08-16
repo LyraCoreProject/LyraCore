@@ -1384,7 +1384,9 @@ impl Coordinator {
         if actor_guid == 0 {
             return Err(anyhow!("gm_command: actor_guid unresolved"));
         }
-        let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
+        let (tx, rx) = std::sync::mpsc::channel::<
+            std::result::Result<(), super::connection::ReducerCompletionFailure>,
+        >();
         // Raw-module-message plumbing: the GM console renders the module's own rejection text
         // ("permission denied", parse errors) verbatim, no "reducer failed" wrapper.
         let coord = self.0.call_pipe();
@@ -1400,18 +1402,23 @@ impl Coordinator {
                 callback_completion.finish(
                     call_id,
                     match status {
-                        Ok(inner) => inner,
-                        Err(e) => Err(format!("{e:?}")),
+                        Ok(Ok(())) => Ok(()),
+                        Ok(Err(reason)) => Err(
+                            super::connection::ReducerCompletionFailure::Rejected(reason),
+                        ),
+                        Err(error) => {
+                            Err(super::connection::ReducerCompletionFailure::Internal(error))
+                        }
                     },
                 );
             })
             .map_err(|e| {
                 completion.cancel(call_id);
-                anyhow!("send gw_gm_command: {e}")
+                super::connection::ReducerCallError::sdk_send("gw_gm_command", e)
             })?;
         match recv_reducer_on(rx, "gm_command", &completion, call_id) {
             Ok(()) => Ok(()),
-            Err(e) if e.to_string().starts_with("gm_command reducer failed: ") => Err(anyhow!(e
+            Err(e) if super::connection::is_reducer_refusal(&e) => Err(anyhow!(e
                 .to_string()
                 .trim_start_matches("gm_command reducer failed: ")
                 .to_string())),

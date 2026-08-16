@@ -45,13 +45,14 @@ pub mod whisper;
 use coalesce::CoalesceState;
 use handlers::{
     decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action, dispatch_cast,
-    dispatch_item_action, dispatch_melee_action, dispatch_quest_action, dispatch_taxi_action,
-    dispatch_vendor_action, handle_bank, handle_char, handle_combat, handle_loot, handle_mail,
-    handle_query, handle_trade, handle_trainer, queue_reply_then_arm, AuctionActionOutcome,
-    AuctionActionPlayer, CastOutcome, CastPlayer, CastTransition, ItemActionOutcome,
-    ItemActionPlayer, MeleeActionOutcome, MeleeActionPlayer, QuestActionOutcome, QuestActionPlayer,
-    TaxiActionOutcome, TaxiActionPlayer, VendorActionOutcome, VendorActionPlayer,
-    CMSG_AUCTION_LIST_ITEMS_OPCODE,
+    dispatch_item_action, dispatch_loot_window, dispatch_melee_action, dispatch_quest_action,
+    dispatch_taxi_action, dispatch_vendor_action, handle_bank, handle_char, handle_combat,
+    handle_loot, handle_mail, handle_query, handle_trade, handle_trainer, queue_reply_then_arm,
+    AuctionActionOutcome, AuctionActionPlayer, CastOutcome, CastPlayer, CastTransition,
+    ItemActionOutcome, ItemActionPlayer, LootWindowOutcome, LootWindowPlayer, MeleeActionOutcome,
+    MeleeActionPlayer, OpenLootState, QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome,
+    TaxiActionPlayer, VendorActionOutcome, VendorActionPlayer,
+    CMSG_AUCTION_LIST_ITEMS_OPCODE, quest_giver_menu,
 };
 pub(crate) use handlers::{
     AuctionBrowseRequest, AuctionPage, AuctionQuery, CreateAuctionOutcome, CreateAuctionRequest,
@@ -342,8 +343,8 @@ pub struct InWorld {
     /// The guid being melee auto-attacked (combat C1), so `CMSG_ATTACKSTOP` can name it. The
     /// authoritative engagement lives in `game_melee_attack`; this is protocol state.
     pub attacking_target: Option<u64>,
-    /// The corpse guid with an open loot window (slice 3; `CMSG_LOOT_MONEY` carries no guid).
-    pub looting_target: Option<u64>,
+    /// The target whose loot window is open. Targetless take requests use this protocol state.
+    pub open_loot: OpenLootState,
     /// A ranged auto-repeat (Auto Shot / wand Shoot) is armed. Melee and ranged share one
     /// `game_melee_attack` row keyed by attacker, so the melee-stop `CMSG_ATTACKSTOP` the client
     /// sends when switching to ranged would collaterally kill the auto-shot. While this is set,
@@ -1236,6 +1237,55 @@ fn dispatch<St: WorldStore + ?Sized>(
     };
     let Some(msg) = handle_combat(tx, store, conn, msg)? else {
         return Ok(());
+    };
+    let dispatches_to_loot_window = if let ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) = &msg {
+        let target_guid = request.guid.guid();
+        match store.gameobject_type(target_guid)? {
+            Some(lyracore_shared::constants::go_type::QUESTGIVER) => {
+                for message in
+                    quest_giver_menu(store, target_guid, social::self_guid(conn).unwrap_or(0))?
+                {
+                    send(tx, message)?;
+                }
+                return Ok(());
+            }
+            Some(lyracore_shared::constants::go_type::CHEST) => true,
+            _ => false,
+        }
+    } else {
+        true
+    };
+    let current_loot_state = match &conn.state {
+        WorldState::InWorld(iw) => iw.open_loot,
+        WorldState::CharSelect => OpenLootState::default(),
+    };
+    let msg = if dispatches_to_loot_window {
+        match dispatch_loot_window(
+            store,
+            LootWindowPlayer {
+                account_id: conn.account_id,
+                self_guid: social::self_guid(conn),
+            },
+            current_loot_state,
+            msg,
+        )? {
+            LootWindowOutcome::Handled {
+                next_state,
+                durable_request: _observed_durable_request,
+                outbound,
+            } => {
+                if let WorldState::InWorld(iw) = &mut conn.state {
+                    iw.open_loot = next_state;
+                }
+                for message in outbound {
+                    send(tx, message)?;
+                }
+                return Ok(());
+            }
+            LootWindowOutcome::PassThrough(msg) => msg,
+        }
+    } else {
+        msg
     };
     let Some(msg) = handle_loot(tx, store, conn, msg)? else {
         return Ok(());

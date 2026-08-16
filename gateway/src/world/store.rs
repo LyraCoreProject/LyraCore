@@ -8,7 +8,7 @@
 
 use super::handlers::{
     AuctionActionStore, CastStore, ItemActionStore, MeleeActionStore, QuestActionStore,
-    TaxiActionStore, VendorActionStore,
+    LootWindowStore, TaxiActionStore, VendorActionStore,
 };
 use super::*;
 
@@ -16,6 +16,7 @@ pub trait WorldStore:
     AuctionActionStore
     + CastStore
     + ItemActionStore
+    + LootWindowStore
     + MeleeActionStore
     + QuestActionStore
     + TaxiActionStore
@@ -355,18 +356,12 @@ pub trait WorldStore:
     /// Look up a gameobject template by entry to answer `CMSG_GAMEOBJECT_QUERY`.
     fn gameobject_template(&self, entry: u32) -> Result<Option<codec::GameObjectTemplateView>>;
 
-    /// The `type_id` of a SPAWNED gameobject by its live guid — lets
-    /// `CMSG_GAMEOBJ_USE` route a `go_type::QUESTGIVER` GO (the Wanted Poster, the Lost Guards
-    /// corpses) to the quest window instead of the loot/toggle reducer path. Defaulted to `Ok(None)`
-    /// (never a questgiver) so existing `WorldStore` implementors (test mocks) that don't override it
-    /// keep their prior CMSG_GAMEOBJ_USE behavior unchanged; only the production `Coordinator` impl
-    /// (`stdb::world_store`) overrides it with a real read.
+    /// The `type_id` of a spawned GameObject by its live guid. `CMSG_GAMEOBJ_USE` sends questgivers
+    /// to the quest window, chests to the loot-window lifecycle, and every other type to the general
+    /// use path. Production overrides the default with the spawned-object read.
     fn gameobject_type(&self, _go_guid: u64) -> Result<Option<u8>> {
         Ok(None)
     }
-
-    /// Use a gameobject (`CMSG_GAMEOBJ_USE`): a chest rolls its loot, a quest-object grants credit.
-    fn use_gameobject(&self, account_id: u64, self_guid: u64, go_guid: u64) -> Result<()>;
 
     /// Enter an area trigger (`CMSG_AREATRIGGER`): credit any active "explore" quest tied to it.
     fn enter_areatrigger(&self, account_id: u64, self_guid: u64, trigger_id: u32) -> Result<()>;
@@ -389,11 +384,6 @@ pub trait WorldStore:
     /// `UNIT_FIELD_RESISTANCES[0]` — so the character sheet shows real worn armor on relog. Auras aren't
     /// folded here (they self-correct via the on_aura relay). Mirrors the module's combat `effective_armor`.
     fn effective_armor(&self, guid: u64) -> u32;
-
-    /// Read a corpse's item loot for the loot window (items slice-4): `(slot, id, count, display)`,
-    /// filtered for `viewer_guid` (a `quest_only` row is shown only to a
-    /// viewer who currently needs it, or who already owns a per-member reserved clone of it).
-    fn corpse_loot(&self, corpse_guid: u64, viewer_guid: u64) -> Result<Vec<codec::LootItemView>>;
 
     /// Standing-derived reaction gate: does this NPC refuse `player_guid` its
     /// interaction WINDOW? Rep-bar factions refuse at Unfriendly-or-below standing; bar-less
@@ -424,12 +414,6 @@ pub trait WorldStore:
         trainer_guid: u64,
         spell_id: u32,
     ) -> Result<()>;
-
-    /// Skin a beast corpse that has been fully looted (no items, no money left). The module gates it
-    /// (dead beast, in range, not already skinned); on success the leather lands in the bag via the
-    /// item-subscription relay. `Err` = not applicable (not a beast, out of range, already skinned,
-    /// or dead player) — the caller falls through to the empty loot window and the player sees nothing.
-    fn skin_corpse(&self, account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()>;
 
     /// Return the `grant_spell_id` for `talent_id` (0 = passive, no ability granted), so the gateway
     /// can push `SMSG_LEARNED_SPELL` for ability talents after a successful `learn_talent`.
@@ -843,25 +827,6 @@ pub trait WorldStore:
     fn mail_escrows_of(&self, _sender_guid: u64) -> Result<Vec<mail::HeldEscrow>> {
         Ok(Vec::new())
     }
-
-    /// Read a corpse's lootable copper for `SMSG_LOOT_RESPONSE` (slice 3). 0 if the target is gone
-    /// or not a corpse. Read-only — the actual take is `loot_money`.
-    fn loot_target_money(&self, target_guid: u64) -> Result<u32>;
-
-    /// Take the money from a corpse the player has open (`CMSG_LOOT_MONEY`, slice 3): the module
-    /// validates dead+range+has-money, moves the copper to the looter, and clears the lootable flag.
-    fn loot_money(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
-
-    /// Take one item from the open corpse's loot into the backpack (`CMSG_AUTOSTORE_LOOT_ITEM`, slice
-    /// 4): the module moves the corpse-loot item in `loot_slot` into a free inventory slot and deletes
-    /// the loot row. The item then appears in the bag via the inventory live-relay.
-    fn take_loot(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        corpse_guid: u64,
-        loot_slot: u8,
-    ) -> Result<()>;
 
     /// Revive the caller after death (`CMSG_REPOP_REQUEST` / Release Spirit, slice 4): the module
     /// restores full health in place and clears the dead state (the client leaves the death screen

@@ -90,7 +90,97 @@ pub(crate) struct ReducerCompletion {
 
 struct ReducerCompletionState {
     connected: bool,
-    pending: HashMap<u64, std::sync::mpsc::Sender<std::result::Result<(), String>>>,
+    pending:
+        HashMap<u64, std::sync::mpsc::Sender<std::result::Result<(), ReducerCompletionFailure>>>,
+}
+
+/// The SDK callback keeps module refusals distinct from failures in the SDK itself. Both used to
+/// share a `String`, which made callers infer provenance from rendered error text.
+#[derive(Debug, Clone)]
+pub(crate) enum ReducerCompletionFailure {
+    Rejected(String),
+    Internal(spacetimedb_sdk::error::InternalError),
+    TransportDisconnected,
+}
+
+/// Typed provenance for a reducer call after it leaves the completion channel.
+#[derive(Debug)]
+pub(crate) enum ReducerCallError {
+    Rejected {
+        operation: String,
+        reason: String,
+    },
+    Internal {
+        operation: String,
+        source: spacetimedb_sdk::error::InternalError,
+    },
+    SdkSend {
+        operation: String,
+        source: spacetimedb_sdk::Error,
+    },
+    Fatal(String),
+}
+
+impl ReducerCallError {
+    fn rejected(operation: &str, reason: String) -> Self {
+        Self::Rejected {
+            operation: operation.to_string(),
+            reason,
+        }
+    }
+
+    fn internal(operation: &str, source: spacetimedb_sdk::error::InternalError) -> Self {
+        Self::Internal {
+            operation: operation.to_string(),
+            source,
+        }
+    }
+
+    pub(crate) fn sdk_send(operation: &str, source: spacetimedb_sdk::Error) -> Self {
+        Self::SdkSend {
+            operation: operation.to_string(),
+            source,
+        }
+    }
+
+    pub(crate) fn fatal(message: String) -> Self {
+        Self::Fatal(message)
+    }
+}
+
+impl std::fmt::Display for ReducerCallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rejected { operation, reason } => {
+                write!(f, "{operation} reducer failed: {reason}")
+            }
+            Self::Internal { operation, source } => {
+                write!(f, "{operation} reducer failed: {source:?}")
+            }
+            Self::SdkSend { operation, source } => write!(f, "send {operation}: {source}"),
+            Self::Fatal(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for ReducerCallError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Internal { source, .. } => Some(source),
+            Self::SdkSend { source, .. } => Some(source),
+            Self::Rejected { .. } | Self::Fatal(_) => None,
+        }
+    }
+}
+
+/// True only for an error returned deliberately by module gameplay rules.
+pub(crate) fn is_reducer_refusal(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<ReducerCallError>(),
+            Some(ReducerCallError::Rejected { .. })
+        )
+    })
 }
 
 impl ReducerCompletion {
@@ -106,7 +196,7 @@ impl ReducerCompletion {
 
     pub(crate) fn register(
         &self,
-        tx: std::sync::mpsc::Sender<std::result::Result<(), String>>,
+        tx: std::sync::mpsc::Sender<std::result::Result<(), ReducerCompletionFailure>>,
     ) -> std::result::Result<u64, String> {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         if !state.connected {
@@ -117,7 +207,11 @@ impl ReducerCompletion {
         Ok(id)
     }
 
-    pub(crate) fn finish(&self, id: u64, result: std::result::Result<(), String>) {
+    pub(crate) fn finish(
+        &self,
+        id: u64,
+        result: std::result::Result<(), ReducerCompletionFailure>,
+    ) {
         if let Some(tx) = self
             .state
             .lock()
@@ -144,7 +238,7 @@ impl ReducerCompletion {
             std::mem::take(&mut state.pending)
         };
         for (_, tx) in pending {
-            let _ = tx.send(Err("transport disconnected".to_string()));
+            let _ = tx.send(Err(ReducerCompletionFailure::TransportDisconnected));
         }
     }
 }
@@ -1078,18 +1172,29 @@ mod mail_escrow_claimant_tests {
 
 /// Block on a reducer-completion channel, mapping the outcome to `anyhow`.
 pub(crate) fn recv_reducer(
-    rx: std::sync::mpsc::Receiver<std::result::Result<(), String>>,
+    rx: std::sync::mpsc::Receiver<std::result::Result<(), ReducerCompletionFailure>>,
     what: &str,
 ) -> Result<()> {
     match rx.recv_timeout(Duration::from_secs(10)) {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => Err(anyhow!("{what} reducer failed: {e}")),
-        Err(_) => Err(anyhow!("{what} reducer timed out after 10s")),
+        Ok(Err(ReducerCompletionFailure::Rejected(reason))) => {
+            Err(ReducerCallError::rejected(what, reason).into())
+        }
+        Ok(Err(ReducerCompletionFailure::Internal(source))) => {
+            Err(ReducerCallError::internal(what, source).into())
+        }
+        Ok(Err(ReducerCompletionFailure::TransportDisconnected)) => Err(ReducerCallError::fatal(
+            format!("{what} reducer failed: transport disconnected"),
+        )
+        .into()),
+        Err(_) => {
+            Err(ReducerCallError::fatal(format!("{what} reducer timed out after 10s")).into())
+        }
     }
 }
 
 pub(crate) fn recv_reducer_on(
-    rx: std::sync::mpsc::Receiver<std::result::Result<(), String>>,
+    rx: std::sync::mpsc::Receiver<std::result::Result<(), ReducerCompletionFailure>>,
     what: &str,
     completion: &ReducerCompletion,
     call_id: u64,
@@ -1175,7 +1280,7 @@ mod coordinator_query_tests {
 
 #[cfg(test)]
 mod recv_reducer_tests {
-    use super::{recv_reducer, ReducerCompletion};
+    use super::{is_reducer_refusal, recv_reducer, ReducerCompletion, ReducerCompletionFailure};
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Duration;
@@ -1193,12 +1298,31 @@ mod recv_reducer_tests {
         // failure to the reducer that ran ("<what> reducer failed: <module error>"). The timeout
         // arm is not driven here (it would block the suite for its full 10s).
         let (tx, rx) = std::sync::mpsc::channel();
-        tx.send(Err("not enough copper".to_string())).unwrap();
+        tx.send(Err(ReducerCompletionFailure::Rejected(
+            "not enough copper".to_string(),
+        )))
+        .unwrap();
         let err = recv_reducer(rx, "buy_item").expect_err("a reducer Err must map to Err");
         assert_eq!(
             err.to_string(),
             "buy_item reducer failed: not enough copper"
         );
+        assert!(is_reducer_refusal(&err));
+    }
+
+    #[test]
+    fn an_sdk_internal_error_is_not_a_gameplay_refusal() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Err(ReducerCompletionFailure::Internal(
+            spacetimedb_sdk::error::InternalError::failed_parse("ReducerResult", "Message"),
+        )))
+        .unwrap();
+
+        let err = recv_reducer(rx, "gw_loot_money")
+            .expect_err("an SDK InternalError must remain session-fatal");
+
+        assert!(!is_reducer_refusal(&err));
+        assert!(err.to_string().starts_with("gw_loot_money reducer failed:"));
     }
 
     #[test]
@@ -1212,9 +1336,12 @@ mod recv_reducer_tests {
 
         dead.disconnect();
 
+        let error = recv_reducer(dead_rx, "gw_loot_money")
+            .expect_err("a disconnected reducer completion must be fatal");
+        assert!(!is_reducer_refusal(&error));
         assert_eq!(
-            dead_rx.recv_timeout(Duration::from_millis(100)).unwrap(),
-            Err("transport disconnected".to_string())
+            error.to_string(),
+            "gw_loot_money reducer failed: transport disconnected"
         );
         assert!(live_rx.recv_timeout(Duration::from_millis(20)).is_err());
     }
@@ -1244,7 +1371,10 @@ mod recv_reducer_tests {
 
         match rx.recv_timeout(Duration::from_millis(100)).unwrap() {
             Ok(()) => {}
-            Err(message) => assert_eq!(message, "transport disconnected"),
+            Err(failure) => assert!(matches!(
+                failure,
+                ReducerCompletionFailure::TransportDisconnected
+            )),
         }
         assert!(rx.recv_timeout(Duration::from_millis(20)).is_err());
     }
@@ -1299,8 +1429,8 @@ mod call_pipe_routing_tests {
 /// `anyhow` (evaluates to `Result<()>`). Collapses the channel + status-flatten callback +
 /// `recv_reducer` that every reducer wrapper otherwise repeats verbatim; the trailing completion
 /// callback is appended after the reducer's own positional args. `$what` (a literal) labels the
-/// send-error and timeout messages. The double-`Result` flattening (`InternalError` → `{e:?}`)
-/// lives here, so it is one edit instead of nine.
+/// send-error and timeout messages. The double `Result` is classified here so module refusals and
+/// SDK failures retain distinct typed provenance.
 macro_rules! call_reducer {
     ($live:ident . conn . reducers, $what:literal, $method:ident ( $($arg:expr),* $(,)? )) => {{
         call_reducer!(@call $live, $what, $method($($arg),*))
@@ -1314,24 +1444,36 @@ macro_rules! call_reducer {
         call_reducer!(@call live, $what, $method($($arg),*))
     }};
     (@call $live:ident, $what:literal, $method:ident ( $($arg:expr),* $(,)? )) => {{
-        let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
+        let (tx, rx) = std::sync::mpsc::channel::<
+            std::result::Result<(), $crate::stdb::connection::ReducerCompletionFailure>,
+        >();
         let completion = $live.reducer_completion.clone();
         let call_id = completion
             .register(tx)
-            .map_err(|e| anyhow!(concat!($what, " reducer transport disconnected: {}"), e))?;
+            .map_err(|e| {
+                $crate::stdb::connection::ReducerCallError::fatal(format!(
+                    concat!($what, " reducer transport disconnected: {}"),
+                    e
+                ))
+            })?;
         let callback_completion = completion.clone();
         $live
             .conn
             .reducers
             .$method($($arg,)* move |_ctx, status| {
                 callback_completion.finish(call_id, match status {
-                    Ok(inner) => inner,
-                    Err(e) => Err(format!("{e:?}")),
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(reason)) => Err(
+                        $crate::stdb::connection::ReducerCompletionFailure::Rejected(reason),
+                    ),
+                    Err(error) => Err(
+                        $crate::stdb::connection::ReducerCompletionFailure::Internal(error),
+                    ),
                 });
             })
             .map_err(|e| {
                 completion.cancel(call_id);
-                anyhow!(concat!("send ", $what, ": {}"), e)
+                $crate::stdb::connection::ReducerCallError::sdk_send($what, e)
             })?;
         $crate::stdb::connection::recv_reducer_on(rx, $what, &completion, call_id)
     }};
