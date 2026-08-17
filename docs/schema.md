@@ -169,6 +169,13 @@ for `SMSG_UPDATE_OBJECT`.
 pub struct WorldEntity { /* ~50 columns; see the source */ }
 ```
 
+Hunter pets keep a separate durable identity in `game_hunter_pet`. A materialized pet is an ordinary
+owned `game_world_entity`, classified by `game_live_pet_kind`; summoned demons use the same live
+creature behavior but have no Hunter identity or care state. `game_hunter_pet_protocol` is the
+bounded owner-facing gateway projection. Taming retires the current wild entity and arms its
+authored `game_creature_spawn` for a later respawn, so the spawn point is not transferred into or
+deleted with the pet identity.
+
 Column groups: identity/control (`guid`, `owner_identity`, `account_id`), spatial (`map_id`,
 `instance_id`, `x/y/z/orientation`, `grid_x`, `grid_y`, `last_move_ms`), the object block
 (`type_mask`, `entry`, `scale_x`), the unit block (health/power/level/faction/display/mount/flags/attack

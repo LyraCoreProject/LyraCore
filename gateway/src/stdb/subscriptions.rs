@@ -29,7 +29,7 @@ use super::world_index::{CellKey, EntityLayer};
 use super::world_view::{self, Viewer, WorldView};
 use super::bindings::*;
 use super::connection::Coordinator;
-use super::views::{corpse_view, entity_view, go_view};
+use super::views::{corpse_view, entity_view, go_view, hunter_pet_protocol_view};
 
 /// RAII guard for one world session's shared-view registration, held by the world connection.
 /// Dropping the guard makes the session unreachable from every shard-level dispatcher.
@@ -194,6 +194,15 @@ pub(crate) fn addon_message_outbound(self_guid: u64, row: &AddonMessage) -> Vec<
     let text = codec::addon::build_bridge_envelope(&row.cmd, &row.payload);
     let (opcode, body) = codec::addon::build_addon_smsg_raw(self_guid, &text);
     vec![Outbound::Raw { opcode, body }]
+}
+
+/// Build the owner's Hunter pet descriptor VALUES for one owner-addressed row.
+pub(crate) fn hunter_pet_outbound(row: &HunterPetProtocol) -> Vec<Outbound> {
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        Box::new(codec::build_hunter_pet_values(&hunter_pet_protocol_view(
+            row.clone(),
+        ))),
+    ))]
 }
 
 /// Build the XP-gain result for one identity-addressed row.
@@ -682,6 +691,17 @@ pub(crate) fn offer_peer_create_for(
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
             Box::new(codec::build_owner_summon_values(viewer.self_guid, row.guid)),
         )));
+        if let Some(pet) = db
+            .game_hunter_pet_protocol()
+            .iter()
+            .find(|pet| pet.live_pet_guid == row.guid && pet.owner_guid == viewer.self_guid)
+        {
+            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(codec::build_hunter_pet_values(&hunter_pet_protocol_view(
+                    pet,
+                ))),
+            )));
+        }
         let spells: Vec<u32> = db
             .game_creature_cast()
             .iter()

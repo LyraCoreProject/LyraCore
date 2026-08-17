@@ -375,6 +375,9 @@ mod it {
     // already-verified MAX_DURABILITY=117: 117 MaxDurability(confirmed), 118 area, 119 Map,
     // 120 BagFamily.
     pub const BAG_FAMILY: usize = 120;
+    // FoodType follows ScriptName(121) and DisenchantID(122) in the current ClassicDB schema.
+    // Values 1..=8 map to CreatureFamily.pet_food_mask bits; 0 is not pet food.
+    pub const FOOD_TYPE: usize = 123;
 }
 mod clt {
     // creature_loot_template: entry(=creature_template.LootId), item, ChanceOrQuestChance, groupid,
@@ -2929,6 +2932,7 @@ fn build_items_and_loot(
         let bag_family: u32 = field(&row, it::BAG_FAMILY).parse().unwrap_or(0);
         // BuyCount (080): floor at 1 — a 0 in the dump (or a parse miss) must not sell zero items.
         let buy_count: u32 = field(&row, it::BUY_COUNT).parse().unwrap_or(1).max(1);
+        let food_type: u8 = field(&row, it::FOOD_TYPE).parse().unwrap_or(0);
         // ON-USE SPELL OVERRIDE (#387): a curated entry's spellid_1/spelltrigger_1 is OUR synthetic
         // on-use cast, forced trigger 0 — see `USE_SPELL_OVERRIDE`'s doc above. Every other item keeps
         // its raw dump value untouched (baseline-safe: the vast majority of the vanilla item catalog is
@@ -2945,7 +2949,7 @@ fn build_items_and_loot(
         // non-shields) — makes imported shields actually block (combat::effective_block_value reads it).
         // restores_power (drink) is a Bool → bare true/false SQL literal (the is_negative Bool-SQL note).
         item_rows.push(format!(
-            "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count})",
+            "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count},{food_type})",
             sheath = field(&row, it::SHEATH).parse::<u8>().unwrap_or(0),
             sp2 = field(&row, it::SPELLID_2).parse::<u32>().unwrap_or(0),
             spt2 = field(&row, it::SPELLTRIGGER_2).parse::<u8>().unwrap_or(0),
@@ -4155,7 +4159,7 @@ fn build_dump_plan(
         stmts.push("DELETE FROM game_item_template WHERE entry > 0".into());
         stmts.push("DELETE FROM game_creature_loot WHERE id > 0".into());
         stmts.push("DELETE FROM game_npc_vendor WHERE id > 0".into());
-        push_insert(&mut stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count", &item_rows);
+        push_insert(&mut stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type", &item_rows);
         push_insert(
             &mut stmts,
             "game_creature_loot",
@@ -5162,7 +5166,7 @@ mod tests {
     fn item_template_parses_the_work_item_213_columns_into_the_right_positions() {
         use std::collections::{HashMap, HashSet};
 
-        let mut cols = vec!["0".to_string(); 121];
+        let mut cols = vec!["0".to_string(); 124];
         cols[it::ENTRY] = "90001".into();
         cols[it::CLASS] = "4".into(); // Armor — never a drink, regardless of subclass
         cols[it::SUBCLASS] = "1".into();
@@ -5195,6 +5199,7 @@ mod tests {
         cols[it::START_QUEST] = "777".into();
         cols[it::MAX_DURABILITY] = "80".into();
         cols[it::BAG_FAMILY] = "6".into();
+        cols[it::FOOD_TYPE] = "1".into();
 
         let tuple = cols
             .join(",")
@@ -5206,7 +5211,7 @@ mod tests {
         assert_eq!(item_rows.len(), 1);
         assert_eq!(
             item_rows[0],
-            "(90001,4,1,'Ring of Fire Resistance',1234,3,5,40,30,80,1000,200,1,0,0,0,0,0,0,0,0,0,0,55,0,false,0,0,0,0,0,0,2,3,12,0,0,0,0,12345,1,12346,2,12347,0,165,150,69,3,7,512,999,777,6,1)",
+            "(90001,4,1,'Ring of Fire Resistance',1234,3,5,40,30,80,1000,200,1,0,0,0,0,0,0,0,0,0,0,55,0,false,0,0,0,0,0,0,2,3,12,0,0,0,0,12345,1,12346,2,12347,0,165,150,69,3,7,512,999,777,6,1,1)",
         );
     }
 
@@ -5219,7 +5224,7 @@ mod tests {
     fn item_template_with_no_new_data_keeps_the_work_item_213_columns_zero() {
         use std::collections::{HashMap, HashSet};
 
-        let mut cols = vec!["0".to_string(); 121];
+        let mut cols = vec!["0".to_string(); 124];
         cols[it::ENTRY] = "25".into();
         cols[it::CLASS] = "2".into(); // Weapon
         cols[it::SUBCLASS] = "7".into(); // Sword (one-hand)
@@ -5245,7 +5250,7 @@ mod tests {
         assert_eq!(item_rows.len(), 1);
         assert_eq!(
             item_rows[0],
-            "(25,2,7,'Worn Shortsword',1521,0,21,1,1,35,100,20,1,1,3,1800,0,0,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1)",
+            "(25,2,7,'Worn Shortsword',1521,0,21,1,1,35,100,20,1,1,3,1800,0,0,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0)",
         );
     }
 

@@ -498,7 +498,7 @@ fn kind_wire_values() {
 fn instant_kind_wire_values_exhaustive() {
     assert_eq!(
         ALL_INSTANT_KINDS.len(),
-        30,
+        32,
         "an instant kind was added to (or removed from) taxonomy.rs without a matching, deliberate \
          change to ALL_INSTANT_KINDS — bump this count only when the taxonomy really changed"
     );

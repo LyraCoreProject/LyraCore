@@ -228,12 +228,14 @@ pub fn pet_of(ctx: &ReducerContext, owner_guid: u64) -> Option<WorldEntity> {
 }
 
 /// Remove a live pet row that has already been resolved. Cleanup order is load-bearing: combat and
-/// threat first, then staged motion, persisted motion, and finally the entity deletion relay.
+/// threat first, then staged motion, persisted motion, the entity deletion relay, and last the
+/// live-kind marker.
 fn despawn_pet_entity(ctx: &ReducerContext, pet: WorldEntity) {
     crate::combat::disengage(ctx, pet.guid); // free its MeleeAttack row + threat
     crate::motion::drop_pending(ctx, pet.guid); // the staged payload dies with it too
     ctx.db.game_entity_motion().guid().delete(pet.guid); // motion row dies with the entity (2.1)
     ctx.db.game_world_entity().guid().delete(pet.guid);
+    super::clear_live_pet_kind(ctx, pet.guid);
 }
 
 /// Despawn the player's pet (if any): free its melee engagement + threat (`disengage`), then DELETE the
@@ -288,7 +290,7 @@ const HIGHGUID_UNIT: u64 = 0xF130;
 /// Unit) + the owner guid in the low 48. The owner is a small player guid (< 2^24); a real creature's low is
 /// `(entry << 24) | db_guid` (always >= 1<<24 since entry >= 1), so the pet's low never collides with a
 /// creature. Stable so the keyed `pet_of` read, despawn delete, and `on_delete` relay agree. Pure.
-fn pet_guid_for(owner_guid: u64) -> u64 {
+pub(crate) fn pet_guid_for(owner_guid: u64) -> u64 {
     (HIGHGUID_UNIT << 48) | (owner_guid & 0x0000_FFFF_FFFF_FFFF)
 }
 
@@ -312,7 +314,9 @@ pub fn summon_pet(ctx: &ReducerContext, caster_guid: u64, entry: u32) {
     despawn_pets(ctx, caster_guid);
     match build_pet_entity(ctx, &caster, entry) {
         Some(pet) => {
+            let pet_guid = pet.guid;
             super::spawn::insert_creature_entity(ctx, pet);
+            super::mark_summoned_pet(ctx, pet_guid);
         }
         None => spacetimedb::log::info!(
             "E_SUMMON_PET: creature template {entry} not loaded — no pet summoned for {caster_guid}"

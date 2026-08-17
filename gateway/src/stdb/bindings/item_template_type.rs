@@ -62,6 +62,7 @@ pub struct ItemTemplate {
     pub start_quest: u32,
     pub bag_family: u32,
     pub buy_count: u32,
+    pub food_type: u8,
 }
 
 impl __sdk::InModule for ItemTemplate {
@@ -127,6 +128,7 @@ pub struct ItemTemplateCols {
     pub start_quest: __sdk::__query_builder::Col<ItemTemplate, u32>,
     pub bag_family: __sdk::__query_builder::Col<ItemTemplate, u32>,
     pub buy_count: __sdk::__query_builder::Col<ItemTemplate, u32>,
+    pub food_type: __sdk::__query_builder::Col<ItemTemplate, u8>,
 }
 
 impl __sdk::__query_builder::HasCols for ItemTemplate {
@@ -197,6 +199,7 @@ impl __sdk::__query_builder::HasCols for ItemTemplate {
             start_quest: __sdk::__query_builder::Col::new(table_name, "start_quest"),
             bag_family: __sdk::__query_builder::Col::new(table_name, "bag_family"),
             buy_count: __sdk::__query_builder::Col::new(table_name, "buy_count"),
+            food_type: __sdk::__query_builder::Col::new(table_name, "food_type"),
         }
     }
 }

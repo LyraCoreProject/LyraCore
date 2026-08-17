@@ -12,10 +12,11 @@
 use spacetimedb::{ReducerContext, Table};
 
 use crate::{
-    game_creature_spawn, game_creature_template, game_faction, game_item_template, game_spell,
-    game_spell_effect, game_taxi_node, game_taxi_path, game_taxi_path_node, game_world_entity,
-    CreatureSpawn, CreatureTemplate, Faction, GameTaxiNode, GameTaxiPath, GameTaxiPathNode,
-    ItemTemplate, Spell, SpellEffect,
+    game_creature_family, game_creature_spawn, game_creature_template, game_createinfo_spell,
+    game_faction, game_item_template, game_spell, game_spell_effect, game_taxi_node, game_taxi_path,
+    game_taxi_path_node, game_world_entity, CreatureFamily, CreatureSpawn, CreatureTemplate,
+    CreateinfoSpell, Faction, GameTaxiNode, GameTaxiPath, GameTaxiPathNode, ItemTemplate, Spell,
+    SpellEffect,
 };
 
 /// Canonical fixture-NPC/item constructors — the single source of truth for the synthetic rows
@@ -30,6 +31,10 @@ use crate::{
 /// original design rationale, preserved below).
 pub(crate) const TEST_WOLF_ENTRY: u32 = 51000;
 pub(crate) const PROFESSION_TRAINER_ENTRY: u32 = 51001;
+pub(crate) const TEST_TAME_BEAST_SPELL: u32 = 50300;
+pub(crate) const TEST_TAME_BOAR_ENTRY: u32 = 51006;
+const TEST_TAME_BOAR_FAMILY: u32 = 5;
+const TEST_HUNTER_CLASS: u8 = 3;
 
 /// "Test Wolf": a dedicated SKINNABLE beast so the skin verify is IMPORT-INDEPENDENT (the demo
 /// Chicken is creature_type 8 = Critter → not skinnable). LEVEL 1 is intentional: the skill gate
@@ -103,6 +108,93 @@ pub(crate) fn profession_trainer_template() -> CreatureTemplate {
         trainer_type: 2,   // TRADESKILLS — serves every class; the gate keys on trainer_class, which stays 0
         trainer_class: 0,
     }
+}
+
+fn test_tame_boar_template() -> CreatureTemplate {
+    CreatureTemplate {
+        entry: TEST_TAME_BOAR_ENTRY,
+        name: "Test Boar".to_string(),
+        display_id: 503,
+        level: 5,
+        health: 100,
+        faction_template: 14,
+        creature_type: 1,
+        creature_family: TEST_TAME_BOAR_FAMILY as u8,
+        base_attack_time_ms: 2000,
+        scale: 1.0,
+        ..test_wolf_template()
+    }
+}
+
+/// Import-independent Hunter/tame/boar catalogue fixture. The runtime branches only on the generic
+/// effect kind; the synthetic spell id exists solely for headless sandbox scenarios.
+pub(crate) fn seed_hunter_tame_fixture(ctx: &ReducerContext) {
+    if !ctx
+        .db
+        .game_createinfo_spell()
+        .iter()
+        .any(|row| row.class == TEST_HUNTER_CLASS && row.spell_id == TEST_TAME_BEAST_SPELL)
+    {
+        ctx.db.game_createinfo_spell().id().delete(50_300u64);
+        ctx.db.game_createinfo_spell().insert(CreateinfoSpell {
+            id: 50_300,
+            race: 0,
+            class: TEST_HUNTER_CLASS,
+            spell_id: TEST_TAME_BEAST_SPELL,
+        });
+    }
+    if ctx
+        .db
+        .game_creature_family()
+        .family_id()
+        .find(TEST_TAME_BOAR_FAMILY)
+        .is_none()
+    {
+        ctx.db.game_creature_family().insert(CreatureFamily {
+            family_id: TEST_TAME_BOAR_FAMILY,
+            name: "Boar".to_string(),
+            pet_food_mask: 0x59,
+            pet_talent_type: 0,
+            category: 0,
+        });
+    }
+    if ctx
+        .db
+        .game_creature_template()
+        .entry()
+        .find(TEST_TAME_BOAR_ENTRY)
+        .is_none()
+    {
+        ctx.db
+            .game_creature_template()
+            .insert(test_tame_boar_template());
+    }
+
+    let header = Spell {
+        range_yd: 30,
+        duration_ms: 10_000,
+        cast_flags: crate::spell::SPELL_ATTR_CHANNELED,
+        ..base_spell(TEST_TAME_BEAST_SPELL, "Test Tame Beast")
+    };
+    if ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(TEST_TAME_BEAST_SPELL)
+        .is_some()
+    {
+        ctx.db.game_spell().spell_id().update(header);
+    } else {
+        ctx.db.game_spell().insert(header);
+    }
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: crate::spell::E_TAME_CREATURE,
+            target: crate::spell::T_TARGET_ENEMY,
+            ..base_effect(TEST_TAME_BEAST_SPELL, 0)
+        },
+    );
 }
 
 /// The reserved taxi fixture: two nodes, one directed route, three ordered points, and one nearby
@@ -295,6 +387,7 @@ pub(crate) fn tough_jerky_template(entry: u32) -> ItemTemplate {
         buy_price: 10,
         sell_price: 2,
         max_stack: 20,
+        food_type: 1, // Meat
         spellid_1: 50115,                     // "Eating" — A_PERIODIC_HEAL food HoT
         spelltrigger_1: 0,                    // on-use
         bonding: crate::items::bonding::NONE, // plain food — unbound/tradeable
@@ -422,6 +515,7 @@ pub(crate) fn base_item(entry: u32, name: &str) -> ItemTemplate {
         start_quest: 0,
         bag_family: 0,
         buy_count: 1,
+        food_type: 0,
     }
 }
 
@@ -898,6 +992,7 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
     // them. Also called unconditionally from `init` now (see `seed_fixture_catalogue`'s doc); this
     // call stays so an already-migrated dev DB that only ever runs the debug reducer still gets them.
     seed_fixture_catalogue(ctx);
+    seed_hunter_tame_fixture(ctx);
 
     const QUEST: u32 = 50900;
     const QUESTGIVER: u32 = 51003;

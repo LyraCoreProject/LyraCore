@@ -474,6 +474,10 @@ parity_test!(parity_game_world_entity, "game_world_entity", lyracore_module::Wor
     sheet_ap_base, sheet_ap_mods, sheet_dmg_min, sheet_dmg_max, sheet_crit_bp, unit_bytes_2,
     bank_bag_slots, mount_display_id,
 });
+parity_test!(parity_game_hunter_pet_protocol, "game_hunter_pet_protocol", lyracore_module::HunterPetProtocol, bindings::hunter_pet_protocol_type::HunterPetProtocol, {
+    pet_id, owner_guid, live_pet_guid, creature_entry, name, name_timestamp, level, pet_xp,
+    next_level_xp, happiness, loyalty_level,
+});
 // `game_config` became gateway-subscribed so the startup instance-hosting check can read
 // `hosts_instances` back instead of guessing. The generated binding was STALE when that subscription
 // landed — a later change END-appended `hosts_instances` to the module table and
@@ -528,7 +532,7 @@ parity_test!(parity_game_item_template, "game_item_template", lyracore_module::I
     shadow_res, arcane_res, spellid_3, spelltrigger_3, spellid_4, spelltrigger_4, spellid_5,
     spelltrigger_5, required_skill, required_skill_rank, required_reputation_faction,
     required_reputation_rank, max_count, item_flags, page_text, start_quest, bag_family,
-    buy_count,
+    buy_count, food_type,
 });
 parity_test!(parity_game_spell, "game_spell", lyracore_module::Spell, bindings::spell_type::Spell, {
     spell_id, name, power_type, cost, cast_time_ms, gcd_ms, cooldown_ms, range_yd, duration_ms,
@@ -799,6 +803,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_guid_range",
     "game_guid_range_registry",
     "game_world_entity",
+    "game_hunter_pet_protocol",
     "game_config",
     "game_creature_template",
     "game_taxi_node",

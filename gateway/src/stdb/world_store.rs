@@ -405,6 +405,15 @@ impl WorldStore for Coordinator {
         self.creature_template(entry)
     }
 
+    fn pet_name(
+        &self,
+        requester_guid: u64,
+        pet_number: u32,
+        pet_guid: u64,
+    ) -> Result<Option<codec::PetNameView>> {
+        self.pet_name(requester_guid, pet_number, pet_guid)
+    }
+
     fn gameobject_template(&self, entry: u32) -> Result<Option<codec::GameObjectTemplateView>> {
         self.gameobject_template(entry)
     }

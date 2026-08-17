@@ -179,6 +179,10 @@ pub struct ItemTemplate {
     /// additive auto-migration.
     #[default(1u32)]
     pub buy_count: u32,
+    /// Vanilla item_template.FoodType. Zero is not pet food; 1..=8 select the matching bit in a
+    /// creature family's pet_food_mask. Kept at the end for additive schema migration.
+    #[default(0)]
+    pub food_type: u8,
 }
 
 /// A per-player owned item. Public but RLS-restricted to the owner (like `game_character`), so a

@@ -12,7 +12,7 @@
 //! | event               | fires from                                             | payload |
 //! |---------------------|--------------------------------------------------------|---------|
 //! | `on_damage_taken`   | `spell::break_auras_on_damage` — the single helper every real-damage path (melee swing, direct spell, DoT tick) already calls | [`DamageTakenPayload`] |
-//! | `on_creature_spawn` | `creatures::insert_creature_entity` — the single wrapper every creature-entity insert routes through (seed, respawn, debug spawn, pet summon) | [`CreatureSpawnPayload`] |
+//! | `on_creature_spawn` | `creatures::insert_creature_entity` — the single wrapper every creature-entity insert routes through (seed, respawn, debug spawn, pet summon, tame) | [`CreatureSpawnPayload`] |
 //! | `on_levelup`        | `xp::grant_xp`'s ding loop, once per level gained      | [`LevelupPayload`] |
 //! | `on_group_invite`   | `group::group_invite`, after the invite row + event are written | [`GroupInvitePayload`] |
 //! | `on_death`          | `combat::kill_creature` (creature corpse AND pet despawn), plus each player-death site (melee tick, spell damage, `debug_set_health(0)`) | [`DeathPayload`] |

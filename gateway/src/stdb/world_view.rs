@@ -416,6 +416,22 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         &view,
         move |v, _old, row| reputation_appeared(v, shard, row),
     );
+    wire_insert(
+        db.game_hunter_pet_protocol(),
+        "game_hunter_pet_protocol.insert",
+        &view,
+        move |v, row| hunter_pet_appeared(v, shard, row),
+    );
+    wire_update(
+        db.game_hunter_pet_protocol(),
+        "game_hunter_pet_protocol.update",
+        &view,
+        move |v, old, row| {
+            if old != row {
+                hunter_pet_appeared(v, shard, row)
+            }
+        },
+    );
     {
         let coord = coord.clone();
         wire_insert_live(
@@ -1304,6 +1320,16 @@ fn reputation_appeared(view: &WorldView, shard: ShardId, row: &PlayerReputation)
     let row = row.clone();
     let tx = viewer.tx.clone();
     enqueue(&tx, move || reputation_outbound(&row));
+}
+
+/// Hunter pet descriptors are idempotent VALUES, so replay re-sends are state-sync, not toasts.
+fn hunter_pet_appeared(view: &WorldView, shard: ShardId, row: &HunterPetProtocol) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.owner_guid)) else {
+        return;
+    };
+    let row = row.clone();
+    let tx = viewer.tx.clone();
+    enqueue(&tx, move || super::subscriptions::hunter_pet_outbound(&row));
 }
 
 fn reputation_outbound(row: &PlayerReputation) -> Vec<Outbound> {

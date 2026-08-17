@@ -84,6 +84,20 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                 None => log::debug!("world: name query for unknown guid {guid}"),
             }
         }
+        ClientOpcodeMessage::CMSG_PET_NAME_QUERY(q) => {
+            let pet_guid = q.guid.guid();
+            match store.pet_name(self_guid, q.pet_number, pet_guid)? {
+                Some(pet) => send(
+                    tx,
+                    Outbound::One(ServerOpcodeMessage::SMSG_PET_NAME_QUERY_RESPONSE(Box::new(
+                        codec::build_pet_name_query_response(&pet),
+                    ))),
+                )?,
+                None => log::debug!(
+                    "world: pet name query ignored for unknown or foreign guid {pet_guid}"
+                ),
+            }
+        }
         // Inspect: validate range + friendly target server-side (the `inspect`
         // reducer), then ack with SMSG_INSPECT(target guid) so the client opens the paperdoll — it
         // renders the target's equipment from fields the client already has (the visible-item relay

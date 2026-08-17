@@ -667,6 +667,9 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // shared-dispatch move, but for a while not subscribed here at all: the only subscription
         // left was the per-player copy nothing read any more, and the pet bar came up empty.
         "SELECT * FROM game_creature_cast",
+        // Bounded Hunter-pet protocol projection. The durable care row stays module-private; this
+        // carries only fields required to render the owner's live pet and answer its name query.
+        "SELECT * FROM game_hunter_pet_protocol",
         // The PRIVATE tier: recipient-addressed rows the shared
         // dispatch delivers through the owner-session lookup + private_recipient_audience. The
         // owner token bypasses each row's per-recipient RLS — the gateway predicate IS the
