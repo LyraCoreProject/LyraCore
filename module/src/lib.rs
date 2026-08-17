@@ -260,6 +260,10 @@ mod faction;
 mod gameobject;
 mod gc;
 mod gm;
+// Module-private DOOR/BUTTON collision-mesh store (issue #112, #103's dynamic GameObject
+// collision epic): the import reducers `--go-models` calls. Consumption (the state-gated ray
+// merge) is #113's `game_go_collider` registry.
+mod go_model;
 // Graveyard resolution (work-item 209/226): the death-release subsystem `world::do_repop` calls to
 // pick where a ghost teleports. Extracted from `world.rs` (issue #385).
 mod graveyard;

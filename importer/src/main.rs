@@ -19,6 +19,10 @@
 //!                                   (--apply loads `game_vmap_chunk` via import_vmap_chunks; a
 //!                                   dry run stops at report — vmap.rs; #520/#521,
 //!                                   docs/decisions.md §10)
+//!   --go-models <client Data/ dir>  DOOR/BUTTON display → M2 bounding-mesh extract + import,
+//!                                   needs --dump too (--apply loads `game_go_model` via
+//!                                   import_go_models; a dry run stops at report — go_model.rs;
+//!                                   #112, part of #103's dynamic GameObject-collision epic)
 //!   --dump-collision <client Data/ dir>  WMO/M2 collision-geometry inspector — dry-run only,
 //!                                   no --apply (collision.rs)
 //!   --pack-client <client Data/ dir>  builds the client patch MPQ + installs addons into the
@@ -31,6 +35,7 @@
 
 mod collision;
 mod dbc;
+mod go_model;
 mod nav;
 mod pack_client;
 mod spell;
@@ -526,8 +531,8 @@ fn gather_node(entry: u64) -> Option<(u32, u32, u32, u32)> {
 /// INERT (template+spawn only, `use` is a no-op) — see `classify_go_type` (work-item 211's widened
 /// import: CHEST/DOOR/BUTTON join GOOBER/GATHER as LIVE; everything else that used to be filtered out
 /// entirely now imports inert instead).
-const GO_DOOR: u8 = 0;
-const GO_BUTTON: u8 = 1;
+pub(crate) const GO_DOOR: u8 = 0;
+pub(crate) const GO_BUTTON: u8 = 1;
 const GO_QUESTGIVER: u8 = lyracore_shared::constants::go_type::QUESTGIVER; // shared const (041) — no drift
 const GO_CHEST: u8 = 3;
 const GO_GOOBER: u8 = 10;
@@ -551,7 +556,7 @@ const CMANGOS_FISHINGHOLE_TYPE: u32 = 25;
 /// Every other in-scope raw type passes through IDENTITY (this repo's type ids match cmangos' for
 /// every value except the 3→25 gather remap and the 25 drop) — `main.rs`'s per-type dispatch decides
 /// LIVE vs INERT from the resulting value, not from this function.
-fn classify_go_type(entry: u64, raw_type: u32) -> Option<u8> {
+pub(crate) fn classify_go_type(entry: u64, raw_type: u32) -> Option<u8> {
     match raw_type {
         3 if gather_node(entry).is_some() => Some(GO_GATHER),
         CMANGOS_FISHINGHOLE_TYPE => None,
@@ -753,7 +758,7 @@ mod sls {
     pub const SPELL_ID: usize = 1; // [V] learn_spell
     pub const ACTIVE: usize = 2; // [V] parsed-but-unused
 }
-mod got {
+pub(crate) mod got {
     // gameobject_template: entry, type, displayId, name, faction, flags, ExtraFlags, size, data0..23, ...
     pub const ENTRY: usize = 0;
     pub const TYPE: usize = 1;
@@ -800,7 +805,7 @@ mod ai {
 // Extracts every value tuple from `INSERT INTO `<table>` VALUES (..),(..);` statements. Handles
 // single-quoted strings with `\` escapes (names contain commas/apostrophes). Returns each field as
 // an unescaped String (quotes stripped). We PARSE, never execute (the firewall: no GPL code runs).
-fn parse_table(dump: &str, table: &str) -> Vec<Vec<String>> {
+pub(crate) fn parse_table(dump: &str, table: &str) -> Vec<Vec<String>> {
     let needle = format!("INSERT INTO `{table}` VALUES ");
     let mut rows = Vec::new();
     let mut search = 0;
@@ -859,7 +864,7 @@ fn parse_table(dump: &str, table: &str) -> Vec<Vec<String>> {
     rows
 }
 
-fn field(row: &[String], idx: usize) -> &str {
+pub(crate) fn field(row: &[String], idx: usize) -> &str {
     row.get(idx).map(|s| s.trim()).unwrap_or("")
 }
 /// Drink discriminator → `game_item_template.restores_power` (food vs drink). In classicdb z2815 BOTH
@@ -916,6 +921,7 @@ pub(crate) struct Args {
     pub(crate) nav: Option<String>, // client Data/ dir: 241 nav-grid rasterizer (see nav.rs)
     pub(crate) vmap: Option<String>, // client Data/ dir: #520/#521 exact vmap triangle extract+pack+import (see vmap.rs)
     pub(crate) vmap_status: bool, // print active-generation provenance/status without opening client data
+    pub(crate) go_models: Option<String>, // client Data/ dir: #112 DOOR/BUTTON display -> M2 bounding-mesh extract+import (see go_model.rs); needs --dump too
     pack_client: Option<String>, // client Data/ dir for the --pack-client packager (see pack_client.rs)
     print_extents: bool, // with --dump: print the operator's own spawn bbox for --map and exit (work-item 206)
     spells: bool, // with --dbc: import Spell.dbc → game_spell/game_spell_effect (see spell.rs)
@@ -965,6 +971,7 @@ fn parse_args() -> Result<Args> {
         nav: None,
         vmap: None,
         vmap_status: false,
+        go_models: None,
         terrain: None,
         print_extents: false,
         spells: false,
@@ -1000,6 +1007,12 @@ fn parse_args() -> Result<Args> {
             "--nav" => a.nav = Some(it.next().context("--nav needs the client Data/ dir")?),
             "--vmap" => a.vmap = Some(it.next().context("--vmap needs the client Data/ dir")?),
             "--vmap-status" => a.vmap_status = true,
+            "--go-models" => {
+                a.go_models = Some(
+                    it.next()
+                        .context("--go-models needs the client Data/ dir")?,
+                )
+            }
             "--dbc" => a.dbc = Some(it.next().context("--dbc needs the client Data/ dir")?),
             "--pack-client" => {
                 a.pack_client = Some(
@@ -1170,8 +1183,14 @@ fn parse_args() -> Result<Args> {
         && a.nav.is_none()
         && a.vmap.is_none()
         && !a.vmap_status
+        && a.go_models.is_none()
     {
         bail!("need an input: --dump <classic-db .sql[.gz]>, --dbc <client Data/ dir>, --terrain <client Data/ dir>, or --pack-client <client Data/ dir>");
+    }
+    // `--go-models` resolves gameobject_template rows (the cmangos dump) against client-owned M2
+    // geometry — meaningless without a template source.
+    if a.go_models.is_some() && a.dump.is_none() {
+        bail!("--go-models needs --dump too (gameobject_template is the template source)");
     }
     // `--print-extents` reads `creature` rows out of the cmangos dump — meaningless without `--dump`.
     if a.print_extents && a.dump.is_none() {
@@ -1313,7 +1332,7 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> Result<String> {
     Ok(digest.to_string())
 }
 
-fn read_dump(path: &str) -> Result<String> {
+pub(crate) fn read_dump(path: &str) -> Result<String> {
     let bytes = std::fs::read(path).with_context(|| format!("read {path}"))?;
     // mysqldumps are latin1/utf8-ish and may carry stray non-UTF8 bytes; decode lossily on BOTH paths
     // (read_to_string would hard-fail the .gz path on the first bad byte — the plain path never did).
@@ -4589,6 +4608,13 @@ fn main() -> Result<()> {
         return vmap::run(&args);
     }
 
+    // `--go-models` → #112: DOOR/BUTTON display → M2 bounding-mesh extract + import (see
+    // go_model.rs). Reads `--dump` itself (`parse_args` requires both), so it dispatches before
+    // the cmangos ETL pass below consumes `args.dump`.
+    if args.go_models.is_some() {
+        return go_model::run(&args);
+    }
+
     // `--dbc` alone → standalone DBC mode (proof/checks), OR `--dbc --spells` → the Spell.dbc importer,
     // OR `--dbc --talents` → the TalentTab.dbc/Talent.dbc importer. With `--dump`, the DBC dir instead
     // enriches the cmangos templates (display-derived scale) below, so fall through to the cmangos path.
@@ -6239,6 +6265,7 @@ mod tests {
             nav: None,
             vmap: None,
             vmap_status: false,
+            go_models: None,
             print_extents: false,
             spells: false,
             talents: false,
