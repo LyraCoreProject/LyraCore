@@ -1428,8 +1428,7 @@ fn forward_movement<St: WorldStore + ?Sized>(
     info: &MovementInfo,
 ) -> Result<()> {
     // The shared-call path names the mover by guid instead of by connection.
-    // Movement only flows in-world, so the guid is always known here; 0 (its absence) forces the
-    // per-player path in the store.
+    // Movement only flows in-world, so the guid is always known here; the store rejects 0.
     let self_guid = match &conn.state {
         WorldState::InWorld(iw) => iw.self_guid,
         _ => 0,
