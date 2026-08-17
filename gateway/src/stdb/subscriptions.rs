@@ -1,8 +1,5 @@
-//! Per-player view subscriptions: the `PlayerSubscriptions` RAII guard (callback teardown +
-//! unsubscribe on drop) and `Coordinator::subscribe_player_events` — the 51-callback relay that
-//! turns row deltas on the per-account connection into outbound SMSG. Moved verbatim from
-//! `mod.rs`; that function's own doc comment (just above it) is the structure map, the teardown-
-//! contract pointer, and the plan to carve this 51-callback body into smaller pieces.
+//! Session relay lifetime: the `PlayerSubscriptions` viewer guard and packet builders used by
+//! `world_view`'s shared per-shard dispatch.
 //!
 //! **The shared-connection model took the four box-scoped tables out of here entirely.** Peer
 //! visibility, peer movement, creature legs and gameobjects are no longer per-player registrations:
@@ -14,13 +11,13 @@
 //! decides and encodes for exactly ONE viewer and is run on that session's own writer thread, never
 //! on the shared pump.
 //!
-//! That carve is also the shape planned for the rest: pure-ish top-level items with their own
-//! tests, called from a thin registration. [`entity_update_to_outbound`] was the first of them.
+//! Owner-addressed relays use the same shape: a shard callback selects one viewer, then its writer
+//! queue runs the cache reads, state updates, and packet construction.
 
 use crate::codec::{self, CreateKind};
 use crate::world::{Outbound, SessionTx};
 use anyhow::Result;
-use spacetimedb_sdk::{Table, TableWithPrimaryKey};
+use spacetimedb_sdk::Table;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -34,18 +31,9 @@ use super::bindings::*;
 use super::connection::Coordinator;
 use super::views::{corpse_view, entity_view, go_view, hunter_pet_protocol_view};
 
-/// RAII guard for one world session's relay callbacks + shared-view registration, held by the
-/// world connection. The coordinator connections outlive every session, so the callbacks MUST be
-/// removed when the session ends, or a relogin would double-register them and a logged-out
-/// player's state would keep relaying into a dead channel. Dropping the guard does exactly that.
+/// RAII guard for one world session's shared-view registration, held by the world connection.
+/// Dropping the guard makes the session unreachable from every shard-level dispatcher.
 pub struct PlayerSubscriptions {
-    // A homogeneous teardown list is the point (see the doc above): one `push` per relay instead of a hand-mirrored field.
-    #[allow(clippy::type_complexity)]
-    /// One teardown closure per registered relay callback, each removing its callback from the
-    /// coordinator (or realm-core) connection it was registered on; drained in `Drop`. Homogeneous
-    /// so adding a relay is a single `push` at registration instead of a new field hand-mirrored
-    /// across the struct, `empty()`, and `Drop`.
-    teardowns: Vec<Box<dyn FnOnce() + Send>>,
     /// This session's registration in the gateway-wide shared view. `None` only for the
     /// in-memory test store. Dropping the guard unregisters it, which is what stops the shared
     /// coordinator dispatch from ever enqueueing for a dead session.
@@ -58,19 +46,56 @@ impl PlayerSubscriptions {
     #[cfg(test)]
     pub fn empty() -> Self {
         Self {
-            teardowns: Vec::new(),
             viewer: None,
             view: None,
         }
     }
 
-    /// The closure must run once when the owning session unregisters its relays.
+    /// Build a real shared-view registration for world-session ordering tests.
     #[cfg(test)]
-    pub fn with_teardown(teardown: impl FnOnce() + Send + 'static) -> Self {
+    pub(crate) fn registered_for_test(
+        view: Arc<WorldView>,
+        self_guid: u64,
+        instance_id: u64,
+        map_id: u32,
+        x: f32,
+        y: f32,
+        tx: SessionTx,
+    ) -> Self {
+        let mut identity = [0; 32];
+        identity[..8].copy_from_slice(&self_guid.to_le_bytes());
+        let viewer = Arc::new(Viewer {
+            session: view.next_session_id(),
+            self_guid,
+            bound_identity: spacetimedb_sdk::Identity::from_byte_array(identity),
+            instance_id,
+            map_id,
+            tx,
+            created: Arc::new(Mutex::new(HashSet::from([self_guid]))),
+            gates: Arc::new(ViewerGates::default()),
+            skill_slots: Arc::new(Mutex::new((std::collections::HashMap::new(), 0))),
+            explored: Mutex::new(world_view::ExplorationReplay::default()),
+            motion_pending: Arc::new(world_view::MotionPending::default()),
+        });
+        view.add_viewer_on_shard(
+            viewer.clone(),
+            CellKey::of_position(map_id, instance_id, x, y),
+            0,
+        );
         Self {
-            teardowns: vec![Box::new(teardown)],
-            viewer: None,
-            view: None,
+            viewer: Some(viewer),
+            view: Some(view),
+        }
+    }
+
+    /// Remove this session from owner, identity, shard, and spatial routing immediately.
+    ///
+    /// World-port uses this before driving a cross-shard transfer because the drive can delete
+    /// owner rows on the source shard. `Drop` calls the same method, so failure and re-entry paths
+    /// remain idempotent.
+    pub(crate) fn unregister_viewer(&mut self) {
+        if let (Some(view), Some(viewer)) = (self.view.take(), self.viewer.take()) {
+            view.remove_viewer(viewer.session);
         }
     }
 
@@ -91,18 +116,7 @@ impl PlayerSubscriptions {
 
 impl Drop for PlayerSubscriptions {
     fn drop(&mut self) {
-        // Remove every relay callback — a leaked closure on a connection that outlives the
-        // session would keep relaying a logged-out player's data into a dead channel for the
-        // gateway's whole lifetime, once more per relogin.
-        for teardown in self.teardowns.drain(..) {
-            teardown();
-        }
-        // Leave the shared view LAST — while the registration is live the coordinator
-        // dispatch may still enqueue for this session, which is harmless (the writer is draining or
-        // gone) but pointless.
-        if let (Some(view), Some(viewer)) = (self.view.take(), self.viewer.take()) {
-            view.remove_viewer(viewer.session);
-        }
+        self.unregister_viewer();
     }
 }
 
@@ -154,6 +168,66 @@ fn build_teleport_relay(
         let [pending, new_world] = codec::build_cross_map_teleport(map_id, x, y, z, o)?;
         Ok(Outbound::Batch(vec![pending, new_world]))
     }
+}
+
+/// Build the complete teleport result on the addressed session's writer queue.
+pub(crate) fn teleport_event_outbound(row: &TeleportEvent) -> Vec<Outbound> {
+    match build_teleport_relay(
+        !row.cross_map,
+        row.mover_guid,
+        row.map_id,
+        row.x,
+        row.y,
+        row.z,
+        row.orientation,
+    ) {
+        Ok(out) => vec![out],
+        Err(error) => {
+            log::warn!("teleport relay: {error} (guid {})", row.mover_guid);
+            Vec::new()
+        }
+    }
+}
+
+/// Build one addon-language whisper using the addressed viewer as its sender.
+pub(crate) fn addon_message_outbound(self_guid: u64, row: &AddonMessage) -> Vec<Outbound> {
+    let text = codec::addon::build_bridge_envelope(&row.cmd, &row.payload);
+    let (opcode, body) = codec::addon::build_addon_smsg_raw(self_guid, &text);
+    vec![Outbound::Raw { opcode, body }]
+}
+
+/// Build the owner's Hunter pet descriptor VALUES for one owner-addressed row.
+pub(crate) fn hunter_pet_outbound(row: &HunterPetProtocol) -> Vec<Outbound> {
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        Box::new(codec::build_hunter_pet_values(&hunter_pet_protocol_view(
+            row.clone(),
+        ))),
+    ))]
+}
+
+/// Build the XP-gain result for one identity-addressed row.
+pub(crate) fn xp_event_outbound(row: &XpEvent) -> Vec<Outbound> {
+    let message = codec::build_log_xpgain(row.killed_guid, row.total_exp, row.is_kill);
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_LOG_XPGAIN(
+        Box::new(message),
+    ))]
+}
+
+/// Build the level-up result for one identity-addressed row.
+pub(crate) fn levelup_event_outbound(row: &LevelupEvent) -> Vec<Outbound> {
+    let message = codec::build_levelup_info(
+        row.new_level,
+        row.health_gained,
+        row.mana_gained,
+        row.strength_gained,
+        row.agility_gained,
+        row.stamina_gained,
+        row.intellect_gained,
+        row.spirit_gained,
+    );
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_LEVELUP_INFO(
+        Box::new(message),
+    ))]
 }
 
 /// Stealth presence marker (taxonomy `A_STEALTH`): a unit carrying ≥1 such aura is stealthed and must
@@ -2286,66 +2360,6 @@ pub(crate) fn entity_update_to_outbound(
     out
 }
 
-/// Login-replay suppression for the per-player relays that see their table's HISTORY replayed as
-/// `on_insert` when the base subscription's initial update is applied (exploration's "Discovered"
-/// toast, the rest-state PLAYER_BYTES_2 flip). Both must relay only what happens LIVE, after the
-/// player is in the world.
-///
-/// **Why a flag and not just a frozen id set.** The previous shape froze the row ids
-/// present at login and skipped those — two ways to misfire, and the live run hit both:
-///
-///  1. **Re-minted ids.** `sweep_transfer_game_character_explored` sets `r.id = 0` so the
-///     destination's `auto_inc` mints fresh ids, and every imported row read as a new discovery —
-///     the reported symptom (one "Discovered: <area> — N experience gained" per explored area, per
-///     shard crossing, quoting XP that was never granted). Hence [`Self::admit_once`] keys on
-///     `area_bit`, which is what drives the fog word and is stable across a re-mint.
-///  2. **The freeze RACES the replay.** The set was frozen on the calling thread after the
-///     subscription ack, but the SDK applies the update to the client cache, fires `on_applied`
-///     (which is what releases that thread) and THEN invokes the row callbacks — on its own
-///     `run_threaded` pump. So the replay callbacks can run before the set is frozen, and keying
-///     that set differently would not change it. The gate is therefore CLOSED until the freeze
-///     completes: nothing the initial apply replays can toast, whatever order the two threads run
-///     in, because a genuinely live discovery cannot happen before the player is in the world.
-///
-/// The cache is written before either callback runs, so a row whose replay lost the race is still
-/// captured by the seed passed to [`Self::open`].
-#[derive(Default)]
-pub(crate) struct ReplayGate {
-    /// False until the initial-apply snapshot has been taken. Everything before that is history.
-    open: bool,
-    /// Exploration only: `area_bit`s already announced (or present at login). A STABLE key —
-    /// unlike the `auto_inc` row id, it survives the re-mint a cross-database transfer performs.
-    announced: HashSet<i32>,
-}
-
-impl ReplayGate {
-    /// Take the initial-apply snapshot and open the gate. `already` is the set of `area_bit`s the
-    /// client cache holds for this character at that moment (empty for the keyless relays).
-    fn open(&mut self, already: impl IntoIterator<Item = i32>) {
-        self.announced.extend(already);
-        self.open = true;
-    }
-
-    /// One arriving exploration row: announce it only once the gate is open AND this `area_bit`
-    /// has not been announced before (a re-minted duplicate of an area the character already
-    /// explored is not a discovery).
-    fn admit_once(&mut self, area_bit: i32) -> bool {
-        self.open && self.announced.insert(area_bit)
-    }
-}
-
-/// The "Discovered: &lt;area&gt;" toast for one arriving `game_character_explored` row, or `None`
-/// when the row is a login/import REPLAY rather than a live discovery. Pure (bar the gate it
-/// mutates) → unit-tested; the fog VALUES deliberately does NOT go through here, since it must fire
-/// for every row so the map restores. See [`ReplayGate`] for what the gate is protecting against.
-fn discovery_packet(gate: &Mutex<ReplayGate>, row: &CharacterExplored) -> Option<Outbound> {
-    if !gate.lock().unwrap().admit_once(row.area_bit) {
-        return None;
-    }
-    let (opcode, body) = codec::build_exploration_experience_raw(row.area_id, row.experience);
-    Some(Outbound::Raw { opcode, body })
-}
-
 /// SMSG_UPDATE_AURA_DURATION (buff timer): the 1.12 UpdateMask aura array carries NO duration,
 /// so without this the client shows "0 seconds"/flashing icon. Only for THIS player's own auras
 /// (the slot indexes the player's aura array) with a finite window; the duration is the full
@@ -2407,34 +2421,300 @@ fn run_speed_packet(
     ))
 }
 
+/// Build the full quest-log update from the coordinator cache. The empty mask deliberately clears
+/// every quest-log field when the final quest leaves the log.
+pub(crate) fn quest_log_outbound(
+    db: &crate::stdb::bindings::RemoteTables,
+    self_guid: u64,
+) -> Option<Outbound> {
+    if !crate::config::quest_log_fields_enabled() {
+        return None;
+    }
+    let quests: Vec<_> = db.game_character_quest().iter().collect();
+    let slots = super::reads::build_quest_log_slots(db, &quests, self_guid);
+    let mask = codec::update_mask::full_quest_log_mask(&slots);
+    let (opcode, body) = codec::build_values_update_raw(self_guid, &mask);
+    Some(Outbound::Raw { opcode, body })
+}
+
+/// Build all packets for one quest update, in the order the client expects.
+pub(crate) fn quest_update_outbound(
+    db: &crate::stdb::bindings::RemoteTables,
+    self_guid: u64,
+    old: &CharacterQuest,
+    row: &CharacterQuest,
+) -> Vec<Outbound> {
+    let objectives: Vec<_> = db
+        .game_quest_objective()
+        .iter()
+        .filter(|objective| objective.quest_entry == row.quest_entry)
+        .map(|objective| {
+            (
+                objective.kind,
+                objective.obj_index,
+                objective.target_entry,
+                objective.required_count,
+            )
+        })
+        .collect();
+    quest_update_packets(old, row, &objectives, quest_log_outbound(db, self_guid))
+}
+
+/// Build the feedback that precedes a full quest-log sync for one update.
+pub(crate) fn quest_update_feedback(
+    old: &CharacterQuest,
+    row: &CharacterQuest,
+    objectives: &[(u8, u8, u32, u32)],
+) -> Vec<Outbound> {
+    let mut outbound = codec::kill_progress_add_kills(
+        row.quest_entry,
+        &old.counts,
+        &row.counts,
+        objectives,
+    )
+    .into_iter()
+    .map(|packet| Outbound::One(ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_KILL(Box::new(packet))))
+    .collect::<Vec<_>>();
+    if !old.failed && row.failed {
+        outbound.push(Outbound::One(
+            ServerOpcodeMessage::SMSG_QUESTUPDATE_FAILEDTIMER(
+                codec::build_questupdate_failedtimer(row.quest_entry),
+            ),
+        ));
+    }
+    outbound
+}
+
+/// Append a post-update full-log sync after kill and timer feedback.
+pub(crate) fn quest_update_packets(
+    old: &CharacterQuest,
+    row: &CharacterQuest,
+    objectives: &[(u8, u8, u32, u32)],
+    quest_log: Option<Outbound>,
+) -> Vec<Outbound> {
+    let mut outbound = quest_update_feedback(old, row, objectives);
+    if let Some(packet) = quest_log {
+        outbound.push(packet);
+    }
+    outbound
+}
+
+fn item_gain_feedback(
+    db: &RemoteTables,
+    self_guid: u64,
+    slot: u8,
+    entry: u32,
+    gained: u32,
+    stack_add: bool,
+) -> Vec<Outbound> {
+    if gained == 0 {
+        return Vec::new();
+    }
+    let mut out = vec![Outbound::One(ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(
+        Box::new(codec::build_item_push_result(
+            self_guid,
+            255,
+            slot as u32,
+            entry,
+            gained,
+            stack_add,
+        )),
+    ))];
+    let wanted = db.game_character_quest().iter().any(|q| {
+        q.character_guid == self_guid
+            && !q.rewarded
+            && !q.failed
+            && db
+                .game_quest_objective()
+                .iter()
+                .any(|o| o.quest_entry == q.quest_entry && o.kind == 1 && o.target_entry == entry)
+    });
+    if wanted {
+        use wow_world_messages::vanilla::SMSG_QUESTUPDATE_ADD_ITEM;
+        out.push(Outbound::One(
+            ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_ITEM(SMSG_QUESTUPDATE_ADD_ITEM {
+                required_item_id: entry,
+                items_required: gained,
+            }),
+        ));
+    }
+    out
+}
+
+/// Build the complete live-inventory insert result for one owner.
+pub(crate) fn item_instance_insert_outbound(
+    db: &RemoteTables,
+    self_guid: u64,
+    row: &ItemInstance,
+) -> Vec<Outbound> {
+    let mut out = item_gain_feedback(db, self_guid, row.slot, row.entry, row.stack_count, false);
+    let (max_durability, container_slots) = db
+        .game_item_template()
+        .entry()
+        .find(&row.entry)
+        .map(|t| (t.max_durability, t.container_slots))
+        .unwrap_or((row.durability, 0));
+    let view = codec::ItemInstanceView {
+        guid: row.guid,
+        entry: row.entry,
+        owner_guid: row.owner_guid,
+        slot: row.slot,
+        stack_count: row.stack_count,
+        durability: row.durability,
+        max_durability,
+        container_slots,
+    };
+    out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        Box::new(codec::build_item_create_object(&view)),
+    )));
+    if let Some(values) = codec::build_inv_slot_values(self_guid, row.slot, row.guid) {
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(values),
+        )));
+    }
+    if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, row.entry) {
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(values),
+        )));
+    }
+    if let Some((bag_slot, slot_in_bag)) = bag_content_parts(row.slot) {
+        if let Some(bag) = db
+            .game_item_instance()
+            .iter()
+            .find(|item| item.owner_guid == self_guid && item.slot == bag_slot)
+        {
+            let (opcode, body) =
+                codec::build_container_slot_values(bag.guid, slot_in_bag, row.guid);
+            out.push(Outbound::Raw { opcode, body });
+        }
+    }
+    if row.slot <= 18 {
+        append_item_armor_and_sheet(db, self_guid, &mut out);
+    }
+    out
+}
+
+/// Build the complete live-inventory delete result for one owner.
+pub(crate) fn item_instance_delete_outbound(
+    db: &RemoteTables,
+    self_guid: u64,
+    row: &ItemInstance,
+) -> Vec<Outbound> {
+    let mut out = Vec::new();
+    if let Some(values) = codec::build_inv_slot_values(self_guid, row.slot, 0) {
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(values),
+        )));
+    }
+    if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, 0) {
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(values),
+        )));
+    }
+    if let Some((bag_slot, slot_in_bag)) = bag_content_parts(row.slot) {
+        if let Some(bag) = db
+            .game_item_instance()
+            .iter()
+            .find(|item| item.owner_guid == self_guid && item.slot == bag_slot)
+        {
+            let (opcode, body) = codec::build_container_slot_values(bag.guid, slot_in_bag, 0);
+            out.push(Outbound::Raw { opcode, body });
+        }
+    }
+    out.push(Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
+        codec::build_destroy_object(row.guid),
+    )));
+    if row.slot <= 18 {
+        append_item_armor_and_sheet(db, self_guid, &mut out);
+    }
+    out
+}
+
+/// Build the complete live-inventory update result for one owner.
+pub(crate) fn item_instance_update_outbound(
+    db: &RemoteTables,
+    self_guid: u64,
+    old: &ItemInstance,
+    row: &ItemInstance,
+) -> Vec<Outbound> {
+    let mut out = if row.slot == old.slot && row.stack_count > old.stack_count {
+        item_gain_feedback(
+            db,
+            self_guid,
+            row.slot,
+            row.entry,
+            row.stack_count - old.stack_count,
+            true,
+        )
+    } else {
+        Vec::new()
+    };
+    if old.slot != row.slot {
+        if let Some(values) = codec::build_inv_slot_values(self_guid, old.slot, 0) {
+            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(values),
+            )));
+        }
+        if let Some(values) = codec::build_inv_slot_values(self_guid, row.slot, row.guid) {
+            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(values),
+            )));
+        }
+        if let Some(values) = codec::build_visible_item_values(self_guid, old.slot, 0) {
+            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(values),
+            )));
+        }
+        if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, row.entry) {
+            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(values),
+            )));
+        }
+        for (slot, guid) in [(old.slot, 0), (row.slot, row.guid)] {
+            if let Some((bag_slot, slot_in_bag)) = bag_content_parts(slot) {
+                if let Some(bag) = db
+                    .game_item_instance()
+                    .iter()
+                    .find(|item| item.owner_guid == self_guid && item.slot == bag_slot)
+                {
+                    let (opcode, body) =
+                        codec::build_container_slot_values(bag.guid, slot_in_bag, guid);
+                    out.push(Outbound::Raw { opcode, body });
+                }
+            }
+        }
+    }
+    if old.stack_count != row.stack_count || old.durability != row.durability {
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(codec::build_item_values(
+                row.guid,
+                row.stack_count,
+                row.durability,
+            )),
+        )));
+    }
+    if old.slot != row.slot && (old.slot <= 18 || row.slot <= 18)
+        || row.slot <= 18 && (old.durability == 0) != (row.durability == 0)
+    {
+        append_item_armor_and_sheet(db, self_guid, &mut out);
+    }
+    out
+}
+
+fn append_item_armor_and_sheet(db: &RemoteTables, self_guid: u64, out: &mut Vec<Outbound>) {
+    let armor = super::armor::effective_armor(db, self_guid);
+    out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        Box::new(codec::build_resistance_values(self_guid, armor)),
+    )));
+    if let Some(stats) = super::armor::sheet_stats(db, self_guid) {
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(codec::build_sheet_stats_values(self_guid, &stats)),
+        )));
+    }
+}
 impl Coordinator {
-    // The relay registration hands each callback its own `Coordinator` clone; the arity is the number of relays, not an accidental type.
-    #[allow(clippy::type_complexity)]
-    /// Register this session's stuck-state relays and turn row deltas into outbound SMSG pushed
-    /// onto `tx` (Phase 6/7). Every registration is pinned to `self.0.coord()` — the COORDINATOR
-    /// connection, immune to AOI-resubscription churn (the coordinator-relay rule, see
-    /// `stdb::connection`): XP, level-up, quest log, item instances, teleport, the addon bridge,
-    /// reputation, and the exploration-fog discovery toast. Everything broadcast-shaped (peer
-    /// entities, motion, combat, chat, auras, corpses, …) rides the shared per-shard dispatch in
-    /// `world_view::arm_shard` instead, keyed to this session by the `Viewer` registered near the
-    /// end of this function.
-    ///
-    /// TEARDOWN CONTRACT: each `register_<group>_relays` method below returns its OWN teardown
-    /// closures, one per callback it registers; this function only `extend`s them into
-    /// `teardowns`. `every_registered_player_callback_has_a_teardown_issue_89` (this file's test
-    /// module) checks the contract holds by scanning this file's own source text: a missed
-    /// teardown relays a logged-out player's state into a dead channel for the gateway's whole
-    /// lifetime.
-    ///
-    /// CARVE (#485): registration and teardown used to live ~1,000 lines apart (one `let on_x =
-    /// ...` up top, its `remove_on_*` mirrored into a vec at the bottom). Each surviving table
-    /// group is now its own `fn register_<group>_relays(...) -> Vec<Box<dyn FnOnce() + Send>>`,
-    /// co-locating the two — the pattern this file's own `offer_peer_create_for` family proved
-    /// first. This function is the dispatcher: mint the shared state every group needs, call
-    /// each registrar in the same order the registrations used to happen, then run the
-    /// login-sequence tail unchanged.
-    ///
-    /// The returned guard removes the callbacks + unregisters the shared-view session on drop.
+    /// Prepare and register one live viewer. Row callbacks are already armed once per shard in
+    /// `world_view::arm_shard`; this method registers no callback of its own.
     pub fn subscribe_player_events(
         &self,
         account_id: u64,
@@ -2464,7 +2744,6 @@ impl Coordinator {
         // everything that could still fail with `?` has succeeded.
         let view = self.world_view();
         let session = view.next_session_id();
-
 
         // ======================================================================================
         //  SKILL-UP — game_player_skill (insert/update)
@@ -2502,97 +2781,23 @@ impl Coordinator {
             std::sync::Arc::new(std::sync::Mutex::new((map, next_free)))
         };
 
-        let explored_replay: Arc<Mutex<ReplayGate>> = Arc::new(Mutex::new(ReplayGate::default()));
+        let mut explored = world_view::ExplorationReplay::default();
 
         // The bound identity WITHOUT touching a per-player connection — synthetic under the
         // flag (what establish_session bound and the module stamps on event rows), the cached
         // connection's real identity otherwise. Identical values to the old `player.identity` read.
-        // Shared by the XP/level-up relay and the addon-bridge relay below.
+        // Stored with the viewer for identity-addressed shared dispatch.
         let self_identity =
             spacetimedb_sdk::Identity::from_byte_array(self.bound_identity(account_id)?);
 
-        // Item-GAIN feedback gate: the base sub's initial apply fires on_item_insert for
-        // every owned item at LOGIN — and those callbacks arrive AFTER on_applied acks (wire-observed:
-        // an on_applied-flipped boolean still let the whole bag toast at login), so the gate is the
-        // AOI dedup pattern instead: snapshot the item guids resident at apply, suppress exactly those.
-        // Minted here (not inside the item registrar) because the login-apply item snapshot in the
-        // login-sequence tail below reaches into the same set.
-        let initial_item_guids: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<u64>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
-        // Same replay gate for REPUTATION rows (live find 2026-07-11): login standings travel
-        // silently in SMSG_INITIALIZE_FACTIONS; the apply-replayed rows must not re-announce
-        // ("you are now Friendly with Stormwind" at every login). Keyed by faction_id (rows are
-        // already self-filtered). Minted here for the same reason as `initial_item_guids` above.
-        let initial_rep_factions: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<u32>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
-
-        // One registrar call per surviving table group, in the same order the registrations used
-        // to happen top-to-bottom in this function; each returns its OWN teardowns (the CARVE
-        // note above).
-        let mut teardowns: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
-        teardowns.extend(self.register_xp_levelup_relays(self_identity, tx.clone()));
-        teardowns.extend(self.register_explored_relays(
-            self_guid,
-            tx.clone(),
-            explored_replay.clone(),
-        ));
-        teardowns.extend(self.register_quest_relays(self_guid, tx.clone()));
-        teardowns.extend(self.register_item_relays(
-            self_guid,
-            tx.clone(),
-            initial_item_guids.clone(),
-        ));
-        teardowns.extend(self.register_teleport_relays(self_guid, tx.clone()));
-        teardowns.extend(self.register_addon_relays(self_guid, self_identity, tx.clone()));
-        teardowns.extend(self.register_reputation_relays(
-            self_guid,
-            tx.clone(),
-            initial_rep_factions.clone(),
-        ));
-        teardowns.extend(self.register_hunter_pet_relays(self_guid, tx.clone()));
-
-        // Freeze the login-apply item snapshot (the coordinator's cache is the only copy —
-        // filter to this owner; the row callbacks that replay these guids arrive after and get
-        // suppressed).
         {
-            let mut set = initial_item_guids.lock().unwrap();
+            // Seed the viewer's replay state before registration. A coordinator reconnect replays
+            // every resident row: exploration is state-sync (the fog word must re-send, the
+            // discovery feedback must not repeat), so it carries this per-viewer seed, while the
+            // event families (teleport, faction announce, item toast) drop replayed rows outright
+            // in `world_view`'s live-insert registrations.
             let guard = self.0.coord();
-            set.extend(
-                guard
-                    .conn
-                    .db
-                    .game_item_instance()
-                    .iter()
-                    .filter(|i| i.owner_guid == self_guid)
-                    .map(|i| i.guid),
-            );
-        }
-        {
-            let mut set = initial_rep_factions.lock().unwrap();
-            let guard = self.0.coord();
-            set.extend(
-                guard
-                    .conn
-                    .db
-                    .game_player_reputation()
-                    .iter()
-                    .filter(|r| r.character_guid == self_guid)
-                    .map(|r| r.faction_id),
-            );
-        }
-        {
-            // Exploration: OPEN the discovery gate, seeded with the area_bits the character
-            // has already explored (whether they arrived by login or by a cross-database import — the
-            // cache is written before the replay callbacks run, so both are in here). Their on_insert
-            // replay therefore skips the "Discovered" popup while the fog VALUES still fires for all.
-            // Only a genuinely new area_bit, discovered after this point, toasts.
-            //
-            // Seeded from the COORDINATOR cache: it predates this session and holds
-            // the same rows for this character in both flag states, while the per-player cache
-            // stops carrying the explored query under the flag. The gate now also guards the
-            // coordinator twin's toast branch, so the seed source must not depend on the flag.
-            let guard = self.0.coord();
-            explored_replay.lock().unwrap().open(
+            explored.seed(
                 guard
                     .conn
                     .db
@@ -2627,29 +2832,28 @@ impl Coordinator {
                 .find(&self_guid)
                 .map(|e| e.player_flags & GHOST_PLAYER_FLAG != 0)
                 .unwrap_or(false);
-            viewer_gates.is_ghost.store(is_ghost, std::sync::atomic::Ordering::Relaxed);
+            viewer_gates
+                .is_ghost
+                .store(is_ghost, std::sync::atomic::Ordering::Relaxed);
         }
         let viewer = Arc::new(Viewer {
             session,
             self_guid,
+            bound_identity: self_identity,
             instance_id: login_instance,
             map_id: login_map,
             tx: tx.clone(),
             created: created.clone(),
             gates: viewer_gates.clone(),
             skill_slots: skill_slots.clone(),
+            explored: Mutex::new(explored),
             motion_pending: Arc::new(world_view::MotionPending::default()),
         });
-        if let Err(error) = view.add_viewer(
+        view.add_viewer(
             self,
             viewer.clone(),
             CellKey::of_position(login_map, login_instance, login_x, login_y),
-        ) {
-            for teardown in teardowns.drain(..) {
-                teardown();
-            }
-            return Err(error);
-        }
+        )?;
         world_view::sweep_into_view(&view, &viewer);
 
         // Corpse resident sweep: corpse rows ride the base subscription
@@ -2712,997 +2916,13 @@ impl Coordinator {
             }
         }
 
-        // `teardowns` already holds every registrar's callback-removal closures (collected via
-        // `.extend()` above); the struct/empty()/Drop stay untouched.
         Ok(PlayerSubscriptions {
-            teardowns,
             viewer: Some(viewer),
             view: Some(view),
         })
     }
 
-    /// XP + LEVEL-UP relays, coordinator-registered — game_xp_event / game_levelup_event
-    /// (insert) → SMSG_LOG_XPGAIN / SMSG_LEVELUP_INFO. `self_identity` is computed once by the
-    /// dispatcher and threaded in rather than recomputed here — the same value also gates the
-    /// addon-bridge relay in [`Self::register_addon_relays`].
-    fn register_xp_levelup_relays(
-        &self,
-        self_identity: spacetimedb_sdk::Identity,
-        tx: SessionTx,
-    ) -> Vec<Box<dyn FnOnce() + Send>> {
-        // ======================================================================================
-        //  XP + LEVEL-UP, coordinator-registered — game_xp_event / game_levelup_event (insert)
-        //  SMSG_LOG_XPGAIN / SMSG_LEVELUP_INFO. Moved off the per-player connection by the
-        //  coordinator-relay rule (see `stdb::connection`): both ride kill transactions concurrent
-        //  with AOI churn on that connection.
-        // ======================================================================================
-        // XP gain (slice 1) → SMSG_LOG_XPGAIN; level-up → SMSG_LEVELUP_INFO. Both event tables are
-        // COORDINATOR-registered per the coordinator-relay rule: xp/levelup events ride KILL
-        // transactions, which can be large and concurrent with movement (AOI churn on the
-        // per-player conn) — a lost SMSG_LEVELUP_INFO was observed as the levelup_info suite
-        // flake. The coordinator bypasses the recipient RLS, so the closure now self-filters
-        // on recipient_identity (the session's bound player identity).
-        let xp_tx = tx.clone();
-        let on_xp = self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_xp_event()
-            .on_insert(move |_ctx, row| {
-                if row.recipient_identity != self_identity {
-                    return;
-                }
-                // Belt-and-suspenders — nothing about a warm handoff should produce a kill/XP event
-                // mid-swap, but this closure is self-keyed like every other relay this flag covers.
-                let m = codec::build_log_xpgain(row.killed_guid, row.total_exp, row.is_kill);
-                let _ = xp_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_LOG_XPGAIN(
-                    Box::new(m),
-                )));
-            });
-        let lvl_tx = tx.clone();
-        let on_levelup = self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_levelup_event()
-            .on_insert(move |_ctx, row| {
-                if row.recipient_identity != self_identity {
-                    return;
-                }
-                let m = codec::build_levelup_info(
-                    row.new_level,
-                    row.health_gained,
-                    row.mana_gained,
-                    row.strength_gained,
-                    row.agility_gained,
-                    row.stamina_gained,
-                    row.intellect_gained,
-                    row.spirit_gained,
-                );
-                let _ = lvl_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_LEVELUP_INFO(
-                    Box::new(m),
-                )));
-            });
-        let td_xp = self.clone();
-        let td_lvl = self.clone();
-        vec![
-            Box::new(move || {
-                let l = td_xp.0.coord();
-                l.conn.db.game_xp_event().remove_on_insert(on_xp);
-            }),
-            Box::new(move || {
-                let l = td_lvl.0.coord();
-                l.conn.db.game_levelup_event().remove_on_insert(on_levelup);
-            }),
-        ]
-    }
 
-    /// EXPLORATION FOG relay, coordinator twin — game_character_explored (insert). Sends the same
-    /// idempotent fog VALUES the per-player leg sends (see `world_view`), from a connection that
-    /// never churns — the coordinator-relay rule's guarantee, see `stdb::connection`.
-    /// `explored_replay` is minted by the dispatcher, not here: the discovery-gate OPEN in the
-    /// login-sequence tail seeds the SAME gate this closure's toast branch reads.
-    fn register_explored_relays(
-        &self,
-        self_guid: u64,
-        tx: SessionTx,
-        explored_replay: Arc<Mutex<ReplayGate>>,
-    ) -> Vec<Box<dyn FnOnce() + Send>> {
-        // ======================================================================================
-        //  EXPLORATION FOG, coordinator twin — game_character_explored (insert)
-        //  The coordinator-relay rule's guarantee (see `stdb::connection`) for the per-player leg
-        //  above: re-sends the same idempotent fog VALUES from a connection that never churns, so a
-        //  fresh-login discovery can't be dropped by AOI resubscription.
-        // ======================================================================================
-        // Fog-word GUARANTEE for live discoveries (the coordinator-relay rule, see
-        // `stdb::connection`; live find 2026-07-19): the fresh-login
-        // first-movement discovery is exactly the AOI-churn window where the per-player callback
-        // drops — a new character discovered Northshire server-side and the map never cleared. The
-        // coordinator re-sends the same idempotent full-word VALUES for every fresh insert (double
-        // fog with the per-player relay is harmless); flag-off the "Discovered" popup deliberately
-        // stays on the per-player path only, so it never toasts twice — flag-on the
-        // per-player leg is gone, so THIS callback carries the toast, behind the same
-        // `ReplayGate` (a coordinator reconnect re-applies the subscription and replays every
-        // cached row; the gate's area_bit key is what keeps that from toasting the whole map).
-        // Login restore: flag-off rides the per-player initial-sync; flag-on it is the explicit
-        // fog sweep at world entry below.
-        let explored_coord_tx = tx.clone();
-        let explored_coord_gate = explored_replay.clone();
-        let on_explored_coord =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_character_explored()
-                .on_insert(move |ctx, row| {
-                    if row.character_guid != self_guid || row.area_bit < 0 {
-                        return;
-                    }
-                    let word_idx = (row.area_bit / 32) as u16;
-                    let lo = word_idx as i32 * 32;
-                    let mut word: u32 = 0;
-                    for r in ctx.db.game_character_explored().iter() {
-                        if r.character_guid == self_guid && r.area_bit >= lo && r.area_bit < lo + 32
-                        {
-                            word |= 1u32 << (r.area_bit - lo);
-                        }
-                    }
-                    let (opcode, body) =
-                        codec::build_explored_zones_values(self_guid, word_idx, word);
-                    let _ = explored_coord_tx.send(Outbound::Raw { opcode, body });
-                    if let Some(out) = discovery_packet(&explored_coord_gate, row) {
-                        let _ = explored_coord_tx.send(out);
-                    }
-                });
-        let td_ex = self.clone();
-        vec![Box::new(move || {
-            let l = td_ex.0.coord();
-            l.conn
-                .db
-                .game_character_explored()
-                .remove_on_insert(on_explored_coord);
-        })]
-    }
-
-    /// QUEST LOG relays, coordinator-registered — game_character_quest (insert/update/delete):
-    /// full PLAYER_QUEST_LOG re-sync (raw-send) on any change to this player's log.
-    fn register_quest_relays(
-        &self,
-        self_guid: u64,
-        tx: SessionTx,
-    ) -> Vec<Box<dyn FnOnce() + Send>> {
-        // ======================================================================================
-        //  QUEST LOG, coordinator-registered — game_character_quest (insert/update/delete)
-        //  Full PLAYER_QUEST_LOG re-sync (raw-send) on any change to this player's log; moved off
-        //  the per-player connection by the coordinator-relay rule for the same reason as
-        //  XP/level-up above.
-        // ======================================================================================
-        // Quest-log array sync (Phase 2, raw-send path). On ANY change to this player's quest log
-        // (accept / kill-progress / turn-in), re-send the FULL PLAYER_QUEST_LOG block (full sync so a
-        // turned-in quest's slot clears). Reads ctx.db (the connection that fired) so the change is
-        // already visible; shares build_quest_log_slots with the login read so slots line up. GATED
-        // behind LYRACORE_QUEST_LOG (default ON) — returns None when set to 0 (escape hatch; the quest-log
-        // descriptor layout is verified against the live 5875 client).
-        fn quest_log_sync(
-            db: &crate::stdb::bindings::RemoteTables,
-            self_guid: u64,
-        ) -> Option<Outbound> {
-            if !crate::config::quest_log_fields_enabled() {
-                return None;
-            }
-            // build_quest_log_slots is now INVENTORY-AWARE (collect-quest completion), so it reads `db`
-            // (game_quest_objective + game_item_instance). Both callers pass the COORDINATOR's cache
-            // (`quest_log_sync` is only ever invoked from coordinator-registered callbacks per the
-            // coordinator-relay rule), which
-            // holds every player's rows and is the only place game_quest_objective lives since the
-            // connection reclaim.
-            let quests: Vec<_> = db.game_character_quest().iter().collect();
-            let slots = super::reads::build_quest_log_slots(db, &quests, self_guid);
-            // Send the FULL quest-log sync on EVERY change, including the empty case. Turning in the LAST
-            // quest flips its `rewarded` flag (an UPDATE, kept row) → build_quest_log_slots (filters
-            // !rewarded) returns EMPTY → full_quest_log_mask(&[]) zeroes all 60 slot fields, which is HOW the
-            // client removes the quest (slot 0's quest_id 783 → 0). This MUST be sent or the turned-in quest
-            // lingers in the log and the questgiver's overhead `?` stays stale until the next quest-log change
-            // (e.g. accepting the follow-up) forces a relay. An earlier empty-slots guard skipped this on a
-            // MISDIAGNOSIS — the real McBride crash was SMSG_SET_FACTION_STANDING sending faction_id instead of
-            // the rep-index (fixed in dee80cb). The all-zero mask is structurally identical to the working
-            // "1 quest left" case (19 slots already zeroed); a zeroed slot 0 is the same clear, not a crash.
-            let mask = codec::update_mask::full_quest_log_mask(&slots);
-            let (opcode, body) = codec::build_values_update_raw(self_guid, &mask);
-            Some(Outbound::Raw { opcode, body })
-        }
-        let quest_ins_tx = tx.clone();
-        // COORDINATOR-registered per the coordinator-relay rule: quest-log rows ride kill and
-        // turn-in transactions — large, movement-concurrent, and a lost update leaves the quest
-        // log desynced until relog. The coordinator sees EVERY player's rows (owner RLS bypass),
-        // so each closure now guards on character_guid; quest_log_sync reads the coordinator
-        // cache, which is a superset, and already filters by self_guid.
-        let on_quest_insert =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_character_quest()
-                .on_insert(move |ctx, row| {
-                    if row.character_guid != self_guid {
-                        return;
-                    }
-                    if let Some(o) = quest_log_sync(&ctx.db, self_guid) {
-                        let _ = quest_ins_tx.send(o);
-                    }
-                });
-        let quest_upd_tx = tx.clone();
-        let on_quest_update =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_character_quest()
-                .on_update(move |ctx, old, row| {
-                    if row.character_guid != self_guid {
-                        return;
-                    }
-                    // Kill-progress feedback: emit SMSG_QUESTUPDATE_ADD_KILL ("Creature slain: n/N") for each
-                    // KILL objective whose count INCREASED this update. Diff logic is the unit-tested pure
-                    // `codec::kill_progress_add_kills`; here we just gather this quest's objectives and relay.
-                    let objs: Vec<(u8, u8, u32, u32)> = ctx
-                        .db
-                        .game_quest_objective()
-                        .iter()
-                        .filter(|o| o.quest_entry == row.quest_entry)
-                        .map(|o| (o.kind, o.obj_index, o.target_entry, o.required_count))
-                        .collect();
-                    for m in codec::kill_progress_add_kills(
-                        row.quest_entry,
-                        &old.counts,
-                        &row.counts,
-                        &objs,
-                    ) {
-                        let _ = quest_upd_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_KILL(Box::new(m)),
-                        ));
-                    }
-                    // Timed-quest expiry: the tick flips `failed` false->true — relay
-                    // SMSG_QUESTUPDATE_FAILEDTIMER so the client's quest-log entry shows FAILED. Diffed (not a
-                    // bare `if row.failed`) so this fires exactly once, on the transition, never on every
-                    // subsequent update to an already-failed row.
-                    if !old.failed && row.failed {
-                        let _ = quest_upd_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_QUESTUPDATE_FAILEDTIMER(
-                                codec::build_questupdate_failedtimer(row.quest_entry),
-                            ),
-                        ));
-                    }
-                    if let Some(o) = quest_log_sync(&ctx.db, self_guid) {
-                        let _ = quest_upd_tx.send(o);
-                    }
-                });
-        let quest_del_tx = tx.clone();
-        let on_quest_delete =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_character_quest()
-                .on_delete(move |ctx, row| {
-                    if row.character_guid != self_guid {
-                        return;
-                    }
-                    // The second live defect from the warm-handoff work, alongside items: finish_transfer's
-                    // cascade deletes every
-                    // game_character_quest row for this character on the SOURCE database — without this guard,
-                    // quest_log_sync would read the now-empty set and send an all-zero PLAYER_QUEST_LOG VALUES,
-                    // visually wiping the quest log on the client for the brief window before the OLD subs are
-                    // torn down, even though the destination's import holds the byte-identical rows.
-                    if let Some(o) = quest_log_sync(&ctx.db, self_guid) {
-                        let _ = quest_del_tx.send(o);
-                    }
-                });
-        let td_qi = self.clone();
-        let td_qu = self.clone();
-        let td_qd = self.clone();
-        vec![
-            Box::new(move || {
-                let l = td_qi.0.coord();
-                l.conn
-                    .db
-                    .game_character_quest()
-                    .remove_on_insert(on_quest_insert);
-            }),
-            Box::new(move || {
-                let l = td_qu.0.coord();
-                l.conn
-                    .db
-                    .game_character_quest()
-                    .remove_on_update(on_quest_update);
-            }),
-            Box::new(move || {
-                let l = td_qd.0.coord();
-                l.conn
-                    .db
-                    .game_character_quest()
-                    .remove_on_delete(on_quest_delete);
-            }),
-        ]
-    }
-
-    /// ITEM INSTANCE relays, coordinator-registered — game_item_instance
-    /// (insert/update/delete): bag CREATE/DESTROY, the PLAYER_FIELD_INV_SLOT pointer,
-    /// SMSG_ITEM_PUSH_RESULT gain-feedback + quest item-objective toast, and the armor/sheet-stats
-    /// relay on an equip-slot or durability-broken crossing. `initial_item_guids` is minted by the
-    /// dispatcher, not here: the login-apply item snapshot in the login-sequence tail reaches into
-    /// the same set.
-    fn register_item_relays(
-        &self,
-        self_guid: u64,
-        tx: SessionTx,
-        initial_item_guids: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<u64>>>,
-    ) -> Vec<Box<dyn FnOnce() + Send>> {
-        // ======================================================================================
-        //  ITEM INSTANCE, coordinator-registered — game_item_instance (insert/update/delete)
-        //  Bag CREATE/DESTROY, the PLAYER_FIELD_INV_SLOT pointer, SMSG_ITEM_PUSH_RESULT gain-
-        //  feedback + quest item-objective toast, and the armor/sheet-stats relay on an equip-slot
-        //  or durability-broken crossing.
-        // ======================================================================================
-        // Inventory live-sync: a new item (vendor buy / loot take / quest reward) appears in the bag,
-        // a removed item (sell / consume) vanishes — WITHOUT a relog. Scoped to THIS player's own items
-        // (owner_guid). Each needs BOTH the item object (CREATE/DESTROY) AND the player's
-        // PLAYER_FIELD_INV_SLOT pointer (set/clear) so the client places/removes it in the bag cell.
-        // (The coinage half of a buy/sell already rides the game_world_entity on_update relay.)
-        // Item-GAIN feedback gate: the base sub's initial apply fires on_item_insert for
-        // every owned item at LOGIN — and those callbacks arrive AFTER on_applied acks (wire-observed:
-        // an on_applied-flipped boolean still let the whole bag toast at login), so the gate is the
-        // AOI dedup pattern instead: snapshot the item guids resident at apply, suppress exactly those.
-        // The client recomputes watched-quest ITEM objectives (tracker + "x/y" floaty) when told an
-        // item ARRIVED. COLLECT_ITEM progress is live-inventory server-side (no counter row change),
-        // so this is the only signal path. Shared by insert (new stack) + update (stack grew).
-        let item_gain_feedback = {
-            let tx = tx.clone();
-            let initial_item_guids = initial_item_guids.clone();
-            move |db: &crate::stdb::bindings::RemoteTables,
-                  item_guid: u64,
-                  slot: u8,
-                  entry: u32,
-                  gained: u32,
-                  stack_add: bool| {
-                // item_guid 0 = an UPDATE event (stack growth — never an apply-time replay);
-                // otherwise suppress the login-apply replay of already-owned rows.
-                if gained == 0
-                    || (item_guid != 0 && initial_item_guids.lock().unwrap().contains(&item_guid))
-                {
-                    return;
-                }
-                let m = codec::build_item_push_result(
-                    self_guid,
-                    255,
-                    slot as u32,
-                    entry,
-                    gained,
-                    stack_add,
-                );
-                let _ = tx.send(Outbound::One(ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(
-                    Box::new(m),
-                )));
-                // Quest item-objective toast: entry matches an incomplete COLLECT_ITEM objective of
-                // an active (un-rewarded, un-failed) quest → SMSG_QUESTUPDATE_ADD_ITEM(entry, gained).
-                let wanted = db.game_character_quest().iter().any(|q| {
-                    q.character_guid == self_guid
-                        && !q.rewarded
-                        && !q.failed
-                        && db.game_quest_objective().iter().any(|o| {
-                            o.quest_entry == q.quest_entry && o.kind == 1 && o.target_entry == entry
-                        })
-                });
-                if wanted {
-                    use wow_world_messages::vanilla::SMSG_QUESTUPDATE_ADD_ITEM;
-                    let _ = tx.send(Outbound::One(
-                        ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_ITEM(SMSG_QUESTUPDATE_ADD_ITEM {
-                            required_item_id: entry,
-                            items_required: gained,
-                        }),
-                    ));
-                }
-            }
-        };
-        let item_gain_ins = item_gain_feedback.clone();
-        let item_gain_upd = item_gain_feedback;
-        let item_ins_tx = tx.clone();
-        let on_item_insert =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_item_instance()
-                .on_insert(move |ctx, row| {
-                    if row.owner_guid != self_guid {
-                        return;
-                    }
-                    item_gain_ins(
-                        &ctx.db,
-                        row.guid,
-                        row.slot,
-                        row.entry,
-                        row.stack_count,
-                        false,
-                    );
-                    // Look up the template for max_durability + container_slots (game_item_template is
-                    // subscribed on the COORDINATOR, which is the cache `ctx.db` is here — this callback is
-                    // coordinator-registered, and the connection reclaim removed the catalogue from the per-player set).
-                    // Fall back to safe defaults if missing.
-                    let (max_durability, container_slots) = ctx
-                        .db
-                        .game_item_template()
-                        .entry()
-                        .find(&row.entry)
-                        .map(|t| (t.max_durability, t.container_slots))
-                        .unwrap_or((row.durability, 0)); // max = current durability as fallback
-                    let view = codec::ItemInstanceView {
-                        guid: row.guid,
-                        entry: row.entry,
-                        owner_guid: row.owner_guid,
-                        slot: row.slot,
-                        stack_count: row.stack_count,
-                        durability: row.durability,
-                        max_durability,
-                        container_slots,
-                    };
-                    // Item object FIRST, then the slot pointer (the pointer must reference an existing object).
-                    let _ =
-                        item_ins_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
-                            Box::new(codec::build_item_create_object(&view)),
-                        )));
-                    if let Some(o) = codec::build_inv_slot_values(self_guid, row.slot, row.guid) {
-                        let _ = item_ins_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                        ));
-                    }
-                    // An item landing directly in an EQUIPMENT slot renders on the model/paperdoll.
-                    if let Some(o) =
-                        codec::build_visible_item_values(self_guid, row.slot, row.entry)
-                    {
-                        let _ = item_ins_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                        ));
-                    }
-                    // For bag-content slots (120..=191), `build_inv_slot_values` returns None (no
-                    // PLAYER_FIELD_INV_SLOT pointer for bag contents). The slot pointer instead lives on
-                    // the container object's own CONTAINER_FIELD_SLOT_N descriptor — send a raw VALUES
-                    // update on the bag's guid so the client populates the bag window.
-                    if let Some((bag_equip_slot, slot_in_bag)) = bag_content_parts(row.slot) {
-                        if let Some(bag) = ctx
-                            .db
-                            .game_item_instance()
-                            .iter()
-                            .find(|i| i.owner_guid == self_guid && i.slot == bag_equip_slot)
-                        {
-                            let (opcode, body) =
-                                codec::build_container_slot_values(bag.guid, slot_in_bag, row.guid);
-                            let _ = item_ins_tx.send(Outbound::Raw { opcode, body });
-                        }
-                    }
-                    // Live armor: an item entering an EQUIPMENT slot (0..=18) changes worn armor → re-push the
-                    // sheet (also corrects gear armor on the initial-state inserts at login). A bag insert (slot
-                    // > 18) is skipped — it can't change worn armor.
-                    if row.slot <= 18 {
-                        let eff = super::armor::effective_armor(&ctx.db, self_guid);
-                        let _ = item_ins_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                                codec::build_resistance_values(self_guid, eff),
-                            )),
-                        ));
-                        // Paperdoll: gear moved -> re-push the paperdoll stats/AP/damage-range alongside armor
-                        // (same trigger set; the login initial-state item replay corrects the CREATE's
-                        // base-only values the same way it does armor).
-                        if let Some(st) = super::armor::sheet_stats(&ctx.db, self_guid) {
-                            let _ = item_ins_tx.send(Outbound::One(
-                                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                                    codec::build_sheet_stats_values(self_guid, &st),
-                                )),
-                            ));
-                        }
-                    }
-                });
-        let item_del_tx = tx.clone();
-        let on_item_delete =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_item_instance()
-                .on_delete(move |ctx, row| {
-                    if row.owner_guid != self_guid {
-                        return;
-                    }
-                    // The diagnosed live defect from the warm-handoff work: finish_transfer's cascade
-                    // deletes every
-                    // game_item_instance row this character owns on the SOURCE database while these OLD subs
-                    // are still registered — without this guard every item relayed SMSG_DESTROY_OBJECT +
-                    // cleared its inventory/visible-item slots on the client, even though the destination's
-                    // import holds the byte-identical rows and no equipment was actually lost.
-                    // Clear the slot pointer FIRST (so the client never points at a doomed guid), then destroy.
-                    if let Some(o) = codec::build_inv_slot_values(self_guid, row.slot, 0) {
-                        let _ = item_del_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                        ));
-                    }
-                    // An item destroyed out of an EQUIPMENT slot un-renders from the model.
-                    if let Some(o) = codec::build_visible_item_values(self_guid, row.slot, 0) {
-                        let _ = item_del_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                        ));
-                    }
-                    // For bag-content slots, clear the container's CONTAINER_FIELD_SLOT_N before destroying
-                    // the item object — same clear-first discipline as the player INV_SLOT pointer above.
-                    // on_delete fires after the row leaves the cache; the bag item itself is a different
-                    // row and is still present, so the iter() lookup succeeds.
-                    if let Some((bag_equip_slot, slot_in_bag)) = bag_content_parts(row.slot) {
-                        if let Some(bag) = ctx
-                            .db
-                            .game_item_instance()
-                            .iter()
-                            .find(|i| i.owner_guid == self_guid && i.slot == bag_equip_slot)
-                        {
-                            let (opcode, body) =
-                                codec::build_container_slot_values(bag.guid, slot_in_bag, 0);
-                            let _ = item_del_tx.send(Outbound::Raw { opcode, body });
-                        }
-                    }
-                    let _ =
-                        item_del_tx.send(Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
-                            codec::build_destroy_object(row.guid),
-                        )));
-                    // Live armor: deleting a WORN item (an equipment slot) drops its armor → re-push the sheet.
-                    // on_delete fires after the row leaves the cache, so the fold reads the remaining gear.
-                    if row.slot <= 18 {
-                        let eff = super::armor::effective_armor(&ctx.db, self_guid);
-                        let _ = item_del_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                                codec::build_resistance_values(self_guid, eff),
-                            )),
-                        ));
-                        // Paperdoll: gear moved -> re-push the paperdoll stats/AP/damage-range alongside armor
-                        // (same trigger set; the login initial-state item replay corrects the CREATE's
-                        // base-only values the same way it does armor).
-                        if let Some(st) = super::armor::sheet_stats(&ctx.db, self_guid) {
-                            let _ = item_del_tx.send(Outbound::One(
-                                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                                    codec::build_sheet_stats_values(self_guid, &st),
-                                )),
-                            ));
-                        }
-                    }
-                });
-        // Item CHANGES (move/equip = slot change; merge/split/consume = stack change; wear/repair =
-        // durability change). On a slot move, re-point the player's bag-slot pointers (clear old, set
-        // new); on a stack/durability change, push the item object's own fields. Without this the client
-        // shows stale slot/count/durability until relog.
-        let item_upd_tx = tx.clone();
-        let on_item_update =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_item_instance()
-                .on_update(move |ctx, old, row| {
-                    if row.owner_guid != self_guid {
-                        return;
-                    }
-                    if row.slot == old.slot && row.stack_count > old.stack_count {
-                        item_gain_upd(
-                            &ctx.db,
-                            0,
-                            row.slot,
-                            row.entry,
-                            row.stack_count - old.stack_count,
-                            true,
-                        );
-                    }
-                    if old.slot != row.slot {
-                        if let Some(o) = codec::build_inv_slot_values(self_guid, old.slot, 0) {
-                            let _ = item_upd_tx.send(Outbound::One(
-                                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                            ));
-                        }
-                        if let Some(o) = codec::build_inv_slot_values(self_guid, row.slot, row.guid)
-                        {
-                            let _ = item_upd_tx.send(Outbound::One(
-                                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                            ));
-                        }
-                        // Equip/unequip moves render/un-render the gear on the model + paperdoll —
-                        // the login create sets PLAYER_VISIBLE_ITEM but nothing relayed it mid-session,
-                        // so equipped gear was invisible until relog. Clear the old equipment slot's
-                        // entry, set the new one (each is a no-op None for non-equipment slots).
-                        if let Some(o) = codec::build_visible_item_values(self_guid, old.slot, 0) {
-                            let _ = item_upd_tx.send(Outbound::One(
-                                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                            ));
-                        }
-                        if let Some(o) =
-                            codec::build_visible_item_values(self_guid, row.slot, row.entry)
-                        {
-                            let _ = item_upd_tx.send(Outbound::One(
-                                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(o)),
-                            ));
-                        }
-                        // For bag-content slot moves: clear the container's old CONTAINER_FIELD_SLOT_N and
-                        // set the new one. build_inv_slot_values returns None for slots >= 120 (correct —
-                        // the player INV_SLOT pointer covers only equip/backpack); we use the raw path here
-                        // targeting the BAG object's guid instead.
-                        if let Some((old_bag_slot, old_slot_in_bag)) = bag_content_parts(old.slot) {
-                            if let Some(bag) = ctx
-                                .db
-                                .game_item_instance()
-                                .iter()
-                                .find(|i| i.owner_guid == self_guid && i.slot == old_bag_slot)
-                            {
-                                let (opcode, body) = codec::build_container_slot_values(
-                                    bag.guid,
-                                    old_slot_in_bag,
-                                    0,
-                                );
-                                let _ = item_upd_tx.send(Outbound::Raw { opcode, body });
-                            }
-                        }
-                        if let Some((new_bag_slot, new_slot_in_bag)) = bag_content_parts(row.slot) {
-                            if let Some(bag) = ctx
-                                .db
-                                .game_item_instance()
-                                .iter()
-                                .find(|i| i.owner_guid == self_guid && i.slot == new_bag_slot)
-                            {
-                                let (opcode, body) = codec::build_container_slot_values(
-                                    bag.guid,
-                                    new_slot_in_bag,
-                                    row.guid,
-                                );
-                                let _ = item_upd_tx.send(Outbound::Raw { opcode, body });
-                            }
-                        }
-                    }
-                    if old.stack_count != row.stack_count || old.durability != row.durability {
-                        let _ = item_upd_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                                codec::build_item_values(row.guid, row.stack_count, row.durability),
-                            )),
-                        ));
-                    }
-                    // Live armor: a slot change that touches the EQUIPMENT region (equip/unequip crosses 0..=18)
-                    // OR a durability change that crosses the BROKEN threshold on a worn item (a broken item grants
-                    // no armor) changes worn armor → re-push UNIT_FIELD_RESISTANCES[0]. The SDK applies the row to
-                    // the cache before this fires, so the fold reads the post-change set.
-                    let slot_crossed_equip =
-                        old.slot != row.slot && (old.slot <= 18 || row.slot <= 18);
-                    let broken_crossed =
-                        row.slot <= 18 && (old.durability == 0) != (row.durability == 0);
-                    if slot_crossed_equip || broken_crossed {
-                        let eff = super::armor::effective_armor(&ctx.db, self_guid);
-                        let _ = item_upd_tx.send(Outbound::One(
-                            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                                codec::build_resistance_values(self_guid, eff),
-                            )),
-                        ));
-                        // Paperdoll: gear moved -> re-push the paperdoll stats/AP/damage-range alongside armor
-                        // (same trigger set; the login initial-state item replay corrects the CREATE's
-                        // base-only values the same way it does armor).
-                        if let Some(st) = super::armor::sheet_stats(&ctx.db, self_guid) {
-                            let _ = item_upd_tx.send(Outbound::One(
-                                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                                    codec::build_sheet_stats_values(self_guid, &st),
-                                )),
-                            ));
-                        }
-                    }
-                });
-        let td_ii = self.clone();
-        let td_id = self.clone();
-        let td_iu = self.clone();
-        vec![
-            Box::new(move || {
-                let l = td_ii.0.coord();
-                l.conn
-                    .db
-                    .game_item_instance()
-                    .remove_on_insert(on_item_insert);
-            }),
-            Box::new(move || {
-                let l = td_id.0.coord();
-                l.conn
-                    .db
-                    .game_item_instance()
-                    .remove_on_delete(on_item_delete);
-            }),
-            Box::new(move || {
-                let l = td_iu.0.coord();
-                l.conn
-                    .db
-                    .game_item_instance()
-                    .remove_on_update(on_item_update);
-            }),
-        ]
-    }
-
-    /// TELEPORT relay, coordinator-registered — game_teleport_event (insert):
-    /// MSG_MOVE_TELEPORT_ACK (same-map) or SMSG_TRANSFER_PENDING+SMSG_NEW_WORLD (cross-map).
-    fn register_teleport_relays(
-        &self,
-        self_guid: u64,
-        tx: SessionTx,
-    ) -> Vec<Box<dyn FnOnce() + Send>> {
-        // ======================================================================================
-        //  TELEPORT, coordinator-registered — game_teleport_event (insert)
-        //  MSG_MOVE_TELEPORT_ACK (same-map) or SMSG_TRANSFER_PENDING+SMSG_NEW_WORLD (cross-map); on
-        //  the coordinator per the coordinator-relay rule (see `stdb::connection`) because the
-        //  per-player connection's AOI resubscription churn can swallow the event mid-flight.
-        // ======================================================================================
-        // Teleport relay: a pending teleport for THIS player → MSG_MOVE_TELEPORT_ACK
-        // (same-map) or SMSG_TRANSFER_PENDING+SMSG_NEW_WORLD (cross-map). Registered on the
-        // COORDINATOR connection per the coordinator-relay rule, NOT `player.conn`: the per-player
-        // conn's AOI grid subscriptions churn mid-flight (aoi.rs recenter, subscribe-new/unsubscribe-old), and a
-        // concurrent transaction's deltas folded into an in-flight apply could swallow the event —
-        // observed 100% on an instance-CREATING portal entry (~200-row transaction): the pair was
-        // never sent and the despawned player limbo'd. The coordinator's subscription set is stable
-        // (never per-query-swapped) and its owner token bypasses the recipient RLS; this closure
-        // self-filters by mover_guid exactly as before, so routing is unchanged. Known edge: a
-        // coordinator watchdog swap drops this callback until the session relogs — that blip
-        // already disrupts every session, accepted. The branch is `still_here`: `teleport_player`
-        // updates the entity IN PLACE same-map and DESPAWNS it cross-map; `row.cross_map` is the
-        // authoritative module-side mirror of that decision. Cross-map: TRANSFER_PENDING and
-        // NEW_WORLD go out together immediately (TRANSFER_PENDING first — the wire order the
-        // 1.12.1 client requires); the client only replies
-        // `MSG_MOVE_WORLDPORT_ACK` once its OWN load finishes, handled in `world/mod.rs`'s `enter_world`.
-        let tele_tx = tx.clone();
-        let tele_coord = self.clone(); // teardown handle — the callback lives on the coordinator db
-        let on_teleport =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_teleport_event()
-                .on_insert(move |_ctx, row| {
-                    if row.mover_guid != self_guid {
-                        return;
-                    }
-                    // AUTHORITATIVE same-map/cross-map signal from the module (`cross_map`), NOT live-entity
-                    // presence: with AOI on, a far same-map teleport moves the self entity out of this viewer's
-                    // grid-scoped subscription, so `find(self_guid)` reads absent post-txn and the old proxy
-                    // wrongly chose the cross-map (NEW_WORLD/loading-screen) path — hanging the client on a
-                    // same-map `.tele` across zones. `still_here == !cross_map`.
-                    let still_here = !row.cross_map;
-                    match build_teleport_relay(
-                        still_here,
-                        row.mover_guid,
-                        row.map_id,
-                        row.x,
-                        row.y,
-                        row.z,
-                        row.orientation,
-                    ) {
-                        Ok(out) => {
-                            let _ = tele_tx.send(out);
-                        }
-                        Err(e) => log::warn!("teleport relay: {e} (guid {})", row.mover_guid),
-                    }
-                });
-        // Per the coordinator-relay rule, the teleport callback lives on the COORDINATOR db
-        // (see its registration) — remove it there.
-        vec![Box::new(move || {
-            tele_coord
-                .0
-                .coord()
-                .conn
-                .db
-                .game_teleport_event()
-                .remove_on_insert(on_teleport);
-        })]
-    }
-
-    /// ADDON MESSAGE relay, coordinator-registered — game_addon_message (insert): a queued
-    /// server→client addon message relayed as an addon-language whisper. Shares `self_identity`
-    /// with [`Self::register_xp_levelup_relays`] — both self-filter on the session's bound
-    /// identity, computed once by the dispatcher.
-    fn register_addon_relays(
-        &self,
-        self_guid: u64,
-        self_identity: spacetimedb_sdk::Identity,
-        tx: SessionTx,
-    ) -> Vec<Box<dyn FnOnce() + Send>> {
-        // ======================================================================================
-        //  ADDON MESSAGE, coordinator-registered — game_addon_message (insert)
-        //  A queued server→client addon message relayed as an addon-language whisper.
-        // ======================================================================================
-        // Addon-bridge relay: a queued server→client addon message becomes an
-        // addon-language whisper (raw-built — gtker's Language enum has no LANG_ADDON) the
-        // client surfaces to addons as CHAT_MSG_ADDON. COORDINATOR-registered (the coordinator-relay
-        // rule: this is the custom-UI state stream — a dropped frame is a stuck progress bar), so the
-        // closure self-filters on the session's bound identity.
-        let addon_tx = tx.clone();
-        let addon_identity = self_identity;
-        let on_addon = self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_addon_message()
-            .on_insert(move |_ctx, row| {
-                if row.recipient_identity != addon_identity {
-                    return;
-                }
-                let text = codec::addon::build_bridge_envelope(&row.cmd, &row.payload);
-                let (opcode, body) = codec::addon::build_addon_smsg_raw(self_guid, &text);
-                let _ = addon_tx.send(Outbound::Raw { opcode, body });
-            });
-        let td_am = self.clone();
-        vec![Box::new(move || {
-            let l = td_am.0.coord();
-            l.conn.db.game_addon_message().remove_on_insert(on_addon);
-        })]
-    }
-
-    /// REPUTATION relays, coordinator-registered — game_player_reputation (insert/update):
-    /// SMSG_SET_FACTION_STANDING on a standing change for this player, the same
-    /// coordinator/replay-gate shape as XP and quest-log. `initial_rep_factions` is minted by the
-    /// dispatcher, not here: the login-apply standings snapshot in the login-sequence tail reaches
-    /// into the same set.
-    fn register_reputation_relays(
-        &self,
-        self_guid: u64,
-        tx: SessionTx,
-        initial_rep_factions: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<u32>>>,
-    ) -> Vec<Box<dyn FnOnce() + Send>> {
-        // ======================================================================================
-        //  REPUTATION, coordinator-registered — game_player_reputation (insert/update)
-        //  SMSG_SET_FACTION_STANDING on a standing change for this player; the same
-        //  coordinator/replay-gate shape as XP and quest-log above.
-        // ======================================================================================
-        // Reputation relay: a stored standing for THIS player changed (quest turn-in rep gain) →
-        // SMSG_SET_FACTION_STANDING so the client's reputation bar moves WITHOUT a relog. RLS scopes the
-        // table to this player; the character_guid guard is belt-and-suspenders. build_set_faction_standing
-        // returns None for a faction id the client enum doesn't know (nothing to show) → skip silently.
-        let rep_ins_tx = tx.clone();
-        let rep_gate = initial_rep_factions.clone();
-        let on_rep_insert =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_player_reputation()
-                .on_insert(move |_ctx, row| {
-                    if row.character_guid != self_guid {
-                        return;
-                    }
-                    // Login-apply replay: this standing already reached the client via
-                    // INITIALIZE_FACTIONS — a re-relay makes the client toast it as a fresh gain.
-                    //
-                    // AUDIT against the explored-area duplicate-discovery bug — deliberately left keyed
-                    // as it is, on BOTH counts. (a) `faction_id` is the
-                    // game's own faction id, not a surrogate PK, so a transfer's re-mint cannot change it —
-                    // the exploration defect has no analogue here. (b) The freeze/replay race cannot reach
-                    // it either: this callback rides the COORDINATOR connection, whose subscription is
-                    // long-lived and was applied long before this player logged in, so a player's login
-                    // replays nothing here and the rows an import writes land while this callback is not
-                    // yet registered. It fires only on a real post-registration insert.
-                    if rep_gate.lock().unwrap().contains(&row.faction_id) {
-                        return;
-                    }
-                    // Send the Faction.dbc ReputationListID (the small 0..63 index the client addresses), NOT
-                    // faction_id — sending the id crashed the client. A `< 0` row has no rep bar → skip (stale
-                    // pre-migration -1 rows self-heal: the next grant re-stamps the real index).
-                    if row.reputation_index >= 0 {
-                        if let Some((opcode, body)) = codec::build_set_faction_standing_raw(
-                            row.reputation_index as u32,
-                            row.standing,
-                        ) {
-                            let _ = rep_ins_tx.send(Outbound::Raw { opcode, body });
-                        }
-                    }
-                });
-        let rep_upd_tx = tx.clone();
-        let on_rep_update =
-            self.0
-                .coord()
-                .conn
-                .db
-                .game_player_reputation()
-                .on_update(move |_ctx, _old, row| {
-                    if row.character_guid != self_guid {
-                        return;
-                    }
-                    if row.reputation_index >= 0 {
-                        if let Some((opcode, body)) = codec::build_set_faction_standing_raw(
-                            row.reputation_index as u32,
-                            row.standing,
-                        ) {
-                            let _ = rep_upd_tx.send(Outbound::Raw { opcode, body });
-                        }
-                    }
-                });
-        let td_ri = self.clone();
-        let td_ru = self.clone();
-        vec![
-            Box::new(move || {
-                let l = td_ri.0.coord();
-                l.conn
-                    .db
-                    .game_player_reputation()
-                    .remove_on_insert(on_rep_insert);
-            }),
-            Box::new(move || {
-                let l = td_ru.0.coord();
-                l.conn
-                    .db
-                    .game_player_reputation()
-                    .remove_on_update(on_rep_update);
-            }),
-        ]
-    }
-
-    fn register_hunter_pet_relays(
-        &self,
-        self_guid: u64,
-        tx: SessionTx,
-    ) -> Vec<Box<dyn FnOnce() + Send>> {
-        let insert_tx = tx.clone();
-        let on_insert = self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_hunter_pet_protocol()
-            .on_insert(move |_ctx, row| {
-                if row.owner_guid != self_guid {
-                    return;
-                }
-                let pet = hunter_pet_protocol_view(row.clone());
-                let _ = insert_tx.send(Outbound::One(
-                    ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                        codec::build_hunter_pet_values(&pet),
-                    )),
-                ));
-            });
-        let update_tx = tx;
-        let on_update = self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_hunter_pet_protocol()
-            .on_update(move |_ctx, old, row| {
-                if row.owner_guid != self_guid || old == row {
-                    return;
-                }
-                let pet = hunter_pet_protocol_view(row.clone());
-                let _ = update_tx.send(Outbound::One(
-                    ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                        codec::build_hunter_pet_values(&pet),
-                    )),
-                ));
-            });
-        let td_insert = self.clone();
-        let td_update = self.clone();
-        vec![
-            Box::new(move || {
-                td_insert
-                    .0
-                    .coord()
-                    .conn
-                    .db
-                    .game_hunter_pet_protocol()
-                    .remove_on_insert(on_insert);
-            }),
-            Box::new(move || {
-                td_update
-                    .0
-                    .coord()
-                    .conn
-                    .db
-                    .game_hunter_pet_protocol()
-                    .remove_on_update(on_update);
-            }),
-        ]
-    }
 }
 
 impl Coordinator {
@@ -3711,14 +2931,8 @@ impl Coordinator {
     /// session to hang this off. A bot's goal tick decides "invite this fellow quester" with no
     /// client behind it, so nothing else in the gateway would ever notice the row.
     ///
-    /// Called ONCE, at gateway startup (`main.rs`). Also installs the RE-ARM hook
-    /// (`CoordinatorInner::on_reconnect`, `connection.rs`) that keeps it alive across a coordinator
-    /// reconnect: every OTHER coordinator-level relay in this file re-registers itself implicitly,
-    /// because it is armed from inside a per-player LOGIN, and a login happens again after any
-    /// reconnect. This one has no login to hang a re-arm off — it runs once at startup — so without
-    /// the hook a reconnect (which the watchdog's own doc comment calls out as covering "a
-    /// SpacetimeDB migration", i.e. a routine module republish, not a rare event on this project)
-    /// would leave it registered on a dead, disconnected `LiveConn` forever.
+    /// Called ONCE, at gateway startup (`main.rs`). Also installs its own reconnect hook, parallel
+    /// to `world_view::arm_shard`, so a module republish binds the callback to the fresh `LiveConn`.
     pub fn spawn_bot_invite_relay(&self) {
         for shard in self.all_shards() {
             shard.arm_bot_invite_relay();
@@ -4742,89 +3956,6 @@ mod tests {
         assert!(!instance_relay_gate(7, None));
     }
 
-    // -------------------------------------------------------------------------------------------
-    //  The shard transfer must not re-announce every explored area
-    // -------------------------------------------------------------------------------------------
-
-    /// One `game_character_explored` row. `id` is the `auto_inc` surrogate the destination RE-MINTS
-    /// on import — the field the old gate keyed on, and the whole of the defect.
-    fn explored(id: u64, area_bit: i32, area_id: u32, experience: u32) -> CharacterExplored {
-        CharacterExplored {
-            id,
-            character_guid: 7,
-            area_bit,
-            area_id,
-            experience,
-        }
-    }
-
-    /// The reported live symptom, end to end through the REAL relay decision: a character arrives on
-    /// another database, its explored rows are re-inserted with FRESH ids, and not one of them may
-    /// toast "Discovered: <area> — N experience gained".
-    #[test]
-    fn an_imported_explored_row_with_a_re_minted_id_emits_no_discovery_packet_issue_41() {
-        let login = [explored(1, 40, 87, 120), explored(2, 87, 12, 60)];
-        let gate = Mutex::new(ReplayGate::default());
-
-        // Login / initial apply: the replay callbacks and the snapshot race (see `ReplayGate`), so
-        // assert BOTH orders. Replay-first — the order that produced the live symptom:
-        for row in &login {
-            assert!(
-                discovery_packet(&gate, row).is_none(),
-                "the initial-apply replay must never toast, gate closed"
-            );
-        }
-        gate.lock().unwrap().open(login.iter().map(|r| r.area_bit));
-
-        // Now the transfer: the SAME areas arrive as brand-new rows with re-minted ids (and, since
-        // `experience` stores the XP granted at the ORIGINAL discovery, a convincingly wrong number).
-        for row in [explored(9001, 40, 87, 120), explored(9002, 87, 12, 60)] {
-            assert!(
-                discovery_packet(&gate, &row).is_none(),
-                "a re-minted row for an already-explored area_bit is not a discovery"
-            );
-        }
-
-        // Snapshot-first (the other side of the race) must reach the same verdict.
-        let gate = Mutex::new(ReplayGate::default());
-        gate.lock().unwrap().open(login.iter().map(|r| r.area_bit));
-        for row in [explored(9001, 40, 87, 120), explored(9002, 87, 12, 60)] {
-            assert!(discovery_packet(&gate, &row).is_none());
-        }
-    }
-
-    /// …while a GENUINELY new area still toasts, exactly once, carrying its own area/XP.
-    #[test]
-    fn a_fresh_discovery_still_emits_its_packet_once_issue_41() {
-        let gate = Mutex::new(ReplayGate::default());
-        gate.lock().unwrap().open([40, 87]);
-
-        let fresh = explored(9003, 108, 9, 155);
-        let Some(Outbound::Raw { opcode, body }) = discovery_packet(&gate, &fresh) else {
-            panic!("a never-before-explored area_bit must toast a discovery packet");
-        };
-        let (want_op, want_body) = codec::build_exploration_experience_raw(9, 155);
-        assert_eq!((opcode, body), (want_op, want_body));
-
-        // Idempotent: the same area arriving again (a later transfer, a duplicated relay) is silent.
-        assert!(
-            discovery_packet(&gate, &explored(9004, 108, 9, 155)).is_none(),
-            "an area announced once must never announce again"
-        );
-    }
-
-    /// Nothing announces until the snapshot is taken and the gate opened.
-    #[test]
-    fn the_replay_gate_admits_nothing_before_it_is_opened_issue_41() {
-        let mut gate = ReplayGate::default();
-        assert!(
-            !gate.admit_once(9),
-            "a historical exploration row replayed at login must not toast a discovery"
-        );
-        gate.open([]);
-        assert!(gate.admit_once(9), "a live discovery after login must announce");
-    }
-
     /// The non-test half of this file as the source scans below may read it: `//` comments STRIPPED
     /// and every whitespace run collapsed to one space.
     ///
@@ -4847,43 +3978,6 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         decommented.split_whitespace().collect::<Vec<_>>().join(" ")
-    }
-
-    /// The per-player subscription list must NEVER carry a static CATALOGUE table. This list
-    /// runs once per session, so anything in it is materialised into every player's client cache;
-    /// `game_item_template` alone (17,720 rows x 32 columns) measured ~37MB per connection, taking
-    /// 20 connections from +220MB to +953MB. The coordinator subscribes these once for the whole
-    /// gateway and every reader already uses that handle.
-    ///
-    /// Scanned on the comment-stripped source, so the DO-NOT-RE-ADD note at the call site cannot
-    /// satisfy this test — the mutation it catches is someone pasting the query back in.
-    #[test]
-    fn the_per_player_subscription_carries_no_static_catalogue_table() {
-        let code = scanned_source();
-        for table in [
-            "game_item_template",
-            "game_gameobject_template",
-            "game_spell",
-            "game_creature_template",
-            "game_quest_template",
-            // The connection reclaim's second pass. Not tens of MB (396 rows) — kept in this list because it is
-            // provably dead weight on the player connection: no callback is registered on
-            // `player.conn.db.game_quest_objective()` and every reader takes the coordinator's
-            // cache. The mutation this catches is a future quest feature "needing objectives on
-            // the player connection" and pasting the query back instead of reaching for
-            // `self.0.coord()` the way `quest_log_sync` and `build_quest_log_slots` already do.
-            "game_quest_objective",
-        ] {
-            assert!(
-                !code.contains(&format!("\"SELECT * FROM {table}\"")),
-                "the per-player subscription list has re-acquired the static world table \
-                 `{table}`. That is a whole extra copy of it in EVERY session's client cache for \
-                 data the coordinator already holds once — up to tens of MB each for the big \
-                 catalogues (the likely mechanism behind a documented out-of-memory death at ~500 \
-                 sessions), and dead weight even for the small ones. If a player-connection \
-                 callback genuinely needs these rows, take `self.0.coord()`'s cache instead."
-            );
-        }
     }
 
     /// The span of ONE top-level `fn NAME(` in a DIFFERENT file of this module tree — the
@@ -4933,23 +4027,21 @@ mod tests {
 
     /// The call-site tripwire for the shared-view `Viewer`'s construction.
     ///
-    /// The session's `Viewer` must be built with the SAME dedup/gate state the per-player relays in
-    /// this file capture — one `created` set, one `ViewerGates`. Hand either of them a fresh
-    /// instance instead and the guarantee they exist for (exactly-once CREATE delivery, the
-    /// spirit-healer ghost gate) is void, with nothing else failing.
+    /// The session's `Viewer` must hold the same dedup/gate state prepared during world entry.
+    /// Hand it a fresh instance and the exactly-once CREATE or spirit-healer gate silently splits.
     #[test]
     fn the_viewer_is_registered_with_the_shared_dedup_sets_and_gates() {
         let code = scanned_source();
         for field in [
+            "bound_identity: self_identity,",
             "created: created.clone(),",
             "gates: viewer_gates.clone(),",
             "skill_slots: skill_slots.clone(),",
         ] {
             assert!(
                 code.contains(field),
-                "the shared-view `Viewer` is no longer constructed with `{field}` — it now holds a \
-                 private copy of state the per-player relays in this file still write to, so the two \
-                 halves of every dedup/gate silently disagree"
+                "the shared-view `Viewer` is no longer constructed with `{field}` — world entry and \
+                 shared writer jobs now use different relay state"
             );
         }
         assert!(
@@ -5006,11 +4098,11 @@ mod tests {
     fn the_realm_private_relays_ride_the_recipient_keyed_dispatchers() {
         let body = decommented(top_level_fn_body_of("world_view.rs", "arm_realm_private"));
         assert!(
-            body.contains("wire_insert(db.game_whisper_event(), \"realm.game_whisper_event.insert\", &view, |v, row| { whisper_appeared(v, row) });"),
+            body.contains("wire_insert_live(db.game_whisper_event(), \"realm.game_whisper_event.insert\", &view, |v, row| { whisper_appeared(v, row) });"),
             "arm_realm_private no longer relays realm-core whispers through `whisper_appeared`"
         );
         assert!(
-            body.contains("wire_insert(db.game_group_event(), \"realm.game_group_event.insert\", &view, move |v, row| { group_event_appeared(v, &coord, row) });"),
+            body.contains("wire_insert_live(db.game_group_event(), \"realm.game_group_event.insert\", &view, move |v, row| { group_event_appeared(v, &coord, row) });"),
             "arm_realm_private no longer relays realm-core group events through \
              `group_event_appeared` (which also carries the QUEST_SHARE detail JOIN through a \
              WORLD handle — realm-core's cache has no quest catalogue)"
@@ -5023,141 +4115,6 @@ mod tests {
                 && whisper.contains("private_recipient_audience(row.recipient_guid, viewer.self_guid)"),
             "whisper_appeared is no longer recipient-keyed — on an owner-token read that is a \
              privacy leak: every session would receive every player's private whispers"
-        );
-    }
-
-    /// Tripwire: the exploration relay must route its popup through [`discovery_packet`], which is
-    /// the only thing the tests above can see, AND must actually SEND what it returns. Deleting the
-    /// call and inlining the codec would restore the defect with every test above still green, so
-    /// the ONE remaining call site of `build_exploration_experience_raw` in this file has to be the
-    /// gated one — and the gated one has to reach the wire (mutation: `let _ = discovery_packet(..)`
-    /// kept the identifier and killed the feature, green).
-    #[test]
-    fn the_discovery_popup_has_exactly_one_gated_call_site_issue_41() {
-        let body = scanned_source();
-        assert_eq!(
-            body.matches("build_exploration_experience_raw").count(),
-            1,
-            "the \"Discovered\" popup must be built in `discovery_packet` and nowhere else — an \
-             ungated second call site is the explored-area duplicate-discovery defect wearing a \
-             different hat"
-        );
-        assert_eq!(
-            body.matches("discovery_packet(&explored_coord_gate, row)").count(),
-            1,
-            "the game_character_explored on_insert relay must ask `discovery_packet` whether to toast"
-        );
-        assert!(
-            body.contains(
-                "if let Some(out) = discovery_packet(&explored_coord_gate, row) { let _ = explored_coord_tx.send(out); }"
-            ),
-            "`discovery_packet`'s answer must be SENT — asking the gate and dropping the packet \
-             leaves every test in this module green while no player ever sees a \"Discovered\" line \
-             again (the inverse of the explored-area duplicate-discovery defect, and the mutation \
-             that survived the identifier-only scan)"
-        );
-    }
-
-    /// Tripwire for the OTHER half of the wiring, and the one mutation the behavioural tests
-    /// above cannot see: the discovery gate has to be OPENED, seeded from the coordinator cache's
-    /// `area_bit`s. Deleting the `open` call leaves every test green while silently killing the
-    /// feature (no discovery ever toasts again); seeding with row ids instead of `area_bit`s
-    /// re-toasts every explored area after a cross-database transfer's auto_inc re-mint.
-    ///
-    /// Note: still a source scan — the weakest form of tripwire. It is what is available:
-    /// opening the gate happens inside `subscribe_player_events`, which needs a live SpacetimeDB
-    /// connection, so no test in this crate can execute it. It reads [`scanned_source`], so a
-    /// comment quoting the call no longer satisfies it. The behavioural half (`ReplayGate` +
-    /// `discovery_packet`) is covered for real above.
-    #[test]
-    fn the_discovery_gate_is_opened_and_seeded_with_area_bits_issue_41() {
-        let body = scanned_source();
-        assert_eq!(
-            body.matches("explored_replay.lock().unwrap().open(")
-                .count(),
-            1,
-            "the discovery gate must be opened exactly once"
-        );
-        assert_eq!(
-            body.matches(".map(|r| r.area_bit),").count(),
-            1,
-            "the discovery gate must be seeded with area_bits — the key that survives the \
-             destination's auto_inc re-mint; seeding it with row ids is the defect"
-        );
-    }
-
-    // -------------------------------------------------------------------------------------------
-    //  Every player-connection callback registered here must be torn down
-    // -------------------------------------------------------------------------------------------
-    //
-    // The actual double-discovery-toast defect: `on_explored_insert` (game_character_explored, the toast relay) was
-    // registered on EVERY world entry and never removed from the teardown list — its coordinator-side
-    // sibling `on_explored_coord` had one, this one did not. Each accumulated registration is another
-    // live callback on the same table, so one discovery fired the "Discovered: <area>" toast once per
-    // registration; the XP relay (`on_xp`) IS torn down, so it fired exactly once — precisely the
-    // asymmetry the operator reported ("two popups, XP once").
-
-    /// Every `let <ident> = <expr>.on_insert(`/`.on_update(`/`.on_delete(...);` REGISTRATION in `text`
-    /// (the statement bounded by the first `;` after `<ident> =` — true for every DIRECT registration
-    /// in this file, which all call the event method immediately after the `=`) that has no matching
-    /// `remove_on_insert(<ident>)` / `remove_on_update(<ident>)` / `remove_on_delete(<ident>)` call
-    /// anywhere else in `text`. Returns each unpaired registration as `"<ident> (<method>)"`.
-    ///
-    /// Does NOT see the two `.map(|realm| { ... })`-wrapped registrations (`on_realm_group`,
-    /// `on_realm_whisper`) — their teardown sits behind an `Option`, not a plain `let`, so they don't
-    /// fit this statement shape. Both are already covered by their own dedicated tripwires:
-    /// `the_realm_core_group_relay_is_gated_filtered_and_torn_down` and
-    /// `the_realm_core_whisper_relay_is_gated_filtered_and_torn_down`, above.
-    fn unpaired_registrations(text: &str) -> Vec<String> {
-        let mut missing = Vec::new();
-        let mut search_from = 0usize;
-        while let Some(rel) = text[search_from..].find("let ") {
-            let ident_start = search_from + rel + 4;
-            let ident_end = text[ident_start..]
-                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .map(|o| ident_start + o)
-                .unwrap_or(text.len());
-            let ident = &text[ident_start..ident_end];
-            search_from = ident_end;
-            if ident.is_empty() {
-                continue; // `let (a, b, ...) = ...` / `let mut ...` — not a single bound name
-            }
-            let after = text[ident_end..].trim_start();
-            if !after.starts_with('=') || after.starts_with("==") {
-                continue; // e.g. `let x: SomeType = ...` — the `=` isn't immediately after the ident
-            }
-            let stmt_end = text[ident_end..]
-                .find(';')
-                .map(|o| ident_end + o)
-                .unwrap_or(text.len());
-            let stmt = &text[ident_end..stmt_end];
-            let Some(method) = ["on_insert", "on_update", "on_delete"]
-                .into_iter()
-                .find(|m| stmt.contains(&format!(".{m}(")))
-            else {
-                continue; // not an event-callback registration
-            };
-            let teardown = format!("remove_{method}({ident})");
-            if !text.contains(&teardown) {
-                missing.push(format!("{ident} ({method})"));
-            }
-        }
-        missing
-    }
-
-    /// Proves [`unpaired_registrations`] actually catches a missing teardown rather than being
-    /// vacuously green (a scanner with an inverted or short-circuited check would pass the real audit
-    /// below for the wrong reason). A synthetic snippet with one paired and one unpaired registration.
-    #[test]
-    fn the_teardown_scanner_flags_a_synthetic_missing_teardown() {
-        let synthetic = "let on_paired = tbl.on_insert(move |_ctx, row| { touch(row); }); \
-                          let on_leaked = tbl2.on_insert(move |_ctx, row| { touch(row); }); \
-                          fn teardown() { tbl.remove_on_insert(on_paired); }";
-        assert_eq!(
-            unpaired_registrations(synthetic),
-            vec!["on_leaked (on_insert)".to_string()],
-            "the scanner must flag exactly the registration with no matching remove_on_insert call, \
-             and not the paired one next to it"
         );
     }
 
@@ -5943,20 +4900,4 @@ mod tests {
         );
     }
 
-    /// The actual teardown audit: no player-connection callback registered in this file may be left
-    /// without a teardown. Mutation (verified live, reverted with `Edit`): deleting the
-    /// `on_explored_insert` teardown line this test exists to protect turns this test red with the
-    /// exact identifier named in the failure message.
-    #[test]
-    fn every_registered_player_callback_has_a_teardown_issue_89() {
-        let missing = unpaired_registrations(&scanned_source());
-        assert!(
-            missing.is_empty(),
-            "the following callbacks are registered with no matching `remove_on_*` teardown — each \
-             leaks another live subscription per world entry (or per session), and a single live \
-             event then fires its relay once per accumulated registration — the double-discovery-toast \
-             defect's exact shape, \
-             reproduced for a different table: {missing:?}"
-        );
-    }
 }

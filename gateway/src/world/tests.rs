@@ -567,8 +567,10 @@ struct InMemoryStore {
     /// When set, `set_target` fails before the reducer can complete. This models the call pipe
     /// whose transport dies while an admitted world session is in flight.
     set_target_error: Option<String>,
-    /// Whether the in-world relay registration was torn down when the session ended.
-    relay_stopped: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Optional real shared view used by world-port ordering tests.
+    relay_view: Option<std::sync::Arc<crate::stdb::world_view::WorldView>>,
+    /// Whether this character still had an addressable viewer at each transfer-resolution call.
+    viewer_present_at_settle: std::sync::Mutex<Vec<bool>>,
     /// Recorded `cancel_aura` spell ids — CMSG_CANCEL_AURA.
     cancelled_auras: std::sync::Mutex<Vec<u32>>,
     /// Recorded `cancel_cast` self_guids — CMSG_CANCEL_CAST.
@@ -756,6 +758,12 @@ impl WorldStore for InMemoryStore {
         &self,
         character_guid: u64,
     ) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        if let Some(view) = &self.relay_view {
+            self.viewer_present_at_settle.lock().unwrap().push(
+                view.viewer_of_owner(crate::stdb::world_view::OwnerGuid(character_guid))
+                    .is_some(),
+            );
+        }
         if let Some(e) = &self.settle_error {
             let nth = self
                 .settle_calls
@@ -1080,7 +1088,7 @@ impl WorldStore for InMemoryStore {
         &self,
         _account_id: u64,
         self_guid: u64,
-        _login_instance: u64,
+        login_instance: u64,
         login_map: u32,
         login_x: f32,
         login_y: f32,
@@ -1092,11 +1100,16 @@ impl WorldStore for InMemoryStore {
             .unwrap()
             .push((self_guid, login_map, login_x, login_y));
         *self.session_depth.lock().unwrap() = Some(tx.depth_handle());
-        match &self.relay_stopped {
-            Some(stopped) => Ok(PlayerSubscriptions::with_teardown({
-                let stopped = stopped.clone();
-                move || stopped.store(true, std::sync::atomic::Ordering::SeqCst)
-            })),
+        match &self.relay_view {
+            Some(view) => Ok(PlayerSubscriptions::registered_for_test(
+                view.clone(),
+                self_guid,
+                login_instance,
+                login_map,
+                login_x,
+                login_y,
+                tx,
+            )),
             None => Ok(PlayerSubscriptions::empty()),
         }
     }
@@ -3772,6 +3785,64 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
 }
 
 #[test]
+fn worldport_removes_the_source_viewer_before_routing_and_registers_a_replacement() {
+    let view = std::sync::Arc::new(crate::stdb::world_view::WorldView::new(true));
+    let mut ported = warrior_entity();
+    ported.map_id = 1;
+    ported.x = 100.0;
+    ported.y = 200.0;
+    let store = std::sync::Arc::new(InMemoryStore {
+        entity_in_world: false,
+        login_entity: Some(warrior_entity()),
+        worldport_entity: Some(ported),
+        relay_view: Some(view.clone()),
+        ..tester_store(7)
+    });
+
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..10 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+    let source_session = view
+        .viewer_of_owner(crate::stdb::world_view::OwnerGuid(1))
+        .expect("login registers the source viewer")
+        .session;
+
+    MSG_MOVE_WORLDPORT_ACK {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..9 {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    assert_eq!(
+        store.viewer_present_at_settle.lock().unwrap().as_slice(),
+        &[false, false],
+        "neither initial routing nor world-port routing may see a registered source viewer; the \
+         second observation is the transfer-cascade safety boundary"
+    );
+    let destination_session = view
+        .viewer_of_owner(crate::stdb::world_view::OwnerGuid(1))
+        .expect("destination world entry registers its viewer")
+        .session;
+    assert_ne!(
+        destination_session, source_session,
+        "world-port must replace, not reuse, the source viewer lifetime"
+    );
+
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
 fn login_initialize_factions_carries_persisted_standing_at_its_reputation_index() {
     // A persisted `game_player_reputation` row must land in the login
     // SMSG_INITIALIZE_FACTIONS at its STORED reputation_index slot (0..63), never faction_id — the
@@ -3818,6 +3889,59 @@ fn login_initialize_factions_carries_persisted_standing_at_its_reputation_index(
             assert_eq!(f.standing, 0, "slot {i} should remain the Neutral/0 stub");
         }
     }
+
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn login_with_resident_items_and_reputation_emits_no_gain_feedback() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(warrior_entity()),
+        player_items_fixture: vec![codec::ItemInstanceView {
+            guid: 0x4000_0000_0000_0001,
+            entry: 25,
+            owner_guid: 1,
+            slot: 23,
+            stack_count: 1,
+            durability: 20,
+            max_durability: 20,
+            container_slots: 0,
+        }],
+        reputations: vec![(19, 3175, false)],
+        ..tester_store(7)
+    });
+
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+
+    // Ten fixed login/self frames plus the resident item's CREATE. The item and standing are
+    // snapshots in those frames, not live insert callbacks, so neither feedback packet is lawful.
+    for _ in 0..11 {
+        let message = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+        assert!(
+            !matches!(
+                message,
+                ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(_)
+                    | ServerOpcodeMessage::SMSG_SET_FACTION_STANDING(_)
+            ),
+            "resident login state must not look like a newly gained item or reputation change"
+        );
+    }
+    client
+        .set_read_timeout(Some(std::time::Duration::from_millis(50)))
+        .unwrap();
+    assert!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).is_err(),
+        "login queued an unexpected post-snapshot feedback frame"
+    );
 
     drop(client);
     server.join().unwrap();
@@ -4125,6 +4249,7 @@ fn a_movement_desync_that_never_heals_still_ends_the_session() {
 
 #[test]
 fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_screen() {
+    let view = std::sync::Arc::new(crate::stdb::world_view::WorldView::new(true));
     let xdb = FakeShardDb::with_character(
         1,
         FakeChar {
@@ -4141,6 +4266,7 @@ fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_scree
         xdb: Some(xdb),
         settle_error: Some("instances shard unreachable".into()),
         settle_ok_calls: 1, // the LOGIN routes fine; the world-port's settle is the one that fails
+        relay_view: Some(view.clone()),
         ..tester_store(7)
     });
 
@@ -4179,6 +4305,17 @@ fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_scree
     assert!(
         format!("{err:#}").contains("instances shard unreachable"),
         "{err:#}"
+    );
+    assert!(
+        view.viewer_of_owner(crate::stdb::world_view::OwnerGuid(1))
+            .is_none(),
+        "a failed transfer terminates the session and must not restore its source viewer"
+    );
+    assert!(
+        store
+            .logout_called
+            .load(std::sync::atomic::Ordering::SeqCst),
+        "early viewer removal keeps InWorld intact so the existing abort teardown still logs out"
     );
 }
 
@@ -8285,14 +8422,12 @@ fn spirit_healer_activate_dispatches_and_confirms_the_healer_guid() {
 
 #[test]
 fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
-    let relay_stopped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let store = std::sync::Arc::new(InMemoryStore {
         login_entity: Some(warrior_entity()),
         set_target_error: Some("transport disconnected".into()),
         // The same dead transport makes leave-world cleanup unreachable. Teardown is best-effort,
         // but the client session and its admission seat must not wait for that reducer.
         logout_error: Some("transport disconnected".into()),
-        relay_stopped: Some(relay_stopped.clone()),
         ..tester_store(7)
     });
     let queue = std::sync::Arc::new(LoginQueue::new(1, 0));
@@ -8339,10 +8474,6 @@ fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
             .logout_called
             .load(std::sync::atomic::Ordering::SeqCst),
         "teardown still attempts leave-world cleanup"
-    );
-    assert!(
-        relay_stopped.load(std::sync::atomic::Ordering::SeqCst),
-        "session teardown removes local relays"
     );
     assert_eq!(queue.active(), 0, "the ended session released its seat");
     assert_eq!(
