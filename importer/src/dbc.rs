@@ -160,8 +160,8 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
 
     // Taxi catalogue: all three tables are read from the same in-memory operator-owned MPQ chain,
     // checked as one graph, and emitted as one recoverable clear+reload family. Isolated points for
-    // absent paths are omitted with a warning; every other malformed catalogue fails before the
-    // first DELETE.
+    // absent paths and paths without geometry are omitted with warnings; every other malformed
+    // catalogue fails before the first DELETE.
     let taxi_nodes: DbcTaxiNodes = read_table(&mut chain)?;
     let taxi_paths: DbcTaxiPath = read_table(&mut chain)?;
     let taxi_path_nodes: DbcTaxiPathNode = read_table(&mut chain)?;
@@ -789,10 +789,10 @@ struct TaxiCatalogueSql {
 }
 
 /// Validate and emit the three-table taxi catalogue as one deterministic clear+reload family.
-/// All validation happens before SQL is returned: a path must resolve both endpoint nodes, every
-/// path must have geometry, costs/indices must be non-negative, and the operator's data may not enter
-/// the reserved fixture namespace. A point for an absent path is omitted with a stable warning. Any
-/// other malformed client extract fails before `run_sql_statements` can execute the first DELETE.
+/// All validation happens before SQL is returned: a path must resolve both endpoint nodes,
+/// costs/indices must be non-negative, and the operator's data may not enter the reserved fixture
+/// namespace. A point for an absent path or a path without geometry is omitted with a stable warning.
+/// Any other malformed client extract fails before `run_sql_statements` can execute the first DELETE.
 fn taxi_catalogue_sql(
     nodes: &DbcTaxiNodes,
     paths: &DbcTaxiPath,
@@ -947,13 +947,13 @@ fn taxi_catalogue_sql(
             ),
         ));
     }
-    if let Some(path_id) = path_ids
+    let mut empty_paths: Vec<u32> = path_ids
         .iter()
         .copied()
-        .find(|id| !paths_with_points.contains(id))
-    {
-        bail!("TaxiPath.dbc path {path_id} has no TaxiPathNode.dbc points");
-    }
+        .filter(|id| !paths_with_points.contains(id))
+        .collect();
+    empty_paths.sort_unstable();
+    path_rows.retain(|(id, _)| paths_with_points.contains(id));
 
     let counts = TaxiCounts {
         nodes: node_rows.len(),
@@ -1068,14 +1068,13 @@ fn taxi_catalogue_sql(
         &point_rows,
     );
     dangling_points.sort_unstable();
-    let warnings = dangling_points
-        .into_iter()
-        .map(|(id, path_id)| {
-            format!(
-                "dbc: WARN TaxiPathNode.dbc point {id} references missing path {path_id}; omitted"
-            )
-        })
-        .collect();
+    let mut warnings = Vec::with_capacity(dangling_points.len() + empty_paths.len());
+    warnings.extend(dangling_points.into_iter().map(|(id, path_id)| {
+        format!("dbc: WARN TaxiPathNode.dbc point {id} references missing path {path_id}; omitted")
+    }));
+    warnings.extend(empty_paths.into_iter().map(|path_id| {
+        format!("dbc: WARN TaxiPath.dbc path {path_id} has no TaxiPathNode.dbc points; omitted")
+    }));
     Ok(TaxiCatalogueSql {
         statements: stmts,
         counts,
@@ -1596,20 +1595,43 @@ mod tests {
     }
 
     #[test]
-    fn taxi_catalogue_sql_rejects_a_path_without_valid_geometry() {
-        let (nodes, paths, _) = synthetic_taxi_catalogue();
-        let dangling_point = DbcTaxiPathNode {
-            rows: vec![taxi_point_row(5221, 248, 0, 40.0, 0, 0)],
-        };
+    fn taxi_catalogue_sql_keeps_valid_geometry_when_a_path_has_no_points() {
+        let (nodes, mut paths, points) = synthetic_taxi_catalogue();
+        paths.rows.push(taxi_path_row(472, 20, 10, 50));
 
-        let err = taxi_catalogue_sql(&nodes, &paths, &dangling_point)
-            .unwrap_err()
-            .to_string();
+        let TaxiCatalogueSql {
+            statements: stmts,
+            counts,
+            warnings,
+        } = taxi_catalogue_sql(&nodes, &paths, &points).unwrap();
 
-        assert!(
-            err.contains("TaxiPath.dbc path 70 has no TaxiPathNode.dbc points"),
-            "{err}"
+        assert_eq!(
+            counts,
+            TaxiCounts {
+                nodes: 2,
+                paths: 1,
+                path_nodes: 3,
+            }
         );
+        assert_eq!(
+            warnings,
+            ["dbc: WARN TaxiPath.dbc path 472 has no TaxiPathNode.dbc points; omitted"]
+        );
+        let path_insert = stmts
+            .iter()
+            .find(|sql| sql.starts_with("INSERT INTO game_taxi_path "))
+            .unwrap();
+        assert!(path_insert.contains("(70,10,20,125)"), "{path_insert}");
+        assert!(!path_insert.contains("(472,20,10,50)"), "{path_insert}");
+
+        let point_insert = stmts
+            .iter()
+            .find(|sql| sql.starts_with("INSERT INTO game_taxi_path_node "))
+            .unwrap();
+        let p0 = point_insert.find("(701,70,0,").unwrap();
+        let p1 = point_insert.find("(702,70,1,").unwrap();
+        let p2 = point_insert.find("(703,70,2,").unwrap();
+        assert!(p0 < p1 && p1 < p2, "{point_insert}");
     }
 
     #[test]
