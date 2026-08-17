@@ -592,18 +592,15 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // ── THE COORDINATOR-RELAY RULE ─────────────────────────────────────────────────────────
         // Every relay whose loss leaves the CLIENT stuck in a wrong state — as opposed to merely
         // late — is subscribed HERE, on the stable coordinator connection, and never on the
-        // per-player one. The per-player connection's AOI grid subscriptions churn as the player
-        // moves, and the SDK's in-flight subscription apply can swallow a concurrent transaction's
-        // deltas: an instance-CREATING portal entry (~200 rows + the event, one transaction) lost
-        // its teleport event, and the player limbo'd — despawned, with no SMSG_TRANSFER pair ever
-        // sent. The owner token bypasses each row's recipient RLS, so EVERY player's rows arrive on
-        // this one connection and each session's callback self-filters by its own guid.
+        // session-scoped connection. Historical AOI subscriptions churned as the player moved, and
+        // the SDK's in-flight apply could swallow a concurrent transaction's deltas: an
+        // instance-creating portal entry lost its teleport event and left the player despawned.
+        // The owner token bypasses recipient RLS, so every player's rows arrive here. Shared
+        // callbacks route addressed rows through WorldView's typed owner/identity indexes.
         //
-        // Members of the class, all subscribed below or registered against `coord()` in
-        // `stdb::subscriptions`: teleport, XP/level-up, quest log, item instances, the addon
-        // bridge, reputation, explored-area fog, and realm-core's group/whisper twins. Anything
-        // added to that list must land here too; anything a dropped callback would only make LATE
-        // (peer movement, peer VALUES) belongs on the per-player connection.
+        // Members of the class include teleport, XP/level-up, quest log, item instances, the addon
+        // bridge, reputation, explored-area fog, and realm-core's group/whisper twins. Every one is
+        // armed once in `world_view::arm_shard` (or `arm_realm_private`) and re-armed on reconnect.
         //
         // Teleport events — the TRANSFER relay, and the failure that produced the rule.
         "SELECT * FROM game_teleport_event",
@@ -780,9 +777,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_aura",
         // The player's persisted reputation standings, chained into the
         // login SMSG_INITIALIZE_FACTIONS. Without this subscription the coordinator's local cache of
-        // game_player_reputation is empty and player_reputations() always returns nothing (the bug
-        // this fixes — the relay path for the live SET_FACTION_STANDING update subscribes per-player
-        // separately in subscriptions.rs, but the coordinator's own read cache needs its own sub too).
+        // game_player_reputation is empty and player_reputations() always returns nothing.
         "SELECT * FROM game_player_reputation",
         // Mail. Subscribed on EVERY connection in the set, because the mailbox has two planes:
         // realm-core is authoritative on a sharded realm, and a single-database gateway reads its
@@ -823,12 +818,9 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // each handle reads its own database's copy, and the gateway decides which copy
         // is authoritative.
         //
-        // `game_group_event` is the RELAY: flag-off on a world shard the per-player connection
-        // subscribes it under RLS (the pre-realm-core path), and on realm-core the owner-token
-        // coordinator reads every player's rows and each session self-filters by `recipient_guid`
-        // — the coordinator-relay rule above. (The event table itself has since moved to the BASE
-        // list above so the shared dispatch works on a single-database gateway too; the two
-        // party-STATE tables stay multi-database-only.)
+        // `game_group_event` is the relay. The owner-token coordinator reads every player's rows;
+        // shared dispatch selects the recipient by guid. The event table lives in the base list so
+        // this also works on a single-database gateway; the two party-state tables stay sharded-only.
         queries.push("SELECT * FROM game_group");
         queries.push("SELECT * FROM game_group_member");
         // Loot rolls — a DIFFERENT reason than every table above: nothing here is a CLIENT
@@ -1801,8 +1793,8 @@ impl Coordinator {
                 world,
             }),
         );
-        // Arm the SHARED area-of-interest dispatch — one registration per shard instead of
-        // one subscription per player. Must run before any session can log in, and must be re-armed
+        // Arm the shared spatial, broadcast, private, and owner dispatch — one callback set per
+        // shard instead of one set per player. Must run before any session can log in, and be re-armed
         // after a coordinator reconnect (the watchdog treats a module republish as one), which is
         // what the `on_reconnect` hook below is for: the callbacks are bound to a `LiveConn` that
         // the swap replaces.
@@ -1829,8 +1821,7 @@ impl Coordinator {
         self.1.world.clone()
     }
 
-    /// Register the shared AOI relays on EVERY connected shard's coordinator connection, and install
-    /// the watchdog re-arm hook that keeps them alive across a reconnect.
+    /// Register the shared relays on every shard coordinator and install their reconnect hooks.
     ///
     /// The shard ORDER fixes the `ShardId`s the index stores, so this runs once, before any session
     /// exists, and the vector is never reordered afterwards. The re-arm re-registers on the fresh

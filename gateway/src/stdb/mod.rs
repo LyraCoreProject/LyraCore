@@ -1,20 +1,16 @@
 //! SpacetimeDB client wiring. The gateway is just a client: it calls reducers and reads
-//! state via subscriptions. There are two kinds of connection:
-//!
-//!   - **Coordinator** (privileged / owner identity): reads `game_account` + `game_session`
-//!     (private), and config tables; calls `provision_account` / `establish_session`.
-//!   - **Player** (per-account identity): one per in-world player; subscribes to self,
-//!     nearby entities, and addressed movement events; calls `player_login` /
-//!     `movement_update` / `logout`. Authorized in reducers via `ctx.sender`.
+//! state via subscriptions. Each database has one privileged coordinator connection for the
+//! shared cache and callbacks, plus a small reducer-only call-pipe pool. Player verbs name their
+//! actor explicitly through the operator-gated reducer surface.
 //!
 //! Wired via `spacetimedb_sdk` (connect, subscribe, reducer calls).
 //!
 //! This module is split by concern behind a thin facade (pure code-motion):
-//!   - `connection`: the `Coordinator` facade + inner state + live/player connections + watchdog +
+//!   - `connection`: the `Coordinator` facade + inner state + live connections + watchdog +
 //!     the `call_reducer!` macro + lifecycle constructors + session-epoch arbitration.
 //!   - `reads`: cache-accessor `Coordinator` methods (RLS-bypass reads → codec views).
 //!   - `reducers`: reducer-call wrapper `Coordinator` methods.
-//!   - `subscriptions`: `PlayerSubscriptions` + the `subscribe_player_events` relay.
+//!   - `subscriptions`: `PlayerSubscriptions`, viewer setup, and shared packet builders.
 //!   - `views`: row→view converters + the thin `RealmRow`/`AccountRow` mirrors.
 
 pub mod bindings;
@@ -30,7 +26,7 @@ pub(crate) mod subscriptions;
 mod views;
 mod world_store; // impl WorldStore for Coordinator (replaces the former WorldCoordinatorStore newtype)
 pub(crate) mod world_index;
-pub(crate) mod world_view; // the shared per-shard AOI dispatch that replaced the per-player subscriptions
+pub(crate) mod world_view; // shared per-shard spatial, broadcast, private, and owner dispatch
 
 pub use connection::Coordinator;
 pub(crate) use connection::is_reducer_refusal;

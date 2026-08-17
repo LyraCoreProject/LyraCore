@@ -256,8 +256,8 @@ pub static MOVE_SUBMITTED: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 /// The connection's world-phase sub-state. Encodes the in-world invariant in the TYPE: the relay
 /// subscriptions, the combat/loot targets, and the session epoch exist ONLY while in-world, so the
 /// dispatch arms match on the state instead of guarding scattered `Option`s. `CMSG_PLAYER_LOGIN`
-/// moves `CharSelect → InWorld`; logout / socket teardown moves back, dropping `InWorld` (whose
-/// `PlayerSubscriptions` tears its relay callbacks down via RAII).
+/// moves `CharSelect → InWorld`; logout / socket teardown moves back, dropping `InWorld` and its
+/// shared-view registration via `PlayerSubscriptions`.
 // `InWorld` is ~400 bytes against `CharSelect`'s zero, which is exactly what
 // `clippy::large_enum_variant` flags — deliberately NOT boxed. There is exactly ONE `WorldState`
 // per connection (it lives in `WorldConn`, one per session thread), so boxing saves ~400 bytes per
@@ -285,8 +285,8 @@ pub struct GossipMenuSnapshot {
 pub struct InWorld {
     /// The selected character's guid (names `SMSG_ATTACKSTART`/`SMSG_ATTACKSTOP`).
     pub self_guid: u64,
-    /// RLS-scoped relay subscriptions; their RAII `Drop` removes the callbacks when this is dropped
-    /// (on logout or socket teardown), so a relogin can't double-register them.
+    /// Shared-view lifetime guard. Its RAII `Drop` unregisters this viewer on logout or socket
+    /// teardown, so a relogin cannot inherit the old routing entry.
     pub subs: PlayerSubscriptions,
     /// In-world session epoch for the two-connection race arbitration (see `SessionEpochs`).
     pub session_epoch: u64,
@@ -419,14 +419,14 @@ impl WorldConn {
         // `import_character_blob`, which created only a SHADOW account row with no identity — and
         // `world::player_login` resolves its caller through `account_by_identity`, so without this
         // the arriving player cannot log in at all. Idempotent, and re-run on every world entry
-        // because the per-player connection mints a fresh identity after any gateway restart.
+        // because a gateway restart establishes a fresh bound identity.
         if let (Some(h), Some(key)) = (&self.home, &self.session_key) {
             h.bind_shard_session(self.account_id, key)?;
         }
         Ok(())
     }
 
-    /// Leave the world: `InWorld → CharSelect`, dropping the relay subs (stops the peer callbacks;
+    /// Leave the world: `InWorld → CharSelect`, dropping the viewer registration (stops shared dispatch;
     /// observers get `DESTROY` via the entity delete) and deleting the entity ONLY if THIS session
     /// still owns it. A stale socket whose player already re-logged on a newer session declines the
     /// `release_session` gate, so we don't vanish the live player (the cached PlayerConn shares one
