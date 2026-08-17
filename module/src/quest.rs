@@ -942,6 +942,8 @@ const CHOICE_FIXTURE_GIVER: u64 = (0xF130_u64 << 48) | ((620_u64) << 24) | 0x00F
 #[cfg(feature = "debug_reducers")]
 const CHOICE_FIXTURE_GIVER_ENTRY: u32 = 620;
 #[cfg(feature = "debug_reducers")]
+const CHOICE_FIXTURE_GIVER_SOURCE: u64 = (0xF130_u64 << 48) | ((620_u64) << 24) | 1;
+#[cfg(feature = "debug_reducers")]
 const CHOICE_FIXTURE_QUEST: u32 = 509_033;
 #[cfg(feature = "debug_reducers")]
 const CHOICE_FIXTURE_OBJECTIVE_ITEM: u32 = 509_033_0;
@@ -972,8 +974,8 @@ pub fn debug_stage_choice_reward_fixture(
     // WorldEntity constructor in test code. Its reserved guid and fixed position make the real
     // giver validation deterministic across transactions.
     let mut giver = entities
-        .iter()
-        .find(|entity| entity.entry == CHOICE_FIXTURE_GIVER_ENTRY && !entity.is_player())
+        .guid()
+        .find(CHOICE_FIXTURE_GIVER_SOURCE)
         .ok_or_else(|| "choice fixture giver source is not live".to_string())?;
     entities.guid().delete(CHOICE_FIXTURE_GIVER);
     giver.guid = CHOICE_FIXTURE_GIVER;
