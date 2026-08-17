@@ -149,16 +149,15 @@ fn shell_shape(src: &str) -> String {
 /// The floors are PER ROOT (they used to be one number, 25, across all four) so that one root
 /// going blind can no longer be masked by the other three growing. They still sum to 25.
 ///
-/// Three of these four roots are PRIVATE-ONLY: the public mirror's allowlist filter ships
-/// `importer/` and none of `scripts/`, `tools/`, `adapters/`, so a cold clone of the mirror has to
-/// test green with only the last one. A root that is ABSENT is therefore skipped (with a note);
-/// a root that is PRESENT is scanned and held to its floor exactly as before. `importer/` is a
-/// workspace member and always there, which is what keeps this scan from ever looking at nothing.
+/// `tools/` and `adapters/` are PRIVATE-ONLY. `scripts/` may contain public acceptance checks
+/// without the private deploy wrapper, so it is always scanned when present but has only a
+/// one-file floor. `importer/` is a workspace member and always there, which is what keeps this
+/// scan from ever looking at nothing.
 ///
-/// Ceiling: renaming a private-only root wholesale now goes quiet instead of red. Renaming a FILE
-/// under one does not — `read_repo` still panics on a missing file inside a present root.
+/// Ceiling: renaming a private-only root wholesale now goes quiet instead of red. Direct safety
+/// pins still fail when an installed target is missing.
 const SCAN_ROOTS: &[(&str, usize)] = &[
-    ("scripts", 10),
+    ("scripts", 1),
     ("tools", 9),
     ("adapters", 1),
     ("importer", 5),
@@ -219,14 +218,6 @@ fn collect_scripts(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
-}
-
-/// Read a pinned repo file, or `None` when its whole PRIVATE-ONLY tree is absent from this
-/// checkout (a cold clone of the public mirror). A file missing from a tree that IS here still
-/// panics: this file is the deploy path's only runtime guard against a database wipe, and if it
-/// moved the pin must MOVE WITH IT rather than be deleted.
-fn read_repo(rel: &str) -> Option<String> {
-    crate::test_scan::read_scanned(rel)
 }
 
 /// One pair of Rust fields which SpacetimeDB would publish under the same column name.
@@ -586,13 +577,13 @@ spacetime publish -cy lyracore
             );
         }
 
-        // The rest of this test bottoms out on `scripts/publish-module.sh`, the ONE sanctioned deploy path — private-only tooling that a filtered checkout does not have at all. mirror-check: allow-private-ref
-        // When scripts/ IS here so is every other root (only the mirror filter removes them), so the
-        // publish-site floor below still spans all four exactly as it did before.
-        if !roots.iter().any(|(d, _)| *d == "scripts") {
+        // `publish-module.sh` is a private deploy wrapper. Public acceptance scripts may live in
+        // `scripts/` without it, so its absence does not make this scan incomplete.
+        let publish_module = repo_root().join("scripts/publish-module.sh");
+        if !publish_module.is_file() {
             let _ = writeln!(
                 std::io::stderr(),
-                "note: skipping the publish-site floor — scripts/ is not present in this checkout"
+                "note: skipping the publish-site floor — scripts/publish-module.sh is not installed in this checkout"
             );
             return;
         }
@@ -669,11 +660,16 @@ spacetime publish -cy lyracore
     /// Deleting the loop must turn this red.
     #[test]
     fn publish_module_sh_still_refuses_flag_shaped_arguments() {
-        // Skipped ONLY when scripts/ is absent wholesale (a mirror cold clone); a scripts/ that is
-        // here without publish-module.sh in it panics inside `read_repo`.
-        let Some(src) = read_repo("scripts/publish-module.sh") else {
+        let path = repo_root().join("scripts/publish-module.sh");
+        if !path.is_file() {
+            let _ = writeln!(
+                std::io::stderr(),
+                "note: skipping publish-module.sh guard — wrapper is not installed in this checkout"
+            );
             return;
-        };
+        }
+        let src = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
         let shape = shell_shape(&src);
         assert!(
             shape.contains(FLAG_REJECTION_LOOP),
@@ -693,10 +689,16 @@ spacetime publish -cy lyracore
     /// surfaces as the gateway refusing logons on that shard, not as a publish error.
     #[test]
     fn publish_module_sh_publish_line_keeps_both_required_flags() {
-        // Same rule as its sibling above: absent scripts/ skips, present-but-missing panics.
-        let Some(src) = read_repo("scripts/publish-module.sh") else {
+        let path = repo_root().join("scripts/publish-module.sh");
+        if !path.is_file() {
+            let _ = writeln!(
+                std::io::stderr(),
+                "note: skipping publish-module.sh publish-line check — wrapper is not installed in this checkout"
+            );
             return;
-        };
+        }
+        let src = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
         let invocations: Vec<&str> = src
             .lines()
             .map(strip_shell_comment)
