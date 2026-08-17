@@ -19,6 +19,9 @@
 //!                                   (--apply loads `game_vmap_chunk` via import_vmap_chunks; a
 //!                                   dry run stops at report — vmap.rs; #520/#521,
 //!                                   docs/decisions.md §10)
+//!   --vmap-prepare-coverage <id>    derive path-grid coverage for an already-staged vmap
+//!                                   generation (--apply calls prepare_/finalize_vmap_nav_coverage,
+//!                                   resumable; a dry run reports the plan) — vmap.rs::run_coverage
 //!   --dump-collision <client Data/ dir>  WMO/M2 collision-geometry inspector — dry-run only,
 //!                                   no --apply (collision.rs)
 //!   --pack-client <client Data/ dir>  builds the client patch MPQ + installs addons into the
@@ -919,6 +922,7 @@ pub(crate) struct Args {
     pub(crate) nav: Option<String>, // client Data/ dir: 241 nav-grid rasterizer (see nav.rs)
     pub(crate) vmap: Option<String>, // client Data/ dir: #520/#521 exact vmap triangle extract+pack+import (see vmap.rs)
     pub(crate) vmap_status: bool, // print active-generation provenance/status without opening client data
+    pub(crate) vmap_prepare_coverage: Option<u64>, // generation id: derive path-grid coverage from an already-staged generation (see vmap.rs::run_coverage)
     pack_client: Option<String>, // client Data/ dir for the --pack-client packager (see pack_client.rs)
     print_extents: bool, // with --dump: print the operator's own spawn bbox for --map and exit (work-item 206)
     spells: bool, // with --dbc: import Spell.dbc → game_spell/game_spell_effect (see spell.rs)
@@ -968,6 +972,7 @@ fn parse_args() -> Result<Args> {
         nav: None,
         vmap: None,
         vmap_status: false,
+        vmap_prepare_coverage: None,
         terrain: None,
         print_extents: false,
         spells: false,
@@ -1003,6 +1008,13 @@ fn parse_args() -> Result<Args> {
             "--nav" => a.nav = Some(it.next().context("--nav needs the client Data/ dir")?),
             "--vmap" => a.vmap = Some(it.next().context("--vmap needs the client Data/ dir")?),
             "--vmap-status" => a.vmap_status = true,
+            "--vmap-prepare-coverage" => {
+                let v = it
+                    .next()
+                    .context("--vmap-prepare-coverage needs a generation id")?;
+                a.vmap_prepare_coverage =
+                    Some(v.parse().context("--vmap-prepare-coverage generation id must be a u64")?);
+            }
             "--dbc" => a.dbc = Some(it.next().context("--dbc needs the client Data/ dir")?),
             "--pack-client" => {
                 a.pack_client = Some(
@@ -1173,6 +1185,7 @@ fn parse_args() -> Result<Args> {
         && a.nav.is_none()
         && a.vmap.is_none()
         && !a.vmap_status
+        && a.vmap_prepare_coverage.is_none()
     {
         bail!("need an input: --dump <classic-db .sql[.gz]>, --dbc <client Data/ dir>, --terrain <client Data/ dir>, or --pack-client <client Data/ dir>");
     }
@@ -4593,6 +4606,12 @@ fn main() -> Result<()> {
         return vmap::run(&args);
     }
 
+    // `--vmap-prepare-coverage <generation_id>` → derive path-grid coverage from an already-staged
+    // generation's own geometry (see vmap.rs::run_coverage).
+    if let Some(generation_id) = args.vmap_prepare_coverage {
+        return vmap::run_coverage(&args, generation_id);
+    }
+
     // `--dbc` alone → standalone DBC mode (proof/checks), OR `--dbc --spells` → the Spell.dbc importer,
     // OR `--dbc --talents` → the TalentTab.dbc/Talent.dbc importer. With `--dump`, the DBC dir instead
     // enriches the cmangos templates (display-derived scale) below, so fall through to the cmangos path.
@@ -6244,6 +6263,7 @@ mod tests {
             nav: None,
             vmap: None,
             vmap_status: false,
+            vmap_prepare_coverage: None,
             print_extents: false,
             spells: false,
             talents: false,
