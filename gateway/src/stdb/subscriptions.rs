@@ -2416,19 +2416,32 @@ pub(crate) fn entity_update_to_outbound(
                 codec::build_max_vitals_values(new.guid, new.max_health, power_b, new.max_power);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
-        // Taxi presentation changes mount display + flight flag in one mask, so the client never sees
-        // an intermediate mounted-but-controllable or unmounted-but-in-flight state. Ordinary flag
-        // changes retain the narrower field-only packet.
-        if old.mount_display_id != new.mount_display_id {
+        // Taxi presentation changes mount display + the TAXI_FLIGHT unit flag in one mask (activation
+        // and landing set both atomically), so the client never sees an intermediate
+        // mounted-but-controllable or unmounted-but-in-flight state — detected by the flight bit itself
+        // toggling, not just "unit_flags changed", so an unrelated flag change alongside a land mount
+        // doesn't get mistaken for a taxi transition. A LAND mount/dismount changes `mount_display_id`
+        // ALONE (the flight bit is untouched) and relays through the standalone single-field builder
+        // instead, never alongside the coupled one for the same change.
+        let taxi_flight_toggled = (old.unit_flags ^ new.unit_flags)
+            & lyracore_shared::constants::unit_flags::TAXI_FLIGHT
+            != 0;
+        if old.mount_display_id != new.mount_display_id && taxi_flight_toggled {
             let m = codec::build_taxi_presentation_values(
                 new.guid,
                 new.mount_display_id,
                 new.unit_flags,
             );
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
-        } else if old.unit_flags != new.unit_flags {
-            let m = codec::build_unit_flags_values(new.guid, new.unit_flags);
-            out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+        } else {
+            if old.mount_display_id != new.mount_display_id {
+                let m = codec::build_mount_display_values(new.guid, new.mount_display_id);
+                out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+            }
+            if old.unit_flags != new.unit_flags {
+                let m = codec::build_unit_flags_values(new.guid, new.unit_flags);
+                out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+            }
         }
         // Sheath relay (#101): UNIT_FIELD_BYTES_2 byte 0 flipping as a unit draws or stows its weapon.
         // Any unit, not player-gated — a creature drawing on engage is the same wire field. Without
@@ -3775,6 +3788,80 @@ mod tests {
                     new.unit_flags,
                 )
             ))]
+        );
+    }
+
+    #[test]
+    fn taxi_landing_emits_one_atomic_presentation_update_not_a_land_mount_duplicate() {
+        // The taxi-landing twin of the activation test above: display AND the flight bit clear
+        // TOGETHER. Must relay through the SAME coupled builder, never the standalone land-mount one
+        // alongside it (the double-fire this ticket's diff separation must avoid).
+        let mut old = player_entity();
+        old.mount_display_id = 1147;
+        old.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
+        let mut new = old.clone();
+        new.mount_display_id = 0;
+        new.unit_flags &= !lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
+        assert_eq!(
+            entity_update_to_outbound(&old, &new),
+            vec![ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                codec::build_taxi_presentation_values(
+                    new.guid,
+                    new.mount_display_id,
+                    new.unit_flags,
+                )
+            ))]
+        );
+    }
+
+    #[test]
+    fn land_mount_display_change_emits_the_standalone_builder_not_taxi_presentation() {
+        // A land mount changes ONLY `mount_display_id` — TAXI_FLIGHT is untouched — so it must relay
+        // through the decoupled single-field builder, not the taxi-coupled one.
+        let old = player_entity();
+        let mut new = old.clone();
+        new.mount_display_id = 1147;
+        assert_eq!(
+            entity_update_to_outbound(&old, &new),
+            vec![ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                codec::build_mount_display_values(new.guid, new.mount_display_id)
+            ))]
+        );
+    }
+
+    #[test]
+    fn land_dismount_display_change_emits_the_standalone_builder_with_zero() {
+        let mut old = player_entity();
+        old.mount_display_id = 1147;
+        let mut new = old.clone();
+        new.mount_display_id = 0; // dismount — TAXI_FLIGHT was never set for a land mount
+        assert_eq!(
+            entity_update_to_outbound(&old, &new),
+            vec![ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                codec::build_mount_display_values(new.guid, 0)
+            ))]
+        );
+    }
+
+    #[test]
+    fn a_land_mount_display_change_alongside_an_unrelated_flag_change_emits_both_packets() {
+        // The flag change is real but NOT the taxi flight bit — both relay, separately, neither
+        // coupled through the taxi builder.
+        let old = player_entity();
+        let mut new = old.clone();
+        new.mount_display_id = 1147;
+        new.unit_flags |= lyracore_shared::constants::unit_flags::IN_COMBAT;
+        assert_eq!(
+            entity_update_to_outbound(&old, &new),
+            vec![
+                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                    codec::build_mount_display_values(new.guid, new.mount_display_id)
+                )),
+                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_unit_flags_values(
+                    new.guid,
+                    new.unit_flags
+                ))),
+            ]
         );
     }
 
