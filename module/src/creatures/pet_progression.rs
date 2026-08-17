@@ -182,7 +182,8 @@ fn eligible_live_pet(pet_id: u64, kind: super::PetKind, dead: bool) -> bool {
 }
 
 /// Advance the active Hunter pet belonging to one authoritative kill-credit recipient. Summoned,
-/// dead, missing and mismatched live pets are excluded before any durable write.
+/// dead, missing and mismatched live pets are excluded before any durable write, and a kill gray
+/// to the owner awards nothing.
 pub(crate) fn award_hunter_pet_kill_progression(
     ctx: &ReducerContext,
     owner_guid: u64,
@@ -201,6 +202,10 @@ pub(crate) fn award_hunter_pet_kill_progression(
     let Some(owner) = ctx.db.game_world_entity().guid().find(owner_guid) else {
         return;
     };
+    // Pet XP shares the owner's gray clamp: a kill worth no XP to the owner advances no pet.
+    if crate::xp::xp_for_kill(mob_level, owner.level) == 0 {
+        return;
+    }
     let raw = crate::xp::xp_for_kill(mob_level, pet.level)
         .saturating_mul(crate::xp::rank_xp_multiplier(rank));
     let award = crate::xp::rated_xp(ctx, raw);
@@ -318,6 +323,18 @@ mod tests {
             super::super::PetKind::Hunter { pet_id: 42 },
             true
         ));
+    }
+
+    #[test]
+    fn pet_award_is_gated_on_the_owner_gray_clamp() {
+        let body = crate::test_scan::code_of(
+            include_str!("pet_progression.rs"),
+            "pub(crate) fn award_hunter_pet_kill_progression(",
+        );
+        assert!(
+            body.contains("xp_for_kill(mob_level, owner.level)"),
+            "pet XP must reuse the owner's kill-eligibility clamp"
+        );
     }
 
     #[test]

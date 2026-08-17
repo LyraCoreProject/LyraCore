@@ -176,7 +176,6 @@ struct TameEligibility {
     target_level: u32,
     owner_level: u32,
     has_live_pet: bool,
-    has_durable_pet: bool,
     family_present: bool,
     family_tameable: bool,
 }
@@ -209,9 +208,6 @@ impl TameEligibility {
         }
         if self.has_live_pet {
             return Err("the Hunter already has an active pet");
-        }
-        if self.has_durable_pet {
-            return Err("the Hunter already has a current pet identity");
         }
         if !self.family_present {
             return Err("the creature has no pet family");
@@ -251,7 +247,6 @@ fn eligibility(
         target_level: target.map_or(0, |row| row.level),
         owner_level: caster.level,
         has_live_pet: super::pet_of(ctx, caster.guid).is_some(),
-        has_durable_pet: hunter_pet_for_owner(ctx, caster.guid).is_some(),
         family_present: family.is_some(),
         family_tameable: family.is_some_and(|row| row.pet_talent_type >= 0),
     }
@@ -269,9 +264,10 @@ pub(crate) fn validate_tame(
         .map_err(str::to_string)
 }
 
-/// Convert the existing wild row into the Hunter's live pet and create its durable identity. All
-/// validation is repeated immediately before the first write, so a delayed completion cannot use
-/// stale target or owner state.
+/// Convert the existing wild row into the Hunter's live pet and create its durable identity. A
+/// durable row left by a despawned pet (logout, owner death, Dismiss, pet death) is replaced —
+/// retaming is the slice's only recovery path. All validation is repeated immediately before the
+/// first write, so a delayed completion cannot use stale target or owner state.
 pub(crate) fn tame_creature(
     ctx: &ReducerContext,
     caster_guid: u64,
@@ -331,7 +327,7 @@ pub(crate) fn tame_creature(
         ctx.db.game_creature_spawn().guid().update(spawn);
     }
     target.guid = pet_guid;
-    entities.insert(target);
+    super::spawn::insert_creature_entity(ctx, target);
 
     let now = ctx.timestamp;
     let hunter_pet = HunterPet {
@@ -350,6 +346,8 @@ pub(crate) fn tame_creature(
         care_updated_at: now,
         loyalty_updated_at: now,
     };
+    // Implicit abandon on retame: drop the orphaned identity so the keyed insert cannot collide.
+    ctx.db.game_hunter_pet().pet_id().delete(pet_id);
     let hunter_pet = ctx.db.game_hunter_pet().insert(hunter_pet);
     ctx.db.game_live_pet_kind().insert(LivePetKind {
         pet_guid,
@@ -376,7 +374,6 @@ mod tests {
             target_level: 9,
             owner_level: 10,
             has_live_pet: false,
-            has_durable_pet: false,
             family_present: true,
             family_tameable: true,
         }
@@ -400,7 +397,6 @@ mod tests {
             Box::new(|v| v.target_owned = true),
             Box::new(|v| v.target_level = v.owner_level + 1),
             Box::new(|v| v.has_live_pet = true),
-            Box::new(|v| v.has_durable_pet = true),
             Box::new(|v| v.family_present = false),
             Box::new(|v| v.family_tameable = false),
         ];
@@ -412,6 +408,27 @@ mod tests {
                 "invalid tame unexpectedly passed: {value:?}"
             );
         }
+    }
+
+    #[test]
+    fn retame_after_despawn_replaces_the_orphaned_durable_identity() {
+        // Logout, owner death, Dismiss and pet death all despawn the live pet but keep the durable
+        // row. Recovery is a retame: the eligibility gates carry no durable-identity check, and
+        // completion deletes the orphan before the keyed insert so the tame cannot collide.
+        let fields =
+            crate::test_scan::code_of(include_str!("hunter_pet.rs"), "struct TameEligibility");
+        assert!(!fields.contains("durable"));
+        let body = crate::test_scan::code_of(
+            include_str!("hunter_pet.rs"),
+            "pub(crate) fn tame_creature(",
+        );
+        let delete = body
+            .find("game_hunter_pet().pet_id().delete(pet_id)")
+            .expect("retame drops the orphaned durable identity");
+        let insert = body
+            .find("game_hunter_pet().insert(")
+            .expect("tame inserts the fresh durable identity");
+        assert!(delete < insert);
     }
 
     #[test]

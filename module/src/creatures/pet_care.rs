@@ -111,10 +111,9 @@ fn update_care(ctx: &ReducerContext, mut pet: HunterPet) {
             .find(live.guid)
             .is_some_and(|kind| kind.hunter_pet_id == pet.pet_id)
     }) else {
-        // Care only advances while the pet is materialized. Reset the anchor so an offline/dead pet
-        // does not accrue a surprise catch-up penalty when it next appears.
-        pet.care_updated_at = ctx.timestamp;
-        ctx.db.game_hunter_pet().pet_id().update(pet);
+        // Care pauses while no live pet is materialized — no write, so an absent pet does not
+        // churn its row every tick. A retame replaces the row with a fresh anchor; any future
+        // restore path must reset `care_updated_at` itself or the gap becomes a catch-up penalty.
         return;
     };
     let in_combat = live.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0;

@@ -517,9 +517,9 @@ pub fn scale_health_for_rank(base_health: u32, rank: u8) -> u32 {
     ((base_health as u64 * permille as u64) / 1000).min(u32::MAX as u64) as u32
 }
 
-/// Scale a template's minimum-level damage range to a live creature level. This keeps ordinary
-/// minimum-level spawns unchanged and gives higher rolled creatures and advancing Hunter pets the
-/// same monotonic, overflow-safe damage refresh.
+/// Scale a template's minimum-level damage range to a live creature level. The level-matching case
+/// is the identity, so ordinary spawns are unchanged; the swing fold uses this to give an advancing
+/// Hunter pet a monotonic, overflow-safe damage refresh.
 pub fn scale_creature_damage_for_level(
     min: u32,
     max: u32,
@@ -538,8 +538,8 @@ pub fn scale_creature_damage_for_level(
 
 /// Insert a freshly-built creature `game_world_entity` row and fire the `on_creature_spawn` notify
 /// hook. The SINGLE chokepoint every creature-entity insert routes through — world
-/// seed, respawn pass, debug spawn, pet summon — so a package hook sees every creature that enters
-/// the world without any core dispatch-site edits. Player-entity inserts (login,
+/// seed, respawn pass, debug spawn, pet summon, tame — so a package hook sees every creature that
+/// enters the world without any core dispatch-site edits. Player-entity inserts (login,
 /// debug_spawn_player_entity) deliberately do NOT come through here.
 pub(crate) fn insert_creature_entity(ctx: &spacetimedb::ReducerContext, mut entity: WorldEntity) {
     // #526: stand on a model floor (bridge, WMO interior deck) instead of the imported spawn.z
@@ -663,7 +663,7 @@ pub fn build_creature_entity(
         sheet_dmg_min: 0,
         sheet_dmg_max: 0,
         sheet_crit_bp: 0,
-        bank_bag_slots: 0, // a creature owns no bank slots
+        bank_bag_slots: 0,   // a creature owns no bank slots
         mount_display_id: 0, // creatures do not use the player taxi presentation field
     }
 }
