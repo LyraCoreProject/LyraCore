@@ -59,6 +59,17 @@ pub(crate) fn handle_trainer<St: WorldStore + ?Sized>(
                             codec::build_trainer_buy_succeeded(trainer_guid, spell_id),
                         ))),
                     )?;
+                    // RIDING buy: the offering teaches a SKILL, and its trainer-list id is a marker with
+                    // no Spell.dbc row behind it — echoing that as a learned spell would push the client
+                    // an id it cannot resolve. The skill pane already moves on its own, from the live
+                    // `game_player_skill` relay, so a riding purchase needs no spell echo at all.
+                    // Profession offerings keep theirs: the importer synthesizes them with real
+                    // learn-spell ids the client does resolve.
+                    if store.trainer_offer_skill_line(trainer_guid, spell_id)
+                        == lyracore_shared::trainer::RIDING_SKILL_LINE
+                    {
+                        return Ok(None);
+                    }
                     // Book the RESOLVED rank (465), not the wrapper (1875) — the module granted
                     // the trigger spell; echoing the wrapper put "the spell that teaches Devotion
                     // Aura" in the player's General tab until relog.

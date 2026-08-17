@@ -626,6 +626,10 @@ impl WorldStore for Coordinator {
         self.buy_trainer_spell(account_id, self_guid, trainer_guid, spell_id)
     }
 
+    fn trainer_offer_skill_line(&self, trainer_guid: u64, spell_id: u32) -> u32 {
+        self.trainer_offer_skill_line(trainer_guid, spell_id)
+    }
+
     fn talent_grant_spell(&self, talent_id: u32) -> u32 {
         self.talent_by_id(talent_id)
             .map(|t| t.grant_spell_id)

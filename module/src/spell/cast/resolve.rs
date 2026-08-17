@@ -341,6 +341,11 @@ fn check_cast_gates(
         crate::creatures::validate_tame(ctx, caster, target_guid)?;
     }
 
+    // LAND-MOUNT gate: a spell carrying `A_MOUNTED` needs a trained rider of the right line and rank,
+    // alive, out of combat, outdoors and not submerged. A no-op for every other spell. It belongs in
+    // this read-only sweep so a refused mount spends nothing — no item, no aura, no cooldown.
+    crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?;
+
     // Level gate: a CHARACTER cannot cast a rank above its level. Pairs with the trainer level-gate so a
     // higher rank is both UNBUYABLE and UNCASTABLE until you level up — the leveling spine. Keyed on the
     // spell's spell_level (the rank's level); spell_level 0 (no requirement) never gates. Baseline-safe:

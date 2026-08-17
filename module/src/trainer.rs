@@ -75,6 +75,11 @@ pub(crate) enum BuyGrant {
     /// Teach a profession `(skill_line, cap)` (Cooking=185 / Skinning=393 at cap 75/150/…) →
     /// `crate::skill::learn_profession`. The cap is the rank ceiling the buy lifts the skill to.
     Profession(u32, u32),
+    /// Teach RIDING at this tier (75 Apprentice, 150 Journeyman) → `crate::skill::learn_riding`. Its own
+    /// variant because riding is granted WHOLE — current and max both become the tier — while a
+    /// profession is born at 1 and climbs to its cap. The mount gate compares the CURRENT rank, so
+    /// granting riding the profession way would leave a paying rider unable to mount.
+    Riding(u32),
     /// Learn the resolved spell id (the LearnSpell wrapper's rank, or the spell itself) → `crate::spell::learn_spell`.
     Spell(u32),
 }
@@ -246,10 +251,41 @@ pub(crate) fn apply_trainer_buy(
     //     "known" is mere ROW PRESENCE (any `game_player_skill` row for that line at all): weapon proficiency
     //     has no tiers to re-buy, so a class-seeded line (already present via `ensure_player_skills`) is fully
     //     known and refuses, while a lacked line proceeds — matching vanilla's "already knows Swords" refusal.
+    //
+    // RIDING FORK: the same column carries a riding offering (`learn_skill_line` = 762). It takes the cap
+    // from the offering's static tier like a profession, but grants through `learn_riding` — riding is
+    // trained WHOLE (current == max == the tier) because the mount cast gate reads the CURRENT rank.
     let profession_line = offered.learn_skill_line;
     let is_weapon_learn =
         profession_line != 0 && crate::skill::is_combat_skill_line(profession_line);
-    let (grant, known): (BuyGrant, bool) = if is_weapon_learn {
+    let (grant, known): (BuyGrant, bool) = if crate::skill::is_riding_skill_line(profession_line) {
+        // RIDING FORK: a riding offering only belongs on a MOUNTS trainer, so a mis-authored row on a
+        // class/tradeskill trainer is refused rather than quietly teaching the mount skill. Fail-OPEN on a
+        // missing creature template, the same posture `validate_trainer_interaction`'s class gate takes —
+        // un-imported data must never block an interaction that used to work.
+        if ctx
+            .db
+            .game_creature_template()
+            .entry()
+            .find(trainer.entry)
+            .is_some_and(|t| t.trainer_type != lyracore_shared::trainer::trainer_type::MOUNTS)
+        {
+            return Err("[0] that trainer does not teach riding".to_string());
+        }
+        // "Known" is the same TIER comparison a profession uses: Apprentice-75 has not met Journeyman-150,
+        // so the second tier is buyable exactly once and a re-buy of the tier you hold is refused.
+        let stored_max_rank = ctx
+            .db
+            .game_player_skill()
+            .by_character()
+            .filter(&caster_guid)
+            .find(|s| s.skill_line == profession_line)
+            .map(|r| r.max_rank);
+        (
+            BuyGrant::Riding(offered.learn_skill_cap),
+            profession_already_capped(stored_max_rank, offered.learn_skill_cap),
+        )
+    } else if is_weapon_learn {
         let cap = crate::skill::skill_cap_for_level(caster.level);
         let present = ctx
             .db
@@ -322,6 +358,9 @@ pub(crate) fn apply_trainer_buy(
             match grant {
                 BuyGrant::Profession(line, cap) => {
                     crate::skill::learn_profession(ctx, caster_guid, owner, line, cap as u16)
+                }
+                BuyGrant::Riding(tier) => {
+                    crate::skill::learn_riding(ctx, caster_guid, owner, tier as u16)
                 }
                 // Trainer-path only: `learn_spell_with_dependents` also auto-teaches this rank's
                 // ONE-LEVEL `game_spell_learn` dependents (see its doc for why NOT plain `learn_spell`
@@ -435,6 +474,56 @@ mod tests {
         );
         // Absent (never seeded/learned) -> proceeds regardless of what a stale cap column might say.
         assert_eq!(trainer_buy_check(false, 40, 1, 1000, 100), Ok(()));
+    }
+
+    // --- issue #22: the riding fork ------------------------------------------------------------------
+
+    /// A riding purchase is TIER-gated the same way a profession is: Apprentice-75 has not met the
+    /// Journeyman-150 offering, so the second tier is buyable exactly once, and re-buying the tier you
+    /// already hold is refused with no re-charge. That is what stops a player paying twice for riding.
+    #[test]
+    fn a_riding_tier_is_buyable_once_and_the_next_tier_still_sells() {
+        assert!(
+            !profession_already_capped(None, 75),
+            "an untrained rider can buy Apprentice"
+        );
+        assert!(
+            profession_already_capped(Some(75), 75),
+            "re-buying Apprentice is refused"
+        );
+        assert!(
+            !profession_already_capped(Some(75), 150),
+            "Apprentice-75 has not met the Journeyman-150 tier"
+        );
+        assert!(
+            profession_already_capped(Some(150), 150),
+            "re-buying Journeyman is refused"
+        );
+    }
+
+    /// The riding fork's two decisions, pinned on the buy path because the crate has no
+    /// `ReducerContext` harness: a riding offering is refused on a trainer that is not a
+    /// `trainer_type::MOUNTS` trainer, and a successful buy grants through `learn_riding` — never
+    /// `learn_profession`, whose born-at-1 row would leave a paying rider below every mount's
+    /// `min_skill`.
+    #[test]
+    fn the_riding_fork_requires_a_mounts_trainer_and_grants_the_whole_tier() {
+        let buy = crate::test_scan::code_of(
+            include_str!("trainer.rs"),
+            "pub(crate) fn apply_trainer_buy(",
+        );
+        assert!(
+            buy.contains("crate::skill::is_riding_skill_line(profession_line)"),
+            "the riding offering must take its own fork. Body was:\n{buy}"
+        );
+        assert!(
+            buy.contains("t.trainer_type != lyracore_shared::trainer::trainer_type::MOUNTS"),
+            "a riding offering must be refused on a non-MOUNTS trainer. Body was:\n{buy}"
+        );
+        assert!(
+            buy.contains("crate::skill::learn_riding(ctx, caster_guid, owner, tier as u16)"),
+            "the riding grant must go through `learn_riding`, not the profession grant. Body was:\n{buy}"
+        );
     }
 
     /// THE IDEMPOTENT RE-LEARN (professions slice 3): the profession buy keys its already-known gate on the

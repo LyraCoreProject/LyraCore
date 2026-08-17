@@ -382,18 +382,24 @@ fn use_spell_for(tmpl: &ItemTemplate) -> Option<u32> {
     (tmpl.spellid_1 != 0 && tmpl.spelltrigger_1 == 0).then_some(tmpl.spellid_1)
 }
 
-/// Does the on-use `spell_id` teleport the caster HOME (`E_RECALL_HOME`, kind 0x1F — the Hearthstone's
-/// shape, #387)? The data-driven twin of `spell_restores_power`'s mana gate: `apply_item_use` reads this
-/// to skip the stack-consumption every OTHER on-use spell takes — a recall trinket is never used up,
-/// unlike a potion/bandage/food. Reads `game_spell_effect` by `by_spell` — `true` if ANY effect carries
-/// the kind. Keyed on the SPELL's effect kind, not the item's entry id, so any future recall item (not
-/// just the Hearthstone) is automatically non-consuming. [entity]
-fn spell_is_recall_home(ctx: &ReducerContext, spell_id: u32) -> bool {
-    ctx.db
+/// Does the on-use `spell_id` leave its item in the bag? The data-driven twin of `spell_restores_power`'s
+/// mana gate: `apply_item_use` reads this to skip the stack-consumption every OTHER on-use spell takes.
+/// Two kinds qualify today, both keyed on the SPELL's effect kind rather than an item-entry allowlist, so
+/// any future recall trinket or mount is reusable with zero code:
+///
+/// - `E_RECALL_HOME` (0x1F) — the Hearthstone's shape (#387). A recall trinket is never used up.
+/// - `A_MOUNTED` — a mount item, via `mount::spell_is_mount`, the one place that classification lives.
+///   Vanilla mounts are permanent bag items, not one-shot potions.
+///
+/// Reads `game_spell_effect` by `by_spell` — `true` if ANY effect carries one of the kinds. [entity]
+fn spell_keeps_item(ctx: &ReducerContext, spell_id: u32) -> bool {
+    let recalls_home = ctx
+        .db
         .game_spell_effect()
         .by_spell()
         .filter(&spell_id)
-        .any(|e| e.kind == crate::spell::E_RECALL_HOME)
+        .any(|e| e.kind == crate::spell::E_RECALL_HOME);
+    recalls_home || crate::mount::spell_is_mount(ctx, spell_id)
 }
 
 /// Is `entry` a BANDAGE AND is its cooldown debuff (`RECENTLY_BANDAGED_SPELL`) currently live on the
@@ -498,12 +504,13 @@ pub(crate) fn apply_item_use(
     if spell_restores_power(ctx, spell_id) && !is_mana_class(ctx, player_guid) {
         return Err("only mana users can use that".to_string());
     }
-    // Consume one unit FIRST — UNLESS this is a permanent recall item (the Hearthstone): a recall trinket
-    // is never used up, so `spell_is_recall_home` is the ONE data-driven exception to "using an item
-    // consumes it" (keyed on the spell's effect kind, not a hardcoded item entry). Every other on-use
-    // spell consumes: the cast is the effect, and a failed cast still consumed the item, matching vanilla
-    // — a fizzled potion is gone.
-    if !spell_is_recall_home(ctx, spell_id) {
+    // Consume one unit FIRST — UNLESS the on-use spell is one of the permanent kinds (a recall trinket,
+    // a mount): `spell_keeps_item` is the data-driven exception to "using an item consumes it", keyed on
+    // the spell's effect kind, not a hardcoded item entry. Every other on-use spell consumes: the cast is
+    // the effect, and a failed cast still consumed the item, matching vanilla — a fizzled potion is gone.
+    // A REFUSED mount consumes nothing either way: the riding/combat/indoor/liquid gates all live in the
+    // cast core's read-only pre-spend sweep, and this branch never touched the stack to begin with.
+    if !spell_keeps_item(ctx, spell_id) {
         if inst.stack_count > 1 {
             inst.stack_count -= 1;
             instances.guid().update(inst);

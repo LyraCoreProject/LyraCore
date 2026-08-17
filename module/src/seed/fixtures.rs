@@ -35,6 +35,7 @@ pub(crate) const TEST_TAME_BEAST_SPELL: u32 = 50300;
 pub(crate) const TEST_TAME_BOAR_ENTRY: u32 = 51006;
 const TEST_TAME_BOAR_FAMILY: u32 = 5;
 const TEST_HUNTER_CLASS: u8 = 3;
+pub(crate) const RIDING_TRAINER_ENTRY: u32 = 51007;
 
 /// "Test Wolf": a dedicated SKINNABLE beast so the skin verify is IMPORT-INDEPENDENT (the demo
 /// Chicken is creature_type 8 = Critter → not skinnable). LEVEL 1 is intentional: the skill gate
@@ -107,6 +108,20 @@ pub(crate) fn profession_trainer_template() -> CreatureTemplate {
         skin_loot_id: 0,       // not imported — a Humanoid trainer isn't skinnable anyway
         trainer_type: 2,   // TRADESKILLS — serves every class; the gate keys on trainer_class, which stays 0
         trainer_class: 0,
+    }
+}
+
+/// "Riding Trainer": a `trainer_type::MOUNTS` NPC so BUY-RIDING-THEN-MOUNT is verifiable on a NO-IMPORT
+/// dev DB, and so the riding fork of `trainer::apply_trainer_buy` has a real trainer to accept. Same shape
+/// as `profession_trainer_template` (GOSSIP|TRAINER, faction 35 FRIENDLY) — only the trainer type differs,
+/// and that difference is what the fork checks.
+pub(crate) fn riding_trainer_template() -> CreatureTemplate {
+    CreatureTemplate {
+        entry: RIDING_TRAINER_ENTRY,
+        name: "Riding Trainer".to_string(),
+        subname: "Riding".to_string(),
+        trainer_type: lyracore_shared::trainer::trainer_type::MOUNTS,
+        ..profession_trainer_template()
     }
 }
 
@@ -392,6 +407,30 @@ pub(crate) fn tough_jerky_template(entry: u32) -> ItemTemplate {
         spelltrigger_1: 0,                    // on-use
         bonding: crate::items::bonding::NONE, // plain food — unbound/tradeable
         ..base_item(entry, "Tough Jerky")
+    }
+}
+
+/// "Test Riding Reins" — the reserved reusable MOUNT item. spellid_1 points at the fixture mount spell
+/// (`FIXTURE_MOUNT_SPELL`) at trigger slot 0 (on-use), so `apply_item_use` casts it through the ordinary
+/// item path. The stack survives the use: `items::ops::spell_keeps_item` classifies the spell by its
+/// `A_MOUNTED` effect, with no item-entry allowlist, so this template needs no flag of its own.
+/// `max_stack: 1` and BIND_ON_PICKUP match a real vanilla mount.
+pub(crate) fn riding_reins_template(entry: u32) -> ItemTemplate {
+    ItemTemplate {
+        class: 15,   // Miscellaneous
+        subclass: 5, // Mount
+        display_id: 1542,
+        quality: 1,        // Common (white) — the vanilla apprentice-tier mounts
+        inventory_type: 0, // not equippable
+        item_level: 40,
+        required_level: 1, // the RIDING SKILL is the gate, never the character level
+        buy_price: 800_000,
+        sell_price: 160_000,
+        max_stack: 1,
+        spellid_1: FIXTURE_MOUNT_SPELL,
+        spelltrigger_1: 0, // on-use
+        bonding: crate::items::bonding::BIND_ON_PICKUP,
+        ..base_item(entry, "Test Riding Reins")
     }
 }
 
@@ -903,6 +942,8 @@ pub(crate) fn seed_regen_fixture(ctx: &ReducerContext) {
 /// a production build.
 pub(crate) const FIXTURE_BLADE: u32 = 5090050;
 pub(crate) const FIXTURE_JERKY: u32 = 5090052;
+/// The reserved reusable MOUNT item (issue #22) — same reserved-entry rationale as the two above.
+pub(crate) const FIXTURE_REINS: u32 = 5090054;
 
 /// Insert the two reserved fixture item templates (insert-if-absent) — built from the same
 /// `tempered_blade_template`/`tough_jerky_template` constructors the mock-seed's Tempered Blade
@@ -916,6 +957,152 @@ fn seed_fixture_items(ctx: &ReducerContext) {
     if items.entry().find(FIXTURE_JERKY).is_none() {
         items.insert(tough_jerky_template(FIXTURE_JERKY));
     }
+    if items.entry().find(FIXTURE_REINS).is_none() {
+        items.insert(riding_reins_template(FIXTURE_REINS));
+    }
+}
+
+// --- LAND-MOUNT FIXTURE (issue #22) -------------------------------------------------------------
+// Reserved ids so a headless sandbox can ride, dismount and fail every mount gate with no Spell.dbc.
+// A real imported world reaches the same behaviour through taxonomy + skill data alone; nothing here
+// is referenced by runtime code.
+
+/// The fixture mount spell: an `A_MOUNTED` display effect plus the paired 60% `SPEED_MOUNTED` effect,
+/// self-cast and instant. Reserved 503xx, alongside `TEST_TAME_BEAST_SPELL`.
+pub(crate) const FIXTURE_MOUNT_SPELL: u32 = 50310;
+/// The synthetic Dazed stand-in: an `A_MOD_SPEED` slow plus `E_DISMOUNT`. It exists ONLY to prove that
+/// a landed spell's dismount effect removes a mount and an unlanded one changes nothing. It does NOT
+/// implement vanilla's mob-chase rear-hit proc — that mechanic is absent, and when it lands it will cast
+/// the real imported Dazed and inherit the same `E_DISMOUNT` behaviour with no new integration point.
+pub(crate) const FIXTURE_DAZED_SPELL: u32 = 50311;
+/// The mount display frozen on the fixture's `A_MOUNTED` effect. Reuses the one mount model this repo
+/// has already confirmed ships in 5875 (the taxi fixture's Alliance flight display) — a fixture only
+/// needs a display the unmodified client renders; attended acceptance rides a real imported mount.
+const FIXTURE_MOUNT_DISPLAY: i32 = 1147;
+/// `game_skill_ability` PK for the fixture's (mount spell → Riding, min_skill 75) pairing. Explicit and
+/// reserved, not the `#[auto_inc]` 0 sentinel: the DBC import loads this table with explicit ids and
+/// leaves the sequence behind the data, so an id-0 insert allocates a live id and panics (errno 12).
+const FIXTURE_MOUNT_ABILITY_ID: u64 = 5_090_020;
+
+/// Seed the land-mount fixture: the Riding skill line, the mount spell and its two effects, the
+/// `SkillAbility` row that gates the spell behind Riding 75, and the synthetic Dazed spell. Idempotent —
+/// spells upsert, the skill-line and ability rows are reserved-id delete-then-insert — so it is safe from
+/// both `init` and the post-import fixture restore.
+///
+/// The riding TRAINER and its offerings live in `seed_scenario_fixtures` with the other trainer NPCs; the
+/// mount ITEM lives in `seed_fixture_items` with the other reserved catalogue rows.
+pub(crate) fn seed_mount_fixture(ctx: &ReducerContext) {
+    use crate::{game_skill_ability, game_skill_line, SkillAbility, SkillLine};
+
+    let lines = ctx.db.game_skill_line();
+    if lines
+        .skill_line()
+        .find(crate::skill::skill_line::RIDING)
+        .is_none()
+    {
+        lines.insert(SkillLine {
+            skill_line: crate::skill::skill_line::RIDING,
+            category: 0,
+            name: "Riding".to_string(),
+        });
+    }
+
+    let mount = Spell {
+        gcd_ms: 0,             // item-triggered, like the other on-use fixture spells
+        duration_ms: u32::MAX, // a mount lasts until it is cancelled or a dismount trigger fires
+        ..base_spell(FIXTURE_MOUNT_SPELL, "Test Riding Horse")
+    };
+    if ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(FIXTURE_MOUNT_SPELL)
+        .is_some()
+    {
+        ctx.db.game_spell().spell_id().update(mount);
+    } else {
+        ctx.db.game_spell().insert(mount);
+    }
+    // The STATE OF RECORD: p0 is the resolved creature display id (p0_kind P_DISPLAY_ID), frozen here and
+    // projected onto `mount_display_id` by `mount::recompute_mount`.
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: crate::spell::A_MOUNTED,
+            p0: FIXTURE_MOUNT_DISPLAY,
+            p0_kind: crate::spell::P_DISPLAY_ID,
+            ..base_effect(FIXTURE_MOUNT_SPELL, 0)
+        },
+    );
+    // The paired mounted-speed effect: +60%, the nominal vanilla slow-mount figure. It folds into run
+    // speed only while an `A_MOUNTED` aura is present, and `mount::dismount` removes both together
+    // because they belong to the same spell.
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: crate::spell::A_MOD_SPEED,
+            base_points: 60,
+            p0: crate::spell::SPEED_MOUNTED as i32,
+            p0_kind: crate::spell::P_SPEED_KIND,
+            ..base_effect(FIXTURE_MOUNT_SPELL, 1)
+        },
+    );
+
+    // Riding 75 gates the mount spell — the same `(spell, skill_line, min_skill)` join an imported
+    // SkillLineAbility row carries, so the gate has nothing fixture-specific in it. Universal masks (0)
+    // keep the fixture usable from any race/class.
+    ctx.db
+        .game_skill_ability()
+        .id()
+        .delete(FIXTURE_MOUNT_ABILITY_ID);
+    ctx.db.game_skill_ability().insert(SkillAbility {
+        id: FIXTURE_MOUNT_ABILITY_ID,
+        spell_id: FIXTURE_MOUNT_SPELL,
+        skill_line: crate::skill::skill_line::RIDING,
+        race_mask: 0,
+        class_mask: 0,
+        min_skill: 75,
+        acquire_method: 0, // never auto-learned: the mount ITEM casts it, the spellbook never holds it
+        gray: 0,
+        green: 0,
+    });
+
+    let dazed = Spell {
+        range_yd: 30,
+        duration_ms: 4_000,
+        is_negative: true,
+        ..base_spell(FIXTURE_DAZED_SPELL, "Test Dazed")
+    };
+    if ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(FIXTURE_DAZED_SPELL)
+        .is_some()
+    {
+        ctx.db.game_spell().spell_id().update(dazed);
+    } else {
+        ctx.db.game_spell().insert(dazed);
+    }
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: crate::spell::A_MOD_SPEED,
+            base_points: -50,
+            target: crate::spell::T_TARGET_ENEMY,
+            p0: crate::spell::SPEED_MOVE as i32,
+            p0_kind: crate::spell::P_SPEED_KIND,
+            ..base_effect(FIXTURE_DAZED_SPELL, 0)
+        },
+    );
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: crate::spell::E_DISMOUNT,
+            target: crate::spell::T_TARGET_ENEMY,
+            ..base_effect(FIXTURE_DAZED_SPELL, 1)
+        },
+    );
 }
 
 /// Reserved fixture FACTION entry (2026-07-16): SYNTHETIC id — was 79, a REAL Faction.dbc id, so on
@@ -1320,6 +1507,55 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
             required_level: 60, // the level-refusal fixture (Ginger's default level is well below 60)
             learn_skill_line: crate::skill::skill_line::POLEARM,
             learn_skill_cap: 0,
+        });
+    }
+
+    // --- RIDING TRAINER (issue #22): the `trainer_type::MOUNTS` NPC that teaches the Riding skill line
+    // at its two vanilla tiers. Same offering shape as the weapon master, but `learn_skill_line` names
+    // Riding, so `apply_trainer_buy` takes the riding fork (grant whole at the offering's tier) and
+    // refuses the row on any trainer that is not a MOUNTS trainer.
+    seed_mount_fixture(ctx);
+    if templates.entry().find(RIDING_TRAINER_ENTRY).is_none() {
+        templates.insert(riding_trainer_template());
+    }
+    for (row_id, marker, cost, required_level) in [
+        (
+            5090015u64,
+            crate::skill::LEARN_APPRENTICE_RIDING_SPELL_ID,
+            100u32,
+            1u8,
+        ),
+        // Journeyman is the level-refusal fixture as well as the second tier: vanilla gates it at 60.
+        (
+            5090016u64,
+            crate::skill::LEARN_JOURNEYMAN_RIDING_SPELL_ID,
+            1000,
+            60,
+        ),
+    ] {
+        // A marker with no tier behind it would seed an offering that grants riding 0 — skip it rather
+        // than write a dead row. Structurally unreachable for the two markers above; the guard is what
+        // keeps it that way if a third tier is added without extending `riding_marker_rank`.
+        let Some(tier) = crate::skill::riding_marker_rank(marker) else {
+            continue;
+        };
+        if offerings
+            .by_trainer()
+            .filter(&RIDING_TRAINER_ENTRY)
+            .any(|r| r.spell_id == marker)
+        {
+            continue;
+        }
+        offerings.id().delete(row_id);
+        offerings.insert(crate::TrainerSpell {
+            id: row_id,
+            trainer_entry: RIDING_TRAINER_ENTRY,
+            spell_id: marker,
+            cost,
+            required_level,
+            learn_skill_line: crate::skill::skill_line::RIDING,
+            // The TIER the buy grants — read by the riding fork as both the cap and the granted rank.
+            learn_skill_cap: tier as u32,
         });
     }
 }
