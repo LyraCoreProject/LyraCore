@@ -36,3 +36,6 @@ __pycache__/
 
 # Agent-created Git worktrees are local execution state, not repository content.
 /.claude/worktrees/
+
+# Local fan-out briefs are agent execution state, not repository content.
+/.claude/tickets/
