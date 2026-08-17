@@ -2071,6 +2071,63 @@ mod tests {
     }
 
     #[test]
+    fn skill_ability_sql_pairs_riding_mount_spells_with_the_skill_line_and_tiers() {
+        // Verifies the EXISTING skill_ability_sql plumbing — no rewrite — correctly pairs each mount
+        // spell with the Riding skill line (762) and carries the 75/150 tiers + race/class masks
+        // through untouched. Row 1: a race-specific Apprentice mount (Human only, min_skill 75, trained
+        // from the trainer — acquire_method 0). Row 2: a Journeyman-tier mount available to every race
+        // (min_skill 150).
+        const RIDING_SKILL_LINE: u32 = 762;
+        const RACE_HUMAN: u32 = 0x1;
+        const CLASS_ALL: u32 = 0xFFFF_FFFF; // riding is not class-restricted
+        let table = DbcSkillLineAbility {
+            rows: vec![
+                skill_ability_row(
+                    1,
+                    RIDING_SKILL_LINE,
+                    458,
+                    RACE_HUMAN,
+                    CLASS_ALL,
+                    75,
+                    0,
+                    0,
+                    0,
+                ),
+                skill_ability_row(
+                    2,
+                    RIDING_SKILL_LINE,
+                    6648,
+                    0xFFFF_FFFF,
+                    CLASS_ALL,
+                    150,
+                    0,
+                    0,
+                    0,
+                ),
+            ],
+        };
+        let (stmts, n) = skill_ability_sql(&table);
+        assert_eq!(n, 2);
+        let insert = stmts
+            .iter()
+            .find(|s| s.starts_with("INSERT INTO game_skill_ability "))
+            .unwrap();
+        // id,spell_id,skill_line,race_mask,class_mask,min_skill,acquire_method,gray,green
+        assert!(
+            insert.contains(&format!(
+                "(1,458,{RIDING_SKILL_LINE},1,{CLASS_ALL},75,0,0,0)"
+            )),
+            "{insert}"
+        );
+        assert!(
+            insert.contains(&format!(
+                "(2,6648,{RIDING_SKILL_LINE},4294967295,{CLASS_ALL},150,0,0,0)"
+            )),
+            "{insert}"
+        );
+    }
+
+    #[test]
     fn skill_availability_sql_shape() {
         let table = DbcSkillRaceClassInfo {
             rows: vec![
