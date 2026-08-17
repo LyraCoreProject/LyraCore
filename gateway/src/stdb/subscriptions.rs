@@ -28,7 +28,7 @@ use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::Vector3d;
 
 use super::aoi::ViewerGates;
-use super::world_index::CellKey;
+use super::world_index::{CellKey, EntityLayer};
 use super::world_view::{self, Viewer, WorldView};
 use super::bindings::*;
 use super::connection::Coordinator;
@@ -101,7 +101,7 @@ impl Drop for PlayerSubscriptions {
         // dispatch may still enqueue for this session, which is harmless (the writer is draining or
         // gone) but pointless.
         if let (Some(view), Some(viewer)) = (self.view.take(), self.viewer.take()) {
-            view.remove_viewer(viewer.session, viewer.self_guid);
+            view.remove_viewer(viewer.session);
         }
     }
 }
@@ -1296,7 +1296,10 @@ pub(crate) fn stealth_visibility(
             // The shared connection's cache holds the whole world, so the question has to be
             // put to the cell index instead — otherwise a stealther unstealthing on the far
             // side of the zone would CREATE for everyone.
-            if !view.entities.can_see(session, changed.target_guid) {
+            if !view
+                .spatial
+                .can_see(EntityLayer::WorldEntity, session, changed.target_guid)
+            {
                 created.lock().unwrap().remove(&changed.target_guid);
                 return Vec::new();
             }
@@ -2625,10 +2628,16 @@ impl Coordinator {
             skill_slots: skill_slots.clone(),
             motion_pending: Arc::new(world_view::MotionPending::default()),
         });
-        view.add_viewer(
+        if let Err(error) = view.add_viewer(
+            self,
             viewer.clone(),
             CellKey::of_position(login_map, login_instance, login_x, login_y),
-        );
+        ) {
+            for teardown in teardowns.drain(..) {
+                teardown();
+            }
+            return Err(error);
+        }
         world_view::sweep_into_view(&view, &viewer);
 
         // Corpse resident sweep: corpse rows ride the base subscription
@@ -4867,7 +4876,7 @@ mod tests {
             );
         }
         assert!(
-            code.contains("view.add_viewer( viewer.clone(), CellKey::of_position(login_map, login_instance, login_x, login_y), );"),
+            code.contains("view.add_viewer( self, viewer.clone(), CellKey::of_position(login_map, login_instance, login_x, login_y), )"),
             "the session is no longer registered with the shared AOI view at its LOGIN cell — \
              without the registration the client sees an empty world; with the wrong anchor it sees \
              somebody else's neighbourhood"
@@ -5805,7 +5814,7 @@ mod tests {
         // And the dispatch routes them through the cell index rather than broadcasting.
         let m = decommented(top_level_fn_body_of("world_view.rs", "motion"));
         assert!(
-            m.contains("view.entities.viewers_of(key)"),
+            m.contains("view.spatial.viewers_of(EntityLayer::WorldEntity, key)"),
             "peer motion no longer asks the cell index who can see the mover — either every session \
              gets every mover (the fan-out this issue removed) or none do"
         );
