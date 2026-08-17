@@ -2479,81 +2479,219 @@ pub(crate) fn quest_update_packets(
     outbound
 }
 
-fn item_gain_feedback(db: &RemoteTables, self_guid: u64, slot: u8, entry: u32, gained: u32, stack_add: bool) -> Vec<Outbound> {
-    if gained == 0 { return Vec::new(); }
-    let mut out = vec![Outbound::One(ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(Box::new(
-        codec::build_item_push_result(self_guid, 255, slot as u32, entry, gained, stack_add),
-    )))];
-    let wanted = db.game_character_quest().iter().any(|q| q.character_guid == self_guid && !q.rewarded && !q.failed && db.game_quest_objective().iter().any(|o| o.quest_entry == q.quest_entry && o.kind == 1 && o.target_entry == entry));
+fn item_gain_feedback(
+    db: &RemoteTables,
+    self_guid: u64,
+    slot: u8,
+    entry: u32,
+    gained: u32,
+    stack_add: bool,
+) -> Vec<Outbound> {
+    if gained == 0 {
+        return Vec::new();
+    }
+    let mut out = vec![Outbound::One(ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(
+        Box::new(codec::build_item_push_result(
+            self_guid,
+            255,
+            slot as u32,
+            entry,
+            gained,
+            stack_add,
+        )),
+    ))];
+    let wanted = db.game_character_quest().iter().any(|q| {
+        q.character_guid == self_guid
+            && !q.rewarded
+            && !q.failed
+            && db
+                .game_quest_objective()
+                .iter()
+                .any(|o| o.quest_entry == q.quest_entry && o.kind == 1 && o.target_entry == entry)
+    });
     if wanted {
         use wow_world_messages::vanilla::SMSG_QUESTUPDATE_ADD_ITEM;
-        out.push(Outbound::One(ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_ITEM(SMSG_QUESTUPDATE_ADD_ITEM { required_item_id: entry, items_required: gained })));
+        out.push(Outbound::One(
+            ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_ITEM(SMSG_QUESTUPDATE_ADD_ITEM {
+                required_item_id: entry,
+                items_required: gained,
+            }),
+        ));
     }
     out
 }
 
 /// Build the complete live-inventory insert result for one owner.
-pub(crate) fn item_instance_insert_outbound(db: &RemoteTables, self_guid: u64, row: &ItemInstance) -> Vec<Outbound> {
+pub(crate) fn item_instance_insert_outbound(
+    db: &RemoteTables,
+    self_guid: u64,
+    row: &ItemInstance,
+) -> Vec<Outbound> {
     let mut out = item_gain_feedback(db, self_guid, row.slot, row.entry, row.stack_count, false);
-    let (max_durability, container_slots) = db.game_item_template().entry().find(&row.entry).map(|t| (t.max_durability, t.container_slots)).unwrap_or((row.durability, 0));
-    let view = codec::ItemInstanceView { guid: row.guid, entry: row.entry, owner_guid: row.owner_guid, slot: row.slot, stack_count: row.stack_count, durability: row.durability, max_durability, container_slots };
-    out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_item_create_object(&view)))));
-    if let Some(values) = codec::build_inv_slot_values(self_guid, row.slot, row.guid) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
-    if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, row.entry) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
+    let (max_durability, container_slots) = db
+        .game_item_template()
+        .entry()
+        .find(&row.entry)
+        .map(|t| (t.max_durability, t.container_slots))
+        .unwrap_or((row.durability, 0));
+    let view = codec::ItemInstanceView {
+        guid: row.guid,
+        entry: row.entry,
+        owner_guid: row.owner_guid,
+        slot: row.slot,
+        stack_count: row.stack_count,
+        durability: row.durability,
+        max_durability,
+        container_slots,
+    };
+    out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        Box::new(codec::build_item_create_object(&view)),
+    )));
+    if let Some(values) = codec::build_inv_slot_values(self_guid, row.slot, row.guid) {
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(values),
+        )));
+    }
+    if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, row.entry) {
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(values),
+        )));
+    }
     if let Some((bag_slot, slot_in_bag)) = bag_content_parts(row.slot) {
-        if let Some(bag) = db.game_item_instance().iter().find(|item| item.owner_guid == self_guid && item.slot == bag_slot) {
-            let (opcode, body) = codec::build_container_slot_values(bag.guid, slot_in_bag, row.guid);
+        if let Some(bag) = db
+            .game_item_instance()
+            .iter()
+            .find(|item| item.owner_guid == self_guid && item.slot == bag_slot)
+        {
+            let (opcode, body) =
+                codec::build_container_slot_values(bag.guid, slot_in_bag, row.guid);
             out.push(Outbound::Raw { opcode, body });
         }
     }
-    if row.slot <= 18 { append_item_armor_and_sheet(db, self_guid, &mut out); }
+    if row.slot <= 18 {
+        append_item_armor_and_sheet(db, self_guid, &mut out);
+    }
     out
 }
 
 /// Build the complete live-inventory delete result for one owner.
-pub(crate) fn item_instance_delete_outbound(db: &RemoteTables, self_guid: u64, row: &ItemInstance) -> Vec<Outbound> {
+pub(crate) fn item_instance_delete_outbound(
+    db: &RemoteTables,
+    self_guid: u64,
+    row: &ItemInstance,
+) -> Vec<Outbound> {
     let mut out = Vec::new();
-    if let Some(values) = codec::build_inv_slot_values(self_guid, row.slot, 0) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
-    if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, 0) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
+    if let Some(values) = codec::build_inv_slot_values(self_guid, row.slot, 0) {
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(values),
+        )));
+    }
+    if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, 0) {
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(values),
+        )));
+    }
     if let Some((bag_slot, slot_in_bag)) = bag_content_parts(row.slot) {
-        if let Some(bag) = db.game_item_instance().iter().find(|item| item.owner_guid == self_guid && item.slot == bag_slot) {
+        if let Some(bag) = db
+            .game_item_instance()
+            .iter()
+            .find(|item| item.owner_guid == self_guid && item.slot == bag_slot)
+        {
             let (opcode, body) = codec::build_container_slot_values(bag.guid, slot_in_bag, 0);
             out.push(Outbound::Raw { opcode, body });
         }
     }
-    out.push(Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(codec::build_destroy_object(row.guid))));
-    if row.slot <= 18 { append_item_armor_and_sheet(db, self_guid, &mut out); }
+    out.push(Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
+        codec::build_destroy_object(row.guid),
+    )));
+    if row.slot <= 18 {
+        append_item_armor_and_sheet(db, self_guid, &mut out);
+    }
     out
 }
 
 /// Build the complete live-inventory update result for one owner.
-pub(crate) fn item_instance_update_outbound(db: &RemoteTables, self_guid: u64, old: &ItemInstance, row: &ItemInstance) -> Vec<Outbound> {
-    let mut out = if row.slot == old.slot && row.stack_count > old.stack_count { item_gain_feedback(db, self_guid, row.slot, row.entry, row.stack_count - old.stack_count, true) } else { Vec::new() };
+pub(crate) fn item_instance_update_outbound(
+    db: &RemoteTables,
+    self_guid: u64,
+    old: &ItemInstance,
+    row: &ItemInstance,
+) -> Vec<Outbound> {
+    let mut out = if row.slot == old.slot && row.stack_count > old.stack_count {
+        item_gain_feedback(
+            db,
+            self_guid,
+            row.slot,
+            row.entry,
+            row.stack_count - old.stack_count,
+            true,
+        )
+    } else {
+        Vec::new()
+    };
     if old.slot != row.slot {
-        if let Some(values) = codec::build_inv_slot_values(self_guid, old.slot, 0) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
-        if let Some(values) = codec::build_inv_slot_values(self_guid, row.slot, row.guid) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
-        if let Some(values) = codec::build_visible_item_values(self_guid, old.slot, 0) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
-        if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, row.entry) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))); }
+        if let Some(values) = codec::build_inv_slot_values(self_guid, old.slot, 0) {
+            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(values),
+            )));
+        }
+        if let Some(values) = codec::build_inv_slot_values(self_guid, row.slot, row.guid) {
+            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(values),
+            )));
+        }
+        if let Some(values) = codec::build_visible_item_values(self_guid, old.slot, 0) {
+            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(values),
+            )));
+        }
+        if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, row.entry) {
+            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(values),
+            )));
+        }
         for (slot, guid) in [(old.slot, 0), (row.slot, row.guid)] {
             if let Some((bag_slot, slot_in_bag)) = bag_content_parts(slot) {
-                if let Some(bag) = db.game_item_instance().iter().find(|item| item.owner_guid == self_guid && item.slot == bag_slot) {
-                    let (opcode, body) = codec::build_container_slot_values(bag.guid, slot_in_bag, guid);
+                if let Some(bag) = db
+                    .game_item_instance()
+                    .iter()
+                    .find(|item| item.owner_guid == self_guid && item.slot == bag_slot)
+                {
+                    let (opcode, body) =
+                        codec::build_container_slot_values(bag.guid, slot_in_bag, guid);
                     out.push(Outbound::Raw { opcode, body });
                 }
             }
         }
     }
-    if old.stack_count != row.stack_count || old.durability != row.durability { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_item_values(row.guid, row.stack_count, row.durability))))); }
-    if old.slot != row.slot && (old.slot <= 18 || row.slot <= 18) || row.slot <= 18 && (old.durability == 0) != (row.durability == 0) { append_item_armor_and_sheet(db, self_guid, &mut out); }
+    if old.stack_count != row.stack_count || old.durability != row.durability {
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(codec::build_item_values(
+                row.guid,
+                row.stack_count,
+                row.durability,
+            )),
+        )));
+    }
+    if old.slot != row.slot && (old.slot <= 18 || row.slot <= 18)
+        || row.slot <= 18 && (old.durability == 0) != (row.durability == 0)
+    {
+        append_item_armor_and_sheet(db, self_guid, &mut out);
+    }
     out
 }
 
 fn append_item_armor_and_sheet(db: &RemoteTables, self_guid: u64, out: &mut Vec<Outbound>) {
     let armor = super::armor::effective_armor(db, self_guid);
-    out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_resistance_values(self_guid, armor)))));
-    if let Some(stats) = super::armor::sheet_stats(db, self_guid) { out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_sheet_stats_values(self_guid, &stats))))); }
+    out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        Box::new(codec::build_resistance_values(self_guid, armor)),
+    )));
+    if let Some(stats) = super::armor::sheet_stats(db, self_guid) {
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(codec::build_sheet_stats_values(self_guid, &stats)),
+        )));
+    }
 }
-
 impl Coordinator {
     /// Prepare and register one live viewer. Row callbacks are already armed once per shard in
     /// `world_view::arm_shard`; this method registers no callback of its own.
@@ -2586,7 +2724,6 @@ impl Coordinator {
         // everything that could still fail with `?` has succeeded.
         let view = self.world_view();
         let session = view.next_session_id();
-
 
         // ======================================================================================
         //  SKILL-UP — game_player_skill (insert/update)
@@ -2634,9 +2771,11 @@ impl Coordinator {
             spacetimedb_sdk::Identity::from_byte_array(self.bound_identity(account_id)?);
 
         {
-            // Seed the viewer's replay state before registration. The shared coordinator was
-            // subscribed before this session existed, so resident reputation rows cannot replay
-            // into the new viewer; exploration keeps this state because reconnect replays rows.
+            // Seed the viewer's replay state before registration. A coordinator reconnect replays
+            // every resident row: exploration is state-sync (the fog word must re-send, the
+            // discovery feedback must not repeat), so it carries this per-viewer seed, while the
+            // event families (teleport, faction announce, item toast) drop replayed rows outright
+            // in `world_view`'s live-insert registrations.
             let guard = self.0.coord();
             explored.seed(
                 guard
@@ -2673,7 +2812,9 @@ impl Coordinator {
                 .find(&self_guid)
                 .map(|e| e.player_flags & GHOST_PLAYER_FLAG != 0)
                 .unwrap_or(false);
-            viewer_gates.is_ghost.store(is_ghost, std::sync::atomic::Ordering::Relaxed);
+            viewer_gates
+                .is_ghost
+                .store(is_ghost, std::sync::atomic::Ordering::Relaxed);
         }
         let viewer = Arc::new(Viewer {
             session,

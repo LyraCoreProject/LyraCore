@@ -333,7 +333,9 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                 } else {
                     // Stop source-shard owner dispatch before `route_home` can drive a transfer.
                     // `finish_transfer` cascade-deletes quest and item rows, and their shared
-                    // callbacks must find no source viewer to enqueue for. Keep `InWorld` intact:
+                    // callbacks must find no source viewer to enqueue for. A source delta the pump
+                    // applies only after destination registration is dropped by the shard-scoped
+                    // owner lookup instead. Keep `InWorld` intact:
                     // if routing fails, the existing abort path terminates the socket and
                     // `leave_world` retains its logout/error policy. The guard's later Drop is
                     // idempotent, and the captured guid/epoch above remain valid for destination
