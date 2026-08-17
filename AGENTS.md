@@ -25,6 +25,7 @@ In this project we focus on building complex things as simple as possible. We lo
 
 - Do not spawn subagents or a multi-agent panel for work a single agent finishes in one pass. Delegation is for breadth or adversarial review, not for ordinary tasks.
 - When several agents work in parallel, state file ownership up front so they do not collide.
+- Pick each subagent's model and effort for its subtask; inheriting the parent's is usually overkill. Scoped, well-guided work goes to a cheaper model; reserve the top tier for hard design, concurrency, or adversarial review. The spawning agent owns this call.
 
 ## Visual and design work
 
