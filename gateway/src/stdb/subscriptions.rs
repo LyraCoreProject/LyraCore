@@ -28,7 +28,7 @@ use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::Vector3d;
 
 use super::aoi::ViewerGates;
-use super::world_index::CellKey;
+use super::world_index::{CellKey, EntityLayer};
 use super::world_view::{self, Viewer, WorldView};
 use super::bindings::*;
 use super::connection::Coordinator;
@@ -101,7 +101,7 @@ impl Drop for PlayerSubscriptions {
         // dispatch may still enqueue for this session, which is harmless (the writer is draining or
         // gone) but pointless.
         if let (Some(view), Some(viewer)) = (self.view.take(), self.viewer.take()) {
-            view.remove_viewer(viewer.session, viewer.self_guid);
+            view.remove_viewer(viewer.session);
         }
     }
 }
@@ -277,7 +277,6 @@ pub(crate) fn motionstat_line(
     d_dropped: u64,
     d_submitted: u64,
     submitted: u64,
-    completed: u64,
 ) -> String {
     let delivery = if d_calls > 0 {
         format!("{:.1}%", 100.0 * d_sent as f64 / d_calls as f64)
@@ -291,8 +290,7 @@ pub(crate) fn motionstat_line(
     format!(
         "MOTIONSTAT calls={calls} sent={sent} dropped={dropped} \
          (+{d_calls} +{d_sent} +{d_dropped} in 10s) | delivery={delivery} fanout={fanout}/move \
-         | move submitted={submitted} completed={completed} outstanding={}",
-        submitted.saturating_sub(completed)
+         | move submitted={submitted}"
     )
 }
 
@@ -1309,7 +1307,10 @@ pub(crate) fn stealth_visibility(
             // The shared connection's cache holds the whole world, so the question has to be
             // put to the cell index instead — otherwise a stealther unstealthing on the far
             // side of the zone would CREATE for everyone.
-            if !view.entities.can_see(session, changed.target_guid) {
+            if !view
+                .spatial
+                .can_see(EntityLayer::WorldEntity, session, changed.target_guid)
+            {
                 created.lock().unwrap().remove(&changed.target_guid);
                 return Vec::new();
             }
@@ -2639,10 +2640,16 @@ impl Coordinator {
             skill_slots: skill_slots.clone(),
             motion_pending: Arc::new(world_view::MotionPending::default()),
         });
-        view.add_viewer(
+        if let Err(error) = view.add_viewer(
+            self,
             viewer.clone(),
             CellKey::of_position(login_map, login_instance, login_x, login_y),
-        );
+        ) {
+            for teardown in teardowns.drain(..) {
+                teardown();
+            }
+            return Err(error);
+        }
         world_view::sweep_into_view(&view, &viewer);
 
         // Corpse resident sweep: corpse rows ride the base subscription
@@ -4946,7 +4953,7 @@ mod tests {
             );
         }
         assert!(
-            code.contains("view.add_viewer( viewer.clone(), CellKey::of_position(login_map, login_instance, login_x, login_y), );"),
+            code.contains("view.add_viewer( self, viewer.clone(), CellKey::of_position(login_map, login_instance, login_x, login_y), )"),
             "the session is no longer registered with the shared AOI view at its LOGIN cell — \
              without the registration the client sees an empty world; with the wrong anchor it sees \
              somebody else's neighbourhood"
@@ -5513,7 +5520,9 @@ mod tests {
     #[test]
     fn the_motionstat_line_reports_delivery_dropped_and_fanout_287() {
         // 1000 callbacks, 900 packets queued, 7 discarded, from 10 submitted movements.
-        let line = motionstat_line(5000, 4500, 21, 1000, 900, 7, 10, 400, 380);
+        let line = motionstat_line(5000, 4500, 21, 1000, 900, 7, 10, 400);
+        assert!(line.contains("calls=5000"), "cumulative calls missing: {line}");
+        assert!(line.contains("sent=4500"), "cumulative sent missing: {line}");
         assert!(
             line.contains("dropped=21"),
             "cumulative dropped count missing: {line}"
@@ -5530,13 +5539,12 @@ mod tests {
             line.contains("fanout=100.0/move"),
             "per-movement fan-out missing/wrong: {line}"
         );
-        assert!(
-            line.contains("outstanding=20"),
-            "the pre-existing move counters must survive: {line}"
-        );
+        assert!(line.contains("submitted=400"), "submitted count missing: {line}");
+        assert!(!line.contains("completed="), "retired completed count remains: {line}");
+        assert!(!line.contains("outstanding="), "retired outstanding count remains: {line}");
 
         // An idle window must not divide by zero or print a fake 0 %.
-        let idle = motionstat_line(5000, 4500, 21, 0, 0, 0, 0, 400, 400);
+        let idle = motionstat_line(5000, 4500, 21, 0, 0, 0, 0, 400);
         assert!(
             idle.contains("delivery=--") && idle.contains("fanout=--/move"),
             "{idle}"
@@ -5883,7 +5891,7 @@ mod tests {
         // And the dispatch routes them through the cell index rather than broadcasting.
         let m = decommented(top_level_fn_body_of("world_view.rs", "motion"));
         assert!(
-            m.contains("view.entities.viewers_of(key)"),
+            m.contains("view.spatial.viewers_of(EntityLayer::WorldEntity, key)"),
             "peer motion no longer asks the cell index who can see the mover — either every session \
              gets every mover (the fan-out this issue removed) or none do"
         );

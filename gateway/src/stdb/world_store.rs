@@ -7,16 +7,17 @@
 //! this trait method — these are thin views, NOT recursion. The inherent methods can't simply *be* this
 //! impl: a trait impl must be one contiguous block, but `subscribe_player_events` is a large relay that
 //! lives in `subscriptions.rs` and the logon tier calls some inherent reads directly — so the real
-//! bodies stay distributed by concern and this block is the unifying world-facing view. The two methods
+//! bodies stay distributed by concern and this block is the unifying world-facing view. The methods
 //! that are NOT 1:1 forwards do real work: `lookup_session` composes two reads, and `movement_update`
-//! serializes the `MovementInfo` before the inherent reducer call.
+//! serializes the `MovementInfo` before enqueueing it on the shard's shared batch.
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use wow_world_messages::vanilla::MovementInfo;
 
 use crate::codec;
-use crate::world::{SessionTx, WorldSession, WorldStore};
+use crate::world::{SessionTx, WorldSession, WorldStore, MOVE_SUBMITTED};
 
+use super::bindings::GwMove;
 use super::connection::Coordinator;
 use super::views::{AccountRow, RealmRow};
 use super::PlayerSubscriptions;
@@ -345,56 +346,30 @@ impl WorldStore for Coordinator {
 
     fn movement_update(
         &self,
-        account_id: u64,
+        _account_id: u64,
         self_guid: u64,
         opcode: u32,
         info: &MovementInfo,
     ) -> Result<()> {
-        // Carry the MovementInfo verbatim so the module can relay it to in-range observers, who
-        // re-emit it under the same opcode (animation intent, not just position). The inherent
-        // `movement_update` takes the pre-serialized body + a u16 opcode (different arity → visibly
-        // not a recursive call).
+        if self_guid == 0 {
+            return Err(anyhow!("movement_update: actor_guid unresolved"));
+        }
+        // Carry the MovementInfo verbatim so the module can relay it to in-range observers under
+        // the same opcode. Queueing is the only completion observable on the shared batch;
+        // individual reducer outcomes are intentionally unavailable.
         let body = codec::movement_info_to_bytes(info)?;
-        self.movement_update(
-            account_id,
-            self_guid,
-            opcode as u16,
-            &body,
-            info.position.x,
-            info.position.y,
-            info.position.z,
-            info.orientation,
-            info.timestamp,
-        )
-    }
-
-    /// The non-blocking submit — this is the override that actually
-    /// removes the ceiling; the trait default just forwards to the blocking call.
-    fn movement_update_nowait(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        opcode: u32,
-        info: &MovementInfo,
-        feedback: &std::sync::Arc<crate::world::MovementFeedback>,
-    ) -> Result<()> {
-        let body = codec::movement_info_to_bytes(info)?;
-        feedback.submitted();
-        let r = self.movement_update_nowait(
-            account_id,
-            self_guid,
-            opcode as u16,
-            &body,
-            info.position.x,
-            info.position.y,
-            info.position.z,
-            info.orientation,
-            info.timestamp,
-        );
-        // Queueing is the only completion observable on a shared batch; individual reducer
-        // outcomes are intentionally unavailable to preserve one transaction per batch.
-        feedback.completed();
-        r
+        self.0.motion_batch.push(GwMove {
+            actor_guid: self_guid,
+            opcode: opcode as u16,
+            movement_info: body,
+            x: info.position.x,
+            y: info.position.y,
+            z: info.position.z,
+            o: info.orientation,
+            move_time_ms: info.timestamp,
+        });
+        MOVE_SUBMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
     }
 
     fn subscribe_player_events(
@@ -1312,7 +1287,7 @@ mod routing_call_site_tests {
              let db = self .1 .map .auth_db(|d| { \
              self.1.conns.get(d).is_some_and(|inner| { \
              let live = inner.coord(); \
-             live.conn.is_active() && live._sub.is_active() }) }) \
+             live.is_healthy() }) }) \
              .map_err(|db| { anyhow!( \
              \"realm-core database {db} is not connected — refusing to authenticate against \\ \
              the world database's stale auth cache\" ) })?; \

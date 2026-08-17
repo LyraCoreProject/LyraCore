@@ -295,7 +295,7 @@ mod partition_discipline_tripwire {
         ("module/src/instance.rs", 8, "instance population spawn/teardown + the reaper's occupied-instance census — classifying every partition at once is the job"),
         ("module/src/encounter.rs", 2, "guid high-water marks over spawn/gameobject TEMPLATE rows when allocating a wave guid, not live-world reads"),
         // Unindexed lookups whose target is co-located with the caller anyway.
-        ("module/src/creatures/pet.rs", 2, "pet-by-owner_guid has no index; a pet is always co-located with its owner. The SECOND is `nearest_hostile_near` — KNOWN DEBT, a textbook `entities_near` radius search kept only because pets are rare (one per online warlock)"),
+        ("module/src/creatures/pet.rs", 1, "`nearest_hostile_near` — KNOWN DEBT, a textbook `entities_near` radius search kept only because pets are rare (one per online warlock)"),
         ("packages/deadmines/src/choreography.rs", 1, "single instance-scoped boss-liveness check inside one encounter"),
         // Issue #383 split tick.rs into tick/{mod,movement,lifecycle,sense}.rs; this budget-5 entry
         // splits with it, same total (3 + 2 = 5), same reasoning as the pre-split note below.

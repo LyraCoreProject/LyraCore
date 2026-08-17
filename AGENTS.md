@@ -12,6 +12,10 @@ In this project we focus on building complex things as simple as possible. We lo
 - Comments are a great way to clarify functionality and how code is used. Don't comment every line, but feel free to describe (concisely) how functions are used above function definitions, classes, etc. Do not put issue numbers in comments.
 - Keep comments up to date! When making changes, it's important to keep things in sync.
 
+## Domain language
+
+- `CONTEXT.md` is the glossary. Use its terms in identifiers, comments, commit messages, docs and PR text. Do not use the `_Avoid_` words in new prose or new names. Existing identifiers, schema names, filenames, and pinned artifacts keep their names. When you introduce or change a term, update `CONTEXT.md` in the same change.
+
 ## Questions are read-only
 
 - A question from a user is a request for an answer, not for changes. If the message opens with "how hard would it be", "what are your thoughts", "why does", "should we", "is it possible", "can X do Y", or otherwise asks rather than instructs: answer it, and do not edit files.

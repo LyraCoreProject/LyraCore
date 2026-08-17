@@ -61,6 +61,17 @@ pub type SessionId = u64;
 /// table, kept alongside the cell so a sweep can read the row back without probing every shard.
 pub type ShardId = usize;
 
+/// The two independent row namespaces that share one viewer anchor index.
+///
+/// GUIDs are unique inside each SpacetimeDB table, but the gateway does not assume a world entity
+/// and a game object cannot have the same numeric GUID. Every row operation therefore names its
+/// layer explicitly.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EntityLayer {
+    WorldEntity,
+    GameObject,
+}
+
 /// A grid cell, partition-qualified. `cell` is the packed `(grid_x, grid_y)` id
 /// ([`grid_cell_id`]) — a bijection on the whole `(i32, i32)` domain, so this triple names exactly
 /// one cell of exactly one `(map_id, instance_id)` partition and two distinct cells can never
@@ -129,31 +140,39 @@ impl CellKey {
     }
 }
 
-/// What a viewer's cell crossing changed: the rows that entered its box and the guids that left it.
-/// The gateway turns these into the CREATE / DESTROY packets a re-subscribed box used to generate.
+/// What one layer gained and lost after a viewer crossed a cell boundary.
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct ViewerDelta {
     pub entered: Vec<(u64, ShardId)>,
     pub left: Vec<(u64, ShardId)>,
 }
 
+/// Both layer deltas produced by one anchor move and one neighbourhood comparison.
+#[derive(Default, Debug, PartialEq, Eq)]
+pub struct RecenterDelta {
+    pub world_entities: ViewerDelta,
+    pub game_objects: ViewerDelta,
+}
+
 #[derive(Default)]
-struct Inner {
+struct EntityIndex {
     /// cell → the guids resident in it. The forward direction of the interest question.
     cell_entities: HashMap<CellKey, HashSet<u64>>,
     /// guid → where it is and whose cache holds it. Also the "did it move?" memory that makes
     /// [`WorldIndex::upsert_entity`] O(1) instead of a search.
     entity_cell: HashMap<u64, (CellKey, ShardId)>,
+}
+
+#[derive(Default)]
+struct Inner {
+    /// Separate row namespaces. Equal GUID values in the two tables never overwrite each other.
+    world_entities: EntityIndex,
+    game_objects: EntityIndex,
     /// cell → the sessions ANCHORED there (not the sessions that can see it). Small by
     /// construction — a `Vec` beats a `HashSet` at these sizes and keeps iteration cache-friendly.
     cell_viewers: HashMap<CellKey, Vec<SessionId>>,
     /// session → its anchor cell. The recenter's "where was it" half.
     viewer_cell: HashMap<SessionId, CellKey>,
-    /// guid → session, for the ONE row that must reach a viewer regardless of geometry: their own.
-    /// A player's entity row and their anchor are written by two different paths (the module's
-    /// movement write and the gateway's movement handler), so a self-VALUES packet must never be
-    /// gated on the two agreeing at that instant.
-    self_guids: HashMap<u64, SessionId>,
 }
 
 /// The gateway-wide AOI index. One instance per gateway, shared by every shard's coordinator
@@ -188,55 +207,72 @@ impl WorldIndex {
         })
     }
 
+    fn layer(inner: &Inner, layer: EntityLayer) -> &EntityIndex {
+        match layer {
+            EntityLayer::WorldEntity => &inner.world_entities,
+            EntityLayer::GameObject => &inner.game_objects,
+        }
+    }
+
+    fn layer_mut(inner: &mut Inner, layer: EntityLayer) -> &mut EntityIndex {
+        match layer {
+            EntityLayer::WorldEntity => &mut inner.world_entities,
+            EntityLayer::GameObject => &mut inner.game_objects,
+        }
+    }
+
     // ---------------------------------------------------------------------------------------
     //  Entities
     // ---------------------------------------------------------------------------------------
 
     /// Record (or move) an entity. Returns the cell it came FROM when this was a move, so a caller
     /// can decide whether a viewer needs a DESTROY for it.
-    pub fn upsert_entity(&self, guid: u64, key: CellKey, shard: ShardId) -> Option<CellKey> {
+    pub fn upsert_entity(
+        &self,
+        layer: EntityLayer,
+        guid: u64,
+        key: CellKey,
+        shard: ShardId,
+    ) -> Option<CellKey> {
         let mut inner = self.lock();
-        let previous = inner.entity_cell.insert(guid, (key, shard)).map(|(k, _)| k);
+        let entities = Self::layer_mut(&mut inner, layer);
+        let previous = entities.entity_cell.insert(guid, (key, shard)).map(|(k, _)| k);
         match previous {
             Some(old) if old == key => return Some(old),
             Some(old) => {
-                if let Some(set) = inner.cell_entities.get_mut(&old) {
+                if let Some(set) = entities.cell_entities.get_mut(&old) {
                     set.remove(&guid);
                     if set.is_empty() {
-                        inner.cell_entities.remove(&old);
+                        entities.cell_entities.remove(&old);
                     }
                 }
             }
             None => {}
         }
-        inner.cell_entities.entry(key).or_default().insert(guid);
+        entities.cell_entities.entry(key).or_default().insert(guid);
         previous
     }
 
-    /// Which shard's coordinator cache holds this entity's row — `None` for a guid the index has
-    /// never seen. The 4c non-spatial dispatch uses it as the "same database as the row" half of a
-    /// family's audience predicate (a viewer's per-player subscription only ever saw rows from the
-    /// shard their own connection was on).
-    pub fn shard_of(&self, guid: u64) -> Option<ShardId> {
-        self.lock().entity_cell.get(&guid).map(|(_, s)| *s)
-    }
-
-    /// The session whose OWN character is `guid` — `None` if that character has no live session on
-    /// this gateway. The self-only 4c families (rest state, skill pane, …) resolve their audience
-    /// through this: the row names its owner and the owner is the only lawful recipient, so the
-    /// lookup IS the visibility predicate — there is no candidate set to filter.
-    pub fn session_of_owner(&self, guid: u64) -> Option<SessionId> {
-        self.lock().self_guids.get(&guid).copied()
+    /// (Inspection only — dispatch uses the shard carried by visibility results.)
+    #[cfg(test)]
+    /// Which shard's coordinator cache holds this entity's row.
+    pub fn shard_of(&self, layer: EntityLayer, guid: u64) -> Option<ShardId> {
+        let inner = self.lock();
+        Self::layer(&inner, layer)
+            .entity_cell
+            .get(&guid)
+            .map(|(_, s)| *s)
     }
 
     /// Forget an entity (its row was deleted). Returns the cell it was in, if it was known.
-    pub fn remove_entity(&self, guid: u64) -> Option<CellKey> {
+    pub fn remove_entity(&self, layer: EntityLayer, guid: u64) -> Option<CellKey> {
         let mut inner = self.lock();
-        let (key, _) = inner.entity_cell.remove(&guid)?;
-        if let Some(set) = inner.cell_entities.get_mut(&key) {
+        let entities = Self::layer_mut(&mut inner, layer);
+        let (key, _) = entities.entity_cell.remove(&guid)?;
+        if let Some(set) = entities.cell_entities.get_mut(&key) {
             set.remove(&guid);
             if set.is_empty() {
-                inner.cell_entities.remove(&key);
+                entities.cell_entities.remove(&key);
             }
         }
         Some(key)
@@ -246,29 +282,24 @@ impl WorldIndex {
     #[cfg(test)]
     /// Where the index believes `guid` is. `None` for a guid it has never seen (a row on a table it
     /// does not index, or one deleted already).
-    pub fn entity_cell(&self, guid: u64) -> Option<CellKey> {
-        self.lock().entity_cell.get(&guid).map(|(k, _)| *k)
+    pub fn entity_cell(&self, layer: EntityLayer, guid: u64) -> Option<CellKey> {
+        let inner = self.lock();
+        Self::layer(&inner, layer).entity_cell.get(&guid).map(|(k, _)| *k)
     }
 
     // ---------------------------------------------------------------------------------------
     //  Viewers
     // ---------------------------------------------------------------------------------------
 
-    /// Register a session as a viewer anchored on `key`, owning entity `self_guid`.
-    pub fn add_viewer(&self, session: SessionId, self_guid: u64, key: CellKey) {
+    /// Register a session as a viewer anchored on `key`.
+    pub fn add_viewer(&self, session: SessionId, key: CellKey) {
         let mut inner = self.lock();
-        inner.self_guids.insert(self_guid, session);
         Self::place_viewer(&mut inner, session, key);
     }
 
     /// Unregister a session. Idempotent.
-    pub fn remove_viewer(&self, session: SessionId, self_guid: u64) {
+    pub fn remove_viewer(&self, session: SessionId) {
         let mut inner = self.lock();
-        // Only drop the self-guid mapping if it still points at THIS session: a relogin on the same
-        // character registers the new session before the old one's guard drops.
-        if inner.self_guids.get(&self_guid) == Some(&session) {
-            inner.self_guids.remove(&self_guid);
-        }
         if let Some(old) = inner.viewer_cell.remove(&session) {
             Self::unplace_viewer(&mut inner, session, old);
         }
@@ -305,8 +336,10 @@ impl WorldIndex {
     // ---------------------------------------------------------------------------------------
 
     /// Every session that can see cell `key` — the dispatch's hot path, called once per indexed row
-    /// delta. O(25 + V) with cell scoping on; O(total viewers) with `LYRACORE_AOI=0`.
-    pub fn viewers_of(&self, key: CellKey) -> Vec<SessionId> {
+    /// delta. The explicit layer keeps the row namespace visible at every dispatch call even though
+    /// both layers use the same viewer anchors. O(25 + V) with cell scoping on; O(total viewers)
+    /// with `LYRACORE_AOI=0`.
+    pub fn viewers_of(&self, _layer: EntityLayer, key: CellKey) -> Vec<SessionId> {
         let inner = self.lock();
         if !self.cell_scoped {
             let partition = key.partition();
@@ -326,24 +359,6 @@ impl WorldIndex {
         out
     }
 
-    /// Every session that must be told about a row for `guid` — [`Self::viewers_of`] plus the guid's
-    /// OWN session if it has one.
-    ///
-    /// The self leg is not an optimisation, it is a correctness gate. A player's entity row is
-    /// written by the module (the movement/health write) while their anchor is moved by the
-    /// gateway's movement handler; in the window between an entity crossing a cell and its own
-    /// session recentring, a purely geometric answer would drop that player's OWN health/level
-    /// VALUES packet. Cheap: one extra hash lookup per delta.
-    pub fn recipients_of(&self, guid: u64, key: CellKey) -> Vec<SessionId> {
-        let mut out = self.viewers_of(key);
-        if let Some(owner) = self.lock().self_guids.get(&guid).copied() {
-            if !out.contains(&owner) {
-                out.push(owner);
-            }
-        }
-        out
-    }
-
     /// Move a viewer's anchor and report the VISIBILITY delta the move implies, or `None` when the
     /// anchor did not change (the overwhelmingly common per-heartbeat call — a plain hash lookup and
     /// a compare, no allocation).
@@ -353,7 +368,7 @@ impl WorldIndex {
     /// gathering guids only from the cells that actually differ: an axis crossing touches 5 cells in
     /// and 5 out, so the answer costs ~50 hash lookups plus the size of the answer — never a scan of
     /// the world or of the box's contents.
-    pub fn move_viewer_delta(&self, session: SessionId, key: CellKey) -> Option<ViewerDelta> {
+    pub fn move_viewer_delta(&self, session: SessionId, key: CellKey) -> Option<RecenterDelta> {
         let mut inner = self.lock();
         let old = *inner.viewer_cell.get(&session)?;
         if old == key {
@@ -364,39 +379,51 @@ impl WorldIndex {
             // No cell scoping: the box IS the partition, so a move inside one changes nothing and a
             // move ACROSS one is a map/instance change, which tears the whole session's view down
             // and rebuilds it through `sweep_into_view` rather than through a delta.
-            return Some(ViewerDelta::default());
+            return Some(RecenterDelta::default());
         }
         let old_cells: HashSet<CellKey> = old.neighbourhood().collect();
         let new_cells: HashSet<CellKey> = key.neighbourhood().collect();
-        let gather = |cells: &HashSet<CellKey>, other: &HashSet<CellKey>| -> Vec<(u64, ShardId)> {
+        let gather = |entities: &EntityIndex,
+                      cells: &HashSet<CellKey>,
+                      other: &HashSet<CellKey>|
+         -> Vec<(u64, ShardId)> {
             let mut out = Vec::new();
             for cell in cells.difference(other) {
-                if let Some(guids) = inner.cell_entities.get(cell) {
+                if let Some(guids) = entities.cell_entities.get(cell) {
                     for guid in guids {
-                        let shard = inner.entity_cell.get(guid).map(|(_, s)| *s).unwrap_or(0);
+                        let shard = entities.entity_cell.get(guid).map(|(_, s)| *s).unwrap_or(0);
                         out.push((*guid, shard));
                     }
                 }
             }
             out
         };
-        Some(ViewerDelta {
-            entered: gather(&new_cells, &old_cells),
-            left: gather(&old_cells, &new_cells),
+        let delta = |entities: &EntityIndex| ViewerDelta {
+            entered: gather(entities, &new_cells, &old_cells),
+            left: gather(entities, &old_cells, &new_cells),
+        };
+        Some(RecenterDelta {
+            world_entities: delta(&inner.world_entities),
+            game_objects: delta(&inner.game_objects),
         })
     }
 
     /// Every entity a viewer can see, with the shard whose cache holds each row — the login /
     /// world-entry sweep, and the inverse the differential test checks. O(25 + E) with cell scoping
     /// on; O(world) with `LYRACORE_AOI=0`.
-    pub fn visible_entities(&self, session: SessionId) -> Vec<(u64, ShardId)> {
+    pub fn visible_entities(
+        &self,
+        layer: EntityLayer,
+        session: SessionId,
+    ) -> Vec<(u64, ShardId)> {
         let inner = self.lock();
         let Some(anchor) = inner.viewer_cell.get(&session).copied() else {
             return Vec::new();
         };
+        let entities = Self::layer(&inner, layer);
         if !self.cell_scoped {
             let partition = anchor.partition();
-            return inner
+            return entities
                 .entity_cell
                 .iter()
                 .filter(|(_, (k, _))| k.partition() == partition)
@@ -405,9 +432,9 @@ impl WorldIndex {
         }
         let mut out = Vec::new();
         for cell in anchor.neighbourhood() {
-            if let Some(guids) = inner.cell_entities.get(&cell) {
+            if let Some(guids) = entities.cell_entities.get(&cell) {
                 for guid in guids {
-                    if let Some((_, shard)) = inner.entity_cell.get(guid) {
+                    if let Some((_, shard)) = entities.entity_cell.get(guid) {
                         out.push((*guid, *shard));
                     }
                 }
@@ -421,12 +448,12 @@ impl WorldIndex {
     /// Before the shared-connection model these asked "is the row in my connection's cache",
     /// which the box subscription made equivalent; on a shared connection the cache holds the whole world, so the question has
     /// to be asked of the index instead.
-    pub fn can_see(&self, session: SessionId, guid: u64) -> bool {
+    pub fn can_see(&self, layer: EntityLayer, session: SessionId, guid: u64) -> bool {
         let inner = self.lock();
         let Some(anchor) = inner.viewer_cell.get(&session) else {
             return false;
         };
-        let Some((cell, _)) = inner.entity_cell.get(&guid) else {
+        let Some((cell, _)) = Self::layer(&inner, layer).entity_cell.get(&guid) else {
             return false;
         };
         if anchor.partition() != cell.partition() {
@@ -441,12 +468,13 @@ impl WorldIndex {
     }
 
     /// Live sizes, for the periodic ops log line: `(entities, viewers, occupied entity cells)`.
-    pub fn stats(&self) -> (usize, usize, usize) {
+    pub fn stats(&self, layer: EntityLayer) -> (usize, usize, usize) {
         let inner = self.lock();
+        let entities = Self::layer(&inner, layer);
         (
-            inner.entity_cell.len(),
+            entities.entity_cell.len(),
             inner.viewer_cell.len(),
-            inner.cell_entities.len(),
+            entities.cell_entities.len(),
         )
     }
 }
@@ -508,14 +536,17 @@ mod tests {
         })
     }
 
-    /// The set the deleted per-player subscription would have delivered to a viewer: the rows the
-    /// `game_world_entity` box query selects.
-    fn sql_visible(viewer: CellKey, rows: &[Row]) -> HashSet<u64> {
+    /// The set the deleted per-player subscription would have delivered to a viewer for one layer.
+    fn sql_visible(layer: EntityLayer, viewer: CellKey, rows: &[Row]) -> HashSet<u64> {
         let queries = box_queries(viewer.instance_id, &viewer.grid_box(), false);
+        let table = match layer {
+            EntityLayer::WorldEntity => "game_world_entity",
+            EntityLayer::GameObject => "game_gameobject",
+        };
         let entity_query = queries
             .iter()
-            .find(|q| q.starts_with("SELECT * FROM game_world_entity "))
-            .expect("the box query set must scope game_world_entity");
+            .find(|q| q.starts_with(&format!("SELECT * FROM {table} ")))
+            .unwrap_or_else(|| panic!("the box query set must scope {table}"));
         rows.iter()
             .filter(|r| sql_selects(entity_query, r))
             .map(|r| r.guid)
@@ -523,18 +554,23 @@ mod tests {
     }
 
     /// The same set, per the index.
-    fn index_visible(index: &WorldIndex, session: SessionId) -> HashSet<u64> {
+    fn index_visible(index: &WorldIndex, layer: EntityLayer, session: SessionId) -> HashSet<u64> {
         index
-            .visible_entities(session)
+            .visible_entities(layer, session)
             .into_iter()
             .map(|(guid, _)| guid)
             .collect()
     }
 
-    fn build(rows: &[Row]) -> WorldIndex {
+    fn build(layer: EntityLayer, rows: &[Row]) -> WorldIndex {
         let index = WorldIndex::new(true);
         for r in rows {
-            index.upsert_entity(r.guid, CellKey::at(r.map_id, r.instance_id, r.gx, r.gy), 0);
+            index.upsert_entity(
+                layer,
+                r.guid,
+                CellKey::at(r.map_id, r.instance_id, r.gx, r.gy),
+                0,
+            );
         }
         index
     }
@@ -581,22 +617,24 @@ mod tests {
                     gy: rng.range(-4, 4),
                 })
                 .collect();
-            let index = build(&rows);
-            for v in 0..12u64 {
-                let viewer = CellKey::at(
-                    rng.range(0, 1) as u32,
-                    rng.range(0, 2) as u64,
-                    rng.range(-4, 4),
-                    rng.range(-4, 4),
-                );
-                index.add_viewer(v, 9_000_000 + v, viewer);
-                assert_eq!(
-                    index_visible(&index, v),
-                    sql_visible(viewer, &rows),
-                    "trial {trial}, viewer {v} anchored at {viewer:?}: the index and the box \
-                     subscription SQL disagree about who is visible"
-                );
-                index.remove_viewer(v, 9_000_000 + v);
+            for layer in [EntityLayer::WorldEntity, EntityLayer::GameObject] {
+                let index = build(layer, &rows);
+                for v in 0..12u64 {
+                    let viewer = CellKey::at(
+                        rng.range(0, 1) as u32,
+                        rng.range(0, 2) as u64,
+                        rng.range(-4, 4),
+                        rng.range(-4, 4),
+                    );
+                    index.add_viewer(v, viewer);
+                    assert_eq!(
+                        index_visible(&index, layer, v),
+                        sql_visible(layer, viewer, &rows),
+                        "trial {trial}, layer {layer:?}, viewer {v} anchored at {viewer:?}: the \
+                         index and the box subscription SQL disagree about who is visible"
+                    );
+                    index.remove_viewer(v);
+                }
             }
         }
     }
@@ -624,7 +662,7 @@ mod tests {
                 .collect();
             let index = WorldIndex::new(true);
             for (v, key) in &viewers {
-                index.add_viewer(*v, 9_000_000 + *v, *key);
+                index.add_viewer(*v, *key);
             }
             for _ in 0..10 {
                 let row = Row {
@@ -635,10 +673,15 @@ mod tests {
                     gy: rng.range(-5, 5),
                 };
                 let cell = CellKey::at(row.map_id, row.instance_id, row.gx, row.gy);
-                let from_index: HashSet<SessionId> = index.viewers_of(cell).into_iter().collect();
+                let from_index: HashSet<SessionId> = index
+                    .viewers_of(EntityLayer::WorldEntity, cell)
+                    .into_iter()
+                    .collect();
                 let from_sql: HashSet<SessionId> = viewers
                     .iter()
-                    .filter(|(_, anchor)| !sql_visible(*anchor, &[row]).is_empty())
+                    .filter(|(_, anchor)| {
+                        !sql_visible(EntityLayer::WorldEntity, *anchor, &[row]).is_empty()
+                    })
                     .map(|(v, _)| *v)
                     .collect();
                 assert_eq!(
@@ -667,34 +710,49 @@ mod tests {
                     gy: rng.range(-6, 6),
                 })
                 .collect();
-            let index = build(&rows);
+            let index = WorldIndex::new(true);
+            for layer in [EntityLayer::WorldEntity, EntityLayer::GameObject] {
+                for row in &rows {
+                    index.upsert_entity(
+                        layer,
+                        row.guid,
+                        CellKey::at(row.map_id, row.instance_id, row.gx, row.gy),
+                        0,
+                    );
+                }
+            }
             let from = CellKey::at(0, 0, rng.range(-4, 4), rng.range(-4, 4));
             let to = CellKey::at(0, 0, rng.range(-4, 4), rng.range(-4, 4));
-            index.add_viewer(1, 999, from);
-            let before = sql_visible(from, &rows);
+            index.add_viewer(1, from);
+            let before = sql_visible(EntityLayer::WorldEntity, from, &rows);
             let delta = index.move_viewer_delta(1, to);
-            let after = sql_visible(to, &rows);
+            let after = sql_visible(EntityLayer::WorldEntity, to, &rows);
             match delta {
                 None => assert_eq!(from, to, "a delta of None must mean the anchor did not move"),
                 Some(d) => {
-                    let entered: HashSet<u64> = d.entered.iter().map(|(g, _)| *g).collect();
-                    let left: HashSet<u64> = d.left.iter().map(|(g, _)| *g).collect();
-                    assert_eq!(
-                        entered,
-                        after.difference(&before).copied().collect::<HashSet<u64>>(),
-                        "entered set wrong moving {from:?} -> {to:?}"
-                    );
-                    assert_eq!(
-                        left,
-                        before.difference(&after).copied().collect::<HashSet<u64>>(),
-                        "left set wrong moving {from:?} -> {to:?}"
-                    );
-                    // And the index agrees with the SQL at the destination, so the delta and the
-                    // absolute answer can never drift apart.
-                    assert_eq!(index_visible(&index, 1), after);
+                    for (layer, layer_delta) in [
+                        (EntityLayer::WorldEntity, d.world_entities),
+                        (EntityLayer::GameObject, d.game_objects),
+                    ] {
+                        let entered: HashSet<u64> =
+                            layer_delta.entered.iter().map(|(g, _)| *g).collect();
+                        let left: HashSet<u64> =
+                            layer_delta.left.iter().map(|(g, _)| *g).collect();
+                        assert_eq!(
+                            entered,
+                            after.difference(&before).copied().collect::<HashSet<u64>>(),
+                            "{layer:?} entered set wrong moving {from:?} -> {to:?}"
+                        );
+                        assert_eq!(
+                            left,
+                            before.difference(&after).copied().collect::<HashSet<u64>>(),
+                            "{layer:?} left set wrong moving {from:?} -> {to:?}"
+                        );
+                        assert_eq!(index_visible(&index, layer, 1), after);
+                    }
                 }
             }
-            index.remove_viewer(1, 999);
+            index.remove_viewer(1);
         }
     }
 
@@ -728,55 +786,42 @@ mod tests {
         let index = WorldIndex::new(true);
         let a = CellKey::at(0, 0, 0, 0);
         let b = CellKey::at(0, 0, 40, 40); // far outside a's box
-        index.upsert_entity(5, a, 0);
-        index.add_viewer(1, 999, a);
-        assert_eq!(index_visible(&index, 1), HashSet::from([5]));
-        assert_eq!(index.upsert_entity(5, b, 0), Some(a));
-        assert!(index_visible(&index, 1).is_empty(), "stale cell membership");
-        assert_eq!(index.entity_cell(5), Some(b));
-        assert_eq!(index.remove_entity(5), Some(b));
-        assert_eq!(index.entity_cell(5), None);
-        assert_eq!(index.remove_entity(5), None, "removal is idempotent");
+        index.upsert_entity(EntityLayer::WorldEntity, 5, a, 0);
+        index.add_viewer(1, a);
+        assert_eq!(index_visible(&index, EntityLayer::WorldEntity, 1), HashSet::from([5]));
+        assert_eq!(index.upsert_entity(EntityLayer::WorldEntity, 5, b, 0), Some(a));
+        assert!(
+            index_visible(&index, EntityLayer::WorldEntity, 1).is_empty(),
+            "stale cell membership"
+        );
+        assert_eq!(index.entity_cell(EntityLayer::WorldEntity, 5), Some(b));
+        assert_eq!(index.remove_entity(EntityLayer::WorldEntity, 5), Some(b));
+        assert_eq!(index.entity_cell(EntityLayer::WorldEntity, 5), None);
+        assert_eq!(index.remove_entity(EntityLayer::WorldEntity, 5), None, "removal is idempotent");
     }
 
     #[test]
     fn a_viewer_recenter_is_a_cell_swap_and_reports_only_real_crossings() {
         let index = WorldIndex::new(true);
         let a = CellKey::at(0, 0, 0, 0);
-        index.add_viewer(1, 999, a);
+        index.add_viewer(1, a);
         assert!(index.move_viewer_delta(1, a).is_none(), "same cell is not a recenter");
         assert!(index.move_viewer_delta(1, CellKey::at(0, 0, 1, 0)).is_some());
         assert_eq!(index.viewer_cell(1), Some(CellKey::at(0, 0, 1, 0)));
         // Only one anchor is ever held: walking away must not leave the session visible from the
         // cell it started in.
-        index.upsert_entity(5, CellKey::at(0, 0, 0, 0), 0);
+        index.upsert_entity(EntityLayer::WorldEntity, 5, CellKey::at(0, 0, 0, 0), 0);
         index.move_viewer_delta(1, CellKey::at(0, 0, 30, 30));
-        assert!(index.viewers_of(CellKey::at(0, 0, 0, 0)).is_empty());
+        assert!(index
+            .viewers_of(EntityLayer::WorldEntity, CellKey::at(0, 0, 0, 0))
+            .is_empty());
         assert!(
             index.move_viewer_delta(2, a).is_none(),
             "an unregistered session never moves"
         );
-        index.remove_viewer(1, 999);
+        index.remove_viewer(1);
         assert_eq!(index.viewer_cell(1), None);
-        index.remove_viewer(1, 999); // idempotent
-    }
-
-    /// The self leg of [`WorldIndex::recipients_of`]: a player must receive their OWN row's updates
-    /// even in the window where their entity has crossed a cell but their session has not
-    /// recentred yet — the window a purely geometric answer would drop a self health/level packet
-    /// in.
-    #[test]
-    fn a_player_always_receives_their_own_row_even_before_their_anchor_catches_up() {
-        let index = WorldIndex::new(true);
-        let anchor = CellKey::at(0, 0, 0, 0);
-        index.add_viewer(7, 4242, anchor);
-        let far = CellKey::at(0, 0, 99, 99);
-        assert!(index.viewers_of(far).is_empty());
-        assert_eq!(index.recipients_of(4242, far), vec![7]);
-        // And never twice when geometry already covers it.
-        assert_eq!(index.recipients_of(4242, anchor), vec![7]);
-        index.remove_viewer(7, 4242);
-        assert!(index.recipients_of(4242, far).is_empty());
+        index.remove_viewer(1); // idempotent
     }
 
     /// `LYRACORE_AOI=0` reproduces the pre-AOI global-subscription semantics: whole partition, and
@@ -784,14 +829,17 @@ mod tests {
     #[test]
     fn the_aoi_off_hatch_sees_the_whole_partition_and_nothing_outside_it() {
         let index = WorldIndex::new(false);
-        index.upsert_entity(1, CellKey::at(0, 0, 0, 0), 0);
-        index.upsert_entity(2, CellKey::at(0, 0, 500, 500), 0);
-        index.upsert_entity(3, CellKey::at(0, 77, 0, 0), 0); // another instance
-        index.upsert_entity(4, CellKey::at(1, 0, 0, 0), 0); // another map
-        index.add_viewer(1, 999, CellKey::at(0, 0, 0, 0));
-        assert_eq!(index_visible(&index, 1), HashSet::from([1, 2]));
-        assert_eq!(index.viewers_of(CellKey::at(0, 0, 900, 900)), vec![1]);
-        assert!(index.viewers_of(CellKey::at(0, 77, 0, 0)).is_empty());
+        index.upsert_entity(EntityLayer::WorldEntity, 1, CellKey::at(0, 0, 0, 0), 0);
+        index.upsert_entity(EntityLayer::WorldEntity, 2, CellKey::at(0, 0, 500, 500), 0);
+        index.upsert_entity(EntityLayer::WorldEntity, 3, CellKey::at(0, 77, 0, 0), 0); // another instance
+        index.upsert_entity(EntityLayer::WorldEntity, 4, CellKey::at(1, 0, 0, 0), 0); // another map
+        index.add_viewer(1, CellKey::at(0, 0, 0, 0));
+        assert_eq!(index_visible(&index, EntityLayer::WorldEntity, 1), HashSet::from([1, 2]));
+        assert_eq!(
+            index.viewers_of(EntityLayer::WorldEntity, CellKey::at(0, 0, 900, 900)),
+            vec![1]
+        );
+        assert!(index.viewers_of(EntityLayer::WorldEntity, CellKey::at(0, 77, 0, 0)).is_empty());
     }
 
     /// `can_see` is a point query and `visible_entities` is the set form of the same question —
@@ -809,7 +857,7 @@ mod tests {
                 gy: rng.range(-6, 6),
             })
             .collect();
-        let index = build(&rows);
+        let index = build(EntityLayer::WorldEntity, &rows);
         for _ in 0..50 {
             let anchor = CellKey::at(
                 rng.range(0, 1) as u32,
@@ -817,45 +865,35 @@ mod tests {
                 rng.range(-5, 5),
                 rng.range(-5, 5),
             );
-            index.add_viewer(1, 999, anchor);
-            let visible = index_visible(&index, 1);
+            index.add_viewer(1, anchor);
+            let visible = index_visible(&index, EntityLayer::WorldEntity, 1);
             for r in &rows {
                 assert_eq!(
-                    index.can_see(1, r.guid),
+                    index.can_see(EntityLayer::WorldEntity, 1, r.guid),
                     visible.contains(&r.guid),
                     "anchor {anchor:?} row {r:?}"
                 );
             }
-            assert!(!index.can_see(1, 1), "an unknown guid is never visible");
-            assert!(!index.can_see(99, rows[0].guid), "an unknown session sees nothing");
-            index.remove_viewer(1, 999);
+            assert!(
+                !index.can_see(EntityLayer::WorldEntity, 1, 1),
+                "an unknown guid is never visible"
+            );
+            assert!(
+                !index.can_see(EntityLayer::WorldEntity, 99, rows[0].guid),
+                "an unknown session sees nothing"
+            );
+            index.remove_viewer(1);
         }
     }
 
     #[test]
     fn stats_report_what_the_ops_line_prints() {
         let index = WorldIndex::new(true);
-        index.upsert_entity(1, CellKey::at(0, 0, 0, 0), 0);
-        index.upsert_entity(2, CellKey::at(0, 0, 0, 0), 0);
-        index.upsert_entity(3, CellKey::at(0, 0, 1, 0), 0);
-        index.add_viewer(1, 999, CellKey::at(0, 0, 0, 0));
-        assert_eq!(index.stats(), (3, 1, 2));
+        index.upsert_entity(EntityLayer::WorldEntity, 1, CellKey::at(0, 0, 0, 0), 0);
+        index.upsert_entity(EntityLayer::WorldEntity, 2, CellKey::at(0, 0, 0, 0), 0);
+        index.upsert_entity(EntityLayer::WorldEntity, 3, CellKey::at(0, 0, 1, 0), 0);
+        index.add_viewer(1, CellKey::at(0, 0, 0, 0));
+        assert_eq!(index.stats(EntityLayer::WorldEntity), (3, 1, 2));
     }
 
-    /// `session_of_owner` is a 4c VISIBILITY predicate (the self-only families deliver through it
-    /// and nothing else), so its whole contract is pinned: resolves the owner while the session is
-    /// live, never anyone else, and stops resolving the moment the viewer is removed.
-    #[test]
-    fn session_of_owner_resolves_only_the_live_owner_session() {
-        let index = WorldIndex::new(true);
-        index.add_viewer(7, 999, CellKey::at(0, 0, 0, 0));
-        assert_eq!(index.session_of_owner(999), Some(7));
-        assert_eq!(index.session_of_owner(998), None, "an unknown guid resolves nobody");
-        index.remove_viewer(7, 999);
-        assert_eq!(
-            index.session_of_owner(999),
-            None,
-            "a logged-out owner must stop receiving self-only relays immediately"
-        );
-    }
 }

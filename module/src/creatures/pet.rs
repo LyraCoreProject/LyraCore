@@ -213,18 +213,29 @@ pub fn debug_pet_command(
     apply_pet_command(ctx, owner_guid, data, target_guid)
 }
 
-/// The owner's pet, if any — the single live `game_world_entity` whose `owner_guid == owner_guid`. A
-/// full-table scan (the module's established idiom; pets are rare — one per online warlock). `owner_guid`
-/// must be non-zero (0 = "not a pet", which would match every wild creature) — callers always pass a real
-/// player guid. [entity]
+/// The owner's pet, if any. Pet GUIDs are deterministic, so this is one primary-key read followed by
+/// an owner check. A missing row or a row that names another owner fails closed. `owner_guid == 0`
+/// returns before looking in the wild-creature namespace. [entity]
 pub fn pet_of(ctx: &ReducerContext, owner_guid: u64) -> Option<WorldEntity> {
     if owner_guid == 0 {
         return None;
     }
     ctx.db
         .game_world_entity()
-        .iter()
-        .find(|e| e.owner_guid == owner_guid)
+        .guid()
+        .find(pet_guid_for(owner_guid))
+        .filter(|pet| pet.owner_guid == owner_guid)
+}
+
+/// Remove a live pet row that has already been resolved. Cleanup order is load-bearing: combat and
+/// threat first, then staged motion, persisted motion, the entity deletion relay, and last the
+/// live-kind marker.
+fn despawn_pet_entity(ctx: &ReducerContext, pet: WorldEntity) {
+    crate::combat::disengage(ctx, pet.guid); // free its MeleeAttack row + threat
+    crate::motion::drop_pending(ctx, pet.guid); // the staged payload dies with it too
+    ctx.db.game_entity_motion().guid().delete(pet.guid); // motion row dies with the entity (2.1)
+    ctx.db.game_world_entity().guid().delete(pet.guid);
+    super::clear_live_pet_kind(ctx, pet.guid);
 }
 
 /// Despawn the player's pet (if any): free its melee engagement + threat (`disengage`), then DELETE the
@@ -234,14 +245,11 @@ pub fn pet_of(ctx: &ReducerContext, owner_guid: u64) -> Option<WorldEntity> {
 /// no-op when the owner has no pet. [entity]
 pub fn despawn_pets(ctx: &ReducerContext, owner_guid: u64) {
     if let Some(pet) = pet_of(ctx, owner_guid) {
-        crate::combat::disengage(ctx, pet.guid); // free its MeleeAttack row + threat
-        crate::motion::drop_pending(ctx, pet.guid); // #461: the staged payload dies with it too
-        ctx.db.game_entity_motion().guid().delete(pet.guid); // motion row dies with the entity (2.1)
-        ctx.db.game_world_entity().guid().delete(pet.guid);
-        super::clear_live_pet_kind(ctx, pet.guid);
+        despawn_pet_entity(ctx, pet);
     }
     // Clear any pet-bar command state (the pet is ephemeral — no stale row across re-summon/logout;
-    // a re-summon thus resets to the Follow + Defensive default, matching vanilla).
+    // a re-summon thus resets to the Follow + Defensive default, matching vanilla). This also covers
+    // an owner-keyed no-op despawn after the live row has already disappeared.
     ctx.db.game_pet_command().owner_guid().delete(owner_guid);
 }
 
@@ -281,8 +289,7 @@ const HIGHGUID_UNIT: u64 = 0xF130;
 /// The deterministic pet guid for an owner: `HIGHGUID_UNIT` in the high bits (so the client treats it as a
 /// Unit) + the owner guid in the low 48. The owner is a small player guid (< 2^24); a real creature's low is
 /// `(entry << 24) | db_guid` (always >= 1<<24 since entry >= 1), so the pet's low never collides with a
-/// creature. Stable so a re-summon's `pet_of` scan + the despawn delete agree + the `on_delete` relay is
-/// clean. Pure.
+/// creature. Stable so the keyed `pet_of` read, despawn delete, and `on_delete` relay agree. Pure.
 pub(crate) fn pet_guid_for(owner_guid: u64) -> u64 {
     (HIGHGUID_UNIT << 48) | (owner_guid & 0x0000_FFFF_FFFF_FFFF)
 }
@@ -367,22 +374,19 @@ pub(crate) fn cancel_attack_order(ctx: &ReducerContext, owner_guid: u64) {
     set_pet_command(ctx, owner_guid, CMD_FOLLOW, react, 0);
 }
 
-/// Despawn one pet BY ITS OWN GUID — the cycle's despawn action, resolved back to the owner
-/// `despawn_pets` keys on. [entity]
+/// Despawn one pet BY ITS OWN GUID — the cycle's despawn action. Resolve the row once, then validate
+/// its owner and deterministic identity before cleanup. A wild or malformed row fails closed. [entity]
 pub(crate) fn despawn_pet(ctx: &ReducerContext, pet_guid: u64) {
-    despawn_pets(ctx, pet_guid_owner_of(ctx, pet_guid));
-}
-
-/// Resolve the OWNER guid for a pet guid so [`despawn_pet`] can reuse `despawn_pets(owner)` (which scans by
-/// owner). A pet's guid encodes the owner in its low 48 bits (`pet_guid_for`), so mask the HIGHGUID off;
-/// verify against the live row in case the encoding ever changes. Pure-ish (one find). [entity]
-fn pet_guid_owner_of(ctx: &ReducerContext, pet_guid: u64) -> u64 {
-    ctx.db
-        .game_world_entity()
-        .guid()
-        .find(pet_guid)
-        .map(|p| p.owner_guid)
-        .unwrap_or(pet_guid & 0x0000_FFFF_FFFF_FFFF)
+    let Some(pet) = ctx.db.game_world_entity().guid().find(pet_guid) else {
+        return;
+    };
+    if pet.owner_guid == 0 || pet.guid != pet_guid_for(pet.owner_guid) {
+        spacetimedb::log::info!("despawn_pet: refusing malformed pet row guid={pet_guid}");
+        return;
+    }
+    let owner_guid = pet.owner_guid;
+    despawn_pet_entity(ctx, pet);
+    ctx.db.game_pet_command().owner_guid().delete(owner_guid);
 }
 
 #[cfg(test)]
@@ -405,4 +409,14 @@ mod tests {
         );
         assert_ne!(pet, owner, "pet guid is distinct from the owner");
     }
+
+    #[test]
+    fn pet_guid_uses_only_the_owner_low_48_bits() {
+        let owner = 0xABCD_1234_5678_9ABC_u64;
+        assert_eq!(
+            pet_guid_for(owner),
+            (HIGHGUID_UNIT << 48) | 0x0000_1234_5678_9ABC
+        );
+    }
+
 }

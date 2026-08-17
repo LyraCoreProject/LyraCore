@@ -394,16 +394,17 @@ mod bot_invite_relay_wiring_tripwire {
     fn the_watchdog_invokes_the_reconnect_hook_after_the_swap() {
         let src = include_str!("stdb/connection.rs");
         let body = code_of(src, "fn spawn_coordinator_watchdog(");
-        let swap_at = body
-            .find("std::mem::replace")
-            .expect("the watchdog no longer swaps in the fresh LiveConn — reconnect is broken");
+        let replacement_at = body.find("replace_live_conn(").expect(
+            "the watchdog no longer installs the fresh LiveConn through the shared replacement \
+             operation — reconnect is broken",
+        );
         let hook_at = body.find("hook()").expect(
             "the watchdog no longer invokes the `on_reconnect` hook, so every one-shot coordinator \
              relay (today: the bot-invite relay) silently dies at the first reconnect",
         );
         assert!(
-            swap_at < hook_at,
-            "the `on_reconnect` hook is invoked BEFORE the connection swap. The hook re-reads \
+            replacement_at < hook_at,
+            "the `on_reconnect` hook is invoked BEFORE the shared connection replacement. The hook re-reads \
              `coord()`, so it would re-arm on the dead connection — indistinguishable at runtime \
              from never re-arming, and just as silent."
         );
