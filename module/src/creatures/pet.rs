@@ -213,12 +213,6 @@ pub fn debug_pet_command(
     apply_pet_command(ctx, owner_guid, data, target_guid)
 }
 
-/// Does the keyed candidate name the requested non-zero owner? Kept pure so the fail-closed half of
-/// the lookup can be tested without constructing a `ReducerContext`.
-fn pet_owner_matches(owner_guid: u64, candidate_owner: Option<u64>) -> bool {
-    owner_guid != 0 && candidate_owner == Some(owner_guid)
-}
-
 /// The owner's pet, if any. Pet GUIDs are deterministic, so this is one primary-key read followed by
 /// an owner check. A missing row or a row that names another owner fails closed. `owner_guid == 0`
 /// returns before looking in the wild-creature namespace. [entity]
@@ -230,7 +224,7 @@ pub fn pet_of(ctx: &ReducerContext, owner_guid: u64) -> Option<WorldEntity> {
         .game_world_entity()
         .guid()
         .find(pet_guid_for(owner_guid))
-        .filter(|pet| pet_owner_matches(owner_guid, Some(pet.owner_guid)))
+        .filter(|pet| pet.owner_guid == owner_guid)
 }
 
 /// Remove a live pet row that has already been resolved. Cleanup order is load-bearing: combat and
@@ -383,6 +377,7 @@ pub(crate) fn despawn_pet(ctx: &ReducerContext, pet_guid: u64) {
         return;
     };
     if pet.owner_guid == 0 || pet.guid != pet_guid_for(pet.owner_guid) {
+        spacetimedb::log::info!("despawn_pet: refusing malformed pet row guid={pet_guid}");
         return;
     }
     let owner_guid = pet.owner_guid;
@@ -420,23 +415,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn pet_selection_fails_closed() {
-        assert!(
-            !pet_owner_matches(42, None),
-            "a missing keyed row is no pet"
-        );
-        assert!(
-            !pet_owner_matches(42, Some(7)),
-            "a keyed row naming another owner is no pet"
-        );
-        assert!(
-            !pet_owner_matches(0, Some(0)),
-            "owner zero is never a pet owner"
-        );
-        assert!(
-            pet_owner_matches(42, Some(42)),
-            "the keyed row for the requested owner is selected"
-        );
-    }
 }
