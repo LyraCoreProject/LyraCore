@@ -365,13 +365,13 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         &view,
         move |v, row| teleport_appeared(v, shard, row),
     );
-    wire_insert(db.game_addon_message(), "game_addon_message.insert", &view, |v, row| {
+    wire_insert_live(db.game_addon_message(), "game_addon_message.insert", &view, |v, row| {
         addon_message_appeared(v, row)
     });
-    wire_insert(db.game_xp_event(), "game_xp_event.insert", &view, |v, row| {
+    wire_insert_live(db.game_xp_event(), "game_xp_event.insert", &view, |v, row| {
         xp_appeared(v, row)
     });
-    wire_insert(db.game_levelup_event(), "game_levelup_event.insert", &view, |v, row| {
+    wire_insert_live(db.game_levelup_event(), "game_levelup_event.insert", &view, |v, row| {
         levelup_appeared(v, row)
     });
     let quest_insert_coord = coord.clone();
@@ -559,19 +559,19 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
     // lookup) + the explicit `private_recipient_audience` predicate — never a viewer fan.
     // (The realm-core whisper/group twins for CROSS-shard delivery ride the same dispatchers,
     // armed once per realm-core connection by `arm_realm_private` below.)
-    wire_insert(db.game_resurrect_request(), "game_resurrect_request.insert", &view, |v, row| {
+    wire_insert_live(db.game_resurrect_request(), "game_resurrect_request.insert", &view, |v, row| {
         resurrect_offered(v, row)
     });
-    wire_insert(db.game_whisper_event(), "game_whisper_event.insert", &view, |v, row| {
+    wire_insert_live(db.game_whisper_event(), "game_whisper_event.insert", &view, |v, row| {
         whisper_appeared(v, row)
     });
     {
         let coord = coord.clone();
-        wire_insert(db.game_group_event(), "game_group_event.insert", &view, move |v, row| {
+        wire_insert_live(db.game_group_event(), "game_group_event.insert", &view, move |v, row| {
             group_event_appeared(v, &coord, row)
         });
     }
-    wire_insert(db.game_trade_event(), "game_trade_event.insert", &view, |v, row| {
+    wire_insert_live(db.game_trade_event(), "game_trade_event.insert", &view, |v, row| {
         trade_event_appeared(v, row)
     });
 
@@ -683,10 +683,10 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
 pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord: Coordinator) {
     let guard = realm.0.coord();
     let db = &guard.conn.db;
-    wire_insert(db.game_whisper_event(), "realm.game_whisper_event.insert", &view, |v, row| {
+    wire_insert_live(db.game_whisper_event(), "realm.game_whisper_event.insert", &view, |v, row| {
         whisper_appeared(v, row)
     });
-    wire_insert(db.game_group_event(), "realm.game_group_event.insert", &view, move |v, row| {
+    wire_insert_live(db.game_group_event(), "realm.game_group_event.insert", &view, move |v, row| {
         group_event_appeared(v, &coord, row)
     });
 }

@@ -4078,11 +4078,11 @@ mod tests {
     fn the_realm_private_relays_ride_the_recipient_keyed_dispatchers() {
         let body = decommented(top_level_fn_body_of("world_view.rs", "arm_realm_private"));
         assert!(
-            body.contains("wire_insert(db.game_whisper_event(), \"realm.game_whisper_event.insert\", &view, |v, row| { whisper_appeared(v, row) });"),
+            body.contains("wire_insert_live(db.game_whisper_event(), \"realm.game_whisper_event.insert\", &view, |v, row| { whisper_appeared(v, row) });"),
             "arm_realm_private no longer relays realm-core whispers through `whisper_appeared`"
         );
         assert!(
-            body.contains("wire_insert(db.game_group_event(), \"realm.game_group_event.insert\", &view, move |v, row| { group_event_appeared(v, &coord, row) });"),
+            body.contains("wire_insert_live(db.game_group_event(), \"realm.game_group_event.insert\", &view, move |v, row| { group_event_appeared(v, &coord, row) });"),
             "arm_realm_private no longer relays realm-core group events through \
              `group_event_appeared` (which also carries the QUEST_SHARE detail JOIN through a \
              WORLD handle — realm-core's cache has no quest catalogue)"
