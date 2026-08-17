@@ -324,16 +324,18 @@ Every relay hangs off a coordinator connection, in one of two shapes:
 
 - **Shared per-shard dispatch** (`world_view::arm_shard`, armed once per shard connection and
   re-armed through `CoordinatorInner::on_reconnect` after a watchdog swap): the broadcast-shaped
-  families — entities, motion, combat, chat, auras, corpses, casts, and the recipient-keyed
-  PRIVATE tier (whisper/group/resurrect). The cross-shard whisper/group twins ride the same
-  dispatchers on the realm-core connection (`arm_realm_private`), armed only when realm-core is a
-  distinct database.
-- **Per-session registrations** (`subscribe_player_events`): the **stuck-state** relays — a state
-  the player is wedged in until the packet arrives — `game_xp_event`, `game_levelup_event`,
-  `game_character_explored` (the discovery toast), `game_character_quest`, `game_item_instance`,
-  `game_teleport_event`, `game_addon_message`, `game_player_reputation`. Each pushes a matching
-  teardown into the session's `PlayerSubscriptions` guard. `game_bot_invite_intent` is registered
-  once at gateway startup and re-armed through `on_reconnect`.
+  families (entities, motion, combat, chat, auras, corpses, casts), the recipient-keyed PRIVATE
+  tier (whisper/group/resurrect), and owner-addressed XP, level-up, exploration, quest, item,
+  teleport, addon, and reputation rows. GUID and bound-identity indexes select one viewer directly;
+  the callback enqueues packet work on that session's FIFO writer. The cross-shard whisper/group
+  twins ride the same dispatchers on the realm-core connection (`arm_realm_private`), armed only
+  when realm-core is a distinct database.
+- **Viewer lifetime** (`subscribe_player_events`): world entry prepares relay state, registers one
+  viewer, and performs resident-state sweeps. `PlayerSubscriptions` owns only that registration;
+  dropping it removes the viewer. It owns no row callbacks. A world-port removes the source viewer
+  before cross-shard transfer cascade deletes, then destination entry registers a fresh viewer.
+
+`game_bot_invite_intent` is registered once at gateway startup and re-armed through `on_reconnect`.
 
 The owner token bypasses recipient RLS, so delivery is gated gateway-side: recipient-keyed lookups
 plus the `private_recipient_audience` predicate for the private tier, per-viewer gates for the

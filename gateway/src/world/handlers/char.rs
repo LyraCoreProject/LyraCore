@@ -73,7 +73,7 @@ fn send_quest_log<St: QuestActionStore + ?Sized>(
 }
 
 /// Enter (or RE-enter) the world as `character_guid`: rebuild the live entity, subscribe
-/// to its per-player views (a FRESH `created` dedup set every call — the full AOI reset a cross-map
+/// to its shared view (a FRESH `created` dedup set every call — the full AOI reset a cross-map
 /// re-entry needs), and send the login sequence + self CREATE_OBJECT as one contiguous batch. Shared by
 /// `CMSG_PLAYER_LOGIN` (fresh world entry) and `MSG_MOVE_WORLDPORT_ACK` (cross-map re-entry after
 /// `teleport_player` despawned the old entity) — see their call sites' doc comments for why reusing this
@@ -82,10 +82,10 @@ fn send_quest_log<St: QuestActionStore + ?Sized>(
 /// packet-level difference between the two callers: a world-port re-entry omits
 /// `SMSG_LOGIN_VERIFY_WORLD` (see `codec::WorldEntry`).
 ///
-/// Drops any PREVIOUS `InWorld` state FIRST (a world-port re-entry has one, scoped to the OLD map/AOI
-/// box; a fresh login doesn't) — the old `PlayerSubscriptions`' RAII `Drop` unregisters every callback +
-/// tears down the old AOI tracker before this registers new ones, so nothing double-fires and nothing
-/// leaks a stale grid subscription pointed at a map the player already left.
+/// Drops any PREVIOUS `InWorld` state FIRST (a world-port re-entry has one, scoped to the old
+/// map/AOI box; a fresh login doesn't). The old `PlayerSubscriptions` guard unregisters its viewer
+/// before this registers the new one. The world-port handler removes it even earlier, before a
+/// cross-shard transfer can cascade-delete source rows.
 fn enter_world<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
@@ -287,9 +287,9 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
             // only the map.
             let session_epoch = store.claim_session(conn.account_id);
             // Multi-shard routing: pin this session to the shard that owns the character's
-            // location BEFORE `player_login` runs, so the login reducer, the per-player connection
-            // it opens, and the AOI subscriptions all land on the home shard — and so does every
-            // message after this one (`run_world_session` re-reads `conn.home` per frame).
+            // location BEFORE `player_login` runs, so the login reducer and viewer registration
+            // land on the home shard — and so does every message after this one
+            // (`run_world_session` re-reads `conn.home` per frame).
             // A single-entry shard map never pins anything → `enter_world` runs on `store`, as it
             // always did.
             conn.route_home(store, character_guid)?;
@@ -331,6 +331,16 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                 if store.entity_in_world(character_guid) {
                     log::debug!("world: spurious WORLDPORT_ACK ignored (guid {character_guid} still in world)");
                 } else {
+                    // Stop source-shard owner dispatch before `route_home` can drive a transfer.
+                    // `finish_transfer` cascade-deletes quest and item rows, and their shared
+                    // callbacks must find no source viewer to enqueue for. Keep `InWorld` intact:
+                    // if routing fails, the existing abort path terminates the socket and
+                    // `leave_world` retains its logout/error policy. The guard's later Drop is
+                    // idempotent, and the captured guid/epoch above remain valid for destination
+                    // entry.
+                    if let WorldState::InWorld(iw) = &mut conn.state {
+                        iw.subs.unregister_viewer();
+                    }
                     // A world-port changes the map, which can change the owning shard —
                     // re-resolve before re-entering, exactly as a fresh login does. This is also
                     // where the escrowed cross-database transfer actually RUNS.

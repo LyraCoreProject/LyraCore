@@ -8,10 +8,10 @@
 //! re-subscribed on every cell crossing, and registered its own row callbacks on that connection.
 //! ~600 unshareable query strings, ~600 SDK pumps woken per committed transaction.
 //!
-//! After: those four tables ride the coordinator's existing global subscription (one per shard),
-//! the callbacks below are registered ONCE per shard, and [`WorldIndex`] answers "which sessions can
-//! see this row". Every shard's stream feeds ONE index keyed by `(map_id, instance_id, cell)` —
-//! guids are globally unique across databases, so one index spans the whole realm.
+//! After: spatial, broadcast, private, and owner-addressed tables ride the coordinator's existing
+//! global subscription (one per shard). The callbacks below are registered ONCE per shard.
+//! [`WorldIndex`] answers spatial audience questions; typed owner and identity indexes select one
+//! viewer for addressed rows. Every shard's stream feeds ONE view spanning the whole realm.
 //!
 //! # The two rules this file exists to keep
 //!
@@ -53,8 +53,7 @@ use crate::world::{Outbound, SessionTx};
 /// Everything the dispatch needs to know about one live world session. Registered at world entry
 /// (`subscribe_player_events`) and dropped by `PlayerSubscriptions`'s guard.
 ///
-/// Every field here is state the per-player relay closures used to CAPTURE; making it one shared
-/// struct is what lets a single registration serve every session.
+/// Every field here is session relay state used by the shared callbacks' writer jobs.
 pub(crate) struct Viewer {
     pub(crate) session: SessionId,
     pub(crate) self_guid: u64,
@@ -73,8 +72,7 @@ pub(crate) struct Viewer {
     pub(crate) created: Arc<Mutex<HashSet<u64>>>,
     pub(crate) gates: Arc<ViewerGates>,
     /// PLAYER_SKILL_INFO slot map `(skill_line → slot, next_free)` — seeded at login from the same
-    /// deterministic layout the CREATE used. Shared with the per-player skill
-    /// relays exactly like `created`/`gates`: one instance, whichever leg the flag picks.
+    /// deterministic layout the CREATE used.
     pub(crate) skill_slots: Arc<Mutex<(HashMap<u32, u8>, u8)>>,
     /// Areas known before this viewer entered the world. Reconnect replays use the same set, so
     /// restoring fog never repeats the discovery feedback.
@@ -288,7 +286,7 @@ impl WorldView {
         Ok(())
     }
 
-    fn add_viewer_on_shard(&self, viewer: Arc<Viewer>, anchor: CellKey, shard: ShardId) {
+    pub(crate) fn add_viewer_on_shard(&self, viewer: Arc<Viewer>, anchor: CellKey, shard: ShardId) {
         let mut registry = self.viewers.write().unwrap();
         self.spatial.add_viewer(viewer.session, anchor);
         registry.register(viewer, shard);
@@ -2134,22 +2132,26 @@ mod family_audience_tests {
         assert_eq!(arm.matches("\"game_item_instance.delete\"").count(), 1);
 
         let subscriptions = include_str!("subscriptions.rs");
-        for registrar in [
-            "register_teleport_relays",
-            "register_addon_relays",
-            "register_xp_levelup_relays",
-            "register_quest_relays",
-            "register_explored_relays",
-            "register_reputation_relays",
-            "initial_rep_factions",
-            "register_item_relays",
-            "initial_item_guids",
-        ] {
+        let subscribe = subscriptions
+            .split("pub fn subscribe_player_events(")
+            .nth(1)
+            .and_then(|body| body.split("pub fn spawn_bot_invite_relay").next())
+            .expect("subscribe_player_events body");
+        for callback in [".on_insert(", ".on_update(", ".on_delete("] {
             assert!(
-                !subscriptions.contains(registrar),
-                "{registrar} must not survive in subscribe_player_events"
+                !subscribe.contains(callback),
+                "subscribe_player_events must only register a viewer, not row callback {callback}"
             );
         }
+        let guard = subscriptions
+            .split("pub struct PlayerSubscriptions")
+            .nth(1)
+            .and_then(|body| body.split("impl PlayerSubscriptions").next())
+            .expect("PlayerSubscriptions fields");
+        assert!(
+            !guard.contains("teardown") && !guard.contains("FnOnce"),
+            "PlayerSubscriptions must own viewer lifetime only"
+        );
 
         let exploration = source
             .split("fn exploration_appeared")

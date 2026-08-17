@@ -5,8 +5,8 @@
 //! `reads`/`reducers`/`subscriptions`/`connection`). Rust method resolution prefers inherent methods
 //! over trait methods, so `self.characters(..)` here calls the inherent `Coordinator::characters`, not
 //! this trait method — these are thin views, NOT recursion. The inherent methods can't simply *be* this
-//! impl: a trait impl must be one contiguous block, but `subscribe_player_events` is a large relay that
-//! lives in `subscriptions.rs` and the logon tier calls some inherent reads directly — so the real
+//! impl: a trait impl must be one contiguous block, but `subscribe_player_events` builds viewer state
+//! in `subscriptions.rs` and the logon tier calls some inherent reads directly — so the real
 //! bodies stay distributed by concern and this block is the unifying world-facing view. The two methods
 //! that are NOT 1:1 forwards do real work: `lookup_session` composes two reads, and `movement_update`
 //! serializes the `MovementInfo` before the inherent reducer call.

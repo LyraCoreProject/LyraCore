@@ -1,5 +1,5 @@
-//! Session relay lifetime: the `PlayerSubscriptions` RAII guard, the remaining per-session callback
-//! groups, and packet builders shared by `world_view`'s per-shard dispatch.
+//! Session relay lifetime: the `PlayerSubscriptions` viewer guard and packet builders used by
+//! `world_view`'s shared per-shard dispatch.
 //!
 //! **The shared-connection model took the four box-scoped tables out of here entirely.** Peer
 //! visibility, peer movement, creature legs and gameobjects are no longer per-player registrations:
@@ -11,8 +11,8 @@
 //! decides and encodes for exactly ONE viewer and is run on that session's own writer thread, never
 //! on the shared pump.
 //!
-//! That carve is also the shape planned for the rest: pure-ish top-level items with their own
-//! tests, called from a thin registration. [`entity_update_to_outbound`] was the first of them.
+//! Owner-addressed relays use the same shape: a shard callback selects one viewer, then its writer
+//! queue runs the cache reads, state updates, and packet construction.
 
 use crate::codec::{self, CreateKind};
 use crate::world::{Outbound, SessionTx};
@@ -31,18 +31,9 @@ use super::bindings::*;
 use super::connection::Coordinator;
 use super::views::{corpse_view, entity_view, go_view};
 
-/// RAII guard for one world session's relay callbacks + shared-view registration, held by the
-/// world connection. The coordinator connections outlive every session, so the callbacks MUST be
-/// removed when the session ends, or a relogin would double-register them and a logged-out
-/// player's state would keep relaying into a dead channel. Dropping the guard does exactly that.
+/// RAII guard for one world session's shared-view registration, held by the world connection.
+/// Dropping the guard makes the session unreachable from every shard-level dispatcher.
 pub struct PlayerSubscriptions {
-    // A homogeneous teardown list is the point (see the doc above): one `push` per relay instead of a hand-mirrored field.
-    #[allow(clippy::type_complexity)]
-    /// One teardown closure per registered relay callback, each removing its callback from the
-    /// coordinator (or realm-core) connection it was registered on; drained in `Drop`. Homogeneous
-    /// so adding a relay is a single `push` at registration instead of a new field hand-mirrored
-    /// across the struct, `empty()`, and `Drop`.
-    teardowns: Vec<Box<dyn FnOnce() + Send>>,
     /// This session's registration in the gateway-wide shared view. `None` only for the
     /// in-memory test store. Dropping the guard unregisters it, which is what stops the shared
     /// coordinator dispatch from ever enqueueing for a dead session.
@@ -55,19 +46,56 @@ impl PlayerSubscriptions {
     #[cfg(test)]
     pub fn empty() -> Self {
         Self {
-            teardowns: Vec::new(),
             viewer: None,
             view: None,
         }
     }
 
-    /// The closure must run once when the owning session unregisters its relays.
+    /// Build a real shared-view registration for world-session ordering tests.
     #[cfg(test)]
-    pub fn with_teardown(teardown: impl FnOnce() + Send + 'static) -> Self {
+    pub(crate) fn registered_for_test(
+        view: Arc<WorldView>,
+        self_guid: u64,
+        instance_id: u64,
+        map_id: u32,
+        x: f32,
+        y: f32,
+        tx: SessionTx,
+    ) -> Self {
+        let mut identity = [0; 32];
+        identity[..8].copy_from_slice(&self_guid.to_le_bytes());
+        let viewer = Arc::new(Viewer {
+            session: view.next_session_id(),
+            self_guid,
+            bound_identity: spacetimedb_sdk::Identity::from_byte_array(identity),
+            instance_id,
+            map_id,
+            tx,
+            created: Arc::new(Mutex::new(HashSet::from([self_guid]))),
+            gates: Arc::new(ViewerGates::default()),
+            skill_slots: Arc::new(Mutex::new((std::collections::HashMap::new(), 0))),
+            explored: Mutex::new(world_view::ExplorationReplay::default()),
+            motion_pending: Arc::new(world_view::MotionPending::default()),
+        });
+        view.add_viewer_on_shard(
+            viewer.clone(),
+            CellKey::of_position(map_id, instance_id, x, y),
+            0,
+        );
         Self {
-            teardowns: vec![Box::new(teardown)],
-            viewer: None,
-            view: None,
+            viewer: Some(viewer),
+            view: Some(view),
+        }
+    }
+
+    /// Remove this session from owner, identity, shard, and spatial routing immediately.
+    ///
+    /// World-port uses this before driving a cross-shard transfer because the drive can delete
+    /// owner rows on the source shard. `Drop` calls the same method, so failure and re-entry paths
+    /// remain idempotent.
+    pub(crate) fn unregister_viewer(&mut self) {
+        if let (Some(view), Some(viewer)) = (self.view.take(), self.viewer.take()) {
+            view.remove_viewer(viewer.session);
         }
     }
 
@@ -88,18 +116,7 @@ impl PlayerSubscriptions {
 
 impl Drop for PlayerSubscriptions {
     fn drop(&mut self) {
-        // Remove every relay callback — a leaked closure on a connection that outlives the
-        // session would keep relaying a logged-out player's data into a dead channel for the
-        // gateway's whole lifetime, once more per relogin.
-        for teardown in self.teardowns.drain(..) {
-            teardown();
-        }
-        // Leave the shared view LAST — while the registration is live the coordinator
-        // dispatch may still enqueue for this session, which is harmless (the writer is draining or
-        // gone) but pointless.
-        if let (Some(view), Some(viewer)) = (self.view.take(), self.viewer.take()) {
-            view.remove_viewer(viewer.session);
-        }
+        self.unregister_viewer();
     }
 }
 
@@ -2540,27 +2557,8 @@ fn append_item_armor_and_sheet(db: &RemoteTables, self_guid: u64, out: &mut Vec<
 }
 
 impl Coordinator {
-    // The relay registration hands each callback its own `Coordinator` clone; the arity is the number of relays, not an accidental type.
-    #[allow(clippy::type_complexity)]
-    /// Prepare one live viewer for the owner-scoped and broadcast-shaped callbacks that are
-    /// registered once per shard in `world_view::arm_shard`.
-    ///
-    /// TEARDOWN CONTRACT: each `register_<group>_relays` method below returns its OWN teardown
-    /// closures, one per callback it registers; this function only `extend`s them into
-    /// `teardowns`. `every_registered_player_callback_has_a_teardown_issue_89` (this file's test
-    /// module) checks the contract holds by scanning this file's own source text: a missed
-    /// teardown relays a logged-out player's state into a dead channel for the gateway's whole
-    /// lifetime.
-    ///
-    /// CARVE (#485): registration and teardown used to live ~1,000 lines apart (one `let on_x =
-    /// ...` up top, its `remove_on_*` mirrored into a vec at the bottom). Each surviving table
-    /// group is now its own `fn register_<group>_relays(...) -> Vec<Box<dyn FnOnce() + Send>>`,
-    /// co-locating the two — the pattern this file's own `offer_peer_create_for` family proved
-    /// first. This function is the dispatcher: mint the shared state every group needs, call
-    /// each registrar in the same order the registrations used to happen, then run the
-    /// login-sequence tail unchanged.
-    ///
-    /// The returned guard removes the callbacks + unregisters the shared-view session on drop.
+    /// Prepare and register one live viewer. Row callbacks are already armed once per shard in
+    /// `world_view::arm_shard`; this method registers no callback of its own.
     pub fn subscribe_player_events(
         &self,
         account_id: u64,
@@ -2637,10 +2635,6 @@ impl Coordinator {
         let self_identity =
             spacetimedb_sdk::Identity::from_byte_array(self.bound_identity(account_id)?);
 
-        // One registrar call per surviving table group, in the same order the registrations used
-        // to happen top-to-bottom in this function; each returns its OWN teardowns (the CARVE
-        // note above).
-        let mut teardowns: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
         {
             // Seed the viewer's replay state before registration. The shared coordinator was
             // subscribed before this session existed, so resident reputation rows cannot replay
@@ -2696,16 +2690,11 @@ impl Coordinator {
             explored: Mutex::new(explored),
             motion_pending: Arc::new(world_view::MotionPending::default()),
         });
-        if let Err(error) = view.add_viewer(
+        view.add_viewer(
             self,
             viewer.clone(),
             CellKey::of_position(login_map, login_instance, login_x, login_y),
-        ) {
-            for teardown in teardowns.drain(..) {
-                teardown();
-            }
-            return Err(error);
-        }
+        )?;
         world_view::sweep_into_view(&view, &viewer);
 
         // Corpse resident sweep: corpse rows ride the base subscription
@@ -2768,10 +2757,7 @@ impl Coordinator {
             }
         }
 
-        // `teardowns` already holds every registrar's callback-removal closures (collected via
-        // `.extend()` above); the struct/empty()/Drop stay untouched.
         Ok(PlayerSubscriptions {
-            teardowns,
             viewer: Some(viewer),
             view: Some(view),
         })
@@ -2786,14 +2772,8 @@ impl Coordinator {
     /// session to hang this off. A bot's goal tick decides "invite this fellow quester" with no
     /// client behind it, so nothing else in the gateway would ever notice the row.
     ///
-    /// Called ONCE, at gateway startup (`main.rs`). Also installs the RE-ARM hook
-    /// (`CoordinatorInner::on_reconnect`, `connection.rs`) that keeps it alive across a coordinator
-    /// reconnect: every OTHER coordinator-level relay in this file re-registers itself implicitly,
-    /// because it is armed from inside a per-player LOGIN, and a login happens again after any
-    /// reconnect. This one has no login to hang a re-arm off — it runs once at startup — so without
-    /// the hook a reconnect (which the watchdog's own doc comment calls out as covering "a
-    /// SpacetimeDB migration", i.e. a routine module republish, not a rare event on this project)
-    /// would leave it registered on a dead, disconnected `LiveConn` forever.
+    /// Called ONCE, at gateway startup (`main.rs`). Also installs its own reconnect hook, parallel
+    /// to `world_view::arm_shard`, so a module republish binds the callback to the fresh `LiveConn`.
     pub fn spawn_bot_invite_relay(&self) {
         for shard in self.all_shards() {
             shard.arm_bot_invite_relay();
@@ -3841,43 +3821,6 @@ mod tests {
         decommented.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    /// The per-player subscription list must NEVER carry a static CATALOGUE table. This list
-    /// runs once per session, so anything in it is materialised into every player's client cache;
-    /// `game_item_template` alone (17,720 rows x 32 columns) measured ~37MB per connection, taking
-    /// 20 connections from +220MB to +953MB. The coordinator subscribes these once for the whole
-    /// gateway and every reader already uses that handle.
-    ///
-    /// Scanned on the comment-stripped source, so the DO-NOT-RE-ADD note at the call site cannot
-    /// satisfy this test — the mutation it catches is someone pasting the query back in.
-    #[test]
-    fn the_per_player_subscription_carries_no_static_catalogue_table() {
-        let code = scanned_source();
-        for table in [
-            "game_item_template",
-            "game_gameobject_template",
-            "game_spell",
-            "game_creature_template",
-            "game_quest_template",
-            // The connection reclaim's second pass. Not tens of MB (396 rows) — kept in this list because it is
-            // provably dead weight on the player connection: no callback is registered on
-            // `player.conn.db.game_quest_objective()` and every reader takes the coordinator's
-            // cache. The mutation this catches is a future quest feature "needing objectives on
-            // the player connection" and pasting the query back instead of reaching for
-            // `self.0.coord()` the way `quest_log_sync` and `build_quest_log_slots` already do.
-            "game_quest_objective",
-        ] {
-            assert!(
-                !code.contains(&format!("\"SELECT * FROM {table}\"")),
-                "the per-player subscription list has re-acquired the static world table \
-                 `{table}`. That is a whole extra copy of it in EVERY session's client cache for \
-                 data the coordinator already holds once — up to tens of MB each for the big \
-                 catalogues (the likely mechanism behind a documented out-of-memory death at ~500 \
-                 sessions), and dead weight even for the small ones. If a player-connection \
-                 callback genuinely needs these rows, take `self.0.coord()`'s cache instead."
-            );
-        }
-    }
-
     /// The span of ONE top-level `fn NAME(` in a DIFFERENT file of this module tree — the
     /// shared-connection model moved the AOI wiring out of this file, and a tripwire that can only
     /// see this file would have gone
@@ -3925,10 +3868,8 @@ mod tests {
 
     /// The call-site tripwire for the shared-view `Viewer`'s construction.
     ///
-    /// The session's `Viewer` must be built with the SAME dedup/gate state the per-player relays in
-    /// this file capture — one `created` set, one `ViewerGates`. Hand either of them a fresh
-    /// instance instead and the guarantee they exist for (exactly-once CREATE delivery, the
-    /// spirit-healer ghost gate) is void, with nothing else failing.
+    /// The session's `Viewer` must hold the same dedup/gate state prepared during world entry.
+    /// Hand it a fresh instance and the exactly-once CREATE or spirit-healer gate silently splits.
     #[test]
     fn the_viewer_is_registered_with_the_shared_dedup_sets_and_gates() {
         let code = scanned_source();
@@ -3940,9 +3881,8 @@ mod tests {
         ] {
             assert!(
                 code.contains(field),
-                "the shared-view `Viewer` is no longer constructed with `{field}` — it now holds a \
-                 private copy of state the per-player relays in this file still write to, so the two \
-                 halves of every dedup/gate silently disagree"
+                "the shared-view `Viewer` is no longer constructed with `{field}` — world entry and \
+                 shared writer jobs now use different relay state"
             );
         }
         assert!(
@@ -4016,77 +3956,6 @@ mod tests {
                 && whisper.contains("private_recipient_audience(row.recipient_guid, viewer.self_guid)"),
             "whisper_appeared is no longer recipient-keyed — on an owner-token read that is a \
              privacy leak: every session would receive every player's private whispers"
-        );
-    }
-
-    // -------------------------------------------------------------------------------------------
-    //  Every player-connection callback registered here must be torn down
-    // -------------------------------------------------------------------------------------------
-    //
-    // A missed removal leaves one more live callback on every world entry. The scan below keeps the
-    // remaining session-owned registrations paired with their teardown calls.
-
-    /// Every `let <ident> = <expr>.on_insert(`/`.on_update(`/`.on_delete(...);` REGISTRATION in `text`
-    /// (the statement bounded by the first `;` after `<ident> =` — true for every DIRECT registration
-    /// in this file, which all call the event method immediately after the `=`) that has no matching
-    /// `remove_on_insert(<ident>)` / `remove_on_update(<ident>)` / `remove_on_delete(<ident>)` call
-    /// anywhere else in `text`. Returns each unpaired registration as `"<ident> (<method>)"`.
-    ///
-    /// Does NOT see the two `.map(|realm| { ... })`-wrapped registrations (`on_realm_group`,
-    /// `on_realm_whisper`) — their teardown sits behind an `Option`, not a plain `let`, so they don't
-    /// fit this statement shape. Both are already covered by their own dedicated tripwires:
-    /// `the_realm_core_group_relay_is_gated_filtered_and_torn_down` and
-    /// `the_realm_core_whisper_relay_is_gated_filtered_and_torn_down`, above.
-    fn unpaired_registrations(text: &str) -> Vec<String> {
-        let mut missing = Vec::new();
-        let mut search_from = 0usize;
-        while let Some(rel) = text[search_from..].find("let ") {
-            let ident_start = search_from + rel + 4;
-            let ident_end = text[ident_start..]
-                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .map(|o| ident_start + o)
-                .unwrap_or(text.len());
-            let ident = &text[ident_start..ident_end];
-            search_from = ident_end;
-            if ident.is_empty() {
-                continue; // `let (a, b, ...) = ...` / `let mut ...` — not a single bound name
-            }
-            let after = text[ident_end..].trim_start();
-            if !after.starts_with('=') || after.starts_with("==") {
-                continue; // e.g. `let x: SomeType = ...` — the `=` isn't immediately after the ident
-            }
-            let stmt_end = text[ident_end..]
-                .find(';')
-                .map(|o| ident_end + o)
-                .unwrap_or(text.len());
-            let stmt = &text[ident_end..stmt_end];
-            let Some(method) = ["on_insert", "on_update", "on_delete"]
-                .into_iter()
-                .find(|m| stmt.contains(&format!(".{m}(")))
-            else {
-                continue; // not an event-callback registration
-            };
-            let teardown = format!("remove_{method}({ident})");
-            if !text.contains(&teardown) {
-                missing.push(format!("{ident} ({method})"));
-            }
-        }
-        missing
-    }
-
-    /// Proves [`unpaired_registrations`] actually catches a missing teardown rather than being
-    /// vacuously green (a scanner with an inverted or short-circuited check would pass the real audit
-    /// below for the wrong reason). A synthetic snippet with one paired and one unpaired registration.
-    #[test]
-    fn the_teardown_scanner_flags_a_synthetic_missing_teardown() {
-        let synthetic = "let on_paired = tbl.on_insert(move |_ctx, row| { touch(row); }); \
-                          let on_leaked = tbl2.on_insert(move |_ctx, row| { touch(row); }); \
-                          fn teardown() { tbl.remove_on_insert(on_paired); }";
-        assert_eq!(
-            unpaired_registrations(synthetic),
-            vec!["on_leaked (on_insert)".to_string()],
-            "the scanner must flag exactly the registration with no matching remove_on_insert call, \
-             and not the paired one next to it"
         );
     }
 
@@ -4871,20 +4740,4 @@ mod tests {
         );
     }
 
-    /// The actual teardown audit: no player-connection callback registered in this file may be left
-    /// without a teardown. Mutation (verified live, reverted with `Edit`): deleting the
-    /// `on_explored_insert` teardown line this test exists to protect turns this test red with the
-    /// exact identifier named in the failure message.
-    #[test]
-    fn every_registered_player_callback_has_a_teardown_issue_89() {
-        let missing = unpaired_registrations(&scanned_source());
-        assert!(
-            missing.is_empty(),
-            "the following callbacks are registered with no matching `remove_on_*` teardown — each \
-             leaks another live subscription per world entry (or per session), and a single live \
-             event then fires its relay once per accumulated registration — the double-discovery-toast \
-             defect's exact shape, \
-             reproduced for a different table: {missing:?}"
-        );
-    }
 }
