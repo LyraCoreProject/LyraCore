@@ -28,7 +28,7 @@ is a reducer call.
 flowchart TB
     subgraph clients["unmodified 1.12.1 clients (build 5875)"]
         C1["WoW client"]
-        C2["wire harness (headless, real protocol)"]
+        C2["headless client (real protocol)"]
     end
 
     subgraph gw["GATEWAY — lyracore-gateway (stateless, native)"]
@@ -59,7 +59,7 @@ flowchart TB
 Four databases, one gateway tier, one wasm.
 
 The same wasm is published to **every** database. A shard is a database *name*, which is a gateway
-routing fact; module game logic never reads one, and a tripwire test fails the build if it starts to
+routing fact; module game logic never reads one, and an architecture test fails the build if it starts to
 (`no_module_game_logic_reads_a_shard_id` in `module/src/tripwires.rs`).
 
 ---
@@ -489,7 +489,7 @@ The ladder, and the rule that no rung substitutes for another:
 
 | Rung | Tool | Catches |
 |---|---|---|
-| Unit / integration | `cargo test --workspace` | logic, planners, codec round-trips, and the source-scan tripwires |
+| Unit / integration | `cargo test --workspace` | logic, planners, codec round-trips, and the source-scan architecture tests |
 | Deploy shape | `lyracore preflight` — the repo's `./lyracore` CLI shim, fully offline | schema and `#[default(...)]` encoding breaks no test can see |
 | Server state | `spacetime sql` | did the transaction actually do it |
 | Wire | the pinned wire-protocol test suite — the real 5875 protocol, no wine (maintainer tooling, not in this repository) | did the server send the right packet |
@@ -499,12 +499,12 @@ The ladder, and the rule that no rung substitutes for another:
 **Live wire tests against a running stack are operator-gated in attended sessions.** Offline tests
 are unrestricted.
 
-Two rungs are recorded as reproducible probe documents rather than as tooling:
+Two rungs are recorded as reproducible verification documents rather than as tooling:
 [`vmap-rollout.md`](./vmap-rollout.md) for exact collision, and
 [`cc-diminishing-returns-probe.md`](./cc-diminishing-returns-probe.md) for crowd-control diminishing
 returns, whose persisted state and removal-time window only a live database can show.
 
-The build carries source-scan tripwire tests that fail on architectural drift rather than on
+The build carries source-scan architecture tests that fail on architectural drift rather than on
 behaviour, all in `module/src/tripwires.rs` (#379 pulled them out of `lib.rs`): no module code
 outside `region.rs`/`load.rs` may read a shard id (`:478`); no whole-table `.iter()` over a spatial
 table outside a shrinking whitelist (`:323`); every character-keyed table must carry
@@ -520,7 +520,7 @@ gated individually elsewhere — one `#[cfg(feature = "debug_reducers")]` per fu
 other files, including the not-obviously-named `set_guid_floor` in `auth.rs`; `grep -rn
 'cfg(feature = "debug_reducers")' module/src` finds every one of them. A production build must be a
 plain build; the deploy wrapper `lyracore publish` enables the feature deliberately because the
-local test harness needs it.
+local headless-client tests need it.
 
 ---
 
@@ -531,6 +531,7 @@ local test harness needs it.
 | Document | What it is |
 |---|---|
 | **`architecture.md`** (this file) | The current system: tiers, topology, data model, read plane, sharding, packages. |
+| [`../CONTEXT.md`](../CONTEXT.md) | The glossary. The words this document and the code are supposed to use, and the words to avoid. |
 | [`danger-zones.md`](./danger-zones.md) | **Authoritative.** Traps, tooling gotchas, and the exact deploy/verify procedure. Read before any engine change. |
 | [`schema.md`](./schema.md) | The table-level data model. |
 | [`region-sharding.md`](./region-sharding.md) | Retired (#471): the removed region tier's design — seam menus, assignments, view merge — kept for reference. |
