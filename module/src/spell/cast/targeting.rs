@@ -411,6 +411,18 @@ pub(crate) fn aura_apply(
         0
     };
 
+    // Two ground mounts never stack (story 28): a mount landing on a target that already rides a
+    // DIFFERENT mount runs the shared dismount first, which drops the whole previous mount spell (its
+    // display effect AND its mounted-speed effect), so the replacement starts from a clean slate.
+    // Scoped to a different spell on purpose — a recast of the SAME mount must fall through to the
+    // ordinary refresh below, or a multi-effect mount would delete the sibling effect this same cast
+    // had just refreshed.
+    if e.kind == A_MOUNTED
+        && crate::mount::active_mount_spell(ctx, target_guid)
+            .is_some_and(|active| active != hdr.spell_id)
+    {
+        crate::mount::dismount(ctx, target_guid);
+    }
     let auras = ctx.db.game_aura();
     // Single active seal: applying a seal removes the ENTIRE other seal buff (seals don't stack; a
     // re-cast of the SAME seal just refreshes via the `existing` lookup below). A multi-effect seal
@@ -602,6 +614,12 @@ pub(crate) fn aura_apply(
     // `e.spirit` field.
     if crate::spell::aura_moves_sheet(e.kind, e.p0) {
         recompute_sheet(ctx, target_guid);
+    }
+    // Same shape again for the land-mount projection: with the `A_MOUNTED` row now placed, re-derive
+    // `mount_display_id` from the aura set so the frozen display reaches the client. Gated on
+    // `mount_aura_moves_mount`, so every non-mount aura skips it entirely.
+    if crate::mount::mount_aura_moves_mount(e.kind, e.p0) {
+        crate::mount::recompute_mount(ctx, target_guid);
     }
 
     // Combo-FINISHER spend (Slice and Dice): SPEND the combo points AFTER the duration read above
@@ -1032,6 +1050,14 @@ pub(crate) fn apply_effect(
             // world) even from inside a dungeon — `recall_to_home` resolves the durable char row's
             // home_map/x/y/z itself, so no target/effect params are read here.
             crate::world::recall_to_home(ctx, caster_guid);
+            EffectHit::none()
+        }
+        E_DISMOUNT => {
+            // Dazed's mount-removal half: run the shared land-dismount on the resolved target. An
+            // instant effect like any other, so an unlanded cast (resisted, immune, no target) never
+            // reaches here and the target stays mounted (story 27). Silent no-op on an unmounted
+            // target, and idempotent if two dismount sources land on the same tick.
+            crate::mount::dismount(ctx, target_guid);
             EffectHit::none()
         }
         E_PERSISTENT_AREA => {

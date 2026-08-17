@@ -250,7 +250,7 @@ pub(crate) fn do_cancel_aura(
     let auras = ctx.db.game_aura();
     // Snapshot the matching aura ids (+ whether each moves a vitals pool) before deleting — never
     // mutate the table mid-iteration.
-    let to_remove: Vec<(u64, bool, bool)> = auras
+    let to_remove: Vec<(u64, bool, bool, bool)> = auras
         .by_target()
         .filter(&player_guid)
         .filter(|a| a.spell_id == spell_id)
@@ -259,6 +259,7 @@ pub(crate) fn do_cancel_aura(
                 a.id,
                 aura_moves_vitals(a.eff_kind, a.eff_p0),
                 crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0),
+                crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0),
             )
         })
         .collect();
@@ -267,10 +268,12 @@ pub(crate) fn do_cancel_aura(
     }
     let mut revitalize = false;
     let mut resheet = false;
-    for (id, moves_vitals, moves_sheet) in to_remove {
+    let mut remount = false;
+    for (id, moves_vitals, moves_sheet, moves_mount) in to_remove {
         auras.id().delete(id);
         revitalize |= moves_vitals;
         resheet |= moves_sheet;
+        remount |= moves_mount;
     }
     if revitalize {
         recompute_vitals(ctx, player_guid);
@@ -279,6 +282,12 @@ pub(crate) fn do_cancel_aura(
     // sheet recompute sees the already-updated `e.spirit`.
     if resheet {
         recompute_sheet(ctx, player_guid);
+    }
+    // Right-clicking the mount buff off (`CMSG_CANCEL_AURA`) is an ordinary aura removal — the same
+    // collect-then-recompute shape clears the mount display, and the mounted-speed row is already gone
+    // with it because both effects share this spell id.
+    if remount {
+        crate::mount::recompute_mount(ctx, player_guid);
     }
     Ok(())
 }
@@ -548,6 +557,8 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
 
     // END the channels that broke this tick (caster CC'd / target dead) — AFTER the advance so the deleted
     // row supersedes its just-advanced cadence (no re-fire). A no-op without an A_PERIODIC_TRIGGER channel.
+    // No mount recompute here: `channel_end` only ever collects A_PERIODIC_TRIGGER ids (see the arm
+    // that fills it), and deleting one removes that row alone — never a mount aura or its sibling.
     for id in channel_end {
         auras.id().delete(id);
     }
@@ -617,12 +628,21 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     // #517: same expiry snapshot, wider gate — a reaped Battle Shout (or a STR/AGI/SPI stat aura) must
     // pull the sheet numbers back down too, even though it never touched a vitals pool.
     let mut resheet: Vec<u64> = Vec::new();
+    // A mount aura reaping on its own timer must leave the same end state as right-clicking the buff
+    // off: the display cleared and the mounted-speed row gone (story 29). Same snapshot, same
+    // de-duped-target shape.
+    let mut remount: Vec<u64> = Vec::new();
     for a in &expired {
         if aura_moves_vitals(a.eff_kind, a.eff_p0) && !revitalize.contains(&a.target_guid) {
             revitalize.push(a.target_guid);
         }
         if crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0) && !resheet.contains(&a.target_guid) {
             resheet.push(a.target_guid);
+        }
+        if crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0)
+            && !remount.contains(&a.target_guid)
+        {
+            remount.push(a.target_guid);
         }
     }
     // CC diminishing returns (work-item 192): a NATURAL EXPIRY is one of the two REMOVAL events that starts
@@ -654,6 +674,11 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     // must see the already-updated `e.spirit`.
     for target_guid in resheet {
         recompute_sheet(ctx, target_guid);
+    }
+    // The mount projection, re-derived from whatever auras survived the reap. A target that lost no
+    // mount aura never enters `remount`, so this is a no-op for the common case.
+    for target_guid in remount {
+        crate::mount::recompute_mount(ctx, target_guid);
     }
 
     // Break-on-damage from DoTs (LAST — after the next_tick advance + expiry, so a broken aura is never
