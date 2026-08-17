@@ -5,9 +5,7 @@
 
 use lyracore_shared::constants::sheath_state;
 use lyracore_shared::spatial;
-use spacetimedb::{
-    reducer, table, Identity, ReducerContext, Table,
-};
+use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
 
 use crate::faction::game_faction_template;
 // Graveyard resolution (work-item 209/226) lives in `graveyard.rs` (issue #385 extraction) — this
@@ -691,6 +689,14 @@ pub(crate) fn teleport_player(
         e.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
         e.instance_id = instance_id;
         entities.guid().update(e);
+    }
+
+    // LAND-MOUNT indoor edge (22): a teleport writes position OUTSIDE the movement heartbeat, so it
+    // asks the same shared predicate and converges on the same `dismount`. After the position write
+    // for the same reason the heartbeat does it there. A taxi passenger never gets here
+    // (`movement_is_suppressed` returned above), and `dismount` is a no-op for an unmounted player.
+    if !crate::mount::mount_cast_allowed_here(ctx, map_id, x, y, z) {
+        crate::mount::dismount(ctx, player_guid);
     }
 
     // Durable character row — updated in BOTH branches: survives relog, and for a cross-map hop is the
@@ -1385,6 +1391,14 @@ pub(crate) fn apply_movement_update(
         );
         crate::breath::update_breath_edge(ctx, &mover, submerged);
     }
+    // LAND-MOUNT indoor edge (22): sampled here, applied after the row write below. Two cheap tests
+    // in front of the area query — the mount PROJECTION on the row already in hand, then a ~10 Hz
+    // gate off the CLIENT move clock (the stateless shape the 1 Hz rest/breath gates above use). An
+    // unmounted heartbeat therefore pays one field compare and nothing else. Taxi passengers never
+    // reach this line: `movement_is_suppressed` returned at the top of the function.
+    let mount_indoor_due = mover.is_player()
+        && mover.mount_display_id != 0
+        && crate::mount::indoor_check_is_due(old_move_ms, move_time_ms);
     // `old_x/old_y/old_z` are the last PERSISTED position, so this drift is exactly how far the
     // stored row has fallen behind the client.
     let drift_sq = (x - old_x).powi(2) + (y - old_y).powi(2) + (z - old_z).powi(2);
@@ -1416,6 +1430,15 @@ pub(crate) fn apply_movement_update(
     if plan.fall_lethal {
         // Killer = self: no kill credit, no loot — an environmental death.
         crate::combat::kill_player(ctx, mover_guid, mover_guid);
+    }
+
+    // LAND-MOUNT indoor edge, applied (see `mount_indoor_due` above for the gating). It runs AFTER
+    // the row write on purpose: `dismount` recomputes the projection straight onto the stored row,
+    // and a later `update(mover)` from the pre-dismount copy in hand would put the mount back.
+    // `dismount` is idempotent and silent when the player is not mounted, so crossing the same
+    // threshold twice changes nothing the second time.
+    if mount_indoor_due && !crate::mount::mount_cast_allowed_here(ctx, map_id, x, y, z) {
+        crate::mount::dismount(ctx, mover_guid);
     }
 
     // BREAK the mover's CHANNEL on a real move (Arcane Missiles stops if you walk). Only on an actual
@@ -2204,8 +2227,10 @@ mod tests {
 
     #[test]
     fn movement_update_applies_the_plan_and_never_re_derives_the_persist_gate() {
-        let body =
-            crate::test_scan::code_of(include_str!("world.rs"), "pub(crate) fn apply_movement_update(");
+        let body = crate::test_scan::code_of(
+            include_str!("world.rs"),
+            "pub(crate) fn apply_movement_update(",
+        );
         // The persist/relay/channel/score decisions must route through `plan_movement` — not a
         // second, hand-rolled `snapshot_needs_persist` call inline (that decision, and the "relay is
         // never gated on it" invariant, are pinned directly by the tests above instead).

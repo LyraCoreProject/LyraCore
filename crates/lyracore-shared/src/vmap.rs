@@ -199,16 +199,29 @@ fn point_at(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     ]
 }
 
-/// Bit in `TriClass::Wmo`'s `mogp_flags` marking the group as an interior space (vanilla WMO group
-/// flags, MOGP chunk — mangos' `MOD_INDOOR`). Same bit value the codec's doc comment/tests already
-/// assume for a "typical interior group" fixture.
-const WMO_GROUP_INDOOR_FLAG: u32 = 0x2000;
+/// Bit in `TriClass::Wmo`'s `mogp_flags` marking a WMO group as an OUTDOOR space (vanilla WMO
+/// group flags, MOGP chunk — mangos' `MOGP_FLAG_OUTDOOR`). Mangos does not test an "indoor" bit:
+/// a group the probe actually found is interior UNLESS it carries this one.
+pub const WMO_GROUP_OUTDOOR_FLAG: u32 = 0x8000;
+
+/// Is a found WMO group an interior space? Mangos' rule, and the ONLY place the MOGP bit is
+/// interpreted — the module's per-cell indoor-presence table classifies staged triangles through
+/// this same function, so a query and its pre-reject can never disagree about a group.
+pub fn group_is_indoor(mogp_flags: u32) -> bool {
+    mogp_flags & WMO_GROUP_OUTDOOR_FLAG == 0
+}
+
+/// How far BELOW the queried point an AREA probe segment reaches (yd). An area query asks which
+/// group a point is *in*, so its budget is the height of a room, not the ray/floor probes'
+/// 200 yd reach — that one finds a WMO two storeys down and reports the point as inside it.
+pub const AREA_PROBE_DOWN_YD: f32 = 10.0;
 
 /// Point-in-WMO-group area-info: which WMO group (if any) contains `point`, and is it indoor —
 /// mangos parity (`VMapManager2::getAreaInfo`). Implemented the same way mangos does: cast a
-/// short vertical probe segment (`a` above `point`, `b` below it) and take the *nearest* WMO-class
-/// hit — the first model surface the point sits under/on belongs to the containing group. `None`
-/// when no WMO triangle lies in the probe range (outdoors, or vmap unimported for this cell).
+/// short vertical probe segment (`a` above `point`, `b` below it, no longer than
+/// [`AREA_PROBE_DOWN_YD`]) and take the *nearest* WMO-class hit — the first model surface the
+/// point sits under/on belongs to the containing group. `None` when no WMO triangle lies in the
+/// probe range (outdoors, or vmap unimported for this cell).
 pub fn cast_ray_area(
     fetch: &mut impl FnMut(u16, u16) -> Option<Vec<VmapTri>>,
     a: [f32; 3],
@@ -224,7 +237,7 @@ pub fn cast_ray_area(
     };
     Some(AreaInfo {
         group_id,
-        indoor: mogp_flags & WMO_GROUP_INDOOR_FLAG != 0,
+        indoor: group_is_indoor(mogp_flags),
         point: point_at(a, b, t),
     })
 }
@@ -393,7 +406,7 @@ mod tests {
                 10.0,
                 TriClass::Wmo {
                     group_id: 3,
-                    mogp_flags: 0x2000,
+                    mogp_flags: WMO_GROUP_OUTDOOR_FLAG,
                 },
             ),
             tri(20.0, TriClass::M2),
@@ -624,9 +637,58 @@ mod tests {
         (cx, cy, tris)
     }
 
+    /// The MOGP rule, at the bit level. Mangos tests ONE bit and tests it for OUTDOOR: a found
+    /// group is interior unless `0x8000` is set. The pre-fix code read `0x2000` as "indoor",
+    /// which was the wrong bit AND the wrong polarity — under it a plain interior group (flags 0,
+    /// the common case) read as outdoors and a group carrying the outdoor bit read as indoors, so
+    /// an indoor dismount built on it would have fired in the open world and nowhere else.
+    #[test]
+    fn only_the_outdoor_bit_decides_a_found_group() {
+        assert!(
+            group_is_indoor(0),
+            "neither bit set — a found group is indoor"
+        );
+        assert!(
+            group_is_indoor(0x2000),
+            "0x2000 is not the outdoor bit and must not make a group outdoor"
+        );
+        assert!(!group_is_indoor(WMO_GROUP_OUTDOOR_FLAG));
+        assert!(
+            !group_is_indoor(WMO_GROUP_OUTDOOR_FLAG | 0x2000),
+            "the outdoor bit wins whatever else is set"
+        );
+    }
+
+    /// The area probe's budget is a room's height, not the 200 yd floor/ray budget: a probe that
+    /// long finds a WMO two storeys under an open-world point and reports the point as inside it.
+    /// Asserted against a floor deliberately placed BELOW the budget, so shortening the constant to
+    /// nothing fails here too.
+    #[test]
+    fn a_probe_no_longer_than_the_area_budget_misses_a_distant_floor() {
+        let (cx, cy, tris) = floor_cell(3, 0);
+        let mut fetch = |fx: u16, fy: u16| (fx == cx && fy == cy).then(|| tris.clone());
+        let x = tris[0].verts[0][0].midpoint(tris[0].verts[1][0]);
+        let y = tris[0].verts[0][1].midpoint(tris[0].verts[2][1]);
+        // The floor sits at z = 10; stand far enough above it that the SHORT budget cannot reach.
+        let stand_z = 10.0 + AREA_PROBE_DOWN_YD * 3.0;
+        assert_eq!(
+            cast_ray_area(
+                &mut fetch,
+                [x, y, stand_z],
+                [x, y, stand_z - AREA_PROBE_DOWN_YD]
+            ),
+            None,
+            "a point well above a floor must not be reported as inside its group"
+        );
+        assert!(
+            cast_ray_area(&mut fetch, [x, y, stand_z], [x, y, stand_z - 200.0]).is_some(),
+            "the long ray/floor budget WOULD have found it — that is exactly the bug"
+        );
+    }
+
     #[test]
     fn a_probe_over_an_indoor_group_floor_reports_indoor_and_its_group() {
-        let (cx, cy, tris) = floor_cell(7, WMO_GROUP_INDOOR_FLAG);
+        let (cx, cy, tris) = floor_cell(7, 0);
         let mut fetch = |fx: u16, fy: u16| (fx == cx && fy == cy).then(|| tris.clone());
         let x = tris[0].verts[0][0].midpoint(tris[0].verts[1][0]);
         let y = tris[0].verts[0][1].midpoint(tris[0].verts[2][1]);
@@ -634,20 +696,20 @@ mod tests {
         let below = [x, y, -5.0];
         let info = cast_ray_area(&mut fetch, above, below).expect("probe must hit the floor");
         assert_eq!(info.group_id, 7);
-        assert!(info.indoor, "MOD_INDOOR flag set — must report indoor");
+        assert!(info.indoor, "outdoor bit unset — must report indoor");
         assert!((info.point[2] - 10.0).abs() < 1e-2);
     }
 
     #[test]
     fn a_probe_over_an_outdoor_group_floor_reports_not_indoor() {
-        let (cx, cy, tris) = floor_cell(9, 0);
+        let (cx, cy, tris) = floor_cell(9, WMO_GROUP_OUTDOOR_FLAG);
         let mut fetch = |fx: u16, fy: u16| (fx == cx && fy == cy).then(|| tris.clone());
         let x = tris[0].verts[0][0].midpoint(tris[0].verts[1][0]);
         let y = tris[0].verts[0][1].midpoint(tris[0].verts[2][1]);
         let info = cast_ray_area(&mut fetch, [x, y, 15.0], [x, y, -5.0])
             .expect("probe must hit the floor");
         assert_eq!(info.group_id, 9);
-        assert!(!info.indoor, "flag unset — must not report indoor");
+        assert!(!info.indoor, "outdoor bit set — must not report indoor");
     }
 
     #[test]

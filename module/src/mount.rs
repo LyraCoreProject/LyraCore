@@ -179,13 +179,23 @@ fn trained_for_spell(ctx: &ReducerContext, guid: u64, spell_id: u32, race: u8, c
         })
 }
 
-/// May a land mount be used at `(x, y, z)`? The ONE shared indoor predicate — the cast gate and the
-/// movement heartbeat both read it rather than interpreting MOGP flags themselves, so there is a single
-/// place for the WMO rule to be right.
+/// Does this heartbeat cross a 100 ms boundary on the CLIENT's own move clock? The movement
+/// heartbeat's indoor check runs only when it does — ~10 Hz, fine enough to catch a doorway at run
+/// speed (a rider covers ~1.4 yd per window) and coarse enough that a 30 Hz client does not buy 30
+/// area queries a second. STATELESS by construction, exactly like the 1 Hz rest and breath gates
+/// beside it: the boundary is derived from the two timestamps the packet already carries, so there
+/// is no per-mover throttle field to persist, reset on login, or leave stale. Pure.
+pub(crate) fn indoor_check_is_due(old_move_ms: u32, move_time_ms: u32) -> bool {
+    move_time_ms / 100 != old_move_ms / 100
+}
+
+/// May a land mount be used at `(x, y, z)`? The ONE shared indoor predicate — the cast gate, the movement
+/// heartbeat and the teleport path all read it rather than interpreting MOGP flags themselves, so there is
+/// a single place for the WMO rule to be right.
 ///
-/// FAILS OPEN by construction: `vmap::area_info` returns `None` when vmap is disabled, when no generation
-/// is active, or when the probe finds no WMO group, and all three read as outdoors. The mount feature is
-/// therefore fully shippable and correct with vmap off.
+/// FAILS OPEN by construction: `vmap::is_indoor` answers `false` when vmap is disabled, when no generation
+/// is active, when the cell carries no indoor-presence marker, and when the probe finds no WMO group. All
+/// four read as outdoors, so the mount feature is fully shippable and correct with vmap off.
 pub(crate) fn mount_cast_allowed_here(
     ctx: &ReducerContext,
     map_id: u32,
@@ -193,7 +203,7 @@ pub(crate) fn mount_cast_allowed_here(
     y: f32,
     z: f32,
 ) -> bool {
-    !crate::vmap::area_info(ctx, map_id, x, y, z).is_some_and(|info| info.indoor)
+    !crate::vmap::is_indoor(ctx, map_id, x, y, z)
 }
 
 /// Is `entity`'s head under a liquid surface? The SAME predicate player breath uses
@@ -481,8 +491,8 @@ mod tests {
         let src = include_str!("mount.rs");
         let allowed = crate::test_scan::code_of(src, "pub(crate) fn mount_cast_allowed_here(");
         assert!(
-            allowed.contains("crate::vmap::area_info(ctx, map_id, x, y, z)"),
-            "the indoor predicate must go through the shared WMO area query. Body was:\n{allowed}"
+            allowed.contains("crate::vmap::is_indoor(ctx, map_id, x, y, z)"),
+            "the indoor predicate must go through the shared WMO indoor query. Body was:\n{allowed}"
         );
         let submerged = crate::test_scan::code_of(src, "fn is_submerged_here(");
         assert!(
@@ -497,6 +507,200 @@ mod tests {
                 && !gate.contains("area_info"),
             "the gate must ask the shared predicate rather than inline a WMO flag test or its own \
              area query. Body was:\n{gate}"
+        );
+    }
+
+    /// The heartbeat's 100 ms window, at the boundary it actually decides. Two heartbeats inside one
+    /// window skip the area query; the first heartbeat of a new window pays it. The clock is the
+    /// CLIENT's own `move_time_ms`, so a client that stops sending simply stops being checked — and a
+    /// mounted player who walks a doorway crosses at most one window before dismounting.
+    #[test]
+    fn indoor_check_is_due_only_on_a_100ms_boundary() {
+        assert!(!indoor_check_is_due(0, 0));
+        assert!(!indoor_check_is_due(1_000, 1_099));
+        assert!(indoor_check_is_due(1_099, 1_100));
+        assert!(!indoor_check_is_due(1_100, 1_199));
+        assert!(indoor_check_is_due(1_100, 5_000));
+        // A client clock that rolls backwards still reads as a crossing rather than wedging the check.
+        assert!(indoor_check_is_due(5_000, 1_100));
+    }
+
+    /// The movement heartbeat (story 21): the check is gated on the mount PROJECTION of the row
+    /// already in hand and the 100 ms window BEFORE any area query, so an unmounted heartbeat — the
+    /// overwhelming majority — pays one field compare. The dismount itself must run AFTER the entity
+    /// row is written: `dismount` recomputes the projection straight onto the stored row, and the
+    /// pre-dismount copy `apply_movement_update` holds would put the mount back if it were flushed
+    /// afterwards. Taxi passengers never reach either half (`movement_is_suppressed` returns first).
+    #[test]
+    fn the_movement_heartbeat_checks_indoors_for_mounted_players_only() {
+        let body = crate::test_scan::code_of(
+            include_str!("world.rs"),
+            "pub(crate) fn apply_movement_update(",
+        );
+        assert!(
+            body.contains("mover.mount_display_id != 0")
+                && body.contains("crate::mount::indoor_check_is_due(old_move_ms, move_time_ms)"),
+            "the heartbeat indoor check must sit behind the mounted test AND the 100 ms client-clock \
+             gate. Body was:\n{body}"
+        );
+        let write = body
+            .find("entities.guid().update(mover);")
+            .expect("the heartbeat still writes the mover row");
+        let dismount = body
+            .find("crate::mount::dismount(ctx, mover_guid);")
+            .expect("the heartbeat still converges on the shared dismount");
+        assert!(
+            dismount > write,
+            "the heartbeat dismount must run AFTER the entity row write, or the stale in-hand copy \
+             restores the mount display. Body was:\n{body}"
+        );
+        let suppressed = body
+            .find("crate::taxi::movement_is_suppressed(ctx, mover.guid)")
+            .expect("the taxi suppression guard still opens the heartbeat");
+        assert!(
+            suppressed < dismount,
+            "a taxi passenger must never reach the indoor check. Body was:\n{body}"
+        );
+    }
+
+    /// The teleport path (story 22): `teleport_player` writes position outside the heartbeat, so it
+    /// asks the SAME shared predicate and converges on the SAME dismount, after the position write for
+    /// the same clobber reason the heartbeat has.
+    #[test]
+    fn teleport_asks_the_same_indoor_predicate() {
+        let body =
+            crate::test_scan::code_of(include_str!("world.rs"), "pub(crate) fn teleport_player(");
+        assert!(
+            body.contains("crate::mount::mount_cast_allowed_here(ctx, map_id, x, y, z)")
+                && body.contains("crate::mount::dismount(ctx, player_guid);"),
+            "a teleport must run the shared indoor check at the DESTINATION and converge on the \
+             shared dismount. Body was:\n{body}"
+        );
+    }
+
+    /// Accepted-action dismount, attack half (story 19): both attack-start cores drop the mount after
+    /// the last validation gate and BEFORE the `game_melee_attack` row is armed, so a packet that
+    /// fails target validation changes nothing at all.
+    #[test]
+    fn an_accepted_attack_start_dismounts_before_the_engagement_is_armed() {
+        let src = include_str!("combat/engage.rs");
+        for (signature, gate) in [
+            (
+                "pub(crate) fn apply_start_attack(",
+                "validate_attack_target(ctx, &attacker, target_guid)?;",
+            ),
+            (
+                "pub(crate) fn apply_start_ranged_attack(",
+                "let target = validate_attack_target(ctx, &attacker, target_guid)?;",
+            ),
+        ] {
+            let body = crate::test_scan::code_of(src, signature);
+            let validated = body.find(gate).unwrap_or_else(|| {
+                panic!("`{signature}` no longer validates the target before arming:\n{body}")
+            });
+            let dismount = body
+                .find("crate::mount::dismount(ctx, attacker.guid);")
+                .unwrap_or_else(|| {
+                    panic!("`{signature}` must dismount an accepted attacker:\n{body}")
+                });
+            let arm = body
+                .find("let melee = ctx.db.game_melee_attack();")
+                .unwrap_or_else(|| panic!("`{signature}` no longer arms the engagement:\n{body}"));
+            assert!(
+                validated < dismount && dismount < arm,
+                "`{signature}` must dismount AFTER target validation and BEFORE the engagement row, \
+                 or a rejected attack packet dismounts the player. Body was:\n{body}"
+            );
+        }
+    }
+
+    /// Accepted-action dismount, cast half (stories 19/23): an accepted cast drops the mount before its
+    /// effects run, and the MOUNT CAST ITSELF is exempt — keyed on the presence of an `A_MOUNTED`
+    /// effect, never a spell id, so onboarding another mount is still data alone. The hook sits after
+    /// `check_cast_gates` (a refused cast returned already) and after the cost charge, because that
+    /// charge flushes a caster row read before the hook and would otherwise overwrite the recompute.
+    #[test]
+    fn an_accepted_cast_dismounts_and_the_mount_cast_is_exempt() {
+        let body = crate::test_scan::code_of(
+            include_str!("spell/cast/resolve.rs"),
+            "pub(crate) fn resolve_cast_at(",
+        );
+        let gates = body
+            .find("check_cast_gates(ctx, &caster, &hdr, &effects, target_guid, spell_id, level)?;")
+            .expect("the cast core still runs the gate sweep");
+        let charge = body
+            .find("ctx.db.game_world_entity().guid().update(caster);")
+            .expect("the cast core still flushes the charged caster row");
+        let exempt = body
+            .find("if !effects.iter().any(|e| e.kind == A_MOUNTED) {")
+            .expect("the cast dismount must exempt a spell carrying an A_MOUNTED effect");
+        assert!(
+            gates < exempt && charge < exempt,
+            "the cast dismount must run after the gate sweep AND after the caster-row charge. \
+             Body was:\n{body}"
+        );
+        let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains(
+                "if !effects.iter().any(|e| e.kind == A_MOUNTED) { crate::mount::dismount(ctx, caster_guid); }"
+            ),
+            "the exemption must guard exactly the shared dismount call. Body was:\n{body}"
+        );
+    }
+
+    /// The dismount TRIGGER census — the counterpart to the aura-deletion census below. Story 25
+    /// ("damage does not dismount") is proven here rather than by a damage-path special case: the
+    /// damage paths do not appear, and cannot start appearing without this list changing. Every entry
+    /// is an ACCEPTED action or an authoritative position write, never an incoming event.
+    #[test]
+    fn every_dismount_trigger_is_accounted_for() {
+        // (file, calls, why it dismounts)
+        const TRIGGERS: &[(&str, usize, &str)] = &[
+            (
+                "module/src/combat/engage.rs",
+                2,
+                "accepted melee and ranged attack start, before the engagement is armed",
+            ),
+            (
+                "module/src/spell/cast/resolve.rs",
+                1,
+                "accepted cast start; a spell with an A_MOUNTED effect is exempt",
+            ),
+            (
+                "module/src/spell/cast/targeting.rs",
+                2,
+                "mount replacement inside aura_apply, and the E_DISMOUNT effect arm",
+            ),
+            (
+                "module/src/world.rs",
+                2,
+                "the movement heartbeat's indoor edge, and the teleport destination check",
+            ),
+        ];
+
+        let mut found: Vec<(String, usize)> = Vec::new();
+        for path in module_sources() {
+            let source = std::fs::read_to_string(&path).expect("module source is readable");
+            let calls = source
+                .match_indices("mount::dismount(")
+                .filter(|(idx, _)| {
+                    !crate::test_scan::on_comment_line(&source, *idx)
+                        && !crate::test_scan::in_string_literal(&source, *idx)
+                })
+                .count();
+            if calls > 0 {
+                found.push((rel(&path), calls));
+            }
+        }
+        let expected: Vec<(String, usize)> = TRIGGERS
+            .iter()
+            .map(|(file, n, _)| ((*file).to_string(), *n))
+            .collect();
+        assert_eq!(
+            found, expected,
+            "the dismount trigger census changed. A mount comes off on an ACCEPTED action or an \
+             authoritative position write — never on taking damage, which is DBC interrupt-flag \
+             driven through `break_auras_on_damage` and needs no mount-specific code."
         );
     }
 
