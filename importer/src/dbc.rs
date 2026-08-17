@@ -159,12 +159,20 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     let (lock_stmts, lock_count, lock_unmapped) = lock_sql(&locks);
 
     // Taxi catalogue: all three tables are read from the same in-memory operator-owned MPQ chain,
-    // validated as one graph, and emitted as one recoverable clear+reload family. The validator runs
-    // before the first DELETE, so a dangling/truncated catalogue never damages the current rows.
+    // checked as one graph, and emitted as one recoverable clear+reload family. Isolated points for
+    // absent paths are omitted with a warning; every other malformed catalogue fails before the
+    // first DELETE.
     let taxi_nodes: DbcTaxiNodes = read_table(&mut chain)?;
     let taxi_paths: DbcTaxiPath = read_table(&mut chain)?;
     let taxi_path_nodes: DbcTaxiPathNode = read_table(&mut chain)?;
-    let (taxi_stmts, taxi_counts) = taxi_catalogue_sql(&taxi_nodes, &taxi_paths, &taxi_path_nodes)?;
+    let TaxiCatalogueSql {
+        statements: taxi_stmts,
+        counts: taxi_counts,
+        warnings: taxi_warnings,
+    } = taxi_catalogue_sql(&taxi_nodes, &taxi_paths, &taxi_path_nodes)?;
+    for warning in taxi_warnings {
+        eprintln!("{warning}");
+    }
 
     // Load game_skill_line + game_skill_ability + game_skill_availability from SkillLine.dbc /
     // SkillLineAbility.dbc / SkillRaceClassInfo.dbc (work-item 208: the skill fabric as data — see
@@ -773,16 +781,23 @@ struct TaxiCounts {
     path_nodes: usize,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct TaxiCatalogueSql {
+    statements: Vec<String>,
+    counts: TaxiCounts,
+    warnings: Vec<String>,
+}
+
 /// Validate and emit the three-table taxi catalogue as one deterministic clear+reload family.
 /// All validation happens before SQL is returned: a path must resolve both endpoint nodes, every
-/// point must resolve its path, every path must have geometry, costs/indices must be non-negative,
-/// and the operator's data may not enter the reserved fixture namespace. That makes a malformed
-/// client extract fail before `run_sql_statements` can execute the first DELETE.
+/// path must have geometry, costs/indices must be non-negative, and the operator's data may not enter
+/// the reserved fixture namespace. A point for an absent path is omitted with a stable warning. Any
+/// other malformed client extract fails before `run_sql_statements` can execute the first DELETE.
 fn taxi_catalogue_sql(
     nodes: &DbcTaxiNodes,
     paths: &DbcTaxiPath,
     path_nodes: &DbcTaxiPathNode,
-) -> Result<(Vec<String>, TaxiCounts)> {
+) -> Result<TaxiCatalogueSql> {
     use lyracore_shared::constants::taxi_fixture as fixture;
     use lyracore_shared::constants::taxi_protocol;
 
@@ -885,6 +900,7 @@ fn taxi_catalogue_sql(
     let mut point_ordinals = HashSet::with_capacity(path_nodes.rows().len());
     let mut paths_with_points = HashSet::with_capacity(paths.rows().len());
     let mut point_rows = Vec::with_capacity(path_nodes.rows().len() + fixture::POINT_IDS.len());
+    let mut dangling_points = Vec::new();
     for row in path_nodes.rows() {
         let id = row.id.id;
         let path_id = row.taxi_path.id;
@@ -903,9 +919,6 @@ fn taxi_catalogue_sql(
         {
             bail!("TaxiPathNode.dbc point {id} has a non-finite position");
         }
-        if !path_ids.contains(&path_id) {
-            bail!("TaxiPathNode.dbc point {id} references missing path {path_id}");
-        }
         let node_index = u32::try_from(row.node_index).with_context(|| {
             format!(
                 "TaxiPathNode.dbc point {id} has negative node index {}",
@@ -920,6 +933,10 @@ fn taxi_catalogue_sql(
                 "TaxiPathNode.dbc point {id} has negative delay {}",
                 row.delay
             );
+        }
+        if !path_ids.contains(&path_id) {
+            dangling_points.push((id, path_id));
+            continue;
         }
         paths_with_points.insert(path_id);
         point_rows.push((
@@ -1050,7 +1067,20 @@ fn taxi_catalogue_sql(
         "id,path_id,node_index,map_id,x,y,z,flags,delay_ms",
         &point_rows,
     );
-    Ok((stmts, counts))
+    dangling_points.sort_unstable();
+    let warnings = dangling_points
+        .into_iter()
+        .map(|(id, path_id)| {
+            format!(
+                "dbc: WARN TaxiPathNode.dbc point {id} references missing path {path_id}; omitted"
+            )
+        })
+        .collect();
+    Ok(TaxiCatalogueSql {
+        statements: stmts,
+        counts,
+        warnings,
+    })
 }
 
 /// Clear+reload SQL for `game_creature_family` from `CreatureFamily.dbc` (work-item 214: the 188 pet
@@ -1478,7 +1508,12 @@ mod tests {
     #[test]
     fn taxi_catalogue_sql_preserves_direction_fare_mounts_and_point_order() {
         let (nodes, paths, points) = synthetic_taxi_catalogue();
-        let (stmts, counts) = taxi_catalogue_sql(&nodes, &paths, &points).unwrap();
+        let TaxiCatalogueSql {
+            statements: stmts,
+            counts,
+            warnings,
+        } = taxi_catalogue_sql(&nodes, &paths, &points).unwrap();
+        assert!(warnings.is_empty());
         assert_eq!(
             counts,
             TaxiCounts {
@@ -1532,17 +1567,67 @@ mod tests {
     }
 
     #[test]
+    fn taxi_catalogue_sql_keeps_valid_geometry_when_a_point_references_an_absent_path() {
+        let (nodes, paths, mut points) = synthetic_taxi_catalogue();
+        points.rows.push(taxi_point_row(5221, 248, 0, 40.0, 0, 0));
+
+        let TaxiCatalogueSql {
+            statements: stmts,
+            counts,
+            warnings,
+        } = taxi_catalogue_sql(&nodes, &paths, &points).unwrap();
+
+        assert_eq!(counts.path_nodes, 3);
+        assert_eq!(
+            warnings,
+            ["dbc: WARN TaxiPathNode.dbc point 5221 references missing path 248; omitted"]
+        );
+        let path_insert = stmts
+            .iter()
+            .find(|sql| sql.starts_with("INSERT INTO game_taxi_path "))
+            .unwrap();
+        assert!(path_insert.contains("(70,10,20,125)"), "{path_insert}");
+        let point_insert = stmts
+            .iter()
+            .find(|sql| sql.starts_with("INSERT INTO game_taxi_path_node "))
+            .unwrap();
+        assert!(point_insert.contains("(701,70,0,"), "{point_insert}");
+        assert!(!point_insert.contains("(5221,248,0,"), "{point_insert}");
+    }
+
+    #[test]
+    fn taxi_catalogue_sql_rejects_a_path_without_valid_geometry() {
+        let (nodes, paths, _) = synthetic_taxi_catalogue();
+        let dangling_point = DbcTaxiPathNode {
+            rows: vec![taxi_point_row(5221, 248, 0, 40.0, 0, 0)],
+        };
+
+        let err = taxi_catalogue_sql(&nodes, &paths, &dangling_point)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("TaxiPath.dbc path 70 has no TaxiPathNode.dbc points"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn taxi_catalogue_sql_is_deterministic_and_restores_the_reserved_fixture() {
         use lyracore_shared::constants::taxi_fixture as fixture;
 
         let (nodes, paths, points) = synthetic_taxi_catalogue();
-        let (first, _) = taxi_catalogue_sql(&nodes, &paths, &points).unwrap();
+        let first = taxi_catalogue_sql(&nodes, &paths, &points)
+            .unwrap()
+            .statements;
 
         let mut nodes_reversed = nodes.clone();
         nodes_reversed.rows.reverse();
         let mut points_reversed = points.clone();
         points_reversed.rows.reverse();
-        let (second, _) = taxi_catalogue_sql(&nodes_reversed, &paths, &points_reversed).unwrap();
+        let second = taxi_catalogue_sql(&nodes_reversed, &paths, &points_reversed)
+            .unwrap()
+            .statements;
         assert_eq!(
             first, second,
             "DBC record order must not change emitted SQL"
@@ -1585,7 +1670,7 @@ mod tests {
     }
 
     #[test]
-    fn taxi_catalogue_rejects_dangling_references_before_emitting_clear_sql() {
+    fn taxi_catalogue_rejects_dangling_path_endpoints_before_emitting_clear_sql() {
         let (nodes, _, _) = synthetic_taxi_catalogue();
         let bad_path = DbcTaxiPath {
             rows: vec![taxi_path_row(70, 10, 999, 125)],
@@ -1595,20 +1680,6 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("missing destination node 999"), "{err}");
-
-        let good_path = DbcTaxiPath {
-            rows: vec![taxi_path_row(70, 10, 20, 125)],
-        };
-        let bad_point = DbcTaxiPathNode {
-            rows: vec![taxi_point_row(701, 999, 0, 10.0, 0, 0)],
-        };
-        let err = taxi_catalogue_sql(&nodes, &good_path, &bad_point)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("point 701 references missing path 999"),
-            "{err}"
-        );
     }
 
     #[test]
