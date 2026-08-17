@@ -56,10 +56,15 @@ pub(crate) fn active_mount_spell(ctx: &ReducerContext, guid: u64) -> Option<u32>
         .map(|a| a.spell_id)
 }
 
-/// Re-derive `guid`'s `mount_display_id` from its current aura rows. Zero `A_MOUNTED` auras clears the
-/// display; one restores the value frozen on it. NEVER a delta — that is what makes every caller
-/// idempotent. The row is only written when the value actually changed, because the gateway's
-/// subscription diff fires on every write and a redundant write would relay a spurious VALUES update.
+/// Re-derive `guid`'s `mount_display_id` AND relayed run speed from its current aura rows. Zero
+/// `A_MOUNTED` auras clears the display; one restores the value frozen on it. The speed side reuses
+/// `combat::effective_move_speed` at base 1.0 (SPEED_MOVE always, SPEED_MOUNTED only while mounted), so
+/// `run_speed_mult_bp` carries the exact multiplier — 16 000 for a 60% mount, 10 000 for an unmounted
+/// rider with no other speed aura — and the existing `run_speed_mult_bp` subscription diff (shared with
+/// GM `.speed`) turns that into `SMSG_FORCE_RUN_SPEED_CHANGE` with no gateway change needed. NEVER a
+/// delta — that is what makes every caller idempotent. Both fields are read-modify-written TOGETHER and
+/// the row is only written when at least one actually changed, because the gateway's subscription diff
+/// fires on every write and a redundant write would relay a spurious VALUES / force-run-speed update.
 ///
 /// A player in a taxi flight is left completely alone: `taxi.rs` owns the shared display field for the
 /// duration of the flight and clears it itself on landing.
@@ -78,10 +83,12 @@ pub(crate) fn recompute_mount(ctx: &ReducerContext, guid: u64) {
             .filter(&guid)
             .map(|a| (a.eff_kind, a.eff_p0)),
     );
-    if e.mount_display_id == display {
+    let speed_bp = (crate::combat::effective_move_speed(ctx, guid, 1.0) * 10_000.0).round() as u32;
+    if e.mount_display_id == display && e.run_speed_mult_bp == speed_bp {
         return;
     }
     e.mount_display_id = display;
+    e.run_speed_mult_bp = speed_bp;
     entities.guid().update(e);
 }
 
@@ -320,6 +327,30 @@ mod tests {
                  flight owns `mount_display_id` and its own aura-free presentation. Body was:\n{body}"
             );
         }
+    }
+
+    /// The speed half of the recompute: `run_speed_mult_bp` is derived from the SAME
+    /// `combat::effective_move_speed` fold the anti-cheat movement check reads (base 1.0, so the field
+    /// carries the exact multiplier), in the SAME read-modify-write as the display — so a mount/dismount
+    /// relays through the EXISTING `run_speed_mult_bp` subscription diff with no gateway change, and
+    /// never writes when NEITHER field actually changed. Scan-pinned like the taxi guard above; the
+    /// FOLD's sense (mounted vs not, base-plus-buff) is asserted directly on `combat`'s
+    /// `mounted_move_pct` pure core, not re-derived here.
+    #[test]
+    fn recompute_mount_folds_effective_speed_into_run_speed_mult_bp() {
+        let body =
+            crate::test_scan::code_of(include_str!("mount.rs"), "pub(crate) fn recompute_mount(");
+        assert!(
+            body.contains("crate::combat::effective_move_speed(ctx, guid, 1.0)"),
+            "`recompute_mount` must derive `run_speed_mult_bp` from the SAME mounted-speed fold the \
+             anti-cheat movement check reads, or the wire relay and the server's own speed check can \
+             disagree. Body was:\n{body}"
+        );
+        assert!(
+            body.contains("e.mount_display_id == display && e.run_speed_mult_bp == speed_bp"),
+            "`recompute_mount` must skip the write when NEITHER the display NOR the speed changed, or \
+             a redundant write relays a spurious VALUES / force-run-speed update. Body was:\n{body}"
+        );
     }
 
     /// `dismount` drops the WHOLE mount spell, not just the `A_MOUNTED` row, so the paired

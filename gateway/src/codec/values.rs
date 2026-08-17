@@ -195,6 +195,17 @@ pub fn build_taxi_presentation_values(
     })
 }
 
+/// Standalone VALUES partial-update carrying ONLY `UNIT_FIELD_MOUNTDISPLAYID` — the land-mount twin of
+/// `build_taxi_presentation_values`, deliberately decoupled from the taxi `UNIT_FLAG_TAXI_FLIGHT` bit. A
+/// land mount/dismount never touches that flag, so it never needs the coupled builder; an observer
+/// already in range sees the model appear/disappear through this single-field mask alone. Same
+/// `dirty_reset` discipline as its siblings (never re-sends OBJECT_FIELD_TYPE).
+pub fn build_mount_display_values(guid: u64, mount_display_id: u32) -> SMSG_UPDATE_OBJECT {
+    unit_values(guid, |unit| {
+        unit.set_unit_mountdisplayid(mount_display_id as i32);
+    })
+}
+
 /// VALUES partial-update carrying `UNIT_FIELD_BYTES_2` so observers see a weapon DRAWN or STOWED the
 /// moment it happens — the `CMSG_SETSHEATHED` a client sends on `Z`. Unit mask, not player-gated: a
 /// creature draws its weapon on engage too. Same `dirty_reset` discipline as its siblings (the wire
@@ -599,6 +610,7 @@ mod lint_tests {
                 "taxi_presentation",
                 build_taxi_presentation_values(g, 1147, 0x0010_0000),
             ),
+            ("mount_display", build_mount_display_values(g, 1147)),
             ("power", build_power_values(g, 0, 55)),
             ("target", build_target_values(g, 0xF130_0000_0000_0001)),
             ("max_vitals", build_max_vitals_values(g, 100, 0, 200)),

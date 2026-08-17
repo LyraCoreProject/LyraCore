@@ -306,14 +306,29 @@ pub fn effective_swing_time(ctx: &ReducerContext, attacker: &WorldEntity) -> u32
 
 /// A unit's EFFECTIVE movement speed (yd/s) for a `base` cadence (RUN / WALK): adjusted by every active
 /// `A_MOD_SPEED(SPEED_MOVE)` aura (signed %, summed) — a snare (Hamstring, negative %) slows it, a speed
-/// buff quickens it. The creature movement passes (chase / return / wander) compute their step + leg
-/// duration from this instead of the raw constant, so a snared creature closes/roams slower — the
-/// movement twin of `effective_swing_time`, server-verifiable via the creature's per-tick position delta.
-/// No move aura → exactly `base` (baseline-safe). Players move client-side, so a player snare additionally
-/// needs a `SMSG_FORCE_RUN_SPEED_CHANGE` wire push (deferred); this fold governs SERVER-driven movement. [entity]
+/// buff quickens it — PLUS, only while `guid` carries an active `A_MOUNTED` aura, every active
+/// `A_MOD_SPEED(SPEED_MOUNTED)` aura (the mount's own speed effect; DBC-normalized to the nominal +60%/
+/// +100% tiers). A mounted-speed aura contributes nothing once the rider dismounts — the fold reads
+/// current mount state fresh on every call, so it never needs its own cleanup. The creature movement
+/// passes (chase / return / wander) compute their step + leg duration from this instead of the raw
+/// constant, so a snared creature closes/roams slower — the movement twin of `effective_swing_time`,
+/// server-verifiable via the creature's per-tick position delta. `mount::recompute_mount` folds the SAME
+/// value (base 1.0) into `run_speed_mult_bp` for the player wire relay; this copy governs SERVER-driven
+/// movement and the anti-cheat max-speed check (`world::score_and_log_movement`), so a mounted player's
+/// higher speed is never flagged as a speedhack. No move/mount aura → exactly `base` (baseline-safe). [entity]
 pub fn effective_move_speed(ctx: &ReducerContext, guid: u64, base: f32) -> f32 {
-    let pct = crate::spell::speed_bonus(ctx, guid, crate::spell::SPEED_MOVE);
-    move_speed_with_pct(base, pct)
+    let move_pct = crate::spell::speed_bonus(ctx, guid, crate::spell::SPEED_MOVE);
+    let mounted_pct = crate::spell::speed_bonus(ctx, guid, crate::spell::SPEED_MOUNTED);
+    let mounted = crate::mount::active_mount_spell(ctx, guid).is_some();
+    move_speed_with_pct(base, mounted_move_pct(move_pct, mounted_pct, mounted))
+}
+
+/// The mounted-speed fold's PURE core: `SPEED_MOVE` always contributes; `SPEED_MOUNTED` only while
+/// `mounted` — so dismounting drops the mount's bonus but an ordinary buff/snare stays folded in, and a
+/// leftover `SPEED_MOUNTED` reading (e.g. stale test data) never registers while `A_MOUNTED` is absent.
+/// Pure — unit-tested without a `ReducerContext`. [pure]
+fn mounted_move_pct(move_pct: i32, mounted_pct: i32, mounted: bool) -> i32 {
+    move_pct + if mounted { mounted_pct } else { 0 }
 }
 
 /// The player's equipped WEAPON profile in inventory `slot`: `(damage_min, damage_max, delay_ms,
@@ -760,5 +775,39 @@ mod react_window_tests {
         assert!(react_window_active(until, 5_999)); // 1ms before expiry → still open
         assert!(!react_window_active(until, 6_000)); // exactly at the deadline → closed (strict >)
         assert!(!react_window_active(until, 6_001)); // past the deadline → closed
+    }
+}
+
+#[cfg(test)]
+mod mounted_speed_tests {
+    use super::{mounted_move_pct, move_speed_with_pct};
+
+    #[test]
+    fn mounted_speed_folds_only_while_mounted() {
+        // Slow mount (+60%), no ordinary buff, mounted: the fold sees the full +60%.
+        assert_eq!(mounted_move_pct(0, 60, true), 60);
+        // Fast mount (+100%), mounted.
+        assert_eq!(mounted_move_pct(0, 100, true), 100);
+        // Same mounted-speed aura amount, but NOT mounted (A_MOUNTED absent) — contributes nothing.
+        assert_eq!(mounted_move_pct(0, 60, false), 0);
+        // Mounted AND snared: both compose (a mount doesn't cancel an active slow).
+        assert_eq!(mounted_move_pct(-20, 60, true), 40);
+    }
+
+    #[test]
+    fn dismounting_keeps_an_ordinary_move_speed_buff_instead_of_forcing_bare_base() {
+        // Dismounted with an ordinary SPEED_MOVE buff (e.g. a totem, +20%) still up: base + that
+        // buff, never a blind reset to bare base.
+        assert_eq!(mounted_move_pct(20, 0, false), 20);
+        // The same buff plus a (now inert, unmounted) leftover SPEED_MOUNTED reading: still just the
+        // ordinary buff — the mount's speed never leaks in once A_MOUNTED is gone.
+        assert_eq!(mounted_move_pct(20, 60, false), 20);
+    }
+
+    #[test]
+    fn nominal_60_and_100_percent_mount_tiers_yield_the_exact_run_speed() {
+        // BASE_RUN_SPEED (7.0 yd/s) at +60% (slow mount) and +100% (fast mount).
+        assert!((move_speed_with_pct(7.0, mounted_move_pct(0, 60, true)) - 11.2).abs() < 1e-4);
+        assert!((move_speed_with_pct(7.0, mounted_move_pct(0, 100, true)) - 14.0).abs() < 1e-4);
     }
 }
