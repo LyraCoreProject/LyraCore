@@ -82,11 +82,16 @@ pub(crate) fn apply_target_damage(
 ) -> (u32, u32) {
     let entities = ctx.db.game_world_entity();
     // A target that is gone or already a corpse absorbs nothing at all.
+    let Some(target) = entities.guid().find(target_guid) else {
+        return (0, 0);
+    };
+    if target.dead {
+        return (0, 0);
+    }
     if entities
         .guid()
-        .find(target_guid)
-        .map(|t| t.dead)
-        .unwrap_or(true)
+        .find(caster_guid)
+        .is_some_and(|caster| !crate::combat::may_harm(ctx, &caster, &target))
     {
         return (0, 0);
     }

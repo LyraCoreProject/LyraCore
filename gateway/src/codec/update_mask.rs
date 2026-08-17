@@ -97,11 +97,15 @@ pub mod idx {
     /// vanilla `UpdateContainerBuilder::set_container_slot_1 → set_guid(50, ..)`.
     pub const CONTAINER_FIELD_SLOT_1: u16 = 50;
 
+    /// `PLAYER_DUEL_ARBITER` — the duel flag gameobject guid, u64 at slots 188 and 189.
+    pub const PLAYER_DUEL_ARBITER: u16 = 188;
     pub const PLAYER_FLAGS: u16 = 190;
     /// `PLAYER_BYTES_2`: byte 0 = facial hair, byte 3 = rest state (RESTED 0x01 → zzz + blue XP
     /// bar / NORMAL 0x02). Vanilla 1.12 index 194 (gtker `set_player_bytes_2` → `set_bytes(194, …)`,
     /// cross-checked: `PLAYER_BYTES_3 = 195`, `PLAYER_FLAGS = 190`). Relayed live on an inn crossing.
     pub const PLAYER_BYTES_2: u16 = 194;
+    /// `PLAYER_DUEL_TEAM` — 0 outside a duel, then 1 for initiator and 2 for challenged.
+    pub const PLAYER_DUEL_TEAM: u16 = 196;
     /// `PLAYER_QUEST_LOG_1_1` — quest-log slot 0, sub-field 0 (the quest id). 20 slots × 3 u32 each
     /// (`_1` id, `_2` packed 6-bit counters + state byte, `_3` timer); slot S sub F = this + S*3 + F.
     /// Vanilla 1.12 (build 5875): `UNIT_END(188) + 0x0A = 198`. CROSS-CHECKED against our own anchor —

@@ -1,7 +1,7 @@
 use super::handlers::{
-    AuctionActionStore, AuctionEntity, AuctionInteraction, CastStore, ItemActionStore,
-    LootWindowRequestStatus, LootWindowStore, MeleeActionStore, QuestActionStore, TaxiActionStore,
-    VendorActionStore,
+    AuctionActionStore, AuctionEntity, AuctionInteraction, CastStore, DuelActionStore,
+    ItemActionStore, LootWindowRequestStatus, LootWindowStore, MeleeActionStore, QuestActionStore,
+    TaxiActionStore, VendorActionStore,
 };
 use super::*;
 use std::os::unix::net::UnixStream;
@@ -2682,6 +2682,16 @@ impl MeleeActionStore for InMemoryStore {
     }
     fn stop_attack(&self, _account_id: u64, self_guid: u64) -> Result<()> {
         self.stop_attacks.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+}
+
+impl DuelActionStore for InMemoryStore {
+    fn duel_accept(&self, _account_id: u64, _actor_guid: u64, _flag_guid: u64) -> Result<()> {
+        Ok(())
+    }
+
+    fn duel_cancel(&self, _account_id: u64, _actor_guid: u64, _flag_guid: u64) -> Result<()> {
         Ok(())
     }
 }

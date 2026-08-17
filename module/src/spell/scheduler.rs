@@ -363,6 +363,11 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     // freeze at 1 hp until a direct hit landed. Collected during the fold, finished by kill_creature after
     // the health flush.
     let mut dying: std::collections::HashMap<u64, Option<u64>> = std::collections::HashMap::new();
+    // Active Duels a periodic tick finishes. Health folds to one first; centralized completion then
+    // removes authorization and combat exactly once after the entity flush.
+    let mut finishing_duels: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut duel_losers: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut duel_finishes: Vec<(u64, u64, u64)> = Vec::new();
     // CHANNEL ticks to FIRE this tick (caster, per-tick trigger spell, frozen cast level, channel target) and
     // channel auras to END early (their PK). Both are deferred to AFTER the fold flush + the cadence advance,
     // so a trigger that kills its target — or an ended channel — never corrupts the in-flight fold/advance.
@@ -377,6 +382,21 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         }
         match a.eff_kind {
             A_PERIODIC_DAMAGE => {
+                let caster = entities.guid().find(a.caster_guid);
+                if caster
+                    .as_ref()
+                    .is_some_and(|caster| !crate::combat::may_harm(ctx, caster, &target))
+                {
+                    continue;
+                }
+                let active_duel =
+                    crate::duel::active_duel_between(ctx, a.caster_guid, a.target_guid);
+                if active_duel
+                    .as_ref()
+                    .is_some_and(|duel| finishing_duels.contains(&duel.id))
+                {
+                    continue;
+                }
                 // A creature already marked dying this tick (a prior lethal DoT tick on it) takes no more
                 // ticks — no double-kill; its `pending` was dropped so the flush can't revive it.
                 if dying.contains_key(&a.target_guid) {
@@ -425,7 +445,16 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 // finishes it (corpse + loot + decay — the shared kill path, identical to a direct/melee
                 // killing blow). PLAYERS still floor at 1 (no spell-death of players yet — mirrors
                 // apply_target_damage).
-                if !target.is_player() && amount > 0 && (amount as u32) >= cur {
+                if target.is_player() && amount > 0 && (amount as u32) >= cur {
+                    if let Some(duel) = active_duel {
+                        pending.insert(a.target_guid, 1);
+                        finishing_duels.insert(duel.id);
+                        duel_losers.insert(a.target_guid);
+                        duel_finishes.push((duel.id, a.caster_guid, a.target_guid));
+                    } else {
+                        pending.insert(a.target_guid, damaged_value(cur, amount));
+                    }
+                } else if !target.is_player() && amount > 0 && (amount as u32) >= cur {
                     let killer = entities
                         .guid()
                         .find(a.caster_guid)
@@ -438,8 +467,8 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 }
             }
             A_PERIODIC_HEAL => {
-                if dying.contains_key(&a.target_guid) {
-                    continue; // a creature dying to a DoT this tick isn't HoT-revived into `pending`
+                if dying.contains_key(&a.target_guid) || duel_losers.contains(&a.target_guid) {
+                    continue; // a terminal damage fold is not revived before its completion runs
                 }
                 let cur = pending
                     .get(&a.target_guid)
@@ -495,6 +524,15 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     // row is re-read fresh inside `flush_pool` and only the one field is touched.
     flush_pool(ctx, &pending, |e, v| e.health = v);
     flush_pool(ctx, &pending_power, |e, v| e.power = v);
+    for (duel_id, winner_guid, loser_guid) in duel_finishes {
+        crate::duel::complete_duel(
+            ctx,
+            duel_id,
+            crate::duel::duel_completion_kind::WON,
+            winner_guid,
+            loser_guid,
+        );
+    }
     // Finish the creatures a DoT tick brought to 0 this tick — the SHARED kill path (corpse + loot +
     // decay + XP credited to the DoT's caster), identical to a direct spell/melee killing blow. After the
     // health flush so surviving targets keep their folded health; dying guids were dropped from `pending`.
@@ -699,11 +737,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
     for a in &due {
         // Live radius scan: hostile, alive, same map/instance, in radius, NOT the caster. Reuses the same
         // squared-distance + faction idiom as select_targets' T_AREA_ENEMY fan-out.
-        let caster_ft = entities
-            .guid()
-            .find(a.caster_guid)
-            .map(|c| c.faction_template)
-            .unwrap_or(0);
+        let caster = entities.guid().find(a.caster_guid);
         let r2 = a.radius_yd * a.radius_yd;
         // Grid-indexed scan (by_grid btree, scoped to the cells covering the radius) — the scale-safe
         // replacement for a full game_world_entity iteration, so a Consecration over a busy zone costs
@@ -718,7 +752,10 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                     if dx * dx + dy * dy + dz * dz > r2 {
                         return None;
                     }
-                    crate::faction::is_hostile(ctx, caster_ft, c.faction_template).then_some(c.guid)
+                    caster
+                        .as_ref()
+                        .is_some_and(|caster| crate::combat::is_hostile_target(ctx, caster, &c))
+                        .then_some(c.guid)
                 })
                 .take(AOE_MAX_TARGETS)
                 .collect();
@@ -822,6 +859,18 @@ pub(crate) fn classify_ground_tick(
         GroundTickStatus::Reap
     } else {
         GroundTickStatus::Wait
+    }
+}
+
+#[cfg(test)]
+mod duel_periodic_wiring_tests {
+    #[test]
+    fn periodic_damage_rechecks_authorization_and_finishes_at_one_health() {
+        let body = crate::test_scan::code_of(include_str!("scheduler.rs"), "pub fn tick_auras(");
+        assert!(body.contains("crate::combat::may_harm"));
+        assert!(body.contains("crate::duel::active_duel_between"));
+        assert!(body.contains("pending.insert(a.target_guid, 1)"));
+        assert!(body.contains("crate::duel::complete_duel"));
     }
 }
 

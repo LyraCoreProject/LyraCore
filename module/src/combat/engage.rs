@@ -137,6 +137,31 @@ pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
     }
 }
 
+/// Remove only the two attack rows belonging to a Duel. Other combat remains intact; each
+/// participant's combat flag clears only when no other engagement still touches them.
+pub(crate) fn stop_duel_combat(ctx: &ReducerContext, first_guid: u64, second_guid: u64) {
+    let melee = ctx.db.game_melee_attack();
+    for attacker_guid in [first_guid, second_guid] {
+        if melee.attacker_guid().find(attacker_guid).is_some_and(|attack| {
+            (attacker_guid == first_guid && attack.target_guid == second_guid)
+                || (attacker_guid == second_guid && attack.target_guid == first_guid)
+        }) {
+            melee.attacker_guid().delete(attacker_guid);
+        }
+    }
+    let entities = ctx.db.game_world_entity();
+    for guid in [first_guid, second_guid] {
+        if is_engaged(ctx, guid) {
+            continue;
+        }
+        if let Some(mut entity) = entities.guid().find(guid) {
+            entity.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
+            entity.combat_until_ms = 0;
+            entities.guid().update(entity);
+        }
+    }
+}
+
 /// Zero a CREATURE's `target_guid` when it leaves combat (evade / flee / death) so the client stops
 /// showing a stale target on a disengaged mob. Skips PLAYERS: a player's `target_guid` is their
 /// SELECTION (`CMSG_SET_SELECTION`), which persists out of combat. No-op when already 0 (common path).
@@ -166,6 +191,46 @@ pub(crate) fn break_own_attacks(ctx: &ReducerContext, guid: u64) {
 pub(crate) fn is_engaged(ctx: &ReducerContext, guid: u64) -> bool {
     let melee = ctx.db.game_melee_attack();
     melee.attacker_guid().find(guid).is_some() || melee.by_target().filter(&guid).next().is_some()
+}
+
+fn may_harm_decision(same_unit: bool, active_duel: bool, friendly: bool) -> bool {
+    same_unit || active_duel || !friendly
+}
+
+fn may_help_decision(same_unit: bool, active_duel: bool, hostile: bool) -> bool {
+    same_unit || (!active_duel && !hostile)
+}
+
+/// Current harmful-target authorization. An active Duel overrides friendship only for its exact
+/// pair; neutral and hostile targets retain the ordinary faction behavior.
+pub(crate) fn may_harm(ctx: &ReducerContext, attacker: &WorldEntity, target: &WorldEntity) -> bool {
+    may_harm_decision(
+        attacker.guid == target.guid,
+        crate::duel::active_opponents(ctx, attacker.guid, target.guid),
+        crate::faction::is_friendly(ctx, attacker.faction_template, target.faction_template),
+    )
+}
+
+/// Current helpful-target authorization. Active Duel opponents are hostile to one another even
+/// when their ordinary faction relation is friendly.
+pub(crate) fn may_help(ctx: &ReducerContext, helper: &WorldEntity, target: &WorldEntity) -> bool {
+    may_help_decision(
+        helper.guid == target.guid,
+        crate::duel::active_opponents(ctx, helper.guid, target.guid),
+        crate::faction::is_hostile(ctx, helper.faction_template, target.faction_template),
+    )
+}
+
+/// Whether an enemy-only area selector should include `target`. Unlike direct attacks, ordinary
+/// neutral units are not selected automatically; an active Duel opponent is the narrow exception.
+pub(crate) fn is_hostile_target(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    target: &WorldEntity,
+) -> bool {
+    attacker.guid != target.guid
+        && (crate::duel::active_opponents(ctx, attacker.guid, target.guid)
+            || crate::faction::is_hostile(ctx, attacker.faction_template, target.faction_template))
 }
 
 /// Every guid currently in combat, for bulk in-combat gates (e.g. regen).
@@ -403,9 +468,7 @@ fn validate_attack_target(
     // e.g. Elwynn wolves, which are huntable) stay attackable, matching vanilla; only friendly (green)
     // units are protected. The gateway maps this to SMSG_ATTACKSWING_CANT_ATTACK so the client leaves
     // stance. SKIPPED when faction data isn't loaded (table empty) so missing data never blocks combat.
-    if ctx.db.game_faction_template().count() > 0
-        && crate::faction::is_friendly(ctx, attacker.faction_template, target.faction_template)
-    {
+    if ctx.db.game_faction_template().count() > 0 && !may_harm(ctx, attacker, &target) {
         return Err(lyracore_shared::ERR_ATTACK_FRIENDLY.to_string());
     }
     Ok(target)
@@ -578,3 +641,23 @@ pub(crate) fn stop_attack_for(ctx: &ReducerContext, attacker_guid: u64) {
         .delete(attacker_guid);
 }
 
+#[cfg(test)]
+mod duel_relation_tests {
+    use super::{may_harm_decision, may_help_decision};
+
+    #[test]
+    fn active_duel_is_the_only_friendly_fire_exception() {
+        assert!(!may_harm_decision(false, false, true));
+        assert!(may_harm_decision(false, true, true));
+        assert!(may_harm_decision(false, false, false));
+        assert!(may_harm_decision(true, false, true));
+    }
+
+    #[test]
+    fn active_opponents_stop_being_helpful_targets() {
+        assert!(may_help_decision(false, false, false));
+        assert!(!may_help_decision(false, true, false));
+        assert!(!may_help_decision(false, false, true));
+        assert!(may_help_decision(true, false, true));
+    }
+}

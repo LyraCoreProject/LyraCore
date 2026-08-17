@@ -7,10 +7,10 @@ use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration}
 use crate::spell::stacking::game_spell_group;
 use crate::{
     game_auction, game_auction_expiry, game_aura_schedule, game_breath_schedule, game_character,
-    game_createinfo_spell, game_creature_move_schedule, game_faction,
+    game_createinfo_spell, game_creature_move_schedule, game_duel_schedule, game_faction,
     game_gateway_lease_reaper_schedule, game_ground_area_schedule, game_instance_reaper_schedule,
     game_item_template, game_motion_publish_schedule, game_pet_care_schedule, game_spell,
-    game_talent, AuctionExpiry, AuraSchedule, BreathSchedule, CreatureMoveSchedule,
+    game_talent, AuctionExpiry, AuraSchedule, BreathSchedule, CreatureMoveSchedule, DuelSchedule,
     GroundAreaSchedule, PetCareSchedule,
 };
 
@@ -137,6 +137,18 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         ctx.db.game_breath_schedule().insert(BreathSchedule {
             scheduled_id: 0,
             scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(1_000_000)),
+        });
+        1
+    };
+
+    let duel_schedule = if ctx.db.game_duel_schedule().iter().next().is_some() {
+        0
+    } else {
+        ctx.db.game_duel_schedule().insert(DuelSchedule {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
+                crate::duel::DUEL_TICK_MICROS,
+            )),
         });
         1
     };
@@ -279,6 +291,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         + regen
         + aura_schedule
         + breath_schedule
+        + duel_schedule
         + ground_area_schedule
         + motion_schedule
         + pet_care_schedule

@@ -569,7 +569,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         melee_disengaged(v, shard, row)
     });
 
-    // ---- game_resurrect_request / game_whisper_event / game_group_event / game_trade_event ----
+    // ---- recipient-keyed private event relays -----------------------------------------------
     // The PRIVATE tier: every row is addressed to exactly one recipient, and on this feed the
     // gateway owns the guarantee RLS used to give. Delivery is recipient-keyed (the owner-session
     // lookup) + the explicit `private_recipient_audience` predicate — never a viewer fan.
@@ -590,6 +590,12 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
     wire_insert_live(db.game_trade_event(), "game_trade_event.insert", &view, |v, row| {
         trade_event_appeared(v, row)
     });
+    {
+        let coord = coord.clone();
+        wire_insert_live(db.game_duel_event(), "game_duel_event.insert", &view, move |v, row| {
+            duel_event_appeared(v, &coord, row)
+        });
+    }
 
     // ---- game_aura ------------------------------------------------------------------------------
     // The aura composite: array sync (visibility-gated), self-only duration/run-speed/armor,
@@ -1590,6 +1596,52 @@ fn trade_event_appeared(view: &WorldView, row: &TradeEvent) {
     });
 }
 
+/// A Duel lifecycle edge landed for one participant. Private packets go only to that participant;
+/// the initiator-addressed completion row also drives the one nearby winner announcement.
+fn duel_event_appeared(view: &WorldView, coord: &Coordinator, row: &DuelEvent) {
+    if let Some(viewer) = view
+        .session_of_owner(row.recipient_guid)
+        .and_then(|session| view.viewer(session))
+        .filter(|viewer| {
+            super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid)
+        })
+    {
+        let row = row.clone();
+        let coord = coord.clone();
+        let tx = viewer.tx.clone();
+        enqueue(&tx, move || {
+            let template = (row.kind == lyracore_shared::duel::event_kind::REQUESTED)
+                .then(|| coord.gameobject_template(row.flag_entry).ok().flatten())
+                .flatten();
+            super::subscriptions::duel_event_outbound(&row, template.as_ref())
+        });
+    }
+
+    // The module writes two participant rows. Use the initiator-addressed copy as the one AOI fan
+    // trigger, and exclude both private recipients so each client receives one winner packet.
+    if row.kind != lyracore_shared::duel::event_kind::COMPLETE
+        || row.recipient_guid != row.initiator_guid
+        || row.winner_guid == 0
+    {
+        return;
+    }
+    let key = CellKey::of_position(row.map_id, row.instance_id, row.flag_x, row.flag_y);
+    let row = Arc::new(row.clone());
+    for session in view.spatial.viewers_of(EntityLayer::WorldEntity, key) {
+        let Some(viewer) = view.viewer(session) else {
+            continue;
+        };
+        if !duel_winner_audience(viewer.self_guid, row.initiator_guid, row.challenged_guid) {
+            continue;
+        }
+        let row = row.clone();
+        let tx = viewer.tx.clone();
+        enqueue(&tx, move || {
+            super::subscriptions::duel_winner_outbound(&row)
+        });
+    }
+}
+
 /// A group/loot-roll/quest-share event landed → the kind-decoded packet to the row's RECIPIENT
 /// and nobody else (same shape as [`whisper_appeared`]; `coord` feeds the QUEST_SHARE detail
 /// JOIN inside the job).
@@ -1740,12 +1792,19 @@ fn channel_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: 
     }
 }
 
+/// The AOI bystander leg of the winner announcement: both participants get their own copy, so the
+/// fan-out must skip them (and the unregistered zero guid).
+fn duel_winner_audience(viewer_guid: u64, initiator_guid: u64, challenged_guid: u64) -> bool {
+    viewer_guid != 0 && viewer_guid != initiator_guid && viewer_guid != challenged_guid
+}
+
 #[cfg(test)]
 mod family_audience_tests {
     use super::{
-        addon_message_appeared, exploration_outbound_for_word, is_initial_apply, item_owner_job,
-        levelup_appeared, reputation_appeared, teleport_appeared, xp_appeared, BoundIdentity,
-        ExplorationReplay, MotionPending, OwnerGuid, Viewer, WorldView,
+        addon_message_appeared, duel_winner_audience, exploration_outbound_for_word,
+        is_initial_apply, item_owner_job, levelup_appeared, reputation_appeared,
+        teleport_appeared, xp_appeared, BoundIdentity, ExplorationReplay, MotionPending,
+        OwnerGuid, Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::bindings::{
@@ -1852,6 +1911,20 @@ mod family_audience_tests {
             !private_recipient_audience(0, 0),
             "the all-zero case is a leak, not a match — both sides unset must still deny"
         );
+    }
+
+    #[test]
+    fn duel_winner_aoi_fan_excludes_the_two_private_recipients() {
+        assert!(!duel_winner_audience(10, 10, 20));
+        assert!(!duel_winner_audience(20, 10, 20));
+        assert!(duel_winner_audience(30, 10, 20));
+        assert!(!duel_winner_audience(0, 10, 20));
+
+        let source = include_str!("world_view.rs");
+        let body = crate::test_scan::code_of(source, "fn duel_event_appeared(");
+        assert!(body.contains("CellKey::of_position"));
+        assert!(body.contains("view.spatial.viewers_of(EntityLayer::WorldEntity, key)"));
+        assert!(body.contains("duel_winner_outbound"));
     }
 
     #[test]

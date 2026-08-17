@@ -276,7 +276,7 @@ fn resolve_offhand_swing(
         ..CombatEvent::signal_at(ctx, attacker, target_guid)
     });
 
-    if apply_hit(ctx, attacker_guid, target_guid, dmg, HitSource::Weapon).killed {
+    if apply_hit(ctx, attacker_guid, target_guid, dmg, HitSource::Weapon).combat_ended() {
         // The kill's `disengage` already freed this engagement row, so there is no off-hand clock
         // left to stamp (the stamp below would find nothing) — return like the main-hand path does.
         return;
@@ -331,6 +331,13 @@ fn resolve_swing(ctx: &ReducerContext) {
         if attacker.dead || target.dead {
             melee.attacker_guid().delete(atk.attacker_guid);
             continue;
+        }
+        if melee.attacker_guid().find(atk.attacker_guid).is_none() {
+            continue; // an earlier hit in this snapshot already tore the engagement down
+        }
+        if !crate::combat::may_harm(ctx, &attacker, &target) {
+            melee.attacker_guid().delete(atk.attacker_guid);
+            continue; // friendship was restored, including an ended Duel
         }
 
         // Crowd control: an ACTION-blocked attacker (stunned/polymorphed/feared) cannot swing. Gated HERE — after the existence/corpse
@@ -444,6 +451,9 @@ fn resolve_swing(ctx: &ReducerContext) {
         // (baseline-safe).
         if ranged.is_none() {
             resolve_offhand_swing(ctx, atk.attacker_guid, atk.target_guid, &attacker, now_ms);
+            if melee.attacker_guid().find(atk.attacker_guid).is_none() {
+                continue; // a lethal off-hand Duel hit removed both participants' attack rows
+            }
             // The off-hand swing may have killed/disengaged `target` (or, on a lethal PLAYER off-hand
             // hit, zeroed its health) via its own writes — re-sync the in-hand snapshot the main-hand
             // path below reads/writes so it never clobbers the off-hand's kill with a stale pre-swing
@@ -747,7 +757,7 @@ fn fire_melee_swing(
 
     // The SHARED application (#370): rage both ways, weapon/defense skill-ups, the lethal fork through
     // kill_player/kill_creature, the health write, break-on-damage, and threat.
-    if apply_hit(ctx, attacker_guid, target_guid, dmg, HitSource::Weapon).killed {
+    if apply_hit(ctx, attacker_guid, target_guid, dmg, HitSource::Weapon).combat_ended() {
         return; // the kill's `disengage` freed the row — nothing left to stamp
     }
 
@@ -903,14 +913,17 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
         return;
     }
     let entities = ctx.db.game_world_entity();
-    if entities.guid().find(shot.attacker_guid).is_none() {
+    let Some(attacker) = entities.guid().find(shot.attacker_guid) else {
         return; // the shooter left the world mid-flight
-    }
+    };
     let Some(target) = entities.guid().find(shot.target_guid) else {
         return;
     };
     if target.dead || shot.damage == 0 {
         return;
+    }
+    if !crate::combat::may_harm(ctx, &attacker, &target) {
+        return; // Duel or faction authorization changed while the projectile was in flight
     }
     // GM playtest godmode (work-item 223's `.god`): the ONE modifier this path re-evaluates at impact.
     // The rest of the chain (outgoing %, damage-taken %, absorb) was folded and FROZEN at launch by
@@ -922,17 +935,19 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
     // The SHARED pipeline (#370) — the same one the main-hand and off-hand swings route through, so a
     // shot can never again drift from a swing (a godmode-zeroed hit is now a full no-op here too,
     // instead of running the survivor path with a 0 damage value).
-    apply_hit(
+    let outcome = apply_hit(
         ctx,
         shot.attacker_guid,
         shot.target_guid,
         dmg,
         HitSource::Weapon,
     );
+    if outcome.duel_completed {
+        return;
+    }
     enter_combat(ctx, shot.attacker_guid);
     enter_combat(ctx, shot.target_guid);
 }
-
 
 #[cfg(test)]
 mod damage_pipeline_drift_tests {

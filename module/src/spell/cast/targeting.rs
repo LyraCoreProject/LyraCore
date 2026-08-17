@@ -205,7 +205,6 @@ pub(crate) fn select_targets(
             // Full-iter + squared-distance scan (the module's established spatial idiom — see
             // creatures/tick.rs aggro). Re-checks faction PER resolved target (the per-cast gate at
             // resolve_cast_at only validates the EXPLICIT target; a PBAoE bypasses it via explicit==0).
-            let caster_ft = caster.faction_template;
             let mut hits: Vec<u64> = entities
                 .iter()
                 .filter(|c| c.map_id == a_map && c.instance_id == a_inst && !c.dead)
@@ -218,15 +217,9 @@ pub(crate) fn select_targets(
                     // Compute ONLY the faction side this AoE needs (one lookup, not both); the unused side
                     // is a dummy `false` — want_enemy selects which side aoe_keep actually reads.
                     let (hostile, friendly) = if want_enemy {
-                        (
-                            crate::faction::is_hostile(ctx, caster_ft, c.faction_template),
-                            false,
-                        )
+                        (crate::combat::is_hostile_target(ctx, &caster, &c), false)
                     } else {
-                        (
-                            false,
-                            crate::faction::is_friendly(ctx, caster_ft, c.faction_template),
-                        )
+                        (false, crate::combat::may_help(ctx, &caster, &c))
                     };
                     aoe_keep(d2, r2, want_enemy, c.guid == caster_guid, hostile, friendly)
                         .then_some(c.guid)
@@ -774,6 +767,12 @@ pub(crate) fn apply_effect(
         return EffectHit::none(); // an aura effect deals no direct cast damage
     }
     match e.kind {
+        E_DUEL => {
+            if e.p0_kind == P_GAMEOBJECT_ENTRY {
+                crate::duel::request_duel(ctx, caster_guid, target_guid, e.p0.max(0) as u32);
+            }
+            EffectHit::none()
+        }
         E_DAMAGE => {
             // Binary spell MISS: a level-derived chance the spell fully misses (4% vs equal, up to
             // 17% vs +3) — a clean 0-damage outcome with NO threat/scaling. Rolled BEFORE everything else,

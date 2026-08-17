@@ -1442,6 +1442,30 @@ impl Coordinator {
         )
     }
 
+    pub fn duel_accept(&self, _account_id: u64, actor_guid: u64, flag_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("duel_accept: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_duel_accept",
+            gw_duel_accept_then(actor_guid, flag_guid)
+        )
+    }
+
+    pub fn duel_cancel(&self, _account_id: u64, actor_guid: u64, flag_guid: u64) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("duel_cancel: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_duel_cancel",
+            gw_duel_cancel_then(actor_guid, flag_guid)
+        )
+    }
+
     /// `CMSG_SET_TRADE_ITEM` (#121).
     pub fn set_trade_item(
         &self,

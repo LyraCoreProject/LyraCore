@@ -108,6 +108,7 @@ pub(crate) const E_FISH: u8 = 0x1C; // Fishing (060): gateway-intercepted like E
 pub(crate) const E_OPEN_LOCK: u8 = 0x1D; // Pick Lock (119): gateway-intercepted like E_FISH (0x1C) — CMSG_CAST_SPELL for a spell carrying this kind routes to the `pick_lock` reducer (unlock a locked GameObject, gated on the caster's Lockpicking 633 skill vs the game_lock required_skill). Inert in-module (NO resolve arm in cast.rs); exists so the gateway routes by DATA, never a spell-id list. 0x1E is reserved for a future E_SUMMON_PORTAL — do NOT reuse.
 pub(crate) const E_BLINK: u8 = 0x1A; // teleport the caster ~20yd FORWARD along its facing (Mage Blink, 116): a self-cast position change reusing the teleport core (like E_CHARGE), clamped to the furthest nav-LoS-clear point so it doesn't cross geometry. Root/snare removal rides a separate A_IMMUNITY effect. The importer name-rescues the dead SCRIPT teleport effect (raw 29) to this kind
 pub(crate) const E_RECALL_HOME: u8 = 0x1F; // teleport the caster to its bound HOME (Hearthstone, #387): a self-cast recall reusing the shared `world::recall_to_home` core, always to instance 0 regardless of the caster's current instance. Data-driven — a consumable's `spellid_1` naming a spell that carries this kind IS "a recall item"; `items::ops::apply_item_use` reads that (not a hardcoded item entry) to skip the normal stack-consumption a used-up consumable takes, since a recall trinket is never consumed. No cost/cooldown gate yet (the vanilla ~10s cast + 1hr CD is the same later follow-up E_BLINK's forward-teleport already defers)
+pub(crate) const E_DUEL: u8 = 0x22; // Duel (raw effect 83): request a server-authoritative Duel; p0 is the duel-flag gameobject template entry
 pub(crate) const E_POWER_BURN: u8 = 0x19; // drain N mana from the target and deal a fraction of it as damage (Mana Burn): MANA-power-type gate read off the target's `unit_bytes_0` byte 3 (same read as `is_rage_user`) — a rage/energy target is a silent no-op (power AND health untouched), matching vanilla's behaviour of skipping the effect entirely. drained = min(base_points, target.power) (floor-at-available; an empty/low pool just burns less, never fails the cast). damage = drained * p1 / 100 (p1 = the effect's ratio in basis-points — vanilla Mana Burn is EffectMultipleValue=0.5 -> p1=50 -> half the drained mana as Shadow damage); `p1<=0` (unauthored data) defaults to 100 (1:1), so a missing p1 never silently zeroes all burn damage. Dealt via the shared `apply_target_damage` (threat/kill/absorb reuse, no new wire work)
 
 // --- aura effects (high bit set) ---
@@ -226,6 +227,7 @@ pub(crate) const P_SPELLMOD_OP: u8 = 11; // p0 is a SpellModOp (A_SPELLMOD_*: 0=
 /// the Aura row, so the generic energize tick (`energized_value`) restores a real number. Every other p0_kind
 /// leaves `amount` verbatim (baseline-safe).
 pub(crate) const P_PCT_MAX_POWER: u8 = 12;
+pub(crate) const P_GAMEOBJECT_ENTRY: u8 = 13; // p0 is a game_gameobject_template entry (E_DUEL)
 pub(crate) const P_RAW: u8 = 255; // scripted / unresolved
 
 // --- TargetKind: who the effect resolves onto ---
@@ -384,6 +386,7 @@ pub(crate) const ALL_INSTANT_KINDS: &[u8] = &[
     E_FISH,
     E_OPEN_LOCK,
     E_RECALL_HOME,
+    E_DUEL,
     E_TAME_CREATURE,
     E_FEED_PET,
 ];

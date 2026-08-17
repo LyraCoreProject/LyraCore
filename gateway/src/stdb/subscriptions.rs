@@ -1629,6 +1629,136 @@ pub(crate) fn trade_event_outbound(row: &TradeEvent) -> Vec<Outbound> {
     }
 }
 
+/// Project one Duel lifecycle edge for one recipient. The module inserts one row per participant,
+/// so this function deliberately builds one copy of each typed protocol packet per row.
+pub(crate) fn duel_event_outbound(
+    row: &DuelEvent,
+    template: Option<&codec::GameObjectTemplateView>,
+) -> Vec<Outbound> {
+    use lyracore_shared::duel::{completion_kind, event_kind};
+    use wow_world_messages::vanilla::{
+        SMSG_DUEL_COMPLETE, SMSG_DUEL_COUNTDOWN, SMSG_DUEL_REQUESTED,
+    };
+
+    let raw_values = |guid, arbiter, team| {
+        let (opcode, body) = codec::build_duel_player_values(guid, arbiter, team);
+        Outbound::Raw { opcode, body }
+    };
+
+    match row.kind {
+        event_kind::REQUESTED => {
+            let Some(template) = template else {
+                log::warn!(
+                    "duel relay: missing duel-flag template {} (event {})",
+                    row.flag_entry,
+                    row.id
+                );
+                return Vec::new();
+            };
+            let flag = codec::GameObjectView {
+                guid: row.flag_guid,
+                template_entry: row.flag_entry,
+                x: row.flag_x,
+                y: row.flag_y,
+                z: row.flag_z,
+                orientation: row.flag_orientation,
+                state: 1,
+                type_id: template.type_id,
+                display_id: template.display_id,
+                rotation_0: 0.0,
+                rotation_1: 0.0,
+                rotation_2: 0.0,
+                rotation_3: 0.0,
+                size: 1.0,
+            };
+            let (rotation_opcode, rotation_body) = codec::build_gameobject_rotation_values(&flag);
+            vec![
+                Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                    codec::build_gameobject_create_object(&flag),
+                ))),
+                Outbound::Raw {
+                    opcode: rotation_opcode,
+                    body: rotation_body,
+                },
+                raw_values(row.initiator_guid, Some(row.flag_guid), None),
+                raw_values(row.challenged_guid, Some(row.flag_guid), None),
+                Outbound::One(ServerOpcodeMessage::SMSG_DUEL_REQUESTED(Box::new(
+                    SMSG_DUEL_REQUESTED {
+                        // The protocol calls this `initiator`; vanilla uses it as the arbiter GO.
+                        initiator: wow_world_messages::Guid::new(row.flag_guid),
+                        target: wow_world_messages::Guid::new(row.initiator_guid),
+                    },
+                ))),
+            ]
+        }
+        event_kind::COUNTDOWN => vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_COUNTDOWN(
+            SMSG_DUEL_COUNTDOWN {
+                // The library labels this Duration as seconds, but writes `as_secs()` directly.
+                // Vanilla's field is milliseconds and CMaNGOS writes 3000, so 3000 seconds here
+                // is the typed API spelling that produces the correct u32 wire value.
+                time: Duration::from_secs(3_000),
+            },
+        ))],
+        event_kind::ACTIVE => vec![
+            raw_values(row.initiator_guid, None, Some(1)),
+            raw_values(row.challenged_guid, None, Some(2)),
+        ],
+        event_kind::OUT_OF_BOUNDS => vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_OUTOFBOUNDS)],
+        event_kind::IN_BOUNDS => vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_INBOUNDS)],
+        event_kind::COMPLETE => {
+            let mut outbound = vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_COMPLETE(
+                SMSG_DUEL_COMPLETE {
+                    ended_without_interruption: row.completion_kind
+                        != completion_kind::INTERRUPTED,
+                },
+            ))];
+            outbound.extend(duel_winner_outbound(row));
+            outbound.extend([
+                raw_values(row.initiator_guid, Some(0), Some(0)),
+                raw_values(row.challenged_guid, Some(0), Some(0)),
+                Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
+                    codec::build_destroy_object(row.flag_guid),
+                )),
+            ]);
+            outbound
+        }
+        other => {
+            log::warn!("duel relay: unknown kind {other} (event {})", row.id);
+            Vec::new()
+        }
+    }
+}
+
+/// The one winner announcement for a completed Duel. Participant relays include it after
+/// `SMSG_DUEL_COMPLETE`; the shared view also fans it to nearby non-participants.
+pub(crate) fn duel_winner_outbound(row: &DuelEvent) -> Vec<Outbound> {
+    use lyracore_shared::duel::completion_kind;
+    use wow_world_base::shared::duel_winner_reason_vanilla_tbc_wrath::DuelWinnerReason;
+    use wow_world_messages::vanilla::SMSG_DUEL_WINNER;
+
+    if row.winner_guid == 0
+        || row.loser_guid == 0
+        || row.winner_name.is_empty()
+        || row.loser_name.is_empty()
+    {
+        return Vec::new();
+    }
+    let reason = match row.completion_kind {
+        completion_kind::WON => DuelWinnerReason::Won,
+        completion_kind::FLED => DuelWinnerReason::Fled,
+        _ => return Vec::new(),
+    };
+    // `opponent_name` is the first CString on the wire and carries the WINNER: mangos sends
+    // this packet from the loser, announcing its opponent as victor.
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_WINNER(Box::new(
+        SMSG_DUEL_WINNER {
+            reason,
+            opponent_name: row.winner_name.clone(),
+            initiator_name: row.loser_name.clone(),
+        },
+    )))]
+}
+
 /// Decode an `OFFER_*` payload into the fixed-444-byte `SMSG_TRADE_STATUS_EXTENDED` (#121):
 /// counts are 7/7 (the cmangos constant), unused slots stay zeroed (`TradeSlot::default`), and
 /// every filled slot carries the module-resolved stack/durability/enchant fields. Fails closed
@@ -2978,6 +3108,131 @@ impl Coordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn duel_event(kind: u8, completion_kind: u8) -> DuelEvent {
+        DuelEvent {
+            id: 1,
+            recipient_identity: spacetimedb_sdk::Identity::from_byte_array([0u8; 32]),
+            recipient_guid: 10,
+            kind,
+            completion_kind,
+            duel_id: 3,
+            flag_guid: 0xF110_2000_0000_0003,
+            flag_entry: 21680,
+            initiator_guid: 10,
+            challenged_guid: 20,
+            winner_guid: 0,
+            loser_guid: 0,
+            map_id: 1,
+            instance_id: 7,
+            flag_x: 3.0,
+            flag_y: 4.0,
+            flag_z: 5.0,
+            flag_orientation: 1.25,
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            winner_name: String::new(),
+            loser_name: String::new(),
+        }
+    }
+
+    #[test]
+    fn duel_request_projects_one_typed_request_with_flag_arbiter_and_challenger() {
+        let template = codec::GameObjectTemplateView {
+            type_id: 16,
+            display_id: 787,
+            name: "Duel Arbiter".into(),
+            data0: 0,
+            data1: 0,
+        };
+        let row = duel_event(0, 0);
+        let out = duel_event_outbound(&row, Some(&template));
+
+        assert_eq!(out.len(), 5);
+        let requests: Vec<_> = out
+            .iter()
+            .filter_map(|message| match message {
+                Outbound::One(ServerOpcodeMessage::SMSG_DUEL_REQUESTED(request)) => Some(request),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].initiator, wow_world_messages::Guid::new(row.flag_guid));
+        assert_eq!(requests[0].target, wow_world_messages::Guid::new(row.initiator_guid));
+    }
+
+    #[test]
+    fn duel_countdown_active_and_interruption_project_the_expected_edges() {
+        let countdown = duel_event_outbound(&duel_event(1, 0), None);
+        assert!(matches!(
+            countdown.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_DUEL_COUNTDOWN(message))]
+                if message.time.as_secs() == 3_000
+        ));
+
+        let active = duel_event_outbound(&duel_event(2, 0), None);
+        assert_eq!(active.len(), 2);
+        assert!(active.iter().all(|out| matches!(out, Outbound::Raw { .. })));
+
+        let interrupted = duel_event_outbound(&duel_event(3, 0), None);
+        assert_eq!(interrupted.len(), 4);
+        assert!(matches!(
+            &interrupted[0],
+            Outbound::One(ServerOpcodeMessage::SMSG_DUEL_COMPLETE(message))
+                if !message.ended_without_interruption
+        ));
+        assert!(matches!(
+            interrupted.last(),
+            Some(Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(_)))
+        ));
+    }
+
+    #[test]
+    fn duel_winner_projects_names_and_the_terminal_reason() {
+        let mut won = duel_event(3, 2);
+        won.winner_guid = 10;
+        won.loser_guid = 20;
+        won.winner_name = "Winner".into();
+        won.loser_name = "Loser".into();
+        let out = duel_event_outbound(&won, None);
+        assert!(matches!(
+            out.as_slice(),
+            [
+                Outbound::One(ServerOpcodeMessage::SMSG_DUEL_COMPLETE(_)),
+                Outbound::One(ServerOpcodeMessage::SMSG_DUEL_WINNER(message)),
+                ..
+                // `opponent_name` is written first on the wire and must carry the winner.
+            ] if message.reason == wow_world_base::shared::duel_winner_reason_vanilla_tbc_wrath::DuelWinnerReason::Won
+                && message.opponent_name == "Winner"
+                && message.initiator_name == "Loser"
+        ));
+
+        let mut fled_event = duel_event(3, 3);
+        fled_event.winner_guid = 10;
+        fled_event.loser_guid = 20;
+        fled_event.winner_name = "Winner".into();
+        fled_event.loser_name = "Loser".into();
+        let fled = duel_event_outbound(&fled_event, None);
+        assert!(matches!(
+            &fled[1],
+            Outbound::One(ServerOpcodeMessage::SMSG_DUEL_WINNER(message))
+                if message.reason == wow_world_base::shared::duel_winner_reason_vanilla_tbc_wrath::DuelWinnerReason::Fled
+        ));
+    }
+
+    #[test]
+    fn duel_boundary_edges_project_only_the_recipient_transition() {
+        let out_of_bounds = duel_event_outbound(&duel_event(4, 0), None);
+        assert!(matches!(
+            out_of_bounds.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_DUEL_OUTOFBOUNDS)]
+        ));
+
+        let in_bounds = duel_event_outbound(&duel_event(5, 0), None);
+        assert!(matches!(
+            in_bounds.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_DUEL_INBOUNDS)]
+        ));
+    }
 
     /// The trade-status wire mapping (#120): every `lyracore_shared::trade::event_kind` the module
     /// emits decodes to its `SMSG_TRADE_STATUS` variant — `BeginTrade` carrying the counterparty

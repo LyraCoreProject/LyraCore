@@ -15,6 +15,7 @@ mod auction;
 mod cast;
 mod char;
 mod combat;
+mod duel;
 mod item;
 mod loot;
 mod mail;
@@ -39,6 +40,7 @@ pub(crate) use auction::{AuctionEntity, AuctionHousePolicy, AuctionInteraction};
 pub(crate) use cast::{dispatch_cast, CastOutcome, CastPlayer, CastStore, CastTransition};
 pub(crate) use char::handle_char;
 pub(crate) use combat::handle_combat;
+pub(crate) use duel::{dispatch_duel_action, DuelActionOutcome, DuelActionPlayer, DuelActionStore};
 pub(crate) use item::{dispatch_item_action, ItemActionOutcome, ItemActionPlayer, ItemActionStore};
 #[cfg(test)]
 pub(crate) use loot::LootWindowRequestStatus;

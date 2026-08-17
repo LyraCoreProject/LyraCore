@@ -199,6 +199,9 @@ pub mod debug_vmap_ray_reducer;
 pub mod delete_character_reducer;
 pub mod discard_vmap_generation_reducer;
 pub mod dr_state_type;
+pub mod duel_event_type;
+pub mod duel_schedule_type;
+pub mod duel_type;
 pub mod dynamic_object_type;
 pub mod emote_event_type;
 pub mod encounter_equip_type;
@@ -274,6 +277,9 @@ pub mod game_creature_template_table;
 pub mod game_creature_waypoint_table;
 pub mod game_debug_readout_table;
 pub mod game_dr_state_table;
+pub mod game_duel_event_table;
+pub mod game_duel_schedule_table;
+pub mod game_duel_table;
 pub mod game_dynamic_object_table;
 pub mod game_emote_event_table;
 pub mod game_encounter_equip_table;
@@ -472,6 +478,8 @@ pub mod gw_client_command_reducer;
 pub mod gw_del_friend_reducer;
 pub mod gw_del_ignore_reducer;
 pub mod gw_disenchant_reducer;
+pub mod gw_duel_accept_reducer;
+pub mod gw_duel_cancel_reducer;
 pub mod gw_enchant_item_reducer;
 pub mod gw_enter_areatrigger_reducer;
 pub mod gw_equip_item_reducer;
@@ -669,6 +677,7 @@ pub mod threat_entry_type;
 pub mod tick_auras_reducer;
 pub mod tick_breath_reducer;
 pub mod tick_creatures_reducer;
+pub mod tick_duels_reducer;
 pub mod tick_ground_areas_reducer;
 pub mod tick_melee_reducer;
 pub mod trade_event_type;
@@ -880,6 +889,9 @@ pub use debug_vmap_ray_reducer::debug_vmap_ray;
 pub use delete_character_reducer::delete_character;
 pub use discard_vmap_generation_reducer::discard_vmap_generation;
 pub use dr_state_type::DrState;
+pub use duel_event_type::DuelEvent;
+pub use duel_schedule_type::DuelSchedule;
+pub use duel_type::Duel;
 pub use dynamic_object_type::DynamicObject;
 pub use emote_event_type::EmoteEvent;
 pub use encounter_equip_type::EncounterEquip;
@@ -955,6 +967,9 @@ pub use game_creature_template_table::*;
 pub use game_creature_waypoint_table::*;
 pub use game_debug_readout_table::*;
 pub use game_dr_state_table::*;
+pub use game_duel_event_table::*;
+pub use game_duel_schedule_table::*;
+pub use game_duel_table::*;
 pub use game_dynamic_object_table::*;
 pub use game_emote_event_table::*;
 pub use game_encounter_equip_table::*;
@@ -1153,6 +1168,8 @@ pub use gw_client_command_reducer::gw_client_command;
 pub use gw_del_friend_reducer::gw_del_friend;
 pub use gw_del_ignore_reducer::gw_del_ignore;
 pub use gw_disenchant_reducer::gw_disenchant;
+pub use gw_duel_accept_reducer::gw_duel_accept;
+pub use gw_duel_cancel_reducer::gw_duel_cancel;
 pub use gw_enchant_item_reducer::gw_enchant_item;
 pub use gw_enter_areatrigger_reducer::gw_enter_areatrigger;
 pub use gw_equip_item_reducer::gw_equip_item;
@@ -1350,6 +1367,7 @@ pub use threat_entry_type::ThreatEntry;
 pub use tick_auras_reducer::tick_auras;
 pub use tick_breath_reducer::tick_breath;
 pub use tick_creatures_reducer::tick_creatures;
+pub use tick_duels_reducer::tick_duels;
 pub use tick_ground_areas_reducer::tick_ground_areas;
 pub use tick_melee_reducer::tick_melee;
 pub use trade_event_type::TradeEvent;
@@ -2179,6 +2197,14 @@ pub enum Reducer {
         actor_guid: u64,
         slot: u8,
     },
+    GwDuelAccept {
+        actor_guid: u64,
+        flag_guid: u64,
+    },
+    GwDuelCancel {
+        actor_guid: u64,
+        flag_guid: u64,
+    },
     GwEnchantItem {
         actor_guid: u64,
         target_slot: u8,
@@ -2743,6 +2769,9 @@ pub enum Reducer {
     TickCreatures {
         schedule: CreatureMoveSchedule,
     },
+    TickDuels {
+        schedule: DuelSchedule,
+    },
     TickGroundAreas {
         schedule: GroundAreaSchedule,
     },
@@ -2947,6 +2976,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwDelFriend { .. } => "gw_del_friend",
             Reducer::GwDelIgnore { .. } => "gw_del_ignore",
             Reducer::GwDisenchant { .. } => "gw_disenchant",
+            Reducer::GwDuelAccept { .. } => "gw_duel_accept",
+            Reducer::GwDuelCancel { .. } => "gw_duel_cancel",
             Reducer::GwEnchantItem { .. } => "gw_enchant_item",
             Reducer::GwEnterAreatrigger { .. } => "gw_enter_areatrigger",
             Reducer::GwEquipItem { .. } => "gw_equip_item",
@@ -3069,6 +3100,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::TickAuras { .. } => "tick_auras",
             Reducer::TickBreath { .. } => "tick_breath",
             Reducer::TickCreatures { .. } => "tick_creatures",
+            Reducer::TickDuels { .. } => "tick_duels",
             Reducer::TickGroundAreas { .. } => "tick_ground_areas",
             Reducer::TickMelee { .. } => "tick_melee",
             Reducer::VerifyVmapGeneration { .. } => "verify_vmap_generation",
@@ -4519,6 +4551,20 @@ Reducer::DebugVerifyCombatRegen{
                 actor_guid: actor_guid.clone(),
                 slot: slot.clone(),
 }),
+            Reducer::GwDuelAccept{
+                actor_guid,
+                flag_guid,
+}             => __sats::bsatn::to_vec(&gw_duel_accept_reducer::GwDuelAcceptArgs {
+                actor_guid: actor_guid.clone(),
+                flag_guid: flag_guid.clone(),
+}),
+            Reducer::GwDuelCancel{
+                actor_guid,
+                flag_guid,
+}             => __sats::bsatn::to_vec(&gw_duel_cancel_reducer::GwDuelCancelArgs {
+                actor_guid: actor_guid.clone(),
+                flag_guid: flag_guid.clone(),
+}),
             Reducer::GwEnchantItem{
                 actor_guid,
                 target_slot,
@@ -5528,6 +5574,11 @@ Reducer::SetCharacterShard{
 }             => __sats::bsatn::to_vec(&tick_creatures_reducer::TickCreaturesArgs {
                 schedule: schedule.clone(),
 }),
+            Reducer::TickDuels{
+                schedule,
+}             => __sats::bsatn::to_vec(&tick_duels_reducer::TickDuelsArgs {
+                schedule: schedule.clone(),
+}),
             Reducer::TickGroundAreas{
                 schedule,
 }             => __sats::bsatn::to_vec(&tick_ground_areas_reducer::TickGroundAreasArgs {
@@ -5609,6 +5660,9 @@ pub struct DbUpdate {
     game_creature_waypoint: __sdk::TableUpdate<CreatureWaypoint>,
     game_debug_readout: __sdk::TableUpdate<DebugReadout>,
     game_dr_state: __sdk::TableUpdate<DrState>,
+    game_duel: __sdk::TableUpdate<Duel>,
+    game_duel_event: __sdk::TableUpdate<DuelEvent>,
+    game_duel_schedule: __sdk::TableUpdate<DuelSchedule>,
     game_dynamic_object: __sdk::TableUpdate<DynamicObject>,
     game_emote_event: __sdk::TableUpdate<EmoteEvent>,
     game_encounter_equip: __sdk::TableUpdate<EncounterEquip>,
@@ -5919,6 +5973,15 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_dr_state" => db_update
                     .game_dr_state
                     .append(game_dr_state_table::parse_table_update(table_update)?),
+                "game_duel" => db_update
+                    .game_duel
+                    .append(game_duel_table::parse_table_update(table_update)?),
+                "game_duel_event" => db_update
+                    .game_duel_event
+                    .append(game_duel_event_table::parse_table_update(table_update)?),
+                "game_duel_schedule" => db_update
+                    .game_duel_schedule
+                    .append(game_duel_schedule_table::parse_table_update(table_update)?),
                 "game_dynamic_object" => db_update
                     .game_dynamic_object
                     .append(game_dynamic_object_table::parse_table_update(table_update)?),
@@ -6597,6 +6660,15 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_dr_state = cache
             .apply_diff_to_table::<DrState>("game_dr_state", &self.game_dr_state)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_duel = cache
+            .apply_diff_to_table::<Duel>("game_duel", &self.game_duel)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_duel_event = cache
+            .apply_diff_to_table::<DuelEvent>("game_duel_event", &self.game_duel_event)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_duel_schedule = cache
+            .apply_diff_to_table::<DuelSchedule>("game_duel_schedule", &self.game_duel_schedule)
+            .with_updates_by_pk(|row| &row.scheduled_id);
         diff.game_dynamic_object = cache
             .apply_diff_to_table::<DynamicObject>("game_dynamic_object", &self.game_dynamic_object)
             .with_updates_by_pk(|row| &row.guid);
@@ -7297,6 +7369,15 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_dr_state" => db_update
                     .game_dr_state
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_duel" => db_update
+                    .game_duel
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_duel_event" => db_update
+                    .game_duel_event
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_duel_schedule" => db_update
+                    .game_duel_schedule
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_dynamic_object" => db_update
                     .game_dynamic_object
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -7868,6 +7949,15 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_dr_state" => db_update
                     .game_dr_state
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_duel" => db_update
+                    .game_duel
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_duel_event" => db_update
+                    .game_duel_event
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_duel_schedule" => db_update
+                    .game_duel_schedule
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_dynamic_object" => db_update
                     .game_dynamic_object
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -8327,6 +8417,9 @@ pub struct AppliedDiff<'r> {
     game_creature_waypoint: __sdk::TableAppliedDiff<'r, CreatureWaypoint>,
     game_debug_readout: __sdk::TableAppliedDiff<'r, DebugReadout>,
     game_dr_state: __sdk::TableAppliedDiff<'r, DrState>,
+    game_duel: __sdk::TableAppliedDiff<'r, Duel>,
+    game_duel_event: __sdk::TableAppliedDiff<'r, DuelEvent>,
+    game_duel_schedule: __sdk::TableAppliedDiff<'r, DuelSchedule>,
     game_dynamic_object: __sdk::TableAppliedDiff<'r, DynamicObject>,
     game_emote_event: __sdk::TableAppliedDiff<'r, EmoteEvent>,
     game_encounter_equip: __sdk::TableAppliedDiff<'r, EncounterEquip>,
@@ -8732,6 +8825,17 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<DrState>(
             "game_dr_state",
             &self.game_dr_state,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<Duel>("game_duel", &self.game_duel, event);
+        callbacks.invoke_table_row_callbacks::<DuelEvent>(
+            "game_duel_event",
+            &self.game_duel_event,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<DuelSchedule>(
+            "game_duel_schedule",
+            &self.game_duel_schedule,
             event,
         );
         callbacks.invoke_table_row_callbacks::<DynamicObject>(
@@ -10064,6 +10168,9 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_creature_waypoint_table::register_table(client_cache);
         game_debug_readout_table::register_table(client_cache);
         game_dr_state_table::register_table(client_cache);
+        game_duel_table::register_table(client_cache);
+        game_duel_event_table::register_table(client_cache);
+        game_duel_schedule_table::register_table(client_cache);
         game_dynamic_object_table::register_table(client_cache);
         game_emote_event_table::register_table(client_cache);
         game_encounter_equip_table::register_table(client_cache);
@@ -10252,6 +10359,9 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_creature_waypoint",
         "game_debug_readout",
         "game_dr_state",
+        "game_duel",
+        "game_duel_event",
+        "game_duel_schedule",
         "game_dynamic_object",
         "game_emote_event",
         "game_encounter_equip",

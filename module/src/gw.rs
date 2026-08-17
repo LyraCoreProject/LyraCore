@@ -841,6 +841,24 @@ pub fn gw_ignore_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Stri
     crate::trade::apply_ignore_trade(ctx, acting)
 }
 
+/// The challenged character accepts the Duel identified by the client-supplied arbiter flag.
+#[reducer]
+pub fn gw_duel_accept(ctx: &ReducerContext, actor_guid: u64, flag_guid: u64) -> Result<(), String> {
+    require_operator(ctx)?;
+    actor(ctx, actor_guid)?;
+    crate::duel::accept_duel(ctx, actor_guid, flag_guid);
+    Ok(())
+}
+
+/// Cancel the Duel identified by the client-supplied arbiter flag. Forged/stale flags are no-ops.
+#[reducer]
+pub fn gw_duel_cancel(ctx: &ReducerContext, actor_guid: u64, flag_guid: u64) -> Result<(), String> {
+    require_operator(ctx)?;
+    actor(ctx, actor_guid)?;
+    crate::duel::cancel_duel(ctx, actor_guid, flag_guid);
+    Ok(())
+}
+
 /// [`crate::group::leave_group_for`] with the leaver named by guid.
 #[reducer]
 pub fn gw_group_leave(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {

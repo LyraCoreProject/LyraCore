@@ -1,7 +1,7 @@
 //! SpacetimeDB module — **all** WoW 1.12 game state and logic.
 //!
 //! This is the thin index. The actual tables and reducers live in per-domain submodules — the
-//! `mod` declarations below are the authoritative list of what exists (46 of them at last count,
+//! `mod` declarations below are the authoritative list of what exists (47 of them at last count,
 //! from `action_bar` to `xp`); this doc comment doesn't duplicate that list because a hand-kept
 //! copy of it only goes stale as the game grows. A few load-bearing ones to start from: `world`
 //! is the live entity/movement relay, `combat`/`spell`/`items`/`quest`/`instance` are the bulk of
@@ -256,6 +256,7 @@ mod debug;
 // Encounter kernel (work-item 228): instance-scoped encounter state, HP-threshold/death/GO-use
 // hooks, and the shared choreography primitives packages consume (packages/<dungeon>/ own content).
 mod encounter;
+mod duel;
 mod faction;
 mod gameobject;
 mod gc;
@@ -339,6 +340,7 @@ pub use corpse::*;
 pub use creatures::*;
 #[cfg(feature = "debug_reducers")]
 pub use debug::*;
+pub use duel::*;
 pub use encounter::*;
 pub use exploration::CharacterExplored; // re-exported for the gateway schema-parity test (282)
 pub use rest::RestStateEvent; // re-exported for the gateway schema-parity test (#468 4c)
