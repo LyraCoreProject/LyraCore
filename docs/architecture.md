@@ -506,10 +506,10 @@ returns, whose persisted state and removal-time window only a live database can 
 
 The build carries source-scan architecture tests that fail on architectural drift rather than on
 behaviour, all in `module/src/tripwires.rs` (#379 pulled them out of `lib.rs`): no module code
-outside `region.rs`/`load.rs` may read a shard id (`:478`); no whole-table `.iter()` over a spatial
-table outside a shrinking whitelist (`:323`); every character-keyed table must carry
-`character_owned!` markers (`:162`); character lookups must go through the two chokepoint helpers
-(`:632`). Each has a companion ratchet test that fails when its whitelist names something that no
+outside `region.rs`/`load.rs` may read a shard id; no whole-table `.iter()` over a spatial
+table outside a shrinking whitelist; every character-keyed table must carry
+`character_owned!` markers; character lookups must go through the two chokepoint helpers.
+Each has a companion ratchet test that fails when its whitelist names something that no
 longer needs to be there.
 
 **Debug reducers are compiled out by default.** `module/Cargo.toml` declares

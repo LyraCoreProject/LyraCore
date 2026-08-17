@@ -14,7 +14,7 @@ In this project we focus on building complex things as simple as possible. We lo
 
 ## Domain language
 
-- `CONTEXT.md` is the glossary. Use its terms in identifiers, comments, commit messages, docs and PR text, and use the `_Avoid_` words for nothing. When you introduce or change a term, update `CONTEXT.md` in the same change.
+- `CONTEXT.md` is the glossary. Use its terms in identifiers, comments, commit messages, docs and PR text. Do not use the `_Avoid_` words in new prose or new names. Existing identifiers, schema names, filenames, and pinned artifacts keep their names. When you introduce or change a term, update `CONTEXT.md` in the same change.
 
 ## Questions are read-only
 

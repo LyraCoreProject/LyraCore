@@ -21,7 +21,7 @@ A shard that owns a set of maps.
 The shard that hosts instanced maps.
 
 **Realm-core**:
-The shard that holds realm-wide state: accounts, sessions, groups, whispers, loot rolls.
+The shard that holds realm-wide state, including accounts, sessions, groups, whispers, loot rolls, the character-to-shard index, and shard load samples.
 
 **Gateway**:
 The trusted protocol tier between clients and shards. Holds no durable state.
@@ -42,7 +42,7 @@ A rule that refuses a request. Gates live in the Module, except the realm-wide r
 _Avoid_: validation, guard
 
 **Coordinator**:
-The Gateway's one connection per shard, authenticated with the Owner Token, serving every Durable Read and Durable Request.
+The Gateway's subscribed connection per shard, authenticated with the Owner Token. It serves every Durable Read; a small pool of call pipes carries Durable Requests.
 
 **Owner Token**:
 The credential that bypasses row-level security.
