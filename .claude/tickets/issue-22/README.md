@@ -50,9 +50,9 @@ Read `module/src/spell/taxonomy.rs` before writing. Verified free as of this tic
 
 | Const | Value | Note |
 |---|---|---|
-| `E_DISMOUNT` | `0x20` | `0x01`–`0x1D` and `0x1F` are taken. **`0x1E` is reserved for `E_SUMMON_PORTAL` — do not use it.** |
+| `E_DISMOUNT` | `0x23` | `0x01`–`0x22` are taken (`0x20`–`0x22` = tame/feed-pet/duel). **`0x1E` is reserved for `E_SUMMON_PORTAL` — do not use it.** |
 | `A_MOUNTED` | `0xB3` | Highest live `A_*` is `A_MOD_DETECT_RANGE` `0xB2`; `A_FLAG` `0xBE` is the inert marker. |
-| `P_DISPLAY_ID` | `13` | `P_PCT_MAX_POWER` `12` is the highest taken. `p0` = the resolved creature display id. |
+| `P_DISPLAY_ID` | `14` | `13` is `P_GAMEOBJECT_ENTRY`. `p0` = the resolved creature display id. |
 
 `SPEED_MOUNTED = 3` already exists in the `SPEED_*` block and is currently unused. Do not add a
 second mounted-speed concept.

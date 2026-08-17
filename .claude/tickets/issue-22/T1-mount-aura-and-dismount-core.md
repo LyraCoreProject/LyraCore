@@ -16,7 +16,7 @@ is safe to build until it exists.
 
 ## Delivery
 
-**1. Taxonomy.** Add `A_MOUNTED = 0xB3`, `E_DISMOUNT = 0x20`, `P_DISPLAY_ID = 13` to
+**1. Taxonomy.** Add `A_MOUNTED = 0xB3`, `E_DISMOUNT = 0x23`, `P_DISPLAY_ID = 14` to
 `module/src/spell/taxonomy.rs`, in the existing block style, and register them in the exhaustive
 constant lists at the bottom of the file. `0x1E` stays reserved. `A_MOUNTED`'s frozen `p0` is the
 resolved creature display id used for `UNIT_FIELD_MOUNTDISPLAYID`; `p0_kind` is `P_DISPLAY_ID`.
