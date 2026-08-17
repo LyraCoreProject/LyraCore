@@ -9,6 +9,7 @@
 //! off, or a world with no vmap data imported, both ray queries return `None` (clear) — the same
 //! missing-chunk-means-unobstructed contract `nav` uses, so nothing regresses on an unimported map.
 
+use crate::terrain::game_terrain_chunk;
 use lyracore_shared::terrain::cell_key;
 use lyracore_shared::vmap::{decode, RayFlavor, VmapTri};
 use spacetimedb::{reducer, table, ReducerContext, Table};
@@ -18,6 +19,7 @@ const VERIFIED: u8 = 1;
 const ACTIVE: u8 = 2;
 const DISCARDED: u8 = 3;
 const MANIFEST_DOMAIN: &[u8] = b"lyracore-vmap-manifest-v1";
+const COVERAGE_MANIFEST_DOMAIN: &[u8] = b"lyracore-vmap-nav-coverage-manifest-v1";
 
 fn require_staging(state: u8) -> Result<(), String> {
     (state == STAGING)
@@ -412,9 +414,270 @@ pub fn discard_vmap_generation(ctx: &ReducerContext, generation_id: u64) -> Resu
     for id in receipt_ids {
         receipts.id().delete(id);
     }
+    let coverage = ctx.db.game_vmap_nav_coverage();
+    let coverage_ids: Vec<u64> = coverage
+        .by_generation()
+        .filter(&generation_id)
+        .map(|cell| cell.id)
+        .collect();
+    for id in coverage_ids {
+        coverage.id().delete(id);
+    }
+    let manifests = ctx.db.game_vmap_nav_coverage_manifest();
+    if manifests.generation_id().find(generation_id).is_some() {
+        manifests.generation_id().delete(generation_id);
+    }
     generation.state = DISCARDED;
     ctx.db.game_vmap_generation().id().update(generation);
     Ok(())
+}
+
+// ===========================================================================================
+//  Nav coverage derivation (issue #195) — per-cell walk/obstruction blobs derived module-side
+//  from a generation's OWN staged `VmapGenerationChunk` rows, never a re-import and never
+//  `game_nav_chunk` (that table has no generation column and is cleared wholesale by the `--nav`
+//  import pipeline). Coverage is generation-scoped so it can never half-exist: it belongs to
+//  exactly one generation, and the manifest below only ever gets written once, fully formed.
+//  Same rasterizer as the importer's `--nav` mode (`lyracore_shared::nav::derive_cell`) — one
+//  rasterization policy, never two.
+// ===========================================================================================
+
+fn require_coverage_preparable(state: u8) -> Result<(), String> {
+    matches!(state, VERIFIED | ACTIVE)
+        .then_some(())
+        .ok_or_else(|| "vmap nav coverage needs a verified or active generation".to_string())
+}
+
+/// Hash the canonical, cell-key-sorted stream of a generation's coverage rows: key, `base_z` (the
+/// standing-ground floor folds into the digest per the README rule), then the walk/obs blobs.
+/// Same shape as `manifest_digest` above, one level down.
+fn coverage_digest<'a>(
+    cells: impl IntoIterator<Item = (u64, f32, &'a [u8], &'a [u8])>,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(COVERAGE_MANIFEST_DOMAIN);
+    for (key, base_z, walk, obs) in cells {
+        hasher.update(&key.to_le_bytes());
+        hasher.update(&base_z.to_le_bytes());
+        hasher.update(&(walk.len() as u32).to_le_bytes());
+        hasher.update(walk);
+        hasher.update(&(obs.len() as u32).to_le_bytes());
+        hasher.update(obs);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+/// One derived coverage cell. PRIVATE like `VmapGenerationChunk` — the nav read seam
+/// (`nav.rs::fetcher`) reads it module-side; nothing outside this module needs a gateway binding.
+/// A missing row means no coverage for that cell, the same "no obstacles known" contract as
+/// `game_nav_chunk`: `derive_cell` returns `None` for a fully-clear cell and no row is written.
+#[table(
+    accessor = game_vmap_nav_coverage,
+    index(accessor = by_generation, btree(columns = [generation_id])),
+    index(accessor = by_generation_cell, btree(columns = [generation_id, cell_key]))
+)]
+pub struct VmapNavCoverage {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub generation_id: u64,
+    /// Same `cell_key` as `game_nav_chunk`/`game_terrain_chunk`/`game_vmap_generation_chunk`.
+    pub cell_key: u64,
+    pub map_id: u32,
+    pub cell_x: u16,
+    pub cell_y: u16,
+    pub base_z: f32,
+    pub walk: Vec<u8>,
+    pub obs: Vec<u8>,
+}
+
+/// Public, blob-free per-generation summary. `complete` is set exactly once, inside
+/// `finalize_vmap_nav_coverage`'s single insert-or-update — there is no persisted half-finished
+/// manifest, so its mere existence already means "finalized."
+#[table(accessor = game_vmap_nav_coverage_manifest, public)]
+pub struct VmapNavCoverageManifest {
+    #[primary_key]
+    pub generation_id: u64,
+    pub map_id: u32,
+    pub cell_count: u32,
+    pub digest: Vec<u8>,
+    pub complete: bool,
+}
+
+/// One cell to prepare in [`prepare_vmap_nav_coverage`]'s batch. Cell coordinates only — the
+/// storage key is always rebuilt server-side from the generation's own `map_id`, the same trust
+/// boundary `append_vmap_generation_chunks` already applies to its cell key.
+#[derive(spacetimedb::SpacetimeType)]
+pub struct VmapNavCoverageCell {
+    pub cell_x: u16,
+    pub cell_y: u16,
+}
+
+/// Every triangle from `(cell_x, cell_y)` plus its 8 neighbours, gathered from this generation's
+/// OWN staged chunks (never the live `game_vmap_chunk` table). Nav derivation needs geometry
+/// within `nav::WALK_MARGIN` of the cell — wider than the vmap importer's exact-AABB-touch
+/// binning — so the neighbours cover that gap; `derive_cell` clamps everything back to the
+/// requested cell, so the extra triangles are free and correct, never a border seam.
+fn coverage_neighborhood_tris(
+    ctx: &ReducerContext,
+    generation_id: u64,
+    map_id: u32,
+    cell_x: u16,
+    cell_y: u16,
+) -> Vec<VmapTri> {
+    let chunks = ctx.db.game_vmap_generation_chunk();
+    let mut tris = Vec::new();
+    for dx in [-1i16, 0, 1] {
+        let Some(nx) = cell_x.checked_add_signed(dx).filter(|&v| (v as u32) < 1024) else {
+            continue;
+        };
+        for dy in [-1i16, 0, 1] {
+            let Some(ny) = cell_y.checked_add_signed(dy).filter(|&v| (v as u32) < 1024) else {
+                continue;
+            };
+            let key = cell_key(map_id, nx, ny);
+            for row in chunks.by_generation_cell().filter((generation_id, key)) {
+                if let Ok(mut t) = decode(&row.blob) {
+                    tris.append(&mut t);
+                }
+            }
+        }
+    }
+    tris
+}
+
+/// Derive and store coverage for a batch of cells, decoding one cell's neighbourhood at a time so
+/// memory stays bounded by the batch, not the map. Idempotent per cell: a key that already has a
+/// row — from an earlier call, including a retried one — is skipped outright, so re-submitting
+/// the same batch (or an overlapping one) never duplicates a row or perturbs the eventual digest.
+/// Allowed for a verified or active generation (the active map can be retrofitted); refused for
+/// staging or discarded data.
+#[reducer]
+pub fn prepare_vmap_nav_coverage(
+    ctx: &ReducerContext,
+    generation_id: u64,
+    cells: Vec<VmapNavCoverageCell>,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let generation = generation(ctx, generation_id)?;
+    require_coverage_preparable(generation.state)?;
+    let coverage = ctx.db.game_vmap_nav_coverage();
+    for cell in cells {
+        let key = cell_key(generation.map_id, cell.cell_x, cell.cell_y);
+        if coverage
+            .by_generation_cell()
+            .filter((generation_id, key))
+            .next()
+            .is_some()
+        {
+            continue;
+        }
+        let tris = coverage_neighborhood_tris(
+            ctx,
+            generation_id,
+            generation.map_id,
+            cell.cell_x,
+            cell.cell_y,
+        );
+        if tris.is_empty() {
+            continue;
+        }
+        let heights = ctx
+            .db
+            .game_terrain_chunk()
+            .key()
+            .find(key)
+            .map(|chunk| chunk.heights);
+        let Some(derived) =
+            lyracore_shared::nav::derive_cell(cell.cell_x, cell.cell_y, heights.as_deref(), &tris)
+        else {
+            continue;
+        };
+        coverage.insert(VmapNavCoverage {
+            id: 0,
+            generation_id,
+            cell_key: key,
+            map_id: generation.map_id,
+            cell_x: cell.cell_x,
+            cell_y: cell.cell_y,
+            base_z: derived.base_z,
+            walk: derived.walk,
+            obs: derived.obs,
+        });
+    }
+    Ok(())
+}
+
+/// Lock in whatever coverage is currently prepared as this generation's manifest: cell count +
+/// digest over every stored row, sorted by cell key for a canonical stream. Safe to call again
+/// after preparing more cells, or with nothing new — the digest just reproduces. Same
+/// verified-or-active gate as preparation.
+#[reducer]
+pub fn finalize_vmap_nav_coverage(ctx: &ReducerContext, generation_id: u64) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let generation = generation(ctx, generation_id)?;
+    require_coverage_preparable(generation.state)?;
+    let mut cells: Vec<VmapNavCoverage> = ctx
+        .db
+        .game_vmap_nav_coverage()
+        .by_generation()
+        .filter(&generation_id)
+        .collect();
+    cells.sort_unstable_by_key(|cell| cell.cell_key);
+    let digest = coverage_digest(cells.iter().map(|cell| {
+        (
+            cell.cell_key,
+            cell.base_z,
+            cell.walk.as_slice(),
+            cell.obs.as_slice(),
+        )
+    }))
+    .to_vec();
+    let cell_count = cells.len() as u32;
+    let manifests = ctx.db.game_vmap_nav_coverage_manifest();
+    match manifests.generation_id().find(generation_id) {
+        Some(mut row) => {
+            row.cell_count = cell_count;
+            row.digest = digest;
+            row.complete = true;
+            manifests.generation_id().update(row);
+        }
+        None => {
+            manifests.insert(VmapNavCoverageManifest {
+                generation_id,
+                map_id: generation.map_id,
+                cell_count,
+                digest,
+                complete: true,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The atomic selection step `activate_vmap_generation` enables: this map's currently ACTIVE
+/// generation's coverage manifest, but only when it is finalized (`complete`). Optional-coverage
+/// semantics (README): a verified-but-not-yet-finalized, or deliberately uncovered, active
+/// generation simply selects none, and the nav read seam (`nav.rs::fetcher`, issue #195 T3)
+/// degrades to terrain-only exactly as if coverage had never been prepared. Re-evaluated on every
+/// call rather than snapshotted at activation time, because preparation can retrofit an already
+/// active generation.
+pub fn active_vmap_nav_coverage_manifest(
+    ctx: &ReducerContext,
+    map_id: u32,
+) -> Option<VmapNavCoverageManifest> {
+    let generation_id = ctx
+        .db
+        .game_vmap_generation()
+        .by_map_state()
+        .filter((map_id, ACTIVE))
+        .next()?
+        .id;
+    ctx.db
+        .game_vmap_nav_coverage_manifest()
+        .generation_id()
+        .find(generation_id)
+        .filter(|manifest| manifest.complete)
 }
 
 fn load_vmap_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
@@ -647,6 +910,10 @@ mod tests {
     struct LifecycleHarness {
         generations: BTreeMap<u64, (u32, u8, u32, u32)>,
         chunks: BTreeMap<(u64, u64, u32), Vec<u8>>,
+        /// (generation_id, cell_key) -> (base_z, walk, obs) — mirrors `VmapNavCoverage`.
+        coverage: BTreeMap<(u64, u64), (f32, Vec<u8>, Vec<u8>)>,
+        /// generation_id -> (cell_count, digest, complete) — mirrors `VmapNavCoverageManifest`.
+        coverage_manifests: BTreeMap<u64, (u32, [u8; 32], bool)>,
     }
 
     impl LifecycleHarness {
@@ -696,6 +963,9 @@ mod tests {
             generation.1 = DISCARDED;
             self.chunks
                 .retain(|(generation_id, _, _), _| *generation_id != id);
+            self.coverage
+                .retain(|(generation_id, _), _| *generation_id != id);
+            self.coverage_manifests.remove(&id);
             Ok(())
         }
 
@@ -703,6 +973,57 @@ mod tests {
             self.generations.iter().find_map(|(&id, generation)| {
                 (generation.0 == map && generation.1 == ACTIVE).then_some(id)
             })
+        }
+
+        fn coverage_preparable(&self, id: u64) -> Result<(), String> {
+            let state = self.generations.get(&id).ok_or("missing generation")?.1;
+            require_coverage_preparable(state)
+        }
+
+        /// Mirrors `prepare_vmap_nav_coverage`: skips a cell key that already has a row
+        /// (idempotent retry), writes nothing when `derive` returns `None` (the clear-cell case).
+        fn prepare_coverage(
+            &mut self,
+            id: u64,
+            keys: &[u64],
+            mut derive: impl FnMut(u64) -> Option<(f32, Vec<u8>, Vec<u8>)>,
+        ) -> Result<(), String> {
+            self.coverage_preparable(id)?;
+            for &key in keys {
+                if self.coverage.contains_key(&(id, key)) {
+                    continue;
+                }
+                if let Some(cell) = derive(key) {
+                    self.coverage.insert((id, key), cell);
+                }
+            }
+            Ok(())
+        }
+
+        /// Mirrors `finalize_vmap_nav_coverage`: cell count + digest over the sorted current rows.
+        fn finalize_coverage(&mut self, id: u64) -> Result<(), String> {
+            self.coverage_preparable(id)?;
+            let mut cells: Vec<(u64, &(f32, Vec<u8>, Vec<u8>))> = self
+                .coverage
+                .iter()
+                .filter(|((generation_id, _), _)| *generation_id == id)
+                .map(|((_, key), cell)| (*key, cell))
+                .collect();
+            cells.sort_unstable_by_key(|(key, _)| *key);
+            let digest = coverage_digest(cells.iter().map(|(key, (base_z, walk, obs))| {
+                (*key, *base_z, walk.as_slice(), obs.as_slice())
+            }));
+            self.coverage_manifests
+                .insert(id, (cells.len() as u32, digest, true));
+            Ok(())
+        }
+
+        /// Mirrors `active_vmap_nav_coverage_manifest`: the active generation's manifest, but
+        /// only when it is finalized.
+        fn active_coverage_manifest(&self, map: u32) -> Option<(u32, [u8; 32])> {
+            let id = self.active(map)?;
+            let (count, digest, complete) = self.coverage_manifests.get(&id)?;
+            complete.then_some((*count, *digest))
         }
     }
 
@@ -846,5 +1167,110 @@ mod tests {
             ),
             "a different coverage selection cannot resume the generation"
         );
+    }
+
+    #[test]
+    fn coverage_prepares_in_batches_and_finalizes_idempotently() {
+        let mut h = LifecycleHarness::default();
+        h.stage(1, 0, 1);
+        h.append(1, 7, 0, vec![1]).unwrap();
+        h.verify(1).unwrap();
+
+        let derive = |key: u64| (key != 11).then_some((80.0, vec![0xAA], vec![0xBB]));
+        h.prepare_coverage(1, &[10, 11, 12], derive).unwrap();
+        assert_eq!(h.coverage.len(), 2, "the fully-clear cell writes no row");
+
+        h.finalize_coverage(1).unwrap();
+        let first = *h.coverage_manifests.get(&1).unwrap();
+        assert_eq!(first.0, 2, "cell count only counts cells with coverage");
+
+        // Retry the exact same batch, including the already-prepared keys and the empty one.
+        h.prepare_coverage(1, &[10, 11, 12], derive).unwrap();
+        assert_eq!(
+            h.coverage.len(),
+            2,
+            "retry does not duplicate a prepared cell"
+        );
+        h.finalize_coverage(1).unwrap();
+        assert_eq!(
+            *h.coverage_manifests.get(&1).unwrap(),
+            first,
+            "re-finalizing an unchanged batch reproduces the same manifest"
+        );
+    }
+
+    #[test]
+    fn coverage_preparation_is_refused_outside_verified_or_active() {
+        let mut h = LifecycleHarness::default();
+        h.stage(1, 0, 1);
+        assert!(
+            h.prepare_coverage(1, &[10], |_| Some((80.0, vec![], vec![])))
+                .is_err(),
+            "a staging generation cannot prepare coverage"
+        );
+        h.append(1, 7, 0, vec![1]).unwrap();
+        h.verify(1).unwrap();
+        h.activate(1).unwrap();
+
+        h.stage(2, 0, 1);
+        h.discard(2).unwrap();
+        assert!(
+            h.prepare_coverage(2, &[10], |_| Some((80.0, vec![], vec![])))
+                .is_err(),
+            "a discarded generation cannot prepare coverage"
+        );
+    }
+
+    #[test]
+    fn discarding_a_generation_removes_its_coverage_and_manifest() {
+        let mut h = LifecycleHarness::default();
+        h.stage(1, 0, 1);
+        h.append(1, 7, 0, vec![1]).unwrap();
+        h.verify(1).unwrap();
+        h.prepare_coverage(1, &[10], |_| Some((80.0, vec![0xAA], vec![0xBB])))
+            .unwrap();
+        h.finalize_coverage(1).unwrap();
+        assert!(!h.coverage.is_empty() && h.coverage_manifests.contains_key(&1));
+
+        h.discard(1).unwrap();
+        assert!(!h
+            .coverage
+            .keys()
+            .any(|(generation_id, _)| *generation_id == 1));
+        assert!(!h.coverage_manifests.contains_key(&1));
+    }
+
+    #[test]
+    fn activation_selects_coverage_only_when_finalized_for_that_exact_generation() {
+        let mut h = LifecycleHarness::default();
+        // Generation 1: fully prepared, finalized, then activated.
+        h.stage(1, 0, 1);
+        h.append(1, 7, 0, vec![1]).unwrap();
+        h.verify(1).unwrap();
+        h.prepare_coverage(1, &[10], |_| Some((80.0, vec![0xAA], vec![0xBB])))
+            .unwrap();
+        h.finalize_coverage(1).unwrap();
+        h.activate(1).unwrap();
+        assert!(
+            h.active_coverage_manifest(0).is_some(),
+            "the active generation's finalized coverage is selected"
+        );
+
+        // Generation 2 replaces it but its coverage prep never finalizes — a failed/partial run.
+        h.stage(2, 0, 1);
+        h.append(2, 8, 0, vec![2]).unwrap();
+        h.verify(2).unwrap();
+        h.prepare_coverage(2, &[20], |_| Some((80.0, vec![0xCC], vec![0xDD])))
+            .unwrap();
+        h.activate(2).unwrap();
+
+        assert_eq!(h.active(0), Some(2), "activation succeeds without coverage");
+        assert!(
+            h.active_coverage_manifest(0).is_none(),
+            "an unfinalized generation activates fine but selects no coverage"
+        );
+        // Generation 1's own finalized manifest survives untouched — only an explicit discard
+        // clears it, and generation 1 was never discarded here.
+        assert!(h.coverage_manifests.contains_key(&1));
     }
 }
