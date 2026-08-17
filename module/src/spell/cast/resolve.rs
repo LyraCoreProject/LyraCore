@@ -762,21 +762,20 @@ pub(crate) fn begin_cast(
     // is only for an actual cancel/Kick) so a missed CMSG_CANCEL_CAST can't strand a pending cast that
     // later fires a phantom GO and wedges the client. `cancel_cast` handles the explicit Esc; this is the
     // backstop for the recast path.
-    let stale: Vec<u64> = ctx
-        .db
-        .game_pending_cast()
-        .iter()
-        .filter(|p| p.caster_guid == caster_guid)
+    let pending = ctx.db.game_pending_cast();
+    let stale: Vec<u64> = pending
+        .by_caster()
+        .filter(&caster_guid)
         .map(|p| p.scheduled_id)
         .collect();
     for id in stale {
-        ctx.db.game_pending_cast().scheduled_id().delete(id);
+        pending.scheduled_id().delete(id);
     }
     let (has_dest, (dx, dy, dz)) = match dest {
         Some(p) => (true, p),
         None => (false, (0.0, 0.0, 0.0)),
     };
-    ctx.db.game_pending_cast().insert(PendingCast {
+    pending.insert(PendingCast {
         scheduled_id: 0,
         scheduled_at: ScheduleAt::Time(fire_at),
         caster_guid,

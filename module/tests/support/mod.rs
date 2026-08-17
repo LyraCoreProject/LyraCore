@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 use std::net::{TcpListener, TcpStream};
@@ -85,6 +86,18 @@ impl Standalone {
         assert_output_success(self.call(reducer, args));
     }
 
+    #[allow(dead_code)] // Used by integration targets that inspect committed table state.
+    pub fn assert_sql(&self, query: &str) {
+        assert_output_success(self.sql(query));
+    }
+
+    #[allow(dead_code)] // Used by integration targets that inspect committed table state.
+    pub fn query_rows(&self, query: &str) -> Vec<BTreeMap<String, String>> {
+        let output = self.sql(query);
+        assert_output_ok(&output);
+        parse_text_rows(&String::from_utf8(output.stdout).expect("SQL output was not UTF-8"))
+    }
+
     #[allow(dead_code)] // This shared method is used only by the expiry integration target.
     pub fn wait_until_call_succeeds(&self, reducer: &str) {
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -119,6 +132,21 @@ impl Standalone {
             thread::sleep(Duration::from_millis(50));
         }
     }
+
+    fn sql(&self, query: &str) -> Output {
+        Command::new(&self.spacetime)
+            .args([
+                "sql",
+                "-s",
+                &self.server,
+                "--format",
+                "text",
+                &self.database,
+                query,
+            ])
+            .output()
+            .expect("failed to run SQL query")
+    }
 }
 
 impl Drop for Standalone {
@@ -134,6 +162,10 @@ fn assert_success(command: &mut Command) {
 }
 
 fn assert_output_success(output: Output) {
+    assert_output_ok(&output);
+}
+
+fn assert_output_ok(output: &Output) {
     assert!(
         output.status.success(),
         "command failed with {}\nstdout:\n{}\nstderr:\n{}",
@@ -141,4 +173,35 @@ fn assert_output_success(output: Output) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
+}
+
+fn parse_text_rows(output: &str) -> Vec<BTreeMap<String, String>> {
+    let mut lines = output.lines().filter(|line| !line.trim().is_empty());
+    let headers: Vec<&str> = lines
+        .next()
+        .expect("SQL output had no header")
+        .split('|')
+        .map(str::trim)
+        .collect();
+    let separator = lines.next().expect("SQL output had no separator");
+    assert!(
+        separator.chars().all(|c| c == '-' || c == '+'),
+        "unexpected SQL separator: {separator}"
+    );
+
+    lines
+        .map(|line| {
+            let values: Vec<&str> = line.split('|').map(str::trim).collect();
+            assert_eq!(
+                values.len(),
+                headers.len(),
+                "unexpected SQL row shape: {line}"
+            );
+            headers
+                .iter()
+                .zip(values)
+                .map(|(name, value)| ((*name).to_string(), value.to_string()))
+                .collect()
+        })
+        .collect()
 }
