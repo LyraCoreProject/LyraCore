@@ -17,7 +17,8 @@
 // when dungeons or bridges matter; Elwynn/Westfall exteriors don't.
 
 use crate::spatial::MAP_COORD_MAX;
-use crate::terrain::CELL_SIZE;
+use crate::terrain::{interpolate, CELL_SIZE};
+use crate::vmap::{TriClass, VmapTri};
 
 /// Walkability sub-cells per terrain-cell axis (64 → 0.5208 yd).
 pub const WALK_DIM: usize = 64;
@@ -672,5 +673,531 @@ mod runtime_tests {
         assert!(!path.is_empty());
         // A wall-interior goal returns None immediately (goal cell unwalkable).
         assert!(find_leg(&mut fetcher(), from, at(32, 50), 20_000).is_none());
+    }
+}
+
+// =============================================================================================
+//  Derivation — collision triangles → one cell's blobs. This is the ONLY rasterization policy:
+//  the importer's `--nav` mode and the module's coverage derivation both call `derive_cell`, so
+//  a margin or band change can never drift between them. Terrain-only inputs (slope, holes) stay
+//  with their owner and fold in through `merge_cells`.
+// =============================================================================================
+
+/// Inflation margin for the point-in-triangle test (yd) — slightly over half a walk-cell
+/// diagonal so a thin vertical wall whose 2D projection is a sliver still hits the centers of
+/// the cells its line crosses. Conservative direction: over-blocking by <1 cell.
+const RASTER_MARGIN: f32 = 0.35;
+
+/// Agent-body inset for walk cells; the obstruction/LoS grid retains the true footprint.
+const AGENT_RADIUS: f32 = 0.5;
+
+/// The walk-grid rasterization margin: sliver-catching plus the body inset. Public because a
+/// caller binning triangles into cells must inflate its cell range by the same amount, or a
+/// triangle hugging a border never reaches the neighbor cell its inset footprint spills into.
+pub const WALK_MARGIN: f32 = RASTER_MARGIN + AGENT_RADIUS;
+
+/// Gap tolerance when fusing a column's z-intervals (yd): stacked wall bands abut without
+/// overlapping exactly.
+const OBS_GAP: f32 = 0.75;
+
+/// One world-space collision triangle with its AABB and plane. `z_at` is the exact-rasterization
+/// core: the triangle's z-interval over a 2D point (None = point outside the inflated footprint).
+/// A coarse M2 bounding triangle spanning trunk→canopy thus blocks only near the trunk (low
+/// plane-z) and never under the canopy — AABB stamping marked the whole canopy width unwalkable
+/// and turned Elwynn's forests into a maze.
+struct WorldTri {
+    lo: [f32; 3],
+    hi: [f32; 3],
+    /// WMO geometry participates in the obstruction grid; M2 doodads never do.
+    is_wmo: bool,
+    v: [[f32; 3]; 3],
+    /// Plane normal + d (n·p = d); near-vertical planes fall back to the full z-range.
+    n: [f32; 3],
+    d: f32,
+}
+
+impl WorldTri {
+    fn new(t: &VmapTri) -> Self {
+        let v = t.verts;
+        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for p in &v {
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+        let e1 = [v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2]];
+        let e2 = [v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2]];
+        let n = [
+            e1[1] * e2[2] - e1[2] * e2[1],
+            e1[2] * e2[0] - e1[0] * e2[2],
+            e1[0] * e2[1] - e1[1] * e2[0],
+        ];
+        let d = n[0] * v[0][0] + n[1] * v[0][1] + n[2] * v[0][2];
+        Self {
+            lo,
+            hi,
+            is_wmo: matches!(t.class, TriClass::Wmo { .. }),
+            v,
+            n,
+            d,
+        }
+    }
+
+    /// The triangle's z-interval over 2D point (x, y), testing inside-ness with a `margin`-yd
+    /// outward inflation (signed edge distance). None = outside the inflated footprint.
+    fn z_at(&self, x: f32, y: f32, margin: f32) -> Option<(f32, f32)> {
+        // 2D signed edge distances (positive = same side as the third vertex).
+        for i in 0..3 {
+            let (a, b, c) = (self.v[i], self.v[(i + 1) % 3], self.v[(i + 2) % 3]);
+            let (ex, ey) = (b[0] - a[0], b[1] - a[1]);
+            let len = (ex * ex + ey * ey).sqrt();
+            if len < 1e-6 {
+                continue; // degenerate edge in 2D (vertical tri seen edge-on) — skip this edge test
+            }
+            let cross = |px: f32, py: f32| ex * (py - a[1]) - ey * (px - a[0]);
+            let side_c = cross(c[0], c[1]);
+            let side_p = cross(x, y);
+            // Normalize to a distance and require p within `margin` outside c's side.
+            let dist = side_p * side_c.signum() / len;
+            if dist < -margin {
+                return None;
+            }
+        }
+        // Steep plane (wall/fence side, >60° from horizontal): the plane-z is ill-conditioned
+        // over the projected sliver (it clamps to an arbitrary end of the z-range — the live
+        // "mobs walk through the graveyard fence" find: fence sides tilted ~1° clamped to the
+        // BOTTOM, below the standing band). Use the full z-span instead; anything this steep
+        // is unwalkable surface anyway (the terrain slope gate is 50°).
+        let n_len = (self.n[0] * self.n[0] + self.n[1] * self.n[1] + self.n[2] * self.n[2]).sqrt();
+        if self.n[2].abs() < 0.5 * n_len {
+            return Some((self.lo[2], self.hi[2]));
+        }
+        let z =
+            ((self.d - self.n[0] * x - self.n[1] * y) / self.n[2]).clamp(self.lo[2], self.hi[2]);
+        Some((z, z))
+    }
+}
+
+/// Sub-index range covering world span `[lo_c, hi_c]`, clamped to `cell_i` (high coord → LOW
+/// index). None when the span misses the cell entirely.
+///
+/// Clamps in the cell's local offset space instead of re-testing each end with `sub_index`: at
+/// ±17k yd an f32 boundary coordinate rounds to either side of the cell edge, and a `None` there
+/// dropped the WHOLE triangle from the cell — every blocker reaching past a cell border went
+/// unrasterized on a coin flip.
+fn clamp_axis(lo_c: f32, hi_c: f32, cell_i: u16, dim: usize) -> Option<(usize, usize)> {
+    let local = |coord: f32| (MAP_COORD_MAX - coord) - cell_i as f32 * CELL_SIZE;
+    // High coord → low local offset, so the span's ends swap.
+    let (lo_local, hi_local) = (local(hi_c), local(lo_c));
+    if hi_local <= 0.0 || lo_local >= CELL_SIZE {
+        return None;
+    }
+    let index =
+        |l: f32| (((l.clamp(0.0, CELL_SIZE) / CELL_SIZE) * dim as f32) as usize).min(dim - 1);
+    Some((index(lo_local), index(hi_local)))
+}
+
+/// Derive one cell's blobs from the collision triangles binned to it (every triangle whose AABB
+/// touches the cell, inflated by `WALK_MARGIN`; anything outside the cell is clamped away here).
+///
+/// `heights` is the cell's 145-value MCNK height grid when a terrain chunk exists. The standing
+/// band references terrain ground ONLY — a model deck is a blocker, never a floor to stand on —
+/// so without heights the whole cell falls back to `base_z` (the lowest triangle vertex).
+///
+/// Returns None when nothing in the cell blocks: fully-clear cells emit NO row, and both readers
+/// treat a missing cell as "no obstacles known".
+pub fn derive_cell(
+    cell_x: u16,
+    cell_y: u16,
+    heights: Option<&[f32]>,
+    tris: &[VmapTri],
+) -> Option<NavCellData> {
+    if tris.is_empty() {
+        return None;
+    }
+    let base_z = match heights {
+        Some(h) if h.len() == 145 => h.iter().copied().fold(f32::MAX, f32::min),
+        _ => tris
+            .iter()
+            .flat_map(|t| t.verts.iter())
+            .map(|v| v[2])
+            .fold(f32::MAX, f32::min),
+    };
+    let ground = |x: f32, y: f32| {
+        heights
+            .and_then(|h| interpolate(h, cell_x, cell_y, x, y))
+            .unwrap_or(base_z)
+    };
+
+    let mut walk = vec![0xFFu8; WALK_BYTES];
+    let mut obs = vec![OBS_NONE; OBS_BYTES];
+    let mut dirty = false;
+    let mut col_ivals: Vec<Vec<(f32, f32)>> = vec![Vec::new(); OBS_BYTES];
+
+    for t in tris.iter().map(WorldTri::new) {
+        // Walkability (all geometry): block a nav cell only when the triangle actually passes
+        // through the standing band above THAT cell's ground. Footprint + window inflated by
+        // `WALK_MARGIN`, so cells within a body radius of geometry rasterize blocked and the
+        // center line `find_leg`/`nav_step` walk keeps the body clear of wall corners.
+        if let (Some((nx0, nx1)), Some((ny0, ny1))) = (
+            clamp_axis(
+                t.lo[0] - WALK_MARGIN,
+                t.hi[0] + WALK_MARGIN,
+                cell_x,
+                WALK_DIM,
+            ),
+            clamp_axis(
+                t.lo[1] - WALK_MARGIN,
+                t.hi[1] + WALK_MARGIN,
+                cell_y,
+                WALK_DIM,
+            ),
+        ) {
+            for ny in ny0..=ny1 {
+                for nx in nx0..=nx1 {
+                    let (x, y) = (
+                        sub_center(cell_x, nx, WALK_DIM),
+                        sub_center(cell_y, ny, WALK_DIM),
+                    );
+                    let Some((z_lo, z_hi)) = t.z_at(x, y, WALK_MARGIN) else {
+                        continue;
+                    };
+                    let g = ground(x, y);
+                    if z_lo < g + WALK_HEIGHT && z_hi > g + WALK_STEP_UP {
+                        walk_set(&mut walk, nx, ny, false);
+                        dirty = true;
+                    }
+                }
+            }
+        }
+        // Obstruction / line of sight: WMO geometry ONLY — vanilla doodads (trees!) block
+        // movement but never sight lines (spells/aggro see through a forest). Accumulate the
+        // z-INTERVALS per column here; the rooted decision happens per COLUMN after merging
+        // (below) — deciding per TRI kept only a wall's bottom band (walls are stacked tri
+        // bands) and collapsed obs tops to ~2 yd, which let eye-height rays graze over and
+        // thugs aggro through the abbey wall (live regression, 2026-07-10).
+        if !t.is_wmo {
+            continue;
+        }
+        if let (Some((ox0, ox1)), Some((oy0, oy1))) = (
+            clamp_axis(t.lo[0], t.hi[0], cell_x, OBS_DIM),
+            clamp_axis(t.lo[1], t.hi[1], cell_y, OBS_DIM),
+        ) {
+            for oy in oy0..=oy1 {
+                for ox in ox0..=ox1 {
+                    let (x, y) = (
+                        sub_center(cell_x, ox, OBS_DIM),
+                        sub_center(cell_y, oy, OBS_DIM),
+                    );
+                    let Some((z_lo, z_hi)) = t.z_at(x, y, RASTER_MARGIN) else {
+                        continue;
+                    };
+                    col_ivals[oy * OBS_DIM + ox].push((z_lo, z_hi));
+                }
+            }
+        }
+    }
+
+    // Per-column obs: merge the accumulated z-intervals (`OBS_GAP` tolerance), then keep only the
+    // merged run that reaches down into the head-height band above THIS column's ground. Stacked
+    // wall bands fuse ground→top (full wall height blocks over-the-roof sight); a floating
+    // eave/roof run stays a separate high interval and is dropped — so standing under an overhang
+    // doesn't blank LoS.
+    // Deliberate simplification: single-top obs column, no (bottom, top) pair — archways/bridges
+    // read as walls; store both bytes when a live case needs to see THROUGH an opening.
+    for oy in 0..OBS_DIM {
+        for ox in 0..OBS_DIM {
+            let ivals = &mut col_ivals[oy * OBS_DIM + ox];
+            if ivals.is_empty() {
+                continue;
+            }
+            let (x, y) = (
+                sub_center(cell_x, ox, OBS_DIM),
+                sub_center(cell_y, oy, OBS_DIM),
+            );
+            let g = ground(x, y);
+            ivals.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (mut run_lo, mut run_hi) = ivals[0];
+            let mut rooted_top: Option<f32> = None;
+            let consider = |lo: f32, hi: f32, rooted_top: &mut Option<f32>| {
+                if lo <= g + WALK_HEIGHT + 1.0 && hi > g - 1.0 && rooted_top.is_none_or(|t| hi > t)
+                {
+                    *rooted_top = Some(hi);
+                }
+            };
+            for &(lo, hi) in ivals.iter().skip(1) {
+                if lo <= run_hi + OBS_GAP {
+                    run_hi = run_hi.max(hi);
+                } else {
+                    consider(run_lo, run_hi, &mut rooted_top);
+                    (run_lo, run_hi) = (lo, hi);
+                }
+            }
+            consider(run_lo, run_hi, &mut rooted_top);
+            if let Some(top) = rooted_top {
+                if top > base_z + 0.5 {
+                    obs_raise(&mut obs, base_z, ox, oy, top);
+                    dirty = true;
+                }
+            }
+        }
+    }
+
+    dirty.then_some(NavCellData { base_z, walk, obs })
+}
+
+/// Merge two cells covering the same terrain cell: `walk` is the bitwise AND (either source may
+/// block) and `obs` keeps the taller column. Both blobs rebase onto the lower `base_z`, so no
+/// column underflows when the two disagree about the cell's floor.
+pub fn merge_cells(a: &NavCellData, b: &NavCellData) -> NavCellData {
+    let base_z = a.base_z.min(b.base_z);
+    let walk: Vec<u8> = a.walk.iter().zip(&b.walk).map(|(x, y)| x & y).collect();
+    let mut obs = vec![OBS_NONE; OBS_BYTES];
+    for src in [a, b] {
+        for oy in 0..OBS_DIM {
+            for ox in 0..OBS_DIM {
+                if let Some(top) = obs_top(&src.obs, src.base_z, ox, oy) {
+                    obs_raise(&mut obs, base_z, ox, oy, top);
+                }
+            }
+        }
+    }
+    NavCellData { base_z, walk, obs }
+}
+
+#[cfg(test)]
+mod derive_tests {
+    use super::*;
+    use crate::terrain::cell_index;
+    use crate::vmap::{cast_ray, RayFlavor};
+
+    const GROUND_Z: f32 = 80.0;
+
+    fn test_cell() -> (u16, u16) {
+        (cell_index(-8913.0).unwrap(), cell_index(-184.0).unwrap())
+    }
+
+    fn flat_heights() -> Vec<f32> {
+        vec![GROUND_Z; 145]
+    }
+
+    fn wmo() -> TriClass {
+        TriClass::Wmo {
+            group_id: 0,
+            mogp_flags: 0,
+        }
+    }
+
+    /// World center of a walk sub-cell in the test cell.
+    fn at(nx: usize, ny: usize) -> (f32, f32) {
+        let (cx, cy) = test_cell();
+        (sub_center(cx, nx, WALK_DIM), sub_center(cy, ny, WALK_DIM))
+    }
+
+    /// Two triangles forming a vertical wall quad along the `nx` line, spanning walk rows
+    /// `ny0..=ny1` and rising `height` yd off the ground.
+    fn wall(nx: usize, ny0: usize, ny1: usize, height: f32, class: TriClass) -> Vec<VmapTri> {
+        let (x, y0) = at(nx, ny0);
+        let (_, y1) = at(nx, ny1);
+        let (lo, hi) = (GROUND_Z - 1.0, GROUND_Z + height);
+        vec![
+            VmapTri {
+                verts: [[x, y0, lo], [x, y1, lo], [x, y1, hi]],
+                class,
+            },
+            VmapTri {
+                verts: [[x, y0, lo], [x, y1, hi], [x, y0, hi]],
+                class,
+            },
+        ]
+    }
+
+    /// One horizontal triangle at `z` that covers the whole test cell (vertices well outside it,
+    /// so every sub-cell center falls inside the footprint).
+    fn slab(z: f32, class: TriClass) -> VmapTri {
+        let (cx, cy) = test_cell();
+        let (hx, hy) = (
+            sub_center(cx, 0, WALK_DIM) + 50.0,
+            sub_center(cy, 0, WALK_DIM) + 50.0,
+        );
+        VmapTri {
+            verts: [[hx, hy, z], [hx - 200.0, hy, z], [hx, hy - 200.0, z]],
+            class,
+        }
+    }
+
+    /// An all-clear terrain cell (what a slope/hole-free chunk contributes to a merge).
+    fn open_terrain() -> NavCellData {
+        NavCellData {
+            base_z: GROUND_Z,
+            walk: vec![0xFFu8; WALK_BYTES],
+            obs: vec![OBS_NONE; OBS_BYTES],
+        }
+    }
+
+    fn cell_fetcher(data: Option<NavCellData>) -> impl FnMut(u16, u16) -> Option<NavCellData> {
+        let (cx, cy) = test_cell();
+        move |x, y| (x == cx && y == cy).then(|| data.clone()).flatten()
+    }
+
+    #[test]
+    fn a_wmo_wall_detours_find_leg_only_once_its_coverage_is_merged_in() {
+        let tris = wall(32, 0, 40, 12.0, wmo());
+        let (cx, cy) = test_cell();
+        let coverage =
+            derive_cell(cx, cy, Some(&flat_heights()), &tris).expect("the wall blocks the cell");
+        let merged = merge_cells(&open_terrain(), &coverage);
+
+        // Opposite sides of the wall, level with its far end so a detour exists.
+        let (from, to) = (at(10, 20), at(54, 20));
+        let (detour, expanded, complete) =
+            find_leg_ex(&mut cell_fetcher(Some(merged)), from, to, 20_000).expect("reachable");
+        assert!(complete && expanded > 0, "the wall must force real A*");
+        assert!(detour.len() > 1, "a detour needs a corner waypoint");
+
+        // Terrain alone knows nothing about the wall: the same leg is one straight segment.
+        let (straight, expanded, _) =
+            find_leg_ex(&mut cell_fetcher(Some(open_terrain())), from, to, 20_000)
+                .expect("open field");
+        assert_eq!((straight.len(), expanded), (1, 0));
+
+        // …and the exact ray over the same triangles agrees the straight segment is blocked.
+        let mut tri_fetch = |x: u16, y: u16| (x == cx && y == cy).then(|| tris.clone());
+        assert!(cast_ray(
+            &mut tri_fetch,
+            [from.0, from.1, GROUND_Z + LOS_EYE_HEIGHT],
+            [to.0, to.1, GROUND_Z + LOS_EYE_HEIGHT],
+            RayFlavor::Los,
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn an_m2_doodad_blocks_walking_but_never_sight() {
+        let (cx, cy) = test_cell();
+        let tris = wall(32, 20, 30, 6.0, TriClass::M2);
+        let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris).expect("a doodad blocks");
+        assert!(!walk_get(&cell.walk, 32, 25));
+        assert!(
+            cell.obs.iter().all(|&b| b == OBS_NONE),
+            "doodads never touch the obstruction grid"
+        );
+    }
+
+    #[test]
+    fn a_thin_wall_blocks_a_body_radius_wide_and_no_further() {
+        let (cx, cy) = test_cell();
+        let tris = wall(32, 3, 60, 12.0, wmo());
+        let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris).expect("a wall blocks");
+        // The wall line plus one sub-cell on each side (the agent-radius inset).
+        for nx in 31..=33 {
+            assert!(!walk_get(&cell.walk, nx, 32), "nx={nx} must be blocked");
+        }
+        // Two out (1.04 yd) is beyond the margin — the inset is bounded.
+        assert!(walk_get(&cell.walk, 30, 32) && walk_get(&cell.walk, 34, 32));
+        // Sight keeps the true footprint: only the wall's own obs column rises.
+        assert!(obs_top(&cell.obs, cell.base_z, 16, 16).is_some());
+        assert!(obs_top(&cell.obs, cell.base_z, 15, 16).is_none());
+        assert!(obs_top(&cell.obs, cell.base_z, 17, 16).is_none());
+    }
+
+    #[test]
+    fn a_triangle_spanning_a_cell_boundary_blocks_in_both_cells_clamped_to_each() {
+        let (cx, cy) = test_cell();
+        // One wall running along x from mid-cell into the NEXT cell over (cx + 1 = lower x).
+        let y = at(0, 32).1;
+        let (x_a, x_b) = (
+            sub_center(cx, 40, WALK_DIM),
+            sub_center(cx + 1, 10, WALK_DIM),
+        );
+        let (lo, hi) = (GROUND_Z - 1.0, GROUND_Z + 10.0);
+        let tris = vec![
+            VmapTri {
+                verts: [[x_a, y, lo], [x_b, y, lo], [x_b, y, hi]],
+                class: wmo(),
+            },
+            VmapTri {
+                verts: [[x_a, y, lo], [x_b, y, hi], [x_a, y, hi]],
+                class: wmo(),
+            },
+        ];
+        let here = derive_cell(cx, cy, Some(&flat_heights()), &tris).expect("blocks this cell");
+        let over = derive_cell(cx + 1, cy, Some(&flat_heights()), &tris).expect("and the next one");
+        // Neither derivation drops the triangle for reaching past its cell, and each writes only
+        // its own sub-cells: the seam is blocked from both sides.
+        assert!(!walk_get(&here.walk, 63, 32) && !walk_get(&over.walk, 0, 32));
+        assert!(!walk_get(&here.walk, 40, 32) && !walk_get(&over.walk, 10, 32));
+        // Past each end of the wall the cell stays open — the span is clamped, not stamped whole.
+        assert!(walk_get(&here.walk, 36, 32) && walk_get(&over.walk, 14, 32));
+    }
+
+    #[test]
+    fn geometry_outside_the_standing_band_is_not_a_blocker() {
+        let (cx, cy) = test_cell();
+        let h = flat_heights();
+        // A doorstep below step-up height: walk onto it, no row at all.
+        let step = slab(GROUND_Z + WALK_STEP_UP - 0.5, wmo());
+        assert!(derive_cell(cx, cy, Some(&h), &[step]).is_none());
+        // A ceiling well above head height: walk under it, no row at all.
+        let ceiling = slab(GROUND_Z + 5.0, wmo());
+        assert!(derive_cell(cx, cy, Some(&h), &[ceiling]).is_none());
+    }
+
+    #[test]
+    fn the_standing_band_follows_terrain_ground_not_the_geometry() {
+        let (cx, cy) = test_cell();
+        // Ground rises 1 yd per outer-corner row along x (index i*17+j, i counts along x).
+        let mut heights = vec![0.0f32; 145];
+        for i in 0..9 {
+            for j in 0..9 {
+                heights[i * 17 + j] = GROUND_Z + i as f32;
+            }
+        }
+        // One flat slab 5 yd above the cell's low end. Ground at walk column nx is
+        // GROUND_Z + (nx + 0.5) / 8, so the slab sits inside the band only where the ground has
+        // climbed to within [step-up, head height] of it.
+        let cell = derive_cell(cx, cy, Some(&heights), &[slab(GROUND_Z + 5.0, wmo())])
+            .expect("the slab blocks the band it crosses");
+        let ground_at = |nx: usize| (nx as f32 + 0.5) / 8.0;
+        for nx in 0..WALK_DIM {
+            let clearance = 5.0 - ground_at(nx);
+            let in_band = clearance < WALK_HEIGHT && clearance > WALK_STEP_UP;
+            assert_eq!(
+                !walk_get(&cell.walk, nx, 32),
+                in_band,
+                "nx={nx} clearance={clearance:.2}"
+            );
+        }
+    }
+
+    #[test]
+    fn merging_ands_walkability_and_keeps_the_taller_obstruction() {
+        let mut terrain = open_terrain();
+        walk_set(&mut terrain.walk, 5, 5, false); // a hole or a steep quad
+        obs_raise(&mut terrain.obs, terrain.base_z, 2, 2, GROUND_Z + 3.0);
+        let mut coverage = NavCellData {
+            base_z: GROUND_Z - 4.0, // coverage floors on its own lowest triangle
+            walk: vec![0xFFu8; WALK_BYTES],
+            obs: vec![OBS_NONE; OBS_BYTES],
+        };
+        walk_set(&mut coverage.walk, 9, 9, false);
+        obs_raise(&mut coverage.obs, coverage.base_z, 2, 2, GROUND_Z + 9.0);
+        obs_raise(&mut coverage.obs, coverage.base_z, 4, 4, GROUND_Z + 1.0);
+
+        let merged = merge_cells(&terrain, &coverage);
+        assert_eq!(
+            merged.base_z,
+            GROUND_Z - 4.0,
+            "merge rebases onto the floor"
+        );
+        assert!(!walk_get(&merged.walk, 5, 5) && !walk_get(&merged.walk, 9, 9));
+        assert!(walk_get(&merged.walk, 7, 7));
+        // Contested column keeps the taller top; each source's own columns survive rebasing.
+        let top = obs_top(&merged.obs, merged.base_z, 2, 2).unwrap();
+        assert!((top - (GROUND_Z + 9.0)).abs() <= OBS_STEP);
+        let top = obs_top(&merged.obs, merged.base_z, 4, 4).unwrap();
+        assert!((top - (GROUND_Z + 1.0)).abs() <= OBS_STEP);
+        assert!(obs_top(&merged.obs, merged.base_z, 1, 1).is_none());
     }
 }
