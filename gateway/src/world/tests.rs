@@ -556,6 +556,9 @@ struct InMemoryStore {
     /// Trainer rows `trainer_list` returns for ANY (player, trainer) pair — the
     /// CMSG_TRAINER_LIST fixture. Empty by default (an empty trainer window).
     trainer_spells: Vec<codec::TrainerSpellView>,
+    /// `learn_skill_line` per offering id — the skill-teaching offerings the fixture trainer carries.
+    /// Empty by default, so every offering reads as an ordinary spell purchase.
+    trainer_offer_skill_lines: std::collections::HashMap<u32, u32>,
     /// Recorded `repop` calls — the caller's self_guid, one entry per CMSG_REPOP_REQUEST.
     repopped: std::sync::Mutex<Vec<u64>>,
     /// Recorded `reclaim_corpse` calls — `(self_guid, corpse_guid)` off CMSG_RECLAIM_CORPSE.
@@ -1798,6 +1801,13 @@ impl WorldStore for InMemoryStore {
     }
     fn resolve_learn_target(&self, spell_id: u32) -> u32 {
         spell_id // mock: self-contained ranks (no wrapper table in the mock store)
+    }
+    fn trainer_offer_skill_line(&self, _trainer_guid: u64, spell_id: u32) -> u32 {
+        // The mock's offerings are spell rows unless a test stages a skill-teaching one.
+        self.trainer_offer_skill_lines
+            .get(&spell_id)
+            .copied()
+            .unwrap_or(0)
     }
     fn entity_in_world(&self, guid: u64) -> bool {
         self.entity_presence_checks
@@ -6732,6 +6742,46 @@ fn trainer_buy_success_replies_succeeded_then_pushes_the_learned_spell() {
     match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
         ServerOpcodeMessage::SMSG_LEARNED_SPELL(m) => assert_eq!(m.id, 1234),
         other => panic!("expected SMSG_LEARNED_SPELL, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+/// A RIDING purchase teaches a skill, not a spell. Its trainer-list id is a marker with no Spell.dbc row,
+/// so the buy confirms and stops — pushing it as a learned spell would hand the client an id it cannot
+/// resolve. The skill pane still moves, from the `game_player_skill` relay.
+#[test]
+fn a_riding_buy_confirms_without_echoing_the_offering_as_a_learned_spell() {
+    let mut s = quest_store();
+    s.trainer_offer_skill_lines
+        .insert(50132, lyracore_shared::trainer::RIDING_SKILL_LINE);
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_TRAINER_BUY_SPELL {
+        guid: Guid::new(70),
+        id: 50132,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_TRAINER_BUY_SUCCEEDED(m) => assert_eq!(m.id, 50132),
+        other => panic!("expected SMSG_TRAINER_BUY_SUCCEEDED, got {other}"),
+    }
+    // The follow-up whose reply we DO expect, proving the buy emitted nothing further.
+    CMSG_GOSSIP_HELLO {
+        guid: Guid::new(70),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(_) => {}
+        ServerOpcodeMessage::SMSG_LEARNED_SPELL(m) => {
+            panic!(
+                "a riding buy must not echo marker {} as a learned spell",
+                m.id
+            )
+        }
+        other => panic!("expected SMSG_GOSSIP_MESSAGE, got {other}"),
     }
     drop(client);
     server.join().unwrap();

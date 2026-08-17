@@ -16,8 +16,12 @@
 use spacetimedb::ReducerContext;
 
 use crate::game_aura;
+use crate::game_player_skill;
+use crate::game_skill_ability;
+use crate::game_spell_effect;
 use crate::game_world_entity;
-use crate::spell::{A_MOD_SPEED, A_MOUNTED, SPEED_MOUNTED};
+use crate::spell::{SpellEffect, A_MOD_SPEED, A_MOUNTED, SPEED_MOUNTED};
+use crate::WorldEntity;
 
 /// Can applying or removing this aura effect move the mount projection? True for the mount state
 /// itself, and for the mounted-speed effect that rides alongside it (the speed fold reads that aura
@@ -107,6 +111,133 @@ pub(crate) fn dismount(ctx: &ReducerContext, guid: u64) {
         auras.id().delete(id);
     }
     recompute_mount(ctx, guid);
+}
+
+// ===========================================================================================
+//  Mount eligibility — the cast gate. [entity]
+//
+//  Every check below is READ-ONLY, and the whole sweep runs inside `check_cast_gates`, which sits
+//  strictly before the cast core spends anything. So a refused mount leaves the item, the aura set,
+//  the display, run speed, cooldowns and combat state byte-identical.
+// ===========================================================================================
+
+/// Does casting `spell_id` mount its target? Keyed on the presence of an `A_MOUNTED` effect, never a
+/// spell id or name — the same data-driven classification `items::ops::apply_item_use` reads to keep a
+/// mount item in the bag, so onboarding another mount is data alone. [entity]
+pub(crate) fn spell_is_mount(ctx: &ReducerContext, spell_id: u32) -> bool {
+    ctx.db
+        .game_spell_effect()
+        .by_spell()
+        .filter(&spell_id)
+        .any(|e| e.kind == A_MOUNTED)
+}
+
+/// Does a `SkillAbility` race/class mask admit `id`? A 0 mask is the DBC's "everyone" row; otherwise
+/// `id`'s bit must be set. Races and classes are 1-based, so id 1 is bit 0 and anything outside 1..=32
+/// can never match. Pure — this is what makes a mount tied to another race's riding tradition refuse.
+fn mask_admits(mask: u32, id: u8) -> bool {
+    mask == 0 || ((1..=32).contains(&id) && mask & (1 << (id - 1)) != 0)
+}
+
+/// Does a learned rank meet a `SkillAbility` row's `min_skill`? Where vanilla's 75 (Apprentice) and 150
+/// (Journeyman) riding tiers live: the threshold is inclusive, so exactly 75 rides a rank-75 mount and 74
+/// does not. A negative/unauthored `min_skill` reads as 0 (no requirement). Pure.
+fn rank_satisfies(rank: u16, min_skill: i32) -> bool {
+    i32::from(rank) >= min_skill.max(0)
+}
+
+/// Is `guid` TRAINED for `spell_id`? True when one of the character's learned skill lines carries a
+/// `game_skill_ability` row naming the spell, whose race/class masks admit the character, and whose
+/// `min_skill` the learned rank meets. Walking the player's own lines (a handful) and probing the
+/// `by_skill_line` index keeps this off a full scan of vanilla's ~10k ability rows.
+///
+/// Fails CLOSED: a mount whose skill-line data was never imported is uncastable rather than free, which
+/// is the whole point of the gate — owning the item must not bypass riding training.
+fn trained_for_spell(ctx: &ReducerContext, guid: u64, spell_id: u32, race: u8, class: u8) -> bool {
+    let abilities = ctx.db.game_skill_ability();
+    ctx.db
+        .game_player_skill()
+        .by_character()
+        .filter(&guid)
+        .any(|learned| {
+            abilities
+                .by_skill_line()
+                .filter(&learned.skill_line)
+                .any(|a| {
+                    a.spell_id == spell_id
+                        && mask_admits(a.race_mask, race)
+                        && mask_admits(a.class_mask, class)
+                        && rank_satisfies(learned.current, a.min_skill)
+                })
+        })
+}
+
+/// May a land mount be used at `(x, y, z)`? The ONE shared indoor predicate — the cast gate and the
+/// movement heartbeat both read it rather than interpreting MOGP flags themselves, so there is a single
+/// place for the WMO rule to be right.
+///
+/// FAILS OPEN by construction: `vmap::area_info` returns `None` when vmap is disabled, when no generation
+/// is active, or when the probe finds no WMO group, and all three read as outdoors. The mount feature is
+/// therefore fully shippable and correct with vmap off.
+pub(crate) fn mount_cast_allowed_here(
+    ctx: &ReducerContext,
+    map_id: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> bool {
+    !crate::vmap::area_info(ctx, map_id, x, y, z).is_some_and(|info| info.indoor)
+}
+
+/// Is `entity`'s head under a liquid surface? The SAME predicate player breath uses
+/// (`terrain::liquid_level_at` + `env::is_submerged`), not a second water-position interpretation:
+/// wading through shallow water, or floating at the surface, is not submerged and never refuses a mount.
+fn is_submerged_here(ctx: &ReducerContext, entity: &WorldEntity) -> bool {
+    let level = crate::terrain::liquid_level_at(ctx, entity.map_id, entity.x, entity.y);
+    lyracore_shared::env::is_submerged(
+        entity.z,
+        level.unwrap_or_default(),
+        level.is_some(),
+        entity.movement_flags,
+    )
+}
+
+/// The land-mount cast gate: refuse a mount spell unless the caster is a trained rider of the right line
+/// and rank, alive, out of combat, outdoors and not submerged. `Ok(())` for every spell that carries no
+/// `A_MOUNTED` effect, so the cast core calls this unconditionally.
+///
+/// Only PLAYERS are gated. A creature has no `game_player_skill` rows and no riding concept, so gating it
+/// would refuse every scripted mount a mob is given, exactly like the level and cost gates' `is_player()`
+/// carve-outs beside this one.
+pub(crate) fn check_mount_cast(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    effects: &[SpellEffect],
+    spell_id: u32,
+) -> Result<(), String> {
+    if !effects.iter().any(|e| e.kind == A_MOUNTED) || !caster.is_player() {
+        return Ok(());
+    }
+    if !trained_for_spell(ctx, caster.guid, spell_id, caster.race(), caster.class()) {
+        return Err(format!("spell {spell_id} requires riding training"));
+    }
+    // A corpse and a ghost are both refused. `caster.dead` is already checked by the shared cast gate;
+    // the GHOST player flag is the released-spirit state that outlives it.
+    if caster.dead || caster.player_flags & lyracore_shared::constants::player_flags::GHOST != 0 {
+        return Err("you cannot mount while dead".to_string());
+    }
+    // The module's authoritative engagement state, never a gateway session flag — a mount is not a
+    // combat escape.
+    if crate::combat::is_engaged(ctx, caster.guid) {
+        return Err("you cannot mount while in combat".to_string());
+    }
+    if !mount_cast_allowed_here(ctx, caster.map_id, caster.x, caster.y, caster.z) {
+        return Err("you cannot mount indoors".to_string());
+    }
+    if is_submerged_here(ctx, caster) {
+        return Err("you cannot mount in deep water".to_string());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -255,6 +386,86 @@ mod tests {
                 "crate::mount::dismount(ctx, target_guid);\n            EffectHit::none()"
             ),
             "the `E_DISMOUNT` arm must call the one shared dismount operation"
+        );
+    }
+
+    /// The riding rank tiers (stories 13/14), asserted on the boundary the gate actually compares:
+    /// `min_skill` is inclusive, so 74 fails a rank-75 mount and 75 rides it, 149 fails a rank-150
+    /// mount and 150 rides it. Unauthored (negative) data imposes no requirement rather than becoming
+    /// an unreachable threshold.
+    #[test]
+    fn rank_satisfies_is_inclusive_at_the_vanilla_riding_tiers() {
+        assert!(!rank_satisfies(74, 75));
+        assert!(rank_satisfies(75, 75));
+        assert!(rank_satisfies(150, 75));
+
+        assert!(!rank_satisfies(149, 150));
+        assert!(rank_satisfies(150, 150));
+
+        assert!(rank_satisfies(0, 0));
+        assert!(rank_satisfies(0, -1));
+    }
+
+    /// The race/class gate on a `SkillAbility` row (story 15): a 0 mask is the DBC's universal row, a
+    /// populated one admits only its own bits, and an out-of-range id can never match. Races and classes
+    /// are 1-based, so Human (1) is bit 0 — an off-by-one here would let every race ride every
+    /// race-specific line.
+    #[test]
+    fn mask_admits_treats_race_and_class_ids_as_one_based_bits() {
+        assert!(mask_admits(0, 1));
+        assert!(mask_admits(0, 11));
+
+        let human = 1u32 << 0;
+        let orc = 1u32 << 1;
+        assert!(mask_admits(human, 1));
+        assert!(!mask_admits(human, 2));
+        assert!(mask_admits(human | orc, 2));
+
+        assert!(!mask_admits(human, 0));
+        assert!(!mask_admits(u32::MAX, 33));
+    }
+
+    /// The gate is a PRE-SPEND sweep: it lives in `check_cast_gates`, whose whole contract is that
+    /// nothing in it writes and everything that spends runs strictly after it returns `Ok` (story 33).
+    /// Pinned by scan because the crate has no `ReducerContext` harness — what is asserted is that the
+    /// call sits inside that function, not merely somewhere in the cast core.
+    #[test]
+    fn the_mount_gate_runs_inside_the_pre_spend_cast_sweep() {
+        let gates = crate::test_scan::code_of(
+            include_str!("spell/cast/resolve.rs"),
+            "fn check_cast_gates(",
+        );
+        assert!(
+            gates.contains("crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?"),
+            "the mount gate must run inside `check_cast_gates` — anywhere later and a refused mount \
+             has already charged power or started a cooldown. Body was:\n{gates}"
+        );
+    }
+
+    /// The gate reads the SHARED indoor predicate instead of testing MOGP flags itself, so T3's WMO
+    /// correctness fix lands in one place, and it reuses the same submerged predicate player breath
+    /// uses rather than inventing a second water-position interpretation.
+    #[test]
+    fn the_gate_reads_the_shared_indoor_and_liquid_predicates() {
+        let src = include_str!("mount.rs");
+        let allowed = crate::test_scan::code_of(src, "pub(crate) fn mount_cast_allowed_here(");
+        assert!(
+            allowed.contains("crate::vmap::area_info(ctx, map_id, x, y, z)"),
+            "the indoor predicate must go through the shared WMO area query. Body was:\n{allowed}"
+        );
+        let submerged = crate::test_scan::code_of(src, "fn is_submerged_here(");
+        assert!(
+            submerged.contains("lyracore_shared::env::is_submerged(")
+                && submerged.contains("crate::terrain::liquid_level_at("),
+            "the liquid gate must reuse the breath predicate, not re-derive one. Body was:\n{submerged}"
+        );
+        let gate = crate::test_scan::code_of(src, "pub(crate) fn check_mount_cast(");
+        assert!(
+            gate.contains("mount_cast_allowed_here(ctx, caster.map_id")
+                && !gate.contains("mogp")
+                && !gate.contains("area_info"),
+            "the gate must ask the shared predicate rather than inline a WMO flag test or its own \
+             area query. Body was:\n{gate}"
         );
     }
 

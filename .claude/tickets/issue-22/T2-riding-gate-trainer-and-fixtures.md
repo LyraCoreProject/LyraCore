@@ -1,7 +1,7 @@
 # T2 — mounts: riding gate, trainer wiring, item path, fixtures
 
 Parent: issue #22. **After T1. Parallel with T3, T4, T5.**
-Model: sonnet. Estimated size: ~170k tokens.
+Model: opus. Estimated size: ~170k tokens.
 
 ## Problem
 
