@@ -1233,6 +1233,12 @@ pub(crate) fn apply_effect(
             crate::creatures::summon_pet(ctx, caster_guid, entry);
             EffectHit::none()
         }
+        E_TAME_CREATURE => {
+            if let Err(error) = crate::creatures::tame_creature(ctx, caster_guid, target_guid) {
+                log::info!("tame completion for caster {caster_guid} and target {target_guid} failed: {error}");
+            }
+            EffectHit::none()
+        }
         E_SET_STANCE => {
             // Switch the caster's stance/form to the effect's p0 (the taxonomy STANCE_* 0-based id —
             // Warrior Battle/Defensive/Berserker 0/1/2, Druid Bear/Cat/DireBear 3/4/5 since 156).

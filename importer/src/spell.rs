@@ -57,11 +57,13 @@ const E_NEXT_SWING: u8 = 0x13; // QUEUE the strike onto the caster's next melee 
 const E_SET_STANCE: u8 = 0x14; // set the caster's Warrior stance (Battle/Defensive/Berserker Stance); reclassified from the inert ModShapeshift→A_FLAG marker BY NAME, with p0 = the 0-based stance id (form id − FORM_BATTLE) (lockstep with module taxonomy)
 const E_SUMMON_PET: u8 = 0x15; // summon a persistent pet creature owned by the caster (Summon Imp); mapped from the raw vanilla Summon effect (56), with the misc_value (the summoned creature entry) routed into p0 (p0_kind = P_ENTRY) (lockstep with module taxonomy)
 const E_HEAL_MAX_HEALTH: u8 = 0x16; // heal the target to FULL max health (Lay on Hands); mapped from the raw vanilla HealMaxHealth effect (67), split out of E_HEAL because its base_points is ~0 (the magnitude is "fill to max", not a flat N) (lockstep with module taxonomy)
+const E_TAME_CREATURE: u8 = 0x20; // completed Hunter tame; raw vanilla TameCreature effect (55), lockstep with module taxonomy
+const E_FEED_PET: u8 = 0x21; // feed a Hunter pet from the explicit item target; raw effect 101
 const E_POWER_BURN: u8 = 0x19; // drain target mana into damage (Mana Burn); mapped from the raw vanilla PowerBurn effect (62), p1 = EffectMultipleValue*100 basis-points (lockstep with module taxonomy, work-items 117)
 const E_BLINK: u8 = 0x1A; // teleport the caster ~20yd FORWARD along its facing (Mage Blink, 116); reclassified BY NAME from the dead SCRIPT teleport effect (lockstep with module taxonomy)
 const E_PERSISTENT_AREA: u8 = 0x1B; // ground-AoE (118, Consecration): spawns a fixed-position game_ground_area whose tick damages hostiles inside; reclassified BY NAME from the ground A_PERIODIC_DAMAGE effect (lockstep with module taxonomy)
 const E_OPEN_LOCK: u8 = 0x1D; // OPEN LOCK (Pick Lock 1804, work-item 119): gateway-intercepted like E_FISH (0x1C)/E_ENCHANT_ITEM — a CMSG_CAST_SPELL for a spell carrying this kind routes to the `pick_lock` reducer (unlock a locked GameObject, gated on the caster's Lockpicking 633 skill). Mapped from the raw vanilla OpenLock (33) / OpenLockItem (59) effects (lockstep with module taxonomy). 0x1E is reserved for a future E_SUMMON_PORTAL — do NOT reuse.
-const E_DUEL: u8 = 0x20; // Duel (raw effect 83): p0 is the duel-flag gameobject template entry
+const E_DUEL: u8 = 0x22; // Duel (raw effect 83): p0 is the duel-flag gameobject template entry
 const E_DISENCHANT: u8 = 0x18; // DISENCHANT (real Disenchant 13262, work-item 282): gateway-intercepted, routed to the disenchant reducer by kind. Mapped from raw vanilla effect 99 (SPELL_EFFECT_DISENCHANT); no params (the module validates + yields dust by item). Lockstep with the module taxonomy (module/src/spell/taxonomy.rs E_DISENCHANT).
 
 // aura effects (high bit set)
@@ -410,6 +412,8 @@ fn instant_effect_to_kind(effect_id: i32) -> u8 {
         114 => E_TAUNT, // AttackMe (work-item 101) — same force-aggro semantics as Threat/ThreatAll, just a distinct raw id; not known to occur in the curated 1-10 human kit (no Taunt/Mocking Blow/Challenging Shout id is in any IDS_* list), so this widens coverage for a FUTURE (non-Human or higher-level) import, not the curated kit today
         24 => E_CREATE_ITEM, // CreateItem (conjure / quest item) — p0 = item entry
         68 => E_INTERRUPT, // InterruptCast (Kick) — cancel the target's in-progress cast
+        55 => E_TAME_CREATURE, // TameCreature — explicit wild target, no spell-id branch
+        101 => E_FEED_PET, // FeedPet — explicit item target is routed by the gateway/manual cast seam
         56 => E_SUMMON_PET, // Summon (Summon Imp et al.) — p0 = the summoned creature entry (misc_value)
         62 => E_POWER_BURN, // PowerBurn (Priest Mana Burn) — p1 = EffectMultipleValue*100 (work-items 117)
         83 => E_DUEL, // Duel — p0 carries the duel-flag gameobject entry
@@ -1321,6 +1325,7 @@ fn build_spell_sql(
                 // faction constraint), so casting it while an enemy is selected still summons the pet.
                 E_SUMMON_PET => T_SELF,
                 E_DUEL => T_TARGET_ANY,
+                E_TAME_CREATURE => T_TARGET_ENEMY,
                 _ => target,
             };
             // Slice and Dice (a combo FINISHER) is cast AT the enemy you built combo on (to read + spend
@@ -1740,6 +1745,8 @@ fn kind_name(kind: u8) -> &'static str {
         E_SET_STANCE => "E_SET_STANCE",
         E_SUMMON_PET => "E_SUMMON_PET",
         E_HEAL_MAX_HEALTH => "E_HEAL_MAX_HEALTH",
+        E_TAME_CREATURE => "E_TAME_CREATURE",
+        E_FEED_PET => "E_FEED_PET",
         E_POWER_BURN => "E_POWER_BURN",
         E_DUEL => "E_DUEL",
         E_SCRIPTED => "E_SCRIPTED",
@@ -2282,6 +2289,21 @@ mod tests {
             correct_script_effect_kind("Summon Imp", E_SUMMON_PET),
             E_SUMMON_PET
         );
+    }
+
+    #[test]
+    fn tame_creature_effect_maps_to_enemy_target_without_params() {
+        assert_eq!(instant_effect_to_kind(55), E_TAME_CREATURE);
+        assert_eq!(
+            resolve_instant_params(E_TAME_CREATURE, 123, 456),
+            (0, P_NONE)
+        );
+    }
+
+    #[test]
+    fn feed_pet_effect_maps_without_a_spell_id_branch() {
+        assert_eq!(instant_effect_to_kind(101), E_FEED_PET);
+        assert_eq!(resolve_instant_params(E_FEED_PET, 123, 456), (0, P_NONE));
     }
 
     #[test]

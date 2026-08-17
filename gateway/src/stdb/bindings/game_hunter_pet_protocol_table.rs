@@ -1,0 +1,230 @@
+// Hand-spliced from the module schema because the SpacetimeDB generator is unavailable in this
+// environment. A future full regeneration overwrites this with the equivalent generated binding.
+
+#![allow(unused, clippy::all)]
+use super::hunter_pet_protocol_type::HunterPetProtocol;
+use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
+
+/// Table handle for the table `game_hunter_pet_protocol`.
+///
+/// Obtain a handle from the [`GameHunterPetProtocolTableAccess::game_hunter_pet_protocol`] method on [`super::RemoteTables`],
+/// like `ctx.db.game_hunter_pet_protocol()`.
+///
+/// Users are encouraged not to explicitly reference this type,
+/// but to directly chain method calls,
+/// like `ctx.db.game_hunter_pet_protocol().on_insert(...)`.
+pub struct GameHunterPetProtocolTableHandle<'ctx> {
+    imp: __sdk::TableHandle<HunterPetProtocol>,
+    ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
+}
+
+/// Lifetime-aware accessor marker for the table `game_hunter_pet_protocol`.
+pub struct GameHunterPetProtocolTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for GameHunterPetProtocolTableAccessor {
+    type Row = HunterPetProtocol;
+    type Handle<'db> = GameHunterPetProtocolTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.game_hunter_pet_protocol()
+    }
+}
+
+#[allow(non_camel_case_types)]
+/// Extension trait for access to the table `game_hunter_pet_protocol`.
+///
+/// Implemented for [`super::RemoteTables`].
+pub trait GameHunterPetProtocolTableAccess {
+    #[allow(non_snake_case)]
+    /// Obtain a [`GameHunterPetProtocolTableHandle`], which mediates access to the table `game_hunter_pet_protocol`.
+    fn game_hunter_pet_protocol(&self) -> GameHunterPetProtocolTableHandle<'_>;
+}
+
+impl GameHunterPetProtocolTableAccess for super::RemoteTables {
+    fn game_hunter_pet_protocol(&self) -> GameHunterPetProtocolTableHandle<'_> {
+        GameHunterPetProtocolTableHandle {
+            imp: self
+                .imp
+                .get_table::<HunterPetProtocol>("game_hunter_pet_protocol"),
+            ctx: std::marker::PhantomData,
+        }
+    }
+}
+
+pub struct GameHunterPetProtocolInsertCallbackId(__sdk::CallbackId);
+pub struct GameHunterPetProtocolDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for GameHunterPetProtocolTableHandle<'ctx> {
+    type Row = HunterPetProtocol;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = HunterPetProtocol> + '_ {
+        self.imp.iter()
+    }
+}
+
+impl<'ctx> __sdk::Table for GameHunterPetProtocolTableHandle<'ctx> {
+    type Row = HunterPetProtocol;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = HunterPetProtocol> + '_ {
+        self.imp.iter()
+    }
+
+    type InsertCallbackId = GameHunterPetProtocolInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameHunterPetProtocolInsertCallbackId {
+        GameHunterPetProtocolInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameHunterPetProtocolInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+
+    type DeleteCallbackId = GameHunterPetProtocolDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameHunterPetProtocolDeleteCallbackId {
+        GameHunterPetProtocolDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameHunterPetProtocolDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithInsert for GameHunterPetProtocolTableHandle<'ctx> {
+    type InsertCallbackId = GameHunterPetProtocolInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameHunterPetProtocolInsertCallbackId {
+        GameHunterPetProtocolInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: GameHunterPetProtocolInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for GameHunterPetProtocolTableHandle<'ctx> {
+    type DeleteCallbackId = GameHunterPetProtocolDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> GameHunterPetProtocolDeleteCallbackId {
+        GameHunterPetProtocolDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: GameHunterPetProtocolDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
+pub struct GameHunterPetProtocolUpdateCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableWithPrimaryKey for GameHunterPetProtocolTableHandle<'ctx> {
+    type UpdateCallbackId = GameHunterPetProtocolUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameHunterPetProtocolUpdateCallbackId {
+        GameHunterPetProtocolUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameHunterPetProtocolUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for GameHunterPetProtocolTableHandle<'ctx> {
+    type UpdateCallbackId = GameHunterPetProtocolUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> GameHunterPetProtocolUpdateCallbackId {
+        GameHunterPetProtocolUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: GameHunterPetProtocolUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+/// Access to the `pet_id` unique index on the table `game_hunter_pet_protocol`,
+/// which allows point queries on the field of the same name
+/// via the [`GameHunterPetProtocolPetIdUnique::find`] method.
+///
+/// Users are encouraged not to explicitly reference this type,
+/// but to directly chain method calls,
+/// like `ctx.db.game_hunter_pet_protocol().pet_id().find(...)`.
+pub struct GameHunterPetProtocolPetIdUnique<'ctx> {
+    imp: __sdk::UniqueConstraintHandle<HunterPetProtocol, u64>,
+    phantom: std::marker::PhantomData<&'ctx super::RemoteTables>,
+}
+
+impl<'ctx> GameHunterPetProtocolTableHandle<'ctx> {
+    /// Get a handle on the `pet_id` unique index on the table `game_hunter_pet_protocol`.
+    pub fn pet_id(&self) -> GameHunterPetProtocolPetIdUnique<'ctx> {
+        GameHunterPetProtocolPetIdUnique {
+            imp: self.imp.get_unique_constraint::<u64>("pet_id"),
+            phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'ctx> GameHunterPetProtocolPetIdUnique<'ctx> {
+    /// Find the subscribed row whose `pet_id` column value is equal to `col_val`,
+    /// if such a row is present in the client cache.
+    pub fn find(&self, col_val: &u64) -> Option<HunterPetProtocol> {
+        self.imp.find(col_val)
+    }
+}
+
+#[doc(hidden)]
+pub(super) fn register_table(client_cache: &mut __sdk::ClientCache<super::RemoteModule>) {
+    let _table = client_cache.get_or_make_table::<HunterPetProtocol>("game_hunter_pet_protocol");
+    _table.add_unique_constraint::<u64>("pet_id", |row| &row.pet_id);
+}
+
+#[doc(hidden)]
+pub(super) fn parse_table_update(
+    raw_updates: __ws::v2::TableUpdate,
+) -> __sdk::Result<__sdk::TableUpdate<HunterPetProtocol>> {
+    __sdk::TableUpdate::parse_table_update(raw_updates).map_err(|e| {
+        __sdk::InternalError::failed_parse("TableUpdate<HunterPetProtocol>", "TableUpdate")
+            .with_cause(e)
+            .into()
+    })
+}
+
+#[allow(non_camel_case_types)]
+/// Extension trait for query builder access to the table `HunterPetProtocol`.
+///
+/// Implemented for [`__sdk::QueryTableAccessor`].
+pub trait game_hunter_pet_protocolQueryTableAccess {
+    #[allow(non_snake_case)]
+    /// Get a query builder for the table `HunterPetProtocol`.
+    fn game_hunter_pet_protocol(&self) -> __sdk::__query_builder::Table<HunterPetProtocol>;
+}
+
+impl game_hunter_pet_protocolQueryTableAccess for __sdk::QueryTableAccessor {
+    fn game_hunter_pet_protocol(&self) -> __sdk::__query_builder::Table<HunterPetProtocol> {
+        __sdk::__query_builder::Table::new("game_hunter_pet_protocol")
+    }
+}

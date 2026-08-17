@@ -28,7 +28,7 @@ is a reducer call.
 flowchart TB
     subgraph clients["unmodified 1.12.1 clients (build 5875)"]
         C1["WoW client"]
-        C2["wire harness (headless, real protocol)"]
+        C2["headless client (real protocol)"]
     end
 
     subgraph gw["GATEWAY — lyracore-gateway (stateless, native)"]
@@ -59,7 +59,7 @@ flowchart TB
 Four databases, one gateway tier, one wasm.
 
 The same wasm is published to **every** database. A shard is a database *name*, which is a gateway
-routing fact; module game logic never reads one, and a tripwire test fails the build if it starts to
+routing fact; module game logic never reads one, and an architecture test fails the build if it starts to
 (`no_module_game_logic_reads_a_shard_id` in `module/src/tripwires.rs`).
 
 ---
@@ -324,16 +324,18 @@ Every relay hangs off a coordinator connection, in one of two shapes:
 
 - **Shared per-shard dispatch** (`world_view::arm_shard`, armed once per shard connection and
   re-armed through `CoordinatorInner::on_reconnect` after a watchdog swap): the broadcast-shaped
-  families — entities, motion, combat, chat, auras, corpses, casts, and the recipient-keyed
-  PRIVATE tier (whisper/group/resurrect). The cross-shard whisper/group twins ride the same
-  dispatchers on the realm-core connection (`arm_realm_private`), armed only when realm-core is a
-  distinct database.
-- **Per-session registrations** (`subscribe_player_events`): the **stuck-state** relays — a state
-  the player is wedged in until the packet arrives — `game_xp_event`, `game_levelup_event`,
-  `game_character_explored` (the discovery toast), `game_character_quest`, `game_item_instance`,
-  `game_teleport_event`, `game_addon_message`, `game_player_reputation`. Each pushes a matching
-  teardown into the session's `PlayerSubscriptions` guard. `game_bot_invite_intent` is registered
-  once at gateway startup and re-armed through `on_reconnect`.
+  families (entities, motion, combat, chat, auras, corpses, casts), the recipient-keyed PRIVATE
+  tier (whisper/group/resurrect), and owner-addressed XP, level-up, exploration, quest, item,
+  teleport, addon, and reputation rows. GUID and bound-identity indexes select one viewer directly;
+  the callback enqueues packet work on that session's FIFO writer. The cross-shard whisper/group
+  twins ride the same dispatchers on the realm-core connection (`arm_realm_private`), armed only
+  when realm-core is a distinct database.
+- **Viewer lifetime** (`subscribe_player_events`): world entry prepares relay state, registers one
+  viewer, and performs resident-state sweeps. `PlayerSubscriptions` owns only that registration;
+  dropping it removes the viewer. It owns no row callbacks. A world-port removes the source viewer
+  before cross-shard transfer cascade deletes, then destination entry registers a fresh viewer.
+
+`game_bot_invite_intent` is registered once at gateway startup and re-armed through `on_reconnect`.
 
 The owner token bypasses recipient RLS, so delivery is gated gateway-side: recipient-keyed lookups
 plus the `private_recipient_audience` predicate for the private tier, per-viewer gates for the
@@ -489,7 +491,7 @@ The ladder, and the rule that no rung substitutes for another:
 
 | Rung | Tool | Catches |
 |---|---|---|
-| Unit / integration | `cargo test --workspace` | logic, planners, codec round-trips, and the source-scan tripwires |
+| Unit / integration | `cargo test --workspace` | logic, planners, codec round-trips, and the source-scan architecture tests |
 | Deploy shape | `lyracore preflight` — the repo's `./lyracore` CLI shim, fully offline | schema and `#[default(...)]` encoding breaks no test can see |
 | Server state | `spacetime sql` | did the transaction actually do it |
 | Wire | the pinned wire-protocol test suite — the real 5875 protocol, no wine (maintainer tooling, not in this repository) | did the server send the right packet |
@@ -499,17 +501,17 @@ The ladder, and the rule that no rung substitutes for another:
 **Live wire tests against a running stack are operator-gated in attended sessions.** Offline tests
 are unrestricted.
 
-Two rungs are recorded as reproducible probe documents rather than as tooling:
+Two rungs are recorded as reproducible verification documents rather than as tooling:
 [`vmap-rollout.md`](./vmap-rollout.md) for exact collision, and
 [`cc-diminishing-returns-probe.md`](./cc-diminishing-returns-probe.md) for crowd-control diminishing
 returns, whose persisted state and removal-time window only a live database can show.
 
-The build carries source-scan tripwire tests that fail on architectural drift rather than on
+The build carries source-scan architecture tests that fail on architectural drift rather than on
 behaviour, all in `module/src/tripwires.rs` (#379 pulled them out of `lib.rs`): no module code
-outside `region.rs`/`load.rs` may read a shard id (`:478`); no whole-table `.iter()` over a spatial
-table outside a shrinking whitelist (`:323`); every character-keyed table must carry
-`character_owned!` markers (`:162`); character lookups must go through the two chokepoint helpers
-(`:632`). Each has a companion ratchet test that fails when its whitelist names something that no
+outside `region.rs`/`load.rs` may read a shard id; no whole-table `.iter()` over a spatial
+table outside a shrinking whitelist; every character-keyed table must carry
+`character_owned!` markers; character lookups must go through the two chokepoint helpers.
+Each has a companion ratchet test that fails when its whitelist names something that no
 longer needs to be there.
 
 **Debug reducers are compiled out by default.** `module/Cargo.toml` declares
@@ -520,7 +522,7 @@ gated individually elsewhere — one `#[cfg(feature = "debug_reducers")]` per fu
 other files, including the not-obviously-named `set_guid_floor` in `auth.rs`; `grep -rn
 'cfg(feature = "debug_reducers")' module/src` finds every one of them. A production build must be a
 plain build; the deploy wrapper `lyracore publish` enables the feature deliberately because the
-local test harness needs it.
+local headless-client tests need it.
 
 ---
 
@@ -531,6 +533,7 @@ local test harness needs it.
 | Document | What it is |
 |---|---|
 | **`architecture.md`** (this file) | The current system: tiers, topology, data model, read plane, sharding, packages. |
+| [`../CONTEXT.md`](../CONTEXT.md) | The glossary. The words this document and the code are supposed to use, and the words to avoid. |
 | [`danger-zones.md`](./danger-zones.md) | **Authoritative.** Traps, tooling gotchas, and the exact deploy/verify procedure. Read before any engine change. |
 | [`schema.md`](./schema.md) | The table-level data model. |
 | [`region-sharding.md`](./region-sharding.md) | Retired (#471): the removed region tier's design — seam menus, assignments, view merge — kept for reference. |

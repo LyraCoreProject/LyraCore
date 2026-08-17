@@ -3,6 +3,24 @@
 
 use super::bindings::*;
 
+pub(crate) fn hunter_pet_protocol_view(
+    pet: HunterPetProtocol,
+) -> crate::codec::HunterPetProtocolView {
+    crate::codec::HunterPetProtocolView {
+        pet_id: pet.pet_id,
+        owner_guid: pet.owner_guid,
+        live_pet_guid: pet.live_pet_guid,
+        creature_entry: pet.creature_entry,
+        name: pet.name,
+        name_timestamp: pet.name_timestamp,
+        level: pet.level,
+        pet_xp: pet.pet_xp,
+        next_level_xp: pet.next_level_xp,
+        happiness: pet.happiness,
+        loyalty_level: pet.loyalty_level,
+    }
+}
+
 /// Flatten a `game_character` row into the codec's `CharacterView` (the char-select projection).
 /// One mapper so the 17-field projection isn't copy-pasted per query (mirrors `entity_view`).
 pub(crate) fn character_view(c: Character) -> crate::codec::CharacterView {

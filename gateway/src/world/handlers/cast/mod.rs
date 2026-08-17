@@ -71,6 +71,16 @@ pub(crate) trait CastStore: MeleeActionStore + Send + Sync {
         z: f32,
     ) -> Result<()>;
 
+    /// Cast a spell whose explicit target is an owned inventory item. The module validates the
+    /// effect kind and consumes the item only after the gameplay gates pass.
+    fn cast_item_target(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        spell_id: u32,
+        slot: u8,
+    ) -> Result<()>;
+
     /// Arm the ranged auto-repeat loop on `target_guid` with `spell_id`. The module requires an
     /// equipped ranged weapon; `Err` is the refusal the player sees as a cast failure.
     fn start_ranged_attack(
@@ -186,6 +196,16 @@ impl CastStore for crate::stdb::Coordinator {
             y,
             z,
         )
+    }
+
+    fn cast_item_target(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        spell_id: u32,
+        slot: u8,
+    ) -> Result<()> {
+        crate::stdb::Coordinator::cast_item_target(self, account_id, self_guid, spell_id, slot)
     }
 
     fn start_ranged_attack(
@@ -401,11 +421,24 @@ fn ordinary_cast<St: CastStore + ?Sized>(
     // A DEST_LOCATION block is a ground click (Flamestrike/Blizzard/Rain of Fire) — the durable
     // ground cast anchors the area there. The clearing sequence above is unchanged either way.
     let self_guid = player.self_guid.unwrap_or(0);
-    let result = match dest_target(c) {
-        Some((x, y, z)) => {
-            store.cast_spell_at(player.account_id, self_guid, spell, target, x, y, z)
+    let item_guid = match c.targets.target_flags.get_item() {
+        Some(wow_world_messages::vanilla::SpellCastTargets_SpellCastTargetFlags_Item::Item {
+            item,
+        }) => item.guid(),
+        _ => 0,
+    };
+    let result = if item_guid != 0 {
+        store
+            .item_slot_by_guid(player.account_id, item_guid)
+            .ok_or_else(|| anyhow!("item target {item_guid} is not in the player's bag"))
+            .and_then(|slot| store.cast_item_target(player.account_id, self_guid, spell, slot))
+    } else {
+        match dest_target(c) {
+            Some((x, y, z)) => {
+                store.cast_spell_at(player.account_id, self_guid, spell, target, x, y, z)
+            }
+            None => store.cast_spell(player.account_id, self_guid, spell, target),
         }
-        None => store.cast_spell(player.account_id, self_guid, spell, target),
     };
     if let Err(e) = result {
         if is_transport_failure(&e) {
@@ -487,6 +520,7 @@ pub(super) mod tests {
         pub(crate) cancel_error: Option<String>,
         pub(crate) casts: Mutex<Vec<Cast>>,
         pub(crate) ground_casts: Mutex<Vec<GroundCast>>,
+        pub(crate) item_target_casts: Mutex<Vec<(u64, u64, u32, u8)>>,
         pub(crate) ranged_attacks: Mutex<Vec<RangedAttack>>,
         pub(crate) stop_attacks: Mutex<Vec<(u64, u64)>>,
         pub(crate) disenchant_calls: Mutex<Vec<u8>>,
@@ -593,6 +627,20 @@ pub(super) mod tests {
                 y,
                 z,
             ));
+            self.durable_result()
+        }
+
+        fn cast_item_target(
+            &self,
+            account_id: u64,
+            self_guid: u64,
+            spell_id: u32,
+            slot: u8,
+        ) -> Result<()> {
+            self.item_target_casts
+                .lock()
+                .unwrap()
+                .push((account_id, self_guid, spell_id, slot));
             self.durable_result()
         }
 
@@ -1191,5 +1239,22 @@ pub(super) mod tests {
 
         assert_eq!(sequence(&outbound), ["CAST_RESULT(FAILURE)"]);
         assert!(store.pick_lock_calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn item_target_cast_resolves_owned_guid_to_slot() {
+        let store = InMemoryCasts {
+            cast_time_ms: Some(0),
+            item_slots: vec![(500, 7)],
+            ..Default::default()
+        };
+        let (_, outbound) =
+            handled(dispatch_cast(&store, player(), cast(6991, item_targets(500))).unwrap());
+        assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
+        assert_eq!(
+            *store.item_target_casts.lock().unwrap(),
+            [(ACCOUNT, CASTER, 6991, 7)]
+        );
+        assert!(store.casts.lock().unwrap().is_empty());
     }
 }

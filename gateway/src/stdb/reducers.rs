@@ -744,80 +744,6 @@ impl Coordinator {
         ))
     }
 
-    /// Persist + relay an inbound movement (Phases 5-6): `gw_movement_update` on the coordinator
-    /// connection with the mover named by `actor_guid` (0 = caller doesn't know the guid, never
-    /// true in-world → error). `movement_info` is the raw body to relay verbatim to observers
-    /// (empty until the inbound raw bytes are threaded through — harmless while no peers are in
-    /// range).
-    #[allow(clippy::too_many_arguments)]
-    pub fn movement_update(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        opcode: u16,
-        movement_info: &[u8],
-        x: f32,
-        y: f32,
-        z: f32,
-        o: f32,
-        move_time_ms: u32,
-    ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("movement_update: actor_guid unresolved"));
-        }
-        let coord = self.0.call_pipe();
-        call_reducer!(
-            coord.conn.reducers,
-            "gw_movement_update",
-            gw_movement_update_then(
-                actor_guid,
-                opcode,
-                movement_info.to_vec(),
-                x,
-                y,
-                z,
-                o,
-                move_time_ms
-            )
-        )
-    }
-
-    /// [`movement_update`](Self::movement_update) without waiting on the completion channel.
-    /// Individual shared-batch reducer outcomes are logged module-side and intentionally not
-    /// returned to the socket-reader thread, which must never block on a round-trip.
-    #[allow(clippy::too_many_arguments)]
-    pub fn movement_update_nowait(
-        &self,
-        _account_id: u64,
-        actor_guid: u64,
-        opcode: u16,
-        movement_info: &[u8],
-        x: f32,
-        y: f32,
-        z: f32,
-        o: f32,
-        move_time_ms: u32,
-    ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("movement_update_nowait: actor_guid unresolved"));
-        }
-        // Push onto the shard's batch — ONE gw_movement_batch transaction per 40ms
-        // tick carries the whole realm's heartbeats instead of one transaction each (the
-        // measured 92%-writer wall). Per-move rejection logging moved module-side (the batch
-        // reducer logs and skips), so no per-entry completion exists here.
-        self.0.motion_batch.push(GwMove {
-            actor_guid,
-            opcode,
-            movement_info: movement_info.to_vec(),
-            x,
-            y,
-            z,
-            o,
-            move_time_ms,
-        });
-        Ok(())
-    }
-
     /// Heartbeat this gateway's `game_gateway_lease` row every 15 s on EVERY connected
     /// database's coordinator connection, forever. Every shard, not just the default:
     /// `gw_player_login` fail-closes on the lease of the database it runs ON, and a
@@ -1185,6 +1111,25 @@ impl Coordinator {
             coord.conn.reducers,
             "gw_cast_spell",
             gw_cast_spell_then(actor_guid, spell_id, target_guid)
+        )
+    }
+
+    /// Resolve an item-target cast through the module's generic item-effect seam.
+    pub fn cast_item_target(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        spell_id: u32,
+        slot: u8,
+    ) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("cast_item_target: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_cast_item_target",
+            gw_cast_item_target_then(actor_guid, spell_id, slot)
         )
     }
 

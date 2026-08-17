@@ -335,6 +335,12 @@ fn check_cast_gates(
         return Err(format!("caster {caster_guid} is dead"));
     }
 
+    // Taming is completion-gated and revalidated here before cost or any write. The handler repeats
+    // the same read immediately before conversion to keep its standalone contract safe.
+    if effects.iter().any(|effect| effect.kind == E_TAME_CREATURE) {
+        crate::creatures::validate_tame(ctx, caster, target_guid)?;
+    }
+
     // Level gate: a CHARACTER cannot cast a rank above its level. Pairs with the trainer level-gate so a
     // higher rank is both UNBUYABLE and UNCASTABLE until you level up — the leveling spine. Keyed on the
     // spell's spell_level (the rank's level); spell_level 0 (no requirement) never gates. Baseline-safe:
@@ -736,7 +742,14 @@ pub(crate) fn begin_cast(
         crate::spell::math::spell_mod(ctx, caster_guid, SPELLMOD_OP_CASTING_TIME, &hdr);
     let cast_ms = crate::spell::math::apply_spell_mod(hdr.cast_time_ms, ct_flat, ct_pct);
 
-    if cast_ms == 0 || hdr.cast_flags & SPELL_ATTR_CHANNELED != 0 {
+    let completed_channel = hdr.cast_flags & SPELL_ATTR_CHANNELED != 0
+        && ctx
+            .db
+            .game_spell_effect()
+            .by_spell()
+            .filter(&spell_id)
+            .any(|effect| effect.kind == E_TAME_CREATURE);
+    if !completed_channel && (cast_ms == 0 || hdr.cast_flags & SPELL_ATTR_CHANNELED != 0) {
         // Instant / channel: resolves NOW (no pending cast bar), so it is NOT a completion — the gateway
         // sends the full instant START(0)+GO+COOLDOWN sequence.
         return resolve_cast_at(
@@ -751,30 +764,34 @@ pub(crate) fn begin_cast(
         );
     }
 
+    let completion_ms = if completed_channel {
+        hdr.duration_ms.max(1)
+    } else {
+        cast_ms
+    };
     let fire_at = ctx
         .timestamp
-        .checked_add(TimeDuration::from_micros((cast_ms as i64) * 1000))
+        .checked_add(TimeDuration::from_micros((completion_ms as i64) * 1000))
         .unwrap_or(ctx.timestamp);
     // A new timed cast supersedes any prior pending cast for this caster (vanilla cancels the
     // current spell when a new one starts). Clear stale rows SILENTLY (no is_interrupted signal — that
     // is only for an actual cancel/Kick) so a missed CMSG_CANCEL_CAST can't strand a pending cast that
     // later fires a phantom GO and wedges the client. `cancel_cast` handles the explicit Esc; this is the
     // backstop for the recast path.
-    let stale: Vec<u64> = ctx
-        .db
-        .game_pending_cast()
-        .iter()
-        .filter(|p| p.caster_guid == caster_guid)
+    let pending = ctx.db.game_pending_cast();
+    let stale: Vec<u64> = pending
+        .by_caster()
+        .filter(&caster_guid)
         .map(|p| p.scheduled_id)
         .collect();
     for id in stale {
-        ctx.db.game_pending_cast().scheduled_id().delete(id);
+        pending.scheduled_id().delete(id);
     }
     let (has_dest, (dx, dy, dz)) = match dest {
         Some(p) => (true, p),
         None => (false, (0.0, 0.0, 0.0)),
     };
-    ctx.db.game_pending_cast().insert(PendingCast {
+    pending.insert(PendingCast {
         scheduled_id: 0,
         scheduled_at: ScheduleAt::Time(fire_at),
         caster_guid,
@@ -792,7 +809,7 @@ pub(crate) fn begin_cast(
     // public row is the cast-start signal.
     ctx.db.game_spell_cast_event().insert(SpellCastEvent {
         target_guid,
-        cast_time_ms: cast_ms,
+        cast_time_ms: completion_ms,
         // A cast-START is never a completion and carries no damage/cooldown (the GO event at resolve
         // does both); the baseline's is_interrupted:false/delay_ms:0 already hold.
         ..SpellCastEvent::signal(ctx, caster_guid, spell_id)

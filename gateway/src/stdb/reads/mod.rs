@@ -11,6 +11,7 @@ mod items;
 mod mail;
 mod npc_vendor;
 mod party;
+mod pet;
 mod quest;
 mod spell;
 mod talent_reputation;

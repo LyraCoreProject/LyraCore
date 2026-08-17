@@ -449,6 +449,21 @@ pub fn swing_range_ctx(ctx: &ReducerContext, attacker: &WorldEntity) -> (u32, u3
             Some(t) if t.damage_max > 0 => (t.damage_min, t.damage_max),
             _ => (CREATURE_MELEE_MIN, CREATURE_MELEE_MAX),
         };
+        // Imported creature damage is anchored to the template's minimum level. An advancing
+        // Hunter pet scales that range with its durable live level; summoned and wild creatures
+        // retain the existing template range.
+        let (base_min, base_max) =
+            match (&tmpl, crate::creatures::live_pet_kind(ctx, attacker.guid)) {
+                (Some(t), crate::creatures::PetKind::Hunter { .. }) => {
+                    crate::creatures::scale_creature_damage_for_level(
+                        base_min,
+                        base_max,
+                        t.level,
+                        attacker.level,
+                    )
+                }
+                _ => (base_min, base_max),
+            };
         let rank = tmpl.map(|t| t.rank).unwrap_or(0);
         let (min, max) = scale_swing_for_rank(base_min, base_max, rank);
         if disarmed {
@@ -562,7 +577,12 @@ pub(crate) fn roll_swing(
     attacker: &WorldEntity,
     target: &WorldEntity,
 ) -> (u32, u8, u32) {
-    roll_swing_with_range(ctx, attacker, target, swing_range_ctx(ctx, attacker))
+    let range = crate::creatures::scale_hunter_pet_swing(
+        ctx,
+        attacker.guid,
+        swing_range_ctx(ctx, attacker),
+    );
+    roll_swing_with_range(ctx, attacker, target, range)
 }
 
 /// The shared core of `roll_swing`: identical attack-table roll + mitigation, but takes the `[min, max]`

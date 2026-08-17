@@ -387,6 +387,20 @@ pub fn gw_use_item(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Result<()
     crate::actor::use_item(ctx, actor_guid, slot)
 }
 
+/// Resolve a spell whose explicit target is an owned inventory item. The effect kind selects the
+/// operation inside the module; the gateway only translates the item guid to a slot.
+#[reducer]
+pub fn gw_cast_item_target(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    spell_id: u32,
+    slot: u8,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    actor(ctx, actor_guid)?;
+    crate::actor::cast_item_target(ctx, actor_guid, spell_id, slot)
+}
+
 /// [`crate::actor::loot_money`] behind the gateway gate.
 #[reducer]
 pub fn gw_loot_money(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result<(), String> {

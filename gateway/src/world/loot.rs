@@ -79,23 +79,13 @@
 //!
 //! # Why this relay is a POLL, not `on_insert` callbacks
 //!
-//! Every other cross-database relay in this codebase (`sync_group_mirror`'s consumers, the whisper
-//! relay, the realm-core group-event relay) is registered per-PLAYER-SESSION, inside
-//! `subscribe_player_events` — its callback's lifetime is tied to one socket, torn down and rebuilt
-//! with that socket, and re-subscribes for free on the player's next login. `relay_tick` has no
-//! session to hook into: it must run for the GATEWAY PROCESS's lifetime, independent of whether any
-//! player is even connected. A callback registered once, at `Coordinator::connect` time, on a world
-//! shard's coordinator `DbConnection` would silently stop firing the moment `spawn_coordinator_watchdog`
-//! rebuilds that connection after a drop or a migration (`connection.rs`) — the fresh `LiveConn` has
-//! no callbacks of its own, and re-registering one from inside the watchdog's generic reconnect path
-//! would need Coordinator-level routing context (which world shard promotes to which realm) that the
-//! per-shard `connect_blocking` function does not have. A poll reads whatever the CURRENT live
-//! connection is on every tick — the same "ask fresh each time" shape every other coordinator
-//! consumer already uses to survive a reconnect for free — which is why it is the simplest construct
-//! that is actually correct here, not merely the laziest one. The 200ms interval bounds ordinary
-//! promotion/settlement latency (a real client cannot render the roll popup and vote within one
-//! tick); it plays no role in disband correctness now that [`flush_pending_promotions`] handles that
-//! synchronously.
+//! Shared row relays are armed on coordinator connections and explicitly re-armed by the watchdog.
+//! `relay_tick` is different because it coordinates writes between every world shard and realm-core,
+//! independent of whether any player is connected. A poll reads the current live connection on
+//! every tick and naturally carries the cross-database routing context it needs. The 200ms interval
+//! bounds ordinary promotion/settlement latency (a real client cannot render the roll popup and vote
+//! within one tick); it plays no role in disband correctness now that
+//! [`flush_pending_promotions`] handles that synchronously.
 
 use anyhow::Result;
 

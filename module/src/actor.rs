@@ -28,6 +28,7 @@
 //! | `buy_item` | `items::apply_buy_item` | vendor in range + stocked + money; stacks/slots validated |
 //! | `sell_item` | `items::apply_item_sell` | vendor in range + sellable item in slot; feeds the buyback ring |
 //! | `use_item` | `items::apply_item_use` | alive + usable item in slot (consumable/on-use gates) |
+//! | `cast_item_target` | `creatures::apply_item_target_spell` | spell kind + owned carried item + effect-specific gates |
 //! | `equip_item` | `items::apply_equip_item` | slot type/level gates |
 //! | `trainer_buy` | `trainer::apply_trainer_buy` | trainer resolved by guid + offering gates (class/level/money) |
 //! | `use_gameobject` | `gameobject::apply_use_gameobject` | GO resolved by guid + range/use gates |
@@ -127,6 +128,7 @@ package_only! {
     // `loot_money` also feeds playerbots' drink-at-rest behavior (work-item 154).
     pub(crate) use crate::loot::apply_loot_money as loot_money;
 }
+pub(crate) use crate::creatures::apply_item_target_spell as cast_item_target;
 debug_only! {
     pub(crate) use crate::items::apply_buy_item as buy_item;
     pub(crate) use crate::items::apply_equip_item as equip_item;
