@@ -143,6 +143,7 @@ use wow_world_messages::vanilla::{
     CMSG_GOSSIP_HELLO,
     CMSG_GOSSIP_SELECT_OPTION,
     CMSG_INSPECT,
+    CMSG_ITEM_QUERY_SINGLE,
     CMSG_LEARN_TALENT,
     CMSG_LIST_INVENTORY,
     CMSG_LOGOUT_REQUEST,
@@ -205,6 +206,9 @@ struct InMemoryStore {
     moves: std::sync::Mutex<Vec<MoveRecord>>,
     /// Vendor stock the seam's `vendor_stock` read returns (empty by default).
     vendor_stock: Vec<codec::VendorItemView>,
+    /// Imported item templates the query path resolves by entry. Keeping this keyed fixture here
+    /// makes socket tests exercise the same durable read shape as the Coordinator cache.
+    item_templates: Vec<codec::ItemTemplateView>,
     /// The player's buyback ring as `(item_entry, stack_count, price)`; empty by default, so a
     /// fixture login replays no buyback tab.
     buyback_ring: Vec<(u32, u32, u32)>,
@@ -2610,8 +2614,12 @@ impl CastStore for InMemoryStore {
     fn player_items(&self, _owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
         Ok(self.player_items_fixture.clone())
     }
-    fn item_template(&self, _entry: u32) -> Result<Option<codec::ItemTemplateView>> {
-        Ok(None)
+    fn item_template(&self, entry: u32) -> Result<Option<codec::ItemTemplateView>> {
+        Ok(self
+            .item_templates
+            .iter()
+            .find(|template| template.entry == entry)
+            .cloned())
     }
 }
 
@@ -4688,6 +4696,92 @@ fn enter_world(
         let _ = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec);
     }
     (client, c_enc, c_dec, server)
+}
+
+/// A restrictive imported equipment template. The query response is cached by the client and is
+/// shared by inventory, vendor, and quest-reward screens, so one socket test pins that definition.
+fn human_warrior_sword_template() -> codec::ItemTemplateView {
+    codec::ItemTemplateView {
+        entry: 910_261,
+        class: 2,
+        subclass: 7,
+        name: "Quartermaster's Practice Sword".into(),
+        display_id: 1542,
+        quality: 2,
+        inventory_type: 13,
+        item_level: 20,
+        required_level: 15,
+        max_durability: 40,
+        buy_price: 4_000,
+        sell_price: 800,
+        max_stack: 1,
+        damage_min: 9.0,
+        damage_max: 17.0,
+        delay_ms: 2_400,
+        required_skill: 43, // Swords
+        required_skill_rank: 150,
+        required_reputation_faction: 72,
+        required_reputation_rank: 5,
+        allowed_class: 0x01, // Warrior
+        allowed_race: 0x01,  // Human
+        ..Default::default()
+    }
+}
+
+#[test]
+fn item_query_preserves_imported_eligibility_through_the_encrypted_world_session() {
+    let template = human_warrior_sword_template();
+    let mut fixture = quest_store();
+    fixture.item_templates = vec![template.clone()];
+    let store = std::sync::Arc::new(fixture);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+
+    CMSG_ITEM_QUERY_SINGLE {
+        item: template.entry,
+        guid: Guid::new(0),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+
+    let found = match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(reply) => {
+            assert_eq!(reply.item, template.entry);
+            reply
+                .found
+                .expect("the imported template must reach the item query reply")
+        }
+        other => panic!("expected SMSG_ITEM_QUERY_SINGLE_RESPONSE, got {other}"),
+    };
+
+    assert_eq!(found.allowed_class.as_int(), template.allowed_class);
+    assert_eq!(found.allowed_race.as_int(), template.allowed_race);
+    assert_eq!(u32::from(found.required_skill.as_int()), template.required_skill);
+    assert_eq!(found.required_skill_rank, template.required_skill_rank);
+    assert_eq!(
+        u32::from(found.required_faction.as_int()),
+        template.required_reputation_faction
+    );
+    assert_eq!(
+        found.required_faction_rank,
+        template.required_reputation_rank
+    );
+
+    // These are client-local eligibility terms, deliberately limited to the fields this cached
+    // definition contains. They prove the fixture is restrictive rather than an all-bits mask.
+    let client_can_use = |class: u32, race: u32, skill: Option<(u32, u32)>| {
+        found.allowed_class.as_int() & class != 0
+            && found.allowed_race.as_int() & race != 0
+            && skill.is_some_and(|(id, rank)| {
+                id == u32::from(found.required_skill.as_int()) && rank >= found.required_skill_rank
+            })
+    };
+    assert!(client_can_use(0x01, 0x01, Some((43, 150)))); // Human Warrior with Swords 150
+    assert!(!client_can_use(0x80, 0x01, Some((43, 150)))); // excluded Mage
+    assert!(!client_can_use(0x01, 0x02, Some((43, 150)))); // excluded Orc
+    assert!(!client_can_use(0x01, 0x01, None)); // missing sword proficiency
+
+    drop(client);
+    server.join().unwrap();
 }
 
 #[test]
