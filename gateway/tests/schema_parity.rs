@@ -537,7 +537,7 @@ parity_test!(parity_game_item_template, "game_item_template", lyracore_module::I
     shadow_res, arcane_res, spellid_3, spelltrigger_3, spellid_4, spelltrigger_4, spellid_5,
     spelltrigger_5, required_skill, required_skill_rank, required_reputation_faction,
     required_reputation_rank, max_count, item_flags, page_text, start_quest, bag_family,
-    buy_count, food_type,
+    buy_count, food_type, allowed_class, allowed_race,
 });
 parity_test!(parity_game_spell, "game_spell", lyracore_module::Spell, bindings::spell_type::Spell, {
     spell_id, name, power_type, cost, cast_time_ms, gcd_ms, cooldown_ms, range_yd, duration_ms,

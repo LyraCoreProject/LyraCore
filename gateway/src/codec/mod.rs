@@ -78,6 +78,8 @@ use lyracore_shared::packing::unpack4;
 use wow_world_messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage};
 use wow_world_messages::vanilla::{
     Area,
+    AllowedClass,
+    AllowedRace,
     BagFamily,
     // Item binding: "Binds when picked up/equipped" tooltip line.
     Bonding,

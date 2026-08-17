@@ -16,7 +16,7 @@ use crate::{
     game_faction, game_item_template, game_spell, game_spell_effect, game_taxi_node, game_taxi_path,
     game_taxi_path_node, game_world_entity, CreatureFamily, CreatureSpawn, CreatureTemplate,
     CreateinfoSpell, Faction, GameTaxiNode, GameTaxiPath, GameTaxiPathNode, ItemTemplate, Spell,
-    SpellEffect,
+    SpellEffect, ALL_PLAYABLE_CLASS_MASK, ALL_PLAYABLE_RACE_MASK,
 };
 
 /// Canonical fixture-NPC/item constructors — the single source of truth for the synthetic rows
@@ -516,6 +516,8 @@ pub(crate) fn base_item(entry: u32, name: &str) -> ItemTemplate {
         bag_family: 0,
         buy_count: 1,
         food_type: 0,
+        allowed_class: ALL_PLAYABLE_CLASS_MASK,
+        allowed_race: ALL_PLAYABLE_RACE_MASK,
     }
 }
 

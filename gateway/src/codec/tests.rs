@@ -1612,6 +1612,8 @@ fn ring_of_fire_resistance() -> ItemTemplateView {
         page_text: 999,
         start_quest: 777,
         bag_family: 6, // Herbs
+        allowed_class: 0x8000_0002,
+        allowed_race: 0x8000_0004,
         ..Default::default()
     }
 }
@@ -1670,6 +1672,8 @@ fn item_query_response_carries_the_work_item_213_columns() {
             assert_eq!(found.page_text, 999);
             assert_eq!(found.start_quest, 777);
             assert_eq!(found.bag_family, BagFamily::Herbs);
+            assert_eq!(found.allowed_class, AllowedClass::new(0x8000_0002));
+            assert_eq!(found.allowed_race, AllowedRace::new(0x8000_0004));
         }
         other => panic!("expected SMSG_ITEM_QUERY_SINGLE_RESPONSE, got {other}"),
     }
