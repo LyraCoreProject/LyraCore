@@ -925,6 +925,11 @@ pub(crate) fn apply_player_login(
     // Crash recovery for the narrow paid-before-gateway-arm window. A running flight already has
     // a nonzero start and is untouched; a pending flight begins from its source on this login.
     crate::taxi::arm_taxi_flight(ctx, character_guid);
+    // A land mount is an ordinary aura and survives this rebuild, but the fresh row was built at
+    // display 0 — re-derive the projection so a relog or a WORLDPORT_ACK shard handoff comes back
+    // riding at mounted speed. AFTER `arm_taxi_flight`, so a passenger whose flight just armed keeps
+    // the taxi presentation (the restore defers to a live flight).
+    crate::mount::restore_mount_on_rebuild(ctx, character_guid);
 
     // Starter-loadout safety net: creation grants the loadout (so char-select shows gear), and
     // this idempotent call (no-op if the character owns ANY item) covers characters created

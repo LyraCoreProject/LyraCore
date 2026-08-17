@@ -274,6 +274,19 @@ docs. The summary:
 - **Spatial partitioning is baked into the rows.** `game_world_entity` carries `grid_x`/`grid_y`
   cell columns and indexes `(map_id, instance_id, grid_x, grid_y)`; seven event/motion tables carry
   the identical 4-column grid key so an AOI box query is a range scan.
+- **Some entity columns are projections, not state.** A land mount is the clearest case: the
+  `A_MOUNTED` aura row is the mounted state, while `WorldEntity.mount_display_id` and
+  `run_speed_mult_bp` are re-derived from the current aura set by one `mount::recompute_mount`. The
+  module has no single aura-deletion boundary, so every removal path collects a predicate while
+  deleting and calls that recompute afterwards, exactly as vitals and the character sheet already do.
+  Because it re-derives rather than applies a delta, every dismount trigger is idempotent by
+  construction and an expiry cleans up the same way a manual cancellation does. A taxi flight owns the
+  same display field for its duration, and the mount entry points refuse a player in flight.
+- **The indoor rule fails open.** `game_vmap_indoor_cell` is a derived per-cell marker written inside
+  `verify_vmap_generation`. A missing row means outdoors, as does a disabled vmap, an absent active
+  generation, or a probe that finds no WMO group. Features built on it, including the indoor mount
+  refusal and the indoor dismount, are correct and fully shippable with vmap off. A generation
+  verified before the table existed carries no markers until it is verified or imported again.
 
 **Migration discipline** (the law is `danger-zones.md` §1.2): a new column is END-appended with
 `#[default(...)]` — which **cannot** default a `String`, so string data goes in a new table — and a
@@ -546,5 +559,6 @@ local headless-client tests need it.
 | [`development-cli.md`](./development-cli.md) | The `./lyracore` CLI: the pinned shim, and the build, preflight, publish and local-stack commands. |
 | [`data-ingestion.md`](./data-ingestion.md) | Where vanilla content comes from and the licensing firewall. |
 | [`aura-capacity-verification.md`](./aura-capacity-verification.md) | The live-stack procedure proving the 32-buff/16-debuff cap end to end: refusal, untouched survivors, the overflow log line, and the wire-level `SMSG_SPELL_FAILURE` relay. |
+| [`mount-verification.md`](./mount-verification.md) | The land-mount fixture ids, the attended procedure, and the Headless Client scenario for the next pinned release. |
 
 **The work queue is GitHub Issues**, which is the single source of truth for what is open.

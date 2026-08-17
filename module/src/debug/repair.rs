@@ -119,6 +119,19 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     // Test Regeneration 50137 (the combat-regen probe's kind-169 A_COMBAT_HEALTH_REGEN_PCT source)
     let regen = ctx.db.game_spell().spell_id().find(50137u32).is_some() as u64;
 
+    // The land-mount fixture: Riding skill line 762, Test Riding Horse 50310 + its two effects, the
+    // skill-ability row that makes it trainable, and Test Dazed 50311. `seed_fixture_catalogue` above
+    // restores the reins ITEM, so without this the item would survive a republish pointing at a spell
+    // that no longer exists.
+    crate::seed::seed_mount_fixture(ctx);
+    let mount_fixture = [
+        crate::seed::FIXTURE_MOUNT_SPELL,
+        crate::seed::FIXTURE_DAZED_SPELL,
+    ]
+    .iter()
+    .filter(|id| ctx.db.game_spell().spell_id().find(**id).is_some())
+    .count() as u64;
+
     // --- schedule ensures (idempotent: no-op if a row is already present) ---
     // formerly `debug_ensure_aura_schedule`: matches the 1s interval in `seed::init`.
     let aura_schedule = if ctx.db.game_aura_schedule().iter().next().is_some() {
@@ -289,6 +302,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         + frost_armor
         + demon_skin
         + regen
+        + mount_fixture
         + aura_schedule
         + breath_schedule
         + duel_schedule

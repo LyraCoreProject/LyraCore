@@ -2956,6 +2956,51 @@ fn active_taxi_mount_is_present_in_the_player_create_mask() {
     }
 }
 
+/// A LAND mount writes the same field with no taxi flag, and an observer's CREATE carries it (story
+/// 5): a peer entering visibility must see the rider on the mount without waiting for a VALUES
+/// update. `unit_flags` stays 0, so the client never renders a land mount as a flight.
+#[test]
+fn a_land_mount_display_is_present_in_the_peer_create_mask() {
+    let mut entity = warrior_entity();
+    entity.mount_display_id = 1147;
+
+    for kind in [CreateKind::Peer, CreateKind::SelfPlayer] {
+        let msg = build_create_object(&entity, kind, &[], &[]).unwrap();
+        match &msg.objects[0] {
+            Object::CreateObject2 {
+                mask2: UpdateMask::Player(player),
+                ..
+            } => {
+                assert_eq!(player.unit_mountdisplayid(), Some(1147), "{kind:?}");
+                assert_eq!(
+                    player.unit_flags(),
+                    Some(0),
+                    "a land mount must not set TAXI_FLIGHT ({kind:?})"
+                );
+            }
+            other => panic!("expected a Player CreateObject2, got {other:?}"),
+        }
+    }
+}
+
+/// The standalone land-mount VALUES builder (story 11) carries the display it is handed, and writes
+/// an explicit 0 on dismount rather than omitting the field, or the client keeps the model. The
+/// partial mask's freedom from `OBJECT_FIELD_TYPE` is asserted at the wire level by
+/// `values::lint_tests::every_values_builder_serializes_without_the_object_type_bit`.
+#[test]
+fn mount_display_values_carries_the_display_it_is_given() {
+    for display in [1147u32, 0] {
+        let msg = crate::codec::build_mount_display_values(0x1234, display);
+        match &msg.objects[0] {
+            Object::Values {
+                mask1: UpdateMask::Unit(unit),
+                ..
+            } => assert_eq!(unit.unit_mountdisplayid(), Some(display as i32)),
+            other => panic!("expected a Unit Values object, got {other:?}"),
+        }
+    }
+}
+
 // ---- P2: visible_item_index slot-19 boundary (entity.rs) ---------------------------------------
 
 #[test]

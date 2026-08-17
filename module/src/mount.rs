@@ -120,6 +120,21 @@ pub(crate) fn dismount(ctx: &ReducerContext, guid: u64) {
     recompute_mount(ctx, guid);
 }
 
+/// Restore the land-mount projection onto a FRESHLY REBUILT player entity. A mount is an ordinary
+/// aura row, so it outlives the despawn/rebuild that a relog, a WORLDPORT_ACK map change or a shard
+/// handoff performs (`sweep_transfer_game_aura` carries the rows across a database boundary), while
+/// `build_player_entity` always constructs at display 0 and 1x. Without this the rider comes back on
+/// foot with an active mount buff.
+///
+/// Guarded on actually being mounted: an ordinary login must leave the GM `.speed` carry
+/// (`Character::pending_run_speed_mult_bp`) that `build_player_entity` just read alone. Idempotent —
+/// `recompute_mount` writes nothing when the rebuilt row already agrees.
+pub(crate) fn restore_mount_on_rebuild(ctx: &ReducerContext, guid: u64) {
+    if active_mount_spell(ctx, guid).is_some() {
+        recompute_mount(ctx, guid);
+    }
+}
+
 // ===========================================================================================
 //  Mount eligibility — the cast gate. [entity]
 //
@@ -510,6 +525,38 @@ mod tests {
         );
     }
 
+    /// The gate CENSUS (stories 12, 16, 17, 18, 20) and its read-only property (story 33). All five
+    /// refusals must still be present, and `check_mount_cast` must not write: it runs inside the
+    /// pre-spend sweep, so a single `insert`/`update`/`delete` here would make a refused mount
+    /// non-atomic. Combat state comes from the module's own engagement fold, never a session flag,
+    /// and a released spirit is refused alongside a corpse.
+    #[test]
+    fn the_gate_refuses_five_ways_and_writes_nothing() {
+        let gate =
+            crate::test_scan::code_of(include_str!("mount.rs"), "pub(crate) fn check_mount_cast(");
+        for needle in [
+            "requires riding training",
+            "you cannot mount while dead",
+            "you cannot mount while in combat",
+            "you cannot mount indoors",
+            "you cannot mount in deep water",
+            "crate::combat::is_engaged(ctx, caster.guid)",
+            "player_flags::GHOST",
+        ] {
+            assert!(
+                gate.contains(needle),
+                "`check_mount_cast` lost `{needle}`. Body was:\n{gate}"
+            );
+        }
+        for write in [".insert(", ".update(", ".delete("] {
+            assert!(
+                !gate.contains(write),
+                "`check_mount_cast` must stay read-only — it runs before anything is spent, and a \
+                 `{write}` here makes a refused mount non-atomic. Body was:\n{gate}"
+            );
+        }
+    }
+
     /// The heartbeat's 100 ms window, at the boundary it actually decides. Two heartbeats inside one
     /// window skip the area query; the first heartbeat of a new window pays it. The clock is the
     /// CLIENT's own `move_time_ms`, so a client that stops sending simply stops being checked — and a
@@ -645,6 +692,107 @@ mod tests {
                 "if !effects.iter().any(|e| e.kind == A_MOUNTED) { crate::mount::dismount(ctx, caster_guid); }"
             ),
             "the exemption must guard exactly the shared dismount call. Body was:\n{body}"
+        );
+    }
+
+    /// The item seam (story 2): a mount item is REUSABLE. `apply_item_use` consumes a stack unit for
+    /// every on-use spell except the kinds `spell_keeps_item` names, and a mount joins the Hearthstone
+    /// there through [`spell_is_mount`] — by effect kind, with no item-entry allowlist, so onboarding
+    /// another mount is data alone. Pinned by scan: both functions are `ReducerContext`-bound.
+    #[test]
+    fn a_mount_item_survives_its_own_use() {
+        let src = include_str!("items/ops.rs");
+        let keeps = crate::test_scan::code_of(src, "fn spell_keeps_item(");
+        assert!(
+            keeps.contains("crate::mount::spell_is_mount(ctx, spell_id)"),
+            "`spell_keeps_item` must classify a mount through the one shared effect-kind test, or a \
+             mount item is eaten like a potion. Body was:\n{keeps}"
+        );
+        let use_item = crate::test_scan::code_of(src, "pub(crate) fn apply_item_use(");
+        assert!(
+            use_item.contains("if !spell_keeps_item(ctx, spell_id) {"),
+            "the stack consumption must stay behind `spell_keeps_item`. Body was:\n{use_item}"
+        );
+    }
+
+    /// The REBUILD census (stories 6 and 7). `build_player_entity` constructs every player row at
+    /// display 0 and the GM speed carry, but the mount aura outlives the despawn — a relog, a
+    /// WORLDPORT_ACK map change and a cross-database handoff all rebuild from it. So every caller of
+    /// that constructor must restore the projection AFTER inserting the row, or a rider comes back on
+    /// foot holding an active mount buff. A new rebuild path changes this list and forces the decision
+    /// to be made rather than silently regressing.
+    #[test]
+    fn every_player_rebuild_restores_the_mount_projection() {
+        // (file, why it rebuilds a player entity)
+        const REBUILDS: &[(&str, &str)] = &[
+            ("module/src/debug/mod.rs", "debug_spawn_player_entity"),
+            (
+                "module/src/world.rs",
+                "player_login, incl. the WORLDPORT_ACK rebuild",
+            ),
+        ];
+
+        let mut found: Vec<String> = Vec::new();
+        for path in module_sources() {
+            let source = std::fs::read_to_string(&path).expect("module source is readable");
+            let Some(build) = source
+                .match_indices("crate::build_player_entity(ctx,")
+                .find(|(idx, _)| {
+                    !crate::test_scan::on_comment_line(&source, *idx)
+                        && !crate::test_scan::in_string_literal(&source, *idx)
+                })
+                .map(|(idx, _)| idx)
+            else {
+                continue;
+            };
+            let insert = source[build..]
+                .find("entities.insert(entity);")
+                .map(|off| build + off)
+                .unwrap_or_else(|| panic!("{} no longer inserts the built row", rel(&path)));
+            let restore = source[build..]
+                .find("crate::mount::restore_mount_on_rebuild(ctx,")
+                .map(|off| build + off)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{} rebuilds a player entity without restoring the mount projection — a \
+                         mounted character relogs or crosses a shard boundary on foot",
+                        rel(&path)
+                    )
+                });
+            assert!(
+                insert < restore,
+                "{}: the restore must run AFTER the row is inserted — `recompute_mount` writes the \
+                 STORED row and silently no-ops on a row that is not there yet",
+                rel(&path)
+            );
+            found.push(rel(&path));
+        }
+        let expected: Vec<String> = REBUILDS
+            .iter()
+            .map(|(file, _)| (*file).to_string())
+            .collect();
+        assert_eq!(
+            found, expected,
+            "the player-rebuild census changed. Every `build_player_entity` caller must call \
+             `mount::restore_mount_on_rebuild` after inserting the row."
+        );
+    }
+
+    /// The restore is guarded on actually being mounted, and converges on the ONE recompute rather
+    /// than stamping the display itself. The guard is load-bearing: an unguarded recompute would
+    /// overwrite the `pending_run_speed_mult_bp` GM `.speed` carry that `build_player_entity` just
+    /// read, on every ordinary login.
+    #[test]
+    fn the_rebuild_restore_is_guarded_and_converges_on_the_recompute() {
+        let body = crate::test_scan::shape_of(
+            include_str!("mount.rs"),
+            "pub(crate) fn restore_mount_on_rebuild(",
+        );
+        assert!(
+            body.contains("if active_mount_spell(ctx, guid).is_some()")
+                && body.contains("recompute_mount(ctx, guid);"),
+            "the rebuild restore must recompute ONLY for a player the aura set says is mounted, so an \
+             ordinary login keeps its GM `.speed` carry. Body was:\n{body}"
         );
     }
 
