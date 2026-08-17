@@ -296,10 +296,9 @@ pub trait WorldStore:
     /// the character isn't the caller's.
     fn player_login(&self, account_id: u64, character_guid: u64) -> Result<codec::EntityView>;
 
-    /// Persist + relay an inbound movement (Phase 5): calls the `movement_update` reducer with
-    /// the mover (= `ctx.sender` on the per-player path; named by `self_guid` on the
-    /// `LYRACORE_SHARED_CALLS` path), the opcode to relay, and the
-    /// `MovementInfo`. Relayed peer events arrive back on the per-player subscription (Phase 6).
+    /// Enqueue an accepted inbound movement on this shard's shared movement batch. The live store
+    /// serializes `info` once and preserves the mover, opcode, position, orientation, and timestamp
+    /// in the queued entry. Relayed peer events arrive back through the shared dispatch.
     fn movement_update(
         &self,
         account_id: u64,
@@ -307,25 +306,6 @@ pub trait WorldStore:
         opcode: u32,
         info: &MovementInfo,
     ) -> Result<()>;
-
-    /// Movement, submitted WITHOUT waiting for the module's completion.
-    ///
-    /// `feedback` models submission/backpressure only. Shared movement batches cannot return a
-    /// per-entry reducer verdict; the session checks the coordinator entity cache before calling.
-    /// The default implementation forwards to the blocking `movement_update`, so mock stores and any
-    /// future `WorldStore` keep working unchanged — only the live `Coordinator` overrides it.
-    fn movement_update_nowait(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        opcode: u32,
-        info: &MovementInfo,
-        _feedback: &std::sync::Arc<MovementFeedback>,
-    ) -> Result<()> {
-        // Synchronous stores return their transport/reducer failure inline. Shared batches do not
-        // have an equivalent per-entry result channel.
-        self.movement_update(account_id, self_guid, opcode, info)
-    }
 
     /// Subscribe this player's connection to its per-player views (nearby `game_world_entity`,
     /// addressed `game_movement_event`) and push the resulting peer-spawn / movement-relay / destroy

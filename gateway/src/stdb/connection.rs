@@ -48,29 +48,79 @@ pub(crate) struct ShardSet {
     world: Arc<super::world_view::WorldView>,
 }
 
-/// The live privileged connection + the handles that keep its pump/subscription alive. Swapped
-/// wholesale by the watchdog on a reconnect (the old one's pump thread has already exited and its
-/// subscription is dead, so dropping it is clean).
+/// One live SDK connection generation and the handles that keep its pump and subscription alive.
+/// Coordinator generations own the shard cache; call-pipe generations carry only the reducer
+/// liveness subscription. Recovery replaces either role as one unit.
 pub(crate) struct LiveConn {
-    /// Privileged (owner) connection: reads every table (RLS bypass) and is the cache the
-    /// gateway reads through. Player verbs go through the module's operator-gated `gw_*` surface
-    /// over the call pipes, with the actor named by guid.
+    /// Privileged owner connection. Coordinators use its subscription cache for reads; call pipes
+    /// use it only for the module's operator-gated reducer surface.
     pub(crate) conn: DbConnection,
     /// Completes reducer waits as soon as this connection's transport dies. It belongs to the
     /// connection generation, so a watchdog replacement cannot fail calls on the fresh socket.
     pub(crate) reducer_completion: Arc<ReducerCompletion>,
     /// Keeps the SDK message-pump thread alive for the connection's lifetime.
     _pump: std::thread::JoinHandle<()>,
-    /// Keeps the privileged subscription active for the connection's lifetime.
+    /// Keeps this role's subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
 }
 
 impl LiveConn {
-    /// A reducer connection is usable only while both its transport and its liveness subscription
+    /// A connection generation is usable only while both its transport and subscription
     /// are alive. A module republish can invalidate the latter without closing the socket.
     fn is_healthy(&self) -> bool {
         self.conn.is_active() && self._sub.is_active()
     }
+}
+
+/// Install a fresh resource before post-install work, then tear down the replaced resource. This
+/// generic seam keeps the ordering and lock lifetime deterministic without constructing SDK types.
+fn replace_slot_ordered<T>(
+    slot: &RwLock<T>,
+    fresh: T,
+    role_label: &str,
+    post_install: impl FnOnce(),
+    teardown: impl FnOnce(T),
+) {
+    let old = {
+        let mut live = slot.write().unwrap_or_else(|poisoned| {
+            log::error!("{role_label} live-slot lock poisoned during replacement; recovering");
+            poisoned.into_inner()
+        });
+        std::mem::replace(&mut *live, fresh)
+    };
+    post_install();
+    teardown(old);
+}
+
+/// Replace one live SDK generation. The fresh generation is visible before role-specific work;
+/// that work, disconnect, and pump join all run without the live-slot write lock.
+fn replace_live_conn(
+    slot: &RwLock<LiveConn>,
+    fresh: LiveConn,
+    role_label: &str,
+    post_install: impl FnOnce(),
+) {
+    replace_slot_ordered(
+        slot,
+        fresh,
+        role_label,
+        || {
+            log::info!("{role_label} replacement installed");
+            post_install();
+        },
+        |old| {
+            if let Err(error) = old.conn.disconnect() {
+                log::warn!(
+                    "{role_label} old connection disconnect failed during teardown: {error}"
+                );
+            }
+            if let Err(error) = old._pump.join() {
+                log::warn!("{role_label} old pump thread panicked during teardown: {error:?}");
+            } else {
+                log::info!("{role_label} old connection teardown complete");
+            }
+        },
+    );
 }
 
 /// One replaceable reducer-only connection. Reconnection happens off the watchdog thread; this
@@ -272,22 +322,10 @@ pub(crate) struct CoordinatorInner {
     /// transaction (was: one transaction per heartbeat — ~10k tx/s of per-transaction machinery
     /// at 2000 players, the measured 92%-writer wall).
     pub(crate) motion_batch: MovementBatch,
-    /// Re-arm hook for a connection-scoped relay that has no per-login registration point to
-    /// self-heal through after a reconnect (the bot-invite relay is the first of these, and
-    /// as of now the only one — every OTHER coordinator relay re-registers itself on the fresh
-    /// connection implicitly, because it is armed from inside a per-session LOGIN, which happens
-    /// again after any reconnect. This one is armed once at gateway startup with no login to hang a
-    /// re-arm off, so without this hook a reconnect (the watchdog's own doc comment: "self-heal
-    /// across a SpacetimeDB migration" — a module republish, which this project does routinely) would
-    /// leave it silently registered on a dead, disconnected `LiveConn` forever).
-    ///
-    /// `None` until [`super::subscriptions::Coordinator::spawn_bot_invite_relay`] sets it (nothing to
-    /// re-arm if that was never called); the watchdog invokes whatever is set, if anything, right
-    /// after each successful reconnect swap — AFTER, because the hook re-reads `coord()`, which must
-    /// already be the fresh connection.
-    /// A LIST, not a slot: there are now two one-shot coordinator relays per shard — the
-    /// bot-invite relay and the shared AOI dispatch — and a slot would silently let whichever
-    /// armed second overwrite the first's re-arm.
+    /// Re-arm hooks for connection-scoped coordinator relays with no per-login recovery point.
+    /// The list is empty until those relays register at startup. After each successful coordinator
+    /// replacement, the watchdog clones the list and invokes every hook against the fresh
+    /// generation without holding this mutex or the live-slot lock.
     pub(crate) on_reconnect: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
 }
 
@@ -347,24 +385,52 @@ fn select_active_call_pipe(
         .find(|&index| is_active(index))
 }
 
-/// Build one CALL-ONLY pipe — same connect shape as [`connect_blocking`] but subscribing a
-/// single one-row table (`game_config`) purely so the `LiveConn` subscription handle exists and
-/// its liveness signal works. Reducer calls need no cache.
-fn connect_call_pipe(uri: String, db_name: String, token: Option<String>) -> Result<LiveConn> {
+const CALL_PIPE_LIVENESS_QUERY: &str = "SELECT * FROM game_config";
+
+fn call_pipe_queries() -> Vec<&'static str> {
+    vec![CALL_PIPE_LIVENESS_QUERY]
+}
+
+fn coordinator_role_label(db_name: &str) -> String {
+    format!("shard {db_name} coordinator")
+}
+
+fn call_pipe_role_label(db_name: &str, index: usize) -> String {
+    format!("shard {db_name} call pipe {index}")
+}
+
+/// Build one SDK connection generation, start its pump, and wait for the caller's exact
+/// subscription policy to apply.
+fn connect_subscribed(
+    uri: String,
+    db_name: String,
+    token: Option<String>,
+    queries: Vec<&'static str>,
+    role_label: String,
+    subscription_timeout_hint: Option<&'static str>,
+) -> Result<LiveConn> {
     let reducer_completion = Arc::new(ReducerCompletion::connected());
     let disconnected = reducer_completion.clone();
+    let connect_label = role_label.clone();
+    let connect_error_label = role_label.clone();
+    let disconnect_label = role_label.clone();
     let conn = DbConnection::builder()
         .with_uri(&uri)
         .with_database_name(&db_name)
         .with_token(token)
-        .on_connect(|_ctx, identity, _token| log::info!("call pipe connected as {identity}"))
-        .on_connect_error(|_ctx, err| log::error!("call pipe connect error: {err}"))
+        .on_connect(move |_ctx, identity, _token| {
+            log::info!("{connect_label} connected as {identity}")
+        })
+        .on_connect_error(move |_ctx, error| {
+            log::error!("{connect_error_label} connect error: {error}")
+        })
         .on_disconnect(move |_ctx, err| {
-            log::warn!("call pipe connection closed: {err:?}");
+            log::warn!("{disconnect_label} connection closed: {err:?}");
             disconnected.disconnect();
         })
         .build()
-        .map_err(|e| anyhow!("call pipe build/connect failed: {e}"))?;
+        .map_err(|error| anyhow!("{role_label} build/connect failed: {error}"))?;
+
     let pump = conn.run_threaded();
     let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
     let tx_err = tx.clone();
@@ -376,18 +442,38 @@ fn connect_call_pipe(uri: String, db_name: String, token: Option<String>) -> Res
         .on_error(move |_ctx, err| {
             let _ = tx_err.send(Err(format!("{err}")));
         })
-        .subscribe(vec!["SELECT * FROM game_config"]);
+        .subscribe(queries);
+
     match rx.recv_timeout(Duration::from_secs(15)) {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => return Err(anyhow!("call pipe subscription error: {e}")),
-        Err(_) => return Err(anyhow!("call pipe subscription not applied within 15s")),
+        Ok(Ok(())) => log::info!("{role_label} subscriptions applied"),
+        Ok(Err(error)) => return Err(anyhow!("{role_label} subscription error: {error}")),
+        Err(_) => {
+            let hint = subscription_timeout_hint
+                .map(|hint| format!(" ({hint})"))
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "{role_label} subscriptions not applied within 15s{hint}"
+            ));
+        }
     }
+
     Ok(LiveConn {
         conn,
         reducer_completion,
         _pump: pump,
         _sub: sub,
     })
+}
+
+/// Build one reducer-only pipe. Its one-row subscription is a liveness signal, not a cache.
+fn connect_call_pipe(
+    uri: String,
+    db_name: String,
+    token: Option<String>,
+    index: usize,
+) -> Result<LiveConn> {
+    let role_label = call_pipe_role_label(&db_name, index);
+    connect_subscribed(uri, db_name, token, call_pipe_queries(), role_label, None)
 }
 
 /// Start at most one reconnect for each failed call pipe. The coordinator watchdog owns this
@@ -416,22 +502,19 @@ fn repair_dead_call_pipes(inner: &Arc<CoordinatorInner>) {
         std::thread::Builder::new()
             .name(format!("stdb-call-pipe-reconnect-{index}"))
             .spawn(move || {
-                match connect_call_pipe(uri, db_name, token) {
+                let role_label = call_pipe_role_label(&db_name, index);
+                match connect_call_pipe(uri, db_name, token, index) {
                     Ok(fresh) => {
-                        let old = {
-                            let mut live = repair.call_pipes[index]
-                                .live
-                                .write()
-                                .unwrap_or_else(|p| p.into_inner());
-                            std::mem::replace(&mut *live, fresh)
-                        };
-                        log::info!("call pipe {index} reconnected");
-                        let _ = old.conn.disconnect();
-                        if let Err(e) = old._pump.join() {
-                            log::warn!("old call-pipe pump thread panicked on teardown: {e:?}");
-                        }
+                        replace_live_conn(
+                            &repair.call_pipes[index].live,
+                            fresh,
+                            &role_label,
+                            || {},
+                        );
                     }
-                    Err(e) => log::error!("call pipe {index} reconnect failed (will retry): {e:#}"),
+                    Err(error) => {
+                        log::error!("{role_label} reconnect failed (will retry): {error:#}")
+                    }
                 }
                 repair.call_pipes[index]
                     .reconnecting
@@ -773,54 +856,16 @@ fn connect_blocking(
     token: Option<String>,
     sharded_tables: bool,
 ) -> Result<LiveConn> {
-    let reducer_completion = Arc::new(ReducerCompletion::connected());
-    let disconnected = reducer_completion.clone();
-    let conn = DbConnection::builder()
-        .with_uri(&uri)
-        .with_database_name(&db_name)
-        .with_token(token)
-        .on_connect(|_ctx, identity, _token| log::info!("coordinator connected as {identity}"))
-        .on_connect_error(|_ctx, err| log::error!("coordinator connect error: {err}"))
-        .on_disconnect(move |_ctx, err| {
-            log::warn!("coordinator connection closed: {err:?}");
-            disconnected.disconnect();
-        })
-        .build()
-        .map_err(|e| anyhow!("coordinator build/connect failed: {e}"))?;
-
-    let pump = conn.run_threaded();
-
-    // Block until the privileged subscription is applied so the cache reads below see data.
-    let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
-    let tx_err = tx.clone();
     let queries = coordinator_queries(sharded_tables);
-    let sub = conn
-        .subscription_builder()
-        .on_applied(move |_ctx| {
-            let _ = tx.send(Ok(()));
-        })
-        .on_error(move |_ctx, err| {
-            let _ = tx_err.send(Err(format!("{err}")));
-        })
-        .subscribe(queries);
-
-    match rx.recv_timeout(Duration::from_secs(15)) {
-        Ok(Ok(())) => log::info!("coordinator subscriptions applied"),
-        Ok(Err(e)) => return Err(anyhow!("coordinator subscription error: {e}")),
-        Err(_) => {
-            return Err(anyhow!(
-                "coordinator subscriptions not applied within 15s (node down, or token lacks \
-                 access to the private game_account/game_session tables?)"
-            ))
-        }
-    }
-
-    Ok(LiveConn {
-        conn,
-        reducer_completion,
-        _pump: pump,
-        _sub: sub,
-    })
+    let role_label = coordinator_role_label(&db_name);
+    connect_subscribed(
+        uri,
+        db_name,
+        token,
+        queries,
+        role_label,
+        Some("node down, or token lacks access to the private game_account/game_session tables?"),
+    )
 }
 
 /// How often the coordinator watchdog polls connection liveness.
@@ -828,7 +873,7 @@ const COORDINATOR_WATCHDOG_POLL: Duration = Duration::from_secs(3);
 
 /// Background watchdog: detect a dropped coordinator connection and rebuild it IN PLACE so the gateway
 /// self-heals across a SpacetimeDB migration / network blip — no manual restart. Each poll it checks
-/// BOTH liveness signals: the socket (`conn.is_active()`) AND the subscription (`_sub.is_active()`).
+/// BOTH liveness signals through [`LiveConn::is_healthy`]: the socket and the subscription.
 /// Neither subsumes the other — a migration can invalidate the SUBSCRIPTION while the socket stays up
 /// (`conn.is_active()` stays true, and the SDK's subscription `on_disconnect` is a no-op), and a raw
 /// socket drop leaves the subscription's status at `Applied` — so we heal when EITHER is down. On a drop
@@ -849,13 +894,15 @@ fn spawn_coordinator_watchdog(inner: Arc<CoordinatorInner>) -> std::thread::Join
             // pipe returning to the round-robin pool.
             repair_dead_call_pipes(&inner);
             {
-                // ONE guard for both checks (so a swap can't land between them). Healthy → keep polling.
+                // One guard covers the whole health decision. Healthy means the transport and
+                // subscription belong to the same generation and are both active.
                 let live = inner.coord();
-                if live.conn.is_active() && live._sub.is_active() {
+                if live.is_healthy() {
                     continue;
                 }
             } // drop the read guard BEFORE the (blocking) rebuild
-            log::warn!("coordinator connection/subscription down — rebuilding (gateway self-heal)");
+            let role_label = coordinator_role_label(&inner.db_name);
+            log::warn!("{role_label} connection/subscription down; rebuilding (gateway self-heal)");
             match connect_blocking(
                 inner.uri.clone(),
                 inner.db_name.clone(),
@@ -863,33 +910,20 @@ fn spawn_coordinator_watchdog(inner: Arc<CoordinatorInner>) -> std::thread::Join
                 inner.sharded_tables,
             ) {
                 Ok(fresh) => {
-                    // Swap in the fresh connection under the write lock (instant), capturing the OLD one;
-                    // release the lock, THEN tear the old one down off-lock.
-                    let old = {
-                        let mut guard = inner.live.write().unwrap_or_else(|p| {
-                            log::error!("coordinator lock poisoned on reconnect swap — recovering");
-                            p.into_inner()
-                        });
-                        std::mem::replace(&mut *guard, fresh)
-                    };
-                    log::info!("coordinator reconnected + resubscribed");
                     // Re-arm any relay with no per-login point to self-heal through — MUST run
-                    // after the swap above: the hook re-reads `inner.coord()`, which by now answers the
-                    // fresh connection. Cloned out from under its own lock so the hook runs unlocked (it
-                    // takes `live`'s read lock itself via `coord()`).
-                    let hooks = inner.on_reconnect.lock().unwrap().clone();
-                    for hook in hooks {
-                        hook();
-                    }
-                    // Deterministic teardown of the old connection: disconnect() winds down its pump (it's
-                    // still running on the subscription-death path), then join() reaps the thread. Both
-                    // are benign no-ops if the old socket was already dead.
-                    let _ = old.conn.disconnect();
-                    if let Err(e) = old._pump.join() {
-                        log::warn!("old coordinator pump thread panicked on teardown: {e:?}");
-                    }
+                    // after the install: each hook re-reads `inner.coord()` and must see fresh.
+                    // `replace_live_conn` also guarantees hooks and teardown run without its write
+                    // guard, with teardown ordered after every hook.
+                    replace_live_conn(&inner.live, fresh, &role_label, || {
+                        let hooks = inner.on_reconnect.lock().unwrap().clone();
+                        for hook in hooks {
+                            hook();
+                        }
+                    });
                 }
-                Err(e) => log::error!("coordinator reconnect failed (will retry): {e:#}"),
+                Err(error) => {
+                    log::error!("{role_label} reconnect failed (will retry): {error:#}")
+                }
             }
         })
         .expect("spawn coordinator watchdog")
@@ -1199,7 +1233,7 @@ pub(crate) fn recv_reducer_on(
 
 #[cfg(test)]
 mod coordinator_query_tests {
-    use super::coordinator_queries;
+    use super::{call_pipe_queries, coordinator_queries, CALL_PIPE_LIVENESS_QUERY};
 
     /// Every table that only exists on a MULTI-DATABASE deployment. A subscription to one of these
     /// against a module that predates it FAILS TO APPLY and takes the whole gateway down on
@@ -1268,6 +1302,60 @@ mod coordinator_query_tests {
         let before = sorted.len();
         sorted.dedup();
         assert_eq!(sorted.len(), before, "duplicate subscription query");
+    }
+
+    #[test]
+    fn coordinator_and_call_pipes_keep_separate_query_policies() {
+        let pipe_queries = call_pipe_queries();
+        assert_eq!(
+            pipe_queries,
+            vec![CALL_PIPE_LIVENESS_QUERY],
+            "a reducer-only pipe must carry only its game_config liveness signal"
+        );
+
+        let coordinator_queries = coordinator_queries(false);
+        assert!(coordinator_queries.len() > pipe_queries.len());
+        assert!(coordinator_queries.contains(&CALL_PIPE_LIVENESS_QUERY));
+    }
+}
+
+#[cfg(test)]
+mod live_replacement_tests {
+    use super::replace_slot_ordered;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, RwLock};
+
+    #[test]
+    fn replacement_installs_before_post_install_and_tears_down_unlocked() {
+        let slot = RwLock::new("old");
+        let post_install_calls = AtomicUsize::new(0);
+        let events = Mutex::new(Vec::new());
+
+        replace_slot_ordered(
+            &slot,
+            "fresh",
+            "test database coordinator",
+            || {
+                let live = slot
+                    .try_read()
+                    .expect("post-install work must run without the live-slot write lock");
+                assert_eq!(*live, "fresh", "post-install work must observe fresh");
+                post_install_calls.fetch_add(1, Ordering::Relaxed);
+                events.lock().unwrap().push("post-install");
+            },
+            |old| {
+                assert_eq!(old, "old");
+                assert!(
+                    slot.try_write().is_ok(),
+                    "teardown must run without the live-slot write lock"
+                );
+                events.lock().unwrap().push("teardown");
+            },
+        );
+
+        assert_eq!(*slot.read().unwrap(), "fresh");
+        assert_eq!(post_install_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(*events.lock().unwrap(), ["post-install", "teardown"]);
     }
 }
 
@@ -1502,15 +1590,17 @@ impl Coordinator {
         let uri = cfg.stdb_uri.clone();
         let db = db_name.to_string();
         let token = cfg.coordinator_token.clone();
+        let role_label = coordinator_role_label(db_name);
+        let join_role_label = role_label.clone();
         // Build on a dedicated OS thread (no tokio context), join it off the reactor.
         let build_thread = std::thread::Builder::new()
             .name("stdb-coordinator-connect".into())
             .spawn(move || connect_blocking(uri, db, token, sharded_tables))
-            .context("spawn coordinator connect thread")?;
+            .context(format!("spawn {role_label} connect thread"))?;
         let live = tokio::task::spawn_blocking(move || -> Result<LiveConn> {
             build_thread
                 .join()
-                .map_err(|_| anyhow!("coordinator connect thread panicked"))?
+                .map_err(|_| anyhow!("{join_role_label} connect thread panicked"))?
         })
         .await
         .context("join coordinator connect task")??;
@@ -1521,6 +1611,7 @@ impl Coordinator {
         let mut call_pipes = Vec::new();
         if want_pipes > 1 {
             for i in 0..want_pipes {
+                let role_label = call_pipe_role_label(db_name, i);
                 let (u, d, t) = (
                     cfg.stdb_uri.clone(),
                     db_name.to_string(),
@@ -1529,7 +1620,7 @@ impl Coordinator {
                 let built = tokio::task::spawn_blocking(move || {
                     std::thread::Builder::new()
                         .name(format!("stdb-call-pipe-{i}"))
-                        .spawn(move || connect_call_pipe(u, d, t))
+                        .spawn(move || connect_call_pipe(u, d, t, i))
                         .expect("spawn call pipe thread")
                         .join()
                         .map_err(|_| anyhow!("call pipe connect thread panicked"))?
@@ -1540,8 +1631,10 @@ impl Coordinator {
                         live: RwLock::new(pipe),
                         reconnecting: AtomicBool::new(false),
                     }),
-                    Ok(Err(e)) => log::warn!("call pipe {i} failed to build (skipped): {e:#}"),
-                    Err(e) => log::warn!("call pipe {i} join failed (skipped): {e:#}"),
+                    Ok(Err(error)) => {
+                        log::warn!("{role_label} failed to build (skipped): {error:#}")
+                    }
+                    Err(error) => log::warn!("{role_label} join failed (skipped): {error:#}"),
                 }
             }
             log::info!(
@@ -1889,7 +1982,7 @@ impl Coordinator {
             .auth_db(|d| {
                 self.1.conns.get(d).is_some_and(|inner| {
                     let live = inner.coord();
-                    live.conn.is_active() && live._sub.is_active()
+                    live.is_healthy()
                 })
             })
             .map_err(|db| {

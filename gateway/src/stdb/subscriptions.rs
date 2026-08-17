@@ -342,7 +342,6 @@ pub(crate) fn motionstat_line(
     d_dropped: u64,
     d_submitted: u64,
     submitted: u64,
-    completed: u64,
 ) -> String {
     let delivery = if d_calls > 0 {
         format!("{:.1}%", 100.0 * d_sent as f64 / d_calls as f64)
@@ -356,8 +355,7 @@ pub(crate) fn motionstat_line(
     format!(
         "MOTIONSTAT calls={calls} sent={sent} dropped={dropped} \
          (+{d_calls} +{d_sent} +{d_dropped} in 10s) | delivery={delivery} fanout={fanout}/move \
-         | move submitted={submitted} completed={completed} outstanding={}",
-        submitted.saturating_sub(completed)
+         | move submitted={submitted}"
     )
 }
 
@@ -4318,7 +4316,9 @@ mod tests {
     #[test]
     fn the_motionstat_line_reports_delivery_dropped_and_fanout_287() {
         // 1000 callbacks, 900 packets queued, 7 discarded, from 10 submitted movements.
-        let line = motionstat_line(5000, 4500, 21, 1000, 900, 7, 10, 400, 380);
+        let line = motionstat_line(5000, 4500, 21, 1000, 900, 7, 10, 400);
+        assert!(line.contains("calls=5000"), "cumulative calls missing: {line}");
+        assert!(line.contains("sent=4500"), "cumulative sent missing: {line}");
         assert!(
             line.contains("dropped=21"),
             "cumulative dropped count missing: {line}"
@@ -4335,13 +4335,12 @@ mod tests {
             line.contains("fanout=100.0/move"),
             "per-movement fan-out missing/wrong: {line}"
         );
-        assert!(
-            line.contains("outstanding=20"),
-            "the pre-existing move counters must survive: {line}"
-        );
+        assert!(line.contains("submitted=400"), "submitted count missing: {line}");
+        assert!(!line.contains("completed="), "retired completed count remains: {line}");
+        assert!(!line.contains("outstanding="), "retired outstanding count remains: {line}");
 
         // An idle window must not divide by zero or print a fake 0 %.
-        let idle = motionstat_line(5000, 4500, 21, 0, 0, 0, 0, 400, 400);
+        let idle = motionstat_line(5000, 4500, 21, 0, 0, 0, 0, 400);
         assert!(
             idle.contains("delivery=--") && idle.contains("fanout=--/move"),
             "{idle}"
