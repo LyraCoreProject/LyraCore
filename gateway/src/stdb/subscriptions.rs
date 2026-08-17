@@ -1662,11 +1662,13 @@ pub(crate) fn duel_winner_outbound(row: &DuelEvent) -> Vec<Outbound> {
         completion_kind::FLED => DuelWinnerReason::Fled,
         _ => return Vec::new(),
     };
+    // `opponent_name` is the first CString on the wire and carries the WINNER: mangos sends
+    // this packet from the loser, announcing its opponent as victor.
     vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_WINNER(Box::new(
         SMSG_DUEL_WINNER {
             reason,
-            opponent_name: row.loser_name.clone(),
-            initiator_name: row.winner_name.clone(),
+            opponent_name: row.winner_name.clone(),
+            initiator_name: row.loser_name.clone(),
         },
     )))]
 }
@@ -3900,9 +3902,10 @@ mod tests {
                 Outbound::One(ServerOpcodeMessage::SMSG_DUEL_COMPLETE(_)),
                 Outbound::One(ServerOpcodeMessage::SMSG_DUEL_WINNER(message)),
                 ..
+                // `opponent_name` is written first on the wire and must carry the winner.
             ] if message.reason == wow_world_base::shared::duel_winner_reason_vanilla_tbc_wrath::DuelWinnerReason::Won
-                && message.initiator_name == "Winner"
-                && message.opponent_name == "Loser"
+                && message.opponent_name == "Winner"
+                && message.initiator_name == "Loser"
         ));
 
         let mut fled_event = duel_event(3, 3);

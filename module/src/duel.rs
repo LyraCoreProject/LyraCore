@@ -110,6 +110,7 @@ pub(crate) enum RequestDenied {
     Dead,
     SelfTarget,
     DifferentPartition,
+    CrossFaction,
     Busy,
 }
 
@@ -120,6 +121,7 @@ pub(crate) struct RequestParticipant {
     dead: bool,
     map_id: u32,
     instance_id: u64,
+    race: u8,
 }
 
 impl From<&crate::WorldEntity> for RequestParticipant {
@@ -130,6 +132,7 @@ impl From<&crate::WorldEntity> for RequestParticipant {
             dead: entity.dead || entity.health == 0,
             map_id: entity.map_id,
             instance_id: entity.instance_id,
+            race: entity.race(),
         }
     }
 }
@@ -155,6 +158,10 @@ pub(crate) fn request_verdict(
     }
     if initiator.map_id != challenged.map_id || initiator.instance_id != challenged.instance_id {
         return Err(RequestDenied::DifferentPartition);
+    }
+    // Vanilla only duels within one team; same race-team rule as the mail gate.
+    if !lyracore_shared::faction::same_team(initiator.race, challenged.race) {
+        return Err(RequestDenied::CrossFaction);
     }
     if initiator_busy || challenged_busy {
         return Err(RequestDenied::Busy);
@@ -557,6 +564,8 @@ pub fn tick_duels(ctx: &ReducerContext, _schedule: DuelSchedule) {
             continue;
         }
 
+        // Tie rule: if both flee deadlines expire on the same tick, the initiator is
+        // processed first and loses.
         let initiator_transition = boundary_transition(
             outside_duel_boundary(
                 &duel,
@@ -594,6 +603,7 @@ mod tests {
             dead: false,
             map_id,
             instance_id,
+            race: 1, // Human
         }
     }
 
@@ -656,6 +666,17 @@ mod tests {
         assert_eq!(
             request_verdict(Some(a), Some(b), false, true),
             Err(RequestDenied::Busy)
+        );
+    }
+
+    #[test]
+    fn request_gate_rejects_cross_faction_pairs() {
+        let a = entity(1, 0, 4);
+        let mut b = entity(2, 0, 4);
+        b.race = 2; // Orc
+        assert_eq!(
+            request_verdict(Some(a), Some(b), false, false),
+            Err(RequestDenied::CrossFaction)
         );
     }
 
