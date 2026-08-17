@@ -97,6 +97,16 @@ pub struct ServerConfig {
     // `debug_set_vmap_enabled` or `UPDATE game_config SET vmap_enabled = true WHERE id = 0`.
     #[default(false)]
     pub vmap_enabled: bool,
+    // END-APPENDED: let vmap-DERIVED nav coverage join path planning (`nav::fetcher` merges it
+    // into the imported grid). Separate from `vmap_enabled`, which gates the exact rays, and from
+    // `nav_enabled`, which gates the imported grid itself. Coverage belongs to one vmap generation
+    // and only an ACTIVE generation with a complete manifest is ever read, so flipping this on a
+    // map without prepared coverage changes nothing. Default OFF: preparation is an operator
+    // workflow rolled out per map, and this flag is the one-command rollback. Toggle:
+    // `debug_set_nav_coverage_enabled` or
+    // `UPDATE game_config SET nav_coverage_enabled = true WHERE id = 0`.
+    #[default(false)]
+    pub nav_coverage_enabled: bool,
 }
 
 /// Starting items per (race, class) — the character-creation loadout. Loaded from the client

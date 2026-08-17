@@ -170,6 +170,7 @@ pub fn debug_set_nav_enabled(ctx: &ReducerContext, enabled: bool) -> Result<(), 
                 hosts_instances: true,
                 bots_idle: false,
                 vmap_enabled: false,
+                nav_coverage_enabled: false,
             });
         }
     }
@@ -211,6 +212,33 @@ pub fn debug_set_vmap_enabled(ctx: &ReducerContext, enabled: bool) -> Result<(),
                 hosts_instances: true,
                 bots_idle: false,
                 vmap_enabled: enabled,
+                nav_coverage_enabled: false,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Toggle vmap-derived nav coverage in path planning (`game_config.nav_coverage_enabled`) —
+/// upserts row 0 like `debug_set_vmap_enabled`. OFF = planning reads the imported nav grid alone.
+/// This is the one-command rollback for a coverage rollout.
+#[reducer]
+pub fn debug_set_nav_coverage_enabled(ctx: &ReducerContext, enabled: bool) -> Result<(), String> {
+    let cfg = ctx.db.game_config();
+    match cfg.id().find(0) {
+        Some(mut c) => {
+            c.nav_coverage_enabled = enabled;
+            cfg.id().update(c);
+        }
+        None => {
+            cfg.insert(ServerConfig {
+                id: 0,
+                xp_rate: 1.0,
+                nav_enabled: false,
+                hosts_instances: true,
+                bots_idle: false,
+                vmap_enabled: false,
+                nav_coverage_enabled: enabled,
             });
         }
     }
@@ -374,6 +402,7 @@ pub fn debug_assert_floor_snap(
                 hosts_instances: true,
                 bots_idle: false,
                 vmap_enabled: true,
+                nav_coverage_enabled: false,
             });
         }
     }
@@ -587,6 +616,7 @@ pub fn debug_assert_blink_clamp(ctx: &ReducerContext, character_guid: u64) -> Re
                 hosts_instances: true,
                 bots_idle: false,
                 vmap_enabled: true,
+                nav_coverage_enabled: false,
             });
         }
     }
@@ -736,6 +766,7 @@ pub fn debug_assert_chase_stops_at_column(
                 hosts_instances: true,
                 bots_idle: false,
                 vmap_enabled: true,
+                nav_coverage_enabled: false,
             });
         }
     }
@@ -857,6 +888,7 @@ pub fn debug_assert_unreachable_goal_stops_at_wall(
                 hosts_instances: true,
                 bots_idle: false,
                 vmap_enabled: false,
+                nav_coverage_enabled: false,
             });
         }
     }

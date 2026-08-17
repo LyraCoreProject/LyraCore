@@ -88,6 +88,7 @@ fn seed_production_core(ctx: &ReducerContext) {
         hosts_instances: true,
         bots_idle: false, // bots think by default; the load-test lever freezes them
         vmap_enabled: false, // #521/#523: off until an operator imports vmap data + flips it
+        nav_coverage_enabled: false, // off until an operator prepares coverage + flips it
     });
 
     // Human Warrior start position (display 49 = human male native model).
