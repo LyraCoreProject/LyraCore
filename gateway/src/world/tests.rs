@@ -224,6 +224,11 @@ struct InMemoryStore {
     /// Recorded `turn_in_quest` dispatches: (account, giver, quest, reward_index) — so the
     /// choose-reward socket test asserts the player's pick reached the store unchanged.
     turned_in: std::sync::Mutex<Vec<(u64, u64, u32, u32)>>,
+    /// Optional item row whose subscribed relay is queued during a successful turn-in. The paired
+    /// sender is retained only for that test and consumed by `turn_in_quest`, so it cannot keep the
+    /// session writer alive during teardown.
+    turn_in_reward_item: Option<codec::ItemInstanceView>,
+    turn_in_tx: std::sync::Mutex<Option<SessionTx>>,
     /// Override for `player_combat_until_ms`: 0 = out of combat (default), non-zero = in combat until
     /// this ms-epoch deadline (use u64::MAX for "always in combat" in tests).
     combat_until_ms: u64,
@@ -1100,6 +1105,9 @@ impl WorldStore for InMemoryStore {
             .unwrap()
             .push((self_guid, login_map, login_x, login_y));
         *self.session_depth.lock().unwrap() = Some(tx.depth_handle());
+        if self.turn_in_reward_item.is_some() {
+            *self.turn_in_tx.lock().unwrap() = Some(tx.clone());
+        }
         match &self.relay_view {
             Some(view) => Ok(PlayerSubscriptions::registered_for_test(
                 view.clone(),
@@ -2813,6 +2821,33 @@ impl QuestActionStore for InMemoryStore {
             .lock()
             .unwrap()
             .push((account_id, giver_guid, quest_id, reward_index));
+        if let (Some(item), Some(tx)) = (
+            self.turn_in_reward_item.clone(),
+            self.turn_in_tx.lock().unwrap().take(),
+        ) {
+            let mut relay = vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(codec::build_item_create_object(&item)),
+            ))];
+            if let Some(pointer) =
+                codec::build_inv_slot_values(item.owner_guid, item.slot, item.guid)
+            {
+                relay.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                    Box::new(pointer),
+                )));
+            }
+            relay.push(Outbound::One(ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(
+                Box::new(codec::build_item_push_result(
+                    item.owner_guid,
+                    255,
+                    item.slot as u32,
+                    item.entry,
+                    item.stack_count,
+                    false,
+                )),
+            )));
+            tx.send(Outbound::Job(Box::new(move || relay)))
+                .map_err(|_| anyhow!("reward item relay writer is gone"))?;
+        }
         Ok(())
     }
 }
@@ -4972,13 +5007,24 @@ fn del_ignore_round_trips_added_then_unknown_is_ignore_not_found() {
 }
 
 #[test]
-fn quest_choose_reward_reaches_the_quest_module_and_replies_complete_over_the_cipher() {
-    // The socket-level contract: dispatch routes CHOOSE_REWARD to the quest module, the chosen
-    // pick-1-of-N slot reaches the store unchanged, and the typed completion reply crosses the
-    // encrypted frame. Which screen a turn-in opens is decided at the `dispatch_quest_action` seam
-    // and proved there.
+fn quest_choose_reward_relays_inventory_before_completion_over_the_cipher() {
+    // The socket-level contract: the subscribed reducer callback has already queued the complete
+    // item insertion when turn_in_quest returns, so the session's completion presentation must sit
+    // behind CREATE, its inventory pointer and gain feedback on the one writer queue.
     let mut s = quest_store();
-    s.quest_details = vec![detail_view(1234, "A Threat Within")];
+    let detail = detail_view(1234, "A Threat Within");
+    s.quest_details = vec![detail.clone()];
+    let reward_item = codec::ItemInstanceView {
+        guid: 0x4000_0000_0000_0042,
+        entry: 25,
+        owner_guid: 1,
+        slot: 23,
+        stack_count: 2,
+        durability: 20,
+        max_durability: 20,
+        container_slots: 0,
+    };
+    s.turn_in_reward_item = Some(reward_item.clone());
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_QUESTGIVER_CHOOSE_REWARD {
@@ -4988,10 +5034,45 @@ fn quest_choose_reward_reaches_the_quest_module_and_replies_complete_over_the_ci
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(_) => {}
-        other => panic!("expected SMSG_QUESTGIVER_QUEST_COMPLETE, got {other}"),
-    }
+    let framed = |message: ServerOpcodeMessage| {
+        let mut bytes = Vec::new();
+        message.write_unencrypted_server(&mut bytes).unwrap();
+        (
+            u16::from_le_bytes([bytes[2], bytes[3]]),
+            bytes[4..].to_vec(),
+        )
+    };
+    let expected = [
+        framed(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+            codec::build_item_create_object(&reward_item),
+        ))),
+        framed(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+            codec::build_inv_slot_values(
+                reward_item.owner_guid,
+                reward_item.slot,
+                reward_item.guid,
+            )
+            .unwrap(),
+        ))),
+        framed(ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(Box::new(
+            codec::build_item_push_result(
+                reward_item.owner_guid,
+                255,
+                reward_item.slot as u32,
+                reward_item.entry,
+                reward_item.stack_count,
+                false,
+            ),
+        ))),
+        framed(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(
+            Box::new(codec::build_quest_complete(&detail)),
+        )),
+    ];
+    let actual = std::array::from_fn(|_| read_raw_frame(&mut client, &mut c_dec));
+    assert_eq!(
+        actual, expected,
+        "inventory visibility must precede completion"
+    );
     drop(client);
     server.join().unwrap();
     assert_eq!(

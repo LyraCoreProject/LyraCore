@@ -2677,7 +2677,7 @@ pub(crate) fn item_instance_insert_outbound(
     self_guid: u64,
     row: &ItemInstance,
 ) -> Vec<Outbound> {
-    let mut out = item_gain_feedback(db, self_guid, row.slot, row.entry, row.stack_count, false);
+    let mut out = Vec::new();
     let (max_durability, container_slots) = db
         .game_item_template()
         .entry()
@@ -2718,6 +2718,17 @@ pub(crate) fn item_instance_insert_outbound(
             out.push(Outbound::Raw { opcode, body });
         }
     }
+    // The item object and the descriptor that makes it reachable must precede gain feedback. The
+    // shared owner-view enqueues this complete vector as one writer job, so another producer cannot
+    // splice quest completion between CREATE and its inventory/container pointer.
+    out.extend(item_gain_feedback(
+        db,
+        self_guid,
+        row.slot,
+        row.entry,
+        row.stack_count,
+        false,
+    ));
     if row.slot <= 18 {
         append_item_armor_and_sheet(db, self_guid, &mut out);
     }

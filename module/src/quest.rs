@@ -21,15 +21,15 @@
 //! [`crate::xp::grant_xp`] + [`crate::items::grant_item`]), and marks the row rewarded (kept, to block
 //! a repeat). Purely additive: brand-new tables + one hook call in `kill_creature`.
 
-use spacetimedb::{
-    table, Identity, ReducerContext, Table,
-};
+use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use crate::game_gameobject; // GAMEOBJECT quest givers (e.g. Wanted Poster, Lost Guards corpses)
 use crate::game_item_instance; // ITEM quest givers (work-item 194: item_template.start_quest)
 use crate::game_item_template;
 use crate::game_world_entity;
 use crate::game_xp_event; // quest XP "+N experience" relay (non-kill SMSG_LOG_XPGAIN)
+#[cfg(feature = "debug_reducers")]
+use crate::reputation::game_player_reputation;
 
 /// Objective kinds (`QuestObjective.kind`). Only KILL ships today; the others are the documented
 /// extension points the schema already accommodates (a new kind needs only a new call site into
@@ -932,6 +932,337 @@ pub(crate) fn apply_turn_in_quest(
             quest_entry,
         },
     );
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+const CHOICE_FIXTURE_PLAYER: u64 = 1;
+#[cfg(feature = "debug_reducers")]
+const CHOICE_FIXTURE_GIVER: u64 = (0xF130_u64 << 48) | ((620_u64) << 24) | 0x00FF_FF00;
+#[cfg(feature = "debug_reducers")]
+const CHOICE_FIXTURE_GIVER_ENTRY: u32 = 620;
+#[cfg(feature = "debug_reducers")]
+const CHOICE_FIXTURE_GIVER_SOURCE: u64 = (0xF130_u64 << 48) | ((620_u64) << 24) | 1;
+#[cfg(feature = "debug_reducers")]
+const CHOICE_FIXTURE_QUEST: u32 = 509_033;
+#[cfg(feature = "debug_reducers")]
+const CHOICE_FIXTURE_OBJECTIVE_ITEM: u32 = 509_033_0;
+#[cfg(feature = "debug_reducers")]
+const CHOICE_FIXTURE_CHOICE_0: u32 = 509_033_1;
+#[cfg(feature = "debug_reducers")]
+const CHOICE_FIXTURE_CHOICE_1: u32 = 509_033_2;
+#[cfg(feature = "debug_reducers")]
+const CHOICE_FIXTURE_GUARANTEED: u32 = 509_033_3;
+#[cfg(feature = "debug_reducers")]
+const CHOICE_FIXTURE_FILLER: u32 = 509_033_4;
+
+/// Stage a quest-33-shaped durable turn-in fixture for the standalone reducer test.
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_stage_choice_reward_fixture(
+    ctx: &ReducerContext,
+    fill_inventory: bool,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let entities = ctx.db.game_world_entity();
+    let mut player = entities
+        .guid()
+        .find(CHOICE_FIXTURE_PLAYER)
+        .ok_or_else(|| "choice fixture player is not live".to_string())?;
+
+    // A dedicated live giver, cloned from the seed chicken only to avoid reproducing the large
+    // WorldEntity constructor in test code. Its reserved guid and fixed position make the real
+    // giver validation deterministic across transactions.
+    let mut giver = entities
+        .guid()
+        .find(CHOICE_FIXTURE_GIVER_SOURCE)
+        .ok_or_else(|| "choice fixture giver source is not live".to_string())?;
+    entities.guid().delete(CHOICE_FIXTURE_GIVER);
+    giver.guid = CHOICE_FIXTURE_GIVER;
+    giver.x = player.x + 1.0;
+    giver.y = player.y;
+    giver.z = player.z;
+    giver.map_id = player.map_id;
+    giver.instance_id = player.instance_id;
+    let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(giver.x, giver.y);
+    giver.grid_x = grid_x;
+    giver.grid_y = grid_y;
+    giver.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
+    entities.insert(giver);
+
+    let templates = ctx.db.game_item_template();
+    for entry in [
+        CHOICE_FIXTURE_OBJECTIVE_ITEM,
+        CHOICE_FIXTURE_CHOICE_0,
+        CHOICE_FIXTURE_CHOICE_1,
+        CHOICE_FIXTURE_GUARANTEED,
+        CHOICE_FIXTURE_FILLER,
+    ] {
+        templates.entry().delete(entry);
+    }
+    templates.insert(crate::seed::tough_jerky_template(
+        CHOICE_FIXTURE_OBJECTIVE_ITEM,
+    ));
+    templates.insert(crate::seed::tempered_blade_template(
+        CHOICE_FIXTURE_CHOICE_0,
+    ));
+    templates.insert(crate::seed::tempered_blade_template(
+        CHOICE_FIXTURE_CHOICE_1,
+    ));
+    templates.insert(crate::seed::tough_jerky_template(CHOICE_FIXTURE_GUARANTEED));
+    templates.insert(crate::seed::tempered_blade_template(CHOICE_FIXTURE_FILLER));
+
+    ctx.db
+        .game_quest_template()
+        .entry()
+        .delete(CHOICE_FIXTURE_QUEST);
+    ctx.db.game_quest_template().insert(QuestTemplate {
+        entry: CHOICE_FIXTURE_QUEST,
+        min_level: 0,
+        quest_level: 2,
+        title: "Choice reward tracer".to_string(),
+        reward_money: 150,
+        reward_xp: 90,
+        prev_quest_id: 0,
+        required_races: 0,
+        required_classes: 0,
+        zone_or_sort: 12,
+        rew_rep_faction_1: crate::seed::FIXTURE_FACTION,
+        rew_rep_value_1: 250,
+        rew_rep_faction_2: 0,
+        rew_rep_value_2: 0,
+        src_item: 0,
+        src_item_count: 0,
+        repeatable: false,
+        next_quest_id: 0,
+        limit_time: 0,
+        reward_money_max_level: 0,
+    });
+
+    let objectives = ctx.db.game_quest_objective();
+    objectives.id().delete(509_033_0);
+    objectives.insert(QuestObjective {
+        id: 509_033_0,
+        quest_entry: CHOICE_FIXTURE_QUEST,
+        obj_index: 0,
+        kind: objective_kind::COLLECT_ITEM,
+        target_entry: CHOICE_FIXTURE_OBJECTIVE_ITEM,
+        required_count: 8,
+    });
+    let guaranteed = ctx.db.game_quest_reward_item();
+    guaranteed.id().delete(509_033_3);
+    guaranteed.insert(QuestRewardItem {
+        id: 509_033_3,
+        quest_entry: CHOICE_FIXTURE_QUEST,
+        item_entry: CHOICE_FIXTURE_GUARANTEED,
+        count: 3,
+    });
+    let choices = ctx.db.game_quest_reward_choice();
+    choices.id().delete(509_033_1);
+    choices.id().delete(509_033_2);
+    choices.insert(QuestRewardChoice {
+        id: 509_033_1,
+        quest_entry: CHOICE_FIXTURE_QUEST,
+        choice_index: 0,
+        item_entry: CHOICE_FIXTURE_CHOICE_0,
+        count: 1,
+    });
+    choices.insert(QuestRewardChoice {
+        id: 509_033_2,
+        quest_entry: CHOICE_FIXTURE_QUEST,
+        choice_index: 1,
+        item_entry: CHOICE_FIXTURE_CHOICE_1,
+        count: 2,
+    });
+    let relations = ctx.db.game_creature_quest();
+    relations.id().delete(509_033_4);
+    relations.insert(CreatureQuest {
+        id: 509_033_4,
+        creature_entry: CHOICE_FIXTURE_GIVER_ENTRY,
+        quest_entry: CHOICE_FIXTURE_QUEST,
+        role: quest_role::END,
+    });
+
+    for item in ctx
+        .db
+        .game_item_instance()
+        .by_owner_guid()
+        .filter(&CHOICE_FIXTURE_PLAYER)
+        .collect::<Vec<_>>()
+    {
+        ctx.db.game_item_instance().guid().delete(item.guid);
+    }
+    for row in ctx
+        .db
+        .game_character_quest()
+        .by_character()
+        .filter(&CHOICE_FIXTURE_PLAYER)
+        .filter(|row| row.quest_entry == CHOICE_FIXTURE_QUEST)
+        .collect::<Vec<_>>()
+    {
+        ctx.db.game_character_quest().id().delete(row.id);
+    }
+    for row in ctx
+        .db
+        .game_player_reputation()
+        .by_character()
+        .filter(&CHOICE_FIXTURE_PLAYER)
+        .filter(|row| row.faction_id == crate::seed::FIXTURE_FACTION)
+        .collect::<Vec<_>>()
+    {
+        ctx.db.game_player_reputation().id().delete(row.id);
+    }
+
+    player.level = 1;
+    player.xp = 0;
+    player.next_level_xp = crate::xp::xp_to_next_level(1);
+    player.money = 0;
+    let owner_identity = player.owner_identity;
+    entities.guid().update(player);
+    crate::items::grant_item(ctx, CHOICE_FIXTURE_PLAYER, CHOICE_FIXTURE_OBJECTIVE_ITEM, 8)?;
+    if fill_inventory {
+        // The objective occupies one backpack slot. Fifteen non-stackable fillers occupy the rest.
+        // Turn-in consumption frees one slot, the guaranteed reward takes it, then the selected
+        // non-stackable reward fails to store. Returning Err must roll that whole transaction back.
+        crate::items::grant_item(ctx, CHOICE_FIXTURE_PLAYER, CHOICE_FIXTURE_FILLER, 15)?;
+    }
+    ctx.db.game_character_quest().insert(CharacterQuest {
+        id: 0,
+        character_guid: CHOICE_FIXTURE_PLAYER,
+        owner_identity,
+        quest_entry: CHOICE_FIXTURE_QUEST,
+        counts: vec![0],
+        rewarded: false,
+        deadline_micros: 0,
+        failed: false,
+    });
+    Ok(())
+}
+
+/// Drive the same durable turn-in core as `gw_turn_in_quest`, with the fixture guids resolved server-side.
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_turn_in_choice_reward_fixture(
+    ctx: &ReducerContext,
+    reward_index: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    apply_turn_in_quest(
+        ctx,
+        CHOICE_FIXTURE_PLAYER,
+        CHOICE_FIXTURE_GIVER,
+        CHOICE_FIXTURE_QUEST,
+        reward_index,
+    )
+}
+
+/// Verify a committed turn-in from a later standalone transaction.
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_verify_choice_reward_fixture(
+    ctx: &ReducerContext,
+    reward_index: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let (choice_0, choice_1) = match reward_index {
+        0 => (1, 0),
+        1 => (0, 2),
+        other => {
+            return Err(format!(
+                "no successful fixture expectation for choice {other}"
+            ))
+        }
+    };
+    let expected = [
+        (CHOICE_FIXTURE_OBJECTIVE_ITEM, 0),
+        (CHOICE_FIXTURE_CHOICE_0, choice_0),
+        (CHOICE_FIXTURE_CHOICE_1, choice_1),
+        (CHOICE_FIXTURE_GUARANTEED, 3),
+        (CHOICE_FIXTURE_FILLER, 0),
+    ];
+    for (entry, count) in expected {
+        let actual = crate::items::item_count(ctx, CHOICE_FIXTURE_PLAYER, entry);
+        if actual != count {
+            return Err(format!("item {entry}: expected {count}, found {actual}"));
+        }
+    }
+    let player = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(CHOICE_FIXTURE_PLAYER)
+        .ok_or_else(|| "choice fixture player is not live".to_string())?;
+    if player.money != 150 || player.xp != 90 {
+        return Err(format!(
+            "expected 150 copper and 90 XP, found {} copper and {} XP",
+            player.money, player.xp
+        ));
+    }
+    let reputation = ctx
+        .db
+        .game_player_reputation()
+        .by_character()
+        .filter(&CHOICE_FIXTURE_PLAYER)
+        .find(|row| row.faction_id == crate::seed::FIXTURE_FACTION)
+        .map(|row| row.standing);
+    if reputation != Some(250) {
+        return Err(format!("expected 250 reputation, found {reputation:?}"));
+    }
+    let quest = character_quest_row(ctx, CHOICE_FIXTURE_PLAYER, CHOICE_FIXTURE_QUEST)
+        .ok_or_else(|| "choice fixture quest row is missing".to_string())?;
+    if !quest.rewarded {
+        return Err("choice fixture quest was not rewarded".to_string());
+    }
+    Ok(())
+}
+
+/// Verify that a refused turn-in rolled back every durable effect.
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_verify_choice_reward_refusal_fixture(
+    ctx: &ReducerContext,
+    expected_fillers: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let expected = [
+        (CHOICE_FIXTURE_OBJECTIVE_ITEM, 8),
+        (CHOICE_FIXTURE_CHOICE_0, 0),
+        (CHOICE_FIXTURE_CHOICE_1, 0),
+        (CHOICE_FIXTURE_GUARANTEED, 0),
+        (CHOICE_FIXTURE_FILLER, expected_fillers),
+    ];
+    for (entry, count) in expected {
+        let actual = crate::items::item_count(ctx, CHOICE_FIXTURE_PLAYER, entry);
+        if actual != count {
+            return Err(format!("item {entry}: expected {count}, found {actual}"));
+        }
+    }
+    let player = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(CHOICE_FIXTURE_PLAYER)
+        .ok_or_else(|| "choice fixture player is not live".to_string())?;
+    if player.money != 0 || player.xp != 0 {
+        return Err(format!(
+            "refusal changed rewards to {} copper and {} XP",
+            player.money, player.xp
+        ));
+    }
+    let reputation = ctx
+        .db
+        .game_player_reputation()
+        .by_character()
+        .filter(&CHOICE_FIXTURE_PLAYER)
+        .find(|row| row.faction_id == crate::seed::FIXTURE_FACTION);
+    if reputation.is_some() {
+        return Err("refusal granted reputation".to_string());
+    }
+    let quest = character_quest_row(ctx, CHOICE_FIXTURE_PLAYER, CHOICE_FIXTURE_QUEST)
+        .ok_or_else(|| "choice fixture quest row is missing".to_string())?;
+    if quest.rewarded {
+        return Err("refusal marked the choice fixture quest rewarded".to_string());
+    }
     Ok(())
 }
 

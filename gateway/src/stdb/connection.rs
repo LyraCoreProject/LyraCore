@@ -370,6 +370,16 @@ impl CoordinatorInner {
         }
         self.coord()
     }
+
+    /// The subscribed connection for a reducer whose successful return authorizes presentation of
+    /// its committed rows. SpacetimeDB's SDK applies a reducer result to this connection's cache and
+    /// runs its row callbacks before the reducer callback. Waiting for that callback is therefore a
+    /// deterministic visibility receipt: relays for the transaction are queued before the caller
+    /// can enqueue success presentation. Reducer-only call pipes cannot provide that ordering
+    /// because they do not subscribe the relayed tables.
+    pub(crate) fn visibility_pipe(&self) -> std::sync::RwLockReadGuard<'_, LiveConn> {
+        self.coord()
+    }
 }
 
 /// Return the round-robin pipe that is currently usable, or let the caller use its coordinator

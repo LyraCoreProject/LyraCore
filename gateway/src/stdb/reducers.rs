@@ -2177,10 +2177,10 @@ impl Coordinator {
         )
     }
 
-    /// Turn quest `quest_id` in to giver `giver_guid` (`CMSG_QUESTGIVER_CHOOSE_REWARD`) over the
-    /// coordinator connection. The module validates completion + grants the rewards (money/XP/items).
-    /// `reward_index` is the player's pick-1-of-N choice slot; ignored when the quest has no choices.
-    /// Rides the coordinator connection as `gw_turn_in_quest`.
+    /// Turn quest `quest_id` in to giver `giver_guid` (`CMSG_QUESTGIVER_CHOOSE_REWARD`). The module
+    /// validates completion + grants the rewards (money/XP/items). `reward_index` is the player's
+    /// pick-1-of-N choice slot; ignored when the quest has no choices. This call uses the subscribed
+    /// visibility pipe so committed item relays are queued before success presentation is allowed.
     pub fn turn_in_quest(
         &self,
         _account_id: u64,
@@ -2192,7 +2192,7 @@ impl Coordinator {
         if actor_guid == 0 {
             return Err(anyhow!("turn_in_quest: actor_guid unresolved"));
         }
-        let coord = self.0.call_pipe();
+        let coord = self.0.visibility_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_turn_in_quest",
@@ -2781,6 +2781,34 @@ impl Coordinator {
             "clear_promoted_loot_roll",
             clear_promoted_loot_roll_then(roll_id)
         )
+    }
+}
+
+#[cfg(test)]
+mod visibility_receipt_tests {
+    #[test]
+    fn quest_completion_waits_for_the_subscribed_coordinator_receipt() {
+        let source = include_str!("reducers.rs");
+        let turn_in = crate::test_scan::code_of(source, "pub fn turn_in_quest(");
+        let visibility_pipe = crate::test_scan::code_of(
+            include_str!("connection.rs"),
+            "pub(crate) fn visibility_pipe(",
+        );
+
+        assert!(
+            turn_in.contains("self.0.visibility_pipe()"),
+            "a successful turn-in may authorize QUEST_COMPLETE only after the coordinator has \
+             applied the reward transaction and queued its inventory relays"
+        );
+        assert!(
+            !turn_in.contains("self.0.call_pipe()"),
+            "a reducer-only call pipe cannot receipt coordinator subscription visibility"
+        );
+        assert!(
+            visibility_pipe.contains("self.coord()")
+                && !visibility_pipe.contains("self.call_pipe()"),
+            "the visibility pipe must be the connection that owns the relayed subscriptions"
+        );
     }
 }
 
