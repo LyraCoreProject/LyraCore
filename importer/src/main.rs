@@ -7,9 +7,12 @@
 //!
 //! One binary, six modes (pick by flag; the ones that write honor --db/--server/--apply,
 //! defaulting to a dry run that prints the plan and writes nothing):
-//!   --dump <classic-db .sql[.gz]>   cmangos creature/etc ETL  [--map 0] [--center X,Y,Z]
-//!                                   [--radius 180] [--print-extents derives --box from the
-//!                                   dump's real spawn extents; always a dry run]
+//!   --dump <classic-db .sql[.gz]>   cmangos creature/etc ETL
+//!                                   [--world-profile alliance-eastern|alliance-kalimdor|
+//!                                    alliance-single|instances]
+//!                                   [advanced: --map 0 --center X,Y,Z --radius 180]
+//!                                   [--print-extents derives --box from the dump's real spawn
+//!                                    extents; always a dry run]
 //!   --dbc  <client Data/ dir>       client DBC extraction/checks (dbc.rs); add --spells for the
 //!                                   Spell.dbc importer (spell.rs) or --talents for the
 //!                                   TalentTab.dbc/Talent.dbc importer (talent.rs)
@@ -41,6 +44,7 @@ mod spell;
 mod talent;
 mod terrain;
 mod vmap;
+mod world_import_scope;
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -48,6 +52,7 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
+use world_import_scope::{WorldImportProfile, WorldImportScope};
 
 // Kept in step with `module::items::tables`: the importer cannot depend on the wasm Module, but
 // it owns the ClassicDB `-1` sentinel conversion that makes these values durable.
@@ -956,6 +961,7 @@ pub(crate) struct Args {
     // entry. `required_level`/`cost` are DBC-DERIVED (the spell's own spell_level +
     // our formula) — NO cmangos npc_trainer value is read. The ids ARE the per-class
     // offering list (a subset of --only); the importer auto-adds them to the allowlist.
+    pub(crate) world_profile: Option<WorldImportProfile>,
     map: i64,
     include_maps: Vec<i64>, // --include-map <id> (repeatable, work-item 226): ADDITIONAL maps whose
     // rows import WHOLE-MAP (no --box/--radius/--exclude geometry — an instance map like Deadmines 36
@@ -986,6 +992,14 @@ pub(crate) struct Args {
 }
 
 fn parse_args() -> Result<Args> {
+    parse_args_from(std::env::args().skip(1))
+}
+
+fn parse_args_from<I, S>(args: I) -> Result<Args>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
     let mut a = Args {
         dump: None,
         dbc: None,
@@ -1001,6 +1015,7 @@ fn parse_args() -> Result<Args> {
         talents: false,
         only: Vec::new(),
         trainers: Vec::new(),
+        world_profile: None,
         map: 0,
         include_maps: Vec::new(),
         include_creatures: Vec::new(),
@@ -1014,7 +1029,8 @@ fn parse_args() -> Result<Args> {
         family: None,
         source_sha: String::new(),
     };
-    let mut it = std::env::args().skip(1);
+    let mut legacy_spatial_args: Vec<&'static str> = Vec::new();
+    let mut it = args.into_iter().map(Into::into);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--dump" => a.dump = Some(it.next().context("--dump needs a path")?),
@@ -1102,8 +1118,19 @@ fn parse_args() -> Result<Args> {
                 }
                 a.trainers.push((entry, ids));
             }
-            "--map" => a.map = it.next().context("--map")?.parse()?,
+            "--world-profile" => {
+                let name = it.next().context("--world-profile needs a profile name")?;
+                if a.world_profile.is_some() {
+                    bail!("--world-profile may be given only once");
+                }
+                a.world_profile = Some(WorldImportProfile::parse(&name)?);
+            }
+            "--map" => {
+                legacy_spatial_args.push("--map");
+                a.map = it.next().context("--map")?.parse()?;
+            }
             "--include-map" => {
+                legacy_spatial_args.push("--include-map");
                 // Repeatable: a WHOLE additional map in the slice (work-item 226 — Deadmines, map 36).
                 // Fail loudly on a malformed id so a typo can't silently skip the dungeon's content.
                 let m: i64 = it
@@ -1115,8 +1142,12 @@ fn parse_args() -> Result<Args> {
                     a.include_maps.push(m);
                 }
             }
-            "--radius" => a.radius = it.next().context("--radius")?.parse()?,
+            "--radius" => {
+                legacy_spatial_args.push("--radius");
+                a.radius = it.next().context("--radius")?.parse()?;
+            }
             "--box" => {
+                legacy_spatial_args.push("--box");
                 // A coordinate rectangle X0,X1,Y0,Y1 (REPLACES --radius for the spawn slice). Fail
                 // loudly on a malformed box so a typo can't silently import the wrong region.
                 let v = it.next().context("--box X0,X1,Y0,Y1")?;
@@ -1139,6 +1170,7 @@ fn parse_args() -> Result<Args> {
                 ));
             }
             "--exclude" => {
+                legacy_spatial_args.push("--exclude");
                 // A rectangle SUBTRACTED from --box (in-box AND in-exclude → dropped). Same parse as --box.
                 let v = it.next().context("--exclude X0,X1,Y0,Y1")?;
                 let p: Vec<f64> = v
@@ -1177,6 +1209,7 @@ fn parse_args() -> Result<Args> {
             }
             "--source-sha" => a.source_sha = it.next().context("--source-sha <sha>")?,
             "--center" => {
+                legacy_spatial_args.push("--center");
                 let v = it.next().context("--center X,Y,Z")?;
                 // Fail loudly on a malformed center — silently defaulting a bad value to (0,0,0) or
                 // keeping the default would import the WRONG slice without the operator noticing.
@@ -1194,6 +1227,17 @@ fn parse_args() -> Result<Args> {
                 a.center = (p[0], p[1], p[2]);
             }
             other => bail!("unknown arg: {other}"),
+        }
+    }
+    if let Some(profile) = a.world_profile {
+        if !legacy_spatial_args.is_empty() {
+            legacy_spatial_args.sort_unstable();
+            legacy_spatial_args.dedup();
+            bail!(
+                "--world-profile {} cannot be mixed with legacy spatial arguments: {}",
+                profile.name(),
+                legacy_spatial_args.join(", ")
+            );
         }
     }
     // Need at least one input. `--dump` alone = cmangos creatures; `--dbc` alone = standalone DBC
@@ -1246,6 +1290,9 @@ fn parse_args() -> Result<Args> {
             );
         }
     }
+    // Resolve and validate the complete scope before the caller opens a dump or client archive.
+    // `build_dump_plan` resolves the same pure value once and then uses its predicate end to end.
+    a.world_import_scope()?;
     // `--trainer` rides the spell importer too (it reads each offering's DBC spell_level). Auto-extend
     // the allowlist with the trainer ids so every offered wrapper's game_spell header is imported in the
     // SAME pass (so the required_level is DBC-derived and the buy path resolves a real rank). When ONLY
@@ -1265,6 +1312,22 @@ fn parse_args() -> Result<Args> {
         }
     }
     Ok(a)
+}
+
+impl Args {
+    pub(crate) fn world_import_scope(&self) -> Result<WorldImportScope> {
+        match self.world_profile {
+            Some(profile) => WorldImportScope::canonical(profile),
+            None => WorldImportScope::legacy(
+                self.map,
+                self.bbox,
+                self.center,
+                self.radius,
+                self.exclude,
+                self.include_maps.clone(),
+            ),
+        }
+    }
 }
 
 /// One `spacetime call` as the CLI identity (the module owner after a local publish) — the shared
@@ -3091,24 +3154,23 @@ pub(crate) fn push_insert(stmts: &mut Vec<String>, table: &str, cols: &str, rows
     flush(&mut batch, stmts);
 }
 
-/// True if a spawn row at `(map, x, y, z)` belongs to this run's content slice (work-item 226): the
-/// primary `--map` keeps its `in_scope` box/radius/exclude geometry, while every `--include-map` map
-/// is included WHOLE (no geometry — an instance map's scope IS its map id; Deadmines has no `--box`
-/// worth drawing and a WMO map has no terrain to co-scope with). Shared by the creature + gameobject
-/// filters so both carve the same region. Pure/unit-tested.
-/// Whether a creature spawn row is KEPT into the content slice: its geometry passes `row_in_slice`,
-/// OR its concrete entry is force-included via `--include-creatures` (which bypasses geometry to
-/// recover an out-of-box quest giver). Pure — the one gate the spawn loop applies. `raw_entry == 0`
-/// (a pool slot) can never match a force-listed giver, so it falls through to geometry as before.
-///
-/// THE MAP FENCE (issue #24, Phase B): a row on a map this run does not own can never be kept, no
-/// matter which flags are passed. `row_in_slice` already implies it; `--include-creatures` did NOT —
-/// it matched on entry alone, so a force-listed entry with a spawn on another map dragged that map's
-/// spatial row into the slice. On a per-continent shard that is cross-contamination (a Kalimdor
-/// database carrying an Elwynn spawn); on the canonical map-0 run it is a no-op unless the dump places
-/// one of the ten force-listed quest givers off map 0, which would itself have been a latent bug (a
-/// spawn on a map the shard doesn't host). The fence lives HERE, in the one gate every spawn passes,
-/// rather than in the calling script's flag hygiene.
+/// Keep a creature inside the scope, or a forced entry anywhere on a planned map. Forced entries
+/// bypass geometry only; the map fence always applies. Pool slots cannot match a forced entry.
+fn creature_row_kept_in_scope(
+    scope: &WorldImportScope,
+    include_creatures: &[u64],
+    map: i64,
+    x: f64,
+    y: f64,
+    z: f64,
+    raw_entry: u64,
+) -> bool {
+    scope.contains_map(map)
+        && ((raw_entry != 0 && include_creatures.contains(&raw_entry))
+            || scope.contains(map, x, y, z))
+}
+
+#[cfg(test)]
 pub(crate) fn creature_row_kept(
     args: &Args,
     map: i64,
@@ -3117,34 +3179,24 @@ pub(crate) fn creature_row_kept(
     z: f64,
     raw_entry: u64,
 ) -> bool {
-    map_in_run(args, map)
-        && ((raw_entry != 0 && args.include_creatures.contains(&raw_entry))
-            || row_in_slice(args, map, x, y, z))
+    let scope = args
+        .world_import_scope()
+        .expect("Args contains a scope validated by parse_args");
+    creature_row_kept_in_scope(&scope, &args.include_creatures, map, x, y, z, raw_entry)
 }
 
-/// Is `map` one of the maps THIS run imports — the primary `--map` or an `--include-map`? The map
-/// fence every spatial row is filtered by (issue #24).
+#[cfg(test)]
 pub(crate) fn map_in_run(args: &Args, map: i64) -> bool {
-    map == args.map || args.include_maps.contains(&map)
+    args.world_import_scope()
+        .expect("Args contains a scope validated by parse_args")
+        .contains_map(map)
 }
 
+#[cfg(test)]
 pub(crate) fn row_in_slice(args: &Args, map: i64, x: f64, y: f64, z: f64) -> bool {
-    if map == args.map {
-        return in_scope(args, x, y, z);
-    }
-    args.include_maps.contains(&map)
-}
-
-/// True if `(x,y,z)` is in the import slice: inside `--box` (else the `--radius` sphere around `--center`)
-/// AND outside `--exclude`. Shared by the creature + gameobject filters so both carve the same region.
-pub(crate) fn in_scope(args: &Args, x: f64, y: f64, z: f64) -> bool {
-    let (cx, cy, cz) = args.center;
-    let inside = match args.bbox {
-        Some((x0, x1, y0, y1)) => x >= x0 && x <= x1 && y >= y0 && y <= y1,
-        None => (x - cx).powi(2) + (y - cy).powi(2) + (z - cz).powi(2) <= args.radius * args.radius,
-    };
-    let excluded = matches!(args.exclude, Some((ex0, ex1, ey0, ey1)) if x >= ex0 && x <= ex1 && y >= ey0 && y <= ey1);
-    inside && !excluded
+    args.world_import_scope()
+        .expect("Args contains a scope validated by parse_args")
+        .contains(map, x, y, z)
 }
 
 /// What `--print-extents` derived from the dump. `anchor` is the in-slice spawn CLOSEST to the
@@ -3369,6 +3421,20 @@ fn build_dump_plan(
     display_scales: &Option<std::collections::HashMap<u32, f32>>,
     profession_tier_values: &Option<std::collections::HashMap<u32, [u16; 4]>>,
 ) -> Result<DumpPlan> {
+    let scope = args.world_import_scope()?;
+    eprintln!("world import scope: {}", scope.name());
+    for slice in &scope.bounded_slices {
+        let (x0, x1, y0, y1) = slice.bounds;
+        let (sx, sy, sz) = slice.sample;
+        eprintln!(
+            "  bounded slice {}: map {} x[{x0:.0},{x1:.0}] y[{y0:.0},{y1:.0}], sample ({sx:.2},{sy:.2},{sz:.2})",
+            slice.name, slice.map_id
+        );
+    }
+    for map in &scope.whole_maps {
+        eprintln!("  whole map: {map}");
+    }
+
     // 0b) creature_spawn_entry: resolves id=0 pool slots to concrete creature_template entries.
     // cmangos places id=0 in `creature` for spawn-pool points; the real entry is in creature_spawn_entry.
     // Each guid may map to multiple entries (random pick at runtime). We pick the first for determinism.
@@ -3387,7 +3453,6 @@ fn build_dump_plan(
     );
 
     // 1) spawns in range → the content slice.
-    let (cx, cy, cz) = args.center;
     // db_guid, entry, x,y,z,o, movement_type, respawn_secs, map (map END-appended, work-item 226 —
     // an --include-map row carries its OWN map into the packed payload, not args.map).
     let mut spawns: Vec<(u64, u64, f64, f64, f64, f64, u8, u32, i64)> = Vec::new();
@@ -3400,15 +3465,9 @@ fn build_dump_plan(
         let z: f64 = field(&row, cr::Z).parse().unwrap_or(0.0);
         let db_guid: u64 = field(&row, cr::GUID).parse().unwrap_or(0);
         let raw_entry: u64 = field(&row, cr::ID).parse().unwrap_or(0);
-        // Scope the slice: the primary --map rides in_scope (--box rectangle else the --radius sphere,
-        // minus --exclude); an --include-map map (Deadmines 36) imports WHOLE. See row_in_slice.
-        // FORCE-INCLUDE (--include-creatures): a row whose concrete entry is force-listed bypasses the
-        // geometry gate, so its spawn survives even out-of-box (a Westfall/Stormwind quest giver whose
-        // sibling is in-band). Keeping the SPAWN is the make-or-break — `entries` derives from `spawns`
-        // below, so the forced entry then flows into every creature-scoped consumer (template, quest
-        // relations, vendor, gossip) AND yields a real in-world game_creature_spawn row. Pool slots
-        // (raw_entry 0) never match a giver, so they resolve via the map after the gate as before.
-        if !creature_row_kept(args, map, x, y, z, raw_entry) {
+        // A forced entry bypasses bounded geometry but not the scope's map fence. Keeping the spawn
+        // makes its entry flow into every creature-scoped family below.
+        if !creature_row_kept_in_scope(&scope, &args.include_creatures, map, x, y, z, raw_entry) {
             continue;
         }
         // cmangos uses id=0 for random spawn-POOL slots; the concrete entry is in creature_spawn_entry.
@@ -3530,23 +3589,26 @@ fn build_dump_plan(
         }
         entries.insert(e);
     }
-    let scope = match args.bbox {
-        Some((x0, x1, y0, y1)) => format!("box x[{x0:.0},{x1:.0}] y[{y0:.0},{y1:.0}]"),
-        None => format!("within {:.0}yd of ({cx:.0},{cy:.0},{cz:.0})", args.radius),
-    };
+    for slice in &scope.bounded_slices {
+        let count = spawns
+            .iter()
+            .filter(|spawn| slice.contains(spawn.8, spawn.2, spawn.3, spawn.4))
+            .count();
+        eprintln!(
+            "filter: bounded slice {} (map {}) → {count} creature spawns",
+            slice.name, slice.map_id
+        );
+    }
+    for &map in &scope.whole_maps {
+        let count = spawns.iter().filter(|spawn| spawn.8 == map).count();
+        eprintln!("filter: whole map {map} → {count} creature spawns");
+    }
     eprintln!(
-        "filter: map {} {scope} → {} spawns, {} entries",
-        args.map,
+        "filter: scope {} total → {} creature spawns, {} entries",
+        scope.name(),
         spawns.len(),
         entries.len()
     );
-    // Per-include-map coverage (work-item 226): loud, so an operator sees a dungeon slice that
-    // silently matched NOTHING (wrong map id, dump without instance content) at import time rather
-    // than as an empty map 36 in play. The manifest floor (import-world.sh) is the hard gate.
-    for &m in &args.include_maps {
-        let n = spawns.iter().filter(|s| s.8 == m).count();
-        eprintln!("filter: include-map {m} (whole map) → {n} creature spawns");
-    }
 
     // 2) templates for those entries.
     let mut templates: Vec<String> = Vec::new();
@@ -3984,7 +4046,8 @@ fn build_dump_plan(
     // membership test (a dropped/unclassified entry has no `go_meta` row).
     let mut go_packed_rows: Vec<String> = Vec::new();
     let mut used_go: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    let mut go_include_map_counts: std::collections::BTreeMap<i64, u32> =
+    let mut go_slice_counts = vec![0usize; scope.bounded_slices.len()];
+    let mut go_whole_map_counts: std::collections::BTreeMap<i64, usize> =
         std::collections::BTreeMap::new();
     for row in parse_table(dump, "gameobject") {
         let map = field(&row, go::MAP).parse::<i64>().unwrap_or(-1);
@@ -3995,9 +4058,8 @@ fn build_dump_plan(
         let x: f64 = field(&row, go::X).parse().unwrap_or(0.0);
         let y: f64 = field(&row, go::Y).parse().unwrap_or(0.0);
         let z: f64 = field(&row, go::Z).parse().unwrap_or(0.0);
-        // Same slice rule as the creature loop (work-item 226): primary --map keeps the box geometry,
-        // an --include-map map imports whole — the Deadmines doors/cannon/chests ride this.
-        if !row_in_slice(args, map, x, y, z) {
+        // Creature and GameObject rows consume the same scope predicate.
+        if !scope.contains(map, x, y, z) {
             continue;
         }
         let db_guid: u64 = field(&row, go::GUID).parse().unwrap_or(0);
@@ -4016,14 +4078,25 @@ fn build_dump_plan(
             g = go_guid(db_guid),
             m = map
         ));
-        if map != args.map {
-            *go_include_map_counts.entry(map).or_insert(0) += 1;
+        for (index, slice) in scope.bounded_slices.iter().enumerate() {
+            if slice.contains(map, x, y, z) {
+                go_slice_counts[index] += 1;
+            }
+        }
+        if scope.whole_maps.contains(&map) {
+            *go_whole_map_counts.entry(map).or_insert(0) += 1;
         }
         used_go.insert(id);
     }
-    for &m in &args.include_maps {
-        let n = go_include_map_counts.get(&m).copied().unwrap_or(0);
-        eprintln!("filter: include-map {m} (whole map) → {n} gameobject spawns");
+    for (slice, count) in scope.bounded_slices.iter().zip(go_slice_counts) {
+        eprintln!(
+            "filter: bounded slice {} (map {}) → {count} gameobject spawns",
+            slice.name, slice.map_id
+        );
+    }
+    for &map in &scope.whole_maps {
+        let count = go_whole_map_counts.get(&map).copied().unwrap_or(0);
+        eprintln!("filter: whole map {map} → {count} gameobject spawns");
     }
     // Template rows for the GOs actually spawned, split by type (`go_template_row`) — a SQL INSERT must
     // name EVERY column (#[default] is NOT applied on INSERT, only on migration — slice-5 data-loss
@@ -5983,6 +6056,63 @@ mod tests {
         }
     }
 
+    #[test]
+    fn command_selects_each_canonical_world_profile() {
+        for name in WorldImportProfile::NAMES {
+            let args = parse_args_from([
+                "--dump",
+                "/path/need-not-exist.sql",
+                "--world-profile",
+                name,
+            ])
+            .unwrap_or_else(|error| panic!("profile {name} should parse: {error:#}"));
+            let scope = args
+                .world_import_scope()
+                .expect("profile resolves to a scope");
+            assert_eq!(scope.name(), *name);
+        }
+    }
+
+    #[test]
+    fn command_refuses_profile_and_legacy_spatial_arguments_before_input_reads() {
+        let error = parse_args_from([
+            "--dump",
+            "/definitely/not/read.sql",
+            "--world-profile",
+            "alliance-eastern",
+            "--map",
+            "0",
+            "--box",
+            "-1,1,-1,1",
+        ])
+        .err()
+        .expect("ambiguous command must fail");
+        let message = format!("{error:#}");
+        assert!(message.contains("alliance-eastern"), "{message}");
+        assert!(message.contains("--map"), "{message}");
+        assert!(message.contains("--box"), "{message}");
+    }
+
+    #[test]
+    fn command_refuses_malformed_or_empty_legacy_scopes() {
+        let flat = parse_args_from(["--dump", "/path/need-not-exist.sql", "--box", "1,1,-1,1"])
+            .err()
+            .expect("flat box must fail");
+        assert!(format!("{flat:#}").contains("positive width and height"));
+
+        let removed = parse_args_from([
+            "--dump",
+            "/path/need-not-exist.sql",
+            "--box",
+            "-1,1,-1,1",
+            "--exclude",
+            "-2,2,-2,2",
+        ])
+        .err()
+        .expect("fully excluded box must fail");
+        assert!(format!("{removed:#}").contains("scope is empty"));
+    }
+
     // ---- Work-item 226: --include-map (the Deadmines map-36 slice) ------------------------------
 
     #[test]
@@ -6016,6 +6146,118 @@ mod tests {
             row_in_slice(&args, 36, -8949.95, -132.493, 83.5),
             "an included map ignores --exclude"
         );
+    }
+
+    #[test]
+    fn canonical_eastern_command_keeps_two_disjoint_map_zero_corridors_and_drops_the_gap() {
+        let dump = format!(
+            "INSERT INTO `creature` VALUES \
+             (1,100,0,1,-9000,0,80,0,300,300,0,0),\
+             (2,200,0,1,-6200,300,380,0,300,300,0,0),\
+             (3,300,0,1,-7500,300,200,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {},{},{}; \
+             INSERT INTO `gameobject_template` VALUES \
+             (400,0,1,'Human Door',0,0,0,0,0,0,0,0),\
+             (500,0,1,'Dwarf Door',0,0,0,0,0,0,0,0),\
+             (600,0,1,'Gap Door',0,0,0,0,0,0,0,0); \
+             INSERT INTO `gameobject` VALUES \
+             (10,400,0,0,-9000,0,80,0,0,0,0,1),\
+             (11,500,0,0,-6200,300,380,0,0,0,0,1),\
+             (12,600,0,0,-7500,300,200,0,0,0,0,1);",
+            creature_template_row(100, 0),
+            creature_template_row(200, 0),
+            creature_template_row(300, 0),
+        );
+        let args = parse_args_from([
+            "--dump",
+            "synthetic.sql",
+            "--world-profile",
+            "alliance-eastern",
+        ])
+        .expect("profile command");
+        let plan = build_dump_plan(&dump, &args, &None, &None).expect("profile dump plan");
+
+        let creatures = plan.spawn_batches.join(";");
+        assert!(creatures
+            .split(';')
+            .any(|row| row.split(',').nth(1) == Some("100")));
+        assert!(creatures
+            .split(';')
+            .any(|row| row.split(',').nth(1) == Some("200")));
+        assert!(!creatures
+            .split(';')
+            .any(|row| row.split(',').nth(1) == Some("300")));
+
+        let gameobjects = plan.go_batches.join(";");
+        assert!(gameobjects
+            .split(';')
+            .any(|row| row.split(',').nth(1) == Some("400")));
+        assert!(gameobjects
+            .split(';')
+            .any(|row| row.split(',').nth(1) == Some("500")));
+        assert!(!gameobjects
+            .split(';')
+            .any(|row| row.split(',').nth(1) == Some("600")));
+    }
+
+    #[test]
+    fn canonical_single_command_keeps_bounded_maps_and_whole_instance_but_fences_forced_rows() {
+        let dump = format!(
+            "INSERT INTO `creature` VALUES \
+             (1,100,0,1,-9000,0,80,0,300,300,0,0),\
+             (2,200,1,1,10311,831,1326,0,300,300,0,0),\
+             (3,300,36,1,-16,-383,-33,0,300,300,0,0),\
+             (4,400,2,1,0,0,0,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {},{},{},{}; \
+             INSERT INTO `gameobject_template` VALUES \
+             (500,0,1,'Eastern Door',0,0,0,0,0,0,0,0),\
+             (600,0,1,'Kalimdor Door',0,0,0,0,0,0,0,0),\
+             (700,0,1,'Instance Door',0,0,0,0,0,0,0,0); \
+             INSERT INTO `gameobject` VALUES \
+             (10,500,0,0,-9000,0,80,0,0,0,0,1),\
+             (11,600,1,0,10311,831,1326,0,0,0,0,1),\
+             (12,700,36,0,90000,-90000,-33,0,0,0,0,1);",
+            creature_template_row(100, 0),
+            creature_template_row(200, 0),
+            creature_template_row(300, 0),
+            creature_template_row(400, 0),
+        );
+        let args = parse_args_from([
+            "--dump",
+            "synthetic.sql",
+            "--world-profile",
+            "alliance-single",
+            "--include-creatures",
+            "400",
+        ])
+        .expect("profile command");
+        let plan = build_dump_plan(&dump, &args, &None, &None).expect("profile dump plan");
+
+        let creatures = plan.spawn_batches.join(";");
+        for entry in ["100", "200", "300"] {
+            assert!(
+                creatures
+                    .split(';')
+                    .any(|row| row.split(',').nth(1) == Some(entry)),
+                "entry {entry} retained: {creatures}"
+            );
+        }
+        assert!(
+            !creatures
+                .split(';')
+                .any(|row| row.split(',').nth(1) == Some("400")),
+            "forced creature on an unplanned map is fenced: {creatures}"
+        );
+
+        let gameobjects = plan.go_batches.join(";");
+        for entry in ["500", "600", "700"] {
+            assert!(
+                gameobjects
+                    .split(';')
+                    .any(|row| row.split(',').nth(1) == Some(entry)),
+                "gameobject {entry} retained: {gameobjects}"
+            );
+        }
     }
 
     #[test]
@@ -6326,6 +6568,7 @@ mod tests {
             talents: false,
             only: Vec::new(),
             trainers: Vec::new(),
+            world_profile: None,
             map: 0,
             include_maps: Vec::new(),
             include_creatures: Vec::new(),
