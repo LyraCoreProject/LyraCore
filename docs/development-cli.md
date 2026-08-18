@@ -95,8 +95,9 @@ the same path `publish` took before it was absorbed into Rust. A checkout withou
 ./lyracore import --accept --client-data /games/…/Data   # scripted: consent answered in advance
 ```
 
-**The consent notice is printed in full, first, every time** — before any network access, any read
-of the client, any write to the database. It names cmangos' `classic-db` and its GPL-3.0 licence,
+**The consent notice is printed in full before any network access, client archive read, or database
+write.** The CLI may first check that a supplied path and its required filenames exist; it does not
+open those archives. The notice names cmangos' `classic-db` and its GPL-3.0 licence,
 states that the content describes Blizzard's copyrighted game world and that this project never
 distributes it or anything built from it, and states that the DBC half comes from the user's own
 1.12.1 client. Only a typed `yes` or `--accept` proceeds; anything else exits 2 having run nothing.
@@ -130,8 +131,15 @@ After `import world`, run `./lyracore import vmaps` when exact model/WMO collisi
 It follows the World Shard profiles and skips the Instance Pool. Importing vmaps does not enable
 exact rays. Enabling them is a separate Operator decision after `docs/vmap-rollout.md` Verification.
 
-A `--client-data` path is validated **before** the consent notice is answered, so a typo costs
-nothing; the flagless run is prompted for at stage 2, in order. Every stage runs from the checkout
+The automated repository checks cover destination plans, profile fences, canned SQL failures, and
+synthetic importer rows. They do not read a real pinned dump or client archives. A lawful real-data
+profile dry run, terrain and navigation extraction, vmap generation, and stock 1.12.1 client
+playthrough remain Operator Verification; a successful plan or unit test is not evidence that those
+checks passed.
+
+A `--client-data` path and its required filenames are checked **before** the consent notice is
+answered, so a typo costs nothing; archive reads still start only after consent. The flagless run is
+prompted for at stage 2, in order. Every stage runs from the checkout
 root regardless of the directory you invoked `lyracore` from. Every stage's target database is
 passed explicitly, never left to a script's default — that default is `lyracore`, and a silent one
 is how a shard once had its spells written to a different database entirely.

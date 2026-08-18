@@ -20,6 +20,19 @@ A shard that owns a set of maps.
 **Instance Pool**:
 The shard that hosts instanced maps.
 
+**World Import Profile**:
+A stable name for the import plan assigned to one World Shard or Instance Pool destination. The
+canonical profiles are `alliance-eastern`, `alliance-kalimdor`, `alliance-single`, and `instances`.
+
+**World Import Scope**:
+The authoritative union of Bounded Map Slices, whole maps, and forced creature dependencies owned
+by one World Import Profile. It decides spatial import membership for dump, terrain, navigation,
+and vmap modes.
+
+**Bounded Map Slice**:
+A named rectangular or circular part of one map, with the anchor used for terrain and navigation
+selection.
+
 **Realm-core**:
 The shard that holds realm-wide state, including accounts, sessions, groups, whispers, loot rolls, the character-to-shard index, and shard load samples.
 

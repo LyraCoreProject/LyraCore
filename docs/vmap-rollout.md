@@ -13,13 +13,16 @@ checking generations. A successful import is data-plane evidence, not permission
   `alliance-kalimdor` through its canonical profile catalogue; do not copy rectangles here.
 - Set `SPACETIME_SERVER` to the approved production SpacetimeDB endpoint before using any commands
   below; each command supplies it explicitly rather than relying on the CLI's ambient server.
-- The World Shard destinations are the default Shard with `alliance-eastern` and the Kalimdor World
-  Shard with `alliance-kalimdor`. The Instance Pool must receive no bounded-profile vmap generation.
+- The production destinations are `lyracore` with `alliance-eastern`, `lyracore-world-1` with
+  `alliance-kalimdor`, and the `lyracore-instances` Instance Pool. The Instance Pool must receive no
+  bounded-profile vmap generation. `lyracore-kalimdor` is the contributor-fixture name, not the
+  production Kalimdor World Shard.
 - Record the deployed module/importer commit, the client-data identity, the approved maintenance
   window, the operator, and the exact importer output for each target.
-- Run `lyracore import vmaps` with the deployed topology. It must address both World Shards, skip the
-  Instance Pool, and leave the vmap gate disabled. Do not substitute the old clear-first
-  `import_vmap_chunks` reducers for this workflow.
+- Run the deployed importer's matching profile apply/resume flow against each named production
+  World Shard. The contributor CLI's fixed fixture plan is not a production topology selector. The
+  flow must skip the Instance Pool and leave the vmap gate disabled. Do not substitute the old
+  clear-first `import_vmap_chunks` reducers for this workflow.
 
 ## Import and generation evidence
 
@@ -32,14 +35,14 @@ checking generations. A successful import is data-plane evidence, not permission
 
    ```bash
    lyracore-importer --vmap-status --map 0 --server "$SPACETIME_SERVER" --db lyracore
-   lyracore-importer --vmap-status --map 1 --server "$SPACETIME_SERVER" --db lyracore-kalimdor
+   lyracore-importer --vmap-status --map 1 --server "$SPACETIME_SERVER" --db lyracore-world-1
    lyracore-importer --vmap-status --map 36 --server "$SPACETIME_SERVER" --db lyracore-instances
    ```
 3. Confirm the gate remains off on every shard before probe testing:
 
    ```bash
    spacetime sql --server "$SPACETIME_SERVER" lyracore "SELECT vmap_enabled FROM game_config WHERE id = 0"
-   spacetime sql --server "$SPACETIME_SERVER" lyracore-kalimdor "SELECT vmap_enabled FROM game_config WHERE id = 0"
+   spacetime sql --server "$SPACETIME_SERVER" lyracore-world-1 "SELECT vmap_enabled FROM game_config WHERE id = 0"
    spacetime sql --server "$SPACETIME_SERVER" lyracore-instances "SELECT vmap_enabled FROM game_config WHERE id = 0"
    ```
 
@@ -65,7 +68,7 @@ spacetime call --server "$SPACETIME_SERVER" lyracore -- debug_floor_probe 0 <x> 
 
 The ray output must identify an expected WMO hit (`los` and `collision`), and the floor probe must
 report a model `floor_z` selected over the terrain ground where those heights differ. Repeat the
-same class of probes against `lyracore-kalimdor` at approved map-1 locations.
+same class of probes against `lyracore-world-1` at approved map-1 locations.
 
 Also probe the indoor answer, which gameplay rules such as the land-mount refusal and the indoor
 dismount read:
@@ -105,10 +108,10 @@ Deployed module/importer commit:
 Client Data path and source identity:
 Canonical profiles: alliance-eastern / alliance-kalimdor
 
-World Shard preflight: lyracore / lyracore-kalimdor:
+World Shard preflight: lyracore / lyracore-world-1:
 Instance Pool skip: lyracore-instances:
 lyracore profile, active generation id, chunks, bytes, digest:
-lyracore-kalimdor profile, active generation id, chunks, bytes, digest:
+lyracore-world-1 profile, active generation id, chunks, bytes, digest:
 Instance Pool bounded-generation check:
 Gate state before probes on all three shards:
 
