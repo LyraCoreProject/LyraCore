@@ -65,6 +65,7 @@ const E_PERSISTENT_AREA: u8 = 0x1B; // ground-AoE (118, Consecration): spawns a 
 const E_OPEN_LOCK: u8 = 0x1D; // OPEN LOCK (Pick Lock 1804, work-item 119): gateway-intercepted like E_FISH (0x1C)/E_ENCHANT_ITEM — a CMSG_CAST_SPELL for a spell carrying this kind routes to the `pick_lock` reducer (unlock a locked GameObject, gated on the caster's Lockpicking 633 skill). Mapped from the raw vanilla OpenLock (33) / OpenLockItem (59) effects (lockstep with module taxonomy). 0x1E is reserved for a future E_SUMMON_PORTAL — do NOT reuse.
 const E_DUEL: u8 = 0x22; // Duel (raw effect 83): p0 is the duel-flag gameobject template entry
 const E_DISENCHANT: u8 = 0x18; // DISENCHANT (real Disenchant 13262, work-item 282): gateway-intercepted, routed to the disenchant reducer by kind. Mapped from raw vanilla effect 99 (SPELL_EFFECT_DISENCHANT); no params (the module validates + yields dust by item). Lockstep with the module taxonomy (module/src/spell/taxonomy.rs E_DISENCHANT).
+const E_DISMOUNT: u8 = 0x23; // remove the target's active land mount (Dazed's mount-removal half): translated from a raw DISPEL_MECHANIC effect (108) whose misc value names the mount mechanic (21) — see `dismount_effect_kind` below. No params. Lockstep with module taxonomy.
 
 // aura effects (high bit set)
 const A_PERIODIC_DAMAGE: u8 = 0x90;
@@ -90,6 +91,7 @@ const A_IMMUNITY: u8 = 0xB1;
 const A_MOD_DETECT_RANGE: u8 = 0xB2; // Priest Mind Soothe (DBC AuraMod 91 ModDetectRange): reduces a creature's aggro/detection radius by `amount` yards (lockstep with module taxonomy)
 const A_FLAG: u8 = 0xBE;
 const A_COMBAT_HEALTH_REGEN_PCT: u8 = 0xA9; // X% of normal health regen continues during combat (lockstep with module taxonomy)
+const A_MOUNTED: u8 = 0xB3; // land mount, the state of record (vanilla AuraMod Mounted, 78): p0 = the resolved creature DISPLAY id (p0_kind = P_DISPLAY_ID), frozen at import (lockstep with module taxonomy)
 
 // MECHANICS (p0 for A_CONTROL when p0_kind == P_MECHANIC)
 const M_STUN: i32 = 1;
@@ -111,6 +113,7 @@ const P_ENTRY: u8 = 9; // p0 is a game_creature_template entry (E_SUMMON_PET —
 const P_SPELLMOD_OP: u8 = 11; // p0 is a SpellModOp (A_SPELLMOD_*)
 const P_PCT_MAX_POWER: u8 = 12; // the effect's `amount` is a PERCENT of the caster's max power (Evocation); aura_apply converts it to an absolute per-tick (lockstep with module taxonomy)
 const P_GAMEOBJECT_ENTRY: u8 = 13; // p0 is a game_gameobject_template entry (E_DUEL)
+const P_DISPLAY_ID: u8 = 14; // p0 is a creature DISPLAY id (A_MOUNTED — the UNIT_FIELD_MOUNTDISPLAYID value)
 const P_RAW: u8 = 255;
 
 // TargetKind
@@ -139,6 +142,7 @@ const STAT_ALL: i32 = 0xFF;
 
 // speed kinds (p0 for A_MOD_SPEED; signed PERCENT amount) — lockstep with module/src/spell/taxonomy.rs.
 const SPEED_MOVE: i32 = 0;
+const SPEED_MOUNTED: i32 = 3; // ModIncreaseMountedSpeed family; T4 folds this speed kind at the combat seam
 
 // STANCE/FORM ids (vanilla SpellShapeshiftForm.dbc indices) — the value the ModShapeshift effect's
 // `effect_misc_value` carries (so a stance/form spell arrives as A_FLAG with p0 = the form id). Our
@@ -220,6 +224,49 @@ fn is_aura_effect(effect_id: i32) -> bool {
             | EFFECT_APPLY_AREA_AURA_PARTY
             | EFFECT_APPLY_AREA_AURA_PET
     )
+}
+
+// raw vanilla SPELL_EFFECT_DISPEL_MECHANIC (108) — an INSTANT effect whose misc value names a Mechanic
+// to strip; `dismount_effect_kind` below reclassifies the ONE parameter this codebase supports (the
+// mount mechanic, 21) to E_DISMOUNT. Every other mechanic parameter is left unmapped by design.
+const EFFECT_DISPEL_MECHANIC: i32 = 108;
+const MECHANIC_MOUNT: u32 = 21;
+
+/// Translate a raw `DISPEL_MECHANIC` effect (108) whose misc value names the MOUNT mechanic (21) into
+/// `E_DISMOUNT` — the one data-driven reclassify the design allows: no generic mechanic-dispel module,
+/// no branch on a spell id or name. ANY spell carrying this raw shape gets mount removal for free — the
+/// synthetic Dazed spell (A_MOD_SPEED slow + this effect) is just the first curated consumer, not a
+/// special case. Any OTHER `DISPEL_MECHANIC` parameter is left
+/// unmapped (falls to `E_SCRIPTED`, counted in the existing unmapped-effect coverage) — deliberately
+/// out of scope until a real gameplay need shows up in the data. Pure. [import]
+fn dismount_effect_kind(effect_id: i32, misc: u32) -> Option<u8> {
+    if effect_id == EFFECT_DISPEL_MECHANIC && misc == MECHANIC_MOUNT {
+        Some(E_DISMOUNT)
+    } else {
+        None
+    }
+}
+
+/// The vanilla DBC "flat amount" convention: `EffectBasePoints` stores the nominal integer amount
+/// MINUS one (the same off-by-one every effect's `base_points` already corrects for at the call site).
+/// Named here so the mounted-speed normalization (vanilla stores 59/99 for the nominal 60%/100% speed
+/// bonus) is an explicit, tested contract rather than an incidental side effect of the generic `+1`.
+/// Pure. [import]
+fn dbc_flat_amount(raw: i32) -> i32 {
+    raw + 1
+}
+
+/// The importer's own `game_spell.aura_interrupt` bits: only bit 0 (break-on-damage) and bit 1
+/// (break-on-move) are read from the raw vanilla `AuraInterruptFlags` — every other vanilla bit
+/// (including the underwater-cancel flag a land mount carries) is structurally dropped by this mask,
+/// never reaching the engine. The curated incapacitate ids (Polymorph 118 / Gouge 1776 / Sap 6770)
+/// additionally OR bit 0 on for synthetic CC whose DBC flag may be absent (Gouge). Pure. [import]
+fn aura_interrupt_bits(raw: u16, spell_id: u32) -> u16 {
+    let mut bits = raw & 0x0003;
+    if matches!(spell_id, 118 | 1776 | 6770) {
+        bits |= AURA_INTERRUPT_BREAK_ON_DAMAGE;
+    }
+    bits
 }
 
 /// Curated load-time flag correction (the Spell.sql analog for header flags): OR our OWN cast-gate bits
@@ -416,7 +463,7 @@ fn instant_effect_to_kind(effect_id: i32) -> u8 {
         101 => E_FEED_PET, // FeedPet — explicit item target is routed by the gateway/manual cast seam
         56 => E_SUMMON_PET, // Summon (Summon Imp et al.) — p0 = the summoned creature entry (misc_value)
         62 => E_POWER_BURN, // PowerBurn (Priest Mana Burn) — p1 = EffectMultipleValue*100 (work-items 117)
-        83 => E_DUEL, // Duel — p0 carries the duel-flag gameobject entry
+        83 => E_DUEL,       // Duel — p0 carries the duel-flag gameobject entry
         33 | 59 => E_OPEN_LOCK, // OpenLock (33) / OpenLockItem (59) — Pick Lock (work-item 119): gateway-intercepted, routed to the pick_lock reducer by kind (Pick Lock 1804 carries the raw OpenLock effect; the item-lock variant 59 covers a lockpick-on-item spell)
         99 => E_DISENCHANT, // Disenchant (13262, work-item 282): gateway-intercepted, routed to the disenchant reducer by kind — the AUTOLEARN enchanting ability. Was falling through to E_SCRIPTED (a no-op).
         80 => E_ADD_COMBO, // AddComboPoints (work-item 101) — the curated Rogue generators (Sinister Strike/Backstab/Gouge/Garrote) carry the generic Dummy effect in-kit and are rescued BY NAME in correct_script_effect_kind below, not via this raw id, so this arm is currently unexercised by the curated kit but correct for any spell that DOES carry the raw AddComboPoints effect
@@ -573,6 +620,23 @@ fn stance_p0(kind: u8, p0: i32) -> i32 {
     }
 }
 
+/// Resolve an `A_MOUNTED` effect's `p0` to a creature DISPLAY id. `resolve_aura_params` already default
+/// the reading to "misc value IS the display id" — the shape of every real classic mount spell (vanilla
+/// stores a `CreatureDisplayInfo` id directly in `EffectMiscValue`). The rarer shape, where the DBC
+/// names a mount CREATURE TEMPLATE instead, is resolved here through `creature_displays` (entry →
+/// display id, sourced from the imported creature-template presentation data); an entry absent from the
+/// map falls through to the direct-display reading unchanged. Non-A_MOUNTED kinds pass p0 through. Pure.
+/// [import]
+fn mount_display_p0(kind: u8, p0: i32, creature_displays: &BTreeMap<u32, u32>) -> i32 {
+    if kind != A_MOUNTED {
+        return p0;
+    }
+    creature_displays
+        .get(&(p0 as u32))
+        .map(|&display| display as i32)
+        .unwrap_or(p0)
+}
+
 /// Map a wow_dbc `AuraMod` variant → our KIND (aura-map design unit). Unmapped → `E_SCRIPTED`. The
 /// per-effect p0/p0_kind are resolved separately by `resolve_aura_params` (which re-reads the variant
 /// for the combat-field / mechanic / speed-kind it implies).
@@ -669,6 +733,10 @@ fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         // Warrior Disarm (67): strips the enemy's main-hand weapon — the swing-range seam drops a disarmed
         // PLAYER to unarmed / scales a CREATURE's swing. A generic aura (natural expiry), no p0.
         ModDisarm => A_DISARM,
+        // LAND MOUNT (78): the state of record for a player's mounted state — reclassified OUT of the
+        // inert A_FLAG marker list below so `p0` carries a real resolved display id
+        // instead of the raw misc value sitting dormant. See `resolve_aura_params`/`mount_display_p0`.
+        Mounted => A_MOUNTED,
         // Priest Mind Soothe (91): reduces a creature's aggro/detection radius by `amount` yards while active.
         // The aggro pass subtracts the summed amount from the creature's aggro radius. A generic aura, no p0.
         ModDetectRange => A_MOD_DETECT_RANGE,
@@ -690,7 +758,6 @@ fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         | ModStalked
         | ModLanguage
         | FarSight
-        | Mounted
         | WaterBreathing
         | ModPowerRegen
         | ModHealthRegenPercent
@@ -773,16 +840,28 @@ fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
             (field, P_COMBAT_FIELD)
         }
         A_MOD_SPEED => {
-            // speed kind: 0=move, 1=swing, 2=cast, 3=mounted (derived from the variant)
+            // speed kind: 0=move, 1=swing, 2=cast, 3=mounted (derived from the variant). Mounted-speed
+            // stays A_MOD_SPEED/SPEED_MOUNTED (not a second concept) — the DBC's own EffectBasePoints
+            // for these auras is already vanilla's flat-amount −1 encoding (59/99), so the generic
+            // `dbc_flat_amount` conversion applied to every effect's base_points normalizes them to the
+            // nominal 60/100 with no extra code here.
             let kind_v = match aura {
                 ModAttackspeed | ModMeleeHaste | ModRangedHaste | ModRangedAmmoHaste => 1,
                 ModCastingSpeedNotStack => 2,
                 ModIncreaseSwimSpeed => 2,
-                ModIncreaseMountedSpeed | ModMountedSpeedAlways | ModMountedSpeedNotStack => 3,
-                _ => 0, // generic move speed
+                ModIncreaseMountedSpeed | ModMountedSpeedAlways | ModMountedSpeedNotStack => {
+                    SPEED_MOUNTED
+                }
+                _ => SPEED_MOVE,
             };
             (kind_v, P_SPEED_KIND)
         }
+        // LAND MOUNT (vanilla AuraMod Mounted, 78): p0 defaults to the raw misc value AS the display
+        // id — the shape of every real classic mount spell (EffectMiscValue names a CreatureDisplayInfo
+        // id directly). `mount_display_p0` (below) additionally resolves the rarer case where the DBC
+        // names a mount CREATURE TEMPLATE instead, through the imported creature-template presentation
+        // data, so the frozen p0 is a display id in every case (the runtime never resolves anything).
+        A_MOUNTED => (misc as i32, P_DISPLAY_ID),
         A_PERIODIC_ENERGIZE => ((misc & 0xFF) as i32, P_POWER_TYPE),
         A_CONTROL => {
             let mech = match aura {
@@ -970,6 +1049,12 @@ fn build_spell_sql(
     let mut effect_rows: Vec<String> = Vec::new();
     let mut reagent_rows: Vec<String> = Vec::new();
     let mut samples: Vec<String> = Vec::new();
+    // Mount creature-template display resolution (entry → display id): the `--dbc --spells` CLI path
+    // is DBC-only (no cmangos creature_template dump is loaded alongside it), so this is empty today —
+    // every real classic mount spell resolves correctly regardless (see `mount_display_p0`), since its
+    // EffectMiscValue already names a display id directly. Threading a real creature-entry source into
+    // this map later is then a one-line change here, not a rewrite of the resolution logic itself.
+    let creature_displays: BTreeMap<u32, u32> = BTreeMap::new();
 
     for s in spells.rows() {
         let spell_id = s.id.id;
@@ -1059,16 +1144,21 @@ fn build_spell_sql(
         } else {
             real_stack.min(255) as u8
         };
-        let mut aura_interrupt = (s.channel_interrupt_flags as u16) & 0x0003; // real AuraInterruptFlags
-                                                                              // Force break-on-damage on the incapacitate spells. Sap (6770) gets it from the DBC already, but a
-                                                                              // SYNTHETIC incapacitate (Gouge 1776 — its CC isn't a DBC effect, so the DBC flag may be absent)
-                                                                              // needs it forced so its A_CONTROL aura is breakable by later damage. Polymorph 118 has DBC
-                                                                              // AuraInterruptFlags=0x2 (DAMAGE bit), but the importer reads channel_interrupt_flags&0x3 instead
-                                                                              // of AuraInterruptFlags, so the bit never lands in our aura_interrupt; force it here. Keyed by
-                                                                              // the real spell ids.
-        if matches!(spell_id, 118 | 1776 | 6770) {
-            aura_interrupt |= AURA_INTERRUPT_BREAK_ON_DAMAGE;
-        }
+        // real AuraInterruptFlags (see the schema-bug note above); `aura_interrupt_bits` keeps only our
+        // bit0 (break-on-damage) / bit1 (break-on-move) and additionally forces bit0 on for the
+        // incapacitate spells. Sap (6770) gets it from the DBC already, but a SYNTHETIC incapacitate
+        // (Gouge 1776 — its CC isn't a DBC effect, so the DBC flag may be absent) needs it forced so its
+        // A_CONTROL aura is breakable by later damage. Polymorph 118 has DBC AuraInterruptFlags=0x2
+        // (DAMAGE bit), but the importer reads channel_interrupt_flags&0x3 instead of AuraInterruptFlags,
+        // so the bit never lands in our aura_interrupt; force it here.
+        //
+        // Land mount: a real mount spell's vanilla AuraInterruptFlags is the
+        // underwater-cancel bit (0x80, NOT-ABOVEWATER), which sits well outside the `& 0x0003` mask
+        // below — it never reaches `aura_interrupt`, and mount spells are absent from the
+        // force-break-on-damage id list. So imported mount spells carry aura_interrupt=0
+        // (`breaks_on_damage` reads false): "ordinary damage does not dismount" holds as a DATA fact,
+        // with zero mount-specific code here.
+        let aura_interrupt = aura_interrupt_bits(s.channel_interrupt_flags as u16, spell_id);
         let attributes = s.attributes.as_int(); // raw vanilla Spell.dbc Attributes subset (unchanged)
                                                 // GCD: flat 1500ms for all active spells.  Two vanilla Attributes bits suppress the GCD:
                                                 //   0x40 SPELL_ATTR_PASSIVE  — passive auras applied at login, never directly cast by the player.
@@ -1203,6 +1293,11 @@ fn build_spell_sql(
             // Curated correction (Spell.sql analog): reclassify the known script-effect-as-generic spells.
             let kind = correct_script_effect_kind(&name, kind);
 
+            // DISMOUNT reclassify (data-driven, never by name/id): a raw DISPEL_MECHANIC effect whose
+            // misc value names the mount mechanic becomes E_DISMOUNT. Runs on the RAW effect id (not
+            // the resolved kind), so it fires regardless of what instant_effect_to_kind mapped 108 to.
+            let kind = dismount_effect_kind(effect_id, s.effect_misc_value[i]).unwrap_or(kind);
+
             // STANCE p0 remap: a reclassified E_SET_STANCE effect arrives with p0 = the vanilla form id
             // (from the ModShapeshift misc value). Remap it to our 0-based stance id via `form_to_stance`
             // (Battle 17→0 / Defensive 18→1 / Berserker 19→2 / Bear 5→3 / Cat 1→4 / Dire Bear 8→5) so the
@@ -1210,6 +1305,11 @@ fn build_spell_sql(
             // rescale below — a kind-keyed p0 fix-up after the reclassify, never a spell id. Non-stance
             // effects keep their resolved p0.
             let p0 = stance_p0(kind, p0);
+
+            // MOUNT DISPLAY resolution: an A_MOUNTED effect's p0 already defaults to the raw misc value
+            // (resolve_aura_params) — resolve the rarer creature-template indirection here, mirroring
+            // the stance/CREATE_ITEM kind-keyed p0 fix-ups above.
+            let p0 = mount_display_p0(kind, p0, &creature_displays);
 
             // CREATE_ITEM p0 injection (Healthstone): the by-name reclassify above made these E_CREATE_ITEM,
             // but their DBC effect_item_type is 0 (the mangos script hardcodes the item), so the resolved p0
@@ -1236,10 +1336,10 @@ fn build_spell_sql(
                 (p0, p0_kind)
             };
 
-            let base_points = s.effect_base_points[i] + 1; // DBC +1 convention
-                                                           // Avoidance-chance combat fields are basis-points in our engine but PERCENT in the DBC, so
-                                                           // scale ×100 (Evasion's +50% dodge → +5000 bp). COMBAT_THREAT is a signed percent in both
-                                                           // (the threat fold divides by 100), so it is NOT scaled.
+            let base_points = dbc_flat_amount(s.effect_base_points[i]); // DBC +1 convention (mounted-speed 59/99 → 60/100 falls out of this for free)
+                                                                        // Avoidance-chance combat fields are basis-points in our engine but PERCENT in the DBC, so
+                                                                        // scale ×100 (Evasion's +50% dodge → +5000 bp). COMBAT_THREAT is a signed percent in both
+                                                                        // (the threat fold divides by 100), so it is NOT scaled.
             let base_points = if kind == A_MOD_COMBAT && p0 == COMBAT_DODGE {
                 base_points * 100
             } else {
@@ -2711,8 +2811,11 @@ mod tests {
         assert_eq!(resolve_instant_params(E_DISPEL, 1, 0), (1, P_SCHOOL_MASK)); // magic category
         assert_eq!(resolve_instant_params(E_DAMAGE, 4, 0), (0, P_NONE)); // school on header
         assert_eq!(instant_effect_to_kind(83), E_DUEL);
-        assert_eq!(resolve_instant_params(E_DUEL, 21680, 0), (21680, P_GAMEOBJECT_ENTRY));
-                                                                         // CreateItem: p0 = the item entry (from effect_item_type), tagged P_ITEM_ENTRY; misc ignored.
+        assert_eq!(
+            resolve_instant_params(E_DUEL, 21680, 0),
+            (21680, P_GAMEOBJECT_ENTRY)
+        );
+        // CreateItem: p0 = the item entry (from effect_item_type), tagged P_ITEM_ENTRY; misc ignored.
         assert_eq!(
             resolve_instant_params(E_CREATE_ITEM, 99, 2070),
             (2070, P_ITEM_ENTRY)
@@ -2824,5 +2927,83 @@ mod tests {
         );
         // The surgical path NEVER emits an unbounded clear (that would clobber the seed/fixtures).
         assert!(surgical.iter().all(|s| !s.contains(">= 0")));
+    }
+
+    #[test]
+    fn mounted_aura_maps_to_a_mounted_with_display_id_p0() {
+        // The vanilla Mounted aura (78) reclassifies out of the inert A_FLAG marker list onto A_MOUNTED
+        // — no longer a dormant no-op.
+        assert_eq!(aura_mod_to_kind(AuraMod::Mounted), A_MOUNTED);
+        // p0 defaults to the raw misc value AS the display id (the shape of every real classic mount:
+        // EffectMiscValue names a CreatureDisplayInfo id directly), tagged P_DISPLAY_ID.
+        assert_eq!(
+            resolve_aura_params(A_MOUNTED, AuraMod::Mounted, 723),
+            (723, P_DISPLAY_ID)
+        );
+    }
+
+    #[test]
+    fn mount_display_p0_resolves_creature_template_indirection_and_falls_through() {
+        let mut displays: BTreeMap<u32, u32> = BTreeMap::new();
+        displays.insert(1234, 5678); // a rare mount that names a creature TEMPLATE, not a display
+                                     // Acceptance criterion: "A mount spell whose DBC names a creature template resolves to the
+                                     // template's display."
+        assert_eq!(mount_display_p0(A_MOUNTED, 1234, &displays), 5678);
+        // The common case: the misc value isn't in the map (it's already a real display id) — pass
+        // through unchanged.
+        assert_eq!(mount_display_p0(A_MOUNTED, 723, &displays), 723);
+        // Non-A_MOUNTED kinds are never touched.
+        assert_eq!(mount_display_p0(E_DAMAGE, 1234, &displays), 1234);
+    }
+
+    #[test]
+    fn dispel_mechanic_reclassifies_the_mount_parameter_only() {
+        // The ONE data-driven reclassify the design allows: raw DISPEL_MECHANIC (108) whose misc value
+        // names the mount mechanic (21) becomes E_DISMOUNT — Dazed's shape (A_MOD_SPEED slow +
+        // this effect), but not keyed on Dazed's spell id or name.
+        assert_eq!(dismount_effect_kind(108, 21), Some(E_DISMOUNT));
+        // Acceptance criterion: any OTHER mechanic parameter does NOT reclassify — it stays unmapped
+        // (falls to E_SCRIPTED via instant_effect_to_kind, counted in cov.unmapped_effect).
+        assert_eq!(dismount_effect_kind(108, 1), None); // e.g. mechanic 1 (a different CC)
+        assert_eq!(dismount_effect_kind(108, 0), None);
+        // A different raw effect id carrying misc==21 is not a dispel-mechanic effect at all — untouched.
+        assert_eq!(dismount_effect_kind(2, 21), None);
+        // 108 isn't in instant_effect_to_kind's raw-id table — it falls to the graceful no-op until the
+        // mechanic-21 reclassify above fires.
+        assert_eq!(instant_effect_to_kind(108), E_SCRIPTED);
+    }
+
+    #[test]
+    fn mounted_speed_normalizes_the_vanilla_stored_flat_amount() {
+        // Mounted speed stays A_MOD_SPEED / SPEED_MOUNTED, never a second concept.
+        use AuraMod::*;
+        for mounted in [
+            ModIncreaseMountedSpeed,
+            ModMountedSpeedAlways,
+            ModMountedSpeedNotStack,
+        ] {
+            assert_eq!(
+                resolve_aura_params(A_MOD_SPEED, mounted, 0),
+                (SPEED_MOUNTED, P_SPEED_KIND)
+            );
+        }
+        // Vanilla stores the flat amount MINUS one; 59/99 normalize to the nominal 60%/100%.
+        assert_eq!(dbc_flat_amount(59), 60);
+        assert_eq!(dbc_flat_amount(99), 100);
+    }
+
+    #[test]
+    fn aura_interrupt_bits_drops_the_underwater_cancel_bit_a_land_mount_carries() {
+        // Only bit0 (break-on-damage) / bit1 (break-on-move) survive from the raw vanilla
+        // AuraInterruptFlags — every other bit, including the underwater-cancel flag (0x80,
+        // NOT-ABOVEWATER) a real land mount's DBC row carries, is structurally dropped.
+        assert_eq!(aura_interrupt_bits(0x80, 458), 0); // Brown Horse-shaped: underwater bit only
+        assert_eq!(aura_interrupt_bits(0x80 | 0x1, 458), 0x1); // a hypothetical mount that DID carry damage too
+        assert_eq!(aura_interrupt_bits(0x1, 999), 0x1); // a genuine damage-break spell keeps its bit
+        assert_eq!(aura_interrupt_bits(0x2, 999), 0x2); // bit1 (break-on-move) passes through too
+                                                        // The synthetic-incapacitate force-on list (Polymorph 118 / Gouge 1776 / Sap 6770) still ORs
+                                                        // bit0 on regardless of the raw flags — untouched by the mount masking.
+        assert_eq!(aura_interrupt_bits(0, 1776), 0x1);
+        assert_eq!(aura_interrupt_bits(0, 458), 0); // a mount id is NOT on the force-on list
     }
 }

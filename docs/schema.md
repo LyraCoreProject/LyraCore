@@ -80,7 +80,7 @@ compiled into the same module. **109 public, 67 private.**
 | Config / static data / diagnostics | 23 | 22 | `config.rs`, `gm.rs`, `faction.rs`, `skilldata.rs`, `stats.rs`, `action_bar.rs`, `import_meta.rs`, `debug.rs` |
 | Taxi progression / service | 5 | 1 | `taxi.rs` |
 | GC | 1 | 0 | `gc.rs` |
-| Exact vmap generations | 2 | 0 | `vmap.rs` |
+| Exact vmap generations | 5 | 0 | `vmap.rs` |
 | Extension packages | 9 | 2 | compiled into the module; maintained outside this repository |
 
 Two shapes recur and are worth naming:
@@ -182,11 +182,25 @@ Column groups: identity/control (`guid`, `owner_identity`, `account_id`), spatia
 time/dynamic flags), the player block (appearance bytes, flags, xp, money, the five base stats,
 armor), the current `target_guid`, and the creature-movement cursor.
 
-Taxi activation end-appends `mount_display_id` for `UNIT_FIELD_MOUNTDISPLAYID` and sets
-`UNIT_FLAG_TAXI_FLIGHT` in the existing `unit_flags` word. The gateway relays both in one
-OBJECT_FIELD_TYPE-free partial VALUES mask, so self and observers see one coherent mounted-flight
-presentation. Route progress is never stored in `game_creature_spline`; it belongs to the separate
-active-flight row.
+`mount_display_id` carries `UNIT_FIELD_MOUNTDISPLAYID` for **both** mounted mechanics, and the module
+decides which one owns it:
+
+- **Taxi flight** owns the field for the whole flight. Activation writes the faction mount display and
+  sets `UNIT_FLAG_TAXI_FLIGHT` in the existing `unit_flags` word; landing clears both. The gateway
+  relays that pair in one OBJECT_FIELD_TYPE-free partial VALUES mask, so self and observers see one
+  coherent flight presentation. Route progress is never stored in `game_creature_spline`; it belongs
+  to the separate active-flight row.
+- **Land mount** owns the field the rest of the time. Here the field is a *projection*, not a state
+  machine: the `A_MOUNTED` aura row is the mounted state, and `mount::recompute_mount` re-derives both
+  `mount_display_id` and `run_speed_mult_bp` from the target's current aura set. Every aura removal
+  path converges on that one recompute, so cancel, expiry, dispel, unlearn and each explicit dismount
+  trigger land on the same end state. A land mount never sets `UNIT_FLAG_TAXI_FLIGHT`, and the gateway
+  relays it through a standalone single-field VALUES builder. Both mount entry points refuse a player
+  in flight, so land-mount cleanup can never clear a taxi presentation.
+
+`run_speed_mult_bp` is the same kind of projection while a land mount is active: it holds the exact
+effective multiplier from the shared move-speed fold (16000 for a nominal 60% mount), and the existing
+subscription diff turns a change into `SMSG_FORCE_RUN_SPEED_CHANGE`.
 
 Three indexes, each earning its keep:
 - `by_grid` is the AOI range scan. Note it is **four** columns — `instance_id` is in the key, because
@@ -262,6 +276,34 @@ settlement/refund-mail receipt.
 callbacks return an unbid item or settle a winning bid with exact item and proceeds mail, then no-op
 when replayed. These tables are additive and are deliberately excluded from character transfer
 manifests; deletion is refused while a character owns Auction value.
+
+### Riding data (`module/src/skill.rs`, `module/src/skilldata.rs`, `module/src/trainer.rs`)
+
+Riding is an ordinary skill line, not a new concept. `game_skill_line` carries line **762** (`Riding`),
+and a character's learned rank is a normal `game_player_skill` row on that line. `game_skill_ability`
+joins a mount spell to line 762 with the `min_skill` threshold that holds vanilla's 75 (Apprentice) and
+150 (Journeyman) tiers, plus the race and class masks that keep one race's riding tradition from
+satisfying another's mount. The cast gate walks the character's own learned lines and probes
+`by_skill_line`, so it never scans the full ability catalogue. It fails closed: a mount whose skill
+data was never imported is uncastable rather than free.
+
+`game_trainer_spell.learn_skill_line` now names three kinds of offering rather than two: a profession,
+a weapon line, or riding. `learn_skill_cap` carries the tier the purchase grants. A riding offering's
+`spell_id` is a marker with no `Spell.dbc` row, so the gateway confirms the purchase without echoing it
+as a learned spell. The trainer NPC declares itself with `trainer_type::MOUNTS`.
+
+### `game_vmap_indoor_cell` (`module/src/vmap.rs`)
+
+A module-private, derived per-cell marker keyed `(generation_id, cell_key)`: this cell of this vmap
+generation holds at least one indoor WMO triangle. Written once inside `verify_vmap_generation`, which
+already decodes every staged chunk, and deleted with the geometry it came from. It has **no gateway
+binding** and is never subscribed; it exists only so the movement heartbeat can ask "am I indoors?"
+with one indexed find and pay a ray cast only in a cell that could answer yes.
+
+**A missing row means outdoors.** That is the fail-open contract the whole indoor rule rests on: vmap
+disabled, no active generation, no marker row, or no containing WMO group all read as outdoors. A
+generation verified before this table existed carries no rows, so indoor behavior stays inactive there
+until the generation is verified again or the vmap data is imported again.
 
 ---
 

@@ -154,6 +154,12 @@ pub(crate) fn dispel_target(ctx: &ReducerContext, target_guid: u64, category: u8
         })
         .collect();
     let removed = debuffs.len() as u32;
+    // A dispel that strips a mount aura must land on the same end state as cancelling the buff by
+    // hand (story 29). Self-cast mounts are excluded by the `caster_guid != target_guid` filter above,
+    // so in practice this stays false — collected anyway so the convergence does not depend on that.
+    let moves_mount = debuffs
+        .iter()
+        .any(|a| crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0));
     let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
     for a in debuffs {
         if let Some(dr_category) = crate::spell::stacking::dr_category_for_effect(
@@ -171,6 +177,9 @@ pub(crate) fn dispel_target(ctx: &ReducerContext, target_guid: u64, category: u8
             );
         }
         auras.id().delete(a.id);
+    }
+    if moves_mount {
+        crate::mount::recompute_mount(ctx, target_guid);
     }
     removed
 }

@@ -258,7 +258,8 @@ pub fn stage_vmap_generation(
                 &manifest_digest,
                 &source_identity,
                 &selection_identity,
-            ) => {
+            ) =>
+        {
             Ok(())
         }
         Some(_) => Err(format!(
@@ -349,8 +350,16 @@ pub fn verify_vmap_generation(ctx: &ReducerContext, generation_id: u64) -> Resul
         .filter(&generation_id)
         .collect();
     staged.sort_unstable_by_key(|chunk| (chunk.key, chunk.shard_ordinal));
+    // The decode pass that validates every staged chunk also classifies it: a cell whose triangles
+    // include an indoor WMO group gets a marker row below (`tri_is_indoor`). Free — the blobs are
+    // decoded here exactly once either way, and nothing about the manifest or the digest changes.
+    let mut indoor_cells = std::collections::BTreeSet::new();
     for chunk in &staged {
-        decode(&chunk.blob).map_err(|err| format!("invalid staged vmap chunk: {err:?}"))?;
+        let tris =
+            decode(&chunk.blob).map_err(|err| format!("invalid staged vmap chunk: {err:?}"))?;
+        if tris.iter().any(tri_is_indoor) {
+            indoor_cells.insert(chunk.key);
+        }
     }
     require_manifest(
         generation.expected_bytes,
@@ -359,6 +368,7 @@ pub fn verify_vmap_generation(ctx: &ReducerContext, generation_id: u64) -> Resul
             .iter()
             .map(|chunk| (chunk.key, chunk.shard_ordinal, chunk.blob.as_slice())),
     )?;
+    record_indoor_cells(ctx, generation_id, indoor_cells);
     generation.state = VERIFIED;
     ctx.db.game_vmap_generation().id().update(generation);
     Ok(())
@@ -411,6 +421,16 @@ pub fn discard_vmap_generation(ctx: &ReducerContext, generation_id: u64) -> Resu
         .collect();
     for id in receipt_ids {
         receipts.id().delete(id);
+    }
+    // The derived indoor markers go with the geometry they were derived from.
+    let indoor_cells = ctx.db.game_vmap_indoor_cell();
+    let indoor_ids: Vec<u64> = indoor_cells
+        .by_generation()
+        .filter(&generation_id)
+        .map(|cell| cell.id)
+        .collect();
+    for id in indoor_ids {
+        indoor_cells.id().delete(id);
     }
     generation.state = DISCARDED;
     ctx.db.game_vmap_generation().id().update(generation);
@@ -478,6 +498,18 @@ pub fn import_vmap_chunks_append(ctx: &ReducerContext, packed: String) -> Result
 
 use crate::game_config;
 
+/// The map's ACTIVE generation id, or `None` when it has none. The ONE `by_map_state` scan —
+/// `vmap_enabled`, `fetcher` and the indoor-presence lookup all ask through here rather than
+/// repeating the filter, so "which generation is live" has a single answer per map.
+fn active_generation_id(ctx: &ReducerContext, map_id: u32) -> Option<u64> {
+    ctx.db
+        .game_vmap_generation()
+        .by_map_state()
+        .filter((map_id, ACTIVE))
+        .next()
+        .map(|generation| generation.id)
+}
+
 /// Exact geometry can consume only when the global kill-switch is on AND this map has a complete
 /// active generation. Staging or legacy chunks never make an uncovered map read as clear.
 pub fn vmap_enabled(ctx: &ReducerContext, map_id: u32) -> bool {
@@ -488,14 +520,7 @@ pub fn vmap_enabled(ctx: &ReducerContext, map_id: u32) -> bool {
         .find(0)
         .map(|c| c.vmap_enabled)
         .unwrap_or(false);
-    configured
-        && ctx
-            .db
-            .game_vmap_generation()
-            .by_map_state()
-            .filter((map_id, ACTIVE))
-            .next()
-            .is_some()
+    configured && active_generation_id(ctx, map_id).is_some()
 }
 
 /// Chunk fetch closure for `cast_ray`: one indexed scan + decode per crossed cell, gathering
@@ -504,13 +529,7 @@ pub fn vmap_enabled(ctx: &ReducerContext, map_id: u32) -> bool {
 /// (shouldn't happen — only this module writes the table) is skipped rather than panicking a ray
 /// query. `None` only when NO row at all exists for the cell (the missing-chunk contract).
 fn fetcher(ctx: &ReducerContext, map_id: u32) -> impl FnMut(u16, u16) -> Option<Vec<VmapTri>> + '_ {
-    let generation_id = ctx
-        .db
-        .game_vmap_generation()
-        .by_map_state()
-        .filter((map_id, ACTIVE))
-        .next()
-        .map(|generation| generation.id);
+    let generation_id = active_generation_id(ctx, map_id);
     move |cx, cy| {
         let generation_id = generation_id?;
         let key = cell_key(map_id, cx, cy);
@@ -623,6 +642,10 @@ pub fn probe_floor_z(
 /// Which WMO group (if any) contains `(x, y, z)` on `map_id`, and whether it's indoor. `None`
 /// when vmap is off, unimported, or no WMO group is found in the probe range (outdoors/open
 /// world) — mirrors every other vmap query's missing-chunk-means-nothing-found contract.
+///
+/// The downward budget is `AREA_PROBE_DOWN_YD`, NOT the 200 yd `FLOOR_PROBE_DOWN_YD`: a floor
+/// probe wants the deepest deck it can reach, an area query wants only the surface this point is
+/// standing on, and the long budget reports a point in the open as inside a WMO far below it.
 pub fn area_info(
     ctx: &ReducerContext,
     map_id: u32,
@@ -634,8 +657,105 @@ pub fn area_info(
         return None;
     }
     let top = [x, y, z + FLOOR_PROBE_UP_YD];
-    let bottom = [x, y, z - FLOOR_PROBE_DOWN_YD];
+    let bottom = [x, y, z - lyracore_shared::vmap::AREA_PROBE_DOWN_YD];
     lyracore_shared::vmap::cast_ray_area(&mut fetcher(ctx, map_id), top, bottom)
+}
+
+// ===========================================================================================
+//  Per-cell indoor presence (issue #22) — a derived, module-private pre-reject in front of
+//  `area_info`, so a movement heartbeat can ask "am I indoors?" every 100 ms without paying a
+//  ray cast anywhere the map has no interior geometry at all (which is nearly everywhere).
+//
+//  Kept in one region at the END of this file on purpose: the generation lifecycle above is
+//  contested ground (issue #195's coverage derivation lands there too), and everything here is
+//  additive — one table, one marker write inside `verify_vmap_generation`'s existing decode
+//  pass, one indexed find on the read path.
+// ===========================================================================================
+
+/// A cell of one generation that contains at least one INDOOR WMO triangle. Marker-only: the row's
+/// existence IS the fact, so there is no state to keep in sync. PRIVATE and derived — it carries
+/// no information the staged chunks don't already, it is rebuilt from them by verification, and it
+/// is deliberately outside the manifest/digest (hashing it would make an equivalent re-import
+/// non-reproducible for no gain).
+///
+/// A MISSING row means outdoors. That is the fail-open contract the whole indoor feature rests
+/// on: no generation, no verification, no row — no indoor dismount, ever.
+#[table(
+    accessor = game_vmap_indoor_cell,
+    index(accessor = by_generation, btree(columns = [generation_id])),
+    index(accessor = by_generation_cell, btree(columns = [generation_id, key]))
+)]
+pub struct VmapIndoorCell {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub generation_id: u64,
+    /// Same `cell_key` as `game_vmap_generation_chunk`: (map << 32) | (cell_x << 16) | cell_y.
+    pub key: u64,
+}
+
+/// Does this triangle belong to an indoor WMO group? Doodads (M2) never do — a tent-shaped tree
+/// standing in a field is not a room. Delegates the MOGP rule to `lyracore_shared::vmap` so the
+/// pre-reject and the query it fronts can never disagree.
+fn tri_is_indoor(tri: &VmapTri) -> bool {
+    match tri.class {
+        lyracore_shared::vmap::TriClass::Wmo { mogp_flags, .. } => {
+            lyracore_shared::vmap::group_is_indoor(mogp_flags)
+        }
+        lyracore_shared::vmap::TriClass::M2 => false,
+    }
+}
+
+/// Record the generation's indoor cells. Called once from `verify_vmap_generation` with the keys
+/// its existing decode pass already classified — there is no second decode and no second read of
+/// the staged chunks.
+fn record_indoor_cells(
+    ctx: &ReducerContext,
+    generation_id: u64,
+    keys: impl IntoIterator<Item = u64>,
+) {
+    let cells = ctx.db.game_vmap_indoor_cell();
+    for key in keys {
+        cells.insert(VmapIndoorCell {
+            id: 0,
+            generation_id,
+            key,
+        });
+    }
+}
+
+/// Is `(x, y)` in a cell that holds any indoor geometry at all? One indexed find against the
+/// map's ACTIVE generation. `false` — no raycast, treat as outdoors — when vmap has no active
+/// generation for the map, when the position is off the map square, or when the cell has no
+/// marker row.
+fn cell_may_be_indoor(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> bool {
+    let Some(generation_id) = active_generation_id(ctx, map_id) else {
+        return false;
+    };
+    let (Some(cell_x), Some(cell_y)) = (
+        lyracore_shared::terrain::cell_index(x),
+        lyracore_shared::terrain::cell_index(y),
+    ) else {
+        return false;
+    };
+    ctx.db
+        .game_vmap_indoor_cell()
+        .by_generation_cell()
+        .filter((generation_id, cell_key(map_id, cell_x, cell_y)))
+        .next()
+        .is_some()
+}
+
+/// Is `(x, y, z)` inside a WMO interior? THE indoor question — the mount cast gate, the movement
+/// heartbeat and the teleport path all ask it here rather than reading MOGP flags themselves.
+///
+/// Two stages, and both FAIL OPEN (answer `false`, "outdoors"): the per-cell marker find, which
+/// skips the ray cast for a cell with no interior geometry, then `area_info`, which is already
+/// `None` with vmap off, with no active generation, or with nothing under the probe. So an
+/// operator running without vmap data never gets an indoor dismount, and never gets a false one.
+pub fn is_indoor(ctx: &ReducerContext, map_id: u32, x: f32, y: f32, z: f32) -> bool {
+    cell_may_be_indoor(ctx, map_id, x, y)
+        && area_info(ctx, map_id, x, y, z).is_some_and(|info| info.indoor)
 }
 
 #[cfg(test)]
@@ -798,6 +918,127 @@ mod tests {
         assert_eq!(h.active(0), Some(1));
         assert!(!h.chunks.keys().any(|(generation, _, _)| *generation == 2));
         assert!(h.discard(1).is_err(), "active data cannot be discarded");
+    }
+
+    /// The presence table's classifier. A WMO group is indoor by the SHARED mangos rule (outdoor
+    /// only when `0x8000` is set); a doodad never is, whatever its geometry looks like.
+    #[test]
+    fn only_indoor_wmo_triangles_mark_a_cell() {
+        use lyracore_shared::vmap::{TriClass, VmapTri, WMO_GROUP_OUTDOOR_FLAG};
+        let tri = |class| VmapTri {
+            verts: [[0.0; 3]; 3],
+            class,
+        };
+        assert!(tri_is_indoor(&tri(TriClass::Wmo {
+            group_id: 1,
+            mogp_flags: 0
+        })));
+        assert!(!tri_is_indoor(&tri(TriClass::Wmo {
+            group_id: 1,
+            mogp_flags: WMO_GROUP_OUTDOOR_FLAG
+        })));
+        assert!(!tri_is_indoor(&tri(TriClass::M2)));
+    }
+
+    /// The presence table is computed inside verification's EXISTING decode pass — the same loop
+    /// that already validates every staged chunk exactly once — and it changes neither the byte
+    /// count nor the digest the manifest is checked against.
+    #[test]
+    fn verification_marks_indoor_cells_in_its_existing_decode_pass() {
+        let body =
+            crate::test_scan::code_of(include_str!("vmap.rs"), "pub fn verify_vmap_generation(");
+        assert_eq!(
+            body.matches("decode(&chunk.blob)").count(),
+            1,
+            "verification must decode each staged chunk ONCE — the indoor classification rides that \
+             pass, it does not add a second one. Body was:\n{body}"
+        );
+        let decode = body
+            .find("decode(&chunk.blob)")
+            .expect("the decode pass exists");
+        let classify = body
+            .find("tris.iter().any(tri_is_indoor)")
+            .expect("the decode pass must classify the chunk's triangles");
+        let manifest = body
+            .find("require_manifest(")
+            .expect("verification still checks the manifest");
+        let record = body
+            .find("record_indoor_cells(ctx, generation_id, indoor_cells);")
+            .expect("verification must record the generation's indoor cells");
+        assert!(decode < classify && manifest < record);
+        assert!(
+            !body.contains("manifest_digest = ") && !body.contains("expected_bytes ="),
+            "the derived table must not touch the manifest or the digest. Body was:\n{body}"
+        );
+    }
+
+    /// The indoor query's two fail-open stages, in order: the indexed marker find first (a cell with
+    /// no indoor geometry never raycasts), then the area probe. Both answer "outdoors" when they
+    /// cannot answer at all, which is what makes the mount feature correct with vmap off.
+    #[test]
+    fn the_indoor_query_pre_rejects_before_it_raycasts() {
+        let src = include_str!("vmap.rs");
+        assert_eq!(
+            crate::test_scan::shape_of(src, "pub fn is_indoor("),
+            "{ cell_may_be_indoor(ctx, map_id, x, y) && area_info(ctx, map_id, x, y, z).is_some_and(|info| info.indoor) }",
+            "`is_indoor` must short-circuit on the per-cell marker before paying an area query"
+        );
+        let cell = crate::test_scan::code_of(src, "fn cell_may_be_indoor(");
+        assert!(
+            cell.contains("let Some(generation_id) = active_generation_id(ctx, map_id) else {")
+                && cell.contains("return false;"),
+            "a map with no ACTIVE generation must read as outdoors. Body was:\n{cell}"
+        );
+        assert!(
+            cell.contains("lyracore_shared::terrain::cell_index(x)"),
+            "an off-map position must read as outdoors through the shared cell index. Body was:\n{cell}"
+        );
+        let area = crate::test_scan::code_of(src, "pub fn area_info(");
+        assert!(
+            area.contains("if !vmap_enabled(ctx, map_id) {") && area.contains("return None;"),
+            "the area query must still fail open with the kill-switch off. Body was:\n{area}"
+        );
+    }
+
+    /// The area query's probe budget is the short one, not the 200 yd floor probe — that reach finds
+    /// a WMO two storeys below an open-world point and reports the point as inside it.
+    #[test]
+    fn the_area_query_uses_the_short_probe_budget() {
+        let area = crate::test_scan::code_of(include_str!("vmap.rs"), "pub fn area_info(");
+        assert!(
+            area.contains("lyracore_shared::vmap::AREA_PROBE_DOWN_YD")
+                && !area.contains("FLOOR_PROBE_DOWN_YD"),
+            "the area probe must use the short area budget. Body was:\n{area}"
+        );
+        let floor = crate::test_scan::code_of(include_str!("vmap.rs"), "pub fn floor_z(");
+        assert!(
+            floor.contains("FLOOR_PROBE_DOWN_YD"),
+            "the long floor probe stays on the floor/ray path. Body was:\n{floor}"
+        );
+    }
+
+    /// "Which generation is live for this map" has ONE implementation. `vmap_enabled`, the ray
+    /// `fetcher` and the indoor-presence lookup all ask it; a second copy of the filter is how two
+    /// answers start to drift.
+    #[test]
+    fn the_active_generation_scan_appears_once() {
+        let src = include_str!("vmap.rs");
+        let scans = src
+            .match_indices("by_map_state()")
+            .filter(|(idx, _)| {
+                !crate::test_scan::on_comment_line(src, *idx)
+                    && !crate::test_scan::in_string_literal(src, *idx)
+            })
+            .count();
+        assert_eq!(
+            scans, 2,
+            "`by_map_state` may appear exactly twice: `active_generation_id` (the one read) and \
+             `activate_vmap_generation`'s own supersede sweep."
+        );
+        assert!(crate::test_scan::code_of(src, "pub fn vmap_enabled(")
+            .contains("active_generation_id(ctx, map_id)"));
+        assert!(crate::test_scan::code_of(src, "fn fetcher(")
+            .contains("active_generation_id(ctx, map_id)"));
     }
 
     #[test]

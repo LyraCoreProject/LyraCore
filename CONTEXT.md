@@ -132,6 +132,20 @@ Closing a Loot Window. Makes the Loot Source available to the next eligible loot
 **Loot Roll**:
 A group's roll on an item. Lives in Realm-core.
 
+### Mounts
+
+**Land Mount**:
+A ground mount, held as an ordinary cancelable self aura. The aura row is the mounted state.
+_Avoid_: mounted state (as a separate stored thing)
+
+**Mount Projection**:
+The `WorldEntity` columns re-derived from a Character's aura set for the client: the mount display and
+the effective run speed. Never a second state machine.
+
+**Dismount**:
+The one shared operation that removes the active Land Mount's aura rows and re-derives the Mount
+Projection. Idempotent, and a no-op for a rider who is not mounted.
+
 ### Auctions
 
 **Settlement**:

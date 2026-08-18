@@ -178,16 +178,30 @@ pub(crate) fn forget_spell(ctx: &ReducerContext, guid: u64, spell_id: u32) {
 /// server-side. [entity]
 pub(crate) fn strip_spell_auras(ctx: &ReducerContext, guid: u64, spell_id: u32) -> bool {
     let auras = ctx.db.game_aura();
-    let to_remove: Vec<(u64, bool)> = auras
+    let to_remove: Vec<(u64, bool, bool)> = auras
         .by_target()
         .filter(&guid)
         .filter(|a| a.spell_id == spell_id)
-        .map(|a| (a.id, crate::spell::aura_moves_vitals(a.eff_kind, a.eff_p0)))
+        .map(|a| {
+            (
+                a.id,
+                crate::spell::aura_moves_vitals(a.eff_kind, a.eff_p0),
+                crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0),
+            )
+        })
         .collect();
     let mut moved_vitals = false;
-    for (id, mv) in to_remove {
+    let mut moved_mount = false;
+    for (id, mv, mm) in to_remove {
         auras.id().delete(id);
         moved_vitals |= mv;
+        moved_mount |= mm;
+    }
+    // Unlike vitals, the mount recompute runs HERE rather than being folded back to the caller: it is
+    // already gated on a mount aura having been removed (never true on the respec path, the only
+    // caller that batches several spells), so per-spell costs nothing and no call site has to know.
+    if moved_mount {
+        crate::mount::recompute_mount(ctx, guid);
     }
     moved_vitals
 }

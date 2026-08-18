@@ -191,6 +191,29 @@ impl Coordinator {
             }))
     }
 
+    /// The skill line offering `spell_id` teaches at trainer `trainer_guid`, or 0 for an ordinary spell
+    /// offering (and for any missing trainer/offering row). The offering list is keyed by the trainer's
+    /// creature-template `entry`, like the vendor stock. Read from the privileged cache.
+    pub fn trainer_offer_skill_line(&self, trainer_guid: u64, spell_id: u32) -> u32 {
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        let Some(entry) = db
+            .game_world_entity()
+            .guid()
+            .find(&trainer_guid)
+            .map(|e| e.entry)
+        else {
+            return 0;
+        };
+        let line = db
+            .game_trainer_spell()
+            .iter()
+            .find(|t| t.trainer_entry == entry && t.spell_id == spell_id)
+            .map(|t| t.learn_skill_line)
+            .unwrap_or(0);
+        line
+    }
+
     /// The spells trainer `trainer_guid` teaches, folded with `player_guid`'s level + known-state so the
     /// codec can render each Green/Red/Gray. The trainer's creature-template `entry` keys the list (like
     /// the vendor stock); `known` = a `game_player_spell` row (the one castability source). A missing

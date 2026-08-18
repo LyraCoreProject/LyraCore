@@ -21,6 +21,12 @@ pub mod trainer_type {
     pub const PETS: u8 = 3;
 }
 
+/// `SkillLine.dbc` id of Riding — the skill a [`trainer_type::MOUNTS`] trainer teaches, and the line a
+/// mount spell's `SkillLineAbility` row names. Shared for the same no-drift reason as [`serves`]: the
+/// module grants the rank on the buy, and the gateway needs to know a riding offering teaches a SKILL so
+/// it does not echo the offering's marker id back as a learned spell.
+pub const RIDING_SKILL_LINE: u32 = 762;
+
 /// Will this trainer serve a character of `player_class`?
 ///
 /// Refuses only when all three hold: the trainer is a `CLASS` trainer, its `trainer_class` is

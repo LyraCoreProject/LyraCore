@@ -104,6 +104,17 @@ pub(crate) fn resolve_cast_at(
         ctx.db.game_world_entity().guid().update(caster);
     }
 
+    // LAND-MOUNT dismount (22): an ACCEPTED cast drops the caster's mount before the effects run. A
+    // refused cast returned from the gate sweep above and changes nothing. THE MOUNT CAST ITSELF IS
+    // EXEMPT — `aura_apply` already replaces an active mount when the new one lands, and dismounting
+    // here would strip the rider mid-cast of the very spell that remounts them. Keyed on the presence
+    // of an `A_MOUNTED` effect, never a spell id. Placed after the cost charge, not beside the gate
+    // call: the charge flushes the caster row from a copy read before this point, so a recompute made
+    // any earlier would be overwritten by it. No-op for an unmounted caster.
+    if !effects.iter().any(|e| e.kind == A_MOUNTED) {
+        crate::mount::dismount(ctx, caster_guid);
+    }
+
     // Stealth breaks on action: casting drops the caster's A_STEALTH presence BEFORE the effects run, so
     // a stealthed rogue that casts any spell is revealed. EXCEPTION — a STEALTH_SAFE spell (Sap, Pick
     // Pocket) keeps the rogue stealthed (vanilla: sapping / pick-pocketing doesn't break stealth); the
@@ -341,6 +352,11 @@ fn check_cast_gates(
         crate::creatures::validate_tame(ctx, caster, target_guid)?;
     }
 
+    // LAND-MOUNT gate: a spell carrying `A_MOUNTED` needs a trained rider of the right line and rank,
+    // alive, out of combat, outdoors and not submerged. A no-op for every other spell. It belongs in
+    // this read-only sweep so a refused mount spends nothing — no item, no aura, no cooldown.
+    crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?;
+
     // Level gate: a CHARACTER cannot cast a rank above its level. Pairs with the trainer level-gate so a
     // higher rank is both UNBUYABLE and UNCASTABLE until you level up — the leveling spine. Keyed on the
     // spell's spell_level (the rank's level); spell_level 0 (no requirement) never gates. Baseline-safe:
@@ -511,13 +527,9 @@ fn check_cast_gates(
                 && e.kind != E_DUEL
                 && matches!(e.target, T_TARGET_ENEMY | T_AREA_ENEMY | T_CHAIN_ENEMY)
         });
-        let hits_ally = effects
-            .iter()
-            .any(|e| {
-                e.kind != A_FLAG
-                    && e.kind != E_DUEL
-                    && matches!(e.target, T_TARGET_ALLY | T_AREA_ALLY)
-            });
+        let hits_ally = effects.iter().any(|e| {
+            e.kind != A_FLAG && e.kind != E_DUEL && matches!(e.target, T_TARGET_ALLY | T_AREA_ALLY)
+        });
         if hits_enemy || hits_ally {
             if let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) {
                 let friendly = !crate::combat::may_harm(ctx, caster, &target);

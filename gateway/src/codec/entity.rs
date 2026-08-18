@@ -47,7 +47,8 @@ pub struct EntityView {
     pub display_id: u32,
     pub native_display_id: u32,
     pub unit_flags: u32,
-    /// `UNIT_FIELD_MOUNTDISPLAYID`; nonzero only while the module owns an active taxi flight.
+    /// `UNIT_FIELD_MOUNTDISPLAYID`; the shared presentation for a taxi flight and a land mount. The
+    /// module decides which one owns it and projects the winner onto this field.
     pub mount_display_id: u32,
     pub base_attack_time_ms: u32,
     pub dynamic_flags: u32,
