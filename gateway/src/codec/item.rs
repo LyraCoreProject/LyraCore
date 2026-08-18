@@ -75,8 +75,6 @@ pub struct ItemTemplateView {
     pub page_text: u32,
     pub start_quest: u32,
     pub bag_family: u32,
-    /// Opaque eligibility masks from the Module.  The gateway preserves all imported bits when it
-    /// fills the typed packet fields; only the importer interprets the ClassicDB unrestricted sentinel.
     pub allowed_class: u32,
     pub allowed_race: u32,
 }
