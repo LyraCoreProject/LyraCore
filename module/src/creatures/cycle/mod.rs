@@ -1331,10 +1331,11 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
             (gap - MELEE_STOP_SHORT_YD).max(0.0)
         };
         let aim = (c.at.x + dir.0 * leg_len, c.at.y + dir.1 * leg_len);
+        // For a standing victim `aim` IS the stop point, so a leg still in flight past it is a lead
+        // thrown at the victim's older, moving position and has to be replaced there.
+        let stop_at = (!victim_moving).then_some(aim);
         let step = w.navigate(c.guid, aim, leg_len);
-        if step == (c.at.x, c.at.y)
-            || !needs_new_leg(c.leg.as_ref(), dir, victim_moving, c.victim_at)
-        {
+        if step == (c.at.x, c.at.y) || !needs_new_leg(c.leg.as_ref(), dir, stop_at) {
             continue;
         }
         let run = w.speed_of(c.guid, Gait::Run);
@@ -1358,24 +1359,17 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
 
 /// Does this chaser need a NEW leg? One whose leg has landed does. One still riding a leg keeps it
 /// while the victim stays roughly on the heading the leg was thrown along, which is what stops the
-/// client re-computing its path every firing — UNLESS the victim has stopped translating and the
-/// leg's destination now lies past the melee stop point: closer to the victim's current position
-/// than `MELEE_STOP_SHORT_YD`, or through them entirely. A lead thrown at a kiter that then stops
-/// short of reach must be replaced there rather than ridden eight yards past them; a still-kiting
-/// victim is exempt, so a straight-line kite still rides one committed leg.
-fn needs_new_leg(
-    leg: Option<&LegInFlight>,
-    dir: (f32, f32),
-    victim_moving: bool,
-    victim_at: Point,
-) -> bool {
+/// client re-computing its path every firing — UNLESS `stop_at` is set and the leg would land at or
+/// past it. `stop_at` is the point this firing would aim at, and the caller sets it only for a
+/// victim that has stopped translating: a lead thrown at a kiter who then stops short of reach must
+/// be replaced at the stop point rather than ridden eight yards through them, while a still-kiting
+/// victim rides its one committed leg exactly as before.
+fn needs_new_leg(leg: Option<&LegInFlight>, dir: (f32, f32), stop_at: Option<(f32, f32)>) -> bool {
     let Some(leg) = leg else {
         return true;
     };
-    if !victim_moving {
-        let reach_past_victim =
-            (leg.dest.x - victim_at.x) * dir.0 + (leg.dest.y - victim_at.y) * dir.1;
-        if reach_past_victim > -MELEE_STOP_SHORT_YD {
+    if let Some((sx, sy)) = stop_at {
+        if (leg.dest.x - sx) * dir.0 + (leg.dest.y - sy) * dir.1 > 0.0 {
             return true;
         }
     }
@@ -1736,11 +1730,9 @@ mod chase_leg_tests {
     use super::*;
 
     const DIR: (f32, f32) = (1.0, 0.0);
-    const VICTIM_AT: Point = Point {
-        x: 23.0,
-        y: 0.0,
-        z: 10.0,
-    };
+    /// Where `chase` aims once its victim stops: four yards short of a victim standing at x = 23.
+    /// A victim still translating gets `None` instead, and no stop-point test at all.
+    const STOP_AT: Option<(f32, f32)> = Some((19.0, 0.0));
 
     fn leg_to(dest_x: f32) -> LegInFlight {
         LegInFlight {
@@ -1765,51 +1757,39 @@ mod chase_leg_tests {
 
     #[test]
     fn no_leg_in_flight_always_needs_one() {
-        assert!(needs_new_leg(None, DIR, false, VICTIM_AT));
-        assert!(needs_new_leg(None, DIR, true, VICTIM_AT));
+        assert!(needs_new_leg(None, DIR, STOP_AT));
+        assert!(needs_new_leg(None, DIR, None));
     }
 
     #[test]
     fn a_stopped_victim_keeps_a_leg_that_still_lands_short_of_the_stop_point() {
-        // The leg's destination is well short of VICTIM_AT.x - MELEE_STOP_SHORT_YD (19.0) — still
-        // approaching, so there is nothing to replace yet.
-        assert!(!needs_new_leg(Some(&leg_to(10.0)), DIR, false, VICTIM_AT));
+        // Still approaching, so there is nothing to replace yet.
+        assert!(!needs_new_leg(Some(&leg_to(10.0)), DIR, STOP_AT));
     }
 
     #[test]
     fn a_stopped_victim_keeps_a_leg_landing_exactly_on_the_stop_point() {
-        assert!(!needs_new_leg(Some(&leg_to(19.0)), DIR, false, VICTIM_AT));
+        assert!(!needs_new_leg(Some(&leg_to(19.0)), DIR, STOP_AT));
     }
 
     #[test]
     fn a_stopped_victim_replaces_a_leg_that_would_overshoot_the_stop_point() {
         // Thrown as a lead past the victim's OLD position, this leg would carry the creature
         // through where the victim now stands rather than stopping short of it.
-        assert!(needs_new_leg(Some(&leg_to(28.0)), DIR, false, VICTIM_AT));
+        assert!(needs_new_leg(Some(&leg_to(28.0)), DIR, STOP_AT));
     }
 
     #[test]
     fn a_still_translating_victim_keeps_the_same_overshooting_leg() {
-        // A straight-line kite rides one committed lead leg — the stop-point rule is exempt while
-        // the victim is still moving, even though the leg's destination sits past where a stop
-        // point would land.
-        assert!(!needs_new_leg(Some(&leg_to(28.0)), DIR, true, VICTIM_AT));
+        // A straight-line kite rides one committed lead leg: there is no stop point to test
+        // against while the victim is still moving.
+        assert!(!needs_new_leg(Some(&leg_to(28.0)), DIR, None));
     }
 
     #[test]
     fn a_veered_heading_still_forces_a_new_leg_whatever_the_victim_is_doing() {
         let off_heading = (0.0, 1.0);
-        assert!(needs_new_leg(
-            Some(&leg_to(19.0)),
-            off_heading,
-            false,
-            VICTIM_AT
-        ));
-        assert!(needs_new_leg(
-            Some(&leg_to(19.0)),
-            off_heading,
-            true,
-            VICTIM_AT
-        ));
+        assert!(needs_new_leg(Some(&leg_to(19.0)), off_heading, STOP_AT));
+        assert!(needs_new_leg(Some(&leg_to(19.0)), off_heading, None));
     }
 }

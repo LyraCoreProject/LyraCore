@@ -2763,9 +2763,8 @@ fn a_lead_leg_is_replaced_when_the_victim_stops_short_of_reach() {
          lead leg through the player"
     );
 
-    // Keep cycling until the fight goes silent: the creature must never ride past the victim it
-    // stopped short of, and the fight must settle with a facing turn as its last word — the exact
-    // stop-and-face shape belongs to the sibling ticket that owns `stand_and_face`.
+    // Ride the replacement out: the creature must never pass the victim it stopped short of, and
+    // the approach must end on the one facing spline the stop writes at the stop point.
     for _ in 0..8 {
         w.advance_clock(500_000);
         let tick = w.tick(false, catch_all());
@@ -2777,10 +2776,19 @@ fn a_lead_leg_is_replaced_when_the_victim_stops_short_of_reach() {
             w.at(WOLF).at.x
         );
     }
+    let stop = p(19.0, 0.0, 10.0);
     let last = w.effects().last().copied().expect("at least one effect");
-    assert!(
-        last.facing && last.dur_ms == 0,
-        "a settled fight's last word must be the facing turn, not a positional leg that overshot"
+    assert_eq!(
+        (
+            last.start,
+            last.dest,
+            last.dur_ms,
+            last.facing,
+            last.facing_angle
+        ),
+        (stop, stop, 0, true, 0.0),
+        "the fight must settle on ONE facing spline at the stop point, squared up on the player: \
+         a positional leg as the last word means the creature overshot them"
     );
 }
 
