@@ -100,8 +100,8 @@ pub(crate) trait MotionSink {
     fn commit_position(&mut self, guid: u64, at: Point, moved_ms: u32);
     /// Stop this mover at `at` and tell the client to halt there: the position moves, the move clock
     /// does not, and the emitted leg has zero duration, REPLACING the leg it interrupts so the next
-    /// cycle reads it as landed. Both a suppressed mover frozen mid-leg and a chaser that reached
-    /// its victim end this way.
+    /// cycle reads it as landed. A mover frozen mid-leg by crowd control ends this way; a chaser
+    /// that reached its victim stops through [`PursuitSink::face`], which also turns it.
     fn halt(&mut self, leg: &LegInFlight, at: Point, spline_id: u32);
     /// Forget this creature's leg — arrived, orphaned or refused.
     fn drop_leg(&mut self, guid: u64);
@@ -430,9 +430,9 @@ pub(crate) struct Pursuit {
     pub leg: Option<LegInFlight>,
 }
 
-/// Chase's surface: the fights worth closing, how far a caster fights from, and where a creature
-/// looks. It shares the movers the idle phases use — `speed_of`, `navigate`, `commit_leg` — and
-/// `halt` with spline advance, so a chase leg is written by the one leg writer like every other.
+/// Chase's surface: the fights worth closing, how far a caster fights from, and the stop-and-turn
+/// that ends an approach. It shares the movers the idle phases use — `speed_of`, `navigate`,
+/// `commit_leg` — so a chase leg is written by the one leg writer like every other.
 pub(crate) trait PursuitSink {
     /// Every live engagement this firing covers whose attacker is a creature that could move and
     /// whose victim is still in the world. NOT scoped to the active-cell sweep: a fight dragged out
@@ -441,9 +441,12 @@ pub(crate) trait PursuitSink {
     /// The longest range this creature can bring an offensive spell to bear from; 0 for anything
     /// that has to close to melee.
     fn caster_hold_range(&self, guid: u64) -> f32;
-    /// Turn the creature to `orientation` and tell the clients that can see it. A spline is the only
-    /// thing a client derives creature facing from, so this is a zero-duration facing packet.
-    fn face(&mut self, guid: u64, orientation: f32, spline_id: u32);
+    /// STOP the creature at `at` and turn it to `orientation`, in ONE carrier row and one entity
+    /// write. A spline is the only thing a client derives creature facing from, so the stop is a
+    /// zero-duration facing spline at `at`: it replaces whatever leg the creature was riding, and
+    /// the next spline advance reads it as arrived and reaps it. One row because a subscriber sees
+    /// only a transaction's net change — a stop written beside a turn would never reach a client.
+    fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32);
 }
 
 /// A creature that could break off and run this firing: its fight, its wounds, and its rout clock.
@@ -1362,22 +1365,23 @@ fn needs_new_leg(leg: Option<&LegInFlight>, dir: (f32, f32)) -> bool {
     len <= 0.001 || (lx / len) * dir.0 + (ly / len) * dir.1 < CHASE_REPATH_COS
 }
 
-/// The victim is inside melee reach and standing still. Stop the leg the chaser was riding, so a
-/// lead aimed past a now-stopped victim does not carry it PAST them, and turn it to face what it is
-/// swinging at — a stand-and-swing creature throws no further movement leg, and a spline is the only
-/// thing a client derives creature facing from, so without this it keeps its pre-combat heading for
-/// the whole fight. Both effects are idempotent — the stop reaps its own leg on the next advance,
-/// the turn is epsilon-gated — so a settled fight goes silent.
-fn stand_and_face<W: MotionSink + PursuitSink>(w: &mut W, tick: &TickContext, c: &Pursuit) {
-    // ponytail: the stop reuses advance's `halt`, which also re-places the creature. Ceiling: one
-    // row write of the position it already holds, each time a fight settles.
-    if let Some(leg) = &c.leg {
-        w.halt(leg, c.at, tick.now_ms);
-    }
+/// The victim is inside melee reach and standing still. ONE facing spline at the point the chaser
+/// renders both stops it — a lead aimed past a now-stopped victim must not carry it through them —
+/// and turns it to what it is swinging at, which is the only thing a client derives creature facing
+/// from. The two cannot be separate rows: a creature has ONE spline row, so a stop written beside a
+/// turn inside one transaction reaches the client as the turn alone, and the client rides the
+/// interrupted leg on while the module holds the creature at the halt point.
+///
+/// A creature riding a leg is stopped whatever way it looks; a stopped one is only turned when the
+/// bearing has drifted past the epsilon. Both are idempotent — the row reaps itself on the next
+/// advance — so a settled fight goes silent.
+fn stand_and_face<W: PursuitSink>(w: &mut W, tick: &TickContext, c: &Pursuit) {
     let bearing = (c.victim_at.y - c.at.y).atan2(c.victim_at.x - c.at.x);
-    if angle_diff(c.orientation, bearing).abs() > FACING_EPSILON_RAD {
-        w.face(c.guid, bearing, tick.now_ms);
+    let turning = angle_diff(c.orientation, bearing).abs() > FACING_EPSILON_RAD;
+    if c.leg.is_none() && !turning {
+        return; // standing where it stands, already looking at what it swings at
     }
+    w.face(c.guid, c.at, bearing, tick.now_ms);
 }
 
 /// COMBAT ENTRY — every unit in a live engagement this firing covers gets the in-combat flag and a
