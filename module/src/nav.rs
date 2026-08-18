@@ -156,6 +156,7 @@ pub fn import_nav_chunks_append(ctx: &ReducerContext, packed: String) -> Result<
 // ===========================================================================================
 
 use crate::game_config;
+use crate::vmap::game_vmap_nav_coverage;
 use lyracore_shared::nav::NavCellData;
 
 /// The 243 consumption gate. Missing config row = false (fresh DB stays baseline).
@@ -168,19 +169,67 @@ pub fn nav_enabled(ctx: &ReducerContext) -> bool {
         .unwrap_or(false)
 }
 
+/// The vmap-derived coverage gate. Missing config row = false, like `nav_enabled`.
+pub fn nav_coverage_enabled(ctx: &ReducerContext) -> bool {
+    ctx.db
+        .game_config()
+        .id()
+        .find(0)
+        .map(|c| c.nav_coverage_enabled)
+        .unwrap_or(false)
+}
+
+/// The generation whose derived coverage may join planning on this map, or `None` for the
+/// terrain-only grid. Needs the gate on, an ACTIVE generation, and a COMPLETE manifest — partial
+/// coverage never routes, and a non-active generation's rows are invisible here.
+fn coverage_generation(ctx: &ReducerContext, map_id: u32) -> Option<u64> {
+    if !nav_coverage_enabled(ctx) {
+        return None;
+    }
+    crate::vmap::active_vmap_nav_coverage_manifest(ctx, map_id).map(|m| m.generation_id)
+}
+
+/// Fold coverage into the imported terrain cell. Either side may be absent: a cell only the vmap
+/// knows about routes off coverage alone, and a cell only the importer knows about is untouched.
+fn merged_cell(terrain: Option<NavCellData>, coverage: Option<NavCellData>) -> Option<NavCellData> {
+    match (terrain, coverage) {
+        (Some(terrain), Some(coverage)) => Some(nav::merge_cells(&terrain, &coverage)),
+        (Some(cell), None) | (None, Some(cell)) => Some(cell),
+        (None, None) => None,
+    }
+}
+
 /// Chunk fetch closure for the shared queries — one PK find per crossed cell, blobs cloned
-/// (a few KB; the shared layer memoizes per query).
+/// (a few KB; the shared layer memoizes per query). With coverage consuming, each cell also costs
+/// one indexed coverage lookup and a blob merge; the generation itself resolves ONCE per query
+/// (the same hoist `vmap::fetcher` does with its active-generation lookup), never per cell.
 fn fetcher(ctx: &ReducerContext, map_id: u32) -> impl FnMut(u16, u16) -> Option<NavCellData> + '_ {
+    let generation = coverage_generation(ctx, map_id);
     move |cx, cy| {
-        ctx.db
+        let key = cell_key(map_id, cx, cy);
+        let terrain = ctx
+            .db
             .game_nav_chunk()
             .key()
-            .find(cell_key(map_id, cx, cy))
+            .find(key)
             .map(|c| NavCellData {
                 base_z: c.base_z,
                 walk: c.walk,
                 obs: c.obs,
-            })
+            });
+        let coverage = generation.and_then(|generation_id| {
+            ctx.db
+                .game_vmap_nav_coverage()
+                .by_generation_cell()
+                .filter((generation_id, key))
+                .next()
+                .map(|c| NavCellData {
+                    base_z: c.base_z,
+                    walk: c.walk,
+                    obs: c.obs,
+                })
+        });
+        merged_cell(terrain, coverage)
     }
 }
 
@@ -296,28 +345,72 @@ fn step_gate(
     }
 }
 
-/// Probe-only: the raw `find_leg_ex` outcome as a printable summary (waypoints + expansions).
+/// Probe-only: the raw `find_leg_ex` outcome as a printable summary (waypoints + expansions),
+/// tagged with the coverage generation that planned it. That tag is what makes a before/after
+/// pair readable: the same leg run with the gate off and on shows how many expansions routing
+/// around real geometry actually costs against `LEG_MAX_EXPANSIONS`, and `complete=false` means
+/// the budget ran out and the leg is best-effort.
 pub fn debug_find_leg(
     ctx: &ReducerContext,
     map_id: u32,
     from: (f32, f32),
     to: (f32, f32),
 ) -> String {
+    let coverage = match coverage_generation(ctx, map_id) {
+        Some(generation_id) => format!("coverage=generation:{generation_id}"),
+        None => "coverage=off".to_string(),
+    };
     match lyracore_shared::nav::find_leg_ex(&mut fetcher(ctx, map_id), from, to, LEG_MAX_EXPANSIONS)
     {
-        None => "None(fallback straight)".to_string(),
+        None => format!("{coverage} budget={LEG_MAX_EXPANSIONS} None(fallback straight)"),
         Some((path, expanded, complete)) => {
             let pts: Vec<String> = path
                 .iter()
                 .map(|p| format!("({:.1},{:.1})", p.0, p.1))
                 .collect();
             format!(
-                "path[{}] expansions={} complete={} {}",
+                "{coverage} budget={LEG_MAX_EXPANSIONS} path[{}] expansions={} complete={} {}",
                 path.len(),
                 expanded,
                 complete,
                 pts.join(" ")
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod coverage_merge_tests {
+    use super::*;
+    use lyracore_shared::nav::{walk_get, walk_set, OBS_BYTES, OBS_NONE, WALK_BYTES};
+
+    fn open(base_z: f32) -> NavCellData {
+        NavCellData {
+            base_z,
+            walk: vec![0xFF; WALK_BYTES],
+            obs: vec![OBS_NONE; OBS_BYTES],
+        }
+    }
+
+    /// The whole point of the read seam: an imported cell that knows nothing about a wall picks up
+    /// the coverage's blockers, and coverage alone still routes where no nav row was imported.
+    #[test]
+    fn either_side_can_block_and_a_lone_side_passes_through_unchanged() {
+        let mut terrain = open(80.0);
+        walk_set(&mut terrain.walk, 5, 5, false);
+        let mut coverage = open(80.0);
+        walk_set(&mut coverage.walk, 9, 9, false);
+
+        let merged = merged_cell(Some(terrain.clone()), Some(coverage.clone())).unwrap();
+        assert!(!walk_get(&merged.walk, 5, 5) && !walk_get(&merged.walk, 9, 9));
+
+        let terrain_only = merged_cell(Some(terrain), None).unwrap();
+        assert!(!walk_get(&terrain_only.walk, 5, 5) && walk_get(&terrain_only.walk, 9, 9));
+
+        let coverage_only = merged_cell(None, Some(coverage)).unwrap();
+        assert!(walk_get(&coverage_only.walk, 5, 5) && !walk_get(&coverage_only.walk, 9, 9));
+
+        // Neither source covering the cell keeps the missing-chunk contract: no obstacles known.
+        assert!(merged_cell(None, None).is_none());
     }
 }

@@ -19,6 +19,9 @@
 //!                                   (--apply loads `game_vmap_chunk` via import_vmap_chunks; a
 //!                                   dry run stops at report — vmap.rs; #520/#521,
 //!                                   docs/decisions.md §10)
+//!   --vmap-prepare-coverage <id>    derive path-grid coverage for an already-staged vmap
+//!                                   generation (--apply calls prepare_/finalize_vmap_nav_coverage,
+//!                                   resumable; a dry run reports the plan) — vmap.rs::run_coverage
 //!   --go-models <client Data/ dir>  DOOR/BUTTON display → M2 bounding-mesh extract + import,
 //!                                   needs --dump too (--apply loads `game_go_model` via
 //!                                   import_go_models; a dry run stops at report — go_model.rs)
@@ -944,6 +947,7 @@ pub(crate) struct Args {
     pub(crate) nav: Option<String>, // client Data/ dir: 241 nav-grid rasterizer (see nav.rs)
     pub(crate) vmap: Option<String>, // client Data/ dir: #520/#521 exact vmap triangle extract+pack+import (see vmap.rs)
     pub(crate) vmap_status: bool, // print active-generation provenance/status without opening client data
+    pub(crate) vmap_prepare_coverage: Option<u64>, // generation id: derive path-grid coverage from an already-staged generation (see vmap.rs::run_coverage)
     pub(crate) go_models: Option<String>, // client Data/ dir: DOOR/BUTTON display -> M2 bounding-mesh extract+import (see go_model.rs); needs --dump too
     pack_client: Option<String>, // client Data/ dir for the --pack-client packager (see pack_client.rs)
     print_extents: bool, // with --dump: print the operator's own spawn bbox for --map and exit (work-item 206)
@@ -994,6 +998,7 @@ fn parse_args() -> Result<Args> {
         nav: None,
         vmap: None,
         vmap_status: false,
+        vmap_prepare_coverage: None,
         go_models: None,
         terrain: None,
         print_extents: false,
@@ -1030,6 +1035,13 @@ fn parse_args() -> Result<Args> {
             "--nav" => a.nav = Some(it.next().context("--nav needs the client Data/ dir")?),
             "--vmap" => a.vmap = Some(it.next().context("--vmap needs the client Data/ dir")?),
             "--vmap-status" => a.vmap_status = true,
+            "--vmap-prepare-coverage" => {
+                let v = it
+                    .next()
+                    .context("--vmap-prepare-coverage needs a generation id")?;
+                a.vmap_prepare_coverage =
+                    Some(v.parse().context("--vmap-prepare-coverage generation id must be a u64")?);
+            }
             "--go-models" => {
                 a.go_models = Some(
                     it.next()
@@ -1206,6 +1218,7 @@ fn parse_args() -> Result<Args> {
         && a.nav.is_none()
         && a.vmap.is_none()
         && !a.vmap_status
+        && a.vmap_prepare_coverage.is_none()
         && a.go_models.is_none()
     {
         bail!("need an input: --dump <classic-db .sql[.gz]>, --dbc <client Data/ dir>, --terrain <client Data/ dir>, or --pack-client <client Data/ dir>");
@@ -4638,6 +4651,12 @@ fn main() -> Result<()> {
         return vmap::run(&args);
     }
 
+    // `--vmap-prepare-coverage <generation_id>` → derive path-grid coverage from an already-staged
+    // generation's own geometry (see vmap.rs::run_coverage).
+    if let Some(generation_id) = args.vmap_prepare_coverage {
+        return vmap::run_coverage(&args, generation_id);
+    }
+
     // `--go-models` → DOOR/BUTTON display → M2 bounding-mesh extract + import (see go_model.rs).
     // Reads `--dump` itself (`parse_args` requires both), so it dispatches before the cmangos ETL
     // pass below consumes `args.dump`.
@@ -6320,6 +6339,7 @@ mod tests {
             nav: None,
             vmap: None,
             vmap_status: false,
+            vmap_prepare_coverage: None,
             go_models: None,
             print_extents: false,
             spells: false,

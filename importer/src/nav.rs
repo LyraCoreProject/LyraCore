@@ -7,7 +7,9 @@
 //! (placements repeat on adjacent tiles), load each referenced model's collision triangles
 //! once, transform to world space, bin by terrain cell, then rasterize each cell's 64×64
 //! walkability bitmask + 32×32 obstruction-height grid through `lyracore_shared::nav` (the same
-//! codec the module reads with).
+//! codec the module reads with). The geometry rasterization policy itself lives in
+//! `nav::derive_cell`; this file only adds the terrain-only blockers (slope, MCNK holes) and
+//! merges the two through `nav::merge_cells`.
 //!
 //! The placement ROTATION convention is folkloric (like the ADT filename axis order), so it is
 //! CALIBRATED, not trusted: MODF carries each WMO placement's world AABB; we try the candidate
@@ -20,10 +22,11 @@
 
 use anyhow::{bail, Context, Result};
 use lyracore_shared::nav::{
-    obs_raise, sub_center, sub_index, walk_set, OBS_BYTES, OBS_DIM, OBS_NONE, WALK_BYTES, WALK_DIM,
-    WALK_HEIGHT, WALK_STEP_UP,
+    derive_cell, merge_cells, sub_index, walk_set, NavCellData, OBS_BYTES, OBS_NONE, WALK_BYTES,
+    WALK_DIM, WALK_MARGIN,
 };
-use lyracore_shared::terrain::{cell_index, cell_key, interpolate, CELL_SIZE};
+use lyracore_shared::terrain::{cell_index, cell_key};
+use lyracore_shared::vmap::{TriClass, VmapTri};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Cursor;
 use std::path::Path;
@@ -382,90 +385,6 @@ fn resolve<'a>(names: &'a [String], indices: &[u32], name_id: u32) -> Result<&'a
 // Rasterizer
 // ---------------------------------------------------------------------------------------------
 
-/// Inflation margin for the point-in-triangle test (yd) — slightly over half a walk-cell
-/// diagonal so a thin vertical wall whose 2D projection is a sliver still hits the centers of
-/// the cells its line crosses. Conservative direction: over-blocking by <1 cell.
-const RASTER_MARGIN: f32 = 0.35;
-
-/// Agent-body inset for walk cells; the obstruction/LoS grid retains the true footprint.
-const AGENT_RADIUS: f32 = 0.5;
-
-/// The walk-grid rasterization margin: sliver-catching plus the body inset. The candidate
-/// sub-cell window inflates by the same amount so every center inside the margin gets tested.
-const WALK_MARGIN: f32 = RASTER_MARGIN + AGENT_RADIUS;
-
-/// One world-space collision triangle with its AABB, plane, and origin kind. `z_at` is the
-/// exact-rasterization core: the triangle's z-interval over a 2D point (None = point outside
-/// the inflated footprint). A coarse M2 bounding triangle spanning trunk→canopy thus blocks
-/// only near the trunk (low plane-z) and never under the canopy — the AABB stamping this
-/// replaces marked the whole canopy width unwalkable and turned Elwynn's forests into a maze.
-struct WorldTri {
-    lo: [f32; 3],
-    hi: [f32; 3],
-    is_wmo: bool,
-    /// Vertices (world).
-    v: Tri,
-    /// Plane normal + d (n·p = d); near-vertical planes fall back to the full z-range.
-    n: [f32; 3],
-    d: f32,
-}
-
-impl WorldTri {
-    fn new(v: Tri, is_wmo: bool) -> Self {
-        let (lo, hi) = aabb(v.iter().copied());
-        let e1 = [v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2]];
-        let e2 = [v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2]];
-        let n = [
-            e1[1] * e2[2] - e1[2] * e2[1],
-            e1[2] * e2[0] - e1[0] * e2[2],
-            e1[0] * e2[1] - e1[1] * e2[0],
-        ];
-        let d = n[0] * v[0][0] + n[1] * v[0][1] + n[2] * v[0][2];
-        Self {
-            lo,
-            hi,
-            is_wmo,
-            v,
-            n,
-            d,
-        }
-    }
-
-    /// The triangle's z-interval over 2D point (x, y), testing inside-ness with an `margin`-yd
-    /// outward inflation (signed edge distance). None = outside the inflated footprint.
-    fn z_at(&self, x: f32, y: f32, margin: f32) -> Option<(f32, f32)> {
-        // 2D signed edge distances (positive = same side as the third vertex).
-        for i in 0..3 {
-            let (a, b, c) = (self.v[i], self.v[(i + 1) % 3], self.v[(i + 2) % 3]);
-            let (ex, ey) = (b[0] - a[0], b[1] - a[1]);
-            let len = (ex * ex + ey * ey).sqrt();
-            if len < 1e-6 {
-                continue; // degenerate edge in 2D (vertical tri seen edge-on) — skip this edge test
-            }
-            let cross = |px: f32, py: f32| ex * (py - a[1]) - ey * (px - a[0]);
-            let side_c = cross(c[0], c[1]);
-            let side_p = cross(x, y);
-            // Normalize to a distance and require p within `margin` outside c's side.
-            let dist = side_p * side_c.signum() / len;
-            if dist < -margin {
-                return None;
-            }
-        }
-        // Steep plane (wall/fence side, >60° from horizontal): the plane-z is ill-conditioned
-        // over the projected sliver (it clamps to an arbitrary end of the z-range — the live
-        // "mobs walk through the graveyard fence" find: fence sides tilted ~1° clamped to the
-        // BOTTOM, below the standing band). Use the full z-span instead; anything this steep
-        // is unwalkable surface anyway (the terrain slope gate is 50°).
-        let n_len = (self.n[0] * self.n[0] + self.n[1] * self.n[1] + self.n[2] * self.n[2]).sqrt();
-        if self.n[2].abs() < 0.5 * n_len {
-            return Some((self.lo[2], self.hi[2]));
-        }
-        let z =
-            ((self.d - self.n[0] * x - self.n[1] * y) / self.n[2]).clamp(self.lo[2], self.hi[2]);
-        Some((z, z))
-    }
-}
-
 struct NavRow {
     map_id: u32,
     cell_x: u16,
@@ -495,24 +414,11 @@ impl NavRow {
     }
 }
 
-/// Rasterize one terrain cell against the triangles binned to it. Returns None when the cell
-/// is fully clear (all-walkable, no obstruction) — those emit NO row by design.
-fn rasterize_cell(cell: &crate::terrain::CellRow, tris: &[&WorldTri]) -> Option<NavRow> {
-    let (cx, cy) = (cell.cell_x, cell.cell_y);
+/// The terrain half of a cell: slope and MCNK holes, the only blockers the height grid alone
+/// knows. None when the terrain is clear everywhere in the cell.
+fn terrain_cell(cell: &crate::terrain::CellRow) -> Option<NavCellData> {
     let mut walk = vec![0xFFu8; WALK_BYTES];
-    let mut obs = vec![OBS_NONE; OBS_BYTES];
     let mut dirty = false;
-
-    // Ground height per walk sub-cell (bilinear through the SAME shared interpolate the
-    // module's ground_z uses).
-    let mut ground = vec![0.0f32; WALK_DIM * WALK_DIM];
-    for ny in 0..WALK_DIM {
-        for nx in 0..WALK_DIM {
-            let (x, y) = (sub_center(cx, nx, WALK_DIM), sub_center(cy, ny, WALK_DIM));
-            ground[ny * WALK_DIM + nx] =
-                interpolate(&cell.heights, cx, cy, x, y).unwrap_or(cell.heights[0]);
-        }
-    }
 
     // Slope: per 4.17 yd sub-quad from the 9×9 outer corners (index i*17+j).
     for qi in 0..8 {
@@ -549,118 +455,35 @@ fn rasterize_cell(cell: &crate::terrain::CellRow, tris: &[&WorldTri]) -> Option<
         }
     }
 
-    // Collision triangles (world-space, exact per-cell rasterization — see WorldTri::z_at).
-    let base_z = cell.heights.iter().copied().fold(f32::MAX, f32::min);
-    let mut col_ivals: Vec<Vec<(f32, f32)>> = vec![Vec::new(); OBS_BYTES];
-    let half_res = |dim: usize| 0.5 * CELL_SIZE / dim as f32;
-    // Sub-index range of [lo_c, hi_c] clamped to this cell (high coord → LOW index).
-    let clamp_axis = |lo_c: f32, hi_c: f32, cell_i: u16, dim: usize| -> Option<(usize, usize)> {
-        let cell_hi = sub_center(cell_i, 0, dim) + half_res(dim);
-        let cell_lo = sub_center(cell_i, dim - 1, dim) - half_res(dim);
-        let lo_c = lo_c.max(cell_lo + 1e-4);
-        let hi_c = hi_c.min(cell_hi - 1e-4);
-        if lo_c > hi_c {
-            return None;
-        }
-        Some((sub_index(hi_c, cell_i, dim)?, sub_index(lo_c, cell_i, dim)?))
+    dirty.then(|| NavCellData {
+        base_z: cell.heights.iter().copied().fold(f32::MAX, f32::min),
+        walk,
+        obs: vec![OBS_NONE; OBS_BYTES],
+    })
+}
+
+/// Rasterize one terrain cell against the triangles binned to it: the terrain blockers merged
+/// with the shared collision-geometry derivation (`nav::derive_cell` — the module derives its
+/// coverage through the same function, so the two can never drift). Returns None when the cell
+/// is fully clear (all-walkable, no obstruction) — those emit NO row by design.
+fn rasterize_cell(cell: &crate::terrain::CellRow, tris: &[VmapTri]) -> Option<NavRow> {
+    let (cx, cy) = (cell.cell_x, cell.cell_y);
+    let data = match (
+        terrain_cell(cell),
+        derive_cell(cx, cy, Some(&cell.heights), tris),
+    ) {
+        (Some(terrain), Some(coverage)) => merge_cells(&terrain, &coverage),
+        (Some(terrain), None) => terrain,
+        (None, Some(coverage)) => coverage,
+        (None, None) => return None,
     };
-    for t in tris.iter() {
-        // Walkability (all geometry): block a nav cell only when the triangle actually passes
-        // through the standing band above THAT cell's ground. Footprint + window inflated by
-        // Cells within a body radius of geometry rasterize blocked, so
-        // the center line `find_leg`/`nav_step` walk keeps the body clear of wall corners.
-        if let (Some((nx0, nx1)), Some((ny0, ny1))) = (
-            clamp_axis(t.lo[0] - WALK_MARGIN, t.hi[0] + WALK_MARGIN, cx, WALK_DIM),
-            clamp_axis(t.lo[1] - WALK_MARGIN, t.hi[1] + WALK_MARGIN, cy, WALK_DIM),
-        ) {
-            for ny in ny0..=ny1 {
-                for nx in nx0..=nx1 {
-                    let (x, y) = (sub_center(cx, nx, WALK_DIM), sub_center(cy, ny, WALK_DIM));
-                    let Some((z_lo, z_hi)) = t.z_at(x, y, WALK_MARGIN) else {
-                        continue;
-                    };
-                    let g = ground[ny * WALK_DIM + nx];
-                    if z_lo < g + WALK_HEIGHT && z_hi > g + WALK_STEP_UP {
-                        walk_set(&mut walk, nx, ny, false);
-                        dirty = true;
-                    }
-                }
-            }
-        }
-        // Obstruction / line of sight: WMO geometry ONLY — vanilla doodads (trees!) block
-        // movement but never sight lines (spells/aggro see through a forest). Accumulate the
-        // z-INTERVALS per column here; the rooted decision happens per COLUMN after merging
-        // (below) — deciding per TRI kept only a wall's bottom band (walls are stacked tri
-        // bands) and collapsed obs tops to ~2 yd, which let eye-height rays graze over and
-        // thugs aggro through the abbey wall (live regression, 2026-07-10).
-        if !t.is_wmo {
-            continue;
-        }
-        if let (Some((ox0, ox1)), Some((oy0, oy1))) = (
-            clamp_axis(t.lo[0], t.hi[0], cx, OBS_DIM),
-            clamp_axis(t.lo[1], t.hi[1], cy, OBS_DIM),
-        ) {
-            for oy in oy0..=oy1 {
-                for ox in ox0..=ox1 {
-                    let (x, y) = (sub_center(cx, ox, OBS_DIM), sub_center(cy, oy, OBS_DIM));
-                    let Some((z_lo, z_hi)) = t.z_at(x, y, RASTER_MARGIN) else {
-                        continue;
-                    };
-                    col_ivals[oy * OBS_DIM + ox].push((z_lo, z_hi));
-                }
-            }
-        }
-    }
-
-    // Per-column obs: merge the accumulated z-intervals (0.75 yd gap tolerance — wall bands
-    // abut but don't overlap exactly), then keep only the merged run that reaches down into
-    // the head-height band above THIS column's ground. Stacked wall bands fuse ground→top
-    // (full wall height blocks over-the-roof sight); a floating eave/roof run stays a separate
-    // high interval and is dropped — so standing under an overhang doesn't blank LoS.
-    // Deliberate simplification: single-top obs column, no (bottom, top) pair — archways/bridges
-    // read as walls; store both bytes when a live case needs to see THROUGH an opening.
-    for oy in 0..OBS_DIM {
-        for ox in 0..OBS_DIM {
-            let ivals = &mut col_ivals[oy * OBS_DIM + ox];
-            if ivals.is_empty() {
-                continue;
-            }
-            let (x, y) = (sub_center(cx, ox, OBS_DIM), sub_center(cy, oy, OBS_DIM));
-            let g = interpolate(&cell.heights, cx, cy, x, y).unwrap_or(base_z);
-            ivals.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let (mut run_lo, mut run_hi) = ivals[0];
-            let mut rooted_top: Option<f32> = None;
-            let consider = |lo: f32, hi: f32, rooted_top: &mut Option<f32>| {
-                if lo <= g + WALK_HEIGHT + 1.0 && hi > g - 1.0 && rooted_top.is_none_or(|t| hi > t)
-                {
-                    *rooted_top = Some(hi);
-                }
-            };
-            for &(lo, hi) in ivals.iter().skip(1) {
-                if lo <= run_hi + 0.75 {
-                    run_hi = run_hi.max(hi);
-                } else {
-                    consider(run_lo, run_hi, &mut rooted_top);
-                    (run_lo, run_hi) = (lo, hi);
-                }
-            }
-            consider(run_lo, run_hi, &mut rooted_top);
-            if let Some(top) = rooted_top {
-                if top > base_z + 0.5 {
-                    obs_raise(&mut obs, base_z, ox, oy, top);
-                    dirty = true;
-                }
-            }
-        }
-    }
-
-    dirty.then_some(NavRow {
+    Some(NavRow {
         map_id: cell.map_id,
         cell_x: cx,
         cell_y: cy,
-        base_z,
-        walk,
-        obs,
+        base_z: data.base_z,
+        walk: data.walk,
+        obs: data.obs,
     })
 }
 
@@ -864,32 +687,41 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     let conv = calibrate_from_placements(&mut chain, &placements)?;
 
     // Pass 4: transform to world space + bin by terrain cell.
-    let mut world_tris: Vec<WorldTri> = Vec::new();
+    let mut world_tris: Vec<VmapTri> = Vec::new();
     for p in &placements {
         let pos_w = place_pos(p.position);
-        let local_tris: Vec<Tri> = match &meshes[&p.name] {
-            Mesh::Wmo(v) => v.iter().map(|w| w.tri).collect(),
-            Mesh::M2(v) => v.clone(),
-        };
-        for t in &local_tris {
-            let w: Tri = [
+        let transform = |t: &Tri| -> Tri {
+            [
                 apply(conv, p.rotation, p.scale, pos_w, t[0]),
                 apply(conv, p.rotation, p.scale, pos_w, t[1]),
                 apply(conv, p.rotation, p.scale, pos_w, t[2]),
-            ];
-            world_tris.push(WorldTri::new(w, p.is_wmo));
+            ]
+        };
+        match &meshes[&p.name] {
+            Mesh::Wmo(rows) => world_tris.extend(rows.iter().map(|w| VmapTri {
+                verts: transform(&w.tri),
+                class: TriClass::Wmo {
+                    group_id: w.group_id,
+                    mogp_flags: w.mogp_flags,
+                },
+            })),
+            Mesh::M2(rows) => world_tris.extend(rows.iter().map(|t| VmapTri {
+                verts: transform(t),
+                class: TriClass::M2,
+            })),
         }
     }
     let mut by_cell: HashMap<u64, Vec<usize>> = HashMap::new();
     for (i, t) in world_tris.iter().enumerate() {
-        // High world coord → LOW cell index; iterate the covered index rectangle, inflated by
-        // Include `WALK_MARGIN` so a triangle hugging a cell border reaches the neighbor.
-        // cell its inset walk footprint spills into.
+        // High world coord → LOW cell index; iterate the covered index rectangle. Inflate by
+        // `WALK_MARGIN` so a triangle hugging a cell border reaches the neighbor cell its inset
+        // walk footprint spills into.
+        let (lo, hi) = aabb(t.verts.iter().copied());
         let (Some(cx0), Some(cx1), Some(cy0), Some(cy1)) = (
-            cell_index(t.hi[0] + WALK_MARGIN),
-            cell_index(t.lo[0] - WALK_MARGIN),
-            cell_index(t.hi[1] + WALK_MARGIN),
-            cell_index(t.lo[1] - WALK_MARGIN),
+            cell_index(hi[0] + WALK_MARGIN),
+            cell_index(lo[0] - WALK_MARGIN),
+            cell_index(hi[1] + WALK_MARGIN),
+            cell_index(lo[1] - WALK_MARGIN),
         ) else {
             continue; // off the map square (shouldn't happen inside the box)
         };
@@ -907,7 +739,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         let tri_idx = by_cell
             .get(&cell_key(map_id, cell.cell_x, cell.cell_y))
             .unwrap_or(&empty);
-        let tris: Vec<&WorldTri> = tri_idx.iter().map(|&i| &world_tris[i]).collect();
+        let tris: Vec<VmapTri> = tri_idx.iter().map(|&i| world_tris[i]).collect();
         if let Some(row) = rasterize_cell(cell, &tris) {
             rows.push(row);
         }
@@ -1028,8 +860,18 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lyracore_shared::nav::{obs_top, walk_get};
+    use lyracore_shared::nav::{obs_top, sub_center, walk_get};
     use lyracore_shared::terrain::cell_index;
+
+    fn wmo_tri(v: Tri) -> VmapTri {
+        VmapTri {
+            verts: v,
+            class: TriClass::Wmo {
+                group_id: 0,
+                mogp_flags: 0,
+            },
+        }
+    }
 
     /// A flat 80.0-height cell at the same Northshire-ish coords the shared runtime tests use.
     fn flat_cell() -> crate::terrain::CellRow {
@@ -1054,11 +896,8 @@ mod tests {
         let (cx, cy) = (cell.cell_x, cell.cell_y);
         let wall_x = sub_center(cx, 32, WALK_DIM);
         let (y0, y1) = (sub_center(cy, 60, WALK_DIM), sub_center(cy, 3, WALK_DIM));
-        let wall = WorldTri::new(
-            [[wall_x, y0, 79.0], [wall_x, y1, 79.0], [wall_x, y0, 92.0]],
-            true,
-        );
-        let row = rasterize_cell(&cell, &[&wall]).expect("a wall dirties the cell");
+        let wall = wmo_tri([[wall_x, y0, 79.0], [wall_x, y1, 79.0], [wall_x, y0, 92.0]]);
+        let row = rasterize_cell(&cell, &[wall]).expect("a wall dirties the cell");
         // On the wall line: blocked.
         assert!(!walk_get(&row.walk, 32, 32));
         // One sub-cell out (0.52 yd — inside `WALK_MARGIN`): blocked ONLY by the agent-radius
@@ -1072,5 +911,27 @@ mod tests {
         assert!(obs_top(&row.obs, row.base_z, 16, 16).is_some());
         assert!(obs_top(&row.obs, row.base_z, 15, 16).is_none());
         assert!(obs_top(&row.obs, row.base_z, 17, 16).is_none());
+    }
+
+    #[test]
+    fn a_row_carries_both_the_terrain_blockers_and_the_geometry_ones() {
+        // Holes are the importer's own blocker; the wall comes from the shared derivation. One
+        // row must carry both, and a hole alone must still emit a row.
+        let mut cell = flat_cell();
+        cell.holes = 1; // quadrant (0, 0) → walk sub-cells 0..16 on both axes
+        assert!(
+            rasterize_cell(&cell, &[]).is_some(),
+            "a hole dirties the cell"
+        );
+
+        let (cx, cy) = (cell.cell_x, cell.cell_y);
+        let wall_x = sub_center(cx, 40, WALK_DIM);
+        let (y0, y1) = (sub_center(cy, 60, WALK_DIM), sub_center(cy, 30, WALK_DIM));
+        let wall = wmo_tri([[wall_x, y0, 79.0], [wall_x, y1, 79.0], [wall_x, y0, 92.0]]);
+        let row = rasterize_cell(&cell, &[wall]).expect("hole + wall");
+        assert!(!walk_get(&row.walk, 8, 8), "the hole survives the merge");
+        assert!(!walk_get(&row.walk, 40, 40), "the wall survives the merge");
+        assert!(walk_get(&row.walk, 20, 40), "clear ground stays walkable");
+        assert!(obs_top(&row.obs, row.base_z, 20, 20).is_some());
     }
 }

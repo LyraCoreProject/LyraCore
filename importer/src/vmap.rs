@@ -14,6 +14,12 @@
 //! the module-side table + LoS/collision ray queries those reducers feed live in
 //! `module/src/vmap.rs` + `lyracore_shared::vmap::cast_ray`. Same licensing firewall as
 //! `--nav`/`--terrain`: in-memory only, nothing written to disk.
+//!
+//! `--vmap-prepare-coverage <generation_id>` drives path-grid coverage derivation for an
+//! already-staged generation (`run_coverage` below): no client Data/ dir, since the geometry is
+//! already staged and the module derives coverage from it directly. Enumerates the generation's
+//! own cells, batches `prepare_vmap_nav_coverage` calls, and finalizes — resumable by skipping
+//! cells a prior run already covered.
 
 use anyhow::{bail, Context, Result};
 use lyracore_shared::terrain::cell_key;
@@ -627,6 +633,179 @@ fn shard_cell(tris: &[VmapTri]) -> Vec<Vec<u8>> {
     tris.chunks(per_shard).map(encode).collect()
 }
 
+// =============================================================================================
+//  `--vmap-prepare-coverage <generation_id>` — drives `prepare_vmap_nav_coverage` /
+//  `finalize_vmap_nav_coverage` (module/src/vmap.rs) over a generation's OWN staged chunks. No
+//  client Data/ dir: the derivation runs module-side from data already staged by an earlier
+//  `--vmap --apply` run, so this workflow only enumerates cells and drives batches.
+// =============================================================================================
+
+/// The generation's map + lifecycle state, read before any coverage work so an ineligible target
+/// fails closed the same way `preflight_map_ownership` does for `--vmap`.
+struct GenerationInfo {
+    map_id: u32,
+    state: u64,
+}
+
+/// Lifecycle state codes mirrored from `module/src/vmap.rs` (no shared crate for a bare u8 enum).
+const VERIFIED: u64 = 1;
+const ACTIVE: u64 = 2;
+
+fn generation_info(args: &crate::Args, generation_id: u64) -> Result<GenerationInfo> {
+    let output = sql_query(
+        args,
+        &format!("SELECT map_id, state FROM game_vmap_generation WHERE id = {generation_id}"),
+    )?;
+    let value: serde_json::Value =
+        serde_json::from_str(&output).context("parse JSON SQL vmap generation response")?;
+    let row = sql_column_rows(&value, &["map_id", "state"])
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("unknown vmap generation {generation_id}"))?;
+    let map_id = row[0]
+        .as_u64()
+        .context("vmap generation map_id")? as u32;
+    let state = row[1].as_u64().context("vmap generation state")?;
+    Ok(GenerationInfo { map_id, state })
+}
+
+/// Every `(cell_x, cell_y)` the generation's OWN staged chunks touch, deduped across shard rows —
+/// the driving enumeration for coverage preparation (never `game_vmap_chunk`, the live table).
+fn generation_cells(args: &crate::Args, generation_id: u64) -> Result<Vec<(u16, u16)>> {
+    let output = sql_query(
+        args,
+        &format!(
+            "SELECT cell_x, cell_y FROM game_vmap_generation_chunk WHERE generation_id = {generation_id}"
+        ),
+    )?;
+    let value: serde_json::Value =
+        serde_json::from_str(&output).context("parse JSON SQL vmap generation-chunk cells")?;
+    let mut cells: std::collections::BTreeSet<(u16, u16)> = std::collections::BTreeSet::new();
+    for row in sql_column_rows(&value, &["cell_x", "cell_y"]) {
+        if let (Some(x), Some(y)) = (row[0].as_u64(), row[1].as_u64()) {
+            cells.insert((x as u16, y as u16));
+        }
+    }
+    Ok(cells.into_iter().collect())
+}
+
+/// Cells this generation already has a `VmapNavCoverage` row for — read directly (the operator
+/// identity that runs this workflow owns the database, same as every other SQL query here; the
+/// table's privacy only hides it from ordinary subscribing clients).
+fn covered_cells(
+    args: &crate::Args,
+    generation_id: u64,
+) -> Result<std::collections::HashSet<(u16, u16)>> {
+    let output = sql_query(
+        args,
+        &format!(
+            "SELECT cell_x, cell_y FROM game_vmap_nav_coverage WHERE generation_id = {generation_id}"
+        ),
+    )?;
+    let value: serde_json::Value =
+        serde_json::from_str(&output).context("parse JSON SQL vmap nav coverage cells")?;
+    let mut cells = std::collections::HashSet::new();
+    for row in sql_column_rows(&value, &["cell_x", "cell_y"]) {
+        if let (Some(x), Some(y)) = (row[0].as_u64(), row[1].as_u64()) {
+            cells.insert((x as u16, y as u16));
+        }
+    }
+    Ok(cells)
+}
+
+/// Cells still needing preparation: every generation cell not already covered. Pure so the resume
+/// skip is testable without a live database — mirrors `accepted_chunk_ids`'s already-accepted skip
+/// for the base import above, one level up (whole cells instead of shard rows).
+fn pending_cells(
+    all: &[(u16, u16)],
+    already_covered: &std::collections::HashSet<(u16, u16)>,
+) -> Vec<(u16, u16)> {
+    all.iter()
+        .copied()
+        .filter(|c| !already_covered.contains(c))
+        .collect()
+}
+
+/// Split `cells` into JSON-array `prepare_vmap_nav_coverage` arguments, each bounded by
+/// `BATCH_BYTES` like every other reducer batch in this file. Batch boundaries are an efficiency
+/// detail only — the reducer is idempotent per cell, so splitting differently reproduces the same
+/// final coverage set and manifest digest (deterministic coverage identity).
+fn coverage_batches(cells: &[(u16, u16)]) -> Vec<String> {
+    let mut batches = Vec::new();
+    let mut cur = String::from("[");
+    for &(x, y) in cells {
+        let entry = format!("{{\"cell_x\":{x},\"cell_y\":{y}}}");
+        if cur.len() > 1 && cur.len() + entry.len() + 1 > BATCH_BYTES {
+            cur.push(']');
+            batches.push(std::mem::replace(&mut cur, String::from("[")));
+        }
+        if cur.len() > 1 {
+            cur.push(',');
+        }
+        cur.push_str(&entry);
+    }
+    if cur.len() > 1 {
+        cur.push(']');
+        batches.push(cur);
+    }
+    batches
+}
+
+/// `--vmap-prepare-coverage <generation_id>`: derive and store nav coverage for an already-staged
+/// generation, resumable and manifest-reporting. Reuses `preflight_map_ownership` fail-closed —
+/// coverage never prepares on a shard that does not own the map — and, like `--vmap`, only writes
+/// with `--apply`; without it this reports the plan and touches nothing.
+pub(crate) fn run_coverage(args: &crate::Args, generation_id: u64) -> Result<()> {
+    let generation = generation_info(args, generation_id)?;
+    preflight_map_ownership(args, generation.map_id)?;
+    if !matches!(generation.state, VERIFIED | ACTIVE) {
+        bail!("vmap generation {generation_id} is not verified or active (state {}) — coverage preparation refused", generation.state);
+    }
+
+    let all_cells = generation_cells(args, generation_id)?;
+    if all_cells.is_empty() {
+        bail!("vmap generation {generation_id} has no staged chunks to derive coverage from");
+    }
+    let already = covered_cells(args, generation_id)?;
+    let pending = pending_cells(&all_cells, &already);
+    let batches = coverage_batches(&pending);
+
+    println!(
+        "vmap-coverage: generation {generation_id} map {} — {} cell(s) total, {} already prepared, {} pending in {} batch(es)",
+        generation.map_id,
+        all_cells.len(),
+        already.len(),
+        pending.len(),
+        batches.len()
+    );
+    if !args.apply {
+        println!("-- DRY RUN: would call prepare_vmap_nav_coverage ({} batch(es)) + finalize_vmap_nav_coverage", batches.len());
+        return Ok(());
+    }
+
+    for batch in &batches {
+        crate::call_reducer_args(
+            args,
+            "prepare_vmap_nav_coverage",
+            &[&generation_id.to_string(), batch],
+        )?;
+    }
+    crate::call_reducer_args(
+        args,
+        "finalize_vmap_nav_coverage",
+        &[&generation_id.to_string()],
+    )?;
+
+    let manifest = sql_query(
+        args,
+        &format!(
+            "SELECT generation_id, map_id, cell_count, digest, complete FROM game_vmap_nav_coverage_manifest WHERE generation_id = {generation_id}"
+        ),
+    )?;
+    println!("vmap-coverage: applied. manifest:\n{}", manifest.trim());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -862,5 +1041,57 @@ mod tests {
         assert!(sql_has_map(rows, 36).unwrap());
         assert!(!sql_has_map(rows, 1).unwrap());
         assert!(!sql_has_map(r#"[{"schema":{"elements":[{"name":{"some":"map_id"}}]},"rows":[]}]"#, 0).unwrap());
+    }
+
+    #[test]
+    fn pending_cells_skips_what_a_prior_run_already_covered() {
+        let all = vec![(1, 1), (2, 2), (3, 3)];
+        let mut covered = std::collections::HashSet::new();
+        covered.insert((2, 2));
+        assert_eq!(pending_cells(&all, &covered), vec![(1, 1), (3, 3)]);
+        assert!(pending_cells(&all, &std::collections::HashSet::new()) == all);
+        let all_covered: std::collections::HashSet<_> = all.iter().copied().collect();
+        assert!(pending_cells(&all, &all_covered).is_empty(), "a fully resumed run submits nothing");
+    }
+
+    /// A fixture too large for one `BATCH_BYTES` call must split into several, and the split must
+    /// be lossless and order-independent — batch boundaries are an efficiency detail, not part of
+    /// coverage identity (the reducer keys each cell independently).
+    #[test]
+    fn coverage_batches_split_a_fixture_larger_than_one_batch_and_reassemble_exactly() {
+        let cells: Vec<(u16, u16)> = (0..2000u32).map(|i| (i as u16, (i * 7 % 997) as u16)).collect();
+        let batches = coverage_batches(&cells);
+        assert!(batches.len() > 1, "fixture must not fit in one batch");
+        for b in &batches {
+            assert!(
+                b.len() <= BATCH_BYTES,
+                "batch exceeds the byte cap: {} > {BATCH_BYTES}",
+                b.len()
+            );
+        }
+        let mut reassembled: Vec<(u16, u16)> = batches
+            .iter()
+            .flat_map(|b| {
+                let v: Vec<serde_json::Value> = serde_json::from_str(b).unwrap();
+                v.into_iter().map(|c| {
+                    (
+                        c["cell_x"].as_u64().unwrap() as u16,
+                        c["cell_y"].as_u64().unwrap() as u16,
+                    )
+                })
+            })
+            .collect();
+        let mut expected = cells.clone();
+        reassembled.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(
+            reassembled, expected,
+            "batch boundaries never drop or duplicate a cell"
+        );
+    }
+
+    #[test]
+    fn coverage_batches_of_an_empty_set_is_empty() {
+        assert!(coverage_batches(&[]).is_empty());
     }
 }

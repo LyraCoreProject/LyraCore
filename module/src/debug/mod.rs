@@ -1503,6 +1503,7 @@ pub fn debug_set_xp_rate(ctx: &ReducerContext, rate: f32) -> Result<(), String> 
                 hosts_instances: true,
                 bots_idle: false,
                 vmap_enabled: false,
+                nav_coverage_enabled: false,
             });
         }
     }

@@ -489,7 +489,7 @@ parity_test!(parity_game_hunter_pet_protocol, "game_hunter_pet_protocol", lyraco
 // `server_config_type.rs` had never been regenerated, so this manifest line is the guard that made
 // the drift a red test.
 parity_test!(parity_game_config, "game_config", lyracore_module::ServerConfig, bindings::server_config_type::ServerConfig, {
-    id, xp_rate, nav_enabled, hosts_instances, bots_idle, vmap_enabled,
+    id, xp_rate, nav_enabled, hosts_instances, bots_idle, vmap_enabled, nav_coverage_enabled,
 });
 parity_test!(parity_game_creature_template, "game_creature_template", lyracore_module::CreatureTemplate, bindings::creature_template_type::CreatureTemplate, {
     entry, name, subname, display_id, level, health, faction_template, npc_flags, unit_flags,
