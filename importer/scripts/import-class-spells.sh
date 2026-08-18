@@ -42,6 +42,9 @@ DBC="${1:-../wowclient/Data}"
 # through explicitly, so a multi-shard import puts each shard's curated spells on that shard — this
 # script writing to the importer's default while the ETL wrote elsewhere was a real, silent bug.
 DB="${DB:-lyracore}"
+# The advanced world path targets a named loopback node by default. Keep this explicit so its curated
+# spell pass cannot silently use a different CLI default than the dump and DBC passes.
+SPACETIME_SERVER="${SPACETIME_SERVER:-http://127.0.0.1:3000}"
 
 # wrappers + ranks, per class (Parry 3128/3127 is shared Warrior<->Paladin, deduped to Warrior).
 # Tier 2b combat-state-machine kit added (re-imported through the updated importer so the reclassification +
@@ -244,4 +247,4 @@ bind "${OVR_MAGE}"    ${TRAINERS_MAGE}
 bind "${IDS_HUNTER}"  ${TRAINERS_HUNTER}
 bind "${IDS_SHAMAN}"  ${TRAINERS_SHAMAN}
 bind "${IDS_DRUID}"   ${TRAINERS_DRUID}
-exec ./target/debug/lyracore-importer --db "$DB" --dbc "${DBC}" --spells --only "${IDS}" "${TRAINER_ARGS[@]}" --apply
+exec ./target/debug/lyracore-importer --server "$SPACETIME_SERVER" --db "$DB" --dbc "${DBC}" --spells --only "${IDS}" "${TRAINER_ARGS[@]}" --apply
