@@ -12,7 +12,8 @@
 //! interpolate self-check below, so put it INSIDE the box.
 
 use anyhow::{bail, Context, Result};
-use lyracore_shared::terrain::{cell_index as shared_cell_index, interpolate};
+use lyracore_shared::terrain::{cell_index as shared_cell_index, cell_key, interpolate};
+use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::path::Path;
 use wow_mpq::PatchChain;
@@ -137,29 +138,80 @@ pub(crate) fn slice_cell_range(
 }
 
 pub(crate) fn run(args: &crate::Args) -> Result<()> {
+    let scope = args.world_import_scope()?;
+    if scope.bounded_slices.is_empty() {
+        println!(
+            "terrain: scope {} has no bounded map slices; WMO instance maps do not have terrain",
+            scope.name()
+        );
+        return Ok(());
+    }
     let data_dir = Path::new(args.terrain.as_ref().expect("caller checked"));
     let mut chain = open_terrain_chain(data_dir)?;
-    let map_name = map_dir(args.map as u32)?;
+    let mut slice_rows = Vec::with_capacity(scope.bounded_slices.len());
+    let mut tiles_read = 0u32;
+    for slice in &scope.bounded_slices {
+        let (rows, slice_tiles) = collect_slice(&mut chain, slice).with_context(|| {
+            format!(
+                "terrain scope {} slice {} (map {})",
+                scope.name(),
+                slice.name,
+                slice.map_id
+            )
+        })?;
+        tiles_read += slice_tiles;
+        slice_rows.push(rows);
+    }
+    let rows = dedup_rows(slice_rows);
+    let batches: Vec<String> = rows
+        .chunks(24)
+        .map(|c| c.iter().map(CellRow::packed).collect::<Vec<_>>().join(";"))
+        .collect();
+    println!(
+        "terrain: {} cells from {tiles_read} tile(s) in scope {} → {} reducer batch(es)",
+        rows.len(),
+        scope.name(),
+        batches.len()
+    );
+    if !args.apply {
+        println!(
+            "-- DRY RUN: would call import_terrain_chunks (batch 0, clears) + {} × import_terrain_chunks_append",
+            batches.len() - 1
+        );
+        return Ok(());
+    }
+    for (i, batch) in batches.iter().enumerate() {
+        let reducer = if i == 0 {
+            "import_terrain_chunks"
+        } else {
+            "import_terrain_chunks_append"
+        };
+        crate::call_reducer(args, reducer, batch)?;
+    }
+    println!("terrain: applied.");
+    Ok(())
+}
 
-    // Cell range covering the slice: a --box rectangle (exact — work-item 206, Westfall widening)
-    // when given, else the center±radius bounding square (the original single-zone UX). The
-    // interpolate self-check below always samples --center (the operator puts center inside the box).
+fn collect_slice(
+    chain: &mut PatchChain,
+    slice: &crate::world_import_scope::BoundedMapSlice,
+) -> Result<(Vec<CellRow>, u32)> {
+    let map_id = u32::try_from(slice.map_id).context("bounded slice map id is outside u32")?;
+    let map_name = map_dir(map_id)?;
     let (cx0, cy0, cz_expect) = (
-        args.center.0 as f32,
-        args.center.1 as f32,
-        args.center.2 as f32,
+        slice.sample.0 as f32,
+        slice.sample.1 as f32,
+        slice.sample.2 as f32,
     );
     let (cell_x_min, cell_x_max, cell_y_min, cell_y_max) =
-        slice_cell_range(args.bbox, args.center, args.radius);
+        slice_cell_range(Some(slice.bounds), slice.sample, 0.0);
     for c in [cell_x_min, cell_x_max, cell_y_min, cell_y_max] {
         if !(0..1024).contains(&c) {
-            bail!("slice cell index {c} outside the map square — check --box/--center/--radius");
+            bail!("slice cell index {c} outside the map square");
         }
     }
-    // Tile range (16 cells per tile).
     let (tx_min, tx_max) = (cell_x_min / 16, cell_x_max / 16);
     let (ty_min, ty_max) = (cell_y_min / 16, cell_y_max / 16);
-
     let mut rows: Vec<CellRow> = Vec::new();
     let mut tiles_read = 0u32;
     for tx in tx_min..=tx_max {
@@ -199,7 +251,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
             tiles_read += 1;
             collect_cells(
                 &root.mcnk_chunks,
-                args.map as u32,
+                map_id,
                 (cell_x_min, cell_x_max, cell_y_min, cell_y_max),
                 &mut rows,
             )?;
@@ -209,48 +261,24 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     if rows.is_empty() {
         bail!("no MCNK cells intersected the slice — bad tile mapping or empty ADTs");
     }
-
-    // Self-check: interpolate the slice center's height from the collected rows and compare
-    // against the --center Z the operator supplied (Northshire: 83.5312). A mismatch means the
-    // axis mapping is wrong — fail loudly rather than load a transposed heightmap.
     let checked = interp_check(&rows, cx0, cy0)?;
     println!(
-        "terrain: self-check — interpolated z at center ({cx0:.1},{cy0:.1}) = {checked:.3} (expected ≈ {cz_expect:.3})"
+        "terrain: slice {} map {map_id} self-check — interpolated z at sample ({cx0:.1},{cy0:.1}) = {checked:.3} (expected ≈ {cz_expect:.3})",
+        slice.name
     );
     if (checked - cz_expect).abs() > 2.0 {
-        bail!(
-            "terrain self-check failed: interpolated {checked:.2} vs expected {cz_expect:.2} — axis mapping is wrong, not loading"
-        );
+        bail!("terrain self-check failed: interpolated {checked:.2} vs expected {cz_expect:.2}");
     }
+    Ok((rows, tiles_read))
+}
 
-    // Reducer batches under the arg-size ceiling: a 145-height row is ~1.3 KB; 24 rows/batch
-    // stays comfortably under the same limit the spawn importer respects.
-    let batches: Vec<String> = rows
-        .chunks(24)
-        .map(|c| c.iter().map(CellRow::packed).collect::<Vec<_>>().join(";"))
-        .collect();
-    println!(
-        "terrain: {} cells from {tiles_read} tile(s) → {} reducer batch(es)",
-        rows.len(),
-        batches.len()
-    );
-    if !args.apply {
-        println!(
-            "-- DRY RUN: would call import_terrain_chunks (batch 0, clears) + {} × import_terrain_chunks_append",
-            batches.len() - 1
-        );
-        return Ok(());
+fn dedup_rows(slice_rows: Vec<Vec<CellRow>>) -> Vec<CellRow> {
+    let mut rows = BTreeMap::new();
+    for row in slice_rows.into_iter().flatten() {
+        rows.entry(cell_key(row.map_id, row.cell_x, row.cell_y))
+            .or_insert(row);
     }
-    for (i, batch) in batches.iter().enumerate() {
-        let reducer = if i == 0 {
-            "import_terrain_chunks"
-        } else {
-            "import_terrain_chunks_append"
-        };
-        crate::call_reducer(args, reducer, batch)?;
-    }
-    println!("terrain: applied.");
-    Ok(())
+    rows.into_values().collect()
 }
 
 /// Content check for the filename arbitration: does this parsed tile's terrain actually live in
@@ -394,5 +422,39 @@ mod tests {
             cell_index((center.1 - radius) as f32),
         );
         assert_eq!(got, want);
+    }
+
+    #[test]
+    fn dedup_rows_keeps_the_union_across_maps_and_overlaps() {
+        let row = |map_id, cell_x, cell_y| CellRow {
+            map_id,
+            cell_x,
+            cell_y,
+            liquid_level: 0.0,
+            has_liquid: false,
+            holes: 0,
+            area_id: 0,
+            heights: vec![0.0; 145],
+        };
+
+        let rows = dedup_rows(vec![
+            vec![row(0, 10, 20), row(0, 11, 20)],
+            vec![row(0, 11, 20), row(0, 12, 20)],
+            vec![row(1, 10, 20)],
+        ]);
+
+        assert_eq!(rows.len(), 4);
+        assert!(rows
+            .iter()
+            .any(|row| (row.map_id, row.cell_x, row.cell_y) == (0, 10, 20)));
+        assert!(rows
+            .iter()
+            .any(|row| (row.map_id, row.cell_x, row.cell_y) == (0, 11, 20)));
+        assert!(rows
+            .iter()
+            .any(|row| (row.map_id, row.cell_x, row.cell_y) == (0, 12, 20)));
+        assert!(rows
+            .iter()
+            .any(|row| (row.map_id, row.cell_x, row.cell_y) == (1, 10, 20)));
     }
 }

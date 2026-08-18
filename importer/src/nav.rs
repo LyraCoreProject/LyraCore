@@ -820,22 +820,71 @@ pub(crate) fn calibrate_from_placements(
 // ---------------------------------------------------------------------------------------------
 
 pub(crate) fn run(args: &crate::Args) -> Result<()> {
+    let scope = args.world_import_scope()?;
+    if scope.bounded_slices.is_empty() {
+        println!(
+            "nav: scope {} has no bounded map slices; no navigation chunks to import",
+            scope.name()
+        );
+        return Ok(());
+    }
     let data_dir = Path::new(args.nav.as_ref().expect("caller checked"));
     let mut chain = crate::collision::open_geometry_chain(data_dir)?;
-    let map_name = crate::terrain::map_dir(args.map as u32)?;
-    let map_id = args.map as u32;
+    let mut slice_rows = Vec::with_capacity(scope.bounded_slices.len());
+    for slice in &scope.bounded_slices {
+        slice_rows.push(rasterize_slice(&mut chain, slice).with_context(|| {
+            format!(
+                "nav scope {} slice {} (map {})",
+                scope.name(),
+                slice.name,
+                slice.map_id
+            )
+        })?);
+    }
+    let rows = dedup_rows(slice_rows);
+    let batches = batches(&rows);
+    println!(
+        "nav: {} unique rows in scope {} → {} reducer batch(es)",
+        rows.len(),
+        scope.name(),
+        batches.len()
+    );
+    if !args.apply {
+        println!("-- DRY RUN: would call import_nav_chunks (batch 0, clears) + {} × import_nav_chunks_append", batches.len().saturating_sub(1));
+        return Ok(());
+    }
+    for (i, batch) in batches.iter().enumerate() {
+        crate::call_reducer(
+            args,
+            if i == 0 {
+                "import_nav_chunks"
+            } else {
+                "import_nav_chunks_append"
+            },
+            batch,
+        )?;
+    }
+    println!("nav: applied.");
+    Ok(())
+}
 
+fn rasterize_slice(
+    chain: &mut PatchChain,
+    slice: &crate::world_import_scope::BoundedMapSlice,
+) -> Result<Vec<NavRow>> {
+    let map_id = u32::try_from(slice.map_id).context("bounded slice map id is outside u32")?;
+    let map_name = crate::terrain::map_dir(map_id)?;
     let (cell_x_min, cell_x_max, cell_y_min, cell_y_max) =
-        crate::terrain::slice_cell_range(args.bbox, args.center, args.radius);
+        crate::terrain::slice_cell_range(Some(slice.bounds), slice.sample, 0.0);
     for c in [cell_x_min, cell_x_max, cell_y_min, cell_y_max] {
         if !(0..1024).contains(&c) {
-            bail!("slice cell index {c} outside the map square — check --box/--center/--radius");
+            bail!("slice cell index {c} outside the map square");
         }
     }
 
     // Pass 1: parse tiles — heights + deduped placements.
     let scan = scan_tiles(
-        &mut chain,
+        chain,
         map_name,
         map_id,
         (cell_x_min, cell_x_max, cell_y_min, cell_y_max),
@@ -853,7 +902,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     );
 
     // Pass 2: load each referenced model's collision mesh once.
-    let meshes = load_meshes(&mut chain, &placements)?;
+    let meshes = load_meshes(chain, &placements)?;
     let mesh_tris: usize = meshes.values().map(Mesh::len).sum();
     println!(
         "nav: {} unique models, {mesh_tris} local tris",
@@ -861,7 +910,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     );
 
     // Pass 3: calibrate the rotation convention against MODF bounds (WMOs only), capped sample.
-    let conv = calibrate_from_placements(&mut chain, &placements)?;
+    let conv = calibrate_from_placements(chain, &placements)?;
 
     // Pass 4: transform to world space + bin by terrain cell.
     let mut world_tris: Vec<WorldTri> = Vec::new();
@@ -971,7 +1020,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     // Self-check: --center must be walkable (the operator points it at a road/spawn, same
     // contract as the terrain interpolate check). Fails loudly on axis/transform breakage.
     {
-        let (ccx, ccy) = (args.center.0 as f32, args.center.1 as f32);
+        let (ccx, ccy) = (slice.sample.0 as f32, slice.sample.1 as f32);
         let (cx, cy) = (
             cell_index(ccx).context("--center off map")?,
             cell_index(ccy).context("--center off map")?,
@@ -986,16 +1035,31 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
                 lyracore_shared::nav::walk_get(&r.walk, nx, ny)
             }
         };
-        println!("nav: self-check — --center walkable = {walkable}");
+        println!(
+            "nav: slice {} map {map_id} self-check — sample walkable = {walkable}",
+            slice.name
+        );
         if !walkable {
-            bail!("nav self-check failed: --center rasterized UNwalkable — transform or band bug, not loading");
+            bail!("nav self-check failed: sample rasterized UNwalkable");
         }
     }
 
-    // Batch + apply (byte-budgeted: rows vary 60 B – 3 KB).
+    Ok(rows)
+}
+
+fn dedup_rows(slice_rows: Vec<Vec<NavRow>>) -> Vec<NavRow> {
+    let mut rows = BTreeMap::new();
+    for row in slice_rows.into_iter().flatten() {
+        rows.entry(cell_key(row.map_id, row.cell_x, row.cell_y))
+            .or_insert(row);
+    }
+    rows.into_values().collect()
+}
+
+fn batches(rows: &[NavRow]) -> Vec<String> {
     let mut batches: Vec<String> = Vec::new();
     let mut cur = String::new();
-    for r in &rows {
+    for r in rows {
         let p = r.packed();
         if !cur.is_empty() && cur.len() + p.len() + 1 > BATCH_BYTES {
             batches.push(std::mem::take(&mut cur));
@@ -1008,21 +1072,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     if !cur.is_empty() {
         batches.push(cur);
     }
-    println!("nav: {} reducer batch(es)", batches.len());
-    if !args.apply {
-        println!("-- DRY RUN: would call import_nav_chunks (batch 0, clears) + {} × import_nav_chunks_append", batches.len().saturating_sub(1));
-        return Ok(());
-    }
-    for (i, batch) in batches.iter().enumerate() {
-        let reducer = if i == 0 {
-            "import_nav_chunks"
-        } else {
-            "import_nav_chunks_append"
-        };
-        crate::call_reducer(args, reducer, batch)?;
-    }
-    println!("nav: applied.");
-    Ok(())
+    batches
 }
 
 #[cfg(test)]
@@ -1043,6 +1093,38 @@ mod tests {
             area_id: 0,
             heights: vec![80.0; 145],
         }
+    }
+
+    #[test]
+    fn dedup_rows_keeps_the_union_across_maps_and_overlaps() {
+        let row = |map_id, cell_x, cell_y| NavRow {
+            map_id,
+            cell_x,
+            cell_y,
+            base_z: 0.0,
+            walk: vec![0xFF; WALK_BYTES],
+            obs: vec![OBS_NONE; OBS_BYTES],
+        };
+
+        let rows = dedup_rows(vec![
+            vec![row(0, 10, 20), row(0, 11, 20)],
+            vec![row(0, 11, 20), row(0, 12, 20)],
+            vec![row(1, 10, 20)],
+        ]);
+
+        assert_eq!(rows.len(), 4);
+        assert!(rows
+            .iter()
+            .any(|row| (row.map_id, row.cell_x, row.cell_y) == (0, 10, 20)));
+        assert!(rows
+            .iter()
+            .any(|row| (row.map_id, row.cell_x, row.cell_y) == (0, 11, 20)));
+        assert!(rows
+            .iter()
+            .any(|row| (row.map_id, row.cell_x, row.cell_y) == (0, 12, 20)));
+        assert!(rows
+            .iter()
+            .any(|row| (row.map_id, row.cell_x, row.cell_y) == (1, 10, 20)));
     }
 
     #[test]

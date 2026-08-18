@@ -20,10 +20,12 @@ use lyracore_shared::terrain::cell_key;
 use lyracore_shared::vmap::{encode, TriClass, VmapTri, HEADER_BYTES, TRI_BYTES};
 #[cfg(test)]
 use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use wow_mpq::PatchChain;
 
 use crate::nav::{Mesh, Placement, Tri};
 
@@ -302,8 +304,8 @@ impl Drop for VmapSpool {
 }
 
 fn sql_has_map(sql_output: &str, map_id: u32) -> Result<bool> {
-    let value: serde_json::Value = serde_json::from_str(sql_output)
-        .context("parse JSON SQL map-ownership response")?;
+    let value: serde_json::Value =
+        serde_json::from_str(sql_output).context("parse JSON SQL map-ownership response")?;
     Ok(sql_column_rows(&value, &["map_id"])
         .iter()
         .any(|row| row[0].as_u64() == Some(map_id as u64)))
@@ -311,31 +313,49 @@ fn sql_has_map(sql_output: &str, map_id: u32) -> Result<bool> {
 
 /// SpacetimeDB JSON SQL returns a result set as `schema.elements` plus array rows, not JSON
 /// objects. Match columns by schema name so a query cannot mistake row-count text for ownership.
-fn sql_column_rows<'a>(value: &'a serde_json::Value, columns: &[&str]) -> Vec<Vec<&'a serde_json::Value>> {
+fn sql_column_rows<'a>(
+    value: &'a serde_json::Value,
+    columns: &[&str],
+) -> Vec<Vec<&'a serde_json::Value>> {
     let mut rows = Vec::new();
     let Some(results) = value.as_array() else {
         return rows;
     };
     for result in results {
-        let Some(elements) = result.pointer("/schema/elements").and_then(serde_json::Value::as_array) else {
+        let Some(elements) = result
+            .pointer("/schema/elements")
+            .and_then(serde_json::Value::as_array)
+        else {
             continue;
         };
         let indices: Option<Vec<usize>> = columns
             .iter()
             .map(|column| {
                 elements.iter().position(|element| {
-                    element.pointer("/name/some").and_then(serde_json::Value::as_str) == Some(*column)
+                    element
+                        .pointer("/name/some")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(*column)
                 })
             })
             .collect();
         let Some(indices) = indices else {
             continue;
         };
-        for row in result.get("rows").and_then(serde_json::Value::as_array).into_iter().flatten() {
+        for row in result
+            .get("rows")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             let Some(row) = row.as_array() else {
                 continue;
             };
-            if let Some(values) = indices.iter().map(|&index| row.get(index)).collect::<Option<Vec<_>>>() {
+            if let Some(values) = indices
+                .iter()
+                .map(|&index| row.get(index))
+                .collect::<Option<Vec<_>>>()
+            {
                 rows.push(values);
             }
         }
@@ -345,24 +365,38 @@ fn sql_column_rows<'a>(value: &'a serde_json::Value, columns: &[&str]) -> Vec<Ve
 
 fn sql_query(args: &crate::Args, query: &str) -> Result<String> {
     let out = Command::new("spacetime")
-        .args(["sql", "--format", "json", "-s", &args.server, &args.db, query])
+        .args([
+            "sql",
+            "--format",
+            "json",
+            "-s",
+            &args.server,
+            &args.db,
+            query,
+        ])
         .output()
         .with_context(|| format!("run vmap SQL query: {query}"))?;
     if !out.status.success() {
-        bail!("vmap SQL query failed: {}", String::from_utf8_lossy(&out.stderr));
+        bail!(
+            "vmap SQL query failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-fn accepted_chunk_ids(args: &crate::Args, generation_id: u64) -> Result<std::collections::HashSet<(u64, u32)>> {
+fn accepted_chunk_ids(
+    args: &crate::Args,
+    generation_id: u64,
+) -> Result<std::collections::HashSet<(u64, u32)>> {
     let output = sql_query(
         args,
         &format!(
             "SELECT key, shard_ordinal FROM game_vmap_generation_receipt WHERE generation_id = {generation_id}"
         ),
     )?;
-    let value: serde_json::Value = serde_json::from_str(&output)
-        .context("parse JSON SQL vmap generation-chunk response")?;
+    let value: serde_json::Value =
+        serde_json::from_str(&output).context("parse JSON SQL vmap generation-chunk response")?;
     let mut accepted = std::collections::HashSet::new();
     for row in sql_column_rows(&value, &["key", "shard_ordinal"]) {
         if let (Some(key), Some(ordinal)) = (row[0].as_u64(), row[1].as_u64()) {
@@ -381,7 +415,10 @@ fn active_generation_status(args: &crate::Args, map_id: u32) -> Result<()> {
             "SELECT id, map_id, state, expected_chunks, accepted_chunks, expected_bytes, manifest_digest, source_identity, selection_identity FROM game_vmap_generation WHERE map_id = {map_id} AND state = 2"
         ),
     )?;
-    println!("vmap active-generation status for map {map_id}:\n{}", output.trim());
+    println!(
+        "vmap active-generation status for map {map_id}:\n{}",
+        output.trim()
+    );
     Ok(())
 }
 
@@ -402,55 +439,167 @@ fn preflight_map_ownership(args: &crate::Args, map_id: u32) -> Result<()> {
 }
 
 pub(crate) fn run(args: &crate::Args) -> Result<()> {
-    let map_id = args.map as u32;
     if args.vmap_status {
         if args.vmap.is_none() {
-            return active_generation_status(args, map_id);
+            return active_generation_status(args, args.map as u32);
         }
         bail!("--vmap-status is a standalone status command; omit --vmap");
     }
-    preflight_map_ownership(args, map_id)?;
+    let scope = args.world_import_scope()?;
+    if scope.bounded_slices.is_empty() {
+        println!(
+            "vmap: scope {} has no bounded map slices; no vmap generation to import",
+            scope.name()
+        );
+        return Ok(());
+    }
+    let mut slices_by_map = BTreeMap::new();
+    for slice in &scope.bounded_slices {
+        slices_by_map
+            .entry(slice.map_id)
+            .or_insert_with(Vec::new)
+            .push(slice);
+    }
+    for &map_id in slices_by_map.keys() {
+        let map_id = u32::try_from(map_id).context("bounded slice map id is outside u32")?;
+        preflight_map_ownership(args, map_id)
+            .with_context(|| format!("vmap scope {} map {map_id}", scope.name()))?;
+    }
     let data_dir = Path::new(args.vmap.as_ref().expect("caller checked"));
     let mut chain = crate::collision::open_geometry_chain(data_dir)?;
-    let map_name = crate::terrain::map_dir(args.map as u32)?;
-
-    let (cell_x_min, cell_x_max, cell_y_min, cell_y_max) =
-        crate::terrain::slice_cell_range(args.bbox, args.center, args.radius);
-    for c in [cell_x_min, cell_x_max, cell_y_min, cell_y_max] {
-        if !(0..1024).contains(&c) {
-            bail!("slice cell index {c} outside the map square — check --box/--center/--radius");
-        }
-    }
     let source_identity = format!("client-data-path:{}", data_dir.display());
-    let selection_identity = format!(
-        "map={map_id};cell_x={cell_x_min}..{cell_x_max};cell_y={cell_y_min}..{cell_y_max}"
-    );
+    let mut plans = Vec::with_capacity(slices_by_map.len());
+    for (map_id, slices) in slices_by_map {
+        plans.push(
+            build_plan(
+                &mut chain,
+                map_id,
+                &slices,
+                &source_identity,
+                scope.name() != "legacy",
+            )
+            .with_context(|| {
+                let names = slices
+                    .iter()
+                    .map(|slice| slice.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("vmap scope {} map {map_id} slices {names}", scope.name())
+            })?,
+        );
+    }
+    for plan in &plans {
+        println!(
+            "vmap: map {} — {} world tris ({} WMO, {} M2) across {} cells, {} packed bytes ({:.1} KB, {} shard row(s))",
+            plan.map_id,
+            plan.world_tris,
+            plan.wmo_tris,
+            plan.world_tris - plan.wmo_tris,
+            plan.keys.len(),
+            plan.total_bytes,
+            plan.total_bytes as f64 / 1024.0,
+            plan.shard_rows
+        );
+        println!(
+            "vmap: manifest {} generation {}",
+            plan.manifest, plan.generation_id
+        );
+    }
+    if !args.apply {
+        println!("-- DRY RUN: would stage, append, verify, and activate each map generation");
+        return Ok(());
+    }
+    for plan in &plans {
+        apply_plan(args, plan)?;
+    }
+    println!("vmap: applied.");
+    Ok(())
+}
 
-    // Pass 1: parse tiles — heights (unused here) + deduped placements.
-    let scan = crate::nav::scan_tiles(
-        &mut chain,
-        map_name,
-        map_id,
-        (cell_x_min, cell_x_max, cell_y_min, cell_y_max),
-    )?;
-    if scan.cells.is_empty() {
-        bail!("no MCNK cells intersected the slice");
+struct VmapPlan {
+    map_id: u32,
+    source_identity: String,
+    selection_identity: String,
+    spool: VmapSpool,
+    keys: Vec<u64>,
+    total_bytes: usize,
+    shard_rows: usize,
+    manifest: String,
+    generation_id: u64,
+    world_tris: usize,
+    wmo_tris: usize,
+}
+
+fn build_plan(
+    chain: &mut PatchChain,
+    map_id: i64,
+    slices: &[&crate::world_import_scope::BoundedMapSlice],
+    source_identity: &str,
+    restrict_to_scope: bool,
+) -> Result<VmapPlan> {
+    let map_id = u32::try_from(map_id).context("bounded slice map id is outside u32")?;
+    let map_name = crate::terrain::map_dir(map_id)?;
+    let mut selected_cells = BTreeSet::new();
+    let mut placements = Vec::new();
+    let mut placement_keys = HashSet::new();
+    let mut tiles_read = 0u32;
+    let mut selections = Vec::with_capacity(slices.len());
+    let mut ranges = Vec::with_capacity(slices.len());
+    for slice in slices {
+        let range = crate::terrain::slice_cell_range(Some(slice.bounds), slice.sample, 0.0);
+        for cell in [range.0, range.1, range.2, range.3] {
+            if !(0..1024).contains(&cell) {
+                bail!(
+                    "slice {} has cell index {cell} outside the map square",
+                    slice.name
+                );
+            }
+        }
+        let scan = crate::nav::scan_tiles(chain, map_name, map_id, range)?;
+        if scan.cells.is_empty() {
+            bail!("slice {} has no intersecting MCNK cells", slice.name);
+        }
+        let sample_cell = lyracore_shared::terrain::cell_index(slice.sample.0 as f32)
+            .zip(lyracore_shared::terrain::cell_index(slice.sample.1 as f32));
+        if !scan
+            .cells
+            .iter()
+            .any(|row| Some((row.cell_x, row.cell_y)) == sample_cell)
+        {
+            bail!(
+                "slice {} sample is not covered by its terrain cells",
+                slice.name
+            );
+        }
+        tiles_read += scan.tiles_read;
+        selected_cells.extend(
+            scan.cells
+                .iter()
+                .map(|row| cell_key(map_id, row.cell_x, row.cell_y)),
+        );
+        for placement in scan.placements {
+            let key = placement_key(&placement);
+            if placement_keys.insert(key) {
+                placements.push(placement);
+            }
+        }
+        selections.push(format!(
+            "{}:{}..{}:{}..{}",
+            slice.name, range.0, range.1, range.2, range.3
+        ));
+        ranges.push(range);
     }
     println!(
-        "vmap: {} tile(s), {} unique placements ({} WMO)",
-        scan.tiles_read,
-        scan.placements.len(),
-        scan.placements.iter().filter(|p| p.is_wmo).count()
+        "vmap: {tiles_read} tile(s), {} selected cells, {} unique placements ({} WMO)",
+        selected_cells.len(),
+        placements.len(),
+        placements
+            .iter()
+            .filter(|placement| placement.is_wmo)
+            .count()
     );
-
-    // Pass 2: calibrate the rotation convention against MODF bounds (WMOs only), capped sample —
-    // same calibration the rasterizer uses; only the yaw term is empirically fit.
-    let conv = crate::nav::calibrate_from_placements(&mut chain, &scan.placements)?;
-
-    // Pass 3: transform one placement at a time and spool its conservative cell overlap. This
-    // deliberately trades disk I/O for a bounded live geometry set.
+    let conv = crate::nav::calibrate_from_placements(chain, &placements)?;
     let spool = VmapSpool::new(map_id)?;
-    let mut placements = scan.placements;
     placements.sort_by(|a, b| {
         a.name.cmp(&b.name).then_with(|| {
             a.position
@@ -462,7 +611,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     let mut world_tris = 0usize;
     let mut wmo_tris = 0usize;
     for (i, placement) in placements.iter().enumerate() {
-        let mesh = crate::nav::load_mesh(&mut chain, placement)?;
+        let mesh = crate::nav::load_mesh(chain, placement)?;
         let mut spool_error = None;
         for_each_placement_tri(placement, &mesh, conv, |tri| {
             if spool_error.is_some() {
@@ -473,9 +622,12 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
             if let Some((cx0, cx1, cy0, cy1)) = tri_cell_range(&tri) {
                 for cx in cx0..=cx1 {
                     for cy in cy0..=cy1 {
-                        if let Err(err) = spool.append(cell_key(map_id, cx, cy), tri) {
-                            spool_error = Some(err);
-                            return;
+                        let key = cell_key(map_id, cx, cy);
+                        if !restrict_to_scope || selected_cells.contains(&key) {
+                            if let Err(err) = spool.append(key, tri) {
+                                spool_error = Some(err);
+                                return;
+                            }
                         }
                     }
                 }
@@ -493,19 +645,11 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         }
     }
 
-    // Pass 4: read one sorted cell spool at a time, producing a deterministic manifest and
-    // the reducer batches below. A dense cell (e.g. a WMO complex whose AABB touches it) can hold
-    // far more triangles than fit in one `spacetime call` CLI argument (Linux caps a single argv
-    // string around 128 KB), so a cell's triangle list is FIRST split into `MAX_ROW_TRI_BYTES`-
-    // capped shards — each independently `lyracore_shared::vmap::decode`able — and only THEN
-    // batched by total payload size like `nav.rs`. `game_vmap_chunk` is a multi-row-per-cell
-    // table for exactly this reason (see its doc comment).
     let keys = spool.keys()?;
     let mut total_bytes = 0usize;
     let mut shard_rows = 0usize;
     let mut digest = blake3::Hasher::new();
     digest.update(b"lyracore-vmap-manifest-v1");
-    let m2_tris = world_tris - wmo_tris;
     for &key in &keys {
         let mut ordinal = 0u32;
         spool.for_each_shard(key, |blob| {
@@ -525,82 +669,99 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
             .try_into()
             .unwrap(),
     );
-    let expected_chunks = shard_rows.to_string();
-    let expected_bytes = total_bytes.to_string();
-    if args.apply {
-        crate::call_reducer_args(
-            args,
-            "stage_vmap_generation",
-            &[
-                &generation_id.to_string(),
-                &map_id.to_string(),
-                &expected_chunks,
-                &expected_bytes,
-                &manifest,
-                &source_identity,
-                &selection_identity,
-            ],
-        )?;
-        let accepted = accepted_chunk_ids(args, generation_id)?;
-        let mut batches = 0usize;
-        let mut skipped = 0usize;
-        let mut current = String::new();
-        for &key in &keys {
-            let mut ordinal = 0u32;
-            spool.for_each_shard(key, |blob| {
-                if accepted.contains(&(key, ordinal)) {
-                    skipped += 1;
-                    ordinal += 1;
-                    return Ok(());
-                }
-                let cell_x = ((key >> 16) & 0xFFFF) as u16;
-                let cell_y = (key & 0xFFFF) as u16;
-                let hex: String = blob.iter().map(|b| format!("{b:02x}")).collect();
-                let row = format!("{ordinal},{map_id},{cell_x},{cell_y},{hex}");
-                if !current.is_empty() && current.len() + row.len() + 1 > BATCH_BYTES {
-                    crate::call_reducer_args(
-                        args,
-                        "append_vmap_generation_chunks",
-                        &[&generation_id.to_string(), &current],
-                    )?;
-                    batches += 1;
-                    current.clear();
-                }
-                if !current.is_empty() {
-                    current.push(';');
-                }
-                current.push_str(&row);
+    Ok(VmapPlan {
+        map_id,
+        source_identity: source_identity.to_owned(),
+        selection_identity: if restrict_to_scope {
+            format!("map={map_id};slices={}", selections.join(","))
+        } else {
+            let (x0, x1, y0, y1) = ranges[0];
+            format!("map={map_id};cell_x={x0}..{x1};cell_y={y0}..{y1}")
+        },
+        spool,
+        keys,
+        total_bytes,
+        shard_rows,
+        manifest,
+        generation_id,
+        world_tris,
+        wmo_tris,
+    })
+}
+
+fn placement_key(placement: &Placement) -> String {
+    format!(
+        "{}:{}:{:?}:{:?}:{}",
+        placement.is_wmo,
+        placement.name,
+        placement.position.map(f32::to_bits),
+        placement.rotation.map(f32::to_bits),
+        placement.scale.to_bits()
+    )
+}
+
+fn apply_plan(args: &crate::Args, plan: &VmapPlan) -> Result<()> {
+    let generation_id = plan.generation_id.to_string();
+    let map_id = plan.map_id.to_string();
+    let expected_chunks = plan.shard_rows.to_string();
+    let expected_bytes = plan.total_bytes.to_string();
+    crate::call_reducer_args(
+        args,
+        "stage_vmap_generation",
+        &[
+            &generation_id,
+            &map_id,
+            &expected_chunks,
+            &expected_bytes,
+            &plan.manifest,
+            &plan.source_identity,
+            &plan.selection_identity,
+        ],
+    )?;
+    let accepted = accepted_chunk_ids(args, plan.generation_id)?;
+    let mut batches = 0usize;
+    let mut skipped = 0usize;
+    let mut current = String::new();
+    for &key in &plan.keys {
+        let mut ordinal = 0u32;
+        plan.spool.for_each_shard(key, |blob| {
+            if accepted.contains(&(key, ordinal)) {
+                skipped += 1;
                 ordinal += 1;
-                Ok(())
-            })?;
-        }
-        if !current.is_empty() {
-            crate::call_reducer_args(
-                args,
-                "append_vmap_generation_chunks",
-                &[&generation_id.to_string(), &current],
-            )?;
-            batches += 1;
-        }
+                return Ok(());
+            }
+            let cell_x = ((key >> 16) & 0xFFFF) as u16;
+            let cell_y = (key & 0xFFFF) as u16;
+            let hex: String = blob.iter().map(|b| format!("{b:02x}")).collect();
+            let row = format!("{ordinal},{map_id},{cell_x},{cell_y},{hex}");
+            if !current.is_empty() && current.len() + row.len() + 1 > BATCH_BYTES {
+                crate::call_reducer_args(
+                    args,
+                    "append_vmap_generation_chunks",
+                    &[&generation_id, &current],
+                )?;
+                batches += 1;
+                current.clear();
+            }
+            if !current.is_empty() {
+                current.push(';');
+            }
+            current.push_str(&row);
+            ordinal += 1;
+            Ok(())
+        })?;
+    }
+    if !current.is_empty() {
         crate::call_reducer_args(
             args,
-            "verify_vmap_generation",
-            &[&generation_id.to_string()],
+            "append_vmap_generation_chunks",
+            &[&generation_id, &current],
         )?;
-        crate::call_reducer_args(
-            args,
-            "activate_vmap_generation",
-            &[&generation_id.to_string()],
-        )?;
-        println!("vmap: activated generation {generation_id} after {batches} batch(es), skipping {skipped} already-accepted shard row(s)");
+        batches += 1;
     }
-    println!("vmap: map {map_id} — {world_tris} world tris ({wmo_tris} WMO, {m2_tris} M2) across {} cells, {total_bytes} packed bytes ({:.1} KB, {shard_rows} shard row(s))", spool.keys()?.len(), total_bytes as f64 / 1024.0);
-    println!("vmap: manifest {manifest} generation {generation_id}");
-    if !args.apply {
-        println!("-- DRY RUN: would stage, append, verify, and activate the generation");
-        return Ok(());
-    }
-    println!("vmap: applied.");
+    crate::call_reducer_args(args, "verify_vmap_generation", &[&generation_id])?;
+    crate::call_reducer_args(args, "activate_vmap_generation", &[&generation_id])?;
+    println!("vmap: activated generation {generation_id} after {batches} batch(es), skipping {skipped} already-accepted shard row(s)");
     Ok(())
 }
 
@@ -856,11 +1017,41 @@ mod tests {
     }
 
     #[test]
+    fn placement_key_deduplicates_an_overlap_without_merging_distinct_placements() {
+        let placement = Placement {
+            name: "World\\wmo\\test.wmo".to_owned(),
+            is_wmo: true,
+            position: [1.0, 2.0, 3.0],
+            rotation: [0.0, 90.0, 0.0],
+            scale: 1.0,
+            bounds_min: None,
+            bounds_max: None,
+        };
+        let mut shifted = Placement {
+            name: placement.name.clone(),
+            is_wmo: placement.is_wmo,
+            position: placement.position,
+            rotation: placement.rotation,
+            scale: placement.scale,
+            bounds_min: None,
+            bounds_max: None,
+        };
+
+        assert_eq!(placement_key(&placement), placement_key(&placement));
+        shifted.position[0] += 1.0;
+        assert_ne!(placement_key(&placement), placement_key(&shifted));
+    }
+
+    #[test]
     fn ownership_parser_accepts_the_requested_map_and_rejects_another() {
         let rows = r#"[{"schema":{"elements":[{"name":{"some":"map_id"}}]},"rows":[[0],[36]]}]"#;
         assert!(sql_has_map(rows, 0).unwrap());
         assert!(sql_has_map(rows, 36).unwrap());
         assert!(!sql_has_map(rows, 1).unwrap());
-        assert!(!sql_has_map(r#"[{"schema":{"elements":[{"name":{"some":"map_id"}}]},"rows":[]}]"#, 0).unwrap());
+        assert!(!sql_has_map(
+            r#"[{"schema":{"elements":[{"name":{"some":"map_id"}}]},"rows":[]}]"#,
+            0
+        )
+        .unwrap());
     }
 }
