@@ -312,6 +312,10 @@ struct InMemoryStore {
     talent_grant: u32,
     /// What `talent_pane_sync` returns: (teach rank-spell, superseded prev, points remaining).
     talent_pane: (u32, u32, u32),
+    /// What `superseded_old_rank` returns for a trainer buy — the known previous rank a
+    /// non-stacking chain's new rank replaces. `None` (derive-Default) mirrors "no known prior
+    /// rank" -> a trainer buy pushes plain SMSG_LEARNED_SPELL.
+    trainer_superseded: Option<u32>,
     /// `npc_is_innkeeper` flag for the gossip bind-home routing.
     innkeeper: bool,
     /// Whether `bind_home` ran (the innkeeper gossip select).
@@ -1867,7 +1871,7 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
     fn superseded_old_rank(&self, _new_spell: u32, _player_guid: u64) -> Option<u32> {
-        None
+        self.trainer_superseded
     }
     fn send_chat(
         &self,
@@ -6732,6 +6736,42 @@ fn trainer_buy_success_replies_succeeded_then_pushes_the_learned_spell() {
     match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
         ServerOpcodeMessage::SMSG_LEARNED_SPELL(m) => assert_eq!(m.id, 1234),
         other => panic!("expected SMSG_LEARNED_SPELL, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
+fn trainer_buy_rank_upgrade_supersedes_the_previous_rank_spell() {
+    // A trainer buy whose chain prev is already known sends SMSG_SUPERCEDED_SPELL, not
+    // SMSG_LEARNED_SPELL — the client REPLACES the old rank's book entry (vanilla), mirroring the
+    // talent rank-upgrade path's cmangos wire order (OLD rides the first u16 slot).
+    let mut s = quest_store();
+    s.trainer_superseded = Some(1233); // rank 1 known; buying 1234 (rank 2) supersedes it
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_TRAINER_BUY_SPELL {
+        guid: Guid::new(70),
+        id: 1234,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_TRAINER_BUY_SUCCEEDED(m) => {
+            assert_eq!(m.guid.guid(), 70);
+            assert_eq!(m.id, 1234);
+        }
+        other => panic!("expected SMSG_TRAINER_BUY_SUCCEEDED, got {other}"),
+    }
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SUPERCEDED_SPELL(m) => {
+            assert_eq!(
+                m.new_spell_id, 1233,
+                "first wire slot carries the OLD rank (cmangos order)"
+            );
+            assert_eq!(m.old_spell_id, 1234, "second wire slot carries the NEW rank");
+        }
+        other => panic!("expected SMSG_SUPERCEDED_SPELL, got {other}"),
     }
     drop(client);
     server.join().unwrap();
