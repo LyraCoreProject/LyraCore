@@ -677,23 +677,24 @@ mod runtime_tests {
 }
 
 // =============================================================================================
-//  Derivation — collision triangles → one cell's blobs. This is the ONLY rasterization policy:
-//  the importer's `--nav` mode and the module's coverage derivation both call `derive_cell`, so
-//  a margin or band change can never drift between them. Terrain-only inputs (slope, holes) stay
+//  Derivation: collision triangles to one cell's blobs. This is the only rasterization policy.
+//  The importer's `--nav` mode and the module's coverage derivation both call `derive_cell`, so
+//  a margin or band change cannot drift between them. Terrain-only inputs (slope, holes) stay
 //  with their owner and fold in through `merge_cells`.
 // =============================================================================================
 
-/// Inflation margin for the point-in-triangle test (yd) — slightly over half a walk-cell
-/// diagonal so a thin vertical wall whose 2D projection is a sliver still hits the centers of
-/// the cells its line crosses. Conservative direction: over-blocking by <1 cell.
+/// Inflation margin for the point-in-triangle test (yd). Slightly over half a walk-cell diagonal,
+/// so a thin vertical wall whose 2D projection is a sliver still hits the centers of the cells its
+/// line crosses. Errs toward over-blocking by less than one cell.
 const RASTER_MARGIN: f32 = 0.35;
 
-/// Agent-body inset for walk cells; the obstruction/LoS grid retains the true footprint.
+/// Agent-body inset for walk cells. The obstruction and line-of-sight grid keeps the true
+/// footprint.
 const AGENT_RADIUS: f32 = 0.5;
 
 /// The walk-grid rasterization margin: sliver-catching plus the body inset. Public because a
 /// caller binning triangles into cells must inflate its cell range by the same amount, or a
-/// triangle hugging a border never reaches the neighbor cell its inset footprint spills into.
+/// triangle hugging a border never reaches the neighbour cell its inset footprint spills into.
 pub const WALK_MARGIN: f32 = RASTER_MARGIN + AGENT_RADIUS;
 
 /// Gap tolerance when fusing a column's z-intervals (yd): stacked wall bands abut without
@@ -701,17 +702,17 @@ pub const WALK_MARGIN: f32 = RASTER_MARGIN + AGENT_RADIUS;
 const OBS_GAP: f32 = 0.75;
 
 /// One world-space collision triangle with its AABB and plane. `z_at` is the exact-rasterization
-/// core: the triangle's z-interval over a 2D point (None = point outside the inflated footprint).
-/// A coarse M2 bounding triangle spanning trunk→canopy thus blocks only near the trunk (low
-/// plane-z) and never under the canopy — AABB stamping marked the whole canopy width unwalkable
-/// and turned Elwynn's forests into a maze.
+/// core: the triangle's z-interval over a 2D point, or None when the point falls outside the
+/// inflated footprint. A coarse M2 bounding triangle spanning trunk to canopy therefore blocks
+/// only near the trunk, where the plane-z is low, and leaves the space under the canopy walkable.
+/// Stamping the whole AABB instead blocks the full canopy width.
 struct WorldTri {
     lo: [f32; 3],
     hi: [f32; 3],
-    /// WMO geometry participates in the obstruction grid; M2 doodads never do.
+    /// WMO geometry participates in the obstruction grid. M2 doodads never do.
     is_wmo: bool,
     v: [[f32; 3]; 3],
-    /// Plane normal + d (n·p = d); near-vertical planes fall back to the full z-range.
+    /// Plane normal and d (n·p = d). Near-vertical planes fall back to the full z-range.
     n: [f32; 3],
     d: f32,
 }
@@ -745,7 +746,7 @@ impl WorldTri {
     }
 
     /// The triangle's z-interval over 2D point (x, y), testing inside-ness with a `margin`-yd
-    /// outward inflation (signed edge distance). None = outside the inflated footprint.
+    /// outward inflation by signed edge distance. None means outside the inflated footprint.
     fn z_at(&self, x: f32, y: f32, margin: f32) -> Option<(f32, f32)> {
         // 2D signed edge distances (positive = same side as the third vertex).
         for i in 0..3 {
@@ -753,7 +754,7 @@ impl WorldTri {
             let (ex, ey) = (b[0] - a[0], b[1] - a[1]);
             let len = (ex * ex + ey * ey).sqrt();
             if len < 1e-6 {
-                continue; // degenerate edge in 2D (vertical tri seen edge-on) — skip this edge test
+                continue; // degenerate edge in 2D (vertical tri seen edge-on): skip this test
             }
             let cross = |px: f32, py: f32| ex * (py - a[1]) - ey * (px - a[0]);
             let side_c = cross(c[0], c[1]);
@@ -764,11 +765,11 @@ impl WorldTri {
                 return None;
             }
         }
-        // Steep plane (wall/fence side, >60° from horizontal): the plane-z is ill-conditioned
-        // over the projected sliver (it clamps to an arbitrary end of the z-range — the live
-        // "mobs walk through the graveyard fence" find: fence sides tilted ~1° clamped to the
-        // BOTTOM, below the standing band). Use the full z-span instead; anything this steep
-        // is unwalkable surface anyway (the terrain slope gate is 50°).
+        // Steep plane (wall or fence side, more than 60° from horizontal): the plane-z is
+        // ill-conditioned over the projected sliver and clamps to an arbitrary end of the
+        // z-range. A fence side tilted about 1° clamps to the bottom, below the standing band,
+        // which leaves the fence walkable. Use the full z-span instead. Anything this steep is
+        // unwalkable surface anyway, since the terrain slope gate is 50°.
         let n_len = (self.n[0] * self.n[0] + self.n[1] * self.n[1] + self.n[2] * self.n[2]).sqrt();
         if self.n[2].abs() < 0.5 * n_len {
             return Some((self.lo[2], self.hi[2]));
@@ -779,13 +780,13 @@ impl WorldTri {
     }
 }
 
-/// Sub-index range covering world span `[lo_c, hi_c]`, clamped to `cell_i` (high coord → LOW
-/// index). None when the span misses the cell entirely.
+/// Sub-index range covering world span `[lo_c, hi_c]`, clamped to `cell_i`. A high coordinate
+/// gives the low index. None when the span misses the cell entirely.
 ///
-/// Clamps in the cell's local offset space instead of re-testing each end with `sub_index`: at
+/// Clamps in the cell's local offset space instead of re-testing each end with `sub_index`. At
 /// ±17k yd an f32 boundary coordinate rounds to either side of the cell edge, and a `None` there
-/// dropped the WHOLE triangle from the cell — every blocker reaching past a cell border went
-/// unrasterized on a coin flip.
+/// drops the whole triangle from the cell, so a blocker reaching past a cell border goes
+/// unrasterized at random.
 fn clamp_axis(lo_c: f32, hi_c: f32, cell_i: u16, dim: usize) -> Option<(usize, usize)> {
     let local = |coord: f32| (MAP_COORD_MAX - coord) - cell_i as f32 * CELL_SIZE;
     // High coord → low local offset, so the span's ends swap.
@@ -798,14 +799,14 @@ fn clamp_axis(lo_c: f32, hi_c: f32, cell_i: u16, dim: usize) -> Option<(usize, u
     Some((index(lo_local), index(hi_local)))
 }
 
-/// Derive one cell's blobs from the collision triangles binned to it (every triangle whose AABB
-/// touches the cell, inflated by `WALK_MARGIN`; anything outside the cell is clamped away here).
+/// Derive one cell's blobs from the collision triangles binned to it: every triangle whose AABB
+/// touches the cell, inflated by `WALK_MARGIN`. Anything outside the cell is clamped away here.
 ///
 /// `heights` is the cell's 145-value MCNK height grid when a terrain chunk exists. The standing
-/// band references terrain ground ONLY — a model deck is a blocker, never a floor to stand on —
-/// so without heights the whole cell falls back to `base_z` (the lowest triangle vertex).
+/// band references terrain ground only, because a model deck is a blocker and never a floor to
+/// stand on, so without heights the whole cell falls back to `base_z`, the lowest triangle vertex.
 ///
-/// Returns None when nothing in the cell blocks: fully-clear cells emit NO row, and both readers
+/// Returns None when nothing in the cell blocks. A fully-clear cell emits no row, and both readers
 /// treat a missing cell as "no obstacles known".
 pub fn derive_cell(
     cell_x: u16,
@@ -836,10 +837,10 @@ pub fn derive_cell(
     let mut col_ivals: Vec<Vec<(f32, f32)>> = vec![Vec::new(); OBS_BYTES];
 
     for t in tris.iter().map(WorldTri::new) {
-        // Walkability (all geometry): block a nav cell only when the triangle actually passes
-        // through the standing band above THAT cell's ground. Footprint + window inflated by
+        // Walkability (all geometry): block a nav cell only when the triangle passes through the
+        // standing band above that cell's ground. Footprint and window are inflated by
         // `WALK_MARGIN`, so cells within a body radius of geometry rasterize blocked and the
-        // center line `find_leg`/`nav_step` walk keeps the body clear of wall corners.
+        // center line that `find_leg` and `nav_step` walk keeps the body clear of wall corners.
         if let (Some((nx0, nx1)), Some((ny0, ny1))) = (
             clamp_axis(
                 t.lo[0] - WALK_MARGIN,
@@ -871,12 +872,12 @@ pub fn derive_cell(
                 }
             }
         }
-        // Obstruction / line of sight: WMO geometry ONLY — vanilla doodads (trees!) block
-        // movement but never sight lines (spells/aggro see through a forest). Accumulate the
-        // z-INTERVALS per column here; the rooted decision happens per COLUMN after merging
-        // (below) — deciding per TRI kept only a wall's bottom band (walls are stacked tri
-        // bands) and collapsed obs tops to ~2 yd, which let eye-height rays graze over and
-        // thugs aggro through the abbey wall (live regression, 2026-07-10).
+        // Obstruction and line of sight: WMO geometry only. Vanilla doodads such as trees block
+        // movement but never sight lines, so spells and aggro reach through a forest. Accumulate
+        // the z-intervals per column here; the rooted decision happens per column after merging,
+        // below. Deciding per triangle keeps only a wall's bottom band, because a wall is stacked
+        // triangle bands, and collapses obs tops to about 2 yd, which lets eye-height rays graze
+        // over the wall.
         if !t.is_wmo {
             continue;
         }
@@ -899,13 +900,14 @@ pub fn derive_cell(
         }
     }
 
-    // Per-column obs: merge the accumulated z-intervals (`OBS_GAP` tolerance), then keep only the
-    // merged run that reaches down into the head-height band above THIS column's ground. Stacked
-    // wall bands fuse ground→top (full wall height blocks over-the-roof sight); a floating
-    // eave/roof run stays a separate high interval and is dropped — so standing under an overhang
-    // doesn't blank LoS.
-    // Deliberate simplification: single-top obs column, no (bottom, top) pair — archways/bridges
-    // read as walls; store both bytes when a live case needs to see THROUGH an opening.
+    // Per-column obs: merge the accumulated z-intervals with `OBS_GAP` tolerance, then keep only
+    // the merged run that reaches down into the head-height band above this column's ground.
+    // Stacked wall bands fuse ground to top, so a full wall height blocks over-the-roof sight. A
+    // floating eave or roof run stays a separate high interval and is dropped, so standing under
+    // an overhang does not blank line of sight.
+    //
+    // Simplification: one top per obs column, with no (bottom, top) pair, so archways and bridges
+    // read as walls. Store both bytes when a real case needs to see through an opening.
     for oy in 0..OBS_DIM {
         for ox in 0..OBS_DIM {
             let ivals = &mut col_ivals[oy * OBS_DIM + ox];
@@ -947,8 +949,8 @@ pub fn derive_cell(
     dirty.then_some(NavCellData { base_z, walk, obs })
 }
 
-/// Merge two cells covering the same terrain cell: `walk` is the bitwise AND (either source may
-/// block) and `obs` keeps the taller column. Both blobs rebase onto the lower `base_z`, so no
+/// Merge two cells covering the same terrain cell: `walk` is the bitwise AND, since either source
+/// may block, and `obs` keeps the taller column. Both blobs rebase onto the lower `base_z`, so no
 /// column underflows when the two disagree about the cell's floor.
 pub fn merge_cells(a: &NavCellData, b: &NavCellData) -> NavCellData {
     let base_z = a.base_z.min(b.base_z);
@@ -1062,7 +1064,7 @@ mod derive_tests {
                 .expect("open field");
         assert_eq!((straight.len(), expanded), (1, 0));
 
-        // …and the exact ray over the same triangles agrees the straight segment is blocked.
+        // The exact ray over the same triangles agrees the straight segment is blocked.
         let mut tri_fetch = |x: u16, y: u16| (x == cx && y == cy).then(|| tris.clone());
         assert!(cast_ray(
             &mut tri_fetch,
@@ -1094,9 +1096,9 @@ mod derive_tests {
         for nx in 31..=33 {
             assert!(!walk_get(&cell.walk, nx, 32), "nx={nx} must be blocked");
         }
-        // Two out (1.04 yd) is beyond the margin — the inset is bounded.
+        // Two out (1.04 yd) is beyond the margin, so the inset is bounded.
         assert!(walk_get(&cell.walk, 30, 32) && walk_get(&cell.walk, 34, 32));
-        // Sight keeps the true footprint: only the wall's own obs column rises.
+        // Sight keeps the true footprint, so only the wall's own obs column rises.
         assert!(obs_top(&cell.obs, cell.base_z, 16, 16).is_some());
         assert!(obs_top(&cell.obs, cell.base_z, 15, 16).is_none());
         assert!(obs_top(&cell.obs, cell.base_z, 17, 16).is_none());
@@ -1105,7 +1107,7 @@ mod derive_tests {
     #[test]
     fn a_triangle_spanning_a_cell_boundary_blocks_in_both_cells_clamped_to_each() {
         let (cx, cy) = test_cell();
-        // One wall running along x from mid-cell into the NEXT cell over (cx + 1 = lower x).
+        // One wall running along x from mid-cell into the next cell over (cx + 1 is lower x).
         let y = at(0, 32).1;
         let (x_a, x_b) = (
             sub_center(cx, 40, WALK_DIM),
@@ -1128,7 +1130,7 @@ mod derive_tests {
         // its own sub-cells: the seam is blocked from both sides.
         assert!(!walk_get(&here.walk, 63, 32) && !walk_get(&over.walk, 0, 32));
         assert!(!walk_get(&here.walk, 40, 32) && !walk_get(&over.walk, 10, 32));
-        // Past each end of the wall the cell stays open — the span is clamped, not stamped whole.
+        // Past each end of the wall the cell stays open: the span is clamped, not stamped whole.
         assert!(walk_get(&here.walk, 36, 32) && walk_get(&over.walk, 14, 32));
     }
 
