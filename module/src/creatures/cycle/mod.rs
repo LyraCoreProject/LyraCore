@@ -1271,9 +1271,10 @@ fn angle_diff(from: f32, to: f32) -> f32 {
 }
 
 /// CHASE — an engaged creature closes on the unit it fights. It commits to ONE long run leg and
-/// rides it for several firings, re-aiming only when the leg lands or the victim veers off the
-/// heading it was thrown along; an offensive caster holds at spell range instead of face-tanking;
-/// and a creature that reaches a victim standing inside melee reach stops and turns to face it.
+/// rides it for several firings, re-aiming only when the leg lands, the victim veers off the
+/// heading it was thrown along, or a victim that stops runs the leg past where the stop point now
+/// sits; an offensive caster holds at spell range instead of face-tanking; and a creature that
+/// reaches a victim standing inside melee reach stops and turns to face it.
 ///
 /// Melee reach is read BEFORE the lead, and the victim's live translation flags decide which of the
 /// two applies, so a player who released the movement key inside reach is turned to rather than led
@@ -1331,7 +1332,9 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         };
         let aim = (c.at.x + dir.0 * leg_len, c.at.y + dir.1 * leg_len);
         let step = w.navigate(c.guid, aim, leg_len);
-        if step == (c.at.x, c.at.y) || !needs_new_leg(c.leg.as_ref(), dir) {
+        if step == (c.at.x, c.at.y)
+            || !needs_new_leg(c.leg.as_ref(), dir, victim_moving, c.victim_at)
+        {
             continue;
         }
         let run = w.speed_of(c.guid, Gait::Run);
@@ -1355,11 +1358,27 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
 
 /// Does this chaser need a NEW leg? One whose leg has landed does. One still riding a leg keeps it
 /// while the victim stays roughly on the heading the leg was thrown along, which is what stops the
-/// client re-computing its path every firing.
-fn needs_new_leg(leg: Option<&LegInFlight>, dir: (f32, f32)) -> bool {
+/// client re-computing its path every firing — UNLESS the victim has stopped translating and the
+/// leg's destination now lies past the melee stop point: closer to the victim's current position
+/// than `MELEE_STOP_SHORT_YD`, or through them entirely. A lead thrown at a kiter that then stops
+/// short of reach must be replaced there rather than ridden eight yards past them; a still-kiting
+/// victim is exempt, so a straight-line kite still rides one committed leg.
+fn needs_new_leg(
+    leg: Option<&LegInFlight>,
+    dir: (f32, f32),
+    victim_moving: bool,
+    victim_at: Point,
+) -> bool {
     let Some(leg) = leg else {
         return true;
     };
+    if !victim_moving {
+        let reach_past_victim =
+            (leg.dest.x - victim_at.x) * dir.0 + (leg.dest.y - victim_at.y) * dir.1;
+        if reach_past_victim > -MELEE_STOP_SHORT_YD {
+            return true;
+        }
+    }
     let (lx, ly) = (leg.dest.x - leg.start.x, leg.dest.y - leg.start.y);
     let len = (lx * lx + ly * ly).sqrt();
     len <= 0.001 || (lx / len) * dir.0 + (ly / len) * dir.1 < CHASE_REPATH_COS
@@ -1706,5 +1725,91 @@ mod facing_tests {
         let just_over = FACING_EPSILON_RAD + 0.01;
         assert!(angle_diff(orientation, just_under).abs() <= FACING_EPSILON_RAD);
         assert!(angle_diff(orientation, just_over).abs() > FACING_EPSILON_RAD);
+    }
+}
+
+/// `needs_new_leg`'s re-aim boundary. A scenario test proves a stopped-short victim gets a
+/// replacement leg landing at the stop point; these pin exactly where that boundary sits along the
+/// approach heading, cheaper and sharper than through a fight.
+#[cfg(test)]
+mod chase_leg_tests {
+    use super::*;
+
+    const DIR: (f32, f32) = (1.0, 0.0);
+    const VICTIM_AT: Point = Point {
+        x: 23.0,
+        y: 0.0,
+        z: 10.0,
+    };
+
+    fn leg_to(dest_x: f32) -> LegInFlight {
+        LegInFlight {
+            guid: 1,
+            start: Point {
+                x: 0.0,
+                y: 0.0,
+                z: 10.0,
+            },
+            dest: Point {
+                x: dest_x,
+                y: 0.0,
+                z: 10.0,
+            },
+            started_micros: 0,
+            dur_ms: 4_000,
+            map_id: 0,
+            instance_id: 0,
+            mover_gone: false,
+        }
+    }
+
+    #[test]
+    fn no_leg_in_flight_always_needs_one() {
+        assert!(needs_new_leg(None, DIR, false, VICTIM_AT));
+        assert!(needs_new_leg(None, DIR, true, VICTIM_AT));
+    }
+
+    #[test]
+    fn a_stopped_victim_keeps_a_leg_that_still_lands_short_of_the_stop_point() {
+        // The leg's destination is well short of VICTIM_AT.x - MELEE_STOP_SHORT_YD (19.0) — still
+        // approaching, so there is nothing to replace yet.
+        assert!(!needs_new_leg(Some(&leg_to(10.0)), DIR, false, VICTIM_AT));
+    }
+
+    #[test]
+    fn a_stopped_victim_keeps_a_leg_landing_exactly_on_the_stop_point() {
+        assert!(!needs_new_leg(Some(&leg_to(19.0)), DIR, false, VICTIM_AT));
+    }
+
+    #[test]
+    fn a_stopped_victim_replaces_a_leg_that_would_overshoot_the_stop_point() {
+        // Thrown as a lead past the victim's OLD position, this leg would carry the creature
+        // through where the victim now stands rather than stopping short of it.
+        assert!(needs_new_leg(Some(&leg_to(28.0)), DIR, false, VICTIM_AT));
+    }
+
+    #[test]
+    fn a_still_translating_victim_keeps_the_same_overshooting_leg() {
+        // A straight-line kite rides one committed lead leg — the stop-point rule is exempt while
+        // the victim is still moving, even though the leg's destination sits past where a stop
+        // point would land.
+        assert!(!needs_new_leg(Some(&leg_to(28.0)), DIR, true, VICTIM_AT));
+    }
+
+    #[test]
+    fn a_veered_heading_still_forces_a_new_leg_whatever_the_victim_is_doing() {
+        let off_heading = (0.0, 1.0);
+        assert!(needs_new_leg(
+            Some(&leg_to(19.0)),
+            off_heading,
+            false,
+            VICTIM_AT
+        ));
+        assert!(needs_new_leg(
+            Some(&leg_to(19.0)),
+            off_heading,
+            true,
+            VICTIM_AT
+        ));
     }
 }

@@ -2716,6 +2716,127 @@ fn every_chase_leg_travels_at_the_configured_run_speed() {
 }
 
 #[test]
+fn a_lead_leg_is_replaced_when_the_victim_stops_short_of_reach() {
+    let run = lyracore_shared::constants::speeds::RUN;
+    let mut w = wolf_fighting(p(20.0, 0.0, 10.0))
+        .kiting(HUNTER, p(20.0, 0.0, 10.0))
+        .facing(WOLF, std::f32::consts::PI)
+        .attacking(WOLF, HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    // The player releases the key at 23 yd, still well outside melee reach, half a firing into
+    // the lead leg the first cycle threw at the old heading.
+    w.advance_clock(500_000);
+    w = w.kiting(HUNTER, p(23.0, 0.0, 10.0)).stopped(HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    let legs = w.effects();
+    assert_eq!(
+        legs.len(),
+        2,
+        "exactly one replacement leg this firing, appended to the first"
+    );
+    let replacement = legs[1];
+    let rendered = p(3.5, 0.0, 10.0);
+    assert_eq!(
+        (replacement.start, replacement.dest),
+        (rendered, p(19.0, 0.0, 10.0)),
+        "the replacement must start where the client RENDERS the creature now, and land \
+         MELEE_STOP_SHORT_YD short of the victim's new position — riding the old lead leg carries \
+         the creature eight yards past a player who has already stopped"
+    );
+    let travelled = ((replacement.dest.x - replacement.start.x).powi(2)
+        + (replacement.dest.y - replacement.start.y).powi(2))
+    .sqrt();
+    let implied = travelled / (replacement.dur_ms as f32 / 1000.0);
+    assert!(
+        (implied - run).abs() < 0.05,
+        "the replacement must still travel at the configured run speed: {travelled} yd in {} ms \
+         implies {implied} yd/s, not {run}",
+        replacement.dur_ms
+    );
+    assert!(
+        replacement.spline_id > legs[0].spline_id,
+        "the replacement must carry a NEWER spline id, or the client keeps riding the obsolete \
+         lead leg through the player"
+    );
+
+    // Keep cycling until the fight goes silent: the creature must never ride past the victim it
+    // stopped short of, and the fight must settle with a facing turn as its last word — the exact
+    // stop-and-face shape belongs to the sibling ticket that owns `stand_and_face`.
+    for _ in 0..8 {
+        w.advance_clock(500_000);
+        let tick = w.tick(false, catch_all());
+        run_cycle(&mut w, tick);
+        assert!(
+            w.at(WOLF).at.x <= 23.0 + 0.01,
+            "the creature's authoritative position must never pass the victim it stopped short of, \
+             got x = {}",
+            w.at(WOLF).at.x
+        );
+    }
+    let last = w.effects().last().copied().expect("at least one effect");
+    assert!(
+        last.facing && last.dur_ms == 0,
+        "a settled fight's last word must be the facing turn, not a positional leg that overshot"
+    );
+}
+
+#[test]
+fn a_creature_victim_with_a_leg_in_flight_is_chased_like_a_kiting_player() {
+    // A creature or pet victim carries no move flags of its own — the leg the cycle is already
+    // moving it along is what says it travels. Same shape as a kiting player: run it down with a
+    // lead rather than planting into attack stance, which is the run/stand/run flicker chase exists
+    // to remove.
+    let mut w = Scenario::new(SETTLED)
+        .creature(WOLF, p(0.0, 0.0, 10.0))
+        .creature(PACK_MATE, p(4.0, 0.0, 10.0))
+        .flying(
+            PACK_MATE,
+            p(4.0, 0.0, 10.0),
+            p(4.0, 20.0, 10.0),
+            SETTLED,
+            LEG_MS,
+        )
+        .attacking(WOLF, PACK_MATE);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.effects()
+            .iter()
+            .map(|e| (e.dest, e.dur_ms > 0, e.run))
+            .collect::<Vec<_>>(),
+        [(p(12.0, 0.0, 10.0), true, true)],
+        "a creature or pet victim mid-leg, inside melee reach, must be chased with a lead exactly \
+         like a kiting player — the Fake derives its translation flags from the leg the cycle is \
+         already moving it along"
+    );
+}
+
+#[test]
+fn a_stopped_victim_outside_reach_with_no_leg_in_flight_still_gets_a_closing_leg() {
+    let mut w = wolf_fighting(p(15.0, 0.0, 10.0))
+        .stopped(HUNTER)
+        .attacking(WOLF, HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.effects()
+            .iter()
+            .map(|e| (e.dest, e.dur_ms > 0, e.run))
+            .collect::<Vec<_>>(),
+        [(p(11.0, 0.0, 10.0), true, true)],
+        "a standing victim outside melee reach with nothing already in flight must still get a \
+         closing leg to the stop point — the re-aim rule for a leg already in flight must not \
+         swallow the ordinary no-leg case"
+    );
+}
+
+#[test]
 fn an_offensive_caster_holds_at_its_spell_range() {
     let cases: [(&str, Twist, usize); 3] = [
         ("inside its range", |w| w, 0),
