@@ -1,15 +1,15 @@
-//! `--go-models <client Data/ dir>` — issue #112 (part of #103's dynamic-GameObject-collision
-//! epic). Resolves every DOOR/BUTTON `gameobject_template.display_id` to its M2's bounding mesh
-//! and emits one `game_go_model` row per entry. Used TOGETHER with `--dump` (the template rows
-//! come from the cmangos dump; the model bytes come from the client's own MPQs).
+//! `--go-models <client Data/ dir>` — resolves every DOOR/BUTTON
+//! `gameobject_template.display_id` to its M2's bounding mesh and emits one `game_go_model` row
+//! per entry. Used TOGETHER with `--dump` (the template rows come from the cmangos dump; the
+//! model bytes come from the client's own MPQs).
 //!
 //! Local-space, not world-space: `nav::m2_tris` already loads the bounding mesh model-local, and
 //! the only transform applied here is the MDDF axis shuffle (the same one `vmap.rs::apply_full`
 //! pre-applies for placed doodads) — quaternion/scale/translate are per-spawn data the MODULE
-//! holds (#113's `game_go_collider`), so baking a world transform here would break for instance
-//! copies (no source-guid backref on a `GO_COPY_BAND` row). Same licensing firewall as
-//! `--vmap`/`--dbc`: in-memory only, nothing written to disk. A display resolving to a `.wmo` is
-//! skipped with a warning — WMO door parsing is out of scope for this slice.
+//! holds in `game_go_collider`, so baking a world transform here would break for instance copies
+//! (no source-guid backref on a `GO_COPY_BAND` row). Same licensing firewall as `--vmap`/`--dbc`:
+//! in-memory only, nothing written to disk. A display resolving to a `.wmo` is skipped with a
+//! warning — WMO door parsing is out of scope.
 
 use anyhow::{bail, Context, Result};
 use lyracore_shared::vmap::{encode, TriClass, VmapTri};
@@ -24,7 +24,7 @@ use crate::{field, got, parse_table, GO_BUTTON, GO_DOOR};
 
 /// MDDF axis shuffle: placement-local (Y-up) → world-axis (Z-up) orientation, applied BEFORE any
 /// rotation/scale/translate — same convention `vmap.rs::apply_full` uses for placed doodads.
-/// Pre-applying it here means the module's per-spawn transform (#113) is pure quaternion+scale+
+/// Pre-applying it here means the module's per-spawn transform is pure quaternion+scale+
 /// translate, with no shuffle of its own to get wrong at ray-query time.
 fn shuffle(v: [f32; 3]) -> [f32; 3] {
     [-v[2], -v[0], v[1]]
@@ -36,7 +36,7 @@ fn shuffle_tri(t: Tri) -> Tri {
 
 /// Local bounding-sphere radius: center of the mesh's AABB, radius = farthest vertex from that
 /// center. Not minimal-enclosing, but conservative (contains every vertex) — the cheap
-/// segment-reject #113's ray merge needs before decoding + transforming the full triangle blob.
+/// segment-reject the ray merge needs before decoding and transforming the full triangle blob.
 fn bounding_radius(tris: &[Tri]) -> f32 {
     let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
     for t in tris {
@@ -67,8 +67,8 @@ fn bounding_radius(tris: &[Tri]) -> f32 {
 const MAX_ROW_TRI_BYTES: usize = 20_000;
 
 /// Encode a model's shuffled local-space mesh, erroring (NOT sharding) past `MAX_ROW_TRI_BYTES`.
-/// The triangle class tag is unused by #113's ray merge (participation is decided per GO row, not
-/// per class) — `TriClass::M2` is just a valid placeholder tag the codec requires.
+/// `TriClass::M2` is a placeholder the codec requires — the ray merge decides participation per
+/// GO row, not per class.
 fn encode_capped(entry: u64, model_name: &str, tris: &[Tri]) -> Result<Vec<u8>> {
     let packed: Vec<VmapTri> = tris
         .iter()

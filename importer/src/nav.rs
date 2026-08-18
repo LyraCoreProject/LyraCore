@@ -122,7 +122,7 @@ fn wmo_tris(chain: &mut PatchChain, name: &str) -> Result<Vec<WmoTri>> {
 /// M2 bounding (collision) mesh, model-local coords. Vanilla names end `.mdx` → archive `.m2`.
 /// Parse failures return an EMPTY mesh with a warning (240 finding: 6/75 Northshire M2s —
 /// all decorative particle props — fail upstream parsing; skipping loses nothing collidable).
-/// `pub(crate)` so `go_model.rs` (#112) can load a door's bounding mesh without a full placement.
+/// `pub(crate)` so `go_model.rs` can load a door's bounding mesh without a full placement.
 pub(crate) fn m2_tris(chain: &mut PatchChain, name: &str) -> Vec<Tri> {
     let m2_name = name
         .rsplit_once('.')

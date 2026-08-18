@@ -21,8 +21,7 @@
 //!                                   docs/decisions.md §10)
 //!   --go-models <client Data/ dir>  DOOR/BUTTON display → M2 bounding-mesh extract + import,
 //!                                   needs --dump too (--apply loads `game_go_model` via
-//!                                   import_go_models; a dry run stops at report — go_model.rs;
-//!                                   #112, part of #103's dynamic GameObject-collision epic)
+//!                                   import_go_models; a dry run stops at report — go_model.rs)
 //!   --dump-collision <client Data/ dir>  WMO/M2 collision-geometry inspector — dry-run only,
 //!                                   no --apply (collision.rs)
 //!   --pack-client <client Data/ dir>  builds the client patch MPQ + installs addons into the
@@ -921,7 +920,7 @@ pub(crate) struct Args {
     pub(crate) nav: Option<String>, // client Data/ dir: 241 nav-grid rasterizer (see nav.rs)
     pub(crate) vmap: Option<String>, // client Data/ dir: #520/#521 exact vmap triangle extract+pack+import (see vmap.rs)
     pub(crate) vmap_status: bool, // print active-generation provenance/status without opening client data
-    pub(crate) go_models: Option<String>, // client Data/ dir: #112 DOOR/BUTTON display -> M2 bounding-mesh extract+import (see go_model.rs); needs --dump too
+    pub(crate) go_models: Option<String>, // client Data/ dir: DOOR/BUTTON display -> M2 bounding-mesh extract+import (see go_model.rs); needs --dump too
     pack_client: Option<String>, // client Data/ dir for the --pack-client packager (see pack_client.rs)
     print_extents: bool, // with --dump: print the operator's own spawn bbox for --map and exit (work-item 206)
     spells: bool, // with --dbc: import Spell.dbc → game_spell/game_spell_effect (see spell.rs)
@@ -4608,9 +4607,9 @@ fn main() -> Result<()> {
         return vmap::run(&args);
     }
 
-    // `--go-models` → #112: DOOR/BUTTON display → M2 bounding-mesh extract + import (see
-    // go_model.rs). Reads `--dump` itself (`parse_args` requires both), so it dispatches before
-    // the cmangos ETL pass below consumes `args.dump`.
+    // `--go-models` → DOOR/BUTTON display → M2 bounding-mesh extract + import (see go_model.rs).
+    // Reads `--dump` itself (`parse_args` requires both), so it dispatches before the cmangos ETL
+    // pass below consumes `args.dump`.
     if args.go_models.is_some() {
         return go_model::run(&args);
     }

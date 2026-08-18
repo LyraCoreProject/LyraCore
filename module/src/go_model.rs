@@ -1,10 +1,9 @@
-//! Module-private store for DOOR/BUTTON collision meshes (issue #112, part of #103's dynamic
-//! GameObject-collision epic). `importer --go-models` resolves each DOOR/BUTTON
-//! `gameobject_template.display_id` to an M2 bounding mesh, pre-applies the MDDF axis shuffle
-//! (`importer/src/go_model.rs::shuffle`), and packs the result into local-space triangles via
-//! `lyracore_shared::vmap`'s per-triangle codec. This table only STORES that local-space
+//! Module-private store for DOOR/BUTTON collision meshes. `importer --go-models` resolves each
+//! DOOR/BUTTON `gameobject_template.display_id` to an M2 bounding mesh, pre-applies the MDDF axis
+//! shuffle (`importer/src/go_model.rs::shuffle`), and packs the result into local-space triangles
+//! via `lyracore_shared::vmap`'s per-triangle codec. This table only STORES that local-space
 //! geometry — the state-gated ray merge that CONSUMES it (per-spawn world transform,
-//! liveness/open-state gating against `game_gameobject`) is #113's `game_go_collider` registry.
+//! liveness/open-state gating against `game_gameobject`) is the `game_go_collider` registry.
 //!
 //! PRIVATE — no gateway binding needed (`docs/danger-zones.md` §1: "a table binding is only
 //! needed if the gateway subscribes to or reads that table" — nothing outside this module does
@@ -18,8 +17,8 @@ pub struct GoModel {
     pub entry: u32,
     /// `gameobject_template.size` (render/collision scale), carried verbatim from the dump.
     pub scale: f32,
-    /// Local-space bounding-sphere radius of the shuffled mesh — the cheap segment-reject #113's
-    /// ray merge needs before decoding + transforming the full triangle blob.
+    /// Local-space bounding-sphere radius of the shuffled mesh — the cheap segment-reject the
+    /// ray merge needs before decoding and transforming the full triangle blob.
     pub radius: f32,
     /// `lyracore_shared::vmap`-codec local-space triangles. The class tag the codec carries is
     /// unused here — a door's dynamic-ray participation is decided per `game_gameobject` row
