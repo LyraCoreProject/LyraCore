@@ -726,6 +726,10 @@ fn advance_legs<W: MotionSink>(w: &mut W, tick: &TickContext) -> usize {
 /// zero-length and the client rejects it, so the cursor advance is the whole move.
 const WAYPOINT_ARRIVE_YD: f32 = 0.5;
 
+/// Above this a patrol leg is a creature dragged off its route by combat, not an ordinary hop
+/// between waypoints. (40 yd)². Below it one leg walks the segment; above it, bounded steps.
+const PATROL_DISPLACED_SQ: f32 = 1600.0;
+
 /// The hop a wander stroll is sized for: this phase only rolls on a sense firing, so the leg must
 /// span the whole ~4s sense cadence, not one movement firing.
 /// ponytail: a schedule row slower than half the sense period senses on EVERY firing, so its
@@ -768,25 +772,45 @@ fn patrol<W: IdleSink + MotionSink>(w: &mut W, tick: &TickContext, active: &Hash
         }
         route.sort_unstable_by_key(|wp| wp.id);
         let points: Vec<(f32, f32)> = route.iter().map(|wp| (wp.at.x, wp.at.y)).collect();
-        let next = match route.iter().position(|wp| wp.id == c.wp_target) {
+        // Keep aiming at the cursor's waypoint until it is reached, so a displaced creature walks
+        // toward it over many firings. Reached, unset or stale advances to the next in route order.
+        let cur = route.iter().position(|wp| wp.id == c.wp_target);
+        let next = match cur {
+            Some(i) if dist_sq(route[i].at, c.at) >= WAYPOINT_ARRIVE_YD * WAYPOINT_ARRIVE_YD => i,
             Some(i) => next_waypoint_idx(i, route.len()),
             None => nearest_waypoint_idx(c.at.x, c.at.y, &points),
         };
         let wp = route[next];
         w.aim_at_waypoint(c.guid, wp.id);
         let (dx, dy, dz) = (wp.at.x - c.at.x, wp.at.y - c.at.y, wp.at.z - c.at.z);
-        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-        if dist < WAYPOINT_ARRIVE_YD {
+        let dist_sq = dx * dx + dy * dy + dz * dz;
+        if dist_sq < WAYPOINT_ARRIVE_YD * WAYPOINT_ARRIVE_YD {
             continue; // already there — next firing walks to the one after it
         }
-        // ponytail: the flat WALK speed, alone among the movers — a snare should slow a patroller
-        // and does not. Pre-cycle behavior, carried verbatim.
-        let leg = Leg {
-            to: (wp.at.x, wp.at.y),
-            z_fallback: wp.at.z,
-            dur_ms: (dist / constants::speeds::WALK * 1000.0) as u32,
-            gait: Gait::Walk,
-            hold_until_landed: true,
+        let leg = if dist_sq <= PATROL_DISPLACED_SQ {
+            // Flat WALK speed, so a snare does not slow a patroller. Pre-cycle behavior.
+            Leg {
+                to: (wp.at.x, wp.at.y),
+                z_fallback: wp.at.z,
+                dur_ms: (dist_sq.sqrt() / constants::speeds::WALK * 1000.0) as u32,
+                gait: Gait::Walk,
+                hold_until_landed: true,
+            }
+        } else {
+            // Badly displaced: step toward the waypoint one tick at a time, ground-snapped per
+            // leg like `walk_home`, so the creature no longer slides home through terrain.
+            let walk = constants::speeds::WALK;
+            let step = w.navigate(c.guid, (wp.at.x, wp.at.y), walk * tick.tick_secs);
+            let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, walk) else {
+                continue; // nothing to close — the client rejects a zero-length leg
+            };
+            Leg {
+                to: (x, y),
+                z_fallback: wp.at.z,
+                dur_ms,
+                gait: Gait::Walk,
+                hold_until_landed: false,
+            }
         };
         w.commit_leg(c.guid, leg, tick.now_ms);
     }

@@ -2,15 +2,10 @@
 
 In this project we focus on building complex things as simple as possible. We love to find ways to reduce complexity when solving problems.
 
-## Coding preferences - general
+## Coding standards
 
-- Keep things simple. Channel "yagni" energy unless told otherwise.
-- Typesafety is useful, take advantage of it.
-- Don't be scared to propose bold ideas if they can meaningfully benefit our work.
-- Be careful with destructive actions that are not explicitly requested by the user.
-- Tests are good! Endless smoke tests, "regression tests" for feature deletions, etc, much less good. Tests should be focused, not slop.
-- Comments are a great way to clarify functionality and how code is used. Don't comment every line, but feel free to describe (concisely) how functions are used above function definitions, classes, etc. Do not put issue numbers in comments.
-- Keep comments up to date! When making changes, it's important to keep things in sync.
+- Before implementing, refactoring, or reviewing code, read `CODING_STANDARDS.md`. Apply it to
+  changed code without churning unrelated legacy code.
 
 ## Domain language
 

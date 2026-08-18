@@ -1517,6 +1517,64 @@ fn a_patrolling_creature_walks_the_next_segment_of_its_route() {
 }
 
 #[test]
+fn a_badly_displaced_patroller_steps_toward_its_waypoint_one_firing_at_a_time() {
+    // Combat dragged the wolf 300 yd off its route while it was already walking to waypoint 2.
+    let route = [(1, p(5.0, 5.0, 10.0)), (2, p(0.0, 0.0, 10.0))];
+    let mut w = Scenario::new(HALF_WAY)
+        .creature(WOLF, p(0.0, 300.0, 10.0))
+        .awake([WOLF])
+        .route(WOLF, &route)
+        .walking_to(WOLF, 2);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    let effect = w.effects()[0];
+    assert_eq!(
+        (effect.dest, effect.run, effect.dur_ms),
+        (p(0.0, 298.75, 10.0), false, 500),
+        "a badly displaced patroller must walk ONE firing's worth toward its waypoint; a \
+         whole-distance leg slides it home through terrain over minutes"
+    );
+    assert_eq!(
+        (w.at(WOLF).wp_target, w.at(WOLF).leg_ends_ms),
+        (2, 0),
+        "the cursor must stay on the same waypoint and the leg must NOT be held to completion, or \
+         the next firing cannot re-derive the step from the creature's new position"
+    );
+}
+
+#[test]
+fn a_displaced_patroller_converges_then_resumes_ordinary_patrolling() {
+    // Just past the displaced threshold: one stepped firing closes enough of the gap that the next
+    // one falls back to an ordinary, held-to-completion leg straight to the waypoint.
+    let route = [(1, p(5.0, 5.0, 10.0)), (2, p(0.0, 0.0, 10.0))];
+    let mut w = Scenario::new(HALF_WAY)
+        .creature(WOLF, p(0.0, 41.0, 10.0))
+        .awake([WOLF])
+        .route(WOLF, &route)
+        .walking_to(WOLF, 2);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+    w.advance_clock(500_000); // the stepped leg's own duration — it has landed
+
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.effects()[0].dest,
+        p(0.0, 39.75, 10.0),
+        "the first firing must still be a bounded step, not a leap to the waypoint"
+    );
+    let now_ms = (HALF_WAY / 1000) as u32 + 500;
+    assert_eq!(
+        (w.effects()[1].dest, w.effects()[1].dur_ms, w.at(WOLF).leg_ends_ms),
+        (p(0.0, 0.0, 10.0), 15900, now_ms + 15900),
+        "once close enough, patrolling must resume the ordinary single-leg-held-to-completion shape \
+         and carry the creature the rest of the way to its waypoint"
+    );
+}
+
+#[test]
 fn a_patroller_outside_every_active_cell_stays_frozen_on_its_route() {
     let route = [(1, p(0.0, 0.0, 10.0)), (2, p(10.0, 0.0, 10.0))];
     let mut w = Scenario::new(HALF_WAY)

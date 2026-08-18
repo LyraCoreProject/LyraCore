@@ -69,6 +69,22 @@ The ray output must identify an expected WMO hit (`los` and `collision`), and th
 report a model `floor_z` selected over the terrain ground where those heights differ. Repeat the
 same probes directly against `lyracore-instances`' active map-0 generation.
 
+Also probe the indoor answer, which gameplay rules such as the land-mount refusal and the indoor
+dismount read:
+
+```bash
+spacetime call --server "$SPACETIME_SERVER" lyracore -- debug_vmap_area_info 0 <x> <y> <z>
+```
+
+Pick one point inside a WMO interior and one in the open world nearby. The interior must report a
+group id with `indoor` true; the open-world point must report no group.
+
+**A generation verified before the indoor-presence table existed carries no marker rows.**
+`game_vmap_indoor_cell` is written only inside `verify_vmap_generation`, and a missing row means
+outdoors, so an older generation answers `indoor` false everywhere and every indoor rule stays
+inactive on it. Run `verify_vmap_generation` on the generation again, or import the vmap data again,
+before recording indoor evidence.
+
 ## Client acceptance and gate decision
 
 1. A human reviewer must approve the completed generation/probe evidence and an approved

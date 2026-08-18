@@ -1004,6 +1004,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
                              // from init), the same divergence-hazard shape #85 fixed for items/faction — see
                              // `seed::fixtures::seed_stealth_fixture`'s doc.
     seed_stealth_fixture(ctx); // Stealth (1784) — A_STEALTH presence marker
+    seed_mount_fixture(ctx); // Test Riding Horse (50310) + Test Dazed (50311) + the Riding skill data
 
     // Enchant / Disenchant — the ITEM-target enchanting spells. These never run through
     // resolve_cast (they target an item GUID, not a unit); the GATEWAY intercepts CMSG_CAST_SPELL, reads
@@ -1187,9 +1188,9 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     // cost/cooldown/cast-time (matches the pre-#387 hardcoded path's IMMEDIATE-teleport behavior — the
     // vanilla ~10s cast + 1hr CD is a later follow-up, same as Blink's forward-teleport). Wired onto the
     // Hearthstone template's spellid_1 below (bonding BIND_ON_PICKUP) — `apply_item_use` reads it as
-    // ANY other on-use spell now, with ONE data-driven exception: `spell_is_recall_home` (keyed on THIS
+    // ANY other on-use spell now, with one data-driven exception: `spell_keeps_item` (keyed on THIS
     // effect kind, not the item's entry id) skips the stack-consumption every other on-use spell takes,
-    // since a recall trinket is never used up.
+    // since a recall trinket is never used up. A mount item qualifies through the same predicate.
     ctx.db.game_spell().insert(Spell {
         gcd_ms: 0, // item-triggered: no GCD
         ..base_spell(50119, "Call Stone")
@@ -1879,6 +1880,57 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// COLLISION SAFETY for the land-mount fixture (issue #22). Every id it reserves has to sit in a
+    /// range the world ETL and the DBC import never write, and none may shadow an existing fixture —
+    /// an id that collides silently replaces real imported data on a live shard, or is silently
+    /// replaced by it, and either way the headless mount scenario stops testing what it claims to.
+    #[test]
+    fn the_mount_fixture_ids_stay_inside_the_reserved_ranges() {
+        // Spells: the 50xxx synthetic range, and distinct from each other + the nearby tame fixture.
+        for id in [FIXTURE_MOUNT_SPELL, FIXTURE_DAZED_SPELL] {
+            assert!(
+                (50_000..51_000).contains(&id),
+                "fixture spell {id} is outside the reserved 50xxx synthetic-spell range"
+            );
+        }
+        // Riding trainer markers live in the same range and must not shadow a mount/Dazed spell — a
+        // marker is never resolved as a spell, so a collision would make one of them unreachable.
+        let ids = [
+            FIXTURE_MOUNT_SPELL,
+            FIXTURE_DAZED_SPELL,
+            TEST_TAME_BEAST_SPELL,
+            crate::skill::LEARN_APPRENTICE_RIDING_SPELL_ID,
+            crate::skill::LEARN_JOURNEYMAN_RIDING_SPELL_ID,
+        ];
+        let unique: std::collections::BTreeSet<u32> = ids.iter().copied().collect();
+        assert_eq!(unique.len(), ids.len(), "fixture spell ids collide: {ids:?}");
+
+        // Creature template + item entry: the same reserved families the other fixtures use.
+        assert!(
+            (51_000..52_000).contains(&RIDING_TRAINER_ENTRY),
+            "the riding trainer must use a reserved 51xxx creature entry"
+        );
+        for entry in [TEST_WOLF_ENTRY, PROFESSION_TRAINER_ENTRY, TEST_TAME_BOAR_ENTRY] {
+            assert_ne!(
+                entry, RIDING_TRAINER_ENTRY,
+                "the riding trainer shadows an existing fixture creature"
+            );
+        }
+        let items = [FIXTURE_BLADE, FIXTURE_JERKY, FIXTURE_REINS];
+        for entry in items {
+            assert!(
+                entry >= 5_090_000,
+                "fixture item {entry} is outside the reserved 509xxxx entry range"
+            );
+        }
+        let unique_items: std::collections::BTreeSet<u32> = items.iter().copied().collect();
+        assert_eq!(
+            unique_items.len(),
+            items.len(),
+            "fixture item entries collide: {items:?}"
+        );
     }
 
     /// REACHABILITY, which is idempotence's other half. `init` does not re-run on an auto-migrate

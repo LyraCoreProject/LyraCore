@@ -326,6 +326,9 @@ pub fn debug_spawn_player_entity(ctx: &ReducerContext, character_guid: u64) -> R
     let entity = crate::build_player_entity(ctx, &character, character.owner_identity);
     let (level, max_health) = (entity.level, entity.max_health);
     entities.insert(entity);
+    // Same rebuild contract as `player_login`: a land mount lives in the aura set, so a materialize
+    // must re-derive the display and mounted speed rather than resurrect the rider on foot.
+    crate::mount::restore_mount_on_rebuild(ctx, character_guid);
     log::info!(
         "debug_spawn_player_entity: materialized player guid {character_guid} (lvl {level}, hp {max_health})"
     );

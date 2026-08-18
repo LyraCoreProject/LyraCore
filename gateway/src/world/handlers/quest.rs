@@ -413,7 +413,8 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
         }
         // Chose the reward → the module grants money/XP/items (gated on completion). The durable
         // turn-in is requested BEFORE any outbound is built, so a refused turn-in can never show a
-        // "Quest Complete" popup for rewards the player did not get.
+        // "Quest Complete" popup for rewards the player did not get. A refusal instead re-opens
+        // the current offer when its details remain readable, so the player can correct the choice.
         ClientOpcodeMessage::CMSG_QUESTGIVER_CHOOSE_REWARD(c) => {
             match store.turn_in_quest(
                 player.account_id,
@@ -438,11 +439,19 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
                     if classify_quest_action_error(&e) == QuestActionErrorClass::GameplayRefusal =>
                 {
                     log::debug!(
-                        "world: turn_in_quest ignored (account {}): {e}",
-                        player.account_id
+                        "world: turn_in_quest refused (quest {}, reward index {}): {e}",
+                        c.quest_id,
+                        c.reward
                     );
                     Ok(QuestActionOutcome::Handled {
-                        outbound: Vec::new(),
+                        outbound: match store.quest_detail_view(c.quest_id)? {
+                            Some(detail) => vec![Outbound::One(
+                                ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(Box::new(
+                                    codec::build_offer_reward(c.guid.guid(), &detail),
+                                )),
+                            )],
+                            None => Vec::new(),
+                        },
                     })
                 }
                 Err(e) => Err(e),
@@ -1440,7 +1449,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_turn_in_answers_nothing_and_never_claims_completion() {
+    fn a_refused_turn_in_reoffers_the_reward_without_claiming_completion() {
         let actions = InMemoryQuestActions {
             turn_in_error: Some("quest objectives are not complete".into()),
             ..rewarded_turn_in()
@@ -1448,11 +1457,31 @@ mod tests {
 
         let batch = outbound(dispatch_quest_action(&actions, player(), choose_reward(2)).unwrap());
 
-        assert!(batch.is_empty(), "a refusal must not send a completion popup");
-        // The refusal stopped before the popup's detail read, so nothing was built at all.
+        assert!(matches!(
+            batch.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(r))]
+                if r.npc == Guid::new(GIVER) && r.quest_id == QUEST
+        ));
         assert_eq!(
             actions.turn_in_calls.lock().unwrap().as_slice(),
-            &[turn_in_of(2)]
+            &[turn_in_of(2), TurnInCall::Detail(QUEST)]
+        );
+    }
+
+    #[test]
+    fn a_refused_turn_in_with_unreadable_details_answers_nothing() {
+        let actions = InMemoryQuestActions {
+            details: Vec::new(),
+            turn_in_error: Some("reward choice is no longer valid".into()),
+            ..one_quest(codec::ROLE_END, true, true)
+        };
+
+        let batch = outbound(dispatch_quest_action(&actions, player(), choose_reward(2)).unwrap());
+
+        assert!(batch.is_empty());
+        assert_eq!(
+            actions.turn_in_calls.lock().unwrap().as_slice(),
+            &[turn_in_of(2), TurnInCall::Detail(QUEST)]
         );
     }
 

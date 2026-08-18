@@ -406,6 +406,13 @@ pub trait WorldStore:
         spell_id: u32,
     ) -> Result<()>;
 
+    /// The skill line a trainer offering teaches (`game_trainer_spell.learn_skill_line`), or 0 for an
+    /// ordinary spell offering. The buy path reads it to tell a SKILL purchase from a SPELL purchase:
+    /// a riding offering's id is a marker with no Spell.dbc row, so echoing it as a learned spell would
+    /// push the client something it cannot resolve. 0 on any missing read (fail toward the spell echo,
+    /// which is the pre-existing behaviour).
+    fn trainer_offer_skill_line(&self, trainer_guid: u64, spell_id: u32) -> u32;
+
     /// Return the `grant_spell_id` for `talent_id` (0 = passive, no ability granted), so the gateway
     /// can push `SMSG_LEARNED_SPELL` for ability talents after a successful `learn_talent`.
     fn talent_grant_spell(&self, talent_id: u32) -> u32;

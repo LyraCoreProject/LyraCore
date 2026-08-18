@@ -142,10 +142,14 @@ pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
 pub(crate) fn stop_duel_combat(ctx: &ReducerContext, first_guid: u64, second_guid: u64) {
     let melee = ctx.db.game_melee_attack();
     for attacker_guid in [first_guid, second_guid] {
-        if melee.attacker_guid().find(attacker_guid).is_some_and(|attack| {
-            (attacker_guid == first_guid && attack.target_guid == second_guid)
-                || (attacker_guid == second_guid && attack.target_guid == first_guid)
-        }) {
+        if melee
+            .attacker_guid()
+            .find(attacker_guid)
+            .is_some_and(|attack| {
+                (attacker_guid == first_guid && attack.target_guid == second_guid)
+                    || (attacker_guid == second_guid && attack.target_guid == first_guid)
+            })
+        {
             melee.attacker_guid().delete(attacker_guid);
         }
     }
@@ -502,6 +506,11 @@ pub(crate) fn apply_start_attack(
     }
     validate_attack_target(ctx, &attacker, target_guid)?;
 
+    // LAND-MOUNT dismount (22): an ACCEPTED attack start drops the attacker's mount BEFORE the
+    // engagement is armed. Every rejection above returned already, so an invalid attack packet leaves
+    // the mount up. No-op for an unmounted attacker, and idempotent on a re-target.
+    crate::mount::dismount(ctx, attacker.guid);
+
     // Arm the engagement (the tick gates each swing on range + timer). Re-arming retargets.
     let melee = ctx.db.game_melee_attack();
     let row = MeleeAttack {
@@ -599,6 +608,9 @@ pub(crate) fn apply_start_ranged_attack(
             return Err("no ammo for ranged weapon".to_string());
         }
     }
+    // LAND-MOUNT dismount (22): the ranged twin of the melee hook — after the last activation gate,
+    // before the engagement is armed, so a refused activation leaves the mount up.
+    crate::mount::dismount(ctx, attacker.guid);
     // Initial-shot wind-up (097): a ranged auto-attack must NOT fire instantly on activation — vanilla's
     // Auto Shot has a ~0.5s cast before the first shot (the user: "we shoot right away, no waiting for the
     // attack timer"). `last_swing_ms == 0` would make the swing tick fire THIS tick; instead seed it so the

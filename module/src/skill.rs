@@ -80,6 +80,11 @@ pub mod skill_line {
     // IDs so the importer's LockType→SkillLine map (`importer/src/dbc.rs`) has ONE source of truth to
     // cite in its doc comment rather than a bare magic number.
     pub const LOCKPICKING: u32 = 633;
+    /// Riding — the mount line. Neither a profession nor a combat line: its rank is a TRAINED TIER
+    /// (Apprentice 75, Journeyman 150) granted whole by a `trainer_type::MOUNTS` trainer, never climbed
+    /// by use and never derived from level. Aliased from the shared crate because the gateway reads the
+    /// same id to tell a riding offering from a spell offering.
+    pub const RIDING: u32 = lyracore_shared::trainer::RIDING_SKILL_LINE;
 }
 
 /// Is `line` one of the 13 player professions (primary/secondary craft + gather lines)? Used to
@@ -531,6 +536,44 @@ pub(crate) fn is_combat_skill_line(line: u32) -> bool {
     )
 }
 
+/// Is `line` the Riding line? Its own third taxonomy alongside `is_combat_skill_line` and
+/// `is_profession_line`, because riding is granted WHOLE at a purchased tier: not level-derived like a
+/// weapon line, and not born at 1 and climbed like a profession. `trainer::apply_trainer_buy` forks on
+/// this to pick `learn_riding` over `learn_profession`.
+pub(crate) fn is_riding_skill_line(line: u32) -> bool {
+    line == skill_line::RIDING
+}
+
+/// Grant Riding at `rank` (75 Apprentice, 150 Journeyman) — the trainer-buy grant for a MOUNTS offering.
+/// Both `current` and `max_rank` become the purchased tier, because the mount gate compares the CURRENT
+/// rank against the mount's `min_skill`; a profession's born-at-1 shape would leave a paying rider unable
+/// to mount. Idempotent, and never lowers a higher tier, so a re-buy or an out-of-order buy cannot demote
+/// a Journeyman rider. [entity]
+pub(crate) fn learn_riding(ctx: &ReducerContext, guid: u64, owner: Identity, rank: u16) {
+    let skills = ctx.db.game_player_skill();
+    if let Some(mut row) = skills
+        .by_character()
+        .filter(&guid)
+        .find(|s| s.skill_line == skill_line::RIDING)
+    {
+        let tier = raised_cap(row.max_rank, rank).max(row.current);
+        if tier != row.max_rank || tier != row.current {
+            row.max_rank = tier;
+            row.current = tier;
+            skills.id().update(row);
+        }
+    } else {
+        skills.insert(PlayerSkill {
+            id: 0, // auto_inc
+            character_guid: guid,
+            owner_identity: owner,
+            skill_line: skill_line::RIDING,
+            current: rank,
+            max_rank: rank,
+        });
+    }
+}
+
 /// Raise every COMBAT-line row's `max_rank` to `level*5` for `guid` — never LOWERS it (a future
 /// +weapon-skill racial/item bonus could already exceed it) and never touches `current` (that lag IS the
 /// visible skill-up window) or a profession row (guarded by `is_combat_skill_line`). Called from BOTH the
@@ -876,6 +919,73 @@ pub fn debug_learn_weapon_from_trainer(
     crate::trainer::apply_trainer_buy(ctx, character_guid, trainer.guid, spell_id)
 }
 
+/// The synthetic riding-offering marker ids the seeded MOUNTS trainer offers — one per vanilla tier. Same
+/// convention as the profession/weapon markers above (a `game_trainer_spell.spell_id` whose
+/// `learn_skill_line` is set, NEVER resolved as a real spell), but NOT `debug_reducers`-gated: the fixture
+/// seeder reads them in every build, so there is one definition instead of a hand-copied twin in
+/// `seed/fixtures.rs` that could drift. Picked just past the weapon-master markers (50130/50131).
+pub(crate) const LEARN_APPRENTICE_RIDING_SPELL_ID: u32 = 50132;
+pub(crate) const LEARN_JOURNEYMAN_RIDING_SPELL_ID: u32 = 50133;
+
+/// The tier a riding marker teaches, or `None` for anything else — the ONE mapping shared by the fixture
+/// seeder (which writes each offering's `learn_skill_cap`) and the debug trainer lever (which resolves a
+/// requested rank back to its marker). Pure, so the two can never disagree about what 50132 costs you.
+pub(crate) fn riding_marker_rank(spell_id: u32) -> Option<u16> {
+    match spell_id {
+        LEARN_APPRENTICE_RIDING_SPELL_ID => Some(75),
+        LEARN_JOURNEYMAN_RIDING_SPELL_ID => Some(150),
+        _ => None,
+    }
+}
+
+/// Grant Riding at `rank` directly — the headless lever for scenarios that need a trained rider without
+/// walking to a trainer (`debug_set_skill` cannot serve: it clamps to `level*5`, so a level-1 character
+/// could never hold riding 75). The trainer path has its own coverage; this one seeds the skill row. [entity]
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_learn_riding(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    rank: u32,
+) -> Result<(), String> {
+    let entity = crate::helpers::live_entity(ctx, character_guid)?;
+    let rank = u16::try_from(rank).unwrap_or(u16::MAX);
+    learn_riding(ctx, character_guid, entity.owner_identity, rank);
+    spacetimedb::log::info!("debug_learn_riding: guid={character_guid} riding -> {rank}");
+    Ok(())
+}
+
+/// DRIVE the real trainer-buy branch for RIDING without the trainer-window UI — the riding twin of
+/// `debug_learn_profession_from_trainer` / `debug_learn_weapon_from_trainer` above, same shape: the
+/// requested `rank` (75 Apprentice / 150 Journeyman) maps to its marker spell id, the nearest live TRAINER
+/// creature on the learner's map is resolved SERVER-SIDE (the trainer's own guid is a u64 > 2^53 the CLI
+/// `spacetime call` mangles), then funnels through the SAME `trainer::apply_trainer_buy` — exercising the
+/// identical range/flag gate, the MOUNTS-trainer check, `trainer_buy_check`, and the `learn_riding` grant
+/// the CMSG-routed buy would. The trainer must offer that marker (the seeded riding-trainer fixture) or
+/// the buy returns "[0] trainer does not teach that spell".
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_learn_riding_from_trainer(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    rank: u32,
+) -> Result<(), String> {
+    let spell_id = match rank {
+        75 => LEARN_APPRENTICE_RIDING_SPELL_ID,
+        150 => LEARN_JOURNEYMAN_RIDING_SPELL_ID,
+        _ => return Err(format!("no riding offering at rank {rank} (75 or 150)")),
+    };
+    let player = crate::helpers::live_entity(ctx, character_guid)
+        .map_err(|_| format!("learner {character_guid} not in world"))?;
+    let trainer = crate::helpers::nearest_entity(ctx, &player, |e| {
+        !e.is_player()
+            && !e.dead
+            && e.npc_flags & lyracore_shared::constants::npc_flags::TRAINER != 0
+    })
+    .ok_or_else(|| "no live trainer near learner".to_string())?;
+    crate::trainer::apply_trainer_buy(ctx, character_guid, trainer.guid, spell_id)
+}
+
 /// The weapon skill lines a player of `class` is proficient with at character creation (vanilla
 /// `playercreateinfo_spell` / SkillLine.dbc). Only returns melee/ranged lines that have a tracked
 /// `skill_line::*` constant (UNARMED and DEFENSE are seeded unconditionally; wands/thrown/bow/gun/
@@ -1069,6 +1179,49 @@ pub fn debug_reseed_skills(ctx: &ReducerContext, character_guid: u64) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Riding is its OWN taxonomy: not a combat line (so a ding never lifts it to level*5) and not a
+    /// profession (so it is never born at 1 and climbed by use). If it leaked into either, a rider would
+    /// silently lose or gain rank without visiting a trainer.
+    #[test]
+    fn riding_is_neither_a_combat_line_nor_a_profession() {
+        assert_eq!(skill_line::RIDING, 762, "verbatim SkillLine.dbc id");
+        assert!(is_riding_skill_line(skill_line::RIDING));
+
+        assert!(!is_combat_skill_line(skill_line::RIDING));
+        assert!(!is_profession_line(skill_line::RIDING));
+        for line in [
+            skill_line::SWORD_1H,
+            skill_line::DEFENSE,
+            skill_line::COOKING,
+        ] {
+            assert!(!is_riding_skill_line(line), "line {line} is not riding");
+        }
+    }
+
+    /// The riding markers and the tiers they teach. One mapping feeds both the fixture seeder (which
+    /// writes each offering's `learn_skill_cap`) and the debug trainer lever, so the two cannot disagree
+    /// about what a purchase grants. The two tiers are vanilla's 75 (Apprentice) and 150 (Journeyman).
+    #[test]
+    fn riding_markers_map_to_the_two_vanilla_tiers() {
+        assert_eq!(
+            riding_marker_rank(LEARN_APPRENTICE_RIDING_SPELL_ID),
+            Some(75)
+        );
+        assert_eq!(
+            riding_marker_rank(LEARN_JOURNEYMAN_RIDING_SPELL_ID),
+            Some(150)
+        );
+        assert_eq!(
+            riding_marker_rank(2050),
+            None,
+            "a real spell id is no marker"
+        );
+        assert_ne!(
+            LEARN_APPRENTICE_RIDING_SPELL_ID, LEARN_JOURNEYMAN_RIDING_SPELL_ID,
+            "two tiers need two marker ids or one offering shadows the other"
+        );
+    }
 
     #[test]
     fn skill_line_ids_are_the_verbatim_vanilla_dbc_values() {

@@ -261,6 +261,9 @@ mod faction;
 mod gameobject;
 mod gc;
 mod gm;
+// Module-private DOOR/BUTTON collision-mesh store: the import reducers `--go-models` calls.
+// Consumption (the state-gated ray merge) is the `game_go_collider` registry.
+mod go_model;
 // Graveyard resolution (work-item 209/226): the death-release subsystem `world::do_repop` calls to
 // pick where a ghost teleports. Extracted from `world.rs` (issue #385).
 mod graveyard;
@@ -287,6 +290,9 @@ mod mail_escrow;
 /// `movement_update` writes, and the 20 Hz `publish_motion` tick that drains it into the public
 /// `game_entity_motion` relay in one transaction.
 mod motion;
+/// Land mounts: the `A_MOUNTED` state model, the `mount_display_id` projection, and the one shared
+/// idempotent dismount every removal path converges on.
+mod mount;
 pub mod nav;
 mod professions;
 /// Deploy-safety tripwire (#223): source-scans `scripts/**` + `tools/**` for a destructive
