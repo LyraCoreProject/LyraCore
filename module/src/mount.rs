@@ -3,9 +3,10 @@
 //! that aura set for the client's `UNIT_FIELD_MOUNTDISPLAYID`, never a second state machine.
 //!
 //! The module has no single aura-deletion boundary — auras are removed by `do_cancel_aura`, the
-//! expiry reap, dispel and the spellbook unlearn path. Rather than teach each of those to undo a
-//! mount, every one of them converges on [`recompute_mount`], which RE-DERIVES the projection from
-//! whatever aura rows remain. That is the same collect-a-predicate-then-recompute shape the crate
+//! expiry reap, dispel, the spellbook unlearn path and the death shed. Rather than teach each of
+//! those to undo a mount, every one of them converges on [`recompute_mount`], which RE-DERIVES the
+//! projection from whatever aura rows remain. That is the same collect-a-predicate-then-recompute
+//! shape the crate
 //! already uses for `aura_moves_vitals` + `recompute_vitals`, and it is what makes every dismount
 //! trigger idempotent by construction: running it twice, or on an unmounted player, converges on the
 //! same state and writes nothing the second time.
@@ -98,8 +99,8 @@ pub(crate) fn recompute_mount(ctx: &ReducerContext, guid: u64) {
 /// unconditionally, and calling it twice changes nothing the second time.
 ///
 /// Every dismount trigger routes here: `E_DISMOUNT` resolution, mount replacement, and the accepted
-/// action / indoor-transition hooks. Manual `CMSG_CANCEL_AURA` and natural expiry reach the same end
-/// state through ordinary aura removal plus [`recompute_mount`].
+/// action / indoor-transition hooks. Manual `CMSG_CANCEL_AURA`, natural expiry and DEATH reach the same
+/// end state through ordinary aura removal plus [`recompute_mount`].
 pub(crate) fn dismount(ctx: &ReducerContext, guid: u64) {
     if crate::taxi::is_in_flight(ctx, guid) {
         return;
@@ -419,6 +420,41 @@ mod tests {
              projection afterwards, or right-clicking the mount buff off leaves a stuck model. \
              Body was:\n{cancel}"
         );
+    }
+
+    /// DEATH DISMOUNTS. A rider who dies must come off the horse, and does so without any
+    /// mount-specific code in the death path: `kill_player` sheds the auras vanilla removes on death,
+    /// the mount aura is an ordinary cancelable one so it goes with them, and the shed collects
+    /// [`mount_aura_moves_mount`] and converges on [`recompute_mount`] — which clears BOTH halves of
+    /// the projection, the display and the folded run speed. The END STATE is asserted directly on the
+    /// pure projection above (an aura set with no `A_MOUNTED` row projects display 0); this pins the
+    /// chain that gets there, since the crate has no `ReducerContext` harness.
+    #[test]
+    fn a_dead_rider_is_dismounted_by_the_death_shed() {
+        let death = crate::test_scan::code_of(
+            include_str!("combat/death.rs"),
+            "pub(crate) fn kill_player(",
+        );
+        assert!(
+            death.contains("crate::spell::remove_auras_on_death(ctx, victim_guid)"),
+            "`kill_player` must shed the dying player's auras — without it a corpse keeps riding. \
+             Body was:\n{death}"
+        );
+        let shed = crate::test_scan::code_of(
+            include_str!("spell/control.rs"),
+            "pub(crate) fn remove_auras_on_death(",
+        );
+        assert!(
+            shed.contains("crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0)")
+                && shed.contains("crate::mount::recompute_mount(ctx, unit_guid);"),
+            "the death shed must collect the mount predicate while deleting and recompute the \
+             projection afterwards, or a dead rider keeps a stuck mount display and mounted run \
+             speed. Body was:\n{shed}"
+        );
+        // The end state the chain converges on: no mount aura left → display 0 (and, through the same
+        // recompute, the unmounted run-speed multiplier).
+        let after_death: [(u8, i32); 0] = [];
+        assert_eq!(projected_mount_display(after_death), 0);
     }
 
     /// The apply half: `aura_apply` is the single `game_aura` insertion boundary, so a mount becomes
@@ -873,10 +909,10 @@ mod tests {
             ),
             (
                 "module/src/spell/control.rs",
-                2,
+                3,
                 "break_auras_on_damage (ordinary damage must NOT dismount — the mount's DBC \
-                 interrupt bit is underwater-cancel, not break-on-damage) and break_channel \
-                 (A_PERIODIC_TRIGGER rows only)",
+                 interrupt bit is underwater-cancel, not break-on-damage), break_channel \
+                 (A_PERIODIC_TRIGGER rows only), and remove_auras_on_death — wired",
             ),
             (
                 "module/src/spell/effects.rs",
