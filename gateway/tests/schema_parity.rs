@@ -690,6 +690,7 @@ parity_test!(parity_game_spell_cast_event, "game_spell_cast_event", lyracore_mod
     id, caster_guid, spell_id, created_at, target_guid, cast_time_ms, is_completion, damage,
     school, is_crit, resisted, absorbed, is_interrupted, cooldown_ms, delay_ms, healed,
     is_proc_log, swing_hit_info, client_initiated, map_id, instance_id, grid_x, grid_y,
+    failure_reason,
 });
 parity_test!(parity_game_spell_impact_event, "game_spell_impact_event", lyracore_module::SpellImpactEvent, bindings::spell_impact_event_type::SpellImpactEvent, {
     id, caster_guid, target_guid, spell_id, created_at, damage, school, is_crit, resisted,

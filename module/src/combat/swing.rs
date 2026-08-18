@@ -645,9 +645,12 @@ fn fire_melee_swing(
     let queued_spell = attacker.next_swing_spell;
     // 114: the cost was VALIDATED at press but is CHARGED here, when the spell actually fires
     // (vanilla defers the rage deduction to the swing; a MISSED swing still charges — the spell
-    // cast and missed). FIZZLE: rage fell below cost between press and swing (out-of-combat
-    // drain) → the strike doesn't fire, the swing stays a plain white swing, and the queue is
-    // cleared below; an is_interrupted row tells the caster's client to release the lit button.
+    // cast and missed). FIZZLE: rage fell below cost between press and swing (a Battle Shout in
+    // between) → the strike doesn't fire, power is left alone, the swing stays a plain white swing,
+    // and the queue is cleared below. The fizzle row carries CAST_FAIL_NO_POWER, so the caster gets
+    // the cast-bar teardown AND a failed cast result naming the queued spell (vanilla's
+    // SendInterrupted + SendCastResult pair). The teardown alone left the 1.12 client holding the
+    // ability as its current melee spell: the button stayed lit and refused every later press.
     let mut swing_is_spell = false;
     if queued_spell != 0 && attacker.is_player() {
         let cost = ctx
@@ -665,7 +668,8 @@ fn fire_melee_swing(
                 swing_is_spell = true;
             } else {
                 ctx.db.game_spell_cast_event().insert(SpellCastEvent {
-                    is_interrupted: true, // SMSG_SPELL_FAILURE → the caster's button releases
+                    is_interrupted: true, // SMSG_SPELL_FAILURE → the caster's cast bar tears down
+                    failure_reason: crate::spell::CAST_FAIL_NO_POWER, // → "Not enough rage"
                     ..SpellCastEvent::signal_at(ctx, attacker, queued_spell)
                 });
             }

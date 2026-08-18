@@ -225,6 +225,15 @@ crate::character_owned!(transfer, fn sweep_transfer_game_aura(ctx, character_gui
     remint = id,
 });
 
+/// `SpellCastEvent::failure_reason` — our own small taxonomy of WHY a cast failed, carried on an
+/// `is_interrupted` row so the gateway can name the reason to the client. The gateway maps these onto
+/// the vanilla `CastFailureReason` byte; the module holds no wire values. `NONE` means "no concrete
+/// reason", which is the plain cast-bar teardown every existing interruption already sends.
+pub const CAST_FAIL_NONE: u8 = 0;
+/// The caster could not pay the cost. The gateway reports it as `SPELL_FAILED_NO_POWER`
+/// ("Not enough rage"), which is what releases the client's lit on-next-swing button.
+pub const CAST_FAIL_NO_POWER: u8 = 1;
+
 /// A spell cast (the visual). Separate from the aura row so a re-cast always replays the cast
 /// animation/SFX (`SMSG_SPELL_GO`) even when the aura only refreshes its timer. Reaped by the event GC.
 #[table(
@@ -280,9 +289,10 @@ pub struct SpellCastEvent {
     // primary target). Drives the damage log's `absorbed_damage` field ("(N absorbed)"). END-appended + defaulted.
     #[default(0u32)]
     pub absorbed: u32,
-    // True on an INTERRUPT signal row (the victim's mid-cast timed spell was cancelled by direct damage).
-    // The gateway relays SMSG_SPELL_FAILURE{spell, result=Interrupted} to the caster. This is the ONLY
-    // field set on such a row besides caster_guid/spell_id — no cast-START/GO/COOLDOWN sequence. END-appended
+    // True on an INTERRUPT signal row (the victim's mid-cast timed spell was cancelled by direct damage,
+    // or an on-next-swing strike could not pay its cost at the swing). The gateway relays
+    // SMSG_SPELL_FAILURE{spell, result=Interrupted} to the caster, plus the failed cast result when
+    // `failure_reason` names one. Such a row carries no cast-START/GO/COOLDOWN sequence. END-appended
     // + #[default(false)] → additive auto-migration (the publish-migration rule).
     #[default(false)]
     pub is_interrupted: bool,
@@ -345,6 +355,14 @@ pub struct SpellCastEvent {
     pub grid_x: i32,
     #[default(0i32)]
     pub grid_y: i32,
+    // Why this cast failed (`CAST_FAIL_*`), on an `is_interrupted` row. A deferred on-next-swing
+    // strike that cannot pay its cost at the swing carries `CAST_FAIL_NO_POWER`, so the gateway
+    // follows the teardown with a failed SMSG_CAST_RESULT naming the queued spell — without it the
+    // 1.12 client keeps the ability latched as its current melee spell. `CAST_FAIL_NONE` on every
+    // other row keeps the plain teardown. Binding hand-synced (see the delay_ms note above).
+    // END-appended + #[default(0u8)] -> additive auto-migration.
+    #[default(0u8)]
+    pub failure_reason: u8,
 }
 
 impl SpellCastEvent {
@@ -420,6 +438,7 @@ impl SpellCastEvent {
             instance_id,
             grid_x,
             grid_y,
+            failure_reason: CAST_FAIL_NONE,
         }
     }
 }

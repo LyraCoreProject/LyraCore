@@ -1081,6 +1081,20 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
                 ServerOpcodeMessage::SMSG_SPELL_FAILURE(Box::new(m)),
             ));
         }
+        // A row that names a concrete reason (an on-next-swing strike that could not pay its cost at
+        // the swing) follows the teardown with the failed cast result, in vanilla's order
+        // (SendInterrupted then SendCastResult). The client needs BOTH: the teardown closes the cast
+        // bar, the cast result releases the ability it holds as its current melee spell and prints
+        // the red "Not enough rage" line. Caster-private, like the teardown above — the raw encoder,
+        // because the typed SMSG_CAST_RESULT inverts the success/failure semantics.
+        if row.caster_guid == self_guid {
+            if let Some(reason) = codec::cast_failure_reason_for_code(row.failure_reason) {
+                out.push(Outbound::Raw {
+                    opcode: 0x0130,
+                    body: codec::build_cast_result_failed(row.spell_id, reason),
+                });
+            }
+        }
         return out;
     }
     // PUSHBACK signal: a direct hit slid the caster's in-progress timed cast's
@@ -3404,6 +3418,89 @@ mod tests {
             trade_event_outbound(&event(kind::OFFER_SELF, "not|a,valid,payload")).is_empty(),
             "a malformed offer payload must drop the packet"
         );
+    }
+
+    const HEROIC_STRIKE_CASTER: u64 = 7;
+    /// The module's `CAST_FAIL_NO_POWER`.
+    const NO_POWER_CODE: u8 = 1;
+
+    /// An interruption signal row for `spell_id` cast by `HEROIC_STRIKE_CASTER`, carrying
+    /// `failure_reason`. Every other field stays at the module baseline's zero, which is what such a
+    /// row really looks like on the wire.
+    fn interrupted_cast(spell_id: u32, failure_reason: u8) -> SpellCastEvent {
+        SpellCastEvent {
+            id: 1,
+            caster_guid: HEROIC_STRIKE_CASTER,
+            spell_id,
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            target_guid: 0,
+            cast_time_ms: 0,
+            is_completion: false,
+            damage: 0,
+            school: 0,
+            is_crit: false,
+            resisted: 0,
+            absorbed: 0,
+            is_interrupted: true,
+            cooldown_ms: 0,
+            delay_ms: 0,
+            healed: 0,
+            is_proc_log: false,
+            swing_hit_info: 0,
+            client_initiated: false,
+            map_id: 0,
+            instance_id: 0,
+            grid_x: 0,
+            grid_y: 0,
+            failure_reason,
+        }
+    }
+
+    /// A queued strike that could not pay its cost at the swing: the caster gets the cast-bar
+    /// teardown and then the failed cast result naming the queued spell with the vanilla Not Enough
+    /// Power reason (0x4D). No SMSG_SPELL_GO — the strike never fired.
+    #[test]
+    fn a_deferred_power_failure_relays_the_teardown_then_the_failed_cast_result() {
+        let out = cast_event_outbound(HEROIC_STRIKE_CASTER, &interrupted_cast(78, NO_POWER_CODE));
+
+        assert_eq!(out.len(), 2, "expected exactly the two vanilla messages");
+        match &out[0] {
+            Outbound::One(ServerOpcodeMessage::SMSG_SPELL_FAILURE(m)) => {
+                assert_eq!(m.guid.guid(), HEROIC_STRIKE_CASTER);
+                assert_eq!(m.spell, 78);
+            }
+            _ => panic!("expected the interruption teardown first"),
+        }
+        match &out[1] {
+            Outbound::Raw { opcode, body } => {
+                assert_eq!(*opcode, 0x0130);
+                // spell(u32 LE) + CAST_FAILED(0x02) + SPELL_FAILED_NO_POWER(0x4D).
+                assert_eq!(body, &vec![78, 0, 0, 0, 0x02, 0x4D]);
+            }
+            _ => panic!("expected the raw failed cast result second"),
+        }
+    }
+
+    /// The failed cast result is caster-private: a bystander watching the same row gets nothing.
+    #[test]
+    fn a_bystander_sees_neither_half_of_a_deferred_power_failure() {
+        let out = cast_event_outbound(
+            HEROIC_STRIKE_CASTER + 1,
+            &interrupted_cast(78, NO_POWER_CODE),
+        );
+        assert!(out.is_empty(), "both messages are caster-private");
+    }
+
+    /// An interruption with no concrete reason (a damaged mid-cast timed spell) still sends the
+    /// teardown alone — the cast result belongs to a failure the server can name.
+    #[test]
+    fn an_ordinary_interruption_still_sends_the_teardown_alone() {
+        let out = cast_event_outbound(HEROIC_STRIKE_CASTER, &interrupted_cast(133, 0));
+        assert_eq!(out.len(), 1, "expected the teardown alone");
+        assert!(matches!(
+            &out[0],
+            Outbound::One(ServerOpcodeMessage::SMSG_SPELL_FAILURE(_))
+        ));
     }
 
     /// A live-entity row with no pending change; tests clone it and mutate one field at a time.

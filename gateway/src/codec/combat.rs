@@ -165,6 +165,18 @@ pub fn build_cast_result_failed(spell_id: u32, reason: u8) -> Vec<u8> {
     v
 }
 
+/// The 1.12 `CastFailureReason` for a durable cast-failure code
+/// (`game_spell_cast_event.failure_reason`), or `None` when the row names no concrete reason and the
+/// cast-bar teardown stands alone. Codes are LOCKSTEP with the module's `CAST_FAIL_*` taxonomy
+/// (`module/src/spell/tables.rs`); the vanilla byte lives here, with the rest of the protocol.
+pub fn cast_failure_reason_for_code(code: u8) -> Option<u8> {
+    const CAST_FAIL_NO_POWER: u8 = 1;
+    match code {
+        CAST_FAIL_NO_POWER => Some(0x4D), // SPELL_FAILED_NO_POWER — "Not enough rage"
+        _ => None,
+    }
+}
+
 /// Map a module cast-rejection message to the closest 1.12 `CastFailureReason`. The module's
 /// rejections are human strings (not tagged codes), so this is a SUBSTRING map over the stable
 /// phrases in `resolve_cast_at`'s gates — if a gate's wording changes, the worst case is the
