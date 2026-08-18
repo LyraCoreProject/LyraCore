@@ -11,13 +11,10 @@
 # `lyracore import` drives this, and the puller and the class-spell pass, for you. Running this
 # script by hand is the advanced path: several shards, a non-default box, or a second continent.
 #
-# WHAT IT IMPORTS. Creature templates/spawns, quests, loot, vendors and gameobjects for ONE widened
-# box covering ALL of Elwynn + the Goldshire/Eastvale/Westbrook/Fargodeep hubs + the Stormwind
-# approach + ALL of Westfall (Sentinel Hill, the coast, the Deadmines overworld half) — the 1-20
-# levelling corridor. Then terrain, nav, the DBC tables, the full Spell.dbc, the curated class spells
-# and the caster-mob spells. Deliberately GENEROUS — adjacent-zone spillover (Stormwind/Redridge/
-# Duskwood edges) is fine; it's more content and the AOI scopes the per-player relay, so the extra
-# spawns cost a connected client nothing.
+# WHAT IT IMPORTS. Canonical profiles cover the Human, Dwarf/Gnome and Night Elf corridors through
+# the importer's one scope catalogue. The legacy no-profile path retains its historical map-0
+# rectangle. Both paths import creature templates/spawns, quests, loot, vendors, gameobjects,
+# terrain, navigation and the global client/dump catalogues that the destination needs.
 #
 # WHY THE BOX MATTERS (a real regression this box guards against): the 6 Human class trainers are in
 # GOLDSHIRE at x=-9461.85; a box starting at x=-9460 excludes them by ~1.85 units, so they never
@@ -50,10 +47,10 @@
 #   cargo build -q --bin lyracore-importer && ./target/debug/lyracore-importer --dump "$DUMP" --map 0 --print-extents
 # — and compare its suggested --box against BOX below; widen or replace as needed.
 #
-# ONE SCRIPT, ONE CONTINENT PER DATABASE —
-# `MAP` picks which continent this run imports. The importer already has `--map`, `--box`, `--db` and
-# `--include-map`, so a second continent is this script threading `MAP` through them plus a map fence
-# and map-aware assertions — NOT a second pipeline. `MAP=0` (the default) is the canonical run.
+# LEGACY SPATIAL FLAGS, ONE CONTINENT PER DATABASE —
+# Without WORLD_PROFILE, `MAP` picks which continent this run imports. The importer already has
+# `--map`, `--box`, `--db` and `--include-map`, so a second continent is this script threading `MAP`
+# through them plus a map fence and map-aware assertions. `MAP=0` is the historical default.
 #
 #   DB=lyracore-world-1 MAP=1 BOX="-1400,600,-5400,-3600" CENTER="-618.52,-4251.67,38.72" \
 #     bash importer/scripts/import-world.sh
@@ -117,7 +114,8 @@ DBC="${DBC:-../wowclient/Data}"
 # zone) + north-Duskwood spillover. Redridge sits entirely within the X band (-11400..-8000) and was
 # excluded ONLY by the old Y-floor -1600; dropping it to -3100 admits Lakeshire/Camp Everstill/Stonewatch
 # so the 15-18 solo-quest stretch (~59 Redridge quest relations) becomes completable.
-# Loch Modan is DEFERRED — off the Human corridor, needs a big eastward X extension that sweeps in noise.
+# Canonical profiles do not use this rectangle. `alliance-eastern` owns separate Human, Dun Morogh,
+# and Loch Modan slices from the importer's profile catalogue.
 # NOTE: this widens the box ~28% → +~1286 spawns and a ~30% longer terrain+nav ETL, both measured on a
 # real import; the RUNTIME cost is ~0, because creature ticking is scoped to cells that have players in
 # them. CONFIRM against `--print-extents` on your own dump before importing; tighten or widen as your
@@ -245,9 +243,9 @@ if [ -z "$WORLD_PROFILE" ] && [ "$MAP" = 0 ] && [ "$SLICE" = 1 ] && [ -z "${CENT
   exit 2
 fi
 
-# Flag arrays. For MAP=0 with the defaults these expand to exactly the canonical flag set
-# (--map 0 --box … --include-map 36 --include-creatures … , no --center) — every MAP/BOX/CENTER knob
-# above adds flags rather than changing the default run.
+# Legacy flag arrays. For MAP=0 with the defaults these expand to the historical single-box scope
+# (--map 0 --box … --include-map 36 --include-creatures … , no --center). Canonical callers pass one
+# WORLD_PROFILE instead; its slices, whole maps, and forced dependencies come from the importer.
 INC_MAP_FLAGS=(); for m in ${INCLUDE_MAPS//,/ }; do INC_MAP_FLAGS+=(--include-map "$m"); done
 INC_CREATURE_FLAGS=(); [ -n "$INCLUDE_CREATURES" ] && INC_CREATURE_FLAGS=(--include-creatures "$INCLUDE_CREATURES")
 CENTER_FLAGS=(); [ -n "$CENTER" ] && CENTER_FLAGS=(--center "$CENTER")
@@ -386,9 +384,10 @@ if [ -n "$WORLD_PROFILE" ]; then
 else
   echo "[world] ETL  --map $MAP  --box $BOX  include-maps [${INCLUDE_MAPS:-none}]  include-creatures [${INCLUDE_CREATURES:-none}]  → $DB"
 fi
-./target/debug/lyracore-importer --db "$DB" --dump "$DUMP" --dbc "$DBC" \
-  "${SCOPE_FLAGS[@]}" --apply 2>&1 \
-  | grep -iE "filter:|mapped|applied|error|abort|WARNING" | tail -12
+run_checked_step "world content for $WORLD_PROFILE into $DB" \
+  "filter:|mapped|applied|error|abort|WARNING" 12 \
+  ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" \
+  --dump "$DUMP" --dbc "$DBC" "${SCOPE_FLAGS[@]}" --apply || exit 1
 # Terrain heightmap ETL: --terrain honors --box (terrain.rs::slice_cell_range),
 # so this covers the SAME widened Elwynn+Westfall rectangle as the creature ETL above — continuous
 # ground-z across the zone border. --center stays the Northshire default (inside the box), which
@@ -406,8 +405,10 @@ if [ "$WORLD_PROFILE" = instances ]; then
 else
   if [ -n "$WORLD_PROFILE" ]; then terrain_scope="--world-profile $WORLD_PROFILE"; else terrain_scope="--map $MAP --box $BOX${CENTER:+  --center $CENTER}"; fi
   echo "[world] terrain heightmap ETL $terrain_scope"
-  ./target/debug/lyracore-importer --db "$DB" --terrain "$DBC" "${SCOPE_FLAGS[@]}" --apply 2>&1 \
-    | grep -iE "terrain:|self-check|error|abort" | tail -8
+  run_checked_step "terrain for $WORLD_PROFILE into $DB" \
+    "terrain:|self-check|error|abort" 8 \
+    ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" \
+    --terrain "$DBC" "${SCOPE_FLAGS[@]}" --apply || exit 1
 fi
 # Nav grid ETL: WMO/M2 collision + slope rasterized into
 # game_nav_chunk (walkability + LoS obstruction). Same box; --center feeds its own walkable
@@ -418,8 +419,10 @@ if [ "$WORLD_PROFILE" = instances ]; then
 else
   if [ -n "$WORLD_PROFILE" ]; then nav_scope="--world-profile $WORLD_PROFILE"; else nav_scope="--map $MAP --box $BOX${CENTER:+  --center $CENTER}"; fi
   echo "[world] nav grid ETL $nav_scope"
-  ./target/debug/lyracore-importer --db "$DB" --nav "$DBC" "${SCOPE_FLAGS[@]}" --apply 2>&1 \
-    | grep -iE "nav: [0-9]|calibration|self-check|applied|error|abort" | tail -8
+  run_checked_step "navigation for $WORLD_PROFILE into $DB" \
+    "nav: [0-9]|calibration|self-check|applied|error|abort" 8 \
+    ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" \
+    --nav "$DBC" "${SCOPE_FLAGS[@]}" --apply || exit 1
 fi
 # Character-creation + faction DBC tables. The combined --dump --dbc pass above uses the DBCs ONLY for
 # Scale==0 resolution; dbc::run() — the SOLE loader of game_start_item / game_char_base_info /
@@ -429,14 +432,15 @@ fi
 # race/class validation (each is an idempotent clear+reload, independent of the cmangos creature slice).
 echo "[world] character-creation + faction DBC tables (start items / race+class combos / race display / factions)"
 run_checked_step "standalone DBC catalogue import" "dbc: loaded|error|abort" 6 \
-  ./target/debug/lyracore-importer --db "$DB" --dbc "$DBC" --apply || exit 1
+  ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" --dbc "$DBC" --apply || exit 1
 # Real talent trees (TalentTab.dbc + Talent.dbc → game_talent_tab/game_talent).
 # WITHOUT this the tables hold only the 8 demo talents, whose ids don't match what the 5875 client
 # sends on a talent click → talent selection silently fails (the client renders the real trees from its
 # OWN Talent.dbc). This clear+reloads 27 tabs + 432 talents so the client's real talent ids resolve.
 echo "[world] real talent trees (TalentTab.dbc + Talent.dbc → game_talent)"
-./target/debug/lyracore-importer --db "$DB" --dbc "$DBC" --talents --apply 2>&1 \
-  | grep -iE "loaded [0-9]+ tabs|error|abort" | tail -2
+run_checked_step "talents into $DB" "loaded [0-9]+ tabs|error|abort" 2 \
+  ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" \
+  --dbc "$DBC" --talents --apply || exit 1
 echo "[world] full Spell.dbc import (every non-zero row)"
 # Full de-curated import: EVERY non-zero Spell.dbc row (header+effects), no --only allowlist. The
 # long tail (raid/other-class/PvP spells with no Rust kind mapping yet) lands as E_SCRIPTED no-ops —
@@ -445,42 +449,19 @@ echo "[world] full Spell.dbc import (every non-zero row)"
 # wholesale clear in spell_delete_statements (importer/src/spell.rs) is guarded at
 # SYNTHETIC_SPELL_ID_FLOOR (50000) so the module's synthetic/test fixture spells (Combat Insight
 # 50000, Test PW:Shield 50072, Minor Healing 50110, Test Regeneration 50137 — none re-created by any
-# import script) survive this reload. The curated class import + caster --only import below still run
-# AFTER this and re-apply their own rows — this full import SUBSUMES their spell rows (byte-identical,
-# same kind-resolution code path) but they're kept for their `--trainer` offering bindings.
-./target/debug/lyracore-importer --db "$DB" --dbc "$DBC" --spells --apply 2>&1 \
-  | grep -iE "imported [0-9]|WARNING|error|abort" | tail -3
+# import script) survive this reload. The curated class import below still runs for its `--trainer`
+# offering bindings. The full catalogue already contains every imported caster spell.
+run_checked_step "full spell catalogue into $DB" "imported [0-9]|WARNING|error|abort" 3 \
+  ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" \
+  --dbc "$DBC" --spells --apply || exit 1
 # NOTE the explicit `DB=` prefix, and do not drop it: `DB` is a plain shell variable here (not
 # exported) and the child script defaults to `lyracore`, so without the prefix a
 # `DB=<other> import-world.sh` run writes its curated spells into the DEFAULT database instead of the
 # target one — silently, on a shard that otherwise imported correctly.
 echo "[world] curated spell-import (functional 1-20 trainer offerings + castable ranks) → $DB"
-DB="$DB" SPACETIME_SERVER="$SPACETIME_SERVER" importer/scripts/import-class-spells.sh "$DBC" 2>&1 | grep -iE "imported [0-9]|error" | tail -1
-# Caster-mob spell-import (Elwynn+Westfall 1-20): the spells the in-box caster mobs reference,
-# additively imported into game_spell/game_spell_effect via the --only allowlist (preserves the
-# curated class kit + test fixtures). game_creature_cast + game_creature_spell (populated by the ETL
-# above) point at these; an un-imported id would silently no-op. SCOPE: only the canonical-box
-# casters — caster mobs OUTSIDE Elwynn+Westfall are DEFERRED (widen this allowlist + import their
-# zone box later). spell2+ rotation rows (e.g. Frost Armor 12544 as a self-buff on entries 474/476)
-# are now populated by the ETL above; all referenced spell2+ spell IDs must be
-# present in this --only list.
-#
-# EXTEND-HERE (Westfall Defias casters): these ids were never read off a real dump, and a FABRICATED
-# spell id is the dangerous kind of wrong — it can silently resolve to some unrelated REAL spell in
-# Spell.dbc instead of failing loudly. So none was added to the --only list below sight-unseen; this
-# list is placeholder-free on purpose. Instead, on YOUR dump:
-# for each Defias caster creature_template entry below, read its creature_template_spells.spell1 (+
-# any spell2-4 rotation ids) and append them to the --only list below, mirroring how 474/476 (Elwynn
-# casters) already ride it.
-#   589?  [V] Defias Pillager — CONFIRM this entry id against your dump before trusting it
-#   449?  [V] Defias Conjurer — CONFIRM this entry id against your dump before trusting it
-# The net: `spell.rs`'s "--only requested N ids but matched M in Spell.dbc" WARNING (a wrong/typo'd
-# id) plus this script's "Defias caster cast row" assertion below (an entry with no cast row at all)
-# both fail loudly rather than silently shipping a mute caster.
-echo "[world] caster-mob spell-import (Elwynn+Westfall 1-20)"
-./target/debug/lyracore-importer --db "$DB" --dbc "$DBC" --spells --apply \
-  --only "53,133,143,1776,145,744,745,3149,3150,3238,3248,5416,5708,6016,6268,6524,6660,6730,7159,7357,8014,8260,8646,8873,9080,10101,10277,12023,12024,12170,12544,13322,13342,13375,13443,14030,15572,15652,15657,15661,16144,16244,20712,20714,20720,20746,20793,20808,23114,23260,23504,28265" \
-  2>&1 | grep -iE "imported [0-9]|WARNING|error" | tail -1
+run_checked_step "curated class spells into $DB" "imported [0-9]|error" 1 \
+  env DB="$DB" SPACETIME_SERVER="$SPACETIME_SERVER" \
+  importer/scripts/import-class-spells.sh "$DBC" || exit 1
 echo "[world] repair (re-arm creature tick + re-seed fixtures/schedules)"
 # #378: debug_rearm_creature_tick was collapsed into debug_repair_after_publish, along with the
 # other 16 debug_seed_*/debug_ensure_*/debug_rearm_* reducers — this now also re-seeds the fixture
@@ -551,8 +532,23 @@ chk() { # label  expected-min  actual
 # grepping the definition out of this file and running it under `set -u` with only MAP/INCLUDE_MAPS
 # set, so a bare $SLICE aborts that whole check. Unset means the canonical corridor, same default the
 # manifest uses.
-chk0() { [ "$MAP" = 0 ] && [ "${SLICE:-0}" = 0 ] && chk "$@"; return 0; }
-chk36() { case " ${INCLUDE_MAPS//,/ } " in *" 36 "*) chk "$@" ;; esac; return 0; }
+# PROFILE ASSERTION HELPERS BEGIN — extracted by import-manifest-smoke.sh.
+chk0() {
+  case "$WORLD_PROFILE" in
+    alliance-eastern|alliance-single) chk "$@" ;;
+    "") [ "$MAP" = 0 ] && [ "${SLICE:-0}" = 0 ] && chk "$@" ;;
+  esac
+  return 0
+}
+chk36() {
+  case "$WORLD_PROFILE" in
+    alliance-single|instances) chk "$@" ;;
+    "") case " ${INCLUDE_MAPS//,/ } " in *" 36 "*) chk "$@" ;; esac ;;
+  esac
+  return 0
+}
+chk_open_world() { [ "$WORLD_PROFILE" != instances ] && chk "$@"; return 0; }
+# PROFILE ASSERTION HELPERS END
 n() { # <query> [count-pattern] — the verification stage's row-COUNT chokepoint (#440): routes
       # through $SPACETIME_SERVER via q(), and on a FAILED query records it via sql_note_failure
       # rather than silently reading a connection fault as a count of 0. Only a query that actually
@@ -659,10 +655,17 @@ verify_taxi_fixture_anchors() {
 }
 # TAXI FIXTURE VERIFY END
 echo "[world] assertions (map $MAP → $DB):"
-[ "$SLICE" = 0 ] || echo "  ..    map-0 corridor fixture checks (Goldshire trainers / Farley / Sentinel Hill / Elwynn caster cast+rotation rows / Deadmines) SKIPPED — not this continent's content"
+if [ -z "$WORLD_PROFILE" ] && [ "$SLICE" != 0 ]; then
+  echo "  ..    named Human and Deadmines checks SKIPPED — custom legacy slice"
+elif [ "$WORLD_PROFILE" = alliance-kalimdor ]; then
+  echo "  ..    named Human and Deadmines checks SKIPPED — alliance-kalimdor does not own them"
+elif [ "$WORLD_PROFILE" = instances ]; then
+  echo "  ..    open-world corridor checks SKIPPED — instances owns only map 36"
+fi
 [ "$MAP" != 0 ] || verify_taxi_fixture_anchors
 verify_alliance_creation_data
 [ -z "$WORLD_PROFILE" ] || verify_profile_corridors
+if [ "$WORLD_PROFILE" != instances ]; then
 chk0 "Goldshire anchor trainers spawned {328,377,906,913,917,927} (NOT total coverage — see the service-coverage audit below)" "$FLOOR_CLASS_TRAINERS" \
     "$(n "SELECT guid FROM game_world_entity WHERE owner_guid=0 AND (entry=328 OR entry=377 OR entry=906 OR entry=913 OR entry=917 OR entry=927)" '[0-9]{6,}')"
 chk "class trainer offerings (learn_skill_line=0)"   "$FLOOR_TRAINER_OFFERINGS_CLASS" "$(n "SELECT spell_id FROM game_trainer_spell WHERE learn_skill_line = 0")"
@@ -671,8 +674,8 @@ chk "gather-node GO spawns"                          "$FLOOR_GATHER_NODE_GO" "$(
 # [V] tune after the first real Westfall import: Elwynn-only imported ~2500 chunks; the widened box
 # must land well past that. A terrain::run failure (axis self-check bail, no-cells-in-slice) must
 # fail HERE, not surface as missing ground-z in play (the review's silent-terrain-skip gap).
-chk "terrain chunks (ground-z heightmap)"           "$FLOOR_TERRAIN_CHUNKS" "$(n "SELECT key FROM game_terrain_chunk" '[0-9]')"
-chk "nav chunks (walkability/LoS grid)"             "$FLOOR_NAV_CHUNKS" "$(n "SELECT key FROM game_nav_chunk" '[0-9]')"
+chk_open_world "terrain chunks (ground-z heightmap)" "$FLOOR_TERRAIN_CHUNKS" "$(n "SELECT key FROM game_terrain_chunk" '[0-9]')"
+chk_open_world "nav chunks (walkability/LoS grid)"   "$FLOOR_NAV_CHUNKS" "$(n "SELECT key FROM game_nav_chunk" '[0-9]')"
 # Gather nodes spawn FLAT (in-place respawn) — vanilla Elwynn is not spatially pooled. Gather pools are
 # armed by the arm_all_pools call above; they're not part of the ETL, so no pool-count assertion here.
 # (The old pool-2 tier-variety demonstrator rode a hand-written profession seed file, retired along
@@ -762,6 +765,7 @@ chk "trainer coverage (spawned trainers that teach)"    "$FLOOR_TRAINER_COVERAGE
 chk "vendor coverage (spawned vendors that sell)"       "$FLOOR_VENDOR_COVERAGE" "$COV_VENDORS"
 chk "questgiver coverage (spawned givers with quests)"  "$FLOOR_QUESTGIVER_COVERAGE" "$COV_QUESTGIVERS"
 fi
+fi # open-world aggregate checks
 
 # [V] — set this to the real Sentinel Hill trainer/vendor creature_template.entry from YOUR dump if
 # the default below does not match it. An entry that matches nothing never matches a live spawn, so

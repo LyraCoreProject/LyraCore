@@ -1316,7 +1316,7 @@ where
 
 impl Args {
     pub(crate) fn world_import_scope(&self) -> Result<WorldImportScope> {
-        match self.world_profile {
+        let mut scope = match self.world_profile {
             Some(profile) => WorldImportScope::canonical(profile),
             None => WorldImportScope::legacy(
                 self.map,
@@ -1326,7 +1326,11 @@ impl Args {
                 self.exclude,
                 self.include_maps.clone(),
             ),
-        }
+        }?;
+        // The legacy flag remains an explicit extension. Canonical dependencies live in the
+        // profile catalogue so callers cannot silently omit or copy them.
+        scope.extend_forced_creatures(&self.include_creatures);
+        Ok(scope)
     }
 }
 
@@ -3158,7 +3162,6 @@ pub(crate) fn push_insert(stmts: &mut Vec<String>, table: &str, cols: &str, rows
 /// bypass geometry only; the map fence always applies. Pool slots cannot match a forced entry.
 fn creature_row_kept_in_scope(
     scope: &WorldImportScope,
-    include_creatures: &[u64],
     map: i64,
     x: f64,
     y: f64,
@@ -3166,7 +3169,7 @@ fn creature_row_kept_in_scope(
     raw_entry: u64,
 ) -> bool {
     scope.contains_map(map)
-        && ((raw_entry != 0 && include_creatures.contains(&raw_entry))
+        && ((raw_entry != 0 && scope.forced_creature_entries.contains(&raw_entry))
             || scope.contains(map, x, y, z))
 }
 
@@ -3182,7 +3185,7 @@ pub(crate) fn creature_row_kept(
     let scope = args
         .world_import_scope()
         .expect("Args contains a scope validated by parse_args");
-    creature_row_kept_in_scope(&scope, &args.include_creatures, map, x, y, z, raw_entry)
+    creature_row_kept_in_scope(&scope, map, x, y, z, raw_entry)
 }
 
 #[cfg(test)]
@@ -3467,7 +3470,7 @@ fn build_dump_plan(
         let raw_entry: u64 = field(&row, cr::ID).parse().unwrap_or(0);
         // A forced entry bypasses bounded geometry but not the scope's map fence. Keeping the spawn
         // makes its entry flow into every creature-scoped family below.
-        if !creature_row_kept_in_scope(&scope, &args.include_creatures, map, x, y, z, raw_entry) {
+        if !creature_row_kept_in_scope(&scope, map, x, y, z, raw_entry) {
             continue;
         }
         // cmangos uses id=0 for random spawn-POOL slots; the concrete entry is in creature_spawn_entry.
@@ -3575,15 +3578,16 @@ fn build_dump_plan(
     // Felhunter 417). [Tier 3b]
     const PET_TEMPLATE_ENTRIES: &[u64] = &[416, 1860]; // Imp (688) + Voidwalker (697).
     entries.extend(PET_TEMPLATE_ENTRIES.iter().copied());
-    // FORCE-INCLUDE (--include-creatures) template safety net: the spawn-loop gate above already keeps
-    // a force-listed entry's PLACED spawns (so it exists in-world + rides `entries` via the derivation).
+    // Forced-creature template safety net: the spawn-loop gate above already keeps a force-listed
+    // entry's placed spawns, whether the profile owns it or the legacy flag extends the scope.
     // But a giver with NO `creature` row (a pure-summon/instanced NPC) produces zero spawns — extend
     // `entries` so its template + quest relations still import, and WARN LOUDLY that it will not
     // physically exist in-world (so the operator doesn't ship a phantom giver).
-    for &e in &args.include_creatures {
+    let scope_name = scope.name();
+    for &e in &scope.forced_creature_entries {
         if !entries.contains(&e) {
             eprintln!(
-                "WARNING: --include-creatures {e}: template will import but NO spawn exists in the \
+                "WARNING: forced creature {e} in scope {scope_name}: template will import but NO spawn exists in the \
                  dump — the NPC will NOT physically exist in-world (pure-summon/instanced giver?)"
             );
         }
@@ -6154,8 +6158,9 @@ mod tests {
             "INSERT INTO `creature` VALUES \
              (1,100,0,1,-9000,0,80,0,300,300,0,0),\
              (2,200,0,1,-6200,300,380,0,300,300,0,0),\
-             (3,300,0,1,-7500,300,200,0,300,300,0,0); \
-             INSERT INTO `creature_template` VALUES {},{},{}; \
+             (3,300,0,1,-7500,300,200,0,300,300,0,0),\
+             (4,344,0,1,-12000,300,200,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {},{},{},{}; \
              INSERT INTO `gameobject_template` VALUES \
              (400,0,1,'Human Door',0,0,0,0,0,0,0,0),\
              (500,0,1,'Dwarf Door',0,0,0,0,0,0,0,0),\
@@ -6167,6 +6172,7 @@ mod tests {
             creature_template_row(100, 0),
             creature_template_row(200, 0),
             creature_template_row(300, 0),
+            creature_template_row(344, 0),
         );
         let args = parse_args_from([
             "--dump",
@@ -6187,6 +6193,12 @@ mod tests {
         assert!(!creatures
             .split(';')
             .any(|row| row.split(',').nth(1) == Some("300")));
+        assert!(
+            creatures
+                .split(';')
+                .any(|row| row.split(',').nth(1) == Some("344")),
+            "the profile catalogue retains its out-of-slice quest dependency"
+        );
 
         let gameobjects = plan.go_batches.join(";");
         assert!(gameobjects
@@ -6460,11 +6472,11 @@ mod tests {
         // Issue #515: the importer used to drop rotation_0..3 entirely (only `orientation` carried).
         // A bench with a real, non-trivial cmangos spawn quaternion must reach the packed
         // guid,id,map,x,y,z,o,initial_state,rot0,rot1,rot2,rot3 row byte-verbatim, in that order.
-        let dump = format!(
+        let dump =
             "INSERT INTO `gameobject_template` VALUES (446,0,259,'Wooden Bench',0,0,0,0,0,0,0,0); \
              INSERT INTO `gameobject` VALUES \
-             (60,446,0,0,-8949.95,-132.493,83.5312,1.57,0.1,0.2,0.70710678,0.70710678);",
-        );
+             (60,446,0,0,-8949.95,-132.493,83.5312,1.57,0.1,0.2,0.70710678,0.70710678);"
+                .to_string();
         let args = test_args();
         let plan = build_dump_plan(&dump, &args, &None, &None).expect("build_dump_plan");
         let go_row = plan

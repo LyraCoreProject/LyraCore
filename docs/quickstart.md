@@ -229,11 +229,10 @@ Your realm is not one database: all of Eastern Kingdoms — including Northshire
 character starts and where all the seeded content is — lives on `lyracore`, map 1 (Kalimdor) is on
 `lyracore-kalimdor`, every dungeon run (map 36, the Deadmines) is on `lyracore-instances`, and
 accounts and sessions are on `lyracore-realm`. Those are separate
-SpacetimeDB databases with separate writers, not zones in one process. Crossing between them is an
-escrowed character transfer, not a walk: the Kalimdor database is topology only — map 1 has no
-content at all, so it is a routing demonstration and a `dev status` line rather than a place to go.
-The instance pool is the opposite — walking into the Deadmines portal is a real crossing, which is
-why `./lyracore import` populates that database too.
+SpacetimeDB databases with separate writers, not zones in one process. Crossing between the World
+Shards is an escrowed character transfer, not a walk. The seed fixture leaves Kalimdor empty, but
+`./lyracore import` populates its Teldrassil and Darkshore corridor. Walking into the Deadmines
+portal crosses to the Instance Pool, which the same import populates with map 36 only.
 
 > The fixture used to carry a second Elwynn database and a **walkable seam** on the road to
 > Goldshire — a mid-session handoff between two databases serving one map. That region tier was
@@ -361,10 +360,11 @@ the purse twice. The gateway queues the success reply before it arms authoritati
 movement. Supported direct routes then advance to an exact durable landing; routes with delays or
 nonzero point flags are refused until those semantics are implemented.
 
-The real thing is the Elwynn/Westfall corridor: roughly 950 creature templates, 640 quests, the
-trainer/vendor/loot tables behind them, a ground-height map and a navigation grid. **That data is not
-in this repository and never will be.** It is reconstructed on your machine, from two sources that
-are yours and not ours to hand out:
+The real thing is the Alliance early game: the Human Elwynn/Westfall/Redridge corridor, Dun Morogh
+and Loch Modan, Teldrassil and Darkshore, plus Deadmines. Each World Shard receives its bounded
+continent slices, terrain and navigation. The Instance Pool receives map 36 without a duplicate
+open-world pass. **That data is not in this repository and never will be.** It is reconstructed on
+your machine, from two sources that are yours and not ours to hand out:
 
 - **cmangos' [`classic-db`](https://github.com/cmangos/classic-db)** — a community-maintained vanilla
   world database, licensed GPL-3.0. Its *content* describes Blizzard's copyrighted game world
@@ -383,17 +383,20 @@ One command, and it asks before it does anything:
 
 It prints the notice above in full and waits for you to type `yes`. Then it pulls `classic-db`
 (checksum-verified against the pinned commit), confirms the client path, and runs the world ETL plus
-the curated class-spell trainer offerings **on every database the fixture populates** — `lyracore`,
-then `lyracore-instances`, which is the database that spawns a Deadmines run's population. Six
-stages on the sharded fixture, four under `--single`. Pass `--accept` to answer the consent question
-in advance for a scripted run, and leave `--client-data` off to be prompted for the path.
+the curated class-spell trainer offerings on every content destination. The sharded plan is
+`lyracore` with `alliance-eastern`, `lyracore-kalimdor` with `alliance-kalimdor`, and
+`lyracore-instances` with `instances`. Under `--single`, `lyracore` receives `alliance-single`, the
+union of both continents and map 36. Pass `--accept` to answer the consent question in advance for a
+scripted run, and leave `--client-data` off to be prompted for the path.
 
 **What to expect.** The pull is a few hundred megabytes of git history. Each ETL is the long
-part — **tens of minutes**, most of it in the terrain and navigation passes, which rasterize the box
-cell by cell, and the sharded fixture runs two of them. It ends by printing an assertion per content
-family (`ok  live creature entities: 2731`, and so on); a `FAIL` line names the family that came up
-short, which is the diagnostic you want. The stack must be up (`./lyracore dev up`) — the ETL writes
-through the running node.
+part: **tens of minutes**, most of it in the terrain and navigation passes, which rasterize each
+bounded slice cell by cell. The sharded fixture runs those modes on both World Shards and skips them
+on the Instance Pool. It ends with global catalogue checks, named Human, Dwarf/Gnome and Night Elf
+corridor checks, caster-spell completeness, and distinct Deadmines checks. A failed stage stops later
+work and names the destination and mode. Fix the cause and rerun: each owned family clears and
+reloads, so a rerun repairs a partial family. This is not multi-process atomicity. The stack must be
+up (`./lyracore dev up`) because the ETL writes through the running node.
 
 **It is optional, and it is one-way-ish.** Everything in §§1–5 works without it, and the wire smoke
 tests run against the fixture. The import clears and reloads whole content families, so running it
@@ -405,6 +408,11 @@ this pipeline is ever distributed or hosted by this project. What you do with th
 is your call and your responsibility. [`docs/data-ingestion.md`](./data-ingestion.md) is the full
 statement, and `importer/scripts/` holds the scripts `lyracore import` drives if you would rather
 run a stage at a time.
+
+Exact model/WMO rays are a separate step. `./lyracore import vmaps` imports matching profile
+geometry on each populated World Shard and skips the Instance Pool. It does not enable exact rays.
+`debug_set_vmap_enabled true` remains an explicit Operator decision after the checks in
+[`docs/vmap-rollout.md`](./vmap-rollout.md).
 
 ---
 

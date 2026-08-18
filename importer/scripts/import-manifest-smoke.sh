@@ -133,8 +133,9 @@ echo "[smoke] import-world.sh chk0/chk36 map fences:"
 fence_out="$(
   bash -c '
     set -uo pipefail
-    eval "$(grep -E "^chk(0|36)\(\) \{" importer/scripts/import-world.sh)"
+    eval "$(sed -n "/# PROFILE ASSERTION HELPERS BEGIN/,/# PROFILE ASSERTION HELPERS END/p" importer/scripts/import-world.sh)"
     chk() { echo "RAN:$1"; }
+    WORLD_PROFILE=
     MAP=0; INCLUDE_MAPS=36; chk0 map0-run; chk36 map36-in-run
     MAP=1; INCLUDE_MAPS=;   chk0 map1-run; chk36 map36-absent
     # SLICE: a caller-chosen map-0 box is a region shard, not the canonical corridor, so the
@@ -142,6 +143,10 @@ fence_out="$(
     # runs under `set -u`, which is why chk0 reads ${SLICE:-0} rather than $SLICE.
     MAP=0; INCLUDE_MAPS=36; SLICE=1; chk0 map0-slice
     MAP=0; INCLUDE_MAPS=36; SLICE=0; chk0 map0-corridor
+    WORLD_PROFILE=alliance-eastern; SLICE=1; chk0 profile-eastern
+    WORLD_PROFILE=alliance-kalimdor; chk0 profile-kalimdor
+    WORLD_PROFILE=alliance-single; INCLUDE_MAPS=; chk36 profile-single-instance
+    WORLD_PROFILE=instances; chk36 profile-instances
   '
 )"
 ran() { case "$fence_out" in *"RAN:$1"*) echo yes ;; *) echo no ;; esac; }
@@ -151,6 +156,10 @@ chk_eq "chk0 SKIPS its check off map 0"                no  "$(ran map1-run)"
 chk_eq "chk36 SKIPS its check when 36 is absent"        no  "$(ran map36-absent)"
 chk_eq "chk0 SKIPS the corridor fixtures on a map-0 SLICE"  no  "$(ran map0-slice)"
 chk_eq "chk0 RUNS them on the canonical map-0 corridor"     yes "$(ran map0-corridor)"
+chk_eq "chk0 RUNS Human checks for alliance-eastern"         yes "$(ran profile-eastern)"
+chk_eq "chk0 SKIPS Human checks for alliance-kalimdor"       no  "$(ran profile-kalimdor)"
+chk_eq "chk36 RUNS instance checks for alliance-single"      yes "$(ran profile-single-instance)"
+chk_eq "chk36 RUNS instance checks for instances"            yes "$(ran profile-instances)"
 
 # The fresh-shard one-continent guard helpers (db_spatial_probe/db_imported_probe/db_never_imported/
 # foreign_spatial_maps, marker-delimited in import-world.sh so they can be extracted verbatim here,

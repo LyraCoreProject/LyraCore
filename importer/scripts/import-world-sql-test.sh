@@ -199,6 +199,9 @@ check "the dump ETL receives the canonical profile name" \
     grep -q -- 'lyracore-importer .*--world-profile alliance-single' "$stub_log"
 check "the dump ETL does not recreate a profile as legacy spatial flags" \
     bash -c '! grep "lyracore-importer .*--world-profile alliance-single" "$0" | grep -qE -- "--map|--box|--include-map|--include-creatures"' "$stub_log"
+unserved_importers="$(grep '^lyracore-importer ' "$stub_log" | grep -vc -- '--server http://127.0.0.1:3000' || true)"
+check "every profile importer invocation names the loopback server" \
+    test "${unserved_importers:-0}" -eq 0
 : >"$stub_log"
 STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=alliance-eastern run_import
 check "the eastern profile runs its Dun Morogh named check" \

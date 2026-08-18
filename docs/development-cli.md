@@ -102,31 +102,33 @@ distributes it or anything built from it, and states that the DBC half comes fro
 1.12.1 client. Only a typed `yes` or `--accept` proceeds; anything else exits 2 having run nothing.
 There is no terminal-less default: `import` with no TTY and no `--accept` refuses.
 
-Then two fixed stages plus an ETL and a class-spell pass **per populated database** — four stages
-under `--single`, six on the sharded fixture — fail-fast, each with its own diagnosis:
+The command has three setup stages: fetch and checksum the pinned dump, resolve the client `Data/`
+directory, and build `lyracore-importer`. Each content destination then has three fail-fast stages:
+run its importer modes, re-arm its schedules and gather pools, and run profile-aware Verification.
+That is six displayed stages under `--single` and twelve on the sharded fixture.
 
-| Stage | What runs | Failure looks like |
+The sharded destination plan is fixed:
+
+| Destination | Profile | Spatial result |
 | --- | --- | --- |
-| 1 | `importer/scripts/pull-classic-db.sh` — clone/fetch cmangos' repo at the pinned commit and assemble the dump, verifying it against `classic-db.lock`'s sha256 | network, or a **checksum mismatch** — which is not a network problem and must not be imported past |
-| 2 | locate the client `Data/` directory (`--client-data`, else prompt) and validate it | missing `dbc.MPQ`/`terrain.MPQ`; the install directory passed instead of `Data/` (the error names the corrected path); a TBC-or-later client (rejected by the archives only it has) |
-| 3 | `importer/scripts/import-world.sh` — the world ETL: creatures, quests, loot, vendors, gameobjects, terrain heightmap, navigation grid | the ETL's own `FAIL` lines, one per content family that came up short |
-| 4 | `importer/scripts/import-class-spells.sh` — the curated class-spell/trainer overlay | a "requested N ids but matched M" warning names ids your client build lacks |
-| 5–6 | stages 3 and 4 again, with `DB=lyracore-instances` — sharded fixture only | as above, and the message names the database |
+| `lyracore` | `alliance-eastern` | Human corridor, Dun Morogh and Loch Modan on map 0 |
+| `lyracore-kalimdor` | `alliance-kalimdor` | Teldrassil and Darkshore on map 1 |
+| `lyracore-instances` | `instances` | whole map 36, with no open-world terrain, navigation or vmap pass |
 
-Stage 4 is run again on purpose even though the world ETL calls it: inside the ETL it is piped
-through a reporting `grep` that swallows its exit status, so a class-spell failure — the one that
-leaves every class unable to train past its starter kit — would otherwise surface in play rather
-than in the import.
+The single topology uses `alliance-single`, the union of those bounded continent slices and map 36.
+Every importer child names its destination and loopback SpacetimeDB endpoint. The curated
+`import-class-spells.sh` pass receives both through explicit environment variables. The full
+Spell.dbc catalogue already supplies caster spells, so Verification derives every referenced
+caster spell from `game_creature_cast` and `game_creature_spell` instead of maintaining an
+independent allowlist.
 
-**Which databases get populated, and why not all of them.** The default world shard always, and
-`lyracore-instances` whenever the fixture routes dungeons there (#108): that database, not the world
-shard, spawns a Deadmines run's population from its own map-36 `game_creature_spawn` rows, and a
-realm where the pass was skipped reports nothing — the entry is routed correctly and the instance
-comes up empty. `lyracore-kalimdor` is deliberately absent: map 1 has no content in this dump slice,
-so importing it would be a long run that lands nothing. The pool's pass is the default ETL with `DB`
-changed and nothing else — same box, same `INCLUDE_MAPS=36` — so it duplicates the map-0 corridor
-onto the pool. Those rows are inert: routing never reads them, and the creature tick is seeded from
-players, so a playerless second copy of Elwynn costs one table scan per tick.
+If a mode fails, later modes and later destinations do not start. The error names the destination,
+profile and mode. Fix the cause and rerun the full command. Import families use clear-and-reload, so
+the rerun repairs a partial family; the complete multi-destination operation is not atomic.
+
+After `import world`, run `./lyracore import vmaps` when exact model/WMO collision data is needed.
+It follows the World Shard profiles and skips the Instance Pool. Importing vmaps does not enable
+exact rays. Enabling them is a separate Operator decision after `docs/vmap-rollout.md` Verification.
 
 A `--client-data` path is validated **before** the consent notice is answered, so a typo costs
 nothing; the flagless run is prompted for at stage 2, in order. Every stage runs from the checkout
@@ -274,8 +276,8 @@ The credential reaches a child as an environment variable, never argv, and the n
 The realm it brings up is **playable without a client-data import**: the module's `init` reducer
 seeds the realm row, the Human-Warrior start position, the graveyards, the `TEST` account and its
 character, and a small demo population. `./lyracore import` (which needs a world-database dump it
-pulls for you and client data you already own) is what turns that into the full Elwynn/Westfall
-content, and it is not a prerequisite for logging in.
+pulls for you and client data you already own) is what turns that into the Alliance Human,
+Dwarf/Gnome and Night Elf early-game corridors, and it is not a prerequisite for logging in.
 
 ### `--lan <IP>` — let another machine on your network in
 
@@ -367,12 +369,12 @@ Eastern Kingdoms stays whole on the default database.
 Three of those four names are production's own, and deliberately: what keeps a fixture off a
 production node is the node it is published to (`-s local`, loopback:3000), never the name.
 
-Two things the fixture does not give you. **Elwynn beyond Northshire has no content** until you run
-`./lyracore import` (a cmangos dump plus your own client MPQs) — Goldshire is not populated out of
-the box. And **`lyracore-kalimdor` is topology only** — map 1 has no content at all, so it is a
-routing demonstration and a `dev status` line, not a place to go. `lyracore-instances` is *not* in
-that second category: `import` populates it, because it is the database that spawns a Deadmines
-run's population.
+The fixture does not provide the wider world. **Elwynn beyond Northshire and all of the Kalimdor
+World Shard are empty** until you run `./lyracore import` with a cmangos dump and your own client
+MPQs. The import assigns `alliance-eastern` to `lyracore`, `alliance-kalimdor` to
+`lyracore-kalimdor`, and the instance-only `instances` profile to `lyracore-instances`. The single
+topology receives their union in `lyracore`. Each destination is verified independently after its
+clear-and-reload stages, so rerun the command after fixing a failure.
 
 ⚠ **Dungeon populations still spawn on the world shard until you say otherwise.** Routing map 36 off
 `lyracore` does not move the spawning with it: `game_config.hosts_instances` is a per-database flag

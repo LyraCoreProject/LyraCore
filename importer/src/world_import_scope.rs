@@ -44,6 +44,7 @@ pub(crate) struct WorldImportScope {
     name: String,
     pub(crate) bounded_slices: Vec<BoundedMapSlice>,
     pub(crate) whole_maps: Vec<i64>,
+    pub(crate) forced_creature_entries: Vec<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -112,17 +113,30 @@ impl WorldImportScope {
             ])
         };
 
-        let (bounded_slices, whole_maps) = match profile {
-            WorldImportProfile::AllianceEastern => (eastern()?, vec![]),
-            WorldImportProfile::AllianceKalimdor => (kalimdor()?, vec![]),
+        // These Eastern Kingdoms quest givers complete chains whose other endpoints are in the
+        // bounded slices. Their placed spawns bypass slice geometry, but never the scope's map fence.
+        let eastern_forced_creatures = || {
+            vec![
+                344, 11_406, 266, 415, 1_343, 6_966, 5_165, 6_166, 6_569, 5_149,
+            ]
+        };
+
+        let (bounded_slices, whole_maps, forced_creature_entries) = match profile {
+            WorldImportProfile::AllianceEastern => (eastern()?, vec![], eastern_forced_creatures()),
+            WorldImportProfile::AllianceKalimdor => (kalimdor()?, vec![], vec![]),
             WorldImportProfile::AllianceSingle => {
                 let mut slices = eastern()?;
                 slices.extend(kalimdor()?);
-                (slices, vec![36])
+                (slices, vec![36], eastern_forced_creatures())
             }
-            WorldImportProfile::Instances => (vec![], vec![36]),
+            WorldImportProfile::Instances => (vec![], vec![36], vec![]),
         };
-        Self::new(profile.name(), bounded_slices, whole_maps)
+        Self::new(
+            profile.name(),
+            bounded_slices,
+            whole_maps,
+            forced_creature_entries,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -154,16 +168,19 @@ impl WorldImportScope {
                 exclude,
             )?,
         };
-        Self::new("legacy", vec![slice], whole_maps)
+        Self::new("legacy", vec![slice], whole_maps, vec![])
     }
 
     fn new(
         name: impl Into<String>,
         bounded_slices: Vec<BoundedMapSlice>,
         mut whole_maps: Vec<i64>,
+        mut forced_creature_entries: Vec<u64>,
     ) -> Result<Self> {
         whole_maps.sort_unstable();
         whole_maps.dedup();
+        forced_creature_entries.sort_unstable();
+        forced_creature_entries.dedup();
         if bounded_slices.is_empty() && whole_maps.is_empty() {
             bail!("world import scope is empty: add a bounded slice or whole map");
         }
@@ -176,7 +193,14 @@ impl WorldImportScope {
             name: name.into(),
             bounded_slices,
             whole_maps,
+            forced_creature_entries,
         })
+    }
+
+    pub(crate) fn extend_forced_creatures(&mut self, entries: &[u64]) {
+        self.forced_creature_entries.extend_from_slice(entries);
+        self.forced_creature_entries.sort_unstable();
+        self.forced_creature_entries.dedup();
     }
 
     pub(crate) fn name(&self) -> &str {
@@ -338,6 +362,10 @@ mod tests {
         assert_eq!(eastern.name(), "alliance-eastern");
         assert_eq!(eastern.bounded_slices.len(), 3);
         assert!(eastern.whole_maps.is_empty());
+        assert_eq!(
+            eastern.forced_creature_entries,
+            vec![266, 344, 415, 1_343, 5_149, 5_165, 6_166, 6_569, 6_966, 11_406]
+        );
 
         let kalimdor = WorldImportScope::canonical(WorldImportProfile::AllianceKalimdor)
             .expect("kalimdor profile");
@@ -351,11 +379,16 @@ mod tests {
             .expect("single profile");
         assert_eq!(single.bounded_slices.len(), 5);
         assert_eq!(single.whole_maps, vec![36]);
+        assert_eq!(
+            single.forced_creature_entries,
+            eastern.forced_creature_entries
+        );
 
         let instances =
             WorldImportScope::canonical(WorldImportProfile::Instances).expect("instances profile");
         assert!(instances.bounded_slices.is_empty());
         assert_eq!(instances.whole_maps, vec![36]);
+        assert!(instances.forced_creature_entries.is_empty());
     }
 
     #[test]
@@ -368,6 +401,7 @@ mod tests {
                 BoundedMapSlice::rectangle("east", 0, (10.0, 20.0, -5.0, 5.0), (15.0, 0.0, 1.0))
                     .expect("east slice"),
             ],
+            vec![],
             vec![],
         )
         .expect("valid scope");
@@ -387,6 +421,7 @@ mod tests {
                     .expect("map-one slice"),
             ],
             vec![36],
+            vec![],
         )
         .expect("valid scope");
         assert!(scope.contains(0, 0.0, 0.0, 0.0));
@@ -417,7 +452,7 @@ mod tests {
         assert!(
             BoundedMapSlice::rectangle("flat", 0, (1.0, 1.0, 0.0, 2.0), (1.0, 1.0, 0.0)).is_err()
         );
-        assert!(WorldImportScope::new("empty", vec![], vec![]).is_err());
+        assert!(WorldImportScope::new("empty", vec![], vec![], vec![]).is_err());
         assert!(WorldImportScope::legacy(
             0,
             Some((-1.0, 1.0, -1.0, 1.0)),

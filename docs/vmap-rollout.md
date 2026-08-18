@@ -1,48 +1,46 @@
 # Vmap production rollout acceptance
 
-Use this checklist only after the shard-aware vmap workflow is deployed. It records the live
-acceptance for [#184](https://github.com/LyraCoreProject/LyraCore/issues/184): map 0 has a complete,
-matching active generation on both eligible shards, the ineligible shard stays empty, and exact
-collision is accepted deliberately.
+Use this checklist only after the shard-aware vmap workflow is deployed. It records live acceptance
+for exact collision on both populated World Shards and confirms that the Instance Pool receives no
+open-world vmap generation.
 
 This is a maintenance operation. Keep `game_config.vmap_enabled` false while importing and while
 checking generations. A successful import is data-plane evidence, not permission to change gameplay.
 
 ## Scope and prerequisites
 
-- Use the production client data at `/srv/wowclient/Data` and the canonical map-0 box
-  `-11400,-8000,-3100,2000`.
+- Use the approved production client data. The importer resolves `alliance-eastern` and
+  `alliance-kalimdor` through its canonical profile catalogue; do not copy rectangles here.
 - Set `SPACETIME_SERVER` to the approved production SpacetimeDB endpoint before using any commands
   below; each command supplies it explicitly rather than relying on the CLI's ambient server.
-- The current production ownership for this rollout is `lyracore` and `lyracore-instances` for map
-  0. `lyracore-world-1` owns map 1 and must receive no map-0 vmap generation.
+- The World Shard destinations are the default Shard with `alliance-eastern` and the Kalimdor World
+  Shard with `alliance-kalimdor`. The Instance Pool must receive no bounded-profile vmap generation.
 - Record the deployed module/importer commit, the client-data identity, the approved maintenance
   window, the operator, and the exact importer output for each target.
-- Run the importer workflow introduced by #183. Its preflight must accept the two eligible targets,
-  reject `lyracore-world-1` for map 0, and leave the vmap gate disabled. Do not substitute the old
-  clear-first `import_vmap_chunks` reducers for this workflow.
+- Run `lyracore import vmaps` with the deployed topology. It must address both World Shards, skip the
+  Instance Pool, and leave the vmap gate disabled. Do not substitute the old clear-first
+  `import_vmap_chunks` reducers for this workflow.
 
 ## Import and generation evidence
 
-1. Run the canonical map-0 dry run and save its completion manifest. Run the matching apply/resume
-   workflow once for `lyracore` and once for `lyracore-instances`; save both complete outputs.
-   A retry must resume the same generation rather than creating duplicate chunk rows.
-2. Query the active map-0 generation on both eligible shards using the workflow's status command.
-   Record its generation id, source/selection identity, chunk count, byte count, and digest. The two
-   manifests must match exactly. Record that no map-0 active or staging generation exists on
-   `lyracore-world-1`.
+1. Run the matching profile dry runs and save their completion manifests. Run the apply/resume flow
+   once for each World Shard. A retry must resume the same generation rather than creating duplicate
+   chunk rows.
+2. Query the active generation on each World Shard. Record its profile, generation id,
+   source/selection identity, chunk count, byte count, and digest. Record that no bounded-profile
+   active or staging generation exists on the Instance Pool.
 
    ```bash
    lyracore-importer --vmap-status --map 0 --server "$SPACETIME_SERVER" --db lyracore
-   lyracore-importer --vmap-status --map 0 --server "$SPACETIME_SERVER" --db lyracore-instances
-   lyracore-importer --vmap-status --map 0 --server "$SPACETIME_SERVER" --db lyracore-world-1
+   lyracore-importer --vmap-status --map 1 --server "$SPACETIME_SERVER" --db lyracore-kalimdor
+   lyracore-importer --vmap-status --map 36 --server "$SPACETIME_SERVER" --db lyracore-instances
    ```
 3. Confirm the gate remains off on every shard before probe testing:
 
    ```bash
    spacetime sql --server "$SPACETIME_SERVER" lyracore "SELECT vmap_enabled FROM game_config WHERE id = 0"
+   spacetime sql --server "$SPACETIME_SERVER" lyracore-kalimdor "SELECT vmap_enabled FROM game_config WHERE id = 0"
    spacetime sql --server "$SPACETIME_SERVER" lyracore-instances "SELECT vmap_enabled FROM game_config WHERE id = 0"
-   spacetime sql --server "$SPACETIME_SERVER" lyracore-world-1 "SELECT vmap_enabled FROM game_config WHERE id = 0"
    ```
 
    Each result must be `false`. If a configuration row is absent, treat it as false and record that
@@ -67,7 +65,7 @@ spacetime call --server "$SPACETIME_SERVER" lyracore -- debug_floor_probe 0 <x> 
 
 The ray output must identify an expected WMO hit (`los` and `collision`), and the floor probe must
 report a model `floor_z` selected over the terrain ground where those heights differ. Repeat the
-same probes directly against `lyracore-instances`' active map-0 generation.
+same class of probes against `lyracore-kalimdor` at approved map-1 locations.
 
 Also probe the indoor answer, which gameplay rules such as the land-mount refusal and the indoor
 dismount read:
@@ -105,19 +103,18 @@ UTC date/time and approved maintenance window:
 Operator and approval reference:
 Deployed module/importer commit:
 Client Data path and source identity:
-Canonical map/box: 0 / -11400,-8000,-3100,2000
+Canonical profiles: alliance-eastern / alliance-kalimdor
 
-Eligible-shard preflight: lyracore / lyracore-instances:
-Ineligible-shard rejection: lyracore-world-1:
-lyracore active generation id, chunks, bytes, digest:
-lyracore-instances active generation id, chunks, bytes, digest:
-Manifest comparison: MATCH / MISMATCH
-world-1 map-0 generation check:
+World Shard preflight: lyracore / lyracore-kalimdor:
+Instance Pool skip: lyracore-instances:
+lyracore profile, active generation id, chunks, bytes, digest:
+lyracore-kalimdor profile, active generation id, chunks, bytes, digest:
+Instance Pool bounded-generation check:
 Gate state before probes on all three shards:
 
 WMO ray coordinates, expected hit, and log excerpt:
 Elevated-floor coordinates, expected floor, and log excerpt:
-Instance-shard probe evidence (if applicable):
+Kalimdor World Shard probe evidence:
 Read-only probe surface / acceptance revision reference:
 
 Human-review gate-enable approval, command, time, and target:
