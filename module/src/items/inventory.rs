@@ -8,13 +8,15 @@ use spacetimedb::{ReducerContext, Table};
 use lyracore_shared::constants::starter_item;
 
 use super::rules::{
-    binds_on_equip, can_equip_into, can_equip_proficiency, equip_slot, invtype,
-    meets_required_level, merge_amount, resolve_equip_slot,
+    binds_on_equip, can_equip_into, can_equip_proficiency, eligibility_mask_allows, equip_slot,
+    invtype, meets_required_level, meets_required_reputation, meets_required_skill, merge_amount,
+    resolve_equip_slot,
 };
 use super::tables::{
     game_item_instance, game_item_template, item_in_slot, next_item_guid, slot_occupied,
     ItemInstance,
 };
+use crate::{game_player_reputation, game_player_skill};
 
 #[allow(dead_code)] // core kept for a future gw_split_item twin (#483 deleted the sender-path reducer)
 /// Shared stack-split logic for the player + debug paths: split `count` units off the stack in `slot`
@@ -152,6 +154,47 @@ pub(crate) fn apply_item_move(
         // plate). The class is byte 1 of unit_bytes_0 (race | class<<8 | gender<<16 | power<<24).
         // Creatures (class 0) never call equip_item; fail closed for unknown classes.
         let player_class = player.class();
+        if !eligibility_mask_allows(tmpl.allowed_class, player_class) {
+            return Err(format!(
+                "class {player_class} is not allowed to equip this item"
+            ));
+        }
+        let player_race = player.race();
+        if !eligibility_mask_allows(tmpl.allowed_race, player_race) {
+            return Err(format!(
+                "race {player_race} is not allowed to equip this item"
+            ));
+        }
+        let current_skill = ctx
+            .db
+            .game_player_skill()
+            .by_character()
+            .filter(&player_guid)
+            .find(|skill| skill.skill_line == tmpl.required_skill)
+            .map(|skill| skill.current);
+        if !meets_required_skill(tmpl.required_skill, tmpl.required_skill_rank, current_skill) {
+            return Err(format!(
+                "requires skill {} at rank {}",
+                tmpl.required_skill, tmpl.required_skill_rank
+            ));
+        }
+        let reputation_standing = ctx
+            .db
+            .game_player_reputation()
+            .by_character()
+            .filter(&player_guid)
+            .find(|reputation| reputation.faction_id == tmpl.required_reputation_faction)
+            .map(|reputation| reputation.standing);
+        if !meets_required_reputation(
+            tmpl.required_reputation_faction,
+            tmpl.required_reputation_rank,
+            reputation_standing,
+        ) {
+            return Err(format!(
+                "requires reputation faction {} at rank {}",
+                tmpl.required_reputation_faction, tmpl.required_reputation_rank
+            ));
+        }
         if !can_equip_proficiency(player_class, tmpl.class, tmpl.subclass) {
             return Err(format!(
                 "class {} lacks proficiency for item class {}/subclass {}",
@@ -567,6 +610,31 @@ mod tests {
             assert!(
                 body.contains("is_bank_slot(to_slot)"),
                 "`{signature}` must test its destination slot for bank space"
+            );
+        }
+    }
+
+    /// EQUIP ELIGIBILITY GATES: the one equipment branch must check all imported requirements before
+    /// the BoE/placement mutations, so every refusal preserves both item rows and binding state.
+    #[test]
+    fn equip_eligibility_gates_precede_all_item_mutations() {
+        let src = include_str!("inventory.rs");
+        let body = code_of(src, "pub(crate) fn apply_item_move(");
+        for gate in [
+            "eligibility_mask_allows(tmpl.allowed_class, player_class)",
+            "eligibility_mask_allows(tmpl.allowed_race, player_race)",
+            "meets_required_skill(tmpl.required_skill, tmpl.required_skill_rank, current_skill)",
+            "meets_required_reputation(",
+            "can_equip_proficiency(player_class, tmpl.class, tmpl.subclass)",
+        ] {
+            assert!(body.contains(gate), "equip path must retain `{gate}`");
+            assert!(
+                body.find(gate).unwrap() < body.find("src.soulbound = true").unwrap(),
+                "`{gate}` must refuse before the BoE mutation"
+            );
+            assert!(
+                body.find(gate).unwrap() < body.find("src.slot = to_slot").unwrap(),
+                "`{gate}` must refuse before placement changes"
             );
         }
     }

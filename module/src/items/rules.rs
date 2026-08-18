@@ -10,6 +10,35 @@
 
 use super::tables::ItemTemplate;
 
+/// Whether a Classic class/race eligibility mask names `id`. IDs are one-based in the source
+/// format, so class/race 1 is bit 0. A zero durable mask is malformed/restrictive and fails
+/// closed; only the importer may normalize the source unrestricted sentinel.
+pub(crate) fn eligibility_mask_allows(mask: u32, id: u8) -> bool {
+    id != 0 && (id as u32) <= u32::BITS && mask & (1u32 << (id - 1)) != 0
+}
+
+/// Whether a character's optional skill row meets an item's requirement. A zero skill id has no
+/// gate; every non-zero id needs a durable row at or above the required rank.
+pub(crate) fn meets_required_skill(
+    required_skill: u32,
+    required_skill_rank: u32,
+    current_skill: Option<u16>,
+) -> bool {
+    required_skill == 0
+        || current_skill.is_some_and(|current| u32::from(current) >= required_skill_rank)
+}
+
+/// Whether a character's standing meets an item's reputation requirement. Missing durable
+/// reputation rows use the Module's established Neutral (zero-standing) semantics.
+pub(crate) fn meets_required_reputation(
+    required_faction: u32,
+    required_rank: u32,
+    standing: Option<i32>,
+) -> bool {
+    required_faction == 0
+        || u32::from(crate::reputation::reputation_rank(standing.unwrap_or(0))) >= required_rank
+}
+
 /// Gold a vendor pays for a stack: the per-unit `sell_price` times the stack count (cmangos sells a
 /// whole stack at once). Pure — unit-tested. Saturating so a pathological count never wraps the copper
 /// total (the credit itself is also saturating on the player's money). A 0 `sell_price` is the
@@ -412,6 +441,27 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn explicit_equip_requirements_fail_closed_and_admit_qualified_characters() {
+        // Class/race ids are one-based bits. A malformed durable zero mask never becomes universal.
+        assert!(eligibility_mask_allows(1 << 7, 8));
+        assert!(!eligibility_mask_allows(1 << 7, 9));
+        assert!(!eligibility_mask_allows(0, 8));
+        assert!(!eligibility_mask_allows(u32::MAX, 0));
+
+        // A required skill needs both a durable row and enough current rank.
+        assert!(!meets_required_skill(171, 50, None));
+        assert!(!meets_required_skill(171, 50, Some(49)));
+        assert!(meets_required_skill(171, 50, Some(50)));
+        assert!(meets_required_skill(0, 50, None));
+
+        // Missing reputation uses Neutral (standing 0, rank 3), not a faction base standing.
+        assert!(!meets_required_reputation(72, 4, None));
+        assert!(!meets_required_reputation(72, 4, Some(2_999)));
+        assert!(meets_required_reputation(72, 4, Some(3_000)));
+        assert!(meets_required_reputation(0, 7, None));
+    }
+
+    #[test]
     fn inventory_type_to_slot_maps_each_invtype_to_its_equipment_slot() {
         use equip_slot as e;
         use invtype as t;
@@ -588,6 +638,8 @@ pub(crate) mod tests {
             bag_family: 0,
             buy_count: 1,
             food_type: 0,
+            allowed_class: crate::items::tables::ALL_PLAYABLE_CLASS_MASK,
+            allowed_race: crate::items::tables::ALL_PLAYABLE_RACE_MASK,
         }
     }
 

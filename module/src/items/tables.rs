@@ -2,11 +2,16 @@
 //! definition, the per-player `game_item_instance` owned-item row, the owner-scoped RLS filter, and the
 //! small pure-ish primitives every op builds on: guid composition/minting and the per-slot scans.
 
-use spacetimedb::{
-    table, Identity, ReducerContext, Table, Timestamp,
-};
+use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
 
 use lyracore_shared::constants::starter_item;
+
+/// The nine class bits playable by the 1.12 client.  Item-template masks retain unknown bits from
+/// imported content; this value exists only to make the source dump's unrestricted sentinel durable.
+pub const ALL_PLAYABLE_CLASS_MASK: u32 = 0x1ff;
+/// The eight race bits playable by the 1.12 client.  As with class masks, imported restrictions are
+/// otherwise opaque `u32` values and are never reconstructed from local variants.
+pub const ALL_PLAYABLE_RACE_MASK: u32 = 0xff;
 
 /// Static item definition (the cmangos `item_template` analogue) — hand-authored, public + read-only
 /// to clients (answered via `CMSG_ITEM_QUERY_SINGLE`). A small subset of the ~130 vanilla
@@ -183,6 +188,13 @@ pub struct ItemTemplate {
     /// creature family's pet_food_mask. Kept at the end for additive schema migration.
     #[default(0)]
     pub food_type: u8,
+    /// Explicit class/race eligibility masks.  The importer turns ClassicDB's `-1` unrestricted
+    /// sentinel into the complete playable masks before rows become durable; zero remains a
+    /// restrictive/malformed durable value.  END-appended defaults make existing rows unrestricted.
+    #[default(ALL_PLAYABLE_CLASS_MASK)]
+    pub allowed_class: u32,
+    #[default(ALL_PLAYABLE_RACE_MASK)]
+    pub allowed_race: u32,
 }
 
 /// A per-player owned item. Public but RLS-restricted to the owner (like `game_character`), so a

@@ -101,6 +101,8 @@ pub(crate) fn item_template_view(t: ItemTemplate) -> crate::codec::ItemTemplateV
         page_text: t.page_text,
         start_quest: t.start_quest,
         bag_family: t.bag_family,
+        allowed_class: t.allowed_class,
+        allowed_race: t.allowed_race,
     }
 }
 

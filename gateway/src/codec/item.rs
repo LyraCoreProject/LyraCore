@@ -75,6 +75,10 @@ pub struct ItemTemplateView {
     pub page_text: u32,
     pub start_quest: u32,
     pub bag_family: u32,
+    /// Opaque eligibility masks from the Module.  The gateway preserves all imported bits when it
+    /// fills the typed packet fields; only the importer interprets the ClassicDB unrestricted sentinel.
+    pub allowed_class: u32,
+    pub allowed_race: u32,
 }
 
 /// An owned-item instance as the gateway reads it from `game_item_instance` (items slice-1),
@@ -175,6 +179,8 @@ pub fn build_item_query_response(
                 .unwrap_or_default(),
             item_level: Level::new(t.item_level),
             required_level: Level::new(t.required_level),
+            allowed_class: AllowedClass::new(t.allowed_class),
+            allowed_race: AllowedRace::new(t.allowed_race),
             // Weapon-skill / mail-plate proficiency gate. An out-of-range skill id
             // degrades to Skill::None rather than failing the query (matches the other try_from
             // degrades in this function).

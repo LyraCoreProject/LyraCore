@@ -49,6 +49,11 @@ use std::process::Command;
 use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
 
+// Kept in step with `module::items::tables`: the importer cannot depend on the wasm Module, but
+// it owns the ClassicDB `-1` sentinel conversion that makes these values durable.
+const ALL_PLAYABLE_CLASS_MASK: u32 = 0x1ff;
+const ALL_PLAYABLE_RACE_MASK: u32 = 0xff;
+
 // --- cmangos column indices (verified against ClassicDB_1_12_1_z2815 schema) -------------------
 mod ct {
     // creature_template
@@ -317,6 +322,11 @@ mod it {
     pub const BUY_PRICE: usize = 8;
     pub const SELL_PRICE: usize = 9;
     pub const INVENTORY_TYPE: usize = 10;
+    // ClassicDB_1_12_1_z2815 follows the canonical cmangos run: InventoryType(10),
+    // AllowableClass(11), AllowableRace(12), ItemLevel(13).  `-1` is the dump's unrestricted
+    // sentinel; restrictive masks are unsigned bits and must stay byte-for-byte intact.
+    pub const ALLOWED_CLASS: usize = 11;
+    pub const ALLOWED_RACE: usize = 12;
     // RequiredSkill/RequiredSkillRank (work-item 213): weapon-skill / mail-plate proficiency gate.
     // Anchored tightly between the already-verified REQUIRED_LEVEL(14) and STACKABLE(23): 14
     // RequiredLevel, 15 RequiredSkill, 16 RequiredSkillRank, 17 RequiredSpell, 18 RequiredHonorRank,
@@ -868,6 +878,17 @@ pub(crate) fn parse_table(dump: &str, table: &str) -> Vec<Vec<String>> {
 
 pub(crate) fn field(row: &[String], idx: usize) -> &str {
     row.get(idx).map(|s| s.trim()).unwrap_or("")
+}
+
+/// ClassicDB uses signed `-1` for an unrestricted allowable-class/race column.  It is normalized
+/// only at this import boundary; every other mask is parsed as raw unsigned bits so unknown bits
+/// survive into the Module and its item-query response.
+fn normalize_item_mask(source: &str, unrestricted: u32) -> u32 {
+    if source == "-1" {
+        unrestricted
+    } else {
+        source.parse().unwrap_or(0)
+    }
 }
 /// Drink discriminator → `game_item_template.restores_power` (food vs drink). In classicdb z2815 BOTH
 /// food and drink are class 0 (Consumable) with subclass 0 (generic) OR 5 (Food&Drink) — they do NOT
@@ -2907,6 +2928,10 @@ fn build_items_and_loot(
             .parse::<u32>()
             .unwrap_or(1)
             .max(1);
+        let allowed_class =
+            normalize_item_mask(field(&row, it::ALLOWED_CLASS), ALL_PLAYABLE_CLASS_MASK);
+        let allowed_race =
+            normalize_item_mask(field(&row, it::ALLOWED_RACE), ALL_PLAYABLE_RACE_MASK);
         // Drink = Food&Drink consumable whose name reads as a beverage (see is_drink_consumable). The
         // restores_power flag makes apply_item_use refill mana instead of HP. Generic predicate, no item-id list.
         let class_v: u8 = field(&row, it::CLASS).parse().unwrap_or(0);
@@ -2967,7 +2992,7 @@ fn build_items_and_loot(
         // non-shields) — makes imported shields actually block (combat::effective_block_value reads it).
         // restores_power (drink) is a Bool → bare true/false SQL literal (the is_negative Bool-SQL note).
         item_rows.push(format!(
-            "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count},{food_type})",
+            "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count},{food_type},{allowed_class},{allowed_race})",
             sheath = field(&row, it::SHEATH).parse::<u8>().unwrap_or(0),
             sp2 = field(&row, it::SPELLID_2).parse::<u32>().unwrap_or(0),
             spt2 = field(&row, it::SPELLTRIGGER_2).parse::<u8>().unwrap_or(0),
@@ -2994,6 +3019,8 @@ fn build_items_and_loot(
             delay = field(&row, it::DELAY),
             armor = field(&row, it::ARMOR),
             block = field(&row, it::BLOCK),
+            allowed_class = allowed_class,
+            allowed_race = allowed_race,
         ));
     }
     eprintln!(
@@ -4177,7 +4204,7 @@ fn build_dump_plan(
         stmts.push("DELETE FROM game_item_template WHERE entry > 0".into());
         stmts.push("DELETE FROM game_creature_loot WHERE id > 0".into());
         stmts.push("DELETE FROM game_npc_vendor WHERE id > 0".into());
-        push_insert(&mut stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type", &item_rows);
+        push_insert(&mut stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race", &item_rows);
         push_insert(
             &mut stmts,
             "game_creature_loot",
@@ -5202,6 +5229,8 @@ mod tests {
         cols[it::BUY_PRICE] = "1000".into();
         cols[it::SELL_PRICE] = "200".into();
         cols[it::INVENTORY_TYPE] = "5".into();
+        cols[it::ALLOWED_CLASS] = "-1".into();
+        cols[it::ALLOWED_RACE] = "-1".into();
         cols[it::ITEM_LEVEL] = "40".into();
         cols[it::REQUIRED_LEVEL] = "30".into();
         cols[it::REQUIRED_SKILL] = "165".into();
@@ -5236,7 +5265,7 @@ mod tests {
         assert_eq!(item_rows.len(), 1);
         assert_eq!(
             item_rows[0],
-            "(90001,4,1,'Ring of Fire Resistance',1234,3,5,40,30,80,1000,200,1,0,0,0,0,0,0,0,0,0,0,55,0,false,0,0,0,0,0,0,2,3,12,0,0,0,0,12345,1,12346,2,12347,0,165,150,69,3,7,512,999,777,6,1,1)",
+            "(90001,4,1,'Ring of Fire Resistance',1234,3,5,40,30,80,1000,200,1,0,0,0,0,0,0,0,0,0,0,55,0,false,0,0,0,0,0,0,2,3,12,0,0,0,0,12345,1,12346,2,12347,0,165,150,69,3,7,512,999,777,6,1,1,511,255)",
         );
     }
 
@@ -5275,7 +5304,29 @@ mod tests {
         assert_eq!(item_rows.len(), 1);
         assert_eq!(
             item_rows[0],
-            "(25,2,7,'Worn Shortsword',1521,0,21,1,1,35,100,20,1,1,3,1800,0,0,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0)",
+            "(25,2,7,'Worn Shortsword',1521,0,21,1,1,35,100,20,1,1,3,1800,0,0,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0)",
+        );
+    }
+
+    #[test]
+    fn item_template_preserves_restrictive_eligibility_mask_bits() {
+        use std::collections::{HashMap, HashSet};
+
+        let mut cols = vec!["0".to_string(); 124];
+        cols[it::ENTRY] = "90003".into();
+        cols[it::NAME] = "__NAME__".into();
+        cols[it::ALLOWED_CLASS] = "2147483650".into();
+        cols[it::ALLOWED_RACE] = "2147483652".into();
+
+        let tuple = cols.join(",").replacen("__NAME__", "'Opaque Mask Item'", 1);
+        let dump = format!("x INSERT INTO `item_template` VALUES ({tuple}); y");
+        let (item_rows, _loot, _vendor) =
+            build_items_and_loot(&dump, &HashMap::new(), &HashSet::new(), &HashSet::new());
+
+        assert_eq!(item_rows.len(), 1);
+        assert!(
+            item_rows[0].ends_with(",2147483650,2147483652)"),
+            "restrictive masks, including unknown high bits, must remain unsigned and verbatim"
         );
     }
 
