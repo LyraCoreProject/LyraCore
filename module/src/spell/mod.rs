@@ -14,9 +14,9 @@
 //! Submodules:
 //!   - `tables`    — the spell/aura/cooldown/cast/schedule table structs (+ their generated accessors).
 //!   - `taxonomy`  — the KIND/MECHANIC/param/target/combat-field/stat/resistance consts + tuning.
-//!   - `control`   — the crowd-control model (the 7 CC predicates + immunity + break-on-damage) PLUS
-//!                   (381) the cast-bar teardown family (`pushback_cast` / `interrupt_cast` /
-//!                   `break_channel` / `interrupt_cast_and_lock`).
+//!   - `control`   — the crowd-control model (the 7 CC predicates + immunity + break-on-damage), the
+//!                   (381) cast-bar teardown family (`pushback_cast` / `interrupt_cast` /
+//!                   `break_channel` / `interrupt_cast_and_lock`), and the death aura cleanup.
 //!   - `math`      — pure helpers + aura-read folds only (388: no ctx-bound orchestration — see `effects`).
 //!   - `effects`   — (388) the ctx-bound orchestration `math` used to carry: `arm_spell_retaliation` /
 //!                   `apply_target_damage` / `dispel_target` / `recompute_vitals` / `absorb_incoming` —

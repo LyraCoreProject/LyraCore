@@ -155,6 +155,10 @@ pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Opti
     // aura + any cast bar. No-op for the common non-caster kill (no channel/cast). A channel aimed AT this
     // dying creature is ended separately by the tick arm (`!target_alive`), so both directions are covered.
     crate::spell::break_channel(ctx, target_guid);
+    // A corpse carries no buffs, no DoTs and no crowd control — vanilla sheds them on the death
+    // transition itself, for every unit and not just players. Runs AFTER the reward/loot steps above,
+    // which still read the victim's live aura set (Drain Soul's channel).
+    crate::spell::remove_auras_on_death(ctx, target_guid);
     // Arm the corpse-decay timer on the spawn row (the tick_creatures decay pass gates on it).
     let spawns = ctx.db.game_creature_spawn();
     if let Some(mut spawn) = spawns.guid().find(target_guid) {
@@ -366,7 +370,8 @@ fn roll_corpse_loot(
 /// zero health + set `dead` (gates regen + re-attack); pull `combat_until_ms` to NOW so the
 /// gateway's logout gate doesn't block a dead player for up to COMBAT_DROP_MS (vanilla allows dead
 /// players to log out immediately; `disengage` clears melee rows but does NOT zero the deadline);
-/// drop the engagements; tear down any channel/cast bar; apply the 10% equipped-durability loss;
+/// drop the engagements; tear down any channel/cast bar; shed the auras death removes (which dismounts
+/// a rider); apply the 10% equipped-durability loss;
 /// and fire the `on_death` notify-hook LAST so handlers observe the fully-committed death.
 /// `killer_guid = 0` = no killer (a debug/environmental death). Returns `false` (no-op) for a
 /// missing guid, a creature, or an already-dead player. [entity]
@@ -385,6 +390,10 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
     entities.guid().update(victim);
     disengage(ctx, victim_guid);
     crate::spell::break_channel(ctx, victim_guid);
+    // Dying sheds the auras vanilla does not exempt, and converges every projection they fed. A rider
+    // who dies is dismounted HERE, by ordinary aura removal — the corpse must not keep its mount, its
+    // buffs, or the crowd control that was on it.
+    crate::spell::remove_auras_on_death(ctx, victim_guid);
     // A live Trade Session dies with the victim — both windows hear `TradeCanceled` (#123).
     crate::trade::cancel_trade_for(ctx, victim_guid);
     crate::items::apply_death_durability_loss(ctx, victim_guid);

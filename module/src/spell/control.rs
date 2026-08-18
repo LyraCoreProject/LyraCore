@@ -5,7 +5,8 @@
 //! the rest of the crowd-control model removes a cross-module callback instead of adding one. `mod.rs`
 //! re-exports the public predicates so every `crate::spell::<predicate>` path resolves;
 //! `is_immune_to_mechanic` is `pub(crate)` (the cast pipeline reads it) and `break_auras_on_damage` is
-//! `pub(crate)` (every real-damage path calls it).
+//! `pub(crate)` (every real-damage path calls it). The death aura cleanup at the foot of the file joins
+//! them for the same reason: it is the third way an aura is torn off a unit that did not ask for it.
 
 use spacetimedb::{log, ReducerContext, ScheduleAt, Table, TimeDuration};
 
@@ -505,9 +506,88 @@ pub(crate) fn interrupt_cast_and_lock(
     interrupted
 }
 
+// ===========================================================================================
+//  Death aura cleanup [entity]
+// ===========================================================================================
+
+/// Does an aura survive its carrier's DEATH? Vanilla sheds everything a unit was carrying the moment it
+/// dies — cmangos `Unit::SetDeathState(JUST_DIED)` calls `Unit::RemoveAllAurasOnDeath`, whose whole body
+/// is `if (!holder->IsPassive() && !holder->IsDeathPersistent()) remove`. Two exempt classes, then: a
+/// PASSIVE aura (a talent bonus, a racial, a weapon specialisation — the unit *is* it rather than
+/// carrying it), and a spell flagged death-persistent (`AttributesEx3` bit 20; 93 spells in 1.12.1,
+/// including Ghost, Resurrection Sickness and the Warrior stances). Nothing else is spared: a mount, a
+/// buff, a DoT and a crowd-control aura all come off.
+///
+/// This module keeps the PASSIVE half and sheds everything else. `game_spell.attributes` carries the raw
+/// `Spell.dbc` Attributes column, so the passive bit is real imported data; `AttributesEx3` is not
+/// imported, so the death-persistent half has no data to read. Of that vanilla exempt list only
+/// Resurrection Sickness exists here as an aura at all — the Warrior stances are a `WorldEntity` field
+/// and Ghost is a player flag, both of which survive death by construction — so the gap is one debuff a
+/// second death clears early. Carrying `AttributesEx3` into `game_spell` is what closes it.
+///
+/// Pure over the attribute mask, so the policy is one testable decision rather than a filter buried in a
+/// scan. A spell with no header at all reads as not-passive at the call site and is shed: unauthored
+/// data losing an aura on death is the recoverable direction.
+pub(crate) fn aura_survives_death(attributes: u32) -> bool {
+    attributes & SPELL_ATTR_PASSIVE != 0
+}
+
+/// Shed `unit_guid`'s auras because it just DIED — the ONE death aura-cleanup path, called from the two
+/// kill chokepoints (`combat::kill_player` / `combat::kill_creature`) so every lethal path leaves the
+/// same corpse. Deletes every aura row [`aura_survives_death`] does not exempt, then converges the three
+/// projections an aura removal can move: the vitals pools, the character sheet, and the Mount Projection
+/// — the same collect-a-predicate-then-recompute tail `do_cancel_aura` and the expiry reap already use,
+/// so a rider who dies is dismounted by ordinary aura removal and never by a mount-specific special case.
+///
+/// Collect-then-delete (never mutate while iterating). A unit carrying nothing but passives is a complete
+/// no-op, and running it twice changes nothing the second time. [entity]
+pub(crate) fn remove_auras_on_death(ctx: &ReducerContext, unit_guid: u64) {
+    let auras = ctx.db.game_aura();
+    let spells = ctx.db.game_spell();
+    let shed: Vec<Aura> = auras
+        .by_target()
+        .filter(&unit_guid)
+        .filter(|a| {
+            !spells
+                .spell_id()
+                .find(a.spell_id)
+                .map(|s| aura_survives_death(s.attributes))
+                .unwrap_or(false)
+        })
+        .collect();
+    if shed.is_empty() {
+        return;
+    }
+    let mut revitalize = false;
+    let mut resheet = false;
+    let mut remount = false;
+    for a in &shed {
+        revitalize |= aura_moves_vitals(a.eff_kind, a.eff_p0);
+        resheet |= crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0);
+        remount |= crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0);
+    }
+    for a in shed {
+        auras.id().delete(a.id);
+    }
+    // Recompute AFTER the deletes, and in the sibling sites' order: vitals first, so a lost STA/INT
+    // aura's sheet recompute sees the already-updated `e.spirit`.
+    if revitalize {
+        recompute_vitals(ctx, unit_guid);
+    }
+    if resheet {
+        recompute_sheet(ctx, unit_guid);
+    }
+    if remount {
+        crate::mount::recompute_mount(ctx, unit_guid);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{cc_blocks, should_pushback, CAST_PUSHBACK_MAX, CAST_PUSHBACK_MS};
+    use super::{
+        aura_survives_death, cc_blocks, should_pushback, CAST_PUSHBACK_MAX, CAST_PUSHBACK_MS,
+        SPELL_ATTR_PASSIVE,
+    };
 
     /// The un-CC'd baseline: no stun/root/fear/poly → nothing is blocked on any axis.
     #[test]
@@ -615,5 +695,82 @@ mod tests {
         for n in 0u8..=20 {
             assert_eq!(should_pushback(n), n < CAST_PUSHBACK_MAX, "n={n}");
         }
+    }
+
+    /// THE DEATH AURA POLICY, at the one decision that carries it. Vanilla's rule
+    /// (`Unit::RemoveAllAurasOnDeath`) exempts passive holders and sheds every other aura class, so a
+    /// mount, a buff, a DoT and a crowd-control aura all come off a corpse — the seeded rows here are
+    /// ordinary spells with `attributes == 0` and none of them survive. The exemption is read from the
+    /// PASSIVE bit alone and ignores every other `Spell.dbc` Attributes bit, so an unrelated attribute
+    /// can never accidentally spare an aura.
+    #[test]
+    fn death_sheds_every_aura_except_a_passive_one() {
+        assert!(aura_survives_death(SPELL_ATTR_PASSIVE));
+        // A talent passive carries other Attributes bits alongside PASSIVE; it still survives.
+        assert!(aura_survives_death(SPELL_ATTR_PASSIVE | 0x4 | 0x10000));
+
+        assert!(!aura_survives_death(0)); // every seeded spell — mount, buff, DoT, CC
+        assert!(!aura_survives_death(0x4)); // an unrelated attribute never spares an aura
+        assert!(!aura_survives_death(!SPELL_ATTR_PASSIVE));
+    }
+
+    /// BOTH kill chokepoints shed — vanilla's removal sits on `Unit`, so a creature drops its auras on
+    /// death exactly like a player. In `kill_creature` the shed must run AFTER the reward step, which
+    /// still reads the victim's live aura set to find the killer's Drain Soul channel: shedding first
+    /// would silently stop soul shards dropping. Pinned by scan — both functions are
+    /// `ReducerContext`-bound and the crate has no reducer harness.
+    #[test]
+    fn both_kill_chokepoints_shed_auras_on_death() {
+        let src = include_str!("../combat/death.rs");
+        for signature in ["pub(crate) fn kill_player(", "pub(crate) fn kill_creature("] {
+            let body = crate::test_scan::code_of(src, signature);
+            assert!(
+                body.contains("crate::spell::remove_auras_on_death(ctx, "),
+                "`{signature}` must shed the dying unit's auras — otherwise a corpse keeps its mount, \
+                 its buffs and the crowd control that was on it. Body was:\n{body}"
+            );
+        }
+        let creature = crate::test_scan::code_of(src, "pub(crate) fn kill_creature(");
+        let rewards = creature
+            .find("award_killer_rewards(ctx, &target, target_guid, killer_guid)")
+            .expect("kill_creature still awards the killer before the corpse work");
+        let shed = creature
+            .find("crate::spell::remove_auras_on_death(ctx, target_guid)")
+            .expect("checked above");
+        assert!(
+            rewards < shed,
+            "the death shed must run AFTER `award_killer_rewards`, which reads the dying creature's \
+             Drain Soul channel aura to mint the killer's soul shard. Body was:\n{creature}"
+        );
+    }
+
+    /// The shed's shape: it reads the exemption through the ONE policy predicate (never an inline
+    /// attribute test or a spell-id list), and converges on the same three recomputes every other aura
+    /// removal site runs — vitals, then sheet, then the Mount Projection. Dropping any of them leaves a
+    /// corpse projecting a stat pool, a paperdoll number or a mount it no longer has.
+    #[test]
+    fn the_death_shed_reads_the_policy_and_converges_every_projection() {
+        let body = crate::test_scan::code_of(
+            include_str!("control.rs"),
+            "pub(crate) fn remove_auras_on_death(",
+        );
+        assert!(
+            body.contains("aura_survives_death(s.attributes)"),
+            "the shed must ask the one policy predicate. Body was:\n{body}"
+        );
+        let vitals = body
+            .find("recompute_vitals(ctx, unit_guid)")
+            .expect("the shed must re-derive the vitals pools a lost STA/INT aura fed");
+        let sheet = body
+            .find("recompute_sheet(ctx, unit_guid)")
+            .expect("the shed must re-derive the character sheet");
+        let mount = body
+            .find("crate::mount::recompute_mount(ctx, unit_guid)")
+            .expect("the shed must re-derive the Mount Projection, or a corpse keeps riding");
+        assert!(
+            vitals < sheet && sheet < mount,
+            "vitals must recompute before the sheet, so a lost stat aura's sheet recompute sees the \
+             already-updated spirit. Body was:\n{body}"
+        );
     }
 }
