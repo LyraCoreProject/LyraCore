@@ -17,6 +17,7 @@ use super::{
     Pursuit, PursuitSink, Recovering, RegenSink, RoutSink, Router, Sensor, SpellOption, ThreatSink,
     TickContext, Waypoint,
 };
+use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::TickScope;
 use crate::creatures::cast_condition;
 use crate::creatures::pet;
@@ -25,7 +26,7 @@ use crate::spell::game_pending_cast;
 use crate::{
     game_aura, game_creature_cast, game_creature_spawn, game_creature_spell, game_creature_spline,
     game_creature_template, game_creature_waypoint, game_melee_attack, game_spell,
-    game_world_entity, MeleeAttack,
+    game_world_entity, MeleeAttack, WorldEntity,
 };
 
 /// `tick_creatures`' one call into the cycle. The adapter never leaves this module.
@@ -80,6 +81,16 @@ fn as_leg(s: CreatureSpline, mover_gone: bool) -> LegInFlight {
         instance_id: s.instance_id,
         mover_gone,
     }
+}
+
+/// A unit's live translation flags as the chase decision reads them. A client-driven unit stamps its
+/// own on every heartbeat; a creature stamps none, so the leg the MODULE is moving it along is what
+/// says it travels — the same thing vanilla's spline launch records on the unit itself. Spline
+/// advance runs first in the cycle and reaps a landed leg, so a surviving leg with a real duration is
+/// still in flight, while a halt leaves a zero-duration row, which is a stop.
+fn translation_flags(unit: &WorldEntity, leg: Option<CreatureSpline>) -> u32 {
+    let carried = leg.is_some_and(|l| l.dur_ms > 0);
+    unit.movement_flags | if carried { MOVE_FLAG_FORWARD } else { 0 }
 }
 
 /// The longest ENEMY-cast range (yd) creature `entry` can bring to bear — the rotation nukes and
@@ -633,7 +644,10 @@ impl PursuitSink for CtxWorld<'_> {
                         y: victim.y,
                         z: victim.z,
                     },
-                    victim_last_move_ms: victim.last_move_ms,
+                    victim_movement_flags: translation_flags(
+                        &victim,
+                        splines.guid().find(row.target_guid),
+                    ),
                     routing: tick::creature_is_routing(self.ctx, &c),
                     leg: splines.guid().find(c.guid).map(|s| as_leg(s, false)),
                 })

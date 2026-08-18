@@ -42,6 +42,16 @@ pub(crate) const WAND_PROJECTILE_SPEED: f32 = 20.0;
 // turn/pitch bits): forward|backward|strafe L/R|jumping|falling-far. Turning in place must NOT
 // count — vanilla keeps Auto Shot firing while you spin, but DEFERS shots while you move (097).
 pub(crate) const MOVE_MASK_MOVING: u32 = 0x1 | 0x2 | 0x4 | 0x8 | 0x2000 | 0x4000;
+/// The single forward bit the SERVER sets on a unit it moves itself (vanilla `MOVEFLAG_FORWARD`,
+/// which its own spline launch records on the unit). A client-driven unit sends its own flags on
+/// every heartbeat; one the module moves along a leg has none of its own, so its carrier says so.
+pub(crate) const MOVE_FLAG_FORWARD: u32 = 0x1;
+/// Is this unit TRANSLATING — travelling through the world rather than turning, pitching or standing?
+/// The one predicate every movement-state gate reads, so a spin, a strafe, a fall and a standstill are
+/// classified the same way wherever the question is asked.
+pub(crate) const fn is_translating(movement_flags: u32) -> bool {
+    movement_flags & MOVE_MASK_MOVING != 0
+}
 // Leashing is a TIMER, not a distance cap: damage in either direction stamps `now + PURSUIT_WINDOW_MS`
 // and remembers where the creature stood, and only an expired deadline plus a target outside
 // LEASH_RADIUS_SQ of that spot evades (`ai::should_evade`). Calibration knobs — vanilla's `Pursuit` and

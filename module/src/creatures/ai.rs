@@ -348,18 +348,12 @@ pub(crate) const CHASE_MELEE_SQ: f32 = crate::combat::MELEE_RANGE_SQ;
 /// chasing nor evading.
 pub(crate) const CHASE_LEASH_SQ: f32 = combat_active_radius(0.0) * combat_active_radius(0.0);
 
-/// SPLINE chase: how recently the target must have moved (ms) for the chaser to treat it as MOVING. A
-/// mob only plants into attack stance (stops chasing to swing) when its target is STATIONARY — while the
-/// target is moving it keeps chasing continuously (run animation + swing-on-the-move), matching vanilla:
-/// mobs run a kiter down without toggling stance, and only stop when the kiter halts. `last_move_ms`
-/// freezes when the player stops, so the mob plants ~this long after they halt (~1.5 ticks).
-pub(crate) const CHASE_TARGET_MOVING_MS: u32 = 700;
-
-/// SPLINE chase LEAD (yd): a chaser aims this far PAST a moving target along the chase line, so the leg
-/// is long and the mob RIDES it for several ticks instead of re-throwing a tiny leg every 500ms tick
+/// SPLINE chase LEAD (yd): a chaser aims this far PAST a TRANSLATING target along the chase line, so the
+/// leg is long and the mob RIDES it for several ticks instead of re-throwing a tiny leg every 500ms tick
 /// (which made the client visibly re-compute its heading each tick — the jitter). A straight-running
-/// kiter keeps the mob on one committed heading. Overshoot on an abrupt stop is bounded by this lead and
-/// caught by the in-melee stand (which cancels the leg).
+/// kiter keeps the mob on one committed heading. The lead is only ever thrown at a victim whose live
+/// translation flags say it is running, and melee reach is read first, so a target standing inside reach
+/// is turned to rather than led past.
 pub(crate) const CHASE_LEAD_YD: f32 = 8.0;
 
 /// SPLINE chase RE-AIM threshold (cosine): while chasing, re-emit a new leg only when the target has

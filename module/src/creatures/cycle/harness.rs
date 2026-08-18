@@ -3,6 +3,7 @@
 //! the ordered movement effects a client would have received.
 
 use super::*;
+use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::ROUT_DURATION_MS;
 use crate::creatures::{chase_step, rout_window_open};
 use lyracore_shared::spatial;
@@ -103,6 +104,9 @@ struct Scenario {
     hold_ranges: RefCell<HashMap<u64, f32>>,
     /// Determinism input: when each PLAYER last moved. A creature's own move clock is on its row.
     player_moved_ms: RefCell<HashMap<u64, u32>>,
+    /// Determinism input: each PLAYER's live movement flags, as its heartbeats stamp them. A creature
+    /// stamps none — the leg the module moves it along is what says it travels.
+    player_move_flags: RefCell<HashMap<u64, u32>>,
     /// Faction pairs at war, directed. Anything absent is not hostile, as missing data is.
     at_war: RefCell<HashSet<(u32, u32)>>,
     /// `(looker, unseen)` pairs with something solid in between.
@@ -390,12 +394,45 @@ impl Scenario {
         pairs
     }
 
-    /// The player RUNS to `at`: it stands there and its move clock reads now, so a chaser treats it
-    /// as a kiter rather than a planted target.
+    /// The player RUNS to `at`: it stands there, its move clock reads now and it is holding the
+    /// forward key, so a chaser treats it as a kiter rather than a planted target.
     fn kiting(self, guid: u64, at: Point) -> Self {
         let now_ms = (self.now_micros.get() / 1000) as u32;
         self.player_moved_ms.borrow_mut().insert(guid, now_ms);
+        self.player_move_flags
+            .borrow_mut()
+            .insert(guid, MOVE_FLAG_FORWARD);
         self.tweak_player(guid, |p| p.at = at)
+    }
+
+    /// The player RELEASED the movement key where it stands: its translation flags go to zero while
+    /// its move clock keeps reading whenever it last ran.
+    fn stopped(self, guid: u64) -> Self {
+        self.player_move_flags.borrow_mut().insert(guid, 0);
+        self
+    }
+
+    /// The player is TURNING IN PLACE — spinning the camera, going nowhere. Vanilla does not count
+    /// this as movement, so neither may a chaser.
+    fn turning(self, guid: u64) -> Self {
+        let now_ms = (self.now_micros.get() / 1000) as u32;
+        self.player_moved_ms.borrow_mut().insert(guid, now_ms);
+        self.player_move_flags
+            .borrow_mut()
+            .insert(guid, MOVE_FLAG_TURN_LEFT);
+        self
+    }
+
+    /// How long ago this player's last movement heartbeat landed.
+    fn since_last_move_ms(&self, guid: u64) -> u32 {
+        let now_ms = (self.now_micros.get() / 1000) as u32;
+        now_ms.wrapping_sub(
+            self.player_moved_ms
+                .borrow()
+                .get(&guid)
+                .copied()
+                .unwrap_or(0),
+        )
     }
 
     /// The creature looks this way — what the facing turn measures its correction against.
@@ -706,18 +743,25 @@ impl Scenario {
         Some((gx, gy))
     }
 
-    /// A fight's victim wherever it stands — a creature row or a player — as its position and move
-    /// clock. Chase reads both: a kiter is run down, a planted one is stood next to and faced.
+    /// A fight's victim wherever it stands — a creature row or a player — as its position and live
+    /// translation flags. Chase reads both: a kiter is run down, a planted one is stood next to and
+    /// faced. A creature carries no flags of its own, so the leg the cycle is moving it along is what
+    /// says it travels, exactly as the production adapter derives it.
     fn unit(&self, guid: u64) -> Option<(Point, u32)> {
         if let Some(c) = self.creatures.borrow().get(&guid) {
-            return Some((c.at, c.last_move_ms));
+            let carried = self
+                .legs
+                .borrow()
+                .iter()
+                .any(|l| l.guid == guid && l.dur_ms > 0);
+            return Some((c.at, if carried { MOVE_FLAG_FORWARD } else { 0 }));
         }
-        let moved = self.player_moved_ms.borrow().get(&guid).copied();
+        let flags = self.player_move_flags.borrow().get(&guid).copied();
         self.players
             .borrow()
             .iter()
             .find(|p| p.guid == guid)
-            .map(|p| (p.at, moved.unwrap_or(0)))
+            .map(|p| (p.at, flags.unwrap_or(0)))
     }
 
     /// A pet's owner as the pet reads it. `None` for an owner that logged out or died — the two are
@@ -1153,13 +1197,13 @@ impl PursuitSink for Scenario {
             .iter()
             .filter_map(|f| {
                 let c = creatures.get(&f.attacker)?;
-                let (victim_at, victim_last_move_ms) = self.unit(f.victim)?;
+                let (victim_at, victim_movement_flags) = self.unit(f.victim)?;
                 scope.covers(c.instance_id).then_some(Pursuit {
                     guid: f.attacker,
                     at: c.at,
                     orientation: c.orientation,
                     victim_at,
-                    victim_last_move_ms,
+                    victim_movement_flags,
                     routing: self.is_routing(f.attacker),
                     leg: legs.iter().find(|l| l.guid == f.attacker).cloned(),
                 })
@@ -1395,6 +1439,8 @@ const INSTANCE: u64 = 0;
 /// A one-second leg launched at t=0, sampled half way through.
 const LEG_MS: u32 = 1000;
 const HALF_WAY: u64 = 500_000;
+/// The 1.12 turn-left bit — a movement flag that is deliberately NOT translation.
+const MOVE_FLAG_TURN_LEFT: u32 = 0x10;
 
 fn p(x: f32, y: f32, z: f32) -> Point {
     Point { x, y, z }
@@ -2326,11 +2372,17 @@ fn a_chaser_rides_one_committed_leg_until_its_victim_veers() {
     w = w.kiting(HUNTER, p(23.0, 20.0, 10.0));
     let tick = w.tick(false, catch_all());
     run_cycle(&mut w, tick);
+    let legs = w.effects();
     assert_eq!(
-        w.effects().len(),
+        legs.len(),
         2,
         "a chaser that never re-aims loses a kiter the moment they turn — the leg must be re-thrown \
          once the victim veers off it"
+    );
+    assert!(
+        legs[1].spline_id > legs[0].spline_id,
+        "the replacement must carry a NEWER spline id, or the client keeps the obsolete leg and \
+         rides it past the victim's new position"
     );
 }
 
@@ -2402,6 +2454,184 @@ fn a_creature_whose_victim_kites_out_of_reach_keeps_chasing() {
          run/stand/run flicker of chasing someone who never stops; the mob must keep running and \
          aim PAST them"
     );
+}
+
+/// The window the DISPLACED rule read the victim's move clock over. A stop packet lands well inside
+/// it, which is why a clock cannot answer "is this player still running".
+const STALE_MOVE_WINDOW_MS: u32 = 700;
+
+/// The bearings a player walks up to a creature from. Nothing about the answer may depend on which
+/// side they stand on.
+const APPROACHES: [f32; 8] = [
+    0.0,
+    std::f32::consts::FRAC_PI_4,
+    std::f32::consts::FRAC_PI_2,
+    2.356_194_5,
+    std::f32::consts::PI,
+    -2.356_194_5,
+    -std::f32::consts::FRAC_PI_2,
+    -std::f32::consts::FRAC_PI_4,
+];
+
+#[test]
+fn a_standing_victim_inside_reach_is_turned_to_from_every_approach() {
+    for bearing in APPROACHES {
+        let at = p(3.0 * bearing.cos(), 3.0 * bearing.sin(), 10.0);
+        let mut w = wolf_fighting(at).facing(WOLF, 0.0).attacking(WOLF, HUNTER);
+        let tick = w.tick(false, catch_all());
+        run_cycle(&mut w, tick);
+
+        let effects = w.effects();
+        assert!(
+            effects.iter().all(|e| e.facing),
+            "a creature already in reach of a standing player must not travel at all: a positional \
+             leg here is the mob running to their flank instead of squaring up ({bearing} rad)"
+        );
+        assert!(
+            effects.len() <= 1 && w.at(WOLF).at == p(0.0, 0.0, 10.0),
+            "the answer must come from distance and movement, not from the side the player walked \
+             up on — one turn at most, and the creature stays where it stands ({bearing} rad)"
+        );
+    }
+}
+
+#[test]
+fn a_player_who_just_released_the_movement_key_is_standing_at_once() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .kiting(HUNTER, p(3.0, 0.0, 10.0))
+        .stopped(HUNTER)
+        .facing(WOLF, std::f32::consts::PI)
+        .attacking(WOLF, HUNTER);
+    assert!(
+        w.since_last_move_ms(HUNTER) < STALE_MOVE_WINDOW_MS,
+        "the point of this scenario is a move clock that still reads FRESH"
+    );
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.effects()
+            .iter()
+            .map(|e| (e.facing, e.dur_ms))
+            .collect::<Vec<_>>(),
+        [(true, 0)],
+        "a stop takes effect on the next covered firing, not once a move clock goes quiet: the \
+         creature must turn to the player, and a lead leg thrown at a player who has stopped runs \
+         eight yards through them"
+    );
+}
+
+#[test]
+fn a_player_turning_in_place_is_not_translating() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .turning(HUNTER)
+        .facing(WOLF, std::f32::consts::PI)
+        .attacking(WOLF, HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.effects()
+            .iter()
+            .map(|e| (e.facing, e.dur_ms))
+            .collect::<Vec<_>>(),
+        [(true, 0)],
+        "spinning the camera goes nowhere, so the creature it is standing next to must square up \
+         rather than chase a player who never left the spot"
+    );
+}
+
+#[test]
+fn a_kiter_inside_reach_is_chased_without_a_stop_between_firings() {
+    let mut w = wolf_fighting(p(4.0, 0.0, 10.0))
+        .kiting(HUNTER, p(4.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER);
+    // Three firings of a straight-line kite: the victim keeps its heading, so the committed leg
+    // keeps its own.
+    for step in 0..3 {
+        let tick = w.tick(false, catch_all());
+        run_cycle(&mut w, tick);
+        w.advance_clock(500_000);
+        w = w.kiting(HUNTER, p(7.0 + 3.0 * step as f32, 0.0, 10.0));
+    }
+
+    assert_eq!(
+        w.effects()
+            .iter()
+            .map(|e| (e.dest, e.run))
+            .collect::<Vec<_>>(),
+        [(p(12.0, 0.0, 10.0), true)],
+        "a genuinely translating victim must be run down on ONE committed leg: a stop between \
+         firings is the run/stand/run flicker, and re-throwing the leg is the client re-computing \
+         its path every tick"
+    );
+}
+
+#[test]
+fn a_lead_leg_is_halted_where_it_renders_once_the_victim_stops() {
+    let mut w = wolf_fighting(p(6.0, 0.0, 10.0))
+        .kiting(HUNTER, p(6.0, 0.0, 10.0))
+        .facing(WOLF, std::f32::consts::PI)
+        .attacking(WOLF, HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    // The player releases the key half a firing into the lead leg, inside melee reach of where the
+    // creature now renders.
+    w.advance_clock(500_000);
+    w = w.stopped(HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    let rendered = p(3.5, 0.0, 10.0);
+    assert_eq!(
+        w.effects()
+            .iter()
+            .map(|e| (e.start, e.dest, e.dur_ms, e.facing))
+            .collect::<Vec<_>>(),
+        [
+            (p(0.0, 0.0, 10.0), p(14.0, 0.0, 10.0), 2000, false),
+            (rendered, rendered, 0, false),
+            (rendered, rendered, 0, true),
+        ],
+        "the leg aimed past a running player has to be stopped where the client RENDERS the \
+         creature, then followed by the turn; halting anywhere else puts the server's melee reach \
+         somewhere the player cannot see the mob"
+    );
+    assert_eq!(
+        (w.at(WOLF).at, w.at(WOLF).orientation),
+        (rendered, 0.0),
+        "server and client must agree on where the creature stopped and which way it now looks"
+    );
+}
+
+#[test]
+fn every_chase_leg_travels_at_the_configured_run_speed() {
+    let run = lyracore_shared::constants::speeds::RUN;
+    for (case, twist) in [
+        ("a standing victim", (|w| w) as Twist),
+        ("a kiting victim", |w: Scenario| {
+            w.kiting(HUNTER, p(15.0, 0.0, 10.0))
+        }),
+    ] {
+        let mut w = twist(wolf_fighting(p(15.0, 0.0, 10.0)).attacking(WOLF, HUNTER));
+        let tick = w.firing(SETTLED, 500_000, catch_all());
+        run_cycle(&mut w, tick);
+
+        let leg = w.effects();
+        assert_eq!(leg.len(), 1, "one run leg on the covered firing ({case})");
+        let travelled = ((leg[0].dest.x - leg[0].start.x).powi(2)
+            + (leg[0].dest.y - leg[0].start.y).powi(2))
+        .sqrt();
+        let implied = travelled / (leg[0].dur_ms as f32 / 1000.0);
+        assert!(
+            leg[0].run && (implied - run).abs() < 0.05,
+            "a leg whose distance and duration disagree with the configured run speed is a \
+             creature that teleports or crawls: {travelled} yd in {} ms implies {implied} yd/s, \
+             not {run} ({case})",
+            leg[0].dur_ms
+        );
+    }
 }
 
 #[test]
@@ -3662,6 +3892,13 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
             ),
         ),
         (
+            "fn translation_flags(unit: &WorldEntity, leg: Option<CreatureSpline>) -> u32 {",
+            concat!(
+                "{ let carried = leg.is_some_and(|l| l.dur_ms > 0); unit.movement_flags | if ",
+                "carried { MOVE_FLAG_FORWARD } else { 0 } }",
+            ),
+        ),
+        (
             "fn caster_hold_range_yd(ctx: &ReducerContext, entry: u32) -> f32 {",
             concat!(
                 "{ let spells = ctx.db.game_spell(); let mut max_r = 0u32; for r in ",
@@ -3871,8 +4108,9 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "row.attacker_guid, scope)?; let victim = ",
                 "entities.guid().find(row.target_guid)?; Some(Pursuit { guid: c.guid, at: Point ",
                 "{ x: c.x, y: c.y, z: c.z, }, orientation: c.orientation, victim_at: Point { x: ",
-                "victim.x, y: victim.y, z: victim.z, }, victim_last_move_ms: ",
-                "victim.last_move_ms, routing: tick::creature_is_routing(self.ctx, &c), leg: ",
+                "victim.x, y: victim.y, z: victim.z, }, victim_movement_flags: ",
+                "translation_flags( &victim, splines.guid().find(row.target_guid), ), routing: ",
+                "tick::creature_is_routing(self.ctx, &c), leg: ",
                 "splines.guid().find(c.guid).map(|s| as_leg(s, false)), }) }) .collect() } fn ",
                 "caster_hold_range(&self, guid: u64) -> f32 { self.ctx .db .game_world_entity() ",
                 ".guid() .find(guid) .map_or(0.0, |c| caster_hold_range_yd(self.ctx, c.entry)) ",

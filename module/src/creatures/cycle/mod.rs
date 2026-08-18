@@ -18,8 +18,8 @@ use super::ai::{
     is_aggro_candidate, leg_in_flight, leg_toward, may_start_rout, nearest_waypoint_idx,
     next_waypoint_idx, rout_close_ms, spline_t, stealth_detect_range, wander_point,
     within_assist_radius, wounded_slow_factor, TickScope, CHASE_LEAD_YD, CHASE_LEASH_SQ,
-    CHASE_MELEE_SQ, CHASE_REPATH_COS, CHASE_TARGET_MOVING_MS, FLEE_LEG_YD, MOVE_TICK_SECS,
-    RETURN_LEASH_SQ, SENSE_EVERY_N_TICKS, WANDER_CHANCE_PCT, WANDER_RADIUS,
+    CHASE_MELEE_SQ, CHASE_REPATH_COS, FLEE_LEG_YD, MOVE_TICK_SECS, RETURN_LEASH_SQ,
+    SENSE_EVERY_N_TICKS, WANDER_CHANCE_PCT, WANDER_RADIUS,
 };
 use super::cast_condition;
 use super::pet;
@@ -411,7 +411,7 @@ pub(crate) trait ThreatSink {
 }
 
 /// One creature closing on the unit it fights, with everything that decision reads: where both
-/// stand, how recently the victim moved, and the leg the chaser is already running.
+/// stand, whether the victim is travelling, and the leg the chaser is already running.
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct Pursuit {
     pub guid: u64,
@@ -419,8 +419,11 @@ pub(crate) struct Pursuit {
     /// Where the creature currently looks — the facing turn is idempotent against it.
     pub orientation: f32,
     pub victim_at: Point,
-    /// The victim's move clock. A kiter is run down on the move; a planted one is stood next to.
-    pub victim_last_move_ms: u32,
+    /// The victim's LIVE movement flags, read through `combat::is_translating`. A kiter is run down
+    /// on the move; one that is standing — turning in place included — is stood next to and faced.
+    /// A move CLOCK cannot answer this: it still reads "just moved" for most of a second after the
+    /// player released the key, which is long enough to throw a lead leg straight through them.
+    pub victim_movement_flags: u32,
     /// Inside an open rout window: the rout leg is this creature's sole mover this firing.
     pub routing: bool,
     /// The leg it is already riding. Both the re-aim decision and the stop read it.
@@ -1269,6 +1272,10 @@ fn angle_diff(from: f32, to: f32) -> f32 {
 /// heading it was thrown along; an offensive caster holds at spell range instead of face-tanking;
 /// and a creature that reaches a victim standing inside melee reach stops and turns to face it.
 ///
+/// Melee reach is read BEFORE the lead, and the victim's live translation flags decide which of the
+/// two applies, so a player who released the movement key inside reach is turned to rather than led
+/// eight yards past — the sideways overshoot of running to their flank.
+///
 /// The engagements are the candidate set, so this phase ignores the active-cell sweep — a player
 /// cannot freeze a fight by dragging it away — and stays O(fights running). A routing or
 /// crowd-controlled creature is skipped, leaving the rout leg and fear as its sole movers, and every
@@ -1291,11 +1298,11 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         if gap_sq > CHASE_LEASH_SQ {
             continue;
         }
-        // A creature plants into attack stance only for a victim that STOPPED. It runs a kiter down
-        // continuously — the swing pass hits on the move — which is what removes the
-        // run/attack-stance/run flicker of chasing someone who never stands still.
-        let victim_moving =
-            tick.now_ms.wrapping_sub(c.victim_last_move_ms) < CHASE_TARGET_MOVING_MS;
+        // Melee reach FIRST, then the victim's live translation state: a creature plants into attack
+        // stance for a victim that is standing, and runs a kiter down continuously — the swing pass
+        // hits on the move — which is what removes the run/attack-stance/run flicker of chasing
+        // someone who never stands still.
+        let victim_moving = crate::combat::is_translating(c.victim_movement_flags);
         if gap_sq <= CHASE_MELEE_SQ && !victim_moving {
             stand_and_face(w, tick, &c);
             continue;
