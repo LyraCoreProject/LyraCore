@@ -7,7 +7,7 @@ use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::ROUT_DURATION_MS;
 use crate::creatures::eventai::{
     self, CreatureAiEvent, CreatureState, Diagnostic, EventAiRequest, EventAiWorld, EventContext,
-    EventKind, RuleAction, RuleState,
+    EventKind, RuleAction, RuleState, EVENT_ON_DEATH, EVENT_ON_SPAWN,
 };
 use crate::creatures::{chase_step, rout_window_open};
 use lyracore_shared::spatial;
@@ -1536,7 +1536,31 @@ impl EngageSink for Scenario {
             .collect()
     }
     fn leave_combat(&mut self, guid: u64) {
-        // EventAI edge resets extend here with the production combat-exit boundary.
+        let rule_ids: HashSet<u64> = self
+            .eventai_rows
+            .borrow()
+            .iter()
+            .filter(|row| {
+                (row.creature_guid == 0
+                    && self
+                        .creatures
+                        .borrow()
+                        .get(&guid)
+                        .is_some_and(|creature| creature.entry == row.creature_entry))
+                    || (row.creature_entry == 0 && row.creature_guid == guid)
+            })
+            .filter(|row| !matches!(row.event_type, EVENT_ON_DEATH | EVENT_ON_SPAWN))
+            .map(eventai::effective_rule_id)
+            .collect();
+        if let Some(state) = self.eventai_rule_state.borrow_mut().get_mut(&guid) {
+            state.retain(|rule_id, _| !rule_ids.contains(rule_id));
+        }
+        if let Some(state) = self.eventai_creature_state.borrow_mut().get_mut(&guid) {
+            state.engagement_id = state.engagement_id.saturating_add(1);
+            state.phase = 0;
+            state.ranged_distance = 0.0;
+            state.ranged_angle = 0.0;
+        }
         self.unflagged.borrow_mut().push(guid);
         self.combat_flags.borrow_mut().remove(&guid);
     }
@@ -4700,7 +4724,7 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 ".filter_map(|guid| entities.guid().find(guid)) .filter(|e| e.unit_flags & ",
                 "constants::unit_flags::IN_COMBAT != 0) .map(|e| Combatant { guid: e.guid, ",
                 "combat_until_ms: e.combat_until_ms, }) .collect() } fn leave_combat(&mut self, ",
-                "guid: u64) { let entities = self.ctx.db.game_world_entity(); if let Some(mut ",
+                "guid: u64) { crate::creatures::eventai::reset_engagement(self.ctx, guid); let entities = self.ctx.db.game_world_entity(); if let Some(mut ",
                 "e) = entities.guid().find(guid) { e.unit_flags &= ",
                 "!constants::unit_flags::IN_COMBAT; entities.guid().update(e); } } }",
             ),

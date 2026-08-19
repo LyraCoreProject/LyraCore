@@ -412,7 +412,7 @@ impl EngageSink for CtxWorld<'_> {
             .collect()
     }
     fn leave_combat(&mut self, guid: u64) {
-        // EventAI edge resets extend here so combat exit keeps one authoritative boundary.
+        crate::creatures::eventai::reset_engagement(self.ctx, guid);
         let entities = self.ctx.db.game_world_entity();
         if let Some(mut e) = entities.guid().find(guid) {
             e.unit_flags &= !constants::unit_flags::IN_COMBAT;

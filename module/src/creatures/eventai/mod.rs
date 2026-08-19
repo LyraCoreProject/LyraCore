@@ -10,7 +10,15 @@ mod edges;
 mod mobility;
 
 pub(crate) use combat::{suppresses_fixed_rout, suppresses_flat_cast};
-pub(crate) use edges::creature_ai_on_aggro;
+#[allow(
+    unused_imports,
+    reason = "keeps the lifecycle cleanup reachable to sibling creature modules"
+)]
+pub(crate) use edges::reset_creature_lifecycle;
+pub(crate) use edges::{
+    creature_ai_on_aggro, creature_ai_on_creature_death, creature_ai_on_creature_spawn,
+    reset_engagement,
+};
 #[cfg(test)]
 pub(crate) use engine::{evaluate, EventAiWorld};
 pub(crate) use fixtures::seed_on_aggro_fixtures;

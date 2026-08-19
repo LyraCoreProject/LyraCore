@@ -246,19 +246,26 @@ fn finish_opportunity<W: EventAiWorld>(
     creature_state: CreatureState,
 ) {
     let state = match rule.repeat {
-        RepeatPolicy::Once => RuleState {
+        RepeatPolicy::Repeat
+            if !matches!(
+                context.kind,
+                EventKind::OnAggro | EventKind::OnSpawn | EventKind::OnDeath
+            ) =>
+        {
+            RuleState {
+                next_eligible_ms: context.now_ms.saturating_add(roll_window(
+                    world,
+                    rule.event_params[2],
+                    rule.event_params[3],
+                )),
+                consumed: false,
+                lifecycle_id: creature_state.lifecycle_id,
+                engagement_id: creature_state.engagement_id,
+            }
+        }
+        _ => RuleState {
             next_eligible_ms: 0,
             consumed: true,
-            lifecycle_id: creature_state.lifecycle_id,
-            engagement_id: creature_state.engagement_id,
-        },
-        RepeatPolicy::Repeat => RuleState {
-            next_eligible_ms: context.now_ms.saturating_add(roll_window(
-                world,
-                rule.event_params[2],
-                rule.event_params[3],
-            )),
-            consumed: false,
             lifecycle_id: creature_state.lifecycle_id,
             engagement_id: creature_state.engagement_id,
         },
