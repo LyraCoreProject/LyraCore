@@ -592,6 +592,75 @@ verify_caster_spell_catalogue() {
     fail=1
   fi
 }
+verify_eventai_catalogue() {
+  local rule action order values entry guid spell text summon kind option duplicate=0 mismatch=0 missing=0 unsupported=0
+  rule="$(n "SELECT source_rule_id FROM game_creature_ai_event WHERE source_rule_id > 0")"
+  if [ "$rule" -eq 0 ]; then
+    echo "  ..    EventAI: no supported source rules in this World Import Scope"
+    return 0
+  fi
+  chk "EventAI source rule actions" 1 "$rule"
+  for kind in $(q_list "SELECT event_type FROM game_creature_ai_event" | sort -u); do
+    case "$kind" in
+      0|1|2|3|4|5|6) chk "EventAI enabled event type $kind" 1 "$(n "SELECT id FROM game_creature_ai_event WHERE event_type = $kind")" ;;
+      *) unsupported=$((unsupported + 1)) ;;
+    esac
+  done
+  for kind in $(q_list "SELECT action_type FROM game_creature_ai_event" | sort -u); do
+    case "$kind" in
+      0|1|2|3|4|5|6|7|8) chk "EventAI enabled action type $kind" 1 "$(n "SELECT id FROM game_creature_ai_event WHERE action_type = $kind")" ;;
+      *) unsupported=$((unsupported + 1)) ;;
+    esac
+  done
+  for kind in $(q_list "SELECT target_policy FROM game_creature_ai_event" | sort -u); do
+    case "$kind" in 0|1|2|3|4|5|6|7|8|9|10) ;; *) unsupported=$((unsupported + 1)) ;; esac
+  done
+  for kind in $(q_list "SELECT repeat_policy FROM game_creature_ai_event" | sort -u); do
+    case "$kind" in 0|1) ;; *) unsupported=$((unsupported + 1)) ;; esac
+  done
+  for option in $(q_list "SELECT source_flags FROM game_creature_ai_event" | sort -u); do
+    [ $((option & ~3)) -eq 0 ] || unsupported=$((unsupported + 1))
+  done
+  for option in $(q_list "SELECT cast_options FROM game_creature_ai_event" | sort -u); do
+    [ $((option & ~29)) -eq 0 ] || unsupported=$((unsupported + 1))
+  done
+  for entry in $(q_list "SELECT creature_entry FROM game_creature_ai_event WHERE creature_entry > 0" | sort -u); do
+    [ "$(n "SELECT entry FROM game_creature_template WHERE entry = $entry")" -gt 0 ] || missing=1
+  done
+  for guid in $(q_list "SELECT creature_guid FROM game_creature_ai_event WHERE creature_guid > 0" | sort -u); do
+    [ "$(n "SELECT guid FROM game_creature_spawn WHERE guid = $guid")" -gt 0 ] || missing=1
+  done
+  for spell in $(q_list "SELECT spell_id FROM game_creature_ai_event WHERE spell_id > 0" | sort -u); do
+    [ "$(n "SELECT spell_id FROM game_spell WHERE spell_id = $spell")" -gt 0 ] || missing=1
+  done
+  for text in $( {
+    q_list "SELECT action_param_1 FROM game_creature_ai_event WHERE action_type = 0 AND action_param_1 > 0"
+    q_list "SELECT action_param_2 FROM game_creature_ai_event WHERE action_type = 0 AND action_param_2 > 0"
+    q_list "SELECT action_param_3 FROM game_creature_ai_event WHERE action_type = 0 AND action_param_3 > 0"
+  } | sort -u); do
+    [ "$(n "SELECT id FROM game_creature_ai_broadcast_text WHERE id = $text")" -gt 0 ] || missing=1
+  done
+  for entry in $(q_list "SELECT action_param_1 FROM game_creature_ai_event WHERE action_type = 7 AND action_param_1 > 0" | sort -u); do
+    [ "$(n "SELECT entry FROM game_creature_template WHERE entry = $entry")" -gt 0 ] || missing=1
+  done
+  for summon in $(q_list "SELECT action_param_3 FROM game_creature_ai_event WHERE action_type = 7 AND action_param_3 > 0" | sort -u); do
+    [ "$(n "SELECT id FROM game_creature_ai_summon WHERE id = $summon")" -gt 0 ] || missing=1
+  done
+  for rule in $(q_list "SELECT source_rule_id FROM game_creature_ai_event WHERE source_rule_id > 0" | sort -u); do
+    order="$(q_list "SELECT action_order FROM game_creature_ai_event WHERE source_rule_id = $rule")"
+    duplicate=$((duplicate + $(printf '%s\n' "$order" | sort | uniq -d | wc -l)))
+    for values in chance_pct allowed_phase_mask source_flags repeat_policy event_param_1 event_param_2 event_param_3 event_param_4 event_param_5 event_param_6 creature_entry creature_guid event_type; do
+      [ "$(q_list "SELECT $values FROM game_creature_ai_event WHERE source_rule_id = $rule" | sort -u | wc -l)" -le 1 ] || mismatch=$((mismatch + 1))
+    done
+  done
+  sql_check_abort
+  if [ "$duplicate" -ne 0 ] || [ "$mismatch" -ne 0 ] || [ "$missing" -ne 0 ] || [ "$unsupported" -ne 0 ]; then
+    echo "  FAIL  EventAI linkage: duplicate-action-orders=$duplicate metadata-mismatches=$mismatch missing-references=$missing unsupported-native-values=$unsupported"
+    fail=1
+  else
+    echo "  ok    EventAI enabled types, grouping, subjects, spells, texts, and summon locations resolve"
+  fi
+}
 verify_alliance_creation_data() {
   chk "Human start positions (all 6 classes, map 0)" "$FLOOR_HUMAN_START_POSITIONS" "$(n "SELECT race_class FROM game_start_position WHERE race=1 AND map_id=0")"
   chk "Dwarf start positions (all 5 classes, map 0)" "$FLOOR_DWARF_START_POSITIONS" "$(n "SELECT race_class FROM game_start_position WHERE race=3 AND map_id=0")"
@@ -816,6 +885,7 @@ chk0 "rotation rows (game_creature_spell)" "$FLOOR_ROTATION_ROWS" "$(n "SELECT i
 chk0 "476 Geomancer rotation nuke row"     "$FLOOR_GEOMANCER_ROTATION_NUKE" "$(n "SELECT id FROM game_creature_spell WHERE creature_entry=476 AND condition=0")"
 chk0 "474/476 Frost Armor rotation row"    "$FLOOR_FROST_ARMOR_ROTATION" "$(n "SELECT id FROM game_creature_spell WHERE spell_id=12544")"
 verify_caster_spell_catalogue
+verify_eventai_catalogue
 
 # --- AreaTable/AreaTrigger/WorldSafeLocs import counts ------------------------------------------
 # [V] tune-to-client: these three land from the standalone --dbc pass above (dbc.rs::run), NOT the

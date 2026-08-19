@@ -40,6 +40,7 @@
 
 mod collision;
 mod dbc;
+mod eventai;
 mod go_model;
 mod nav;
 mod pack_client;
@@ -3389,6 +3390,7 @@ pub(crate) const FAMILIES: &[&str] = &[
     "gameobjects",
     "trainers",
     "casts",
+    "creature-ai",
     "globals",
     "spellmeta",
 ];
@@ -3605,6 +3607,43 @@ fn build_dump_plan(
             );
         }
         entries.insert(e);
+    }
+    let imported_guid_entries: std::collections::HashMap<u64, u64> = spawns
+        .iter()
+        .map(|(guid, entry, ..)| (*guid, *entry))
+        .collect();
+    let importable_templates: std::collections::HashSet<u64> =
+        parse_table(dump, "creature_template")
+            .into_iter()
+            .filter_map(|row| {
+                let entry = field(&row, ct::ENTRY).parse().ok()?;
+                (field(&row, ct::UNIT_FLAGS).parse::<u32>().unwrap_or(0) & 0x0200_0000 == 0)
+                    .then_some(entry)
+            })
+            .collect();
+    let eventai = if family_active(args, "creature-ai") {
+        loop {
+            let plan = eventai::build(
+                dump,
+                &entries,
+                &imported_guid_entries,
+                &importable_templates,
+            );
+            let added = plan
+                .forced_template_entries
+                .iter()
+                .copied()
+                .filter(|entry| entries.insert(*entry))
+                .count();
+            if added == 0 {
+                break plan;
+            }
+        }
+    } else {
+        eventai::EventAiPlan::default()
+    };
+    if family_active(args, "creature-ai") {
+        eventai.report();
     }
     for slice in &scope.bounded_slices {
         let count = spawns
@@ -4567,6 +4606,30 @@ fn build_dump_plan(
         );
     }
 
+    if family_active(args, "creature-ai") {
+        stmts.push("DELETE FROM game_creature_ai_event WHERE id > 0".into());
+        stmts.push("DELETE FROM game_creature_ai_broadcast_text WHERE id > 0".into());
+        stmts.push("DELETE FROM game_creature_ai_summon WHERE id > 0".into());
+        push_insert(
+            &mut stmts,
+            "game_creature_ai_event",
+            "id,creature_entry,event_type,action_type,text,spell_id,initial_min_ms,initial_max_ms,repeat_min_ms,repeat_max_ms,source_rule_id,action_order,creature_guid,chance_pct,allowed_phase_mask,source_flags,repeat_policy,event_param_1,event_param_2,event_param_3,event_param_4,event_param_5,event_param_6,action_param_1,action_param_2,action_param_3,target_policy,cast_options",
+            &eventai.event_rows,
+        );
+        push_insert(
+            &mut stmts,
+            "game_creature_ai_broadcast_text",
+            "id,male_text,female_text,chat_type,language_id,emote_delay_1_ms,emote_id_1,emote_delay_2_ms,emote_id_2,emote_delay_3_ms,emote_id_3",
+            &eventai.broadcast_rows,
+        );
+        push_insert(
+            &mut stmts,
+            "game_creature_ai_summon",
+            "id,x,y,z,orientation,lifetime_ms",
+            &eventai.summon_rows,
+        );
+    }
+
     // P3: the class/level stat curve + P1: all-(race,class) start positions + 209: graveyard-zone
     // links (all global, plain SQL — not box-scoped) + work-item 212's createinfo spells/actions/items
     // + work-item 225's areatrigger-teleport dungeon portals.
@@ -4681,6 +4744,9 @@ fn build_dump_plan(
             "casts",
             (creature_casts.len() + creature_rotation_rows.len()) as u64,
         ));
+    }
+    if family_active(args, "creature-ai") {
+        stamps.push(("creature-ai", eventai.row_count()));
     }
     if family_active(args, "globals") {
         stamps.push(("globals", globals_row_count));
@@ -6033,6 +6099,7 @@ mod tests {
             "gameobjects",
             "trainers",
             "casts",
+            "creature-ai",
             "globals",
             "spellmeta",
         ] {
@@ -6659,6 +6726,441 @@ mod tests {
             creature_template_row(creature_entry, 0),
             quest_template_row(quest_entry, "Test Quest"),
         )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn eventai_rule_row(
+        id: u64,
+        subject: i64,
+        event: u32,
+        inverse_phase_mask: u32,
+        chance: u32,
+        flags: u32,
+        params: [u32; 6],
+        actions: [[i64; 4]; 3],
+    ) -> String {
+        let mut columns = vec![
+            id.to_string(),
+            subject.to_string(),
+            event.to_string(),
+            inverse_phase_mask.to_string(),
+            chance.to_string(),
+            flags.to_string(),
+        ];
+        columns.extend(params.into_iter().map(|value| value.to_string()));
+        columns.extend(actions.into_iter().flatten().map(|value| value.to_string()));
+        format!("({})", columns.join(","))
+    }
+
+    fn eventai_broadcast_row(id: u32, male: &str, female: &str) -> String {
+        format!("({id},'{male}','{female}',1,0,0,0,0,0,0,5,6,7,8,9,10,0)")
+    }
+
+    fn eventai_fixture_dump() -> String {
+        let mut rules = vec![
+            eventai_rule_row(
+                10,
+                100,
+                0,
+                2,
+                100,
+                0x421,
+                [1_000, 2_000, 3_000, 4_000, 0, 0],
+                [[1, 900, 901, 902], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+            eventai_rule_row(
+                11,
+                100,
+                2,
+                0,
+                75,
+                0,
+                [80, 20, 100, 200, 0, 0],
+                [[11, 42, 1, 0xA21], [5, 7, 0, 0], [25, 0, 0, 0]],
+            ),
+            eventai_rule_row(
+                12,
+                100,
+                14,
+                0,
+                100,
+                0,
+                [500, 30, 100, 200, 0, 0],
+                [[32, 200, 17, 700], [11, 42, 12, 0], [39, 40, 0, 0]],
+            ),
+            eventai_rule_row(
+                13,
+                100,
+                11,
+                0,
+                100,
+                0,
+                [0; 6],
+                [[22, 3, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+            eventai_rule_row(
+                14,
+                100,
+                9,
+                0,
+                100,
+                0,
+                [5, 20, 100, 200, 0, 0],
+                [[29, 15, -45, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+            eventai_rule_row(
+                15,
+                100,
+                4,
+                0,
+                100,
+                0,
+                [0; 6],
+                [[54, 900, 1, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+            eventai_rule_row(
+                16,
+                -2,
+                6,
+                0,
+                100,
+                0,
+                [0; 6],
+                [[1, -1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+            eventai_rule_row(
+                17,
+                200,
+                11,
+                0,
+                100,
+                0,
+                [0; 6],
+                [[1, 901, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+        ];
+        for (offset, target) in [0, 2, 4, 6, 8, 12, 18].into_iter().enumerate() {
+            rules.push(eventai_rule_row(
+                20 + offset as u64,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[11, 42, target, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ));
+        }
+        format!(
+            "x INSERT INTO `creature` VALUES \
+             (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0),\
+             (2,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {},{}; \
+             INSERT INTO `broadcast_text` VALUES {},{},{},{}; \
+             INSERT INTO `script_texts` VALUES (-1,'Old\\'s','','','','','','','','',0,1,0,2,0); \
+             INSERT INTO `creature_ai_summons` VALUES (700,1,2,3,4,5); \
+             INSERT INTO `creature_ai_scripts` VALUES {}; y",
+            creature_template_row(100, 0),
+            creature_template_row(200, 0),
+            eventai_broadcast_row(900, "Hogger\\'s", "Hoggerette\\'s"),
+            eventai_broadcast_row(901, "One", "One"),
+            eventai_broadcast_row(902, "Two", "Two"),
+            eventai_broadcast_row(903, "Unused", "Unused"),
+            rules.join(","),
+        )
+    }
+
+    #[test]
+    fn eventai_plan_keeps_source_rule_groups_and_native_mappings() {
+        let dump = eventai_fixture_dump();
+        let mut args = test_args();
+        args.family = Some("creature-ai".to_string());
+        let plan = build_dump_plan(&dump, &args, &None, &None).expect("EventAI plan");
+        assert_eq!(plan.stamps, vec![("creature-ai", 24)]);
+        assert_eq!(plan.stmts.len(), 6, "{:?}", plan.stmts);
+        assert_eq!(
+            &plan.stmts[..3],
+            [
+                "DELETE FROM game_creature_ai_event WHERE id > 0",
+                "DELETE FROM game_creature_ai_broadcast_text WHERE id > 0",
+                "DELETE FROM game_creature_ai_summon WHERE id > 0",
+            ],
+            "a full EventAI reload replaces both imported rows and reserved fixtures"
+        );
+        assert!(plan.stmts.iter().all(|statement| {
+            statement.contains("game_creature_ai_event")
+                || statement.contains("game_creature_ai_broadcast_text")
+                || statement.contains("game_creature_ai_summon")
+        }));
+        assert!(!plan.stmts.iter().any(|statement| {
+            statement.contains("game_creature_ai_state")
+                || statement.contains("game_creature_ai_rule_state")
+                || statement.contains("game_creature_ai_timer")
+        }));
+
+        let events = plan
+            .stmts
+            .iter()
+            .find(|statement| statement.starts_with("INSERT INTO game_creature_ai_event"))
+            .expect("EventAI rows");
+        assert!(
+            events.contains("(4611686018427387944,100,1,0,''"),
+            "{events}"
+        );
+        assert!(
+            events.contains(",10,0,0,100,4294967293,3,1,1000,2000,3000,4000"),
+            "{events}"
+        );
+        assert!(
+            events.contains(",11,0,0,75,4294967295,0,0,20,80,100,200"),
+            "{events}"
+        );
+        assert!(
+            events.contains(",15,0,0,100,4294967295,0,0,0,0,0,0,0,0,900,0,0,0,0)"),
+            "{events}"
+        );
+        assert!(
+            events.contains(&format!(",16,0,{},100,4294967295", world_guid(100, 2))),
+            "{events}"
+        );
+        assert!(events.contains(",17,0,0,100,4294967295,0,0"), "{events}");
+        assert!(events.contains(",15,4294967251,0,0,0)"), "{events}");
+        for target in [0, 1, 3, 4, 5, 6, 8, 9, 10] {
+            assert!(
+                events.contains(&format!(",{target},")),
+                "missing native target {target}: {events}"
+            );
+        }
+        let texts = plan
+            .stmts
+            .iter()
+            .find(|statement| statement.starts_with("INSERT INTO game_creature_ai_broadcast_text"))
+            .expect("EventAI texts");
+        assert!(texts.contains("Hogger''s"), "{texts}");
+        assert!(texts.contains("Old''s"), "{texts}");
+        assert!(!texts.contains("Unused"), "{texts}");
+        assert!(texts.contains(",8,5,9,6,10,7)"), "{texts}");
+
+        let again = build_dump_plan(&dump, &args, &None, &None).expect("repeat EventAI plan");
+        assert_eq!(plan.stmts, again.stmts);
+    }
+
+    #[test]
+    fn eventai_inactive_family_does_not_extend_quest_scope() {
+        let dump = format!(
+            "x INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {},{}; \
+             INSERT INTO `quest_template` VALUES {},{}; \
+             INSERT INTO `creature_questrelation` VALUES (100,500),(200,501); \
+             INSERT INTO `creature_ai_summons` VALUES (700,1,2,3,4,5); \
+             INSERT INTO `creature_ai_scripts` VALUES {}; y",
+            creature_template_row(100, 0),
+            creature_template_row(200, 0),
+            quest_template_row(500, "In scope"),
+            quest_template_row(501, "Summon only"),
+            eventai_rule_row(
+                10,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[32, 200, 0, 700], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+        );
+        let mut args = test_args();
+        args.family = Some("quests".to_string());
+        let plan = build_dump_plan(&dump, &args, &None, &None).expect("quest-only plan");
+        let quests = plan
+            .stmts
+            .iter()
+            .find(|statement| statement.starts_with("INSERT INTO game_quest_template"))
+            .expect("quest rows");
+        assert!(quests.contains("(500,"), "{quests}");
+        assert!(!quests.contains("(501,"), "{quests}");
+        assert_eq!(plan.stamps, vec![("quests", 1)]);
+    }
+
+    #[test]
+    fn eventai_drops_invalid_rules_into_explicit_buckets() {
+        let mut dump = eventai_fixture_dump().replacen(
+            "(903,'Unused','Unused',1,0,0,0,0,0,0,5,6,7,8,9,10,0)",
+            "(903,'Unused','Unused',2,0,0,0,0,0,0,5,6,7,8,9,10,0)",
+            1,
+        );
+        let invalid = [
+            eventai_rule_row(40, 100, 99, 0, 100, 0, [0; 6], [[1, 900, 0, 0]; 3]),
+            eventai_rule_row(41, 100, 0, 0, 0, 0, [0, 1, 0, 1, 0, 0], [[1, 900, 0, 0]; 3]),
+            eventai_rule_row(
+                42,
+                100,
+                0,
+                u32::MAX,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[1, 900, 0, 0]; 3],
+            ),
+            eventai_rule_row(
+                43,
+                100,
+                0,
+                0,
+                100,
+                2,
+                [0, 1, 0, 1, 0, 0],
+                [[1, 900, 0, 0]; 3],
+            ),
+            eventai_rule_row(
+                44,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[99, 0, 0, 0]; 3],
+            ),
+            eventai_rule_row(
+                45,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[1, 999, 0, 0]; 3],
+            ),
+            eventai_rule_row(
+                46,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[11, 0, 0, 0]; 3],
+            ),
+            eventai_rule_row(
+                47,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[11, 42, 99, 0]; 3],
+            ),
+            eventai_rule_row(
+                48,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[32, 999, 0, 700]; 3],
+            ),
+            eventai_rule_row(
+                49,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[32, 200, 0, 999]; 3],
+            ),
+            eventai_rule_row(
+                50,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[1, 4_294_967_296, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+            eventai_rule_row(
+                51,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[54, 900, 0, 77], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+            eventai_rule_row(
+                52,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[1, 903, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+            eventai_rule_row(
+                53,
+                100,
+                14,
+                0,
+                100,
+                0,
+                [1, 30, 0, 1, 0, 0],
+                [[11, 42, 10, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+            eventai_rule_row(
+                54,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[11, 42, 1, 0x2], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+            eventai_rule_row(
+                55,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[11, 42, 1, 0x4], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+        ];
+        dump = dump.replacen("; y", &format!(",{},(999); y", invalid.join(",")), 1);
+        let entries = [100].into_iter().collect();
+        let guids = [(1, 100), (2, 100)].into_iter().collect();
+        let templates = [100, 200].into_iter().collect();
+        let plan = eventai::build(&dump, &entries, &guids, &templates);
+        for (reason, value) in [
+            ("unsupported_event", 99),
+            ("invalid_chance", 0),
+            ("empty_phase_mask", u32::MAX as u64),
+            ("unsupported_flag", 2),
+            ("unsupported_action", 99),
+            ("missing_broadcast_text", 999),
+            ("invalid_spell", 0),
+            ("unsupported_target", 99),
+            ("missing_summon_creature", 999),
+            ("missing_summon_location", 999),
+            ("malformed_rule", 1),
+            ("invalid_numeric", 13),
+            ("unsupported_text_template", 77),
+            ("unsupported_chat_type", 2),
+            ("unsupported_target", 10),
+            ("unsupported_triggered_cast", 2),
+            ("unsupported_force_cast", 4),
+        ] {
+            assert_eq!(plan.dropped(reason, value), 1, "{reason}/{value}");
+        }
+        assert_eq!(plan.event_counts(99), (1, 0, 1, 0));
+        assert_eq!(plan.action_counts(99), (3, 0, 3, 0));
     }
 
     #[test]

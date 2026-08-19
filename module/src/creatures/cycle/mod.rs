@@ -22,6 +22,7 @@ use super::ai::{
     SENSE_EVERY_N_TICKS, WANDER_CHANCE_PCT, WANDER_RADIUS,
 };
 use super::cast_condition;
+use super::eventai::EventAiRequest;
 use super::pet;
 use super::tick::TickSweep;
 
@@ -419,6 +420,8 @@ pub(crate) struct Pursuit {
     /// Where the creature currently looks — the facing turn is idempotent against it.
     pub orientation: f32,
     pub victim_at: Point,
+    /// Where the victim looks. An authored nonzero ranged angle is relative to this facing.
+    pub victim_orientation: f32,
     /// The victim's LIVE movement flags, read through `combat::is_translating`. A kiter is run down
     /// on the move; one that is standing — turning in place included — is stood next to and faced.
     /// A move CLOCK cannot answer this: it still reads "just moved" for most of a second after the
@@ -438,6 +441,9 @@ pub(crate) trait PursuitSink {
     /// whose victim is still in the world. NOT scoped to the active-cell sweep: a fight dragged out
     /// of every active cell must keep running.
     fn pursuits(&self, scope: &TickScope) -> Vec<Pursuit>;
+    /// The EventAI hold distance and angle, in yards and radians. `Some((0, 0))` explicitly
+    /// restores melee posture; `None` leaves the creature's existing caster behavior unchanged.
+    fn authored_ranged_posture(&self, guid: u64) -> Option<(f32, f32)>;
     /// The longest range this creature can bring an offensive spell to bear from; 0 for anything
     /// that has to close to melee.
     fn caster_hold_range(&self, guid: u64) -> f32;
@@ -623,6 +629,9 @@ pub(crate) trait CreatureWorld:
     /// Corpse decay, creature respawn and gameobject respawn. Not behavior — the cycle only
     /// SEQUENCES them. Returns the rows each visited, for the operator log.
     fn run_due_world_maintenance(&mut self) -> Vec<(&'static str, u64)>;
+    /// Evaluate authored creature rules for this firing. The operation owns rule loading, grouping,
+    /// gates, ordered effects and durable rule state.
+    fn evaluate_eventai(&mut self, request: EventAiRequest<'_>) -> u64;
     /// Every registered package tick pass, after all core behavior.
     fn run_package_passes(&mut self);
 }
@@ -668,6 +677,7 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         rows.push(("aggro", seen as u64));
         rows.push(("assist", assist(w, &active, pulls) as u64));
         rows.push(("pet", pet_behavior(w, &tick, &pets) as u64));
+        // EventAI combat precedence extends at this call without changing the rotation itself.
         rows.push(("cast", cast(w, &tick.scope) as u64));
         rows.push(("threat_retarget", threat_retarget(w, &tick.scope) as u64));
     }
@@ -678,8 +688,13 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         rows.push(("regen*", regenerate(w, &in_combat) as u64));
         rows.push(("combat_drop*", combat_exit(w, &tick, &in_combat) as u64));
     }
+    // EventAI combat precedence extends at this call without adding a second rout pass.
     rows.push(("rout", rout(w, &tick) as u64));
     rows.push(("fear", fear(w, &tick) as u64));
+    rows.push((
+        "eventai",
+        w.evaluate_eventai(EventAiRequest::Engaged(&tick.scope)),
+    ));
     if global {
         w.run_package_passes();
     }
@@ -1302,20 +1317,53 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         if gap_sq > CHASE_LEASH_SQ {
             continue;
         }
-        // Melee reach FIRST, then the victim's live translation state: a creature plants into attack
-        // stance for a victim that is standing, and runs a kiter down continuously — the swing pass
-        // hits on the move — which is what removes the run/attack-stance/run flicker of chasing
+        if let Some((distance, angle)) = w.authored_ranged_posture(c.guid) {
+            if distance > 0.0 && w.line_of_sight(c.guid, c.victim_at) {
+                let aim = ranged_hold_point(&c, distance, angle);
+                let aim_gap_sq = dist_sq(c.at, aim);
+                if aim_gap_sq <= 0.25 {
+                    continue;
+                }
+                let aim_gap = aim_gap_sq.sqrt();
+                let direction = ((aim.x - c.at.x) / aim_gap, (aim.y - c.at.y) / aim_gap);
+                let step = w.navigate(c.guid, (aim.x, aim.y), aim_gap);
+                if step == (c.at.x, c.at.y)
+                    || !needs_new_leg(c.leg.as_ref(), direction, Some((aim.x, aim.y)))
+                {
+                    continue;
+                }
+                let run = w.speed_of(c.guid, Gait::Run);
+                let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, run) else {
+                    continue;
+                };
+                w.commit_leg(
+                    c.guid,
+                    Leg {
+                        to: (x, y),
+                        z_fallback: aim.z,
+                        dur_ms,
+                        gait: Gait::Run,
+                        hold_until_landed: false,
+                    },
+                    tick.now_ms,
+                );
+                continue;
+            }
+        } else {
+            // An offensive caster stands and casts while its victim is in spell range and in plain
+            // sight. A wall-blocked caster closes instead, matching the cast phase's verdict.
+            let hold = w.caster_hold_range(c.guid) * CASTER_HOLD_MARGIN;
+            if hold > 0.0 && gap_sq <= hold * hold && w.line_of_sight(c.guid, c.victim_at) {
+                continue;
+            }
+        }
+        // In melee posture, reach precedes the victim's live translation state. A creature plants
+        // into attack stance for a victim that is standing and runs a kiter down continuously. The
+        // swing pass hits on the move, which removes the run/attack-stance/run flicker of chasing.
         // someone who never stands still.
         let victim_moving = crate::combat::is_translating(c.victim_movement_flags);
         if gap_sq <= CHASE_MELEE_SQ && !victim_moving {
             stand_and_face(w, tick, &c);
-            continue;
-        }
-        // An offensive caster stands and casts (the cast phase already fired this firing) while its
-        // victim is inside spell range and in plain sight. A wall-blocked one closes instead, which
-        // is the verdict the cast phase reached about that same line.
-        let hold = w.caster_hold_range(c.guid) * CASTER_HOLD_MARGIN;
-        if hold > 0.0 && gap_sq <= hold * hold && w.line_of_sight(c.guid, c.victim_at) {
             continue;
         }
         let gap = gap_sq.sqrt();
@@ -1355,6 +1403,19 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         w.commit_leg(c.guid, leg, tick.now_ms);
     }
     visited
+}
+
+fn ranged_hold_point(pursuit: &Pursuit, distance: f32, angle: f32) -> Point {
+    let radial = if angle == 0.0 {
+        (pursuit.at.y - pursuit.victim_at.y).atan2(pursuit.at.x - pursuit.victim_at.x)
+    } else {
+        pursuit.victim_orientation + angle
+    };
+    Point {
+        x: pursuit.victim_at.x + distance * radial.cos(),
+        y: pursuit.victim_at.y + distance * radial.sin(),
+        z: pursuit.victim_at.z,
+    }
 }
 
 /// Does this chaser need a NEW leg? One whose leg has landed does. One still riding a leg keeps it

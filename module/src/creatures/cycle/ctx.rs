@@ -20,6 +20,7 @@ use super::{
 use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::TickScope;
 use crate::creatures::cast_condition;
+use crate::creatures::eventai::{self, EventAiRequest};
 use crate::creatures::pet;
 use crate::creatures::tick::{self, CreatureSpline, TickSweep};
 use crate::spell::game_pending_cast;
@@ -411,6 +412,7 @@ impl EngageSink for CtxWorld<'_> {
             .collect()
     }
     fn leave_combat(&mut self, guid: u64) {
+        crate::creatures::eventai::reset_engagement(self.ctx, guid);
         let entities = self.ctx.db.game_world_entity();
         if let Some(mut e) = entities.guid().find(guid) {
             e.unit_flags &= !constants::unit_flags::IN_COMBAT;
@@ -542,6 +544,9 @@ impl CastSink for CtxWorld<'_> {
             .collect()
     }
     fn rotation_of(&self, guid: u64) -> Vec<SpellOption> {
+        if eventai::suppresses_flat_cast(self.ctx, guid) {
+            return Vec::new();
+        }
         self.entry_of(guid).map_or(Vec::new(), |entry| {
             self.ctx
                 .db
@@ -558,6 +563,9 @@ impl CastSink for CtxWorld<'_> {
         })
     }
     fn lone_spell(&self, guid: u64) -> Option<u32> {
+        if eventai::suppresses_flat_cast(self.ctx, guid) {
+            return None;
+        }
         self.ctx
             .db
             .game_creature_cast()
@@ -653,6 +661,7 @@ impl PursuitSink for CtxWorld<'_> {
                         y: victim.y,
                         z: victim.z,
                     },
+                    victim_orientation: victim.orientation,
                     victim_movement_flags: translation_flags(
                         &victim,
                         splines.guid().find(row.target_guid),
@@ -662,6 +671,9 @@ impl PursuitSink for CtxWorld<'_> {
                 })
             })
             .collect()
+    }
+    fn authored_ranged_posture(&self, guid: u64) -> Option<(f32, f32)> {
+        eventai::ranged_posture(self.ctx, guid)
     }
     fn caster_hold_range(&self, guid: u64) -> f32 {
         self.ctx
@@ -722,7 +734,8 @@ impl RoutSink for CtxWorld<'_> {
                     }),
                     health: c.health,
                     max_health: c.max_health,
-                    eligible: tick::rout_eligible(self.ctx, &c),
+                    eligible: tick::rout_eligible(self.ctx, &c)
+                        && !eventai::suppresses_fixed_rout(self.ctx, c.guid),
                     rout_ends_ms: row.rout_ends_ms,
                     routing: tick::creature_is_routing(self.ctx, &c),
                     committed: splines.guid().find(c.guid).is_some(),
@@ -908,6 +921,9 @@ impl CreatureWorld for CtxWorld<'_> {
                 tick::pass_gameobject_respawn(self.ctx) as u64,
             ),
         ]
+    }
+    fn evaluate_eventai(&mut self, request: EventAiRequest<'_>) -> u64 {
+        eventai::evaluate_context(self.ctx, request)
     }
     fn run_package_passes(&mut self) {
         crate::hooks::run_package_tick_passes(self.ctx);
