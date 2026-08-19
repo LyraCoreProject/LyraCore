@@ -134,6 +134,38 @@ pub struct SpellReagent {
     pub count: u32,
 }
 
+/// The classic-db `spell_proc_event` **overlay** for one spell: everything a Proc needs that Spell.dbc
+/// has no column for. Vanilla's spell data carries a proc's event mask, flat chance and charge count
+/// and nothing else — no procs-per-minute rate, no internal cooldown, no hit-quality rule and no
+/// filter on which spells may trigger it. Those live here, keyed by spell id, and an ABSENT row means
+/// "the header's values, and neutral zeros for the rest".
+///
+/// Read once, at apply: `spell::proc::freeze_profile` folds this row and the header into the profile
+/// the aura freezes, so the proc pass never re-joins either. Module-private — the client has its own
+/// Spell.dbc and the gateway has no use for proc policy, so there is no binding to hand-sync. No
+/// `Timestamp`, so the importer loads it as plain SQL. [static]
+#[table(accessor = game_spell_proc_event)]
+pub struct SpellProcEvent {
+    #[primary_key]
+    pub spell_id: u32,
+    /// `procFlags` OVERRIDE — replaces the header's mask when non-zero. 0 = use the header's.
+    pub proc_flags: u32,
+    /// `procEx`, verbatim. The engine reads only the normal-hit / critical-hit bits.
+    pub proc_ex: u32,
+    /// School filter on the triggering spell; 0 = any school.
+    pub school_mask: u8,
+    /// Spell-family filter (name half); 0 = any family.
+    pub family_name: u8,
+    /// Spell-family filter (flags half); paired with `family_name`.
+    pub family_flags: u64,
+    /// Procs-per-minute rate; replaces the chance for a Carrier that dealt the hit. 0 = flat chance.
+    pub ppm_rate: f32,
+    /// `CustomChance` — the flat percent, replacing the header's `procChance` when non-zero.
+    pub custom_chance: u8,
+    /// Internal cooldown; the Proc fires at most once per window. 0 = none.
+    pub icd_ms: u32,
+}
+
 // ===========================================================================================
 //  Aura + cast-event + schedule tables [event/entity]
 // ===========================================================================================

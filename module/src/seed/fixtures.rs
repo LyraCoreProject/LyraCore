@@ -12,11 +12,12 @@
 use spacetimedb::{ReducerContext, Table};
 
 use crate::{
-    game_creature_family, game_creature_spawn, game_creature_template, game_createinfo_spell,
-    game_faction, game_item_template, game_spell, game_spell_effect, game_taxi_node, game_taxi_path,
-    game_taxi_path_node, game_world_entity, CreatureFamily, CreatureSpawn, CreatureTemplate,
-    CreateinfoSpell, Faction, GameTaxiNode, GameTaxiPath, GameTaxiPathNode, ItemTemplate, Spell,
-    SpellEffect, ALL_PLAYABLE_CLASS_MASK, ALL_PLAYABLE_RACE_MASK,
+    game_createinfo_spell, game_creature_family, game_creature_spawn, game_creature_template,
+    game_faction, game_item_template, game_spell, game_spell_effect, game_spell_proc_event,
+    game_taxi_node, game_taxi_path, game_taxi_path_node, game_world_entity, CreateinfoSpell,
+    CreatureFamily, CreatureSpawn, CreatureTemplate, Faction, GameTaxiNode, GameTaxiPath,
+    GameTaxiPathNode, ItemTemplate, Spell, SpellEffect, SpellProcEvent, ALL_PLAYABLE_CLASS_MASK,
+    ALL_PLAYABLE_RACE_MASK,
 };
 
 /// Canonical fixture-NPC/item constructors — the single source of truth for the synthetic rows
@@ -873,19 +874,35 @@ pub(crate) const TEST_PROC_COIN: u32 = 50141;
 /// A certain Proc with 3 charges off a melee hit taken — the charge fixture. It fires 3 times and then
 /// the whole buff comes off.
 pub(crate) const TEST_PROC_CHARGES: u32 = 50142;
+/// A certain Proc off a melee hit taken with a 5 s internal cooldown, authored through an overlay row
+/// — the cooldown fixture. However fast the hits come, it fires at most once per window.
+pub(crate) const TEST_PROC_COOLDOWN: u32 = 50143;
+/// A 2-per-minute Proc off a melee hit DEALT, authored through an overlay row — the rate fixture. Its
+/// header chance is 0, so every fire it ever makes came from the rate.
+pub(crate) const TEST_PROC_PPM: u32 = 50144;
 
-/// Mock-seed the Proc-engine test fixtures: one inert mark plus two self-buff Procs that exercise the
-/// chance roll and the charge count on a development database, with no Spell.dbc import.
+/// The internal cooldown `TEST_PROC_COOLDOWN` carries, in milliseconds.
+const TEST_PROC_ICD_MS: u32 = 5_000;
+/// The rate `TEST_PROC_PPM` carries, in procs per minute.
+const TEST_PROC_PPM_RATE: f32 = 2.0;
+
+/// Mock-seed the Proc-engine test fixtures: one inert mark plus four self-buff Procs that exercise the
+/// chance roll, the charge count, the internal cooldown and the rate on a development database, with
+/// no Spell.dbc import and no world dump.
 ///
-/// Both Procs are `A_PROC_TRIGGER` self-buffs whose header carries `proc_flags 0x8` (melee hit taken),
-/// so a plain melee swing at the Carrier — or `debug_apply_damage`, which routes through the same
-/// chokepoint — fires them. Drive them with a REAL attacker guid: a Proc with no Counterparty in the
-/// world fires nothing, so the anonymous `attacker_guid = 0` form of that reducer deliberately does
-/// not exercise them. Count the fires as `game_spell_cast_event` rows naming `TEST_PROC_MARK`.
+/// Every Proc is an `A_PROC_TRIGGER` self-buff. Three of them fire off a melee hit TAKEN, so a plain
+/// melee swing at the Carrier — or `debug_apply_damage`, which routes through the same chokepoint —
+/// fires them; the rate fixture fires off a melee hit DEALT instead, because procs-per-minute is a
+/// per-swing rate and only the unit that swung has an attack time to scale it by (a taken-side Proc
+/// would ignore the rate and read its header chance of 0, i.e. never fire). Drive them with a REAL
+/// attacker guid: a Proc with no Counterparty in the world fires nothing, so the anonymous
+/// `attacker_guid = 0` form of that reducer deliberately does not exercise them. Count the fires as
+/// `game_spell_cast_event` rows naming `TEST_PROC_MARK`.
 ///
-/// The PPM and internal-cooldown fixtures are deliberately absent: the classic-db `spell_proc_event`
-/// overlay is the only source vanilla data has for those two fields, so authoring them here would
-/// invent a second one. IDEMPOTENT, like every other mock-seed fixture.
+/// The cooldown and the rate have no Spell.dbc column, so their two fixtures carry a seeded
+/// `game_spell_proc_event` overlay row — the same table and the same precedence the importer loads
+/// real data into, rather than a second source invented for the fixtures. IDEMPOTENT, like every
+/// other mock-seed fixture.
 pub(crate) fn seed_test_proc_fixtures(ctx: &ReducerContext) {
     if ctx
         .db
@@ -909,14 +926,32 @@ pub(crate) fn seed_test_proc_fixtures(ctx: &ReducerContext) {
             ..base_effect(TEST_PROC_MARK, 0)
         },
     );
-    for (spell_id, name, chance, charges) in [
-        (TEST_PROC_COIN, "Test Proc Coin", 50u8, 0u8),
-        (TEST_PROC_CHARGES, "Test Proc Charges", 100, 3),
+    let taken = crate::spell::proc::PROC_FLAG_TAKEN_MELEE_HIT;
+    let dealt = crate::spell::proc::PROC_FLAG_SUCCESSFUL_MELEE_HIT;
+    for (spell_id, name, flags, chance, charges, overlay) in [
+        (TEST_PROC_COIN, "Test Proc Coin", taken, 50u8, 0u8, None),
+        (TEST_PROC_CHARGES, "Test Proc Charges", taken, 100, 3, None),
+        (
+            TEST_PROC_COOLDOWN,
+            "Test Proc Cooldown",
+            taken,
+            100,
+            0,
+            Some((TEST_PROC_ICD_MS, 0.0)),
+        ),
+        (
+            TEST_PROC_PPM,
+            "Test Proc PPM",
+            dealt,
+            0,
+            0,
+            Some((0, TEST_PROC_PPM_RATE)),
+        ),
     ] {
         if ctx.db.game_spell().spell_id().find(spell_id).is_none() {
             ctx.db.game_spell().insert(Spell {
                 duration_ms: u32::MAX, // permanent until its charges run out
-                proc_flags: 0x8,       // melee hit taken
+                proc_flags: flags,
                 proc_chance: chance,
                 proc_charges: charges,
                 ..base_spell(spell_id, name)
@@ -931,6 +966,29 @@ pub(crate) fn seed_test_proc_fixtures(ctx: &ReducerContext) {
                 ..base_effect(spell_id, 0)
             },
         );
+        // The overlay row carries only what Spell.dbc cannot express; everything else stays 0, which
+        // is exactly "the header already said it".
+        if let Some((icd_ms, ppm_rate)) = overlay {
+            if ctx
+                .db
+                .game_spell_proc_event()
+                .spell_id()
+                .find(spell_id)
+                .is_none()
+            {
+                ctx.db.game_spell_proc_event().insert(SpellProcEvent {
+                    spell_id,
+                    proc_flags: 0,
+                    proc_ex: 0,
+                    school_mask: 0,
+                    family_name: 0,
+                    family_flags: 0,
+                    ppm_rate,
+                    custom_chance: 0,
+                    icd_ms,
+                });
+            }
+        }
     }
 }
 

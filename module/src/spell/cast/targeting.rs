@@ -498,12 +498,13 @@ pub(crate) fn aura_apply(
     } else {
         e.p1
     };
-    // The frozen PROC PROFILE: a Proc aura carries its own event mask, chance and charge count, so the
-    // proc pass reads one row and never re-joins the header. Every non-proc kind freezes zeros, which
-    // the decision reads as "never procs". A REFRESH refills charges to full (recasting Lightning
-    // Shield mid-fight) and deliberately leaves `proc_ready_micros` alone — a running internal cooldown
-    // is not reset by a recast.
-    let proc = crate::spell::proc::frozen_profile(e.kind, hdr);
+    // The frozen PROC PROFILE: a Proc aura carries its own event mask, chance, rate, filter, charge
+    // count and cooldown length, folded here from the spell header and the `spell_proc_event` overlay,
+    // so the proc pass reads one row and never re-joins either. Every non-proc kind freezes zeros,
+    // which the decision reads as "never procs". A REFRESH re-freezes the whole profile and refills
+    // charges to full (recasting Lightning Shield mid-fight) and deliberately leaves
+    // `proc_ready_micros` alone — a running internal cooldown is not reset by a recast.
+    let proc = crate::spell::proc::freeze_profile(ctx, e.kind, hdr);
     if let Some(mut a) = existing {
         // Refresh: re-freeze the magnitude + reset the cadence; keep the slot. STACKING — a re-cast of a
         // stacking aura (`max_stacks >= 2`) bumps `stacks` (capped at the header's `max_stacks`) so the
@@ -949,16 +950,18 @@ pub(crate) fn apply_effect(
                 entities.guid().find(caster_guid),
                 entities.guid().find(target_guid),
             ) {
-                let dmg = crate::combat::weapon_strike_damage(ctx, &caster, &target, points);
-                // Physical strike: no magic resist; the melee crit (if any) is already folded inside
-                // weapon_strike_damage. Surface dealt+absorbed; `crit`/`resisted` stay 0 (the cast-row
-                // `is_crit` means specifically "the E_DAMAGE magic-crit roll landed").
+                let (dmg, crit) =
+                    crate::combat::weapon_strike_damage(ctx, &caster, &target, points);
+                // Physical strike: no magic resist; the melee crit is already folded into the damage
+                // inside weapon_strike_damage, and rides the `Hit` so a crit-only Proc (Flurry) can
+                // read it. Surface dealt+absorbed; the EffectHit's `crit`/`resisted` stay 0 (the
+                // cast-row `is_crit` means specifically "the E_DAMAGE magic-crit roll landed").
                 let (dealt, absorbed) = apply_target_damage(
                     ctx,
                     target_guid,
                     caster_guid,
                     dmg as i32,
-                    hit_of(crate::combat::HitSource::MeleeSpell, false),
+                    hit_of(crate::combat::HitSource::MeleeSpell, crit),
                 );
                 EffectHit::dmg(dealt, absorbed)
             } else {

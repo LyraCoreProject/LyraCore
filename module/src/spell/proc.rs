@@ -5,10 +5,11 @@
 //! on which spells may trigger it. The unit wearing the aura is the **Carrier**; the unit on the other
 //! side of the hit is the **Counterparty**.
 //!
-//! [`run_proc_pass`] is the only `ReducerContext`-bound function here and `combat::apply_hit` — the one
-//! chokepoint every damaging hit routes through — is its only caller, so a new damage path cannot
-//! forget procs. Everything the pass decides ([`hit_bits`], [`proc_chance_bp`], [`decide`]) is pure and
-//! unit-tested below: the pass reads rows, asks the decision, and writes the outcome.
+//! [`run_proc_pass`] is the pass, and `combat::apply_hit` — the one chokepoint every damaging hit
+//! routes through — is its only caller, so a new damage path cannot forget procs. Everything the pass
+//! decides ([`hit_bits`], [`proc_chance_bp`], [`decide`]) is pure and unit-tested below: the pass reads
+//! rows, asks the decision, and writes the outcome. The one other `ReducerContext`-bound function here
+//! is [`freeze_profile`], which reads the `spell_proc_event` overlay at apply so the pass never has to.
 //!
 //! Firing means starting a **Triggered Cast** ([`crate::spell::cast_triggered`]) of the frozen trigger
 //! spell from the Carrier at the Counterparty. A Triggered Cast pays nothing, passes no Gates, starts
@@ -53,6 +54,11 @@ pub(crate) const PROC_FLAG_SUCCESSFUL_OFFHAND_HIT: u32 = 0x0080_0000;
 pub(crate) const PROC_EX_NORMAL_HIT: u32 = 0x0000_0001;
 /// `procEx`: the hit was a critical hit.
 pub(crate) const PROC_EX_CRITICAL_HIT: u32 = 0x0000_0002;
+
+/// The school a hit that carries no spell belongs to. An auto-attack swing is physical, so a school
+/// filter judges it against this bit rather than skipping the swing entirely (cmangos
+/// `SPELL_SCHOOL_MASK_NORMAL`).
+const SCHOOL_MASK_PHYSICAL: u8 = 0x01;
 
 /// Basis points in a whole — the roll space every chance in this module is expressed in.
 const BASIS_POINTS: u32 = 10_000;
@@ -121,7 +127,7 @@ impl ProcProfile {
 }
 
 /// The spell that carried a hit, for the school/family filter. `None` for an auto-attack swing, which
-/// no filter may exclude (a swing belongs to no school and no family).
+/// [`filter_matches`] then judges as physical-school and family-less.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TriggeringSpell {
     pub school_mask: u8,
@@ -206,9 +212,16 @@ pub(crate) fn proc_chance_bp(profile: &ProcProfile, side: ProcSide, attack_time_
     (profile.chance as u32 * 100).min(BASIS_POINTS)
 }
 
-/// Does the triggering spell pass this Proc's school and family filter? A hit with no spell (an
-/// auto-attack swing) is never filtered — the caller passes `None` and this is not consulted.
-fn filter_matches(profile: &ProcProfile, spell: &TriggeringSpell) -> bool {
+/// Does the hit pass this Proc's school and family filter?
+///
+/// A hit with NO spell is an auto-attack swing: it belongs to the physical school and to no family, so
+/// a school filter judges it against physical (a fire-only filter excludes it; a physical filter keeps
+/// it) and a family filter — which names spells — does not apply to it at all. That is cmangos's rule
+/// in `IsSpellProcEventCanTriggeredBy`, and it is why a filter cannot silently disarm a weapon Proc.
+fn filter_matches(profile: &ProcProfile, spell: Option<&TriggeringSpell>) -> bool {
+    let Some(spell) = spell else {
+        return profile.school_mask == 0 || profile.school_mask & SCHOOL_MASK_PHYSICAL != 0;
+    };
     if profile.school_mask != 0 && profile.school_mask & spell.school_mask == 0 {
         return false;
     }
@@ -242,10 +255,10 @@ fn proc_ex_allows(proc_ex: u32, crit: bool) -> bool {
 /// and its cooldown are untouched, so a 50 percent Proc with 3 charges lands 3 times, not one and a
 /// half.
 ///
-/// In order: the event bit must be set for this side; a hit that carries a spell must pass the school
-/// and family filter; `procEx` must accept the hit quality; the internal cooldown must be up; and only
-/// then does the roll happen — so a Proc still on cooldown never consumes its roll. `roll_bp` is a
-/// basis-point roll in `0..10_000`.
+/// In order: the event bit must be set for this side; the hit must pass the school and family filter;
+/// `procEx` must accept the hit quality; the internal cooldown must be up; and only then does the roll
+/// happen — so a Proc still on cooldown never consumes its roll. `roll_bp` is a basis-point roll in
+/// `0..10_000`.
 pub(crate) fn decide(
     profile: &ProcProfile,
     side: ProcSide,
@@ -256,10 +269,8 @@ pub(crate) fn decide(
     if profile.flags & hit.bits(side) == 0 {
         return None;
     }
-    if let Some(spell) = hit.spell.as_ref() {
-        if !filter_matches(profile, spell) {
-            return None;
-        }
+    if !filter_matches(profile, hit.spell.as_ref()) {
+        return None;
     }
     if !proc_ex_allows(profile.proc_ex, hit.crit) {
         return None;
@@ -283,20 +294,68 @@ pub(crate) fn decide(
     })
 }
 
-/// The profile a fresh aura row freezes at apply, from its spell header. `Spell.dbc` is the only
-/// source the header has, and it carries no rate, no `procEx`, no filter and no internal cooldown —
-/// those come from the classic-db `spell_proc_event` overlay. Until that overlay is loaded they freeze
-/// at their neutral zero, which the decision reads as "no rate, any hit, any spell, no cooldown".
-pub(crate) fn frozen_profile(kind: u8, hdr: &Spell) -> ProcProfile {
+/// The profile a fresh aura row freezes at apply, from its spell header and the classic-db
+/// `spell_proc_event` overlay.
+///
+/// Spell.dbc carries only the event mask, the flat chance and the charge count; the rate, the internal
+/// cooldown, the hit-quality rule and the school/family filter have no column there and come from the
+/// overlay alone. An ABSENT overlay row is the ordinary case: the header's values, and neutral zeros
+/// for the rest, which the decision reads as "no rate, any hit, any spell, no cooldown".
+///
+/// Where both carry a value the overlay wins, the way cmangos applies it: a non-zero `procFlags`
+/// override REPLACES the header's mask (0 means "the header already says it"), and a non-zero
+/// `CustomChance` replaces the header's `procChance`. The rate is not a chance and cannot be folded
+/// into one here — it needs the Carrier's attack time at proc time — so it freezes alongside, and
+/// [`proc_chance_bp`] lets it win on the dealer side.
+///
+/// Charges always come from the header: the overlay has no charge column.
+pub(crate) fn frozen_profile(
+    kind: u8,
+    hdr: &Spell,
+    overlay: Option<&SpellProcEvent>,
+) -> ProcProfile {
     if !is_proc_kind(kind) {
         return ProcProfile::default();
     }
-    ProcProfile {
+    let base = ProcProfile {
         flags: hdr.proc_flags,
         chance: hdr.proc_chance,
         charges: hdr.proc_charges,
         ..ProcProfile::default()
+    };
+    let Some(o) = overlay else {
+        return base;
+    };
+    ProcProfile {
+        flags: if o.proc_flags != 0 {
+            o.proc_flags
+        } else {
+            base.flags
+        },
+        chance: if o.custom_chance != 0 {
+            o.custom_chance
+        } else {
+            base.chance
+        },
+        ppm: o.ppm_rate,
+        proc_ex: o.proc_ex,
+        school_mask: o.school_mask,
+        family_name: o.family_name,
+        family_flags: o.family_flags,
+        icd_ms: o.icd_ms,
+        ..base
     }
+}
+
+/// [`frozen_profile`] with the overlay looked up for you — what `aura_apply` and the post-publish
+/// repair both call. The overlay is read HERE, once, at apply: the proc pass reads one aura row and
+/// never re-joins either the header or this table.
+pub(crate) fn freeze_profile(ctx: &ReducerContext, kind: u8, hdr: &Spell) -> ProcProfile {
+    if !is_proc_kind(kind) {
+        return ProcProfile::default(); // the common path: no lookup for an ordinary aura
+    }
+    let overlay = ctx.db.game_spell_proc_event().spell_id().find(hdr.spell_id);
+    frozen_profile(kind, hdr, overlay.as_ref())
 }
 
 // ===========================================================================================
@@ -409,9 +468,12 @@ fn proc_rows(ctx: &ReducerContext, carrier_guid: u64, bits: u32) -> Vec<Aura> {
         .collect()
 }
 
-/// The school and family of the spell that carried the hit. `None` for an auto-attack swing, and for
-/// a spell whose header is not loaded: there are no facts to judge, so the filter is not consulted and
-/// a data gap never silently stops a Proc that would otherwise fire.
+/// The school and family of the spell that carried the hit — `None` for an auto-attack swing, which
+/// the filter then judges as physical and family-less.
+///
+/// A non-zero `spell_id` always has a header in this same transaction (the hit was produced by
+/// resolving that spell's own effects, which read the header first), so the missing-header arm is the
+/// unreachable one; it falls back to the swing reading rather than inventing facts.
 fn triggering_spell(ctx: &ReducerContext, spell_id: u32) -> Option<TriggeringSpell> {
     if spell_id == 0 {
         return None;
@@ -746,10 +808,10 @@ mod tests {
         }
     }
 
-    /// The school filter applies to a hit that carried a spell, and only to such a hit: an auto-attack
-    /// swing belongs to no school and is never excluded by one.
+    /// The school filter on a hit that carried a spell: Impact's fire-only rule lets a Fireball
+    /// through and stops a Frostbolt.
     #[test]
-    fn the_school_filter_judges_a_spell_hit_and_never_a_swing() {
+    fn the_school_filter_admits_only_a_spell_of_the_named_school() {
         let fire_only = ProcProfile {
             flags: PROC_FLAG_TAKEN_MELEE_SPELL_HIT,
             school_mask: 0x4, // fire
@@ -766,14 +828,35 @@ mod tests {
         };
         assert!(decide(&fire_only, ProcSide::Victim, &spell_hit(0x4), 0, 0).is_some());
         assert!(decide(&fire_only, ProcSide::Victim, &spell_hit(0x10), 0, 0).is_none());
+    }
 
-        // The same filter, on a swing that carries no spell at all: not consulted.
-        let swing_hit = ProcHit {
-            victim_bits: PROC_FLAG_TAKEN_MELEE_SPELL_HIT,
-            spell: None,
-            ..melee_hit()
+    /// A swing carries no spell, so it belongs to the physical school and to no family. A school
+    /// filter still judges it — against physical — which is how Impact's fire-only rule excludes a
+    /// swing while a physical-school weapon Proc keeps firing off one. A family filter names spells
+    /// and never applies to a swing.
+    #[test]
+    fn a_swing_is_judged_as_physical_by_a_school_filter_and_not_at_all_by_a_family_one() {
+        let swing = melee_hit();
+        assert!(swing.spell.is_none(), "a swing carries no spell");
+
+        let fire_only = ProcProfile {
+            school_mask: 0x4,
+            ..always()
         };
-        assert!(decide(&fire_only, ProcSide::Victim, &swing_hit, 0, 0).is_some());
+        assert!(decide(&fire_only, ProcSide::Victim, &swing, 0, 0).is_none());
+
+        let physical_only = ProcProfile {
+            school_mask: SCHOOL_MASK_PHYSICAL,
+            ..always()
+        };
+        assert!(decide(&physical_only, ProcSide::Victim, &swing, 0, 0).is_some());
+
+        let mage_frost = ProcProfile {
+            family_name: 3,
+            family_flags: 0x20,
+            ..always()
+        };
+        assert!(decide(&mage_frost, ProcSide::Victim, &swing, 0, 0).is_some());
     }
 
     /// The family filter: the name must agree, and a non-zero flag mask must overlap. A named family
@@ -805,26 +888,127 @@ mod tests {
         assert!(decide(&any_mage, ProcSide::Victim, &spell(3, 0x40), 0, 0).is_some());
     }
 
-    /// The frozen profile a fresh aura row takes from its header — and the zeros every non-proc row
-    /// takes, so an ordinary buff can never be mistaken for a Proc.
-    #[test]
-    fn a_proc_row_freezes_its_header_and_every_other_row_freezes_zeros() {
+    // ---- frozen_profile: the header, and the overlay over it -------------------------------
+
+    /// Frost Armor's real Spell.dbc proc data.
+    fn proc_header() -> Spell {
         let mut hdr = crate::seed::base_spell(168, "Frost Armor");
         hdr.proc_flags = 0x28;
         hdr.proc_chance = 100;
         hdr.proc_charges = 3;
+        hdr
+    }
 
-        let frozen = frozen_profile(A_PROC_TRIGGER, &hdr);
+    /// An overlay row that overrides nothing, for a test to change one field of.
+    fn overlay() -> SpellProcEvent {
+        SpellProcEvent {
+            spell_id: 168,
+            proc_flags: 0,
+            proc_ex: 0,
+            school_mask: 0,
+            family_name: 0,
+            family_flags: 0,
+            ppm_rate: 0.0,
+            custom_chance: 0,
+            icd_ms: 0,
+        }
+    }
+
+    /// No overlay row is the ordinary case: the header's mask, chance and charges, and neutral zeros
+    /// for the four fields Spell.dbc has no column for. And every non-proc row freezes zeros, so an
+    /// ordinary buff can never be mistaken for a Proc.
+    #[test]
+    fn a_proc_row_freezes_its_header_and_every_other_row_freezes_zeros() {
+        let hdr = proc_header();
+        let frozen = frozen_profile(A_PROC_TRIGGER, &hdr, None);
         assert_eq!(frozen.flags, 0x28);
         assert_eq!(frozen.chance, 100);
         assert_eq!(frozen.charges, 3);
-        // The `spell_proc_event` overlay fills these; the Spell.dbc header carries no source for them.
         assert_eq!(frozen.ppm, 0.0);
         assert_eq!(frozen.icd_ms, 0);
         assert_eq!(frozen.proc_ex, 0);
+        assert_eq!(frozen.school_mask, 0);
+        assert_eq!(frozen.family_name, 0);
 
-        assert_eq!(frozen_profile(A_MOD_RESISTANCE, &hdr).flags, 0);
-        assert_eq!(frozen_profile(A_MOD_RESISTANCE, &hdr).charges, 0);
+        assert_eq!(frozen_profile(A_MOD_RESISTANCE, &hdr, None).flags, 0);
+        assert_eq!(frozen_profile(A_MOD_RESISTANCE, &hdr, None).charges, 0);
+    }
+
+    /// The overlay's own fields — the four Spell.dbc cannot express — freeze straight through, and
+    /// the header's charge count is untouched by it (the overlay has no charge column).
+    #[test]
+    fn the_overlay_supplies_the_rate_cooldown_hit_rule_and_filter() {
+        let frozen = frozen_profile(
+            A_PROC_TRIGGER,
+            &proc_header(),
+            Some(&SpellProcEvent {
+                proc_ex: PROC_EX_CRITICAL_HIT,
+                school_mask: 0x4,
+                family_name: 3,
+                family_flags: 0x20,
+                ppm_rate: 2.0,
+                icd_ms: 45_000,
+                ..overlay()
+            }),
+        );
+        assert_eq!(frozen.proc_ex, PROC_EX_CRITICAL_HIT);
+        assert_eq!(frozen.school_mask, 0x4);
+        assert_eq!(frozen.family_name, 3);
+        assert_eq!(frozen.family_flags, 0x20);
+        assert_eq!(frozen.ppm, 2.0);
+        assert_eq!(frozen.icd_ms, 45_000);
+        assert_eq!(frozen.charges, 3, "charges only ever come from the header");
+    }
+
+    /// A `procFlags` override REPLACES the header's mask; 0 means the header already says it.
+    #[test]
+    fn a_non_zero_flag_override_replaces_the_header_mask_and_zero_keeps_it() {
+        let overridden = frozen_profile(
+            A_PROC_TRIGGER,
+            &proc_header(),
+            Some(&SpellProcEvent {
+                proc_flags: PROC_FLAG_SUCCESSFUL_MELEE_HIT,
+                ..overlay()
+            }),
+        );
+        assert_eq!(overridden.flags, PROC_FLAG_SUCCESSFUL_MELEE_HIT);
+
+        let kept = frozen_profile(A_PROC_TRIGGER, &proc_header(), Some(&overlay()));
+        assert_eq!(kept.flags, 0x28);
+    }
+
+    /// A custom chance REPLACES the header's `procChance`; 0 means the header keeps it.
+    #[test]
+    fn a_custom_chance_replaces_the_header_chance_and_zero_keeps_it() {
+        let custom = frozen_profile(
+            A_PROC_TRIGGER,
+            &proc_header(),
+            Some(&SpellProcEvent {
+                custom_chance: 15,
+                ..overlay()
+            }),
+        );
+        assert_eq!(custom.chance, 15);
+
+        let kept = frozen_profile(A_PROC_TRIGGER, &proc_header(), Some(&overlay()));
+        assert_eq!(kept.chance, 100);
+    }
+
+    /// And a rate beats BOTH on the dealer side: the custom chance is what a taken-side Carrier
+    /// (and a Carrier with no rate) uses, while a dealer scales the rate by its own weapon.
+    #[test]
+    fn the_rate_beats_the_custom_chance_on_the_dealer_side_only() {
+        let frozen = frozen_profile(
+            A_PROC_TRIGGER,
+            &proc_header(),
+            Some(&SpellProcEvent {
+                custom_chance: 15,
+                ppm_rate: 1.0,
+                ..overlay()
+            }),
+        );
+        assert_eq!(proc_chance_bp(&frozen, ProcSide::Dealer, 2000), 333);
+        assert_eq!(proc_chance_bp(&frozen, ProcSide::Victim, 2000), 1_500);
     }
 
     // ---- Architecture Tests -----------------------------------------------------------------
