@@ -91,6 +91,20 @@ enum PetEffect {
     OrderCleared(u64),
 }
 
+#[derive(Clone, Copy)]
+struct ScenarioSummon {
+    at: Point,
+    orientation: f32,
+    lifetime_ms: u32,
+}
+
+#[derive(Clone, Copy)]
+struct ScenarioSummonExpiry {
+    lifetime_ms: u32,
+    remaining_ms: u32,
+    last_checked_ms: u64,
+}
+
 #[derive(Default)]
 struct Scenario {
     creatures: RefCell<HashMap<u64, XCreature>>,
@@ -186,6 +200,10 @@ struct Scenario {
     eventai_text: RefCell<HashMap<u32, (String, u8, u32)>>,
     eventai_creature_state: RefCell<HashMap<u64, CreatureState>>,
     eventai_rule_state: RefCell<HashMap<u64, HashMap<u64, RuleState>>>,
+    eventai_summons: RefCell<HashMap<u32, ScenarioSummon>>,
+    eventai_templates: RefCell<HashSet<u32>>,
+    eventai_summon_expiry: RefCell<HashMap<u64, ScenarioSummonExpiry>>,
+    eventai_next_summon: Cell<u64>,
     /// Ordered text effects emitted by authored rules.
     eventai_speech: RefCell<Vec<(u64, u8, String)>>,
     eventai_emotes: RefCell<Vec<(u64, u32, u32, u64)>>,
@@ -255,6 +273,87 @@ impl Scenario {
             .borrow_mut()
             .insert(id, (text.to_string(), chat_type, 0));
         self
+    }
+
+    fn eventai_summon(self, id: u32, at: Point, orientation: f32, lifetime_ms: u32) -> Self {
+        self.eventai_summons.borrow_mut().insert(
+            id,
+            ScenarioSummon {
+                at,
+                orientation,
+                lifetime_ms,
+            },
+        );
+        self
+    }
+
+    fn eventai_template(self, entry: u32) -> Self {
+        self.eventai_templates.borrow_mut().insert(entry);
+        self
+    }
+
+    fn eventai_summoned_guids(&self) -> Vec<u64> {
+        let mut guids: Vec<u64> = self
+            .eventai_summon_expiry
+            .borrow()
+            .keys()
+            .copied()
+            .collect();
+        guids.sort_unstable();
+        guids
+    }
+
+    fn reap_eventai_summons(&self) -> u64 {
+        let now_ms = self.now_micros.get() / 1_000;
+        let expiries: Vec<(u64, ScenarioSummonExpiry)> = self
+            .eventai_summon_expiry
+            .borrow()
+            .iter()
+            .map(|(guid, expiry)| (*guid, *expiry))
+            .collect();
+        for (guid, expiry) in &expiries {
+            if !self.creatures.borrow().contains_key(guid) {
+                self.clear_eventai_summon(*guid);
+                continue;
+            }
+            let engaged = self
+                .fights
+                .borrow()
+                .iter()
+                .any(|fight| fight.attacker == *guid || fight.victim == *guid);
+            if engaged {
+                if let Some(state) = self.eventai_summon_expiry.borrow_mut().get_mut(guid) {
+                    state.remaining_ms = state.lifetime_ms;
+                    state.last_checked_ms = now_ms;
+                }
+                continue;
+            }
+            let elapsed = now_ms
+                .saturating_sub(expiry.last_checked_ms)
+                .min(u64::from(u32::MAX)) as u32;
+            let remaining = expiry.remaining_ms.saturating_sub(elapsed);
+            if remaining == 0 {
+                self.clear_eventai_summon(*guid);
+            } else if let Some(state) = self.eventai_summon_expiry.borrow_mut().get_mut(guid) {
+                state.remaining_ms = remaining;
+                state.last_checked_ms = now_ms;
+            }
+        }
+        expiries.len() as u64
+    }
+
+    fn clear_eventai_summon(&self, guid: u64) {
+        self.fights
+            .borrow_mut()
+            .retain(|fight| fight.attacker != guid && fight.victim != guid);
+        self.threat
+            .borrow_mut()
+            .retain(|pair, _| pair.0 != guid && pair.1 != guid);
+        self.legs.borrow_mut().retain(|leg| leg.guid != guid);
+        self.creatures.borrow_mut().remove(&guid);
+        self.eventai_rule_state.borrow_mut().remove(&guid);
+        self.eventai_creature_state.borrow_mut().remove(&guid);
+        self.eventai_summon_expiry.borrow_mut().remove(&guid);
     }
 
     fn eventai_speech(&self) -> Vec<(u64, u8, String)> {
@@ -949,7 +1048,12 @@ impl CreatureWorld for Scenario {
     }
     fn run_due_world_maintenance(&mut self) -> Vec<(&'static str, u64)> {
         self.maintenance_runs.set(self.maintenance_runs.get() + 1);
-        Vec::new()
+        let summons = self.reap_eventai_summons();
+        if summons == 0 {
+            Vec::new()
+        } else {
+            vec![("eventai_summon_expiry*", summons)]
+        }
     }
     fn evaluate_eventai(&mut self, request: EventAiRequest<'_>) -> u64 {
         eventai::evaluate(self, request)
@@ -1241,6 +1345,110 @@ impl EventAiWorld for Scenario {
                         .any(|fight| fight.attacker == helper)
                     {
                         EngageSink::engage(self, helper, victim, Pull::Assisted);
+                    }
+                }
+                eventai::ActionResult::Applied
+            }
+            _ => eventai::ActionResult::Unsupported,
+        }
+    }
+
+    fn eventai_mobility_action(
+        &mut self,
+        context: &EventContext,
+        action: &RuleAction,
+    ) -> eventai::ActionResult {
+        match action.kind {
+            eventai::ActionKind::SetRangedPosture => {
+                let distance = action.params[0] as f32;
+                let angle = if action.params[0] == 0 {
+                    0.0
+                } else {
+                    (action.params[1] as i32 as f32).to_radians()
+                };
+                let mut states = self.eventai_creature_state.borrow_mut();
+                let state = states.entry(context.creature_guid).or_default();
+                state.ranged_distance = distance;
+                state.ranged_angle = angle;
+                eventai::ActionResult::Applied
+            }
+            eventai::ActionKind::Summon => {
+                let Some(summoner) = self.creatures.borrow().get(&context.creature_guid).copied()
+                else {
+                    return eventai::ActionResult::Refused;
+                };
+                let Some(summon) = self
+                    .eventai_summons
+                    .borrow()
+                    .get(&action.params[2])
+                    .copied()
+                else {
+                    return eventai::ActionResult::Refused;
+                };
+                if !self.eventai_templates.borrow().contains(&action.params[0])
+                    || ![summon.at.x, summon.at.y, summon.at.z, summon.orientation]
+                        .into_iter()
+                        .all(f32::is_finite)
+                {
+                    return eventai::ActionResult::Refused;
+                }
+                let target = self.eventai_target(context, action);
+                let sequence = self.eventai_next_summon.get() + 1;
+                self.eventai_next_summon.set(sequence);
+                let low = 0x40_0000 | ((sequence - 1) % 0x3F_FFFF + 1);
+                let guid = crate::encounter::wave_guid(action.params[0], low);
+                if self.creatures.borrow().contains_key(&guid) {
+                    return eventai::ActionResult::Refused;
+                }
+                let (grid_x, grid_y) = spatial::grid_cell(summon.at.x, summon.at.y);
+                self.creatures.borrow_mut().insert(
+                    guid,
+                    XCreature {
+                        entry: action.params[0],
+                        at: summon.at,
+                        grid: (grid_x, grid_y),
+                        cell: spatial::grid_cell_id(grid_x, grid_y),
+                        last_move_ms: 0,
+                        orientation: summon.orientation,
+                        leg_ends_ms: 0,
+                        wp_target: 0,
+                        health: 100,
+                        max_health: 100,
+                        power: 0,
+                        max_power: 0,
+                        level: 10,
+                        faction_template: summoner.faction_template,
+                        map_id: summoner.map_id,
+                        instance_id: summoner.instance_id,
+                        aggro_range: Some(0),
+                        detect_range_mod: 0.0,
+                        would_rout: false,
+                        cannot_act: false,
+                    },
+                );
+                self.eventai_summon_expiry.borrow_mut().insert(
+                    guid,
+                    ScenarioSummonExpiry {
+                        lifetime_ms: summon.lifetime_ms,
+                        remaining_ms: summon.lifetime_ms,
+                        last_checked_ms: self.now_micros.get() / 1_000,
+                    },
+                );
+                eventai::evaluate(
+                    self,
+                    EventAiRequest::Edge(EventContext {
+                        kind: EventKind::OnSpawn,
+                        creature_guid: guid,
+                        invoker_guid: None,
+                        event_target_guid: None,
+                        current_target_guid: None,
+                        assisted: false,
+                        now_ms: self.now_micros.get() / 1_000,
+                    }),
+                );
+                if action.target != eventai::TargetPolicy::SelfActor {
+                    if let Some(target) = target {
+                        EngageSink::engage(self, guid, target, Pull::Assisted);
                     }
                 }
                 eventai::ActionResult::Applied
@@ -1768,6 +1976,11 @@ impl PursuitSink for Scenario {
                     at: c.at,
                     orientation: c.orientation,
                     victim_at,
+                    victim_orientation: self
+                        .creatures
+                        .borrow()
+                        .get(&f.victim)
+                        .map_or(0.0, |victim| victim.orientation),
                     victim_movement_flags,
                     routing: self.is_routing(f.attacker),
                     leg: legs.iter().find(|l| l.guid == f.attacker).cloned(),
@@ -1775,8 +1988,29 @@ impl PursuitSink for Scenario {
             })
             .collect()
     }
+    fn authored_ranged_posture(&self, guid: u64) -> Option<(f32, f32)> {
+        let mut grouped = HashMap::new();
+        for row in self.eventai_rows(guid) {
+            grouped
+                .entry(eventai::effective_rule_id(&row))
+                .or_insert_with(Vec::new)
+                .push(row);
+        }
+        let authored = grouped
+            .into_values()
+            .filter_map(|rows| eventai::Rule::decode(rows).ok())
+            .flat_map(|rule| rule.actions)
+            .any(|action| action.kind == eventai::ActionKind::SetRangedPosture);
+        authored.then(|| {
+            self.eventai_creature_state
+                .borrow()
+                .get(&guid)
+                .map_or((0.0, 0.0), |state| {
+                    (state.ranged_distance, state.ranged_angle)
+                })
+        })
+    }
     fn caster_hold_range(&self, guid: u64) -> f32 {
-        // EventAI ranged posture extends here with the production chase read.
         self.hold_ranges.borrow().get(&guid).copied().unwrap_or(0.0)
     }
     /// The stop AND the turn, as one carrier row: the creature is planted at `at` looking at
@@ -4848,10 +5082,13 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "row.attacker_guid, scope)?; let victim = ",
                 "entities.guid().find(row.target_guid)?; Some(Pursuit { guid: c.guid, at: Point ",
                 "{ x: c.x, y: c.y, z: c.z, }, orientation: c.orientation, victim_at: Point { x: ",
-                "victim.x, y: victim.y, z: victim.z, }, victim_movement_flags: ",
+                "victim.x, y: victim.y, z: victim.z, }, victim_orientation: ",
+                "victim.orientation, victim_movement_flags: ",
                 "translation_flags( &victim, splines.guid().find(row.target_guid), ), routing: ",
                 "tick::creature_is_routing(self.ctx, &c), leg: ",
                 "splines.guid().find(c.guid).map(|s| as_leg(s, false)), }) }) .collect() } fn ",
+                "authored_ranged_posture(&self, guid: u64) -> Option<(f32, f32)> { ",
+                "eventai::ranged_posture(self.ctx, guid) } fn ",
                 "caster_hold_range(&self, guid: u64) -> f32 { self.ctx .db .game_world_entity() ",
                 ".guid() .find(guid) .map_or(0.0, |c| caster_hold_range_yd(self.ctx, c.entry)) ",
                 "} fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32) { ",

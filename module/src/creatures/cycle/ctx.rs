@@ -661,6 +661,7 @@ impl PursuitSink for CtxWorld<'_> {
                         y: victim.y,
                         z: victim.z,
                     },
+                    victim_orientation: victim.orientation,
                     victim_movement_flags: translation_flags(
                         &victim,
                         splines.guid().find(row.target_guid),
@@ -671,8 +672,10 @@ impl PursuitSink for CtxWorld<'_> {
             })
             .collect()
     }
+    fn authored_ranged_posture(&self, guid: u64) -> Option<(f32, f32)> {
+        eventai::ranged_posture(self.ctx, guid)
+    }
     fn caster_hold_range(&self, guid: u64) -> f32 {
-        // EventAI ranged posture extends here, before chase reads its hold distance.
         self.ctx
             .db
             .game_world_entity()

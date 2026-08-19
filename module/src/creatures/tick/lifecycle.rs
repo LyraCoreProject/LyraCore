@@ -44,6 +44,8 @@ use super::*;
 pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
     crate::combat::disengage(ctx, guid); // melee rows + threat (clear_for_unit) + stale selections
     crate::threat::clear_taunt_lock(ctx, guid);
+    crate::creatures::reset_creature_lifecycle(ctx, guid);
+    crate::creatures::drop_summon_expiry(ctx, guid);
     ctx.db.game_creature_spline().guid().delete(guid); // the LIVE leg row (perf 2.3)
     crate::motion::drop_pending(ctx, guid); // #461: the staged, not-yet-republished payload too
     ctx.db.game_entity_motion().guid().delete(guid); // motion row dies with the entity (perf 2.1)
@@ -347,6 +349,14 @@ mod despawn_checklist_tripwire {
             (
                 "crate::threat::clear_taunt_lock(ctx, guid)",
                 "the taunt lock (`despawn_tracked` used to skip it entirely)",
+            ),
+            (
+                "crate::creatures::reset_creature_lifecycle(ctx, guid)",
+                "the creature's EventAI rule state, phase, and ranged posture",
+            ),
+            (
+                "crate::creatures::drop_summon_expiry(ctx, guid)",
+                "the one-shot lifetime row for a temporary EventAI summon",
             ),
             (
                 "ctx.db.game_creature_spline().guid().delete(guid)",

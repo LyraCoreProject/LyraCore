@@ -608,7 +608,7 @@ fn inconsistent_group_metadata_fails_closed_with_a_diagnostic() {
 }
 
 #[test]
-fn an_unimplemented_action_stays_ready_and_reports_why() {
+fn a_missing_summon_is_refused_without_an_unsupported_action_diagnostic() {
     let mut scenario = world(0).eventai_row(native_row(
         911,
         910,
@@ -624,9 +624,6 @@ fn an_unimplemented_action_stays_ready_and_reports_why() {
 
     EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
 
-    assert!(scenario.eventai_state(CREATURE, 910).is_none());
-    assert_eq!(
-        scenario.eventai_diagnostics()[0].kind,
-        DiagnosticKind::UnsupportedAction
-    );
+    assert!(scenario.eventai_state(CREATURE, 910).is_some());
+    assert!(scenario.eventai_diagnostics().is_empty());
 }
