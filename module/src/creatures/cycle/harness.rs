@@ -3,6 +3,7 @@
 //! the ordered movement effects a client would have received.
 
 use super::*;
+use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::ROUT_DURATION_MS;
 use crate::creatures::{chase_step, rout_window_open};
 use lyracore_shared::spatial;
@@ -92,6 +93,10 @@ struct Scenario {
     detours: RefCell<HashMap<u64, (f32, f32)>>,
     /// Ordered movement effects, oldest first.
     effects: RefCell<Vec<MoveEffect>>,
+    /// The last carrier row each creature wrote, and the firing clock it was written at. A creature
+    /// has ONE spline row and a subscriber sees only a transaction's net change, so a second write
+    /// in one firing would reach no client at all — [`Scenario::record`] refuses it.
+    last_carrier: RefCell<HashMap<u64, (u64, MoveEffect)>>,
     /// The players in the world, in the order the world reads them.
     players: RefCell<Vec<AggroTarget>>,
     /// Live melee engagements — what aggro arms, and what combat entry and chase read.
@@ -103,6 +108,9 @@ struct Scenario {
     hold_ranges: RefCell<HashMap<u64, f32>>,
     /// Determinism input: when each PLAYER last moved. A creature's own move clock is on its row.
     player_moved_ms: RefCell<HashMap<u64, u32>>,
+    /// Determinism input: each PLAYER's live movement flags, as its heartbeats stamp them. A creature
+    /// stamps none — the leg the module moves it along is what says it travels.
+    player_move_flags: RefCell<HashMap<u64, u32>>,
     /// Faction pairs at war, directed. Anything absent is not hostile, as missing data is.
     at_war: RefCell<HashSet<(u32, u32)>>,
     /// `(looker, unseen)` pairs with something solid in between.
@@ -390,12 +398,45 @@ impl Scenario {
         pairs
     }
 
-    /// The player RUNS to `at`: it stands there and its move clock reads now, so a chaser treats it
-    /// as a kiter rather than a planted target.
+    /// The player RUNS to `at`: it stands there, its move clock reads now and it is holding the
+    /// forward key, so a chaser treats it as a kiter rather than a planted target.
     fn kiting(self, guid: u64, at: Point) -> Self {
         let now_ms = (self.now_micros.get() / 1000) as u32;
         self.player_moved_ms.borrow_mut().insert(guid, now_ms);
+        self.player_move_flags
+            .borrow_mut()
+            .insert(guid, MOVE_FLAG_FORWARD);
         self.tweak_player(guid, |p| p.at = at)
+    }
+
+    /// The player RELEASED the movement key where it stands: its translation flags go to zero while
+    /// its move clock keeps reading whenever it last ran.
+    fn stopped(self, guid: u64) -> Self {
+        self.player_move_flags.borrow_mut().insert(guid, 0);
+        self
+    }
+
+    /// The player is TURNING IN PLACE — spinning the camera, going nowhere. Vanilla does not count
+    /// this as movement, so neither may a chaser.
+    fn turning(self, guid: u64) -> Self {
+        let now_ms = (self.now_micros.get() / 1000) as u32;
+        self.player_moved_ms.borrow_mut().insert(guid, now_ms);
+        self.player_move_flags
+            .borrow_mut()
+            .insert(guid, MOVE_FLAG_TURN_LEFT);
+        self
+    }
+
+    /// How long ago this player's last movement heartbeat landed.
+    fn since_last_move_ms(&self, guid: u64) -> u32 {
+        let now_ms = (self.now_micros.get() / 1000) as u32;
+        now_ms.wrapping_sub(
+            self.player_moved_ms
+                .borrow()
+                .get(&guid)
+                .copied()
+                .unwrap_or(0),
+        )
     }
 
     /// The creature looks this way — what the facing turn measures its correction against.
@@ -629,13 +670,13 @@ impl MotionSink for Scenario {
         self.cc(guid).2
     }
     fn commit_position(&mut self, guid: u64, at: Point, moved_ms: u32) {
-        self.place(guid, at, Some(moved_ms));
+        self.place(guid, at, Some(moved_ms), None);
     }
     fn halt(&mut self, leg: &LegInFlight, at: Point, spline_id: u32) {
-        let Some(grid) = self.place(leg.guid, at, None) else {
+        let Some(c) = self.place(leg.guid, at, None, None) else {
             return;
         };
-        self.effects.borrow_mut().push(MoveEffect {
+        self.record(MoveEffect {
             guid: leg.guid,
             start: at,
             dest: at,
@@ -644,25 +685,12 @@ impl MotionSink for Scenario {
             run: false,
             map_id: leg.map_id,
             instance_id: leg.instance_id,
-            grid,
-            cell: spatial::grid_cell_id(grid.0, grid.1),
+            grid: c.grid,
+            cell: c.cell,
             facing: false,
             facing_angle: 0.0,
         });
-        // The stop REPLACES the leg it interrupts (the writer upserts one row per mover), so the
-        // next cycle reads it as landed and reaps it instead of resuming the old destination.
-        let mut legs = self.legs.borrow_mut();
-        legs.retain(|l| l.guid != leg.guid);
-        legs.push(LegInFlight {
-            guid: leg.guid,
-            start: at,
-            dest: at,
-            started_micros: self.now_micros.get(),
-            dur_ms: 0,
-            map_id: leg.map_id,
-            instance_id: leg.instance_id,
-            mover_gone: false,
-        });
+        self.park_leg(leg.guid, at, leg.map_id, leg.instance_id);
     }
     fn drop_leg(&mut self, guid: u64) {
         self.legs.borrow_mut().retain(|l| l.guid != guid);
@@ -692,8 +720,15 @@ impl Scenario {
         eligible && rout_window_open(now_ms, self.rout_ends_ms(guid)) && !self.cc(guid).2
     }
 
-    /// The state mirror behind both position writes, matching `CtxWorld::place`.
-    fn place(&self, guid: u64, at: Point, moved_ms: Option<u32>) -> Option<(i32, i32)> {
+    /// The state mirror behind every position write, matching `CtxWorld::place`: the row moves, and
+    /// the move clock and the facing move with it only when the caller says so.
+    fn place(
+        &self,
+        guid: u64,
+        at: Point,
+        moved_ms: Option<u32>,
+        orientation: Option<f32>,
+    ) -> Option<XCreature> {
         let mut creatures = self.creatures.borrow_mut();
         let c = creatures.get_mut(&guid)?;
         let (gx, gy) = spatial::grid_cell(at.x, at.y);
@@ -703,21 +738,69 @@ impl Scenario {
         if let Some(ms) = moved_ms {
             c.last_move_ms = ms;
         }
-        Some((gx, gy))
+        if let Some(rad) = orientation {
+            c.orientation = rad;
+        }
+        Some(*c)
     }
 
-    /// A fight's victim wherever it stands — a creature row or a player — as its position and move
-    /// clock. Chase reads both: a kiter is run down, a planted one is stood next to and faced.
+    /// The one place a `MoveEffect` is recorded, and the rule production gets from the schema: a
+    /// creature has ONE `game_creature_spline` row, so two writes for it in one firing reach a
+    /// client as the second alone. The Fake refuses rather than recording a relay that cannot happen.
+    fn record(&self, effect: MoveEffect) {
+        let now = self.now_micros.get();
+        if let Some((wrote_at, first)) = self.last_carrier.borrow().get(&effect.guid) {
+            assert!(
+                *wrote_at != now,
+                "guid {} wrote two carrier rows in one firing: {first:?} then {effect:?} — only \
+                 the second would ever reach a client, so the first is a decision the player \
+                 never sees",
+                effect.guid
+            );
+        }
+        self.last_carrier
+            .borrow_mut()
+            .insert(effect.guid, (now, effect));
+        self.effects.borrow_mut().push(effect);
+    }
+
+    /// The zero-duration row a stop leaves behind. It REPLACES the leg it interrupts (the writer
+    /// upserts one row per mover), so the next cycle reads it as landed and reaps it instead of
+    /// resuming the old destination.
+    fn park_leg(&self, guid: u64, at: Point, map_id: u32, instance_id: u64) {
+        let mut legs = self.legs.borrow_mut();
+        legs.retain(|l| l.guid != guid);
+        legs.push(LegInFlight {
+            guid,
+            start: at,
+            dest: at,
+            started_micros: self.now_micros.get(),
+            dur_ms: 0,
+            map_id,
+            instance_id,
+            mover_gone: false,
+        });
+    }
+
+    /// A fight's victim wherever it stands — a creature row or a player — as its position and live
+    /// translation flags. Chase reads both: a kiter is run down, a planted one is stood next to and
+    /// faced. A creature carries no flags of its own, so the leg the cycle is moving it along is what
+    /// says it travels, exactly as the production adapter derives it.
     fn unit(&self, guid: u64) -> Option<(Point, u32)> {
         if let Some(c) = self.creatures.borrow().get(&guid) {
-            return Some((c.at, c.last_move_ms));
+            let carried = self
+                .legs
+                .borrow()
+                .iter()
+                .any(|l| l.guid == guid && l.dur_ms > 0);
+            return Some((c.at, if carried { MOVE_FLAG_FORWARD } else { 0 }));
         }
-        let moved = self.player_moved_ms.borrow().get(&guid).copied();
+        let flags = self.player_move_flags.borrow().get(&guid).copied();
         self.players
             .borrow()
             .iter()
             .find(|p| p.guid == guid)
-            .map(|p| (p.at, moved.unwrap_or(0)))
+            .map(|p| (p.at, flags.unwrap_or(0)))
     }
 
     /// A pet's owner as the pet reads it. `None` for an owner that logged out or died — the two are
@@ -857,7 +940,7 @@ impl IdleSink for Scenario {
             return; // the writer refuses a corrupt leg rather than writing it onto the creature
         }
         let dur_ms = leg.dur_ms.max(1); // a zero-duration lerp would divide by zero
-        self.effects.borrow_mut().push(MoveEffect {
+        self.record(MoveEffect {
             guid,
             start: from.at,
             dest,
@@ -1153,13 +1236,13 @@ impl PursuitSink for Scenario {
             .iter()
             .filter_map(|f| {
                 let c = creatures.get(&f.attacker)?;
-                let (victim_at, victim_last_move_ms) = self.unit(f.victim)?;
+                let (victim_at, victim_movement_flags) = self.unit(f.victim)?;
                 scope.covers(c.instance_id).then_some(Pursuit {
                     guid: f.attacker,
                     at: c.at,
                     orientation: c.orientation,
                     victim_at,
-                    victim_last_move_ms,
+                    victim_movement_flags,
                     routing: self.is_routing(f.attacker),
                     leg: legs.iter().find(|l| l.guid == f.attacker).cloned(),
                 })
@@ -1169,17 +1252,17 @@ impl PursuitSink for Scenario {
     fn caster_hold_range(&self, guid: u64) -> f32 {
         self.hold_ranges.borrow().get(&guid).copied().unwrap_or(0.0)
     }
-    fn face(&mut self, guid: u64, orientation: f32, spline_id: u32) {
-        let Some(c) = self.creatures.borrow_mut().get_mut(&guid).map(|c| {
-            c.orientation = orientation;
-            *c
-        }) else {
+    /// The stop AND the turn, as one carrier row: the creature is planted at `at` looking at
+    /// `orientation`, and the zero-duration facing row replaces the leg it was riding, exactly as
+    /// the production writer's upsert does.
+    fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32) {
+        let Some(c) = self.place(guid, at, None, Some(orientation)) else {
             return;
         };
-        self.effects.borrow_mut().push(MoveEffect {
+        self.record(MoveEffect {
             guid,
-            start: c.at,
-            dest: c.at,
+            start: at,
+            dest: at,
             dur_ms: 0,
             spline_id,
             run: false,
@@ -1190,6 +1273,7 @@ impl PursuitSink for Scenario {
             facing: true,
             facing_angle: orientation,
         });
+        self.park_leg(guid, at, c.map_id, c.instance_id);
     }
 }
 
@@ -1367,7 +1451,7 @@ impl PetSink for Scenario {
         self.pet_effects
             .borrow_mut()
             .push(PetEffect::Restaged(pet, at, map_id, instance_id));
-        self.place(pet, at, Some(now_ms));
+        self.place(pet, at, Some(now_ms), None);
         if let Some(c) = self.creatures.borrow_mut().get_mut(&pet) {
             c.map_id = map_id;
             c.instance_id = instance_id;
@@ -1395,6 +1479,8 @@ const INSTANCE: u64 = 0;
 /// A one-second leg launched at t=0, sampled half way through.
 const LEG_MS: u32 = 1000;
 const HALF_WAY: u64 = 500_000;
+/// The 1.12 turn-left bit — a movement flag that is deliberately NOT translation.
+const MOVE_FLAG_TURN_LEFT: u32 = 0x10;
 
 fn p(x: f32, y: f32, z: f32) -> Point {
     Point { x, y, z }
@@ -2326,17 +2412,24 @@ fn a_chaser_rides_one_committed_leg_until_its_victim_veers() {
     w = w.kiting(HUNTER, p(23.0, 20.0, 10.0));
     let tick = w.tick(false, catch_all());
     run_cycle(&mut w, tick);
+    let legs = w.effects();
     assert_eq!(
-        w.effects().len(),
+        legs.len(),
         2,
         "a chaser that never re-aims loses a kiter the moment they turn — the leg must be re-thrown \
          once the victim veers off it"
+    );
+    assert!(
+        legs[1].spline_id > legs[0].spline_id,
+        "the replacement must carry a NEWER spline id, or the client keeps the obsolete leg and \
+         rides it past the victim's new position"
     );
 }
 
 #[test]
 fn a_creature_that_reaches_a_standing_victim_stops_and_faces_it() {
     // Half way through a leg thrown at the player, who has since stopped two yards ahead of it.
+    let launched = SETTLED - 500_000;
     let mut w = wolf_fighting(p(7.0, 0.0, 10.0))
         .facing(WOLF, std::f32::consts::PI)
         .attacking(WOLF, HUNTER)
@@ -2344,32 +2437,32 @@ fn a_creature_that_reaches_a_standing_victim_stops_and_faces_it() {
             WOLF,
             p(0.0, 0.0, 10.0),
             p(10.0, 0.0, 10.0),
-            SETTLED - 500_000,
+            launched,
             LEG_MS,
         );
     let tick = w.tick(false, catch_all());
     run_cycle(&mut w, tick);
 
-    let stop_and_turn: Vec<(Point, u32, bool, f32)> = w
-        .effects()
-        .iter()
-        .map(|e| (e.dest, e.dur_ms, e.facing, e.facing_angle))
-        .collect();
+    let rendered = p(5.0, 0.0, 10.0);
+    let stop = w.effects();
     assert_eq!(
-        stop_and_turn,
-        [
-            (p(5.0, 0.0, 10.0), 0, false, 0.0),
-            (p(5.0, 0.0, 10.0), 0, true, 0.0),
-        ],
-        "a lead-chase aimed PAST the victim would ride on through them, so the client has to be \
-         told to stop where the server planted the creature; and a spline is the only thing a \
-         client derives creature facing from, so without the zero-duration turn the mob fights the \
-         whole fight looking the way it came"
+        stop.iter()
+            .map(|e| (e.start, e.dest, e.dur_ms, e.facing, e.facing_angle))
+            .collect::<Vec<_>>(),
+        [(rendered, rendered, 0, true, 0.0)],
+        "the stop and the turn are ONE facing spline at the point the client renders the creature: \
+         two rows land on its single spline row inside one transaction, so the client would receive \
+         the turn alone and ride the lead leg on through the player it is supposed to be swinging at"
+    );
+    assert!(
+        stop[0].spline_id > (launched / 1000) as u32,
+        "the stop must carry a NEWER spline id than the leg it interrupts, or the client keeps the \
+         obsolete leg and runs it to its end"
     );
     assert_eq!(
-        w.at(WOLF).orientation,
-        0.0,
-        "the authoritative heading must move with the turn, or the next firing turns again"
+        (w.at(WOLF).at, w.at(WOLF).orientation),
+        (rendered, 0.0),
+        "server and client must agree on where the creature stopped and which way it now looks"
     );
 
     w.advance_clock(500_000);
@@ -2377,7 +2470,7 @@ fn a_creature_that_reaches_a_standing_victim_stops_and_faces_it() {
     run_cycle(&mut w, tick);
     assert_eq!(
         w.effects().len(),
-        2,
+        1,
         "a settled fight must go SILENT: a stop or a turn re-sent every firing is a packet per \
          creature per tick for every mob standing in melee"
     );
@@ -2401,6 +2494,353 @@ fn a_creature_whose_victim_kites_out_of_reach_keeps_chasing() {
         "planting into attack stance the moment a moving victim touches melee reach is the \
          run/stand/run flicker of chasing someone who never stops; the mob must keep running and \
          aim PAST them"
+    );
+}
+
+/// The window the DISPLACED rule read the victim's move clock over. A stop packet lands well inside
+/// it, which is why a clock cannot answer "is this player still running".
+const STALE_MOVE_WINDOW_MS: u32 = 700;
+
+/// The bearings a player walks up to a creature from. Nothing about the answer may depend on which
+/// side they stand on.
+const APPROACHES: [f32; 8] = [
+    0.0,
+    std::f32::consts::FRAC_PI_4,
+    std::f32::consts::FRAC_PI_2,
+    2.356_194_5,
+    std::f32::consts::PI,
+    -2.356_194_5,
+    -std::f32::consts::FRAC_PI_2,
+    -std::f32::consts::FRAC_PI_4,
+];
+
+#[test]
+fn a_standing_victim_inside_reach_is_turned_to_from_every_approach() {
+    for bearing in APPROACHES {
+        let at = p(3.0 * bearing.cos(), 3.0 * bearing.sin(), 10.0);
+        let mut w = wolf_fighting(at).facing(WOLF, 0.0).attacking(WOLF, HUNTER);
+        let tick = w.tick(false, catch_all());
+        run_cycle(&mut w, tick);
+
+        let effects = w.effects();
+        assert!(
+            effects.iter().all(|e| e.facing),
+            "a creature already in reach of a standing player must not travel at all: a positional \
+             leg here is the mob running to their flank instead of squaring up ({bearing} rad)"
+        );
+        assert!(
+            effects.len() <= 1 && w.at(WOLF).at == p(0.0, 0.0, 10.0),
+            "the answer must come from distance and movement, not from the side the player walked \
+             up on — one turn at most, and the creature stays where it stands ({bearing} rad)"
+        );
+    }
+}
+
+#[test]
+fn a_player_who_just_released_the_movement_key_is_standing_at_once() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .kiting(HUNTER, p(3.0, 0.0, 10.0))
+        .stopped(HUNTER)
+        .facing(WOLF, std::f32::consts::PI)
+        .attacking(WOLF, HUNTER);
+    assert!(
+        w.since_last_move_ms(HUNTER) < STALE_MOVE_WINDOW_MS,
+        "the point of this scenario is a move clock that still reads FRESH"
+    );
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.effects()
+            .iter()
+            .map(|e| (e.facing, e.dur_ms))
+            .collect::<Vec<_>>(),
+        [(true, 0)],
+        "a stop takes effect on the next covered firing, not once a move clock goes quiet: the \
+         creature must turn to the player, and a lead leg thrown at a player who has stopped runs \
+         eight yards through them"
+    );
+}
+
+#[test]
+fn a_player_turning_in_place_is_not_translating() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .turning(HUNTER)
+        .facing(WOLF, std::f32::consts::PI)
+        .attacking(WOLF, HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.effects()
+            .iter()
+            .map(|e| (e.facing, e.dur_ms))
+            .collect::<Vec<_>>(),
+        [(true, 0)],
+        "spinning the camera goes nowhere, so the creature it is standing next to must square up \
+         rather than chase a player who never left the spot"
+    );
+}
+
+#[test]
+fn a_kiter_inside_reach_is_chased_without_a_stop_between_firings() {
+    let mut w = wolf_fighting(p(4.0, 0.0, 10.0))
+        .kiting(HUNTER, p(4.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER);
+    // Three firings of a straight-line kite: the victim keeps its heading, so the committed leg
+    // keeps its own.
+    for step in 0..3 {
+        let tick = w.tick(false, catch_all());
+        run_cycle(&mut w, tick);
+        w.advance_clock(500_000);
+        w = w.kiting(HUNTER, p(7.0 + 3.0 * step as f32, 0.0, 10.0));
+    }
+
+    assert_eq!(
+        w.effects()
+            .iter()
+            .map(|e| (e.dest, e.run))
+            .collect::<Vec<_>>(),
+        [(p(12.0, 0.0, 10.0), true)],
+        "a genuinely translating victim must be run down on ONE committed leg: a stop between \
+         firings is the run/stand/run flicker, and re-throwing the leg is the client re-computing \
+         its path every tick"
+    );
+}
+
+#[test]
+fn a_lead_leg_is_stopped_where_it_renders_once_the_victim_stops() {
+    let mut w = wolf_fighting(p(6.0, 0.0, 10.0))
+        .kiting(HUNTER, p(6.0, 0.0, 10.0))
+        .facing(WOLF, std::f32::consts::PI)
+        .attacking(WOLF, HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    // The player releases the key half a firing into the lead leg, inside melee reach of where the
+    // creature now renders.
+    w.advance_clock(500_000);
+    w = w.stopped(HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    let rendered = p(3.5, 0.0, 10.0);
+    let effects = w.effects();
+    assert_eq!(
+        effects
+            .iter()
+            .map(|e| (e.start, e.dest, e.dur_ms, e.facing))
+            .collect::<Vec<_>>(),
+        [
+            (p(0.0, 0.0, 10.0), p(14.0, 0.0, 10.0), 2000, false),
+            (rendered, rendered, 0, true),
+        ],
+        "the leg aimed past a running player has to be ended where the client RENDERS the creature, \
+         and the one row that ends it is the facing row; stopping anywhere else puts the server's \
+         melee reach somewhere the player cannot see the mob"
+    );
+    assert!(
+        effects[1].spline_id > effects[0].spline_id,
+        "the stop must carry a NEWER spline id than the lead leg, or the client keeps the obsolete \
+         leg and runs the eight yards past the player anyway"
+    );
+    assert_eq!(
+        (w.at(WOLF).at, w.at(WOLF).orientation),
+        (rendered, 0.0),
+        "server and client must agree on where the creature stopped and which way it now looks"
+    );
+
+    w.advance_clock(500_000);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+    assert_eq!(
+        w.effects().len(),
+        2,
+        "the firing after the stop must be silent, or every mob standing in melee costs a packet \
+         per tick"
+    );
+}
+
+/// The rule the production carrier has by construction, made visible: one `game_creature_spline`
+/// row per creature, and a subscriber sees only a transaction's net change. Written as a pair of
+/// direct sink calls — the very pair `stand_and_face` used to make — because no scenario can reach
+/// the forbidden write any more, and a rule nothing proves detects anything is not a rule.
+#[test]
+#[should_panic(expected = "wrote two carrier rows in one firing")]
+fn the_fake_refuses_a_second_carrier_row_for_one_creature_in_one_firing() {
+    let mut w = Scenario::new(SETTLED).creature(WOLF, p(0.0, 0.0, 10.0));
+    let leg = LegInFlight {
+        guid: WOLF,
+        start: p(0.0, 0.0, 10.0),
+        dest: p(10.0, 0.0, 10.0),
+        started_micros: SETTLED - 500_000,
+        dur_ms: LEG_MS,
+        map_id: MAP,
+        instance_id: INSTANCE,
+        mover_gone: false,
+    };
+    let at = p(5.0, 0.0, 10.0);
+    let spline_id = (SETTLED / 1000) as u32;
+
+    w.halt(&leg, at, spline_id);
+    w.face(WOLF, at, 0.0, spline_id);
+}
+
+#[test]
+fn every_chase_leg_travels_at_the_configured_run_speed() {
+    let run = lyracore_shared::constants::speeds::RUN;
+    for (case, twist) in [
+        ("a standing victim", (|w| w) as Twist),
+        ("a kiting victim", |w: Scenario| {
+            w.kiting(HUNTER, p(15.0, 0.0, 10.0))
+        }),
+    ] {
+        let mut w = twist(wolf_fighting(p(15.0, 0.0, 10.0)).attacking(WOLF, HUNTER));
+        let tick = w.firing(SETTLED, 500_000, catch_all());
+        run_cycle(&mut w, tick);
+
+        let leg = w.effects();
+        assert_eq!(leg.len(), 1, "one run leg on the covered firing ({case})");
+        let travelled = ((leg[0].dest.x - leg[0].start.x).powi(2)
+            + (leg[0].dest.y - leg[0].start.y).powi(2))
+        .sqrt();
+        let implied = travelled / (leg[0].dur_ms as f32 / 1000.0);
+        assert!(
+            leg[0].run && (implied - run).abs() < 0.05,
+            "a leg whose distance and duration disagree with the configured run speed is a \
+             creature that teleports or crawls: {travelled} yd in {} ms implies {implied} yd/s, \
+             not {run} ({case})",
+            leg[0].dur_ms
+        );
+    }
+}
+
+#[test]
+fn a_lead_leg_is_replaced_when_the_victim_stops_short_of_reach() {
+    let run = lyracore_shared::constants::speeds::RUN;
+    let mut w = wolf_fighting(p(20.0, 0.0, 10.0))
+        .kiting(HUNTER, p(20.0, 0.0, 10.0))
+        .facing(WOLF, std::f32::consts::PI)
+        .attacking(WOLF, HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    // The player releases the key at 23 yd, still well outside melee reach, half a firing into
+    // the lead leg the first cycle threw at the old heading.
+    w.advance_clock(500_000);
+    w = w.kiting(HUNTER, p(23.0, 0.0, 10.0)).stopped(HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    let legs = w.effects();
+    assert_eq!(
+        legs.len(),
+        2,
+        "exactly one replacement leg this firing, appended to the first"
+    );
+    let replacement = legs[1];
+    let rendered = p(3.5, 0.0, 10.0);
+    assert_eq!(
+        (replacement.start, replacement.dest),
+        (rendered, p(19.0, 0.0, 10.0)),
+        "the replacement must start where the client RENDERS the creature now, and land \
+         MELEE_STOP_SHORT_YD short of the victim's new position — riding the old lead leg carries \
+         the creature eight yards past a player who has already stopped"
+    );
+    let travelled = ((replacement.dest.x - replacement.start.x).powi(2)
+        + (replacement.dest.y - replacement.start.y).powi(2))
+    .sqrt();
+    let implied = travelled / (replacement.dur_ms as f32 / 1000.0);
+    assert!(
+        (implied - run).abs() < 0.05,
+        "the replacement must still travel at the configured run speed: {travelled} yd in {} ms \
+         implies {implied} yd/s, not {run}",
+        replacement.dur_ms
+    );
+    assert!(
+        replacement.spline_id > legs[0].spline_id,
+        "the replacement must carry a NEWER spline id, or the client keeps riding the obsolete \
+         lead leg through the player"
+    );
+
+    // Ride the replacement out: the creature must never pass the victim it stopped short of, and
+    // the approach must end on the one facing spline the stop writes at the stop point.
+    for _ in 0..8 {
+        w.advance_clock(500_000);
+        let tick = w.tick(false, catch_all());
+        run_cycle(&mut w, tick);
+        assert!(
+            w.at(WOLF).at.x <= 23.0 + 0.01,
+            "the creature's authoritative position must never pass the victim it stopped short of, \
+             got x = {}",
+            w.at(WOLF).at.x
+        );
+    }
+    let stop = p(19.0, 0.0, 10.0);
+    let last = w.effects().last().copied().expect("at least one effect");
+    assert_eq!(
+        (
+            last.start,
+            last.dest,
+            last.dur_ms,
+            last.facing,
+            last.facing_angle
+        ),
+        (stop, stop, 0, true, 0.0),
+        "the fight must settle on ONE facing spline at the stop point, squared up on the player: \
+         a positional leg as the last word means the creature overshot them"
+    );
+}
+
+#[test]
+fn a_creature_victim_with_a_leg_in_flight_is_chased_like_a_kiting_player() {
+    // A creature or pet victim carries no move flags of its own — the leg the cycle is already
+    // moving it along is what says it travels. Same shape as a kiting player: run it down with a
+    // lead rather than planting into attack stance, which is the run/stand/run flicker chase exists
+    // to remove.
+    let mut w = Scenario::new(SETTLED)
+        .creature(WOLF, p(0.0, 0.0, 10.0))
+        .creature(PACK_MATE, p(4.0, 0.0, 10.0))
+        .flying(
+            PACK_MATE,
+            p(4.0, 0.0, 10.0),
+            p(4.0, 20.0, 10.0),
+            SETTLED,
+            LEG_MS,
+        )
+        .attacking(WOLF, PACK_MATE);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.effects()
+            .iter()
+            .map(|e| (e.dest, e.dur_ms > 0, e.run))
+            .collect::<Vec<_>>(),
+        [(p(12.0, 0.0, 10.0), true, true)],
+        "a creature or pet victim mid-leg, inside melee reach, must be chased with a lead exactly \
+         like a kiting player — the Fake derives its translation flags from the leg the cycle is \
+         already moving it along"
+    );
+}
+
+#[test]
+fn a_stopped_victim_outside_reach_with_no_leg_in_flight_still_gets_a_closing_leg() {
+    let mut w = wolf_fighting(p(15.0, 0.0, 10.0))
+        .stopped(HUNTER)
+        .attacking(WOLF, HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.effects()
+            .iter()
+            .map(|e| (e.dest, e.dur_ms > 0, e.run))
+            .collect::<Vec<_>>(),
+        [(p(11.0, 0.0, 10.0), true, true)],
+        "a standing victim outside melee reach with nothing already in flight must still get a \
+         closing leg to the stop point — the re-aim rule for a leg already in flight must not \
+         swallow the ordinary no-leg case"
     );
 }
 
@@ -3644,12 +4084,13 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
         (
             "impl CtxWorld<'_> {",
             concat!(
-                "{ fn place(&self, guid: u64, at: Point, moved_ms: Option<u32>) -> Option<(i32, ",
-                "i32)> { let entities = self.ctx.db.game_world_entity(); let mut e = ",
-                "entities.guid().find(guid)?; let (gx, gy) = spatial::grid_cell(at.x, at.y); ",
-                "e.x = at.x; e.y = at.y; e.z = at.z; e.grid_x = gx; e.grid_y = gy; e.cell = ",
-                "spatial::grid_cell_id(gx, gy); if let Some(ms) = moved_ms { e.last_move_ms = ",
-                "ms; } entities.guid().update(e); Some((gx, gy)) } }",
+                "{ fn place( &self, guid: u64, at: Point, moved_ms: Option<u32>, orientation: ",
+                "Option<f32>, ) -> Option<WorldEntity> { let entities = ",
+                "self.ctx.db.game_world_entity(); let mut e = entities.guid().find(guid)?; let ",
+                "(gx, gy) = spatial::grid_cell(at.x, at.y); e.x = at.x; e.y = at.y; e.z = at.z; ",
+                "e.grid_x = gx; e.grid_y = gy; e.cell = spatial::grid_cell_id(gx, gy); if let ",
+                "Some(ms) = moved_ms { e.last_move_ms = ms; } if let Some(rad) = orientation { ",
+                "e.orientation = rad; } Some(entities.guid().update(e)) } }",
             ),
         ),
         (
@@ -3659,6 +4100,13 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "dest: Point { x: s.dx, y: s.dy, z: s.dz, }, started_micros: s.start_micros, ",
                 "dur_ms: s.dur_ms, map_id: s.map_id, instance_id: s.instance_id, mover_gone, } ",
                 "}",
+            ),
+        ),
+        (
+            "fn translation_flags(unit: &WorldEntity, leg: Option<CreatureSpline>) -> u32 {",
+            concat!(
+                "{ let carried = leg.is_some_and(|l| l.dur_ms > 0); unit.movement_flags | if ",
+                "carried { MOVE_FLAG_FORWARD } else { 0 } }",
             ),
         ),
         (
@@ -3683,10 +4131,11 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "}) .collect() } fn movement_suppressed(&self, guid: u64) -> bool { ",
                 "crate::spell::is_self_movement_suppressed(self.ctx, guid) } fn ",
                 "commit_position(&mut self, guid: u64, at: Point, moved_ms: u32) { ",
-                "self.place(guid, at, Some(moved_ms)); } fn halt(&mut self, leg: &LegInFlight, ",
-                "at: Point, spline_id: u32) { if let Some(grid) = self.place(leg.guid, at, ",
-                "None) { tick::emit_move_spline( self.ctx, leg.guid, (at.x, at.y, at.z), (at.x, ",
-                "at.y, at.z), 0, false, spline_id, leg.map_id, leg.instance_id, grid, ); } } fn ",
+                "self.place(guid, at, Some(moved_ms), None); } fn halt(&mut self, leg: ",
+                "&LegInFlight, at: Point, spline_id: u32) { if let Some(e) = ",
+                "self.place(leg.guid, at, None, None) { tick::emit_move_spline( self.ctx, ",
+                "leg.guid, (at.x, at.y, at.z), (at.x, at.y, at.z), 0, false, spline_id, ",
+                "leg.map_id, leg.instance_id, (e.grid_x, e.grid_y), ); } } fn ",
                 "drop_leg(&mut self, guid: u64) { ",
                 "self.ctx.db.game_creature_spline().guid().delete(guid); } }",
             ),
@@ -3871,17 +4320,16 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "row.attacker_guid, scope)?; let victim = ",
                 "entities.guid().find(row.target_guid)?; Some(Pursuit { guid: c.guid, at: Point ",
                 "{ x: c.x, y: c.y, z: c.z, }, orientation: c.orientation, victim_at: Point { x: ",
-                "victim.x, y: victim.y, z: victim.z, }, victim_last_move_ms: ",
-                "victim.last_move_ms, routing: tick::creature_is_routing(self.ctx, &c), leg: ",
+                "victim.x, y: victim.y, z: victim.z, }, victim_movement_flags: ",
+                "translation_flags( &victim, splines.guid().find(row.target_guid), ), routing: ",
+                "tick::creature_is_routing(self.ctx, &c), leg: ",
                 "splines.guid().find(c.guid).map(|s| as_leg(s, false)), }) }) .collect() } fn ",
                 "caster_hold_range(&self, guid: u64) -> f32 { self.ctx .db .game_world_entity() ",
                 ".guid() .find(guid) .map_or(0.0, |c| caster_hold_range_yd(self.ctx, c.entry)) ",
-                "} fn face(&mut self, guid: u64, orientation: f32, spline_id: u32) { let ",
-                "entities = self.ctx.db.game_world_entity(); let Some(mut e) = ",
-                "entities.guid().find(guid) else { return; }; e.orientation = orientation; let ",
-                "(pos, map_id, instance_id, grid) = ( (e.x, e.y, e.z), e.map_id, e.instance_id, ",
-                "(e.grid_x, e.grid_y), ); entities.guid().update(e); tick::emit_facing_spline( ",
-                "self.ctx, guid, pos, orientation, spline_id, map_id, instance_id, grid, ); } }",
+                "} fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32) { ",
+                "let Some(e) = self.place(guid, at, None, Some(orientation)) else { return; }; ",
+                "tick::emit_facing_spline( self.ctx, guid, (at.x, at.y, at.z), orientation, ",
+                "spline_id, e.map_id, e.instance_id, (e.grid_x, e.grid_y), ); } }",
             ),
         ),
         (

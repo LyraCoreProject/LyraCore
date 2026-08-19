@@ -17,6 +17,7 @@ use super::{
     Pursuit, PursuitSink, Recovering, RegenSink, RoutSink, Router, Sensor, SpellOption, ThreatSink,
     TickContext, Waypoint,
 };
+use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::TickScope;
 use crate::creatures::cast_condition;
 use crate::creatures::pet;
@@ -25,7 +26,7 @@ use crate::spell::game_pending_cast;
 use crate::{
     game_aura, game_creature_cast, game_creature_spawn, game_creature_spell, game_creature_spline,
     game_creature_template, game_creature_waypoint, game_melee_attack, game_spell,
-    game_world_entity, MeleeAttack,
+    game_world_entity, MeleeAttack, WorldEntity,
 };
 
 /// `tick_creatures`' one call into the cycle. The adapter never leaves this module.
@@ -39,9 +40,16 @@ struct CtxWorld<'a> {
 
 impl CtxWorld<'_> {
     /// Move the creature's authoritative row to `at`, writing grid address and packed cell in the
-    /// SAME statement (a stale `cell` puts the row in the wrong AOI cell). `moved_ms` stamps the
-    /// move clock; a halted creature passes `None` because it did not travel.
-    fn place(&self, guid: u64, at: Point, moved_ms: Option<u32>) -> Option<(i32, i32)> {
+    /// SAME statement (a stale `cell` puts the row in the wrong AOI cell), and hand back the row as
+    /// written. `moved_ms` stamps the move clock; a halted creature passes `None` because it did not
+    /// travel. `orientation` turns it in that same statement, so a stop-and-turn costs one write.
+    fn place(
+        &self,
+        guid: u64,
+        at: Point,
+        moved_ms: Option<u32>,
+        orientation: Option<f32>,
+    ) -> Option<WorldEntity> {
         let entities = self.ctx.db.game_world_entity();
         let mut e = entities.guid().find(guid)?;
         let (gx, gy) = spatial::grid_cell(at.x, at.y);
@@ -54,8 +62,10 @@ impl CtxWorld<'_> {
         if let Some(ms) = moved_ms {
             e.last_move_ms = ms;
         }
-        entities.guid().update(e);
-        Some((gx, gy))
+        if let Some(rad) = orientation {
+            e.orientation = rad;
+        }
+        Some(entities.guid().update(e))
     }
 }
 
@@ -80,6 +90,16 @@ fn as_leg(s: CreatureSpline, mover_gone: bool) -> LegInFlight {
         instance_id: s.instance_id,
         mover_gone,
     }
+}
+
+/// A unit's live translation flags as the chase decision reads them. A client-driven unit stamps its
+/// own on every heartbeat; a creature stamps none, so the leg the MODULE is moving it along is what
+/// says it travels — the same thing vanilla's spline launch records on the unit itself. Spline
+/// advance runs first in the cycle and reaps a landed leg, so a surviving leg with a real duration is
+/// still in flight, while a halt leaves a zero-duration row, which is a stop.
+fn translation_flags(unit: &WorldEntity, leg: Option<CreatureSpline>) -> u32 {
+    let carried = leg.is_some_and(|l| l.dur_ms > 0);
+    unit.movement_flags | if carried { MOVE_FLAG_FORWARD } else { 0 }
 }
 
 /// The longest ENEMY-cast range (yd) creature `entry` can bring to bear — the rotation nukes and
@@ -124,10 +144,10 @@ impl MotionSink for CtxWorld<'_> {
         crate::spell::is_self_movement_suppressed(self.ctx, guid)
     }
     fn commit_position(&mut self, guid: u64, at: Point, moved_ms: u32) {
-        self.place(guid, at, Some(moved_ms));
+        self.place(guid, at, Some(moved_ms), None);
     }
     fn halt(&mut self, leg: &LegInFlight, at: Point, spline_id: u32) {
-        if let Some(grid) = self.place(leg.guid, at, None) {
+        if let Some(e) = self.place(leg.guid, at, None, None) {
             tick::emit_move_spline(
                 self.ctx,
                 leg.guid,
@@ -138,7 +158,7 @@ impl MotionSink for CtxWorld<'_> {
                 spline_id,
                 leg.map_id,
                 leg.instance_id,
-                grid,
+                (e.grid_x, e.grid_y),
             );
         }
     }
@@ -633,7 +653,10 @@ impl PursuitSink for CtxWorld<'_> {
                         y: victim.y,
                         z: victim.z,
                     },
-                    victim_last_move_ms: victim.last_move_ms,
+                    victim_movement_flags: translation_flags(
+                        &victim,
+                        splines.guid().find(row.target_guid),
+                    ),
                     routing: tick::creature_is_routing(self.ctx, &c),
                     leg: splines.guid().find(c.guid).map(|s| as_leg(s, false)),
                 })
@@ -648,30 +671,22 @@ impl PursuitSink for CtxWorld<'_> {
             .find(guid)
             .map_or(0.0, |c| caster_hold_range_yd(self.ctx, c.entry))
     }
-    fn face(&mut self, guid: u64, orientation: f32, spline_id: u32) {
-        let entities = self.ctx.db.game_world_entity();
-        // Re-find rather than carry the snapshot the decision was made from, so another write to
-        // this row inside the same tick is not clobbered by a stale copy.
-        let Some(mut e) = entities.guid().find(guid) else {
+    fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32) {
+        // Position and facing land in ONE entity write, beside the ONE spline row the relay carries:
+        // `place` re-finds the live row rather than carrying the snapshot the decision was made
+        // from, so another write to it inside the same tick is not clobbered by a stale copy.
+        let Some(e) = self.place(guid, at, None, Some(orientation)) else {
             return;
         };
-        e.orientation = orientation;
-        let (pos, map_id, instance_id, grid) = (
-            (e.x, e.y, e.z),
-            e.map_id,
-            e.instance_id,
-            (e.grid_x, e.grid_y),
-        );
-        entities.guid().update(e);
         tick::emit_facing_spline(
             self.ctx,
             guid,
-            pos,
+            (at.x, at.y, at.z),
             orientation,
             spline_id,
-            map_id,
-            instance_id,
-            grid,
+            e.map_id,
+            e.instance_id,
+            (e.grid_x, e.grid_y),
         );
     }
 }

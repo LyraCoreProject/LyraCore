@@ -18,8 +18,8 @@ use super::ai::{
     is_aggro_candidate, leg_in_flight, leg_toward, may_start_rout, nearest_waypoint_idx,
     next_waypoint_idx, rout_close_ms, spline_t, stealth_detect_range, wander_point,
     within_assist_radius, wounded_slow_factor, TickScope, CHASE_LEAD_YD, CHASE_LEASH_SQ,
-    CHASE_MELEE_SQ, CHASE_REPATH_COS, CHASE_TARGET_MOVING_MS, FLEE_LEG_YD, MOVE_TICK_SECS,
-    RETURN_LEASH_SQ, SENSE_EVERY_N_TICKS, WANDER_CHANCE_PCT, WANDER_RADIUS,
+    CHASE_MELEE_SQ, CHASE_REPATH_COS, FLEE_LEG_YD, MOVE_TICK_SECS, RETURN_LEASH_SQ,
+    SENSE_EVERY_N_TICKS, WANDER_CHANCE_PCT, WANDER_RADIUS,
 };
 use super::cast_condition;
 use super::pet;
@@ -100,8 +100,8 @@ pub(crate) trait MotionSink {
     fn commit_position(&mut self, guid: u64, at: Point, moved_ms: u32);
     /// Stop this mover at `at` and tell the client to halt there: the position moves, the move clock
     /// does not, and the emitted leg has zero duration, REPLACING the leg it interrupts so the next
-    /// cycle reads it as landed. Both a suppressed mover frozen mid-leg and a chaser that reached
-    /// its victim end this way.
+    /// cycle reads it as landed. A mover frozen mid-leg by crowd control ends this way; a chaser
+    /// that reached its victim stops through [`PursuitSink::face`], which also turns it.
     fn halt(&mut self, leg: &LegInFlight, at: Point, spline_id: u32);
     /// Forget this creature's leg — arrived, orphaned or refused.
     fn drop_leg(&mut self, guid: u64);
@@ -411,7 +411,7 @@ pub(crate) trait ThreatSink {
 }
 
 /// One creature closing on the unit it fights, with everything that decision reads: where both
-/// stand, how recently the victim moved, and the leg the chaser is already running.
+/// stand, whether the victim is travelling, and the leg the chaser is already running.
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct Pursuit {
     pub guid: u64,
@@ -419,17 +419,20 @@ pub(crate) struct Pursuit {
     /// Where the creature currently looks — the facing turn is idempotent against it.
     pub orientation: f32,
     pub victim_at: Point,
-    /// The victim's move clock. A kiter is run down on the move; a planted one is stood next to.
-    pub victim_last_move_ms: u32,
+    /// The victim's LIVE movement flags, read through `combat::is_translating`. A kiter is run down
+    /// on the move; one that is standing — turning in place included — is stood next to and faced.
+    /// A move CLOCK cannot answer this: it still reads "just moved" for most of a second after the
+    /// player released the key, which is long enough to throw a lead leg straight through them.
+    pub victim_movement_flags: u32,
     /// Inside an open rout window: the rout leg is this creature's sole mover this firing.
     pub routing: bool,
     /// The leg it is already riding. Both the re-aim decision and the stop read it.
     pub leg: Option<LegInFlight>,
 }
 
-/// Chase's surface: the fights worth closing, how far a caster fights from, and where a creature
-/// looks. It shares the movers the idle phases use — `speed_of`, `navigate`, `commit_leg` — and
-/// `halt` with spline advance, so a chase leg is written by the one leg writer like every other.
+/// Chase's surface: the fights worth closing, how far a caster fights from, and the stop-and-turn
+/// that ends an approach. It shares the movers the idle phases use — `speed_of`, `navigate`,
+/// `commit_leg` — so a chase leg is written by the one leg writer like every other.
 pub(crate) trait PursuitSink {
     /// Every live engagement this firing covers whose attacker is a creature that could move and
     /// whose victim is still in the world. NOT scoped to the active-cell sweep: a fight dragged out
@@ -438,9 +441,12 @@ pub(crate) trait PursuitSink {
     /// The longest range this creature can bring an offensive spell to bear from; 0 for anything
     /// that has to close to melee.
     fn caster_hold_range(&self, guid: u64) -> f32;
-    /// Turn the creature to `orientation` and tell the clients that can see it. A spline is the only
-    /// thing a client derives creature facing from, so this is a zero-duration facing packet.
-    fn face(&mut self, guid: u64, orientation: f32, spline_id: u32);
+    /// STOP the creature at `at` and turn it to `orientation`, in ONE carrier row and one entity
+    /// write. A spline is the only thing a client derives creature facing from, so the stop is a
+    /// zero-duration facing spline at `at`: it replaces whatever leg the creature was riding, and
+    /// the next spline advance reads it as arrived and reaps it. One row because a subscriber sees
+    /// only a transaction's net change — a stop written beside a turn would never reach a client.
+    fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32);
 }
 
 /// A creature that could break off and run this firing: its fight, its wounds, and its rout clock.
@@ -1265,9 +1271,14 @@ fn angle_diff(from: f32, to: f32) -> f32 {
 }
 
 /// CHASE — an engaged creature closes on the unit it fights. It commits to ONE long run leg and
-/// rides it for several firings, re-aiming only when the leg lands or the victim veers off the
-/// heading it was thrown along; an offensive caster holds at spell range instead of face-tanking;
-/// and a creature that reaches a victim standing inside melee reach stops and turns to face it.
+/// rides it for several firings, re-aiming only when the leg lands, the victim veers off the
+/// heading it was thrown along, or a victim that stops runs the leg past where the stop point now
+/// sits; an offensive caster holds at spell range instead of face-tanking; and a creature that
+/// reaches a victim standing inside melee reach stops and turns to face it.
+///
+/// Melee reach is read BEFORE the lead, and the victim's live translation flags decide which of the
+/// two applies, so a player who released the movement key inside reach is turned to rather than led
+/// eight yards past — the sideways overshoot of running to their flank.
 ///
 /// The engagements are the candidate set, so this phase ignores the active-cell sweep — a player
 /// cannot freeze a fight by dragging it away — and stays O(fights running). A routing or
@@ -1291,11 +1302,11 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         if gap_sq > CHASE_LEASH_SQ {
             continue;
         }
-        // A creature plants into attack stance only for a victim that STOPPED. It runs a kiter down
-        // continuously — the swing pass hits on the move — which is what removes the
-        // run/attack-stance/run flicker of chasing someone who never stands still.
-        let victim_moving =
-            tick.now_ms.wrapping_sub(c.victim_last_move_ms) < CHASE_TARGET_MOVING_MS;
+        // Melee reach FIRST, then the victim's live translation state: a creature plants into attack
+        // stance for a victim that is standing, and runs a kiter down continuously — the swing pass
+        // hits on the move — which is what removes the run/attack-stance/run flicker of chasing
+        // someone who never stands still.
+        let victim_moving = crate::combat::is_translating(c.victim_movement_flags);
         if gap_sq <= CHASE_MELEE_SQ && !victim_moving {
             stand_and_face(w, tick, &c);
             continue;
@@ -1320,8 +1331,11 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
             (gap - MELEE_STOP_SHORT_YD).max(0.0)
         };
         let aim = (c.at.x + dir.0 * leg_len, c.at.y + dir.1 * leg_len);
+        // For a standing victim `aim` IS the stop point, so a leg still in flight past it is a lead
+        // thrown at the victim's older, moving position and has to be replaced there.
+        let stop_at = (!victim_moving).then_some(aim);
         let step = w.navigate(c.guid, aim, leg_len);
-        if step == (c.at.x, c.at.y) || !needs_new_leg(c.leg.as_ref(), dir) {
+        if step == (c.at.x, c.at.y) || !needs_new_leg(c.leg.as_ref(), dir, stop_at) {
             continue;
         }
         let run = w.speed_of(c.guid, Gait::Run);
@@ -1345,32 +1359,42 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
 
 /// Does this chaser need a NEW leg? One whose leg has landed does. One still riding a leg keeps it
 /// while the victim stays roughly on the heading the leg was thrown along, which is what stops the
-/// client re-computing its path every firing.
-fn needs_new_leg(leg: Option<&LegInFlight>, dir: (f32, f32)) -> bool {
+/// client re-computing its path every firing — UNLESS `stop_at` is set and the leg would land at or
+/// past it. `stop_at` is the point this firing would aim at, and the caller sets it only for a
+/// victim that has stopped translating: a lead thrown at a kiter who then stops short of reach must
+/// be replaced at the stop point rather than ridden eight yards through them, while a still-kiting
+/// victim rides its one committed leg exactly as before.
+fn needs_new_leg(leg: Option<&LegInFlight>, dir: (f32, f32), stop_at: Option<(f32, f32)>) -> bool {
     let Some(leg) = leg else {
         return true;
     };
+    if let Some((sx, sy)) = stop_at {
+        if (leg.dest.x - sx) * dir.0 + (leg.dest.y - sy) * dir.1 > 0.0 {
+            return true;
+        }
+    }
     let (lx, ly) = (leg.dest.x - leg.start.x, leg.dest.y - leg.start.y);
     let len = (lx * lx + ly * ly).sqrt();
     len <= 0.001 || (lx / len) * dir.0 + (ly / len) * dir.1 < CHASE_REPATH_COS
 }
 
-/// The victim is inside melee reach and standing still. Stop the leg the chaser was riding, so a
-/// lead aimed past a now-stopped victim does not carry it PAST them, and turn it to face what it is
-/// swinging at — a stand-and-swing creature throws no further movement leg, and a spline is the only
-/// thing a client derives creature facing from, so without this it keeps its pre-combat heading for
-/// the whole fight. Both effects are idempotent — the stop reaps its own leg on the next advance,
-/// the turn is epsilon-gated — so a settled fight goes silent.
-fn stand_and_face<W: MotionSink + PursuitSink>(w: &mut W, tick: &TickContext, c: &Pursuit) {
-    // ponytail: the stop reuses advance's `halt`, which also re-places the creature. Ceiling: one
-    // row write of the position it already holds, each time a fight settles.
-    if let Some(leg) = &c.leg {
-        w.halt(leg, c.at, tick.now_ms);
-    }
+/// The victim is inside melee reach and standing still. ONE facing spline at the point the chaser
+/// renders both stops it — a lead aimed past a now-stopped victim must not carry it through them —
+/// and turns it to what it is swinging at, which is the only thing a client derives creature facing
+/// from. The two cannot be separate rows: a creature has ONE spline row, so a stop written beside a
+/// turn inside one transaction reaches the client as the turn alone, and the client rides the
+/// interrupted leg on while the module holds the creature at the halt point.
+///
+/// A creature riding a leg is stopped whatever way it looks; a stopped one is only turned when the
+/// bearing has drifted past the epsilon. Both are idempotent — the row reaps itself on the next
+/// advance — so a settled fight goes silent.
+fn stand_and_face<W: PursuitSink>(w: &mut W, tick: &TickContext, c: &Pursuit) {
     let bearing = (c.victim_at.y - c.at.y).atan2(c.victim_at.x - c.at.x);
-    if angle_diff(c.orientation, bearing).abs() > FACING_EPSILON_RAD {
-        w.face(c.guid, bearing, tick.now_ms);
+    let turning = angle_diff(c.orientation, bearing).abs() > FACING_EPSILON_RAD;
+    if c.leg.is_none() && !turning {
+        return; // standing where it stands, already looking at what it swings at
     }
+    w.face(c.guid, c.at, bearing, tick.now_ms);
 }
 
 /// COMBAT ENTRY — every unit in a live engagement this firing covers gets the in-combat flag and a
@@ -1695,5 +1719,77 @@ mod facing_tests {
         let just_over = FACING_EPSILON_RAD + 0.01;
         assert!(angle_diff(orientation, just_under).abs() <= FACING_EPSILON_RAD);
         assert!(angle_diff(orientation, just_over).abs() > FACING_EPSILON_RAD);
+    }
+}
+
+/// `needs_new_leg`'s re-aim boundary. A scenario test proves a stopped-short victim gets a
+/// replacement leg landing at the stop point; these pin exactly where that boundary sits along the
+/// approach heading, cheaper and sharper than through a fight.
+#[cfg(test)]
+mod chase_leg_tests {
+    use super::*;
+
+    const DIR: (f32, f32) = (1.0, 0.0);
+    /// Where `chase` aims once its victim stops: four yards short of a victim standing at x = 23.
+    /// A victim still translating gets `None` instead, and no stop-point test at all.
+    const STOP_AT: Option<(f32, f32)> = Some((19.0, 0.0));
+
+    fn leg_to(dest_x: f32) -> LegInFlight {
+        LegInFlight {
+            guid: 1,
+            start: Point {
+                x: 0.0,
+                y: 0.0,
+                z: 10.0,
+            },
+            dest: Point {
+                x: dest_x,
+                y: 0.0,
+                z: 10.0,
+            },
+            started_micros: 0,
+            dur_ms: 4_000,
+            map_id: 0,
+            instance_id: 0,
+            mover_gone: false,
+        }
+    }
+
+    #[test]
+    fn no_leg_in_flight_always_needs_one() {
+        assert!(needs_new_leg(None, DIR, STOP_AT));
+        assert!(needs_new_leg(None, DIR, None));
+    }
+
+    #[test]
+    fn a_stopped_victim_keeps_a_leg_that_still_lands_short_of_the_stop_point() {
+        // Still approaching, so there is nothing to replace yet.
+        assert!(!needs_new_leg(Some(&leg_to(10.0)), DIR, STOP_AT));
+    }
+
+    #[test]
+    fn a_stopped_victim_keeps_a_leg_landing_exactly_on_the_stop_point() {
+        assert!(!needs_new_leg(Some(&leg_to(19.0)), DIR, STOP_AT));
+    }
+
+    #[test]
+    fn a_stopped_victim_replaces_a_leg_that_would_overshoot_the_stop_point() {
+        // Thrown as a lead past the victim's OLD position, this leg would carry the creature
+        // through where the victim now stands rather than stopping short of it.
+        assert!(needs_new_leg(Some(&leg_to(28.0)), DIR, STOP_AT));
+    }
+
+    #[test]
+    fn a_still_translating_victim_keeps_the_same_overshooting_leg() {
+        // A straight-line kite rides one committed lead leg: there is no stop point to test
+        // against while the victim is still moving.
+        assert!(!needs_new_leg(Some(&leg_to(28.0)), DIR, None));
+    }
+
+    #[test]
+    fn a_veered_heading_still_forces_a_new_leg_whatever_the_victim_is_doing() {
+        let off_heading = (0.0, 1.0);
+        assert!(needs_new_leg(Some(&leg_to(19.0)), off_heading, STOP_AT));
+        assert!(needs_new_leg(Some(&leg_to(19.0)), off_heading, None));
     }
 }
