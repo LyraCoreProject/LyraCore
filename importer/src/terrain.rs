@@ -236,16 +236,20 @@ fn collect_slice(
             // locations), so file existence proves nothing (PR-9 review). Arbitrate by CONTENT:
             // parse each candidate and accept the one whose own MCNK header positions land in
             // this (tx, ty) tile's cell range. Wrong-order picks are a hard error, not a
-            // silently-holed slice.
+            // silently-holed slice. A tile with no ADT at all is open sea or an unbuilt map
+            // edge: the client ships no file there, so a slice rectangle that reaches the coast
+            // skips it with a warning instead of refusing the whole slice.
             let candidates = [
                 format!("World\\Maps\\{map_name}\\{map_name}_{ty}_{tx}.adt"),
                 format!("World\\Maps\\{map_name}\\{map_name}_{tx}_{ty}.adt"),
             ];
             let mut accepted = None;
+            let mut any_file = false;
             for name in &candidates {
                 let Ok(bytes) = chain.read_file(name) else {
                     continue;
                 };
+                any_file = true;
                 let wow_adt::ParsedAdt::Root(root) = wow_adt::parse_adt(&mut Cursor::new(&bytes))
                     .with_context(|| format!("parsing {name}"))?
                 else {
@@ -257,6 +261,14 @@ fn collect_slice(
                 }
             }
             let Some((root, which)) = accepted else {
+                if !any_file {
+                    println!(
+                        "terrain: WARN tile ({tx},{ty}) has no ADT in the client ({} / {}); \
+                         open sea or unbuilt map edge, skipped",
+                        candidates[0], candidates[1]
+                    );
+                    continue;
+                }
                 bail!(
                     "tile ({tx},{ty}): no candidate ADT ({} / {}) has MCNK positions inside this \
                      tile's cell range — filename-axis mapping broke, refusing to silently hole the slice",
