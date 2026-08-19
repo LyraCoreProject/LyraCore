@@ -7,6 +7,10 @@ In this project we focus on building complex things as simple as possible. We lo
 - Before implementing, refactoring, or reviewing code, read `CODING_STANDARDS.md`. Apply it to
   changed code without churning unrelated legacy code.
 
+## Prose
+
+- Apply the `unslop` skill (`.claude/skills/unslop/SKILL.md`) to all prose you write: docs, PR text, comments, reports.
+
 ## Domain language
 
 - `CONTEXT.md` is the glossary. Use its terms in identifiers, comments, commit messages, docs and PR text. Do not use the `_Avoid_` words in new prose or new names. Existing identifiers, schema names, filenames, and pinned artifacts keep their names. When you introduce or change a term, update `CONTEXT.md` in the same change.
