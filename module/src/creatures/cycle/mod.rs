@@ -1330,7 +1330,7 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         }
         let posture = w.authored_ranged_posture(c.guid);
         // An authored ranged posture REPLACES the whole melee approach, so it is read first and the
-        // caster hold below is skipped whenever one is set — a posture of zero distance is the
+        // caster hold below is skipped whenever one is set. A posture of zero distance is the
         // script asking for the plain melee chase back.
         if let Some(aim) = posture.and_then(|(distance, angle)| {
             (distance > 0.0 && w.line_of_sight(c.guid, c.victim_at))
@@ -1390,7 +1390,7 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
     visited
 }
 
-/// Throw ONE run leg at `aim` — the melee approach and the authored ranged posture both land here,
+/// Throw ONE run leg at `aim`. The melee approach and the authored ranged posture both land here,
 /// so a chaser gets at most one leg per firing whichever posture it is in. Nothing is written when
 /// navigation refuses to move at all, when the leg in flight is still good enough
 /// (`needs_new_leg`), or when the step collapses to zero length, which the client rejects.

@@ -717,7 +717,7 @@ pub(crate) fn rout_eligible(ctx: &ReducerContext, c: &WorldEntity) -> bool {
 ///
 /// Two things entitle a creature to the window. The fixed rout's own gate (`rout_eligible`: below the
 /// flee threshold AND of a kind that runs) opens it for the ordinary near-death humanoid. An authored
-/// flee opens it for anyone the script says flees — a beast at 30% health included — because the
+/// flee opens it for anyone the script says flees, a beast at 30% health included, because the
 /// script's window is the only thing that stamped it, and the fixed gate is switched OFF for such a
 /// creature. Reading only the fixed gate left an authored flee with an open window and nothing that
 /// would move it.

@@ -297,7 +297,7 @@ fn missing_summon_catalogue_or_template_fails_without_a_partial_creature() {
 
 #[test]
 fn a_creature_standing_on_its_authored_hold_point_turns_to_its_victim() {
-    // Placed exactly where the 10 yd / 90° posture holds it, looking the other way — the shape a
+    // Placed exactly where the 10 yd / 90° posture holds it, looking the other way: the shape a
     // victim who ran a quarter circle around it leaves behind.
     let mut scenario = Scenario::new(1_000_000)
         .creature(CREATURE, point(20.0, 10.0))

@@ -3674,7 +3674,7 @@ fn an_offensive_caster_holds_at_its_spell_range() {
 
 #[test]
 fn a_caster_whose_victim_stops_inside_reach_turns_and_halts_its_lead() {
-    // Half way through a leg thrown at the player, who has since stopped two yards ahead of it —
+    // Half way through a leg thrown at the player, who has since stopped two yards ahead of it,
     // well inside the 30 yd the caster would otherwise hold at.
     let launched = SETTLED - 500_000;
     let mut w = wolf_fighting(p(7.0, 0.0, 10.0))
