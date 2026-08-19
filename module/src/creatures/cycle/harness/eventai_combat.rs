@@ -490,22 +490,41 @@ fn interrupt_previous_replaces_a_pending_cast() {
 }
 
 #[test]
-fn flee_for_assist_opens_the_existing_rout_window_without_writing_a_leg() {
-    let mut scenario = world().eventai_row(row(
+fn an_authored_flee_runs_a_creature_the_fixed_rout_would_leave_standing() {
+    // A beast at 30% health: below no flee threshold and of a kind that fights to the death, so
+    // nothing but the authored rule can break it off.
+    let mut scenario = world().hurt(CREATURE, 30).eventai_row(row(
         509_0211,
         509_0211,
         0,
         EVENT_CREATURE_HP,
         ACTION_FLEE_FOR_ASSIST,
         REPEAT_ONCE,
-        [0, 100, 0, 0, 0, 0],
+        [0, 30, 0, 0, 0, 0],
         [0; 3],
     ));
 
     fire(&mut scenario);
+    assert!(
+        scenario.rout_ends_ms(CREATURE) > 0,
+        "the authored action is the only thing that can open this creature's rout window"
+    );
 
-    assert!(scenario.rout_ends_ms(CREATURE) > 0);
-    assert!(!scenario.has_leg(CREATURE));
+    // The rout pass runs BEFORE the eventai pass in the firing order, so the window opened above is
+    // read on the next firing.
+    fire(&mut scenario);
+
+    let legs = scenario.effects();
+    assert_eq!(
+        legs.len(),
+        1,
+        "an authored flee that stamps a window nothing then reads leaves the creature standing in \
+         melee, which is the fixed rout's own gate deciding a fight the script owns"
+    );
+    assert!(
+        legs[0].dest.x < 0.0,
+        "the leg must run AWAY from the victim it is breaking off from"
+    );
 }
 
 #[test]
@@ -580,6 +599,44 @@ fn edge_cast_rows_do_not_suppress_the_default_rotation() {
         "an on-death or on-spawn cast fires at a moment the rotation never covers, so it takes \
          nothing over: silencing the rotation for it would leave the creature swinging in silence"
     );
+}
+
+#[test]
+fn an_authored_cast_rule_sends_its_caster_to_melee_and_replaces_the_flat_rotation() {
+    let mut scenario = Scenario::new(0)
+        .creature(CREATURE, point(0.0))
+        .entry(CREATURE, ENTRY)
+        .player(TARGET, point(20.0))
+        .attacking(CREATURE, TARGET)
+        .caster(CREATURE, 30.0)
+        .rotation_line(CREATURE, 120, CastWhen::Always, 1)
+        .eventai_row(row(
+            509_0113,
+            509_0113,
+            0,
+            EVENT_CREATURE_HP,
+            ACTION_CAST,
+            REPEAT_ONCE,
+            [0, 30, 0, 0, 0, 0],
+            [113, 0, 0],
+        ));
+
+    fire(&mut scenario);
+
+    assert!(
+        scenario.casts().is_empty(),
+        "the flat rotation is off, so nothing may be cast before the authored band opens"
+    );
+    assert!(
+        scenario.has_leg(CREATURE),
+        "a creature whose casting the script owns holds at no rotation range: it closes to melee \
+         and swings between authored casts, instead of standing at 30 yards casting nothing"
+    );
+
+    scenario = scenario.hurt(CREATURE, 30);
+    fire(&mut scenario);
+
+    assert_eq!(scenario.casts(), vec![(CREATURE, 113, TARGET)]);
 }
 
 #[test]

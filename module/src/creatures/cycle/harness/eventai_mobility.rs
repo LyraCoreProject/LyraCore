@@ -294,3 +294,43 @@ fn missing_summon_catalogue_or_template_fails_without_a_partial_creature() {
     EngageSink::engage(&mut missing_template, CREATURE, TARGET, Pull::Noticed);
     assert!(missing_template.eventai_summoned_guids().is_empty());
 }
+
+#[test]
+fn a_creature_standing_on_its_authored_hold_point_turns_to_its_victim() {
+    // Placed exactly where the 10 yd / 90° posture holds it, looking the other way — the shape a
+    // victim who ran a quarter circle around it leaves behind.
+    let mut scenario = Scenario::new(1_000_000)
+        .creature(CREATURE, point(20.0, 10.0))
+        .entry(CREATURE, ENTRY)
+        .player(TARGET, point(20.0, 0.0))
+        .facing(CREATURE, std::f32::consts::FRAC_PI_2)
+        .eventai_row(row(
+            509_0309,
+            509_0309,
+            0,
+            ENTRY,
+            EVENT_ON_AGGRO,
+            ACTION_SET_RANGED_POSTURE,
+            [10, 90, 0],
+        ));
+
+    EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
+    fire(&mut scenario, false);
+
+    let effects = scenario.effects();
+    assert_eq!(
+        effects
+            .iter()
+            .map(|effect| (effect.dur_ms, effect.facing))
+            .collect::<Vec<_>>(),
+        [(0, true)],
+        "arriving at an authored hold point is an arrival like reaching melee: a creature that only \
+         ever stops there renders with its back to what it is shooting at"
+    );
+    assert!((effects[0].facing_angle + std::f32::consts::FRAC_PI_2).abs() < 0.01);
+    assert_eq!(
+        scenario.at(CREATURE).at,
+        point(20.0, 10.0),
+        "the turn must not move it off the hold point"
+    );
+}

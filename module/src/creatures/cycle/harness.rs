@@ -3673,6 +3673,39 @@ fn an_offensive_caster_holds_at_its_spell_range() {
 }
 
 #[test]
+fn a_caster_whose_victim_stops_inside_reach_turns_and_halts_its_lead() {
+    // Half way through a leg thrown at the player, who has since stopped two yards ahead of it —
+    // well inside the 30 yd the caster would otherwise hold at.
+    let launched = SETTLED - 500_000;
+    let mut w = wolf_fighting(p(7.0, 0.0, 10.0))
+        .caster(WOLF, 30.0)
+        .facing(WOLF, std::f32::consts::PI)
+        .attacking(WOLF, HUNTER)
+        .flying(
+            WOLF,
+            p(0.0, 0.0, 10.0),
+            p(10.0, 0.0, 10.0),
+            launched,
+            LEG_MS,
+        );
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    let rendered = p(5.0, 0.0, 10.0);
+    assert_eq!(
+        w.effects()
+            .iter()
+            .map(|e| (e.start, e.dest, e.dur_ms, e.facing, e.facing_angle))
+            .collect::<Vec<_>>(),
+        [(rendered, rendered, 0, true, 0.0)],
+        "a caster is not exempt from melee reach: facing is the only thing that HALTS a leg, so one \
+         that holds before it turns slides its lead straight past the player who stopped on top of \
+         it and never faces what it is fighting"
+    );
+    assert_eq!((w.at(WOLF).at, w.at(WOLF).orientation), (rendered, 0.0));
+}
+
+#[test]
 fn a_crowd_controlled_creature_is_not_moved_by_chase() {
     let mut w = wolf_fighting(p(15.0, 0.0, 10.0))
         .attacking(WOLF, HUNTER)
