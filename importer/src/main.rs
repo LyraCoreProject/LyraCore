@@ -3733,13 +3733,9 @@ fn build_dump_plan(
             })
             .collect();
     let eventai = if family_active(args, "creature-ai") {
+        let source = eventai::parse(dump);
         loop {
-            let plan = eventai::build(
-                dump,
-                &entries,
-                &imported_guid_entries,
-                &importable_templates,
-            );
+            let plan = source.assemble(&entries, &imported_guid_entries, &importable_templates);
             let added = plan
                 .forced_template_entries
                 .iter()
@@ -7455,7 +7451,7 @@ mod tests {
         let entries = [100].into_iter().collect();
         let guids = [(1, 100), (2, 100)].into_iter().collect();
         let templates = [100, 200].into_iter().collect();
-        let plan = eventai::build(&dump, &entries, &guids, &templates);
+        let plan = eventai::parse(&dump).assemble(&entries, &guids, &templates);
         for (reason, value) in [
             ("unsupported_event", 99),
             ("invalid_chance", 0),
