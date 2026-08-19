@@ -14,7 +14,7 @@
 
 use spacetimedb::{log, reducer, table, ReducerContext, Table};
 
-use crate::helpers::{require_operator};
+use crate::helpers::require_operator;
 use crate::{game_character, game_world_entity};
 
 // ===========================================================================================
@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::excessive_precision)] // The expected values pin the Spec's f32 coordinates.
-    fn alliance_tele_destinations_have_the_specified_coordinates() {
+    fn canonical_tele_destinations_have_the_specified_coordinates() {
         let destinations = [
             (
                 "northshire",
@@ -587,6 +587,16 @@ mod tests {
                 "darnassus",
                 TeleSpot::Darnassus,
                 (1, 10054.2998, 2117.1201, 1329.63, 0.0),
+            ),
+            (
+                "westfall_coast",
+                TeleSpot::WestfallCoast,
+                (0, -11390.0, 1590.0, 6.0, 0.0),
+            ),
+            (
+                "valley",
+                TeleSpot::ValleyOfTrials,
+                (1, -618.518, -4251.67, 38.718, 0.0),
             ),
         ];
 
