@@ -12,7 +12,7 @@ use crate::creatures::eventai::{
 use crate::creatures::{chase_step, rout_window_open};
 use lyracore_shared::spatial;
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 #[path = "harness/eventai_combat.rs"]
 mod eventai_combat;
@@ -197,7 +197,7 @@ struct Scenario {
     /// Authored EventAI action rows, mirroring the Module-only static table.
     eventai_rows: RefCell<Vec<CreatureAiEvent>>,
     /// Imported broadcast text, keyed by its stable catalogue id.
-    eventai_text: RefCell<HashMap<u32, (String, u8, u32)>>,
+    eventai_text: RefCell<HashMap<u32, (String, u8, u32, u32)>>,
     eventai_creature_state: RefCell<HashMap<u64, CreatureState>>,
     eventai_rule_state: RefCell<HashMap<u64, HashMap<u64, RuleState>>>,
     eventai_summons: RefCell<HashMap<u32, ScenarioSummon>>,
@@ -271,7 +271,14 @@ impl Scenario {
     fn eventai_broadcast(self, id: u32, text: &str, chat_type: u8) -> Self {
         self.eventai_text
             .borrow_mut()
-            .insert(id, (text.to_string(), chat_type, 0));
+            .insert(id, (text.to_string(), chat_type, 0, 0));
+        self
+    }
+
+    fn eventai_broadcast_emote(self, id: u32, text: &str, chat_type: u8, emote: u32) -> Self {
+        self.eventai_text
+            .borrow_mut()
+            .insert(id, (text.to_string(), chat_type, 0, emote));
         self
     }
 
@@ -383,15 +390,49 @@ impl Scenario {
     }
 
     fn suppresses_flat_cast(&self, creature_guid: u64) -> bool {
-        self.eventai_rows(creature_guid)
+        self.applicable_engaged_eventai_rules(creature_guid)
             .into_iter()
-            .any(|row| row.action_type == eventai::ACTION_CAST)
+            .flat_map(|rule| rule.actions)
+            .any(|action| action.kind == eventai::ActionKind::Cast)
     }
 
     fn suppresses_fixed_rout(&self, creature_guid: u64) -> bool {
-        self.eventai_rows(creature_guid)
+        self.applicable_engaged_eventai_rules(creature_guid)
             .into_iter()
-            .any(|row| row.action_type == eventai::ACTION_FLEE_FOR_ASSIST)
+            .flat_map(|rule| rule.actions)
+            .any(|action| action.kind == eventai::ActionKind::FleeForAssist)
+    }
+
+    fn applicable_engaged_eventai_rules(&self, creature_guid: u64) -> Vec<eventai::Rule> {
+        let state = self.eventai_creature_state(creature_guid);
+        let mut grouped = BTreeMap::new();
+        for row in self.eventai_rows(creature_guid) {
+            grouped
+                .entry(eventai::effective_rule_id(&row))
+                .or_insert_with(Vec::new)
+                .push(row);
+        }
+        grouped
+            .into_values()
+            .filter_map(|rows| eventai::Rule::decode(rows).ok())
+            .filter(|rule| {
+                matches!(
+                    rule.event,
+                    eventai::EventKind::TimedInCombat
+                        | eventai::EventKind::CreatureHp
+                        | eventai::EventKind::TargetRange
+                        | eventai::EventKind::FriendlyHpDeficit
+                ) && state.phase < 32
+                    && rule.allowed_phase_mask & (1u32 << state.phase) != 0
+                    && !self
+                        .eventai_state(creature_guid, rule.id)
+                        .is_some_and(|rule_state| {
+                            rule_state.lifecycle_id == state.lifecycle_id
+                                && rule_state.engagement_id == state.engagement_id
+                                && rule_state.consumed
+                        })
+            })
+            .collect()
     }
 
     /// The creature's template carries a hand-tuned aggro range instead of the level-scaled one.
@@ -1111,10 +1152,10 @@ impl EventAiWorld for Scenario {
         match context.kind {
             EventKind::TimedInCombat => Some(*context),
             EventKind::CreatureHp => {
-                let pct = creature.health.saturating_mul(100);
+                let pct = u64::from(creature.health) * 100;
                 (creature.max_health != 0
-                    && pct >= rule.event_params[0].saturating_mul(creature.max_health)
-                    && pct <= rule.event_params[1].saturating_mul(creature.max_health))
+                    && pct >= u64::from(rule.event_params[0]) * u64::from(creature.max_health)
+                    && pct <= u64::from(rule.event_params[1]) * u64::from(creature.max_health))
                 .then_some(*context)
             }
             EventKind::TargetRange => {
@@ -1132,10 +1173,10 @@ impl EventAiWorld for Scenario {
                     .borrow()
                     .iter()
                     .filter(|(guid, other)| {
-                        **guid != context.creature_guid
-                            && other.map_id == creature.map_id
+                        other.map_id == creature.map_id
                             && other.instance_id == creature.instance_id
-                            && other.faction_template == creature.faction_template
+                            && (**guid == context.creature_guid
+                                || other.faction_template == creature.faction_template)
                             && other.max_health.saturating_sub(other.health) >= rule.event_params[0]
                             && distance(other.at, creature.at) <= rule.event_params[1] as f32
                     })
@@ -1231,7 +1272,7 @@ impl EventAiWorld for Scenario {
     fn eventai_speak(&mut self, context: &EventContext, action: &RuleAction, chat_type: u8) {
         let ids: Vec<u32> = action.params.into_iter().filter(|id| *id != 0).collect();
         let text = match ids.len() {
-            0 => Some((action.legacy_text.clone(), chat_type, 0)),
+            0 => Some((action.legacy_text.clone(), chat_type, 0, 0)),
             1 => self.eventai_text.borrow().get(&ids[0]).cloned(),
             _ => self
                 .eventai_text
@@ -1239,13 +1280,18 @@ impl EventAiWorld for Scenario {
                 .get(&ids[self.eventai_roll() as usize % ids.len()])
                 .cloned(),
         };
-        let Some((message, chat_type, _)) = text else {
+        let Some((message, chat_type, _, emote)) = text else {
             return;
         };
         if !message.is_empty() {
             self.eventai_speech
                 .borrow_mut()
                 .push((context.creature_guid, chat_type, message));
+        }
+        if emote != 0 {
+            self.eventai_emotes
+                .borrow_mut()
+                .push((context.creature_guid, 0, emote, 0));
         }
     }
 
@@ -1255,6 +1301,9 @@ impl EventAiWorld for Scenario {
         action: &RuleAction,
         target_guid: u64,
     ) -> eventai::ActionResult {
+        if action.cast_options.contains(eventai::CAST_TRIGGERED) {
+            return eventai::ActionResult::Refused;
+        }
         if action.cast_options.contains(eventai::CAST_PLAYER_ONLY)
             && !self
                 .players
@@ -1280,10 +1329,15 @@ impl EventAiWorld for Scenario {
         if self.not_ready.borrow().contains(&action.params[0]) {
             return eventai::ActionResult::Refused;
         }
-        if action
-            .cast_options
-            .contains(eventai::CAST_INTERRUPT_PREVIOUS)
+        let pending = self.casting.borrow().contains(&context.creature_guid);
+        if pending
+            && !action
+                .cast_options
+                .contains(eventai::CAST_INTERRUPT_PREVIOUS)
         {
+            return eventai::ActionResult::Refused;
+        }
+        if pending {
             self.casting.borrow_mut().remove(&context.creature_guid);
         }
         self.casts
@@ -1302,8 +1356,8 @@ impl EventAiWorld for Scenario {
                 let target = self.eventai_target(context, action).unwrap_or(0);
                 self.eventai_emotes.borrow_mut().push((
                     context.creature_guid,
+                    0,
                     action.params[0],
-                    action.params[1],
                     target,
                 ));
                 eventai::ActionResult::Applied
@@ -1370,6 +1424,7 @@ impl EventAiWorld for Scenario {
                 let state = states.entry(context.creature_guid).or_default();
                 state.ranged_distance = distance;
                 state.ranged_angle = angle;
+                state.ranged_posture_active = true;
                 eventai::ActionResult::Applied
             }
             eventai::ActionKind::Summon => {
@@ -1471,6 +1526,18 @@ impl EventAiWorld for Scenario {
             .filter_map(|((_, guid), value)| self.unit(*guid).map(|_| (*guid, *value)))
             .collect();
         threat.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        threat.retain(|(guid, _)| {
+            (!action.cast_options.contains(eventai::CAST_PLAYER_ONLY)
+                || self
+                    .players
+                    .borrow()
+                    .iter()
+                    .any(|player| player.guid == *guid))
+                && (!action.cast_options.contains(eventai::CAST_AURA_ABSENT)
+                    || !self.auras.borrow().contains(&(*guid, action.params[0])))
+                && (!action.cast_options.contains(eventai::CAST_TARGET_CASTING)
+                    || self.casting.borrow().contains(guid))
+        });
         match action.target {
             eventai::TargetPolicy::Current => context.current_target_guid,
             eventai::TargetPolicy::SelfActor => Some(context.creature_guid),
@@ -1499,33 +1566,23 @@ impl EventAiWorld for Scenario {
                         .map(|(guid, _)| *guid)
                 }
             }
-            eventai::TargetPolicy::NearestArea => self
-                .players
-                .borrow()
+            eventai::TargetPolicy::NearestArea => threat
                 .iter()
-                .filter(|player| distance(player.at, creature.at) <= action.params[1] as f32)
-                .min_by(|a, b| {
-                    distance(a.at, creature.at)
-                        .partial_cmp(&distance(b.at, creature.at))
-                        .unwrap()
+                .filter_map(|(guid, _)| {
+                    self.unit(*guid)
+                        .map(|unit| (*guid, distance(unit.0, creature.at)))
                 })
-                .map(|player| player.guid),
-            eventai::TargetPolicy::FarthestHostile => self
-                .players
-                .borrow()
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap().then(a.0.cmp(&b.0)))
+                .map(|(guid, _)| guid),
+            eventai::TargetPolicy::FarthestHostile => threat
                 .iter()
-                .filter(|player| {
-                    self.at_war
-                        .borrow()
-                        .contains(&(creature.faction_template, player.faction_template))
-                        && distance(player.at, creature.at) <= action.params[1] as f32
+                .filter_map(|(guid, _)| {
+                    self.unit(*guid)
+                        .map(|unit| (*guid, distance(unit.0, creature.at)))
                 })
-                .max_by(|a, b| {
-                    distance(a.at, creature.at)
-                        .partial_cmp(&distance(b.at, creature.at))
-                        .unwrap()
-                })
-                .map(|player| player.guid),
+                .filter(|(_, distance)| *distance > 5.0)
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap().then(b.0.cmp(&a.0)))
+                .map(|(guid, _)| guid),
         }
     }
 
@@ -1785,6 +1842,7 @@ impl EngageSink for Scenario {
                 state.phase = 0;
                 state.ranged_distance = 0.0;
                 state.ranged_angle = 0.0;
+                state.ranged_posture_active = false;
                 state.engagement_id
             });
         if let Some(state) = self.eventai_rule_state.borrow_mut().get_mut(&guid) {
@@ -1989,26 +2047,11 @@ impl PursuitSink for Scenario {
             .collect()
     }
     fn authored_ranged_posture(&self, guid: u64) -> Option<(f32, f32)> {
-        let mut grouped = HashMap::new();
-        for row in self.eventai_rows(guid) {
-            grouped
-                .entry(eventai::effective_rule_id(&row))
-                .or_insert_with(Vec::new)
-                .push(row);
-        }
-        let authored = grouped
-            .into_values()
-            .filter_map(|rows| eventai::Rule::decode(rows).ok())
-            .flat_map(|rule| rule.actions)
-            .any(|action| action.kind == eventai::ActionKind::SetRangedPosture);
-        authored.then(|| {
-            self.eventai_creature_state
-                .borrow()
-                .get(&guid)
-                .map_or((0.0, 0.0), |state| {
-                    (state.ranged_distance, state.ranged_angle)
-                })
-        })
+        self.eventai_creature_state
+            .borrow()
+            .get(&guid)
+            .filter(|state| state.ranged_posture_active)
+            .map(|state| (state.ranged_distance, state.ranged_angle))
     }
     fn caster_hold_range(&self, guid: u64) -> f32 {
         self.hold_ranges.borrow().get(&guid).copied().unwrap_or(0.0)

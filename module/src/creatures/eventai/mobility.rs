@@ -1,16 +1,10 @@
 //! EventAI summon actions and ranged posture.
 
-use std::collections::BTreeMap;
-
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration};
 
-use super::{
-    effective_rule_id, ActionKind, ActionResult, CreatureAiState, EventContext, Rule, RuleAction,
-    TargetPolicy,
-};
+use super::{ActionKind, ActionResult, CreatureAiState, EventContext, RuleAction, TargetPolicy};
 use crate::{
-    game_creature_ai_event, game_creature_ai_state, game_creature_ai_summon,
-    game_creature_template, game_world_entity,
+    game_creature_ai_state, game_creature_ai_summon, game_creature_template, game_world_entity,
 };
 
 const SUMMON_CHECK_MS: u32 = 500;
@@ -47,33 +41,13 @@ pub(super) fn execute(
 }
 
 pub(crate) fn ranged_posture(ctx: &ReducerContext, creature_guid: u64) -> Option<(f32, f32)> {
-    let creature = ctx.db.game_world_entity().guid().find(creature_guid)?;
-    let table = ctx.db.game_creature_ai_event();
-    let mut grouped = BTreeMap::new();
-    for row in table
-        .by_entry()
-        .filter(&creature.entry)
-        .chain(table.by_guid().filter(&creature_guid))
-    {
-        grouped
-            .entry(effective_rule_id(&row))
-            .or_insert_with(Vec::new)
-            .push(row);
-    }
-    let authored = grouped
-        .into_values()
-        .filter_map(|rows| Rule::decode(rows).ok())
-        .flat_map(|rule| rule.actions)
-        .any(|action| action.kind == ActionKind::SetRangedPosture);
-    authored.then(|| {
-        ctx.db
-            .game_creature_ai_state()
-            .creature_guid()
-            .find(creature_guid)
-            .map_or((0.0, 0.0), |state| {
-                (state.ranged_distance, state.ranged_angle)
-            })
-    })
+    ctx.db.game_world_entity().guid().find(creature_guid)?;
+    ctx.db
+        .game_creature_ai_state()
+        .creature_guid()
+        .find(creature_guid)
+        .filter(|state| state.ranged_posture_active)
+        .map(|state| (state.ranged_distance, state.ranged_angle))
 }
 
 pub(crate) fn drop_summon_expiry(ctx: &ReducerContext, creature_guid: u64) {
@@ -99,6 +73,7 @@ fn set_ranged_posture(
         Some(mut state) => {
             state.ranged_distance = distance;
             state.ranged_angle = angle;
+            state.ranged_posture_active = true;
             states.creature_guid().update(state);
         }
         None => {
@@ -109,6 +84,7 @@ fn set_ranged_posture(
                 engagement_id: 1,
                 ranged_distance: distance,
                 ranged_angle: angle,
+                ranged_posture_active: true,
             });
         }
     }

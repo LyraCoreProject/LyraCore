@@ -91,6 +91,8 @@ pub struct CreatureAiState {
     pub engagement_id: u64,
     pub ranged_distance: f32,
     pub ranged_angle: f32,
+    #[default(false)]
+    pub ranged_posture_active: bool,
 }
 
 /// Timing and consumption state for one creature and one effective source rule. Module only.

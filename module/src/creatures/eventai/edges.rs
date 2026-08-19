@@ -76,6 +76,7 @@ pub(crate) fn reset_engagement(ctx: &ReducerContext, creature_guid: u64) {
         state.phase = 0;
         state.ranged_distance = 0.0;
         state.ranged_angle = 0.0;
+        state.ranged_posture_active = false;
         let state = states.creature_guid().update(state);
         state.engagement_id
     });

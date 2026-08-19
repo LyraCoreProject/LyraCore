@@ -593,13 +593,37 @@ verify_caster_spell_catalogue() {
   fi
 }
 verify_eventai_catalogue() {
-  local rule action order values entry guid spell text summon duplicate=0 mismatch=0 missing=0
+  local rule action order values entry guid spell text summon kind option duplicate=0 mismatch=0 missing=0 unsupported=0
   rule="$(n "SELECT source_rule_id FROM game_creature_ai_event WHERE source_rule_id > 0")"
   if [ "$rule" -eq 0 ]; then
     echo "  ..    EventAI: no supported source rules in this World Import Scope"
     return 0
   fi
   chk "EventAI source rule actions" 1 "$rule"
+  for kind in $(q_list "SELECT event_type FROM game_creature_ai_event" | sort -u); do
+    case "$kind" in
+      0|1|2|3|4|5|6) chk "EventAI enabled event type $kind" 1 "$(n "SELECT id FROM game_creature_ai_event WHERE event_type = $kind")" ;;
+      *) unsupported=$((unsupported + 1)) ;;
+    esac
+  done
+  for kind in $(q_list "SELECT action_type FROM game_creature_ai_event" | sort -u); do
+    case "$kind" in
+      0|1|2|3|4|5|6|7|8) chk "EventAI enabled action type $kind" 1 "$(n "SELECT id FROM game_creature_ai_event WHERE action_type = $kind")" ;;
+      *) unsupported=$((unsupported + 1)) ;;
+    esac
+  done
+  for kind in $(q_list "SELECT target_policy FROM game_creature_ai_event" | sort -u); do
+    case "$kind" in 0|1|2|3|4|5|6|7|8|9|10) ;; *) unsupported=$((unsupported + 1)) ;; esac
+  done
+  for kind in $(q_list "SELECT repeat_policy FROM game_creature_ai_event" | sort -u); do
+    case "$kind" in 0|1) ;; *) unsupported=$((unsupported + 1)) ;; esac
+  done
+  for option in $(q_list "SELECT source_flags FROM game_creature_ai_event" | sort -u); do
+    [ $((option & ~3)) -eq 0 ] || unsupported=$((unsupported + 1))
+  done
+  for option in $(q_list "SELECT cast_options FROM game_creature_ai_event" | sort -u); do
+    [ $((option & ~29)) -eq 0 ] || unsupported=$((unsupported + 1))
+  done
   for entry in $(q_list "SELECT creature_entry FROM game_creature_ai_event WHERE creature_entry > 0" | sort -u); do
     [ "$(n "SELECT entry FROM game_creature_template WHERE entry = $entry")" -gt 0 ] || missing=1
   done
@@ -630,11 +654,11 @@ verify_eventai_catalogue() {
     done
   done
   sql_check_abort
-  if [ "$duplicate" -ne 0 ] || [ "$mismatch" -ne 0 ] || [ "$missing" -ne 0 ]; then
-    echo "  FAIL  EventAI linkage: duplicate-action-orders=$duplicate metadata-mismatches=$mismatch missing-references=$missing"
+  if [ "$duplicate" -ne 0 ] || [ "$mismatch" -ne 0 ] || [ "$missing" -ne 0 ] || [ "$unsupported" -ne 0 ]; then
+    echo "  FAIL  EventAI linkage: duplicate-action-orders=$duplicate metadata-mismatches=$mismatch missing-references=$missing unsupported-native-values=$unsupported"
     fail=1
   else
-    echo "  ok    EventAI linkage, rule metadata, subjects, spells, texts, and summon locations resolve"
+    echo "  ok    EventAI enabled types, grouping, subjects, spells, texts, and summon locations resolve"
   fi
 }
 verify_alliance_creation_data() {

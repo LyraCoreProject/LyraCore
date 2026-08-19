@@ -91,6 +91,17 @@ fn a_fixed_ranged_angle_uses_the_existing_chase_leg() {
     assert!((effects[0].dest.x - 20.0).abs() < 0.01);
     assert!((effects[0].dest.y - 10.0).abs() < 0.01);
     assert!(effects[0].run);
+    assert_eq!(
+        PursuitSink::authored_ranged_posture(&scenario, CREATURE),
+        Some((10.0, std::f32::consts::FRAC_PI_2))
+    );
+
+    EngageSink::leave_combat(&mut scenario, CREATURE);
+
+    assert_eq!(
+        PursuitSink::authored_ranged_posture(&scenario, CREATURE),
+        None
+    );
 }
 
 #[test]

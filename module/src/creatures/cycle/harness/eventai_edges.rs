@@ -17,6 +17,10 @@ fn scenario() -> Scenario {
         .player(TARGET, point(2.0))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "edge test rows keep each authored value at the call site"
+)]
 fn row(
     row_id: u64,
     rule_id: u64,
@@ -370,6 +374,7 @@ fn combat_end_clears_only_engagement_state() {
             engagement_id: 5,
             ranged_distance: 20.0,
             ranged_angle: 1.0,
+            ranged_posture_active: true,
         },
     );
     scenario.eventai_rule_state.borrow_mut().insert(
@@ -408,6 +413,7 @@ fn combat_end_clears_only_engagement_state() {
             engagement_id: 6,
             ranged_distance: 0.0,
             ranged_angle: 0.0,
+            ranged_posture_active: false,
         }
     );
 }

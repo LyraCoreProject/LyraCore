@@ -28,7 +28,7 @@ const TARGET_HOSTILE_SECOND: u32 = 2;
 const TARGET_HOSTILE_RANDOM: u32 = 4;
 const TARGET_ACTION_INVOKER: u32 = 6;
 const TARGET_HOSTILE_RANDOM_PLAYER: u32 = 8;
-const TARGET_EVENT_SENDER: u32 = 10;
+const TARGET_EVENT_SPECIFIC: u32 = 12;
 const TARGET_NEAREST_AOE: u32 = 17;
 const TARGET_HOSTILE_FARTHEST: u32 = 18;
 
@@ -82,11 +82,9 @@ const NATIVE_SOURCE_RANDOM_ACTION: u32 = 1 << 1;
 const NATIVE_REPEAT_ONCE: u8 = 0;
 const NATIVE_REPEAT: u8 = 1;
 const NATIVE_CAST_INTERRUPT_PREVIOUS: u32 = 1;
-const NATIVE_CAST_TRIGGERED: u32 = 1 << 1;
 const NATIVE_CAST_AURA_ABSENT: u32 = 1 << 2;
 const NATIVE_CAST_PLAYER_ONLY: u32 = 1 << 3;
 const NATIVE_CAST_TARGET_CASTING: u32 = 1 << 4;
-const NATIVE_CAST_REQUIRED: u32 = 1 << 5;
 const ROW_ID_NAMESPACE: u64 = 0x4000_0000_0000_0000;
 const FIXTURE_ID_FIRST: u32 = 5_099_000;
 const FIXTURE_ID_LAST: u32 = 5_099_999;
@@ -118,6 +116,26 @@ impl EventAiPlan {
             .copied()
             .unwrap_or(0)
     }
+
+    #[cfg(test)]
+    pub(crate) fn event_counts(&self, value: u64) -> (u64, u64, u64, u64) {
+        self.coverage.counts(
+            value,
+            &self.coverage.event,
+            &self.coverage.accepted_event,
+            &self.coverage.emitted_event,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn action_counts(&self, value: u64) -> (u64, u64, u64, u64) {
+        self.coverage.counts(
+            value,
+            &self.coverage.action,
+            &self.coverage.accepted_action,
+            &self.coverage.emitted_action,
+        )
+    }
 }
 
 #[derive(Default)]
@@ -128,6 +146,10 @@ struct Coverage {
     guid_rules: u64,
     event: BTreeMap<u64, u64>,
     action: BTreeMap<u64, u64>,
+    accepted_event: BTreeMap<u64, u64>,
+    accepted_action: BTreeMap<u64, u64>,
+    emitted_event: BTreeMap<u64, u64>,
+    emitted_action: BTreeMap<u64, u64>,
     target: BTreeMap<u64, u64>,
     flags: BTreeMap<u64, u64>,
     cast_flags: BTreeMap<u64, u64>,
@@ -149,6 +171,24 @@ impl Coverage {
             .or_default() += 1;
     }
 
+    #[cfg(test)]
+    fn counts(
+        &self,
+        value: u64,
+        source: &BTreeMap<u64, u64>,
+        accepted: &BTreeMap<u64, u64>,
+        emitted: &BTreeMap<u64, u64>,
+    ) -> (u64, u64, u64, u64) {
+        let source = source.get(&value).copied().unwrap_or(0);
+        let accepted = accepted.get(&value).copied().unwrap_or(0);
+        (
+            source,
+            accepted,
+            source.saturating_sub(accepted),
+            emitted.get(&value).copied().unwrap_or(0),
+        )
+    }
+
     fn report(&self, broadcasts: usize, summons: usize) {
         eprintln!(
             "eventai: rules={} accepted={} action_rows={} broadcasts={} summons={} guid_rules={}",
@@ -159,9 +199,35 @@ impl Coverage {
             summons,
             self.guid_rules,
         );
+        for (label, source, accepted, emitted) in [
+            (
+                "events",
+                &self.event,
+                &self.accepted_event,
+                &self.emitted_event,
+            ),
+            (
+                "actions",
+                &self.action,
+                &self.accepted_action,
+                &self.emitted_action,
+            ),
+        ] {
+            let rendered = source
+                .iter()
+                .map(|(value, count)| {
+                    let accepted = accepted.get(value).copied().unwrap_or(0);
+                    let emitted = emitted.get(value).copied().unwrap_or(0);
+                    format!(
+                        "{value}:source={count}/accepted={accepted}/dropped={}/emitted={emitted}",
+                        count.saturating_sub(accepted)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            eprintln!("eventai: {label} [{rendered}]");
+        }
         for (label, values) in [
-            ("events", &self.event),
-            ("actions", &self.action),
             ("targets", &self.target),
             ("flags", &self.flags),
             ("cast_flags", &self.cast_flags),
@@ -278,7 +344,6 @@ pub(crate) fn build(
             if raw_action == 0 {
                 continue;
             }
-            Coverage::source_value(&mut plan.coverage.action, raw_action as u64);
             match map_action(
                 *action,
                 &broadcasts,
@@ -286,7 +351,7 @@ pub(crate) fn build(
                 importable_templates,
                 &mut plan.coverage,
             ) {
-                Some(action) => actions.push((slot as u8, action)),
+                Some(action) => actions.push((slot as u8, raw_action, action)),
                 None => {
                     failed = true;
                     break;
@@ -320,7 +385,17 @@ pub(crate) fn build(
         } else {
             NATIVE_REPEAT_ONCE
         };
-        for (order, action) in actions {
+        Coverage::source_value(&mut plan.coverage.accepted_event, rule.event as u64);
+        *plan
+            .coverage
+            .emitted_event
+            .entry(rule.event as u64)
+            .or_default() += action_count;
+        for (_, raw_action, _) in &actions {
+            Coverage::source_value(&mut plan.coverage.accepted_action, *raw_action as u64);
+            Coverage::source_value(&mut plan.coverage.emitted_action, *raw_action as u64);
+        }
+        for (order, _, action) in actions {
             let row_id = rule_prefix | u64::from(order);
             used_texts.extend(action.texts.iter().copied());
             if let Some(entry) = action.summon_entry {
@@ -434,13 +509,17 @@ fn parse_rules(dump: &str, coverage: &mut Coverage) -> Vec<RawRule> {
                     return None;
                 };
                 action[0] = kind;
+                if kind != 0 {
+                    Coverage::source_value(&mut coverage.action, kind as u64);
+                }
                 for (part, value) in action.iter_mut().enumerate().skip(1) {
                     let column = action_column + part;
-                    let parsed = if kind == ACTION_TEXT {
-                        source_action_u32(field(&row, column))
-                    } else {
-                        source_u32(field(&row, column))
-                    };
+                    let parsed =
+                        if kind == ACTION_TEXT || (kind == ACTION_RANGED_MOVEMENT && part == 2) {
+                            source_action_u32(field(&row, column))
+                        } else {
+                            source_u32(field(&row, column))
+                        };
                     let Some(parsed) = parsed else {
                         coverage.drop("invalid_numeric", column as u64);
                         return None;
@@ -490,7 +569,7 @@ fn parse_broadcasts(dump: &str, coverage: &mut Coverage) -> BTreeMap<u32, Broadc
                 coverage.drop("malformed_broadcast_text", id as u64);
                 return None;
             }
-            let (emote_start, delay_start) = if row.len() >= 17 { (11, 14) } else { (6, 9) };
+            let (emote_start, delay_start) = if row.len() >= 17 { (10, 13) } else { (6, 9) };
             let emotes = std::array::from_fn(|index| {
                 (
                     source_u32(field(&row, delay_start + index)).unwrap_or(0),
@@ -842,16 +921,18 @@ fn map_cast_target_and_flags(
         coverage.drop("unsupported_cast_flag", raw_flags as u64);
         return None;
     }
+    if raw_flags & CAST_TRIGGERED != 0 {
+        coverage.drop("unsupported_triggered_cast", raw_flags as u64);
+        return None;
+    }
+    if raw_flags & CAST_FORCE_CAST != 0 {
+        coverage.drop("unsupported_force_cast", raw_flags as u64);
+        return None;
+    }
     let target = map_target(raw_target, coverage)?;
     let mut options = 0;
     if raw_flags & CAST_INTERRUPT_PREVIOUS != 0 {
         options |= NATIVE_CAST_INTERRUPT_PREVIOUS;
-    }
-    if raw_flags & CAST_TRIGGERED != 0 {
-        options |= NATIVE_CAST_TRIGGERED;
-    }
-    if raw_flags & CAST_FORCE_CAST != 0 {
-        options |= NATIVE_CAST_REQUIRED;
     }
     if raw_flags & CAST_AURA_NOT_PRESENT != 0 {
         options |= NATIVE_CAST_AURA_ABSENT;
@@ -874,7 +955,7 @@ fn map_target(value: u32, coverage: &mut Coverage) -> Option<u8> {
         TARGET_HOSTILE_RANDOM => Some(NATIVE_TARGET_RANDOM_THREAT),
         TARGET_ACTION_INVOKER => Some(NATIVE_TARGET_INVOKER),
         TARGET_HOSTILE_RANDOM_PLAYER => Some(NATIVE_TARGET_RANDOM_THREAT_PLAYER),
-        TARGET_EVENT_SENDER => Some(NATIVE_TARGET_EVENT),
+        TARGET_EVENT_SPECIFIC => Some(NATIVE_TARGET_EVENT),
         TARGET_NEAREST_AOE => Some(NATIVE_TARGET_NEAREST_AREA),
         TARGET_HOSTILE_FARTHEST => Some(NATIVE_TARGET_FARTHEST_HOSTILE),
         other => {

@@ -61,14 +61,18 @@ pub(crate) trait EventAiWorld {
 
 pub(crate) fn evaluate<W: EventAiWorld>(world: &mut W, request: EventAiRequest<'_>) -> u64 {
     let mut visited = 0;
-    let mut counted_creatures = HashSet::new();
+    let mut contexts_by_creature: BTreeMap<u64, Vec<EventContext>> = BTreeMap::new();
     for context in world.eventai_contexts(&request) {
-        let rows = world.eventai_rows(context.creature_guid);
-        if counted_creatures.insert(context.creature_guid) {
-            visited += rows.len() as u64;
-        }
+        contexts_by_creature
+            .entry(context.creature_guid)
+            .or_default()
+            .push(context);
+    }
+    for (creature_guid, contexts) in contexts_by_creature {
+        let rows = world.eventai_rows(creature_guid);
+        visited += rows.len() as u64;
         let valid_rule_ids = rows.iter().map(effective_rule_id).collect();
-        world.reap_eventai_rule_state(context.creature_guid, &valid_rule_ids);
+        world.reap_eventai_rule_state(creature_guid, &valid_rule_ids);
         let mut groups: BTreeMap<u64, Vec<CreatureAiEvent>> = BTreeMap::new();
         for row in rows {
             groups.entry(effective_rule_id(&row)).or_default().push(row);
@@ -81,7 +85,10 @@ pub(crate) fn evaluate<W: EventAiWorld>(world: &mut W, request: EventAiRequest<'
                     continue;
                 }
             };
-            evaluate_rule(world, &context, &rule);
+            let Some(context) = contexts.iter().find(|context| context.kind == rule.event) else {
+                continue;
+            };
+            evaluate_rule(world, context, &rule);
         }
     }
     visited
@@ -112,24 +119,19 @@ fn evaluate_rule<W: EventAiWorld>(world: &mut W, context: &EventContext, rule: &
         return;
     }
 
-    if rule.event == EventKind::TimedInCombat {
-        match state {
-            None => {
-                let delay = roll_window(world, rule.event_params[0], rule.event_params[1]);
-                world.put_eventai_rule_state(
-                    context.creature_guid,
-                    rule.id,
-                    RuleState {
-                        next_eligible_ms: context.now_ms.saturating_add(delay),
-                        consumed: false,
-                        lifecycle_id: creature_state.lifecycle_id,
-                        engagement_id: creature_state.engagement_id,
-                    },
-                );
-                return;
-            }
-            Some(_) => {}
-        }
+    if rule.event == EventKind::TimedInCombat && state.is_none() {
+        let delay = roll_window(world, rule.event_params[0], rule.event_params[1]);
+        world.put_eventai_rule_state(
+            context.creature_guid,
+            rule.id,
+            RuleState {
+                next_eligible_ms: context.now_ms.saturating_add(delay),
+                consumed: false,
+                lifecycle_id: creature_state.lifecycle_id,
+                engagement_id: creature_state.engagement_id,
+            },
+        );
+        return;
     }
 
     let Some(context) = world.eventai_condition(context, rule) else {
@@ -162,8 +164,7 @@ fn evaluate_rule<W: EventAiWorld>(world: &mut W, context: &EventContext, rule: &
             ActionResult::Refused
                 if index == 0
                     && action.kind == ActionKind::Cast
-                    && (rule.source_policy.contains(SOURCE_FLAG_COMBAT_ACTION)
-                        || action.cast_options.contains(super::CAST_REQUIRED)) =>
+                    && rule.source_policy.contains(SOURCE_FLAG_COMBAT_ACTION) =>
             {
                 return;
             }
@@ -343,6 +344,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
                 engagement_id: row.engagement_id,
                 ranged_distance: row.ranged_distance,
                 ranged_angle: row.ranged_angle,
+                ranged_posture_active: row.ranged_posture_active,
             })
     }
 
@@ -361,6 +363,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
                     engagement_id: 1,
                     ranged_distance: 0.0,
                     ranged_angle: 0.0,
+                    ranged_posture_active: false,
                 });
             }
         }
@@ -452,9 +455,14 @@ impl EventAiWorld for DatabaseWorld<'_> {
                 .id()
                 .find(ids[self.ctx.random::<u32>() as usize % ids.len()]),
         };
-        let (message, chat_type, language) = match (ids.is_empty(), broadcast) {
-            (true, _) => (action.legacy_text.clone(), chat_type, 0),
-            (false, Some(text)) => (text.male_text, text.chat_type, text.language_id),
+        let (message, chat_type, language, emote) = match (ids.is_empty(), broadcast) {
+            (true, _) => (action.legacy_text.clone(), chat_type, 0, 0),
+            (false, Some(text)) => (
+                text.male_text,
+                text.chat_type,
+                text.language_id,
+                text.emote_id_1,
+            ),
             (false, None) => return,
         };
         if message.is_empty() {
@@ -468,6 +476,17 @@ impl EventAiWorld for DatabaseWorld<'_> {
             message,
             created_at: self.ctx.timestamp,
         });
+        if emote != 0 {
+            if let Some(creature) = self
+                .ctx
+                .db
+                .game_world_entity()
+                .guid()
+                .find(context.creature_guid)
+            {
+                let _ = crate::chat::apply_send_emote(self.ctx, creature, 0, emote, 0);
+            }
+        }
     }
 
     fn eventai_cast(

@@ -1,17 +1,19 @@
 //! Engaged EventAI conditions and combat actions.
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 
 use spacetimedb::{ReducerContext, Table};
 
 use super::{
-    ActionKind, ActionResult, EventContext, EventKind, Rule, RuleAction, TargetPolicy,
-    CAST_AURA_ABSENT, CAST_INTERRUPT_PREVIOUS, CAST_PLAYER_ONLY, CAST_TARGET_CASTING,
+    effective_rule_id, ActionKind, ActionResult, CreatureState, EventContext, EventKind, Rule,
+    RuleAction, TargetPolicy, CAST_AURA_ABSENT, CAST_INTERRUPT_PREVIOUS, CAST_PLAYER_ONLY,
+    CAST_TARGET_CASTING, CAST_TRIGGERED,
 };
 use crate::creatures::ai::{rout_close_ms, TickScope};
 use crate::{
-    game_creature_ai_event, game_faction_template, game_melee_attack, game_pending_cast,
-    game_threat, game_world_entity,
+    game_creature_ai_event, game_creature_ai_rule_state, game_creature_ai_state,
+    game_faction_template, game_melee_attack, game_pending_cast, game_threat, game_world_entity,
 };
 
 pub(super) fn engaged_contexts(
@@ -106,7 +108,7 @@ pub(super) fn execute(
                 return ActionResult::Refused;
             };
             let target = target(ctx, context, action).unwrap_or(0);
-            crate::chat::apply_send_emote(ctx, creature, action.params[0], action.params[1], target)
+            crate::chat::apply_send_emote(ctx, creature, 0, action.params[0], target)
                 .map_or(ActionResult::Refused, |_| ActionResult::Applied)
         }
         ActionKind::FleeForAssist => {
@@ -140,13 +142,13 @@ pub(super) fn target(
         TargetPolicy::SelfActor => Some(context.creature_guid),
         TargetPolicy::Invoker => context.invoker_guid,
         TargetPolicy::EventTarget => context.event_target_guid,
-        TargetPolicy::TopThreat => ranked_threat(ctx, &creature, None).first().copied(),
-        TargetPolicy::SecondThreat => ranked_threat(ctx, &creature, None).get(1).copied(),
-        TargetPolicy::RandomThreat => pick(ctx, &ranked_threat(ctx, &creature, None)),
-        TargetPolicy::TopThreatPlayer => ranked_threat(ctx, &creature, Some(true)).first().copied(),
-        TargetPolicy::RandomThreatPlayer => pick(ctx, &ranked_threat(ctx, &creature, Some(true))),
-        TargetPolicy::NearestArea => nearest_area(ctx, &creature, action.params[1]),
-        TargetPolicy::FarthestHostile => farthest_hostile(ctx, &creature, action.params[1]),
+        TargetPolicy::TopThreat => ranked_threat(ctx, &creature, action).first().copied(),
+        TargetPolicy::SecondThreat => ranked_threat(ctx, &creature, action).get(1).copied(),
+        TargetPolicy::RandomThreat => pick(ctx, &ranked_threat(ctx, &creature, action)),
+        TargetPolicy::TopThreatPlayer => ranked_threat(ctx, &creature, action).first().copied(),
+        TargetPolicy::RandomThreatPlayer => pick(ctx, &ranked_threat(ctx, &creature, action)),
+        TargetPolicy::NearestArea => nearest_area(ctx, &creature, action),
+        TargetPolicy::FarthestHostile => farthest_hostile(ctx, &creature, action),
     }?;
     if action.cast_options.contains(CAST_PLAYER_ONLY)
         && !ctx.db.game_world_entity().guid().find(target)?.is_player()
@@ -162,6 +164,9 @@ pub(super) fn cast(
     action: &RuleAction,
     target_guid: u64,
 ) -> ActionResult {
+    if action.cast_options.contains(CAST_TRIGGERED) {
+        return ActionResult::Refused;
+    }
     if action.cast_options.contains(CAST_PLAYER_ONLY)
         && !ctx
             .db
@@ -196,7 +201,17 @@ pub(super) fn cast(
     else {
         return ActionResult::Refused;
     };
-    if action.cast_options.contains(CAST_INTERRUPT_PREVIOUS) {
+    let pending = ctx
+        .db
+        .game_pending_cast()
+        .by_caster()
+        .filter(&creature.guid)
+        .next()
+        .is_some();
+    if pending {
+        if !action.cast_options.contains(CAST_INTERRUPT_PREVIOUS) {
+            return ActionResult::Refused;
+        }
         crate::spell::interrupt_cast(ctx, creature.guid);
     }
     crate::spell::begin_cast(
@@ -205,22 +220,80 @@ pub(super) fn cast(
         action.params[0],
         creature.level as u8,
         target_guid,
-        action.cast_options.contains(super::CAST_TRIGGERED),
+        false,
         None,
     )
     .map_or(ActionResult::Refused, |_| ActionResult::Applied)
 }
 
 pub(crate) fn suppresses_flat_cast(ctx: &ReducerContext, creature_guid: u64) -> bool {
-    rows_for(ctx, creature_guid)
+    applicable_engaged_rules(ctx, creature_guid)
         .into_iter()
-        .any(|row| row.action_type == super::ACTION_CAST)
+        .flat_map(|rule| rule.actions)
+        .any(|action| action.kind == ActionKind::Cast)
 }
 
 pub(crate) fn suppresses_fixed_rout(ctx: &ReducerContext, creature_guid: u64) -> bool {
-    rows_for(ctx, creature_guid)
+    applicable_engaged_rules(ctx, creature_guid)
         .into_iter()
-        .any(|row| row.action_type == super::ACTION_FLEE_FOR_ASSIST)
+        .flat_map(|rule| rule.actions)
+        .any(|action| action.kind == ActionKind::FleeForAssist)
+}
+
+pub(crate) fn applicable_rules(ctx: &ReducerContext, creature_guid: u64) -> Vec<Rule> {
+    let state = ctx
+        .db
+        .game_creature_ai_state()
+        .creature_guid()
+        .find(creature_guid)
+        .map_or_else(CreatureState::default, |row| CreatureState {
+            phase: row.phase,
+            lifecycle_id: row.lifecycle_id,
+            engagement_id: row.engagement_id,
+            ranged_distance: row.ranged_distance,
+            ranged_angle: row.ranged_angle,
+            ranged_posture_active: row.ranged_posture_active,
+        });
+    let mut grouped = std::collections::BTreeMap::new();
+    for row in rows_for(ctx, creature_guid) {
+        grouped
+            .entry(effective_rule_id(&row))
+            .or_insert_with(Vec::new)
+            .push(row);
+    }
+    let consumed_rule_ids: HashSet<u64> = ctx
+        .db
+        .game_creature_ai_rule_state()
+        .by_creature()
+        .filter(&creature_guid)
+        .filter(|rule_state| {
+            rule_state.lifecycle_id == state.lifecycle_id
+                && rule_state.engagement_id == state.engagement_id
+                && rule_state.consumed
+        })
+        .map(|rule_state| rule_state.source_rule_id)
+        .collect();
+    grouped
+        .into_values()
+        .filter_map(|rows| Rule::decode(rows).ok())
+        .filter(|rule| state.phase < 32 && rule.allowed_phase_mask & (1u32 << state.phase) != 0)
+        .filter(|rule| !consumed_rule_ids.contains(&rule.id))
+        .collect()
+}
+
+fn applicable_engaged_rules(ctx: &ReducerContext, creature_guid: u64) -> Vec<Rule> {
+    applicable_rules(ctx, creature_guid)
+        .into_iter()
+        .filter(|rule| {
+            matches!(
+                rule.event,
+                EventKind::TimedInCombat
+                    | EventKind::CreatureHp
+                    | EventKind::TargetRange
+                    | EventKind::FriendlyHpDeficit
+            )
+        })
+        .collect()
 }
 
 fn rows_for(ctx: &ReducerContext, creature_guid: u64) -> Vec<super::CreatureAiEvent> {
@@ -243,8 +316,8 @@ fn rows_for(ctx: &ReducerContext, creature_guid: u64) -> Vec<super::CreatureAiEv
 
 fn in_inclusive_pct(value: u32, max: u32, min_pct: u32, max_pct: u32) -> bool {
     max != 0
-        && value.saturating_mul(100) >= min_pct.saturating_mul(max)
-        && value.saturating_mul(100) <= max_pct.saturating_mul(max)
+        && u64::from(value) * 100 >= u64::from(min_pct) * u64::from(max)
+        && u64::from(value) * 100 <= u64::from(max_pct) * u64::from(max)
 }
 
 fn wounded_friendly(
@@ -263,9 +336,8 @@ fn wounded_friendly(
     )
     .into_iter()
     .filter(|other| {
-        other.guid != creature.guid
-            && !other.dead
-            && friendly(ctx, creature, other)
+        !other.dead
+            && (other.guid == creature.guid || friendly(ctx, creature, other))
             && distance_yd(creature, other) <= radius as f32
             && other.max_health.saturating_sub(other.health) >= deficit
     })
@@ -280,7 +352,7 @@ fn wounded_friendly(
 fn ranked_threat(
     ctx: &ReducerContext,
     creature: &crate::WorldEntity,
-    player_only: Option<bool>,
+    action: &RuleAction,
 ) -> Vec<u64> {
     let entities = ctx.db.game_world_entity();
     let mut ranked: Vec<(u64, i64)> = ctx
@@ -296,7 +368,21 @@ fn ranked_threat(
                     creature.map_id,
                     creature.instance_id,
                 )
-                && player_only.is_none_or(|player| source.is_player() == player))
+                && (!matches!(
+                    action.target,
+                    TargetPolicy::TopThreatPlayer | TargetPolicy::RandomThreatPlayer
+                ) || source.is_player())
+                && (!action.cast_options.contains(CAST_PLAYER_ONLY) || source.is_player())
+                && (!action.cast_options.contains(CAST_AURA_ABSENT)
+                    || !crate::spell::has_aura(ctx, source.guid, action.params[0]))
+                && (!action.cast_options.contains(CAST_TARGET_CASTING)
+                    || ctx
+                        .db
+                        .game_pending_cast()
+                        .by_caster()
+                        .filter(&source.guid)
+                        .next()
+                        .is_some()))
             .then_some((source.guid, entry.threat))
         })
         .collect();
@@ -304,56 +390,43 @@ fn ranked_threat(
     ranked.into_iter().map(|(guid, _)| guid).collect()
 }
 
-fn nearest_area(ctx: &ReducerContext, creature: &crate::WorldEntity, radius: u32) -> Option<u64> {
-    let radius = radius as f32;
-    crate::helpers::entities_near(
-        ctx,
-        creature.map_id,
-        creature.instance_id,
-        creature.x,
-        creature.y,
-        radius,
-    )
-    .into_iter()
-    .filter(|other| {
-        other.guid != creature.guid && !other.dead && distance_yd(creature, other) <= radius
-    })
-    .min_by(|a, b| {
-        distance_yd(creature, a)
-            .partial_cmp(&distance_yd(creature, b))
-            .unwrap_or(Ordering::Equal)
-            .then(a.guid.cmp(&b.guid))
-    })
-    .map(|other| other.guid)
+fn nearest_area(
+    ctx: &ReducerContext,
+    creature: &crate::WorldEntity,
+    action: &RuleAction,
+) -> Option<u64> {
+    ranked_threat(ctx, creature, action)
+        .into_iter()
+        .filter_map(|guid| {
+            let target = ctx.db.game_world_entity().guid().find(guid)?;
+            Some((guid, distance_yd(creature, &target)))
+        })
+        .min_by(|a, b| {
+            a.1.partial_cmp(&b.1)
+                .unwrap_or(Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        })
+        .map(|(guid, _)| guid)
 }
 
 fn farthest_hostile(
     ctx: &ReducerContext,
     creature: &crate::WorldEntity,
-    radius: u32,
+    action: &RuleAction,
 ) -> Option<u64> {
-    let radius = radius as f32;
-    crate::helpers::entities_near(
-        ctx,
-        creature.map_id,
-        creature.instance_id,
-        creature.x,
-        creature.y,
-        radius,
-    )
-    .into_iter()
-    .filter(|other| {
-        !other.dead
-            && crate::combat::is_hostile_target(ctx, creature, other)
-            && distance_yd(creature, other) <= radius
-    })
-    .max_by(|a, b| {
-        distance_yd(creature, a)
-            .partial_cmp(&distance_yd(creature, b))
-            .unwrap_or(Ordering::Equal)
-            .then(b.guid.cmp(&a.guid))
-    })
-    .map(|other| other.guid)
+    ranked_threat(ctx, creature, action)
+        .into_iter()
+        .filter_map(|guid| {
+            let target = ctx.db.game_world_entity().guid().find(guid)?;
+            let distance = distance_yd(creature, &target);
+            (distance * distance > crate::combat::MELEE_RANGE_SQ).then_some((guid, distance))
+        })
+        .max_by(|a, b| {
+            a.1.partial_cmp(&b.1)
+                .unwrap_or(Ordering::Equal)
+                .then(b.0.cmp(&a.0))
+        })
+        .map(|(guid, _)| guid)
 }
 
 fn call_for_help(ctx: &ReducerContext, context: &EventContext, radius: u32) -> ActionResult {

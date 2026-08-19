@@ -43,13 +43,11 @@ pub(crate) const CAST_TRIGGERED: u32 = 1 << 1;
 pub(crate) const CAST_AURA_ABSENT: u32 = 1 << 2;
 pub(crate) const CAST_PLAYER_ONLY: u32 = 1 << 3;
 pub(crate) const CAST_TARGET_CASTING: u32 = 1 << 4;
-pub(crate) const CAST_REQUIRED: u32 = 1 << 5;
 const SUPPORTED_CAST_OPTIONS: u32 = CAST_INTERRUPT_PREVIOUS
     | CAST_TRIGGERED
     | CAST_AURA_ABSENT
     | CAST_PLAYER_ONLY
-    | CAST_TARGET_CASTING
-    | CAST_REQUIRED;
+    | CAST_TARGET_CASTING;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EventKind {
@@ -226,6 +224,7 @@ pub(crate) struct CreatureState {
     pub engagement_id: u64,
     pub ranged_distance: f32,
     pub ranged_angle: f32,
+    pub ranged_posture_active: bool,
 }
 
 impl Default for CreatureState {
@@ -236,6 +235,7 @@ impl Default for CreatureState {
             engagement_id: 1,
             ranged_distance: 0.0,
             ranged_angle: 0.0,
+            ranged_posture_active: false,
         }
     }
 }

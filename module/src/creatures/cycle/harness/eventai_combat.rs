@@ -174,6 +174,26 @@ fn missing_imported_text_stays_silent_and_multiple_texts_roll_deterministically(
 }
 
 #[test]
+fn broadcast_text_emits_its_first_animation_emote_immediately() {
+    let mut scenario = world()
+        .eventai_broadcast_emote(9, "move", 0, 17)
+        .eventai_row(row(
+            509_0127,
+            509_0127,
+            0,
+            EVENT_CREATURE_HP,
+            ACTION_SAY,
+            REPEAT_ONCE,
+            [0, 100, 0, 0, 0, 0],
+            [9, 0, 0],
+        ));
+
+    fire(&mut scenario);
+
+    assert_eq!(scenario.eventai_emotes(), vec![(CREATURE, 0, 17, 0)]);
+}
+
+#[test]
 fn wounded_friendly_is_selected_as_the_event_target() {
     let mut action = row(
         509_0103,
@@ -248,7 +268,7 @@ fn ordered_text_emote_cast_and_phase_actions_share_one_rule() {
     fire(&mut scenario);
 
     assert_eq!(scenario.eventai_speech().len(), 1);
-    assert_eq!(scenario.eventai_emotes(), vec![(CREATURE, 7, 8, TARGET)]);
+    assert_eq!(scenario.eventai_emotes(), vec![(CREATURE, 0, 7, TARGET)]);
     assert_eq!(scenario.casts(), vec![(CREATURE, 106, TARGET)]);
     assert_eq!(scenario.eventai_creature_state(CREATURE).phase, 1);
 }
@@ -337,7 +357,7 @@ fn target_policies_choose_the_expected_actor() {
             ACTION_CAST,
             REPEAT_ONCE,
             [0, 100, 0, 0, 0, 0],
-            [200 + order as u32, 10, 0],
+            [200 + order as u32, 0, 0],
         );
         action.target_policy = *policy;
         scenario = scenario.eventai_row(action);
@@ -353,6 +373,120 @@ fn target_policies_choose_the_expected_actor() {
             .map(|(order, (_, target))| (CREATURE, 200 + order as u32, *target))
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn ranked_random_casts_filter_ineligible_targets_before_selection() {
+    let mut action = row(
+        509_0220,
+        509_0220,
+        0,
+        EVENT_CREATURE_HP,
+        ACTION_CAST,
+        REPEAT_ONCE,
+        [0, 100, 0, 0, 0, 0],
+        [220, 0, 0],
+    );
+    action.target_policy = TARGET_RANDOM_THREAT;
+    action.cast_options = CAST_AURA_ABSENT;
+    let mut scenario = world()
+        .player(SECOND_TARGET, point(6.0))
+        .threat(CREATURE, TARGET, 100)
+        .threat(CREATURE, SECOND_TARGET, 90)
+        .eventai_row(action)
+        .rolls([0]);
+    scenario.auras.borrow_mut().insert((TARGET, 220));
+
+    fire(&mut scenario);
+
+    assert_eq!(scenario.casts(), vec![(CREATURE, 220, SECOND_TARGET)]);
+}
+
+#[test]
+fn source_rule_order_wins_across_engaged_event_kinds() {
+    let phase = row(
+        509_0300,
+        300,
+        0,
+        EVENT_FRIENDLY_HP_DEFICIT,
+        ACTION_SET_PHASE,
+        REPEAT_ONCE,
+        [1, 8, 0, 0, 0, 0],
+        [1, 0, 0],
+    );
+    let say = row(
+        509_0301,
+        301,
+        0,
+        EVENT_CREATURE_HP,
+        ACTION_SAY,
+        REPEAT_ONCE,
+        [0, 100, 0, 0, 0, 0],
+        [10, 0, 0],
+    );
+    let mut scenario = world()
+        .hurt(CREATURE, 1)
+        .eventai_broadcast(10, "too late", 0)
+        .eventai_row(phase)
+        .eventai_row(say);
+
+    fire(&mut scenario);
+
+    assert!(scenario.eventai_speech().is_empty());
+    assert_eq!(scenario.eventai_creature_state(CREATURE).phase, 1);
+}
+
+#[test]
+fn triggered_and_non_interrupting_pending_casts_fail_closed() {
+    let mut triggered = row(
+        509_0302,
+        302,
+        0,
+        EVENT_CREATURE_HP,
+        ACTION_CAST,
+        REPEAT_ONCE,
+        [0, 100, 0, 0, 0, 0],
+        [300, 0, 0],
+    );
+    triggered.cast_options = CAST_TRIGGERED;
+    let pending = row(
+        509_0303,
+        303,
+        0,
+        EVENT_CREATURE_HP,
+        ACTION_CAST,
+        REPEAT_ONCE,
+        [0, 100, 0, 0, 0, 0],
+        [301, 0, 0],
+    );
+    let mut scenario = world().eventai_row(triggered).eventai_row(pending);
+    scenario.casting.borrow_mut().insert(CREATURE);
+
+    fire(&mut scenario);
+
+    assert!(scenario.casts().is_empty());
+}
+
+#[test]
+fn interrupt_previous_replaces_a_pending_cast() {
+    let mut action = row(
+        509_0304,
+        304,
+        0,
+        EVENT_CREATURE_HP,
+        ACTION_CAST,
+        REPEAT_ONCE,
+        [0, 100, 0, 0, 0, 0],
+        [304, 0, 0],
+    );
+    action.cast_options = CAST_INTERRUPT_PREVIOUS;
+    let mut scenario = world().eventai_row(action);
+    scenario.casting.borrow_mut().insert(CREATURE);
+
+    fire(&mut scenario);
+
+    assert_eq!(scenario.casts(), vec![(CREATURE, 304, TARGET)]);
+    assert!(!scenario.casting.borrow().contains(&CREATURE));
 }
 
 #[test]
@@ -422,4 +556,69 @@ fn eventai_cast_rules_suppress_flat_casts_without_changing_unscripted_creatures(
     fire(&mut scenario);
 
     assert_eq!(scenario.casts(), vec![(scripted, 121, TARGET)]);
+}
+
+#[test]
+fn edge_and_malformed_cast_rows_do_not_suppress_the_default_rotation() {
+    let edge = row(
+        509_0310,
+        310,
+        0,
+        EVENT_ON_DEATH,
+        ACTION_CAST,
+        REPEAT_ONCE,
+        [0; 6],
+        [310, 0, 0],
+    );
+    let mut malformed = row(
+        509_0311,
+        311,
+        0,
+        EVENT_CREATURE_HP,
+        ACTION_CAST,
+        REPEAT_ONCE,
+        [0, 100, 0, 0, 0, 0],
+        [311, 0, 0],
+    );
+    malformed.chance_pct = 0;
+    let mut scenario = world()
+        .lone_spell(CREATURE, 120)
+        .eventai_row(edge)
+        .eventai_row(malformed);
+
+    fire(&mut scenario);
+
+    assert_eq!(scenario.casts(), vec![(CREATURE, 120, TARGET)]);
+}
+
+#[test]
+fn an_unscripted_creature_keeps_the_same_cycle_state_and_effects() {
+    let mut unrelated = row(
+        509_0320,
+        320,
+        0,
+        EVENT_CREATURE_HP,
+        ACTION_CAST,
+        REPEAT_ONCE,
+        [0, 100, 0, 0, 0, 0],
+        [320, 0, 0],
+    );
+    unrelated.creature_entry = ENTRY + 99;
+    let mut baseline = world().lone_spell(CREATURE, 120);
+    let mut with_catalogue = world().lone_spell(CREATURE, 120).eventai_row(unrelated);
+
+    let baseline_tick = baseline.tick(true, scope());
+    let catalogue_tick = with_catalogue.tick(true, scope());
+    let baseline_outcome = run_cycle(&mut baseline, baseline_tick);
+    let catalogue_outcome = run_cycle(&mut with_catalogue, catalogue_tick);
+
+    assert_eq!(baseline_outcome.awake, catalogue_outcome.awake);
+    assert_eq!(
+        baseline_outcome.rows_visited,
+        catalogue_outcome.rows_visited
+    );
+    assert_eq!(baseline.snapshot(), with_catalogue.snapshot());
+    assert_eq!(baseline.victims(), with_catalogue.victims());
+    assert_eq!(baseline.casts(), with_catalogue.casts());
+    assert_eq!(baseline.effects(), with_catalogue.effects());
 }

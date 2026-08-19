@@ -233,10 +233,21 @@ subjects must be in the World Import Scope. Negative subjects resolve through th
 Accepted summon templates enlarge the scope to a fixpoint, so a summoned creature can bring its own
 EventAI dependencies. The importer carries current broadcast text and supported legacy negative
 `script_texts` ids. It reads both the compact 12-column and current 17-column broadcast-text
-tuple vintages; the latter places emotes in columns 11 to 13 and their delays in columns 14 to 16.
+tuple vintages. The 17-column shape places emotes at zero-based indexes 10 to 12 and delays at indexes
+13 to 15. The runtime emits the first animation emote with the text. It retains the other two emotes
+and their delays but does not schedule them.
+
+Source target 12, `TARGET_T_EVENT_SPECIFIC`, maps to the event target selected by friendly-HP and
+other event conditions. Source target 10, `TARGET_T_EVENT_SENDER`, is unsupported. Triggered casts and
+force casts are also unsupported because the Module has no operation with their CMaNGOS behavior.
+The importer drops the complete source rule instead of mapping either flag to an ordinary cast or a
+retry policy. A ranged-movement angle is parsed as a signed 32-bit value and stored in the native
+unsigned carrier without changing its bits. The creature state records when a ranged posture action
+has run, including an explicit zero-distance melee posture. Engagement and lifecycle resets clear it.
 
 Unsupported or invalid values reject the complete source rule and appear in dry-run coverage by source
-value and reason. The report also lists casts whose spell id has no complete source-dump catalogue.
+value and reason. Event and action histograms show source, accepted, dropped, and emitted counts for
+each value. The report also lists casts whose spell id has no complete source-dump catalogue.
 Spell validation is therefore authoritative after the DBC spell import, through the post-import
 `game_spell` reference check. A nonzero spell id is retained rather than incorrectly rejected because
 it is absent from `spell_template`.
@@ -251,6 +262,16 @@ ids for EventAI text rows; negative ids require a matching `script_texts` row in
 dump. This is an importer inference from the CMaNGOS action contracts and source data shape. Text-new
 keeps its target policy. Template selection is rejected because the current relay has no template
 lookup, rather than being represented as a direct broadcast.
+
+Operator verification needs the exact dump identity supplied for the import, including its resolved
+classic-db commit. On current z2815 data, verify Hogger speech and timed casts, Goldtooth's HP-based
+flee, and one nearby creature with no authored EventAI rules. The last creature must keep the same
+cycle outcome, durable state, and emitted effects as it had before this family was imported. This is a
+dev-node and real-client check. Do not treat importer unit tests as a substitute for it.
+
+The shell preflight accepts any subset of supported event and action types because each World Import
+Scope contains different creatures. It prints and checks every type present in the destination. It
+does not require absent families to be fabricated to meet a global count floor.
 
 The standalone DBC pass reads all three taxi files through the same in-memory MPQ patch chain as
 the other client tables. It validates every endpoint/path reference and every `(path, node_index)`

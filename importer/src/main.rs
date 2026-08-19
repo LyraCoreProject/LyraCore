@@ -6753,7 +6753,7 @@ mod tests {
     }
 
     fn eventai_broadcast_row(id: u32, male: &str, female: &str) -> String {
-        format!("({id},'{male}','{female}',1,0,0,0,0,0,0,0,5,6,7,8,9,10)")
+        format!("({id},'{male}','{female}',1,0,0,0,0,0,0,5,6,7,8,9,10,0)")
     }
 
     fn eventai_fixture_dump() -> String {
@@ -6776,7 +6776,7 @@ mod tests {
                 75,
                 0,
                 [80, 20, 100, 200, 0, 0],
-                [[11, 42, 1, 0xA27], [5, 7, 0, 0], [25, 0, 0, 0]],
+                [[11, 42, 1, 0xA21], [5, 7, 0, 0], [25, 0, 0, 0]],
             ),
             eventai_rule_row(
                 12,
@@ -6786,7 +6786,7 @@ mod tests {
                 100,
                 0,
                 [500, 30, 100, 200, 0, 0],
-                [[32, 200, 17, 700], [39, 40, 0, 0], [0, 0, 0, 0]],
+                [[32, 200, 17, 700], [11, 42, 12, 0], [39, 40, 0, 0]],
             ),
             eventai_rule_row(
                 13,
@@ -6806,7 +6806,7 @@ mod tests {
                 100,
                 0,
                 [5, 20, 100, 200, 0, 0],
-                [[29, 15, 45, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+                [[29, 15, -45, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
             ),
             eventai_rule_row(
                 15,
@@ -6839,7 +6839,7 @@ mod tests {
                 [[1, 901, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
             ),
         ];
-        for (offset, target) in [0, 2, 4, 6, 8, 10, 18].into_iter().enumerate() {
+        for (offset, target) in [0, 2, 4, 6, 8, 12, 18].into_iter().enumerate() {
             rules.push(eventai_rule_row(
                 20 + offset as u64,
                 100,
@@ -6876,7 +6876,7 @@ mod tests {
         let mut args = test_args();
         args.family = Some("creature-ai".to_string());
         let plan = build_dump_plan(&dump, &args, &None, &None).expect("EventAI plan");
-        assert_eq!(plan.stamps, vec![("creature-ai", 23)]);
+        assert_eq!(plan.stamps, vec![("creature-ai", 24)]);
         assert_eq!(plan.stmts.len(), 6, "{:?}", plan.stmts);
         assert_eq!(
             &plan.stmts[..3],
@@ -6924,6 +6924,7 @@ mod tests {
             "{events}"
         );
         assert!(events.contains(",17,0,0,100,4294967295,0,0"), "{events}");
+        assert!(events.contains(",15,4294967251,0,0,0)"), "{events}");
         for target in [0, 1, 3, 4, 5, 6, 8, 9, 10] {
             assert!(
                 events.contains(&format!(",{target},")),
@@ -6938,6 +6939,7 @@ mod tests {
         assert!(texts.contains("Hogger''s"), "{texts}");
         assert!(texts.contains("Old''s"), "{texts}");
         assert!(!texts.contains("Unused"), "{texts}");
+        assert!(texts.contains(",8,5,9,6,10,7)"), "{texts}");
 
         let again = build_dump_plan(&dump, &args, &None, &None).expect("repeat EventAI plan");
         assert_eq!(plan.stmts, again.stmts);
@@ -6983,8 +6985,8 @@ mod tests {
     #[test]
     fn eventai_drops_invalid_rules_into_explicit_buckets() {
         let mut dump = eventai_fixture_dump().replacen(
-            "(903,'Unused','Unused',1,0,0,0,0,0,0,0,5,6,7,8,9,10)",
-            "(903,'Unused','Unused',2,0,0,0,0,0,0,0,5,6,7,8,9,10)",
+            "(903,'Unused','Unused',1,0,0,0,0,0,0,5,6,7,8,9,10,0)",
+            "(903,'Unused','Unused',2,0,0,0,0,0,0,5,6,7,8,9,10,0)",
             1,
         );
         let invalid = [
@@ -7100,6 +7102,36 @@ mod tests {
                 [0, 1, 0, 1, 0, 0],
                 [[1, 903, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
             ),
+            eventai_rule_row(
+                53,
+                100,
+                14,
+                0,
+                100,
+                0,
+                [1, 30, 0, 1, 0, 0],
+                [[11, 42, 10, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+            eventai_rule_row(
+                54,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[11, 42, 1, 0x2], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+            eventai_rule_row(
+                55,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[11, 42, 1, 0x4], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
         ];
         dump = dump.replacen("; y", &format!(",{},(999); y", invalid.join(",")), 1);
         let entries = [100].into_iter().collect();
@@ -7121,9 +7153,14 @@ mod tests {
             ("invalid_numeric", 13),
             ("unsupported_text_template", 77),
             ("unsupported_chat_type", 2),
+            ("unsupported_target", 10),
+            ("unsupported_triggered_cast", 2),
+            ("unsupported_force_cast", 4),
         ] {
             assert_eq!(plan.dropped(reason, value), 1, "{reason}/{value}");
         }
+        assert_eq!(plan.event_counts(99), (1, 0, 1, 0));
+        assert_eq!(plan.action_counts(99), (3, 0, 3, 0));
     }
 
     #[test]
