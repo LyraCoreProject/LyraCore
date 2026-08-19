@@ -445,7 +445,9 @@ pub(crate) trait PursuitSink {
     /// restores melee posture; `None` leaves the creature's existing caster behavior unchanged.
     fn authored_ranged_posture(&self, guid: u64) -> Option<(f32, f32)>;
     /// The longest range this creature can bring an offensive spell to bear from; 0 for anything
-    /// that has to close to melee.
+    /// that has to close to melee. A creature whose casting an imported script has taken over reads
+    /// 0 too: its flat rotation is off, so holding at that rotation's range would leave it standing
+    /// there casting nothing.
     fn caster_hold_range(&self, guid: u64) -> f32;
     /// STOP the creature at `at` and turn it to `orientation`, in ONE carrier row and one entity
     /// write. A spline is the only thing a client derives creature facing from, so the stop is a
@@ -1266,6 +1268,10 @@ const MELEE_STOP_SHORT_YD: f32 = 4.0;
 /// not yo-yo it across the boundary.
 const CASTER_HOLD_MARGIN: f32 = 0.9;
 
+/// How close (yd², so half a yard) counts as STANDING ON an authored hold point. Inside it the
+/// creature has arrived and turns to its victim instead of re-throwing a leg it could not complete.
+const RANGED_HOLD_ARRIVED_SQ: f32 = 0.25;
+
 /// The least bearing drift (radians, ~17°) that is worth turning for. Below it the correction would
 /// be imperceptible and would re-throw a facing packet every firing; the epsilon is what makes "have
 /// I already turned to face it" idempotent firing over firing.
@@ -1291,9 +1297,14 @@ fn angle_diff(from: f32, to: f32) -> f32 {
 /// sits; an offensive caster holds at spell range instead of face-tanking; and a creature that
 /// reaches a victim standing inside melee reach stops and turns to face it.
 ///
-/// Melee reach is read BEFORE the lead, and the victim's live translation flags decide which of the
-/// two applies, so a player who released the movement key inside reach is turned to rather than led
-/// eight yards past — the sideways overshoot of running to their flank.
+/// Melee reach is read BEFORE the lead AND before the caster hold, and the victim's live translation
+/// flags decide which of the two applies, so a player who released the movement key inside reach is
+/// turned to rather than led eight yards past — the sideways overshoot of running to their flank.
+/// A caster is no exception: facing is also what halts a leg, so one that skipped the reach check
+/// would slide through a victim that stopped on top of it and never turn.
+///
+/// An authored ranged posture outranks both. It is the script's own stance, so it replaces the melee
+/// approach outright and the caster hold never applies while one is set.
 ///
 /// The engagements are the candidate set, so this phase ignores the active-cell sweep — a player
 /// cannot freeze a fight by dragging it away — and stays O(fights running). A routing or
@@ -1317,54 +1328,42 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         if gap_sq > CHASE_LEASH_SQ {
             continue;
         }
-        if let Some((distance, angle)) = w.authored_ranged_posture(c.guid) {
-            if distance > 0.0 && w.line_of_sight(c.guid, c.victim_at) {
-                let aim = ranged_hold_point(&c, distance, angle);
-                let aim_gap_sq = dist_sq(c.at, aim);
-                if aim_gap_sq <= 0.25 {
-                    continue;
-                }
-                let aim_gap = aim_gap_sq.sqrt();
-                let direction = ((aim.x - c.at.x) / aim_gap, (aim.y - c.at.y) / aim_gap);
-                let step = w.navigate(c.guid, (aim.x, aim.y), aim_gap);
-                if step == (c.at.x, c.at.y)
-                    || !needs_new_leg(c.leg.as_ref(), direction, Some((aim.x, aim.y)))
-                {
-                    continue;
-                }
-                let run = w.speed_of(c.guid, Gait::Run);
-                let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, run) else {
-                    continue;
-                };
-                w.commit_leg(
-                    c.guid,
-                    Leg {
-                        to: (x, y),
-                        z_fallback: aim.z,
-                        dur_ms,
-                        gait: Gait::Run,
-                        hold_until_landed: false,
-                    },
-                    tick.now_ms,
-                );
-                continue;
+        let posture = w.authored_ranged_posture(c.guid);
+        // An authored ranged posture REPLACES the whole melee approach, so it is read first and the
+        // caster hold below is skipped whenever one is set — a posture of zero distance is the
+        // script asking for the plain melee chase back.
+        if let Some(aim) = posture.and_then(|(distance, angle)| {
+            (distance > 0.0 && w.line_of_sight(c.guid, c.victim_at))
+                .then(|| ranged_hold_point(&c, distance, angle))
+        }) {
+            if dist_sq(c.at, aim) <= RANGED_HOLD_ARRIVED_SQ {
+                // Standing on the hold point is an arrival like reaching melee: the creature turns
+                // to what it is shooting at, and a lead still carrying it is halted there.
+                stand_and_face(w, tick, &c);
+            } else {
+                commit_chase_leg(w, &c, aim, Some((aim.x, aim.y)), tick.now_ms);
             }
-        } else {
-            // An offensive caster stands and casts while its victim is in spell range and in plain
-            // sight. A wall-blocked caster closes instead, matching the cast phase's verdict.
-            let hold = w.caster_hold_range(c.guid) * CASTER_HOLD_MARGIN;
-            if hold > 0.0 && gap_sq <= hold * hold && w.line_of_sight(c.guid, c.victim_at) {
-                continue;
-            }
+            continue;
         }
-        // In melee posture, reach precedes the victim's live translation state. A creature plants
-        // into attack stance for a victim that is standing and runs a kiter down continuously. The
-        // swing pass hits on the move, which removes the run/attack-stance/run flicker of chasing.
-        // someone who never stands still.
+        // Melee reach FIRST, then the victim's live translation state: a creature plants into attack
+        // stance for a victim that is standing, and runs a kiter down continuously — the swing pass
+        // hits on the move — which is what removes the run/attack-stance/run flicker of chasing
+        // someone who never stands still. It precedes the caster hold because facing is what also
+        // HALTS an in-flight leg: a caster whose victim stopped on top of it would otherwise never
+        // turn, and its lead would slide it past the player.
         let victim_moving = crate::combat::is_translating(c.victim_movement_flags);
         if gap_sq <= CHASE_MELEE_SQ && !victim_moving {
             stand_and_face(w, tick, &c);
             continue;
+        }
+        // An offensive caster stands and casts (the cast phase already fired this firing) while its
+        // victim is inside spell range and in plain sight. A wall-blocked one closes instead, which
+        // is the verdict the cast phase reached about that same line.
+        if posture.is_none() {
+            let hold = w.caster_hold_range(c.guid) * CASTER_HOLD_MARGIN;
+            if hold > 0.0 && gap_sq <= hold * hold && w.line_of_sight(c.guid, c.victim_at) {
+                continue;
+            }
         }
         let gap = gap_sq.sqrt();
         let dir = (
@@ -1378,31 +1377,57 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         } else {
             (gap - MELEE_STOP_SHORT_YD).max(0.0)
         };
-        let aim = (c.at.x + dir.0 * leg_len, c.at.y + dir.1 * leg_len);
+        let aim = Point {
+            x: c.at.x + dir.0 * leg_len,
+            y: c.at.y + dir.1 * leg_len,
+            z: c.victim_at.z,
+        };
         // For a standing victim `aim` IS the stop point, so a leg still in flight past it is a lead
         // thrown at the victim's older, moving position and has to be replaced there.
-        let stop_at = (!victim_moving).then_some(aim);
-        let step = w.navigate(c.guid, aim, leg_len);
-        if step == (c.at.x, c.at.y) || !needs_new_leg(c.leg.as_ref(), dir, stop_at) {
-            continue;
-        }
-        let run = w.speed_of(c.guid, Gait::Run);
-        let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, run) else {
-            continue; // nothing to close — the client rejects a zero-length leg
-        };
-        // The victim's height is only the FALLBACK: the writer snaps the landing point to the ground
-        // under it, which matters on a slope and where the point is a detour corner nowhere near the
-        // victim.
-        let leg = Leg {
+        let stop_at = (!victim_moving).then_some((aim.x, aim.y));
+        commit_chase_leg(w, &c, aim, stop_at, tick.now_ms);
+    }
+    visited
+}
+
+/// Throw ONE run leg at `aim` — the melee approach and the authored ranged posture both land here,
+/// so a chaser gets at most one leg per firing whichever posture it is in. Nothing is written when
+/// navigation refuses to move at all, when the leg in flight is still good enough
+/// (`needs_new_leg`), or when the step collapses to zero length, which the client rejects.
+///
+/// `aim.z` is only the FALLBACK height: the leg writer snaps the landing point to the ground under
+/// it, which matters on a slope and where the point is a detour corner nowhere near the victim.
+fn commit_chase_leg<W: MotionSink + IdleSink>(
+    w: &mut W,
+    c: &Pursuit,
+    aim: Point,
+    stop_at: Option<(f32, f32)>,
+    now_ms: u32,
+) {
+    let leg_len = dist_sq(c.at, aim).sqrt();
+    if leg_len <= 0.0 {
+        return;
+    }
+    let dir = ((aim.x - c.at.x) / leg_len, (aim.y - c.at.y) / leg_len);
+    let step = w.navigate(c.guid, (aim.x, aim.y), leg_len);
+    if step == (c.at.x, c.at.y) || !needs_new_leg(c.leg.as_ref(), dir, stop_at) {
+        return;
+    }
+    let run = w.speed_of(c.guid, Gait::Run);
+    let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, run) else {
+        return;
+    };
+    w.commit_leg(
+        c.guid,
+        Leg {
             to: (x, y),
-            z_fallback: c.victim_at.z,
+            z_fallback: aim.z,
             dur_ms,
             gait: Gait::Run,
             hold_until_landed: false,
-        };
-        w.commit_leg(c.guid, leg, tick.now_ms);
-    }
-    visited
+        },
+        now_ms,
+    );
 }
 
 fn ranged_hold_point(pursuit: &Pursuit, distance: f32, angle: f32) -> Point {
