@@ -1046,3 +1046,120 @@ fn supported_texts(
     }
     valid && ids.iter().all(|id| broadcasts.contains_key(id))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `EVENTAI_*` out of the world-import verifier's supported-native-values manifest, as the set of
+    /// numbers a `0|1|2`-style shell alternation lists.
+    fn verifier_values(key: &str) -> Vec<u32> {
+        verifier_manifest(key)
+            .split('|')
+            .map(|value| value.parse().expect("a numeric native value"))
+            .collect()
+    }
+
+    fn verifier_mask(key: &str) -> u32 {
+        verifier_manifest(key).parse().expect("a numeric mask")
+    }
+
+    fn verifier_manifest(key: &str) -> String {
+        let script = include_str!("../scripts/import-world.sh");
+        let manifest = script
+            .split_once("# SUPPORTED NATIVE VALUES BEGIN")
+            .and_then(|(_, rest)| rest.split_once("# SUPPORTED NATIVE VALUES END"))
+            .expect("the verifier's supported-native-values manifest")
+            .0;
+        manifest
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(&format!("{key}=")))
+            .unwrap_or_else(|| panic!("{key} is missing from the verifier manifest"))
+            .trim_matches('\'')
+            .to_string()
+    }
+
+    /// The world import verifies the loaded catalogue with its own allowlist of native values, in
+    /// shell. A value this importer emits that the verifier then reports as unsupported fails only
+    /// at import time, against real data, long after the mapping was written.
+    #[test]
+    fn eventai_verifier_accepts_every_native_value_the_importer_emits() {
+        for (key, emitted) in [
+            (
+                "EVENTAI_EVENT_TYPES",
+                vec![
+                    NATIVE_EVENT_ON_AGGRO,
+                    NATIVE_EVENT_TIMED_IN_COMBAT,
+                    NATIVE_EVENT_CREATURE_HP,
+                    NATIVE_EVENT_ON_DEATH,
+                    NATIVE_EVENT_TARGET_RANGE,
+                    NATIVE_EVENT_ON_SPAWN,
+                    NATIVE_EVENT_FRIENDLY_HP_DEFICIT,
+                ],
+            ),
+            (
+                "EVENTAI_ACTION_TYPES",
+                vec![
+                    NATIVE_ACTION_SAY,
+                    NATIVE_ACTION_CAST,
+                    NATIVE_ACTION_EMOTE,
+                    NATIVE_ACTION_FLEE_FOR_ASSIST,
+                    NATIVE_ACTION_CALL_FOR_HELP,
+                    NATIVE_ACTION_SET_PHASE,
+                    NATIVE_ACTION_SUMMON,
+                    NATIVE_ACTION_SET_RANGED_POSTURE,
+                ],
+            ),
+            (
+                "EVENTAI_TARGET_POLICIES",
+                vec![
+                    NATIVE_TARGET_CURRENT,
+                    NATIVE_TARGET_SELF,
+                    NATIVE_TARGET_SECOND_THREAT,
+                    NATIVE_TARGET_RANDOM_THREAT,
+                    NATIVE_TARGET_INVOKER,
+                    NATIVE_TARGET_EVENT,
+                    NATIVE_TARGET_RANDOM_THREAT_PLAYER,
+                    NATIVE_TARGET_NEAREST_AREA,
+                    NATIVE_TARGET_FARTHEST_HOSTILE,
+                ],
+            ),
+            (
+                "EVENTAI_REPEAT_POLICIES",
+                vec![NATIVE_REPEAT_ONCE, NATIVE_REPEAT],
+            ),
+        ] {
+            let accepted = verifier_values(key);
+            for value in emitted {
+                assert!(
+                    accepted.contains(&u32::from(value)),
+                    "{key} rejects native value {value} the importer emits: {accepted:?}"
+                );
+            }
+        }
+
+        let source_flags = NATIVE_SOURCE_COMBAT_ACTION | NATIVE_SOURCE_RANDOM_ACTION;
+        assert_eq!(
+            source_flags & !verifier_mask("EVENTAI_SOURCE_FLAGS_MASK"),
+            0,
+            "the verifier rejects a source policy the importer emits"
+        );
+        let cast_options = NATIVE_CAST_INTERRUPT_PREVIOUS
+            | NATIVE_CAST_AURA_ABSENT
+            | NATIVE_CAST_PLAYER_ONLY
+            | NATIVE_CAST_TARGET_CASTING;
+        assert_eq!(
+            cast_options & !verifier_mask("EVENTAI_CAST_OPTIONS_MASK"),
+            0,
+            "the verifier rejects a cast option the importer emits"
+        );
+        // The Module's supported cast options also carry triggered casts. This importer drops them,
+        // but a reserved fixture may load one, and the verifier reads the durable table.
+        const MODULE_CAST_TRIGGERED: u32 = 1 << 1;
+        assert_eq!(
+            verifier_mask("EVENTAI_CAST_OPTIONS_MASK") & MODULE_CAST_TRIGGERED,
+            MODULE_CAST_TRIGGERED,
+            "the verifier rejects a triggered cast the Module supports"
+        );
+    }
+}

@@ -295,4 +295,82 @@ chk_eq "complete taxi fixture satisfies every anchor" 0 "$(ta success_fail)"
 chk_eq "taxi verification still runs every anchor after one miss" 7 "$(ta missing_live_checked)"
 chk_eq "missing live flight master fails verification" 1 "$(ta missing_live_fail)"
 
+# verify_eventai_catalogue pulls each column set ONCE and does the per-rule grouping and the
+# reference checks locally, so its cost does not grow with the rule count. Its first shape spent
+# ~14 `spacetime sql` subprocesses per source rule. Nothing else exercises that awk offline, so pin
+# both directions here against a pasted `spacetime sql` table: a catalogue that fully resolves, and
+# one carrying each defect the four counters exist to name.
+echo "[smoke] import-world.sh EventAI catalogue verification:"
+eventai_out="$(
+  bash -c '
+    set -uo pipefail
+    eval "$(sed -n "/# SQL TABLE PULL BEGIN/,/# SQL TABLE PULL END/p" importer/scripts/import-world.sh)"
+    eval "$(sed -n "/# EVENTAI VERIFY BEGIN/,/# EVENTAI VERIFY END/p" importer/scripts/import-world.sh)"
+    scratch="$(mktemp -d)"
+    trap "rm -rf $scratch" EXIT
+    queries="$scratch/queries"; catalogue="$scratch/catalogue"; checks="$scratch/checks"
+    sql_note_failure() { :; }
+    sql_check_abort() { :; }
+    chk() { printf "%s=%s\n" "$1" "${3:-0}" >>"$checks"; }
+    q() {
+      printf "%s\n" "$1" >>"$queries"
+      case "$1" in
+        *"FROM game_creature_ai_event"*) cat "$catalogue" ;;
+        # every referenced entry, guid, spell, text and summon location the tables below name
+        *) printf " id \n----\n 42 \n 100 \n 200 \n 700 \n 900 \n 4611686018427387905 \n" ;;
+      esac
+    }
+    header() {
+      printf " source_rule_id | action_order | event_type | action_type | target_policy"
+      printf " | repeat_policy | source_flags | cast_options | chance_pct | allowed_phase_mask"
+      printf " | creature_entry | creature_guid | spell_id | action_param_1 | action_param_2"
+      printf " | action_param_3 | event_param_1 | event_param_2 | event_param_3 | event_param_4"
+      printf " | event_param_5 | event_param_6\n"
+      printf -- "----------------+--------------+------------+------------\n"
+    }
+
+    # 500 source rules of 3 action rows: say(text 900), triggered cast(spell 42, cast_options bit 1, a
+    # cast option the Module supports), summon(template 200, location 700). Plus one guid-scoped
+    # rule, so the spawn reference is exercised too.
+    { header; awk "BEGIN {
+        for (rule = 1; rule <= 500; rule++) {
+          printf \" %d | 0 | 1 | 0 | 1 | 1 | 1 | 0 | 100 | 4294967295 | 100 | 0 | 0 | 900 | 0 | 0 | 1000 | 2000 | 3000 | 4000 | 0 | 0\n\", rule
+          printf \" %d | 1 | 1 | 2 | 0 | 1 | 1 | 2 | 100 | 4294967295 | 100 | 0 | 42 | 42 | 0 | 0 | 1000 | 2000 | 3000 | 4000 | 0 | 0\n\", rule
+          printf \" %d | 2 | 1 | 7 | 1 | 1 | 1 | 0 | 100 | 4294967295 | 100 | 0 | 0 | 200 | 0 | 700 | 1000 | 2000 | 3000 | 4000 | 0 | 0\n\", rule
+        }
+        printf \" 501 | 0 | 1 | 0 | 1 | 1 | 1 | 0 | 100 | 4294967295 | 0 | 4611686018427387905 | 0 | 900 | 0 | 0 | 1000 | 2000 | 3000 | 4000 | 0 | 0\n\"
+      }"; } >"$catalogue"
+    : >"$queries"; : >"$checks"; fail=0
+    verdict="$(verify_eventai_catalogue)"
+    echo "healthy_verdict=${verdict#  }"
+    echo "healthy_action_rows=$(sed -n "s/^EventAI source rule actions=//p" "$checks")"
+    echo "healthy_queries=$(wc -l <"$queries" | tr -d " ")"
+
+    # rule 10: two rows share action_order 0 and disagree on chance_pct. rule 11: an unsupported value
+    # in each of the six native columns, and an entry and a spell no catalogue row answers. rules 12
+    # and 13: a dangling broadcast text, summon template, and summon location.
+    { header
+      printf " 10 | 0 | 1 | 2 | 0 | 1 | 1 | 2 | 100 | 4294967295 | 100 | 0 | 42 | 42 | 0 | 0 | 1000 | 2000 | 3000 | 4000 | 0 | 0\n"
+      printf " 10 | 0 | 1 | 2 | 0 | 1 | 1 | 2 | 55 | 4294967295 | 100 | 0 | 42 | 42 | 0 | 0 | 1000 | 2000 | 3000 | 4000 | 0 | 0\n"
+      printf " 11 | 0 | 9 | 99 | 44 | 7 | 8 | 64 | 100 | 4294967295 | 999 | 0 | 777 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0\n"
+      printf " 12 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 100 | 4294967295 | 100 | 0 | 0 | 555 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0\n"
+      printf " 13 | 0 | 0 | 7 | 1 | 0 | 0 | 0 | 100 | 4294967295 | 100 | 0 | 0 | 888 | 0 | 666 | 0 | 0 | 0 | 0 | 0 | 0\n"
+    } >"$catalogue"
+    : >"$queries"; : >"$checks"; fail=0
+    verdict="$(verify_eventai_catalogue)"
+    echo "broken_verdict=${verdict#  }"
+    echo "broken_queries=$(wc -l <"$queries" | tr -d " ")"
+  '
+)"
+ea() { echo "$eventai_out" | grep "^$1=" | cut -d= -f2-; }
+chk_eq "a resolving catalogue reports ok" \
+  "ok    EventAI enabled types, grouping, subjects, spells, texts, and summon locations resolve" \
+  "$(ea healthy_verdict)"
+chk_eq "every action row of every source rule is counted" 1501 "$(ea healthy_action_rows)"
+chk_eq "1501 action rows still cost six queries" 6 "$(ea healthy_queries)"
+chk_eq "a broken catalogue names every counter it tripped" \
+  "FAIL  EventAI linkage: duplicate-action-orders=1 metadata-mismatches=1 missing-references=1 unsupported-native-values=6" \
+  "$(ea broken_verdict)"
+chk_eq "a five-row catalogue costs the same six queries" 6 "$(ea broken_queries)"
+
 if [ "$fail" = 0 ]; then echo "[smoke] OK — every consumed manifest key is defined"; else echo "[smoke] FAIL"; exit 1; fi
