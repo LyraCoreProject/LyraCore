@@ -59,6 +59,7 @@ pub(crate) fn xprate_bp(ctx: &ReducerContext) -> u32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TeleSpot {
     Goldshire,
+    Stormwind,
     Northshire,
     Coldridge,
     Kharanos,
@@ -80,6 +81,7 @@ impl TeleSpot {
     fn parse(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "goldshire" => Some(Self::Goldshire),
+            "stormwind" => Some(Self::Stormwind),
             "northshire" => Some(Self::Northshire),
             "coldridge" => Some(Self::Coldridge),
             "kharanos" => Some(Self::Kharanos),
@@ -101,6 +103,7 @@ impl TeleSpot {
         match self {
             Self::Northshire => (0, -8949.95, -132.493, 83.5312, 0.0),
             Self::Goldshire => (0, -9339.4561, 171.4084, 61.5618, 0.0),
+            Self::Stormwind => (0, -9115.0, 423.0, 96.0, 0.0),
             Self::Coldridge => (0, -6240.32, 331.033, 382.758, 0.0),
             Self::Kharanos => (0, -5680.0444, -518.9205, 396.2743, 0.0),
             Self::Ironforge => (0, -5049.4502, -809.6970, 495.1270, 0.0),
@@ -551,6 +554,11 @@ mod tests {
                 (0, -9339.4561, 171.4084, 61.5618, 0.0),
             ),
             (
+                "stormwind",
+                TeleSpot::Stormwind,
+                (0, -9115.0, 423.0, 96.0, 0.0),
+            ),
+            (
                 "coldridge",
                 TeleSpot::Coldridge,
                 (0, -6240.32, 331.033, 382.758, 0.0),
@@ -678,6 +686,7 @@ mod tests {
     fn eastern_kingdoms_destinations_use_the_same_map_path() {
         for spot in [
             TeleSpot::Goldshire,
+            TeleSpot::Stormwind,
             TeleSpot::Northshire,
             TeleSpot::Coldridge,
             TeleSpot::Kharanos,
