@@ -303,6 +303,22 @@ Notes that will save you a round trip:
 - Any name works, not just `TEST`: `./lyracore account create ALICE` creates a fresh account (with no
   characters — make one on the client's character-creation screen).
 
+### Alpha Test Tools enrollment
+
+New Accounts receive Alpha Test Tools by default. These commands inspect or change that setting and
+grant or revoke Alpha Test Tools for an existing Account:
+
+```bash
+./lyracore account alpha-test-tools enrollment lyracore-realm
+./lyracore account alpha-test-tools enrollment lyracore-realm false
+./lyracore account alpha-test-tools grant lyracore-realm TEST
+./lyracore account alpha-test-tools revoke lyracore-realm TEST
+```
+
+Use `lyracore` instead of `lyracore-realm` after `dev up --single`. The commands use the coordinator
+credential created or selected by `dev up`. They refuse a missing Realm-core target, invalid action,
+or missing Account name before changing state.
+
 ### Optional: prove it over the wire before touching a client
 
 ```bash
@@ -502,6 +518,7 @@ order, backups). None of that is what `lyracore dev up` gives you.
 ./lyracore config                    # show the remembered client-data path (unset by default)
 ./lyracore config set client-data PATH   # remember one, so `import` stops asking
 ./lyracore character gm NAME true    # flip GM commands on for a character (false to revoke)
+./lyracore account alpha-test-tools enrollment lyracore-realm   # inspect automatic enrollment
 ./lyracore update                    # pull the latest LyraCore and restart the stack (see below)
 ```
 

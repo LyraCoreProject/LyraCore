@@ -50,6 +50,8 @@ lyracore dev logs [spacetime|gateway]
 lyracore dev smoke
 lyracore dev down [--forget]
 lyracore account create USER [--password-stdin]
+lyracore account alpha-test-tools enrollment REALM_CORE [true|false]
+lyracore account alpha-test-tools grant|revoke REALM_CORE ACCOUNT
 lyracore import [--accept] [--client-data PATH]
 lyracore config
 lyracore config set client-data PATH
@@ -69,6 +71,7 @@ lyracore update
 | `dev smoke` | the pinned wire harness's generic login smoke against the running fixture |
 | `dev down` | stop only the processes this CLI started, and only if the PID is still ours |
 | `account create` | provision an account's SRP6 credentials without a password in `argv` |
+| `account alpha-test-tools` | read or set automatic enrollment, or grant or revoke one Account |
 | `import` | replace the seed fixture with the real world — consent notice, then the ETL on every database the fixture populates |
 | `config` | show, or set, the client-data path `import` and `doctor` remember |
 | `character gm` | flip GM commands on or off for a character, on whichever world shard has it |
@@ -420,6 +423,27 @@ unset — per `gateway/src/config.rs`, an unconfigured shard map collapses every
 `LYRACORE_DATABASE`, so the result is byte-identical to a single-database build. Reach for it when
 you are debugging something that is not about sharding, when RAM is tight (four databases cost more
 than one), or to establish whether a bug is a sharding bug at all.
+
+## `account alpha-test-tools` controls
+
+```bash
+./lyracore account alpha-test-tools enrollment lyracore-realm
+./lyracore account alpha-test-tools enrollment lyracore-realm true
+./lyracore account alpha-test-tools enrollment lyracore-realm false
+./lyracore account alpha-test-tools grant lyracore-realm ACCOUNT
+./lyracore account alpha-test-tools revoke lyracore-realm ACCOUNT
+```
+
+The first command reads whether genuinely new Accounts receive Alpha Test Tools. Adding `true` or
+`false` enables or disables that automatic enrollment. It does not change existing Accounts.
+`grant` and `revoke` change one existing Account, with the name normalized to uppercase as it is
+during provisioning.
+
+Every form requires the Realm-core database name. Use `lyracore-realm` for the default sharded
+fixture and `lyracore` under `dev up --single`. The CLI refuses a missing target, invalid boolean or
+action, and a missing Account name before it sends a request. It authenticates the read and every
+Operator-only change with the coordinator credential that `dev up` resolved. The credential stays
+out of arguments, rendered commands, and output.
 
 ## `character gm` — grant or revoke GM commands
 
