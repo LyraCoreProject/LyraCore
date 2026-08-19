@@ -5,14 +5,29 @@
 use super::*;
 use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::ROUT_DURATION_MS;
+use crate::creatures::eventai::{
+    self, CreatureAiEvent, CreatureState, Diagnostic, EventAiRequest, EventAiWorld, EventContext,
+    EventKind, RuleAction, RuleState,
+};
 use crate::creatures::{chase_step, rout_window_open};
 use lyracore_shared::spatial;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 
+#[path = "harness/eventai_combat.rs"]
+mod eventai_combat;
+#[path = "harness/eventai_edges.rs"]
+mod eventai_edges;
+#[path = "harness/eventai_mobility.rs"]
+mod eventai_mobility;
+#[path = "harness/eventai_tracer.rs"]
+mod eventai_tracer;
+
 /// A creature's authoritative state, as the cycle writes it.
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct XCreature {
+    /// The static creature template entry.
+    entry: u32,
     at: Point,
     grid: (i32, i32),
     cell: i64,
@@ -158,6 +173,15 @@ struct Scenario {
     seen_by_sweep: RefCell<Vec<(u64, Point)>>,
     maintenance_runs: Cell<u32>,
     package_runs: Cell<u32>,
+    /// Authored EventAI action rows, mirroring the Module-only static table.
+    eventai_rows: RefCell<Vec<CreatureAiEvent>>,
+    /// Imported broadcast text, keyed by its stable catalogue id.
+    eventai_text: RefCell<HashMap<u32, (String, u8, u32)>>,
+    eventai_creature_state: RefCell<HashMap<u64, CreatureState>>,
+    eventai_rule_state: RefCell<HashMap<(u64, u64), RuleState>>,
+    /// Ordered text effects emitted by authored rules.
+    eventai_speech: RefCell<Vec<(u64, u8, String)>>,
+    eventai_diagnostics: RefCell<Vec<Diagnostic>>,
 }
 
 impl Scenario {
@@ -174,6 +198,7 @@ impl Scenario {
         self.creatures.borrow_mut().insert(
             guid,
             XCreature {
+                entry: guid as u32,
                 at,
                 grid: (gx, gy),
                 cell: spatial::grid_cell_id(gx, gy),
@@ -206,6 +231,50 @@ impl Scenario {
 
     fn level(self, guid: u64, level: u32) -> Self {
         self.tweak(guid, |c| c.level = level)
+    }
+
+    fn entry(self, guid: u64, entry: u32) -> Self {
+        self.tweak(guid, |c| c.entry = entry)
+    }
+
+    fn eventai_row(self, row: CreatureAiEvent) -> Self {
+        self.eventai_rows.borrow_mut().push(row);
+        self
+    }
+
+    fn eventai_broadcast(self, id: u32, text: &str, chat_type: u8) -> Self {
+        self.eventai_text
+            .borrow_mut()
+            .insert(id, (text.to_string(), chat_type, 0));
+        self
+    }
+
+    fn eventai_speech(&self) -> Vec<(u64, u8, String)> {
+        self.eventai_speech.borrow().clone()
+    }
+
+    fn eventai_diagnostics(&self) -> Vec<Diagnostic> {
+        self.eventai_diagnostics.borrow().clone()
+    }
+
+    fn eventai_state(&self, guid: u64, rule_id: u64) -> Option<RuleState> {
+        self.eventai_rule_state
+            .borrow()
+            .get(&(guid, rule_id))
+            .copied()
+    }
+
+    fn remove_eventai_rule(&self, rule_id: u64) {
+        self.eventai_rows
+            .borrow_mut()
+            .retain(|row| eventai::effective_rule_id(row) != rule_id);
+    }
+
+    fn remove_creature(&self, guid: u64) {
+        self.creatures.borrow_mut().remove(&guid);
+        self.fights
+            .borrow_mut()
+            .retain(|fight| fight.attacker != guid);
     }
 
     /// The creature's template carries a hand-tuned aggro range instead of the level-scaled one.
@@ -864,8 +933,146 @@ impl CreatureWorld for Scenario {
         self.maintenance_runs.set(self.maintenance_runs.get() + 1);
         Vec::new()
     }
+    fn evaluate_eventai(&mut self, request: EventAiRequest<'_>) -> u64 {
+        eventai::evaluate(self, request)
+    }
     fn run_package_passes(&mut self) {
         self.package_runs.set(self.package_runs.get() + 1);
+    }
+}
+
+impl EventAiWorld for Scenario {
+    fn eventai_contexts(&self, request: &EventAiRequest<'_>) -> Vec<EventContext> {
+        match request {
+            EventAiRequest::Edge(context) => vec![*context],
+            // Engaged EventAI conditions extend this fight-derived context list.
+            EventAiRequest::Engaged(scope) => self
+                .fights
+                .borrow()
+                .iter()
+                .filter_map(|fight| {
+                    let creature = self.creatures.borrow().get(&fight.attacker).copied()?;
+                    scope.covers(creature.instance_id).then_some(EventContext {
+                        kind: EventKind::TimedInCombat,
+                        creature_guid: fight.attacker,
+                        invoker_guid: Some(fight.victim),
+                        event_target_guid: Some(fight.victim),
+                        current_target_guid: Some(fight.victim),
+                        assisted: false,
+                        now_ms: self.now_micros.get() / 1000,
+                    })
+                })
+                .collect(),
+        }
+    }
+
+    fn eventai_rows(&self, creature_guid: u64) -> Vec<CreatureAiEvent> {
+        let Some(creature) = self.creatures.borrow().get(&creature_guid).copied() else {
+            return Vec::new();
+        };
+        self.eventai_rows
+            .borrow()
+            .iter()
+            .filter(|row| {
+                (row.creature_guid == 0 && row.creature_entry == creature.entry)
+                    || (row.creature_entry == 0 && row.creature_guid == creature_guid)
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn eventai_creature_exists(&self, creature_guid: u64) -> bool {
+        self.creatures.borrow().contains_key(&creature_guid)
+    }
+
+    fn eventai_creature_state(&self, creature_guid: u64) -> CreatureState {
+        self.eventai_creature_state
+            .borrow()
+            .get(&creature_guid)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn set_eventai_phase(&mut self, creature_guid: u64, phase: u8) {
+        self.eventai_creature_state
+            .borrow_mut()
+            .entry(creature_guid)
+            .or_default()
+            .phase = phase;
+    }
+
+    fn eventai_rule_state(&self, creature_guid: u64, rule_id: u64) -> Option<RuleState> {
+        self.eventai_rule_state
+            .borrow()
+            .get(&(creature_guid, rule_id))
+            .copied()
+    }
+
+    fn put_eventai_rule_state(&mut self, creature_guid: u64, rule_id: u64, state: RuleState) {
+        self.eventai_rule_state
+            .borrow_mut()
+            .insert((creature_guid, rule_id), state);
+    }
+
+    fn delete_eventai_rule_state(&mut self, creature_guid: u64, rule_id: u64) {
+        self.eventai_rule_state
+            .borrow_mut()
+            .remove(&(creature_guid, rule_id));
+    }
+
+    fn reap_eventai_rule_state(&mut self) {
+        let valid_rules: HashSet<u64> = self
+            .eventai_rows
+            .borrow()
+            .iter()
+            .map(eventai::effective_rule_id)
+            .collect();
+        let creatures = self.creatures.borrow();
+        self.eventai_rule_state
+            .borrow_mut()
+            .retain(|(creature_guid, rule_id), _| {
+                creatures.contains_key(creature_guid) && valid_rules.contains(rule_id)
+            });
+    }
+
+    fn eventai_roll(&self) -> u32 {
+        self.rolls
+            .borrow_mut()
+            .pop_front()
+            .expect("the scenario ran out of EventAI random rolls")
+    }
+
+    fn eventai_speak(&mut self, context: &EventContext, action: &RuleAction, chat_type: u8) {
+        let (message, chat_type, _) = self
+            .eventai_text
+            .borrow()
+            .get(&action.params[0])
+            .cloned()
+            .unwrap_or_else(|| (action.legacy_text.clone(), chat_type, 0));
+        if !message.is_empty() {
+            self.eventai_speech
+                .borrow_mut()
+                .push((context.creature_guid, chat_type, message));
+        }
+    }
+
+    fn eventai_cast(
+        &mut self,
+        context: &EventContext,
+        action: &RuleAction,
+        target_guid: u64,
+    ) -> eventai::ActionResult {
+        if self.not_ready.borrow().contains(&action.params[0]) {
+            return eventai::ActionResult::Refused;
+        }
+        self.casts
+            .borrow_mut()
+            .push((context.creature_guid, action.params[0], target_guid));
+        eventai::ActionResult::Applied
+    }
+
+    fn eventai_diagnostic(&mut self, diagnostic: Diagnostic) {
+        self.eventai_diagnostics.borrow_mut().push(diagnostic);
     }
 }
 
@@ -1033,6 +1240,16 @@ impl EngageSink for Scenario {
             instance_id,
             player_never_swung: false,
         });
+        let request = EventAiRequest::Edge(EventContext {
+            kind: EventKind::OnAggro,
+            creature_guid: creature,
+            invoker_guid: Some(victim),
+            event_target_guid: Some(victim),
+            current_target_guid: Some(victim),
+            assisted: pull == Pull::Assisted,
+            now_ms: self.now_micros.get() / 1000,
+        });
+        eventai::evaluate(self, request);
     }
     /// The instance is the ATTACKER's, read live — the world reads it off the attacker's own entity
     /// row, so a scenario that puts a creature in an instance puts its fight there too.
@@ -1069,6 +1286,7 @@ impl EngageSink for Scenario {
             .collect()
     }
     fn leave_combat(&mut self, guid: u64) {
+        // EventAI edge resets extend here with the production combat-exit boundary.
         self.unflagged.borrow_mut().push(guid);
         self.combat_flags.borrow_mut().remove(&guid);
     }
@@ -1156,6 +1374,7 @@ impl CastSink for Scenario {
             .collect()
     }
     fn rotation_of(&self, guid: u64) -> Vec<SpellOption> {
+        // EventAI cast precedence extends here with the production rotation read.
         self.rotations
             .borrow()
             .get(&guid)
@@ -1250,6 +1469,7 @@ impl PursuitSink for Scenario {
             .collect()
     }
     fn caster_hold_range(&self, guid: u64) -> f32 {
+        // EventAI ranged posture extends here with the production chase read.
         self.hold_ranges.borrow().get(&guid).copied().unwrap_or(0.0)
     }
     /// The stop AND the turn, as one carrier row: the creature is planted at `at` looking at
@@ -4044,6 +4264,7 @@ fn discovery_stays_on_the_narrow_candidate_universes() {
                 ("combat_drop*", 0),
                 ("rout", 1),
                 ("fear", 0),
+                ("eventai", 0),
             ]
         ),
         "the engaged phases must cost one row per FIGHT and the idle phases one per AWAKE \
@@ -4417,6 +4638,8 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "(\"decay*\", tick::pass_decay(self.ctx) as u64), (\"respawn*\", ",
                 "tick::pass_respawn(self.ctx) as u64), ( \"go_respawn*\", ",
                 "tick::pass_gameobject_respawn(self.ctx) as u64, ), ] } fn ",
+                "evaluate_eventai(&mut self, request: EventAiRequest<'_>) -> u64 { ",
+                "eventai::evaluate_context(self.ctx, request) } fn ",
                 "run_package_passes(&mut self) { ",
                 "crate::hooks::run_package_tick_passes(self.ctx); } }",
             ),

@@ -20,6 +20,7 @@ use super::{
 use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::TickScope;
 use crate::creatures::cast_condition;
+use crate::creatures::eventai::{self, EventAiRequest};
 use crate::creatures::pet;
 use crate::creatures::tick::{self, CreatureSpline, TickSweep};
 use crate::spell::game_pending_cast;
@@ -411,6 +412,7 @@ impl EngageSink for CtxWorld<'_> {
             .collect()
     }
     fn leave_combat(&mut self, guid: u64) {
+        // EventAI edge resets extend here so combat exit keeps one authoritative boundary.
         let entities = self.ctx.db.game_world_entity();
         if let Some(mut e) = entities.guid().find(guid) {
             e.unit_flags &= !constants::unit_flags::IN_COMBAT;
@@ -542,6 +544,7 @@ impl CastSink for CtxWorld<'_> {
             .collect()
     }
     fn rotation_of(&self, guid: u64) -> Vec<SpellOption> {
+        // EventAI cast precedence extends here, before the flat rotation is exposed to the cycle.
         self.entry_of(guid).map_or(Vec::new(), |entry| {
             self.ctx
                 .db
@@ -664,6 +667,7 @@ impl PursuitSink for CtxWorld<'_> {
             .collect()
     }
     fn caster_hold_range(&self, guid: u64) -> f32 {
+        // EventAI ranged posture extends here, before chase reads its hold distance.
         self.ctx
             .db
             .game_world_entity()
@@ -908,6 +912,9 @@ impl CreatureWorld for CtxWorld<'_> {
                 tick::pass_gameobject_respawn(self.ctx) as u64,
             ),
         ]
+    }
+    fn evaluate_eventai(&mut self, request: EventAiRequest<'_>) -> u64 {
+        eventai::evaluate_context(self.ctx, request)
     }
     fn run_package_passes(&mut self) {
         crate::hooks::run_package_tick_passes(self.ctx);

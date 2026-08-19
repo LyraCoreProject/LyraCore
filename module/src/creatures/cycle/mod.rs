@@ -22,6 +22,7 @@ use super::ai::{
     SENSE_EVERY_N_TICKS, WANDER_CHANCE_PCT, WANDER_RADIUS,
 };
 use super::cast_condition;
+use super::eventai::EventAiRequest;
 use super::pet;
 use super::tick::TickSweep;
 
@@ -623,6 +624,9 @@ pub(crate) trait CreatureWorld:
     /// Corpse decay, creature respawn and gameobject respawn. Not behavior — the cycle only
     /// SEQUENCES them. Returns the rows each visited, for the operator log.
     fn run_due_world_maintenance(&mut self) -> Vec<(&'static str, u64)>;
+    /// Evaluate authored creature rules for this firing. The operation owns rule loading, grouping,
+    /// gates, ordered effects and durable rule state.
+    fn evaluate_eventai(&mut self, request: EventAiRequest<'_>) -> u64;
     /// Every registered package tick pass, after all core behavior.
     fn run_package_passes(&mut self);
 }
@@ -668,6 +672,7 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         rows.push(("aggro", seen as u64));
         rows.push(("assist", assist(w, &active, pulls) as u64));
         rows.push(("pet", pet_behavior(w, &tick, &pets) as u64));
+        // EventAI combat precedence extends at this call without changing the rotation itself.
         rows.push(("cast", cast(w, &tick.scope) as u64));
         rows.push(("threat_retarget", threat_retarget(w, &tick.scope) as u64));
     }
@@ -678,8 +683,13 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         rows.push(("regen*", regenerate(w, &in_combat) as u64));
         rows.push(("combat_drop*", combat_exit(w, &tick, &in_combat) as u64));
     }
+    // EventAI combat precedence extends at this call without adding a second rout pass.
     rows.push(("rout", rout(w, &tick) as u64));
     rows.push(("fear", fear(w, &tick) as u64));
+    rows.push((
+        "eventai",
+        w.evaluate_eventai(EventAiRequest::Engaged(&tick.scope)),
+    ));
     if global {
         w.run_package_passes();
     }
@@ -1314,6 +1324,7 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         // An offensive caster stands and casts (the cast phase already fired this firing) while its
         // victim is inside spell range and in plain sight. A wall-blocked one closes instead, which
         // is the verdict the cast phase reached about that same line.
+        // EventAI ranged posture extends this hold-and-aim block. Chase remains the leg owner.
         let hold = w.caster_hold_range(c.guid) * CASTER_HOLD_MARGIN;
         if hold > 0.0 && gap_sq <= hold * hold && w.line_of_sight(c.guid, c.victim_at) {
             continue;
