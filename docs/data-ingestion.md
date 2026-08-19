@@ -208,6 +208,50 @@ fence plus the surrounding pre- and post-flight guards keep any one database fro
 continents' spatial rows. Non-spatial content (spells, items, quests, the DBC reference tables) is
 duplicated on every shard by design.
 
+## Creature EventAI family
+
+`--family creature-ai` imports the supported CMaNGOS `creature_ai_scripts` rules into the Module-only
+EventAI tables. It clears and reloads `game_creature_ai_event`,
+`game_creature_ai_broadcast_text`, and `game_creature_ai_summon`. It does not clear creature EventAI
+state, rule state, or timer rows.
+
+One accepted source rule becomes one to three ordered static rows. The row id is
+`0x4000_0000_0000_0000 | (source_rule_id << 2) | action_order`; this keeps imported ids outside the
+reserved fixture range. Rules retain source chance, inverse-phase conversion, repeat policy, and
+source policies. A source random-action flag maps to native policy bit 1 and a combat-action flag to
+bit 0. Event parameters map as follows:
+
+- creature HP: source `[max_pct, min_pct, repeat_min_ms, repeat_max_ms]` becomes native
+  `[min_pct, max_pct, repeat_min_ms, repeat_max_ms]`;
+- target range: `[min_yd, max_yd, repeat_min_ms, repeat_max_ms]` is retained;
+- friendly HP: `[missing_hp, radius_yd, repeat_min_ms, repeat_max_ms]` is retained. `missing_hp` is
+  an absolute health deficit, not a percentage.
+
+The importer accepts timed combat, HP, aggro, death, range, spawn, and friendly-HP events. It accepts
+text, text-new, emote, cast, phase, flee, call-for-help, summon, and ranged-movement actions. Positive
+subjects must be in the World Import Scope. Negative subjects resolve through the imported spawn guid.
+Accepted summon templates enlarge the scope to a fixpoint, so a summoned creature can bring its own
+EventAI dependencies. The importer carries current broadcast text and supported legacy negative
+`script_texts` ids. It reads both the compact 12-column and current 17-column broadcast-text
+tuple vintages; the latter places emotes in columns 11 to 13 and their delays in columns 14 to 16.
+
+Unsupported or invalid values reject the complete source rule and appear in dry-run coverage by source
+value and reason. The report also lists casts whose spell id has no complete source-dump catalogue.
+Spell validation is therefore authoritative after the DBC spell import, through the post-import
+`game_spell` reference check. A nonzero spell id is retained rather than incorrectly rejected because
+it is absent from `spell_template`.
+
+The mappings follow the CMaNGOS Classic EventAI declarations and loader:
+[event, action, target, and flag values](https://github.com/cmangos/mangos-classic/blob/ca0775fe352fb67a0e82dc6051f0563187d569a5/src/game/AI/EventAI/CreatureEventAI.h),
+[source tuple load and validation](https://github.com/cmangos/mangos-classic/blob/ca0775fe352fb67a0e82dc6051f0563187d569a5/src/game/AI/EventAI/CreatureEventAIMgr.cpp),
+the [legacy text loader](https://github.com/cmangos/mangos-classic/blob/ca0775fe352fb67a0e82dc6051f0563187d569a5/src/game/Globals/ObjectMgr.cpp),
+and [text-new selection](https://github.com/cmangos/mangos-classic/blob/ca0775fe352fb67a0e82dc6051f0563187d569a5/src/game/AI/EventAI/CreatureEventAI.cpp).
+The source stores legacy text ids as signed values. The current ClassicDB source uses broadcast text
+ids for EventAI text rows; negative ids require a matching `script_texts` row in the supplied
+dump. This is an importer inference from the CMaNGOS action contracts and source data shape. Text-new
+keeps its target policy and template id in the native action fields. The current relay uses the direct
+broadcast id; template selection remains stored metadata until the relay supports template lookup.
+
 The standalone DBC pass reads all three taxi files through the same in-memory MPQ patch chain as
 the other client tables. It validates every endpoint/path reference and every `(path, node_index)`
 ordinal, client id against the vanilla 1..=256 mask range, reserved wire-id collisions, and negative
