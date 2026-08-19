@@ -17,13 +17,14 @@ use crate::{
 pub(crate) trait EventAiWorld {
     fn eventai_contexts(&self, request: &EventAiRequest<'_>) -> Vec<EventContext>;
     fn eventai_rows(&self, creature_guid: u64) -> Vec<CreatureAiEvent>;
-    fn eventai_creature_exists(&self, creature_guid: u64) -> bool;
     fn eventai_creature_state(&self, creature_guid: u64) -> CreatureState;
     fn set_eventai_phase(&mut self, creature_guid: u64, phase: u8);
     fn eventai_rule_state(&self, creature_guid: u64, rule_id: u64) -> Option<RuleState>;
     fn put_eventai_rule_state(&mut self, creature_guid: u64, rule_id: u64, state: RuleState);
     fn delete_eventai_rule_state(&mut self, creature_guid: u64, rule_id: u64);
-    fn reap_eventai_rule_state(&mut self);
+    /// Remove state for missing rules on this evaluated creature. Lifecycle edges clean state for
+    /// creatures that no longer produce evaluation contexts.
+    fn reap_eventai_rule_state(&mut self, creature_guid: u64, valid_rule_ids: &HashSet<u64>);
     fn eventai_roll(&self) -> u32;
     fn eventai_speak(&mut self, context: &EventContext, action: &RuleAction, chat_type: u8);
     fn eventai_cast(
@@ -57,13 +58,12 @@ pub(crate) trait EventAiWorld {
 }
 
 pub(crate) fn evaluate<W: EventAiWorld>(world: &mut W, request: EventAiRequest<'_>) -> u64 {
-    if matches!(&request, EventAiRequest::Engaged(_)) {
-        world.reap_eventai_rule_state();
-    }
     let mut visited = 0;
     for context in world.eventai_contexts(&request) {
         let rows = world.eventai_rows(context.creature_guid);
         visited += rows.len() as u64;
+        let valid_rule_ids = rows.iter().map(effective_rule_id).collect();
+        world.reap_eventai_rule_state(context.creature_guid, &valid_rule_ids);
         let mut groups: BTreeMap<u64, Vec<CreatureAiEvent>> = BTreeMap::new();
         for row in rows {
             groups.entry(effective_rule_id(&row)).or_default().push(row);
@@ -301,15 +301,6 @@ impl EventAiWorld for DatabaseWorld<'_> {
             .collect()
     }
 
-    fn eventai_creature_exists(&self, creature_guid: u64) -> bool {
-        self.ctx
-            .db
-            .game_world_entity()
-            .guid()
-            .find(creature_guid)
-            .is_some()
-    }
-
     fn eventai_creature_state(&self, creature_guid: u64) -> CreatureState {
         self.state_row(creature_guid)
             .map_or_else(CreatureState::default, |row| CreatureState {
@@ -393,19 +384,14 @@ impl EventAiWorld for DatabaseWorld<'_> {
         }
     }
 
-    fn reap_eventai_rule_state(&mut self) {
-        let valid_rules: HashSet<u64> = self
-            .ctx
-            .db
-            .game_creature_ai_event()
-            .iter()
-            .map(|row| effective_rule_id(&row))
-            .collect();
+    fn reap_eventai_rule_state(&mut self, creature_guid: u64, valid_rule_ids: &HashSet<u64>) {
         let state = self.ctx.db.game_creature_ai_rule_state();
-        for row in state.iter().collect::<Vec<_>>() {
-            if !self.eventai_creature_exists(row.creature_guid)
-                || !valid_rules.contains(&row.source_rule_id)
-            {
+        for row in state
+            .by_creature()
+            .filter(&creature_guid)
+            .collect::<Vec<_>>()
+        {
+            if !valid_rule_ids.contains(&row.source_rule_id) {
                 state.id().delete(row.id);
             }
         }

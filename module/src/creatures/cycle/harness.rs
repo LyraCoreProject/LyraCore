@@ -178,7 +178,7 @@ struct Scenario {
     /// Imported broadcast text, keyed by its stable catalogue id.
     eventai_text: RefCell<HashMap<u32, (String, u8, u32)>>,
     eventai_creature_state: RefCell<HashMap<u64, CreatureState>>,
-    eventai_rule_state: RefCell<HashMap<(u64, u64), RuleState>>,
+    eventai_rule_state: RefCell<HashMap<u64, HashMap<u64, RuleState>>>,
     /// Ordered text effects emitted by authored rules.
     eventai_speech: RefCell<Vec<(u64, u8, String)>>,
     eventai_diagnostics: RefCell<Vec<Diagnostic>>,
@@ -260,7 +260,8 @@ impl Scenario {
     fn eventai_state(&self, guid: u64, rule_id: u64) -> Option<RuleState> {
         self.eventai_rule_state
             .borrow()
-            .get(&(guid, rule_id))
+            .get(&guid)
+            .and_then(|rules| rules.get(&rule_id))
             .copied()
     }
 
@@ -268,13 +269,6 @@ impl Scenario {
         self.eventai_rows
             .borrow_mut()
             .retain(|row| eventai::effective_rule_id(row) != rule_id);
-    }
-
-    fn remove_creature(&self, guid: u64) {
-        self.creatures.borrow_mut().remove(&guid);
-        self.fights
-            .borrow_mut()
-            .retain(|fight| fight.attacker != guid);
     }
 
     /// The creature's template carries a hand-tuned aggro range instead of the level-scaled one.
@@ -981,10 +975,6 @@ impl EventAiWorld for Scenario {
             .collect()
     }
 
-    fn eventai_creature_exists(&self, creature_guid: u64) -> bool {
-        self.creatures.borrow().contains_key(&creature_guid)
-    }
-
     fn eventai_creature_state(&self, creature_guid: u64) -> CreatureState {
         self.eventai_creature_state
             .borrow()
@@ -1004,35 +994,37 @@ impl EventAiWorld for Scenario {
     fn eventai_rule_state(&self, creature_guid: u64, rule_id: u64) -> Option<RuleState> {
         self.eventai_rule_state
             .borrow()
-            .get(&(creature_guid, rule_id))
+            .get(&creature_guid)
+            .and_then(|rules| rules.get(&rule_id))
             .copied()
     }
 
     fn put_eventai_rule_state(&mut self, creature_guid: u64, rule_id: u64, state: RuleState) {
         self.eventai_rule_state
             .borrow_mut()
-            .insert((creature_guid, rule_id), state);
+            .entry(creature_guid)
+            .or_default()
+            .insert(rule_id, state);
     }
 
     fn delete_eventai_rule_state(&mut self, creature_guid: u64, rule_id: u64) {
-        self.eventai_rule_state
-            .borrow_mut()
-            .remove(&(creature_guid, rule_id));
+        let mut state = self.eventai_rule_state.borrow_mut();
+        if let Some(rules) = state.get_mut(&creature_guid) {
+            rules.remove(&rule_id);
+            if rules.is_empty() {
+                state.remove(&creature_guid);
+            }
+        }
     }
 
-    fn reap_eventai_rule_state(&mut self) {
-        let valid_rules: HashSet<u64> = self
-            .eventai_rows
-            .borrow()
-            .iter()
-            .map(eventai::effective_rule_id)
-            .collect();
-        let creatures = self.creatures.borrow();
-        self.eventai_rule_state
-            .borrow_mut()
-            .retain(|(creature_guid, rule_id), _| {
-                creatures.contains_key(creature_guid) && valid_rules.contains(rule_id)
-            });
+    fn reap_eventai_rule_state(&mut self, creature_guid: u64, valid_rule_ids: &HashSet<u64>) {
+        let mut state = self.eventai_rule_state.borrow_mut();
+        if let Some(rules) = state.get_mut(&creature_guid) {
+            rules.retain(|rule_id, _| valid_rule_ids.contains(rule_id));
+            if rules.is_empty() {
+                state.remove(&creature_guid);
+            }
+        }
     }
 
     fn eventai_roll(&self) -> u32 {

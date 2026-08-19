@@ -505,7 +505,7 @@ fn timed_casts_rearm_from_the_fire_time() {
 }
 
 #[test]
-fn stale_rule_state_is_reaped_for_removed_rules_and_creatures() {
+fn a_removed_rule_is_reaped_for_the_creature_evaluated_next() {
     let mut scenario = world(0).attacking(CREATURE, TARGET).eventai_row(native_row(
         801,
         800,
@@ -524,23 +524,48 @@ fn stale_rule_state_is_reaped_for_removed_rules_and_creatures() {
     scenario.remove_eventai_rule(800);
     fire(&mut scenario);
     assert!(scenario.eventai_state(CREATURE, 800).is_none());
+}
 
-    scenario = scenario.eventai_row(native_row(
-        811,
-        810,
-        0,
-        EVENT_TIMED_IN_COMBAT,
-        ACTION_CAST,
-        100,
-        1,
-        REPEAT,
-        [500, 500, 500, 500, 0, 0],
-        [81, 0, 0],
-    ));
+#[test]
+fn rule_state_cleanup_does_not_scan_other_creatures() {
+    let other = CREATURE + 10;
+    let mut scenario = world(0)
+        .creature(other, point(1.0))
+        .entry(other, ENTRY)
+        .attacking(CREATURE, TARGET)
+        .attacking(other, TARGET)
+        .eventai_row(native_row(
+            811,
+            810,
+            0,
+            EVENT_TIMED_IN_COMBAT,
+            ACTION_CAST,
+            100,
+            1,
+            REPEAT,
+            [500, 500, 500, 500, 0, 0],
+            [81, 0, 0],
+        ));
     fire(&mut scenario);
-    scenario.remove_creature(CREATURE);
-    fire(&mut scenario);
+    assert!(scenario.eventai_state(CREATURE, 810).is_some());
+    assert!(scenario.eventai_state(other, 810).is_some());
+
+    scenario.remove_eventai_rule(810);
+    eventai::evaluate(
+        &mut scenario,
+        EventAiRequest::Edge(EventContext {
+            kind: EventKind::OnAggro,
+            creature_guid: CREATURE,
+            invoker_guid: Some(TARGET),
+            event_target_guid: Some(TARGET),
+            current_target_guid: Some(TARGET),
+            assisted: false,
+            now_ms: 0,
+        }),
+    );
+
     assert!(scenario.eventai_state(CREATURE, 810).is_none());
+    assert!(scenario.eventai_state(other, 810).is_some());
 }
 
 #[test]
