@@ -244,6 +244,11 @@ session write, or the handshake's K lookup — realm-core is the only handle tho
 realm-core is configured and unreachable, the gateway fails closed (refuses logons) rather than
 falling back to the cache.
 
+The same boundary applies to Alpha Test Tools. For each dot-Say command, the Gateway reads the
+current Account value from Realm-core, then conveys it to the Character's Home Shard in one Durable
+Request. The Module makes the final Gate with that value and the Character's GM level. No
+Character-side authority projection exists.
+
 `auth.rs` also carries a `ensure_shadow_account` path: an instance or continent shard has no real
 account row, so a transferred character gets an index-entry row with empty salt and verifier. It can
 never satisfy an SRP proof; it exists only to carry the identity binding.

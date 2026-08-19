@@ -63,6 +63,11 @@ mod mail_tests;
 #[path = "framing_tests.rs"]
 mod framing_tests;
 
+/// Account-owned Alpha Test Tools at the Headless Client seam. This stays separate from the Module
+/// command Gate tests: it proves dot-Say dispatch, current authority, and client-visible results.
+#[path = "alpha_test_tools_tests.rs"]
+mod alpha_test_tools_tests;
+
 /// The per-account connection release regressions. A sibling of the modules above for the
 /// same reason — it reaches `InMemoryStore` without widening anything.
 
@@ -287,6 +292,14 @@ struct InMemoryStore {
     /// RIGHT raw text (still carrying its leading `.`) reached the reducer call, and that a NON-dot
     /// Say never reaches this vec at all.
     gm_commands: std::sync::Mutex<Vec<(String, String)>>,
+    /// Current Realm-core Alpha Test Tools answer for the next command. `None` leaves the older
+    /// fixed-outcome fixture in place; tests that set it model the production Store's fresh read.
+    gm_alpha_test_tools: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// The authority conveyed with each command when `gm_alpha_test_tools` is in use.
+    gm_authority_results: std::sync::Mutex<Vec<bool>>,
+    /// Home Shard gameplay accepted by the focused Alpha Test Tools Fake. The command parser and
+    /// effects belong to Module tests, so this only records the visible Store outcome.
+    gm_gameplay_changes: std::sync::Mutex<Vec<String>>,
     /// Recorded `cast_spell` dispatches: (spell_id, target_guid) — pins target threading.
     casts: std::sync::Mutex<Vec<(u32, u64)>>,
     /// Recorded `start_ranged_attack` dispatches: (target_guid, spell_id) — the Auto Shot intercept.
@@ -1951,6 +1964,19 @@ impl WorldStore for InMemoryStore {
         }
     }
     fn gm_command(&self, account_name: &str, _self_guid: u64, text: String) -> Result<()> {
+        if let Some(alpha_test_tools) = &self.gm_alpha_test_tools {
+            let authorized = alpha_test_tools.load(std::sync::atomic::Ordering::SeqCst);
+            self.gm_commands
+                .lock()
+                .unwrap()
+                .push((account_name.to_string(), text.clone()));
+            self.gm_authority_results.lock().unwrap().push(authorized);
+            if authorized && (text.starts_with(".speed") || text.starts_with(".tele")) {
+                self.gm_gameplay_changes.lock().unwrap().push(text);
+                return Ok(());
+            }
+            return Err(anyhow!("permission denied"));
+        }
         match &self.gm_command_error {
             Some(e) => Err(anyhow!("{e}")),
             None => {
