@@ -832,6 +832,9 @@ fn seed_spell_registry(ctx: &ReducerContext) {
             is_negative,
             cast_flags: 0,
             stances: 0, // seeded spells have no stance requirement (usable in any stance)
+            proc_flags: 0, // seeded spells carry no Proc data
+            proc_chance: 0,
+            proc_charges: 0,
         });
     };
     let effect = |spell_id: u32,
@@ -1005,7 +1008,8 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     seed_stacking_probe_fixture(ctx); // the live stacking-family probe's four family members
     seed_soul_shard_item(ctx); // Soul Shard item template (6265)
     seed_drain_soul_fixture(ctx); // Drain Soul (1120) channel — soul-shard generation
-    seed_frost_armor_fixture(ctx); // Chilled (6136) + Frost Armor (168) — proc-on-being-hit-in-melee
+    seed_frost_armor_fixture(ctx); // Chilled (6136) + Frost Armor (168) — the Proc engine's live user
+    seed_test_proc_fixtures(ctx); // Test Proc Mark/Coin/Charges (50140-50142) — the Proc chance + charge probes
     seed_mana_burn_fixture(ctx); // Mana Burn (8129) — E_POWER_BURN drain-mana-into-damage
     seed_demon_skin_fixture(ctx); // Demon Skin (696 rank 2) — combat-independent health-per-5 tick
     seed_regen_fixture(ctx); // Test Regeneration (50137) — the combat-regen probe's kind-169 source

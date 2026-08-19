@@ -75,6 +75,17 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
         sched.target_guid,
         sched.caster_guid,
         sched.after_resist,
+        // The bolt keeps the origin it was launched with across its travel time, so a proc's own bolt
+        // still raises no proc event when it lands.
+        crate::combat::Hit::spell(
+            if sched.triggered {
+                crate::combat::HitSource::Triggered
+            } else {
+                crate::combat::HitSource::Spell
+            },
+            sched.spell_id,
+            sched.is_crit,
+        ),
     );
     // perf catalog 2.3: AOI address of the actor, so this row is delivered to the observers whose box
     // contains them instead of to every connected session. ONE grid_of lookup (was 4 — one per field).
@@ -685,7 +696,8 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     // re-advanced or double-deleted): every target that took real periodic damage this tick drops its
     // break-on-damage CC, the same as a melee swing / direct spell. No-op without such an aura.
     for target_guid in dot_damaged {
-        // attacker_guid 0: a DoT tick is not a melee swing, so it never feeds the A_PROC_ON_HIT scan.
+        // attacker_guid 0: a DoT tick is not a melee swing, so it never provokes Retaliation. Periodic
+        // procs are out of scope, so a tick runs no proc pass either.
         break_auras_on_damage(ctx, target_guid, 0, true); // periodic: breaks CC, does NOT interrupt casts
     }
 }
@@ -789,7 +801,15 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
             // Magic resist first (the caster's level drives mitigation; a gone caster → 0% = full damage),
             // then the shared damage entry point (threat / engage / kill_creature / absorb / combat-flag).
             let resisted = apply_resistance(ctx, t, a.caster_guid, a.school_mask, a.amount);
-            let (dealt, absorbed) = apply_target_damage(ctx, t, a.caster_guid, resisted);
+            // A ground-area tick is nobody's swing and nobody's cast — Triggered, so it raises no
+            // proc event.
+            let (dealt, absorbed) = apply_target_damage(
+                ctx,
+                t,
+                a.caster_guid,
+                resisted,
+                crate::combat::Hit::triggered(),
+            );
             // Per-tick feedback (118, user: area damage "does not show on damage numbers or in the
             // combat log"): a log-only cast-event row (`is_proc_log`, same shape as the seal's holy
             // line) — the gateway relays ONLY the SMSG_SPELLNONMELEEDAMAGELOG named after the area's

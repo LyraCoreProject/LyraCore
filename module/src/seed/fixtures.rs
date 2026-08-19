@@ -468,6 +468,9 @@ pub(crate) fn base_spell(spell_id: u32, name: &str) -> Spell {
         is_negative: false,
         cast_flags: 0,
         stances: 0,
+        proc_flags: 0,
+        proc_chance: 0,
+        proc_charges: 0,
     }
 }
 
@@ -796,11 +799,13 @@ pub(crate) fn seed_stealth_fixture(ctx: &ReducerContext) {
 /// self-documentation / any future direct-cast use.
 ///
 /// Frost Armor (168) mirrors the real DBC shape the importer maps (`importer/src/spell.rs`): eff0 is the
-/// `+armor` self-buff (`A_MOD_RESISTANCE`, p0 = `RESIST_ARMOR` bit); eff1 is the reactive chill, classified
-/// as `A_PROC_ON_HIT` with `trigger_spell = 6136` — `break_auras_on_damage`'s proc-on-hit scan reads it off
-/// any melee-hit unit carrying this aura and applies Chilled onto the ATTACKER. Permanent self-buff
-/// (`duration_ms = u32::MAX`, the importer's infinite-aura sentinel — matches vanilla armor spells' -1 DBC
-/// duration). IDEMPOTENT (inserts only if absent), mirroring the other mock-seed fixtures.
+/// `+armor` self-buff (`A_MOD_RESISTANCE`, p0 = `RESIST_ARMOR` bit); eff1 is the reactive chill, an
+/// `A_PROC_TRIGGER` Proc with `trigger_spell = 6136`. The header carries Frost Armor's real Spell.dbc proc
+/// data — `proc_flags 0x28` (melee hit taken | melee spell hit taken) and `proc_chance 100`, no charges —
+/// which the aura freezes at apply, so the proc pass in `combat::apply_hit` starts a Triggered Cast of
+/// Chilled at whoever landed the hit. Permanent self-buff (`duration_ms = u32::MAX`, the importer's
+/// infinite-aura sentinel — matches vanilla armor spells' -1 DBC duration). IDEMPOTENT (inserts only if
+/// absent), mirroring the other mock-seed fixtures.
 pub(crate) fn seed_frost_armor_fixture(ctx: &ReducerContext) {
     const CHILLED: u32 = 6136;
     const FROST_ARMOR: u32 = 168;
@@ -829,6 +834,10 @@ pub(crate) fn seed_frost_armor_fixture(ctx: &ReducerContext) {
         ctx.db.game_spell().insert(Spell {
             duration_ms: u32::MAX, // permanent until replaced/dispelled
             school_mask: 16,
+            // Frost Armor's real Spell.dbc proc data: melee hit taken (0x8) | melee spell hit taken
+            // (0x20), always, unlimited charges.
+            proc_flags: 0x28,
+            proc_chance: 100,
             ..base_spell(FROST_ARMOR, "Frost Armor")
         });
     }
@@ -846,12 +855,79 @@ pub(crate) fn seed_frost_armor_fixture(ctx: &ReducerContext) {
     upsert_effect(
         ctx,
         SpellEffect {
-            kind: crate::spell::A_PROC_ON_HIT,
+            kind: crate::spell::A_PROC_TRIGGER,
             target: 0, // T_SELF
             trigger_spell: CHILLED,
             ..base_effect(FROST_ARMOR, 1)
         },
     );
+}
+
+/// The shared Proc-fixture mark the two test Procs below trigger. An inert 1 s `A_FLAG` debuff on the
+/// Counterparty: it does nothing, which is the point — a proc fire is COUNTED off the Triggered Cast's
+/// own cast-GO row, so the mark only has to land somewhere observable without perturbing combat.
+pub(crate) const TEST_PROC_MARK: u32 = 50140;
+/// A 50-percent Proc off a melee hit taken, unlimited charges — the chance roll's fixture. A scripted
+/// 100-hit probe against it should land inside binomial bounds.
+pub(crate) const TEST_PROC_COIN: u32 = 50141;
+/// A certain Proc with 3 charges off a melee hit taken — the charge fixture. It fires 3 times and then
+/// the whole buff comes off.
+pub(crate) const TEST_PROC_CHARGES: u32 = 50142;
+
+/// Mock-seed the Proc-engine test fixtures: one inert mark plus two self-buff Procs that exercise the
+/// chance roll and the charge count on a development database, with no Spell.dbc import.
+///
+/// Both Procs are `A_PROC_TRIGGER` self-buffs whose header carries `proc_flags 0x8` (melee hit taken),
+/// so a plain melee swing at the Carrier — or `debug_apply_damage`, which routes through the same
+/// chokepoint — fires them. The PPM and internal-cooldown fixtures are deliberately absent: the
+/// `spell_proc_event` overlay is the only data source vanilla has for those two fields, so authoring
+/// them here would invent a second one. IDEMPOTENT, like every other mock-seed fixture.
+pub(crate) fn seed_test_proc_fixtures(ctx: &ReducerContext) {
+    if ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(TEST_PROC_MARK)
+        .is_none()
+    {
+        ctx.db.game_spell().insert(Spell {
+            duration_ms: 1000,
+            is_negative: true,
+            ..base_spell(TEST_PROC_MARK, "Test Proc Mark")
+        });
+    }
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: crate::spell::A_FLAG,
+            target: 1,  // T_TARGET_ENEMY — the mark lands on the Counterparty
+            p0_kind: 7, // P_FLAG
+            ..base_effect(TEST_PROC_MARK, 0)
+        },
+    );
+    for (spell_id, name, chance, charges) in [
+        (TEST_PROC_COIN, "Test Proc Coin", 50u8, 0u8),
+        (TEST_PROC_CHARGES, "Test Proc Charges", 100, 3),
+    ] {
+        if ctx.db.game_spell().spell_id().find(spell_id).is_none() {
+            ctx.db.game_spell().insert(Spell {
+                duration_ms: u32::MAX, // permanent until its charges run out
+                proc_flags: 0x8,       // melee hit taken
+                proc_chance: chance,
+                proc_charges: charges,
+                ..base_spell(spell_id, name)
+            });
+        }
+        upsert_effect(
+            ctx,
+            SpellEffect {
+                kind: crate::spell::A_PROC_TRIGGER,
+                target: 0, // T_SELF — the Proc sits on its Carrier
+                trigger_spell: TEST_PROC_MARK,
+                ..base_effect(spell_id, 0)
+            },
+        );
+    }
 }
 
 /// Mock-seed Demon Skin (real vanilla spell 696, rank 2) — the COMBAT-INDEPENDENT

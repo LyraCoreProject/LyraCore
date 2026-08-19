@@ -79,6 +79,9 @@ pub(crate) fn apply_target_damage(
     target_guid: u64,
     caster_guid: u64,
     basis: i32,
+    // What KIND of hit this is, for the shared pipeline and the Proc engine — a direct spell, a melee
+    // ability, or a hit produced inside a Triggered Cast (which raises no proc event at all).
+    hit: crate::combat::Hit,
 ) -> (u32, u32) {
     let entities = ctx.db.game_world_entity();
     // A target that is gone or already a corpse absorbs nothing at all.
@@ -110,17 +113,11 @@ pub(crate) fn apply_target_damage(
     // flags it too. Re-fetches the caster, so there is no stale-copy overwrite.
     crate::combat::enter_combat(ctx, caster_guid);
     // Stage 2: the SHARED application — the lethal fork through `kill_creature` (a PLAYER target is
-    // floored at 1 hp instead: `HitSource::Spell`, there is no spell-death of players yet), the health
-    // write, the surviving target's IN_COMBAT stamp, break-on-damage with the `0` attacker sentinel
-    // (a spell must not feed the melee-only A_PROC_ON_HIT reactive-chill scan), threat, and the
-    // engage-on-damage retaliation arm.
-    crate::combat::apply_hit(
-        ctx,
-        caster_guid,
-        target_guid,
-        dmg,
-        crate::combat::HitSource::Spell,
-    );
+    // floored at 1 hp instead, since there is no spell-death of players yet), the health write, the
+    // surviving target's IN_COMBAT stamp, break-on-damage with the `0` attacker sentinel (a spell is
+    // not a tracked melee swing, so it must not provoke Retaliation), threat, the engage-on-damage
+    // retaliation arm, and the proc pass.
+    crate::combat::apply_hit(ctx, caster_guid, target_guid, dmg, hit);
     // The post-mitigation damage actually dealt + the amount absorbed — the caller (the E_DAMAGE/
     // E_WEAPON_STRIKE arm) sums these into the cast-GO row so the gateway can relay the floating damage
     // number (with the absorbed/resisted breakdown).

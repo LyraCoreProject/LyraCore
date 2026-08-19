@@ -168,6 +168,24 @@ the effective run speed. Never a second state machine.
 The one shared operation that removes the active Land Mount's aura rows and re-derives the Mount
 Projection. Idempotent, and a no-op for a rider who is not mounted.
 
+### Procs
+
+**Proc**:
+An aura that fires off a combat event, with the event mask, chance, charges and internal cooldown its spell data gives it. One engine, one pass, run at the damage chokepoint.
+_Avoid_: on-hit trigger, reactive aura
+
+**Carrier**:
+The unit wearing a Proc aura. A fired Proc casts from the Carrier, at the Carrier's frozen aura level.
+_Avoid_: proc owner, wearer
+
+**Counterparty**:
+The unit on the other side of the hit that fired a Proc: the victim of a dealt event, the attacker of a taken one.
+_Avoid_: other unit, opponent
+
+**Triggered Cast**:
+The cast a fired Proc starts. It runs the cast core's effect loop and nothing else: no Gate, no cost, no cooldown, no stealth break. Its own hits fire no further Procs.
+_Avoid_: proc cast, internal cast, free cast
+
 ### Auctions
 
 **Settlement**:

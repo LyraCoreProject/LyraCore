@@ -139,91 +139,20 @@ pub(crate) fn resolve_cast_at(
         }
     }
 
-    // Run the effects in `effect_index` order (loaded above for the faction gate). Accumulate the
-    // post-mitigation damage dealt to the PRIMARY target this cast — only hits on `target_guid` count, so a
-    // self-effect / a secondary target doesn't pollute the single-target damage log (multi-target / AoE
-    // per-target logging is a follow-up; see the table doc). Summed across damage effects (a multi-effect
-    // damage spell), then written onto the cast-GO row so the gateway relays SMSG_SPELLNONMELEEDAMAGELOG.
-    let mut total_damage: u32 = 0;
-    let mut total_healed: u32 = 0;
-    let mut total_resisted: u32 = 0;
-    let mut total_absorbed: u32 = 0;
-    let mut any_crit = false;
-    for e in &effects {
-        let points = effect_amount(
-            e.base_points,
-            e.die_sides,
-            e.per_level,
-            level as u32,
-            hdr.spell_level,
-            hdr.max_level,
-            ctx.random::<u32>(),
-        );
-        for t in select_targets(ctx, caster_guid, target_guid, e, dest) {
-            // `target_guid` is the cast's EXPLICIT target (the enemy); `t` is this effect's RESOLVED target
-            // (T_SELF → the caster). The combo-FINISHER duration scaling needs the enemy key, so thread the
-            // explicit `target_guid` as `cast_target_guid` alongside the per-effect `t`.
-            let hit = apply_effect(
-                ctx,
-                e,
-                &hdr,
-                caster_guid,
-                t,
-                target_guid,
-                level,
-                points,
-                dest,
-            );
-            // Only hits on the PRIMARY target feed the single-target damage log (crit/resist/absorb too).
-            if t == target_guid {
-                total_damage = total_damage.saturating_add(hit.dealt);
-                total_resisted = total_resisted.saturating_add(hit.resisted);
-                total_absorbed = total_absorbed.saturating_add(hit.absorbed);
-                total_healed = total_healed.saturating_add(hit.healed);
-                any_crit |= hit.crit;
-            }
-        }
-    }
-    // SpellSchool INDEX (0=normal..6=arcane) from the spell header's school BITMASK (1,2,4,…,64) via
-    // trailing_zeros — the same mask→index the gateway's SMSG_SPELLNONMELEEDAMAGELOG `school` wants. Stored
-    // on the row so the gateway stays dumb. school_mask 0 (rare/unset) → index 0 (Normal/physical).
-    let school_index = if hdr.school_mask == 0 {
-        0u8
-    } else {
-        hdr.school_mask.trailing_zeros() as u8
-    };
-
-    // ONE cast visual per cast (the caster's animation/SFX), even for a multi-effect spell. This is the
-    // cast-GO (the spell resolves): cast_time_ms 0, aimed at the primary target so the gateway's
-    // SMSG_SPELL_GO missile flies at it. (A timed spell already emitted a cast-START event in begin_cast.)
-    //
-    // EXCEPT an on-next-swing QUEUE cast (Heroic Strike/Cleave, 114): the spell did NOT fire — it parked
-    // on `next_swing_spell`. Vanilla sends NOTHING at queue time (the client lights the button locally on
-    // the press and holds it as a pending cast); the GO + yellow damage log are emitted by the SWING when
-    // it fires (resolve_swing inserts the is_completion=true row). Emitting GO here is exactly what
-    // un-lit the button and made the damage read as white (the 114 bug pair).
-    if !queued_next_swing {
-        ctx.db.game_spell_cast_event().insert(SpellCastEvent {
-            target_guid,
-            // FIX 1: true only on a TIMED-cast COMPLETION (from fire_pending_cast) → gateway suppresses the
-            // second START(0). false for instant/channel/creature/triggered → gateway keeps START(0)+GO+CD.
-            is_completion,
-            // FIX 2: the total post-mitigation damage + school → gateway relays SMSG_SPELLNONMELEEDAMAGELOG
-            // (the floating damage number) when damage > 0. 0 for heals/buffs → no damage log.
-            damage: total_damage,
-            healed: total_healed,
-            school: school_index,
-            // SPELL-CRIT: the crit flag + resisted/absorbed breakdown for the primary target → gateway renders
-            // hit_info=CriticalHit and the (N resisted)/(N absorbed) suffixes. Defaults on a non-damage cast.
-            is_crit: any_crit,
-            resisted: total_resisted,
-            absorbed: total_absorbed,
-            // The cooldown starts at the GO (the spell fired). Only spells with a real cooldown send the packet.
-            cooldown_ms: hdr.cooldown_ms,
-            client_initiated,
-            ..SpellCastEvent::signal(ctx, caster_guid, spell_id)
-        });
-    }
+    // The effect loop + the ONE cast visual — shared verbatim with the Triggered Cast (`cast_triggered`),
+    // which runs this and nothing else.
+    run_spell_effects(
+        ctx,
+        &hdr,
+        &effects,
+        caster_guid,
+        target_guid,
+        level,
+        is_completion,
+        client_initiated,
+        dest,
+        false,
+    );
 
     // AGGRO-ON-HOSTILE-CAST: a player casting an ENEMY-targeting spell at a creature pulls it into combat at
     // CAST time. Vanilla aggros the instant you cast, NOT on the DoT's first tick (~3s later), so this is the
@@ -303,6 +232,171 @@ pub(crate) fn resolve_cast_at(
             spell_id,
             target_guid,
         },
+    );
+    Ok(())
+}
+
+// One argument per axis the two callers differ on; the shared body is the loop itself.
+#[allow(clippy::too_many_arguments)]
+/// **The effect loop.** Run every effect of a cast in order and emit the ONE cast-GO visual. This is
+/// the whole of what a **Triggered Cast** does, and the middle of what a normal cast does — extracted
+/// so aura placement, damage, crit, resist, threat and logging stay one code path rather than two.
+///
+/// Per effect: compute its magnitude, resolve its targets, apply it, and sum the PRIMARY target's
+/// damage/heal/resist/absorb figures onto the cast-GO row (a self-effect or a secondary AoE target does
+/// not pollute the single-target damage log). An on-next-swing QUEUE cast emits no GO row at all: the
+/// spell did not fire, it parked on `next_swing_spell`, and the SWING emits the row when it does fire
+/// (emitting one here is exactly what un-lit the client's button and made the damage read as white).
+///
+/// `triggered` marks a Triggered Cast: every hit it deals is a Triggered hit (grants nothing, raises no
+/// proc event), and a resolved target that is DEAD or gone takes nothing — so a proc firing off a
+/// killing blow still lands its self-targeted effects and never places a debuff on a corpse.
+fn run_spell_effects(
+    ctx: &ReducerContext,
+    hdr: &Spell,
+    effects: &[SpellEffect],
+    caster_guid: u64,
+    target_guid: u64,
+    level: u8,
+    is_completion: bool,
+    client_initiated: bool,
+    dest: Option<(f32, f32, f32)>,
+    triggered: bool,
+) {
+    let mut total_damage: u32 = 0;
+    let mut total_healed: u32 = 0;
+    let mut total_resisted: u32 = 0;
+    let mut total_absorbed: u32 = 0;
+    let mut any_crit = false;
+    for e in effects {
+        let points = effect_amount(
+            e.base_points,
+            e.die_sides,
+            e.per_level,
+            level as u32,
+            hdr.spell_level,
+            hdr.max_level,
+            ctx.random::<u32>(),
+        );
+        for t in select_targets(ctx, caster_guid, target_guid, e, dest) {
+            // A Triggered Cast lands only on the living: `select_targets` already resolves T_SELF to the
+            // Carrier, so a self-buff proc still fires off a killing blow while the effect aimed at the
+            // dead Counterparty simply does not run.
+            if triggered && !is_alive(ctx, t) {
+                continue;
+            }
+            // `target_guid` is the cast's EXPLICIT target (the enemy); `t` is this effect's RESOLVED target
+            // (T_SELF → the caster). The combo-FINISHER duration scaling needs the enemy key, so thread the
+            // explicit `target_guid` as `cast_target_guid` alongside the per-effect `t`.
+            let hit = apply_effect(
+                ctx,
+                e,
+                hdr,
+                caster_guid,
+                t,
+                target_guid,
+                level,
+                points,
+                dest,
+                triggered,
+            );
+            // Only hits on the PRIMARY target feed the single-target damage log (crit/resist/absorb too).
+            if t == target_guid {
+                total_damage = total_damage.saturating_add(hit.dealt);
+                total_resisted = total_resisted.saturating_add(hit.resisted);
+                total_absorbed = total_absorbed.saturating_add(hit.absorbed);
+                total_healed = total_healed.saturating_add(hit.healed);
+                any_crit |= hit.crit;
+            }
+        }
+    }
+    if effects.iter().any(|e| e.kind == E_NEXT_SWING) {
+        return; // parked on the next swing — the swing emits the GO row, not this cast
+    }
+    // SpellSchool INDEX (0=normal..6=arcane) from the spell header's school BITMASK (1,2,4,…,64) via
+    // trailing_zeros — the same mask→index the gateway's SMSG_SPELLNONMELEEDAMAGELOG `school` wants. Stored
+    // on the row so the gateway stays dumb. school_mask 0 (rare/unset) → index 0 (Normal/physical).
+    let school_index = if hdr.school_mask == 0 {
+        0u8
+    } else {
+        hdr.school_mask.trailing_zeros() as u8
+    };
+    // ONE cast visual per cast (the caster's animation/SFX), even for a multi-effect spell. This is the
+    // cast-GO (the spell resolves): cast_time_ms 0, aimed at the primary target so the gateway's
+    // SMSG_SPELL_GO missile flies at it. (A timed spell already emitted a cast-START event in begin_cast.)
+    ctx.db.game_spell_cast_event().insert(SpellCastEvent {
+        target_guid,
+        // true only on a TIMED-cast COMPLETION (from fire_pending_cast) → gateway suppresses the
+        // second START(0). false for instant/channel/creature/triggered → gateway keeps START(0)+GO+CD.
+        is_completion,
+        // the total post-mitigation damage + school → gateway relays SMSG_SPELLNONMELEEDAMAGELOG
+        // (the floating damage number) when damage > 0. 0 for heals/buffs → no damage log.
+        damage: total_damage,
+        healed: total_healed,
+        school: school_index,
+        // SPELL-CRIT: the crit flag + resisted/absorbed breakdown for the primary target → gateway renders
+        // hit_info=CriticalHit and the (N resisted)/(N absorbed) suffixes. Defaults on a non-damage cast.
+        is_crit: any_crit,
+        resisted: total_resisted,
+        absorbed: total_absorbed,
+        // The cooldown starts at the GO (the spell fired). Only spells with a real cooldown send the packet.
+        cooldown_ms: hdr.cooldown_ms,
+        client_initiated,
+        ..SpellCastEvent::signal(ctx, caster_guid, hdr.spell_id)
+    });
+}
+
+/// Is `guid` a unit that is in the world and not a corpse? The Triggered Cast's target rule.
+fn is_alive(ctx: &ReducerContext, guid: u64) -> bool {
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(guid)
+        .is_some_and(|e| !e.dead)
+}
+
+/// Start a **Triggered Cast** of `spell_id` from `caster_guid` at `target_guid` — what a fired Proc
+/// does. It runs the shared effect loop and emits its cast-GO row, and NOTHING else: no Gate sweep, no
+/// cost, no dismount, no stealth break, no reagents, no engage-on-hostile-cast arm, no global cooldown,
+/// no spell cooldown, no resolved-cast hook. So a proc never blocks or taxes the Carrier's own casts,
+/// and a proc firing off a Rogue's opener does not by itself break stealth.
+///
+/// Every hit the cast produces is marked Triggered, which raises no proc event — a Triggered Cast can
+/// never start another proc pass, with no per-family exception list. Refuses (`Err`) only when the
+/// trigger spell is not loaded, which the proc pass logs; the Carrier keeps its charge.
+pub(crate) fn cast_triggered(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    level: u8,
+    target_guid: u64,
+) -> Result<(), String> {
+    let hdr = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(spell_id)
+        .ok_or_else(|| format!("unknown spell {spell_id}"))?;
+    // Same load + ordering as the normal cast (E_INTERRUPT first, then effect_index), so a triggered
+    // spell's effects run in the order a directly cast one's would.
+    let mut effects: Vec<SpellEffect> = ctx
+        .db
+        .game_spell_effect()
+        .by_spell()
+        .filter(&spell_id)
+        .collect();
+    effects.sort_by_key(|e| (e.kind != E_INTERRUPT, e.effect_index));
+    run_spell_effects(
+        ctx,
+        &hdr,
+        &effects,
+        caster_guid,
+        target_guid,
+        level,
+        false,
+        false,
+        None,
+        true,
     );
     Ok(())
 }

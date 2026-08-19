@@ -91,32 +91,44 @@ pub fn debug_teleport(
     Ok(())
 }
 
-/// Deal `amount` DIRECT damage to a live entity through the REAL damage side-effect path
-/// (`break_auras_on_damage`: pushback, CC break, on-damage hooks) — the deterministic damage
-/// source for harness tests (testing-hardening: cast_interrupt's pushback used to depend on a mob
-/// swing landing inside a 1.7s window, a per-run lottery). Unlike `debug_set_health` (a raw field
-/// write, NO side effects), this behaves like being hit. Never lethal: clamps to 1 HP — a harness
-/// poke must not trip the kill path (use `debug_kill_nearest` for that).
+/// Deal `amount` DIRECT damage to a live entity through the REAL shared damage pipeline — the same
+/// `fold_incoming_damage` → `apply_hit` every swing and spell routes through, as a MAIN-HAND hit. So a
+/// harness poke drives everything a real melee hit drives: absorb, break-on-damage, pushback, threat,
+/// Retaliation and the proc pass (which is what lets the proc probe run in seconds instead of waiting
+/// on swing timers). Unlike `debug_set_health` (a raw field write, NO side effects), this behaves like
+/// being hit. Never lethal: the damage is capped at `health - 1` BEFORE the pipeline, so the kill fork
+/// is unreachable from here (use `debug_kill_nearest` for that).
 #[reducer]
 pub fn debug_apply_damage(
     ctx: &ReducerContext,
     target_guid: u64,
     amount: u32,
     // The attributed attacker (0 = anonymous): threads through to `on_damage_taken` so
-    // attacker-reactive systems (the playerbots defend hook, A_PROC_ON_HIT) see a real source.
+    // attacker-reactive systems (the playerbots defend hook, Retaliation, the proc pass) see a real
+    // source.
     attacker_guid: u64,
 ) -> Result<(), String> {
-    let entities = ctx.db.game_world_entity();
-    let mut e = entities
+    let e = ctx
+        .db
+        .game_world_entity()
         .guid()
         .find(target_guid)
         .ok_or_else(|| format!("no live entity for guid {target_guid}"))?;
     if e.dead {
         return Err("target is dead".to_string());
     }
-    e.health = e.health.saturating_sub(amount).max(1);
-    entities.guid().update(e);
-    crate::spell::break_auras_on_damage(ctx, target_guid, attacker_guid, false);
+    // Clamp at 1 HP up front: the pipeline's own lethal fork must never be reachable from a debug poke,
+    // and a clamp applied afterwards could not un-kill anything.
+    let capped = amount.min(e.health.saturating_sub(1));
+    let (dmg, _absorbed) =
+        crate::combat::fold_incoming_damage(ctx, attacker_guid, target_guid, capped);
+    crate::combat::apply_hit(
+        ctx,
+        attacker_guid,
+        target_guid,
+        dmg,
+        crate::combat::Hit::weapon(crate::combat::HitSource::MainHand, false),
+    );
     Ok(())
 }
 
@@ -1081,6 +1093,16 @@ pub fn debug_fill_aura_slots(
             next_tick_micros: 0,
             channel_target: 0,
             enters_combat: false,
+            proc_flags: 0, // a filler aura is not a Proc
+            proc_chance: 0,
+            proc_ppm: 0.0,
+            proc_ex: 0,
+            proc_school_mask: 0,
+            proc_family_name: 0,
+            proc_family_flags: 0,
+            proc_charges: 0,
+            proc_icd_ms: 0,
+            proc_ready_micros: 0,
         });
     }
     Ok(())

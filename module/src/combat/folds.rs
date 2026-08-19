@@ -577,7 +577,15 @@ pub(crate) fn retaliate_on_hit(ctx: &ReducerContext, victim_guid: u64, attacker_
         return; // a dead combatant doesn't trade blows
     }
     let dmg = weapon_strike_damage(ctx, &victim, &attacker, 0);
-    crate::spell::apply_target_damage(ctx, attacker_guid, victim_guid, dmg as i32);
+    // Marked Triggered: the counter-swing is not an action the retaliator took, so it grants nothing
+    // and raises no proc event — the same structural reason a Triggered Cast cannot chain a proc.
+    crate::spell::apply_target_damage(
+        ctx,
+        attacker_guid,
+        victim_guid,
+        dmg as i32,
+        crate::combat::Hit::triggered(),
+    );
 }
 
 /// Roll one melee swing of `attacker` against `target`: `(damage, hit_info, blocked_amount)`. One roll

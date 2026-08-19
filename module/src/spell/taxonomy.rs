@@ -150,14 +150,17 @@ pub(crate) const A_COMBAT_HEALTH_REGEN_PCT: u8 = 0xA9;
 /// percent (e.g. The Human Spirit = +5% Spirit). `recompute_vitals` folds it as a multiplier on the
 /// resolved stat — `effective = (base + flat) * (100 + pct) / 100` — so it scales the base, not a flat add.
 pub(crate) const A_MOD_STAT_PCT: u8 = 0xAA;
-/// Reactive proc-on-being-hit-in-melee marker (Frost Armor's chill): `eff_p1` freezes the
-/// TRIGGER spell id (Chilled 6136) at apply, mirroring `A_PERIODIC_TRIGGER`'s own `eff_p1` freeze (see
-/// `aura_apply`). Sits on the CARRIER (the frost-armored unit, self-targeted like the armor buff itself);
-/// the victim-side damage chokepoint `break_auras_on_damage` scans for it on a genuine MELEE hit and applies
-/// the frozen trigger spell onto the ATTACKER instead of the carrier — reusing `apply_linked_debuff`'s
-/// existing "apply spell X's aura effects onto Y" machinery with X=trigger spell, Y=attacker. A carrier with
-/// no A_PROC_ON_HIT aura (every unit today) is unaffected (baseline-safe).
-pub(crate) const A_PROC_ON_HIT: u8 = 0xAB;
+/// A Proc that starts a **Triggered Cast** of its trigger spell (vanilla `Spell.dbc` aura 42,
+/// ProcTriggerSpell). `eff_p1` freezes the trigger spell id at apply, mirroring `A_PERIODIC_TRIGGER`'s
+/// own `eff_p1` freeze (see `aura_apply`); the proc profile (event mask, chance, charges, internal
+/// cooldown) freezes onto the same row. Sits on the CARRIER; `proc::run_proc_pass` — the one proc pass,
+/// called from `combat::apply_hit` — decides whether it fires and casts the trigger spell from the
+/// Carrier at the Counterparty. A carrier with no proc aura is unaffected.
+pub(crate) const A_PROC_TRIGGER: u8 = 0xAB;
+/// A Proc that deals its frozen `amount` as damage of the proc spell's school (vanilla `Spell.dbc`
+/// aura 43, ProcTriggerDamage). Same proc profile and same one pass as [`A_PROC_TRIGGER`]; `p0` is the
+/// school mask ([`P_SCHOOL_MASK`]). The firing arm is not wired yet — the pass logs and spends nothing.
+pub(crate) const A_PROC_DAMAGE: u8 = 0xB4;
 pub(crate) const A_SPELLMOD_FLAT: u8 = 0xAC; // spell modifier, FLAT (264 — DBC aura 107 AddFlatModifier): p0 (P_SPELLMOD_OP) = the SpellModOp, p1 = the 32-bit affected-spell FAMILY mask (DBC EffectItemType), amount = the SIGNED flat value (Improved Fireball: op 10 cast-time, −100ms/rank). Pulled by `spell_mod` at the cast-time/damage seams — a talent passive is pure data, zero per-spell code
 pub(crate) const A_SPELLMOD_PCT: u8 = 0xAD; // spell modifier, PERCENT (DBC aura 108 AddPctModifier): same shape, amount = a signed percent
 /// DISARM (Warrior Disarm, DBC AuraMod 67 ModDisarm): while active on an ENEMY, the disarmed unit's melee
@@ -429,7 +432,8 @@ pub(crate) const ALL_AURA_KINDS: &[u8] = &[
     A_STEALTH,
     A_COMBAT_HEALTH_REGEN_PCT,
     A_MOD_STAT_PCT,
-    A_PROC_ON_HIT,
+    A_PROC_TRIGGER,
+    A_PROC_DAMAGE,
     A_SPELLMOD_FLAT,
     A_SPELLMOD_PCT,
     A_DISARM,

@@ -179,8 +179,9 @@ pub(crate) fn breaks_on_damage(aura_interrupt: u16) -> bool {
 /// unaffected). Called from every real-damage, surviving-target, `dmg > 0` branch.
 ///
 /// `attacker_guid` is the GENUINE MELEE assailant, or `0` when the caller has no such
-/// concept (every direct-spell / DoT-tick call site) — it drives ONLY the `A_PROC_ON_HIT` reactive-chill
-/// scan below (Frost Armor); it does not affect the break/pushback logic above. [entity]
+/// concept (every direct-spell / DoT-tick call site) — it drives ONLY the Retaliation counter-swing
+/// below; it does not affect the break/pushback logic above. Procs are NOT decided here: they run in
+/// `spell::proc::run_proc_pass`, at the one damage chokepoint. [entity]
 pub(crate) fn break_auras_on_damage(
     ctx: &ReducerContext,
     target_guid: u64,
@@ -255,35 +256,12 @@ pub(crate) fn break_auras_on_damage(
     if !periodic {
         crate::spell::pushback_cast(ctx, target_guid);
     }
-    // Proc-on-hit: a genuine MELEE hit (`attacker_guid != 0`) on `target_guid` scans its
-    // `A_PROC_ON_HIT` auras and reactively applies each one's frozen trigger spell onto the ATTACKER (Frost
-    // Armor chills whoever hits its wearer in melee). No-op for the common case — every direct-spell/DoT call
-    // site passes `attacker_guid == 0`, and a target with no `A_PROC_ON_HIT` aura is unaffected either way.
+    // Retaliation (A_RETALIATE): a genuine incoming MELEE hit (`attacker_guid != 0`) on a Retaliating
+    // `target_guid` provokes ONE free main-hand counter-swing back at the attacker. Guarded against
+    // recursion inside `retaliate_on_hit` (the counter is a Triggered hit, so it never re-enters here).
+    // No-op for a target without an A_RETALIATE aura (the common path).
     if attacker_guid != 0 {
-        proc_on_hit(ctx, target_guid, attacker_guid);
-        // Retaliation (A_RETALIATE): a genuine incoming MELEE hit on a Retaliating `target_guid` provokes
-        // ONE free main-hand counter-swing back at the attacker. Guarded against recursion inside
-        // `retaliate_on_hit` (the counter routes through the spell-damage path with attacker sentinel 0, so
-        // it never re-enters here). No-op for a target without an A_RETALIATE aura (the common path).
         crate::combat::retaliate_on_hit(ctx, target_guid, attacker_guid);
-    }
-}
-
-/// The `A_PROC_ON_HIT` half of `break_auras_on_damage`: for every active such aura on `victim_guid` (the
-/// carrier, e.g. a Frost-Armored mage), apply its frozen trigger spell (`eff_p1`, e.g. Chilled 6136) onto
-/// `attacker_guid` (the melee assailant) — via `apply_linked_debuff`, the SAME "load spell X's aura effects
-/// and place them on Y" machinery PW:Shield's Weakened Soul link already uses, with X = the trigger spell and
-/// Y = the attacker. Attributed to the CARRIER's own `caster_guid`/`level` (frozen on the proc aura at its own
-/// apply) — mirroring how a linked debuff is attributed to its parent aura's caster. Collected before
-/// applying (mirrors the collect-then-mutate idiom above); a victim with no `A_PROC_ON_HIT` aura (every unit
-/// without Frost Armor) is a no-op.
-fn proc_on_hit(ctx: &ReducerContext, victim_guid: u64, attacker_guid: u64) {
-    let procs: Vec<(u32, u64, u8)> = auras_on(ctx, victim_guid)
-        .filter(|a| a.eff_kind == A_PROC_ON_HIT && a.eff_p1 != 0)
-        .map(|a| (a.eff_p1 as u32, a.caster_guid, a.level))
-        .collect();
-    for (trigger_spell, caster_guid, level) in procs {
-        crate::spell::apply_linked_debuff(ctx, trigger_spell, caster_guid, attacker_guid, level);
     }
 }
 

@@ -156,6 +156,16 @@ fn aura_absolute_expiry_survives_the_export_import_round_trip_with_the_same_rema
         next_tick_micros: 0,
         channel_target: 0,
         enters_combat: false,
+        proc_flags: 0,
+        proc_chance: 0,
+        proc_ppm: 0.0,
+        proc_ex: 0,
+        proc_school_mask: 0,
+        proc_family_name: 0,
+        proc_family_flags: 0,
+        proc_charges: 0,
+        proc_icd_ms: 0,
+        proc_ready_micros: 0,
     };
 
     let bytes = encode_rows(vec![aura]);

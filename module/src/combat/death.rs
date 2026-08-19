@@ -427,21 +427,82 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
 //  log, a projectile launch), which is why they are two functions and not one.
 // ===========================================================================================
 
-/// Where a hit came from — the ONE axis [`apply_hit`] branches on, so "what is different about a
-/// spell hit" is a single readable enum instead of a second copy of the whole pipeline.
+/// Where a hit came from. [`HitSource::is_weapon`] is the ONE axis [`apply_hit`] branches on, so
+/// "what is different about a spell hit" is a single readable predicate instead of a second copy of
+/// the whole pipeline; the finer split exists because the Proc engine fires a DIFFERENT combat event
+/// per source (an off-hand swing and a ranged shot are not the same event as a main-hand swing).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HitSource {
+    /// A main-hand melee auto-attack swing.
+    MainHand,
+    /// An off-hand melee auto-attack swing — its own proc event, so an off-hand-only proc fires off
+    /// these alone.
+    OffHand,
+    /// A ranged auto-attack impact (Auto Shot, a wand).
+    Ranged,
+    /// A melee ABILITY: a weapon strike or a finisher. Its own proc event pair, distinct from the
+    /// auto-attack swing that shares its weapon.
+    MeleeSpell,
+    /// A direct damaging SPELL hit.
+    Spell,
+    /// A hit produced inside a **Triggered Cast**. Grants nothing, and raises NO proc event — which is
+    /// what makes "a proc can never start a proc" structural instead of an exception list.
+    Triggered,
+}
+
+impl HitSource {
     /// A WEAPON hit — a melee main-hand swing, an off-hand swing, or a ranged projectile impact.
     /// Grants rage BOTH ways, trains weapon/defense skill, KILLS a player at 0 hp, credits a PET's
-    /// kill to its owner, and feeds the real attacker guid to the break-on-damage scan (so an
-    /// `A_PROC_ON_HIT` aura like Frost Armor can chill the swinger back).
-    Weapon,
-    /// A SPELL hit. No rage, no skill-ups; a PLAYER is FLOORED at 1 hp instead of dying (there is no
-    /// spell-death of players yet); the kill credit is player-caster-only (a pet's spell doesn't
-    /// credit its owner — pets have no spells today); the break-on-damage scan gets the `0` attacker
-    /// sentinel (a spell is not a tracked melee swing, so it must not feed the reactive-chill scan);
-    /// and a player caster's damaging hit ARMS the creature's melee retaliation.
-    Spell,
+    /// kill to its owner, and feeds the real attacker guid to the break-on-damage scan (so
+    /// Retaliation can counter-swing).
+    ///
+    /// Everything else — a spell, a melee ability, a Triggered Cast — grants no rage and no
+    /// skill-ups; a PLAYER is FLOORED at 1 hp instead of dying (there is no spell-death of players
+    /// yet); the kill credit is player-caster-only (a pet's spell doesn't credit its owner — pets
+    /// have no spells today); the break-on-damage scan gets the `0` attacker sentinel; and a player
+    /// caster's damaging hit ARMS the creature's melee retaliation.
+    pub(crate) fn is_weapon(self) -> bool {
+        matches!(self, Self::MainHand | Self::OffHand | Self::Ranged)
+    }
+}
+
+/// One landed hit, as the pipeline and the Proc engine both read it: where it came from, which spell
+/// carried it (0 for an auto-attack swing), and whether it crit.
+#[derive(Clone, Copy)]
+pub(crate) struct Hit {
+    pub source: HitSource,
+    pub spell_id: u32,
+    pub crit: bool,
+}
+
+impl Hit {
+    /// An auto-attack hit — no spell carried it.
+    pub(crate) fn weapon(source: HitSource, crit: bool) -> Self {
+        Self {
+            source,
+            spell_id: 0,
+            crit,
+        }
+    }
+
+    /// A hit carried by `spell_id`, whose school and family the Proc filter may judge.
+    pub(crate) fn spell(source: HitSource, spell_id: u32, crit: bool) -> Self {
+        Self {
+            source,
+            spell_id,
+            crit,
+        }
+    }
+
+    /// A hit nobody took an action to land: a Retaliation counter-swing, a ground-area tick. Grants
+    /// nothing and raises no proc event.
+    pub(crate) fn triggered() -> Self {
+        Self {
+            source: HitSource::Triggered,
+            spell_id: 0,
+            crit: false,
+        }
+    }
 }
 
 /// What [`apply_hit`] did. `killed` is what a caller checks to decide whether its own post-hit tail (a
@@ -536,6 +597,9 @@ pub(crate) fn fold_incoming_damage(
 ///     caller can see).
 ///  4. **Break-on-damage** (drops polymorph, interrupts a timed cast) and **threat** (player →
 ///     creature only), plus the spell path's engage-on-damage retaliation arm.
+///  5. **The proc pass** ([`crate::spell::proc::run_proc_pass`]) — once per lethal branch, and from
+///     nowhere else in the module. The attacker's "dealt" Procs run even on a killing blow; the
+///     target's "taken" Procs run only on the survivor path.
 ///
 /// A 0-damage hit (miss, fully absorbed, godmode) is a complete no-op: no health write, no kill, no
 /// break-on-damage, no threat — matching what the melee swing and `apply_target_damage` have always
@@ -546,7 +610,7 @@ pub(crate) fn apply_hit(
     attacker_guid: u64,
     target_guid: u64,
     dmg: u32,
-    source: HitSource,
+    hit: Hit,
 ) -> HitOutcome {
     let miss = HitOutcome {
         killed: false,
@@ -559,7 +623,7 @@ pub(crate) fn apply_hit(
     if dmg == 0 || target.dead {
         return miss;
     }
-    let weapon = source == HitSource::Weapon;
+    let weapon = hit.source.is_weapon();
     // Read the attacker ONCE, fresh: a caller's in-hand snapshot may predate its own writes this tick
     // (the queued-strike rage deduction, an earlier engagement's swing), and the spell path may have
     // no attacker row at all (an environmental / departed caster → not a player, no threat).
@@ -634,6 +698,9 @@ pub(crate) fn apply_hit(
                 },
             );
         }
+        // A killing blow still fires the ATTACKER's "dealt" Procs (a Lightning Shield zap that lands
+        // the kill still counts); the corpse's own "taken" Procs do not.
+        crate::spell::proc::run_proc_pass(ctx, attacker_guid, target_guid, &hit, false);
         return HitOutcome {
             killed: true,
             duel_completed: false,
@@ -664,9 +731,8 @@ pub(crate) fn apply_hit(
 
     // 4. Break-on-damage drops the target's break-on-damage CC (polymorph etc.) and interrupts its
     // in-progress timed cast (direct damage → `periodic = false`). The attacker guid rides along for a
-    // WEAPON hit so an `A_PROC_ON_HIT` aura on the target (Frost Armor) can reactively chill the
-    // swinger; a spell hit passes the `0` sentinel (Frost Armor procs off melee only, per its vanilla
-    // ProcTriggerSpell semantics).
+    // WEAPON hit so Retaliation can counter-swing the assailant; everything else passes the `0`
+    // sentinel (a counter-swing answers a real incoming swing only).
     crate::spell::break_auras_on_damage(
         ctx,
         target_guid,
@@ -689,6 +755,9 @@ pub(crate) fn apply_hit(
             crate::spell::arm_spell_retaliation(ctx, attacker_guid, target_guid);
         }
     }
+    // 5. The proc pass. Both sides fire here: the attacker's "dealt" Procs and — because the target
+    // lived — its "taken" Procs too (Frost Armor chills whoever hit its wearer).
+    crate::spell::proc::run_proc_pass(ctx, attacker_guid, target_guid, &hit, true);
     HitOutcome {
         killed: false,
         duel_completed: false,

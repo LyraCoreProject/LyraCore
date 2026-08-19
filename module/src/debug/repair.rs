@@ -106,11 +106,18 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     let stealth = ctx.db.game_spell().spell_id().find(1784u32).is_some() as u64;
 
     crate::seed::seed_frost_armor_fixture(ctx);
-    // Chilled 6136, Frost Armor 168
-    let frost_armor = [6136u32, 168u32]
-        .iter()
-        .filter(|id| ctx.db.game_spell().spell_id().find(**id).is_some())
-        .count() as u64;
+    crate::seed::seed_test_proc_fixtures(ctx);
+    // Chilled 6136, Frost Armor 168, and the Proc engine's three test fixtures
+    let frost_armor = [
+        6136u32,
+        168u32,
+        crate::seed::TEST_PROC_MARK,
+        crate::seed::TEST_PROC_COIN,
+        crate::seed::TEST_PROC_CHARGES,
+    ]
+    .iter()
+    .filter(|id| ctx.db.game_spell().spell_id().find(**id).is_some())
+    .count() as u64;
 
     crate::seed::seed_demon_skin_fixture(ctx);
     let demon_skin = ctx.db.game_spell().spell_id().find(696u32).is_some() as u64;
