@@ -4,7 +4,7 @@
 //! (`gm_command`) — module-side parsing keeps the command set data-free and easily extended (a new
 //! command is a new `match` arm here, no gateway/binding change). A nonzero `Character.gm_level`
 //! authorizes the full set. Account-owned Alpha Test Tools authorize the classified subset, which
-//! currently contains only `.speed`. The Gateway reads that Account authority from Realm-core on
+//! contains only `.speed` and `.tele`. The Gateway reads that Account authority from Realm-core on
 //! every command and conveys it to the Home Shard; this Module remains the final Gate.
 //!
 //! `.kill` deliberately takes NO explicit target argument: the caller's live `WorldEntity.target_guid`
@@ -60,6 +60,12 @@ pub(crate) fn xprate_bp(ctx: &ReducerContext) -> u32 {
 pub(crate) enum TeleSpot {
     Goldshire,
     Northshire,
+    Coldridge,
+    Kharanos,
+    Ironforge,
+    Shadowglen,
+    Dolanaar,
+    Darnassus,
     SentinelHill,
     WestfallCoast,
     /// The ORC start, on map 1 — and the only `.tele` that crosses a continent. Kalimdor lives on
@@ -75,6 +81,12 @@ impl TeleSpot {
         match name.to_ascii_lowercase().as_str() {
             "goldshire" => Some(Self::Goldshire),
             "northshire" => Some(Self::Northshire),
+            "coldridge" => Some(Self::Coldridge),
+            "kharanos" => Some(Self::Kharanos),
+            "ironforge" => Some(Self::Ironforge),
+            "shadowglen" => Some(Self::Shadowglen),
+            "dolanaar" => Some(Self::Dolanaar),
+            "darnassus" => Some(Self::Darnassus),
             "sentinel_hill" | "sentinelhill" => Some(Self::SentinelHill),
             "westfall_coast" | "westfallcoast" => Some(Self::WestfallCoast),
             "valley" | "valleyoftrials" | "valley_of_trials" => Some(Self::ValleyOfTrials),
@@ -82,30 +94,21 @@ impl TeleSpot {
         }
     }
 
-    /// `(map_id, x, y, z, orientation)` — the SAME coordinates as `world::graveyard`'s hardcoded
-    /// fallback consts (world_safe_locs 105/106, plus the [V]-tagged Sentinel Hill/Westfall Coast
-    /// estimates). Duplicated here rather than shared (that `graveyard` submodule is private to
-    /// `world.rs`) — matching this codebase's own convention: `seed.rs` ALSO independently row-seeds
-    /// these same five points into `game_graveyard` (see its doc, "seed.rs also row-seeds these five").
-    /// The first four are on map 0 (Eastern Kingdoms) — same-map moves through the existing
-    /// `world::teleport_player` core. `ValleyOfTrials` is on map 1, which the shard map routes to
-    /// another database, so that one is a CROSS-CONTINENT `.tele`: the same primitive drives it, but
-    /// what follows is the full escrowed transfer (loading screen, import, attest, release), not a
-    /// reposition. It was safe to add only once Kalimdor had imported content — the reason the
-    /// Deadmines destination is still absent is unchanged (map 36 has no world data to land in).
+    /// `(map_id, x, y, z, orientation)`. Map 0 destinations use the same-map path. Map 1
+    /// destinations use the established cross-map Transfer path.
+    #[allow(clippy::excessive_precision)] // The Spec supplies these f32 coordinates verbatim.
     pub(crate) fn coords(self) -> (u32, f32, f32, f32, f32) {
         match self {
-            // world_safe_locs 105 — Northshire Abbey.
-            Self::Northshire => (0, -8935.33, -188.646, 80.4165, 2.72271),
-            // world_safe_locs 106 — Goldshire.
-            Self::Goldshire => (0, -9339.59, 171.73, 63.5258, 0.0),
-            // world_safe_locs ≈80 [V] — Sentinel Hill (Westfall). Unverified estimate (no cmangos
-            // dump in this sandbox); confirm against a real dump before relying on this live.
+            Self::Northshire => (0, -8949.95, -132.493, 83.5312, 0.0),
+            Self::Goldshire => (0, -9339.4561, 171.4084, 61.5618, 0.0),
+            Self::Coldridge => (0, -6240.32, 331.033, 382.758, 0.0),
+            Self::Kharanos => (0, -5680.0444, -518.9205, 396.2743, 0.0),
+            Self::Ironforge => (0, -5049.4502, -809.6970, 495.1270, 0.0),
+            Self::Shadowglen => (1, 10311.3, 831.463, 1326.41, 5.48033),
+            Self::Dolanaar => (1, 9701.2549, 945.6204, 1291.3551, 0.0),
+            Self::Darnassus => (1, 10054.2998, 2117.1201, 1329.63, 0.0),
             Self::SentinelHill => (0, -10650.0, 1180.0, 34.0, 0.0),
-            // world_safe_locs ≈81 [V] — Westfall coast. Same provenance caveat as SentinelHill.
             Self::WestfallCoast => (0, -11390.0, 1590.0, 6.0, 0.0),
-            // The orc start position, straight out of `game_start_position` (race 2) rather than a
-            // hand-estimated point — Durotar is imported, so this one is data-backed.
             Self::ValleyOfTrials => (1, -618.518, -4251.67, 38.718, 0.0),
         }
     }
@@ -151,7 +154,7 @@ enum GmCommandClass {
 impl GmCommand {
     fn class(self) -> GmCommandClass {
         match self {
-            Self::Speed(_) => GmCommandClass::AlphaTestTool,
+            Self::Speed(_) | Self::Tele(_) => GmCommandClass::AlphaTestTool,
             _ => GmCommandClass::FullGm,
         }
     }
@@ -187,7 +190,9 @@ fn command_is_authorized(authority: GmAuthority, command: GmCommand) -> bool {
 fn authority_accepts_command_name(authority: GmAuthority, text: &str) -> bool {
     match authority {
         GmAuthority::None => false,
-        GmAuthority::AlphaTestTools => text.split_whitespace().next() == Some(".speed"),
+        GmAuthority::AlphaTestTools => {
+            matches!(text.split_whitespace().next(), Some(".speed" | ".tele"))
+        }
         GmAuthority::FullGm => true,
     }
 }
@@ -408,12 +413,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn alpha_test_tools_authorize_speed_only() {
+    fn alpha_test_tools_authorize_speed_and_tele_only() {
         let authority = gm_authority(0, true);
         assert!(authority_accepts_command_name(authority, ".speed 3"));
-        assert!(!authority_accepts_command_name(authority, ".tele goldshire"));
+        assert!(authority_accepts_command_name(authority, ".tele goldshire"));
         assert!(!authority_accepts_command_name(authority, ".unknown"));
         assert!(command_is_authorized(authority, GmCommand::Speed(3.0)));
+        assert!(command_is_authorized(
+            authority,
+            GmCommand::Tele(TeleSpot::Goldshire)
+        ));
         for command in [
             GmCommand::God(None),
             GmCommand::XpRate(2),
@@ -422,7 +431,6 @@ mod tests {
             GmCommand::Heal,
             GmCommand::Kill,
             GmCommand::Gps,
-            GmCommand::Tele(TeleSpot::Goldshire),
             GmCommand::AddItem(1, 1),
         ] {
             assert!(
@@ -528,6 +536,61 @@ mod tests {
         );
     }
 
+    #[test]
+    #[allow(clippy::excessive_precision)] // The expected values pin the Spec's f32 coordinates.
+    fn alliance_tele_destinations_have_the_specified_coordinates() {
+        let destinations = [
+            (
+                "northshire",
+                TeleSpot::Northshire,
+                (0, -8949.95, -132.493, 83.5312, 0.0),
+            ),
+            (
+                "goldshire",
+                TeleSpot::Goldshire,
+                (0, -9339.4561, 171.4084, 61.5618, 0.0),
+            ),
+            (
+                "coldridge",
+                TeleSpot::Coldridge,
+                (0, -6240.32, 331.033, 382.758, 0.0),
+            ),
+            (
+                "kharanos",
+                TeleSpot::Kharanos,
+                (0, -5680.0444, -518.9205, 396.2743, 0.0),
+            ),
+            (
+                "ironforge",
+                TeleSpot::Ironforge,
+                (0, -5049.4502, -809.6970, 495.1270, 0.0),
+            ),
+            (
+                "shadowglen",
+                TeleSpot::Shadowglen,
+                (1, 10311.3, 831.463, 1326.41, 5.48033),
+            ),
+            (
+                "dolanaar",
+                TeleSpot::Dolanaar,
+                (1, 9701.2549, 945.6204, 1291.3551, 0.0),
+            ),
+            (
+                "darnassus",
+                TeleSpot::Darnassus,
+                (1, 10054.2998, 2117.1201, 1329.63, 0.0),
+            ),
+        ];
+
+        for (name, spot, expected) in destinations {
+            assert_eq!(
+                parse_gm_command(&format!(".tele {name}")),
+                Ok(GmCommand::Tele(spot))
+            );
+            assert_eq!(spot.coords(), expected, "{name}");
+        }
+    }
+
     // ---- Clamping ----
 
     #[test]
@@ -609,18 +672,36 @@ mod tests {
         assert_eq!(XPRATE_DEFAULT_BP, 10_000);
     }
 
-    // ---- Tele coordinates: all four spots are on the same map (same-map move, no SMSG_NEW_WORLD) ----
+    // ---- Tele map paths ----
 
     #[test]
-    fn every_tele_spot_is_on_map_zero() {
+    fn eastern_kingdoms_destinations_use_the_same_map_path() {
         for spot in [
             TeleSpot::Goldshire,
             TeleSpot::Northshire,
+            TeleSpot::Coldridge,
+            TeleSpot::Kharanos,
+            TeleSpot::Ironforge,
             TeleSpot::SentinelHill,
             TeleSpot::WestfallCoast,
         ] {
             let (map_id, ..) = spot.coords();
             assert_eq!(map_id, 0, "{spot:?} must be a same-map move");
+            assert!(!crate::world::is_cross_map_teleport(0, map_id));
+        }
+    }
+
+    #[test]
+    fn kalimdor_destinations_use_the_cross_map_transfer_path() {
+        for spot in [
+            TeleSpot::Shadowglen,
+            TeleSpot::Dolanaar,
+            TeleSpot::Darnassus,
+            TeleSpot::ValleyOfTrials,
+        ] {
+            let (map_id, ..) = spot.coords();
+            assert_eq!(map_id, 1, "{spot:?} must be a cross-map move");
+            assert!(crate::world::is_cross_map_teleport(0, map_id));
         }
     }
 }
