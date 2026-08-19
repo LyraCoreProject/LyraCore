@@ -916,13 +916,14 @@ impl Scenario {
     /// that runs, inside an open window, and free to move. Chase, the rout leg and the swing pass all
     /// read this one verdict, so the harness answers it in one place too.
     fn is_routing(&self, guid: u64) -> bool {
-        let eligible = self
+        let entitled = self
             .creatures
             .borrow()
             .get(&guid)
-            .is_some_and(|c| c.would_rout);
+            .is_some_and(|c| c.would_rout)
+            || self.authored_combat(guid).flee;
         let now_ms = (self.now_micros.get() / 1000) as u32;
-        eligible && rout_window_open(now_ms, self.rout_ends_ms(guid)) && !self.cc(guid).2
+        entitled && rout_window_open(now_ms, self.rout_ends_ms(guid)) && !self.cc(guid).2
     }
 
     /// The state mirror behind every position write, matching `CtxWorld::place`: the row moves, and
