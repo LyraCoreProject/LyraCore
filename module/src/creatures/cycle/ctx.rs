@@ -544,7 +544,9 @@ impl CastSink for CtxWorld<'_> {
             .collect()
     }
     fn rotation_of(&self, guid: u64) -> Vec<SpellOption> {
-        // EventAI cast precedence extends here, before the flat rotation is exposed to the cycle.
+        if eventai::suppresses_flat_cast(self.ctx, guid) {
+            return Vec::new();
+        }
         self.entry_of(guid).map_or(Vec::new(), |entry| {
             self.ctx
                 .db
@@ -561,6 +563,9 @@ impl CastSink for CtxWorld<'_> {
         })
     }
     fn lone_spell(&self, guid: u64) -> Option<u32> {
+        if eventai::suppresses_flat_cast(self.ctx, guid) {
+            return None;
+        }
         self.ctx
             .db
             .game_creature_cast()
@@ -726,7 +731,8 @@ impl RoutSink for CtxWorld<'_> {
                     }),
                     health: c.health,
                     max_health: c.max_health,
-                    eligible: tick::rout_eligible(self.ctx, &c),
+                    eligible: tick::rout_eligible(self.ctx, &c)
+                        && !eventai::suppresses_fixed_rout(self.ctx, c.guid),
                     rout_ends_ms: row.rout_ends_ms,
                     routing: tick::creature_is_routing(self.ctx, &c),
                     committed: splines.guid().find(c.guid).is_some(),

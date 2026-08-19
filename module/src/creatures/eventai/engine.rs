@@ -16,6 +16,8 @@ use crate::{
 
 pub(crate) trait EventAiWorld {
     fn eventai_contexts(&self, request: &EventAiRequest<'_>) -> Vec<EventContext>;
+    /// Checks the rule's event condition and may name the actor selected by that condition.
+    fn eventai_condition(&self, context: &EventContext, rule: &Rule) -> Option<EventContext>;
     fn eventai_rows(&self, creature_guid: u64) -> Vec<CreatureAiEvent>;
     fn eventai_creature_state(&self, creature_guid: u64) -> CreatureState;
     fn set_eventai_phase(&mut self, creature_guid: u64, phase: u8);
@@ -50,7 +52,7 @@ pub(crate) trait EventAiWorld {
     fn eventai_diagnostic(&mut self, diagnostic: Diagnostic);
 
     // Combat actions and target selection extend here. Until then, these policies fail closed.
-    fn eventai_target(&self, _context: &EventContext, _policy: TargetPolicy) -> Option<u64> {
+    fn eventai_target(&self, _context: &EventContext, _action: &RuleAction) -> Option<u64> {
         None
     }
 
@@ -59,9 +61,12 @@ pub(crate) trait EventAiWorld {
 
 pub(crate) fn evaluate<W: EventAiWorld>(world: &mut W, request: EventAiRequest<'_>) -> u64 {
     let mut visited = 0;
+    let mut counted_creatures = HashSet::new();
     for context in world.eventai_contexts(&request) {
         let rows = world.eventai_rows(context.creature_guid);
-        visited += rows.len() as u64;
+        if counted_creatures.insert(context.creature_guid) {
+            visited += rows.len() as u64;
+        }
         let valid_rule_ids = rows.iter().map(effective_rule_id).collect();
         world.reap_eventai_rule_state(context.creature_guid, &valid_rule_ids);
         let mut groups: BTreeMap<u64, Vec<CreatureAiEvent>> = BTreeMap::new();
@@ -103,6 +108,10 @@ fn evaluate_rule<W: EventAiWorld>(world: &mut W, context: &EventContext, rule: &
         return;
     }
 
+    if state.is_some_and(|state| context.now_ms < state.next_eligible_ms) {
+        return;
+    }
+
     if rule.event == EventKind::TimedInCombat {
         match state {
             None => {
@@ -119,28 +128,42 @@ fn evaluate_rule<W: EventAiWorld>(world: &mut W, context: &EventContext, rule: &
                 );
                 return;
             }
-            Some(current) if context.now_ms < current.next_eligible_ms => return,
             Some(_) => {}
         }
     }
 
+    let Some(context) = world.eventai_condition(context, rule) else {
+        return;
+    };
+
     if rule.chance_pct < 100 && world.eventai_roll() % 100 >= rule.chance_pct as u32 {
-        finish_opportunity(world, context, rule, creature_state);
+        finish_opportunity(world, &context, rule, creature_state);
         return;
     }
 
-    for (index, action) in rule.actions.iter().enumerate() {
+    let actions: Vec<&RuleAction> = if rule
+        .source_policy
+        .contains(super::SOURCE_FLAG_RANDOM_ACTION)
+    {
+        rule.actions
+            .get(world.eventai_roll() as usize % rule.actions.len())
+            .into_iter()
+            .collect()
+    } else {
+        rule.actions.iter().collect()
+    };
+    for (index, action) in actions.into_iter().enumerate() {
         if context.assisted && matches!(action.kind, ActionKind::Say | ActionKind::Yell) {
             continue;
         }
-        let result = execute_action(world, context, action);
+        let result = execute_action(world, &context, action);
         match result {
             ActionResult::Applied => {}
             ActionResult::Refused
-                if (index == 0
+                if index == 0
                     && action.kind == ActionKind::Cast
-                    && rule.source_policy.contains(SOURCE_FLAG_COMBAT_ACTION))
-                    || action.cast_options.contains(super::CAST_REQUIRED) =>
+                    && (rule.source_policy.contains(SOURCE_FLAG_COMBAT_ACTION)
+                        || action.cast_options.contains(super::CAST_REQUIRED)) =>
             {
                 return;
             }
@@ -156,7 +179,7 @@ fn evaluate_rule<W: EventAiWorld>(world: &mut W, context: &EventContext, rule: &
             }
         }
     }
-    finish_opportunity(world, context, rule, creature_state);
+    finish_opportunity(world, &context, rule, creature_state);
 }
 
 fn execute_action<W: EventAiWorld>(
@@ -174,7 +197,7 @@ fn execute_action<W: EventAiWorld>(
             ActionResult::Applied
         }
         ActionKind::Cast => {
-            let Some(target) = basic_target(world, context, action.target) else {
+            let Some(target) = basic_target(world, context, action) else {
                 return ActionResult::Refused;
             };
             if action.params[0] == 0 {
@@ -205,14 +228,14 @@ fn execute_action<W: EventAiWorld>(
 fn basic_target<W: EventAiWorld>(
     world: &W,
     context: &EventContext,
-    policy: TargetPolicy,
+    action: &RuleAction,
 ) -> Option<u64> {
-    match policy {
+    match action.target {
         TargetPolicy::Current => context.current_target_guid,
         TargetPolicy::SelfActor => Some(context.creature_guid),
         TargetPolicy::Invoker => context.invoker_guid,
         TargetPolicy::EventTarget => context.event_target_guid,
-        other => world.eventai_target(context, other),
+        _ => world.eventai_target(context, action),
     }
 }
 
@@ -299,6 +322,10 @@ impl EventAiWorld for DatabaseWorld<'_> {
             .filter(&creature.entry)
             .chain(rules.by_guid().filter(&creature_guid))
             .collect()
+    }
+
+    fn eventai_condition(&self, context: &EventContext, rule: &Rule) -> Option<EventContext> {
+        super::combat::condition(self.ctx, context, rule)
     }
 
     fn eventai_creature_state(&self, creature_guid: u64) -> CreatureState {
@@ -402,16 +429,27 @@ impl EventAiWorld for DatabaseWorld<'_> {
     }
 
     fn eventai_speak(&mut self, context: &EventContext, action: &RuleAction, chat_type: u8) {
-        let broadcast = self
-            .ctx
-            .db
-            .game_creature_ai_broadcast_text()
-            .id()
-            .find(action.params[0]);
-        let (message, chat_type, language) = broadcast.map_or_else(
-            || (action.legacy_text.clone(), chat_type, 0),
-            |text| (text.male_text, text.chat_type, text.language_id),
-        );
+        let ids: Vec<u32> = action.params.into_iter().filter(|id| *id != 0).collect();
+        let broadcast = match ids.len() {
+            0 => None,
+            1 => self
+                .ctx
+                .db
+                .game_creature_ai_broadcast_text()
+                .id()
+                .find(ids[0]),
+            _ => self
+                .ctx
+                .db
+                .game_creature_ai_broadcast_text()
+                .id()
+                .find(ids[self.ctx.random::<u32>() as usize % ids.len()]),
+        };
+        let (message, chat_type, language) = match (ids.is_empty(), broadcast) {
+            (true, _) => (action.legacy_text.clone(), chat_type, 0),
+            (false, Some(text)) => (text.male_text, text.chat_type, text.language_id),
+            (false, None) => return,
+        };
         if message.is_empty() {
             return;
         }
@@ -431,34 +469,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
         action: &RuleAction,
         target_guid: u64,
     ) -> ActionResult {
-        let implemented_options = super::CAST_TRIGGERED | super::CAST_REQUIRED;
-        if action.cast_options.bits() & !implemented_options != 0 {
-            return ActionResult::Unsupported;
-        }
-        let Some(creature) = self
-            .ctx
-            .db
-            .game_world_entity()
-            .guid()
-            .find(context.creature_guid)
-        else {
-            return ActionResult::Refused;
-        };
-        if crate::spell::begin_cast(
-            self.ctx,
-            creature.guid,
-            action.params[0],
-            creature.level as u8,
-            target_guid,
-            action.cast_options.contains(super::CAST_TRIGGERED),
-            None,
-        )
-        .is_ok()
-        {
-            ActionResult::Applied
-        } else {
-            ActionResult::Refused
-        }
+        super::combat::cast(self.ctx, context, action, target_guid)
     }
 
     fn eventai_combat_action(
@@ -477,8 +488,8 @@ impl EventAiWorld for DatabaseWorld<'_> {
         super::mobility::execute(self.ctx, context, action)
     }
 
-    fn eventai_target(&self, context: &EventContext, policy: TargetPolicy) -> Option<u64> {
-        super::combat::target(self.ctx, context, policy)
+    fn eventai_target(&self, context: &EventContext, action: &RuleAction) -> Option<u64> {
+        super::combat::target(self.ctx, context, action)
     }
 
     fn eventai_diagnostic(&mut self, diagnostic: Diagnostic) {

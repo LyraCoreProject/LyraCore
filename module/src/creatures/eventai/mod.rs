@@ -9,6 +9,7 @@ mod combat;
 mod edges;
 mod mobility;
 
+pub(crate) use combat::{suppresses_fixed_rout, suppresses_flat_cast};
 pub(crate) use edges::creature_ai_on_aggro;
 #[cfg(test)]
 pub(crate) use engine::{evaluate, EventAiWorld};

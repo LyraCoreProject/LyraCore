@@ -614,7 +614,7 @@ fn an_unimplemented_action_stays_ready_and_reports_why() {
         910,
         0,
         EVENT_ON_AGGRO,
-        ACTION_EMOTE,
+        ACTION_SUMMON,
         100,
         1,
         REPEAT_ONCE,

@@ -35,7 +35,8 @@ pub(crate) const TARGET_NEAREST_AREA: u8 = 9;
 pub(crate) const TARGET_FARTHEST_HOSTILE: u8 = 10;
 
 pub(crate) const SOURCE_FLAG_COMBAT_ACTION: u32 = 1 << 0;
-const SUPPORTED_SOURCE_FLAGS: u32 = SOURCE_FLAG_COMBAT_ACTION;
+pub(crate) const SOURCE_FLAG_RANDOM_ACTION: u32 = 1 << 1;
+const SUPPORTED_SOURCE_FLAGS: u32 = SOURCE_FLAG_COMBAT_ACTION | SOURCE_FLAG_RANDOM_ACTION;
 
 pub(crate) const CAST_INTERRUPT_PREVIOUS: u32 = 1 << 0;
 pub(crate) const CAST_TRIGGERED: u32 = 1 << 1;
@@ -144,10 +145,6 @@ impl TargetPolicy {
 pub(crate) struct CastOptions(u32);
 
 impl CastOptions {
-    pub(crate) fn bits(self) -> u32 {
-        self.0
-    }
-
     pub(crate) fn contains(self, bit: u32) -> bool {
         self.0 & bit != 0
     }
