@@ -1056,8 +1056,10 @@ where
                 let v = it
                     .next()
                     .context("--vmap-prepare-coverage needs a generation id")?;
-                a.vmap_prepare_coverage =
-                    Some(v.parse().context("--vmap-prepare-coverage generation id must be a u64")?);
+                a.vmap_prepare_coverage = Some(
+                    v.parse()
+                        .context("--vmap-prepare-coverage generation id must be a u64")?,
+                );
             }
             "--go-models" => {
                 a.go_models = Some(
@@ -1828,17 +1830,46 @@ fn build_spell_chain_sql(dump: &str) -> Vec<String> {
 /// densely from 1 (the `#[auto_inc]` PK, like `game_trainer_spell`/`game_createinfo_spell` above — the
 /// importer supplies explicit ids for a direct SQL INSERT rather than relying on live auto-assignment).
 /// No Timestamp → plain SQL.
+///
+/// Also synthesizes the two armor-proficiency wrapper→passive rows (verified against ClassicDB 1.12):
+/// Plate Mail wrapper `PLATE_TRAINER_SPELL_ID` (7109) → passive `PLATE_PASSIVE_SPELL_ID` (750), and
+/// Mail wrapper `MAIL_TRAINER_SPELL_ID` (8738) → passive `MAIL_PASSIVE_SPELL_ID` (8737). cmangos
+/// `spell_learn_spell` carries no rows for these parents — the module's
+/// `learn_spell_with_dependents` (`module/src/spell/spellbook.rs`) needs them to grant the passive the
+/// equip Gate reads when a class trainer sells the wrapper. Skipped if the dump ever grows a real row
+/// for either parent, so a future upstream fix can't collide with the synthesized one.
 fn build_spell_learn_sql(dump: &str) -> Vec<String> {
-    let rows: Vec<String> = parse_table(dump, "spell_learn_spell")
+    use lyracore_shared::constants::armor_proficiency;
+
+    let mut parents_seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut rows: Vec<String> = parse_table(dump, "spell_learn_spell")
         .iter()
         .enumerate()
         .filter_map(|(i, r)| {
             let parent_spell: u32 = field(r, sls::ENTRY).parse().ok()?;
             let learn_spell: u32 = field(r, sls::SPELL_ID).parse().ok()?;
             let _active: u8 = field(r, sls::ACTIVE).parse().unwrap_or(1); // parsed, unused (see doc)
+            parents_seen.insert(parent_spell);
             Some(format!("({},{parent_spell},{learn_spell})", i as u64 + 1))
         })
         .collect();
+    let mut next_id = rows.len() as u64 + 1;
+    for (parent, learn) in [
+        (
+            armor_proficiency::PLATE_TRAINER_SPELL_ID,
+            armor_proficiency::PLATE_PASSIVE_SPELL_ID,
+        ),
+        (
+            armor_proficiency::MAIL_TRAINER_SPELL_ID,
+            armor_proficiency::MAIL_PASSIVE_SPELL_ID,
+        ),
+    ] {
+        if parents_seen.contains(&parent) {
+            continue; // dump already carries a real spell_learn_spell row for this wrapper
+        }
+        rows.push(format!("({next_id},{parent},{learn})"));
+        next_id += 1;
+    }
     let mut stmts = vec!["DELETE FROM game_spell_learn WHERE id > 0".to_string()];
     push_insert(
         &mut stmts,
@@ -5629,12 +5660,60 @@ mod tests {
     }
 
     #[test]
-    fn build_spell_learn_sql_empty_table_yields_delete_only_no_insert() {
+    fn build_spell_learn_sql_empty_table_still_synthesizes_armor_proficiency_wrappers() {
+        // No cmangos spell_learn_spell rows at all — the two verified armor-proficiency wrapper→passive
+        // pairs still synthesize (cmangos ships neither; see the builder's doc).
         let stmts = build_spell_learn_sql("x y");
-        assert_eq!(
-            stmts,
-            vec!["DELETE FROM game_spell_learn WHERE id > 0".to_string()]
+        assert_eq!(stmts[0], "DELETE FROM game_spell_learn WHERE id > 0");
+        let insert = stmts
+            .iter()
+            .find(|s| s.starts_with("INSERT INTO game_spell_learn "))
+            .unwrap();
+        assert!(
+            insert.contains("(1,7109,750)"),
+            "Plate Mail wrapper→passive: {insert}"
         );
+        assert!(
+            insert.contains("(2,8738,8737)"),
+            "Mail wrapper→passive: {insert}"
+        );
+    }
+
+    #[test]
+    fn build_spell_learn_sql_synthesizes_armor_proficiency_wrappers_exactly_once_alongside_real_rows(
+    ) {
+        // Real spell_learn_spell rows for unrelated spells coexist with the two synthesized pairs, each
+        // appearing exactly once, with ids continuing densely past the real rows.
+        let dump = "x INSERT INTO `spell_learn_spell` VALUES (196,197,1); y";
+        let stmts = build_spell_learn_sql(dump);
+        let insert = stmts
+            .iter()
+            .find(|s| s.starts_with("INSERT INTO game_spell_learn "))
+            .unwrap();
+        assert!(insert.contains("(1,196,197)"), "{insert}");
+        assert!(insert.contains("(2,7109,750)"), "{insert}");
+        assert!(insert.contains("(3,8738,8737)"), "{insert}");
+        assert_eq!(insert.matches("7109,750").count(), 1, "{insert}");
+        assert_eq!(insert.matches("8738,8737").count(), 1, "{insert}");
+    }
+
+    #[test]
+    fn build_spell_learn_sql_does_not_double_synthesize_if_dump_already_has_the_wrapper_row() {
+        // Defense-in-depth: if a future cmangos dump grows a real spell_learn_spell row for one of the
+        // wrapper parents, the synthesis must not add a second, colliding row for that parent.
+        let dump = "x INSERT INTO `spell_learn_spell` VALUES (7109,750,1); y";
+        let stmts = build_spell_learn_sql(dump);
+        let insert = stmts
+            .iter()
+            .find(|s| s.starts_with("INSERT INTO game_spell_learn "))
+            .unwrap();
+        assert_eq!(
+            insert.matches("7109,750").count(),
+            1,
+            "must not double-insert the plate wrapper: {insert}"
+        );
+        // The mail pair still synthesizes — only the colliding parent is skipped.
+        assert!(insert.contains("8738,8737"), "{insert}");
     }
 
     #[test]
@@ -5706,8 +5785,9 @@ mod tests {
                 plan.stmts
             );
         }
-        // Only the spellmeta family gets a provenance stamp (1 chain row + 1 learn row).
-        assert_eq!(plan.stamps, vec![("spellmeta", 2u64)], "{:?}", plan.stamps);
+        // Only the spellmeta family gets a provenance stamp (1 chain row + 1 real learn row + the 2
+        // synthesized armor-proficiency wrapper→passive rows).
+        assert_eq!(plan.stamps, vec![("spellmeta", 4u64)], "{:?}", plan.stamps);
     }
 
     // --- work-item 217: gossip completeness (menu options, multi-slot npc_text, conditions) --------
@@ -6486,6 +6566,35 @@ mod tests {
             trailing.get("620"),
             Some(&("0", "0")),
             "an ordinary creature imports 0/0 — the fail-open default: {insert}"
+        );
+    }
+
+    /// The verbatim `npc_trainer` → `game_trainer_spell` path (unchanged by the armor-proficiency
+    /// wrapper work) already carries `required_level` and `cost` straight through for an armor-wrapper
+    /// offering — this pins that behavior rather than re-implementing it. The gap the wrapper work
+    /// closes is `game_spell_learn` (see `build_spell_learn_sql_*` tests), not this path.
+    #[test]
+    fn npc_trainer_armor_wrapper_row_imports_verbatim_required_level_and_cost() {
+        // A Paladin trainer (entry 925, in-box at the test-args default center) offering the Plate
+        // Mail wrapper (7109) at req level 40 for 22000 copper — real-world ClassicDB shape.
+        let dump = format!(
+            "x INSERT INTO `creature` VALUES \
+             (1,925,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {}; \
+             INSERT INTO `npc_trainer` VALUES (925,7109,22000,0,0,40); y",
+            creature_template_row(925, 0),
+        );
+        let args = test_args();
+        let plan = build_dump_plan(&dump, &args, &None, &None).expect("build_dump_plan");
+        let insert = plan
+            .stmts
+            .iter()
+            .find(|s| s.starts_with("INSERT INTO game_trainer_spell"))
+            .unwrap_or_else(|| panic!("trainer_spell insert present: {:?}", plan.stmts));
+        // id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap
+        assert!(
+            insert.contains(",925,7109,22000,40,0,75)"),
+            "wrapper row keeps req level 40 and verbatim cost: {insert}"
         );
     }
 
