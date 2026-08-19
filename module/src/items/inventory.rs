@@ -5,12 +5,12 @@
 
 use spacetimedb::{ReducerContext, Table};
 
-use lyracore_shared::constants::starter_item;
+use lyracore_shared::constants::{armor_proficiency, starter_item};
 
 use super::rules::{
-    binds_on_equip, can_equip_into, can_equip_proficiency, eligibility_mask_allows, equip_slot,
-    invtype, meets_required_level, meets_required_reputation, meets_required_skill, merge_amount,
-    resolve_equip_slot,
+    binds_on_equip, can_equip_into, eligibility_mask_allows, equip_slot, invtype,
+    meets_required_level, meets_required_reputation, meets_required_skill, merge_amount,
+    resolve_equip_slot, Proficiency,
 };
 use super::tables::{
     game_item_instance, game_item_template, item_in_slot, next_item_guid, slot_occupied,
@@ -195,7 +195,16 @@ pub(crate) fn apply_item_move(
                 tmpl.required_reputation_faction, tmpl.required_reputation_rank
             ));
         }
-        if !can_equip_proficiency(player_class, tmpl.class, tmpl.subclass) {
+        // Armor proficiency is class base set PLUS the two upgrades a class trainer teaches at 40:
+        // knowing the passive IS the proficiency, so an untrained Warrior wears mail but not plate.
+        // Same derivation the gateway masks into SMSG_SET_PROFICIENCY, so the tint cannot promise
+        // what this Gate refuses.
+        let proficiency = Proficiency::derive(
+            player_class,
+            crate::spell::knows_spell(ctx, player_guid, armor_proficiency::PLATE_PASSIVE_SPELL_ID),
+            crate::spell::knows_spell(ctx, player_guid, armor_proficiency::MAIL_PASSIVE_SPELL_ID),
+        );
+        if !proficiency.can_equip(tmpl.class, tmpl.subclass) {
             return Err(format!(
                 "class {} lacks proficiency for item class {}/subclass {}",
                 player_class, tmpl.class, tmpl.subclass
@@ -625,7 +634,7 @@ mod tests {
             "eligibility_mask_allows(tmpl.allowed_race, player_race)",
             "meets_required_skill(tmpl.required_skill, tmpl.required_skill_rank, current_skill)",
             "meets_required_reputation(",
-            "can_equip_proficiency(player_class, tmpl.class, tmpl.subclass)",
+            "proficiency.can_equip(tmpl.class, tmpl.subclass)",
         ] {
             assert!(body.contains(gate), "equip path must retain `{gate}`");
             assert!(
@@ -637,6 +646,34 @@ mod tests {
                 "`{gate}` must refuse before placement changes"
             );
         }
+    }
+
+    /// ARMOR PROFICIENCY SOURCE: the equip Gate must derive proficiency from the Character's LEARNED
+    /// passives, so a level-40 trainer purchase is what unlocks plate. Reading the class alone would
+    /// hand a fresh Warrior a full plate set. There is no `ReducerContext` harness in this crate, so
+    /// the two spell reads are pinned by source scan; the derivation's answers are asserted directly
+    /// in `lyracore-shared` and in `rules`.
+    #[test]
+    fn the_equip_gate_derives_armor_proficiency_from_learned_passives() {
+        let src = include_str!("inventory.rs");
+        let body = code_of(src, "pub(crate) fn apply_item_move(");
+        for passive in [
+            "armor_proficiency::PLATE_PASSIVE_SPELL_ID",
+            "armor_proficiency::MAIL_PASSIVE_SPELL_ID",
+        ] {
+            assert!(
+                body.contains(passive) && body.contains("knows_spell("),
+                "the equip path must read `{passive}` from the spellbook"
+            );
+        }
+        assert!(
+            body.contains("Proficiency::derive("),
+            "the equip path must feed the shared derivation, not a class-only rule"
+        );
+        assert!(
+            !body.contains("can_equip_proficiency("),
+            "the class ceiling belongs to the auction filter and must never gate an equip"
+        );
     }
 
     /// FREE-BANK-SLOT SEARCH SHAPE: like `first_free_backpack_slot`, `first_free_bank_slot` must
