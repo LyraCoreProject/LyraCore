@@ -674,6 +674,9 @@ pub(crate) fn apply_hit(
                 target_guid,
             );
         }
+        // The duel finisher dealt real damage to a target that survived it, so both sides' Procs fire,
+        // exactly as they would on any other surviving hit.
+        crate::spell::proc::run_proc_pass(ctx, attacker_guid, target_guid, &hit, true);
         return HitOutcome {
             killed: false,
             duel_completed: true,

@@ -93,11 +93,13 @@ pub fn debug_teleport(
 
 /// Deal `amount` DIRECT damage to a live entity through the REAL shared damage pipeline — the same
 /// `fold_incoming_damage` → `apply_hit` every swing and spell routes through, as a MAIN-HAND hit. So a
-/// harness poke drives everything a real melee hit drives: absorb, break-on-damage, pushback, threat,
-/// Retaliation and the proc pass (which is what lets the proc probe run in seconds instead of waiting
-/// on swing timers). Unlike `debug_set_health` (a raw field write, NO side effects), this behaves like
-/// being hit. Never lethal: the damage is capped at `health - 1` BEFORE the pipeline, so the kill fork
-/// is unreachable from here (use `debug_kill_nearest` for that).
+/// debug poke drives everything a real melee swing drives: the attacker's rage and weapon skill-up,
+/// absorb, the defender's rage and defense skill-up, break-on-damage, cast pushback, threat,
+/// Retaliation and the proc pass. That last one is why it routes here rather than writing health: a
+/// scripted 100-hit run against a Proc finishes in seconds instead of waiting on swing timers.
+/// Unlike `debug_set_health` (a raw field write, NO side effects), this behaves like being hit. Never
+/// lethal: the damage is capped at `health - 1` BEFORE the pipeline, so the kill fork is unreachable
+/// from here (use `debug_kill_nearest` for that).
 #[reducer]
 pub fn debug_apply_damage(
     ctx: &ReducerContext,

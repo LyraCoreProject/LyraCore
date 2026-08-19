@@ -440,15 +440,24 @@ mod tests {
             "`kill_player` must shed the dying player's auras — without it a corpse keeps riding. \
              Body was:\n{death}"
         );
-        let shed = crate::test_scan::code_of(
+        let collect = crate::test_scan::code_of(
             include_str!("spell/control.rs"),
             "pub(crate) fn remove_auras_on_death(",
         );
         assert!(
+            collect.contains("shed_auras(ctx, unit_guid, shed)"),
+            "the death shed must route its collected rows through the shared removal tail, which is \
+             what recomputes the Mount Projection. Body was:\n{collect}"
+        );
+        let shed = crate::test_scan::code_of(
+            include_str!("spell/control.rs"),
+            "pub(crate) fn shed_auras(",
+        );
+        assert!(
             shed.contains("crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0)")
                 && shed.contains("crate::mount::recompute_mount(ctx, unit_guid);"),
-            "the death shed must collect the mount predicate while deleting and recompute the \
-             projection afterwards, or a dead rider keeps a stuck mount display and mounted run \
+            "the shared removal tail must collect the mount predicate while deleting and recompute \
+             the projection afterwards, or a dead rider keeps a stuck mount display and mounted run \
              speed. Body was:\n{shed}"
         );
         // The end state the chain converges on: no mount aura left → display 0 (and, through the same
@@ -910,7 +919,8 @@ mod tests {
                 3,
                 "break_auras_on_damage (ordinary damage must NOT dismount — the mount's DBC \
                  interrupt bit is underwater-cancel, not break-on-damage), break_channel \
-                 (A_PERIODIC_TRIGGER rows only), and remove_auras_on_death — wired",
+                 (A_PERIODIC_TRIGGER rows only), and shed_auras — the shared involuntary-removal \
+                 tail behind the death shed and a spent Proc's buff; wired",
             ),
             (
                 "module/src/spell/effects.rs",
@@ -921,11 +931,6 @@ mod tests {
                 "module/src/spell/math.rs",
                 2,
                 "remove_seal_auras and break_stealth — both scoped to their own aura kind",
-            ),
-            (
-                "module/src/spell/proc.rs",
-                1,
-                "remove_carrier_buff — a Proc that spent its last charge sheds the whole buff; wired",
             ),
             (
                 "module/src/spell/scheduler.rs",

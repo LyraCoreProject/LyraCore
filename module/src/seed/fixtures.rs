@@ -868,7 +868,7 @@ pub(crate) fn seed_frost_armor_fixture(ctx: &ReducerContext) {
 /// own cast-GO row, so the mark only has to land somewhere observable without perturbing combat.
 pub(crate) const TEST_PROC_MARK: u32 = 50140;
 /// A 50-percent Proc off a melee hit taken, unlimited charges — the chance roll's fixture. A scripted
-/// 100-hit probe against it should land inside binomial bounds.
+/// 100-hit run against it should land its fire count inside binomial bounds.
 pub(crate) const TEST_PROC_COIN: u32 = 50141;
 /// A certain Proc with 3 charges off a melee hit taken — the charge fixture. It fires 3 times and then
 /// the whole buff comes off.
@@ -879,9 +879,13 @@ pub(crate) const TEST_PROC_CHARGES: u32 = 50142;
 ///
 /// Both Procs are `A_PROC_TRIGGER` self-buffs whose header carries `proc_flags 0x8` (melee hit taken),
 /// so a plain melee swing at the Carrier — or `debug_apply_damage`, which routes through the same
-/// chokepoint — fires them. The PPM and internal-cooldown fixtures are deliberately absent: the
-/// `spell_proc_event` overlay is the only data source vanilla has for those two fields, so authoring
-/// them here would invent a second one. IDEMPOTENT, like every other mock-seed fixture.
+/// chokepoint — fires them. Drive them with a REAL attacker guid: a Proc with no Counterparty in the
+/// world fires nothing, so the anonymous `attacker_guid = 0` form of that reducer deliberately does
+/// not exercise them. Count the fires as `game_spell_cast_event` rows naming `TEST_PROC_MARK`.
+///
+/// The PPM and internal-cooldown fixtures are deliberately absent: the classic-db `spell_proc_event`
+/// overlay is the only source vanilla data has for those two fields, so authoring them here would
+/// invent a second one. IDEMPOTENT, like every other mock-seed fixture.
 pub(crate) fn seed_test_proc_fixtures(ctx: &ReducerContext) {
     if ctx
         .db

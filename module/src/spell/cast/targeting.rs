@@ -762,13 +762,18 @@ pub(crate) fn apply_effect(
     // never start a proc.
     triggered: bool,
 ) -> EffectHit {
-    // The proc event a damage arm's hit raises, or Triggered when this whole cast was one.
-    let event = |source: crate::combat::HitSource| {
-        if triggered {
-            crate::combat::HitSource::Triggered
-        } else {
-            source
-        }
+    // The hit a damage arm below hands to the shared pipeline: this spell, and the proc event its
+    // source raises — or Triggered, raising nothing, when the whole cast was one.
+    let hit_of = |source: crate::combat::HitSource, crit: bool| {
+        crate::combat::Hit::spell(
+            if triggered {
+                crate::combat::HitSource::Triggered
+            } else {
+                source
+            },
+            hdr.spell_id,
+            crit,
+        )
     };
     if e.kind & KIND_AURA_BIT != 0 {
         // CC IMMUNITY: an `A_CONTROL` crowd-control effect (a stun/root/…) is REFUSED if the target is
@@ -923,11 +928,7 @@ pub(crate) fn apply_effect(
                 target_guid,
                 caster_guid,
                 after_resist,
-                crate::combat::Hit::spell(
-                    event(crate::combat::HitSource::Spell),
-                    hdr.spell_id,
-                    is_crit,
-                ),
+                hit_of(crate::combat::HitSource::Spell, is_crit),
             );
             EffectHit {
                 dealt,
@@ -957,11 +958,7 @@ pub(crate) fn apply_effect(
                     target_guid,
                     caster_guid,
                     dmg as i32,
-                    crate::combat::Hit::spell(
-                        event(crate::combat::HitSource::MeleeSpell),
-                        hdr.spell_id,
-                        false,
-                    ),
+                    hit_of(crate::combat::HitSource::MeleeSpell, false),
                 );
                 EffectHit::dmg(dealt, absorbed)
             } else {
@@ -1152,11 +1149,7 @@ pub(crate) fn apply_effect(
                 target_guid,
                 caster_guid,
                 damage as i32,
-                crate::combat::Hit::spell(
-                    event(crate::combat::HitSource::Spell),
-                    hdr.spell_id,
-                    false,
-                ),
+                hit_of(crate::combat::HitSource::Spell, false),
             );
             EffectHit::dmg(dealt, absorbed)
         }
@@ -1172,11 +1165,7 @@ pub(crate) fn apply_effect(
                     target_guid,
                     caster_guid,
                     seal,
-                    crate::combat::Hit::spell(
-                        event(crate::combat::HitSource::Spell),
-                        hdr.spell_id,
-                        false,
-                    ),
+                    hit_of(crate::combat::HitSource::Spell, false),
                 );
                 remove_seal_auras(ctx, caster_guid);
                 EffectHit::dmg(dealt, absorbed)
@@ -1201,11 +1190,7 @@ pub(crate) fn apply_effect(
                     target_guid,
                     caster_guid,
                     dmg,
-                    crate::combat::Hit::spell(
-                        event(crate::combat::HitSource::MeleeSpell),
-                        hdr.spell_id,
-                        false,
-                    ),
+                    hit_of(crate::combat::HitSource::MeleeSpell, false),
                 );
                 EffectHit::dmg(dealt, absorbed)
             } else {

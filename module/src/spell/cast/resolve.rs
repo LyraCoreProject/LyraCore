@@ -93,8 +93,7 @@ pub(crate) fn resolve_cast_at(
     // 114: an on-next-swing spell (Heroic Strike/Cleave) VALIDATES cost at press (the gate above,
     // vanilla shows "Not enough rage" immediately) but CHARGES when the swing FIRES (resolve_swing) —
     // a press-time rage deduction was operator-flagged as wrong (vanilla defers it to the fire).
-    let queued_next_swing = effects.iter().any(|e| e.kind == E_NEXT_SWING);
-    if caster.is_player() && hdr.cost > 0 && !queued_next_swing {
+    if caster.is_player() && hdr.cost > 0 && !queues_next_swing(&effects) {
         let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
         caster.power = caster.power.saturating_sub(hdr.cost);
         // FSR only applies when mana is spent; rage/energy/health costs must not suppress mana regen.
@@ -148,10 +147,11 @@ pub(crate) fn resolve_cast_at(
         caster_guid,
         target_guid,
         level,
-        is_completion,
-        client_initiated,
+        CastOrigin::Direct {
+            is_completion,
+            client_initiated,
+        },
         dest,
-        false,
     );
 
     // AGGRO-ON-HOSTILE-CAST: a player casting an ENEMY-targeting spell at a creature pulls it into combat at
@@ -236,6 +236,47 @@ pub(crate) fn resolve_cast_at(
     Ok(())
 }
 
+/// Who is running this cast — the one axis the shared effect loop below branches on, as an exhaustive
+/// type rather than three booleans that can be combined into states that cannot exist (a Triggered
+/// Cast is never a timed-cast completion and never client-initiated).
+#[derive(Clone, Copy)]
+pub(crate) enum CastOrigin {
+    /// A cast the caster performed. `is_completion` is true only for a TIMED cast finishing its cast
+    /// bar (the gateway then suppresses the second `SMSG_SPELL_START`); `client_initiated` only for the
+    /// player `CMSG_CAST_SPELL` path, whose caster already got a synchronous send.
+    Direct {
+        is_completion: bool,
+        client_initiated: bool,
+    },
+    /// A **Triggered Cast**: a fired Proc's own cast. Every hit it deals is a Triggered hit, and it
+    /// lands only on units that are in the world and alive.
+    Triggered,
+}
+
+impl CastOrigin {
+    fn is_triggered(self) -> bool {
+        matches!(self, Self::Triggered)
+    }
+
+    /// `(is_completion, client_initiated)` for the cast-GO row. A Triggered Cast is neither.
+    fn cast_event_flags(self) -> (bool, bool) {
+        match self {
+            Self::Direct {
+                is_completion,
+                client_initiated,
+            } => (is_completion, client_initiated),
+            Self::Triggered => (false, false),
+        }
+    }
+}
+
+/// Did this cast PARK on the caster's next melee swing (Heroic Strike / Cleave) rather than fire? Such
+/// a cast charges its cost at the swing, not at the press, and emits no cast-GO row here — the swing
+/// emits it when it fires. One derivation, read by both the cost charge and the effect loop.
+fn queues_next_swing(effects: &[SpellEffect]) -> bool {
+    effects.iter().any(|e| e.kind == E_NEXT_SWING)
+}
+
 // One argument per axis the two callers differ on; the shared body is the loop itself.
 #[allow(clippy::too_many_arguments)]
 /// **The effect loop.** Run every effect of a cast in order and emit the ONE cast-GO visual. This is
@@ -248,9 +289,10 @@ pub(crate) fn resolve_cast_at(
 /// spell did not fire, it parked on `next_swing_spell`, and the SWING emits the row when it does fire
 /// (emitting one here is exactly what un-lit the client's button and made the damage read as white).
 ///
-/// `triggered` marks a Triggered Cast: every hit it deals is a Triggered hit (grants nothing, raises no
-/// proc event), and a resolved target that is DEAD or gone takes nothing — so a proc firing off a
-/// killing blow still lands its self-targeted effects and never places a debuff on a corpse.
+/// A [`CastOrigin::Triggered`] origin marks a Triggered Cast: every hit it deals is a Triggered hit
+/// (grants nothing, raises no proc event), and a resolved target that is DEAD or gone takes nothing —
+/// so a proc firing off a killing blow still lands its self-targeted effects and never places a debuff
+/// on a corpse.
 fn run_spell_effects(
     ctx: &ReducerContext,
     hdr: &Spell,
@@ -258,11 +300,10 @@ fn run_spell_effects(
     caster_guid: u64,
     target_guid: u64,
     level: u8,
-    is_completion: bool,
-    client_initiated: bool,
+    origin: CastOrigin,
     dest: Option<(f32, f32, f32)>,
-    triggered: bool,
 ) {
+    let triggered = origin.is_triggered();
     let mut total_damage: u32 = 0;
     let mut total_healed: u32 = 0;
     let mut total_resisted: u32 = 0;
@@ -310,7 +351,7 @@ fn run_spell_effects(
             }
         }
     }
-    if effects.iter().any(|e| e.kind == E_NEXT_SWING) {
+    if queues_next_swing(effects) {
         return; // parked on the next swing — the swing emits the GO row, not this cast
     }
     // SpellSchool INDEX (0=normal..6=arcane) from the spell header's school BITMASK (1,2,4,…,64) via
@@ -324,6 +365,7 @@ fn run_spell_effects(
     // ONE cast visual per cast (the caster's animation/SFX), even for a multi-effect spell. This is the
     // cast-GO (the spell resolves): cast_time_ms 0, aimed at the primary target so the gateway's
     // SMSG_SPELL_GO missile flies at it. (A timed spell already emitted a cast-START event in begin_cast.)
+    let (is_completion, client_initiated) = origin.cast_event_flags();
     ctx.db.game_spell_cast_event().insert(SpellCastEvent {
         target_guid,
         // true only on a TIMED-cast COMPLETION (from fire_pending_cast) → gateway suppresses the
@@ -393,10 +435,8 @@ pub(crate) fn cast_triggered(
         caster_guid,
         target_guid,
         level,
-        false,
-        false,
+        CastOrigin::Triggered,
         None,
-        true,
     );
     Ok(())
 }

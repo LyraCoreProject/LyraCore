@@ -283,9 +283,10 @@ pub(crate) fn decide(
     })
 }
 
-/// The profile a fresh aura row freezes at apply, from its spell header. The overlay fields (rate,
-/// `procEx`, the filters and the internal cooldown) have no data source in this ticket and freeze at
-/// their neutral zero, which the decision reads as "no rate, any hit, any spell, no cooldown".
+/// The profile a fresh aura row freezes at apply, from its spell header. `Spell.dbc` is the only
+/// source the header has, and it carries no rate, no `procEx`, no filter and no internal cooldown —
+/// those come from the classic-db `spell_proc_event` overlay. Until that overlay is loaded they freeze
+/// at their neutral zero, which the decision reads as "no rate, any hit, any spell, no cooldown".
 pub(crate) fn frozen_profile(kind: u8, hdr: &Spell) -> ProcProfile {
     if !is_proc_kind(kind) {
         return ProcProfile::default();
@@ -302,11 +303,13 @@ pub(crate) fn frozen_profile(kind: u8, hdr: &Spell) -> ProcProfile {
 //  The one pass [entity]
 // ===========================================================================================
 
-/// Run **the** proc pass for one landed hit. Called exactly once per lethal branch of
-/// `combat::apply_hit` and from nowhere else.
+/// Run **the** proc pass for one landed hit. Called once per outcome branch of `combat::apply_hit`
+/// (killed, duel-completed, survived) and from nowhere else.
 ///
 /// The attacker's "dealt" Procs run first and run even on a killing blow; the target's "taken" Procs
-/// run only when it survived. Rows are snapshotted before any of them fires (collect-then-mutate), and
+/// run only when it survived. A Carrier whose Counterparty has left the world fires nothing at all:
+/// with no Counterparty to aim at, a Triggered Cast would resolve its enemy effects back onto the
+/// Carrier. Rows are snapshotted before any of them fires (collect-then-mutate), and
 /// a row applied in this same reducer invocation is skipped — the same guard `break_auras_on_damage`
 /// uses — so a Proc that grants another Proc cannot double up in one instant.
 ///
@@ -328,10 +331,16 @@ pub(crate) fn run_proc_pass(
     // (it can place, refresh or displace an aura), and a pass that read the table lazily would decide
     // later rows against a table its own earlier fire had already moved.
     let mut candidates: Vec<(Aura, ProcSide, u64)> = Vec::new();
-    for row in proc_rows(ctx, attacker_guid, dealer_bits) {
-        candidates.push((row, ProcSide::Dealer, target_guid));
+    // A Counterparty that is not in the world at all (an environmental hit with no attacker, a caster
+    // that logged out mid-flight) fires nothing: the Triggered Cast's own target resolution treats a
+    // guid of 0 as "no explicit target" and would land the trigger back on the Carrier. A DEAD
+    // Counterparty is still a real unit and still fires — the cast then lands only its self effects.
+    if in_world(ctx, target_guid) {
+        for row in proc_rows(ctx, attacker_guid, dealer_bits) {
+            candidates.push((row, ProcSide::Dealer, target_guid));
+        }
     }
-    if target_survived {
+    if target_survived && in_world(ctx, attacker_guid) {
         for row in proc_rows(ctx, target_guid, victim_bits) {
             candidates.push((row, ProcSide::Victim, attacker_guid));
         }
@@ -368,12 +377,23 @@ pub(crate) fn run_proc_pass(
         if fire.remove_buff {
             remove_carrier_buff(ctx, row.target_guid, row.spell_id);
         } else if let Some(mut fresh) = ctx.db.game_aura().id().find(row.id) {
-            // Re-read: the Triggered Cast above may have refreshed this very row.
-            fresh.proc_charges = fire.charges_left;
+            // Re-read, because the Triggered Cast above can have written this very row. A REFRESH in
+            // this same instant refilled the charges to full, and that refill wins over the count this
+            // fire computed from the pre-fire snapshot; the cooldown stamp is written either way, since
+            // a refresh deliberately leaves a running cooldown alone.
+            if fresh.applied_at != ctx.timestamp {
+                fresh.proc_charges = fire.charges_left;
+            }
             fresh.proc_ready_micros = fire.ready_micros;
             ctx.db.game_aura().id().update(fresh);
         }
     }
+}
+
+/// Is `guid` a unit in the world? A guid of 0 (the "no attacker" sentinel every environmental and
+/// non-melee damage path passes) is never one.
+fn in_world(ctx: &ReducerContext, guid: u64) -> bool {
+    guid != 0 && ctx.db.game_world_entity().guid().find(guid).is_some()
 }
 
 /// The Carrier's Proc rows this event could fire: a Proc kind, not applied in this same instant, whose
@@ -440,8 +460,8 @@ fn fire_proc(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) -> bool {
         }
         A_PROC_DAMAGE => {
             // The damage arm is not wired yet: the kind, its wire value and the decision that selects
-            // it all exist, but nothing routes its frozen amount through the damage pipeline. Until it
-            // does, the row is inert and keeps its charges.
+            // it all exist, but nothing routes its frozen amount through the resistance and damage
+            // pipeline. Until it does, the row is inert and keeps its charges.
             log::info!(
                 "proc: spell {} is a damage Proc — the damage arm is not wired yet, nothing fired",
                 row.spell_id
@@ -452,39 +472,15 @@ fn fire_proc(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) -> bool {
     }
 }
 
-/// The last charge is spent: every aura row of `spell_id` comes off the Carrier, and the projections an
-/// aura removal can move are re-derived — the same collect-then-delete-then-converge shape every other
-/// removal path uses, so a proc buff that also carried a stat effect cannot leave a stale pool behind.
+/// The last charge is spent: EVERY aura row of `spell_id` comes off the Carrier, not just the Proc
+/// effect — a proc buff is one buff in the client and its other effects must not linger as an orphan.
+/// Routed through the shared [`crate::spell::shed_auras`] tail, so the projections an aura removal can
+/// move are re-derived exactly as they are on any other involuntary removal.
 fn remove_carrier_buff(ctx: &ReducerContext, carrier_guid: u64, spell_id: u32) {
-    let auras = ctx.db.game_aura();
-    let spent: Vec<Aura> = auras
-        .by_target()
-        .filter(&carrier_guid)
+    let spent: Vec<Aura> = auras_on(ctx, carrier_guid)
         .filter(|a| a.spell_id == spell_id)
         .collect();
-    if spent.is_empty() {
-        return;
-    }
-    let mut revitalize = false;
-    let mut resheet = false;
-    let mut remount = false;
-    for a in &spent {
-        revitalize |= aura_moves_vitals(a.eff_kind, a.eff_p0);
-        resheet |= crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0);
-        remount |= crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0);
-    }
-    for a in spent {
-        auras.id().delete(a.id);
-    }
-    if revitalize {
-        recompute_vitals(ctx, carrier_guid);
-    }
-    if resheet {
-        recompute_sheet(ctx, carrier_guid);
-    }
-    if remount {
-        crate::mount::recompute_mount(ctx, carrier_guid);
-    }
+    shed_auras(ctx, carrier_guid, spent);
 }
 
 #[cfg(test)]
@@ -822,7 +818,7 @@ mod tests {
         assert_eq!(frozen.flags, 0x28);
         assert_eq!(frozen.chance, 100);
         assert_eq!(frozen.charges, 3);
-        // T3 fills these from the `spell_proc_event` overlay; the header carries no source for them.
+        // The `spell_proc_event` overlay fills these; the Spell.dbc header carries no source for them.
         assert_eq!(frozen.ppm, 0.0);
         assert_eq!(frozen.icd_ms, 0);
         assert_eq!(frozen.proc_ex, 0);
@@ -833,9 +829,9 @@ mod tests {
 
     // ---- Architecture Tests -----------------------------------------------------------------
 
-    /// Story 38, structurally: ONE proc pass, called from ONE place. `apply_hit` is the chokepoint
-    /// every damaging hit already routes through, so a new damage path gets procs by construction —
-    /// a second call site anywhere else is how that guarantee is lost.
+    /// ONE proc pass, called from ONE place. `apply_hit` is the chokepoint every damaging hit already
+    /// routes through, so a new damage path gets procs by construction — a second call site anywhere
+    /// else is how that guarantee is lost.
     #[test]
     fn the_proc_pass_is_called_only_from_apply_hit() {
         let mut offenders: Vec<String> = Vec::new();
@@ -866,20 +862,21 @@ mod tests {
              once, at the one chokepoint every damaging hit routes through, so a new damage path \
              cannot forget procs."
         );
-        // Both calls sit inside `apply_hit` itself — one per lethal branch, since the dealer's procs
-        // run on a killing blow and the victim's only run when the victim survived.
+        // Every call sits inside `apply_hit` itself — one per outcome branch, because each branch
+        // decides for itself whether the target survived: the duel finisher and the ordinary survivor
+        // fire both sides, the killing blow fires the attacker's Procs only.
         let death = crate::test_scan::read_scanned("module/src/combat/death.rs")
             .expect("module/ is never optional");
         let body = crate::test_scan::code_of(&death, "pub(crate) fn apply_hit(");
         assert_eq!(
             body.matches("run_proc_pass(").count(),
-            2,
-            "`apply_hit` must run the proc pass once per lethal branch — the killing blow still \
-             fires the attacker's procs, and the victim's only fire when it survived. Body \
-             was:\n{body}"
+            3,
+            "`apply_hit` must run the proc pass once per outcome branch — duel-completed, killed and \
+             survived. A branch that writes damage and skips the pass is a damage path that forgot \
+             procs. Body was:\n{body}"
         );
         assert_eq!(
-            in_death, 2,
+            in_death, 3,
             "combat/death.rs calls `run_proc_pass` somewhere other than `apply_hit`"
         );
     }
@@ -907,6 +904,34 @@ mod tests {
                  no Gate and start no cooldown. Body was:\n{body}"
             );
         }
+    }
+
+    /// The debug damage reducer is the fast way to drive this pass: waiting on real swing timers turns
+    /// a 100-hit run into minutes. It must therefore route through the SHARED pipeline as a main-hand
+    /// hit, not write health by hand — a raw field write raises no combat event and fires no Proc.
+    #[test]
+    fn the_debug_damage_reducer_drives_the_pass_as_a_main_hand_hit() {
+        let body = crate::test_scan::code_of(
+            &crate::test_scan::debug_dir_src(),
+            "pub fn debug_apply_damage(",
+        );
+        for needle in [
+            "crate::combat::fold_incoming_damage(",
+            "crate::combat::apply_hit(",
+            "HitSource::MainHand",
+        ] {
+            assert!(
+                body.contains(needle),
+                "`debug_apply_damage` no longer reaches `{needle}` — it must drive the same \
+                 fold-then-apply pipeline a real swing does, or it stops driving the proc pass. Body \
+                 was:\n{body}"
+            );
+        }
+        assert!(
+            !body.contains("entities.guid().update("),
+            "`debug_apply_damage` writes health by hand again instead of routing through the shared \
+             pipeline. Body was:\n{body}"
+        );
     }
 
     /// The trainer's wrapper-resolution exclusion list names the renamed Proc kind. It and the

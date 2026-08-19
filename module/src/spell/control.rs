@@ -520,11 +520,8 @@ pub(crate) fn aura_survives_death(attributes: u32) -> bool {
 /// Collect-then-delete (never mutate while iterating). A unit carrying nothing but passives is a complete
 /// no-op, and running it twice changes nothing the second time. [entity]
 pub(crate) fn remove_auras_on_death(ctx: &ReducerContext, unit_guid: u64) {
-    let auras = ctx.db.game_aura();
     let spells = ctx.db.game_spell();
-    let shed: Vec<Aura> = auras
-        .by_target()
-        .filter(&unit_guid)
+    let shed: Vec<Aura> = auras_on(ctx, unit_guid)
         .filter(|a| {
             !spells
                 .spell_id()
@@ -533,6 +530,19 @@ pub(crate) fn remove_auras_on_death(ctx: &ReducerContext, unit_guid: u64) {
                 .unwrap_or(false)
         })
         .collect();
+    shed_auras(ctx, unit_guid, shed);
+}
+
+/// Delete a collected set of `unit_guid`'s aura rows and converge every projection the removal can
+/// move: the vitals pools, the character sheet, and the Mount Projection. THE shared tail behind an
+/// involuntary aura removal — the death shed above and a Proc that spent its last charge both reduce
+/// to it, so a removal path cannot leave a stale max-health or a corpse still projecting a mount.
+///
+/// The caller decides WHICH rows come off; this decides what that costs. Rows must already be
+/// collected (never mutate the table while iterating it), and the recomputes run AFTER the deletes,
+/// vitals first so a lost STA/INT aura's sheet recompute sees the already-updated Spirit. An empty set
+/// is a complete no-op, and running it twice changes nothing the second time. [entity]
+pub(crate) fn shed_auras(ctx: &ReducerContext, unit_guid: u64, shed: Vec<Aura>) {
     if shed.is_empty() {
         return;
     }
@@ -544,11 +554,10 @@ pub(crate) fn remove_auras_on_death(ctx: &ReducerContext, unit_guid: u64) {
         resheet |= crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0);
         remount |= crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0);
     }
+    let auras = ctx.db.game_aura();
     for a in shed {
         auras.id().delete(a.id);
     }
-    // Recompute AFTER the deletes, and in the sibling sites' order: vitals first, so a lost STA/INT
-    // aura's sheet recompute sees the already-updated `e.spirit`.
     if revitalize {
         recompute_vitals(ctx, unit_guid);
     }
@@ -723,19 +732,26 @@ mod tests {
     }
 
     /// The shed's shape: it reads the exemption through the ONE policy predicate (never an inline
-    /// attribute test or a spell-id list), and converges on the same three recomputes every other aura
-    /// removal site runs — vitals, then sheet, then the Mount Projection. Dropping any of them leaves a
-    /// corpse projecting a stat pool, a paperdoll number or a mount it no longer has.
+    /// attribute test or a spell-id list), and hands its rows to the shared removal tail, which
+    /// converges the same three recomputes every other aura removal site runs — vitals, then sheet,
+    /// then the Mount Projection. Dropping any of them leaves a corpse projecting a stat pool, a
+    /// paperdoll number or a mount it no longer has.
     #[test]
     fn the_death_shed_reads_the_policy_and_converges_every_projection() {
-        let body = crate::test_scan::code_of(
+        let collect = crate::test_scan::code_of(
             include_str!("control.rs"),
             "pub(crate) fn remove_auras_on_death(",
         );
         assert!(
-            body.contains("aura_survives_death(s.attributes)"),
-            "the shed must ask the one policy predicate. Body was:\n{body}"
+            collect.contains("aura_survives_death(s.attributes)"),
+            "the shed must ask the one policy predicate. Body was:\n{collect}"
         );
+        assert!(
+            collect.contains("shed_auras(ctx, unit_guid, shed)"),
+            "the shed must hand its collected rows to the shared removal tail. Body was:\n{collect}"
+        );
+        let body =
+            crate::test_scan::code_of(include_str!("control.rs"), "pub(crate) fn shed_auras(");
         let vitals = body
             .find("recompute_vitals(ctx, unit_guid)")
             .expect("the shed must re-derive the vitals pools a lost STA/INT aura fed");
