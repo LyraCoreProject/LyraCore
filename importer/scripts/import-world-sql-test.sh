@@ -129,6 +129,8 @@ run_import() { # run_import [extra env assignments already exported by the calle
             STUB_MODE="${STUB_MODE:-succeed}" \
             STUB_ROW_COUNT="${STUB_ROW_COUNT:-20}" \
             SPACETIME_SERVER="${SPACETIME_SERVER:-}" \
+            WORLD_PROFILE="${WORLD_PROFILE:-}" \
+            ALLOW_MAP_SWITCH="${ALLOW_MAP_SWITCH:-}" \
             bash "$under_test"
     ) >"$out" 2>&1
     code=$?
@@ -184,7 +186,37 @@ check "an overridden SPACETIME_SERVER reaches spacetime verbatim" \
     grep -q -- '--server http://example.invalid:9000' "$stub_log"
 
 # =====================================================================================================
-# 4. python3 absent — the coverage audit must degrade explicitly, never crash mid-output (defect c) --
+# 4. canonical profiles stay one importer argument, never a copied rectangle -------------------------
+# =====================================================================================================
+echo
+echo "import-world.sh — canonical profile argument"
+: >"$stub_log"
+STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=alliance-single run_import
+check "the profile run reaches the assertion stage" not_contains "$out" '[world] ABORT'
+check "the profile is displayed with all of its planned maps" \
+    contains "$out" 'canonical profile alliance-single (planned maps: 0 1 36)'
+check "the dump ETL receives the canonical profile name" \
+    grep -q -- 'lyracore-importer .*--world-profile alliance-single' "$stub_log"
+check "the dump ETL does not recreate a profile as legacy spatial flags" \
+    bash -c '! grep "lyracore-importer .*--world-profile alliance-single" "$0" | grep -qE -- "--map|--box|--include-map|--include-creatures"' "$stub_log"
+unserved_importers="$(grep '^lyracore-importer ' "$stub_log" | grep -vc -- '--server http://127.0.0.1:3000' || true)"
+check "every profile importer invocation names the loopback server" \
+    test "${unserved_importers:-0}" -eq 0
+: >"$stub_log"
+STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=alliance-eastern run_import
+check "the eastern profile runs its Dun Morogh named check" \
+    contains "$out" 'Dun Morogh start correct-map quest-giver spawn'
+check "the eastern profile runs its Loch Modan named check" \
+    contains "$out" 'Loch Modan follow-on correct-map quest-giver spawn'
+: >"$stub_log"
+STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=alliance-kalimdor ALLOW_MAP_SWITCH=1 run_import
+check "the Kalimdor profile runs its Teldrassil named check" \
+    contains "$out" 'Teldrassil start correct-map quest-giver spawn'
+check "the Kalimdor profile runs its Darkshore named check" \
+    contains "$out" 'Darkshore follow-on correct-map quest-giver spawn'
+
+# =====================================================================================================
+# 5. python3 absent — the coverage audit must degrade explicitly, never crash mid-output (defect c) --
 # =====================================================================================================
 echo
 echo "import-world.sh — python3 absent from PATH"

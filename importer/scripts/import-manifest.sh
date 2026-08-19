@@ -35,6 +35,15 @@
 # from either consumer. See the source-smoke test (import-manifest-smoke.sh) for the "every consumed
 # key is defined here" check both consumers rely on.
 #
+# PROFILE VOCABULARY: WORLD_PROFILE selects one canonical WorldImportProfile in the importer. These
+# names and planned maps intentionally carry no rectangles or samples: world_import_scope.rs is the
+# sole catalogue for spatial scope. The map lists are only the script's post-import ownership check.
+WORLD_PROFILES="alliance-eastern alliance-kalimdor alliance-single instances"
+PROFILE_ALLIANCE_EASTERN_MAPS="0"
+PROFILE_ALLIANCE_KALIMDOR_MAPS="1"
+PROFILE_ALLIANCE_SINGLE_MAPS="0 1 36"
+PROFILE_INSTANCES_MAPS="36"
+
 # MAP-AWARENESS: every count floor below is tuned to the MAP-0 Elwynn/Westfall box. A continent import
 # for another map (`MAP=1` — Kalimdor on its own world shard) would fail ~40 of them for content that
 # legitimately isn't there, which is noise, not a regression signal — so the tail of the FLOOR_*
@@ -77,6 +86,19 @@ FLOOR_VENDOR_COVERAGE=125                 # spawned vendor-flagged NPCs with ven
 FLOOR_QUESTGIVER_COVERAGE=190             # spawned questgiver-flagged NPCs with quest relations (measured 194 of 228; the quiet ones may be off-level content)
 FLOOR_SENTINEL_HILL_VENDOR=1              # Sentinel Hill trainer/vendor spawned [V SENTINEL_HILL_VENDOR_ENTRY, set separately]
 FLOOR_START_ITEMS_CLASSES=6               # Human start-items (all 6 classes)
+FLOOR_HUMAN_START_POSITIONS=6             # playercreateinfo: Human Warrior/Paladin/Rogue/Priest/Mage/Warlock
+FLOOR_DWARF_START_POSITIONS=5             # playercreateinfo: Dwarf Warrior/Paladin/Hunter/Rogue/Priest
+FLOOR_GNOME_START_POSITIONS=4             # playercreateinfo: Gnome Warrior/Rogue/Mage/Warlock
+FLOOR_NIGHT_ELF_START_POSITIONS=5         # playercreateinfo: Night Elf Warrior/Hunter/Rogue/Priest/Druid
+FLOOR_DWARF_START_ITEMS_CLASSES=5         # Dwarf creation loadout families; no Human fallback
+FLOOR_GNOME_START_ITEMS_CLASSES=4         # Gnome creation loadout families; no Human fallback
+FLOOR_NIGHT_ELF_START_ITEMS_CLASSES=5     # Night Elf creation loadout families; no Human fallback
+FLOOR_DUN_MOROGH_START=1                  # Sten Stoutarm (658), map 0
+FLOOR_LOCH_MODAN_CONTENT=1                # Mountaineer Kadrell (1340), map 0
+FLOOR_TELDRASSIL_START=1                  # Conservator Ilthalaine (2079), map 1
+FLOOR_DARKSHORE_CONTENT=1                 # Gwennyth Bly'Leggonde (10219), map 1
+FLOOR_CORRIDOR_QUEST_LEVEL_BAND=1         # each named corridor giver has a level 1-20 quest
+FLOOR_CORRIDOR_GAMEOBJECTS=1              # each planned open-world map retains GameObjects
 FLOOR_CASTER_CAST_ROWS=60                 # [V] caster-mob cast rows — an estimate; tighten against your own dump's count
 FLOOR_GEOMANCER_CAST_SPELL=1              # 476 Geomancer cast spell present
 FLOOR_ROGUE_WIZARD_CAST_SPELL=1           # 474 Rogue Wizard cast spell present
