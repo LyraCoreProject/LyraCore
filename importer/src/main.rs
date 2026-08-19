@@ -60,7 +60,7 @@ use world_import_scope::{WorldImportProfile, WorldImportScope};
 
 // Kept in step with `module::items::tables`: the importer cannot depend on the wasm Module, but
 // it owns the ClassicDB `-1` sentinel conversion that makes these values durable.
-const ALL_PLAYABLE_CLASS_MASK: u32 = 0x1ff;
+const ALL_PLAYABLE_CLASS_MASK: u32 = 0x5df;
 const ALL_PLAYABLE_RACE_MASK: u32 = 0xff;
 
 // --- cmangos column indices (verified against ClassicDB_1_12_1_z2815 schema) -------------------
@@ -5427,7 +5427,7 @@ mod tests {
         assert_eq!(item_rows.len(), 1);
         assert_eq!(
             item_rows[0],
-            "(90001,4,1,'Ring of Fire Resistance',1234,3,5,40,30,80,1000,200,1,0,0,0,0,0,0,0,0,0,0,55,0,false,0,0,0,0,0,0,2,3,12,0,0,0,0,12345,1,12346,2,12347,0,165,150,69,3,7,512,999,777,6,1,1,511,255)",
+            "(90001,4,1,'Ring of Fire Resistance',1234,3,5,40,30,80,1000,200,1,0,0,0,0,0,0,0,0,0,0,55,0,false,0,0,0,0,0,0,2,3,12,0,0,0,0,12345,1,12346,2,12347,0,165,150,69,3,7,512,999,777,6,1,1,1503,255)",
         );
     }
 
@@ -5490,6 +5490,14 @@ mod tests {
             item_rows[0].ends_with(",2147483650,2147483652)"),
             "restrictive masks, including unknown high bits, must remain unsigned and verbatim"
         );
+    }
+
+    #[test]
+    fn unrestricted_sentinel_expands_to_the_playable_masks() {
+        // Vanilla class ids skip 6 and 10 (Druid is 11 → bit 0x400); races 1-8 are contiguous.
+        // The client hides the tooltip "Classes:" line only when every playable bit is set.
+        assert_eq!(normalize_item_mask("-1", ALL_PLAYABLE_CLASS_MASK), 0x5df);
+        assert_eq!(normalize_item_mask("-1", ALL_PLAYABLE_RACE_MASK), 0xff);
     }
 
     // --- work-item 212: playercreateinfo_* fixture tests ------------------------------------------
