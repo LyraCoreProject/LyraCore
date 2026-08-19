@@ -73,6 +73,13 @@ impl EventKind {
             _ => None,
         }
     }
+
+    /// An engaged creature re-evaluates these kinds on every cycle firing, so a rule keyed on one
+    /// can carry a repeat window. The edges (aggro, spawn, death) fire once per engagement or
+    /// lifecycle: a window stamped on one of them would never be reached again.
+    pub(crate) fn recurs(self) -> bool {
+        !matches!(self, Self::OnAggro | Self::OnSpawn | Self::OnDeath)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -353,10 +360,13 @@ impl Rule {
         } else {
             event_params(first)
         };
-        if event == EventKind::TimedInCombat
-            && (decoded_event_params[0] > decoded_event_params[1]
-                || decoded_event_params[2] > decoded_event_params[3])
-        {
+        // A timer rule waits its initial window before its first firing; every recurring kind
+        // carries its repeat window in params 3 and 4. An inverted window is a bad row, not a
+        // fixed cadence: left to the roller it wraps the delay to weeks, so it surfaces here.
+        let inverted_initial =
+            event == EventKind::TimedInCombat && decoded_event_params[0] > decoded_event_params[1];
+        let inverted_repeat = event.recurs() && decoded_event_params[2] > decoded_event_params[3];
+        if inverted_initial || inverted_repeat {
             return Err(Diagnostic {
                 rule_id: id,
                 row_id: first.id,

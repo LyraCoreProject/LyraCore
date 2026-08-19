@@ -629,6 +629,38 @@ fn a_missing_summon_is_refused_without_an_unsupported_action_diagnostic() {
 }
 
 #[test]
+fn a_refused_cast_retries_sooner_than_its_repeat_window() {
+    let rule_id = 920;
+    let mut scenario = world(0)
+        .attacking(CREATURE, TARGET)
+        .eventai_row(native_row(
+            921,
+            rule_id,
+            0,
+            EVENT_TIMED_IN_COMBAT,
+            ACTION_CAST,
+            100,
+            1,
+            REPEAT,
+            [0, 0, 30_000, 30_000, 0, 0],
+            [92, 0, 0],
+        ))
+        .not_ready(92);
+
+    fire(&mut scenario); // arms the timer
+    fire(&mut scenario); // due, and the cast is refused
+
+    assert!(scenario.casts().is_empty());
+    assert_eq!(
+        scenario
+            .eventai_state(CREATURE, rule_id)
+            .unwrap()
+            .next_eligible_ms,
+        1_500
+    );
+}
+
+#[test]
 fn a_fresh_engagement_rearms_the_rules_the_last_fight_spent() {
     let aggro_rule = 930;
     let timed_rule = 940;

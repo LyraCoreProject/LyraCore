@@ -14,6 +14,11 @@ use crate::{
     game_creature_ai_rule_state, game_creature_ai_state, game_world_entity,
 };
 
+/// How long a rule waits after a Refusal from its opening cast. A Refusal there is transient (a
+/// cast already in flight, the target out of range or gone), so the rule keeps its opportunity and
+/// tries again shortly instead of standing down for a whole repeat window.
+const CAST_RETRY_MS: u64 = 1_500;
+
 pub(crate) trait EventAiWorld {
     fn eventai_contexts(&self, request: &EventAiRequest<'_>) -> Vec<EventContext>;
     /// Checks the rule's event condition and may name the actor selected by that condition.
@@ -138,8 +143,13 @@ fn evaluate_rule<W: EventAiWorld>(world: &mut W, context: &EventContext, rule: &
         return;
     };
 
+    // A missed chance roll costs the opportunity, never the rule. CMaNGOS re-arms a recurring
+    // event's repeat window before it rolls and returns without disabling the event, so a repeat
+    // rule waits one window and a once-only rule stays armed to roll again next opportunity.
     if rule.chance_pct < 100 && world.eventai_roll() % 100 >= rule.chance_pct as u32 {
-        finish_opportunity(world, &context, rule, creature_state);
+        if let Some(state) = repeat_state(world, &context, rule, creature_state) {
+            world.put_eventai_rule_state(context.creature_guid, rule.id, state);
+        }
         return;
     }
 
@@ -161,11 +171,10 @@ fn evaluate_rule<W: EventAiWorld>(world: &mut W, context: &EventContext, rule: &
         let result = execute_action(world, &context, action);
         match result {
             ActionResult::Applied => {}
-            ActionResult::Refused
-                if index == 0
-                    && action.kind == ActionKind::Cast
-                    && rule.source_policy.contains(SOURCE_FLAG_COMBAT_ACTION) =>
-            {
+            // A Refusal from a LATER action does not rewind the actions already applied, so it
+            // spends the opportunity like any other outcome.
+            ActionResult::Refused if index == 0 && action.kind == ActionKind::Cast => {
+                hold_opportunity_open(world, &context, rule, creature_state);
                 return;
             }
             ActionResult::Refused => {}
@@ -246,36 +255,67 @@ fn finish_opportunity<W: EventAiWorld>(
     rule: &Rule,
     creature_state: CreatureState,
 ) {
-    let state = match rule.repeat {
-        RepeatPolicy::Repeat
-            if !matches!(
-                context.kind,
-                EventKind::OnAggro | EventKind::OnSpawn | EventKind::OnDeath
-            ) =>
-        {
-            RuleState {
-                next_eligible_ms: context.now_ms.saturating_add(roll_window(
-                    world,
-                    rule.event_params[2],
-                    rule.event_params[3],
-                )),
-                consumed: false,
-                lifecycle_id: creature_state.lifecycle_id,
-                engagement_id: creature_state.engagement_id,
-            }
-        }
-        _ => RuleState {
-            next_eligible_ms: 0,
-            consumed: true,
-            lifecycle_id: creature_state.lifecycle_id,
-            engagement_id: creature_state.engagement_id,
-        },
-    };
+    let state = repeat_state(world, context, rule, creature_state).unwrap_or(RuleState {
+        next_eligible_ms: 0,
+        consumed: true,
+        lifecycle_id: creature_state.lifecycle_id,
+        engagement_id: creature_state.engagement_id,
+    });
     world.put_eventai_rule_state(context.creature_guid, rule.id, state);
 }
 
+/// A Refusal from a rule's OPENING cast is transient (a cast already in flight, the target out of
+/// range or gone), so the rule keeps its opportunity instead of spending a whole repeat window on
+/// it. A rule the source marks as the creature's combat action comes back on the very next firing,
+/// the way CMaNGOS retries one; every other rule waits `CAST_RETRY_MS`, which is the retry the
+/// timer evaluator this engine replaced used for the same Refusal. An edge rule keeps its arming
+/// untouched either way: no window stamped on an edge would ever be reached again.
+fn hold_opportunity_open<W: EventAiWorld>(
+    world: &mut W,
+    context: &EventContext,
+    rule: &Rule,
+    creature_state: CreatureState,
+) {
+    if rule.source_policy.contains(SOURCE_FLAG_COMBAT_ACTION) || !rule.event.recurs() {
+        return;
+    }
+    world.put_eventai_rule_state(
+        context.creature_guid,
+        rule.id,
+        RuleState {
+            next_eligible_ms: context.now_ms.saturating_add(CAST_RETRY_MS),
+            consumed: false,
+            lifecycle_id: creature_state.lifecycle_id,
+            engagement_id: creature_state.engagement_id,
+        },
+    );
+}
+
+/// The rule state a repeat rule takes after an opportunity: its window rolled from now. `None`
+/// when the rule has no next opportunity to wait for, which spends it instead.
+fn repeat_state<W: EventAiWorld>(
+    world: &W,
+    context: &EventContext,
+    rule: &Rule,
+    creature_state: CreatureState,
+) -> Option<RuleState> {
+    (rule.repeat == RepeatPolicy::Repeat && rule.event.recurs()).then(|| RuleState {
+        next_eligible_ms: context.now_ms.saturating_add(roll_window(
+            world,
+            rule.event_params[2],
+            rule.event_params[3],
+        )),
+        consumed: false,
+        lifecycle_id: creature_state.lifecycle_id,
+        engagement_id: creature_state.engagement_id,
+    })
+}
+
+/// Random ms in `[min, max]`. An empty or inverted window is a fixed cadence of `min` and costs no
+/// roll: `Rule::decode` refuses an inverted one, and this is what keeps a row that slipped past it
+/// from wrapping the span to weeks or dividing by zero.
 fn roll_window<W: EventAiWorld>(world: &W, min: u32, max: u32) -> u64 {
-    if max == min {
+    if max <= min {
         return min as u64;
     }
     min as u64 + (world.eventai_roll() as u64 % (u64::from(max) - u64::from(min) + 1))
