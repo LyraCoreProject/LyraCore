@@ -428,9 +428,20 @@ fn parse_rules(dump: &str, coverage: &mut Coverage) -> Vec<RawRule> {
                 *param = value;
             }
             for (slot, action) in actions.iter_mut().enumerate() {
-                for (part, value) in action.iter_mut().enumerate() {
-                    let column = 12 + slot * 4 + part;
-                    let Some(parsed) = source_action_u32(field(&row, column)) else {
+                let action_column = 12 + slot * 4;
+                let Some(kind) = source_u32(field(&row, action_column)) else {
+                    coverage.drop("invalid_numeric", action_column as u64);
+                    return None;
+                };
+                action[0] = kind;
+                for (part, value) in action.iter_mut().enumerate().skip(1) {
+                    let column = action_column + part;
+                    let parsed = if kind == ACTION_TEXT {
+                        source_action_u32(field(&row, column))
+                    } else {
+                        source_u32(field(&row, column))
+                    };
+                    let Some(parsed) = parsed else {
                         coverage.drop("invalid_numeric", column as u64);
                         return None;
                     };
@@ -682,6 +693,9 @@ fn map_action(
                 coverage.drop(reason, action[1] as u64);
                 return None;
             }
+            if !supported_texts(&texts, broadcasts, coverage) {
+                return None;
+            }
             Some(NativeAction {
                 kind: NATIVE_ACTION_SAY,
                 params: [action[1], action[2], action[3]],
@@ -694,17 +708,24 @@ fn map_action(
             })
         }
         ACTION_TEXT_NEW => {
+            if action[3] != 0 {
+                coverage.drop("unsupported_text_template", action[3] as u64);
+                return None;
+            }
             if !broadcasts.contains_key(&action[1]) {
                 coverage.drop("missing_broadcast_text", action[1] as u64);
+                return None;
+            }
+            if !supported_texts(&[action[1]], broadcasts, coverage) {
                 return None;
             }
             let target = map_target(action[2], coverage)?;
             Some(NativeAction {
                 kind: NATIVE_ACTION_SAY,
-                params: [action[1], action[3], 0],
+                params: [action[1], 0, 0],
                 target,
                 cast_options: 0,
-                legacy_text: "eventai:text-new",
+                legacy_text: "",
                 texts: vec![action[1]],
                 summon_entry: None,
                 summon_location: None,
@@ -872,9 +893,33 @@ fn source_u64(value: &str) -> Option<u64> {
 }
 
 fn source_action_u32(value: &str) -> Option<u32> {
-    value.parse::<i64>().ok().map(|value| value as u32)
+    value.parse::<u32>().ok().or_else(|| {
+        value
+            .parse::<i32>()
+            .ok()
+            .filter(|value| *value < 0)
+            .map(|value| value as u32)
+    })
 }
 
 fn fixture_id(id: u32) -> bool {
     (FIXTURE_ID_FIRST..=FIXTURE_ID_LAST).contains(&id)
+}
+
+fn supported_texts(
+    ids: &[u32],
+    broadcasts: &BTreeMap<u32, Broadcast>,
+    coverage: &mut Coverage,
+) -> bool {
+    let mut valid = true;
+    for id in ids {
+        let Some(text) = broadcasts.get(id) else {
+            continue;
+        };
+        if text.chat_type > 1 {
+            coverage.drop("unsupported_chat_type", text.chat_type as u64);
+            valid = false;
+        }
+    }
+    valid && ids.iter().all(|id| broadcasts.contains_key(id))
 }

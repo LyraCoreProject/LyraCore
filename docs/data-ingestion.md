@@ -249,8 +249,8 @@ and [text-new selection](https://github.com/cmangos/mangos-classic/blob/ca0775fe
 The source stores legacy text ids as signed values. The current ClassicDB source uses broadcast text
 ids for EventAI text rows; negative ids require a matching `script_texts` row in the supplied
 dump. This is an importer inference from the CMaNGOS action contracts and source data shape. Text-new
-keeps its target policy and template id in the native action fields. The current relay uses the direct
-broadcast id; template selection remains stored metadata until the relay supports template lookup.
+keeps its target policy. Template selection is rejected because the current relay has no template
+lookup, rather than being represented as a direct broadcast.
 
 The standalone DBC pass reads all three taxi files through the same in-memory MPQ patch chain as
 the other client tables. It validates every endpoint/path reference and every `(path, node_index)`

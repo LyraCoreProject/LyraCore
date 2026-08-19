@@ -3621,24 +3621,30 @@ fn build_dump_plan(
                     .then_some(entry)
             })
             .collect();
-    let eventai = loop {
-        let plan = eventai::build(
-            dump,
-            &entries,
-            &imported_guid_entries,
-            &importable_templates,
-        );
-        let added = plan
-            .forced_template_entries
-            .iter()
-            .copied()
-            .filter(|entry| entries.insert(*entry))
-            .count();
-        if added == 0 {
-            break plan;
+    let eventai = if family_active(args, "creature-ai") {
+        loop {
+            let plan = eventai::build(
+                dump,
+                &entries,
+                &imported_guid_entries,
+                &importable_templates,
+            );
+            let added = plan
+                .forced_template_entries
+                .iter()
+                .copied()
+                .filter(|entry| entries.insert(*entry))
+                .count();
+            if added == 0 {
+                break plan;
+            }
         }
+    } else {
+        eventai::EventAiPlan::default()
     };
-    eventai.report();
+    if family_active(args, "creature-ai") {
+        eventai.report();
+    }
     for slice in &scope.bounded_slices {
         let count = spawns
             .iter()
@@ -4601,9 +4607,9 @@ fn build_dump_plan(
     }
 
     if family_active(args, "creature-ai") {
-        stmts.push("DELETE FROM game_creature_ai_event WHERE id >= 4611686018427387904".into());
-        stmts.push("DELETE FROM game_creature_ai_broadcast_text WHERE id > 0 AND (id < 5099000 OR id > 5099999)".into());
-        stmts.push("DELETE FROM game_creature_ai_summon WHERE id > 0 AND (id < 5099000 OR id > 5099999)".into());
+        stmts.push("DELETE FROM game_creature_ai_event WHERE id > 0".into());
+        stmts.push("DELETE FROM game_creature_ai_broadcast_text WHERE id > 0".into());
+        stmts.push("DELETE FROM game_creature_ai_summon WHERE id > 0".into());
         push_insert(
             &mut stmts,
             "game_creature_ai_event",
@@ -6810,7 +6816,7 @@ mod tests {
                 100,
                 0,
                 [0; 6],
-                [[54, 900, 1, 77], [0, 0, 0, 0], [0, 0, 0, 0]],
+                [[54, 900, 1, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
             ),
             eventai_rule_row(
                 16,
@@ -6872,6 +6878,15 @@ mod tests {
         let plan = build_dump_plan(&dump, &args, &None, &None).expect("EventAI plan");
         assert_eq!(plan.stamps, vec![("creature-ai", 23)]);
         assert_eq!(plan.stmts.len(), 6, "{:?}", plan.stmts);
+        assert_eq!(
+            &plan.stmts[..3],
+            [
+                "DELETE FROM game_creature_ai_event WHERE id > 0",
+                "DELETE FROM game_creature_ai_broadcast_text WHERE id > 0",
+                "DELETE FROM game_creature_ai_summon WHERE id > 0",
+            ],
+            "a full EventAI reload replaces both imported rows and reserved fixtures"
+        );
         assert!(plan.stmts.iter().all(|statement| {
             statement.contains("game_creature_ai_event")
                 || statement.contains("game_creature_ai_broadcast_text")
@@ -6901,7 +6916,7 @@ mod tests {
             "{events}"
         );
         assert!(
-            events.contains(",15,0,0,100,4294967295,0,0,0,0,0,0,0,0,900,77,0,0,0)"),
+            events.contains(",15,0,0,100,4294967295,0,0,0,0,0,0,0,0,900,0,0,0,0)"),
             "{events}"
         );
         assert!(
@@ -6929,8 +6944,49 @@ mod tests {
     }
 
     #[test]
+    fn eventai_inactive_family_does_not_extend_quest_scope() {
+        let dump = format!(
+            "x INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {},{}; \
+             INSERT INTO `quest_template` VALUES {},{}; \
+             INSERT INTO `creature_questrelation` VALUES (100,500),(200,501); \
+             INSERT INTO `creature_ai_summons` VALUES (700,1,2,3,4,5); \
+             INSERT INTO `creature_ai_scripts` VALUES {}; y",
+            creature_template_row(100, 0),
+            creature_template_row(200, 0),
+            quest_template_row(500, "In scope"),
+            quest_template_row(501, "Summon only"),
+            eventai_rule_row(
+                10,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[32, 200, 0, 700], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+        );
+        let mut args = test_args();
+        args.family = Some("quests".to_string());
+        let plan = build_dump_plan(&dump, &args, &None, &None).expect("quest-only plan");
+        let quests = plan
+            .stmts
+            .iter()
+            .find(|statement| statement.starts_with("INSERT INTO game_quest_template"))
+            .expect("quest rows");
+        assert!(quests.contains("(500,"), "{quests}");
+        assert!(!quests.contains("(501,"), "{quests}");
+        assert_eq!(plan.stamps, vec![("quests", 1)]);
+    }
+
+    #[test]
     fn eventai_drops_invalid_rules_into_explicit_buckets() {
-        let mut dump = eventai_fixture_dump();
+        let mut dump = eventai_fixture_dump().replacen(
+            "(903,'Unused','Unused',1,0,0,0,0,0,0,0,5,6,7,8,9,10)",
+            "(903,'Unused','Unused',2,0,0,0,0,0,0,0,5,6,7,8,9,10)",
+            1,
+        );
         let invalid = [
             eventai_rule_row(40, 100, 99, 0, 100, 0, [0; 6], [[1, 900, 0, 0]; 3]),
             eventai_rule_row(41, 100, 0, 0, 0, 0, [0, 1, 0, 1, 0, 0], [[1, 900, 0, 0]; 3]),
@@ -7014,6 +7070,36 @@ mod tests {
                 [0, 1, 0, 1, 0, 0],
                 [[32, 200, 0, 999]; 3],
             ),
+            eventai_rule_row(
+                50,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[1, 4_294_967_296, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+            eventai_rule_row(
+                51,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[54, 900, 0, 77], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+            eventai_rule_row(
+                52,
+                100,
+                0,
+                0,
+                100,
+                0,
+                [0, 1, 0, 1, 0, 0],
+                [[1, 903, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
         ];
         dump = dump.replacen("; y", &format!(",{},(999); y", invalid.join(",")), 1);
         let entries = [100].into_iter().collect();
@@ -7032,6 +7118,9 @@ mod tests {
             ("missing_summon_creature", 999),
             ("missing_summon_location", 999),
             ("malformed_rule", 1),
+            ("invalid_numeric", 13),
+            ("unsupported_text_template", 77),
+            ("unsupported_chat_type", 2),
         ] {
             assert_eq!(plan.dropped(reason, value), 1, "{reason}/{value}");
         }

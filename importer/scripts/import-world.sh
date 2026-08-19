@@ -611,8 +611,8 @@ verify_eventai_catalogue() {
   done
   for text in $( {
     q_list "SELECT action_param_1 FROM game_creature_ai_event WHERE action_type = 0 AND action_param_1 > 0"
-    q_list "SELECT action_param_2 FROM game_creature_ai_event WHERE action_type = 0 AND text = '' AND action_param_2 > 0"
-    q_list "SELECT action_param_3 FROM game_creature_ai_event WHERE action_type = 0 AND text = '' AND action_param_3 > 0"
+    q_list "SELECT action_param_2 FROM game_creature_ai_event WHERE action_type = 0 AND action_param_2 > 0"
+    q_list "SELECT action_param_3 FROM game_creature_ai_event WHERE action_type = 0 AND action_param_3 > 0"
   } | sort -u); do
     [ "$(n "SELECT id FROM game_creature_ai_broadcast_text WHERE id = $text")" -gt 0 ] || missing=1
   done
