@@ -132,11 +132,13 @@ mod npct {
         9 + slot
     }
 }
-mod bt {
-    // broadcast_text: Id, Text (male), Text1 (female), ...
+pub(crate) mod bt {
+    // broadcast_text: Id, Text (male), Text1 (female), ChatTypeID, LanguageID, ...
     pub const ID: usize = 0;
     pub const TEXT: usize = 1; // male greeting text
     pub const TEXT1: usize = 2; // female greeting text
+    pub const CHAT_TYPE: usize = 3;
+    pub const LANGUAGE: usize = 4;
 }
 mod gmo {
     // gossip_menu_option — DUMP-VERIFIED 2026-07-10 (the [V] guess had OPTION_TYPE at 4, which is

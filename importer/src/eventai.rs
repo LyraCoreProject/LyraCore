@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::{field, parse_table, sql_text, world_guid};
+use crate::{bt, field, parse_table, sql_text, world_guid};
 
 const EVENT_TIMER_IN_COMBAT: u32 = 0;
 const EVENT_HP: u32 = 2;
@@ -545,7 +545,7 @@ fn parse_broadcasts(dump: &str, coverage: &mut Coverage) -> BTreeMap<u32, Broadc
     parse_table(dump, "broadcast_text")
         .into_iter()
         .filter_map(|row| {
-            let Some(id) = source_u32(field(&row, 0)) else {
+            let Some(id) = source_u32(field(&row, bt::ID)) else {
                 coverage.drop("malformed_broadcast_text", 0);
                 return None;
             };
@@ -554,13 +554,13 @@ fn parse_broadcasts(dump: &str, coverage: &mut Coverage) -> BTreeMap<u32, Broadc
                 return None;
             }
             let Some(chat_type) =
-                source_u32(field(&row, 3)).and_then(|value| u8::try_from(value).ok())
+                source_u32(field(&row, bt::CHAT_TYPE)).and_then(|value| u8::try_from(value).ok())
             else {
                 coverage.drop("malformed_broadcast_text", id as u64);
                 return None;
             };
             let Some(language) =
-                source_u32(field(&row, 4)).and_then(|value| u8::try_from(value).ok())
+                source_u32(field(&row, bt::LANGUAGE)).and_then(|value| u8::try_from(value).ok())
             else {
                 coverage.drop("malformed_broadcast_text", id as u64);
                 return None;
@@ -579,8 +579,8 @@ fn parse_broadcasts(dump: &str, coverage: &mut Coverage) -> BTreeMap<u32, Broadc
             Some((
                 id,
                 Broadcast {
-                    male: field(&row, 1).to_string(),
-                    female: field(&row, 2).to_string(),
+                    male: field(&row, bt::TEXT).to_string(),
+                    female: field(&row, bt::TEXT1).to_string(),
                     chat_type,
                     language,
                     emotes,
