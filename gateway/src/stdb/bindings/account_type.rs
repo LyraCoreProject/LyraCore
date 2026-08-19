@@ -13,6 +13,7 @@ pub struct Account {
     pub verifier: Vec<u8>,
     pub identity: Option<__sdk::Identity>,
     pub banned: bool,
+    pub alpha_test_tools: bool,
 }
 
 impl __sdk::InModule for Account {
@@ -29,6 +30,7 @@ pub struct AccountCols {
     pub verifier: __sdk::__query_builder::Col<Account, Vec<u8>>,
     pub identity: __sdk::__query_builder::Col<Account, Option<__sdk::Identity>>,
     pub banned: __sdk::__query_builder::Col<Account, bool>,
+    pub alpha_test_tools: __sdk::__query_builder::Col<Account, bool>,
 }
 
 impl __sdk::__query_builder::HasCols for Account {
@@ -41,6 +43,7 @@ impl __sdk::__query_builder::HasCols for Account {
             verifier: __sdk::__query_builder::Col::new(table_name, "verifier"),
             identity: __sdk::__query_builder::Col::new(table_name, "identity"),
             banned: __sdk::__query_builder::Col::new(table_name, "banned"),
+            alpha_test_tools: __sdk::__query_builder::Col::new(table_name, "alpha_test_tools"),
         }
     }
 }

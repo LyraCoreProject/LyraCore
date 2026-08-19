@@ -85,6 +85,11 @@ _Avoid_: reject, deny, error (for gameplay refusals)
 **Account**:
 A login. Owns characters.
 
+**Alpha Test Tools**:
+Account-owned authority for a limited set of alpha testing dot-commands. The Gateway reads its
+current value from Realm-core for every command and conveys it to the Home Shard. The Module applies
+the final Gate.
+
 **Character**:
 A guid-owned player entity.
 _Avoid_: player (as a noun in code)

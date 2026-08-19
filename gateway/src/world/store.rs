@@ -615,11 +615,12 @@ pub trait WorldStore:
     /// say/yell.
     fn party_chat(&self, account_id: u64, self_guid: u64, message: String) -> Result<()>;
 
-    /// GM playtest dot-command: `text` is the raw Say line, STILL carrying its
+    /// GM playtest dot-command for the proof-validated, realm-wide `account_name`: `text` is the
+    /// raw Say line, STILL carrying its
     /// leading `.` — the Say handler intercepts it BEFORE any chat relay/insert and forwards it here
     /// verbatim (module-side parsing keeps the command set data-free). `Err`'s message is relayed back
     /// to the SENDER ONLY as a system chat line (never broadcast, never a `game_chat_event` row).
-    fn gm_command(&self, account_id: u64, self_guid: u64, text: String) -> Result<()>;
+    fn gm_command(&self, account_name: &str, self_guid: u64, text: String) -> Result<()>;
 
     /// Every mail addressed to `recipient_guid`, on the database THIS handle names.
     ///

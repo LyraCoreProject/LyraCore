@@ -45,6 +45,7 @@ use crate::{
     MeleeSchedule, PetCareSchedule, Realm, ServerConfig, Spell, SpellEffect, StartPosition,
     EVENT_TTL_MICROS,
 };
+use crate::{game_alpha_test_tools_enrollment, AlphaTestToolsEnrollment};
 
 #[reducer(init)]
 pub fn init(ctx: &ReducerContext) {
@@ -90,6 +91,13 @@ fn seed_production_core(ctx: &ReducerContext) {
         vmap_enabled: false, // #521/#523: off until an operator imports vmap data + flips it
         nav_coverage_enabled: false, // off until an operator prepares coverage + flips it
     });
+
+    ctx.db
+        .game_alpha_test_tools_enrollment()
+        .insert(AlphaTestToolsEnrollment {
+            id: 0,
+            enabled: true,
+        });
 
     // Human Warrior start position (display 49 = human male native model).
     ctx.db.game_start_position().insert(StartPosition {
@@ -163,6 +171,7 @@ fn seed_production_core(ctx: &ReducerContext) {
         verifier: vec![0u8; 32],
         identity: None,
         banned: false,
+        alpha_test_tools: true,
     });
 
     seed_createinfo_spells(ctx);

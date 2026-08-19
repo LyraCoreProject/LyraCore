@@ -303,7 +303,7 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
             let lang = language.as_int() as u8;
             match chat_type {
                 CMSG_MESSAGECHAT_ChatType::Say if message.starts_with('.') => {
-                    if let Err(e) = store.gm_command(conn.account_id, self_guid, message) {
+                    if let Err(e) = store.gm_command(&conn.account_name, self_guid, message) {
                         send(
                             tx,
                             Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(

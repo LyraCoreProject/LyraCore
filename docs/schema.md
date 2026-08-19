@@ -227,9 +227,12 @@ offline character costs no live-world machinery. Carries appearance, position, l
 rested-xp pool, hearthstone home, played-time accounting, and the persisted health/power snapshot.
 `owner_identity` is `Identity::ZERO` until bound at `establish_session`.
 
-### `game_account` / `game_session` / `game_operator` (`module/src/auth.rs:14,:62,:77`)
+### `game_account` / `game_alpha_test_tools_enrollment` / `game_session` / `game_operator` (`module/src/auth.rs`)
 
-All three **private**. `game_account` holds SRP6 salt and verifier — never a password.
+All four are **private**. `game_account` holds SRP6 salt and verifier, never a password. It also
+holds the Account's Alpha Test Tools authority. Existing Accounts receive that authority through an
+end-appended default. New Accounts copy `game_alpha_test_tools_enrollment`, which starts enabled;
+changing enrollment never changes an existing Account.
 `game_session` holds the SRP6 session key **K**, which is what makes gateways stateless: the logon
 flow writes it, and any world gateway can read it to complete the handshake. `game_operator` is a
 singleton holding the one trusted operator identity, captured (not derived) by `claim_operator`.

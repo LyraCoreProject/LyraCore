@@ -2,9 +2,10 @@
 //! from Say chat. The gateway's `CMSG_MESSAGECHAT` Say arm intercepts any message starting with `.`
 //! BEFORE the normal chat relay/insert and forwards the raw text to this ONE generic reducer
 //! (`gm_command`) — module-side parsing keeps the command set data-free and easily extended (a new
-//! command is a new `match` arm here, no gateway/binding change). Authorized by `Character.gm_level`
-//! (0 = no access; granted via the operator-only [`set_gm_level`]). The moderation half (mute/kick,
-//! GM levels for OTHER players) is work-item 205 — this is the solo-playtest kit only.
+//! command is a new `match` arm here, no gateway/binding change). A nonzero `Character.gm_level`
+//! authorizes the full set. Account-owned Alpha Test Tools authorize the classified subset, which
+//! currently contains only `.speed`. The Gateway reads that Account authority from Realm-core on
+//! every command and conveys it to the Home Shard; this Module remains the final Gate.
 //!
 //! `.kill` deliberately takes NO explicit target argument: the caller's live `WorldEntity.target_guid`
 //! is already tracked server-side by `world::set_target` (`CMSG_SET_SELECTION`) every time the client
@@ -141,6 +142,56 @@ pub(crate) enum GmCommand {
     AddItem(u32, u32),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GmCommandClass {
+    AlphaTestTool,
+    FullGm,
+}
+
+impl GmCommand {
+    fn class(self) -> GmCommandClass {
+        match self {
+            Self::Speed(_) => GmCommandClass::AlphaTestTool,
+            _ => GmCommandClass::FullGm,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GmAuthority {
+    None,
+    AlphaTestTools,
+    FullGm,
+}
+
+fn gm_authority(gm_level: u8, alpha_test_tools: bool) -> GmAuthority {
+    if gm_level != 0 {
+        GmAuthority::FullGm
+    } else if alpha_test_tools {
+        GmAuthority::AlphaTestTools
+    } else {
+        GmAuthority::None
+    }
+}
+
+fn command_is_authorized(authority: GmAuthority, command: GmCommand) -> bool {
+    match (authority, command.class()) {
+        (GmAuthority::FullGm, _) | (GmAuthority::AlphaTestTools, GmCommandClass::AlphaTestTool) => {
+            true
+        }
+        (GmAuthority::None | GmAuthority::AlphaTestTools, GmCommandClass::FullGm)
+        | (GmAuthority::None, GmCommandClass::AlphaTestTool) => false,
+    }
+}
+
+fn authority_accepts_command_name(authority: GmAuthority, text: &str) -> bool {
+    match authority {
+        GmAuthority::None => false,
+        GmAuthority::AlphaTestTools => text.split_whitespace().next() == Some(".speed"),
+        GmAuthority::FullGm => true,
+    }
+}
+
 /// Parse a raw dot-command string (`".speed 3"`, `".god"`, …) into a [`GmCommand`]. Pure — no
 /// `ReducerContext`, fully unit-testable. Args are space-separated (`split_whitespace`, so repeated
 /// spaces are tolerant). An out-of-range numeric arg is silently CLAMPED into the command's valid
@@ -246,12 +297,12 @@ pub fn set_gm_level(ctx: &ReducerContext, character_name: String, level: u8) -> 
     Ok(())
 }
 
-/// The shared core behind [`gm_command`] and its gateway twin `gw_gm_command` (#479). The REAL
-/// authorization is unchanged and lives here: `gm_level` read off the CALLER'S CHARACTER row —
-/// the connection identity never was the gate.
+/// The shared core behind the gateway's `gw_gm_command`. The Character's current GM level and the
+/// Account authority conveyed by the Gateway meet at this final Module Gate.
 pub(crate) fn apply_gm_command(
     ctx: &ReducerContext,
     caller: crate::WorldEntity,
+    alpha_test_tools: bool,
     text: String,
 ) -> Result<(), String> {
     let entities = ctx.db.game_world_entity();
@@ -263,12 +314,16 @@ pub(crate) fn apply_gm_command(
         .find(caller.guid)
         .map(|c| c.gm_level)
         .unwrap_or(0);
-    if gm_level == 0 {
+    let authority = gm_authority(gm_level, alpha_test_tools);
+    if !authority_accepts_command_name(authority, &text) {
         return Err("permission denied".to_string());
     }
     let cmd = parse_gm_command(&text)?;
+    if !command_is_authorized(authority, cmd) {
+        return Err("permission denied".to_string());
+    }
     log::info!(
-        "gm_command: guid {} (gm_level {gm_level}) -> {cmd:?}",
+        "gm_command: guid {} ({authority:?}) -> {cmd:?}",
         caller.guid
     );
     match cmd {
@@ -351,6 +406,64 @@ pub(crate) fn apply_gm_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alpha_test_tools_authorize_speed_only() {
+        let authority = gm_authority(0, true);
+        assert!(authority_accepts_command_name(authority, ".speed 3"));
+        assert!(!authority_accepts_command_name(authority, ".tele goldshire"));
+        assert!(!authority_accepts_command_name(authority, ".unknown"));
+        assert!(command_is_authorized(authority, GmCommand::Speed(3.0)));
+        for command in [
+            GmCommand::God(None),
+            GmCommand::XpRate(2),
+            GmCommand::Level(10),
+            GmCommand::Money(1),
+            GmCommand::Heal,
+            GmCommand::Kill,
+            GmCommand::Gps,
+            GmCommand::Tele(TeleSpot::Goldshire),
+            GmCommand::AddItem(1, 1),
+        ] {
+            assert!(
+                !command_is_authorized(authority, command),
+                "Alpha Test Tools unexpectedly authorized {command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_full_gm_keeps_every_command() {
+        let authority = gm_authority(1, false);
+        assert!(authority_accepts_command_name(authority, ".unknown"));
+        for command in [
+            GmCommand::Speed(3.0),
+            GmCommand::God(None),
+            GmCommand::XpRate(2),
+            GmCommand::Level(10),
+            GmCommand::Money(1),
+            GmCommand::Heal,
+            GmCommand::Kill,
+            GmCommand::Gps,
+            GmCommand::Tele(TeleSpot::Goldshire),
+            GmCommand::AddItem(1, 1),
+        ] {
+            assert!(command_is_authorized(authority, command));
+        }
+    }
+
+    #[test]
+    fn an_ordinary_account_has_no_command_authority() {
+        let authority = gm_authority(0, false);
+        assert!(!authority_accepts_command_name(authority, ".speed 3"));
+        assert!(!command_is_authorized(authority, GmCommand::Speed(3.0)));
+        assert!(!command_is_authorized(authority, GmCommand::God(None)));
+    }
+
+    #[test]
+    fn full_gm_authority_wins_when_the_account_also_has_alpha_test_tools() {
+        assert_eq!(gm_authority(1, true), GmAuthority::FullGm);
+    }
 
     // ---- Parsing: happy path, one per command ----
 

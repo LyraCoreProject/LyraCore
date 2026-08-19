@@ -1318,14 +1318,25 @@ impl Coordinator {
         )
     }
 
-    /// GM playtest dot-command: `CMSG_MESSAGECHAT` Say text starting with `.`, over the
-    /// coordinator connection so the module attributes it (and its `gm_level` gate) to the caller.
+    /// GM playtest dot-command: resolve current Account authority on Realm-core, then convey it to
+    /// the Home Shard through one Store operation.
+    pub fn gm_command(&self, account_name: &str, actor_guid: u64, text: String) -> Result<()> {
+        crate::realm_core::run_gm_command(self, account_name, actor_guid, text)
+    }
+
+    /// Send one classified command request to this Home Shard. The Module combines the conveyed
+    /// Account authority with its own Character GM level and remains the final Gate.
     /// Deliberately does NOT use the `call_reducer!` macro: that macro wraps a module `Err` as
     /// `"{what} reducer failed: {e}"` (fine when a caller only substring-matches it, like `party_chat`'s
     /// `NOT_IN_GROUP` check), but the Say handler relays this `Err`'s text VERBATIM to the sender as a
     /// system chat line — a raw `"permission denied"` / `"unknown command: .foo"` must reach the client
     /// with no wrapper prefix.
-    pub fn gm_command(&self, _account_id: u64, actor_guid: u64, text: String) -> Result<()> {
+    pub(crate) fn request_gm_command(
+        &self,
+        actor_guid: u64,
+        alpha_test_tools: bool,
+        text: String,
+    ) -> Result<()> {
         if actor_guid == 0 {
             return Err(anyhow!("gm_command: actor_guid unresolved"));
         }
@@ -1343,7 +1354,7 @@ impl Coordinator {
         coord
             .conn
             .reducers
-            .gw_gm_command_then(actor_guid, text, move |_ctx, status| {
+            .gw_gm_command_then(actor_guid, alpha_test_tools, text, move |_ctx, status| {
                 callback_completion.finish(
                     call_id,
                     match status {

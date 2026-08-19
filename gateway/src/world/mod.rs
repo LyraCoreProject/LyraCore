@@ -311,6 +311,8 @@ pub struct InWorld {
 /// advance it). NOT game state: the cipher is re-derivable from K on reconnect.
 pub struct WorldConn {
     pub account_id: u64,
+    /// Proof-validated, realm-wide Account name used for cross-database authority reads.
+    pub account_name: String,
     /// Decrypts inbound CMSG headers (reader-thread only).
     pub decrypt: DecrypterHalf,
     /// Character-select vs in-world; the relay subs + combat/loot/session state live in `InWorld`.
@@ -608,6 +610,7 @@ pub fn world_handshake_with_queue<S: Read + Write, St: WorldStore + ?Sized>(
     Ok(Some((
         WorldConn {
             account_id,
+            account_name: username,
             decrypt,
             state: WorldState::CharSelect,
             move_coalesce: CoalesceState::default(),

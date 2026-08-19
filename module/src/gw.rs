@@ -1258,13 +1258,19 @@ pub fn gw_client_command(
     crate::bridge::apply_client_command(ctx, actor_guid, &cmd, &payload)
 }
 
-/// [`crate::gm::apply_gm_command`] with the caller named by guid (#479). The gm_level check on
-/// the CALLER'S CHARACTER row — the real gate — is inside the core, unchanged.
+/// [`crate::gm::apply_gm_command`] with the Actor named by guid. The Gateway conveys the Account's
+/// current Realm-core Alpha Test Tools authority; the Module combines it with the Character's GM
+/// level and remains the final Gate.
 #[reducer]
-pub fn gw_gm_command(ctx: &ReducerContext, actor_guid: u64, text: String) -> Result<(), String> {
+pub fn gw_gm_command(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    alpha_test_tools: bool,
+    text: String,
+) -> Result<(), String> {
     require_operator(ctx)?;
     let caller = actor(ctx, actor_guid)?;
-    crate::gm::apply_gm_command(ctx, caller, text)
+    crate::gm::apply_gm_command(ctx, caller, alpha_test_tools, text)
 }
 
 #[cfg(test)]
