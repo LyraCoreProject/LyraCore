@@ -137,6 +137,12 @@ profile dry run, terrain and navigation extraction, vmap generation, and stock 1
 playthrough remain Operator Verification; a successful plan or unit test is not evidence that those
 checks passed.
 
+One Verification runs from `cargo test` when you point it at your own client: with
+`LYRACORE_CLIENT_DATA=<client Data/ dir>`, `cargo test -p lyracore-importer alliance_eastern_terrain`
+runs the `alliance-eastern` terrain dry run and asserts every Bounded Map Slice self-check is within
+tolerance, Loch Modan included. Run it before an `--apply` after changing a profile anchor; without
+the variable it reports itself skipped.
+
 A `--client-data` path and its required filenames are checked **before** the consent notice is
 answered, so a typo costs nothing; archive reads still start only after consent. The flagless run is
 prompted for at stage 2, in order. Every stage runs from the checkout

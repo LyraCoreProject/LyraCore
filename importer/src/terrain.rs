@@ -43,6 +43,11 @@ pub(crate) fn map_dir(map_id: u32) -> Result<&'static str> {
     }
 }
 
+/// Largest gap, in yards, between a slice sample's Z and the heightmap interpolated at its X/Y
+/// before the slice is refused. A wrong sample (a WMO floor, a wrong map) is tens of yards off; a
+/// right one is within a fraction of a yard, so this is a coarse gate, not a precision claim.
+const SELF_CHECK_TOLERANCE: f32 = 2.0;
+
 /// Open the terrain patch chain in client load order: `terrain.MPQ` < `patch.MPQ` < `patch-2.MPQ`
 /// (ADTs live in terrain.MPQ in the 1.12 client; patches may override tiles).
 fn open_terrain_chain(data_dir: &Path) -> Result<PatchChain> {
@@ -148,21 +153,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     }
     let data_dir = Path::new(args.terrain.as_ref().expect("caller checked"));
     let mut chain = open_terrain_chain(data_dir)?;
-    let mut slice_rows = Vec::with_capacity(scope.bounded_slices.len());
-    let mut tiles_read = 0u32;
-    for slice in &scope.bounded_slices {
-        let (rows, slice_tiles) = collect_slice(&mut chain, slice).with_context(|| {
-            format!(
-                "terrain scope {} slice {} (map {})",
-                scope.name(),
-                slice.name,
-                slice.map_id
-            )
-        })?;
-        tiles_read += slice_tiles;
-        slice_rows.push(rows);
-    }
-    let rows = dedup_rows(slice_rows);
+    let (rows, tiles_read) = collect_scope(&mut chain, &scope)?;
     let batches: Vec<String> = rows
         .chunks(24)
         .map(|c| c.iter().map(CellRow::packed).collect::<Vec<_>>().join(";"))
@@ -190,6 +181,30 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     }
     println!("terrain: applied.");
     Ok(())
+}
+
+/// Every cell row the scope's Bounded Map Slices cover, deduplicated where slices overlap, plus
+/// the tile count read. Each slice's terrain self-check runs here, so a dry run and `--apply`
+/// prove the same thing: no slice reaches a reducer with a sample the heightmap contradicts.
+fn collect_scope(
+    chain: &mut PatchChain,
+    scope: &crate::world_import_scope::WorldImportScope,
+) -> Result<(Vec<CellRow>, u32)> {
+    let mut slice_rows = Vec::with_capacity(scope.bounded_slices.len());
+    let mut tiles_read = 0u32;
+    for slice in &scope.bounded_slices {
+        let (rows, slice_tiles) = collect_slice(chain, slice).with_context(|| {
+            format!(
+                "terrain scope {} slice {} (map {})",
+                scope.name(),
+                slice.name,
+                slice.map_id
+            )
+        })?;
+        tiles_read += slice_tiles;
+        slice_rows.push(rows);
+    }
+    Ok((dedup_rows(slice_rows), tiles_read))
 }
 
 fn collect_slice(
@@ -266,8 +281,14 @@ fn collect_slice(
         "terrain: slice {} map {map_id} self-check — interpolated z at sample ({cx0:.1},{cy0:.1}) = {checked:.3} (expected ≈ {cz_expect:.3})",
         slice.name
     );
-    if (checked - cz_expect).abs() > 2.0 {
-        bail!("terrain self-check failed: interpolated {checked:.2} vs expected {cz_expect:.2}");
+    if (checked - cz_expect).abs() > SELF_CHECK_TOLERANCE {
+        bail!(
+            "terrain self-check failed: slice {} map {map_id} sample ({cx0:.2},{cy0:.2}) \
+             interpolated {checked:.2} vs expected {cz_expect:.2} (limit {SELF_CHECK_TOLERANCE} yd; \
+             a sample on a WMO floor such as a cave or porch reads off the heightmap — \
+             pick a heightmap ground point)",
+            slice.name
+        );
     }
     Ok((rows, tiles_read))
 }
@@ -372,6 +393,43 @@ fn interp_check(rows: &[CellRow], x: f32, y: f32) -> Result<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world_import_scope::{WorldImportProfile, WorldImportScope};
+
+    /// The operator's own 1.12.1 client `Data/` dir, when the Verification below may read it.
+    /// Client archives never enter the repo, so without it the test reports itself skipped.
+    fn client_data_dir() -> Option<std::path::PathBuf> {
+        let dir = std::env::var_os("LYRACORE_CLIENT_DATA")?;
+        Some(std::path::PathBuf::from(dir))
+    }
+
+    #[test]
+    fn alliance_eastern_terrain_dry_run_passes_every_slice_self_check() {
+        // Verification against the owned client: the same `collect_scope` a `--terrain
+        // --world-profile alliance-eastern` dry run takes, so a green result proves the profile's
+        // Human, Dun Morogh and Loch Modan samples stand on the heightmap the Module will read.
+        let Some(data_dir) = client_data_dir() else {
+            eprintln!(
+                "skipped: set LYRACORE_CLIENT_DATA=<client Data/ dir> to run this Verification"
+            );
+            return;
+        };
+        let scope = WorldImportScope::canonical(WorldImportProfile::AllianceEastern)
+            .expect("eastern profile");
+        let mut chain = open_terrain_chain(&data_dir).expect("terrain patch chain");
+        let (rows, tiles_read) =
+            collect_scope(&mut chain, &scope).expect("every alliance-eastern slice self-check");
+        assert!(tiles_read > 0);
+        for slice in &scope.bounded_slices {
+            let (x, y) = (slice.sample.0 as f32, slice.sample.1 as f32);
+            let ground = interp_check(&rows, x, y).expect("sample cell imported");
+            assert!(
+                (ground - slice.sample.2 as f32).abs() <= SELF_CHECK_TOLERANCE,
+                "slice {} sample z {} vs heightmap {ground}",
+                slice.name,
+                slice.sample.2
+            );
+        }
+    }
 
     #[test]
     fn slice_cell_range_from_box_uses_corners_not_center_radius() {
