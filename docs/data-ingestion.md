@@ -230,6 +230,8 @@ bit 0. Event parameters map as follows:
 The importer accepts timed combat, HP, aggro, death, range, spawn, and friendly-HP events. It accepts
 text, text-new, emote, cast, phase, flee, call-for-help, summon, and ranged-movement actions. Positive
 subjects must be in the World Import Scope. Negative subjects resolve through the imported spawn guid.
+Each row names its creature by template entry or by spawn guid, never both: a guid-scoped rule emits
+`creature_entry` 0, because the Module refuses a row that sets both columns.
 Accepted summon templates enlarge the scope to a fixpoint, so a summoned creature can bring its own
 EventAI dependencies. The importer carries current broadcast text and supported legacy negative
 `script_texts` ids. It reads both the compact 12-column and current 17-column broadcast-text

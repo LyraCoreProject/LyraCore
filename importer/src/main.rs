@@ -7236,6 +7236,34 @@ mod tests {
     }
 
     #[test]
+    fn eventai_row_carries_the_entry_or_the_spawn_guid_but_never_both() {
+        // The Module decodes a subject as (entry, 0) or (0, guid) and refuses a row that sets both,
+        // so a guid-scoped source rule has to clear the entry column it resolved the guid through.
+        let dump = eventai_fixture_dump();
+        let mut args = test_args();
+        args.family = Some("creature-ai".to_string());
+        let plan = build_dump_plan(&dump, &args, &None, &None).expect("EventAI plan");
+        let events = plan
+            .stmts
+            .iter()
+            .find(|statement| statement.starts_with("INSERT INTO game_creature_ai_event"))
+            .expect("EventAI rows");
+
+        // Source rule 16 names spawn guid 2 (`creature_id` -2); source rule 17 names entry 200.
+        assert!(
+            events.contains(&format!(
+                "(4611686018427387968,0,3,0,'',0,0,0,0,0,16,0,{},100,",
+                world_guid(100, 2)
+            )),
+            "{events}"
+        );
+        assert!(
+            events.contains("(4611686018427387972,200,5,0,'',0,0,0,0,0,17,0,0,100,"),
+            "{events}"
+        );
+    }
+
+    #[test]
     fn eventai_inactive_family_does_not_extend_quest_scope() {
         let dump = format!(
             "x INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \

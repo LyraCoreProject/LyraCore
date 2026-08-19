@@ -284,6 +284,22 @@ struct SummonLocation {
     lifetime_ms: u32,
 }
 
+/// A row names its creature by template entry or by spawn guid, never both. The Module reads the
+/// pair and refuses a row that sets neither or sets both.
+enum Subject {
+    Entry(u32),
+    Guid(u64),
+}
+
+impl Subject {
+    fn columns(&self) -> (u32, u64) {
+        match *self {
+            Self::Entry(entry) => (entry, 0),
+            Self::Guid(guid) => (0, guid),
+        }
+    }
+}
+
 struct NativeAction {
     kind: u8,
     params: [u32; 3],
@@ -311,7 +327,7 @@ pub(crate) fn build(
     rules.sort_by_key(|rule| rule.id);
 
     for rule in rules {
-        let Some((creature_entry, creature_guid)) = resolve_subject(
+        let Some(subject) = resolve_subject(
             &rule,
             imported_entries,
             imported_guid_entries,
@@ -320,6 +336,7 @@ pub(crate) fn build(
         ) else {
             continue;
         };
+        let (creature_entry, creature_guid) = subject.columns();
         let Some((event, params)) = map_event(&rule, &mut plan.coverage) else {
             continue;
         };
@@ -676,11 +693,11 @@ fn resolve_subject(
     imported_guid_entries: &HashMap<u64, u64>,
     importable_templates: &HashSet<u64>,
     coverage: &mut Coverage,
-) -> Option<(u32, u64)> {
+) -> Option<Subject> {
     if rule.subject > 0 {
         let entry = rule.subject as u64;
         if imported_entries.contains(&entry) && importable_templates.contains(&entry) {
-            return u32::try_from(entry).ok().map(|entry| (entry, 0));
+            return u32::try_from(entry).ok().map(Subject::Entry);
         }
         coverage.drop("missing_entry_subject", entry);
         return None;
@@ -699,9 +716,7 @@ fn resolve_subject(
         return None;
     }
     coverage.guid_rules += 1;
-    u32::try_from(entry)
-        .ok()
-        .map(|entry| (entry, world_guid(entry as u64, source_guid)))
+    Some(Subject::Guid(world_guid(entry, source_guid)))
 }
 
 fn map_event(rule: &RawRule, coverage: &mut Coverage) -> Option<(u8, [u32; 6])> {
