@@ -1,4 +1,4 @@
-use super::CreatureAiEvent;
+use super::{CreatureAiEvent, CreatureAiState};
 use crate::creatures::ai::TickScope;
 
 pub(crate) const EVENT_ON_AGGRO: u8 = 0;
@@ -243,6 +243,19 @@ impl Default for CreatureState {
             ranged_distance: 0.0,
             ranged_angle: 0.0,
             ranged_posture_active: false,
+        }
+    }
+}
+
+impl From<CreatureAiState> for CreatureState {
+    fn from(row: CreatureAiState) -> Self {
+        Self {
+            phase: row.phase,
+            lifecycle_id: row.lifecycle_id,
+            engagement_id: row.engagement_id,
+            ranged_distance: row.ranged_distance,
+            ranged_angle: row.ranged_angle,
+            ranged_posture_active: row.ranged_posture_active,
         }
     }
 }

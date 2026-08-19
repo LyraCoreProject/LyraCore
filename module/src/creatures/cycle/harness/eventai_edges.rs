@@ -206,6 +206,56 @@ fn an_inverted_repeat_window_is_refused_instead_of_rolled() {
 }
 
 #[test]
+fn a_dead_creature_says_nothing() {
+    let mut scenario = scenario()
+        .slain(CREATURE)
+        .eventai_broadcast(21, "silent", 0)
+        .eventai_row(row(
+            21,
+            21,
+            0,
+            EVENT_ON_AGGRO,
+            ACTION_SAY,
+            100,
+            1,
+            REPEAT_ONCE,
+            [21, 0, 0],
+        ));
+
+    edge(&mut scenario, EventKind::OnAggro, false);
+
+    assert!(scenario.eventai_speech().is_empty());
+}
+
+#[test]
+fn an_overlong_line_is_capped_like_any_other_chat() {
+    let mut scenario = scenario()
+        .eventai_broadcast(22, &"a".repeat(400), 0)
+        .eventai_row(row(
+            22,
+            22,
+            0,
+            EVENT_ON_AGGRO,
+            ACTION_SAY,
+            100,
+            1,
+            REPEAT_ONCE,
+            [22, 0, 0],
+        ));
+
+    edge(&mut scenario, EventKind::OnAggro, false);
+
+    // Vanilla caps client chat input around 255 characters; the stored row is bounded to match.
+    assert_eq!(
+        scenario
+            .eventai_speech()
+            .first()
+            .map(|(_, _, line)| line.chars().count()),
+        Some(255)
+    );
+}
+
+#[test]
 fn a_repeatable_condition_keeps_its_repeat_policy() {
     let mut repeated = row(
         10,

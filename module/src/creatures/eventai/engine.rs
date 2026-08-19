@@ -8,10 +8,10 @@ use super::{
     EventKind, RepeatPolicy, Rule, RuleAction, RuleState, Subject, TargetPolicy,
     SOURCE_FLAG_COMBAT_ACTION,
 };
-use crate::chat::{ChatEvent, CHAT_SAY, CHAT_YELL};
+use crate::chat::{is_supported_chat_type, CHAT_SAY, CHAT_YELL};
 use crate::{
-    game_chat_event, game_creature_ai_broadcast_text, game_creature_ai_event,
-    game_creature_ai_rule_state, game_creature_ai_state, game_world_entity,
+    game_creature_ai_broadcast_text, game_creature_ai_rule_state, game_creature_ai_state,
+    game_world_entity,
 };
 
 /// How long a rule waits after a Refusal from its opening cast. A Refusal there is transient (a
@@ -361,15 +361,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
     }
 
     fn eventai_rows(&self, creature_guid: u64) -> Vec<CreatureAiEvent> {
-        let rules = self.ctx.db.game_creature_ai_event();
-        let Some(creature) = self.ctx.db.game_world_entity().guid().find(creature_guid) else {
-            return Vec::new();
-        };
-        rules
-            .by_entry()
-            .filter(&creature.entry)
-            .chain(rules.by_guid().filter(&creature_guid))
-            .collect()
+        super::combat::rows_for(self.ctx, creature_guid)
     }
 
     fn eventai_condition(&self, context: &EventContext, rule: &Rule) -> Option<EventContext> {
@@ -378,14 +370,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
 
     fn eventai_creature_state(&self, creature_guid: u64) -> CreatureState {
         self.state_row(creature_guid)
-            .map_or_else(CreatureState::default, |row| CreatureState {
-                phase: row.phase,
-                lifecycle_id: row.lifecycle_id,
-                engagement_id: row.engagement_id,
-                ranged_distance: row.ranged_distance,
-                ranged_angle: row.ranged_angle,
-                ranged_posture_active: row.ranged_posture_active,
-            })
+            .map_or_else(CreatureState::default, CreatureState::from)
     }
 
     fn set_eventai_phase(&mut self, creature_guid: u64, phase: u8) {
@@ -480,52 +465,49 @@ impl EventAiWorld for DatabaseWorld<'_> {
 
     fn eventai_speak(&mut self, context: &EventContext, action: &RuleAction, chat_type: u8) {
         let ids: Vec<u32> = action.params.into_iter().filter(|id| *id != 0).collect();
-        let broadcast = match ids.len() {
-            0 => None,
-            1 => self
-                .ctx
-                .db
-                .game_creature_ai_broadcast_text()
-                .id()
-                .find(ids[0]),
-            _ => self
-                .ctx
-                .db
-                .game_creature_ai_broadcast_text()
-                .id()
-                .find(ids[self.ctx.random::<u32>() as usize % ids.len()]),
-        };
+        let broadcast = super::combat::pick(self.ctx, &ids)
+            .and_then(|id| self.ctx.db.game_creature_ai_broadcast_text().id().find(id));
         let (message, chat_type, language, emote) = match (ids.is_empty(), broadcast) {
             (true, _) => (action.legacy_text.clone(), chat_type, 0, 0),
+            // A broadcast text carries its own chat type; the authored action decides when that is
+            // not one this tier relays (a monster emote line still reaches players as its say/yell).
             (false, Some(text)) => (
                 text.male_text,
-                text.chat_type,
+                if is_supported_chat_type(text.chat_type) {
+                    text.chat_type
+                } else {
+                    chat_type
+                },
                 text.language_id,
                 text.emote_id_1,
             ),
             (false, None) => return,
         };
-        if message.is_empty() {
+        let Some(creature) = self
+            .ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(context.creature_guid)
+        else {
+            return;
+        };
+        // The say/yell chokepoint owns the dead-speaker Gate and the length cap; a creature line
+        // goes through it like a player's rather than writing the event row itself. The broadcast
+        // text's emote belongs to the line, so a Refusal there silences both.
+        let spoken =
+            crate::chat::apply_send_chat(self.ctx, creature, chat_type, language, message).is_ok();
+        if !spoken || emote == 0 {
             return;
         }
-        self.ctx.db.game_chat_event().insert(ChatEvent {
-            id: 0,
-            sender_guid: context.creature_guid,
-            chat_type,
-            language,
-            message,
-            created_at: self.ctx.timestamp,
-        });
-        if emote != 0 {
-            if let Some(creature) = self
-                .ctx
-                .db
-                .game_world_entity()
-                .guid()
-                .find(context.creature_guid)
-            {
-                let _ = crate::chat::apply_send_emote(self.ctx, creature, 0, emote, 0);
-            }
+        if let Some(speaker) = self
+            .ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(context.creature_guid)
+        {
+            let _ = crate::chat::apply_send_emote(self.ctx, speaker, 0, emote, 0);
         }
     }
 

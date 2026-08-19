@@ -17,7 +17,7 @@ pub(crate) use combat::{suppresses_fixed_rout, suppresses_flat_cast};
 pub(crate) use edges::reset_creature_lifecycle;
 pub(crate) use edges::{
     creature_ai_on_aggro, creature_ai_on_creature_death, creature_ai_on_creature_spawn,
-    reset_engagement,
+    reset_engagement, runs_eventai,
 };
 #[cfg(test)]
 pub(crate) use engine::{evaluate, EventAiWorld};

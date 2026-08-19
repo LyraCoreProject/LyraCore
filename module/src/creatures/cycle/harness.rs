@@ -1280,14 +1280,26 @@ impl EventAiWorld for Scenario {
                 .get(&ids[self.eventai_roll() as usize % ids.len()])
                 .cloned(),
         };
-        let Some((message, chat_type, _, emote)) = text else {
+        let Some((message, broadcast_type, _, emote)) = text else {
             return;
         };
-        if !message.is_empty() {
-            self.eventai_speech
-                .borrow_mut()
-                .push((context.creature_guid, chat_type, message));
+        // The say/yell chokepoint the world speaks through: a corpse says nothing, the line is
+        // trimmed and length-capped, and a chat type this tier does not relay falls back to the
+        // authored action's.
+        if self.corpses.borrow().contains(&context.creature_guid) {
+            return;
         }
+        let chat_type = if crate::chat::is_supported_chat_type(broadcast_type) {
+            broadcast_type
+        } else {
+            chat_type
+        };
+        let Some(message) = crate::chat::normalized_message(&message) else {
+            return;
+        };
+        self.eventai_speech
+            .borrow_mut()
+            .push((context.creature_guid, chat_type, message));
         if emote != 0 {
             self.eventai_emotes
                 .borrow_mut()

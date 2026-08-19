@@ -27,7 +27,7 @@ pub(super) fn engaged_contexts(
         .iter()
         .filter_map(|fight| {
             let creature = entities.guid().find(fight.attacker_guid)?;
-            (!creature.is_player() && !creature.dead && scope.covers(creature.instance_id))
+            (super::runs_eventai(&creature) && !creature.dead && scope.covers(creature.instance_id))
                 .then_some((fight, creature.guid))
         })
         .flat_map(|(fight, creature_guid)| {
@@ -246,14 +246,7 @@ pub(crate) fn applicable_rules(ctx: &ReducerContext, creature_guid: u64) -> Vec<
         .game_creature_ai_state()
         .creature_guid()
         .find(creature_guid)
-        .map_or_else(CreatureState::default, |row| CreatureState {
-            phase: row.phase,
-            lifecycle_id: row.lifecycle_id,
-            engagement_id: row.engagement_id,
-            ranged_distance: row.ranged_distance,
-            ranged_angle: row.ranged_angle,
-            ranged_posture_active: row.ranged_posture_active,
-        });
+        .map_or_else(CreatureState::default, CreatureState::from);
     let mut grouped = std::collections::BTreeMap::new();
     for row in rows_for(ctx, creature_guid) {
         grouped
@@ -296,20 +289,20 @@ fn applicable_engaged_rules(ctx: &ReducerContext, creature_guid: u64) -> Vec<Rul
         .collect()
 }
 
-fn rows_for(ctx: &ReducerContext, creature_guid: u64) -> Vec<super::CreatureAiEvent> {
-    let rules = ctx.db.game_creature_ai_event();
-    let entry = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(creature_guid)
-        .map(|creature| creature.entry);
-    let Some(entry) = entry else {
+/// Every EventAI row that governs one creature: its entry's rules plus any pinned to its own guid.
+/// The single row fetch behind the engine, the lifecycle edges and the cycle's suppression reads,
+/// so the "who runs EventAI at all" Gate is answered once, here.
+pub(super) fn rows_for(ctx: &ReducerContext, creature_guid: u64) -> Vec<super::CreatureAiEvent> {
+    let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
         return Vec::new();
     };
+    if !super::runs_eventai(&creature) {
+        return Vec::new();
+    }
+    let rules = ctx.db.game_creature_ai_event();
     rules
         .by_entry()
-        .filter(&entry)
+        .filter(&creature.entry)
         .chain(rules.by_guid().filter(&creature_guid))
         .collect()
 }
@@ -477,7 +470,8 @@ fn friendly(ctx: &ReducerContext, first: &crate::WorldEntity, second: &crate::Wo
             && first.faction_template == second.faction_template)
 }
 
-fn pick(ctx: &ReducerContext, candidates: &[u64]) -> Option<u64> {
+/// One candidate at random, or `None` when there are none to choose between.
+pub(super) fn pick<T: Copy>(ctx: &ReducerContext, candidates: &[T]) -> Option<T> {
     if candidates.is_empty() {
         return None;
     }
@@ -487,8 +481,5 @@ fn pick(ctx: &ReducerContext, candidates: &[u64]) -> Option<u64> {
 }
 
 fn distance_yd(first: &crate::WorldEntity, second: &crate::WorldEntity) -> f32 {
-    let dx = first.x - second.x;
-    let dy = first.y - second.y;
-    let dz = first.z - second.z;
-    (dx * dx + dy * dy + dz * dz).sqrt()
+    crate::helpers::dist_sq(first, second).sqrt()
 }
