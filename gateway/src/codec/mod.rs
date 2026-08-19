@@ -104,6 +104,8 @@ use wow_world_messages::vanilla::{
     HitInfo,
     InitialSpell,
     InventoryType,
+    // `SMSG_SET_PROFICIENCY` names the item class its subclass mask applies to (Weapon / Armor).
+    ItemClass,
     ItemClassAndSubClass,
     ItemDamageType,
     // Item flags bitmask + bag-type restriction on the query response.
@@ -272,6 +274,8 @@ use wow_world_messages::vanilla::{
     // faction ENTRY where 1.12 wants the rep INDEX, so that packet is RAW-encoded in `entity.rs`
     // (`build_faction_standing_raw`). Re-importing the typed pair would resurrect the McBride
     // client-crash (see `update_mask.rs`'s note).
+    // What the client may equip, per item class — drives the red "unusable" tint on a tooltip.
+    SMSG_SET_PROFICIENCY,
     SMSG_SET_REST_START,
     // Banker activate + the BANKER gossip option: opens the bank window.
     SMSG_SHOW_BANK,

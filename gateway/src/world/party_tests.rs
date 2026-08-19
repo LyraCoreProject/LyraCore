@@ -898,9 +898,9 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
 
-    // The login sequence is 10 packets; the realm-wide party slice appends the party frame as an 11th.
+    // The login sequence is 12 packets; the realm-wide party slice appends the party frame as a 13th.
     let mut roster_named: Option<String> = None;
-    for _ in 0..11 {
+    for _ in 0..13 {
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec) {
             Ok(ServerOpcodeMessage::SMSG_GROUP_LIST(list)) => {
                 roster_named = list.members.first().map(|m| m.name.clone());

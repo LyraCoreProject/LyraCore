@@ -103,6 +103,12 @@ pub(crate) fn handle_trainer<St: WorldStore + ?Sized>(
                             )?;
                         }
                     }
+                    // An armor-proficiency purchase widens what this Character may wear, and the
+                    // client only learns that from SMSG_SET_PROFICIENCY. Re-read the spellbook the
+                    // buy just changed and resend the ARMOR mask; the weapon table never moves.
+                    if teaches_armor_proficiency(spell_id) || teaches_armor_proficiency(resolved) {
+                        send_armor_proficiency(tx, store, self_guid)?;
+                    }
                 }
                 Err(e) => {
                     // The module tags its Err with a [N] gtker failure-reason; 1=money, 2=level/req, else generic.
@@ -232,4 +238,39 @@ pub(crate) fn handle_trainer<St: WorldStore + ?Sized>(
         other => return Ok(Some(other)),
     }
     Ok(None)
+}
+
+/// Does this trainer offering teach an armor proficiency? Both the trainer-list wrapper and the
+/// passive it resolves to count, so the check lands whichever id the buy path reports.
+fn teaches_armor_proficiency(spell_id: u32) -> bool {
+    use lyracore_shared::constants::armor_proficiency::*;
+
+    matches!(
+        spell_id,
+        PLATE_TRAINER_SPELL_ID
+            | PLATE_PASSIVE_SPELL_ID
+            | MAIL_TRAINER_SPELL_ID
+            | MAIL_PASSIVE_SPELL_ID
+    )
+}
+
+/// Push the Character's ARMOR `SMSG_SET_PROFICIENCY` from its CURRENT spellbook, so the client
+/// re-tints its bags without a relog. Read after the buy: the mask states what the Character knows
+/// now, not what the purchase was meant to grant, so a buy the Module only half-applied never
+/// tints an item the equip Gate would still refuse.
+fn send_armor_proficiency<St: WorldStore + ?Sized>(
+    tx: &SessionTx,
+    store: &St,
+    self_guid: u64,
+) -> Result<()> {
+    let learned = store.player_learned_spells(self_guid).unwrap_or_default();
+    // `character_presence` is the store's existing class read; a proficiency buy happens twice in a
+    // character's life, so the lookup is not worth a dedicated one.
+    let Some((_, _, player_class, _)) = store.character_presence(self_guid).ok().flatten() else {
+        return Ok(());
+    };
+    send(
+        tx,
+        Outbound::One(codec::build_armor_proficiency_msg(player_class, &learned)),
+    )
 }

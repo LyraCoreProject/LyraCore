@@ -3685,3 +3685,107 @@ fn compressed_moves_codec_wraps_its_u16_size_field_only_far_past_reported_scale(
     }
     panic!("expected the encoder to wrap its u16 size field somewhere in 1000..20000 movers");
 }
+
+// ---- SMSG_SET_PROFICIENCY: what the client may wield and wear -----------------------------------
+
+/// Extract the typed proficiency message, or fail loudly.
+fn proficiency(msg: &ServerOpcodeMessage) -> &SMSG_SET_PROFICIENCY {
+    match msg {
+        ServerOpcodeMessage::SMSG_SET_PROFICIENCY(p) => p,
+        other => panic!("expected SMSG_SET_PROFICIENCY, got {other}"),
+    }
+}
+
+#[test]
+fn set_proficiency_pins_both_masks_on_the_wire() {
+    // A Warrior who has trained Plate Mail (750). Weapons: the class table admits every subclass up
+    // to the fishing pole except the wand. Armor: misc+cloth+leather+mail+shield, plus the plate the
+    // passive just unlocked.
+    let msgs = build_set_proficiency_msgs(1, &[750]);
+    let bytes = |msg: &ServerOpcodeMessage| {
+        let mut buf = Vec::new();
+        proficiency(msg).write_unencrypted_server(&mut buf).unwrap();
+        buf
+    };
+    // size (u16 BE) = 5-byte body + 2-byte opcode; opcode 0x0127 (u16 LE); ItemClass; mask (u32 LE).
+    assert_eq!(
+        bytes(&msgs[0]),
+        vec![0x00, 0x07, 0x27, 0x01, 2, 0xFF, 0xFF, 0x17, 0x00],
+        "weapon mask = every subclass 0..=20 except the wand (19)"
+    );
+    assert_eq!(
+        bytes(&msgs[1]),
+        vec![0x00, 0x07, 0x27, 0x01, 4, 0x5F, 0x00, 0x00, 0x00],
+        "armor mask = misc|cloth|leather|mail|plate|shield"
+    );
+    // Each bit is `1 << subclass`, so the mask reads back as the subclass set it stands for.
+    let armor = proficiency(&msgs[1]).item_sub_class_mask;
+    for subclass in [0u8, 1, 2, 3, 4, 6] {
+        assert!(armor & (1 << subclass) != 0, "armor subclass {subclass}");
+    }
+    assert_eq!(armor & (1 << 5), 0, "subclass 5 is not an armor tier");
+}
+
+#[test]
+fn the_armor_mask_follows_the_trained_passives_per_class() {
+    let mask = |player_class, learned: &[u32]| {
+        let msg = build_armor_proficiency_msg(player_class, learned);
+        assert_eq!(proficiency(&msg).class.as_int(), 4);
+        proficiency(&msg).item_sub_class_mask
+    };
+    const MAIL: u32 = 1 << 3;
+    const PLATE: u32 = 1 << 4;
+
+    // A Warrior wears mail from level 1 and plate only once 750 is trained.
+    assert_eq!(mask(1, &[]) & MAIL, MAIL);
+    assert_eq!(mask(1, &[]) & PLATE, 0);
+    assert_eq!(mask(1, &[750]) & (MAIL | PLATE), MAIL | PLATE);
+    // A Mage wears cloth and misc, whatever passives it somehow holds.
+    assert_eq!(mask(8, &[]), 0b11);
+    assert_eq!(mask(8, &[750, 8737]), 0b11);
+    // The mail upgrade is the Hunter's, and it is the only tier it moves.
+    assert_eq!(mask(3, &[]) & MAIL, 0);
+    assert_eq!(mask(3, &[8737]) & MAIL, MAIL);
+}
+
+#[test]
+fn login_sequence_carries_both_proficiency_masks_with_the_initial_state() {
+    for (learned, plate_trained) in [(&[][..], false), (&[750u32][..], true)] {
+        let msgs =
+            login_sequence_messages(&warrior_entity(), learned, &[], &[], WorldEntry::FreshLogin)
+                .unwrap();
+        let at = |wanted: fn(&ServerOpcodeMessage) -> bool| {
+            msgs.iter().position(wanted).expect("message in sequence")
+        };
+        let spells = at(|m| matches!(m, ServerOpcodeMessage::SMSG_INITIAL_SPELLS(_)));
+        let buttons = at(|m| matches!(m, ServerOpcodeMessage::SMSG_ACTION_BUTTONS(_)));
+        let first = at(|m| matches!(m, ServerOpcodeMessage::SMSG_SET_PROFICIENCY(_)));
+        assert!(
+            spells < first && first < buttons,
+            "both masks ride the initial-state batch, after the spellbook they derive from"
+        );
+
+        let masks: Vec<(u8, u32)> = msgs
+            .iter()
+            .filter(|m| matches!(m, ServerOpcodeMessage::SMSG_SET_PROFICIENCY(_)))
+            .map(|m| {
+                (
+                    proficiency(m).class.as_int(),
+                    proficiency(m).item_sub_class_mask,
+                )
+            })
+            .collect();
+        assert_eq!(masks.len(), 2, "one message per item class");
+        assert_eq!(masks[0].0, 2, "weapons first");
+        assert_eq!(masks[1].0, 4, "then armor");
+        assert!(
+            masks[1].1 & (1 << 3) != 0,
+            "a Warrior wears mail with nothing trained"
+        );
+        assert_eq!(
+            masks[1].1 & (1 << 4) != 0,
+            plate_trained,
+            "plate follows the passive in the spellbook"
+        );
+    }
+}

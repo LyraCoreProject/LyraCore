@@ -3,6 +3,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};
+use lyracore_shared::item::Proficiency;
 use spacetimedb_sdk::Table;
 
 use super::super::bindings::*;
@@ -22,7 +23,7 @@ struct BrowseFacts<'a> {
 fn browse_matches(
     request: &AuctionBrowseRequest,
     player_level: u8,
-    player_class: u8,
+    proficiency: Proficiency,
     item: BrowseFacts<'_>,
 ) -> bool {
     (request.name.is_empty()
@@ -48,11 +49,7 @@ fn browse_matches(
         && request.quality.is_none_or(|wanted| item.quality == wanted)
         && (!request.usable_only
             || (item.required_level <= player_level
-                && lyracore_shared::item::can_equip_proficiency(
-                    player_class,
-                    item.item_class,
-                    item.item_subclass,
-                )))
+                && proficiency.can_equip(item.item_class, item.item_subclass)))
 }
 
 fn paginate(mut rows: Vec<Auction>, offset: u32) -> (Vec<Auction>, u32) {
@@ -117,18 +114,29 @@ impl Coordinator {
         house_id: u32,
         query: AuctionQuery,
     ) -> Result<AuctionPage> {
-        let (player_level, player_class) = {
+        let (player_level, proficiency) = {
             let guard = self.0.coord();
-            let player = guard
-                .conn
-                .db
+            let db = &guard.conn.db;
+            let player = db
                 .game_world_entity()
                 .guid()
                 .find(&player_guid)
                 .ok_or_else(|| anyhow!("auction query actor {player_guid} is not in world"))?;
+            // The "usable" checkbox asks what THIS Character can wear, so the armor half reads its
+            // trained passives, not the class ceiling — a level-1 Warrior must not see plate as
+            // usable. One spellbook scan per query, not per row.
+            let learned: Vec<u32> = db
+                .game_player_spell()
+                .iter()
+                .filter(|s| s.character_guid == player_guid)
+                .map(|s| s.spell_id)
+                .collect();
             (
                 u8::try_from(player.level).unwrap_or(u8::MAX),
-                ((player.unit_bytes_0 >> 8) & 0xff) as u8,
+                crate::codec::armor_proficiency(
+                    ((player.unit_bytes_0 >> 8) & 0xff) as u8,
+                    &learned,
+                ),
             )
         };
         let now_micros = now_micros();
@@ -154,7 +162,7 @@ impl Coordinator {
                         browse_matches(
                             request,
                             player_level,
-                            player_class,
+                            proficiency,
                             BrowseFacts {
                                 name: &item.name,
                                 required_level: item.required_level,
@@ -210,9 +218,14 @@ mod tests {
         }
     }
 
+    /// A Character of `player_class` that has trained neither level-40 armor upgrade.
+    fn untrained(player_class: u8) -> Proficiency {
+        Proficiency::derive(player_class, false, false)
+    }
+
     #[test]
     fn browse_supports_every_exact_filter_and_the_existing_usable_model() {
-        assert!(browse_matches(&request(), 15, 1, facts()));
+        assert!(browse_matches(&request(), 15, untrained(1), facts()));
 
         let mismatches = [
             AuctionBrowseRequest {
@@ -245,17 +258,17 @@ mod tests {
             },
         ];
         for mismatch in mismatches {
-            assert!(!browse_matches(&mismatch, 15, 1, facts()));
+            assert!(!browse_matches(&mismatch, 15, untrained(1), facts()));
         }
-        assert!(!browse_matches(&request(), 14, 1, facts()));
-        assert!(!browse_matches(&request(), 15, 5, facts()));
+        assert!(!browse_matches(&request(), 14, untrained(1), facts()));
+        assert!(!browse_matches(&request(), 15, untrained(5), facts()));
         assert!(browse_matches(
             &AuctionBrowseRequest {
                 usable_only: false,
                 ..request()
             },
             15,
-            5,
+            untrained(5),
             facts(),
         ));
         assert!(browse_matches(
@@ -272,8 +285,38 @@ mod tests {
                 usable_only: false,
             },
             1,
-            5,
+            untrained(5),
             facts(),
+        ));
+    }
+
+    /// The usable checkbox used to answer from the class ceiling, so a level-1 Warrior saw plate as
+    /// usable and the equip Gate then refused it. It now answers from the Character's own training.
+    #[test]
+    fn the_usable_filter_follows_trained_armor_not_the_class_ceiling() {
+        let plate = BrowseFacts {
+            item_class: 4,
+            item_subclass: 4,
+            ..facts()
+        };
+        let usable = AuctionBrowseRequest {
+            item_class: Some(4),
+            item_subclass: Some(4),
+            ..request()
+        };
+        assert!(!browse_matches(&usable, 60, untrained(1), plate));
+        assert!(browse_matches(
+            &usable,
+            60,
+            Proficiency::derive(1, true, false),
+            plate
+        ));
+        // A Mage trains neither upgrade, so plate stays unusable however the flags fall.
+        assert!(!browse_matches(
+            &usable,
+            60,
+            Proficiency::derive(8, true, true),
+            plate
         ));
     }
 
