@@ -164,19 +164,21 @@ fn an_edge_chance_miss_is_consumed_even_when_the_source_repeats() {
 
 #[test]
 fn a_repeatable_condition_keeps_its_repeat_policy() {
+    let mut repeated = row(
+        10,
+        10,
+        0,
+        EVENT_CREATURE_HP,
+        ACTION_SAY,
+        100,
+        1,
+        REPEAT,
+        [10, 0, 0],
+    );
+    repeated.event_param_2 = 100;
     let mut scenario = scenario()
         .eventai_broadcast(10, "again", 0)
-        .eventai_row(row(
-            10,
-            10,
-            0,
-            EVENT_CREATURE_HP,
-            ACTION_SAY,
-            100,
-            1,
-            REPEAT,
-            [10, 0, 0],
-        ));
+        .eventai_row(repeated);
 
     edge(&mut scenario, EventKind::CreatureHp, false);
     edge(&mut scenario, EventKind::CreatureHp, false);
