@@ -5,7 +5,7 @@
 
 use spacetimedb::{ReducerContext, Table};
 
-use lyracore_shared::constants::{armor_proficiency, starter_item};
+use lyracore_shared::constants::starter_item;
 
 use super::rules::{
     binds_on_equip, can_equip_into, eligibility_mask_allows, equip_slot, invtype,
@@ -199,11 +199,9 @@ pub(crate) fn apply_item_move(
         // knowing the passive IS the proficiency, so an untrained Warrior wears mail but not plate.
         // Same derivation the gateway masks into SMSG_SET_PROFICIENCY, so the tint cannot promise
         // what this Gate refuses.
-        let proficiency = Proficiency::derive(
-            player_class,
-            crate::spell::knows_spell(ctx, player_guid, armor_proficiency::PLATE_PASSIVE_SPELL_ID),
-            crate::spell::knows_spell(ctx, player_guid, armor_proficiency::MAIL_PASSIVE_SPELL_ID),
-        );
+        let proficiency = Proficiency::from_spellbook(player_class, |spell_id| {
+            crate::spell::knows_spell(ctx, player_guid, spell_id)
+        });
         if !proficiency.can_equip(tmpl.class, tmpl.subclass) {
             return Err(format!(
                 "class {} lacks proficiency for item class {}/subclass {}",
@@ -651,27 +649,18 @@ mod tests {
     /// ARMOR PROFICIENCY SOURCE: the equip Gate must derive proficiency from the Character's LEARNED
     /// passives, so a level-40 trainer purchase is what unlocks plate. Reading the class alone would
     /// hand a fresh Warrior a full plate set. There is no `ReducerContext` harness in this crate, so
-    /// the two spell reads are pinned by source scan; the derivation's answers are asserted directly
+    /// the spellbook read is pinned by source scan; the derivation's answers are asserted directly
     /// in `lyracore-shared` and in `rules`.
     #[test]
     fn the_equip_gate_derives_armor_proficiency_from_learned_passives() {
         let src = include_str!("inventory.rs");
         let body = code_of(src, "pub(crate) fn apply_item_move(");
-        for passive in [
-            "armor_proficiency::PLATE_PASSIVE_SPELL_ID",
-            "armor_proficiency::MAIL_PASSIVE_SPELL_ID",
-        ] {
-            assert!(
-                body.contains(passive) && body.contains("knows_spell("),
-                "the equip path must read `{passive}` from the spellbook"
-            );
-        }
         assert!(
-            body.contains("Proficiency::derive("),
-            "the equip path must feed the shared derivation, not a class-only rule"
+            body.contains("Proficiency::from_spellbook(") && body.contains("knows_spell("),
+            "the equip path must derive proficiency from this Character's spellbook"
         );
         assert!(
-            !body.contains("can_equip_proficiency("),
+            !body.contains("class_ceiling("),
             "the class ceiling belongs to the auction filter and must never gate an equip"
         );
     }

@@ -414,15 +414,7 @@ pub fn build_item_push_result(
 /// passive spells a class trainer teaches, so knowing the passive IS the knowledge — the same
 /// question the Module equip Gate asks before it allows the item move.
 pub fn armor_proficiency(player_class: u8, learned: &[u32]) -> Proficiency {
-    use lyracore_shared::constants::armor_proficiency::{
-        MAIL_PASSIVE_SPELL_ID, PLATE_PASSIVE_SPELL_ID,
-    };
-
-    Proficiency::derive(
-        player_class,
-        learned.contains(&PLATE_PASSIVE_SPELL_ID),
-        learned.contains(&MAIL_PASSIVE_SPELL_ID),
-    )
+    Proficiency::from_spellbook(player_class, |spell_id| learned.contains(&spell_id))
 }
 
 /// The pair of `SMSG_SET_PROFICIENCY` messages that tell the client what this Character may wield

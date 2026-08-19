@@ -3789,7 +3789,7 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    // Drain the initial 10-message login sequence (map 0 — not the point of this test).
+    // Drain the initial 12-message login sequence (map 0 — not the point of this test).
     for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
@@ -3805,7 +3805,7 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
         .unwrap();
 
     // enter_world reruns the login-style sequence for the re-entry — minus SMSG_LOGIN_VERIFY_WORLD
-    // (9 messages, not 10): a verify-world resend commands a second load of the just-loaded map.
+    // (11 messages, not 12): a verify-world resend commands a second load of the just-loaded map.
     let mut create_guid = None;
     for _ in 0..11 {
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
@@ -3999,7 +3999,7 @@ fn login_with_resident_items_and_reputation_emits_no_gain_feedback() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // Ten fixed login/self frames plus the resident item's CREATE. The item and standing are
+    // Twelve fixed login/self frames plus the resident item's CREATE. The item and standing are
     // snapshots in those frames, not live insert callbacks, so neither feedback packet is lawful.
     for _ in 0..13 {
         let message = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
@@ -5227,7 +5227,7 @@ fn login_sends_the_quest_log_descriptor_raw_update_after_the_create_packet() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // The fixed 10-message login sequence, then the self CREATE_OBJECT2 — discarded, this test is
+    // The fixed 12-message login sequence, then the self CREATE_OBJECT2 — discarded, this test is
     // about what comes right after.
     for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();

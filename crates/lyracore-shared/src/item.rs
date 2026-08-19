@@ -74,9 +74,23 @@ impl Proficiency {
         }
     }
 
+    /// Derive from a Character's spellbook: `knows` answers whether a spell id is in it. The Module
+    /// equip Gate asks its `game_player_spell` index, the Gateway asks the learned-spell list it
+    /// already gathered for the login batch. Which passives mean which tier is named HERE and only
+    /// here, so neither side can read a different spell than the other.
+    pub fn from_spellbook(player_class: u8, knows: impl Fn(u32) -> bool) -> Self {
+        use crate::constants::armor_proficiency::{MAIL_PASSIVE_SPELL_ID, PLATE_PASSIVE_SPELL_ID};
+
+        Self::derive(
+            player_class,
+            knows(PLATE_PASSIVE_SPELL_ID),
+            knows(MAIL_PASSIVE_SPELL_ID),
+        )
+    }
+
     /// Every armor tier the class can ever reach, both upgrades included. The auction "usable"
-    /// filter shows a browser what its class could wear; the equip Gate must use [`Self::derive`]
-    /// with the Character's learned passives instead.
+    /// filter shows a browser what its class could wear; the equip Gate must use
+    /// [`Self::from_spellbook`] with the Character's own spellbook instead.
     pub const fn class_ceiling(player_class: u8) -> Self {
         Self::derive(player_class, true, true)
     }
@@ -105,12 +119,6 @@ impl Proficiency {
 
 const fn bit(subclass: u8) -> u32 {
     1 << subclass
-}
-
-/// The class ceiling, ignoring which upgrades a Character has actually trained. Kept for the
-/// gateway's auction "usable" filter — an equip Gate needs [`Proficiency::derive`].
-pub fn can_equip_proficiency(player_class: u8, item_class: u8, item_subclass: u8) -> bool {
-    Proficiency::class_ceiling(player_class).can_equip(item_class, item_subclass)
 }
 
 const fn weapon_proficiency(player_class: u8, subclass: u8) -> bool {
@@ -163,6 +171,12 @@ mod tests {
 
     /// The nine playable classes (6 and 10 are unused in 1.12).
     const PLAYABLE: [u8; 9] = [1, 2, 3, 4, 5, 7, 8, 9, 11];
+
+    /// What a class can equip with both level-40 upgrades trained — the auction "usable" filter's
+    /// question, and the shape the pre-training class table was written in.
+    fn ceiling_can_equip(player_class: u8, item_class: u8, item_subclass: u8) -> bool {
+        Proficiency::class_ceiling(player_class).can_equip(item_class, item_subclass)
+    }
 
     /// The armor subclasses a derivation admits, in ascending order.
     fn armor_set(proficiency: Proficiency) -> Vec<u8> {
@@ -308,7 +322,7 @@ mod tests {
     }
 
     /// The class ceiling is what a Character reaches with everything trained — the auction filter's
-    /// question, and the reason `can_equip_proficiency` keeps its answers.
+    /// question.
     #[test]
     fn the_class_ceiling_is_the_fully_trained_derivation() {
         for class in PLAYABLE {
@@ -317,16 +331,82 @@ mod tests {
                 Proficiency::derive(class, true, true)
             );
         }
-        assert!(can_equip_proficiency(1, item_class::ARMOR, PLATE));
-        assert!(can_equip_proficiency(3, item_class::ARMOR, MAIL));
+        assert!(ceiling_can_equip(1, item_class::ARMOR, PLATE));
+        assert!(ceiling_can_equip(3, item_class::ARMOR, MAIL));
     }
 
     #[test]
     fn representative_class_proficiencies_are_available_to_gateway_reads() {
-        assert!(!can_equip_proficiency(8, 4, 4));
-        assert!(can_equip_proficiency(1, 4, 4));
-        assert!(can_equip_proficiency(8, 2, 19));
-        assert!(!can_equip_proficiency(1, 2, 19));
-        assert!(can_equip_proficiency(8, 7, 0));
+        assert!(!ceiling_can_equip(8, 4, 4));
+        assert!(ceiling_can_equip(1, 4, 4));
+        assert!(ceiling_can_equip(8, 2, 19));
+        assert!(!ceiling_can_equip(1, 2, 19));
+        assert!(ceiling_can_equip(8, 7, 0));
+    }
+
+    /// The spellbook reader turns the two trained passives into the two flags, and reads nothing
+    /// else. A Character's spellbook holds hundreds of spells; only these two move armor.
+    #[test]
+    fn the_spellbook_reader_maps_the_two_passives_and_ignores_the_rest() {
+        use crate::constants::armor_proficiency::{MAIL_PASSIVE_SPELL_ID, PLATE_PASSIVE_SPELL_ID};
+
+        let from = |class, book: &[u32]| {
+            let owned = book.to_vec();
+            Proficiency::from_spellbook(class, move |spell| owned.contains(&spell))
+        };
+        for class in PLAYABLE {
+            assert_eq!(from(class, &[]), Proficiency::derive(class, false, false));
+            assert_eq!(
+                from(class, &[PLATE_PASSIVE_SPELL_ID]),
+                Proficiency::derive(class, true, false)
+            );
+            assert_eq!(
+                from(class, &[MAIL_PASSIVE_SPELL_ID]),
+                Proficiency::derive(class, false, true)
+            );
+            assert_eq!(
+                from(class, &[PLATE_PASSIVE_SPELL_ID, MAIL_PASSIVE_SPELL_ID]),
+                Proficiency::class_ceiling(class)
+            );
+            // The trainer wrappers are what a Character BUYS; the passive they teach is what counts.
+            assert_eq!(
+                from(class, &[7109, 8738, 674, 201]),
+                Proficiency::derive(class, false, false),
+                "class {class}: only the passives move armor"
+            );
+        }
+    }
+
+    /// CROSS-CRATE DERIVATION: the Module's equip Gate and the Gateway's `SMSG_SET_PROFICIENCY`
+    /// armor mask must both come from this file, through the same spellbook reader. If either grows
+    /// its own class table, or reads a different spell for the same tier, the client tints an item
+    /// red that the Gate accepts — or worse, tints one usable that the Gate refuses. No crate can
+    /// call both call sites, so this owner pins them by source scan.
+    #[test]
+    fn both_consumers_derive_their_armor_proficiency_here() {
+        let call_sites = [
+            (
+                "the Module equip Gate",
+                include_str!("../../../module/src/items/inventory.rs"),
+            ),
+            (
+                "the Gateway armor mask",
+                include_str!("../../../gateway/src/codec/item.rs"),
+            ),
+        ];
+        for (name, src) in call_sites {
+            assert!(
+                src.contains("Proficiency::from_spellbook("),
+                "{name} must derive proficiency from the shared spellbook reader"
+            );
+            assert!(
+                !src.contains("Proficiency::derive("),
+                "{name} must not assemble the flags itself — that is how the two sides drift"
+            );
+            assert!(
+                !src.contains("PASSIVE_SPELL_ID"),
+                "{name} must not name a proficiency passive; `from_spellbook` owns that mapping"
+            );
+        }
     }
 }

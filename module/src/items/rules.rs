@@ -253,9 +253,7 @@ pub fn can_equip_into(class: u8, inventory_type: u8, dest_slot: u8, can_dual_wie
     resolved == canonical
 }
 
-pub use lyracore_shared::item::{
-    armor_subclass, can_equip_proficiency, weapon_subclass, Proficiency,
-};
+pub use lyracore_shared::item::{armor_subclass, weapon_subclass, Proficiency};
 
 /// Whether a character of `player_level` meets an item's `required_level` to EQUIP or USE it. Pure —
 /// unit-tested. A required_level of 1 (every seeded item today) is met by every character, so this gate
@@ -385,6 +383,13 @@ pub(crate) fn resolve_equip_slot(
 pub(crate) mod tests {
     use super::*;
     use crate::items::tables::ItemTemplate;
+
+    /// The class CEILING: what a class can equip with both level-40 armor upgrades trained. The
+    /// equip Gate asks the stricter `Proficiency::from_spellbook` question; these cases pin the
+    /// class table itself, which training never changes.
+    fn can_equip_proficiency(player_class: u8, item_class: u8, item_subclass: u8) -> bool {
+        Proficiency::class_ceiling(player_class).can_equip(item_class, item_subclass)
+    }
 
     #[test]
     fn sell_value_multiplies_by_stack_count() {
