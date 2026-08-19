@@ -267,7 +267,9 @@ lookup, rather than being represented as a direct broadcast.
 
 Operator verification needs the exact dump identity supplied for the import, including its resolved
 classic-db commit. On current z2815 data, verify Hogger speech and timed casts, Goldtooth's HP-based
-flee, and one nearby creature with no authored EventAI rules. The last creature must keep the same
+flee, and one nearby creature with no authored EventAI rules. Goldtooth must break off and run at the
+health band its rule states, not at the fixed 15% flee threshold, and the fixed flee must not fire as
+well. An authored flee replaces the fixed one. The last creature must keep the same
 cycle outcome, durable state, and emitted effects as it had before this family was imported. This is a
 dev-node and real-client check. Do not treat importer unit tests as a substitute for it.
 
