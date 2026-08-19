@@ -31,7 +31,8 @@ and vmap modes.
 
 **Bounded Map Slice**:
 A named rectangular or circular part of one map, with the anchor used for terrain and navigation
-selection.
+selection. The anchor is a real ground point on the client heightmap inside the slice, not a WMO
+floor; the terrain and navigation self-checks fail before `--apply` when it is not.
 
 **Realm-core**:
 The shard that holds realm-wide state, including accounts, sessions, groups, whispers, loot rolls, the character-to-shard index, and shard load samples.

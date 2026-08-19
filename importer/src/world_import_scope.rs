@@ -74,6 +74,13 @@ impl WorldImportScope {
         // bounds were narrowed with `--print-extents` against the local classic-db dump. Their
         // samples are `playercreateinfo` anchors or real creature rows emitted by that command.
         // Keeping the catalogue here lets later Verification refine data without changing callers.
+        //
+        // A sample must stand on the ADT heightmap: the terrain self-check interpolates the
+        // heightmap at the sample and the nav self-check rasterizes it, so a spawn on a WMO floor
+        // (a cave, a porch, a dam) reads tens of yards off the surface. The Loch Modan sample is
+        // Mountaineer Kadrell's spawn on the Thelsamar road; the owned 1.12.1 client's heightmap
+        // interpolates to 327.700 there. The nearest-to-centre spawn `--print-extents` offers for
+        // this rectangle is a Tunnel Rat Surveyor 28 yards under the surface in Silver Stream Mine.
         let eastern = || -> Result<Vec<BoundedMapSlice>> {
             Ok(vec![
                 BoundedMapSlice::rectangle(
@@ -92,7 +99,7 @@ impl WorldImportScope {
                     "loch-modan",
                     0,
                     (-6_000.0, -4_000.0, -4_500.0, -1_601.0),
-                    (-4_988.90, -2_958.24, 315.71),
+                    (-5_367.58, -2_936.21, 327.64),
                 )?,
             ])
         };
@@ -389,6 +396,31 @@ mod tests {
         assert!(instances.bounded_slices.is_empty());
         assert_eq!(instances.whole_maps, vec![36]);
         assert!(instances.forced_creature_entries.is_empty());
+    }
+
+    #[test]
+    fn loch_modan_anchor_is_the_thelsamar_road_spawn_inside_its_own_slice() {
+        // Mountaineer Kadrell's spawn on the Thelsamar road: a heightmap ground point, not a WMO
+        // floor. The earlier Silver Stream Mine sample sat 28 yards under the surface and failed
+        // the terrain self-check on the live Realm.
+        let kadrell = (-5_367.58, -2_936.21, 327.64);
+        let eastern = WorldImportScope::canonical(WorldImportProfile::AllianceEastern)
+            .expect("eastern profile");
+        let loch_modan = eastern
+            .bounded_slices
+            .iter()
+            .find(|slice| slice.name == "loch-modan")
+            .expect("loch-modan slice");
+        assert_eq!(loch_modan.map_id, 0);
+        assert_eq!(loch_modan.sample, kadrell);
+        assert!(loch_modan.contains(0, kadrell.0, kadrell.1, kadrell.2));
+        let owners: Vec<&str> = eastern
+            .bounded_slices
+            .iter()
+            .filter(|slice| slice.contains(0, kadrell.0, kadrell.1, kadrell.2))
+            .map(|slice| slice.name.as_str())
+            .collect();
+        assert_eq!(owners, vec!["loch-modan"]);
     }
 
     #[test]
