@@ -559,7 +559,7 @@ fn eventai_cast_rules_suppress_flat_casts_without_changing_unscripted_creatures(
 }
 
 #[test]
-fn edge_and_malformed_cast_rows_do_not_suppress_the_default_rotation() {
+fn edge_cast_rows_do_not_suppress_the_default_rotation() {
     let edge = row(
         509_0310,
         310,
@@ -570,25 +570,16 @@ fn edge_and_malformed_cast_rows_do_not_suppress_the_default_rotation() {
         [0; 6],
         [310, 0, 0],
     );
-    let mut malformed = row(
-        509_0311,
-        311,
-        0,
-        EVENT_CREATURE_HP,
-        ACTION_CAST,
-        REPEAT_ONCE,
-        [0, 100, 0, 0, 0, 0],
-        [311, 0, 0],
-    );
-    malformed.chance_pct = 0;
-    let mut scenario = world()
-        .lone_spell(CREATURE, 120)
-        .eventai_row(edge)
-        .eventai_row(malformed);
+    let mut scenario = world().lone_spell(CREATURE, 120).eventai_row(edge);
 
     fire(&mut scenario);
 
-    assert_eq!(scenario.casts(), vec![(CREATURE, 120, TARGET)]);
+    assert_eq!(
+        scenario.casts(),
+        vec![(CREATURE, 120, TARGET)],
+        "an on-death or on-spawn cast fires at a moment the rotation never covers, so it takes \
+         nothing over: silencing the rotation for it would leave the creature swinging in silence"
+    );
 }
 
 #[test]

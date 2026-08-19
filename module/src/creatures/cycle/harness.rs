@@ -12,7 +12,7 @@ use crate::creatures::eventai::{
 use crate::creatures::{chase_step, rout_window_open};
 use lyracore_shared::spatial;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 #[path = "harness/eventai_combat.rs"]
 mod eventai_combat;
@@ -389,50 +389,28 @@ impl Scenario {
             .retain(|row| eventai::effective_rule_id(row) != rule_id);
     }
 
-    fn suppresses_flat_cast(&self, creature_guid: u64) -> bool {
-        self.applicable_engaged_eventai_rules(creature_guid)
-            .into_iter()
-            .flat_map(|rule| rule.actions)
-            .any(|action| action.kind == eventai::ActionKind::Cast)
-    }
-
-    fn suppresses_fixed_rout(&self, creature_guid: u64) -> bool {
-        self.applicable_engaged_eventai_rules(creature_guid)
-            .into_iter()
-            .flat_map(|rule| rule.actions)
-            .any(|action| action.kind == eventai::ActionKind::FleeForAssist)
-    }
-
-    fn applicable_engaged_eventai_rules(&self, creature_guid: u64) -> Vec<eventai::Rule> {
-        let state = self.eventai_creature_state(creature_guid);
-        let mut grouped = BTreeMap::new();
-        for row in self.eventai_rows(creature_guid) {
-            grouped
-                .entry(eventai::effective_rule_id(&row))
-                .or_insert_with(Vec::new)
-                .push(row);
+    /// The world's `eventai::authored_combat`: which halves of the fight the script has taken over,
+    /// read straight off the rows with no decode and no rule state, so an authored cast silences the
+    /// flat rotation from the first firing rather than when its condition first passes.
+    fn authored_combat(&self, creature_guid: u64) -> eventai::AuthoredCombat {
+        if self.pet_owners.borrow().contains_key(&creature_guid) {
+            return eventai::AuthoredCombat::default();
         }
-        grouped
-            .into_values()
-            .filter_map(|rows| eventai::Rule::decode(rows).ok())
-            .filter(|rule| {
-                matches!(
-                    rule.event,
-                    eventai::EventKind::TimedInCombat
-                        | eventai::EventKind::CreatureHp
-                        | eventai::EventKind::TargetRange
-                        | eventai::EventKind::FriendlyHpDeficit
-                ) && state.phase < 32
-                    && rule.allowed_phase_mask & (1u32 << state.phase) != 0
-                    && !self
-                        .eventai_state(creature_guid, rule.id)
-                        .is_some_and(|rule_state| {
-                            rule_state.lifecycle_id == state.lifecycle_id
-                                && rule_state.engagement_id == state.engagement_id
-                                && rule_state.consumed
-                        })
-            })
-            .collect()
+        let engaged = [
+            eventai::EVENT_TIMED_IN_COMBAT,
+            eventai::EVENT_CREATURE_HP,
+            eventai::EVENT_TARGET_RANGE,
+            eventai::EVENT_FRIENDLY_HP_DEFICIT,
+        ];
+        let mut authored = eventai::AuthoredCombat::default();
+        for row in self.eventai_rows(creature_guid) {
+            if !engaged.contains(&row.event_type) {
+                continue;
+            }
+            authored.casting |= row.action_type == eventai::ACTION_CAST;
+            authored.flee |= row.action_type == eventai::ACTION_FLEE_FOR_ASSIST;
+        }
+        authored
     }
 
     /// The creature's template carries a hand-tuned aggro range instead of the level-scaled one.
@@ -1954,7 +1932,7 @@ impl CastSink for Scenario {
             .collect()
     }
     fn rotation_of(&self, guid: u64) -> Vec<SpellOption> {
-        if self.suppresses_flat_cast(guid) {
+        if self.authored_combat(guid).casting {
             return Vec::new();
         }
         self.rotations
@@ -1964,7 +1942,7 @@ impl CastSink for Scenario {
             .unwrap_or_default()
     }
     fn lone_spell(&self, guid: u64) -> Option<u32> {
-        if self.suppresses_flat_cast(guid) {
+        if self.authored_combat(guid).casting {
             return None;
         }
         self.lone_spells.borrow().get(&guid).copied()
@@ -2066,6 +2044,9 @@ impl PursuitSink for Scenario {
             .map(|state| (state.ranged_distance, state.ranged_angle))
     }
     fn caster_hold_range(&self, guid: u64) -> f32 {
+        if self.authored_combat(guid).casting {
+            return 0.0;
+        }
         self.hold_ranges.borrow().get(&guid).copied().unwrap_or(0.0)
     }
     /// The stop AND the turn, as one carrier row: the creature is planted at `at` looking at
@@ -2111,7 +2092,7 @@ impl RoutSink for Scenario {
                     victim_at: self.unit(f.victim).map(|(at, _)| at),
                     health: c.health,
                     max_health: c.max_health,
-                    eligible: c.would_rout && !self.suppresses_fixed_rout(f.attacker),
+                    eligible: c.would_rout && !self.authored_combat(f.attacker).flee,
                     rout_ends_ms: self.rout_ends_ms(f.attacker),
                     routing: self.is_routing(f.attacker),
                     committed: legs.iter().any(|l| l.guid == f.attacker),
@@ -5093,11 +5074,13 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "}), level: c.level as u8, health: c.health, max_health: c.max_health, ",
                 "cannot_act: crate::spell::is_action_blocked(self.ctx, guid), casting, }) }) ",
                 ".collect() } fn rotation_of(&self, guid: u64) -> Vec<SpellOption> { if ",
-                "eventai::suppresses_flat_cast(self.ctx, guid) { return Vec::new(); } self.entry_of(guid).map_or(Vec::new(), |entry| { self.ctx .db ",
+                "eventai::authored_combat(self.ctx, guid).casting { return Vec::new(); } ",
+                "self.entry_of(guid).map_or(Vec::new(), |entry| { self.ctx .db ",
                 ".game_creature_spell() .by_entry() .filter(&entry) .map(|r| SpellOption { ",
                 "spell_id: r.spell_id, when: CastWhen::of(r.condition, r.condition_value), ",
                 "priority: r.priority, authored: r.id, }) .collect() }) } fn lone_spell(&self, ",
-                "guid: u64) -> Option<u32> { if eventai::suppresses_flat_cast(self.ctx, guid) { return None; } self.ctx .db .game_creature_cast() ",
+                "guid: u64) -> Option<u32> { if eventai::authored_combat(self.ctx, guid).casting { ",
+                "return None; } self.ctx .db .game_creature_cast() ",
                 ".creature_entry() .find(self.entry_of(guid)?) .map(|c| c.spell_id) } fn ",
                 "carries(&self, guid: u64, spell_id: u32) -> bool { ",
                 "crate::spell::has_aura(self.ctx, guid, spell_id) } fn begin_cast(&mut self, ",
@@ -5144,8 +5127,10 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "splines.guid().find(c.guid).map(|s| as_leg(s, false)), }) }) .collect() } fn ",
                 "authored_ranged_posture(&self, guid: u64) -> Option<(f32, f32)> { ",
                 "eventai::ranged_posture(self.ctx, guid) } fn ",
-                "caster_hold_range(&self, guid: u64) -> f32 { self.ctx .db .game_world_entity() ",
-                ".guid() .find(guid) .map_or(0.0, |c| caster_hold_range_yd(self.ctx, c.entry)) ",
+                "caster_hold_range(&self, guid: u64) -> f32 { if ",
+                "eventai::authored_combat(self.ctx, guid).casting { return 0.0; } self.ctx .db ",
+                ".game_world_entity() .guid() .find(guid) .map_or(0.0, |c| ",
+                "caster_hold_range_yd(self.ctx, c.entry)) ",
                 "} fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32) { ",
                 "let Some(e) = self.place(guid, at, None, Some(orientation)) else { return; }; ",
                 "tick::emit_facing_spline( self.ctx, guid, (at.x, at.y, at.z), orientation, ",
@@ -5163,7 +5148,8 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "c.y, z: c.z, }, victim: row.target_guid, victim_at: ",
                 "entities.guid().find(row.target_guid).map(|t| Point { x: t.x, y: t.y, z: t.z, ",
                 "}), health: c.health, max_health: c.max_health, eligible: ",
-                "tick::rout_eligible(self.ctx, &c) && !eventai::suppresses_fixed_rout(self.ctx, c.guid), rout_ends_ms: row.rout_ends_ms, routing: ",
+                "tick::rout_eligible(self.ctx, &c) && !eventai::authored_combat(self.ctx, ",
+                "c.guid).flee, rout_ends_ms: row.rout_ends_ms, routing: ",
                 "tick::creature_is_routing(self.ctx, &c), committed: ",
                 "splines.guid().find(c.guid).is_some(), }) }) .collect() } fn start_rout(&mut ",
                 "self, guid: u64, ends_ms: u32) { let melee = self.ctx.db.game_melee_attack(); ",

@@ -1,19 +1,19 @@
 //! Engaged EventAI conditions and combat actions.
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
 
 use spacetimedb::{ReducerContext, Table};
 
 use super::{
-    effective_rule_id, ActionKind, ActionResult, CreatureState, EventContext, EventKind, Rule,
-    RuleAction, TargetPolicy, CAST_AURA_ABSENT, CAST_INTERRUPT_PREVIOUS, CAST_PLAYER_ONLY,
-    CAST_TARGET_CASTING, CAST_TRIGGERED,
+    ActionKind, ActionResult, EventContext, EventKind, Rule, RuleAction, TargetPolicy, ACTION_CAST,
+    ACTION_FLEE_FOR_ASSIST, CAST_AURA_ABSENT, CAST_INTERRUPT_PREVIOUS, CAST_PLAYER_ONLY,
+    CAST_TARGET_CASTING, CAST_TRIGGERED, EVENT_CREATURE_HP, EVENT_FRIENDLY_HP_DEFICIT,
+    EVENT_TARGET_RANGE, EVENT_TIMED_IN_COMBAT,
 };
-use crate::creatures::ai::{rout_close_ms, TickScope};
+use crate::creatures::ai::{rout_close_ms, rout_window_open, TickScope};
 use crate::{
-    game_creature_ai_event, game_creature_ai_rule_state, game_creature_ai_state,
-    game_faction_template, game_melee_attack, game_pending_cast, game_threat, game_world_entity,
+    game_creature_ai_event, game_faction_template, game_melee_attack, game_pending_cast,
+    game_threat, game_world_entity,
 };
 
 pub(super) fn engaged_contexts(
@@ -116,7 +116,11 @@ pub(super) fn execute(
             let Some(mut fight) = melee.attacker_guid().find(context.creature_guid) else {
                 return ActionResult::Refused;
             };
-            if fight.rout_ends_ms == 0 {
+            // A spent window bars the FIXED low-health rout, which is once per engagement. An
+            // authored flee is not: cmangos re-runs the action every time its rule fires, so the
+            // window re-opens once the previous run has finished. Re-stamping an OPEN window would
+            // instead extend one flee forever.
+            if !rout_window_open(context.now_ms as u32, fight.rout_ends_ms) {
                 fight.rout_ends_ms = rout_close_ms(context.now_ms as u32);
                 melee.attacker_guid().update(fight);
             }
@@ -226,67 +230,46 @@ pub(super) fn cast(
     .map_or(ActionResult::Refused, |_| ActionResult::Applied)
 }
 
-pub(crate) fn suppresses_flat_cast(ctx: &ReducerContext, creature_guid: u64) -> bool {
-    applicable_engaged_rules(ctx, creature_guid)
-        .into_iter()
-        .flat_map(|rule| rule.actions)
-        .any(|action| action.kind == ActionKind::Cast)
+/// The event kinds the engaged pass can ever fire, as the raw column values `authored_combat` reads.
+/// An on-aggro, on-spawn or on-death row is an EDGE: it says nothing about how the creature fights
+/// between those moments, so it takes nothing over.
+const ENGAGED_EVENT_TYPES: [u8; 4] = [
+    EVENT_TIMED_IN_COMBAT,
+    EVENT_CREATURE_HP,
+    EVENT_TARGET_RANGE,
+    EVENT_FRIENDLY_HP_DEFICIT,
+];
+
+/// Which halves of a creature's fight an imported script has taken over. Both are properties of the
+/// SCRIPT, not of this instant: eligibility, phase and the rule's own condition are all deliberately
+/// ignored, because a health-gated cast rule has to silence the flat rotation from the first firing
+/// of the fight rather than at the moment its band opens. The creature would otherwise hold at a
+/// range it casts nothing from.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct AuthoredCombat {
+    /// The script owns offensive casting: the flat rotation, the lone spell and the caster hold
+    /// range are all off, so the creature closes to melee between authored casts unless an authored
+    /// ranged posture holds it back.
+    pub casting: bool,
+    /// The script owns breaking off: the fixed low-health rout is off, and the authored window runs
+    /// the creature whatever its health and whatever its creature type.
+    pub flee: bool,
 }
 
-pub(crate) fn suppresses_fixed_rout(ctx: &ReducerContext, creature_guid: u64) -> bool {
-    applicable_engaged_rules(ctx, creature_guid)
-        .into_iter()
-        .flat_map(|rule| rule.actions)
-        .any(|action| action.kind == ActionKind::FleeForAssist)
-}
-
-pub(crate) fn applicable_rules(ctx: &ReducerContext, creature_guid: u64) -> Vec<Rule> {
-    let state = ctx
-        .db
-        .game_creature_ai_state()
-        .creature_guid()
-        .find(creature_guid)
-        .map_or_else(CreatureState::default, CreatureState::from);
-    let mut grouped = std::collections::BTreeMap::new();
+/// Read `AuthoredCombat` for one creature. Straight off the rows, with no decode, no rule state and
+/// no grouping, because the cast phase, the chase and the rout each ask per engaged creature per
+/// firing, and most creatures own no rows at all. `rows_for` answers the pet Gate, so an owned
+/// creature reads as unscripted.
+pub(crate) fn authored_combat(ctx: &ReducerContext, creature_guid: u64) -> AuthoredCombat {
+    let mut authored = AuthoredCombat::default();
     for row in rows_for(ctx, creature_guid) {
-        grouped
-            .entry(effective_rule_id(&row))
-            .or_insert_with(Vec::new)
-            .push(row);
+        if !ENGAGED_EVENT_TYPES.contains(&row.event_type) {
+            continue;
+        }
+        authored.casting |= row.action_type == ACTION_CAST;
+        authored.flee |= row.action_type == ACTION_FLEE_FOR_ASSIST;
     }
-    let consumed_rule_ids: HashSet<u64> = ctx
-        .db
-        .game_creature_ai_rule_state()
-        .by_creature()
-        .filter(&creature_guid)
-        .filter(|rule_state| {
-            rule_state.lifecycle_id == state.lifecycle_id
-                && rule_state.engagement_id == state.engagement_id
-                && rule_state.consumed
-        })
-        .map(|rule_state| rule_state.source_rule_id)
-        .collect();
-    grouped
-        .into_values()
-        .filter_map(|rows| Rule::decode(rows).ok())
-        .filter(|rule| state.phase < 32 && rule.allowed_phase_mask & (1u32 << state.phase) != 0)
-        .filter(|rule| !consumed_rule_ids.contains(&rule.id))
-        .collect()
-}
-
-fn applicable_engaged_rules(ctx: &ReducerContext, creature_guid: u64) -> Vec<Rule> {
-    applicable_rules(ctx, creature_guid)
-        .into_iter()
-        .filter(|rule| {
-            matches!(
-                rule.event,
-                EventKind::TimedInCombat
-                    | EventKind::CreatureHp
-                    | EventKind::TargetRange
-                    | EventKind::FriendlyHpDeficit
-            )
-        })
-        .collect()
+    authored
 }
 
 /// Every EventAI row that governs one creature: its entry's rules plus any pinned to its own guid.

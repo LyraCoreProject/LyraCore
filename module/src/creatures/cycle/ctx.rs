@@ -544,7 +544,7 @@ impl CastSink for CtxWorld<'_> {
             .collect()
     }
     fn rotation_of(&self, guid: u64) -> Vec<SpellOption> {
-        if eventai::suppresses_flat_cast(self.ctx, guid) {
+        if eventai::authored_combat(self.ctx, guid).casting {
             return Vec::new();
         }
         self.entry_of(guid).map_or(Vec::new(), |entry| {
@@ -563,7 +563,7 @@ impl CastSink for CtxWorld<'_> {
         })
     }
     fn lone_spell(&self, guid: u64) -> Option<u32> {
-        if eventai::suppresses_flat_cast(self.ctx, guid) {
+        if eventai::authored_combat(self.ctx, guid).casting {
             return None;
         }
         self.ctx
@@ -676,6 +676,9 @@ impl PursuitSink for CtxWorld<'_> {
         eventai::ranged_posture(self.ctx, guid)
     }
     fn caster_hold_range(&self, guid: u64) -> f32 {
+        if eventai::authored_combat(self.ctx, guid).casting {
+            return 0.0;
+        }
         self.ctx
             .db
             .game_world_entity()
@@ -735,7 +738,7 @@ impl RoutSink for CtxWorld<'_> {
                     health: c.health,
                     max_health: c.max_health,
                     eligible: tick::rout_eligible(self.ctx, &c)
-                        && !eventai::suppresses_fixed_rout(self.ctx, c.guid),
+                        && !eventai::authored_combat(self.ctx, c.guid).flee,
                     rout_ends_ms: row.rout_ends_ms,
                     routing: tick::creature_is_routing(self.ctx, &c),
                     committed: splines.guid().find(c.guid).is_some(),

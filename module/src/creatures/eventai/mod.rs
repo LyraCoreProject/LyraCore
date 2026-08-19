@@ -9,7 +9,9 @@ mod combat;
 mod edges;
 mod mobility;
 
-pub(crate) use combat::{suppresses_fixed_rout, suppresses_flat_cast};
+pub(crate) use combat::authored_combat;
+#[cfg(test)]
+pub(crate) use combat::AuthoredCombat;
 #[allow(
     unused_imports,
     reason = "keeps the lifecycle cleanup reachable to sibling creature modules"
