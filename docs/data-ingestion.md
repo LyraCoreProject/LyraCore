@@ -273,7 +273,10 @@ dev-node and real-client check. Do not treat importer unit tests as a substitute
 
 The shell preflight accepts any subset of supported event and action types because each World Import
 Scope contains different creatures. It prints and checks every type present in the destination. It
-does not require absent families to be fabricated to meet a global count floor.
+does not require absent families to be fabricated to meet a global count floor. It pulls each column
+set it needs in one query and groups the rows locally, so it costs six queries for any rule count.
+The native values it accepts are declared once in the script and pinned to the importer's constants
+by an importer test.
 
 The standalone DBC pass reads all three taxi files through the same in-memory MPQ patch chain as
 the other client tables. It validates every endpoint/path reference and every `(path, node_index)`
