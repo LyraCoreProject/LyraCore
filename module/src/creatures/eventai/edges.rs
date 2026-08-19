@@ -70,8 +70,17 @@ pub(crate) fn reset_engagement(ctx: &ReducerContext, creature_guid: u64) {
         .filter(|rule| !matches!(rule.event_type, EVENT_ON_DEATH | EVENT_ON_SPAWN))
         .map(effective_rule_id)
         .collect();
+    let states = ctx.db.game_creature_ai_state();
+    let engagement_id = states.creature_guid().find(creature_guid).map(|mut state| {
+        state.engagement_id = state.engagement_id.saturating_add(1);
+        state.phase = 0;
+        state.ranged_distance = 0.0;
+        state.ranged_angle = 0.0;
+        let state = states.creature_guid().update(state);
+        state.engagement_id
+    });
     let rule_state = ctx.db.game_creature_ai_rule_state();
-    for state in rule_state
+    for mut state in rule_state
         .by_creature()
         .filter(&creature_guid)
         .collect::<Vec<_>>()
@@ -80,16 +89,10 @@ pub(crate) fn reset_engagement(ctx: &ReducerContext, creature_guid: u64) {
             || engagement_rule_ids.contains(&state.source_rule_id)
         {
             rule_state.id().delete(state.id);
+        } else if let Some(engagement_id) = engagement_id {
+            state.engagement_id = engagement_id;
+            rule_state.id().update(state);
         }
-    }
-
-    let states = ctx.db.game_creature_ai_state();
-    if let Some(mut state) = states.creature_guid().find(creature_guid) {
-        state.engagement_id = state.engagement_id.saturating_add(1);
-        state.phase = 0;
-        state.ranged_distance = 0.0;
-        state.ranged_angle = 0.0;
-        states.creature_guid().update(state);
     }
 }
 

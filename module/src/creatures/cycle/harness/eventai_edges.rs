@@ -255,6 +255,43 @@ fn a_spawn_phase_change_gates_later_rules_in_source_order() {
 }
 
 #[test]
+fn combat_exit_keeps_spawn_rules_consumed_in_the_same_lifecycle() {
+    let mut scenario = scenario()
+        .eventai_broadcast(13, "once", 0)
+        .eventai_row(row(
+            13,
+            13,
+            0,
+            EVENT_ON_SPAWN,
+            ACTION_SET_PHASE,
+            100,
+            1,
+            REPEAT_ONCE,
+            [1, 0, 0],
+        ))
+        .eventai_row(row(
+            14,
+            14,
+            0,
+            EVENT_ON_SPAWN,
+            ACTION_SAY,
+            100,
+            1 << 1,
+            REPEAT_ONCE,
+            [13, 0, 0],
+        ));
+
+    edge(&mut scenario, EventKind::OnSpawn, false);
+    EngageSink::leave_combat(&mut scenario, CREATURE);
+    edge(&mut scenario, EventKind::OnSpawn, false);
+
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![(CREATURE, 0, "once".to_string())]
+    );
+}
+
+#[test]
 fn death_runs_before_its_lifecycle_cleanup() {
     let mut scenario = scenario()
         .eventai_broadcast(6, "gone", 0)

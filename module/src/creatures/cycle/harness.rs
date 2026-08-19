@@ -1552,14 +1552,42 @@ impl EngageSink for Scenario {
             .filter(|row| !matches!(row.event_type, EVENT_ON_DEATH | EVENT_ON_SPAWN))
             .map(eventai::effective_rule_id)
             .collect();
+        let lifecycle_rule_ids: HashSet<u64> = self
+            .eventai_rows
+            .borrow()
+            .iter()
+            .filter(|row| {
+                (row.creature_guid == 0
+                    && self
+                        .creatures
+                        .borrow()
+                        .get(&guid)
+                        .is_some_and(|creature| creature.entry == row.creature_entry))
+                    || (row.creature_entry == 0 && row.creature_guid == guid)
+            })
+            .filter(|row| matches!(row.event_type, EVENT_ON_DEATH | EVENT_ON_SPAWN))
+            .map(eventai::effective_rule_id)
+            .collect();
+        let engagement_id = self
+            .eventai_creature_state
+            .borrow_mut()
+            .get_mut(&guid)
+            .map(|state| {
+                state.engagement_id = state.engagement_id.saturating_add(1);
+                state.phase = 0;
+                state.ranged_distance = 0.0;
+                state.ranged_angle = 0.0;
+                state.engagement_id
+            });
         if let Some(state) = self.eventai_rule_state.borrow_mut().get_mut(&guid) {
             state.retain(|rule_id, _| !rule_ids.contains(rule_id));
-        }
-        if let Some(state) = self.eventai_creature_state.borrow_mut().get_mut(&guid) {
-            state.engagement_id = state.engagement_id.saturating_add(1);
-            state.phase = 0;
-            state.ranged_distance = 0.0;
-            state.ranged_angle = 0.0;
+            if let Some(engagement_id) = engagement_id {
+                for (rule_id, state) in state {
+                    if lifecycle_rule_ids.contains(rule_id) {
+                        state.engagement_id = engagement_id;
+                    }
+                }
+            }
         }
         self.unflagged.borrow_mut().push(guid);
         self.combat_flags.borrow_mut().remove(&guid);
