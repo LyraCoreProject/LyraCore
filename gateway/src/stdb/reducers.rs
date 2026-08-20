@@ -699,7 +699,8 @@ impl Coordinator {
         )?;
 
         // The reducer committed; the row propagates to the owner cache asynchronously. Poll
-        // briefly until it appears (zone_id and home_* ride along from the game_character row).
+        // briefly until it appears (home_* ride along from the game_character row, and its
+        // zone_id is the fallback for a live row the Module could not resolve a zone for).
         let char_row = self
             .0
             .coord()

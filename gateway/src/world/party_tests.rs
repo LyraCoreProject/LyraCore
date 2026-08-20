@@ -898,9 +898,9 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
 
-    // The login sequence is 12 packets; the realm-wide party slice appends the party frame as a 13th.
+    // The realm-wide party slice appends the party frame right after world entry.
     let mut roster_named: Option<String> = None;
-    for _ in 0..13 {
+    for _ in 0..WORLD_ENTRY_PACKETS + 1 {
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec) {
             Ok(ServerOpcodeMessage::SMSG_GROUP_LIST(list)) => {
                 roster_named = list.members.first().map(|m| m.name.clone());
@@ -966,7 +966,7 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec) {
             Ok(ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(r)) if r.member == "Nobodyatall" => {
                 break

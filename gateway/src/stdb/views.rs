@@ -106,14 +106,22 @@ pub(crate) fn item_template_view(t: ItemTemplate) -> crate::codec::ItemTemplateV
     }
 }
 
-/// Map a `game_world_entity` row (+ the `zone_id` carried from `game_character`) into the codec's
-/// `EntityView`. The entity row has every field the self-spawn encoder needs except `zone_id`.
-pub(crate) fn entity_view(e: WorldEntity, zone_id: u32) -> crate::codec::EntityView {
+/// Map a `game_world_entity` row into the codec's `EntityView`.
+///
+/// The entity carries its own live zone, resolved from terrain by the Module wherever a position is
+/// established. `durable_zone` is the `game_character` copy, used only when the live row says `0` —
+/// the Module's "no terrain covers this position", which a character parked off the imported slice
+/// really can have.
+pub(crate) fn entity_view(e: WorldEntity, durable_zone: u32) -> crate::codec::EntityView {
     crate::codec::EntityView {
         guid: e.guid,
         map_id: e.map_id,
         instance_id: e.instance_id,
-        zone_id,
+        zone_id: if e.zone_id != 0 {
+            e.zone_id
+        } else {
+            durable_zone
+        },
         x: e.x,
         y: e.y,
         z: e.z,

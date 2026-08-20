@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
-use wow_world_messages::vanilla::Vector3d;
+use wow_world_messages::vanilla::{Vector3d, WeatherChangeType};
 
 use super::aoi::ViewerGates;
 use super::world_index::{CellKey, EntityLayer};
@@ -56,12 +56,11 @@ impl PlayerSubscriptions {
     pub(crate) fn registered_for_test(
         view: Arc<WorldView>,
         self_guid: u64,
-        instance_id: u64,
-        map_id: u32,
-        x: f32,
-        y: f32,
+        arrival: &codec::EntityView,
         tx: SessionTx,
     ) -> Self {
+        let (instance_id, map_id, x, y) =
+            (arrival.instance_id, arrival.map_id, arrival.x, arrival.y);
         let mut identity = [0; 32];
         identity[..8].copy_from_slice(&self_guid.to_le_bytes());
         let viewer = Arc::new(Viewer {
@@ -70,6 +69,7 @@ impl PlayerSubscriptions {
             bound_identity: spacetimedb_sdk::Identity::from_byte_array(identity),
             instance_id,
             map_id,
+            zone_id: arrival.zone_id.into(),
             tx,
             created: Arc::new(Mutex::new(HashSet::from([self_guid]))),
             gates: Arc::new(ViewerGates::default()),
@@ -885,6 +885,31 @@ pub(crate) fn relay_roll(row: &RollEvent) -> Vec<Outbound> {
     let m = codec::build_random_roll(row.roller_guid, row.min_roll, row.max_roll, row.result);
     vec![Outbound::One(ServerOpcodeMessage::MSG_RANDOM_ROLL(
         Box::new(m),
+    ))]
+}
+
+/// Encode one zone's sky. The audience decision (the viewer's stored zone) already happened in
+/// `world_view::weather_changed`, and the changed row carried the whole packet, so nothing is read
+/// here.
+pub(crate) fn weather_outbound(
+    view: codec::ZoneWeatherView,
+    change: WeatherChangeType,
+) -> Vec<Outbound> {
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_WEATHER(Box::new(
+        codec::build_weather(view, change),
+    )))]
+}
+
+/// Read `zone_id`'s current sky off this shard's cache and encode it — the zone-entry leg, run on
+/// the arriving viewer's own writer thread. Goes through the same `WeatherStore` seam world entry
+/// uses, so a zone with no row means fine weather here too.
+pub(crate) fn zone_weather_outbound<St: crate::world::WeatherStore + ?Sized>(
+    store: &St,
+    zone_id: u32,
+    change: WeatherChangeType,
+) -> Vec<Outbound> {
+    vec![Outbound::One(crate::world::zone_weather_message(
+        store, zone_id, change,
     ))]
 }
 
@@ -2887,12 +2912,16 @@ impl Coordinator {
         &self,
         account_id: u64,
         self_guid: u64,
-        login_instance: u64,
-        login_map: u32,
-        login_x: f32,
-        login_y: f32,
+        arrival: &codec::EntityView,
         tx: SessionTx,
     ) -> Result<PlayerSubscriptions> {
+        let (login_instance, login_map, login_zone, login_x, login_y) = (
+            arrival.instance_id,
+            arrival.map_id,
+            arrival.zone_id,
+            arrival.x,
+            arrival.y,
+        );
         // Ghost-only visibility constants (vanilla 1.12): a spirit-healer creature carries
         // UNIT_NPC_FLAGS SPIRITHEALER and is visible ONLY to a viewer in the GHOST player-flag state.
         // BUG FIX: was 0x4000 — but 0x4000 is REPAIR in cmangos 1.12 numbering (SPIRITHEALER is 0x20).
@@ -3010,6 +3039,7 @@ impl Coordinator {
             bound_identity: self_identity,
             instance_id: login_instance,
             map_id: login_map,
+            zone_id: login_zone.into(),
             tx: tx.clone(),
             created: created.clone(),
             gates: viewer_gates.clone(),
@@ -3581,6 +3611,7 @@ mod tests {
             sheet_crit_bp: 0,
             bank_bag_slots: 0,
             mount_display_id: 0,
+            zone_id: 0,
         }
     }
 

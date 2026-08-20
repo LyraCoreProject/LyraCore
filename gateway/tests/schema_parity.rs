@@ -477,7 +477,12 @@ parity_test!(parity_game_world_entity, "game_world_entity", lyracore_module::Wor
     run_speed_mult_bp, godmode, resting, cell,
     sheet_str_bonus, sheet_agi_bonus, sheet_sta_bonus, sheet_int_bonus, sheet_spi_bonus,
     sheet_ap_base, sheet_ap_mods, sheet_dmg_min, sheet_dmg_max, sheet_crit_bp, unit_bytes_2,
-    bank_bag_slots, mount_display_id,
+    bank_bag_slots, mount_display_id, zone_id,
+});
+// The live sky, one row per zone. Gateway-subscribed: world entry and zone entry read it, and its
+// updates are the weather relay.
+parity_test!(parity_game_zone_weather, "game_zone_weather", lyracore_module::ZoneWeather, bindings::zone_weather_type::ZoneWeather, {
+    zone_id, weather_type, intensity, changed_at_micros,
 });
 parity_test!(parity_game_hunter_pet_protocol, "game_hunter_pet_protocol", lyracore_module::HunterPetProtocol, bindings::hunter_pet_protocol_type::HunterPetProtocol, {
     pet_id, owner_guid, live_pet_guid, creature_entry, name, name_timestamp, level, pet_xp,
@@ -813,6 +818,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_guid_range",
     "game_guid_range_registry",
     "game_world_entity",
+    "game_zone_weather",
     "game_hunter_pet_protocol",
     "game_config",
     "game_creature_template",

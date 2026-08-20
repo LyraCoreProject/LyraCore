@@ -38,11 +38,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{anyhow, Result};
 use spacetimedb_sdk::{Table, TableWithPrimaryKey};
+use wow_world_messages::vanilla::WeatherChangeType;
 
 use super::aoi::{ViewerGates, AOI_RECENTERS};
 use super::bindings::*;
@@ -67,6 +68,14 @@ pub(crate) struct Viewer {
     /// plan), never re-read from a cache. The lesson: the authoritative value is known at
     /// construction, and a second possibly-stale copy can only disagree with it.
     pub(crate) instance_id: u64,
+    /// The zone this session is standing in — the weather relay's whole audience predicate.
+    ///
+    /// Unlike `map_id` this changes inside one session: walking, a same-map teleport and a taxi
+    /// landing all cross zone boundaries without tearing the viewer down, so it is interior-mutable
+    /// and written from the self entity's own `zone_id` deltas. `0` is the unresolved zone and
+    /// matches no weather row. Seeded at `add_viewer` time with the zone world entry already sent
+    /// weather for, so the first stored value is never a phantom crossing.
+    pub(crate) zone_id: AtomicU32,
     pub(crate) tx: SessionTx,
     /// The per-viewer "already shown" dedup set — the exactly-once guarantee behind every CREATE.
     pub(crate) created: Arc<Mutex<HashSet<u64>>>,
@@ -80,6 +89,18 @@ pub(crate) struct Viewer {
     /// This viewer's motion-coalescing buffer. Shared-dispatch-only state (no per-player
     /// twin), so it is constructed inline and pinned by no tripwire.
     pub(crate) motion_pending: Arc<MotionPending>,
+}
+
+impl Viewer {
+    /// Move this viewer's weather routing into `zone_id`, answering whether that was a real
+    /// crossing — the ONE place [`Viewer::zone_id`] is written after construction.
+    ///
+    /// The unresolved zone (`0`) is not a crossing and never overwrites a known zone: it means the
+    /// Module's terrain could not answer, not that the player left every zone, and treating it as a
+    /// destination would send fine weather over a real storm.
+    fn enter_zone(&self, zone_id: u32) -> bool {
+        zone_id != 0 && self.zone_id.swap(zone_id, Ordering::Relaxed) != zone_id
+    }
 }
 
 /// Per-viewer exploration replay state. `area_bit` is stable across a transfer's re-minted row
@@ -464,9 +485,16 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
     wire_insert(db.game_world_entity(), "game_world_entity.insert", &view, move |v, row| {
         entity_appeared(v, shard, row)
     });
-    wire_update(db.game_world_entity(), "game_world_entity.update", &view, move |v, old, new| {
-        entity_changed(v, shard, old, new)
-    });
+    {
+        // The update leg carries the live zone as well as the position: the Module re-stamps
+        // `zone_id` on the same grid-crossing that moves the row, so a viewer's own row is the
+        // gateway's only zone signal (`CMSG_ZONEUPDATE` is deliberately unhandled).
+        let coord = coord.clone();
+        wire_update(db.game_world_entity(), "game_world_entity.update", &view, move |v, old, new| {
+            entity_changed(v, shard, old, new);
+            zone_crossed(v, &coord, shard, new.guid, old.zone_id, new.zone_id);
+        });
+    }
     wire_delete(db.game_world_entity(), "game_world_entity.delete", &view, |v, row| {
         entity_vanished(v, row)
     });
@@ -674,6 +702,17 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
             channel_appeared(v, &coord, shard, row)
         });
     }
+
+    // ---- game_zone_weather -----------------------------------------------------------------------
+    // The live sky. ONE callback per shard, routed by the viewer's stored zone — there are no
+    // per-character weather subscriptions. Insert and update run the same body: the first row a
+    // zone ever gets is as much a visible change as every later one.
+    wire_insert(db.game_zone_weather(), "game_zone_weather.insert", &view, move |v, row| {
+        weather_changed(v, shard, row)
+    });
+    wire_update(db.game_zone_weather(), "game_zone_weather.update", &view, move |v, _old, row| {
+        weather_changed(v, shard, row)
+    });
 
     // ---- game_player_skill ----------------------------------------------------------------------
     // Live skill pane. Self-only relay; insert (line learned) and update (skill-up) run the same
@@ -1792,6 +1831,73 @@ fn channel_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: 
     }
 }
 
+/// A zone's sky changed → `SMSG_WEATHER` to every viewer standing in that zone on this shard, and
+/// to nobody else. The zone comparison IS the audience: weather is per zone, so an Elwynn row can
+/// never reach a Westfall viewer however close the two stand.
+///
+/// Smooth, because this is a scheduled drift the client should fade in. The synchronizing sends
+/// (world entry, zone entry) are Instant and come from [`zone_crossed`] and the login path.
+///
+/// The row carries the whole packet, so no cache read happens in the job — which also means a
+/// later row cannot overtake an earlier one's encoding and show a client the wrong sky.
+fn weather_changed(view: &WorldView, shard: ShardId, row: &ZoneWeather) {
+    let zone_id = row.zone_id;
+    let view_of_row = crate::codec::ZoneWeatherView {
+        weather_type: row.weather_type,
+        intensity: row.intensity,
+    };
+    for viewer in viewers_on_shard(view, shard) {
+        if viewer.zone_id.load(Ordering::Relaxed) != zone_id {
+            continue;
+        }
+        let tx = viewer.tx.clone();
+        enqueue(&tx, move || {
+            super::subscriptions::weather_outbound(view_of_row, WeatherChangeType::Smooth)
+        });
+    }
+}
+
+/// The self entity's own row says it is standing in a different zone than the viewer's routing
+/// state remembers → move the routing state and send the destination zone's current weather ONCE,
+/// Instant, so the stale source-zone sky is replaced immediately (story 7).
+///
+/// This covers walking, a same-map teleport and a taxi landing — every path that changes the zone
+/// without rebuilding the session. A cross-map path tears the viewer down and re-runs world entry,
+/// which sends its own weather.
+///
+/// `store` is this shard's coordinator, taken through the [`crate::world::WeatherStore`] seam
+/// because the destination's sky is READ, on the arriving viewer's own writer thread, rather than
+/// carried by the row that triggered this.
+///
+/// The row-delta comparison comes FIRST because this sits on the pump, under the highest-rate
+/// table in the module: every creature heartbeat and every player step that stays inside its zone
+/// leaves here without touching the viewer registry. Creatures never carry a zone at all, so their
+/// updates are all `0 -> 0`.
+fn zone_crossed<St>(
+    view: &WorldView,
+    store: &St,
+    shard: ShardId,
+    guid: u64,
+    old_zone: u32,
+    zone_id: u32,
+) where
+    St: crate::world::WeatherStore + Clone + 'static,
+{
+    if zone_id == old_zone {
+        return;
+    }
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(guid)) else {
+        return;
+    };
+    if !viewer.enter_zone(zone_id) {
+        return;
+    }
+    let (store, tx) = (store.clone(), viewer.tx.clone());
+    enqueue(&tx, move || {
+        super::subscriptions::zone_weather_outbound(&store, zone_id, WeatherChangeType::Instant)
+    });
+}
+
 /// The AOI bystander leg of the winner announcement: both participants get their own copy, so the
 /// fan-out must skip them (and the unregistered zero guid).
 fn duel_winner_audience(viewer_guid: u64, initiator_guid: u64, challenged_guid: u64) -> bool {
@@ -1802,14 +1908,14 @@ fn duel_winner_audience(viewer_guid: u64, initiator_guid: u64, challenged_guid: 
 mod family_audience_tests {
     use super::{
         addon_message_appeared, duel_winner_audience, exploration_outbound_for_word,
-        is_initial_apply, item_owner_job, levelup_appeared, reputation_appeared,
-        teleport_appeared, xp_appeared, BoundIdentity, ExplorationReplay, MotionPending,
-        OwnerGuid, Viewer, WorldView,
+        is_initial_apply, item_owner_job, levelup_appeared, reputation_appeared, teleport_appeared,
+        weather_changed, xp_appeared, zone_crossed, BoundIdentity, ExplorationReplay,
+        MotionPending, OwnerGuid, Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::bindings::{
         AddonMessage, CharacterExplored, CharacterQuest, LevelupEvent, PlayerReputation,
-        TeleportEvent, XpEvent,
+        TeleportEvent, XpEvent, ZoneWeather,
     };
     use crate::stdb::subscriptions::{private_recipient_audience, quest_update_packets};
     use crate::stdb::world_index::{CellKey, EntityLayer};
@@ -1818,6 +1924,7 @@ mod family_audience_tests {
     use std::sync::mpsc::Receiver;
     use std::sync::{Arc, Mutex};
     use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    use wow_world_messages::vanilla::{WeatherChangeType, WeatherType};
 
     fn identity(byte: u8) -> spacetimedb_sdk::Identity {
         spacetimedb_sdk::Identity::from_byte_array([byte; 32])
@@ -1834,12 +1941,24 @@ mod family_audience_tests {
         bound_identity: spacetimedb_sdk::Identity,
         tx: SessionTx,
     ) -> Arc<Viewer> {
+        viewer_in_zone(session, self_guid, bound_identity, 0, tx)
+    }
+
+    /// A viewer already standing in `zone_id` — the weather relay's audience state.
+    fn viewer_in_zone(
+        session: u64,
+        self_guid: u64,
+        bound_identity: spacetimedb_sdk::Identity,
+        zone_id: u32,
+        tx: SessionTx,
+    ) -> Arc<Viewer> {
         Arc::new(Viewer {
             session,
             self_guid,
             bound_identity,
             map_id: 0,
             instance_id: 0,
+            zone_id: zone_id.into(),
             tx,
             created: Arc::new(Mutex::new(HashSet::new())),
             gates: Arc::new(ViewerGates::default()),
@@ -1896,6 +2015,167 @@ mod family_audience_tests {
             created_micros: 0,
             cross_map: true,
         }
+    }
+
+    const ELWYNN: u32 = 12;
+    const WESTFALL: u32 = 40;
+
+    fn zone_weather(zone_id: u32, weather_type: u8, intensity: f32) -> ZoneWeather {
+        ZoneWeather {
+            zone_id,
+            weather_type,
+            intensity,
+            changed_at_micros: 0,
+        }
+    }
+
+    /// A `WeatherStore` holding one zone's sky. Stands in for a shard's `game_zone_weather` cache,
+    /// which a unit test has no node to populate.
+    #[derive(Clone)]
+    struct CannedWeather(Option<(u32, u8, f32)>);
+
+    impl crate::world::WeatherStore for CannedWeather {
+        fn zone_weather(
+            &self,
+            zone_id: u32,
+        ) -> anyhow::Result<Option<crate::codec::ZoneWeatherView>> {
+            Ok(self.0.and_then(|(zone, weather_type, intensity)| {
+                (zone == zone_id).then_some(crate::codec::ZoneWeatherView {
+                    weather_type,
+                    intensity,
+                })
+            }))
+        }
+    }
+
+    fn only_weather(out: Vec<Outbound>) -> wow_world_messages::vanilla::SMSG_WEATHER {
+        match out.as_slice() {
+            [Outbound::One(ServerOpcodeMessage::SMSG_WEATHER(m))] => **m,
+            other => panic!(
+                "expected exactly one SMSG_WEATHER, got {} messages",
+                other.len()
+            ),
+        }
+    }
+
+    /// Stories 5 and 6, the Elwynn/Westfall pair: a zone's weather reaches every viewer standing in
+    /// THAT zone and no viewer anywhere else, however near they are — weather is per zone, and the
+    /// spatial index has no say in it.
+    #[test]
+    fn a_weather_row_reaches_its_own_zone_and_no_other() {
+        let view = WorldView::new(true);
+        let (elwynn_tx, elwynn_rx) = SessionTx::with_depth(0);
+        let (also_elwynn_tx, also_elwynn_rx) = SessionTx::with_depth(0);
+        let (westfall_tx, westfall_rx) = SessionTx::with_depth(0);
+        let (zoneless_tx, zoneless_rx) = SessionTx::with_depth(0);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        for (session, guid, zone, tx) in [
+            (1, 9001, ELWYNN, elwynn_tx),
+            (2, 9002, ELWYNN, also_elwynn_tx),
+            (3, 9003, WESTFALL, westfall_tx),
+            (4, 9004, 0, zoneless_tx),
+        ] {
+            let v = viewer_in_zone(session, guid, identity(session as u8), zone, tx);
+            view.add_viewer_on_shard(v, anchor, 0);
+        }
+
+        weather_changed(&view, 0, &zone_weather(ELWYNN, 1, 0.5));
+
+        for rx in [&elwynn_rx, &also_elwynn_rx] {
+            let m = only_weather(queued_job(rx));
+            assert_eq!(m.weather_type, WeatherType::Rain);
+            assert_eq!(m.grade, 0.5);
+            assert_eq!(m.sound_id, 8534);
+            assert_eq!(
+                m.change,
+                WeatherChangeType::Smooth,
+                "a scheduled change fades in rather than snapping"
+            );
+        }
+        assert!(
+            westfall_rx.try_recv().is_err(),
+            "Elwynn's weather must not reach a viewer standing in Westfall"
+        );
+        assert!(
+            zoneless_rx.try_recv().is_err(),
+            "the unresolved zone matches no weather row"
+        );
+    }
+
+    /// Story 7: crossing into a new zone replaces the stale source-zone sky ONCE, instantly.
+    /// Staying put is silence — the slow scheduler must not turn every grid crossing into a packet.
+    #[test]
+    fn crossing_into_a_zone_sends_its_weather_once() {
+        let view = WorldView::new(true);
+        let (walker_tx, walker_rx) = SessionTx::with_depth(0);
+        let (resident_tx, resident_rx) = SessionTx::with_depth(0);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let walker = viewer_in_zone(1, 9001, identity(1), ELWYNN, walker_tx);
+        let resident = viewer_in_zone(2, 9002, identity(2), WESTFALL, resident_tx);
+        view.add_viewer_on_shard(walker.clone(), anchor, 0);
+        view.add_viewer_on_shard(resident.clone(), anchor, 0);
+        let store = CannedWeather(Some((WESTFALL, 3, 0.9)));
+
+        // Elwynn → Westfall.
+        zone_crossed(&view, &store, 0, walker.self_guid, ELWYNN, WESTFALL);
+        let m = only_weather(queued_job(&walker_rx));
+        assert_eq!(m.weather_type, WeatherType::Storm);
+        assert_eq!(m.grade, 0.9);
+        assert_eq!(m.sound_id, 8558);
+        assert_eq!(m.change, WeatherChangeType::Instant);
+
+        // Still walking around Westfall; a row the Module could not resolve a zone for; and a row
+        // whose own delta claims a crossing the viewer has already been told about (a re-created
+        // entity row starts from the unresolved zone).
+        zone_crossed(&view, &store, 0, walker.self_guid, WESTFALL, WESTFALL);
+        zone_crossed(&view, &store, 0, walker.self_guid, WESTFALL, 0);
+        zone_crossed(&view, &store, 0, walker.self_guid, 0, WESTFALL);
+        assert!(
+            walker_rx.try_recv().is_err(),
+            "staying inside a zone sends nothing, the unresolved zone is not a crossing, and a \
+             zone the viewer is already in is not re-sent"
+        );
+        assert_eq!(
+            walker.zone_id.load(std::sync::atomic::Ordering::Relaxed),
+            WESTFALL,
+            "an unresolved zone must not erase the zone the viewer is really in"
+        );
+        assert!(
+            resident_rx.try_recv().is_err(),
+            "another player's crossing is not this viewer's business"
+        );
+
+        // …and the arriving viewer now routes with the destination zone.
+        weather_changed(&view, 0, &zone_weather(WESTFALL, 2, 0.3));
+        assert_eq!(
+            only_weather(queued_job(&walker_rx)).weather_type,
+            WeatherType::Snow
+        );
+    }
+
+    /// Story 10: a destination with no weather row is fine weather, not a missing packet — the
+    /// client would otherwise keep rendering the sky of the zone it left.
+    #[test]
+    fn crossing_into_a_zone_with_no_weather_row_sends_fine_weather() {
+        let view = WorldView::new(true);
+        let (tx, rx) = SessionTx::with_depth(0);
+        let walker = viewer_in_zone(1, 9001, identity(1), ELWYNN, tx);
+        view.add_viewer_on_shard(walker.clone(), CellKey::at(0, 0, 0, 0), 0);
+
+        zone_crossed(
+            &view,
+            &CannedWeather(None),
+            0,
+            walker.self_guid,
+            ELWYNN,
+            WESTFALL,
+        );
+
+        let m = only_weather(queued_job(&rx));
+        assert_eq!(m.weather_type, WeatherType::Fine);
+        assert_eq!(m.grade, 0.0);
+        assert_eq!(m.sound_id, 0);
+        assert_eq!(m.change, WeatherChangeType::Instant);
     }
 
     /// The private tier's whole privacy guarantee (whisper/group/resurrect): the addressee and
@@ -2074,6 +2354,7 @@ mod family_audience_tests {
             bound_identity: identity(99),
             map_id: 1,
             instance_id: 2,
+            zone_id: 0.into(),
             tx: old.tx.clone(),
             created: old.created.clone(),
             gates: old.gates.clone(),

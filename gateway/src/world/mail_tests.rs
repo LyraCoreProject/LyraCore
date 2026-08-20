@@ -259,7 +259,7 @@ fn an_empty_mailbox_is_answered_with_an_empty_list_packet() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -292,7 +292,7 @@ fn a_seeded_mail_reaches_the_client_as_a_mail_list_row() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -618,7 +618,7 @@ fn return_acks_with_send_mail_result_and_the_next_list_is_empty() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -675,7 +675,7 @@ fn a_refused_return_still_acks_and_never_kills_the_session() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -725,7 +725,7 @@ fn mark_as_read_sends_no_reply_but_the_next_list_shows_it() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -767,7 +767,7 @@ fn delete_acks_with_send_mail_result_and_the_next_list_is_empty() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -824,7 +824,7 @@ fn a_refused_delete_still_acks_and_never_kills_the_session() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -1261,7 +1261,7 @@ fn send_over_the_wire(
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -1357,7 +1357,7 @@ fn a_refused_mail_opcode_costs_a_packet_and_never_the_session() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     wow_world_messages::vanilla::CMSG_GET_MAIL_LIST {
@@ -1736,7 +1736,7 @@ fn taking_money_over_the_wire_acks_and_credits_the_purse() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -2629,7 +2629,7 @@ fn a_refused_priced_take_reaches_the_client_as_not_enough_money() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 

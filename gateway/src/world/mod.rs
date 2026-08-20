@@ -27,8 +27,9 @@ use wow_world_messages::errors::ExpectedOpcodeError;
 use wow_world_messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage};
 use wow_world_messages::vanilla::{
     CMSG_MESSAGECHAT_ChatType, MovementInfo, PartyOperation, PartyResult,
-    SMSG_CAST_RESULT_SimpleSpellCastResult, ServerMessage, CMSG_MESSAGECHAT, SMSG_AUTH_CHALLENGE,
-    SMSG_AUTH_RESPONSE, SMSG_CAST_RESULT, SMSG_CHAT_PLAYER_NOT_FOUND, SMSG_SPIRIT_HEALER_CONFIRM,
+    SMSG_CAST_RESULT_SimpleSpellCastResult, ServerMessage, WeatherChangeType, CMSG_MESSAGECHAT,
+    SMSG_AUTH_CHALLENGE, SMSG_AUTH_RESPONSE, SMSG_CAST_RESULT, SMSG_CHAT_PLAYER_NOT_FOUND,
+    SMSG_SPIRIT_HEALER_CONFIRM,
 };
 
 mod coalesce;
@@ -57,8 +58,8 @@ use handlers::{
     CMSG_AUCTION_LIST_ITEMS_OPCODE, quest_giver_menu,
 };
 pub(crate) use handlers::{
-    AuctionBrowseRequest, AuctionPage, AuctionQuery, CreateAuctionOutcome, CreateAuctionRequest,
-    PlaceBidOutcome, PlaceBidRequest,
+    zone_weather_message, AuctionBrowseRequest, AuctionPage, AuctionQuery, CreateAuctionOutcome,
+    CreateAuctionRequest, PlaceBidOutcome, PlaceBidRequest, WeatherStore,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;

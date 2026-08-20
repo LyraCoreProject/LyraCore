@@ -649,6 +649,12 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // Rest-state flips: same shape — `world_view::
         // rest_state_appeared` relays each row to its owner's session only. TTL-reaped.
         "SELECT * FROM game_rest_state_event",
+        // The live sky, one row per zone that has weather. Read at world entry and at a zone
+        // crossing, and relayed by `world_view::weather_changed` to exactly the viewers whose
+        // stored zone matches the row's. Durable state and relay source in the same row, so a
+        // reconnect replays what everyone else already has. Tiny (one row per zone) and slow (one
+        // roll per zone every ten minutes).
+        "SELECT * FROM game_zone_weather",
         // Breath timer edges and server-resolved drowning hits: self-only relay, with the same
         // owner-session audience as rest state. The bar counts down client-side between edges.
         "SELECT * FROM game_breath_relay_event",

@@ -1,7 +1,7 @@
 use super::handlers::{
     AuctionActionStore, AuctionEntity, AuctionInteraction, CastStore, DuelActionStore,
     ItemActionStore, LootWindowRequestStatus, LootWindowStore, MeleeActionStore, QuestActionStore,
-    TaxiActionStore, VendorActionStore,
+    TaxiActionStore, VendorActionStore, WeatherStore,
 };
 use super::*;
 use std::os::unix::net::UnixStream;
@@ -117,6 +117,7 @@ use wow_world_messages::vanilla::{
     SpellCastTargets_SpellCastTargetFlags_Unit,
     Talent,
     TrainingFailureReason,
+    WeatherType,
     WorldResult,
     CMSG_ADD_FRIEND,
     CMSG_ADD_IGNORE,
@@ -181,6 +182,7 @@ use wow_world_messages::vanilla::{
     MSG_AUCTION_HELLO_Client,
     // Cross-map teleport: the client's world-port-finished ack.
     MSG_MOVE_WORLDPORT_ACK,
+    SMSG_WEATHER,
 };
 use wow_world_messages::Guid;
 
@@ -189,6 +191,14 @@ const K: [u8; 40] = [
     0xBE, 0x9C, 0xAD, 0x14, 0xBF, 0x8B, 0x54, 0xBB, 0x5A, 0x86, 0xFB, 0xF8, 0x1F, 0x6D, 0x42, 0x4A,
     0xA2, 0x3C, 0xC9, 0xA3, 0x14, 0x9F, 0xB1, 0x75,
 ];
+
+/// How many messages one world entry puts on the wire before anything else can: the eleven
+/// login-sequence packets, the self CREATE_OBJECT2, and the zone's SMSG_WEATHER. Tests that are
+/// about what comes AFTER world entry drain exactly this many.
+///
+/// `player_login_emits_sequence_then_self_create` is the one test that reads the sequence itself,
+/// and its tag vector is the authority on the order.
+pub(super) const WORLD_ENTRY_PACKETS: usize = 13;
 
 /// In-memory `WorldStore` returning a fixed session key + character list for one account.
 /// One recorded `movement_update`: (opcode, x, y, z, orientation, timestamp).
@@ -416,6 +426,13 @@ struct InMemoryStore {
     /// `Arc` and NOT the `SessionTx` itself: holding a sender clone here would keep the writer's
     /// `rx.recv()` alive forever and hang every `enter_world` test's `server.join()`.
     session_depth: std::sync::Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>>,
+    /// Canned `game_zone_weather` rows, keyed by zone. A zone absent here has no row, which the
+    /// Module defines as fine weather — the default, so a store that says nothing about weather
+    /// behaves exactly like today's weatherless world.
+    zone_weather: Vec<(u32, codec::ZoneWeatherView)>,
+    /// When set, every weather read fails with this message — the "the Store could not answer"
+    /// case, which must still leave the player with a sky rather than a failed login.
+    weather_error: Option<String>,
     /// Multi-shard routing: the database this handle stands for. `""` (derive-Default) is the
     /// single-shard world every other test runs in, where nothing routes.
     shard: String,
@@ -1120,17 +1137,14 @@ impl WorldStore for InMemoryStore {
         &self,
         _account_id: u64,
         self_guid: u64,
-        login_instance: u64,
-        login_map: u32,
-        login_x: f32,
-        login_y: f32,
+        arrival: &codec::EntityView,
         tx: SessionTx,
     ) -> Result<PlayerSubscriptions> {
         self.rec("subscribe_player_events");
         self.subscribed
             .lock()
             .unwrap()
-            .push((self_guid, login_map, login_x, login_y));
+            .push((self_guid, arrival.map_id, arrival.x, arrival.y));
         *self.session_depth.lock().unwrap() = Some(tx.depth_handle());
         if self.turn_in_reward_item.is_some() {
             *self.turn_in_tx.lock().unwrap() = Some(tx.clone());
@@ -1139,10 +1153,7 @@ impl WorldStore for InMemoryStore {
             Some(view) => Ok(PlayerSubscriptions::registered_for_test(
                 view.clone(),
                 self_guid,
-                login_instance,
-                login_map,
-                login_x,
-                login_y,
+                arrival,
                 tx,
             )),
             None => Ok(PlayerSubscriptions::empty()),
@@ -3018,6 +3029,19 @@ impl ItemActionStore for InMemoryStore {
     }
 }
 
+impl WeatherStore for InMemoryStore {
+    fn zone_weather(&self, zone_id: u32) -> Result<Option<codec::ZoneWeatherView>> {
+        if let Some(e) = &self.weather_error {
+            return Err(anyhow!("{e}"));
+        }
+        Ok(self
+            .zone_weather
+            .iter()
+            .find(|(zone, _)| *zone == zone_id)
+            .map(|(_, view)| *view))
+    }
+}
+
 impl LootWindowStore for InMemoryStore {
     fn loot_target_money(&self, _target_guid: u64) -> Result<u32> {
         Ok(self.corpse_money)
@@ -3712,10 +3736,19 @@ fn warrior_entity() -> codec::EntityView {
 
 #[test]
 fn player_login_emits_sequence_then_self_create() {
-    // CMSG_PLAYER_LOGIN must yield the full login sequence (in order) followed by the
-    // self CREATE_OBJECT2 at the correct position/guid.
+    // CMSG_PLAYER_LOGIN must yield the full login sequence (in order), then the self
+    // CREATE_OBJECT2 at the correct position/guid, then the current zone's weather — the clock
+    // (SMSG_LOGIN_SETTIMESPEED) before the sky, so the client has both before it renders.
     let store = std::sync::Arc::new(InMemoryStore {
         login_entity: Some(warrior_entity()),
+        // Elwynn Forest (the fixture's zone) is raining hard.
+        zone_weather: vec![(
+            12,
+            codec::ZoneWeatherView {
+                weather_type: 1,
+                intensity: 0.8,
+            },
+        )],
         ..tester_store(7)
     });
 
@@ -3730,10 +3763,11 @@ fn player_login_emits_sequence_then_self_create() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // The 11-message login sequence, then the self CREATE_OBJECT2.
+    // The 11-message login sequence, the self CREATE_OBJECT2, then the zone's weather.
     let mut tags = Vec::new();
     let mut create_guid = None;
-    for _ in 0..12 {
+    let mut weather = None;
+    for _ in 0..WORLD_ENTRY_PACKETS {
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
             ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(m) => {
                 tags.push("verify_world");
@@ -3761,6 +3795,10 @@ fn player_login_emits_sequence_then_self_create() {
                     panic!("expected CreateObject2 in self-spawn");
                 }
             }
+            ServerOpcodeMessage::SMSG_WEATHER(m) => {
+                tags.push("weather");
+                weather = Some(*m);
+            }
             other => panic!("unexpected message in login sequence: {other}"),
         }
     }
@@ -3780,12 +3818,71 @@ fn player_login_emits_sequence_then_self_create() {
             "set_rest_start",
             "bindpoint",
             "update_object",
+            "weather",
         ],
     );
     assert_eq!(create_guid, Some(1));
+    // Elwynn's stored rain, synchronized rather than faded in: an arriving client must not spend
+    // a transition rendering the sky it happened to have last.
+    let weather = weather.expect("world entry sends the zone's weather");
+    assert_eq!(weather.weather_type, WeatherType::Rain);
+    assert_eq!(weather.grade, 0.8);
+    assert_eq!(weather.sound_id, 8535);
+    assert_eq!(weather.change, WeatherChangeType::Instant);
 
     drop(client);
     server.join().unwrap();
+}
+
+/// Drive one login to completion and hand back the world-entry weather packet.
+fn world_entry_weather(store: std::sync::Arc<InMemoryStore>) -> SMSG_WEATHER {
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    let mut weather = None;
+    for _ in 0..WORLD_ENTRY_PACKETS {
+        if let ServerOpcodeMessage::SMSG_WEATHER(m) =
+            ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
+        {
+            weather = Some(*m);
+        }
+    }
+    drop(client);
+    server.join().unwrap();
+    weather.expect("every world entry sends the zone's weather")
+}
+
+/// Story 10: a zone the Module has no weather row for is fine weather. World entry still sends the
+/// packet — a client told nothing keeps rendering whatever sky it arrived with.
+#[test]
+fn world_entry_into_a_zone_with_no_weather_row_sends_fine_weather() {
+    let weather = world_entry_weather(std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(warrior_entity()),
+        ..tester_store(7)
+    }));
+    assert_eq!(weather.weather_type, WeatherType::Fine);
+    assert_eq!(weather.grade, 0.0);
+    assert_eq!(weather.sound_id, 0);
+    assert_eq!(weather.change, WeatherChangeType::Instant);
+}
+
+/// A Store that cannot answer the weather question is a degraded sky, never a failed login: the
+/// session completes world entry and the player lands under clear skies.
+#[test]
+fn a_weather_read_failure_still_completes_world_entry() {
+    let weather = world_entry_weather(std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(warrior_entity()),
+        weather_error: Some("shard cache unavailable".into()),
+        ..tester_store(7)
+    }));
+    assert_eq!(weather.weather_type, WeatherType::Fine);
+    assert_eq!(weather.grade, 0.0);
 }
 
 #[test]
@@ -3819,8 +3916,8 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    // Drain the initial 12-message login sequence (map 0 — not the point of this test).
-    for _ in 0..12 {
+    // Drain world entry (map 0 — not the point of this test).
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -3915,7 +4012,7 @@ fn worldport_removes_the_source_viewer_before_routing_and_registers_a_replacemen
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     let source_session = view
@@ -3976,7 +4073,7 @@ fn login_initialize_factions_carries_persisted_standing_at_its_reputation_index(
     // Drain the full login sequence + self CREATE_OBJECT2 (mirrors the message count in
     // player_login_emits_sequence_then_self_create) so the server side doesn't see a broken pipe.
     let mut factions = None;
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         if let ServerOpcodeMessage::SMSG_INITIALIZE_FACTIONS(m) =
             ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
         {
@@ -4029,9 +4126,9 @@ fn login_with_resident_items_and_reputation_emits_no_gain_feedback() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // Twelve fixed login/self frames plus the resident item's CREATE. The item and standing are
-    // snapshots in those frames, not live insert callbacks, so neither feedback packet is lawful.
-    for _ in 0..13 {
+    // World entry plus the resident item's CREATE. The item and standing are snapshots in those
+    // frames, not live insert callbacks, so neither feedback packet is lawful.
+    for _ in 0..WORLD_ENTRY_PACKETS + 1 {
         let message = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
         assert!(
             !matches!(
@@ -4384,7 +4481,7 @@ fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_scree
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     // The client finished loading the dungeon map and acks — this is where the transfer runs.
@@ -4454,7 +4551,7 @@ fn a_world_port_whose_world_entry_fails_also_aborts_the_clients_loading_screen()
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     MSG_MOVE_WORLDPORT_ACK {}
@@ -4741,7 +4838,7 @@ fn enter_world(
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
     // 10 login-sequence packets, plus the weapon and armor SMSG_SET_PROFICIENCY pair.
-    for _ in 0..12 + item_creates {
+    for _ in 0..WORLD_ENTRY_PACKETS + item_creates {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     if has_quest_log {
@@ -5257,9 +5354,8 @@ fn login_sends_the_quest_log_descriptor_raw_update_after_the_create_packet() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // The fixed 12-message login sequence, then the self CREATE_OBJECT2 — discarded, this test is
-    // about what comes right after.
-    for _ in 0..12 {
+    // World entry — discarded, this test is about what comes right after.
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     // gtker's typed reader rejects this raw partial VALUES body (no OBJECT_FIELD_TYPE), so read it
@@ -5669,7 +5765,7 @@ fn item_reducer_transport_loss_ends_the_world_session() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -6734,7 +6830,7 @@ fn attackswing_desync_error_is_session_fatal() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     CMSG_ATTACKSWING {
@@ -8850,7 +8946,7 @@ fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..12 {
+    for _ in 0..WORLD_ENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     assert_eq!(
