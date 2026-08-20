@@ -273,8 +273,8 @@ pub(crate) fn authored_combat(ctx: &ReducerContext, creature_guid: u64) -> Autho
 }
 
 /// Every EventAI row that governs one creature: its entry's rules plus any pinned to its own guid.
-/// The single row fetch behind the engine, the lifecycle edges and the cycle's suppression reads,
-/// so the "who runs EventAI at all" Gate is answered once, here.
+/// The single row fetch behind the engine, the lifecycle edges and the cycle's authored-combat
+/// reads, so the "who runs EventAI at all" Gate is answered once, here.
 pub(super) fn rows_for(ctx: &ReducerContext, creature_guid: u64) -> Vec<super::CreatureAiEvent> {
     let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
         return Vec::new();

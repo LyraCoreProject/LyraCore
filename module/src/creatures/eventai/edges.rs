@@ -170,7 +170,7 @@ mod eventai_gate_tripwire {
                 "pub(super) fn rows_for(",
                 "super::runs_eventai(&creature)",
                 "the one row fetch answers `who runs EventAI` for the engine, the edges and the \
-                 cycle's suppression reads alike",
+                 cycle's authored-combat reads alike",
             ),
             (
                 include_str!("edges.rs"),

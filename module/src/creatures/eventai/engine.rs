@@ -14,9 +14,8 @@ use crate::{
     game_world_entity,
 };
 
-/// How long a rule waits after a Refusal from its opening cast. A Refusal there is transient (a
-/// cast already in flight, the target out of range or gone), so the rule keeps its opportunity and
-/// tries again shortly instead of standing down for a whole repeat window.
+/// How long a rule waits after a Refusal from its opening cast; `hold_opportunity_open` explains
+/// the policy.
 const CAST_RETRY_MS: u64 = 1_500;
 
 pub(crate) trait EventAiWorld {

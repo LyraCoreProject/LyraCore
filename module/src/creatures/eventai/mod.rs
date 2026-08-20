@@ -12,10 +12,6 @@ mod mobility;
 pub(crate) use combat::authored_combat;
 #[cfg(test)]
 pub(crate) use combat::AuthoredCombat;
-#[allow(
-    unused_imports,
-    reason = "keeps the lifecycle cleanup reachable to sibling creature modules"
-)]
 pub(crate) use edges::reset_creature_lifecycle;
 pub(crate) use edges::{
     creature_ai_on_aggro, creature_ai_on_creature_death, creature_ai_on_creature_spawn,
