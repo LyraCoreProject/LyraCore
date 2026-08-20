@@ -3,6 +3,7 @@
 //! pure code-motion, byte-identical to the previous inline module.
 
 use super::*;
+use std::time::{SystemTime, UNIX_EPOCH};
 // Only the loot byte-match test needs gtker's typed loot response (the runtime path is raw).
 use wow_world_messages::vanilla::ServerMessage;
 use wow_world_messages::vanilla::{
@@ -3788,4 +3789,131 @@ fn login_sequence_carries_both_proficiency_masks_with_the_initial_state() {
             "plate follows the passive in the spellbook"
         );
     }
+}
+
+// ---- P1: entity.rs realm_datetime — dynamic SMSG_LOGIN_SETTIMESPEED clock ---------------------
+//
+// Expected packed fields below are worked calendar examples verified independently with
+// `date -u`, not recomputed from `realm_datetime`'s own days-to-civil algorithm. Each Unix
+// timestamp's day-count offset and weekday were cross-checked by hand.
+
+#[test]
+fn realm_datetime_year_rollover() {
+    // 2026-12-31T23:59:00Z (a Thursday) rolls to 2027-01-01T00:00:00Z (a Friday) one minute later.
+    let before = realm_datetime(1_798_761_540);
+    assert_eq!(before.years_after_2000(), 26);
+    assert_eq!(before.month(), Month::December);
+    assert_eq!(
+        before.month_day() + 1,
+        31,
+        "month_day is zero-based; +1 is the calendar day"
+    );
+    assert_eq!(before.weekday(), Weekday::Thursday);
+    assert_eq!(before.hours(), 23);
+    assert_eq!(before.minutes(), 59);
+
+    let after = realm_datetime(1_798_761_600);
+    assert_eq!(after.years_after_2000(), 27);
+    assert_eq!(after.month(), Month::January);
+    assert_eq!(after.month_day() + 1, 1);
+    assert_eq!(after.weekday(), Weekday::Friday);
+    assert_eq!(after.hours(), 0);
+    assert_eq!(after.minutes(), 0);
+}
+
+#[test]
+fn realm_datetime_month_rollover() {
+    // 2027-01-31T14:37:00Z (a Sunday) rolls to 2027-02-01T00:05:00Z (a Monday).
+    let before = realm_datetime(1_801_406_220);
+    assert_eq!(before.month(), Month::January);
+    assert_eq!(before.month_day() + 1, 31);
+    assert_eq!(before.weekday(), Weekday::Sunday);
+    assert_eq!(before.hours(), 14);
+    assert_eq!(
+        before.minutes(),
+        37,
+        "minute precision: 14:37 must not truncate to the hour"
+    );
+
+    let after = realm_datetime(1_801_440_300);
+    assert_eq!(after.month(), Month::February);
+    assert_eq!(after.month_day() + 1, 1);
+    assert_eq!(after.weekday(), Weekday::Monday);
+    assert_eq!(after.hours(), 0);
+    assert_eq!(after.minutes(), 5);
+}
+
+#[test]
+fn realm_datetime_leap_year_boundary() {
+    // 2028-02-29T06:15:00Z: 2028 is a leap year (divisible by 4, not by 100), so a 29th of
+    // February exists at all; it is a Tuesday.
+    let dt = realm_datetime(1_835_417_700);
+    assert_eq!(dt.years_after_2000(), 28);
+    assert_eq!(dt.month(), Month::February);
+    assert_eq!(dt.month_day() + 1, 29);
+    assert_eq!(dt.weekday(), Weekday::Tuesday);
+    assert_eq!(dt.hours(), 6);
+    assert_eq!(dt.minutes(), 15);
+}
+
+#[test]
+fn realm_datetime_round_trips_through_display() {
+    // 2026-06-15T12:00:00Z: the date the removed hard-code intended but packed wrong (it fed 15
+    // into the zero-based month_day field, so the client actually showed the 16th). A Monday.
+    let dt = realm_datetime(1_781_524_800);
+    assert_eq!(dt.weekday(), Weekday::Monday, "2026-06-15 is a Monday");
+    assert_eq!(
+        dt.month_day() + 1,
+        15,
+        "month_day() + 1 is the calendar day"
+    );
+    assert_eq!(
+        dt.to_string(),
+        "Monday 2026-6-15T12:0",
+        "Display must show the intended calendar date"
+    );
+}
+
+#[test]
+fn login_sequence_emits_a_current_realm_clock_not_the_old_hardcode() {
+    // World entry's 3rd message stays SMSG_LOGIN_SETTIMESPEED, now carrying today's date within
+    // a couple of minutes of now (proving the removed 2026-06-15 hard-code is gone) at vanilla's
+    // fixed timescale.
+    let before_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let msgs =
+        login_sequence_messages(&warrior_entity(), &[], &[], &[], WorldEntry::FreshLogin).unwrap();
+    let after_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    assert!(
+        matches!(
+            msgs.get(2),
+            Some(ServerOpcodeMessage::SMSG_LOGIN_SETTIMESPEED(_))
+        ),
+        "SMSG_LOGIN_SETTIMESPEED stays the 3rd message in the login batch"
+    );
+    let settimespeed = msgs
+        .iter()
+        .find_map(|m| match m {
+            ServerOpcodeMessage::SMSG_LOGIN_SETTIMESPEED(s) => Some(s),
+            _ => None,
+        })
+        .expect("SMSG_LOGIN_SETTIMESPEED must be in the sequence");
+    assert_eq!(settimespeed.timescale, 0.016_666_668);
+
+    // Bound the emitted value against the same real-clock window this test observed around the
+    // call — proving it tracks wall time, not that the packing algorithm is correct (the
+    // boundary tests above establish that against independently derived examples).
+    let lower = realm_datetime(before_secs).as_int();
+    let upper = realm_datetime(after_secs + 120).as_int();
+    let emitted = settimespeed.datetime.as_int();
+    assert!(
+        (lower..=upper).contains(&emitted),
+        "emitted datetime {emitted} must fall within [{lower}, {upper}], a couple of minutes around now"
+    );
 }
