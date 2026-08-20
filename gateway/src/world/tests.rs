@@ -320,6 +320,9 @@ struct InMemoryStore {
     /// non-stacking chain's new rank replaces. `None` (derive-Default) mirrors "no known prior
     /// rank" -> a trainer buy pushes plain SMSG_LEARNED_SPELL.
     trainer_superseded: Option<u32>,
+    /// The character's spellbook, as `player_learned_spells` reports it. Empty by default; a
+    /// proficiency test seeds the passive the trainer buy is meant to have granted.
+    learned_spells: Vec<u32>,
     /// `npc_is_innkeeper` flag for the gossip bind-home routing.
     innkeeper: bool,
     /// Whether `bind_home` ran (the innkeeper gossip select).
@@ -1799,7 +1802,7 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
     fn player_learned_spells(&self, _player_guid: u64) -> Result<Vec<u32>> {
-        Ok(Vec::new())
+        Ok(self.learned_spells.clone())
     }
     fn player_reputations(&self, _player_guid: u64) -> Result<Vec<(i32, i32, bool)>> {
         Ok(self.reputations.clone())
@@ -3697,10 +3700,10 @@ fn player_login_emits_sequence_then_self_create() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // The 9-message login sequence, then the self CREATE_OBJECT2.
+    // The 11-message login sequence, then the self CREATE_OBJECT2.
     let mut tags = Vec::new();
     let mut create_guid = None;
-    for _ in 0..10 {
+    for _ in 0..12 {
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
             ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(m) => {
                 tags.push("verify_world");
@@ -3711,6 +3714,11 @@ fn player_login_emits_sequence_then_self_create() {
             ServerOpcodeMessage::SMSG_LOGIN_SETTIMESPEED(_) => tags.push("settimespeed"),
             ServerOpcodeMessage::SMSG_TUTORIAL_FLAGS(_) => tags.push("tutorial_flags"),
             ServerOpcodeMessage::SMSG_INITIAL_SPELLS(_) => tags.push("initial_spells"),
+            ServerOpcodeMessage::SMSG_SET_PROFICIENCY(m) => tags.push(match m.class.as_int() {
+                2 => "weapon_proficiency",
+                4 => "armor_proficiency",
+                other => panic!("unexpected proficiency item class {other}"),
+            }),
             ServerOpcodeMessage::SMSG_ACTION_BUTTONS(_) => tags.push("action_buttons"),
             ServerOpcodeMessage::SMSG_INITIALIZE_FACTIONS(_) => tags.push("init_factions"),
             ServerOpcodeMessage::SMSG_SET_REST_START(_) => tags.push("set_rest_start"),
@@ -3735,6 +3743,8 @@ fn player_login_emits_sequence_then_self_create() {
             "settimespeed",
             "tutorial_flags",
             "initial_spells",
+            "weapon_proficiency",
+            "armor_proficiency",
             "action_buttons",
             "init_factions",
             "set_rest_start",
@@ -3779,8 +3789,8 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    // Drain the initial 10-message login sequence (map 0 — not the point of this test).
-    for _ in 0..10 {
+    // Drain the initial 12-message login sequence (map 0 — not the point of this test).
+    for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -3795,9 +3805,9 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
         .unwrap();
 
     // enter_world reruns the login-style sequence for the re-entry — minus SMSG_LOGIN_VERIFY_WORLD
-    // (9 messages, not 10): a verify-world resend commands a second load of the just-loaded map.
+    // (11 messages, not 12): a verify-world resend commands a second load of the just-loaded map.
     let mut create_guid = None;
-    for _ in 0..9 {
+    for _ in 0..11 {
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
             ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(_) => {
                 panic!(
@@ -3875,7 +3885,7 @@ fn worldport_removes_the_source_viewer_before_routing_and_registers_a_replacemen
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..10 {
+    for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     let source_session = view
@@ -3886,7 +3896,7 @@ fn worldport_removes_the_source_viewer_before_routing_and_registers_a_replacemen
     MSG_MOVE_WORLDPORT_ACK {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..9 {
+    for _ in 0..11 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -3936,7 +3946,7 @@ fn login_initialize_factions_carries_persisted_standing_at_its_reputation_index(
     // Drain the full login sequence + self CREATE_OBJECT2 (mirrors the message count in
     // player_login_emits_sequence_then_self_create) so the server side doesn't see a broken pipe.
     let mut factions = None;
-    for _ in 0..10 {
+    for _ in 0..12 {
         if let ServerOpcodeMessage::SMSG_INITIALIZE_FACTIONS(m) =
             ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
         {
@@ -3989,9 +3999,9 @@ fn login_with_resident_items_and_reputation_emits_no_gain_feedback() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // Ten fixed login/self frames plus the resident item's CREATE. The item and standing are
+    // Twelve fixed login/self frames plus the resident item's CREATE. The item and standing are
     // snapshots in those frames, not live insert callbacks, so neither feedback packet is lawful.
-    for _ in 0..11 {
+    for _ in 0..13 {
         let message = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
         assert!(
             !matches!(
@@ -4344,7 +4354,7 @@ fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_scree
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..10 {
+    for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     // The client finished loading the dungeon map and acks — this is where the transfer runs.
@@ -4414,7 +4424,7 @@ fn a_world_port_whose_world_entry_fails_also_aborts_the_clients_loading_screen()
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..10 {
+    for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     MSG_MOVE_WORLDPORT_ACK {}
@@ -4700,7 +4710,8 @@ fn enter_world(
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    for _ in 0..10 + item_creates {
+    // 10 login-sequence packets, plus the weapon and armor SMSG_SET_PROFICIENCY pair.
+    for _ in 0..12 + item_creates {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     if has_quest_log {
@@ -5216,9 +5227,9 @@ fn login_sends_the_quest_log_descriptor_raw_update_after_the_create_packet() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // The fixed 10-message login sequence, then the self CREATE_OBJECT2 — discarded, this test is
+    // The fixed 12-message login sequence, then the self CREATE_OBJECT2 — discarded, this test is
     // about what comes right after.
-    for _ in 0..10 {
+    for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     // gtker's typed reader rejects this raw partial VALUES body (no OBJECT_FIELD_TYPE), so read it
@@ -5628,7 +5639,7 @@ fn item_reducer_transport_loss_ends_the_world_session() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..10 {
+    for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -6693,7 +6704,7 @@ fn attackswing_desync_error_is_session_fatal() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..10 {
+    for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     CMSG_ATTACKSWING {
@@ -6879,6 +6890,95 @@ fn a_riding_buy_confirms_without_echoing_the_offering_as_a_learned_spell() {
                 m.id
             )
         }
+        other => panic!("expected SMSG_GOSSIP_MESSAGE, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+/// A Warrior buying Plate Mail at 40. The book update alone leaves the client tinting every plate
+/// piece red, so the buy also refreshes the ARMOR mask from the post-buy spellbook.
+#[test]
+fn a_proficiency_buy_pushes_the_refreshed_armor_mask_after_the_learned_spell() {
+    let mut s = quest_store();
+    // The passive the buy granted, and the class the mask is derived for.
+    s.learned_spells = vec![lyracore_shared::constants::armor_proficiency::PLATE_PASSIVE_SPELL_ID];
+    s.characters = vec![codec::CharacterView {
+        guid: 1,
+        class: 1,
+        level: 40,
+        ..Default::default()
+    }];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_TRAINER_BUY_SPELL {
+        guid: Guid::new(70),
+        id: lyracore_shared::constants::armor_proficiency::PLATE_TRAINER_SPELL_ID,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_TRAINER_BUY_SUCCEEDED(m) => assert_eq!(m.id, 7109),
+        other => panic!("expected SMSG_TRAINER_BUY_SUCCEEDED, got {other}"),
+    }
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_LEARNED_SPELL(m) => assert_eq!(m.id, 7109),
+        other => panic!("expected SMSG_LEARNED_SPELL, got {other}"),
+    }
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SET_PROFICIENCY(m) => {
+            assert_eq!(
+                m.class.as_int(),
+                4,
+                "a proficiency buy refreshes ARMOR only"
+            );
+            assert!(
+                m.item_sub_class_mask & (1 << lyracore_shared::item::armor_subclass::PLATE) != 0,
+                "the trained plate bit must be set: {:#x}",
+                m.item_sub_class_mask
+            );
+        }
+        other => panic!("expected SMSG_SET_PROFICIENCY, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+/// An ordinary ability purchase changes nothing about what the Character may wear, so it must not
+/// resend a proficiency mask.
+#[test]
+fn an_ordinary_trainer_buy_pushes_no_proficiency_mask() {
+    let mut s = quest_store();
+    s.characters = vec![codec::CharacterView {
+        guid: 1,
+        class: 1,
+        level: 40,
+        ..Default::default()
+    }];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    CMSG_TRAINER_BUY_SPELL {
+        guid: Guid::new(70),
+        id: 1234,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_TRAINER_BUY_SUCCEEDED(_) => {}
+        other => panic!("expected SMSG_TRAINER_BUY_SUCCEEDED, got {other}"),
+    }
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_LEARNED_SPELL(m) => assert_eq!(m.id, 1234),
+        other => panic!("expected SMSG_LEARNED_SPELL, got {other}"),
+    }
+    // A follow-up whose reply we DO expect, proving the buy emitted nothing further.
+    CMSG_GOSSIP_HELLO {
+        guid: Guid::new(70),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(_) => {}
         other => panic!("expected SMSG_GOSSIP_MESSAGE, got {other}"),
     }
     drop(client);
@@ -8720,7 +8820,7 @@ fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..10 {
+    for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     assert_eq!(

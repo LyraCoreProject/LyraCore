@@ -137,7 +137,7 @@ pub(super) fn drive_routed_session(
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..10 {
+    for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -347,14 +347,14 @@ fn a_world_port_keeps_the_pin_when_the_home_shard_still_owns_the_new_map() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..10 {
+    for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     MSG_MOVE_WORLDPORT_ACK {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    // 9, not 10: the re-entry sequence omits SMSG_LOGIN_VERIFY_WORLD.
-    for _ in 0..9 {
+    // 11, not 12: the re-entry sequence omits SMSG_LOGIN_VERIFY_WORLD.
+    for _ in 0..11 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     drop(client);
@@ -425,7 +425,7 @@ fn a_spurious_worldport_ack_is_ignored_on_a_session_pinned_off_the_default_shard
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..10 {
+    for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
@@ -466,7 +466,7 @@ fn a_spurious_worldport_ack_is_ignored_on_the_default_shard() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..10 {
+    for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     MSG_MOVE_WORLDPORT_ACK {}
@@ -502,7 +502,7 @@ fn a_logout_to_character_select_releases_the_home_shard_pin() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..10 {
+    for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     CMSG_LOGOUT_REQUEST {}
@@ -613,7 +613,7 @@ fn a_freshly_created_characters_first_login_transfers_off_the_default_shard() {
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    for _ in 0..10 {
+    for _ in 0..12 {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     drop(client);

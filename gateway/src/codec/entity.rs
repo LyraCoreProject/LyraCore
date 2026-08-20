@@ -627,6 +627,12 @@ pub fn login_sequence_messages(
         }
     }
 
+    // What this Character may wield and wear. The class byte is `UNIT_FIELD_BYTES_0` byte 1, and the
+    // armor half reads the trained passives out of `learned` — the same spells the Module equip Gate
+    // reads, so the client's red tint and the server's Refusal agree.
+    let [weapon_proficiency, armor_proficiency] =
+        build_set_proficiency_msgs(((entity.unit_bytes_0 >> 8) & 0xFF) as u8, learned);
+
     let mut msgs = Vec::new();
     if entry == WorldEntry::FreshLogin {
         msgs.push(ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(Box::new(
@@ -659,6 +665,10 @@ pub fn login_sequence_messages(
             initial_spells,
             cooldowns: vec![],
         })),
+        // Straight after the spellbook the armor mask is derived from, so the client learns the
+        // passives and what they unlock in one initial-state batch.
+        weapon_proficiency,
+        armor_proficiency,
         ServerOpcodeMessage::SMSG_ACTION_BUTTONS(Box::new(SMSG_ACTION_BUTTONS {
             data: action_buttons,
         })),

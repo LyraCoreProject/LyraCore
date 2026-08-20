@@ -308,6 +308,32 @@ mod tests {
         );
     }
 
+    /// A class trainer sells the armor-proficiency WRAPPER; the passive it teaches is what the equip
+    /// Gate reads. The importer synthesizes exactly one `game_spell_learn` row per wrapper, so the
+    /// buy's single level of dependents is what turns the purchase into a Proficiency.
+    #[test]
+    fn an_armor_proficiency_wrapper_teaches_its_passive_as_a_dependent() {
+        use lyracore_shared::constants::armor_proficiency::*;
+
+        let rows = vec![
+            (PLATE_TRAINER_SPELL_ID, PLATE_PASSIVE_SPELL_ID),
+            (MAIL_TRAINER_SPELL_ID, MAIL_PASSIVE_SPELL_ID),
+        ];
+        assert_eq!(
+            dependent_spell_ids(&rows, PLATE_TRAINER_SPELL_ID),
+            vec![PLATE_PASSIVE_SPELL_ID]
+        );
+        assert_eq!(
+            dependent_spell_ids(&rows, MAIL_TRAINER_SPELL_ID),
+            vec![MAIL_PASSIVE_SPELL_ID]
+        );
+        // The passive teaches nothing further, so one level of dependents reaches the whole grant.
+        assert_eq!(
+            dependent_spell_ids(&rows, PLATE_PASSIVE_SPELL_ID),
+            Vec::<u32>::new()
+        );
+    }
+
     /// An exact (race, class) match always applies, regardless of any wildcards elsewhere.
     #[test]
     fn createinfo_row_matches_exact_race_and_class() {

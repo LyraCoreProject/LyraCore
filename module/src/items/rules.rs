@@ -253,7 +253,7 @@ pub fn can_equip_into(class: u8, inventory_type: u8, dest_slot: u8, can_dual_wie
     resolved == canonical
 }
 
-pub use lyracore_shared::item::{armor_subclass, can_equip_proficiency, weapon_subclass};
+pub use lyracore_shared::item::{armor_subclass, weapon_subclass, Proficiency};
 
 /// Whether a character of `player_level` meets an item's `required_level` to EQUIP or USE it. Pure —
 /// unit-tested. A required_level of 1 (every seeded item today) is met by every character, so this gate
@@ -383,6 +383,13 @@ pub(crate) fn resolve_equip_slot(
 pub(crate) mod tests {
     use super::*;
     use crate::items::tables::ItemTemplate;
+
+    /// The class CEILING: what a class can equip with both level-40 armor upgrades trained. The
+    /// equip Gate asks the stricter `Proficiency::from_spellbook` question; these cases pin the
+    /// class table itself, which training never changes.
+    fn can_equip_proficiency(player_class: u8, item_class: u8, item_subclass: u8) -> bool {
+        Proficiency::class_ceiling(player_class).can_equip(item_class, item_subclass)
+    }
 
     #[test]
     fn sell_value_multiplies_by_stack_count() {
@@ -837,9 +844,58 @@ pub(crate) mod tests {
         assert!(!can_equip_proficiency(9, 4, 4)); // plate
     }
 
+    /// EQUIP GATE, PLATE: plate is a level-40 trainer purchase, not a class birthright. The Gate
+    /// reads no level at all here — a Warrior at 1 and at 60 are refused alike until spell 750 is in
+    /// the spellbook, and mail is wearable from the first level either way.
+    #[test]
+    fn plate_needs_the_trained_passive_whatever_the_level() {
+        use armor_subclass as a;
+        const ARMOR: u8 = 4;
+        for class in [1u8, 2] {
+            let untrained = Proficiency::derive(class, false, false);
+            assert!(
+                !untrained.can_equip(ARMOR, a::PLATE),
+                "class {class} at any level without 750"
+            );
+            assert!(
+                untrained.can_equip(ARMOR, a::MAIL),
+                "class {class} wears mail from level 1"
+            );
+            assert!(Proficiency::derive(class, true, false).can_equip(ARMOR, a::PLATE));
+        }
+    }
+
+    /// EQUIP GATE, MAIL: Hunter and Shaman start in leather and buy the mail upgrade (8737) at 40.
+    #[test]
+    fn hunters_and_shamans_need_the_trained_passive_for_mail() {
+        use armor_subclass as a;
+        const ARMOR: u8 = 4;
+        for class in [3u8, 7] {
+            assert!(!Proficiency::derive(class, false, false).can_equip(ARMOR, a::MAIL));
+            assert!(Proficiency::derive(class, false, true).can_equip(ARMOR, a::MAIL));
+            // The plate flag is not theirs to use.
+            assert!(!Proficiency::derive(class, true, true).can_equip(ARMOR, a::PLATE));
+        }
+    }
+
+    /// Proficiency gates the BODY only. Every non-equip destination — bags, bank, trade, mail,
+    /// vendor purchases — reaches its mutation without this rule, which is why the Gate lives in
+    /// `apply_item_move`'s equipment branch alone.
+    #[test]
+    fn proficiency_leaves_non_equippable_item_classes_alone() {
+        let untrained_warrior = Proficiency::derive(1, false, false);
+        for item_class in [0u8, 1, 3, 5, 6, 7, 9, 11, 12, 15] {
+            assert!(
+                untrained_warrior.can_equip(item_class, 4),
+                "item class {item_class} carries no proficiency restriction"
+            );
+        }
+    }
+
     #[test]
     fn proficiency_warrior_can_wear_plate() {
-        // Warrior (class 1) may equip all armor tiers including plate and shield.
+        // The class CEILING (the auction "usable" filter's question): a Warrior's reachable tiers
+        // include plate once trained. The equip Gate asks the stricter question above.
         assert!(can_equip_proficiency(1, 4, 1)); // cloth
         assert!(can_equip_proficiency(1, 4, 2)); // leather
         assert!(can_equip_proficiency(1, 4, 3)); // mail
@@ -872,7 +928,7 @@ pub(crate) mod tests {
     #[test]
     fn proficiency_hunter_leather_and_mail() {
         assert!(can_equip_proficiency(3, 4, 2)); // leather
-        assert!(can_equip_proficiency(3, 4, 3)); // mail (L1-trainable in vanilla)
+        assert!(can_equip_proficiency(3, 4, 3)); // mail — reachable, trained at 40
         assert!(!can_equip_proficiency(3, 4, 4)); // plate
         assert!(!can_equip_proficiency(3, 4, 6)); // shield
     }

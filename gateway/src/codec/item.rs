@@ -3,6 +3,8 @@
 
 use super::*;
 
+use lyracore_shared::item::{item_class, weapon_subclass, Proficiency};
+
 /// An item-template row as the gateway reads it from `game_item_template`, flattened for the
 /// `CMSG_ITEM_QUERY_SINGLE` reply + the item CREATE (items slice-1). Decoupled from the SDK row
 /// type. `class`/`subclass` together pick the typed `ItemClassAndSubClass`; the rest map 1:1.
@@ -406,4 +408,43 @@ pub fn build_item_push_result(
         item_random_property_id: 0,
         item_count: count,
     }
+}
+
+/// The Character's armor Proficiency, read off its spellbook. The two level-40 upgrades are the
+/// passive spells a class trainer teaches, so knowing the passive IS the knowledge — the same
+/// question the Module equip Gate asks before it allows the item move.
+pub fn armor_proficiency(player_class: u8, learned: &[u32]) -> Proficiency {
+    Proficiency::from_spellbook(player_class, |spell_id| learned.contains(&spell_id))
+}
+
+/// The pair of `SMSG_SET_PROFICIENCY` messages that tell the client what this Character may wield
+/// and wear: the static class weapon table, then the armor tiers it has actually trained. Both
+/// masks are `1 << subclass`, and both come from the shared [`Proficiency`] rule, so the client's
+/// red tint and the Module's Refusal cannot drift apart.
+pub fn build_set_proficiency_msgs(player_class: u8, learned: &[u32]) -> [ServerOpcodeMessage; 2] {
+    [
+        ServerOpcodeMessage::SMSG_SET_PROFICIENCY(SMSG_SET_PROFICIENCY {
+            class: ItemClass::Weapon,
+            item_sub_class_mask: weapon_subclass_mask(player_class),
+        }),
+        build_armor_proficiency_msg(player_class, learned),
+    ]
+}
+
+/// The ARMOR message alone — what a proficiency purchase refreshes. A weapon table never moves, so
+/// resending it after a trainer buy would say nothing.
+pub fn build_armor_proficiency_msg(player_class: u8, learned: &[u32]) -> ServerOpcodeMessage {
+    ServerOpcodeMessage::SMSG_SET_PROFICIENCY(SMSG_SET_PROFICIENCY {
+        class: ItemClass::Armor,
+        item_sub_class_mask: armor_proficiency(player_class, learned).armor_subclass_mask(),
+    })
+}
+
+/// Weapon subclasses the class table admits, folded into a `1 << subclass` mask. Armor training
+/// never touches weapons, so the ceiling answers this for every Character of the class.
+fn weapon_subclass_mask(player_class: u8) -> u32 {
+    let table = Proficiency::class_ceiling(player_class);
+    (0..=weapon_subclass::FISHING_POLE)
+        .filter(|&subclass| table.can_equip(item_class::WEAPON, subclass))
+        .fold(0, |mask, subclass| mask | 1 << subclass)
 }

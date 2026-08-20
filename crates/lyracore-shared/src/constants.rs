@@ -212,6 +212,19 @@ pub mod dual_wield {
     pub const SPELL_ID: u32 = 674;
 }
 
+/// The two armor upgrades a class trainer teaches at level 40. Knowing the PASSIVE is the
+/// proficiency; the wrapper is the purchasable `game_trainer_spell` row that teaches it, so a
+/// Character ends up with both spells in its spellbook. Nothing here is granted at creation — base
+/// armor tiers come from the class alone (`item::Proficiency::derive`).
+pub mod armor_proficiency {
+    /// Plate Mail, taught by Warrior and Paladin trainers.
+    pub const PLATE_PASSIVE_SPELL_ID: u32 = 750;
+    pub const PLATE_TRAINER_SPELL_ID: u32 = 7109;
+    /// Mail, taught by Hunter and Shaman trainers (both classes start in leather).
+    pub const MAIL_PASSIVE_SPELL_ID: u32 = 8737;
+    pub const MAIL_TRAINER_SPELL_ID: u32 = 8738;
+}
+
 /// The 6 vanilla movement speeds emitted in a CREATE block's movement section.
 /// (Flight speeds were added in TBC and are absent here.)
 pub mod speeds {
