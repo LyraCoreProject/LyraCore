@@ -133,7 +133,7 @@ pub(crate) fn trainer_buy_check(
 /// (never worse than before). EXCEPTION — a CHANNELED spell (Arcane Missiles) is NOT a wrapper: its
 /// `trigger_spell` is the per-tick MISSILE (an A_PERIODIC_TRIGGER effect), not a rank to learn; skip
 /// that trigger so the learner gets the channel itself (5143), not the hidden bolt (7268). The same
-/// logic excludes every other reactive/at-cast trigger kind — A_FLAG, A_PROC_ON_HIT (Frost Armor's
+/// logic excludes every other reactive/at-cast trigger kind — A_FLAG, both Proc kinds (Frost Armor's
 /// chill 6136), plain E_TRIGGER (Bloodrage's trickle 29131): those triggers are effect PAYLOADS, not
 /// ranks; treating them as wrappers taught the payload instead of the spell (156 review — a Frost
 /// Armor R2 buy charged for and learned "Chilled"). A genuine LearnSpell wrapper's effect imports as
@@ -151,7 +151,8 @@ pub(crate) fn resolve_learn_target(ctx: &ReducerContext, spell_id: u32) -> u32 {
             (e.trigger_spell != 0
                 && e.kind != crate::spell::A_PERIODIC_TRIGGER
                 && e.kind != crate::spell::A_FLAG
-                && e.kind != crate::spell::A_PROC_ON_HIT
+                && e.kind != crate::spell::A_PROC_TRIGGER
+                && e.kind != crate::spell::A_PROC_DAMAGE
                 && e.kind != crate::spell::E_TRIGGER)
                 .then_some(e.trigger_spell)
         })

@@ -67,6 +67,20 @@ pub struct Spell {
     /// bit — stored u64 for headroom). END-appended + `#[default(0u64)]` → auto-migrates. [data]
     #[default(0u64)]
     pub family_flags: u64,
+    /// Spell.dbc `procFlags` — the vanilla combat-event mask a Proc on this spell fires off, stored
+    /// VERBATIM (like `family_flags`), so the engine names only the bits it fires and there is no
+    /// translation table to keep in lockstep. See `spell::proc`'s `PROC_FLAG_*`. 0 = never procs.
+    /// END-appended + `#[default(0u32)]` → auto-migrates. [data]
+    #[default(0u32)]
+    pub proc_flags: u32,
+    /// Spell.dbc `procChance` — the flat percent a Proc on this spell fires at, once its event and
+    /// filters match. 100 (or above) always fires. Frozen onto the aura row at apply. [data]
+    #[default(0u8)]
+    pub proc_chance: u8,
+    /// Spell.dbc `procCharges` — how many times a Proc on this spell may fire before the whole buff
+    /// comes off. 0 = unlimited (Frost Armor); 3 = Lightning Shield. [data]
+    #[default(0u8)]
+    pub proc_charges: u8,
 }
 
 /// One **effect** of a spell (1..3 per spell, ordered by `effect_index`). The `kind` (§ KINDS) is the
@@ -118,6 +132,38 @@ pub struct SpellReagent {
     pub spell_id: u32,
     pub item_entry: u32,
     pub count: u32,
+}
+
+/// The classic-db `spell_proc_event` **overlay** for one spell: everything a Proc needs that Spell.dbc
+/// has no column for. Vanilla's spell data carries a proc's event mask, flat chance and charge count
+/// and nothing else — no procs-per-minute rate, no internal cooldown, no hit-quality rule and no
+/// filter on which spells may trigger it. Those live here, keyed by spell id, and an ABSENT row means
+/// "the header's values, and neutral zeros for the rest".
+///
+/// Read once, at apply: `spell::proc::freeze_profile` folds this row and the header into the profile
+/// the aura freezes, so the proc pass never re-joins either. Module-private — the client has its own
+/// Spell.dbc and the gateway has no use for proc policy, so there is no binding to hand-sync. No
+/// `Timestamp`, so the importer loads it as plain SQL. [static]
+#[table(accessor = game_spell_proc_event)]
+pub struct SpellProcEvent {
+    #[primary_key]
+    pub spell_id: u32,
+    /// `procFlags` OVERRIDE — replaces the header's mask when non-zero. 0 = use the header's.
+    pub proc_flags: u32,
+    /// `procEx`, verbatim. The engine reads only the normal-hit / critical-hit bits.
+    pub proc_ex: u32,
+    /// School filter on the triggering spell; 0 = any school.
+    pub school_mask: u8,
+    /// Spell-family filter (name half); 0 = any family.
+    pub family_name: u8,
+    /// Spell-family filter (flags half); paired with `family_name`.
+    pub family_flags: u64,
+    /// Procs-per-minute rate; replaces the chance for a Carrier that dealt the hit. 0 = flat chance.
+    pub ppm_rate: f32,
+    /// `CustomChance` — the flat percent, replacing the header's `procChance` when non-zero.
+    pub custom_chance: u8,
+    /// Internal cooldown; the Proc fires at most once per window. 0 = none.
+    pub icd_ms: u32,
 }
 
 // ===========================================================================================
@@ -191,6 +237,41 @@ pub struct Aura {
     /// without a spell-id check (Bloodrage's over-time trickle holds the caster in combat).
     #[default(false)]
     pub enters_combat: bool,
+    // --- the frozen PROC PROFILE (A_PROC_TRIGGER / A_PROC_DAMAGE rows; zeros on every other kind) ---
+    // Frozen at apply the same way kind/amount/params are, so the proc pass reads one row and never
+    // re-joins the header or the overlay. `proc_charges` and `proc_ready_micros` are the two MUTABLE
+    // fields: a fire spends a charge and stamps the internal cooldown. END-appended + typed defaults.
+    /// The Carrier's frozen combat-event mask (vanilla `procFlags`, verbatim). 0 = this row never procs.
+    #[default(0u32)]
+    pub proc_flags: u32,
+    /// Frozen flat percent. Used unless `proc_ppm` applies (dealer-side procs-per-minute).
+    #[default(0u8)]
+    pub proc_chance: u8,
+    /// Frozen procs-per-minute rate. Non-zero only from the `spell_proc_event` overlay; the chance is
+    /// derived from the Carrier's attack time at proc time, so it cannot be folded into `proc_chance`.
+    #[default(0.0f32)]
+    pub proc_ppm: f32,
+    /// Frozen vanilla `procEx` mask, verbatim — the engine reads only the normal-hit / critical-hit bits.
+    #[default(0u32)]
+    pub proc_ex: u32,
+    /// Frozen school filter: when non-zero, a triggering SPELL must share a school bit.
+    #[default(0u8)]
+    pub proc_school_mask: u8,
+    /// Frozen spell-family filter (name half); 0 = no family filter.
+    #[default(0u8)]
+    pub proc_family_name: u8,
+    /// Frozen spell-family filter (flags half); paired with `proc_family_name`.
+    #[default(0u64)]
+    pub proc_family_flags: u64,
+    /// Charges LEFT. 0 = unlimited. A fire on the last charge removes every aura row of the spell.
+    #[default(0u8)]
+    pub proc_charges: u8,
+    /// Frozen internal-cooldown length. 0 = no cooldown (fire as often as the roll allows).
+    #[default(0u32)]
+    pub proc_icd_ms: u32,
+    /// Micros-since-epoch this Proc is ready again. 0 = ready now; stamped `now + proc_icd_ms` on a fire.
+    #[default(0i64)]
+    pub proc_ready_micros: i64,
 }
 
 // UNIT-keyed character-owned sweep (issue #72, the warm-handoff hot-state audit). `Aura`'s columns
@@ -618,6 +699,13 @@ pub struct PendingSpellImpact {
     pub is_crit: bool,
     pub resisted: u32,
     pub after_resist: i32, // crit+resist-scaled damage basis, pre-absorb (rolled at cast time)
+    // The bolt was launched inside a Triggered Cast, so its IMPACT is a Triggered hit too: it grants
+    // nothing and raises no proc event. Without this the origin would be lost across the missile's
+    // travel time and a proc's own bolt could fire further procs on landing. `game_pending_spell_impact`
+    // is server-internal (never gateway-subscribed), so this END-appended `#[default(false)]` column
+    // needs no binding work.
+    #[default(false)]
+    pub triggered: bool,
 }
 
 /// The floating spell-damage number (`SMSG_SPELLNONMELEEDAMAGELOG`) for a PROJECTILE hit that landed AFTER

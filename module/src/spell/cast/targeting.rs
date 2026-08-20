@@ -490,14 +490,21 @@ pub(crate) fn aura_apply(
     } else {
         0
     };
-    // A_PROC_ON_HIT freezes its trigger spell the SAME way A_PERIODIC_TRIGGER does — off
+    // A_PROC_TRIGGER freezes its trigger spell the SAME way A_PERIODIC_TRIGGER does — off
     // `e.trigger_spell`, not `e.p1` (which stays free for the unrelated linked-debuff overload below). It is
     // NOT a channel, so `channel_target` above is correctly left at 0 for it.
-    let eff_p1 = if e.kind == A_PERIODIC_TRIGGER || e.kind == A_PROC_ON_HIT {
+    let eff_p1 = if e.kind == A_PERIODIC_TRIGGER || e.kind == A_PROC_TRIGGER {
         e.trigger_spell as i32
     } else {
         e.p1
     };
+    // The frozen PROC PROFILE: a Proc aura carries its own event mask, chance, rate, filter, charge
+    // count and cooldown length, folded here from the spell header and the `spell_proc_event` overlay,
+    // so the proc pass reads one row and never re-joins either. Every non-proc kind freezes zeros,
+    // which the decision reads as "never procs". A REFRESH re-freezes the whole profile and refills
+    // charges to full (recasting Lightning Shield mid-fight) and deliberately leaves
+    // `proc_ready_micros` alone — a running internal cooldown is not reset by a recast.
+    let proc = crate::spell::proc::freeze_profile(ctx, e.kind, hdr);
     if let Some(mut a) = existing {
         // Refresh: re-freeze the magnitude + reset the cadence; keep the slot. STACKING — a re-cast of a
         // stacking aura (`max_stacks >= 2`) bumps `stacks` (capped at the header's `max_stacks`) so the
@@ -513,6 +520,15 @@ pub(crate) fn aura_apply(
         // every non-channel aura (channel_target 0; eff_p1 == e.p1, i.e. a no-op write).
         a.eff_p1 = eff_p1;
         a.channel_target = channel_target;
+        a.proc_flags = proc.flags;
+        a.proc_chance = proc.chance;
+        a.proc_ppm = proc.ppm;
+        a.proc_ex = proc.proc_ex;
+        a.proc_school_mask = proc.school_mask;
+        a.proc_family_name = proc.family_name;
+        a.proc_family_flags = proc.family_flags;
+        a.proc_charges = proc.charges;
+        a.proc_icd_ms = proc.icd_ms;
         auras.id().update(a);
     } else {
         // Stacking-group conflict (work-item 192): resolve BEFORE picking a slot, so a Refuse never
@@ -586,6 +602,16 @@ pub(crate) fn aura_apply(
             next_tick_micros,
             channel_target,
             enters_combat: e.enters_combat, // freeze so the periodic-energize tick re-enters combat (Bloodrage)
+            proc_flags: proc.flags,
+            proc_chance: proc.chance,
+            proc_ppm: proc.ppm,
+            proc_ex: proc.proc_ex,
+            proc_school_mask: proc.school_mask,
+            proc_family_name: proc.family_name,
+            proc_family_flags: proc.family_flags,
+            proc_charges: proc.charges,
+            proc_icd_ms: proc.icd_ms,
+            proc_ready_micros: 0, // a fresh Proc is ready at once
         });
     }
 
@@ -732,7 +758,24 @@ pub(crate) fn apply_effect(
     // The clicked GROUND point (118 phase 2) — only the E_PERSISTENT_AREA arm reads it (anchors the patch
     // at the dest); every other effect ignores it. `None` for all non-ground casts.
     dest: Option<(f32, f32, f32)>,
+    // This effect is running inside a **Triggered Cast** (a fired Proc). Every hit it deals is marked
+    // Triggered, so it grants nothing and raises no proc event — the structural reason a proc can
+    // never start a proc.
+    triggered: bool,
 ) -> EffectHit {
+    // The hit a damage arm below hands to the shared pipeline: this spell, and the proc event its
+    // source raises — or Triggered, raising nothing, when the whole cast was one.
+    let hit_of = |source: crate::combat::HitSource, crit: bool| {
+        crate::combat::Hit::spell(
+            if triggered {
+                crate::combat::HitSource::Triggered
+            } else {
+                source
+            },
+            hdr.spell_id,
+            crit,
+        )
+    };
     if e.kind & KIND_AURA_BIT != 0 {
         // CC IMMUNITY: an `A_CONTROL` crowd-control effect (a stun/root/…) is REFUSED if the target is
         // immune to that mechanic (an active `A_IMMUNITY(mechanic)` aura). The effect simply doesn't land
@@ -864,14 +907,11 @@ pub(crate) fn apply_effect(
                                     caster_guid,
                                     target_guid,
                                     spell_id: hdr.spell_id,
-                                    school_index: if hdr.school_mask == 0 {
-                                        0u8
-                                    } else {
-                                        hdr.school_mask.trailing_zeros() as u8
-                                    },
+                                    school_index: crate::spell::school_index(hdr.school_mask),
                                     is_crit,
                                     resisted,
                                     after_resist,
+                                    triggered,
                                 });
                             // The impact (and its damage log) lands later via `fire_spell_impact` — this
                             // cast's own GO/damage-log row carries no damage (no double-count/double-log).
@@ -880,8 +920,13 @@ pub(crate) fn apply_effect(
                     }
                 }
             }
-            let (dealt, absorbed) =
-                apply_target_damage(ctx, target_guid, caster_guid, after_resist);
+            let (dealt, absorbed) = apply_target_damage(
+                ctx,
+                target_guid,
+                caster_guid,
+                after_resist,
+                hit_of(crate::combat::HitSource::Spell, is_crit),
+            );
             EffectHit {
                 dealt,
                 resisted,
@@ -901,12 +946,19 @@ pub(crate) fn apply_effect(
                 entities.guid().find(caster_guid),
                 entities.guid().find(target_guid),
             ) {
-                let dmg = crate::combat::weapon_strike_damage(ctx, &caster, &target, points);
-                // Physical strike: no magic resist; the melee crit (if any) is already folded inside
-                // weapon_strike_damage. Surface dealt+absorbed; `crit`/`resisted` stay 0 (the cast-row
-                // `is_crit` means specifically "the E_DAMAGE magic-crit roll landed").
-                let (dealt, absorbed) =
-                    apply_target_damage(ctx, target_guid, caster_guid, dmg as i32);
+                let (dmg, crit) =
+                    crate::combat::weapon_strike_damage(ctx, &caster, &target, points);
+                // Physical strike: no magic resist; the melee crit is already folded into the damage
+                // inside weapon_strike_damage, and rides the `Hit` so a crit-only Proc (Flurry) can
+                // read it. Surface dealt+absorbed; the EffectHit's `crit`/`resisted` stay 0 (the
+                // cast-row `is_crit` means specifically "the E_DAMAGE magic-crit roll landed").
+                let (dealt, absorbed) = apply_target_damage(
+                    ctx,
+                    target_guid,
+                    caster_guid,
+                    dmg as i32,
+                    hit_of(crate::combat::HitSource::MeleeSpell, crit),
+                );
                 EffectHit::dmg(dealt, absorbed)
             } else {
                 EffectHit::none()
@@ -1091,8 +1143,13 @@ pub(crate) fn apply_effect(
             t.power -= drained;
             ctx.db.game_world_entity().guid().update(t);
             let damage = mana_burn_damage(drained, e.p1);
-            let (dealt, absorbed) =
-                apply_target_damage(ctx, target_guid, caster_guid, damage as i32);
+            let (dealt, absorbed) = apply_target_damage(
+                ctx,
+                target_guid,
+                caster_guid,
+                damage as i32,
+                hit_of(crate::combat::HitSource::Spell, false),
+            );
             EffectHit::dmg(dealt, absorbed)
         }
         E_JUDGEMENT => {
@@ -1102,7 +1159,13 @@ pub(crate) fn apply_effect(
             // is a tuning refinement.)
             let seal = seal_amount(ctx, caster_guid);
             if seal > 0 {
-                let (dealt, absorbed) = apply_target_damage(ctx, target_guid, caster_guid, seal);
+                let (dealt, absorbed) = apply_target_damage(
+                    ctx,
+                    target_guid,
+                    caster_guid,
+                    seal,
+                    hit_of(crate::combat::HitSource::Spell, false),
+                );
                 remove_seal_auras(ctx, caster_guid);
                 EffectHit::dmg(dealt, absorbed)
             } else {
@@ -1121,7 +1184,13 @@ pub(crate) fn apply_effect(
             let combo = crate::combo::combo_points(ctx, caster_guid, target_guid);
             let dmg = crate::combo::finisher_damage(points, combo);
             let hit = if dmg > 0 {
-                let (dealt, absorbed) = apply_target_damage(ctx, target_guid, caster_guid, dmg);
+                let (dealt, absorbed) = apply_target_damage(
+                    ctx,
+                    target_guid,
+                    caster_guid,
+                    dmg,
+                    hit_of(crate::combat::HitSource::MeleeSpell, false),
+                );
                 EffectHit::dmg(dealt, absorbed)
             } else {
                 EffectHit::none()

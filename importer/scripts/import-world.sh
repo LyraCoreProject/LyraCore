@@ -858,12 +858,13 @@ chk "Human start-items (all 6 classes)"   "$FLOOR_START_ITEMS_CLASSES" \
 # against your real dump's count.
 chk "caster-mob cast rows"               "$FLOOR_CASTER_CAST_ROWS" "$(n "SELECT creature_entry FROM game_creature_cast")"
 chk "total game_spell rows (full Spell.dbc import)" "$FLOOR_SPELL_TOTAL" "$(n "SELECT spell_id FROM game_spell")"
-# Rank-chain + auto-learn dependent tables, populated by the same --dump pass above (family
-# "spellmeta" — no --family flag needed here, a plain --dump run activates every family). A 0 here
-# means the spell_chain/spell_learn_spell column indices ([V] importer/src/main.rs `sc`/`sls`) drifted
-# against your dump, or those tables are absent from it.
+# Rank-chain, auto-learn dependent and proc-overlay tables, populated by the same --dump pass above
+# (family "spellmeta" — no --family flag needed here, a plain --dump run activates every family). A 0
+# here means the spell_chain/spell_learn_spell/spell_proc_event column indices ([V]
+# importer/src/main.rs `sc`/`sls`/`spe`) drifted against your dump, or those tables are absent from it.
 chk "spell chain rows (game_spell_chain) [V]"            "$FLOOR_SPELL_CHAIN" "$(n "SELECT spell_id FROM game_spell_chain")"
 chk "spell auto-learn dependents (game_spell_learn) [V]" "$FLOOR_SPELL_LEARN" "$(n "SELECT id FROM game_spell_learn")"
+chk "proc overlay rows (game_spell_proc_event) [V]"      "$FLOOR_SPELL_PROC_EVENT" "$(n "SELECT spell_id FROM game_spell_proc_event")"
 # Map fencing, drawn precisely: a `game_spell` PRESENCE check is map-INDEPENDENT (the full
 # Spell.dbc import + the curated `--only` passes run on every shard), so 133/13322/3110 stay live on any
 # continent — free coverage. What IS map-0 content is the CREATURE-derived side: a `game_creature_cast`

@@ -179,8 +179,9 @@ pub(crate) fn breaks_on_damage(aura_interrupt: u16) -> bool {
 /// unaffected). Called from every real-damage, surviving-target, `dmg > 0` branch.
 ///
 /// `attacker_guid` is the GENUINE MELEE assailant, or `0` when the caller has no such
-/// concept (every direct-spell / DoT-tick call site) — it drives ONLY the `A_PROC_ON_HIT` reactive-chill
-/// scan below (Frost Armor); it does not affect the break/pushback logic above. [entity]
+/// concept (every direct-spell / DoT-tick call site) — it drives ONLY the Retaliation counter-swing
+/// below; it does not affect the break/pushback logic above. Procs are NOT decided here: they run in
+/// `spell::proc::run_proc_pass`, at the one damage chokepoint. [entity]
 pub(crate) fn break_auras_on_damage(
     ctx: &ReducerContext,
     target_guid: u64,
@@ -255,35 +256,12 @@ pub(crate) fn break_auras_on_damage(
     if !periodic {
         crate::spell::pushback_cast(ctx, target_guid);
     }
-    // Proc-on-hit: a genuine MELEE hit (`attacker_guid != 0`) on `target_guid` scans its
-    // `A_PROC_ON_HIT` auras and reactively applies each one's frozen trigger spell onto the ATTACKER (Frost
-    // Armor chills whoever hits its wearer in melee). No-op for the common case — every direct-spell/DoT call
-    // site passes `attacker_guid == 0`, and a target with no `A_PROC_ON_HIT` aura is unaffected either way.
+    // Retaliation (A_RETALIATE): a genuine incoming MELEE hit (`attacker_guid != 0`) on a Retaliating
+    // `target_guid` provokes ONE free main-hand counter-swing back at the attacker. Guarded against
+    // recursion inside `retaliate_on_hit` (the counter is a Triggered hit, so it never re-enters here).
+    // No-op for a target without an A_RETALIATE aura (the common path).
     if attacker_guid != 0 {
-        proc_on_hit(ctx, target_guid, attacker_guid);
-        // Retaliation (A_RETALIATE): a genuine incoming MELEE hit on a Retaliating `target_guid` provokes
-        // ONE free main-hand counter-swing back at the attacker. Guarded against recursion inside
-        // `retaliate_on_hit` (the counter routes through the spell-damage path with attacker sentinel 0, so
-        // it never re-enters here). No-op for a target without an A_RETALIATE aura (the common path).
         crate::combat::retaliate_on_hit(ctx, target_guid, attacker_guid);
-    }
-}
-
-/// The `A_PROC_ON_HIT` half of `break_auras_on_damage`: for every active such aura on `victim_guid` (the
-/// carrier, e.g. a Frost-Armored mage), apply its frozen trigger spell (`eff_p1`, e.g. Chilled 6136) onto
-/// `attacker_guid` (the melee assailant) — via `apply_linked_debuff`, the SAME "load spell X's aura effects
-/// and place them on Y" machinery PW:Shield's Weakened Soul link already uses, with X = the trigger spell and
-/// Y = the attacker. Attributed to the CARRIER's own `caster_guid`/`level` (frozen on the proc aura at its own
-/// apply) — mirroring how a linked debuff is attributed to its parent aura's caster. Collected before
-/// applying (mirrors the collect-then-mutate idiom above); a victim with no `A_PROC_ON_HIT` aura (every unit
-/// without Frost Armor) is a no-op.
-fn proc_on_hit(ctx: &ReducerContext, victim_guid: u64, attacker_guid: u64) {
-    let procs: Vec<(u32, u64, u8)> = auras_on(ctx, victim_guid)
-        .filter(|a| a.eff_kind == A_PROC_ON_HIT && a.eff_p1 != 0)
-        .map(|a| (a.eff_p1 as u32, a.caster_guid, a.level))
-        .collect();
-    for (trigger_spell, caster_guid, level) in procs {
-        crate::spell::apply_linked_debuff(ctx, trigger_spell, caster_guid, attacker_guid, level);
     }
 }
 
@@ -542,11 +520,8 @@ pub(crate) fn aura_survives_death(attributes: u32) -> bool {
 /// Collect-then-delete (never mutate while iterating). A unit carrying nothing but passives is a complete
 /// no-op, and running it twice changes nothing the second time. [entity]
 pub(crate) fn remove_auras_on_death(ctx: &ReducerContext, unit_guid: u64) {
-    let auras = ctx.db.game_aura();
     let spells = ctx.db.game_spell();
-    let shed: Vec<Aura> = auras
-        .by_target()
-        .filter(&unit_guid)
+    let shed: Vec<Aura> = auras_on(ctx, unit_guid)
         .filter(|a| {
             !spells
                 .spell_id()
@@ -555,6 +530,19 @@ pub(crate) fn remove_auras_on_death(ctx: &ReducerContext, unit_guid: u64) {
                 .unwrap_or(false)
         })
         .collect();
+    shed_auras(ctx, unit_guid, shed);
+}
+
+/// Delete a collected set of `unit_guid`'s aura rows and converge every projection the removal can
+/// move: the vitals pools, the character sheet, and the Mount Projection. THE shared tail behind an
+/// involuntary aura removal — the death shed above and a Proc that spent its last charge both reduce
+/// to it, so a removal path cannot leave a stale max-health or a corpse still projecting a mount.
+///
+/// The caller decides WHICH rows come off; this decides what that costs. Rows must already be
+/// collected (never mutate the table while iterating it), and the recomputes run AFTER the deletes,
+/// vitals first so a lost STA/INT aura's sheet recompute sees the already-updated Spirit. An empty set
+/// is a complete no-op, and running it twice changes nothing the second time. [entity]
+pub(crate) fn shed_auras(ctx: &ReducerContext, unit_guid: u64, shed: Vec<Aura>) {
     if shed.is_empty() {
         return;
     }
@@ -566,11 +554,10 @@ pub(crate) fn remove_auras_on_death(ctx: &ReducerContext, unit_guid: u64) {
         resheet |= crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0);
         remount |= crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0);
     }
+    let auras = ctx.db.game_aura();
     for a in shed {
         auras.id().delete(a.id);
     }
-    // Recompute AFTER the deletes, and in the sibling sites' order: vitals first, so a lost STA/INT
-    // aura's sheet recompute sees the already-updated `e.spirit`.
     if revitalize {
         recompute_vitals(ctx, unit_guid);
     }
@@ -745,19 +732,26 @@ mod tests {
     }
 
     /// The shed's shape: it reads the exemption through the ONE policy predicate (never an inline
-    /// attribute test or a spell-id list), and converges on the same three recomputes every other aura
-    /// removal site runs — vitals, then sheet, then the Mount Projection. Dropping any of them leaves a
-    /// corpse projecting a stat pool, a paperdoll number or a mount it no longer has.
+    /// attribute test or a spell-id list), and hands its rows to the shared removal tail, which
+    /// converges the same three recomputes every other aura removal site runs — vitals, then sheet,
+    /// then the Mount Projection. Dropping any of them leaves a corpse projecting a stat pool, a
+    /// paperdoll number or a mount it no longer has.
     #[test]
     fn the_death_shed_reads_the_policy_and_converges_every_projection() {
-        let body = crate::test_scan::code_of(
+        let collect = crate::test_scan::code_of(
             include_str!("control.rs"),
             "pub(crate) fn remove_auras_on_death(",
         );
         assert!(
-            body.contains("aura_survives_death(s.attributes)"),
-            "the shed must ask the one policy predicate. Body was:\n{body}"
+            collect.contains("aura_survives_death(s.attributes)"),
+            "the shed must ask the one policy predicate. Body was:\n{collect}"
         );
+        assert!(
+            collect.contains("shed_auras(ctx, unit_guid, shed)"),
+            "the shed must hand its collected rows to the shared removal tail. Body was:\n{collect}"
+        );
+        let body =
+            crate::test_scan::code_of(include_str!("control.rs"), "pub(crate) fn shed_auras(");
         let vitals = body
             .find("recompute_vitals(ctx, unit_guid)")
             .expect("the shed must re-derive the vitals pools a lost STA/INT aura fed");

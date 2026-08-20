@@ -54,8 +54,8 @@ publish presents as an unrelated mid-session hang, not a loud "no such table".
 
 ## 2. Inventory
 
-**176 tables** — 167 of them in `module/src/**`, the remaining 9 contributed by extension packages
-compiled into the same module. **109 public, 67 private.**
+**177 tables** — 168 of them in `module/src/**`, the remaining 9 contributed by extension packages
+compiled into the same module. **109 public, 68 private.**
 
 | Domain | Tables | Public | Where |
 |---|---:|---:|---|
@@ -65,7 +65,7 @@ compiled into the same module. **109 public, 67 private.**
 | Terrain / nav | 2 | 2 | `terrain.rs`, `nav.rs` |
 | Chat / social / addon bridge | 7 | 7 | `chat.rs`, `bridge.rs` |
 | Combat / threat | 6 | 3 | `combat/mod.rs`, `threat.rs` |
-| Spell / aura | 22 | 11 | `spell/tables.rs`, `spell/spellbook.rs`, `spell/stacking.rs` |
+| Spell / aura | 23 | 11 | `spell/tables.rs`, `spell/spellbook.rs`, `spell/stacking.rs` |
 | Talent tree (static) | 2 | 2 | `talent.rs` |
 | Quest | 9 | 8 | `quest.rs` |
 | Item / vendor | 4 | 3 | `items/tables.rs` |
@@ -299,6 +299,34 @@ data was never imported is uncastable rather than free.
 a weapon line, or riding. `learn_skill_cap` carries the tier the purchase grants. A riding offering's
 `spell_id` is a marker with no `Spell.dbc` row, so the gateway confirms the purchase without echoing it
 as a learned spell. The trainer NPC declares itself with `trainer_type::MOUNTS`.
+
+### Proc data (`module/src/spell/tables.rs`)
+
+A **Proc** is an aura that fires off a combat event. Its rules live in three places, and the split is
+the point: two of them are static data the importer writes, the third is a per-aura snapshot.
+
+`game_spell` carries what `Spell.dbc` knows, verbatim: `proc_flags` (the vanilla `procFlags`
+combat-event bitmask — the engine names only the bits it fires and there is no translation table),
+`proc_chance` (a whole percent) and `proc_charges` (0 = unlimited).
+
+`game_spell_proc_event` is the classic-db overlay for everything `Spell.dbc` has no column for:
+`ppm_rate`, `icd_ms`, `proc_ex` (the normal-hit / critical-hit rule), the `school_mask` /
+`family_name` / `family_flags` filter on which spells may trigger the Proc, plus a `proc_flags`
+override and a `custom_chance`. Keyed by spell id, module-private, and **absent for most spells** —
+an absent row means "the header's values". Loaded by the `spellmeta` dump family, whose clear stops
+at the reserved synthetic id floor so the seeded Proc fixtures keep their own overlay rows.
+
+`game_aura` carries the FROZEN profile: `proc_flags`, `proc_chance`, `proc_ppm`, `proc_ex`,
+`proc_school_mask`, `proc_family_name`, `proc_family_flags`, `proc_charges`, `proc_icd_ms`,
+`proc_ready_micros`. `spell::proc::freeze_profile` folds the header and the overlay together once,
+at apply, so the proc pass reads one row and re-joins nothing on the hot path. The overlay wins where
+both carry a value; charges only ever come from the header. The last two columns are the mutable
+pair — a fire spends a charge and stamps the next cooldown deadline — and everything before them is
+re-frozen on a refresh, which also refills charges and deliberately leaves a running cooldown alone.
+
+The overlay is the reason `debug_repair_after_publish` re-freezes proc profiles: an aura that was
+already on a unit when the columns landed reads as "never procs", and a permanent self-buff never
+refreshes on its own.
 
 ### `game_vmap_indoor_cell` (`module/src/vmap.rs`)
 

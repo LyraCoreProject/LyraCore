@@ -518,26 +518,25 @@ pub fn swing_range_ctx(ctx: &ReducerContext, attacker: &WorldEntity) -> (u32, u3
 /// `caster` vs `target`: roll the caster's weapon swing range (`swing_range_ctx` — the same weapon + AP
 /// the auto-attack uses), add the ability's flat `bonus`, roll a MELEE crit (`×CRIT_MULT` at the caster's
 /// effective crit), then shave the target's armor (`armor_mitigation_pct`), floored at 1. Returns the
-/// pre-absorb damage; the caller folds absorb + threat + the kill via `spell::apply_target_damage`. Reusing
-/// the swing/crit/armor math means an ability scales off the weapon like a real strike, not a flat number.
-/// (Slice scope: specials always land — no miss/dodge/parry roll yet; the attack table for yellow hits is
-/// a follow-up.) Uses the module RNG (`ctx.random`, deterministic per reducer transaction). [entity]
+/// pre-absorb damage AND whether the crit landed; the caller folds absorb + threat + the kill via
+/// `spell::apply_target_damage`, and carries the crit into the `Hit` so a crit-only Proc can read it —
+/// the roll happens here, so nowhere else can tell. Reusing the swing/crit/armor math means an ability
+/// scales off the weapon like a real strike, not a flat number. (Slice scope: specials always land — no
+/// miss/dodge/parry roll yet; the attack table for yellow hits is a follow-up.) Uses the module RNG
+/// (`ctx.random`, deterministic per reducer transaction). [entity]
 pub fn weapon_strike_damage(
     ctx: &ReducerContext,
     caster: &WorldEntity,
     target: &WorldEntity,
     flat_bonus: i32,
-) -> u32 {
+) -> (u32, bool) {
     let (min, max) = swing_range_ctx(ctx, caster);
     let base = min + ctx.random::<u32>() % (max - min + 1);
     let total = (base as i32 + flat_bonus).max(1) as u32;
-    let pre_mit = if (ctx.random::<u32>() % 10_000) < effective_crit_bp(ctx, caster) {
-        total * CRIT_MULT
-    } else {
-        total
-    };
+    let crit = (ctx.random::<u32>() % 10_000) < effective_crit_bp(ctx, caster);
+    let pre_mit = if crit { total * CRIT_MULT } else { total };
     let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), caster.level);
-    (pre_mit * (100 - mit_pct) / 100).max(1)
+    ((pre_mit * (100 - mit_pct) / 100).max(1), crit)
 }
 
 /// Warrior Retaliation (`A_RETALIATE`): when `victim_guid` takes a REAL incoming melee hit from
@@ -576,8 +575,18 @@ pub(crate) fn retaliate_on_hit(ctx: &ReducerContext, victim_guid: u64, attacker_
     if victim.dead || attacker.dead {
         return; // a dead combatant doesn't trade blows
     }
-    let dmg = weapon_strike_damage(ctx, &victim, &attacker, 0);
-    crate::spell::apply_target_damage(ctx, attacker_guid, victim_guid, dmg as i32);
+    // The counter-swing's crit is rolled and spent inside the damage: a Triggered hit raises no proc
+    // event, so there is no Proc to read the flag.
+    let (dmg, _crit) = weapon_strike_damage(ctx, &victim, &attacker, 0);
+    // Marked Triggered: the counter-swing is not an action the retaliator took, so it grants nothing
+    // and raises no proc event — the same structural reason a Triggered Cast cannot chain a proc.
+    crate::spell::apply_target_damage(
+        ctx,
+        attacker_guid,
+        victim_guid,
+        dmg as i32,
+        crate::combat::Hit::triggered(),
+    );
 }
 
 /// Roll one melee swing of `attacker` against `target`: `(damage, hit_info, blocked_amount)`. One roll

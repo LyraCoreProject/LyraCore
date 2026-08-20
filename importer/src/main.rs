@@ -779,6 +779,32 @@ mod sls {
     pub const SPELL_ID: usize = 1; // [V] learn_spell
     pub const ACTIVE: usize = 2; // [V] parsed-but-unused
 }
+mod spe {
+    // spell_proc_event (cmangos classic schema): entry, SchoolMask, SpellFamilyName, SpellFamilyMask,
+    // procFlags, procEx, ppmRate, CustomChance, Cooldown. [V] — anchored against the cmangos classic
+    // schema's column ORDER, NOT verified against an in-repo dump (this sandbox has no cmangos dump —
+    // the same caveat as `sc`/`sls` above). CONFIRM these indices against your own `classic-db` dump's
+    // `spell_proc_event` table before trusting the import.
+    //
+    // Note for the confirm: cmangos classic keeps ONE `SpellFamilyMask` column (a bigint). Later
+    // mangos branches split it into `SpellFamilyMask0/1/2`, which would shift every index from
+    // PROC_FLAGS on. A row whose column count does not match is dropped rather than mis-mapped, so a
+    // schema on the other side of that split reads as an empty table, not as wrong proc data.
+    pub const ENTRY: usize = 0; // [V]
+    pub const SCHOOL_MASK: usize = 1; // [V]
+    pub const FAMILY_NAME: usize = 2; // [V]
+    pub const FAMILY_MASK: usize = 3; // [V]
+    pub const PROC_FLAGS: usize = 4; // [V] override; 0 = use the Spell.dbc header's mask
+    pub const PROC_EX: usize = 5; // [V]
+    pub const PPM_RATE: usize = 6; // [V]
+    pub const CUSTOM_CHANCE: usize = 7; // [V] a float percent in the dump; our column is a u8 percent
+    /// The internal cooldown, in SECONDS ([V] — cmangos holds it as `std::chrono::seconds`, and the
+    /// dump's own values are small integers: a 45-second trinket reads 45, not 45000). The module
+    /// column is milliseconds, so `build_spell_proc_event_sql` scales it.
+    pub const COOLDOWN: usize = 8;
+    /// How many columns a row must have to be mapped at all.
+    pub const COLUMNS: usize = 9;
+}
 pub(crate) mod got {
     // gameobject_template: entry, type, displayId, name, faction, flags, ExtraFlags, size, data0..23, ...
     pub const ENTRY: usize = 0;
@@ -1880,6 +1906,70 @@ fn build_spell_learn_sql(dump: &str) -> Vec<String> {
     eprintln!("spell learn dependents: {} rows", rows.len());
     stmts
 }
+
+/// Clear+reload SQL for `game_spell_proc_event` from cmangos `spell_proc_event` — the PROC OVERLAY.
+/// Spell.dbc carries a Proc's event mask, flat chance and charge count and nothing else; the
+/// procs-per-minute rate, the internal cooldown, the `procEx` hit rule and the school/family filter
+/// exist only here. `module/src/spell/proc.rs::freeze_profile` reads it once, at aura apply, by
+/// `spell_id` (the PK). No Timestamp → plain SQL.
+///
+/// Two column conversions, because the dump's units are not the module's:
+///   • `Cooldown` is SECONDS in cmangos and milliseconds on our row (see `spe::COOLDOWN`).
+///   • `CustomChance` is a float percent in the dump and a whole percent on our row. Vanilla's own
+///     values are whole numbers, so this rounds; a rate is what expresses a fractional chance, and
+///     that rides `ppm_rate` unchanged.
+///
+/// The DELETE stops at `SYNTHETIC_PROC_EVENT_FLOOR` rather than wiping wholesale like its `spell_chain`
+/// sibling: the seeded Proc fixtures own overlay rows in the synthetic range, and a world import must
+/// not silently disarm them (the same rule `importer/src/spell.rs` applies to `game_spell` itself).
+fn build_spell_proc_event_sql(dump: &str) -> Vec<String> {
+    let rows: Vec<String> = parse_table(dump, "spell_proc_event")
+        .iter()
+        .filter_map(|r| {
+            // A row from a schema that split `SpellFamilyMask` into three columns would map every
+            // field past it onto the wrong meaning. Drop a row whose width does not match instead.
+            if r.len() != spe::COLUMNS {
+                return None;
+            }
+            let spell_id: u32 = field(r, spe::ENTRY).parse().ok()?;
+            if spell_id == 0 || spell_id >= SYNTHETIC_PROC_EVENT_FLOOR {
+                return None; // outside the DELETE's reach — an INSERT here would PK-collide next reload
+            }
+            let school_mask: u8 = field(r, spe::SCHOOL_MASK).parse().ok()?;
+            let family_name: u8 = field(r, spe::FAMILY_NAME).parse().ok()?;
+            let family_flags: u64 = field(r, spe::FAMILY_MASK).parse().ok()?;
+            let proc_flags: u32 = field(r, spe::PROC_FLAGS).parse().ok()?;
+            let proc_ex: u32 = field(r, spe::PROC_EX).parse().ok()?;
+            let ppm_rate: f32 = field(r, spe::PPM_RATE).parse().ok()?;
+            let custom_chance: f32 = field(r, spe::CUSTOM_CHANCE).parse().ok()?;
+            let cooldown_s: u32 = field(r, spe::COOLDOWN).parse().ok()?;
+            if !ppm_rate.is_finite() || ppm_rate < 0.0 || !custom_chance.is_finite() {
+                return None; // a corrupt rate would freeze onto every aura of this spell
+            }
+            let custom_chance = custom_chance.round().clamp(0.0, 100.0) as u8;
+            let icd_ms = cooldown_s.saturating_mul(1000);
+            Some(format!(
+                "({spell_id},{proc_flags},{proc_ex},{school_mask},{family_name},{family_flags},{ppm_rate},{custom_chance},{icd_ms})"
+            ))
+        })
+        .collect();
+    let mut stmts = vec![format!(
+        "DELETE FROM game_spell_proc_event WHERE spell_id < {SYNTHETIC_PROC_EVENT_FLOOR}"
+    )];
+    push_insert(
+        &mut stmts,
+        "game_spell_proc_event",
+        "spell_id,proc_flags,proc_ex,school_mask,family_name,family_flags,ppm_rate,custom_chance,icd_ms",
+        &rows,
+    );
+    eprintln!("spell proc events: {} rows", rows.len());
+    stmts
+}
+
+/// The reserved synthetic-spell floor, above which the seeded fixtures live and no real vanilla spell
+/// does. Hand-synced with `importer/src/spell.rs`'s `SYNTHETIC_SPELL_ID_FLOOR` and the module's own
+/// fixture ids; the two must stay equal.
+const SYNTHETIC_PROC_EVENT_FLOOR: u32 = 50_000;
 
 /// Map the literal `NULL` token (and pure whitespace) to an empty string for an INTERNAL string
 /// comparison — `sql_text` does the SQL-literal-quoted version of the same collapse for values that
@@ -4705,18 +4795,23 @@ fn build_dump_plan(
         stmts.extend(areatrigger_teleport_sql);
     }
 
-    // Spell metadata (family "spellmeta", work-item 102 reduced scope): rank chain + auto-learn
-    // dependents. Not box-scoped (global, like "globals"), plain SQL (no Timestamp). Nothing else in
-    // this function reads either builder's output, so — unlike the entangled quests/items pair — it's
-    // safe to gate the COMPUTE too, not just the push (the "globals" precedent).
+    // Spell metadata (family "spellmeta", work-item 102 reduced scope): rank chain, auto-learn
+    // dependents, and the proc overlay. Not box-scoped (global, like "globals"), plain SQL (no
+    // Timestamp). Every one of them is map-independent, so they land on the same destinations the
+    // spell catalogue does. Nothing else in this function reads any builder's output, so — unlike the
+    // entangled quests/items pair — it's safe to gate the COMPUTE too, not just the push (the
+    // "globals" precedent).
     let mut spellmeta_row_count = 0u64;
     if family_active(args, "spellmeta") {
         let spell_chain_sql = build_spell_chain_sql(dump);
         let spell_learn_sql = build_spell_learn_sql(dump);
-        spellmeta_row_count =
-            insert_row_count(&spell_chain_sql) + insert_row_count(&spell_learn_sql);
+        let spell_proc_event_sql = build_spell_proc_event_sql(dump);
+        spellmeta_row_count = insert_row_count(&spell_chain_sql)
+            + insert_row_count(&spell_learn_sql)
+            + insert_row_count(&spell_proc_event_sql);
         stmts.extend(spell_chain_sql);
         stmts.extend(spell_learn_sql);
+        stmts.extend(spell_proc_event_sql);
     }
 
     // The spawn payload can hold ~2k rows for a full zone — more than one `spacetime call` string arg
@@ -5638,6 +5733,57 @@ mod tests {
     }
 
     #[test]
+    fn build_spell_proc_event_sql_maps_the_nine_overlay_columns_by_tuple_position() {
+        // entry,SchoolMask,SpellFamilyName,SpellFamilyMask,procFlags,procEx,ppmRate,CustomChance,Cooldown
+        // Two shapes worth pinning together: a filtered talent proc (Impact 12358 — fire school, mage
+        // family, crit-only, no rate) and a rate-plus-cooldown weapon proc.
+        let dump = "x INSERT INTO `spell_proc_event` VALUES \
+                    (12358,4,3,32,0,2,0,0,0),(20007,0,0,0,20,0,1.5,15,45); y";
+        let stmts = build_spell_proc_event_sql(dump);
+        assert_eq!(
+            stmts[0],
+            "DELETE FROM game_spell_proc_event WHERE spell_id < 50000"
+        );
+        let insert = stmts
+            .iter()
+            .find(|s| s.starts_with("INSERT INTO game_spell_proc_event "))
+            .expect("two rows must produce one INSERT");
+        // spell_id,proc_flags,proc_ex,school_mask,family_name,family_flags,ppm_rate,custom_chance,icd_ms
+        assert!(insert.contains("(12358,0,2,4,3,32,0,0,0)"), "{insert}");
+        // The cooldown is seconds in the dump and milliseconds on the row.
+        assert!(
+            insert.contains("(20007,20,0,0,0,0,1.5,15,45000)"),
+            "{insert}"
+        );
+    }
+
+    #[test]
+    fn build_spell_proc_event_sql_empty_table_yields_delete_only_no_insert() {
+        // A dump with no `spell_proc_event` table at all: the overlay is optional per spell AND as a
+        // whole, so the clear still runs and every Proc falls back to its Spell.dbc values.
+        let stmts = build_spell_proc_event_sql("x y");
+        assert_eq!(
+            stmts,
+            vec!["DELETE FROM game_spell_proc_event WHERE spell_id < 50000".to_string()]
+        );
+    }
+
+    #[test]
+    fn build_spell_proc_event_sql_drops_a_row_the_delete_cannot_reach_or_the_schema_moved() {
+        // A synthetic-range entry is a seeded fixture's own overlay row: the DELETE deliberately spares
+        // it, so importing one would PK-collide on the next reload. And a row with the split
+        // SpellFamilyMask0/1/2 shape of a later mangos branch would map procFlags onto the wrong
+        // column, so it is dropped rather than mis-read.
+        let dump = "x INSERT INTO `spell_proc_event` VALUES \
+                    (50143,0,0,0,0,0,0,0,5),(133,0,0,0,0,0,0,0,0,0,0); y";
+        let stmts = build_spell_proc_event_sql(dump);
+        assert_eq!(
+            stmts,
+            vec!["DELETE FROM game_spell_proc_event WHERE spell_id < 50000".to_string()]
+        );
+    }
+
+    #[test]
     fn build_spell_chain_sql_empty_table_yields_delete_only_no_insert() {
         // No cmangos `spell_chain` rows at all (e.g. an un-imported dump) — the DELETE still runs
         // (wholesale wipe), but push_insert emits no INSERT for zero rows.
@@ -5727,11 +5873,12 @@ mod tests {
     #[test]
     fn family_spellmeta_filter_produces_only_spellmeta_family_stmts() {
         // `--family spellmeta` (work-item 102, reduced scope, mirroring the 216 `--family` gate
-        // parity pattern): the plan must carry ONLY the two spellmeta blocks — no other family's
+        // parity pattern): the plan must carry ONLY the three spellmeta blocks — no other family's
         // statements — even on a dump that also carries an in-box quest fixture.
         let dump = format!(
             "{} INSERT INTO `spell_chain` VALUES (133,0,133,1,0); \
-             INSERT INTO `spell_learn_spell` VALUES (196,197,1); y",
+             INSERT INTO `spell_learn_spell` VALUES (196,197,1); \
+             INSERT INTO `spell_proc_event` VALUES (12358,4,3,32,0,2,0,0,0); y",
             tiny_quest_dump(102, 502)
         );
         let mut args = test_args();
@@ -5766,6 +5913,20 @@ mod tests {
             "{:?}",
             plan.stmts
         );
+        assert!(
+            plan.stmts
+                .iter()
+                .any(|s| s.starts_with("DELETE FROM game_spell_proc_event")),
+            "{:?}",
+            plan.stmts
+        );
+        assert!(
+            plan.stmts
+                .iter()
+                .any(|s| s.starts_with("INSERT INTO game_spell_proc_event") && s.contains("12358")),
+            "{:?}",
+            plan.stmts
+        );
         let non_spellmeta_markers = [
             "game_creature_template",
             "game_creature_waypoint",
@@ -5794,8 +5955,8 @@ mod tests {
             );
         }
         // Only the spellmeta family gets a provenance stamp (1 chain row + 1 real learn row + the 2
-        // synthesized armor-proficiency wrapper→passive rows).
-        assert_eq!(plan.stamps, vec![("spellmeta", 4u64)], "{:?}", plan.stamps);
+        // synthesized armor-proficiency wrapper→passive rows + 1 proc-event row).
+        assert_eq!(plan.stamps, vec![("spellmeta", 5u64)], "{:?}", plan.stamps);
     }
 
     // --- work-item 217: gossip completeness (menu options, multi-slot npc_text, conditions) --------
@@ -7329,6 +7490,7 @@ mod tests {
             "game_createinfo_action",
             "game_spell_chain",
             "game_spell_learn",
+            "game_spell_proc_event",
         ];
         for marker in non_quest_markers {
             assert!(

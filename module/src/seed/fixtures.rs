@@ -12,11 +12,12 @@
 use spacetimedb::{ReducerContext, Table};
 
 use crate::{
-    game_creature_family, game_creature_spawn, game_creature_template, game_createinfo_spell,
-    game_faction, game_item_template, game_spell, game_spell_effect, game_taxi_node, game_taxi_path,
-    game_taxi_path_node, game_world_entity, CreatureFamily, CreatureSpawn, CreatureTemplate,
-    CreateinfoSpell, Faction, GameTaxiNode, GameTaxiPath, GameTaxiPathNode, ItemTemplate, Spell,
-    SpellEffect, ALL_PLAYABLE_CLASS_MASK, ALL_PLAYABLE_RACE_MASK,
+    game_createinfo_spell, game_creature_family, game_creature_spawn, game_creature_template,
+    game_faction, game_item_template, game_spell, game_spell_effect, game_spell_proc_event,
+    game_taxi_node, game_taxi_path, game_taxi_path_node, game_world_entity, CreateinfoSpell,
+    CreatureFamily, CreatureSpawn, CreatureTemplate, Faction, GameTaxiNode, GameTaxiPath,
+    GameTaxiPathNode, ItemTemplate, Spell, SpellEffect, SpellProcEvent, ALL_PLAYABLE_CLASS_MASK,
+    ALL_PLAYABLE_RACE_MASK,
 };
 
 /// Canonical fixture-NPC/item constructors — the single source of truth for the synthetic rows
@@ -468,6 +469,9 @@ pub(crate) fn base_spell(spell_id: u32, name: &str) -> Spell {
         is_negative: false,
         cast_flags: 0,
         stances: 0,
+        proc_flags: 0,
+        proc_chance: 0,
+        proc_charges: 0,
     }
 }
 
@@ -796,11 +800,13 @@ pub(crate) fn seed_stealth_fixture(ctx: &ReducerContext) {
 /// self-documentation / any future direct-cast use.
 ///
 /// Frost Armor (168) mirrors the real DBC shape the importer maps (`importer/src/spell.rs`): eff0 is the
-/// `+armor` self-buff (`A_MOD_RESISTANCE`, p0 = `RESIST_ARMOR` bit); eff1 is the reactive chill, classified
-/// as `A_PROC_ON_HIT` with `trigger_spell = 6136` — `break_auras_on_damage`'s proc-on-hit scan reads it off
-/// any melee-hit unit carrying this aura and applies Chilled onto the ATTACKER. Permanent self-buff
-/// (`duration_ms = u32::MAX`, the importer's infinite-aura sentinel — matches vanilla armor spells' -1 DBC
-/// duration). IDEMPOTENT (inserts only if absent), mirroring the other mock-seed fixtures.
+/// `+armor` self-buff (`A_MOD_RESISTANCE`, p0 = `RESIST_ARMOR` bit); eff1 is the reactive chill, an
+/// `A_PROC_TRIGGER` Proc with `trigger_spell = 6136`. The header carries Frost Armor's real Spell.dbc proc
+/// data — `proc_flags 0x28` (melee hit taken | melee spell hit taken) and `proc_chance 100`, no charges —
+/// which the aura freezes at apply, so the proc pass in `combat::apply_hit` starts a Triggered Cast of
+/// Chilled at whoever landed the hit. Permanent self-buff (`duration_ms = u32::MAX`, the importer's
+/// infinite-aura sentinel — matches vanilla armor spells' -1 DBC duration). IDEMPOTENT (inserts only if
+/// absent), mirroring the other mock-seed fixtures.
 pub(crate) fn seed_frost_armor_fixture(ctx: &ReducerContext) {
     const CHILLED: u32 = 6136;
     const FROST_ARMOR: u32 = 168;
@@ -829,6 +835,10 @@ pub(crate) fn seed_frost_armor_fixture(ctx: &ReducerContext) {
         ctx.db.game_spell().insert(Spell {
             duration_ms: u32::MAX, // permanent until replaced/dispelled
             school_mask: 16,
+            // Frost Armor's real Spell.dbc proc data: melee hit taken (0x8) | melee spell hit taken
+            // (0x20), always, unlimited charges.
+            proc_flags: 0x28,
+            proc_chance: 100,
             ..base_spell(FROST_ARMOR, "Frost Armor")
         });
     }
@@ -846,10 +856,171 @@ pub(crate) fn seed_frost_armor_fixture(ctx: &ReducerContext) {
     upsert_effect(
         ctx,
         SpellEffect {
-            kind: crate::spell::A_PROC_ON_HIT,
+            kind: crate::spell::A_PROC_TRIGGER,
             target: 0, // T_SELF
             trigger_spell: CHILLED,
             ..base_effect(FROST_ARMOR, 1)
+        },
+    );
+}
+
+/// The shared Proc-fixture mark the two test Procs below trigger. An inert 1 s `A_FLAG` debuff on the
+/// Counterparty: it does nothing, which is the point — a proc fire is COUNTED off the Triggered Cast's
+/// own cast-GO row, so the mark only has to land somewhere observable without perturbing combat.
+pub(crate) const TEST_PROC_MARK: u32 = 50140;
+/// A 50-percent Proc off a melee hit taken, unlimited charges — the chance roll's fixture. A scripted
+/// 100-hit run against it should land its fire count inside binomial bounds.
+pub(crate) const TEST_PROC_COIN: u32 = 50141;
+/// A certain Proc with 3 charges off a melee hit taken — the charge fixture. It fires 3 times and then
+/// the whole buff comes off.
+pub(crate) const TEST_PROC_CHARGES: u32 = 50142;
+/// A certain Proc off a melee hit taken with a 5 s internal cooldown, authored through an overlay row
+/// — the cooldown fixture. However fast the hits come, it fires at most once per window.
+pub(crate) const TEST_PROC_COOLDOWN: u32 = 50143;
+/// A 2-per-minute Proc off a melee hit DEALT, authored through an overlay row — the rate fixture. Its
+/// header chance is 0, so every fire it ever makes came from the rate.
+pub(crate) const TEST_PROC_PPM: u32 = 50144;
+/// A certain DAMAGE Proc off a melee hit taken — the aura-43 fixture, Lightning Shield's shape without
+/// an import. It zaps its attacker for a frost figure and logs the number.
+pub(crate) const TEST_PROC_ZAP: u32 = 50145;
+
+/// The internal cooldown `TEST_PROC_COOLDOWN` carries, in milliseconds.
+const TEST_PROC_ICD_MS: u32 = 5_000;
+/// The rate `TEST_PROC_PPM` carries, in procs per minute.
+const TEST_PROC_PPM_RATE: f32 = 2.0;
+/// The damage `TEST_PROC_ZAP` deals per fire.
+const TEST_PROC_ZAP_DAMAGE: i32 = 5;
+/// The frost school bit `TEST_PROC_ZAP` deals in — the school the damage log names.
+const TEST_PROC_ZAP_SCHOOL_MASK: i32 = 0x10;
+
+/// Mock-seed the Proc-engine test fixtures: one inert mark, four self-buff trigger Procs that exercise
+/// the chance roll, the charge count, the internal cooldown and the rate, and one damage Proc — all on
+/// a development database, with no Spell.dbc import and no world dump.
+///
+/// Four of the five are an `A_PROC_TRIGGER` self-buff. Three of those fire off a melee hit TAKEN, so a plain
+/// melee swing at the Carrier — or `debug_apply_damage`, which routes through the same chokepoint —
+/// fires them; the rate fixture fires off a melee hit DEALT instead, because procs-per-minute is a
+/// per-swing rate and only the unit that swung has an attack time to scale it by (a taken-side Proc
+/// would ignore the rate and read its header chance of 0, i.e. never fire). Drive them with a REAL
+/// attacker guid: a Proc with no Counterparty in the world fires nothing, so the anonymous
+/// `attacker_guid = 0` form of that reducer deliberately does not exercise them. Count the fires as
+/// `game_spell_cast_event` rows naming `TEST_PROC_MARK`.
+///
+/// The fifth is the damage kind (`A_PROC_DAMAGE`): it casts nothing, so it has no mark to count — its
+/// fires are the log-only `game_spell_cast_event` rows naming the zap itself, carrying its damage.
+///
+/// The cooldown and the rate have no Spell.dbc column, so their two fixtures carry a seeded
+/// `game_spell_proc_event` overlay row — the same table and the same precedence the importer loads
+/// real data into, rather than a second source invented for the fixtures. IDEMPOTENT, like every
+/// other mock-seed fixture.
+pub(crate) fn seed_test_proc_fixtures(ctx: &ReducerContext) {
+    if ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(TEST_PROC_MARK)
+        .is_none()
+    {
+        ctx.db.game_spell().insert(Spell {
+            duration_ms: 1000,
+            is_negative: true,
+            ..base_spell(TEST_PROC_MARK, "Test Proc Mark")
+        });
+    }
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: crate::spell::A_FLAG,
+            target: 1,  // T_TARGET_ENEMY — the mark lands on the Counterparty
+            p0_kind: 7, // P_FLAG
+            ..base_effect(TEST_PROC_MARK, 0)
+        },
+    );
+    let taken = crate::spell::proc::PROC_FLAG_TAKEN_MELEE_HIT;
+    let dealt = crate::spell::proc::PROC_FLAG_SUCCESSFUL_MELEE_HIT;
+    for (spell_id, name, flags, chance, charges, overlay) in [
+        (TEST_PROC_COIN, "Test Proc Coin", taken, 50u8, 0u8, None),
+        (TEST_PROC_CHARGES, "Test Proc Charges", taken, 100, 3, None),
+        (
+            TEST_PROC_COOLDOWN,
+            "Test Proc Cooldown",
+            taken,
+            100,
+            0,
+            Some((TEST_PROC_ICD_MS, 0.0)),
+        ),
+        (
+            TEST_PROC_PPM,
+            "Test Proc PPM",
+            dealt,
+            0,
+            0,
+            Some((0, TEST_PROC_PPM_RATE)),
+        ),
+    ] {
+        if ctx.db.game_spell().spell_id().find(spell_id).is_none() {
+            ctx.db.game_spell().insert(Spell {
+                duration_ms: u32::MAX, // permanent until its charges run out
+                proc_flags: flags,
+                proc_chance: chance,
+                proc_charges: charges,
+                ..base_spell(spell_id, name)
+            });
+        }
+        upsert_effect(
+            ctx,
+            SpellEffect {
+                kind: crate::spell::A_PROC_TRIGGER,
+                target: 0, // T_SELF — the Proc sits on its Carrier
+                trigger_spell: TEST_PROC_MARK,
+                ..base_effect(spell_id, 0)
+            },
+        );
+        // The overlay row carries only what Spell.dbc cannot express; everything else stays 0, which
+        // is exactly "the header already said it".
+        if let Some((icd_ms, ppm_rate)) = overlay {
+            if ctx
+                .db
+                .game_spell_proc_event()
+                .spell_id()
+                .find(spell_id)
+                .is_none()
+            {
+                ctx.db.game_spell_proc_event().insert(SpellProcEvent {
+                    spell_id,
+                    proc_flags: 0,
+                    proc_ex: 0,
+                    school_mask: 0,
+                    family_name: 0,
+                    family_flags: 0,
+                    ppm_rate,
+                    custom_chance: 0,
+                    icd_ms,
+                });
+            }
+        }
+    }
+    // The damage kind. A self-buff like the others, but it deals its frozen amount instead of casting:
+    // `p0` is the school the damage is dealt in (`P_SCHOOL_MASK`, what the importer freezes off the
+    // header for a real aura-43 spell) and `base_points` is the figure.
+    if ctx.db.game_spell().spell_id().find(TEST_PROC_ZAP).is_none() {
+        ctx.db.game_spell().insert(Spell {
+            duration_ms: u32::MAX,
+            school_mask: TEST_PROC_ZAP_SCHOOL_MASK as u8,
+            proc_flags: crate::spell::proc::PROC_FLAG_TAKEN_MELEE_HIT,
+            proc_chance: 100,
+            ..base_spell(TEST_PROC_ZAP, "Test Proc Zap")
+        });
+    }
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: crate::spell::A_PROC_DAMAGE,
+            base_points: TEST_PROC_ZAP_DAMAGE,
+            target: 0, // T_SELF — the Proc sits on its Carrier
+            p0: TEST_PROC_ZAP_SCHOOL_MASK,
+            p0_kind: 2, // P_SCHOOL_MASK
+            ..base_effect(TEST_PROC_ZAP, 0)
         },
     );
 }

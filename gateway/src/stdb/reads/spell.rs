@@ -170,7 +170,7 @@ impl Coordinator {
     /// "Devotion Aura appeared in my General tab as the spell that teaches Devotion Aura").
     /// LOCKSTEP with module trainer.rs::resolve_learn_target — the same first-qualifying-trigger
     /// rule; the excluded kinds are the module's taxonomy values (A_PERIODIC_TRIGGER 0x93,
-    /// A_FLAG 0xBE, A_PROC_ON_HIT 0xAB, E_TRIGGER 0x05).
+    /// A_FLAG 0xBE, A_PROC_TRIGGER 0xAB, E_TRIGGER 0x05).
     /// True iff `spell_id` is an on-next-swing QUEUE spell (Heroic Strike/Cleave — any effect of kind
     /// E_NEXT_SWING). The CMSG_CAST_SPELL handler then sends NO synchronous START/CAST_RESULT/GO: the
     /// 5875 client lights the button locally on the press and holds it as a pending cast until the

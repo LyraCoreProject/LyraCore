@@ -81,9 +81,12 @@ const A_MOD_HEALTH_POWER: u8 = 0xA5;
 const A_MOD_DAMAGE_TAKEN: u8 = 0xA6;
 const A_SEAL: u8 = 0xA7; // proc-on-swing holy seal (Seal of Righteousness); reclassified from A_FLAG
 const A_STEALTH: u8 = 0xA8; // stealth presence marker (Stealth); reclassified from A_FLAG
-const A_PROC_ON_HIT: u8 = 0xAB;
+                            // A Proc that starts a Triggered Cast of its own trigger spell (vanilla Spell.dbc aura 42,
+                            // ProcTriggerSpell). Native mapping — no name rescue (lockstep with module taxonomy, which renamed
+                            // this wire value from A_PROC_ON_HIT).
+const A_PROC_TRIGGER: u8 = 0xAB;
 const A_SPELLMOD_FLAT: u8 = 0xAC; // spell modifier FLAT (DBC aura 107 AddFlatModifier — 264): p0 = SpellModOp, p1 = affected-spell family mask
-const A_SPELLMOD_PCT: u8 = 0xAD; // spell modifier PERCENT (DBC aura 108 AddPctModifier) // reactive proc-on-being-hit-in-melee (Frost Armor's chill); reclassified from A_FLAG (work-item 019)
+const A_SPELLMOD_PCT: u8 = 0xAD; // spell modifier PERCENT (DBC aura 108 AddPctModifier)
 const A_DISARM: u8 = 0xAE; // Warrior Disarm (DBC AuraMod 67 ModDisarm): strips the enemy's main-hand weapon (lockstep with module taxonomy)
 const A_RETALIATE: u8 = 0xAF; // Warrior Retaliation self-buff: free counter-swing at any melee attacker; reclassified from the inert A_FLAG marker BY NAME (lockstep with module taxonomy)
 const A_CONTROL: u8 = 0xB0;
@@ -92,6 +95,10 @@ const A_MOD_DETECT_RANGE: u8 = 0xB2; // Priest Mind Soothe (DBC AuraMod 91 ModDe
 const A_FLAG: u8 = 0xBE;
 const A_COMBAT_HEALTH_REGEN_PCT: u8 = 0xA9; // X% of normal health regen continues during combat (lockstep with module taxonomy)
 const A_MOUNTED: u8 = 0xB3; // land mount, the state of record (vanilla AuraMod Mounted, 78): p0 = the resolved creature DISPLAY id (p0_kind = P_DISPLAY_ID), frozen at import (lockstep with module taxonomy)
+                            // A Proc that deals its frozen amount as damage of the proc spell's own school (vanilla Spell.dbc
+                            // aura 43, ProcTriggerDamage). p0 = the header's school_mask, p0_kind = P_SCHOOL_MASK (lockstep with
+                            // module taxonomy).
+const A_PROC_DAMAGE: u8 = 0xB4;
 
 // MECHANICS (p0 for A_CONTROL when p0_kind == P_MECHANIC)
 const M_STUN: i32 = 1;
@@ -254,6 +261,24 @@ fn dismount_effect_kind(effect_id: i32, misc: u32) -> Option<u8> {
 /// Pure. [import]
 fn dbc_flat_amount(raw: i32) -> i32 {
     raw + 1
+}
+
+/// The header's `proc_flags`/`proc_chance`/`proc_charges` from the three raw column values the
+/// off-by-one schema bug lands them under (see the SCHEMA BUG comment at the header build site —
+/// real procFlags/procChance/procCharges, DBC columns 24/25/26, read out through the wow_dbc fields
+/// NAMED `proc_chance`/`proc_charges`/`max_level`, not the ones named for them). `proc_chance` is a
+/// vanilla percent (clamped into the column's `u8`, so a >255 value saturates at 100% intent — no
+/// real spell exceeds 100); `proc_charges` is a count (0 = unlimited). Pure. [import]
+fn proc_header_fields(
+    real_proc_flags: i32,
+    real_proc_chance: i32,
+    real_proc_charges: i32,
+) -> (u32, u8, u8) {
+    (
+        real_proc_flags as u32,
+        real_proc_chance.clamp(0, 255) as u8,
+        real_proc_charges.clamp(0, 255) as u8,
+    )
 }
 
 /// The importer's own `game_spell.aura_interrupt` bits: only bit 0 (break-on-damage) and bit 1
@@ -501,31 +526,6 @@ fn correct_script_effect_kind(name: &str, kind: u8) -> u8 {
     if kind == E_TAUNT && name == "Feint" {
         return E_REDUCE_THREAT;
     }
-    // Frost Armor (+ rank 2): its eff2 is a ProcTriggerSpell (→ E_TRIGGER, trigger=6136 'Chilled'), which
-    // vanilla fires REACTIVELY when an attacker MELEE-HITS the armored caster — NOT at cast time. Reclassify
-    // it BY NAME to A_PROC_ON_HIT (work-item 019): a self-targeted aura on the armored caster that
-    // `break_auras_on_damage` reads on a genuine melee hit, applying the frozen trigger spell (6136, still
-    // carried in `trigger_spell` below — untouched by this reclassify) onto the ATTACKER instead of an
-    // instant self-cast (which would have mis-fired 6136 at cast onto a SELF target — a no-op or self-slow).
-    // Keyed on kind == E_TRIGGER + the name, before the residue guard — the Eviscerate / Feint reclassify
-    // precedent. (The +armor eff1 is A_MOD_RESISTANCE, untouched.)
-    //
-    // Lightning Shield (156 review HIGH): identical vanilla shape — its ONLY effect is a
-    // ProcTriggerSpell (→ E_TRIGGER, trigger=26364 zap) fired reactively when an attacker melee-hits
-    // the shielded caster. Left un-rescued it imported as one instant E_TRIGGER: the cast SUCCEEDED
-    // as a no-op and never created a game_aura row, so the shaman rotation's SELF_MISSING_AURA guard
-    // saw it missing EVERY tick — a mana-burning recast tunnel that starved every lower-priority row
-    // (a fail-loud net can't catch an Ok no-op). As A_PROC_ON_HIT it becomes a real self-aura and the
-    // guard closes. (Vanilla's 3-charge consumption is not modeled — the aura persists until
-    // reapplied/expired; [V] in work-item 156.)
-    if kind == E_TRIGGER
-        && matches!(
-            name,
-            "Frost Armor" | "Ice Armor" | "Frostbite" | "Lightning Shield"
-        )
-    {
-        return A_PROC_ON_HIT;
-    }
     if kind != E_SCRIPTED && kind != A_FLAG {
         return kind;
     }
@@ -637,6 +637,18 @@ fn mount_display_p0(kind: u8, p0: i32, creature_displays: &BTreeMap<u32, u32>) -
         .unwrap_or(p0)
 }
 
+/// An `A_PROC_DAMAGE` effect's `p0` is the PROC SPELL'S OWN school mask (the header's `school_mask`)
+/// — aura 43 carries no per-effect misc value to resolve it from, unlike every other school-typed
+/// aura (`A_MOD_RESISTANCE`, `A_ABSORB`). Same kind-keyed p0 override shape as `mount_display_p0` /
+/// `stance_p0`; a non-A_PROC_DAMAGE kind's (p0, p0_kind) passes through untouched. Pure. [import]
+fn proc_damage_school_p0(kind: u8, p0: i32, p0_kind: u8, school_mask: u8) -> (i32, u8) {
+    if kind == A_PROC_DAMAGE {
+        (school_mask as i32, P_SCHOOL_MASK)
+    } else {
+        (p0, p0_kind)
+    }
+}
+
 /// Map a wow_dbc `AuraMod` variant → our KIND (aura-map design unit). Unmapped → `E_SCRIPTED`. The
 /// per-effect p0/p0_kind are resolved separately by `resolve_aura_params` (which re-reads the variant
 /// for the combat-field / mechanic / speed-kind it implies).
@@ -647,7 +659,13 @@ fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         PeriodicDamage | PeriodicLeech | PeriodicDamagePercent => A_PERIODIC_DAMAGE,
         PeriodicHeal => A_PERIODIC_HEAL,
         PeriodicEnergize | PeriodicManaLeech | PowerBurnMana => A_PERIODIC_ENERGIZE,
-        PeriodicTriggerSpell | ProcTriggerSpell => E_TRIGGER,
+        // A channel's per-tick trigger (PeriodicTriggerSpell) fires at cast time -> E_TRIGGER (the
+        // channel reclassify below turns it into A_PERIODIC_TRIGGER when the header is channeled).
+        // A Proc's trigger (aura 42 ProcTriggerSpell) and its damage twin (aura 43 ProcTriggerDamage)
+        // map natively onto the two proc kinds — no name rescue.
+        PeriodicTriggerSpell => E_TRIGGER,
+        ProcTriggerSpell => A_PROC_TRIGGER,
+        ProcTriggerDamage => A_PROC_DAMAGE,
 
         // stat — FLAT (ModStat) vs PERCENT (ModPercentStat / ModTotalStatPercentage). The percent ones fold
         // as a multiplier in recompute_vitals (The Human Spirit = +5% Spirit), so they need a distinct kind.
@@ -791,6 +809,20 @@ fn aura_mod_to_kind(aura: AuraMod) -> u8 {
     }
 }
 
+/// Whether a per-effect `trigger_spell` names a castable RANK worth recording in `wrapper_to_rank`
+/// (a genuine LearnSpell wrapper), as opposed to a payload that merely rides the same DBC column: a
+/// channel's per-tick missile (A_PERIODIC_TRIGGER), either Proc kind's own effect data
+/// (A_PROC_TRIGGER / A_PROC_DAMAGE), an inert marker (A_FLAG), or a plain instant trigger (E_TRIGGER,
+/// e.g. Bloodrage's rage trickle). Mirrors `resolve_learn_target`'s own exclusion
+/// (module/src/trainer.rs) — the two lists MUST stay in lockstep, so a rename or a new proc kind on
+/// either side fails this test loud. Pure. [import]
+fn is_wrapper_rank_trigger(kind: u8) -> bool {
+    !matches!(
+        kind,
+        A_PERIODIC_TRIGGER | A_FLAG | A_PROC_TRIGGER | A_PROC_DAMAGE | E_TRIGGER
+    )
+}
+
 /// Resolve the typed (p0, p0_kind) for an AURA effect from its KIND + AuraMod variant + the raw
 /// `effect_misc_value`. The combat-field / mechanic / speed-kind / stat-id semantics come from the
 /// VARIANT (not the raw misc value); school masks / power types / immunity ids come from misc value.
@@ -879,6 +911,11 @@ fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
         },
         A_FLAG => ((misc & 0xFF) as i32, P_FLAG),
         E_TRIGGER => (0, P_RAW), // periodic/proc trigger: spell id lives in trigger_spell
+        A_PROC_TRIGGER => (0, P_RAW), // same convention as E_TRIGGER: the trigger spell lives in trigger_spell
+        // A_PROC_DAMAGE's real p0 is the header's own school_mask, not an effect misc value — the call
+        // site overrides this placeholder once school_mask is in scope (mirrors the mount_display_p0 /
+        // stance_p0 kind-keyed p0 fix-ups).
+        A_PROC_DAMAGE => (0, P_NONE),
         E_SCRIPTED => (0, P_RAW),
         _ => (0, P_NONE),
     }
@@ -1096,8 +1133,14 @@ fn build_spell_sql(
         //   real rangeIndex   = s.speed (int bytes read as f32 → recover via .to_bits()) (col 36)
         //   real stackAmount  = s.totem[0]                  (col 39)
         //   real AuraIntFlags = s.channel_interrupt_flags   (col 22)
+        //   real procFlags    = s.proc_chance               (col 24)
+        //   real procChance   = s.proc_charges               (col 25)
+        //   real procCharges  = s.max_level                  (col 26)
         // VERIFIED by `--only` dry-run against known values: Fireball powerType=0(mana)/30 mana/4s DoT/
-        // 35yd; Battle Shout rage/10/120s; Slam rage/15/L30/instant; Sunder rage/15/L10/30s/STACK=5.
+        // 35yd; Battle Shout rage/10/120s; Slam rage/15/L30/instant; Sunder rage/15/L10/30s/STACK=5;
+        // Frost Armor (168) procFlags=0x28/procChance=100/procCharges=0; Lightning Shield (324)
+        // procChance=100/procCharges=3 (its real procFlags is a richer taken-hit mask, not 0x28 — every
+        // "taken" bit, matching its real behavior of zapping back at any attack, not just melee).
         // (cast_time/cooldown/gcd/school/dispel/mechanic/attributes/effects are pre-col-21 or post-resync
         // → read directly.) Rage costs are stored ×10 in BOTH the DBC and our power bar, mana ×1 in both,
         // so `manaCost` imports with no scaling.
@@ -1237,8 +1280,12 @@ fn build_spell_sql(
         // nonzero mask). Vanilla family masks are 32-bit; the u64 column carries headroom.
         let family_name = s.spell_class_set.id as u8;
         let family_flags = s.spell_class_mask[0] as u32 as u64;
+        // See the SCHEMA BUG comment above the header: the real procFlags/procChance/procCharges land
+        // in the wow_dbc fields named proc_chance/proc_charges/max_level.
+        let (proc_flags, proc_chance, proc_charges) =
+            proc_header_fields(s.proc_chance, s.proc_charges, s.max_level);
         spell_rows.push(format!(
-            "({spell_id},{name},{power_type},{cost},{cast_time_ms},{gcd_ms},{cooldown_ms},{range_yd},{duration_ms},{school_mask},{dispel_type},{mechanic},{max_stacks},{aura_interrupt},{attributes},{spell_level},{max_level},{neg},{cast_flags},{stances},{family_name},{family_flags})",
+            "({spell_id},{name},{power_type},{cost},{cast_time_ms},{gcd_ms},{cooldown_ms},{range_yd},{duration_ms},{school_mask},{dispel_type},{mechanic},{max_stacks},{aura_interrupt},{attributes},{spell_level},{max_level},{neg},{cast_flags},{stances},{family_name},{family_flags},{proc_flags},{proc_chance},{proc_charges})",
             name = sql_text(&name),
             // `is_negative` is a BOOL column — SpacetimeDB SQL needs the `true`/`false` literal, not 1/0.
             neg = if is_negative { "true" } else { "false" },
@@ -1249,7 +1296,7 @@ fn build_spell_sql(
         // resolved header (the per-effect lines follow in the effect loop below).
         if !allow.is_empty() {
             samples.push(format!(
-                "spell {spell_id} '{title}': school_mask={school_mask} power_type={power_type} cost={cost} cast_ms={cast_time_ms} gcd_ms={gcd_ms} cd_ms={cooldown_ms} range={range_yd}yd dur_ms={duration_ms} spell_level={spell_level} max_stacks={max_stacks} negative={is_negative} attributes=0x{attributes:X} cast_flags=0x{cast_flags:X} stances=0x{stances:X} aura_interrupt=0x{aura_interrupt:X}",
+                "spell {spell_id} '{title}': school_mask={school_mask} power_type={power_type} cost={cost} cast_ms={cast_time_ms} gcd_ms={gcd_ms} cd_ms={cooldown_ms} range={range_yd}yd dur_ms={duration_ms} spell_level={spell_level} max_stacks={max_stacks} negative={is_negative} attributes=0x{attributes:X} cast_flags=0x{cast_flags:X} stances=0x{stances:X} aura_interrupt=0x{aura_interrupt:X} proc_flags=0x{proc_flags:X} proc_chance={proc_chance} proc_charges={proc_charges}",
                 title = name.chars().take(40).collect::<String>(),
             ));
         }
@@ -1310,6 +1357,10 @@ fn build_spell_sql(
             // (resolve_aura_params) — resolve the rarer creature-template indirection here, mirroring
             // the stance/CREATE_ITEM kind-keyed p0 fix-ups above.
             let p0 = mount_display_p0(kind, p0, &creature_displays);
+
+            // PROC_DAMAGE school: an A_PROC_DAMAGE effect deals its frozen amount as damage of the
+            // proc spell's own school — mirrors the mount/stance p0 fix-ups above.
+            let (p0, p0_kind) = proc_damage_school_p0(kind, p0, p0_kind, school_mask);
 
             // CREATE_ITEM p0 injection (Healthstone): the by-name reclassify above made these E_CREATE_ITEM,
             // but their DBC effect_item_type is 0 (the mangos script hardcodes the item), so the resolved p0
@@ -1530,25 +1581,12 @@ fn build_spell_sql(
             let chain_targets = s.effect_chain_target[i].clamp(0, 255) as u8;
             let trigger_spell = s.effect_trigger_spell[i];
             // Record wrapper -> rank: a LearnSpell wrapper's first nonzero trigger is the castable rank it
-            // teaches (resolves the wrapper's trainer-offering level/cost to the rank, below). A CHANNEL's
-            // per-tick A_PERIODIC_TRIGGER effect ALSO carries a trigger_spell (the missile), but that is NOT
-            // a rank to learn — exclude it so a channeled spell (Arcane Missiles 5143) is offered/learned as
-            // ITSELF, not resolved to its hidden bolt (7268). Mirrors the trainer.rs to_learn exclusion.
-            // ALSO exclude A_FLAG and A_PROC_ON_HIT: Frost Armor's chill (reclassified E_TRIGGER →
-            // A_PROC_ON_HIT above) still carries its trigger_spell (6136), but that is the reactive proc
-            // target, NOT a rank to learn — recording it would mis-resolve the offered Frost Armor rank's
-            // (7300) level/cost to Chilled's. ALSO exclude plain E_TRIGGER (156 review): Bloodrage's
-            // instant side-cast (2687 → trickle 29131) is a cast-time trigger, not a rank — recording it
-            // resolved the offering to the unimported trickle and DROPPED Bloodrage from the trainer with
-            // a misleading warning. A genuine LearnSpell wrapper maps to E_SCRIPTED (never
-            // A_FLAG/A_PROC_ON_HIT/E_TRIGGER — no name-rescue produces E_TRIGGER), so it is unaffected.
-            // This list must stay in lockstep with `resolve_learn_target` (module/src/trainer.rs).
-            if trigger_spell != 0
-                && kind != A_PERIODIC_TRIGGER
-                && kind != A_FLAG
-                && kind != A_PROC_ON_HIT
-                && kind != E_TRIGGER
-            {
+            // teaches (resolves the wrapper's trainer-offering level/cost to the rank, below).
+            // `is_wrapper_rank_trigger` excludes every OTHER kind that rides the same `trigger_spell`
+            // column for a non-rank payload (a channel's missile, a Proc's trigger, a plain instant
+            // trigger) — see its own doc comment. This list must stay in lockstep with
+            // `resolve_learn_target` (module/src/trainer.rs).
+            if trigger_spell != 0 && is_wrapper_rank_trigger(kind) {
                 wrapper_to_rank.entry(spell_id).or_insert(trigger_spell);
             }
             let effect_mechanic = s.effect_mechanic[i] as u8;
@@ -1683,7 +1721,7 @@ fn build_spell_sql(
     push_insert(
         &mut stmts,
         "game_spell",
-        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags",
+        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges",
         &spell_rows,
     );
     push_insert(
@@ -1864,7 +1902,8 @@ fn kind_name(kind: u8) -> &'static str {
         A_CONTROL => "A_CONTROL",
         A_IMMUNITY => "A_IMMUNITY",
         A_FLAG => "A_FLAG",
-        A_PROC_ON_HIT => "A_PROC_ON_HIT",
+        A_PROC_TRIGGER => "A_PROC_TRIGGER",
+        A_PROC_DAMAGE => "A_PROC_DAMAGE",
         _ => "?",
     }
 }
@@ -1894,6 +1933,14 @@ fn print_coverage(cov: &Coverage) {
         "  E_SCRIPTED (no-op):  {} ({:.1}%)",
         cov.scripted,
         pct(cov.scripted, cov.effects)
+    );
+    // Procs woke up: every effect that landed natively on the two Proc kinds this ticket added (aura
+    // 42/43, no name rescue). An Operator reviews this count after an import to see what changed.
+    let proc_trigger = cov.by_kind.get(&A_PROC_TRIGGER).copied().unwrap_or(0);
+    let proc_damage = cov.by_kind.get(&A_PROC_DAMAGE).copied().unwrap_or(0);
+    println!(
+        "  proc auras: {} (42: {proc_trigger}, 43: {proc_damage})",
+        proc_trigger + proc_damage
     );
 
     println!("\nBreakdown by kind (descending):");
@@ -2420,35 +2467,70 @@ mod tests {
     }
 
     #[test]
-    fn frost_armor_chill_trigger_maps_to_proc_on_hit() {
-        // Frost Armor's eff2 is a ProcTriggerSpell → E_TRIGGER (trigger=6136 'Chilled'), which vanilla fires
-        // REACTIVELY on being melee-hit, NOT at cast. Since work-item 019 the engine HAS that primitive: the
-        // by-name correction routes it to A_PROC_ON_HIT (a self-aura on the armored caster whose frozen
-        // trigger_spell chills the melee attacker). Pre-019 this was neutered to the inert A_FLAG; this test
-        // pins the 019 mapping so a regression back to the neuter (or a blanket E_TRIGGER rewrite) fails loud.
+    fn proc_auras_map_natively_no_name_involved() {
+        // Aura 42 (ProcTriggerSpell) and aura 43 (ProcTriggerDamage) map onto the two proc kinds for
+        // ANY spell — no name rescue. `name` is deliberately absent from these two calls.
+        assert_eq!(aura_mod_to_kind(AuraMod::ProcTriggerSpell), A_PROC_TRIGGER);
+        assert_eq!(aura_mod_to_kind(AuraMod::ProcTriggerDamage), A_PROC_DAMAGE);
+        // A channel's per-tick trigger (PeriodicTriggerSpell) is unaffected — it still lands on
+        // E_TRIGGER (the channel reclassify further downstream turns it into A_PERIODIC_TRIGGER).
+        assert_eq!(aura_mod_to_kind(AuraMod::PeriodicTriggerSpell), E_TRIGGER);
+        // Both proc kinds are already real (non-E_SCRIPTED, non-A_FLAG) kinds, so the curated
+        // name correction passes them through untouched for any name, including one carrying no
+        // rescue entry at all.
         assert_eq!(
-            correct_script_effect_kind("Frost Armor", E_TRIGGER),
-            A_PROC_ON_HIT
+            correct_script_effect_kind("Some Other Spell", A_PROC_TRIGGER),
+            A_PROC_TRIGGER
         );
-        // Lightning Shield (156 review): the identical reactive shape — its ONLY effect is the
-        // ProcTriggerSpell zap (26364) fired when an attacker melee-hits the shielded caster. As a raw
-        // E_TRIGGER the cast succeeded as an aura-less no-op and the shaman rotation's
-        // SELF_MISSING_AURA guard recast it every tick (a mana-burning tunnel no fail-loud net sees).
         assert_eq!(
-            correct_script_effect_kind("Lightning Shield", E_TRIGGER),
-            A_PROC_ON_HIT
+            correct_script_effect_kind("Some Other Spell", A_PROC_DAMAGE),
+            A_PROC_DAMAGE
         );
-        // A non-rescued E_TRIGGER (e.g. Bloodrage's eff2 → 29131) is UNTOUCHED — it fires at cast as
-        // intended (the periodic-rage chain). The correction is name-scoped, never a blanket E_TRIGGER rewrite.
+    }
+
+    #[test]
+    fn proc_damage_school_p0_reads_the_header_school_not_a_misc_value() {
+        // Aura 43 carries no per-effect misc value for its school — p0 is the PROC SPELL'S OWN
+        // school_mask (frost = bit 4 = 0x10), regardless of whatever misc value resolve_aura_params
+        // produced upstream.
         assert_eq!(
-            correct_script_effect_kind("Bloodrage", E_TRIGGER),
-            E_TRIGGER
+            proc_damage_school_p0(A_PROC_DAMAGE, 0, P_NONE, 0x10),
+            (0x10, P_SCHOOL_MASK)
         );
-        // The +armor eff1 is A_MOD_RESISTANCE — already a real kind, untouched by the name correction.
+        // A non-A_PROC_DAMAGE kind's (p0, p0_kind) passes through untouched.
         assert_eq!(
-            correct_script_effect_kind("Frost Armor", A_MOD_RESISTANCE),
-            A_MOD_RESISTANCE
+            proc_damage_school_p0(A_MOD_RESISTANCE, 5, P_SCHOOL_MASK, 0x10),
+            (5, P_SCHOOL_MASK)
         );
+    }
+
+    #[test]
+    fn proc_header_fields_read_the_schema_bug_shift() {
+        // Real client DBC values (verified against /srv/wowclient/Data): Frost Armor (168) reads
+        // procFlags=40 (0x28, "melee hit taken | melee spell hit taken"), procChance=100,
+        // procCharges=0 out of the wow_dbc fields NAMED proc_chance/proc_charges/max_level — matching
+        // the values the issue's own worked example states for 168. Lightning Shield (324) reads
+        // procChance=100, procCharges=3 (its 3-charge shield) the same way.
+        assert_eq!(proc_header_fields(40, 100, 0), (40, 100, 0));
+        assert_eq!(proc_header_fields(139944, 100, 3), (139944, 100, 3));
+        // A percent/charge count is clamped into its u8 column rather than silently truncating.
+        assert_eq!(proc_header_fields(1, 999, 999), (1, 255, 255));
+        // A negative raw value (should never occur in real data) clamps to 0 rather than wrapping.
+        assert_eq!(proc_header_fields(1, -5, -5), (1, 0, 0));
+    }
+
+    #[test]
+    fn wrapper_rank_trigger_excludes_every_non_rank_payload() {
+        // Mirrors module/src/trainer.rs `resolve_learn_target`'s exclusion list — the two MUST stay
+        // in lockstep, so this test pins the importer's half by kind, not by name.
+        assert!(!is_wrapper_rank_trigger(A_PERIODIC_TRIGGER));
+        assert!(!is_wrapper_rank_trigger(A_FLAG));
+        assert!(!is_wrapper_rank_trigger(A_PROC_TRIGGER));
+        assert!(!is_wrapper_rank_trigger(A_PROC_DAMAGE));
+        assert!(!is_wrapper_rank_trigger(E_TRIGGER));
+        // A genuine LearnSpell wrapper's effect maps to E_SCRIPTED — its trigger_spell IS a rank.
+        assert!(is_wrapper_rank_trigger(E_SCRIPTED));
+        assert!(is_wrapper_rank_trigger(E_DAMAGE));
     }
 
     #[test]

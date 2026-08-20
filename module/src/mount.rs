@@ -440,15 +440,24 @@ mod tests {
             "`kill_player` must shed the dying player's auras — without it a corpse keeps riding. \
              Body was:\n{death}"
         );
-        let shed = crate::test_scan::code_of(
+        let collect = crate::test_scan::code_of(
             include_str!("spell/control.rs"),
             "pub(crate) fn remove_auras_on_death(",
         );
         assert!(
+            collect.contains("shed_auras(ctx, unit_guid, shed)"),
+            "the death shed must route its collected rows through the shared removal tail, which is \
+             what recomputes the Mount Projection. Body was:\n{collect}"
+        );
+        let shed = crate::test_scan::code_of(
+            include_str!("spell/control.rs"),
+            "pub(crate) fn shed_auras(",
+        );
+        assert!(
             shed.contains("crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0)")
                 && shed.contains("crate::mount::recompute_mount(ctx, unit_guid);"),
-            "the death shed must collect the mount predicate while deleting and recompute the \
-             projection afterwards, or a dead rider keeps a stuck mount display and mounted run \
+            "the shared removal tail must collect the mount predicate while deleting and recompute \
+             the projection afterwards, or a dead rider keeps a stuck mount display and mounted run \
              speed. Body was:\n{shed}"
         );
         // The end state the chain converges on: no mount aura left → display 0 (and, through the same
@@ -769,8 +778,8 @@ mod tests {
         ];
 
         let mut found: Vec<String> = Vec::new();
-        for path in module_sources() {
-            let source = std::fs::read_to_string(&path).expect("module source is readable");
+        for path in crate::test_scan::module_sources() {
+            let source = crate::test_scan::read_scanned(&path).expect("module/ is never optional");
             let Some(build) = source
                 .match_indices("crate::build_player_entity(ctx,")
                 .find(|(idx, _)| {
@@ -784,24 +793,22 @@ mod tests {
             let insert = source[build..]
                 .find("entities.insert(entity);")
                 .map(|off| build + off)
-                .unwrap_or_else(|| panic!("{} no longer inserts the built row", rel(&path)));
+                .unwrap_or_else(|| panic!("{path} no longer inserts the built row"));
             let restore = source[build..]
                 .find("crate::mount::restore_mount_on_rebuild(ctx,")
                 .map(|off| build + off)
                 .unwrap_or_else(|| {
                     panic!(
-                        "{} rebuilds a player entity without restoring the mount projection — a \
-                         mounted character relogs or crosses a shard boundary on foot",
-                        rel(&path)
+                        "{path} rebuilds a player entity without restoring the mount projection — \
+                         a mounted character relogs or crosses a shard boundary on foot"
                     )
                 });
             assert!(
                 insert < restore,
-                "{}: the restore must run AFTER the row is inserted — `recompute_mount` writes the \
-                 STORED row and silently no-ops on a row that is not there yet",
-                rel(&path)
+                "{path}: the restore must run AFTER the row is inserted — `recompute_mount` writes \
+                 the STORED row and silently no-ops on a row that is not there yet"
             );
-            found.push(rel(&path));
+            found.push(path);
         }
         let expected: Vec<String> = REBUILDS
             .iter()
@@ -863,8 +870,8 @@ mod tests {
         ];
 
         let mut found: Vec<(String, usize)> = Vec::new();
-        for path in module_sources() {
-            let source = std::fs::read_to_string(&path).expect("module source is readable");
+        for path in crate::test_scan::module_sources() {
+            let source = crate::test_scan::read_scanned(&path).expect("module/ is never optional");
             let calls = source
                 .match_indices("mount::dismount(")
                 .filter(|(idx, _)| {
@@ -873,7 +880,7 @@ mod tests {
                 })
                 .count();
             if calls > 0 {
-                found.push((rel(&path), calls));
+                found.push((path, calls));
             }
         }
         let expected: Vec<(String, usize)> = TRIGGERS
@@ -912,7 +919,8 @@ mod tests {
                 3,
                 "break_auras_on_damage (ordinary damage must NOT dismount — the mount's DBC \
                  interrupt bit is underwater-cancel, not break-on-damage), break_channel \
-                 (A_PERIODIC_TRIGGER rows only), and remove_auras_on_death — wired",
+                 (A_PERIODIC_TRIGGER rows only), and shed_auras — the shared involuntary-removal \
+                 tail behind the death shed and a spent Proc's buff; wired",
             ),
             (
                 "module/src/spell/effects.rs",
@@ -949,14 +957,14 @@ mod tests {
         ];
 
         let mut found: Vec<(String, usize)> = Vec::new();
-        for path in module_sources() {
-            let source = std::fs::read_to_string(&path).expect("module source is readable");
+        for path in crate::test_scan::module_sources() {
+            let source = crate::test_scan::read_scanned(&path).expect("module/ is never optional");
             let deletes = crate::test_scan::raw_table_reads(&source, &["game_aura"], |c, idx| {
                 c[idx..].trim_start().starts_with(".id().delete(")
             })
             .len();
             if deletes > 0 {
-                found.push((rel(&path), deletes));
+                found.push((path, deletes));
             }
         }
         let expected: Vec<(String, usize)> = CENSUS
@@ -970,31 +978,5 @@ mod tests {
              listed here with the reason it cannot remove a mount aura — otherwise a mount can be \
              deleted while `mount_display_id` keeps projecting it."
         );
-    }
-
-    /// Every `.rs` file under `module/src`, sorted, so the census above cannot be sidestepped by
-    /// putting a new aura-deletion path outside the spell module.
-    fn module_sources() -> Vec<std::path::PathBuf> {
-        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-            for entry in std::fs::read_dir(dir).expect("module source directory is readable") {
-                let path = entry.expect("module source entry is readable").path();
-                if path.is_dir() {
-                    walk(&path, out);
-                } else if path.extension().is_some_and(|ext| ext == "rs") {
-                    out.push(path);
-                }
-            }
-        }
-        let mut out = Vec::new();
-        walk(&crate::test_scan::repo_root().join("module/src"), &mut out);
-        out.sort();
-        out
-    }
-
-    fn rel(path: &std::path::Path) -> String {
-        path.strip_prefix(crate::test_scan::repo_root())
-            .unwrap_or(path)
-            .display()
-            .to_string()
     }
 }

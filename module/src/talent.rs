@@ -640,6 +640,9 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                     is_negative: false,
                     cast_flags: 0,
                     stances: 0, // a talent passive has no stance requirement (usable in any stance)
+                    proc_flags: 0, // a seeded talent passive carries no Proc data
+                    proc_chance: 0,
+                    proc_charges: 0,
                 });
                 // Single effect at index 0; id keeps the canonical `(spell_id << 2) | effect_index` form
                 // (== `<< 2` here) so a future multi-effect talent spell won't collide on effect_id.
@@ -709,6 +712,9 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                 is_negative,
                 cast_flags: 0,
                 stances: 0, // a replicated talent-granted spell has no stance requirement (usable in any stance)
+                proc_flags: 0, // a replicated talent-granted spell carries no Proc data
+                proc_chance: 0,
+                proc_charges: 0,
             });
             ctx.db.game_spell_effect().insert(SpellEffect {
                 id: (spell_id as u64) << 2,

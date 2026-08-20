@@ -259,6 +259,34 @@ pub(crate) fn debug_dir_src() -> String {
     out
 }
 
+/// Every `.rs` file under `module/src`, as repo-relative paths, sorted. For a CRATE-WIDE scan — the
+/// "this call exists in exactly one place" shape, which a per-file `include_str!` cannot express
+/// (a new file is exactly where a second call site would appear).
+pub(crate) fn module_sources() -> Vec<String> {
+    fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<String>) {
+        let entries =
+            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry.expect("readable dir entry").path();
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let rel = path
+                    .strip_prefix(root)
+                    .expect("walked from the repo root")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.push(rel);
+            }
+        }
+    }
+    let root = repo_root();
+    let mut out = Vec::new();
+    walk(&root.join("module/src"), &root, &mut out);
+    out.sort();
+    out
+}
+
 /// The repo root: `module/`'s parent.
 pub(crate) fn repo_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

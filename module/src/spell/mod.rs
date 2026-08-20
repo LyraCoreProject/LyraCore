@@ -25,6 +25,7 @@
 //!                   `apply_effect` + per-kind handlers) and `resolve` (the cast core —
 //!                   `resolve_cast_at` + its extracted `check_cast_gates` gate sweep / `resolve_cast` /
 //!                   `begin_cast` / the passive-apply path).
+//!   - `proc`      — the Proc engine: the pure proc decision plus the ONE pass, from `apply_hit`.
 //!   - `scheduler` — the `#[reducer]`s (`tick_auras` / `fire_pending_cast` / `cast_spell`).
 //!
 //! Everything is re-exported below so every `crate::spell::<sym>` path resolves regardless of which
@@ -34,6 +35,7 @@ mod cast;
 mod control;
 mod effects;
 mod math;
+pub(crate) mod proc;
 mod scheduler;
 pub(crate) mod spellbook;
 pub(crate) mod stacking;

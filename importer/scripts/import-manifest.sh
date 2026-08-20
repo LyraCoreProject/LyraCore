@@ -169,6 +169,14 @@ FLOOR_SPELL_LEARN=5                       # game_spell_learn rows — measured o
                                            # spell_learn_spell (auto-taught dependents) is a much
                                            # smaller table than spell_chain, so 5 is a presence floor
                                            # — tighten it against your own dump's real count.
+FLOOR_SPELL_PROC_EVENT=100                # [V] game_spell_proc_event rows — the classic-db proc overlay
+                                           # (PPM, internal cooldowns, procEx, school/family filters).
+                                           # An unverified estimate: cmangos hand-authors one row per
+                                           # scripted proc, which in 1.12 is the talent procs, the class
+                                           # shields and the weapon procs — a few hundred. 100 is a
+                                           # conservative floor that still fails loud if the table is
+                                           # absent from the dump or its columns drifted. Tighten it
+                                           # against your own dump's real count.
 
 # -----------------------------------------------------------------------------------------------------
 #  MAP != 0 — the continent-shard overrides

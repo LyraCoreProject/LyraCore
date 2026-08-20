@@ -6,12 +6,12 @@ use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration}
 
 use crate::spell::stacking::game_spell_group;
 use crate::{
-    game_auction, game_auction_expiry, game_aura_schedule, game_breath_schedule, game_character,
-    game_createinfo_spell, game_creature_move_schedule, game_duel_schedule, game_faction,
-    game_gateway_lease_reaper_schedule, game_ground_area_schedule, game_instance_reaper_schedule,
-    game_item_template, game_motion_publish_schedule, game_pet_care_schedule, game_spell,
-    game_talent, AuctionExpiry, AuraSchedule, BreathSchedule, CreatureMoveSchedule, DuelSchedule,
-    GroundAreaSchedule, PetCareSchedule,
+    game_auction, game_auction_expiry, game_aura, game_aura_schedule, game_breath_schedule,
+    game_character, game_createinfo_spell, game_creature_move_schedule, game_duel_schedule,
+    game_faction, game_gateway_lease_reaper_schedule, game_ground_area_schedule,
+    game_instance_reaper_schedule, game_item_template, game_motion_publish_schedule,
+    game_pet_care_schedule, game_spell, game_talent, AuctionExpiry, AuraSchedule, BreathSchedule,
+    CreatureMoveSchedule, DuelSchedule, GroundAreaSchedule, PetCareSchedule,
 };
 
 /// Consolidated post-publish repair pass (#378). SpacetimeDB's `init` reducer runs ONLY on a
@@ -106,11 +106,21 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     let stealth = ctx.db.game_spell().spell_id().find(1784u32).is_some() as u64;
 
     crate::seed::seed_frost_armor_fixture(ctx);
-    // Chilled 6136, Frost Armor 168
-    let frost_armor = [6136u32, 168u32]
-        .iter()
-        .filter(|id| ctx.db.game_spell().spell_id().find(**id).is_some())
-        .count() as u64;
+    crate::seed::seed_test_proc_fixtures(ctx);
+    // Chilled 6136, Frost Armor 168, and the Proc engine's six test fixtures
+    let frost_armor = [
+        6136u32,
+        168u32,
+        crate::seed::TEST_PROC_MARK,
+        crate::seed::TEST_PROC_COIN,
+        crate::seed::TEST_PROC_CHARGES,
+        crate::seed::TEST_PROC_COOLDOWN,
+        crate::seed::TEST_PROC_PPM,
+        crate::seed::TEST_PROC_ZAP,
+    ]
+    .iter()
+    .filter(|id| ctx.db.game_spell().spell_id().find(**id).is_some())
+    .count() as u64;
 
     crate::seed::seed_demon_skin_fixture(ctx);
     let demon_skin = ctx.db.game_spell().spell_id().find(696u32).is_some() as u64;
@@ -285,6 +295,42 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         }
     }
 
+    // PROC-PROFILE BACKFILL. The proc columns are END-appended and default to 0, and 0 in `proc_flags`
+    // reads as "never procs" — so an aura row that was already on a unit when the proc columns landed
+    // is a Proc that silently stopped firing. A permanent self-buff (Frost Armor) never refreshes on
+    // its own, so nothing would ever re-freeze it. Re-freeze each such row from its spell header and
+    // the `spell_proc_event` overlay, the same profile `aura_apply` freezes — which also picks up an
+    // overlay that landed after the aura did. Charges are refilled to full and the cooldown starts ready,
+    // which is what a fresh apply would have given it. Idempotent: a row already carrying its profile
+    // is left alone, so a second repair pass touches nothing.
+    let auras = ctx.db.game_aura();
+    let stale_procs: Vec<crate::Aura> = auras
+        .iter()
+        .filter(|a| crate::spell::proc::is_proc_kind(a.eff_kind) && a.proc_flags == 0)
+        .collect();
+    let mut proc_profiles = 0u64;
+    for mut a in stale_procs {
+        let Some(hdr) = ctx.db.game_spell().spell_id().find(a.spell_id) else {
+            continue; // no header to read a profile off — leave the row as it is
+        };
+        let profile = crate::spell::proc::freeze_profile(ctx, a.eff_kind, &hdr);
+        if profile.flags == 0 {
+            continue; // the header carries no proc data either; nothing to backfill
+        }
+        a.proc_flags = profile.flags;
+        a.proc_chance = profile.chance;
+        a.proc_ppm = profile.ppm;
+        a.proc_ex = profile.proc_ex;
+        a.proc_school_mask = profile.school_mask;
+        a.proc_family_name = profile.family_name;
+        a.proc_family_flags = profile.family_flags;
+        a.proc_charges = profile.charges;
+        a.proc_icd_ms = profile.icd_ms;
+        a.proc_ready_micros = 0;
+        auras.id().update(a);
+        proc_profiles += 1;
+    }
+
     // row_count: total rows/rearms across every family this pass touched (work-item 216 provenance
     // stamp) — one stamp for the whole repair pass, replacing the 13 separate per-family stamps the
     // deleted reducers wrote. The trailing `+ 2` is the two schedule rows this always (re)arms
@@ -310,6 +356,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         + motion_schedule
         + pet_care_schedule
         + auction_expiries
+        + proc_profiles
         + 2;
     crate::import_meta::stamp(ctx, "debug_repair_after_publish", "", "", total);
     log::info!("debug_repair_after_publish: repaired {total} fixture/schedule row(s), including missing Auction expiries");

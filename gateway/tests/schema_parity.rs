@@ -542,7 +542,8 @@ parity_test!(parity_game_item_template, "game_item_template", lyracore_module::I
 parity_test!(parity_game_spell, "game_spell", lyracore_module::Spell, bindings::spell_type::Spell, {
     spell_id, name, power_type, cost, cast_time_ms, gcd_ms, cooldown_ms, range_yd, duration_ms,
     school_mask, dispel_type, mechanic, max_stacks, aura_interrupt, attributes, spell_level,
-    max_level, is_negative, cast_flags, stances, family_name, family_flags,
+    max_level, is_negative, cast_flags, stances, family_name, family_flags, proc_flags,
+    proc_chance, proc_charges,
 });
 parity_test!(parity_game_spell_effect, "game_spell_effect", lyracore_module::SpellEffect, bindings::spell_effect_type::SpellEffect, {
     id, spell_id, effect_index, kind, base_points, die_sides, per_level, period_ms, target,
@@ -711,7 +712,9 @@ parity_test!(parity_game_channel_member, "game_channel_member", lyracore_module:
 parity_test!(parity_game_aura, "game_aura", lyracore_module::Aura, bindings::aura_type::Aura, {
     id, target_guid, caster_guid, spell_id, slot, level, flags, applied_at, expires_at, effect_id,
     eff_kind, amount, eff_p0, eff_p0_kind, eff_p1, period_ms, amount_remaining, stacks,
-    next_tick_micros, channel_target, enters_combat,
+    next_tick_micros, channel_target, enters_combat, proc_flags, proc_chance, proc_ppm, proc_ex,
+    proc_school_mask, proc_family_name, proc_family_flags, proc_charges, proc_icd_ms,
+    proc_ready_micros,
 });
 parity_test!(parity_game_player_reputation, "game_player_reputation", lyracore_module::PlayerReputation, bindings::player_reputation_type::PlayerReputation, {
     id, character_guid, owner_identity, faction_id, standing, reputation_index, at_war,

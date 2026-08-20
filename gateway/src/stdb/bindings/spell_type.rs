@@ -29,6 +29,9 @@ pub struct Spell {
     pub stances: u8,
     pub family_name: u8,
     pub family_flags: u64,
+    pub proc_flags: u32,
+    pub proc_chance: u8,
+    pub proc_charges: u8,
 }
 
 impl __sdk::InModule for Spell {
@@ -61,6 +64,9 @@ pub struct SpellCols {
     pub stances: __sdk::__query_builder::Col<Spell, u8>,
     pub family_name: __sdk::__query_builder::Col<Spell, u8>,
     pub family_flags: __sdk::__query_builder::Col<Spell, u64>,
+    pub proc_flags: __sdk::__query_builder::Col<Spell, u32>,
+    pub proc_chance: __sdk::__query_builder::Col<Spell, u8>,
+    pub proc_charges: __sdk::__query_builder::Col<Spell, u8>,
 }
 
 impl __sdk::__query_builder::HasCols for Spell {
@@ -89,6 +95,9 @@ impl __sdk::__query_builder::HasCols for Spell {
             stances: __sdk::__query_builder::Col::new(table_name, "stances"),
             family_name: __sdk::__query_builder::Col::new(table_name, "family_name"),
             family_flags: __sdk::__query_builder::Col::new(table_name, "family_flags"),
+            proc_flags: __sdk::__query_builder::Col::new(table_name, "proc_flags"),
+            proc_chance: __sdk::__query_builder::Col::new(table_name, "proc_chance"),
+            proc_charges: __sdk::__query_builder::Col::new(table_name, "proc_charges"),
         }
     }
 }

@@ -28,6 +28,16 @@ pub struct Aura {
     pub next_tick_micros: i64,
     pub channel_target: u64,
     pub enters_combat: bool,
+    pub proc_flags: u32,
+    pub proc_chance: u8,
+    pub proc_ppm: f32,
+    pub proc_ex: u32,
+    pub proc_school_mask: u8,
+    pub proc_family_name: u8,
+    pub proc_family_flags: u64,
+    pub proc_charges: u8,
+    pub proc_icd_ms: u32,
+    pub proc_ready_micros: i64,
 }
 
 impl __sdk::InModule for Aura {
@@ -59,6 +69,16 @@ pub struct AuraCols {
     pub next_tick_micros: __sdk::__query_builder::Col<Aura, i64>,
     pub channel_target: __sdk::__query_builder::Col<Aura, u64>,
     pub enters_combat: __sdk::__query_builder::Col<Aura, bool>,
+    pub proc_flags: __sdk::__query_builder::Col<Aura, u32>,
+    pub proc_chance: __sdk::__query_builder::Col<Aura, u8>,
+    pub proc_ppm: __sdk::__query_builder::Col<Aura, f32>,
+    pub proc_ex: __sdk::__query_builder::Col<Aura, u32>,
+    pub proc_school_mask: __sdk::__query_builder::Col<Aura, u8>,
+    pub proc_family_name: __sdk::__query_builder::Col<Aura, u8>,
+    pub proc_family_flags: __sdk::__query_builder::Col<Aura, u64>,
+    pub proc_charges: __sdk::__query_builder::Col<Aura, u8>,
+    pub proc_icd_ms: __sdk::__query_builder::Col<Aura, u32>,
+    pub proc_ready_micros: __sdk::__query_builder::Col<Aura, i64>,
 }
 
 impl __sdk::__query_builder::HasCols for Aura {
@@ -86,6 +106,16 @@ impl __sdk::__query_builder::HasCols for Aura {
             next_tick_micros: __sdk::__query_builder::Col::new(table_name, "next_tick_micros"),
             channel_target: __sdk::__query_builder::Col::new(table_name, "channel_target"),
             enters_combat: __sdk::__query_builder::Col::new(table_name, "enters_combat"),
+            proc_flags: __sdk::__query_builder::Col::new(table_name, "proc_flags"),
+            proc_chance: __sdk::__query_builder::Col::new(table_name, "proc_chance"),
+            proc_ppm: __sdk::__query_builder::Col::new(table_name, "proc_ppm"),
+            proc_ex: __sdk::__query_builder::Col::new(table_name, "proc_ex"),
+            proc_school_mask: __sdk::__query_builder::Col::new(table_name, "proc_school_mask"),
+            proc_family_name: __sdk::__query_builder::Col::new(table_name, "proc_family_name"),
+            proc_family_flags: __sdk::__query_builder::Col::new(table_name, "proc_family_flags"),
+            proc_charges: __sdk::__query_builder::Col::new(table_name, "proc_charges"),
+            proc_icd_ms: __sdk::__query_builder::Col::new(table_name, "proc_icd_ms"),
+            proc_ready_micros: __sdk::__query_builder::Col::new(table_name, "proc_ready_micros"),
         }
     }
 }

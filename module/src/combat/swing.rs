@@ -276,7 +276,15 @@ fn resolve_offhand_swing(
         ..CombatEvent::signal_at(ctx, attacker, target_guid)
     });
 
-    if apply_hit(ctx, attacker_guid, target_guid, dmg, HitSource::Weapon).combat_ended() {
+    if apply_hit(
+        ctx,
+        attacker_guid,
+        target_guid,
+        dmg,
+        Hit::weapon(HitSource::OffHand, hit_info == HIT_CRIT),
+    )
+    .combat_ended()
+    {
         // The kill's `disengage` already freed this engagement row, so there is no off-hand clock
         // left to stamp (the stamp below would find nothing) — return like the main-hand path does.
         return;
@@ -761,7 +769,15 @@ fn fire_melee_swing(
 
     // The SHARED application (#370): rage both ways, weapon/defense skill-ups, the lethal fork through
     // kill_player/kill_creature, the health write, break-on-damage, and threat.
-    if apply_hit(ctx, attacker_guid, target_guid, dmg, HitSource::Weapon).combat_ended() {
+    if apply_hit(
+        ctx,
+        attacker_guid,
+        target_guid,
+        dmg,
+        Hit::weapon(HitSource::MainHand, hit_info == HIT_CRIT),
+    )
+    .combat_ended()
+    {
         return; // the kill's `disengage` freed the row — nothing left to stamp
     }
 
@@ -944,7 +960,7 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
         shot.attacker_guid,
         shot.target_guid,
         dmg,
-        HitSource::Weapon,
+        Hit::weapon(HitSource::Ranged, false),
     );
     if outcome.duel_completed {
         return;
@@ -1000,6 +1016,35 @@ mod damage_pipeline_drift_tests {
                  was:\n{body}"
             );
         }
+    }
+
+    /// The source argument is not decoration: it is the combat EVENT the Proc engine fires off, and a
+    /// resolver that named the wrong one would fire the wrong procs (an off-hand swing that claimed to
+    /// be a main-hand one would never feed an off-hand-only proc). `apply_target_damage` is the odd one
+    /// out on purpose — it takes the hit from its caller and must forward it verbatim, never invent one.
+    #[test]
+    fn each_weapon_resolver_names_the_proc_event_its_hit_raises() {
+        for (sig, event) in [
+            ("fn fire_melee_swing(", "HitSource::MainHand"),
+            ("fn resolve_offhand_swing(", "HitSource::OffHand"),
+            ("pub fn ranged_impact(", "HitSource::Ranged"),
+        ] {
+            let body = code_of(source("combat/swing.rs"), sig);
+            assert!(
+                body.contains(event),
+                "`{sig}` no longer names `{event}` on its hit — the Proc engine fires the combat \
+                 event this argument selects. Body was:\n{body}"
+            );
+        }
+        let spell = code_of(
+            source("spell/effects.rs"),
+            "pub(crate) fn apply_target_damage(",
+        );
+        assert!(
+            spell.contains("apply_hit(ctx, caster_guid, target_guid, dmg, hit)"),
+            "`apply_target_damage` must forward its caller's hit verbatim — manufacturing one here \
+             would relabel every spell effect's proc event. Body was:\n{spell}"
+        );
     }
 
     #[test]

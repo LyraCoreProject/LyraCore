@@ -533,7 +533,7 @@ fn instant_kind_wire_values_exhaustive() {
 fn aura_kind_wire_values_exhaustive() {
     assert_eq!(
         ALL_AURA_KINDS.len(),
-        25,
+        26,
         "an aura kind was added to (or removed from) taxonomy.rs without a matching, deliberate \
          change to ALL_AURA_KINDS — bump this count only when the taxonomy really changed"
     );
