@@ -20,6 +20,8 @@ pub(crate) use edges::{
 #[cfg(test)]
 pub(crate) use engine::{evaluate, EventAiWorld};
 pub(crate) use fixtures::seed_on_aggro_fixtures;
+#[cfg(test)]
+pub(crate) use mobility::summon_lifetime_after;
 pub(crate) use mobility::{drop_summon_expiry, ranged_posture};
 pub use mobility::{expire_eventai_summon, CreatureAiSummonExpiry};
 pub(crate) use model::*;

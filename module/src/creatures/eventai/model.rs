@@ -181,6 +181,51 @@ pub(crate) enum EventAiRequest<'a> {
     Edge(EventContext),
 }
 
+/// One live melee fight the engaged pass evaluates: the creature whose rules run, and the victim
+/// its contexts point at.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EngagedFight {
+    pub creature_guid: u64,
+    pub victim_guid: u64,
+}
+
+/// One unit as EventAI conditions and target selection read it, free of any table shape.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct EventAiUnit {
+    pub guid: u64,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub map_id: u32,
+    pub instance_id: u64,
+    pub health: u32,
+    pub max_health: u32,
+    pub level: u32,
+    pub faction_template: u32,
+    pub dead: bool,
+    pub is_player: bool,
+}
+
+/// One imported broadcast text as speech reads it: the line, the chat type it carries, and the
+/// animation emote that travels with it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BroadcastLine {
+    pub text: String,
+    pub chat_type: u8,
+    pub language: u8,
+    pub emote: u32,
+}
+
+/// One authored summon location, with the summon's out-of-combat lifetime.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SummonLocation {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub orientation: f32,
+    pub lifetime_ms: u32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct EventContext {
     pub kind: EventKind,

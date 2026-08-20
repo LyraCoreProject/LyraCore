@@ -2,10 +2,11 @@
 
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration};
 
-use super::{ActionKind, ActionResult, CreatureAiState, EventContext, RuleAction, TargetPolicy};
-use crate::{
-    game_creature_ai_state, game_creature_ai_summon, game_creature_template, game_world_entity,
+use super::engine::EventAiWorld;
+use super::{
+    ActionKind, ActionResult, EventAiUnit, EventContext, RuleAction, SummonLocation, TargetPolicy,
 };
+use crate::{game_creature_ai_state, game_creature_template, game_world_entity};
 
 const SUMMON_CHECK_MS: u32 = 500;
 const SUMMON_LOW_BAND: u64 = 0x40_0000;
@@ -28,14 +29,23 @@ pub struct CreatureAiSummonExpiry {
     pub last_checked_ms: u64,
 }
 
-pub(super) fn execute(
-    ctx: &ReducerContext,
+pub(super) fn execute<W: EventAiWorld>(
+    world: &mut W,
     context: &EventContext,
     action: &RuleAction,
 ) -> ActionResult {
     match action.kind {
-        ActionKind::Summon => summon(ctx, context, action),
-        ActionKind::SetRangedPosture => set_ranged_posture(ctx, context, action),
+        ActionKind::Summon => summon(world, context, action),
+        ActionKind::SetRangedPosture => {
+            let distance_yd = action.params[0] as f32;
+            let angle_rad = if action.params[0] == 0 {
+                0.0
+            } else {
+                (action.params[1] as i32 as f32).to_radians()
+            };
+            world.set_eventai_ranged_posture(context.creature_guid, distance_yd, angle_rad);
+            ActionResult::Applied
+        }
         _ => ActionResult::Unsupported,
     }
 }
@@ -64,56 +74,20 @@ pub(crate) fn drop_summon_expiry(ctx: &ReducerContext, creature_guid: u64) {
         .delete(creature_guid);
 }
 
-fn set_ranged_posture(
-    ctx: &ReducerContext,
+fn summon<W: EventAiWorld>(
+    world: &mut W,
     context: &EventContext,
     action: &RuleAction,
 ) -> ActionResult {
-    let distance = action.params[0] as f32;
-    let angle = if action.params[0] == 0 {
-        0.0
-    } else {
-        (action.params[1] as i32 as f32).to_radians()
+    let Some(summoner) = world.eventai_unit(context.creature_guid) else {
+        return ActionResult::Refused;
     };
-    let states = ctx.db.game_creature_ai_state();
-    match states.creature_guid().find(context.creature_guid) {
-        Some(mut state) => {
-            state.ranged_distance = distance;
-            state.ranged_angle = angle;
-            state.ranged_posture_active = true;
-            states.creature_guid().update(state);
-        }
-        None => {
-            states.insert(CreatureAiState {
-                creature_guid: context.creature_guid,
-                phase: 0,
-                lifecycle_id: 1,
-                engagement_id: 1,
-                ranged_distance: distance,
-                ranged_angle: angle,
-                ranged_posture_active: true,
-            });
-        }
+    let Some(location) = world.eventai_summon_location(action.params[2]) else {
+        return ActionResult::Refused;
+    };
+    if !world.eventai_summon_template_exists(action.params[0]) {
+        return ActionResult::Refused;
     }
-    ActionResult::Applied
-}
-
-fn summon(ctx: &ReducerContext, context: &EventContext, action: &RuleAction) -> ActionResult {
-    let entities = ctx.db.game_world_entity();
-    let Some(summoner) = entities.guid().find(context.creature_guid) else {
-        return ActionResult::Refused;
-    };
-    let Some(location) = ctx.db.game_creature_ai_summon().id().find(action.params[2]) else {
-        return ActionResult::Refused;
-    };
-    let Some(template) = ctx
-        .db
-        .game_creature_template()
-        .entry()
-        .find(action.params[0])
-    else {
-        return ActionResult::Refused;
-    };
     if ![location.x, location.y, location.z, location.orientation]
         .into_iter()
         .all(f32::is_finite)
@@ -121,41 +95,69 @@ fn summon(ctx: &ReducerContext, context: &EventContext, action: &RuleAction) -> 
         return ActionResult::Refused;
     }
 
-    let selected_target = super::combat::target(ctx, context, action);
-    let now_ms = timestamp_ms(ctx);
-    let expiry = ctx
-        .db
+    let selected_target = super::combat::target(world, context, action);
+    let sequence = world.eventai_claim_summon_sequence(location.lifetime_ms);
+    let Some(guid) = summon_guid(action.params[0], sequence) else {
+        world.eventai_release_summon_sequence(sequence);
+        return ActionResult::Refused;
+    };
+    if world.eventai_unit(guid).is_some() {
+        world.eventai_release_summon_sequence(sequence);
+        return ActionResult::Refused;
+    }
+    world.eventai_place_summon(sequence, guid, action.params[0], &location, &summoner);
+
+    if action.target != TargetPolicy::SelfActor {
+        if let Some(target_guid) = selected_target {
+            world.eventai_engage_summon(guid, target_guid);
+        }
+    }
+    ActionResult::Applied
+}
+
+/// Reserve the durable expiry slot whose id is the summon's sequence number.
+pub(super) fn claim_summon_sequence(ctx: &ReducerContext, lifetime_ms: u32) -> u64 {
+    ctx.db
         .game_creature_ai_summon_expiry()
         .insert(CreatureAiSummonExpiry {
             scheduled_id: 0,
-            scheduled_at: schedule_after(ctx, next_check_ms(location.lifetime_ms)),
+            scheduled_at: schedule_after(ctx, next_check_ms(lifetime_ms)),
             creature_guid: 0,
-            lifetime_ms: location.lifetime_ms,
-            remaining_ms: location.lifetime_ms,
-            last_checked_ms: now_ms,
-        });
-    let Some(guid) = summon_guid(action.params[0], expiry.scheduled_id) else {
-        ctx.db
-            .game_creature_ai_summon_expiry()
-            .scheduled_id()
-            .delete(expiry.scheduled_id);
-        return ActionResult::Refused;
-    };
-    if entities.guid().find(guid).is_some() {
-        ctx.db
-            .game_creature_ai_summon_expiry()
-            .scheduled_id()
-            .delete(expiry.scheduled_id);
-        return ActionResult::Refused;
-    }
+            lifetime_ms,
+            remaining_ms: lifetime_ms,
+            last_checked_ms: timestamp_ms(ctx),
+        })
+        .scheduled_id
+}
+
+/// Give back a claimed slot whose summon was refused.
+pub(super) fn release_summon_sequence(ctx: &ReducerContext, sequence: u64) {
+    ctx.db
+        .game_creature_ai_summon_expiry()
+        .scheduled_id()
+        .delete(sequence);
+}
+
+pub(super) fn place_summon(
+    ctx: &ReducerContext,
+    sequence: u64,
+    guid: u64,
+    entry: u32,
+    location: &SummonLocation,
+    summoner: &EventAiUnit,
+) {
     let expiry_table = ctx.db.game_creature_ai_summon_expiry();
-    let mut expiry = expiry;
-    expiry.creature_guid = guid;
-    expiry_table.scheduled_id().update(expiry);
+    if let Some(mut expiry) = expiry_table.scheduled_id().find(sequence) {
+        expiry.creature_guid = guid;
+        expiry_table.scheduled_id().update(expiry);
+    }
+    let Some(template) = ctx.db.game_creature_template().entry().find(entry) else {
+        return;
+    };
 
     let spawn = crate::creatures::CreatureSpawn {
         guid,
-        entry: action.params[0],
+        entry,
         map_id: summoner.map_id,
         x: location.x,
         y: location.y,
@@ -173,16 +175,9 @@ fn summon(ctx: &ReducerContext, context: &EventContext, action: &RuleAction) -> 
         summoner.instance_id,
     );
     crate::creatures::insert_creature_entity(ctx, entity);
-
-    if action.target != TargetPolicy::SelfActor {
-        if let Some(target_guid) = selected_target {
-            engage_summon(ctx, guid, target_guid);
-        }
-    }
-    ActionResult::Applied
 }
 
-fn engage_summon(ctx: &ReducerContext, creature_guid: u64, target_guid: u64) {
+pub(super) fn engage_summon(ctx: &ReducerContext, creature_guid: u64, target_guid: u64) {
     if crate::combat::apply_start_attack(ctx, creature_guid, target_guid).is_err() {
         return;
     }
@@ -211,6 +206,22 @@ fn summon_guid(entry: u32, scheduled_id: u64) -> Option<u64> {
 
 fn next_check_ms(remaining_ms: u32) -> u32 {
     remaining_ms.clamp(1, SUMMON_CHECK_MS)
+}
+
+/// One lifetime check on a temporary summon: the out-of-combat ms it has left after `elapsed_ms`,
+/// or `None` when its time is up and it despawns. A fight refills the whole lifetime, so an
+/// engaged summon never runs out mid-swing.
+pub(crate) fn summon_lifetime_after(
+    engaged: bool,
+    lifetime_ms: u32,
+    remaining_ms: u32,
+    elapsed_ms: u32,
+) -> Option<u32> {
+    if engaged {
+        return Some(lifetime_ms);
+    }
+    let remaining = remaining_ms.saturating_sub(elapsed_ms);
+    (remaining != 0).then_some(remaining)
 }
 
 fn schedule_after(ctx: &ReducerContext, delay_ms: u32) -> ScheduleAt {
@@ -244,15 +255,12 @@ pub fn expire_eventai_summon(ctx: &ReducerContext, expiry: CreatureAiSummonExpir
         .saturating_sub(expiry.last_checked_ms)
         .min(u64::from(u32::MAX)) as u32;
     let engaged = crate::combat::is_engaged(ctx, expiry.creature_guid);
-    let remaining_ms = if engaged {
-        expiry.lifetime_ms
-    } else {
-        expiry.remaining_ms.saturating_sub(elapsed_ms)
-    };
-    if !engaged && remaining_ms == 0 {
+    let Some(remaining_ms) =
+        summon_lifetime_after(engaged, expiry.lifetime_ms, expiry.remaining_ms, elapsed_ms)
+    else {
         despawn_temporary_summon(ctx, expiry.creature_guid);
         return;
-    }
+    };
     let delay_ms = if engaged {
         SUMMON_CHECK_MS
     } else {

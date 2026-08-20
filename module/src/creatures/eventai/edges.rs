@@ -160,8 +160,8 @@ mod eventai_gate_tripwire {
     fn every_eventai_entry_point_keeps_its_gate() {
         for (source, signature, needle, why) in [
             (
-                include_str!("combat.rs"),
-                "pub(super) fn engaged_contexts(",
+                include_str!("engine.rs"),
+                "fn eventai_fights(&self, scope: &TickScope) -> Vec<EngagedFight> {",
                 "super::runs_eventai(&creature)",
                 "a pet must produce no evaluation context of its own",
             ),
@@ -186,8 +186,15 @@ mod eventai_gate_tripwire {
             ),
             (
                 include_str!("engine.rs"),
-                "fn eventai_speak(&mut self, context: &EventContext, action: &RuleAction, \
-                 chat_type: u8) {",
+                concat!(
+                    "fn eventai_deliver_line(\n",
+                    "        &mut self,\n",
+                    "        speaker_guid: u64,\n",
+                    "        chat_type: u8,\n",
+                    "        language: u8,\n",
+                    "        message: String,\n",
+                    "    ) -> bool {",
+                ),
                 "crate::chat::apply_send_chat(",
                 "the say/yell chokepoint owns the dead-speaker Gate and the length cap",
             ),
