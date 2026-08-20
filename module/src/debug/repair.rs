@@ -142,6 +142,11 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     .filter(|id| ctx.db.game_spell().spell_id().find(**id).is_some())
     .count() as u64;
 
+    // The temporary Elwynn Forest / Westfall weather climate. Only-if-empty, so an operator edit and
+    // the eventual world-data import both survive this pass. A zone with no climate row never rolls,
+    // and its sky stays fine.
+    let weather_climate = crate::weather::seed_weather_weights(ctx);
+
     // --- schedule ensures (idempotent: no-op if a row is already present) ---
     // formerly `debug_ensure_aura_schedule`: matches the 1s interval in `seed::init`.
     let aura_schedule = if ctx.db.game_aura_schedule().iter().next().is_some() {
@@ -274,6 +279,11 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(crate::gw::LEASE_REAP_MICROS)),
     });
 
+    // Re-arm the 10-minute weather roll, leaving exactly one schedule row. Rearm-not-ensure for the
+    // lease reaper's reason: there is no operator cadence knob here, so the canonical interval is the
+    // only interval. Absent, weather silently stops advancing.
+    crate::weather::rearm_weather_schedule(ctx);
+
     // One-shot Auction expiries are created with their Auctions, not seeded globally. A publish
     // must preserve them; if an older/broken publication left one absent, restore only that missing
     // row at the Auction's original deadline. Never re-arm an existing row or move its deadline.
@@ -333,9 +343,9 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
 
     // row_count: total rows/rearms across every family this pass touched (work-item 216 provenance
     // stamp) — one stamp for the whole repair pass, replacing the 13 separate per-family stamps the
-    // deleted reducers wrote. The trailing `+ 2` is the two schedule rows this always (re)arms
-    // unconditionally (creature tick + instance reaper), which have no "was it already present"
-    // signal worth stamping separately.
+    // deleted reducers wrote. The trailing `+ 3` is the three schedule rows this always (re)arms
+    // unconditionally (creature tick + instance reaper + weather roll), which have no "was it
+    // already present" signal worth stamping separately.
     let total = talents
         + createinfo
         + spell_groups
@@ -349,6 +359,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         + demon_skin
         + regen
         + mount_fixture
+        + weather_climate
         + aura_schedule
         + breath_schedule
         + duel_schedule
@@ -357,7 +368,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         + pet_care_schedule
         + auction_expiries
         + proc_profiles
-        + 2;
+        + 3;
     crate::import_meta::stamp(ctx, "debug_repair_after_publish", "", "", total);
     log::info!("debug_repair_after_publish: repaired {total} fixture/schedule row(s), including missing Auction expiries");
     Ok(())

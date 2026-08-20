@@ -329,6 +329,9 @@ pub mod vmap;
 // `test_scan.rs` it now runs on.
 #[cfg(test)]
 mod tripwires;
+/// Per-zone weather: the seasonal climate weights, the current-weather row the gateway relays, the
+/// ten-minute roll that advances it, and the operator's forced-weather lever.
+mod weather;
 mod world;
 mod xp;
 
@@ -379,6 +382,7 @@ pub use threat::*;
 pub use trade::*;
 pub use trainer::*;
 pub use transfer::TransferOut; // re-exported for the gateway schema-parity test (#19)
+pub use weather::*;
 pub use world::*;
 pub use xp::*;
 

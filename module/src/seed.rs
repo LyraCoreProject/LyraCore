@@ -9,7 +9,8 @@
 //!    fresh database needs this regardless of whether it will ever host a real import.
 //! 2. **`seed_map0_demo_content`** (the in-body `DECISION (issue #79)` comment has the full
 //!    reasoning): NPCs, a starter weapon, profession items, a skinning beast, a profession trainer,
-//!    gameobjects, gather nodes, and a tier-variety demonstrator, each under its own `// ---` banner.
+//!    gameobjects, gather nodes, a tier-variety demonstrator, and the temporary Elwynn Forest /
+//!    Westfall weather climate, each under its own `// ---` banner.
 //!    Every row here is wholesale-replaced the moment a real `importer --apply` run lands for map 0
 //!    (or fenced off entirely for any other continent). This is a DIFFERENT fixture family from
 //!    `seed/fixtures.rs`'s synthetic engine-mechanic fixtures (5xxxx ids, no map content) — see that
@@ -18,7 +19,7 @@
 //!    1-10-alpha consumable breadth, the mock-seed fixture kits (`seed/fixtures.rs`), enchant/
 //!    disenchant, talents, and the stacking-group starter set.
 //! 4. **`seed_scheduler_arming`**: the event reaper, instance reaper, creature movement/melee/aura/
-//!    ground-AoE ticks. Runs last so nothing fires against a half-seeded database.
+//!    ground-AoE/weather ticks. Runs last so nothing fires against a half-seeded database.
 //!
 //! Base-row constructors (`base_spell`/`base_effect`/`base_item`, `seed/fixtures.rs`) plus the
 //! `spell`/`effect` closures below keep the ~700 lines of `Spell`/`SpellEffect`/`ItemTemplate`
@@ -237,10 +238,11 @@ fn seed_production_core(ctx: &ReducerContext) {
 
 /// Stratum 2 — Map-0 (Northshire) demo/fixture content (the `DECISION (issue #79)` comment below
 /// has the full reasoning): NPCs, a starter weapon, profession items, a skinning beast, a
-/// profession trainer, gameobjects, gather nodes, and a tier-variety demonstrator. Every row here
-/// is wholesale-replaced the moment a real `importer --apply` run lands for map 0 (or fenced off
-/// entirely for any other continent). This is a DIFFERENT fixture family from `seed/fixtures.rs`'s
-/// synthetic engine-mechanic fixtures (5xxxx ids, no map content) — see that file's header.
+/// profession trainer, gameobjects, gather nodes, a tier-variety demonstrator, and the temporary
+/// Elwynn Forest / Westfall weather climate. Every row here is wholesale-replaced the moment a real
+/// `importer --apply` run lands for map 0 (or fenced off entirely for any other continent). This is
+/// a DIFFERENT fixture family from `seed/fixtures.rs`'s synthetic engine-mechanic fixtures (5xxxx
+/// ids, no map content) — see that file's header.
 fn seed_map0_demo_content(ctx: &ReducerContext) {
     use constants::start_human_warrior as hw;
 
@@ -786,6 +788,13 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     }
     // ARM: insert exactly max_active (1) weighted-distinct live rows → a rolled tier is live from init.
     crate::gameobject::arm_pool(ctx, TIER_POOL_ID);
+
+    // --- Weather climate for Elwynn Forest and Westfall ---------------------------------------
+    // Hand-authored and TEMPORARY: the world-data import will fill `game_weather` from the cmangos
+    // dump and delete this seed in the same change. Idempotent + shared with
+    // `debug_repair_after_publish`, which is how an already-migrated database picks it up (init does
+    // NOT re-run).
+    crate::weather::seed_weather_weights(ctx);
 }
 
 /// Stratum 3 — the hand-authored spell/item registry: `game_spell`/`game_spell_effect` rows, the
@@ -1314,8 +1323,8 @@ fn seed_spell_registry(ctx: &ReducerContext) {
 }
 
 /// Stratum 4 — scheduler arming: the event reaper, instance reaper, creature movement tick, melee
-/// swing tick, aura-expiry tick, and ground-AoE damage tick. Runs last so nothing fires against a
-/// half-seeded database.
+/// swing tick, aura-expiry tick, ground-AoE damage tick, and weather roll. Runs last so nothing
+/// fires against a half-seeded database.
 fn seed_scheduler_arming(ctx: &ReducerContext) {
     // Schedule the event reaper every 1s.
     ctx.db
@@ -1426,6 +1435,13 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
                 crate::gw::LEASE_REAP_MICROS,
             )),
         });
+
+    // Weather roll every 10 minutes: re-rolls each zone that has climate data and writes only the
+    // rows whose sky actually changed. Without this row weather never advances past whatever a zone
+    // was last forced to. Shared with `debug_repair_after_publish`, which re-arms it on an
+    // already-migrated database where `init` does not re-run — one definition of the canonical row,
+    // so the two paths cannot arm different intervals.
+    crate::weather::rearm_weather_schedule(ctx);
 }
 
 // Test/mock-seed fixture kits (Test PW:Shield, scenario quest/vendor/trainer, …) live in their
