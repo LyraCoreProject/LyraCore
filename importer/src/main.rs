@@ -7197,7 +7197,6 @@ mod tests {
         assert!(!plan.stmts.iter().any(|statement| {
             statement.contains("game_creature_ai_state")
                 || statement.contains("game_creature_ai_rule_state")
-                || statement.contains("game_creature_ai_timer")
         }));
 
         let events = plan

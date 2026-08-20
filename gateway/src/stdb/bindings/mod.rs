@@ -61,7 +61,6 @@ pub mod creature_ai_rule_state_type;
 pub mod creature_ai_state_type;
 pub mod creature_ai_summon_expiry_type;
 pub mod creature_ai_summon_type;
-pub mod creature_ai_timer_type;
 pub mod creature_cast_type;
 pub mod creature_family_type;
 pub mod creature_loot_type;
@@ -284,7 +283,6 @@ pub mod game_creature_ai_rule_state_table;
 pub mod game_creature_ai_state_table;
 pub mod game_creature_ai_summon_expiry_table;
 pub mod game_creature_ai_summon_table;
-pub mod game_creature_ai_timer_table;
 pub mod game_creature_cast_table;
 pub mod game_creature_family_table;
 pub mod game_creature_loot_table;
@@ -804,7 +802,6 @@ pub use creature_ai_rule_state_type::CreatureAiRuleState;
 pub use creature_ai_state_type::CreatureAiState;
 pub use creature_ai_summon_expiry_type::CreatureAiSummonExpiry;
 pub use creature_ai_summon_type::CreatureAiSummon;
-pub use creature_ai_timer_type::CreatureAiTimer;
 pub use creature_cast_type::CreatureCast;
 pub use creature_family_type::CreatureFamily;
 pub use creature_loot_type::CreatureLoot;
@@ -1027,7 +1024,6 @@ pub use game_creature_ai_rule_state_table::*;
 pub use game_creature_ai_state_table::*;
 pub use game_creature_ai_summon_expiry_table::*;
 pub use game_creature_ai_summon_table::*;
-pub use game_creature_ai_timer_table::*;
 pub use game_creature_cast_table::*;
 pub use game_creature_family_table::*;
 pub use game_creature_loot_table::*;
@@ -5939,7 +5935,6 @@ pub struct DbUpdate {
     game_creature_ai_state: __sdk::TableUpdate<CreatureAiState>,
     game_creature_ai_summon: __sdk::TableUpdate<CreatureAiSummon>,
     game_creature_ai_summon_expiry: __sdk::TableUpdate<CreatureAiSummonExpiry>,
-    game_creature_ai_timer: __sdk::TableUpdate<CreatureAiTimer>,
     game_creature_cast: __sdk::TableUpdate<CreatureCast>,
     game_creature_family: __sdk::TableUpdate<CreatureFamily>,
     game_creature_loot: __sdk::TableUpdate<CreatureLoot>,
@@ -6257,9 +6252,6 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                         game_creature_ai_summon_expiry_table::parse_table_update(table_update)?,
                     )
                 }
-                "game_creature_ai_timer" => db_update.game_creature_ai_timer.append(
-                    game_creature_ai_timer_table::parse_table_update(table_update)?,
-                ),
                 "game_creature_cast" => db_update
                     .game_creature_cast
                     .append(game_creature_cast_table::parse_table_update(table_update)?),
@@ -6991,12 +6983,6 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_creature_ai_summon_expiry,
             )
             .with_updates_by_pk(|row| &row.scheduled_id);
-        diff.game_creature_ai_timer = cache
-            .apply_diff_to_table::<CreatureAiTimer>(
-                "game_creature_ai_timer",
-                &self.game_creature_ai_timer,
-            )
-            .with_updates_by_pk(|row| &row.id);
         diff.game_creature_cast = cache
             .apply_diff_to_table::<CreatureCast>("game_creature_cast", &self.game_creature_cast)
             .with_updates_by_pk(|row| &row.creature_entry);
@@ -7793,9 +7779,6 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_creature_ai_summon_expiry" => db_update
                     .game_creature_ai_summon_expiry
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "game_creature_ai_timer" => db_update
-                    .game_creature_ai_timer
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_creature_cast" => db_update
                     .game_creature_cast
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -8424,9 +8407,6 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_creature_ai_summon_expiry" => db_update
                     .game_creature_ai_summon_expiry
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "game_creature_ai_timer" => db_update
-                    .game_creature_ai_timer
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_creature_cast" => db_update
                     .game_creature_cast
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -8961,7 +8941,6 @@ pub struct AppliedDiff<'r> {
     game_creature_ai_state: __sdk::TableAppliedDiff<'r, CreatureAiState>,
     game_creature_ai_summon: __sdk::TableAppliedDiff<'r, CreatureAiSummon>,
     game_creature_ai_summon_expiry: __sdk::TableAppliedDiff<'r, CreatureAiSummonExpiry>,
-    game_creature_ai_timer: __sdk::TableAppliedDiff<'r, CreatureAiTimer>,
     game_creature_cast: __sdk::TableAppliedDiff<'r, CreatureCast>,
     game_creature_family: __sdk::TableAppliedDiff<'r, CreatureFamily>,
     game_creature_loot: __sdk::TableAppliedDiff<'r, CreatureLoot>,
@@ -9350,11 +9329,6 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<CreatureAiSummonExpiry>(
             "game_creature_ai_summon_expiry",
             &self.game_creature_ai_summon_expiry,
-            event,
-        );
-        callbacks.invoke_table_row_callbacks::<CreatureAiTimer>(
-            "game_creature_ai_timer",
-            &self.game_creature_ai_timer,
             event,
         );
         callbacks.invoke_table_row_callbacks::<CreatureCast>(
@@ -10814,7 +10788,6 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_creature_ai_state_table::register_table(client_cache);
         game_creature_ai_summon_table::register_table(client_cache);
         game_creature_ai_summon_expiry_table::register_table(client_cache);
-        game_creature_ai_timer_table::register_table(client_cache);
         game_creature_cast_table::register_table(client_cache);
         game_creature_family_table::register_table(client_cache);
         game_creature_loot_table::register_table(client_cache);
@@ -11022,7 +10995,6 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_creature_ai_state",
         "game_creature_ai_summon",
         "game_creature_ai_summon_expiry",
-        "game_creature_ai_timer",
         "game_creature_cast",
         "game_creature_family",
         "game_creature_loot",

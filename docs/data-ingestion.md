@@ -213,7 +213,7 @@ duplicated on every shard by design.
 `--family creature-ai` imports the supported CMaNGOS `creature_ai_scripts` rules into the Module-only
 EventAI tables. It clears and reloads `game_creature_ai_event`,
 `game_creature_ai_broadcast_text`, and `game_creature_ai_summon`. It does not clear creature EventAI
-state, rule state, or timer rows.
+state or rule state rows.
 
 One accepted source rule becomes one to three ordered static rows. The row id is
 `0x4000_0000_0000_0000 | (source_rule_id << 2) | action_order`; this keeps imported ids outside the
