@@ -40,8 +40,14 @@ pub(super) fn execute(
     }
 }
 
+/// The authored ranged posture holding this creature at `(distance, angle)` from its victim, if
+/// one is active. Behind `runs_eventai` like every other EventAI read: a tamed creature answers
+/// its owner, never a posture its wild entry's state row may still carry.
 pub(crate) fn ranged_posture(ctx: &ReducerContext, creature_guid: u64) -> Option<(f32, f32)> {
-    ctx.db.game_world_entity().guid().find(creature_guid)?;
+    let creature = ctx.db.game_world_entity().guid().find(creature_guid)?;
+    if !super::runs_eventai(&creature) {
+        return None;
+    }
     ctx.db
         .game_creature_ai_state()
         .creature_guid()
@@ -50,6 +56,7 @@ pub(crate) fn ranged_posture(ctx: &ReducerContext, creature_guid: u64) -> Option
         .map(|state| (state.ranged_distance, state.ranged_angle))
 }
 
+/// Forget a despawned creature's pending summon-lifetime check.
 pub(crate) fn drop_summon_expiry(ctx: &ReducerContext, creature_guid: u64) {
     ctx.db
         .game_creature_ai_summon_expiry()
