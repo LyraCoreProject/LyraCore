@@ -16,6 +16,7 @@ pub struct PendingSpellImpact {
     pub is_crit: bool,
     pub resisted: u32,
     pub after_resist: i32,
+    pub triggered: bool,
 }
 
 impl __sdk::InModule for PendingSpellImpact {
@@ -35,6 +36,7 @@ pub struct PendingSpellImpactCols {
     pub is_crit: __sdk::__query_builder::Col<PendingSpellImpact, bool>,
     pub resisted: __sdk::__query_builder::Col<PendingSpellImpact, u32>,
     pub after_resist: __sdk::__query_builder::Col<PendingSpellImpact, i32>,
+    pub triggered: __sdk::__query_builder::Col<PendingSpellImpact, bool>,
 }
 
 impl __sdk::__query_builder::HasCols for PendingSpellImpact {
@@ -50,6 +52,7 @@ impl __sdk::__query_builder::HasCols for PendingSpellImpact {
             is_crit: __sdk::__query_builder::Col::new(table_name, "is_crit"),
             resisted: __sdk::__query_builder::Col::new(table_name, "resisted"),
             after_resist: __sdk::__query_builder::Col::new(table_name, "after_resist"),
+            triggered: __sdk::__query_builder::Col::new(table_name, "triggered"),
         }
     }
 }

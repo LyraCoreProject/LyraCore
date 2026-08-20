@@ -6,52 +6,46 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct GwCastItemTargetArgs {
-    pub actor_guid: u64,
-    pub spell_id: u32,
-    pub slot: u8,
+pub(super) struct DebugStageChoiceRewardFixtureArgs {
+    pub fill_inventory: bool,
 }
 
-impl From<GwCastItemTargetArgs> for super::Reducer {
-    fn from(args: GwCastItemTargetArgs) -> Self {
-        Self::GwCastItemTarget {
-            actor_guid: args.actor_guid,
-            spell_id: args.spell_id,
-            slot: args.slot,
+impl From<DebugStageChoiceRewardFixtureArgs> for super::Reducer {
+    fn from(args: DebugStageChoiceRewardFixtureArgs) -> Self {
+        Self::DebugStageChoiceRewardFixture {
+            fill_inventory: args.fill_inventory,
         }
     }
 }
 
-impl __sdk::InModule for GwCastItemTargetArgs {
+impl __sdk::InModule for DebugStageChoiceRewardFixtureArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `gw_cast_item_target`.
+/// Extension trait for access to the reducer `debug_stage_choice_reward_fixture`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait gw_cast_item_target {
-    /// Request that the remote module invoke the reducer `gw_cast_item_target` to run as soon as possible.
+pub trait debug_stage_choice_reward_fixture {
+    /// Request that the remote module invoke the reducer `debug_stage_choice_reward_fixture` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`gw_cast_item_target:gw_cast_item_target_then`] to run a callback after the reducer completes.
-    fn gw_cast_item_target(&self, actor_guid: u64, spell_id: u32, slot: u8) -> __sdk::Result<()> {
-        self.gw_cast_item_target_then(actor_guid, spell_id, slot, |_, _| {})
+    /// /// Use [`debug_stage_choice_reward_fixture:debug_stage_choice_reward_fixture_then`] to run a callback after the reducer completes.
+    fn debug_stage_choice_reward_fixture(&self, fill_inventory: bool) -> __sdk::Result<()> {
+        self.debug_stage_choice_reward_fixture_then(fill_inventory, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `gw_cast_item_target` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `debug_stage_choice_reward_fixture` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn gw_cast_item_target_then(
+    fn debug_stage_choice_reward_fixture_then(
         &self,
-        actor_guid: u64,
-        spell_id: u32,
-        slot: u8,
+        fill_inventory: bool,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -59,23 +53,17 @@ pub trait gw_cast_item_target {
     ) -> __sdk::Result<()>;
 }
 
-impl gw_cast_item_target for super::RemoteReducers {
-    fn gw_cast_item_target_then(
+impl debug_stage_choice_reward_fixture for super::RemoteReducers {
+    fn debug_stage_choice_reward_fixture_then(
         &self,
-        actor_guid: u64,
-        spell_id: u32,
-        slot: u8,
+        fill_inventory: bool,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            GwCastItemTargetArgs {
-                actor_guid,
-                spell_id,
-                slot,
-            },
+            DebugStageChoiceRewardFixtureArgs { fill_inventory },
             callback,
         )
     }

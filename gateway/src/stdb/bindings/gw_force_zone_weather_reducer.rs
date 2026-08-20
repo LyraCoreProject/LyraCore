@@ -6,52 +6,57 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct GwCastItemTargetArgs {
-    pub actor_guid: u64,
-    pub spell_id: u32,
-    pub slot: u8,
+pub(super) struct GwForceZoneWeatherArgs {
+    pub zone_id: u32,
+    pub weather_type: u8,
+    pub intensity: f32,
 }
 
-impl From<GwCastItemTargetArgs> for super::Reducer {
-    fn from(args: GwCastItemTargetArgs) -> Self {
-        Self::GwCastItemTarget {
-            actor_guid: args.actor_guid,
-            spell_id: args.spell_id,
-            slot: args.slot,
+impl From<GwForceZoneWeatherArgs> for super::Reducer {
+    fn from(args: GwForceZoneWeatherArgs) -> Self {
+        Self::GwForceZoneWeather {
+            zone_id: args.zone_id,
+            weather_type: args.weather_type,
+            intensity: args.intensity,
         }
     }
 }
 
-impl __sdk::InModule for GwCastItemTargetArgs {
+impl __sdk::InModule for GwForceZoneWeatherArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `gw_cast_item_target`.
+/// Extension trait for access to the reducer `gw_force_zone_weather`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait gw_cast_item_target {
-    /// Request that the remote module invoke the reducer `gw_cast_item_target` to run as soon as possible.
+pub trait gw_force_zone_weather {
+    /// Request that the remote module invoke the reducer `gw_force_zone_weather` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`gw_cast_item_target:gw_cast_item_target_then`] to run a callback after the reducer completes.
-    fn gw_cast_item_target(&self, actor_guid: u64, spell_id: u32, slot: u8) -> __sdk::Result<()> {
-        self.gw_cast_item_target_then(actor_guid, spell_id, slot, |_, _| {})
+    /// /// Use [`gw_force_zone_weather:gw_force_zone_weather_then`] to run a callback after the reducer completes.
+    fn gw_force_zone_weather(
+        &self,
+        zone_id: u32,
+        weather_type: u8,
+        intensity: f32,
+    ) -> __sdk::Result<()> {
+        self.gw_force_zone_weather_then(zone_id, weather_type, intensity, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `gw_cast_item_target` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `gw_force_zone_weather` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn gw_cast_item_target_then(
+    fn gw_force_zone_weather_then(
         &self,
-        actor_guid: u64,
-        spell_id: u32,
-        slot: u8,
+        zone_id: u32,
+        weather_type: u8,
+        intensity: f32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -59,22 +64,22 @@ pub trait gw_cast_item_target {
     ) -> __sdk::Result<()>;
 }
 
-impl gw_cast_item_target for super::RemoteReducers {
-    fn gw_cast_item_target_then(
+impl gw_force_zone_weather for super::RemoteReducers {
+    fn gw_force_zone_weather_then(
         &self,
-        actor_guid: u64,
-        spell_id: u32,
-        slot: u8,
+        zone_id: u32,
+        weather_type: u8,
+        intensity: f32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            GwCastItemTargetArgs {
-                actor_guid,
-                spell_id,
-                slot,
+            GwForceZoneWeatherArgs {
+                zone_id,
+                weather_type,
+                intensity,
             },
             callback,
         )

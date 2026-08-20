@@ -17,6 +17,24 @@ pub struct CreatureAiEvent {
     pub initial_max_ms: u32,
     pub repeat_min_ms: u32,
     pub repeat_max_ms: u32,
+    pub source_rule_id: u64,
+    pub action_order: u8,
+    pub creature_guid: u64,
+    pub chance_pct: u8,
+    pub allowed_phase_mask: u32,
+    pub source_flags: u32,
+    pub repeat_policy: u8,
+    pub event_param_1: u32,
+    pub event_param_2: u32,
+    pub event_param_3: u32,
+    pub event_param_4: u32,
+    pub event_param_5: u32,
+    pub event_param_6: u32,
+    pub action_param_1: u32,
+    pub action_param_2: u32,
+    pub action_param_3: u32,
+    pub target_policy: u8,
+    pub cast_options: u32,
 }
 
 impl __sdk::InModule for CreatureAiEvent {
@@ -37,6 +55,24 @@ pub struct CreatureAiEventCols {
     pub initial_max_ms: __sdk::__query_builder::Col<CreatureAiEvent, u32>,
     pub repeat_min_ms: __sdk::__query_builder::Col<CreatureAiEvent, u32>,
     pub repeat_max_ms: __sdk::__query_builder::Col<CreatureAiEvent, u32>,
+    pub source_rule_id: __sdk::__query_builder::Col<CreatureAiEvent, u64>,
+    pub action_order: __sdk::__query_builder::Col<CreatureAiEvent, u8>,
+    pub creature_guid: __sdk::__query_builder::Col<CreatureAiEvent, u64>,
+    pub chance_pct: __sdk::__query_builder::Col<CreatureAiEvent, u8>,
+    pub allowed_phase_mask: __sdk::__query_builder::Col<CreatureAiEvent, u32>,
+    pub source_flags: __sdk::__query_builder::Col<CreatureAiEvent, u32>,
+    pub repeat_policy: __sdk::__query_builder::Col<CreatureAiEvent, u8>,
+    pub event_param_1: __sdk::__query_builder::Col<CreatureAiEvent, u32>,
+    pub event_param_2: __sdk::__query_builder::Col<CreatureAiEvent, u32>,
+    pub event_param_3: __sdk::__query_builder::Col<CreatureAiEvent, u32>,
+    pub event_param_4: __sdk::__query_builder::Col<CreatureAiEvent, u32>,
+    pub event_param_5: __sdk::__query_builder::Col<CreatureAiEvent, u32>,
+    pub event_param_6: __sdk::__query_builder::Col<CreatureAiEvent, u32>,
+    pub action_param_1: __sdk::__query_builder::Col<CreatureAiEvent, u32>,
+    pub action_param_2: __sdk::__query_builder::Col<CreatureAiEvent, u32>,
+    pub action_param_3: __sdk::__query_builder::Col<CreatureAiEvent, u32>,
+    pub target_policy: __sdk::__query_builder::Col<CreatureAiEvent, u8>,
+    pub cast_options: __sdk::__query_builder::Col<CreatureAiEvent, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for CreatureAiEvent {
@@ -53,6 +89,24 @@ impl __sdk::__query_builder::HasCols for CreatureAiEvent {
             initial_max_ms: __sdk::__query_builder::Col::new(table_name, "initial_max_ms"),
             repeat_min_ms: __sdk::__query_builder::Col::new(table_name, "repeat_min_ms"),
             repeat_max_ms: __sdk::__query_builder::Col::new(table_name, "repeat_max_ms"),
+            source_rule_id: __sdk::__query_builder::Col::new(table_name, "source_rule_id"),
+            action_order: __sdk::__query_builder::Col::new(table_name, "action_order"),
+            creature_guid: __sdk::__query_builder::Col::new(table_name, "creature_guid"),
+            chance_pct: __sdk::__query_builder::Col::new(table_name, "chance_pct"),
+            allowed_phase_mask: __sdk::__query_builder::Col::new(table_name, "allowed_phase_mask"),
+            source_flags: __sdk::__query_builder::Col::new(table_name, "source_flags"),
+            repeat_policy: __sdk::__query_builder::Col::new(table_name, "repeat_policy"),
+            event_param_1: __sdk::__query_builder::Col::new(table_name, "event_param_1"),
+            event_param_2: __sdk::__query_builder::Col::new(table_name, "event_param_2"),
+            event_param_3: __sdk::__query_builder::Col::new(table_name, "event_param_3"),
+            event_param_4: __sdk::__query_builder::Col::new(table_name, "event_param_4"),
+            event_param_5: __sdk::__query_builder::Col::new(table_name, "event_param_5"),
+            event_param_6: __sdk::__query_builder::Col::new(table_name, "event_param_6"),
+            action_param_1: __sdk::__query_builder::Col::new(table_name, "action_param_1"),
+            action_param_2: __sdk::__query_builder::Col::new(table_name, "action_param_2"),
+            action_param_3: __sdk::__query_builder::Col::new(table_name, "action_param_3"),
+            target_policy: __sdk::__query_builder::Col::new(table_name, "target_policy"),
+            cast_options: __sdk::__query_builder::Col::new(table_name, "cast_options"),
         }
     }
 }
@@ -62,6 +116,7 @@ impl __sdk::__query_builder::HasCols for CreatureAiEvent {
 /// Provides typed access to indexed columns for query building.
 pub struct CreatureAiEventIxCols {
     pub creature_entry: __sdk::__query_builder::IxCol<CreatureAiEvent, u32>,
+    pub creature_guid: __sdk::__query_builder::IxCol<CreatureAiEvent, u64>,
     pub id: __sdk::__query_builder::IxCol<CreatureAiEvent, u64>,
 }
 
@@ -70,6 +125,7 @@ impl __sdk::__query_builder::HasIxCols for CreatureAiEvent {
     fn ix_cols(table_name: &'static str) -> Self::IxCols {
         CreatureAiEventIxCols {
             creature_entry: __sdk::__query_builder::IxCol::new(table_name, "creature_entry"),
+            creature_guid: __sdk::__query_builder::IxCol::new(table_name, "creature_guid"),
             id: __sdk::__query_builder::IxCol::new(table_name, "id"),
         }
     }

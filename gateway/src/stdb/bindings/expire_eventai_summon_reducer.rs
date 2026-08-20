@@ -4,54 +4,50 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::creature_ai_summon_expiry_type::CreatureAiSummonExpiry;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct GwCastItemTargetArgs {
-    pub actor_guid: u64,
-    pub spell_id: u32,
-    pub slot: u8,
+pub(super) struct ExpireEventaiSummonArgs {
+    pub expiry: CreatureAiSummonExpiry,
 }
 
-impl From<GwCastItemTargetArgs> for super::Reducer {
-    fn from(args: GwCastItemTargetArgs) -> Self {
-        Self::GwCastItemTarget {
-            actor_guid: args.actor_guid,
-            spell_id: args.spell_id,
-            slot: args.slot,
+impl From<ExpireEventaiSummonArgs> for super::Reducer {
+    fn from(args: ExpireEventaiSummonArgs) -> Self {
+        Self::ExpireEventaiSummon {
+            expiry: args.expiry,
         }
     }
 }
 
-impl __sdk::InModule for GwCastItemTargetArgs {
+impl __sdk::InModule for ExpireEventaiSummonArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `gw_cast_item_target`.
+/// Extension trait for access to the reducer `expire_eventai_summon`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait gw_cast_item_target {
-    /// Request that the remote module invoke the reducer `gw_cast_item_target` to run as soon as possible.
+pub trait expire_eventai_summon {
+    /// Request that the remote module invoke the reducer `expire_eventai_summon` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`gw_cast_item_target:gw_cast_item_target_then`] to run a callback after the reducer completes.
-    fn gw_cast_item_target(&self, actor_guid: u64, spell_id: u32, slot: u8) -> __sdk::Result<()> {
-        self.gw_cast_item_target_then(actor_guid, spell_id, slot, |_, _| {})
+    /// /// Use [`expire_eventai_summon:expire_eventai_summon_then`] to run a callback after the reducer completes.
+    fn expire_eventai_summon(&self, expiry: CreatureAiSummonExpiry) -> __sdk::Result<()> {
+        self.expire_eventai_summon_then(expiry, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `gw_cast_item_target` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `expire_eventai_summon` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn gw_cast_item_target_then(
+    fn expire_eventai_summon_then(
         &self,
-        actor_guid: u64,
-        spell_id: u32,
-        slot: u8,
+        expiry: CreatureAiSummonExpiry,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -59,24 +55,16 @@ pub trait gw_cast_item_target {
     ) -> __sdk::Result<()>;
 }
 
-impl gw_cast_item_target for super::RemoteReducers {
-    fn gw_cast_item_target_then(
+impl expire_eventai_summon for super::RemoteReducers {
+    fn expire_eventai_summon_then(
         &self,
-        actor_guid: u64,
-        spell_id: u32,
-        slot: u8,
+        expiry: CreatureAiSummonExpiry,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp.invoke_reducer_with_callback(
-            GwCastItemTargetArgs {
-                actor_guid,
-                spell_id,
-                slot,
-            },
-            callback,
-        )
+        self.imp
+            .invoke_reducer_with_callback(ExpireEventaiSummonArgs { expiry }, callback)
     }
 }
