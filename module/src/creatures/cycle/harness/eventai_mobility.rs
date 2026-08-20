@@ -215,6 +215,35 @@ fn a_summon_inherits_partition_fires_spawn_once_and_engages() {
 }
 
 #[test]
+fn a_summon_guid_carries_the_entry_and_the_first_sequence_of_the_eventai_band() {
+    let summon = row(
+        509_0310,
+        509_0310,
+        0,
+        ENTRY,
+        EVENT_ON_AGGRO,
+        ACTION_SUMMON,
+        [SUMMON_ENTRY, 1, 10],
+    );
+    let mut scenario = world()
+        .eventai_template(SUMMON_ENTRY)
+        .eventai_summon(10, point(5.0, 0.0), 0.0, 1_000)
+        .eventai_row(summon);
+
+    EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
+
+    let summoned_guids = scenario.eventai_summoned_guids();
+    let [summoned] = summoned_guids.as_slice() else {
+        panic!("expected one summon");
+    };
+    // The wave-guid layout: the template entry in the high 24 bits of the low 48, the low 24 bits
+    // for the band and sequence. The EventAI band is 0x40_0000 and this world's first summon takes
+    // sequence 1.
+    assert_eq!((summoned >> 24) & 0xFF_FFFF, u64::from(SUMMON_ENTRY));
+    assert_eq!(summoned & 0xFF_FFFF, 0x40_0000 | 1);
+}
+
+#[test]
 fn summon_lifetime_waits_out_combat_then_uses_full_cleanup() {
     let mut summon = row(
         509_0306,
