@@ -1000,6 +1000,35 @@ fn create_object_carries_guid_position_speeds() {
 }
 
 #[test]
+fn self_player_create_object_carries_player_controlled_unit_flag_on_the_wire() {
+    let mut entity = warrior_entity();
+    let player_controlled = lyracore_shared::constants::unit_flags::PLAYER_CONTROLLED;
+    entity.unit_flags |= player_controlled;
+
+    let update = build_create_object(&entity, CreateKind::SelfPlayer, &[], &[]).unwrap();
+    let mut bytes = Vec::new();
+    update.write_unencrypted_server(&mut bytes).unwrap();
+
+    match ServerOpcodeMessage::read_unencrypted(&mut bytes.as_slice()).unwrap() {
+        ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update) => match &update.objects[0] {
+            Object::CreateObject2 {
+                mask2: UpdateMask::Player(player),
+                ..
+            } => {
+                let wire_flags = player.unit_flags().expect("UNIT_FIELD_FLAGS is present");
+                assert_ne!(
+                    wire_flags & player_controlled as i32,
+                    0,
+                    "self-player CREATE_OBJECT2 must preserve PLAYER_CONTROLLED"
+                );
+            }
+            other => panic!("expected a Player CreateObject2, got {other:?}"),
+        },
+        other => panic!("expected SMSG_UPDATE_OBJECT, got {other}"),
+    }
+}
+
+#[test]
 fn create_object_uses_entity_run_speed_multiplier() {
     let mut e = warrior_entity();
     e.run_speed_mult_bp = 30_000; // `.speed 3` survives a destination-shard entity rebuild
