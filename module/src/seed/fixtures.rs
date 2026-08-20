@@ -880,17 +880,24 @@ pub(crate) const TEST_PROC_COOLDOWN: u32 = 50143;
 /// A 2-per-minute Proc off a melee hit DEALT, authored through an overlay row — the rate fixture. Its
 /// header chance is 0, so every fire it ever makes came from the rate.
 pub(crate) const TEST_PROC_PPM: u32 = 50144;
+/// A certain DAMAGE Proc off a melee hit taken — the aura-43 fixture, Lightning Shield's shape without
+/// an import. It zaps its attacker for a frost figure and logs the number.
+pub(crate) const TEST_PROC_ZAP: u32 = 50145;
 
 /// The internal cooldown `TEST_PROC_COOLDOWN` carries, in milliseconds.
 const TEST_PROC_ICD_MS: u32 = 5_000;
 /// The rate `TEST_PROC_PPM` carries, in procs per minute.
 const TEST_PROC_PPM_RATE: f32 = 2.0;
+/// The damage `TEST_PROC_ZAP` deals per fire.
+const TEST_PROC_ZAP_DAMAGE: i32 = 5;
+/// The frost school bit `TEST_PROC_ZAP` deals in — the school the damage log names.
+const TEST_PROC_ZAP_SCHOOL_MASK: i32 = 0x10;
 
-/// Mock-seed the Proc-engine test fixtures: one inert mark plus four self-buff Procs that exercise the
-/// chance roll, the charge count, the internal cooldown and the rate on a development database, with
-/// no Spell.dbc import and no world dump.
+/// Mock-seed the Proc-engine test fixtures: one inert mark, four self-buff trigger Procs that exercise
+/// the chance roll, the charge count, the internal cooldown and the rate, and one damage Proc — all on
+/// a development database, with no Spell.dbc import and no world dump.
 ///
-/// Every Proc is an `A_PROC_TRIGGER` self-buff. Three of them fire off a melee hit TAKEN, so a plain
+/// Four of the five are an `A_PROC_TRIGGER` self-buff. Three of those fire off a melee hit TAKEN, so a plain
 /// melee swing at the Carrier — or `debug_apply_damage`, which routes through the same chokepoint —
 /// fires them; the rate fixture fires off a melee hit DEALT instead, because procs-per-minute is a
 /// per-swing rate and only the unit that swung has an attack time to scale it by (a taken-side Proc
@@ -898,6 +905,9 @@ const TEST_PROC_PPM_RATE: f32 = 2.0;
 /// attacker guid: a Proc with no Counterparty in the world fires nothing, so the anonymous
 /// `attacker_guid = 0` form of that reducer deliberately does not exercise them. Count the fires as
 /// `game_spell_cast_event` rows naming `TEST_PROC_MARK`.
+///
+/// The fifth is the damage kind (`A_PROC_DAMAGE`): it casts nothing, so it has no mark to count — its
+/// fires are the log-only `game_spell_cast_event` rows naming the zap itself, carrying its damage.
 ///
 /// The cooldown and the rate have no Spell.dbc column, so their two fixtures carry a seeded
 /// `game_spell_proc_event` overlay row — the same table and the same precedence the importer loads
@@ -990,6 +1000,29 @@ pub(crate) fn seed_test_proc_fixtures(ctx: &ReducerContext) {
             }
         }
     }
+    // The damage kind. A self-buff like the others, but it deals its frozen amount instead of casting:
+    // `p0` is the school the damage is dealt in (`P_SCHOOL_MASK`, what the importer freezes off the
+    // header for a real aura-43 spell) and `base_points` is the figure.
+    if ctx.db.game_spell().spell_id().find(TEST_PROC_ZAP).is_none() {
+        ctx.db.game_spell().insert(Spell {
+            duration_ms: u32::MAX,
+            school_mask: TEST_PROC_ZAP_SCHOOL_MASK as u8,
+            proc_flags: crate::spell::proc::PROC_FLAG_TAKEN_MELEE_HIT,
+            proc_chance: 100,
+            ..base_spell(TEST_PROC_ZAP, "Test Proc Zap")
+        });
+    }
+    upsert_effect(
+        ctx,
+        SpellEffect {
+            kind: crate::spell::A_PROC_DAMAGE,
+            base_points: TEST_PROC_ZAP_DAMAGE,
+            target: 0, // T_SELF — the Proc sits on its Carrier
+            p0: TEST_PROC_ZAP_SCHOOL_MASK,
+            p0_kind: 2, // P_SCHOOL_MASK
+            ..base_effect(TEST_PROC_ZAP, 0)
+        },
+    );
 }
 
 /// Mock-seed Demon Skin (real vanilla spell 696, rank 2) — the COMBAT-INDEPENDENT

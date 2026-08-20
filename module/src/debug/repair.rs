@@ -107,7 +107,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
 
     crate::seed::seed_frost_armor_fixture(ctx);
     crate::seed::seed_test_proc_fixtures(ctx);
-    // Chilled 6136, Frost Armor 168, and the Proc engine's five test fixtures
+    // Chilled 6136, Frost Armor 168, and the Proc engine's six test fixtures
     let frost_armor = [
         6136u32,
         168u32,
@@ -116,6 +116,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         crate::seed::TEST_PROC_CHARGES,
         crate::seed::TEST_PROC_COOLDOWN,
         crate::seed::TEST_PROC_PPM,
+        crate::seed::TEST_PROC_ZAP,
     ]
     .iter()
     .filter(|id| ctx.db.game_spell().spell_id().find(**id).is_some())

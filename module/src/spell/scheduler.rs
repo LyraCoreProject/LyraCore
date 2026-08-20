@@ -821,12 +821,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                     .insert(crate::spell::SpellCastEvent {
                         target_guid: t,
                         damage: dealt,
-                        // The mask→index rule from resolve_cast_at (mask 0 = physical index 0).
-                        school: if a.school_mask == 0 {
-                            0
-                        } else {
-                            a.school_mask.trailing_zeros() as u8
-                        },
+                        school: crate::spell::school_index(a.school_mask),
                         resisted: (a.amount.max(0) as u32).saturating_sub(resisted.max(0) as u32),
                         absorbed,
                         is_proc_log: true,

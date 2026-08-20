@@ -354,14 +354,9 @@ fn run_spell_effects(
     if queues_next_swing(effects) {
         return; // parked on the next swing — the swing emits the GO row, not this cast
     }
-    // SpellSchool INDEX (0=normal..6=arcane) from the spell header's school BITMASK (1,2,4,…,64) via
-    // trailing_zeros — the same mask→index the gateway's SMSG_SPELLNONMELEEDAMAGELOG `school` wants. Stored
-    // on the row so the gateway stays dumb. school_mask 0 (rare/unset) → index 0 (Normal/physical).
-    let school_index = if hdr.school_mask == 0 {
-        0u8
-    } else {
-        hdr.school_mask.trailing_zeros() as u8
-    };
+    // SpellSchool INDEX from the header's school BITMASK — the one shared mask→index rule, so the
+    // gateway stays dumb and no two damage-log rows disagree about what school a mask names.
+    let school_index = crate::spell::school_index(hdr.school_mask);
     // ONE cast visual per cast (the caster's animation/SFX), even for a multi-effect spell. This is the
     // cast-GO (the spell resolves): cast_time_ms 0, aimed at the primary target so the gateway's
     // SMSG_SPELL_GO missile flies at it. (A timed spell already emitted a cast-START event in begin_cast.)

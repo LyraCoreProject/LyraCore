@@ -11,12 +11,13 @@
 //! rows, asks the decision, and writes the outcome. The one other `ReducerContext`-bound function here
 //! is [`freeze_profile`], which reads the `spell_proc_event` overlay at apply so the pass never has to.
 //!
-//! Firing means starting a **Triggered Cast** ([`crate::spell::cast_triggered`]) of the frozen trigger
-//! spell from the Carrier at the Counterparty. A Triggered Cast pays nothing, passes no Gates, starts
-//! no cooldown, and every hit it produces is marked Triggered — which fires no proc pass, so two
-//! shields can never ping-pong.
+//! Firing means one of two things, by aura kind. A trigger Proc starts a **Triggered Cast**
+//! ([`crate::spell::cast_triggered`]) of its frozen trigger spell from the Carrier at the Counterparty;
+//! a damage Proc deals its frozen amount to the Counterparty instead. A Triggered Cast pays nothing,
+//! passes no Gates, starts no cooldown, and every hit either kind produces is marked Triggered — which
+//! fires no proc pass, so two shields can never ping-pong.
 
-use spacetimedb::{log, ReducerContext};
+use spacetimedb::{log, ReducerContext, Table};
 
 // The `game_world_entity` accessor trait must be in scope to read the Carrier's base attack time.
 use crate::game_world_entity;
@@ -373,8 +374,9 @@ pub(crate) fn freeze_profile(ctx: &ReducerContext, kind: u8, hdr: &Spell) -> Pro
 /// uses — so a Proc that grants another Proc cannot double up in one instant.
 ///
 /// A fired Proc of the trigger kind starts a Triggered Cast of its frozen trigger spell from the
-/// Carrier at the Counterparty; a Proc whose trigger spell is not loaded does nothing and logs, and
-/// keeps its charge. Only a Proc that actually fired spends a charge or stamps its cooldown.
+/// Carrier at the Counterparty; one of the damage kind deals its frozen amount there instead. A Proc
+/// whose data is missing — no trigger spell, no amount — does nothing, logs, and keeps its charge.
+/// Only a Proc that actually fired spends a charge or stamps its cooldown.
 pub(crate) fn run_proc_pass(
     ctx: &ReducerContext,
     attacker_guid: u64,
@@ -520,18 +522,60 @@ fn fire_proc(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) -> bool {
                 }
             }
         }
-        A_PROC_DAMAGE => {
-            // The damage arm is not wired yet: the kind, its wire value and the decision that selects
-            // it all exist, but nothing routes its frozen amount through the resistance and damage
-            // pipeline. Until it does, the row is inert and keeps its charges.
-            log::info!(
-                "proc: spell {} is a damage Proc — the damage arm is not wired yet, nothing fired",
-                row.spell_id
-            );
-            false
-        }
+        A_PROC_DAMAGE => fire_proc_damage(ctx, row, counterparty_guid),
         _ => false,
     }
+}
+
+/// Deal a damage-kind Proc's frozen amount to the Counterparty, in the school frozen alongside it
+/// (`eff_p0`, the proc spell's own school — aura 43 carries no per-effect school of its own).
+///
+/// Resistance first, then the SHARED damage pipeline as a **Triggered** hit: the damage is the
+/// Carrier's, so it accrues the Carrier's threat and credits the Carrier's kill, and being Triggered
+/// it raises no proc event of its own. There is no Triggered Cast here — a damage Proc has no spell to
+/// cast — so the client's only sign of it is a log-only cast-event row named after the proc spell, the
+/// same shape the seal's holy line and a ground area's tick already use: the gateway relays
+/// `SMSG_SPELLNONMELEEDAMAGELOG` alone, never a cast START/GO.
+///
+/// Returns whether the Proc fired. A row with no amount is a data gap: it logs, fires nothing, and
+/// keeps its charge. A hit a shield ate, or one the Counterparty did not live to take, still counts as
+/// fired — the Proc did its work and the target's defenses answered it.
+fn fire_proc_damage(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) -> bool {
+    if row.amount <= 0 {
+        log::info!(
+            "proc: spell {} on {} is a damage Proc with no amount — nothing fired",
+            row.spell_id,
+            row.target_guid
+        );
+        return false;
+    }
+    let school_mask = row.eff_p0.clamp(0, u8::MAX as i32) as u8;
+    let after_resist = apply_resistance(
+        ctx,
+        counterparty_guid,
+        row.target_guid,
+        school_mask,
+        row.amount,
+    );
+    let (dealt, absorbed) = apply_target_damage(
+        ctx,
+        counterparty_guid,
+        row.target_guid,
+        after_resist,
+        Hit::spell(HitSource::Triggered, row.spell_id, false),
+    );
+    if dealt > 0 || absorbed > 0 {
+        ctx.db.game_spell_cast_event().insert(SpellCastEvent {
+            target_guid: counterparty_guid,
+            damage: dealt,
+            school: school_index(school_mask),
+            resisted: (row.amount as u32).saturating_sub(after_resist.max(0) as u32),
+            absorbed,
+            is_proc_log: true,
+            ..SpellCastEvent::signal(ctx, row.target_guid, row.spell_id)
+        });
+    }
+    true
 }
 
 /// The last charge is spent: EVERY aura row of `spell_id` comes off the Carrier, not just the Proc
@@ -1065,6 +1109,35 @@ mod tests {
         );
     }
 
+    /// A damage Proc's amount is damage like any other: it resists, then goes through
+    /// `apply_target_damage` — the shared pipeline's spell entrance, which reaches `apply_hit` and with
+    /// it the absorb, the lethal fork, the threat and the kill credit. A hand-written health write here
+    /// would be the fifth copy of a pipeline that already drifted twice, and it would rob the Carrier of
+    /// the kill its zap landed.
+    #[test]
+    fn the_damage_proc_routes_its_amount_through_the_shared_pipeline() {
+        let src = crate::test_scan::read_scanned("module/src/spell/proc.rs")
+            .expect("module/ is never optional");
+        let body = crate::test_scan::code_of(&src, "fn fire_proc_damage(");
+        for needle in ["apply_resistance(", "apply_target_damage("] {
+            assert!(
+                body.contains(needle),
+                "the damage Proc arm no longer reaches `{needle}` — its amount must resist and then \
+                 land through the one shared damage pipeline. Body was:\n{body}"
+            );
+        }
+        assert!(
+            body.contains("HitSource::Triggered"),
+            "the damage Proc arm must mark its hit Triggered, or a Lightning Shield zap starts a proc \
+             pass of its own and two shields ping-pong. Body was:\n{body}"
+        );
+        assert!(
+            !body.contains("game_world_entity()"),
+            "the damage Proc arm writes the target's health by hand again instead of routing through \
+             `apply_target_damage`. Body was:\n{body}"
+        );
+    }
+
     /// A Triggered Cast pays nothing and passes nothing: no Gate sweep, no cost charge, no global or
     /// per-spell cooldown, no stealth break, no dismount. Losing any of those exclusions turns a proc
     /// into something that can block or tax the Carrier's own casts.
@@ -1126,10 +1199,12 @@ mod tests {
         let src = crate::test_scan::read_scanned("module/src/trainer.rs")
             .expect("module/ is never optional");
         let body = crate::test_scan::code_of(&src, "pub(crate) fn resolve_learn_target(");
-        assert!(
-            body.contains("A_PROC_TRIGGER"),
-            "`resolve_learn_target` no longer excludes the Proc trigger kind — buying Frost Armor \
-             rank 2 would teach `Chilled` instead. Body was:\n{body}"
-        );
+        for kind in ["A_PROC_TRIGGER", "A_PROC_DAMAGE"] {
+            assert!(
+                body.contains(kind),
+                "`resolve_learn_target` no longer excludes `{kind}` — buying Frost Armor rank 2 would \
+                 teach `Chilled` instead. Body was:\n{body}"
+            );
+        }
     }
 }

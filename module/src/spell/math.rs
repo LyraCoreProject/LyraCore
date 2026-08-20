@@ -276,6 +276,19 @@ pub(crate) fn should_arm_spell_retaliation(
     caster_is_player && !target_is_player && !target_already_engaged
 }
 
+/// The SpellSchool INDEX (0 normal/physical .. 6 arcane) a damage log carries, from a school BITMASK
+/// (1, 2, 4, ... 64). The gateway's `SMSG_SPELLNONMELEEDAMAGELOG` wants the index, so every row that
+/// carries a school converts here and the gateway stays dumb. A mask of 0 (unset) reads as physical,
+/// and a multi-school mask reads as its lowest school — vanilla's own damage log names one school.
+/// Pure. [server]
+pub(crate) fn school_index(school_mask: u8) -> u8 {
+    if school_mask == 0 {
+        0
+    } else {
+        school_mask.trailing_zeros() as u8
+    }
+}
+
 /// Reduce `dmg` by the target's resistance to the spell's MAGIC school (vanilla average-resist via
 /// `combat::resist_mitigation_pct`, capped 75%, level-scaled on the CASTER). The magic-damage twin of how
 /// `roll_swing` folds armor into a melee hit. Returns `dmg` UNCHANGED for: a non-positive `dmg`; a
@@ -867,6 +880,23 @@ mod tests {
         assert!(!should_arm_spell_retaliation(true, true, false));
         // Creature/NPC caster → no player-driven pull (creatures keep no threat/engagement this way).
         assert!(!should_arm_spell_retaliation(false, false, false));
+    }
+
+    /// The one mask→index rule every damage-log row converts through. Values are vanilla's
+    /// `SpellSchools` order, read off the 1.12 client's own enumeration.
+    #[test]
+    fn school_index_names_the_lowest_school_in_the_mask() {
+        use super::school_index;
+        assert_eq!(school_index(0), 0); // unset reads as physical
+        assert_eq!(school_index(0x01), 0); // physical
+        assert_eq!(school_index(0x02), 1); // holy
+        assert_eq!(school_index(0x04), 2); // fire
+        assert_eq!(school_index(0x08), 3); // nature
+        assert_eq!(school_index(0x10), 4); // frost
+        assert_eq!(school_index(0x20), 5); // shadow
+        assert_eq!(school_index(0x40), 6); // arcane
+                                           // A multi-school mask names its lowest school: a damage log carries one school, not a set.
+        assert_eq!(school_index(0x14), 2);
     }
 
     #[test]

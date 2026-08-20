@@ -811,14 +811,15 @@ fn aura_mod_to_kind(aura: AuraMod) -> u8 {
 
 /// Whether a per-effect `trigger_spell` names a castable RANK worth recording in `wrapper_to_rank`
 /// (a genuine LearnSpell wrapper), as opposed to a payload that merely rides the same DBC column: a
-/// channel's per-tick missile (A_PERIODIC_TRIGGER), a Proc's trigger spell (A_PROC_TRIGGER), an inert
-/// marker (A_FLAG), or a plain instant trigger (E_TRIGGER, e.g. Bloodrage's rage trickle). Mirrors
-/// `resolve_learn_target`'s own exclusion (module/src/trainer.rs) — the two lists MUST stay in
-/// lockstep, so a rename or a new proc kind on either side fails this test loud. Pure. [import]
+/// channel's per-tick missile (A_PERIODIC_TRIGGER), either Proc kind's own effect data
+/// (A_PROC_TRIGGER / A_PROC_DAMAGE), an inert marker (A_FLAG), or a plain instant trigger (E_TRIGGER,
+/// e.g. Bloodrage's rage trickle). Mirrors `resolve_learn_target`'s own exclusion
+/// (module/src/trainer.rs) — the two lists MUST stay in lockstep, so a rename or a new proc kind on
+/// either side fails this test loud. Pure. [import]
 fn is_wrapper_rank_trigger(kind: u8) -> bool {
     !matches!(
         kind,
-        A_PERIODIC_TRIGGER | A_FLAG | A_PROC_TRIGGER | E_TRIGGER
+        A_PERIODIC_TRIGGER | A_FLAG | A_PROC_TRIGGER | A_PROC_DAMAGE | E_TRIGGER
     )
 }
 
@@ -2525,6 +2526,7 @@ mod tests {
         assert!(!is_wrapper_rank_trigger(A_PERIODIC_TRIGGER));
         assert!(!is_wrapper_rank_trigger(A_FLAG));
         assert!(!is_wrapper_rank_trigger(A_PROC_TRIGGER));
+        assert!(!is_wrapper_rank_trigger(A_PROC_DAMAGE));
         assert!(!is_wrapper_rank_trigger(E_TRIGGER));
         // A genuine LearnSpell wrapper's effect maps to E_SCRIPTED — its trigger_spell IS a rank.
         assert!(is_wrapper_rank_trigger(E_SCRIPTED));

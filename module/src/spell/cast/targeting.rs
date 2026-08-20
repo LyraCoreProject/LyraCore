@@ -907,11 +907,7 @@ pub(crate) fn apply_effect(
                                     caster_guid,
                                     target_guid,
                                     spell_id: hdr.spell_id,
-                                    school_index: if hdr.school_mask == 0 {
-                                        0u8
-                                    } else {
-                                        hdr.school_mask.trailing_zeros() as u8
-                                    },
+                                    school_index: crate::spell::school_index(hdr.school_mask),
                                     is_crit,
                                     resisted,
                                     after_resist,
