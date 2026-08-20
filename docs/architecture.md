@@ -110,6 +110,12 @@ Each of these re-implements *the read the module gate performed*, not a new rule
 the module's own error strings so the client sees identical behaviour on a single-database
 deployment. The rationale is recorded in the maintainers' internal security analysis.
 
+Account-owned Alpha Test Tools follows a narrower cross-shard path. On every dot-Say command, the
+Gateway reads the current Account authority from Realm-core and conveys it in the one Durable
+Request to the Character's Home Shard. The Module combines that value with the Character's GM level
+and applies the final Gate. World-shard Account rows are not authority, and the Gateway keeps no
+Character authority projection.
+
 ---
 
 ## 3. The realm is several databases

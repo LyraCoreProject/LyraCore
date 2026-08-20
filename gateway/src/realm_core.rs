@@ -72,6 +72,14 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
         bound_identity: [u8; 32],
     ) -> Result<()>;
 
+    // --- Account-authorized command routing
+    fn request_gm_command(
+        &self,
+        actor_guid: u64,
+        alpha_test_tools: bool,
+        text: String,
+    ) -> Result<()>;
+
     // --- the character→shard index
     /// Where THIS database's own rows say the character is. `None` = not here.
     fn character_location(&self, guid: u64) -> Option<(u32, u64)>;
@@ -106,6 +114,23 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
         sessions: u32,
         gateway_key: u64,
     ) -> Result<()>;
+}
+
+/// Read current Alpha Test Tools authority from Realm-core and convey it to the Actor's Home Shard
+/// in one caller-facing Store operation. Account ids never cross between databases.
+pub(crate) fn run_gm_command<D: RealmDb>(
+    home_shard: &D,
+    account_name: &str,
+    actor_guid: u64,
+    text: String,
+) -> Result<()> {
+    let account_name = account_name.to_ascii_uppercase();
+    let realm_core = home_shard.realm_core()?;
+    let authority = realm_core
+        .account_by_username(&account_name)?
+        .ok_or_else(|| anyhow::anyhow!("no Account named {account_name} on Realm-core"))?
+        .alpha_test_tools;
+    home_shard.request_gm_command(actor_guid, authority, text)
 }
 
 // ===============================================================================================
@@ -505,6 +530,9 @@ pub(crate) mod fake {
         /// Every `record_shard_load` call this database RECEIVED, in order: (shard,
         /// writer_occupancy_pct, sessions, gateway_key).
         pub recorded_shard_loads: Mutex<Vec<(String, f32, u32, u64)>>,
+        /// Every command this World Shard received: Actor, conveyed Alpha Test Tools authority,
+        /// and raw dot-command text.
+        pub gm_commands: Mutex<Vec<(u64, bool, String)>>,
         /// Every `RealmDb` call served by this database, in order.
         pub log: Mutex<Vec<String>>,
     }
@@ -591,6 +619,7 @@ pub(crate) mod fake {
             salt: vec![salt; 32],
             verifier: vec![verifier; 32],
             banned: false,
+            alpha_test_tools: false,
         }
     }
 
@@ -700,6 +729,24 @@ pub(crate) mod fake {
                 .insert(account_id, (*session_key, bound_identity));
             Ok(())
         }
+        fn request_gm_command(
+            &self,
+            actor_guid: u64,
+            alpha_test_tools: bool,
+            text: String,
+        ) -> Result<()> {
+            let db = self.store();
+            db.note(&format!("request_gm_command({actor_guid})"));
+            db.gm_commands
+                .lock()
+                .unwrap()
+                .push((actor_guid, alpha_test_tools, text.clone()));
+            if alpha_test_tools && text.starts_with(".speed") {
+                Ok(())
+            } else {
+                Err(anyhow!("permission denied"))
+            }
+        }
         fn character_location(&self, guid: u64) -> Option<(u32, u64)> {
             let db = self.store();
             db.note(&format!("character_location({guid})"));
@@ -793,6 +840,70 @@ mod tests {
             .unwrap()
             .insert(USER.into(), account(3, USER, 0x11, 0x22));
         h
+    }
+
+    #[test]
+    fn speed_uses_the_realm_wide_account_name_and_runs_on_the_home_shard() {
+        let h = split_realm();
+        h.db_at(CORE)
+            .accounts
+            .lock()
+            .unwrap()
+            .get_mut(USER)
+            .expect("Realm-core Account")
+            .alpha_test_tools = true;
+        run_gm_command(&h, &USER.to_ascii_lowercase(), 42, ".speed 3".into())
+            .expect("Alpha Test Tools permit speed");
+
+        assert_eq!(
+            h.db_at(WORLD).gm_commands.lock().unwrap().as_slice(),
+            &[(42, true, ".speed 3".to_string())],
+            "the Home Shard did not receive current Realm-core authority"
+        );
+        assert!(
+            h.db_at(CORE).gm_commands.lock().unwrap().is_empty(),
+            "the Durable Request ran on Realm-core instead of the Actor's Home Shard"
+        );
+    }
+
+    #[test]
+    fn revoking_alpha_test_tools_refuses_the_next_command_without_a_new_world_session() {
+        let h = split_realm();
+        h.db_at(CORE)
+            .accounts
+            .lock()
+            .unwrap()
+            .get_mut(USER)
+            .expect("Realm-core Account")
+            .alpha_test_tools = true;
+        run_gm_command(&h, USER, 42, ".speed 3".into()).expect("first command is authorized");
+
+        h.db_at(CORE)
+            .accounts
+            .lock()
+            .unwrap()
+            .get_mut(USER)
+            .expect("Realm-core Account")
+            .alpha_test_tools = false;
+        let refusal = run_gm_command(&h, USER, 42, ".speed 4".into())
+            .expect_err("the same World Session must see the revocation");
+
+        assert_eq!(refusal.to_string(), "permission denied");
+        assert_eq!(
+            h.db_at(WORLD).gm_commands.lock().unwrap().as_slice(),
+            &[
+                (42, true, ".speed 3".to_string()),
+                (42, false, ".speed 4".to_string()),
+            ],
+            "each command must carry a fresh Realm-core authority result"
+        );
+    }
+
+    #[test]
+    fn a_dead_realm_core_fails_before_the_home_shard_command_request() {
+        let h = realm_with_dead_core(&[WORLD, CORE], "", CORE);
+        assert!(run_gm_command(&h, USER, 42, ".speed 3".into()).is_err());
+        assert!(h.db_at(WORLD).gm_commands.lock().unwrap().is_empty());
     }
 
     // -------------------------------------------------------------------------------------
@@ -1686,6 +1797,8 @@ mod tests {
             fn realm(&self) -> Result<RealmRow> { self.realm() } \
             fn establish_session( &self, account_id: u64, session_key: &[u8; 40], bound_identity: [u8; 32], ) \
             -> Result<()> { self.establish_session(account_id, session_key, bound_identity) } \
+            fn request_gm_command( &self, actor_guid: u64, alpha_test_tools: bool, text: String, ) \
+            -> Result<()> { self.request_gm_command(actor_guid, alpha_test_tools, text) } \
             fn character_location(&self, guid: u64) -> Option<(u32, u64)> { \
             self.character_location(guid) } \
             fn character_shard(&self, guid: u64) -> Option<(u32, u64)> { self.character_shard(guid) } \

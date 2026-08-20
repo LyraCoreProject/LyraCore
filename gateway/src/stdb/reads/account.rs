@@ -46,6 +46,7 @@ impl Coordinator {
                 salt: a.salt,
                 verifier: a.verifier,
                 banned: a.banned,
+                alpha_test_tools: a.alpha_test_tools,
             }))
     }
 

@@ -815,8 +815,8 @@ impl WorldStore for Coordinator {
         self.party_chat(account_id, self_guid, message)
     }
 
-    fn gm_command(&self, account_id: u64, self_guid: u64, text: String) -> Result<()> {
-        self.gm_command(account_id, self_guid, text)
+    fn gm_command(&self, account_name: &str, self_guid: u64, text: String) -> Result<()> {
+        self.gm_command(account_name, self_guid, text)
     }
 
     fn repop(&self, account_id: u64, self_guid: u64) -> Result<()> {
@@ -1148,6 +1148,14 @@ impl crate::realm_core::RealmDb for Coordinator {
         bound_identity: [u8; 32],
     ) -> Result<()> {
         self.establish_session(account_id, session_key, bound_identity)
+    }
+    fn request_gm_command(
+        &self,
+        actor_guid: u64,
+        alpha_test_tools: bool,
+        text: String,
+    ) -> Result<()> {
+        self.request_gm_command(actor_guid, alpha_test_tools, text)
     }
     fn character_location(&self, guid: u64) -> Option<(u32, u64)> {
         self.character_location(guid)

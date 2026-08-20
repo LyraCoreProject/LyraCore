@@ -227,9 +227,12 @@ offline character costs no live-world machinery. Carries appearance, position, l
 rested-xp pool, hearthstone home, played-time accounting, and the persisted health/power snapshot.
 `owner_identity` is `Identity::ZERO` until bound at `establish_session`.
 
-### `game_account` / `game_session` / `game_operator` (`module/src/auth.rs:14,:62,:77`)
+### `game_account` / `game_alpha_test_tools_enrollment` / `game_session` / `game_operator` (`module/src/auth.rs`)
 
-All three **private**. `game_account` holds SRP6 salt and verifier — never a password.
+All four are **private**. `game_account` holds SRP6 salt and verifier, never a password. It also
+holds the Account's Alpha Test Tools authority. Existing Accounts receive that authority through an
+end-appended default. New Accounts copy `game_alpha_test_tools_enrollment`, which starts enabled;
+changing enrollment never changes an existing Account.
 `game_session` holds the SRP6 session key **K**, which is what makes gateways stateless: the logon
 flow writes it, and any world gateway can read it to complete the handshake. `game_operator` is a
 singleton holding the one trusted operator identity, captured (not derived) by `claim_operator`.
@@ -240,6 +243,11 @@ a **write-through cache that is never read for auth**: a world shard's own `game
 session write, or the handshake's K lookup — realm-core is the only handle those ever use. If
 realm-core is configured and unreachable, the gateway fails closed (refuses logons) rather than
 falling back to the cache.
+
+The same boundary applies to Alpha Test Tools. For each dot-Say command, the Gateway reads the
+current Account value from Realm-core, then conveys it to the Character's Home Shard in one Durable
+Request. The Module makes the final Gate with that value and the Character's GM level. No
+Character-side authority projection exists.
 
 `auth.rs` also carries a `ensure_shadow_account` path: an instance or continent shard has no real
 account row, so a transferred character gets an index-entry row with empty salt and verifier. It can

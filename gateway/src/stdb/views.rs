@@ -235,4 +235,5 @@ pub struct AccountRow {
     pub salt: Vec<u8>,
     pub verifier: Vec<u8>,
     pub banned: bool,
+    pub alpha_test_tools: bool,
 }

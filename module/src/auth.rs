@@ -22,6 +22,47 @@ pub struct Account {
     pub verifier: Vec<u8>, // 32 bytes
     pub identity: Option<Identity>,
     pub banned: bool,
+    /// Account-owned Alpha Test Tools authority. Existing rows enroll on the additive migration;
+    /// new rows copy [`AlphaTestToolsEnrollment::enabled`].
+    #[default(true)]
+    pub alpha_test_tools: bool,
+}
+
+/// Whether newly provisioned Accounts receive Alpha Test Tools. Private and authoritative on
+/// Realm-core. A missing row means enabled so an additive publish behaves like a fresh database.
+#[table(accessor = game_alpha_test_tools_enrollment)]
+pub struct AlphaTestToolsEnrollment {
+    #[primary_key]
+    pub id: u8,
+    pub enabled: bool,
+}
+
+const ALPHA_TEST_TOOLS_ENROLLMENT_ID: u8 = 0;
+
+fn alpha_test_tools_enrollment(enabled: Option<bool>) -> bool {
+    enabled.unwrap_or(true)
+}
+
+fn provisioned_alpha_test_tools(existing: Option<bool>, enrollment: bool) -> bool {
+    existing.unwrap_or(enrollment)
+}
+
+fn changed_alpha_test_tools(existing: Option<bool>, enabled: bool) -> Result<bool, &'static str> {
+    existing.map(|_| enabled).ok_or("unknown account")
+}
+
+fn realm_account_name(account_name: &str) -> String {
+    account_name.to_ascii_uppercase()
+}
+
+fn current_alpha_test_tools_enrollment(ctx: &ReducerContext) -> bool {
+    alpha_test_tools_enrollment(
+        ctx.db
+            .game_alpha_test_tools_enrollment()
+            .id()
+            .find(ALPHA_TEST_TOOLS_ENROLLMENT_ID)
+            .map(|row| row.enabled),
+    )
 }
 
 /// Ensure a SHADOW account row exists for `account_id` on THIS database (issue #19).
@@ -56,6 +97,7 @@ pub(crate) fn ensure_shadow_account(ctx: &ReducerContext, account_id: u64) {
         verifier: Vec::new(),
         identity: None,
         banned: false,
+        alpha_test_tools: false,
     });
 }
 
@@ -213,10 +255,126 @@ pub fn provision_account(
                 verifier,
                 identity: None,
                 banned: false,
+                alpha_test_tools: provisioned_alpha_test_tools(
+                    None,
+                    current_alpha_test_tools_enrollment(ctx),
+                ),
             });
         }
     }
     Ok(())
+}
+
+/// Set whether genuinely new Accounts receive Alpha Test Tools. Existing Accounts are unchanged.
+#[reducer]
+pub fn set_alpha_test_tools_enrollment(ctx: &ReducerContext, enabled: bool) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let enrollment = ctx.db.game_alpha_test_tools_enrollment();
+    let row = AlphaTestToolsEnrollment {
+        id: ALPHA_TEST_TOOLS_ENROLLMENT_ID,
+        enabled,
+    };
+    if enrollment
+        .id()
+        .find(ALPHA_TEST_TOOLS_ENROLLMENT_ID)
+        .is_some()
+    {
+        enrollment.id().update(row);
+    } else {
+        enrollment.insert(row);
+    }
+    Ok(())
+}
+
+fn set_account_alpha_test_tools(
+    ctx: &ReducerContext,
+    account_name: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    let account_name = realm_account_name(account_name);
+    let accounts = ctx.db.game_account();
+    let existing = accounts.username().find(&account_name);
+    let alpha_test_tools = changed_alpha_test_tools(
+        existing.as_ref().map(|account| account.alpha_test_tools),
+        enabled,
+    )
+    .map_err(|_| format!("no Account named {account_name}"))?;
+    let mut account = existing.expect("the authority decision requires an existing Account");
+    account.alpha_test_tools = alpha_test_tools;
+    accounts.id().update(account);
+    Ok(())
+}
+
+/// Grant Alpha Test Tools to one Account by realm-wide, uppercased Account name.
+#[reducer]
+pub fn grant_alpha_test_tools(ctx: &ReducerContext, account_name: String) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    set_account_alpha_test_tools(ctx, &account_name, true)
+}
+
+/// Revoke Alpha Test Tools from one Account by realm-wide, uppercased Account name.
+#[reducer]
+pub fn revoke_alpha_test_tools(ctx: &ReducerContext, account_name: String) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    set_account_alpha_test_tools(ctx, &account_name, false)
+}
+
+#[cfg(test)]
+mod alpha_test_tools_tests {
+    use super::{
+        alpha_test_tools_enrollment, changed_alpha_test_tools, provisioned_alpha_test_tools,
+        realm_account_name,
+    };
+
+    #[test]
+    fn enrollment_starts_enabled_and_tracks_operator_changes() {
+        assert!(alpha_test_tools_enrollment(None));
+        assert!(alpha_test_tools_enrollment(Some(true)));
+        assert!(!alpha_test_tools_enrollment(Some(false)));
+    }
+
+    #[test]
+    fn new_accounts_copy_enrollment_while_existing_accounts_keep_their_authority() {
+        assert!(provisioned_alpha_test_tools(None, true));
+        assert!(!provisioned_alpha_test_tools(None, false));
+        assert!(provisioned_alpha_test_tools(Some(true), false));
+        assert!(!provisioned_alpha_test_tools(Some(false), true));
+    }
+
+    #[test]
+    fn explicit_grant_and_revoke_change_only_a_known_account() {
+        assert_eq!(changed_alpha_test_tools(Some(false), true), Ok(true));
+        assert_eq!(changed_alpha_test_tools(Some(true), false), Ok(false));
+        assert_eq!(changed_alpha_test_tools(None, true), Err("unknown account"));
+        assert_eq!(realm_account_name("TeSt"), "TEST");
+    }
+
+    #[test]
+    fn operator_controls_are_gated_before_their_state_change() {
+        let src = include_str!("auth.rs");
+        for reducer in [
+            "pub fn set_alpha_test_tools_enrollment(",
+            "pub fn grant_alpha_test_tools(",
+            "pub fn revoke_alpha_test_tools(",
+        ] {
+            let body = crate::test_scan::code_of(src, reducer);
+            assert!(
+                body.contains("crate::helpers::require_operator(ctx)?;"),
+                "{reducer} must refuse a caller who is not the Operator"
+            );
+        }
+    }
+
+    #[test]
+    fn account_authority_is_an_end_appended_additive_default() {
+        let src = include_str!("auth.rs");
+        let account = &src[src.find("pub struct Account {").expect("Account row")..];
+        let account = &account[..account.find("\n}").expect("Account row end")];
+        assert!(
+            account.ends_with("#[default(true)]\n    pub alpha_test_tools: bool,"),
+            "existing Account rows must receive Alpha Test Tools during an additive publish"
+        );
+    }
 }
 
 /// Logon writes the shared session key K and binds the per-account identity.

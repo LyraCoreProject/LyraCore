@@ -386,7 +386,7 @@ parity_test!(parity_game_character_explored, "game_character_explored", lyracore
     id, character_guid, area_bit, area_id, experience,
 });
 parity_test!(parity_game_account, "game_account", lyracore_module::Account, bindings::account_type::Account, {
-    id, username, salt, verifier, identity, banned,
+    id, username, salt, verifier, identity, banned, alpha_test_tools,
 });
 parity_test!(parity_game_session, "game_session", lyracore_module::Session, bindings::session_type::Session, {
     account_id, session_key, identity, created_at, expires_at,

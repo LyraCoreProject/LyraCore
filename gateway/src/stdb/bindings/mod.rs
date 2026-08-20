@@ -432,6 +432,7 @@ pub mod gateway_session_type;
 pub mod gm_world_config_type;
 pub mod gossip_menu_type;
 pub mod gossip_option_type;
+pub mod grant_alpha_test_tools_reducer;
 pub mod graveyard_loc_type;
 pub mod graveyard_zone_type;
 pub mod ground_area_schedule_type;
@@ -634,10 +635,12 @@ pub mod release_transfer_reducer;
 pub mod rest_state_event_type;
 pub mod restore_taxi_fixture_reducer;
 pub mod resurrect_request_type;
+pub mod revoke_alpha_test_tools_reducer;
 pub mod roll_event_type;
 pub mod school_lockout_type;
 pub mod server_config_type;
 pub mod session_type;
+pub mod set_alpha_test_tools_enrollment_reducer;
 pub mod set_character_shard_reducer;
 pub mod set_gm_level_reducer;
 pub mod set_motion_tick_ms_reducer;
@@ -1122,6 +1125,7 @@ pub use gateway_session_type::GatewaySession;
 pub use gm_world_config_type::GmWorldConfig;
 pub use gossip_menu_type::GossipMenu;
 pub use gossip_option_type::GossipOption;
+pub use grant_alpha_test_tools_reducer::grant_alpha_test_tools;
 pub use graveyard_loc_type::GraveyardLoc;
 pub use graveyard_zone_type::GraveyardZone;
 pub use ground_area_schedule_type::GroundAreaSchedule;
@@ -1324,10 +1328,12 @@ pub use release_transfer_reducer::release_transfer;
 pub use rest_state_event_type::RestStateEvent;
 pub use restore_taxi_fixture_reducer::restore_taxi_fixture;
 pub use resurrect_request_type::ResurrectRequest;
+pub use revoke_alpha_test_tools_reducer::revoke_alpha_test_tools;
 pub use roll_event_type::RollEvent;
 pub use school_lockout_type::SchoolLockout;
 pub use server_config_type::ServerConfig;
 pub use session_type::Session;
+pub use set_alpha_test_tools_enrollment_reducer::set_alpha_test_tools_enrollment;
 pub use set_character_shard_reducer::set_character_shard;
 pub use set_gm_level_reducer::set_gm_level;
 pub use set_motion_tick_ms_reducer::set_motion_tick_ms;
@@ -2017,6 +2023,9 @@ pub enum Reducer {
     FireSpellImpact {
         sched: PendingSpellImpact,
     },
+    GrantAlphaTestTools {
+        account_name: String,
+    },
     GwAbandonQuest {
         actor_guid: u64,
         quest_entry: u32,
@@ -2223,6 +2232,7 @@ pub enum Reducer {
     },
     GwGmCommand {
         actor_guid: u64,
+        alpha_test_tools: bool,
         text: String,
     },
     GwGossipSelect {
@@ -2711,6 +2721,12 @@ pub enum Reducer {
         transfer_id: u64,
     },
     RestoreTaxiFixture,
+    RevokeAlphaTestTools {
+        account_name: String,
+    },
+    SetAlphaTestToolsEnrollment {
+        enabled: bool,
+    },
     SetCharacterShard {
         character_guid: u64,
         map_id: u32,
@@ -2941,6 +2957,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::FinishTransfer { .. } => "finish_transfer",
             Reducer::FirePendingCast { .. } => "fire_pending_cast",
             Reducer::FireSpellImpact { .. } => "fire_spell_impact",
+            Reducer::GrantAlphaTestTools { .. } => "grant_alpha_test_tools",
             Reducer::GwAbandonQuest { .. } => "gw_abandon_quest",
             Reducer::GwAcceptGroupInvite { .. } => "gw_accept_group_invite",
             Reducer::GwAcceptQuest { .. } => "gw_accept_quest",
@@ -3088,6 +3105,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::RecordShardLoad { .. } => "record_shard_load",
             Reducer::ReleaseTransfer { .. } => "release_transfer",
             Reducer::RestoreTaxiFixture => "restore_taxi_fixture",
+            Reducer::RevokeAlphaTestTools { .. } => "revoke_alpha_test_tools",
+            Reducer::SetAlphaTestToolsEnrollment { .. } => "set_alpha_test_tools_enrollment",
             Reducer::SetCharacterShard { .. } => "set_character_shard",
             Reducer::SetGmLevel { .. } => "set_gm_level",
             Reducer::SetMotionTickMs { .. } => "set_motion_tick_ms",
@@ -4226,6 +4245,11 @@ Reducer::DebugVerifyCombatRegen{
 }             => __sats::bsatn::to_vec(&fire_spell_impact_reducer::FireSpellImpactArgs {
                 sched: sched.clone(),
 }),
+            Reducer::GrantAlphaTestTools{
+                account_name,
+}             => __sats::bsatn::to_vec(&grant_alpha_test_tools_reducer::GrantAlphaTestToolsArgs {
+                account_name: account_name.clone(),
+}),
             Reducer::GwAbandonQuest{
                 actor_guid,
                 quest_entry,
@@ -4595,9 +4619,11 @@ Reducer::DebugVerifyCombatRegen{
 }),
             Reducer::GwGmCommand{
                 actor_guid,
+                alpha_test_tools,
                 text,
 }             => __sats::bsatn::to_vec(&gw_gm_command_reducer::GwGmCommandArgs {
                 actor_guid: actor_guid.clone(),
+                alpha_test_tools: alpha_test_tools.clone(),
                 text: text.clone(),
 }),
             Reducer::GwGossipSelect{
@@ -5470,6 +5496,16 @@ Reducer::ProvisionAccount{
 }),
             Reducer::RestoreTaxiFixture => __sats::bsatn::to_vec(&restore_taxi_fixture_reducer::RestoreTaxiFixtureArgs {
                 }),
+            Reducer::RevokeAlphaTestTools{
+                account_name,
+}             => __sats::bsatn::to_vec(&revoke_alpha_test_tools_reducer::RevokeAlphaTestToolsArgs {
+                account_name: account_name.clone(),
+}),
+            Reducer::SetAlphaTestToolsEnrollment{
+                enabled,
+}             => __sats::bsatn::to_vec(&set_alpha_test_tools_enrollment_reducer::SetAlphaTestToolsEnrollmentArgs {
+                enabled: enabled.clone(),
+}),
 Reducer::SetCharacterShard{
                 character_guid,
                 map_id,
