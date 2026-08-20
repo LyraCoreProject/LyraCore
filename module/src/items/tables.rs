@@ -6,9 +6,11 @@ use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
 
 use lyracore_shared::constants::starter_item;
 
-/// The nine class bits playable by the 1.12 client.  Item-template masks retain unknown bits from
-/// imported content; this value exists only to make the source dump's unrestricted sentinel durable.
-pub const ALL_PLAYABLE_CLASS_MASK: u32 = 0x1ff;
+/// The nine class bits playable by the 1.12 client.  Class ids skip 6 and 10, so Druid (11) is bit
+/// 0x400; the client hides the tooltip "Classes:" line only when every playable bit is set.
+/// Item-template masks retain unknown bits from imported content; this value exists only to make
+/// the source dump's unrestricted sentinel durable.
+pub const ALL_PLAYABLE_CLASS_MASK: u32 = 0x5df;
 /// The eight race bits playable by the 1.12 client.  As with class masks, imported restrictions are
 /// otherwise opaque `u32` values and are never reconstructed from local variants.
 pub const ALL_PLAYABLE_RACE_MASK: u32 = 0xff;

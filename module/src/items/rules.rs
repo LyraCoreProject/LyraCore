@@ -455,6 +455,23 @@ pub(crate) mod tests {
         assert!(!eligibility_mask_allows(0, 8));
         assert!(!eligibility_mask_allows(u32::MAX, 0));
 
+        // Vanilla class ids skip 6 and 10; the unrestricted sentinel must admit all nine playable
+        // classes, Druid (11) included, and set no bit for the unused ids.
+        for class_id in [1u8, 2, 3, 4, 5, 7, 8, 9, 11] {
+            assert!(eligibility_mask_allows(
+                crate::items::tables::ALL_PLAYABLE_CLASS_MASK,
+                class_id
+            ));
+        }
+        assert!(!eligibility_mask_allows(
+            crate::items::tables::ALL_PLAYABLE_CLASS_MASK,
+            6
+        ));
+        assert!(!eligibility_mask_allows(
+            crate::items::tables::ALL_PLAYABLE_CLASS_MASK,
+            10
+        ));
+
         // A required skill needs both a durable row and enough current rank.
         assert!(!meets_required_skill(171, 50, None));
         assert!(!meets_required_skill(171, 50, Some(49)));
