@@ -609,7 +609,7 @@ struct FlightEndPlan {
 }
 
 trait FlightEndSink {
-    fn project_world(&mut self, landing: Option<LandingPosition>);
+    fn project_world(&mut self, landing: Option<LandingPosition>, zone_id: Option<u32>);
     fn project_character(
         &mut self,
         landing: LandingPosition,
@@ -629,7 +629,7 @@ fn apply_flight_end(sink: &mut impl FlightEndSink, plan: FlightEndPlan) {
         sink.clear_schedule();
         return;
     }
-    sink.project_world(plan.landing);
+    sink.project_world(plan.landing, plan.zone_id);
     if let Some(landing) = plan.landing {
         sink.drop_pending_motion();
         sink.project_character(landing, plan.instance_id, plan.zone_id);
@@ -645,7 +645,7 @@ struct CtxFlightEndSink<'a> {
 }
 
 impl FlightEndSink for CtxFlightEndSink<'_> {
-    fn project_world(&mut self, landing: Option<LandingPosition>) {
+    fn project_world(&mut self, landing: Option<LandingPosition>, zone_id: Option<u32>) {
         let Some(mut player) = self.player.take() else {
             return;
         };
@@ -658,6 +658,11 @@ impl FlightEndSink for CtxFlightEndSink<'_> {
             player.grid_x = landing.grid_x;
             player.grid_y = landing.grid_y;
             player.cell = landing.cell;
+            // The landing zone lands on the live row too, not just the durable one: the Gateway
+            // reads the entity's zone. An unresolvable landing keeps the zone flown in with.
+            if let Some(zone_id) = zone_id {
+                player.zone_id = zone_id;
+            }
         }
         let cleared = cleared_presentation(FlightPresentation {
             mount_display_id: player.mount_display_id,
@@ -1242,6 +1247,9 @@ mod tests {
         durable: LandingPosition,
         pending_instance_id: u64,
         zone_id: u32,
+        /// The zone landed on the LIVE entity row, kept apart from the durable `zone_id` above so a
+        /// test can prove the landing reaches both.
+        world_zone_id: u32,
         spline: bool,
         schedule: bool,
         active: bool,
@@ -1252,9 +1260,12 @@ mod tests {
     }
 
     impl FlightEndSink for FakeFlightEnd {
-        fn project_world(&mut self, landing: Option<LandingPosition>) {
+        fn project_world(&mut self, landing: Option<LandingPosition>, zone_id: Option<u32>) {
             if let Some(landing) = landing {
                 self.world = landing;
+                if let Some(zone_id) = zone_id {
+                    self.world_zone_id = zone_id;
+                }
             }
             self.presentation = cleared_presentation(self.presentation);
         }
@@ -1309,6 +1320,7 @@ mod tests {
             durable: position,
             pending_instance_id: 3,
             zone_id: 12,
+            world_zone_id: 12,
             spline: true,
             schedule: true,
             active: true,
@@ -1755,6 +1767,10 @@ mod tests {
         assert_eq!(sink.world, landing);
         assert_eq!(sink.durable, landing);
         assert_eq!((sink.pending_instance_id, sink.zone_id), (7, 40));
+        assert_eq!(
+            sink.world_zone_id, 40,
+            "the landing zone reaches the live entity row, not only the durable one"
+        );
         assert_eq!(sink.presentation, cleared_presentation(sink.presentation));
         assert_eq!(
             (
@@ -1792,6 +1808,10 @@ mod tests {
         assert_eq!(sink.world, last);
         assert_eq!(sink.durable, last);
         assert_eq!((sink.pending_instance_id, sink.zone_id), (3, 12));
+        assert_eq!(
+            sink.world_zone_id, 12,
+            "a cancelled flight grants no destination zone either"
+        );
         assert_eq!(sink.presentation.mount_display_id, 0);
         assert_eq!(
             (

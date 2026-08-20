@@ -665,6 +665,7 @@ pub fn build_creature_entity(
         sheet_crit_bp: 0,
         bank_bag_slots: 0,   // a creature owns no bank slots
         mount_display_id: 0, // creatures do not use the player taxi presentation field
+        zone_id: 0,          // unresolved: nothing routes zone-scoped delivery to a creature
     }
 }
 
@@ -820,6 +821,13 @@ pub fn build_player_entity(
         sheet_dmg_max: 0,
         sheet_crit_bp: 0,
         mount_display_id: 0,
+        // WORLD ENTRY resolves the zone from the position this row is built at — login, the
+        // WORLDPORT_ACK rebuild after a cross-map teleport, and a Transfer arrival's first login all
+        // come through here, so every world-entry path yields a fresh zone before the Gateway reads
+        // the row. Off the imported terrain slice it falls back to the durable zone the character
+        // logged out with, which is 0 for a character that has never resolved one.
+        zone_id: crate::terrain::zone_id_at(ctx, character.map_id, character.x, character.y)
+            .unwrap_or(character.zone_id),
     };
     // An interrupted connection does not cancel a paid flight. Restore its presentation while the
     // scheduler continues from its original authoritative timestamp.

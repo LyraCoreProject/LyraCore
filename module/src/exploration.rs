@@ -11,7 +11,7 @@ use spacetimedb::{table, ReducerContext, Table};
 #[cfg(feature = "debug_reducers")]
 use crate::game_world_entity;
 use crate::xp::XpEvent;
-use crate::{game_area, game_xp_event, WorldEntity};
+use crate::{game_xp_event, WorldEntity};
 
 /// Per-character record of an explored area — the dedup + persistence store so a subzone awards
 /// discovery XP exactly ONCE, ever, AND the gateway's source for the client fog. PUBLIC so the gateway
@@ -63,10 +63,11 @@ crate::character_owned!(transfer, fn sweep_transfer_game_character_explored(ctx,
 });
 
 /// On a grid-cell crossing (called from `movement_update`), award discovery XP if `mover` just entered
-/// a subzone it has never explored. Mutates `mover` (XP/level) — the caller's single `update` persists
-/// it. A graceful no-op when: area data isn't imported, the cell has no area, the area isn't
-/// discoverable (`area_bit < 0` or `exploration_level == 0`), the discovery XP rounds to 0 (grey /
-/// capped), or the area was already explored. [entity]
+/// a subzone it has never explored. `area` is the crossing's already-resolved `game_area` row — the
+/// caller looks the position up once and drives both this and the zone transition off it. Mutates
+/// `mover` (XP/level) — the caller's single `update` persists it. A graceful no-op when: the area
+/// isn't discoverable (`area_bit < 0` or `exploration_level == 0`), the discovery XP rounds to 0
+/// (grey / capped), or the area was already explored. [entity]
 ///
 /// Issue #89: a paying discovery inserts BOTH `game_character_explored` (→ the gateway's
 /// `SMSG_EXPLORATION_EXPERIENCE` "Discovered: <area>" toast, carrying `experience`) AND
@@ -80,13 +81,11 @@ crate::character_owned!(transfer, fn sweep_transfer_game_character_explored(ctx,
 /// also carries the xp number) — see `quest.rs`'s `reward_quest`, which mirrors it. XP itself is
 /// granted exactly once either way (`grant_xp`, below); only the FEEDBACK is deliberately doubled,
 /// matching what a real client receives.
-pub(crate) fn check_area_exploration(ctx: &ReducerContext, mover: &mut WorldEntity) {
-    let Some(area_id) = crate::terrain::area_id_at(ctx, mover.map_id, mover.x, mover.y) else {
-        return;
-    };
-    let Some(area) = ctx.db.game_area().id().find(area_id) else {
-        return; // area table unimported, or an unknown area — skip rather than guess
-    };
+pub(crate) fn check_area_exploration(
+    ctx: &ReducerContext,
+    mover: &mut WorldEntity,
+    area: &crate::GameArea,
+) {
     if area.area_bit < 0 {
         return;
     }
@@ -115,7 +114,7 @@ pub(crate) fn check_area_exploration(ctx: &ReducerContext, mover: &mut WorldEnti
         id: 0,
         character_guid: mover.guid,
         area_bit: area.area_bit,
-        area_id,
+        area_id: area.id,
         experience: xp,
     });
     if xp > 0 {
@@ -155,7 +154,9 @@ pub fn debug_explore_at(
     e.map_id = map_id;
     e.x = x;
     e.y = y;
-    check_area_exploration(ctx, &mut e);
+    if let Some(area) = crate::terrain::area_at(ctx, map_id, x, y) {
+        check_area_exploration(ctx, &mut e, &area);
+    }
     ctx.db.game_world_entity().guid().update(e);
     Ok(())
 }

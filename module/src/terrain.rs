@@ -129,16 +129,30 @@ pub fn debug_check_submerged(ctx: &ReducerContext, guid: u64) -> Result<(), Stri
 /// The single canonical zone resolver (#375, work-item 209 idiom): `world::graveyard`'s release pick
 /// and `loot::apply_fish`'s catch roll both call this instead of each keeping its own one-hop walk.
 pub fn zone_id_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<u32> {
+    area_at(ctx, map_id, x, y).map(|area| zone_of(&area))
+}
+
+/// The imported `game_area` ROW at `(x, y)` — [`area_id_at`] plus its one indexed row read. Callers
+/// that need both the area and its zone (the movement grid-crossing hook drives discovery XP and the
+/// zone transition off the same crossing) resolve once here instead of looking the position up twice.
+/// `None` under the same conditions as [`area_id_at`], plus an unimported `game_area`.
+pub fn area_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<crate::GameArea> {
     if ctx.db.game_area().count() == 0 {
         return None;
     }
     let area_id = area_id_at(ctx, map_id, x, y)?;
-    let area = ctx.db.game_area().id().find(area_id)?;
-    Some(if area.parent_area_id != 0 {
+    ctx.db.game_area().id().find(area_id)
+}
+
+/// The one-hop subzone→zone chase itself: an area with a `parent_area_id` IS a subzone, and its
+/// parent is the zone; a top-level area is its own zone. Split out of [`zone_id_at`] so a caller
+/// holding a resolved area does not repeat the rule.
+pub fn zone_of(area: &crate::GameArea) -> u32 {
+    if area.parent_area_id != 0 {
         area.parent_area_id
     } else {
         area.id
-    })
+    }
 }
 
 // ===========================================================================================
