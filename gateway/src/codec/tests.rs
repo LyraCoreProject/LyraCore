@@ -2918,13 +2918,17 @@ fn login_sequence_drops_an_out_of_range_imported_button() {
 }
 
 #[test]
-fn create_object_derives_attack_power_and_weapon_damage_from_level_and_strength() {
-    // PARITY with the module's combat::tables: attack_power = (level*3 + str*2) - 20 (saturating),
-    // and the unarmed swing range folds in the AP*attack_time/(14*1000) bonus.
+fn create_object_carries_stored_melee_and_ranged_sheet_projection() {
     let e = EntityView {
         level: 10,
         strength: 20,
         base_attack_time_ms: 2800,
+        sheet_ap_base: 50,
+        sheet_dmg_min: 11,
+        sheet_dmg_max: 13,
+        sheet_ranged_ap: 30,
+        sheet_ranged_dmg_min: 14,
+        sheet_ranged_dmg_max: 18,
         ..warrior_entity()
     };
     let msg = build_create_object(&e, CreateKind::SelfPlayer, &[], &[]).unwrap();
@@ -2933,20 +2937,20 @@ fn create_object_derives_attack_power_and_weapon_damage_from_level_and_strength(
             mask2: UpdateMask::Player(p),
             ..
         } => {
-            // attack_power = (10*3 + 20*2) - 20 = 50
             assert_eq!(p.unit_attack_power(), Some(50));
-            // dmg_bonus = 50 * 2800 / 14000 = 10; min = 1+10 = 11, max = 3+10 = 13
             assert_eq!(p.unit_mindamage(), Some(11.0));
             assert_eq!(p.unit_maxdamage(), Some(13.0));
+            assert_eq!(p.unit_ranged_attack_power(), Some(30));
+            assert_eq!(p.unit_ranged_attack_power_mods(), Some((0, 0)));
+            assert_eq!(p.unit_minrangeddamage(), Some(14.0));
+            assert_eq!(p.unit_maxrangeddamage(), Some(18.0));
         }
         other => panic!("expected a Player CreateObject2, got {other:?}"),
     }
 }
 
 #[test]
-fn create_object_attack_power_saturates_at_zero_for_a_fresh_level_one() {
-    // level 1, str 0: a plain `(1*3 + 0) - 20` would underflow; saturating_sub floors it at 0
-    // instead of wrapping a u32 subtraction into a huge value.
+fn create_object_carries_a_zero_stored_sheet_projection() {
     let msg = build_create_object(&warrior_entity(), CreateKind::SelfPlayer, &[], &[]).unwrap();
     match &msg.objects[0] {
         Object::CreateObject2 {
@@ -2954,11 +2958,88 @@ fn create_object_attack_power_saturates_at_zero_for_a_fresh_level_one() {
             ..
         } => {
             assert_eq!(p.unit_attack_power(), Some(0));
-            assert_eq!(p.unit_mindamage(), Some(1.0));
-            assert_eq!(p.unit_maxdamage(), Some(3.0));
+            assert_eq!(p.unit_mindamage(), Some(0.0));
+            assert_eq!(p.unit_maxdamage(), Some(0.0));
         }
         other => panic!("expected a Player CreateObject2, got {other:?}"),
     }
+}
+
+#[test]
+fn create_object_carries_a_flat_wand_projection() {
+    let e = EntityView {
+        sheet_ranged_dmg_min: 8,
+        sheet_ranged_dmg_max: 12,
+        ..warrior_entity()
+    };
+    let msg = build_create_object(&e, CreateKind::SelfPlayer, &[], &[]).unwrap();
+    match &msg.objects[0] {
+        Object::CreateObject2 {
+            mask2: UpdateMask::Player(p),
+            ..
+        } => {
+            assert_eq!(p.unit_ranged_attack_power(), Some(0));
+            assert_eq!(p.unit_minrangeddamage(), Some(8.0));
+            assert_eq!(p.unit_maxrangeddamage(), Some(12.0));
+        }
+        other => panic!("expected a Player CreateObject2, got {other:?}"),
+    }
+}
+
+fn ranged_sheet_stats(
+    ranged_attack_power: u32,
+    ranged_dmg_min: u32,
+    ranged_dmg_max: u32,
+) -> SheetStatsValues {
+    SheetStatsValues {
+        strength: 20,
+        agility: 20,
+        stamina: 20,
+        intellect: 20,
+        spirit: 20,
+        str_bonus: 0,
+        agi_bonus: 0,
+        sta_bonus: 0,
+        int_bonus: 0,
+        spi_bonus: 0,
+        attack_power: 50,
+        ap_mods: 0,
+        dmg_min: 11,
+        dmg_max: 13,
+        ranged_attack_power,
+        ranged_dmg_min,
+        ranged_dmg_max,
+        crit_pct: 5.0,
+    }
+}
+
+fn assert_sheet_values_projection(stats: SheetStatsValues, expected: (i32, f32, f32)) {
+    let msg = build_sheet_stats_values(1, &stats);
+    match &msg.objects[0] {
+        Object::Values {
+            mask1: UpdateMask::Player(p),
+            ..
+        } => {
+            assert_eq!(p.unit_attack_power(), Some(50));
+            assert_eq!(p.unit_mindamage(), Some(11.0));
+            assert_eq!(p.unit_maxdamage(), Some(13.0));
+            assert_eq!(p.unit_ranged_attack_power(), Some(expected.0));
+            assert_eq!(p.unit_ranged_attack_power_mods(), Some((0, 0)));
+            assert_eq!(p.unit_minrangeddamage(), Some(expected.1));
+            assert_eq!(p.unit_maxrangeddamage(), Some(expected.2));
+        }
+        other => panic!("expected Player Values, got {other:?}"),
+    }
+}
+
+#[test]
+fn sheet_values_carry_the_same_melee_and_ranged_projection() {
+    assert_sheet_values_projection(ranged_sheet_stats(30, 14, 18), (30, 14.0, 18.0));
+}
+
+#[test]
+fn sheet_values_carry_a_flat_wand_projection() {
+    assert_sheet_values_projection(ranged_sheet_stats(0, 8, 12), (0, 8.0, 12.0));
 }
 
 #[test]

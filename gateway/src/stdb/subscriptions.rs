@@ -3612,6 +3612,9 @@ mod tests {
             bank_bag_slots: 0,
             mount_display_id: 0,
             zone_id: 0,
+            sheet_ranged_ap: 0,
+            sheet_ranged_dmg_min: 0,
+            sheet_ranged_dmg_max: 0,
         }
     }
 

@@ -82,6 +82,9 @@ pub struct WorldEntity {
     pub bank_bag_slots: u8,
     pub mount_display_id: u32,
     pub zone_id: u32,
+    pub sheet_ranged_ap: u32,
+    pub sheet_ranged_dmg_min: u32,
+    pub sheet_ranged_dmg_max: u32,
 }
 
 impl __sdk::InModule for WorldEntity {
@@ -167,6 +170,9 @@ pub struct WorldEntityCols {
     pub bank_bag_slots: __sdk::__query_builder::Col<WorldEntity, u8>,
     pub mount_display_id: __sdk::__query_builder::Col<WorldEntity, u32>,
     pub zone_id: __sdk::__query_builder::Col<WorldEntity, u32>,
+    pub sheet_ranged_ap: __sdk::__query_builder::Col<WorldEntity, u32>,
+    pub sheet_ranged_dmg_min: __sdk::__query_builder::Col<WorldEntity, u32>,
+    pub sheet_ranged_dmg_max: __sdk::__query_builder::Col<WorldEntity, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for WorldEntity {
@@ -257,6 +263,15 @@ impl __sdk::__query_builder::HasCols for WorldEntity {
             bank_bag_slots: __sdk::__query_builder::Col::new(table_name, "bank_bag_slots"),
             mount_display_id: __sdk::__query_builder::Col::new(table_name, "mount_display_id"),
             zone_id: __sdk::__query_builder::Col::new(table_name, "zone_id"),
+            sheet_ranged_ap: __sdk::__query_builder::Col::new(table_name, "sheet_ranged_ap"),
+            sheet_ranged_dmg_min: __sdk::__query_builder::Col::new(
+                table_name,
+                "sheet_ranged_dmg_min",
+            ),
+            sheet_ranged_dmg_max: __sdk::__query_builder::Col::new(
+                table_name,
+                "sheet_ranged_dmg_max",
+            ),
         }
     }
 }

@@ -3722,6 +3722,13 @@ fn warrior_entity() -> codec::EntityView {
         stamina: 22,
         intellect: 20,
         spirit: 21,
+        sheet_ap_base: 29,
+        sheet_ap_mods: 0,
+        sheet_dmg_min: 5,
+        sheet_dmg_max: 7,
+        sheet_ranged_ap: 0,
+        sheet_ranged_dmg_min: 0,
+        sheet_ranged_dmg_max: 0,
         npc_flags: 0,        // a player is not an NPC
         owner_guid: 0,       // not a summon
         effective_armor: 40, // agility 20 * 2 (base; no gear in the fixture → effective == base)

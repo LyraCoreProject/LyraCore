@@ -477,7 +477,8 @@ parity_test!(parity_game_world_entity, "game_world_entity", lyracore_module::Wor
     run_speed_mult_bp, godmode, resting, cell,
     sheet_str_bonus, sheet_agi_bonus, sheet_sta_bonus, sheet_int_bonus, sheet_spi_bonus,
     sheet_ap_base, sheet_ap_mods, sheet_dmg_min, sheet_dmg_max, sheet_crit_bp, unit_bytes_2,
-    bank_bag_slots, mount_display_id, zone_id,
+    bank_bag_slots, mount_display_id, zone_id, sheet_ranged_ap, sheet_ranged_dmg_min,
+    sheet_ranged_dmg_max,
 });
 // The live sky, one row per zone. Gateway-subscribed: world entry and zone entry read it, and its
 // updates are the weather relay.
