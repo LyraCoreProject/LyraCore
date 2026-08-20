@@ -9,7 +9,7 @@ use crate::creatures::eventai::{
     self, CreatureAiEvent, CreatureState, Diagnostic, EventAiRequest, EventAiWorld, EventContext,
     EventKind, RuleAction, RuleState, EVENT_ON_DEATH, EVENT_ON_SPAWN,
 };
-use crate::creatures::{chase_step, rout_window_open};
+use crate::creatures::{chase_step, rout_close_ms, rout_window_open};
 use lyracore_shared::spatial;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
@@ -1354,10 +1354,15 @@ impl EventAiWorld for Scenario {
                 eventai::ActionResult::Applied
             }
             eventai::ActionKind::FleeForAssist => {
-                self.rout_clock
-                    .borrow_mut()
-                    .entry(context.creature_guid)
-                    .or_insert(context.now_ms as u32 + ROUT_DURATION_MS);
+                // The world's `FleeForAssist` arm: a spent window re-stamps, because an authored
+                // flee runs every time its rule fires, while an OPEN window is left to run out
+                // rather than be extended into one endless flee.
+                let now_ms = context.now_ms as u32;
+                let mut clocks = self.rout_clock.borrow_mut();
+                let ends_ms = clocks.get(&context.creature_guid).copied().unwrap_or(0);
+                if !rout_window_open(now_ms, ends_ms) {
+                    clocks.insert(context.creature_guid, rout_close_ms(now_ms));
+                }
                 eventai::ActionResult::Applied
             }
             eventai::ActionKind::CallForHelp => {

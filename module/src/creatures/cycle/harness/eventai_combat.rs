@@ -528,6 +528,42 @@ fn an_authored_flee_runs_a_creature_the_fixed_rout_would_leave_standing() {
 }
 
 #[test]
+fn a_repeat_authored_flee_runs_the_creature_again_later_in_the_fight() {
+    // The rule repeats every 15 s and each rout window runs 10 s, so the second firing lands on a
+    // window that is stamped but SPENT. It must re-stamp rather than treat the spent window as the
+    // fixed rout's once per Engagement.
+    let mut scenario = world().hurt(CREATURE, 30).eventai_row(row(
+        509_0214,
+        509_0214,
+        0,
+        EVENT_CREATURE_HP,
+        ACTION_FLEE_FOR_ASSIST,
+        REPEAT,
+        [0, 30, 15_000, 15_000, 0, 0],
+        [0; 3],
+    ));
+
+    fire(&mut scenario); // the rule stamps the first window
+    fire(&mut scenario); // the rout pass reads it: the first flee leg
+
+    scenario.advance_clock(15_000_000); // the first window and the repeat wait are both over
+    fire(&mut scenario); // the rule fires onto the spent window and re-stamps it
+    scenario.advance_clock(5_000_000); // the chase leg thrown while the window was spent lands
+    fire(&mut scenario); // the re-stamped window runs the creature again
+
+    let flee_legs: Vec<_> = scenario
+        .effects()
+        .into_iter()
+        .filter(|leg| leg.dur_ms > 0 && leg.dest.x < leg.start.x)
+        .collect();
+    assert_eq!(
+        flee_legs.len(),
+        2,
+        "a later flee in the same fight must write a second leg away from the victim"
+    );
+}
+
+#[test]
 fn call_for_help_uses_the_normal_assisted_engagement() {
     let helper = CREATURE + 20;
     let mut scenario = world()
