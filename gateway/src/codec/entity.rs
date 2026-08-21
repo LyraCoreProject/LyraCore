@@ -572,7 +572,7 @@ pub(crate) fn realm_datetime(secs_since_unix_epoch: u64) -> DateTime {
     let hours = (secs_of_day / 3_600) as u8;
     let minutes = ((secs_of_day % 3_600) / 60) as u8;
 
-    let (year, month, month_day) = civil_from_days(days);
+    let (year, month, month_day) = lyracore_shared::calendar::civil_from_days(days);
     // 1970-01-01 (days = 0) was a Thursday, and `Weekday::as_int()` numbers Sunday 0 ..
     // Saturday 6 — exactly `(days + 4) % 7` for a non-negative day count.
     let weekday = Weekday::try_from(((days + 4) % 7) as u32)
@@ -580,28 +580,12 @@ pub(crate) fn realm_datetime(secs_since_unix_epoch: u64) -> DateTime {
 
     DateTime::new(
         (year - 2000) as u8,
-        Month::try_from((month - 1) as u32).expect("civil_from_days month is always 1..=12"),
+        Month::try_from(month - 1).expect("civil_from_days month is always 1..=12"),
         (month_day - 1) as u8,
         weekday,
         hours,
         minutes,
     )
-}
-
-/// Howard Hinnant's `civil_from_days`: the standard days-since-epoch to proleptic-Gregorian
-/// calendar conversion (<http://howardhinnant.github.io/date_algorithms.html>). Returns
-/// `(year, month, day)`, `month` and `day` both one-based.
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097; // [0, 146096]
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
-    (y + i64::from(m <= 2), m, d)
 }
 
 /// Emit the post-login SMSG sequence (Phase 4, gateway translation §5) to the owner, in the

@@ -245,36 +245,9 @@ pub(crate) fn day_of_year(now_micros: i64) -> u32 {
     const BEFORE_MONTH: [u32; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
 
     let days = now_micros.div_euclid(86_400_000_000);
-    let (year, month, day) = civil_from_days(days);
+    let (year, month, day) = lyracore_shared::calendar::civil_from_days(days);
     let leap_day = (month > 2 && is_leap_year(year)) as u32;
     BEFORE_MONTH[(month - 1) as usize] + day - 1 + leap_day
-}
-
-/// `(year, month 1..=12, day 1..=31)` for a count of days since 1970-01-01, proleptic Gregorian.
-///
-/// The era arithmetic shifts the year to start in March so the leap day lands last and needs no
-/// special case. Exact for any timestamp a realm can hold, including dates before 1970.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let shifted = days + 719_468; // days since 0000-03-01
-    let era = shifted.div_euclid(146_097); // one 400-year cycle
-    let day_of_era = shifted - era * 146_097; // 0..=146096
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365; // 0..=399
-    let march_year = year_of_era + era * 400;
-    let day_of_march_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let march_month = (5 * day_of_march_year + 2) / 153; // 0 is March
-    let day = (day_of_march_year - (153 * march_month + 2) / 5 + 1) as u32;
-    let month = if march_month < 10 {
-        march_month + 3
-    } else {
-        march_month - 9
-    } as u32;
-    let year = if month <= 2 {
-        march_year + 1
-    } else {
-        march_year
-    };
-    (year, month, day)
 }
 
 fn is_leap_year(year: i64) -> bool {
@@ -625,7 +598,7 @@ mod tests {
     }
 
     /// Micros at midnight UTC on a date, counted forward from the epoch a year at a time so the
-    /// expectation does not come from [`civil_from_days`] run backwards.
+    /// expectation does not come from the shared calendar conversion run backwards.
     fn micros_at(year: i64, month: u32, day: u32) -> i64 {
         const BEFORE_MONTH: [i64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
         let mut days = 0i64;
