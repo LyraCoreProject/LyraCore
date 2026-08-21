@@ -38,6 +38,7 @@ mod quest;
 mod trainer;
 mod taxi;
 mod values;
+mod weather;
 
 pub use social::{
     build_channel_message, build_chat_message, build_emote_anim, build_friend_list_response,
@@ -67,6 +68,7 @@ pub use quest::*;
 pub use trainer::*;
 pub use taxi::*;
 pub use values::*;
+pub use weather::*;
 
 // Shared imports for the family submodules. Kept at this (private) module level so each submodule
 // glob-imports them via `use super::*`; the type aliases / row-view structs they build all live in

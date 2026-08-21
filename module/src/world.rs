@@ -341,6 +341,21 @@ pub struct WorldEntity {
     /// `#[default(0)]` + END-appended keeps existing rows unmounted across publication.
     #[default(0)]
     pub mount_display_id: u32,
+    /// The zone this entity stands in — the Module's authoritative live answer, resolved from
+    /// imported terrain and the entity's own position. Never client-supplied, which is why
+    /// `CMSG_ZONEUPDATE` stays unhandled. Written wherever a position is established: world entry,
+    /// teleport, taxi landing, and the grid-cell crossing in `movement_update`.
+    ///
+    /// `0` means unresolved — no terrain or area data covers this position — and a reader treats it
+    /// as no zone rather than guessing. Creatures keep 0: nothing routes by a creature's zone.
+    ///
+    /// `Character.zone_id` is the durable twin, kept in step by the same transitions. This column
+    /// exists because the character row is not live and the Gateway needs a zone signal it can
+    /// watch. `#[default(0)]` + END-appended so `publish` auto-migrates existing rows (the migration
+    /// rule); the default is the honest "unresolved" value, so an existing row states no zone until
+    /// its owner next moves, teleports, or relogs.
+    #[default(0)]
+    pub zone_id: u32,
 }
 
 impl WorldEntity {
@@ -617,6 +632,42 @@ pub(crate) fn is_cross_map_teleport(current_map_id: u32, target_map_id: u32) -> 
     current_map_id != target_map_id
 }
 
+/// The zone-transition DECISION, pure: given the zone an entity already carries and the zone freshly
+/// resolved from its new position, the zone to write — or `None` for "write nothing".
+///
+/// Two cases produce no write. An unresolved position (`resolved` is `None`: terrain or area data
+/// does not cover it) keeps the current zone, so walking off the imported slice never blanks a good
+/// answer and never fails the move. A position in the same zone is not a transition, so ordinary
+/// walking inside one zone touches neither row.
+pub(crate) fn zone_transition(current: u32, resolved: Option<u32>) -> Option<u32> {
+    resolved.filter(|zone| *zone != current)
+}
+
+/// Apply [`zone_transition`] to a live entity and its durable character row — the movement path's
+/// zone chokepoint.
+///
+/// The entity is mutated in place; the CALLER persists it (a grid crossing already forces that write,
+/// so a transition costs no extra entity write). The character row is written ONLY on a real
+/// transition, which is what keeps ordinary walking off the durable table. Teleport and taxi landing
+/// stamp the same two fields inside writes they already perform unconditionally, so they set them
+/// directly rather than through here.
+pub(crate) fn apply_zone_transition(
+    ctx: &ReducerContext,
+    entity: &mut WorldEntity,
+    resolved: Option<u32>,
+) {
+    let Some(zone) = zone_transition(entity.zone_id, resolved) else {
+        return;
+    };
+    entity.zone_id = zone;
+    // Through the by-guid chokepoint: an in-transit character reads as absent, so a shard the
+    // character has already left cannot stamp a zone onto the copy the destination owns.
+    if let Some(mut character) = crate::helpers::character_by_guid(ctx, entity.guid) {
+        character.zone_id = zone;
+        ctx.db.game_character().guid().update(character);
+    }
+}
+
 // The teleport primitive's full destination (map/instance/x/y/z/o) plus the actor; the shape mirrors `game_teleport_event`'s columns.
 #[allow(clippy::too_many_arguments)]
 /// The reusable teleport core: move `player_guid` to `(map_id, instance_id, x, y, z, o)` authoritatively
@@ -667,6 +718,11 @@ pub(crate) fn teleport_player(
     // the authoritative position is the destination, and the player's next heartbeat relays it.
     crate::motion::drop_pending(ctx, player_guid);
 
+    // The destination zone, resolved ONCE from trusted terrain and stamped onto both rows below. A
+    // cross-map hop despawns the live entity, so `build_player_entity` resolves the arrival zone
+    // again on the far side; an unresolvable destination leaves both zones as they were.
+    let destination_zone = crate::terrain::zone_id_at(ctx, map_id, x, y);
+
     if cross_map {
         // Persist current progression (old position/vitals) BEFORE despawning — matches
         // `remove_from_world`'s persist-then-delete order (logout) so a cross-map hop never loses a
@@ -688,6 +744,9 @@ pub(crate) fn teleport_player(
         e.grid_y = grid_y;
         e.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
         e.instance_id = instance_id;
+        if let Some(zone) = destination_zone {
+            e.zone_id = zone;
+        }
         entities.guid().update(e);
     }
 
@@ -711,7 +770,7 @@ pub(crate) fn teleport_player(
         c.pending_instance_id = instance_id;
         // Zone follows the destination (the persist_entity stamp's teleport twin): a cross-map
         // hop persisted the OLD position's zone above, and the char-select label reads this row.
-        if let Some(zone) = crate::terrain::zone_id_at(ctx, map_id, x, y) {
+        if let Some(zone) = destination_zone {
             c.zone_id = zone;
         }
         chars.guid().update(c);
@@ -1365,11 +1424,17 @@ pub(crate) fn apply_movement_update(
             fall_lethal = lethal;
         }
     }
-    // Exploration (200): on crossing into a new grid cell, award discovery XP if this is a fresh
-    // subzone. Gated on the grid change so the area lookup + dedup run ~once per 50yd, not per
-    // heartbeat; folds any XP/ding into the single `update` below (mutates `mover`).
+    // AREA CROSSING: on crossing into a new grid cell, resolve the position's area ONCE and drive
+    // both hooks off it — discovery XP (200) if this is a fresh subzone, and the authoritative zone
+    // transition the Gateway routes zone-scoped delivery on. Gated on the grid change so the lookup
+    // runs ~once per 50 yd, not per heartbeat; a grid change also forces the single `update` below,
+    // so both hooks' mutations to `mover` persist without a second write. Unimported terrain or area
+    // data resolves nothing and the mover keeps the zone it already had.
     if mover.is_player() && !mover.dead && (grid_x != old_gx || grid_y != old_gy) {
-        crate::exploration::check_area_exploration(ctx, &mut mover);
+        if let Some(area) = crate::terrain::area_at(ctx, mover.map_id, mover.x, mover.y) {
+            crate::exploration::check_area_exploration(ctx, &mut mover, &area);
+            apply_zone_transition(ctx, &mut mover, Some(crate::terrain::zone_of(&area)));
+        }
     }
     // Rest state (196): not grid-gated (an inn is smaller than a 50yd cell) but THROTTLED to
     // ~1Hz per mover (#482): gate on the heartbeat clock crossing a second boundary. At run
@@ -2055,9 +2120,9 @@ mod tests {
     use super::{
         accrue_played_on_persist, can_inspect, ghost_restored_fields, is_cross_map_teleport,
         movement_violation, persisted_gm_playtest, persisted_pending_ghost, plan_movement,
-        resolve_environmental_damage, snapshot_needs_persist, spirit_res_vitals, MovementDelta,
-        INSPECT_RANGE_SQ, MOVE_VIOLATION_SPEED, MOVE_VIOLATION_TELEPORT, PERSIST_MAX_DRIFT_YD,
-        RESURRECTION_SICKNESS_SPELL, RUN_SPEED_BP_1X,
+        resolve_environmental_damage, snapshot_needs_persist, spirit_res_vitals, zone_transition,
+        MovementDelta, INSPECT_RANGE_SQ, MOVE_VIOLATION_SPEED, MOVE_VIOLATION_TELEPORT,
+        PERSIST_MAX_DRIFT_YD, RESURRECTION_SICKNESS_SPELL, RUN_SPEED_BP_1X,
     };
 
     // ---- perf catalog 2.2: snapshot persistence ----------------------------------------------
@@ -2165,6 +2230,21 @@ mod tests {
             (50, true),
             "over-lethal damage is flagged, not subtracted either"
         );
+    }
+
+    #[test]
+    fn a_zone_transition_writes_only_when_the_resolved_zone_is_new() {
+        // Elwynn (12) → Westfall (40): the crossing every zone-scoped delivery depends on.
+        assert_eq!(zone_transition(12, Some(40)), Some(40));
+        // The unresolved-to-resolved edge — a character whose row predates this column, or who was
+        // standing off the imported slice, resolves its first zone the same way.
+        assert_eq!(zone_transition(0, Some(12)), Some(12));
+        // Walking on inside the same zone is not a transition, so neither row is written.
+        assert_eq!(zone_transition(12, Some(12)), None);
+        // An unresolvable position KEEPS the zone it had — missing terrain never blanks a good
+        // answer, and never resolves to zone 0 as if the character had left the world.
+        assert_eq!(zone_transition(12, None), None);
+        assert_eq!(zone_transition(0, None), None);
     }
 
     #[test]
@@ -2437,6 +2517,32 @@ mod tests {
         assert!(
             !build.contains("godmode: false,") && !build.contains("run_speed_mult_bp: 10_000,"),
             "…and must NOT hardcode them again — that hardcode IS work-item 289. Body was:\n{build}"
+        );
+    }
+
+    /// World entry's zone, pinned by scan for the same reason as the carry columns above:
+    /// `build_player_entity` takes a `&ReducerContext` this crate has no harness for (playbook
+    /// §7/§8). The needle is a struct FIELD ASSIGNMENT, so a restored `zone_id: 0` hardcode cannot
+    /// coexist with it — Rust forbids the duplicate field. The behavior across a real database is
+    /// covered by `module/tests/zone_transition.rs`.
+    #[test]
+    fn world_entry_resolves_the_arrival_zone_from_trusted_terrain() {
+        let build = crate::test_scan::shape_of(
+            include_str!("creatures/spawn.rs"),
+            "pub fn build_player_entity(",
+        );
+        assert!(
+            build.contains(
+                "zone_id: crate::terrain::zone_id_at(ctx, character.map_id, character.x, character.y)"
+            ),
+            "every world-entry path — login, the WORLDPORT_ACK rebuild after a cross-map teleport, \
+             and a Transfer arrival's first login — builds the live row here, so the arrival zone \
+             must be resolved from terrain before the Gateway can read it. Body was:\n{build}"
+        );
+        assert!(
+            build.contains(".unwrap_or(character.zone_id)"),
+            "…and an arrival off the imported terrain slice must fall back to the durable zone, \
+             never fail world entry. Body was:\n{build}"
         );
     }
 

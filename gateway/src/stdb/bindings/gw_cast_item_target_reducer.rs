@@ -27,16 +27,32 @@ impl __sdk::InModule for GwCastItemTargetArgs {
 }
 
 #[allow(non_camel_case_types)]
+/// Extension trait for access to the reducer `gw_cast_item_target`.
+///
+/// Implemented for [`super::RemoteReducers`].
 pub trait gw_cast_item_target {
+    /// Request that the remote module invoke the reducer `gw_cast_item_target` to run as soon as possible.
+    ///
+    /// This method returns immediately, and errors only if we are unable to send the request.
+    /// The reducer will run asynchronously in the future,
+    ///  and this method provides no way to listen for its completion status.
+    /// /// Use [`gw_cast_item_target:gw_cast_item_target_then`] to run a callback after the reducer completes.
     fn gw_cast_item_target(&self, actor_guid: u64, spell_id: u32, slot: u8) -> __sdk::Result<()> {
         self.gw_cast_item_target_then(actor_guid, spell_id, slot, |_, _| {})
     }
 
+    /// Request that the remote module invoke the reducer `gw_cast_item_target` to run as soon as possible,
+    /// registering `callback` to run when we are notified that the reducer completed.
+    ///
+    /// This method returns immediately, and errors only if we are unable to send the request.
+    /// The reducer will run asynchronously in the future,
+    ///  and its status can be observed with the `callback`.
     fn gw_cast_item_target_then(
         &self,
         actor_guid: u64,
         spell_id: u32,
         slot: u8,
+
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
@@ -49,6 +65,7 @@ impl gw_cast_item_target for super::RemoteReducers {
         actor_guid: u64,
         spell_id: u32,
         slot: u8,
+
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,

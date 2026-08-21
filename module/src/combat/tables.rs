@@ -1147,6 +1147,7 @@ mod tests {
             sheet_crit_bp: 0,
             bank_bag_slots: 0,
             mount_display_id: 0,
+            zone_id: 0,
         }
     }
 

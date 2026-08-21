@@ -130,6 +130,16 @@ fn enter_world<St: WorldStore + ?Sized>(
     batch.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
         codec::build_create_object(&entity, codec::CreateKind::SelfPlayer, &inventory, &skills)?,
     )));
+    // The environment, closing the same contiguous batch: the client must land with the right sky
+    // rather than the last one it rendered, so this is Instant and is sent on EVERY world entry —
+    // fresh login, reconnect and cross-map world-port alike. The zone is the Module's answer,
+    // resolved from terrain when it built the live entity. A zone with no weather is fine weather
+    // and still sends its packet: an arriving client that is told nothing keeps whatever it had.
+    batch.push(zone_weather_message(
+        store,
+        entity.zone_id,
+        WeatherChangeType::Instant,
+    ));
     send(tx, Outbound::Batch(batch))?;
     // Subscribe AFTER the self-spawn batch is on the wire — so the AOI initial-apply creates for
     // entities ALREADY in view (notably a questgiver you spawn right next to) arrive AFTER the
@@ -139,15 +149,8 @@ fn enter_world<St: WorldStore + ?Sized>(
     // always fine — this makes the login case match it. (Missing a peer that
     // inserts in the µs window between this send and the subscribe is negligible.) The dedup set
     // is seeded with self_guid so the player's own row (delivered on initial apply) is skipped.
-    let subs = store.subscribe_player_events(
-        conn.account_id,
-        character_guid,
-        entity.instance_id,
-        entity.map_id,
-        entity.x,
-        entity.y,
-        tx.clone(),
-    )?;
+    let subs =
+        store.subscribe_player_events(conn.account_id, character_guid, &entity, tx.clone())?;
     // Replay the buyback-tab view (the ring persists across sessions; without this the tab
     // is empty until the first in-session sell).
     for message in build_buyback_view_replay(store, character_guid) {

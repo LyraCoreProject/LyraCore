@@ -26,6 +26,7 @@ mod taxi;
 mod trade;
 mod trainer;
 mod vendor;
+mod weather;
 
 pub(crate) use bank::handle_bank;
 pub(crate) use auction::{
@@ -64,6 +65,7 @@ pub(crate) use trainer::handle_trainer;
 pub(crate) use vendor::{
     dispatch_vendor_action, VendorActionOutcome, VendorActionPlayer, VendorActionStore,
 };
+pub(crate) use weather::{zone_weather_message, WeatherStore};
 
 /// Open the bank window for `banker_guid`. Single chokepoint for `CMSG_BANKER_ACTIVATE` and the
 /// BANKER gossip option, so the two entry points cannot drift apart.

@@ -11,6 +11,7 @@ pub mod activate_vmap_generation_reducer;
 pub mod active_taxi_flight_type;
 pub mod addon_message_type;
 pub mod advance_taxi_flight_reducer;
+pub mod alpha_test_tools_enrollment_type;
 pub mod append_vmap_generation_chunks_reducer;
 pub mod areatrigger_teleport_type;
 pub mod arm_all_pools_reducer;
@@ -54,7 +55,12 @@ pub mod corpse_type;
 pub mod create_character_reducer;
 pub mod createinfo_action_type;
 pub mod createinfo_spell_type;
+pub mod creature_ai_broadcast_text_type;
 pub mod creature_ai_event_type;
+pub mod creature_ai_rule_state_type;
+pub mod creature_ai_state_type;
+pub mod creature_ai_summon_expiry_type;
+pub mod creature_ai_summon_type;
 pub mod creature_ai_timer_type;
 pub mod creature_cast_type;
 pub mod creature_family_type;
@@ -133,6 +139,8 @@ pub mod debug_kill_creature_reducer;
 pub mod debug_kill_nearest_reducer;
 pub mod debug_learn_profession_from_trainer_reducer;
 pub mod debug_learn_profession_reducer;
+pub mod debug_learn_riding_from_trainer_reducer;
+pub mod debug_learn_riding_reducer;
 pub mod debug_learn_spell_reducer;
 pub mod debug_learn_talent_reducer;
 pub mod debug_learn_weapon_from_trainer_reducer;
@@ -165,6 +173,7 @@ pub mod debug_sell_item_reducer;
 pub mod debug_set_health_reducer;
 pub mod debug_set_level_reducer;
 pub mod debug_set_money_reducer;
+pub mod debug_set_nav_coverage_enabled_reducer;
 pub mod debug_set_nav_enabled_reducer;
 pub mod debug_set_power_reducer;
 pub mod debug_set_skill_reducer;
@@ -180,11 +189,13 @@ pub mod debug_spirit_healer_res_reducer;
 pub mod debug_split_item_reducer;
 pub mod debug_stage_auction_buyout_fixture_reducer;
 pub mod debug_stage_auction_expiry_fixture_reducer;
+pub mod debug_stage_choice_reward_fixture_reducer;
 pub mod debug_stress_relay_reducer;
 pub mod debug_sweep_encounter_state_reducer;
 pub mod debug_sweep_slice_lens_reducer;
 pub mod debug_take_loot_reducer;
 pub mod debug_teleport_reducer;
+pub mod debug_turn_in_choice_reward_fixture_reducer;
 pub mod debug_turn_in_quest_reducer;
 pub mod debug_unequip_item_reducer;
 pub mod debug_use_gameobject_entry_reducer;
@@ -193,6 +204,8 @@ pub mod debug_use_hearthstone_reducer;
 pub mod debug_use_item_reducer;
 pub mod debug_verify_auction_buyout_fixture_reducer;
 pub mod debug_verify_auction_expiry_fixture_reducer;
+pub mod debug_verify_choice_reward_fixture_reducer;
+pub mod debug_verify_choice_reward_refusal_fixture_reducer;
 pub mod debug_verify_combat_regen_reducer;
 pub mod debug_vmap_area_info_reducer;
 pub mod debug_vmap_ray_reducer;
@@ -214,14 +227,17 @@ pub mod establish_session_reducer;
 pub mod event_reaper_schedule_type;
 pub mod evict_instance_population_reducer;
 pub mod expire_auction_reducer;
+pub mod expire_eventai_summon_reducer;
 pub mod faction_template_type;
 pub mod faction_type;
+pub mod finalize_vmap_nav_coverage_reducer;
 pub mod finish_transfer_reducer;
 pub mod fire_pending_cast_reducer;
 pub mod fire_spell_impact_reducer;
 pub mod game_account_table;
 pub mod game_active_taxi_flight_table;
 pub mod game_addon_message_table;
+pub mod game_alpha_test_tools_enrollment_table;
 pub mod game_area_table;
 pub mod game_area_trigger_table;
 pub mod game_area_trigger_type;
@@ -262,7 +278,12 @@ pub mod game_corpse_loot_table;
 pub mod game_corpse_table;
 pub mod game_createinfo_action_table;
 pub mod game_createinfo_spell_table;
+pub mod game_creature_ai_broadcast_text_table;
 pub mod game_creature_ai_event_table;
+pub mod game_creature_ai_rule_state_table;
+pub mod game_creature_ai_state_table;
+pub mod game_creature_ai_summon_expiry_table;
+pub mod game_creature_ai_summon_table;
 pub mod game_creature_ai_timer_table;
 pub mod game_creature_cast_table;
 pub mod game_creature_family_table;
@@ -303,6 +324,7 @@ pub mod game_gameobject_unlocked_table;
 pub mod game_gateway_lease_reaper_schedule_table;
 pub mod game_gateway_lease_table;
 pub mod game_gateway_session_table;
+pub mod game_go_model_table;
 pub mod game_gossip_menu_table;
 pub mod game_gossip_option_table;
 pub mod game_graveyard_table;
@@ -317,6 +339,7 @@ pub mod game_guid_allocator_table;
 pub mod game_guid_range_registry_table;
 pub mod game_guid_range_table;
 pub mod game_hunter_pet_protocol_table;
+pub mod game_hunter_pet_table;
 pub mod game_import_meta_table;
 pub mod game_instance_binding_table;
 pub mod game_instance_binding_type;
@@ -327,6 +350,7 @@ pub mod game_item_instance_table;
 pub mod game_item_template_table;
 pub mod game_level_stats_table;
 pub mod game_levelup_event_table;
+pub mod game_live_pet_kind_table;
 pub mod game_lock_table;
 pub mod game_lock_type;
 pub mod game_loot_roll_table;
@@ -354,6 +378,7 @@ pub mod game_object_unlocked_type;
 pub mod game_operator_table;
 pub mod game_pending_cast_table;
 pub mod game_pending_spell_impact_table;
+pub mod game_pet_care_schedule_table;
 pub mod game_pet_command_table;
 pub mod game_pickpocket_loot_table;
 pub mod game_pickpocket_loot_type;
@@ -392,6 +417,7 @@ pub mod game_spell_group_rule_table;
 pub mod game_spell_group_table;
 pub mod game_spell_impact_event_table;
 pub mod game_spell_learn_table;
+pub mod game_spell_proc_event_table;
 pub mod game_spell_reagent_table;
 pub mod game_spell_table;
 pub mod game_start_item_table;
@@ -422,14 +448,21 @@ pub mod game_vmap_chunk_table;
 pub mod game_vmap_generation_chunk_table;
 pub mod game_vmap_generation_receipt_table;
 pub mod game_vmap_generation_table;
+pub mod game_vmap_indoor_cell_table;
+pub mod game_vmap_nav_coverage_manifest_table;
+pub mod game_vmap_nav_coverage_table;
+pub mod game_weather_schedule_table;
+pub mod game_weather_table;
 pub mod game_whisper_event_table;
 pub mod game_world_config_table;
 pub mod game_world_entity_table;
 pub mod game_xp_event_table;
+pub mod game_zone_weather_table;
 pub mod gateway_lease_reaper_schedule_type;
 pub mod gateway_lease_type;
 pub mod gateway_session_type;
 pub mod gm_world_config_type;
+pub mod go_model_type;
 pub mod gossip_menu_type;
 pub mod gossip_option_type;
 pub mod grant_alpha_test_tools_reducer;
@@ -485,6 +518,7 @@ pub mod gw_enchant_item_reducer;
 pub mod gw_enter_areatrigger_reducer;
 pub mod gw_equip_item_reducer;
 pub mod gw_fish_reducer;
+pub mod gw_force_zone_weather_reducer;
 pub mod gw_gm_command_reducer;
 pub mod gw_gossip_select_reducer;
 pub mod gw_group_decline_reducer;
@@ -543,12 +577,15 @@ pub mod gw_unequip_item_reducer;
 pub mod gw_use_gameobject_reducer;
 pub mod gw_use_item_reducer;
 pub mod hunter_pet_protocol_type;
+pub mod hunter_pet_type;
 pub mod import_character_blob_reducer;
 pub mod import_character_reducer;
 pub mod import_creature_spawns_append_reducer;
 pub mod import_creature_spawns_reducer;
 pub mod import_gameobjects_append_reducer;
 pub mod import_gameobjects_reducer;
+pub mod import_go_models_append_reducer;
+pub mod import_go_models_reducer;
 pub mod import_map_regions_reducer;
 pub mod import_meta_type;
 pub mod import_nav_chunks_append_reducer;
@@ -563,6 +600,7 @@ pub mod item_instance_type;
 pub mod item_template_type;
 pub mod level_stats_type;
 pub mod levelup_event_type;
+pub mod live_pet_kind_type;
 pub mod loot_roll_type;
 pub mod loot_roll_vote_type;
 pub mod mail_delivery_type;
@@ -583,11 +621,13 @@ pub mod operator_type;
 pub mod pending_cast_type;
 pub mod pending_motion_type;
 pub mod pending_spell_impact_type;
+pub mod pet_care_schedule_type;
 pub mod pet_command_type;
 pub mod player_action_type;
 pub mod player_reputation_type;
 pub mod player_skill_type;
 pub mod player_spell_type;
+pub mod prepare_vmap_nav_coverage_reducer;
 pub mod provision_account_reducer;
 pub mod publish_motion_reducer;
 pub mod quest_objective_type;
@@ -661,6 +701,7 @@ pub mod spell_group_rule_type;
 pub mod spell_group_type;
 pub mod spell_impact_event_type;
 pub mod spell_learn_type;
+pub mod spell_proc_event_type;
 pub mod spell_reagent_type;
 pub mod spell_type;
 pub mod stage_vmap_generation_reducer;
@@ -683,6 +724,8 @@ pub mod tick_creatures_reducer;
 pub mod tick_duels_reducer;
 pub mod tick_ground_areas_reducer;
 pub mod tick_melee_reducer;
+pub mod tick_pet_care_reducer;
+pub mod tick_weather_reducer;
 pub mod trade_event_type;
 pub mod trade_session_type;
 pub mod trade_slot_type;
@@ -695,15 +738,23 @@ pub mod vmap_chunk_type;
 pub mod vmap_generation_chunk_type;
 pub mod vmap_generation_receipt_type;
 pub mod vmap_generation_type;
+pub mod vmap_indoor_cell_type;
+pub mod vmap_nav_coverage_cell_type;
+pub mod vmap_nav_coverage_manifest_type;
+pub mod vmap_nav_coverage_type;
+pub mod weather_schedule_type;
 pub mod whisper_event_type;
 pub mod world_entity_type;
 pub mod xp_event_type;
+pub mod zone_weather_chance_type;
+pub mod zone_weather_type;
 
 pub use account_type::Account;
 pub use activate_vmap_generation_reducer::activate_vmap_generation;
 pub use active_taxi_flight_type::ActiveTaxiFlight;
 pub use addon_message_type::AddonMessage;
 pub use advance_taxi_flight_reducer::advance_taxi_flight;
+pub use alpha_test_tools_enrollment_type::AlphaTestToolsEnrollment;
 pub use append_vmap_generation_chunks_reducer::append_vmap_generation_chunks;
 pub use areatrigger_teleport_type::AreatriggerTeleport;
 pub use arm_all_pools_reducer::arm_all_pools;
@@ -747,7 +798,12 @@ pub use corpse_type::Corpse;
 pub use create_character_reducer::create_character;
 pub use createinfo_action_type::CreateinfoAction;
 pub use createinfo_spell_type::CreateinfoSpell;
+pub use creature_ai_broadcast_text_type::CreatureAiBroadcastText;
 pub use creature_ai_event_type::CreatureAiEvent;
+pub use creature_ai_rule_state_type::CreatureAiRuleState;
+pub use creature_ai_state_type::CreatureAiState;
+pub use creature_ai_summon_expiry_type::CreatureAiSummonExpiry;
+pub use creature_ai_summon_type::CreatureAiSummon;
 pub use creature_ai_timer_type::CreatureAiTimer;
 pub use creature_cast_type::CreatureCast;
 pub use creature_family_type::CreatureFamily;
@@ -826,6 +882,8 @@ pub use debug_kill_creature_reducer::debug_kill_creature;
 pub use debug_kill_nearest_reducer::debug_kill_nearest;
 pub use debug_learn_profession_from_trainer_reducer::debug_learn_profession_from_trainer;
 pub use debug_learn_profession_reducer::debug_learn_profession;
+pub use debug_learn_riding_from_trainer_reducer::debug_learn_riding_from_trainer;
+pub use debug_learn_riding_reducer::debug_learn_riding;
 pub use debug_learn_spell_reducer::debug_learn_spell;
 pub use debug_learn_talent_reducer::debug_learn_talent;
 pub use debug_learn_weapon_from_trainer_reducer::debug_learn_weapon_from_trainer;
@@ -858,6 +916,7 @@ pub use debug_sell_item_reducer::debug_sell_item;
 pub use debug_set_health_reducer::debug_set_health;
 pub use debug_set_level_reducer::debug_set_level;
 pub use debug_set_money_reducer::debug_set_money;
+pub use debug_set_nav_coverage_enabled_reducer::debug_set_nav_coverage_enabled;
 pub use debug_set_nav_enabled_reducer::debug_set_nav_enabled;
 pub use debug_set_power_reducer::debug_set_power;
 pub use debug_set_skill_reducer::debug_set_skill;
@@ -873,11 +932,13 @@ pub use debug_spirit_healer_res_reducer::debug_spirit_healer_res;
 pub use debug_split_item_reducer::debug_split_item;
 pub use debug_stage_auction_buyout_fixture_reducer::debug_stage_auction_buyout_fixture;
 pub use debug_stage_auction_expiry_fixture_reducer::debug_stage_auction_expiry_fixture;
+pub use debug_stage_choice_reward_fixture_reducer::debug_stage_choice_reward_fixture;
 pub use debug_stress_relay_reducer::debug_stress_relay;
 pub use debug_sweep_encounter_state_reducer::debug_sweep_encounter_state;
 pub use debug_sweep_slice_lens_reducer::debug_sweep_slice_lens;
 pub use debug_take_loot_reducer::debug_take_loot;
 pub use debug_teleport_reducer::debug_teleport;
+pub use debug_turn_in_choice_reward_fixture_reducer::debug_turn_in_choice_reward_fixture;
 pub use debug_turn_in_quest_reducer::debug_turn_in_quest;
 pub use debug_unequip_item_reducer::debug_unequip_item;
 pub use debug_use_gameobject_entry_reducer::debug_use_gameobject_entry;
@@ -886,6 +947,8 @@ pub use debug_use_hearthstone_reducer::debug_use_hearthstone;
 pub use debug_use_item_reducer::debug_use_item;
 pub use debug_verify_auction_buyout_fixture_reducer::debug_verify_auction_buyout_fixture;
 pub use debug_verify_auction_expiry_fixture_reducer::debug_verify_auction_expiry_fixture;
+pub use debug_verify_choice_reward_fixture_reducer::debug_verify_choice_reward_fixture;
+pub use debug_verify_choice_reward_refusal_fixture_reducer::debug_verify_choice_reward_refusal_fixture;
 pub use debug_verify_combat_regen_reducer::debug_verify_combat_regen;
 pub use debug_vmap_area_info_reducer::debug_vmap_area_info;
 pub use debug_vmap_ray_reducer::debug_vmap_ray;
@@ -907,14 +970,17 @@ pub use establish_session_reducer::establish_session;
 pub use event_reaper_schedule_type::EventReaperSchedule;
 pub use evict_instance_population_reducer::evict_instance_population;
 pub use expire_auction_reducer::expire_auction;
+pub use expire_eventai_summon_reducer::expire_eventai_summon;
 pub use faction_template_type::FactionTemplate;
 pub use faction_type::Faction;
+pub use finalize_vmap_nav_coverage_reducer::finalize_vmap_nav_coverage;
 pub use finish_transfer_reducer::finish_transfer;
 pub use fire_pending_cast_reducer::fire_pending_cast;
 pub use fire_spell_impact_reducer::fire_spell_impact;
 pub use game_account_table::*;
 pub use game_active_taxi_flight_table::*;
 pub use game_addon_message_table::*;
+pub use game_alpha_test_tools_enrollment_table::*;
 pub use game_area_table::*;
 pub use game_area_trigger_table::*;
 pub use game_area_trigger_type::GameAreaTrigger;
@@ -955,7 +1021,12 @@ pub use game_corpse_loot_table::*;
 pub use game_corpse_table::*;
 pub use game_createinfo_action_table::*;
 pub use game_createinfo_spell_table::*;
+pub use game_creature_ai_broadcast_text_table::*;
 pub use game_creature_ai_event_table::*;
+pub use game_creature_ai_rule_state_table::*;
+pub use game_creature_ai_state_table::*;
+pub use game_creature_ai_summon_expiry_table::*;
+pub use game_creature_ai_summon_table::*;
 pub use game_creature_ai_timer_table::*;
 pub use game_creature_cast_table::*;
 pub use game_creature_family_table::*;
@@ -996,6 +1067,7 @@ pub use game_gameobject_unlocked_table::*;
 pub use game_gateway_lease_reaper_schedule_table::*;
 pub use game_gateway_lease_table::*;
 pub use game_gateway_session_table::*;
+pub use game_go_model_table::*;
 pub use game_gossip_menu_table::*;
 pub use game_gossip_option_table::*;
 pub use game_graveyard_table::*;
@@ -1010,6 +1082,7 @@ pub use game_guid_allocator_table::*;
 pub use game_guid_range_registry_table::*;
 pub use game_guid_range_table::*;
 pub use game_hunter_pet_protocol_table::*;
+pub use game_hunter_pet_table::*;
 pub use game_import_meta_table::*;
 pub use game_instance_binding_table::*;
 pub use game_instance_binding_type::GameInstanceBinding;
@@ -1020,6 +1093,7 @@ pub use game_item_instance_table::*;
 pub use game_item_template_table::*;
 pub use game_level_stats_table::*;
 pub use game_levelup_event_table::*;
+pub use game_live_pet_kind_table::*;
 pub use game_lock_table::*;
 pub use game_lock_type::GameLock;
 pub use game_loot_roll_table::*;
@@ -1047,6 +1121,7 @@ pub use game_object_unlocked_type::GameObjectUnlocked;
 pub use game_operator_table::*;
 pub use game_pending_cast_table::*;
 pub use game_pending_spell_impact_table::*;
+pub use game_pet_care_schedule_table::*;
 pub use game_pet_command_table::*;
 pub use game_pickpocket_loot_table::*;
 pub use game_pickpocket_loot_type::GamePickpocketLoot;
@@ -1085,6 +1160,7 @@ pub use game_spell_group_rule_table::*;
 pub use game_spell_group_table::*;
 pub use game_spell_impact_event_table::*;
 pub use game_spell_learn_table::*;
+pub use game_spell_proc_event_table::*;
 pub use game_spell_reagent_table::*;
 pub use game_spell_table::*;
 pub use game_start_item_table::*;
@@ -1115,14 +1191,21 @@ pub use game_vmap_chunk_table::*;
 pub use game_vmap_generation_chunk_table::*;
 pub use game_vmap_generation_receipt_table::*;
 pub use game_vmap_generation_table::*;
+pub use game_vmap_indoor_cell_table::*;
+pub use game_vmap_nav_coverage_manifest_table::*;
+pub use game_vmap_nav_coverage_table::*;
+pub use game_weather_schedule_table::*;
+pub use game_weather_table::*;
 pub use game_whisper_event_table::*;
 pub use game_world_config_table::*;
 pub use game_world_entity_table::*;
 pub use game_xp_event_table::*;
+pub use game_zone_weather_table::*;
 pub use gateway_lease_reaper_schedule_type::GatewayLeaseReaperSchedule;
 pub use gateway_lease_type::GatewayLease;
 pub use gateway_session_type::GatewaySession;
 pub use gm_world_config_type::GmWorldConfig;
+pub use go_model_type::GoModel;
 pub use gossip_menu_type::GossipMenu;
 pub use gossip_option_type::GossipOption;
 pub use grant_alpha_test_tools_reducer::grant_alpha_test_tools;
@@ -1178,6 +1261,7 @@ pub use gw_enchant_item_reducer::gw_enchant_item;
 pub use gw_enter_areatrigger_reducer::gw_enter_areatrigger;
 pub use gw_equip_item_reducer::gw_equip_item;
 pub use gw_fish_reducer::gw_fish;
+pub use gw_force_zone_weather_reducer::gw_force_zone_weather;
 pub use gw_gm_command_reducer::gw_gm_command;
 pub use gw_gossip_select_reducer::gw_gossip_select;
 pub use gw_group_decline_reducer::gw_group_decline;
@@ -1236,12 +1320,15 @@ pub use gw_unequip_item_reducer::gw_unequip_item;
 pub use gw_use_gameobject_reducer::gw_use_gameobject;
 pub use gw_use_item_reducer::gw_use_item;
 pub use hunter_pet_protocol_type::HunterPetProtocol;
+pub use hunter_pet_type::HunterPet;
 pub use import_character_blob_reducer::import_character_blob;
 pub use import_character_reducer::import_character;
 pub use import_creature_spawns_append_reducer::import_creature_spawns_append;
 pub use import_creature_spawns_reducer::import_creature_spawns;
 pub use import_gameobjects_append_reducer::import_gameobjects_append;
 pub use import_gameobjects_reducer::import_gameobjects;
+pub use import_go_models_append_reducer::import_go_models_append;
+pub use import_go_models_reducer::import_go_models;
 pub use import_map_regions_reducer::import_map_regions;
 pub use import_meta_type::ImportMeta;
 pub use import_nav_chunks_append_reducer::import_nav_chunks_append;
@@ -1256,6 +1343,7 @@ pub use item_instance_type::ItemInstance;
 pub use item_template_type::ItemTemplate;
 pub use level_stats_type::LevelStats;
 pub use levelup_event_type::LevelupEvent;
+pub use live_pet_kind_type::LivePetKind;
 pub use loot_roll_type::LootRoll;
 pub use loot_roll_vote_type::LootRollVote;
 pub use mail_delivery_type::MailDelivery;
@@ -1276,11 +1364,13 @@ pub use operator_type::Operator;
 pub use pending_cast_type::PendingCast;
 pub use pending_motion_type::PendingMotion;
 pub use pending_spell_impact_type::PendingSpellImpact;
+pub use pet_care_schedule_type::PetCareSchedule;
 pub use pet_command_type::PetCommand;
 pub use player_action_type::PlayerAction;
 pub use player_reputation_type::PlayerReputation;
 pub use player_skill_type::PlayerSkill;
 pub use player_spell_type::PlayerSpell;
+pub use prepare_vmap_nav_coverage_reducer::prepare_vmap_nav_coverage;
 pub use provision_account_reducer::provision_account;
 pub use publish_motion_reducer::publish_motion;
 pub use quest_objective_type::QuestObjective;
@@ -1354,6 +1444,7 @@ pub use spell_group_rule_type::SpellGroupRule;
 pub use spell_group_type::SpellGroup;
 pub use spell_impact_event_type::SpellImpactEvent;
 pub use spell_learn_type::SpellLearn;
+pub use spell_proc_event_type::SpellProcEvent;
 pub use spell_reagent_type::SpellReagent;
 pub use spell_type::Spell;
 pub use stage_vmap_generation_reducer::stage_vmap_generation;
@@ -1376,6 +1467,8 @@ pub use tick_creatures_reducer::tick_creatures;
 pub use tick_duels_reducer::tick_duels;
 pub use tick_ground_areas_reducer::tick_ground_areas;
 pub use tick_melee_reducer::tick_melee;
+pub use tick_pet_care_reducer::tick_pet_care;
+pub use tick_weather_reducer::tick_weather;
 pub use trade_event_type::TradeEvent;
 pub use trade_session_type::TradeSession;
 pub use trade_slot_type::TradeSlot;
@@ -1388,9 +1481,16 @@ pub use vmap_chunk_type::VmapChunk;
 pub use vmap_generation_chunk_type::VmapGenerationChunk;
 pub use vmap_generation_receipt_type::VmapGenerationReceipt;
 pub use vmap_generation_type::VmapGeneration;
+pub use vmap_indoor_cell_type::VmapIndoorCell;
+pub use vmap_nav_coverage_cell_type::VmapNavCoverageCell;
+pub use vmap_nav_coverage_manifest_type::VmapNavCoverageManifest;
+pub use vmap_nav_coverage_type::VmapNavCoverage;
+pub use weather_schedule_type::WeatherSchedule;
 pub use whisper_event_type::WhisperEvent;
 pub use world_entity_type::WorldEntity;
 pub use xp_event_type::XpEvent;
+pub use zone_weather_chance_type::ZoneWeatherChance;
+pub use zone_weather_type::ZoneWeather;
 
 #[derive(Clone, PartialEq, Debug)]
 
@@ -1736,6 +1836,14 @@ pub enum Reducer {
         character_guid: u64,
         profession: u32,
     },
+    DebugLearnRiding {
+        character_guid: u64,
+        rank: u32,
+    },
+    DebugLearnRidingFromTrainer {
+        character_guid: u64,
+        rank: u32,
+    },
     DebugLearnSpell {
         character_guid: u64,
         spell_id: u32,
@@ -1859,6 +1967,9 @@ pub enum Reducer {
         character_guid: u64,
         copper: u32,
     },
+    DebugSetNavCoverageEnabled {
+        enabled: bool,
+    },
     DebugSetNavEnabled {
         enabled: bool,
     },
@@ -1923,6 +2034,9 @@ pub enum Reducer {
     },
     DebugStageAuctionBuyoutFixture,
     DebugStageAuctionExpiryFixture,
+    DebugStageChoiceRewardFixture {
+        fill_inventory: bool,
+    },
     DebugStressRelay {
         character_guid: u64,
         victim_entry: u32,
@@ -1945,6 +2059,9 @@ pub enum Reducer {
         y: f32,
         z: f32,
         o: f32,
+    },
+    DebugTurnInChoiceRewardFixture {
+        reward_index: u32,
     },
     DebugTurnInQuest {
         character_guid: u64,
@@ -1973,6 +2090,12 @@ pub enum Reducer {
     },
     DebugVerifyAuctionBuyoutFixture,
     DebugVerifyAuctionExpiryFixture,
+    DebugVerifyChoiceRewardFixture {
+        reward_index: u32,
+    },
+    DebugVerifyChoiceRewardRefusalFixture {
+        expected_fillers: u32,
+    },
     DebugVerifyCombatRegen {
         character_guid: u64,
     },
@@ -2013,6 +2136,12 @@ pub enum Reducer {
     },
     ExpireAuction {
         schedule: AuctionExpiry,
+    },
+    ExpireEventaiSummon {
+        expiry: CreatureAiSummonExpiry,
+    },
+    FinalizeVmapNavCoverage {
+        generation_id: u64,
     },
     FinishTransfer {
         transfer_id: u64,
@@ -2229,6 +2358,11 @@ pub enum Reducer {
     },
     GwFish {
         actor_guid: u64,
+    },
+    GwForceZoneWeather {
+        zone_id: u32,
+        weather_type: u8,
+        intensity: f32,
     },
     GwGmCommand {
         actor_guid: u64,
@@ -2498,6 +2632,12 @@ pub enum Reducer {
     ImportGameobjectsAppend {
         packed: String,
     },
+    ImportGoModels {
+        packed: String,
+    },
+    ImportGoModelsAppend {
+        packed: String,
+    },
     ImportMapRegions {
         packed: String,
     },
@@ -2523,6 +2663,10 @@ pub enum Reducer {
         base: u64,
     },
     OnDisconnect,
+    PrepareVmapNavCoverage {
+        generation_id: u64,
+        cells: Vec<VmapNavCoverageCell>,
+    },
     ProvisionAccount {
         username: String,
         salt: Vec<u8>,
@@ -2794,6 +2938,12 @@ pub enum Reducer {
     TickMelee {
         schedule: MeleeSchedule,
     },
+    TickPetCare {
+        schedule: PetCareSchedule,
+    },
+    TickWeather {
+        schedule: WeatherSchedule,
+    },
     VerifyVmapGeneration {
         generation_id: u64,
     },
@@ -2886,6 +3036,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugLearnProfessionFromTrainer { .. } => {
                 "debug_learn_profession_from_trainer"
             }
+            Reducer::DebugLearnRiding { .. } => "debug_learn_riding",
+            Reducer::DebugLearnRidingFromTrainer { .. } => "debug_learn_riding_from_trainer",
             Reducer::DebugLearnSpell { .. } => "debug_learn_spell",
             Reducer::DebugLearnTalent { .. } => "debug_learn_talent",
             Reducer::DebugLearnWeaponFromTrainer { .. } => "debug_learn_weapon_from_trainer",
@@ -2917,6 +3069,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugSetHealth { .. } => "debug_set_health",
             Reducer::DebugSetLevel { .. } => "debug_set_level",
             Reducer::DebugSetMoney { .. } => "debug_set_money",
+            Reducer::DebugSetNavCoverageEnabled { .. } => "debug_set_nav_coverage_enabled",
             Reducer::DebugSetNavEnabled { .. } => "debug_set_nav_enabled",
             Reducer::DebugSetPower { .. } => "debug_set_power",
             Reducer::DebugSetSkill { .. } => "debug_set_skill",
@@ -2932,11 +3085,13 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugSplitItem { .. } => "debug_split_item",
             Reducer::DebugStageAuctionBuyoutFixture => "debug_stage_auction_buyout_fixture",
             Reducer::DebugStageAuctionExpiryFixture => "debug_stage_auction_expiry_fixture",
+            Reducer::DebugStageChoiceRewardFixture { .. } => "debug_stage_choice_reward_fixture",
             Reducer::DebugStressRelay { .. } => "debug_stress_relay",
             Reducer::DebugSweepEncounterState { .. } => "debug_sweep_encounter_state",
             Reducer::DebugSweepSliceLens => "debug_sweep_slice_lens",
             Reducer::DebugTakeLoot { .. } => "debug_take_loot",
             Reducer::DebugTeleport { .. } => "debug_teleport",
+            Reducer::DebugTurnInChoiceRewardFixture { .. } => "debug_turn_in_choice_reward_fixture",
             Reducer::DebugTurnInQuest { .. } => "debug_turn_in_quest",
             Reducer::DebugUnequipItem { .. } => "debug_unequip_item",
             Reducer::DebugUseGameobject { .. } => "debug_use_gameobject",
@@ -2945,6 +3100,10 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugUseItem { .. } => "debug_use_item",
             Reducer::DebugVerifyAuctionBuyoutFixture => "debug_verify_auction_buyout_fixture",
             Reducer::DebugVerifyAuctionExpiryFixture => "debug_verify_auction_expiry_fixture",
+            Reducer::DebugVerifyChoiceRewardFixture { .. } => "debug_verify_choice_reward_fixture",
+            Reducer::DebugVerifyChoiceRewardRefusalFixture { .. } => {
+                "debug_verify_choice_reward_refusal_fixture"
+            }
             Reducer::DebugVerifyCombatRegen { .. } => "debug_verify_combat_regen",
             Reducer::DebugVmapAreaInfo { .. } => "debug_vmap_area_info",
             Reducer::DebugVmapRay { .. } => "debug_vmap_ray",
@@ -2954,6 +3113,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::EstablishSession { .. } => "establish_session",
             Reducer::EvictInstancePopulation { .. } => "evict_instance_population",
             Reducer::ExpireAuction { .. } => "expire_auction",
+            Reducer::ExpireEventaiSummon { .. } => "expire_eventai_summon",
+            Reducer::FinalizeVmapNavCoverage { .. } => "finalize_vmap_nav_coverage",
             Reducer::FinishTransfer { .. } => "finish_transfer",
             Reducer::FirePendingCast { .. } => "fire_pending_cast",
             Reducer::FireSpellImpact { .. } => "fire_spell_impact",
@@ -2999,6 +3160,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwEnterAreatrigger { .. } => "gw_enter_areatrigger",
             Reducer::GwEquipItem { .. } => "gw_equip_item",
             Reducer::GwFish { .. } => "gw_fish",
+            Reducer::GwForceZoneWeather { .. } => "gw_force_zone_weather",
             Reducer::GwGmCommand { .. } => "gw_gm_command",
             Reducer::GwGossipSelect { .. } => "gw_gossip_select",
             Reducer::GwGroupDecline { .. } => "gw_group_decline",
@@ -3061,6 +3223,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::ImportCreatureSpawnsAppend { .. } => "import_creature_spawns_append",
             Reducer::ImportGameobjects { .. } => "import_gameobjects",
             Reducer::ImportGameobjectsAppend { .. } => "import_gameobjects_append",
+            Reducer::ImportGoModels { .. } => "import_go_models",
+            Reducer::ImportGoModelsAppend { .. } => "import_go_models_append",
             Reducer::ImportMapRegions { .. } => "import_map_regions",
             Reducer::ImportNavChunks { .. } => "import_nav_chunks",
             Reducer::ImportNavChunksAppend { .. } => "import_nav_chunks_append",
@@ -3070,6 +3234,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::ImportVmapChunksAppend { .. } => "import_vmap_chunks_append",
             Reducer::InstallGuidRange { .. } => "install_guid_range",
             Reducer::OnDisconnect => "on_disconnect",
+            Reducer::PrepareVmapNavCoverage { .. } => "prepare_vmap_nav_coverage",
             Reducer::ProvisionAccount { .. } => "provision_account",
             Reducer::PublishMotion { .. } => "publish_motion",
             Reducer::RangedImpact { .. } => "ranged_impact",
@@ -3122,6 +3287,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::TickDuels { .. } => "tick_duels",
             Reducer::TickGroundAreas { .. } => "tick_ground_areas",
             Reducer::TickMelee { .. } => "tick_melee",
+            Reducer::TickPetCare { .. } => "tick_pet_care",
+            Reducer::TickWeather { .. } => "tick_weather",
             Reducer::VerifyVmapGeneration { .. } => "verify_vmap_generation",
             _ => unreachable!(),
         }
@@ -3732,6 +3899,20 @@ Reducer::DebugCheckRestAt{
                 character_guid: character_guid.clone(),
                 profession: profession.clone(),
 }),
+            Reducer::DebugLearnRiding{
+                character_guid,
+                rank,
+}             => __sats::bsatn::to_vec(&debug_learn_riding_reducer::DebugLearnRidingArgs {
+                character_guid: character_guid.clone(),
+                rank: rank.clone(),
+}),
+            Reducer::DebugLearnRidingFromTrainer{
+                character_guid,
+                rank,
+}             => __sats::bsatn::to_vec(&debug_learn_riding_from_trainer_reducer::DebugLearnRidingFromTrainerArgs {
+                character_guid: character_guid.clone(),
+                rank: rank.clone(),
+}),
             Reducer::DebugLearnSpell{
                 character_guid,
                 spell_id,
@@ -3952,6 +4133,11 @@ Reducer::DebugSellItem{
                 character_guid: character_guid.clone(),
                 copper: copper.clone(),
 }),
+            Reducer::DebugSetNavCoverageEnabled{
+                enabled,
+}             => __sats::bsatn::to_vec(&debug_set_nav_coverage_enabled_reducer::DebugSetNavCoverageEnabledArgs {
+                enabled: enabled.clone(),
+}),
             Reducer::DebugSetNavEnabled{
                 enabled,
 }             => __sats::bsatn::to_vec(&debug_set_nav_enabled_reducer::DebugSetNavEnabledArgs {
@@ -4067,7 +4253,12 @@ Reducer::DebugSellItem{
                 }),
 Reducer::DebugStageAuctionExpiryFixture => __sats::bsatn::to_vec(&debug_stage_auction_expiry_fixture_reducer::DebugStageAuctionExpiryFixtureArgs {
                 }),
-Reducer::DebugStressRelay{
+Reducer::DebugStageChoiceRewardFixture{
+                fill_inventory,
+}             => __sats::bsatn::to_vec(&debug_stage_choice_reward_fixture_reducer::DebugStageChoiceRewardFixtureArgs {
+                fill_inventory: fill_inventory.clone(),
+}),
+            Reducer::DebugStressRelay{
                 character_guid,
                 victim_entry,
                 item_entry,
@@ -4108,6 +4299,11 @@ Reducer::DebugTakeLoot{
                 y: y.clone(),
                 z: z.clone(),
                 o: o.clone(),
+}),
+            Reducer::DebugTurnInChoiceRewardFixture{
+                reward_index,
+}             => __sats::bsatn::to_vec(&debug_turn_in_choice_reward_fixture_reducer::DebugTurnInChoiceRewardFixtureArgs {
+                reward_index: reward_index.clone(),
 }),
             Reducer::DebugTurnInQuest{
                 character_guid,
@@ -4157,7 +4353,17 @@ Reducer::DebugTakeLoot{
                 }),
 Reducer::DebugVerifyAuctionExpiryFixture => __sats::bsatn::to_vec(&debug_verify_auction_expiry_fixture_reducer::DebugVerifyAuctionExpiryFixtureArgs {
                 }),
-Reducer::DebugVerifyCombatRegen{
+Reducer::DebugVerifyChoiceRewardFixture{
+                reward_index,
+}             => __sats::bsatn::to_vec(&debug_verify_choice_reward_fixture_reducer::DebugVerifyChoiceRewardFixtureArgs {
+                reward_index: reward_index.clone(),
+}),
+            Reducer::DebugVerifyChoiceRewardRefusalFixture{
+                expected_fillers,
+}             => __sats::bsatn::to_vec(&debug_verify_choice_reward_refusal_fixture_reducer::DebugVerifyChoiceRewardRefusalFixtureArgs {
+                expected_fillers: expected_fillers.clone(),
+}),
+            Reducer::DebugVerifyCombatRegen{
                 character_guid,
 }             => __sats::bsatn::to_vec(&debug_verify_combat_regen_reducer::DebugVerifyCombatRegenArgs {
                 character_guid: character_guid.clone(),
@@ -4229,6 +4435,16 @@ Reducer::DebugVerifyCombatRegen{
                 schedule,
 }             => __sats::bsatn::to_vec(&expire_auction_reducer::ExpireAuctionArgs {
                 schedule: schedule.clone(),
+}),
+            Reducer::ExpireEventaiSummon{
+                expiry,
+}             => __sats::bsatn::to_vec(&expire_eventai_summon_reducer::ExpireEventaiSummonArgs {
+                expiry: expiry.clone(),
+}),
+            Reducer::FinalizeVmapNavCoverage{
+                generation_id,
+}             => __sats::bsatn::to_vec(&finalize_vmap_nav_coverage_reducer::FinalizeVmapNavCoverageArgs {
+                generation_id: generation_id.clone(),
 }),
             Reducer::FinishTransfer{
                 transfer_id,
@@ -4616,6 +4832,15 @@ Reducer::DebugVerifyCombatRegen{
                 actor_guid,
 }             => __sats::bsatn::to_vec(&gw_fish_reducer::GwFishArgs {
                 actor_guid: actor_guid.clone(),
+}),
+            Reducer::GwForceZoneWeather{
+                zone_id,
+                weather_type,
+                intensity,
+}             => __sats::bsatn::to_vec(&gw_force_zone_weather_reducer::GwForceZoneWeatherArgs {
+                zone_id: zone_id.clone(),
+                weather_type: weather_type.clone(),
+                intensity: intensity.clone(),
 }),
             Reducer::GwGmCommand{
                 actor_guid,
@@ -5092,6 +5317,16 @@ Reducer::GwIgnoreTrade{
 }             => __sats::bsatn::to_vec(&import_gameobjects_append_reducer::ImportGameobjectsAppendArgs {
                 packed: packed.clone(),
 }),
+            Reducer::ImportGoModels{
+                packed,
+}             => __sats::bsatn::to_vec(&import_go_models_reducer::ImportGoModelsArgs {
+                packed: packed.clone(),
+}),
+            Reducer::ImportGoModelsAppend{
+                packed,
+}             => __sats::bsatn::to_vec(&import_go_models_append_reducer::ImportGoModelsAppendArgs {
+                packed: packed.clone(),
+}),
             Reducer::ImportMapRegions{
                 packed,
 }             => __sats::bsatn::to_vec(&import_map_regions_reducer::ImportMapRegionsArgs {
@@ -5134,7 +5369,14 @@ Reducer::GwIgnoreTrade{
 }),
             Reducer::OnDisconnect => __sats::bsatn::to_vec(&on_disconnect_reducer::OnDisconnectArgs {
                 }),
-Reducer::ProvisionAccount{
+Reducer::PrepareVmapNavCoverage{
+                generation_id,
+                cells,
+}             => __sats::bsatn::to_vec(&prepare_vmap_nav_coverage_reducer::PrepareVmapNavCoverageArgs {
+                generation_id: generation_id.clone(),
+                cells: cells.clone(),
+}),
+            Reducer::ProvisionAccount{
                 username,
                 salt,
                 verifier,
@@ -5496,7 +5738,7 @@ Reducer::ProvisionAccount{
 }),
             Reducer::RestoreTaxiFixture => __sats::bsatn::to_vec(&restore_taxi_fixture_reducer::RestoreTaxiFixtureArgs {
                 }),
-            Reducer::RevokeAlphaTestTools{
+Reducer::RevokeAlphaTestTools{
                 account_name,
 }             => __sats::bsatn::to_vec(&revoke_alpha_test_tools_reducer::RevokeAlphaTestToolsArgs {
                 account_name: account_name.clone(),
@@ -5506,7 +5748,7 @@ Reducer::ProvisionAccount{
 }             => __sats::bsatn::to_vec(&set_alpha_test_tools_enrollment_reducer::SetAlphaTestToolsEnrollmentArgs {
                 enabled: enabled.clone(),
 }),
-Reducer::SetCharacterShard{
+            Reducer::SetCharacterShard{
                 character_guid,
                 map_id,
                 instance_id,
@@ -5625,6 +5867,16 @@ Reducer::SetCharacterShard{
 }             => __sats::bsatn::to_vec(&tick_melee_reducer::TickMeleeArgs {
                 schedule: schedule.clone(),
 }),
+            Reducer::TickPetCare{
+                schedule,
+}             => __sats::bsatn::to_vec(&tick_pet_care_reducer::TickPetCareArgs {
+                schedule: schedule.clone(),
+}),
+            Reducer::TickWeather{
+                schedule,
+}             => __sats::bsatn::to_vec(&tick_weather_reducer::TickWeatherArgs {
+                schedule: schedule.clone(),
+}),
             Reducer::VerifyVmapGeneration{
                 generation_id,
 }             => __sats::bsatn::to_vec(&verify_vmap_generation_reducer::VerifyVmapGenerationArgs {
@@ -5642,6 +5894,7 @@ pub struct DbUpdate {
     game_account: __sdk::TableUpdate<Account>,
     game_active_taxi_flight: __sdk::TableUpdate<ActiveTaxiFlight>,
     game_addon_message: __sdk::TableUpdate<AddonMessage>,
+    game_alpha_test_tools_enrollment: __sdk::TableUpdate<AlphaTestToolsEnrollment>,
     game_area: __sdk::TableUpdate<GameArea>,
     game_area_trigger: __sdk::TableUpdate<GameAreaTrigger>,
     game_areatrigger_teleport: __sdk::TableUpdate<AreatriggerTeleport>,
@@ -5674,14 +5927,18 @@ pub struct DbUpdate {
     game_class_level_stats: __sdk::TableUpdate<ClassLevelStats>,
     game_combat_event: __sdk::TableUpdate<CombatEvent>,
     game_combo_point: __sdk::TableUpdate<ComboPoint>,
-    game_hunter_pet_protocol: __sdk::TableUpdate<HunterPetProtocol>,
     game_config: __sdk::TableUpdate<ServerConfig>,
     game_corpse: __sdk::TableUpdate<Corpse>,
     game_corpse_loot: __sdk::TableUpdate<CorpseLoot>,
     game_corpse_loot_eligible: __sdk::TableUpdate<CorpseLootEligible>,
     game_createinfo_action: __sdk::TableUpdate<CreateinfoAction>,
     game_createinfo_spell: __sdk::TableUpdate<CreateinfoSpell>,
+    game_creature_ai_broadcast_text: __sdk::TableUpdate<CreatureAiBroadcastText>,
     game_creature_ai_event: __sdk::TableUpdate<CreatureAiEvent>,
+    game_creature_ai_rule_state: __sdk::TableUpdate<CreatureAiRuleState>,
+    game_creature_ai_state: __sdk::TableUpdate<CreatureAiState>,
+    game_creature_ai_summon: __sdk::TableUpdate<CreatureAiSummon>,
+    game_creature_ai_summon_expiry: __sdk::TableUpdate<CreatureAiSummonExpiry>,
     game_creature_ai_timer: __sdk::TableUpdate<CreatureAiTimer>,
     game_creature_cast: __sdk::TableUpdate<CreatureCast>,
     game_creature_family: __sdk::TableUpdate<CreatureFamily>,
@@ -5721,6 +5978,7 @@ pub struct DbUpdate {
     game_gateway_lease: __sdk::TableUpdate<GatewayLease>,
     game_gateway_lease_reaper_schedule: __sdk::TableUpdate<GatewayLeaseReaperSchedule>,
     game_gateway_session: __sdk::TableUpdate<GatewaySession>,
+    game_go_model: __sdk::TableUpdate<GoModel>,
     game_gossip_menu: __sdk::TableUpdate<GossipMenu>,
     game_gossip_option: __sdk::TableUpdate<GossipOption>,
     game_graveyard: __sdk::TableUpdate<GraveyardLoc>,
@@ -5734,6 +5992,8 @@ pub struct DbUpdate {
     game_guid_allocator: __sdk::TableUpdate<GuidAllocator>,
     game_guid_range: __sdk::TableUpdate<GuidRange>,
     game_guid_range_registry: __sdk::TableUpdate<GuidRangeAssignment>,
+    game_hunter_pet: __sdk::TableUpdate<HunterPet>,
+    game_hunter_pet_protocol: __sdk::TableUpdate<HunterPetProtocol>,
     game_import_meta: __sdk::TableUpdate<ImportMeta>,
     game_instance: __sdk::TableUpdate<GameInstance>,
     game_instance_binding: __sdk::TableUpdate<GameInstanceBinding>,
@@ -5742,6 +6002,7 @@ pub struct DbUpdate {
     game_item_template: __sdk::TableUpdate<ItemTemplate>,
     game_level_stats: __sdk::TableUpdate<LevelStats>,
     game_levelup_event: __sdk::TableUpdate<LevelupEvent>,
+    game_live_pet_kind: __sdk::TableUpdate<LivePetKind>,
     game_lock: __sdk::TableUpdate<GameLock>,
     game_loot_roll: __sdk::TableUpdate<LootRoll>,
     game_loot_roll_vote: __sdk::TableUpdate<LootRollVote>,
@@ -5761,6 +6022,7 @@ pub struct DbUpdate {
     game_operator: __sdk::TableUpdate<Operator>,
     game_pending_cast: __sdk::TableUpdate<PendingCast>,
     game_pending_spell_impact: __sdk::TableUpdate<PendingSpellImpact>,
+    game_pet_care_schedule: __sdk::TableUpdate<PetCareSchedule>,
     game_pet_command: __sdk::TableUpdate<PetCommand>,
     game_pickpocket_loot: __sdk::TableUpdate<GamePickpocketLoot>,
     game_player_action: __sdk::TableUpdate<PlayerAction>,
@@ -5798,6 +6060,7 @@ pub struct DbUpdate {
     game_spell_group_rule: __sdk::TableUpdate<SpellGroupRule>,
     game_spell_impact_event: __sdk::TableUpdate<SpellImpactEvent>,
     game_spell_learn: __sdk::TableUpdate<SpellLearn>,
+    game_spell_proc_event: __sdk::TableUpdate<SpellProcEvent>,
     game_spell_reagent: __sdk::TableUpdate<SpellReagent>,
     game_start_item: __sdk::TableUpdate<StartItem>,
     game_start_position: __sdk::TableUpdate<StartPosition>,
@@ -5824,10 +6087,16 @@ pub struct DbUpdate {
     game_vmap_generation: __sdk::TableUpdate<VmapGeneration>,
     game_vmap_generation_chunk: __sdk::TableUpdate<VmapGenerationChunk>,
     game_vmap_generation_receipt: __sdk::TableUpdate<VmapGenerationReceipt>,
+    game_vmap_indoor_cell: __sdk::TableUpdate<VmapIndoorCell>,
+    game_vmap_nav_coverage: __sdk::TableUpdate<VmapNavCoverage>,
+    game_vmap_nav_coverage_manifest: __sdk::TableUpdate<VmapNavCoverageManifest>,
+    game_weather: __sdk::TableUpdate<ZoneWeatherChance>,
+    game_weather_schedule: __sdk::TableUpdate<WeatherSchedule>,
     game_whisper_event: __sdk::TableUpdate<WhisperEvent>,
     game_world_config: __sdk::TableUpdate<GmWorldConfig>,
     game_world_entity: __sdk::TableUpdate<WorldEntity>,
     game_xp_event: __sdk::TableUpdate<XpEvent>,
+    game_zone_weather: __sdk::TableUpdate<ZoneWeather>,
 }
 
 impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
@@ -5845,6 +6114,11 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_addon_message" => db_update
                     .game_addon_message
                     .append(game_addon_message_table::parse_table_update(table_update)?),
+                "game_alpha_test_tools_enrollment" => {
+                    db_update.game_alpha_test_tools_enrollment.append(
+                        game_alpha_test_tools_enrollment_table::parse_table_update(table_update)?,
+                    )
+                }
                 "game_area" => db_update
                     .game_area
                     .append(game_area_table::parse_table_update(table_update)?),
@@ -5943,9 +6217,6 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_combo_point" => db_update
                     .game_combo_point
                     .append(game_combo_point_table::parse_table_update(table_update)?),
-                "game_hunter_pet_protocol" => db_update.game_hunter_pet_protocol.append(
-                    game_hunter_pet_protocol_table::parse_table_update(table_update)?,
-                ),
                 "game_config" => db_update
                     .game_config
                     .append(game_config_table::parse_table_update(table_update)?),
@@ -5964,9 +6235,28 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_createinfo_spell" => db_update.game_createinfo_spell.append(
                     game_createinfo_spell_table::parse_table_update(table_update)?,
                 ),
+                "game_creature_ai_broadcast_text" => {
+                    db_update.game_creature_ai_broadcast_text.append(
+                        game_creature_ai_broadcast_text_table::parse_table_update(table_update)?,
+                    )
+                }
                 "game_creature_ai_event" => db_update.game_creature_ai_event.append(
                     game_creature_ai_event_table::parse_table_update(table_update)?,
                 ),
+                "game_creature_ai_rule_state" => db_update.game_creature_ai_rule_state.append(
+                    game_creature_ai_rule_state_table::parse_table_update(table_update)?,
+                ),
+                "game_creature_ai_state" => db_update.game_creature_ai_state.append(
+                    game_creature_ai_state_table::parse_table_update(table_update)?,
+                ),
+                "game_creature_ai_summon" => db_update.game_creature_ai_summon.append(
+                    game_creature_ai_summon_table::parse_table_update(table_update)?,
+                ),
+                "game_creature_ai_summon_expiry" => {
+                    db_update.game_creature_ai_summon_expiry.append(
+                        game_creature_ai_summon_expiry_table::parse_table_update(table_update)?,
+                    )
+                }
                 "game_creature_ai_timer" => db_update.game_creature_ai_timer.append(
                     game_creature_ai_timer_table::parse_table_update(table_update)?,
                 ),
@@ -6086,6 +6376,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_gateway_session" => db_update.game_gateway_session.append(
                     game_gateway_session_table::parse_table_update(table_update)?,
                 ),
+                "game_go_model" => db_update
+                    .game_go_model
+                    .append(game_go_model_table::parse_table_update(table_update)?),
                 "game_gossip_menu" => db_update
                     .game_gossip_menu
                     .append(game_gossip_menu_table::parse_table_update(table_update)?),
@@ -6125,6 +6418,12 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_guid_range_registry" => db_update.game_guid_range_registry.append(
                     game_guid_range_registry_table::parse_table_update(table_update)?,
                 ),
+                "game_hunter_pet" => db_update
+                    .game_hunter_pet
+                    .append(game_hunter_pet_table::parse_table_update(table_update)?),
+                "game_hunter_pet_protocol" => db_update.game_hunter_pet_protocol.append(
+                    game_hunter_pet_protocol_table::parse_table_update(table_update)?,
+                ),
                 "game_import_meta" => db_update
                     .game_import_meta
                     .append(game_import_meta_table::parse_table_update(table_update)?),
@@ -6149,6 +6448,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_levelup_event" => db_update
                     .game_levelup_event
                     .append(game_levelup_event_table::parse_table_update(table_update)?),
+                "game_live_pet_kind" => db_update
+                    .game_live_pet_kind
+                    .append(game_live_pet_kind_table::parse_table_update(table_update)?),
                 "game_lock" => db_update
                     .game_lock
                     .append(game_lock_table::parse_table_update(table_update)?),
@@ -6207,6 +6509,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                     .append(game_pending_cast_table::parse_table_update(table_update)?),
                 "game_pending_spell_impact" => db_update.game_pending_spell_impact.append(
                     game_pending_spell_impact_table::parse_table_update(table_update)?,
+                ),
+                "game_pet_care_schedule" => db_update.game_pet_care_schedule.append(
+                    game_pet_care_schedule_table::parse_table_update(table_update)?,
                 ),
                 "game_pet_command" => db_update
                     .game_pet_command
@@ -6319,6 +6624,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_spell_learn" => db_update
                     .game_spell_learn
                     .append(game_spell_learn_table::parse_table_update(table_update)?),
+                "game_spell_proc_event" => db_update.game_spell_proc_event.append(
+                    game_spell_proc_event_table::parse_table_update(table_update)?,
+                ),
                 "game_spell_reagent" => db_update
                     .game_spell_reagent
                     .append(game_spell_reagent_table::parse_table_update(table_update)?),
@@ -6397,6 +6705,23 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_vmap_generation_receipt" => db_update.game_vmap_generation_receipt.append(
                     game_vmap_generation_receipt_table::parse_table_update(table_update)?,
                 ),
+                "game_vmap_indoor_cell" => db_update.game_vmap_indoor_cell.append(
+                    game_vmap_indoor_cell_table::parse_table_update(table_update)?,
+                ),
+                "game_vmap_nav_coverage" => db_update.game_vmap_nav_coverage.append(
+                    game_vmap_nav_coverage_table::parse_table_update(table_update)?,
+                ),
+                "game_vmap_nav_coverage_manifest" => {
+                    db_update.game_vmap_nav_coverage_manifest.append(
+                        game_vmap_nav_coverage_manifest_table::parse_table_update(table_update)?,
+                    )
+                }
+                "game_weather" => db_update
+                    .game_weather
+                    .append(game_weather_table::parse_table_update(table_update)?),
+                "game_weather_schedule" => db_update.game_weather_schedule.append(
+                    game_weather_schedule_table::parse_table_update(table_update)?,
+                ),
                 "game_whisper_event" => db_update
                     .game_whisper_event
                     .append(game_whisper_event_table::parse_table_update(table_update)?),
@@ -6409,6 +6734,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_xp_event" => db_update
                     .game_xp_event
                     .append(game_xp_event_table::parse_table_update(table_update)?),
+                "game_zone_weather" => db_update
+                    .game_zone_weather
+                    .append(game_zone_weather_table::parse_table_update(table_update)?),
 
                 unknown => {
                     return Err(__sdk::InternalError::unknown_name(
@@ -6446,6 +6774,12 @@ impl __sdk::DbUpdate for DbUpdate {
             .with_updates_by_pk(|row| &row.character_guid);
         diff.game_addon_message = cache
             .apply_diff_to_table::<AddonMessage>("game_addon_message", &self.game_addon_message)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_alpha_test_tools_enrollment = cache
+            .apply_diff_to_table::<AlphaTestToolsEnrollment>(
+                "game_alpha_test_tools_enrollment",
+                &self.game_alpha_test_tools_enrollment,
+            )
             .with_updates_by_pk(|row| &row.id);
         diff.game_area = cache
             .apply_diff_to_table::<GameArea>("game_area", &self.game_area)
@@ -6594,12 +6928,6 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_combo_point = cache
             .apply_diff_to_table::<ComboPoint>("game_combo_point", &self.game_combo_point)
             .with_updates_by_pk(|row| &row.id);
-        diff.game_hunter_pet_protocol = cache
-            .apply_diff_to_table::<HunterPetProtocol>(
-                "game_hunter_pet_protocol",
-                &self.game_hunter_pet_protocol,
-            )
-            .with_updates_by_pk(|row| &row.pet_id);
         diff.game_config = cache
             .apply_diff_to_table::<ServerConfig>("game_config", &self.game_config)
             .with_updates_by_pk(|row| &row.id);
@@ -6627,12 +6955,42 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_createinfo_spell,
             )
             .with_updates_by_pk(|row| &row.id);
+        diff.game_creature_ai_broadcast_text = cache
+            .apply_diff_to_table::<CreatureAiBroadcastText>(
+                "game_creature_ai_broadcast_text",
+                &self.game_creature_ai_broadcast_text,
+            )
+            .with_updates_by_pk(|row| &row.id);
         diff.game_creature_ai_event = cache
             .apply_diff_to_table::<CreatureAiEvent>(
                 "game_creature_ai_event",
                 &self.game_creature_ai_event,
             )
             .with_updates_by_pk(|row| &row.id);
+        diff.game_creature_ai_rule_state = cache
+            .apply_diff_to_table::<CreatureAiRuleState>(
+                "game_creature_ai_rule_state",
+                &self.game_creature_ai_rule_state,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_creature_ai_state = cache
+            .apply_diff_to_table::<CreatureAiState>(
+                "game_creature_ai_state",
+                &self.game_creature_ai_state,
+            )
+            .with_updates_by_pk(|row| &row.creature_guid);
+        diff.game_creature_ai_summon = cache
+            .apply_diff_to_table::<CreatureAiSummon>(
+                "game_creature_ai_summon",
+                &self.game_creature_ai_summon,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_creature_ai_summon_expiry = cache
+            .apply_diff_to_table::<CreatureAiSummonExpiry>(
+                "game_creature_ai_summon_expiry",
+                &self.game_creature_ai_summon_expiry,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
         diff.game_creature_ai_timer = cache
             .apply_diff_to_table::<CreatureAiTimer>(
                 "game_creature_ai_timer",
@@ -6816,6 +7174,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_gateway_session,
             )
             .with_updates_by_pk(|row| &row.entity_guid);
+        diff.game_go_model = cache
+            .apply_diff_to_table::<GoModel>("game_go_model", &self.game_go_model)
+            .with_updates_by_pk(|row| &row.entry);
         diff.game_gossip_menu = cache
             .apply_diff_to_table::<GossipMenu>("game_gossip_menu", &self.game_gossip_menu)
             .with_updates_by_pk(|row| &row.entry);
@@ -6861,6 +7222,15 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_guid_range_registry,
             )
             .with_updates_by_pk(|row| &row.shard_name);
+        diff.game_hunter_pet = cache
+            .apply_diff_to_table::<HunterPet>("game_hunter_pet", &self.game_hunter_pet)
+            .with_updates_by_pk(|row| &row.pet_id);
+        diff.game_hunter_pet_protocol = cache
+            .apply_diff_to_table::<HunterPetProtocol>(
+                "game_hunter_pet_protocol",
+                &self.game_hunter_pet_protocol,
+            )
+            .with_updates_by_pk(|row| &row.pet_id);
         diff.game_import_meta = cache
             .apply_diff_to_table::<ImportMeta>("game_import_meta", &self.game_import_meta)
             .with_updates_by_pk(|row| &row.family);
@@ -6891,6 +7261,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_levelup_event = cache
             .apply_diff_to_table::<LevelupEvent>("game_levelup_event", &self.game_levelup_event)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_live_pet_kind = cache
+            .apply_diff_to_table::<LivePetKind>("game_live_pet_kind", &self.game_live_pet_kind)
+            .with_updates_by_pk(|row| &row.pet_guid);
         diff.game_lock = cache
             .apply_diff_to_table::<GameLock>("game_lock", &self.game_lock)
             .with_updates_by_pk(|row| &row.id);
@@ -6958,6 +7331,12 @@ impl __sdk::DbUpdate for DbUpdate {
             .apply_diff_to_table::<PendingSpellImpact>(
                 "game_pending_spell_impact",
                 &self.game_pending_spell_impact,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.game_pet_care_schedule = cache
+            .apply_diff_to_table::<PetCareSchedule>(
+                "game_pet_care_schedule",
+                &self.game_pet_care_schedule,
             )
             .with_updates_by_pk(|row| &row.scheduled_id);
         diff.game_pet_command = cache
@@ -7113,6 +7492,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_spell_learn = cache
             .apply_diff_to_table::<SpellLearn>("game_spell_learn", &self.game_spell_learn)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_spell_proc_event = cache
+            .apply_diff_to_table::<SpellProcEvent>(
+                "game_spell_proc_event",
+                &self.game_spell_proc_event,
+            )
+            .with_updates_by_pk(|row| &row.spell_id);
         diff.game_spell_reagent = cache
             .apply_diff_to_table::<SpellReagent>("game_spell_reagent", &self.game_spell_reagent)
             .with_updates_by_pk(|row| &row.id);
@@ -7215,6 +7600,33 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_vmap_generation_receipt,
             )
             .with_updates_by_pk(|row| &row.id);
+        diff.game_vmap_indoor_cell = cache
+            .apply_diff_to_table::<VmapIndoorCell>(
+                "game_vmap_indoor_cell",
+                &self.game_vmap_indoor_cell,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_vmap_nav_coverage = cache
+            .apply_diff_to_table::<VmapNavCoverage>(
+                "game_vmap_nav_coverage",
+                &self.game_vmap_nav_coverage,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_vmap_nav_coverage_manifest = cache
+            .apply_diff_to_table::<VmapNavCoverageManifest>(
+                "game_vmap_nav_coverage_manifest",
+                &self.game_vmap_nav_coverage_manifest,
+            )
+            .with_updates_by_pk(|row| &row.generation_id);
+        diff.game_weather = cache
+            .apply_diff_to_table::<ZoneWeatherChance>("game_weather", &self.game_weather)
+            .with_updates_by_pk(|row| &row.zone_id);
+        diff.game_weather_schedule = cache
+            .apply_diff_to_table::<WeatherSchedule>(
+                "game_weather_schedule",
+                &self.game_weather_schedule,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
         diff.game_whisper_event = cache
             .apply_diff_to_table::<WhisperEvent>("game_whisper_event", &self.game_whisper_event)
             .with_updates_by_pk(|row| &row.id);
@@ -7227,6 +7639,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_xp_event = cache
             .apply_diff_to_table::<XpEvent>("game_xp_event", &self.game_xp_event)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_zone_weather = cache
+            .apply_diff_to_table::<ZoneWeather>("game_zone_weather", &self.game_zone_weather)
+            .with_updates_by_pk(|row| &row.zone_id);
 
         diff
     }
@@ -7242,6 +7657,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_addon_message" => db_update
                     .game_addon_message
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_alpha_test_tools_enrollment" => db_update
+                    .game_alpha_test_tools_enrollment
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_area" => db_update
                     .game_area
@@ -7339,9 +7757,6 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_combo_point" => db_update
                     .game_combo_point
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "game_hunter_pet_protocol" => db_update
-                    .game_hunter_pet_protocol
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_config" => db_update
                     .game_config
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -7360,8 +7775,23 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_createinfo_spell" => db_update
                     .game_createinfo_spell
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_broadcast_text" => db_update
+                    .game_creature_ai_broadcast_text
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_creature_ai_event" => db_update
                     .game_creature_ai_event
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_rule_state" => db_update
+                    .game_creature_ai_rule_state
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_state" => db_update
+                    .game_creature_ai_state
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_summon" => db_update
+                    .game_creature_ai_summon
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_summon_expiry" => db_update
+                    .game_creature_ai_summon_expiry
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_creature_ai_timer" => db_update
                     .game_creature_ai_timer
@@ -7480,6 +7910,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_gateway_session" => db_update
                     .game_gateway_session
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_go_model" => db_update
+                    .game_go_model
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_gossip_menu" => db_update
                     .game_gossip_menu
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -7519,6 +7952,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_guid_range_registry" => db_update
                     .game_guid_range_registry
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_hunter_pet" => db_update
+                    .game_hunter_pet
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_hunter_pet_protocol" => db_update
+                    .game_hunter_pet_protocol
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_import_meta" => db_update
                     .game_import_meta
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -7542,6 +7981,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_levelup_event" => db_update
                     .game_levelup_event
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_live_pet_kind" => db_update
+                    .game_live_pet_kind
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_lock" => db_update
                     .game_lock
@@ -7599,6 +8041,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_pending_spell_impact" => db_update
                     .game_pending_spell_impact
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_pet_care_schedule" => db_update
+                    .game_pet_care_schedule
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_pet_command" => db_update
                     .game_pet_command
@@ -7711,6 +8156,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_spell_learn" => db_update
                     .game_spell_learn
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_spell_proc_event" => db_update
+                    .game_spell_proc_event
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_spell_reagent" => db_update
                     .game_spell_reagent
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -7789,6 +8237,21 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_vmap_generation_receipt" => db_update
                     .game_vmap_generation_receipt
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_vmap_indoor_cell" => db_update
+                    .game_vmap_indoor_cell
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_vmap_nav_coverage" => db_update
+                    .game_vmap_nav_coverage
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_vmap_nav_coverage_manifest" => db_update
+                    .game_vmap_nav_coverage_manifest
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_weather" => db_update
+                    .game_weather
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_weather_schedule" => db_update
+                    .game_weather_schedule
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_whisper_event" => db_update
                     .game_whisper_event
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -7800,6 +8263,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_xp_event" => db_update
                     .game_xp_event
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_zone_weather" => db_update
+                    .game_zone_weather
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 unknown => {
                     return Err(
@@ -7823,6 +8289,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_addon_message" => db_update
                     .game_addon_message
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_alpha_test_tools_enrollment" => db_update
+                    .game_alpha_test_tools_enrollment
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_area" => db_update
                     .game_area
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -7919,9 +8388,6 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_combo_point" => db_update
                     .game_combo_point
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "game_hunter_pet_protocol" => db_update
-                    .game_hunter_pet_protocol
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_config" => db_update
                     .game_config
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -7940,8 +8406,23 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_createinfo_spell" => db_update
                     .game_createinfo_spell
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_broadcast_text" => db_update
+                    .game_creature_ai_broadcast_text
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_creature_ai_event" => db_update
                     .game_creature_ai_event
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_rule_state" => db_update
+                    .game_creature_ai_rule_state
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_state" => db_update
+                    .game_creature_ai_state
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_summon" => db_update
+                    .game_creature_ai_summon
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_summon_expiry" => db_update
+                    .game_creature_ai_summon_expiry
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_creature_ai_timer" => db_update
                     .game_creature_ai_timer
@@ -8060,6 +8541,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_gateway_session" => db_update
                     .game_gateway_session
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_go_model" => db_update
+                    .game_go_model
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_gossip_menu" => db_update
                     .game_gossip_menu
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -8099,6 +8583,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_guid_range_registry" => db_update
                     .game_guid_range_registry
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_hunter_pet" => db_update
+                    .game_hunter_pet
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_hunter_pet_protocol" => db_update
+                    .game_hunter_pet_protocol
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_import_meta" => db_update
                     .game_import_meta
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -8122,6 +8612,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_levelup_event" => db_update
                     .game_levelup_event
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_live_pet_kind" => db_update
+                    .game_live_pet_kind
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_lock" => db_update
                     .game_lock
@@ -8179,6 +8672,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_pending_spell_impact" => db_update
                     .game_pending_spell_impact
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_pet_care_schedule" => db_update
+                    .game_pet_care_schedule
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_pet_command" => db_update
                     .game_pet_command
@@ -8291,6 +8787,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_spell_learn" => db_update
                     .game_spell_learn
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_spell_proc_event" => db_update
+                    .game_spell_proc_event
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_spell_reagent" => db_update
                     .game_spell_reagent
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -8369,6 +8868,21 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_vmap_generation_receipt" => db_update
                     .game_vmap_generation_receipt
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_vmap_indoor_cell" => db_update
+                    .game_vmap_indoor_cell
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_vmap_nav_coverage" => db_update
+                    .game_vmap_nav_coverage
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_vmap_nav_coverage_manifest" => db_update
+                    .game_vmap_nav_coverage_manifest
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_weather" => db_update
+                    .game_weather
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_weather_schedule" => db_update
+                    .game_weather_schedule
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_whisper_event" => db_update
                     .game_whisper_event
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -8380,6 +8894,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_xp_event" => db_update
                     .game_xp_event
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_zone_weather" => db_update
+                    .game_zone_weather
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 unknown => {
                     return Err(
@@ -8399,6 +8916,7 @@ pub struct AppliedDiff<'r> {
     game_account: __sdk::TableAppliedDiff<'r, Account>,
     game_active_taxi_flight: __sdk::TableAppliedDiff<'r, ActiveTaxiFlight>,
     game_addon_message: __sdk::TableAppliedDiff<'r, AddonMessage>,
+    game_alpha_test_tools_enrollment: __sdk::TableAppliedDiff<'r, AlphaTestToolsEnrollment>,
     game_area: __sdk::TableAppliedDiff<'r, GameArea>,
     game_area_trigger: __sdk::TableAppliedDiff<'r, GameAreaTrigger>,
     game_areatrigger_teleport: __sdk::TableAppliedDiff<'r, AreatriggerTeleport>,
@@ -8431,14 +8949,18 @@ pub struct AppliedDiff<'r> {
     game_class_level_stats: __sdk::TableAppliedDiff<'r, ClassLevelStats>,
     game_combat_event: __sdk::TableAppliedDiff<'r, CombatEvent>,
     game_combo_point: __sdk::TableAppliedDiff<'r, ComboPoint>,
-    game_hunter_pet_protocol: __sdk::TableAppliedDiff<'r, HunterPetProtocol>,
     game_config: __sdk::TableAppliedDiff<'r, ServerConfig>,
     game_corpse: __sdk::TableAppliedDiff<'r, Corpse>,
     game_corpse_loot: __sdk::TableAppliedDiff<'r, CorpseLoot>,
     game_corpse_loot_eligible: __sdk::TableAppliedDiff<'r, CorpseLootEligible>,
     game_createinfo_action: __sdk::TableAppliedDiff<'r, CreateinfoAction>,
     game_createinfo_spell: __sdk::TableAppliedDiff<'r, CreateinfoSpell>,
+    game_creature_ai_broadcast_text: __sdk::TableAppliedDiff<'r, CreatureAiBroadcastText>,
     game_creature_ai_event: __sdk::TableAppliedDiff<'r, CreatureAiEvent>,
+    game_creature_ai_rule_state: __sdk::TableAppliedDiff<'r, CreatureAiRuleState>,
+    game_creature_ai_state: __sdk::TableAppliedDiff<'r, CreatureAiState>,
+    game_creature_ai_summon: __sdk::TableAppliedDiff<'r, CreatureAiSummon>,
+    game_creature_ai_summon_expiry: __sdk::TableAppliedDiff<'r, CreatureAiSummonExpiry>,
     game_creature_ai_timer: __sdk::TableAppliedDiff<'r, CreatureAiTimer>,
     game_creature_cast: __sdk::TableAppliedDiff<'r, CreatureCast>,
     game_creature_family: __sdk::TableAppliedDiff<'r, CreatureFamily>,
@@ -8478,6 +9000,7 @@ pub struct AppliedDiff<'r> {
     game_gateway_lease: __sdk::TableAppliedDiff<'r, GatewayLease>,
     game_gateway_lease_reaper_schedule: __sdk::TableAppliedDiff<'r, GatewayLeaseReaperSchedule>,
     game_gateway_session: __sdk::TableAppliedDiff<'r, GatewaySession>,
+    game_go_model: __sdk::TableAppliedDiff<'r, GoModel>,
     game_gossip_menu: __sdk::TableAppliedDiff<'r, GossipMenu>,
     game_gossip_option: __sdk::TableAppliedDiff<'r, GossipOption>,
     game_graveyard: __sdk::TableAppliedDiff<'r, GraveyardLoc>,
@@ -8491,6 +9014,8 @@ pub struct AppliedDiff<'r> {
     game_guid_allocator: __sdk::TableAppliedDiff<'r, GuidAllocator>,
     game_guid_range: __sdk::TableAppliedDiff<'r, GuidRange>,
     game_guid_range_registry: __sdk::TableAppliedDiff<'r, GuidRangeAssignment>,
+    game_hunter_pet: __sdk::TableAppliedDiff<'r, HunterPet>,
+    game_hunter_pet_protocol: __sdk::TableAppliedDiff<'r, HunterPetProtocol>,
     game_import_meta: __sdk::TableAppliedDiff<'r, ImportMeta>,
     game_instance: __sdk::TableAppliedDiff<'r, GameInstance>,
     game_instance_binding: __sdk::TableAppliedDiff<'r, GameInstanceBinding>,
@@ -8499,6 +9024,7 @@ pub struct AppliedDiff<'r> {
     game_item_template: __sdk::TableAppliedDiff<'r, ItemTemplate>,
     game_level_stats: __sdk::TableAppliedDiff<'r, LevelStats>,
     game_levelup_event: __sdk::TableAppliedDiff<'r, LevelupEvent>,
+    game_live_pet_kind: __sdk::TableAppliedDiff<'r, LivePetKind>,
     game_lock: __sdk::TableAppliedDiff<'r, GameLock>,
     game_loot_roll: __sdk::TableAppliedDiff<'r, LootRoll>,
     game_loot_roll_vote: __sdk::TableAppliedDiff<'r, LootRollVote>,
@@ -8518,6 +9044,7 @@ pub struct AppliedDiff<'r> {
     game_operator: __sdk::TableAppliedDiff<'r, Operator>,
     game_pending_cast: __sdk::TableAppliedDiff<'r, PendingCast>,
     game_pending_spell_impact: __sdk::TableAppliedDiff<'r, PendingSpellImpact>,
+    game_pet_care_schedule: __sdk::TableAppliedDiff<'r, PetCareSchedule>,
     game_pet_command: __sdk::TableAppliedDiff<'r, PetCommand>,
     game_pickpocket_loot: __sdk::TableAppliedDiff<'r, GamePickpocketLoot>,
     game_player_action: __sdk::TableAppliedDiff<'r, PlayerAction>,
@@ -8555,6 +9082,7 @@ pub struct AppliedDiff<'r> {
     game_spell_group_rule: __sdk::TableAppliedDiff<'r, SpellGroupRule>,
     game_spell_impact_event: __sdk::TableAppliedDiff<'r, SpellImpactEvent>,
     game_spell_learn: __sdk::TableAppliedDiff<'r, SpellLearn>,
+    game_spell_proc_event: __sdk::TableAppliedDiff<'r, SpellProcEvent>,
     game_spell_reagent: __sdk::TableAppliedDiff<'r, SpellReagent>,
     game_start_item: __sdk::TableAppliedDiff<'r, StartItem>,
     game_start_position: __sdk::TableAppliedDiff<'r, StartPosition>,
@@ -8581,10 +9109,16 @@ pub struct AppliedDiff<'r> {
     game_vmap_generation: __sdk::TableAppliedDiff<'r, VmapGeneration>,
     game_vmap_generation_chunk: __sdk::TableAppliedDiff<'r, VmapGenerationChunk>,
     game_vmap_generation_receipt: __sdk::TableAppliedDiff<'r, VmapGenerationReceipt>,
+    game_vmap_indoor_cell: __sdk::TableAppliedDiff<'r, VmapIndoorCell>,
+    game_vmap_nav_coverage: __sdk::TableAppliedDiff<'r, VmapNavCoverage>,
+    game_vmap_nav_coverage_manifest: __sdk::TableAppliedDiff<'r, VmapNavCoverageManifest>,
+    game_weather: __sdk::TableAppliedDiff<'r, ZoneWeatherChance>,
+    game_weather_schedule: __sdk::TableAppliedDiff<'r, WeatherSchedule>,
     game_whisper_event: __sdk::TableAppliedDiff<'r, WhisperEvent>,
     game_world_config: __sdk::TableAppliedDiff<'r, GmWorldConfig>,
     game_world_entity: __sdk::TableAppliedDiff<'r, WorldEntity>,
     game_xp_event: __sdk::TableAppliedDiff<'r, XpEvent>,
+    game_zone_weather: __sdk::TableAppliedDiff<'r, ZoneWeather>,
     __unused: std::marker::PhantomData<&'r ()>,
 }
 
@@ -8607,6 +9141,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<AddonMessage>(
             "game_addon_message",
             &self.game_addon_message,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<AlphaTestToolsEnrollment>(
+            "game_alpha_test_tools_enrollment",
+            &self.game_alpha_test_tools_enrollment,
             event,
         );
         callbacks.invoke_table_row_callbacks::<GameArea>("game_area", &self.game_area, event);
@@ -8757,11 +9296,6 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_combo_point,
             event,
         );
-        callbacks.invoke_table_row_callbacks::<HunterPetProtocol>(
-            "game_hunter_pet_protocol",
-            &self.game_hunter_pet_protocol,
-            event,
-        );
         callbacks.invoke_table_row_callbacks::<ServerConfig>(
             "game_config",
             &self.game_config,
@@ -8788,9 +9322,34 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_createinfo_spell,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<CreatureAiBroadcastText>(
+            "game_creature_ai_broadcast_text",
+            &self.game_creature_ai_broadcast_text,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<CreatureAiEvent>(
             "game_creature_ai_event",
             &self.game_creature_ai_event,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CreatureAiRuleState>(
+            "game_creature_ai_rule_state",
+            &self.game_creature_ai_rule_state,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CreatureAiState>(
+            "game_creature_ai_state",
+            &self.game_creature_ai_state,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CreatureAiSummon>(
+            "game_creature_ai_summon",
+            &self.game_creature_ai_summon,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CreatureAiSummonExpiry>(
+            "game_creature_ai_summon_expiry",
+            &self.game_creature_ai_summon_expiry,
             event,
         );
         callbacks.invoke_table_row_callbacks::<CreatureAiTimer>(
@@ -8980,6 +9539,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_gateway_session,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<GoModel>(
+            "game_go_model",
+            &self.game_go_model,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<GossipMenu>(
             "game_gossip_menu",
             &self.game_gossip_menu,
@@ -9041,6 +9605,16 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_guid_range_registry,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<HunterPet>(
+            "game_hunter_pet",
+            &self.game_hunter_pet,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<HunterPetProtocol>(
+            "game_hunter_pet_protocol",
+            &self.game_hunter_pet_protocol,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<ImportMeta>(
             "game_import_meta",
             &self.game_import_meta,
@@ -9079,6 +9653,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<LevelupEvent>(
             "game_levelup_event",
             &self.game_levelup_event,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<LivePetKind>(
+            "game_live_pet_kind",
+            &self.game_live_pet_kind,
             event,
         );
         callbacks.invoke_table_row_callbacks::<GameLock>("game_lock", &self.game_lock, event);
@@ -9166,6 +9745,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<PendingSpellImpact>(
             "game_pending_spell_impact",
             &self.game_pending_spell_impact,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<PetCareSchedule>(
+            "game_pet_care_schedule",
+            &self.game_pet_care_schedule,
             event,
         );
         callbacks.invoke_table_row_callbacks::<PetCommand>(
@@ -9341,6 +9925,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_spell_learn,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<SpellProcEvent>(
+            "game_spell_proc_event",
+            &self.game_spell_proc_event,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<SpellReagent>(
             "game_spell_reagent",
             &self.game_spell_reagent,
@@ -9467,6 +10056,31 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_vmap_generation_receipt,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<VmapIndoorCell>(
+            "game_vmap_indoor_cell",
+            &self.game_vmap_indoor_cell,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<VmapNavCoverage>(
+            "game_vmap_nav_coverage",
+            &self.game_vmap_nav_coverage,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<VmapNavCoverageManifest>(
+            "game_vmap_nav_coverage_manifest",
+            &self.game_vmap_nav_coverage_manifest,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ZoneWeatherChance>(
+            "game_weather",
+            &self.game_weather,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<WeatherSchedule>(
+            "game_weather_schedule",
+            &self.game_weather_schedule,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<WhisperEvent>(
             "game_whisper_event",
             &self.game_whisper_event,
@@ -9485,6 +10099,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<XpEvent>(
             "game_xp_event",
             &self.game_xp_event,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ZoneWeather>(
+            "game_zone_weather",
+            &self.game_zone_weather,
             event,
         );
     }
@@ -10150,6 +10769,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_account_table::register_table(client_cache);
         game_active_taxi_flight_table::register_table(client_cache);
         game_addon_message_table::register_table(client_cache);
+        game_alpha_test_tools_enrollment_table::register_table(client_cache);
         game_area_table::register_table(client_cache);
         game_area_trigger_table::register_table(client_cache);
         game_areatrigger_teleport_table::register_table(client_cache);
@@ -10182,14 +10802,18 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_class_level_stats_table::register_table(client_cache);
         game_combat_event_table::register_table(client_cache);
         game_combo_point_table::register_table(client_cache);
-        game_hunter_pet_protocol_table::register_table(client_cache);
         game_config_table::register_table(client_cache);
         game_corpse_table::register_table(client_cache);
         game_corpse_loot_table::register_table(client_cache);
         game_corpse_loot_eligible_table::register_table(client_cache);
         game_createinfo_action_table::register_table(client_cache);
         game_createinfo_spell_table::register_table(client_cache);
+        game_creature_ai_broadcast_text_table::register_table(client_cache);
         game_creature_ai_event_table::register_table(client_cache);
+        game_creature_ai_rule_state_table::register_table(client_cache);
+        game_creature_ai_state_table::register_table(client_cache);
+        game_creature_ai_summon_table::register_table(client_cache);
+        game_creature_ai_summon_expiry_table::register_table(client_cache);
         game_creature_ai_timer_table::register_table(client_cache);
         game_creature_cast_table::register_table(client_cache);
         game_creature_family_table::register_table(client_cache);
@@ -10229,6 +10853,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_gateway_lease_table::register_table(client_cache);
         game_gateway_lease_reaper_schedule_table::register_table(client_cache);
         game_gateway_session_table::register_table(client_cache);
+        game_go_model_table::register_table(client_cache);
         game_gossip_menu_table::register_table(client_cache);
         game_gossip_option_table::register_table(client_cache);
         game_graveyard_table::register_table(client_cache);
@@ -10242,6 +10867,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_guid_allocator_table::register_table(client_cache);
         game_guid_range_table::register_table(client_cache);
         game_guid_range_registry_table::register_table(client_cache);
+        game_hunter_pet_table::register_table(client_cache);
+        game_hunter_pet_protocol_table::register_table(client_cache);
         game_import_meta_table::register_table(client_cache);
         game_instance_table::register_table(client_cache);
         game_instance_binding_table::register_table(client_cache);
@@ -10250,6 +10877,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_item_template_table::register_table(client_cache);
         game_level_stats_table::register_table(client_cache);
         game_levelup_event_table::register_table(client_cache);
+        game_live_pet_kind_table::register_table(client_cache);
         game_lock_table::register_table(client_cache);
         game_loot_roll_table::register_table(client_cache);
         game_loot_roll_vote_table::register_table(client_cache);
@@ -10269,6 +10897,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_operator_table::register_table(client_cache);
         game_pending_cast_table::register_table(client_cache);
         game_pending_spell_impact_table::register_table(client_cache);
+        game_pet_care_schedule_table::register_table(client_cache);
         game_pet_command_table::register_table(client_cache);
         game_pickpocket_loot_table::register_table(client_cache);
         game_player_action_table::register_table(client_cache);
@@ -10306,6 +10935,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_spell_group_rule_table::register_table(client_cache);
         game_spell_impact_event_table::register_table(client_cache);
         game_spell_learn_table::register_table(client_cache);
+        game_spell_proc_event_table::register_table(client_cache);
         game_spell_reagent_table::register_table(client_cache);
         game_start_item_table::register_table(client_cache);
         game_start_position_table::register_table(client_cache);
@@ -10332,15 +10962,22 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_vmap_generation_table::register_table(client_cache);
         game_vmap_generation_chunk_table::register_table(client_cache);
         game_vmap_generation_receipt_table::register_table(client_cache);
+        game_vmap_indoor_cell_table::register_table(client_cache);
+        game_vmap_nav_coverage_table::register_table(client_cache);
+        game_vmap_nav_coverage_manifest_table::register_table(client_cache);
+        game_weather_table::register_table(client_cache);
+        game_weather_schedule_table::register_table(client_cache);
         game_whisper_event_table::register_table(client_cache);
         game_world_config_table::register_table(client_cache);
         game_world_entity_table::register_table(client_cache);
         game_xp_event_table::register_table(client_cache);
+        game_zone_weather_table::register_table(client_cache);
     }
     const ALL_TABLE_NAMES: &'static [&'static str] = &[
         "game_account",
         "game_active_taxi_flight",
         "game_addon_message",
+        "game_alpha_test_tools_enrollment",
         "game_area",
         "game_area_trigger",
         "game_areatrigger_teleport",
@@ -10373,14 +11010,18 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_class_level_stats",
         "game_combat_event",
         "game_combo_point",
-        "game_hunter_pet_protocol",
         "game_config",
         "game_corpse",
         "game_corpse_loot",
         "game_corpse_loot_eligible",
         "game_createinfo_action",
         "game_createinfo_spell",
+        "game_creature_ai_broadcast_text",
         "game_creature_ai_event",
+        "game_creature_ai_rule_state",
+        "game_creature_ai_state",
+        "game_creature_ai_summon",
+        "game_creature_ai_summon_expiry",
         "game_creature_ai_timer",
         "game_creature_cast",
         "game_creature_family",
@@ -10420,6 +11061,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_gateway_lease",
         "game_gateway_lease_reaper_schedule",
         "game_gateway_session",
+        "game_go_model",
         "game_gossip_menu",
         "game_gossip_option",
         "game_graveyard",
@@ -10433,6 +11075,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_guid_allocator",
         "game_guid_range",
         "game_guid_range_registry",
+        "game_hunter_pet",
+        "game_hunter_pet_protocol",
         "game_import_meta",
         "game_instance",
         "game_instance_binding",
@@ -10441,6 +11085,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_item_template",
         "game_level_stats",
         "game_levelup_event",
+        "game_live_pet_kind",
         "game_lock",
         "game_loot_roll",
         "game_loot_roll_vote",
@@ -10460,6 +11105,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_operator",
         "game_pending_cast",
         "game_pending_spell_impact",
+        "game_pet_care_schedule",
         "game_pet_command",
         "game_pickpocket_loot",
         "game_player_action",
@@ -10497,6 +11143,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_spell_group_rule",
         "game_spell_impact_event",
         "game_spell_learn",
+        "game_spell_proc_event",
         "game_spell_reagent",
         "game_start_item",
         "game_start_position",
@@ -10523,9 +11170,15 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_vmap_generation",
         "game_vmap_generation_chunk",
         "game_vmap_generation_receipt",
+        "game_vmap_indoor_cell",
+        "game_vmap_nav_coverage",
+        "game_vmap_nav_coverage_manifest",
+        "game_weather",
+        "game_weather_schedule",
         "game_whisper_event",
         "game_world_config",
         "game_world_entity",
         "game_xp_event",
+        "game_zone_weather",
     ];
 }

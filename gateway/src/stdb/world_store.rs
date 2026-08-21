@@ -376,21 +376,10 @@ impl WorldStore for Coordinator {
         &self,
         account_id: u64,
         self_guid: u64,
-        login_instance: u64,
-        login_map: u32,
-        login_x: f32,
-        login_y: f32,
+        arrival: &crate::codec::EntityView,
         tx: SessionTx,
     ) -> Result<PlayerSubscriptions> {
-        self.subscribe_player_events(
-            account_id,
-            self_guid,
-            login_instance,
-            login_map,
-            login_x,
-            login_y,
-            tx,
-        )
+        self.subscribe_player_events(account_id, self_guid, arrival, tx)
     }
 
     fn logout(&self, account_id: u64, self_guid: u64) -> Result<()> {

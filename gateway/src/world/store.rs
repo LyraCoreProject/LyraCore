@@ -8,7 +8,7 @@
 
 use super::handlers::{
     AuctionActionStore, CastStore, DuelActionStore, ItemActionStore, LootWindowStore,
-    MeleeActionStore, QuestActionStore, TaxiActionStore, VendorActionStore,
+    MeleeActionStore, QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
 };
 use super::*;
 
@@ -22,6 +22,7 @@ pub trait WorldStore:
     + QuestActionStore
     + TaxiActionStore
     + VendorActionStore
+    + WeatherStore
     + Send
     + Sync
 {
@@ -312,14 +313,16 @@ pub trait WorldStore:
     /// addressed `game_movement_event`) and push the resulting peer-spawn / movement-relay / destroy
     /// SMSG onto `tx` (Phase 6/7). The returned guard tears the subscription + callbacks down on
     /// drop. Called once, at `CMSG_PLAYER_LOGIN`, when `self_guid` is known.
+    ///
+    /// `arrival` is the entity the login batch was just built from, so the viewer's map, partition,
+    /// zone and AOI anchor cannot drift from what the client was told. Its zone in particular seeds
+    /// the weather routing with the zone world entry already sent weather for, so the first live
+    /// crossing is a real crossing rather than the viewer learning its own starting zone.
     fn subscribe_player_events(
         &self,
         account_id: u64,
         self_guid: u64,
-        login_instance: u64,
-        login_map: u32,
-        login_x: f32,
-        login_y: f32,
+        arrival: &codec::EntityView,
         tx: SessionTx,
     ) -> Result<PlayerSubscriptions>;
 

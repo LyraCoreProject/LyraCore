@@ -9,6 +9,7 @@
 
 pub mod auction;
 pub mod bank;
+pub mod calendar;
 pub mod constants;
 pub mod duel;
 pub mod env;

@@ -2,6 +2,7 @@
 //! post-login SMSG sequence, and destroy. Pure code-motion out of `mod.rs`.
 
 use super::*;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A minimal mirror of the entity-row fields the encoder needs. The gateway fills this from
 /// the `game_world_entity` subscription cache; it is decoupled from the module's table type.
@@ -558,6 +559,35 @@ pub enum WorldEntry {
     WorldPort,
 }
 
+/// Packs a Unix timestamp into the `SMSG_LOGIN_SETTIMESPEED` wire clock. The realm clock is
+/// always UTC — there is no realm-timezone setting, so this deliberately never reads host-local
+/// time.
+///
+/// The wire constructor takes zero-based `month` and `month_day` and a `Weekday` that must agree
+/// with the date; this function derives all three from `secs_since_unix_epoch` alone so the
+/// packed value is always internally consistent.
+pub(crate) fn realm_datetime(secs_since_unix_epoch: u64) -> DateTime {
+    let days = (secs_since_unix_epoch / 86_400) as i64;
+    let secs_of_day = (secs_since_unix_epoch % 86_400) as u32;
+    let hours = (secs_of_day / 3_600) as u8;
+    let minutes = ((secs_of_day % 3_600) / 60) as u8;
+
+    let (year, month, month_day) = lyracore_shared::calendar::civil_from_days(days);
+    // 1970-01-01 (days = 0) was a Thursday, and `Weekday::as_int()` numbers Sunday 0 ..
+    // Saturday 6 — exactly `(days + 4) % 7` for a non-negative day count.
+    let weekday = Weekday::try_from(((days + 4) % 7) as u32)
+        .expect("(days + 4) % 7 is always 0..=6, a valid Weekday");
+
+    DateTime::new(
+        (year - 2000) as u8,
+        Month::try_from(month - 1).expect("civil_from_days month is always 1..=12"),
+        (month_day - 1) as u8,
+        weekday,
+        hours,
+        minutes,
+    )
+}
+
 /// Emit the post-login SMSG sequence (Phase 4, gateway translation §5) to the owner, in the
 /// order the client expects — `SMSG_LOGIN_VERIFY_WORLD` must precede `SMSG_TUTORIAL_FLAGS`,
 /// and is sent ONLY for a [`WorldEntry::FreshLogin`] (see the enum's doc for why a world-port
@@ -648,9 +678,14 @@ pub fn login_sequence_messages(
             data: [0u32; 32],
         })),
         ServerOpcodeMessage::SMSG_LOGIN_SETTIMESPEED(SMSG_LOGIN_SETTIMESPEED {
-            // The weekday must agree with the date by the crate's calendar (2026-06-15 -> Tuesday);
-            // the value is cosmetic (sets the in-game clock).
-            datetime: DateTime::new(26, Month::June, 15, Weekday::Tuesday, 12, 0),
+            // Current realm date/time (UTC). The client free-runs from here at the timescale
+            // below; no periodic clock resend follows.
+            datetime: realm_datetime(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            ),
             timescale: 0.016_666_668,
         }),
         ServerOpcodeMessage::SMSG_TUTORIAL_FLAGS(Box::new(SMSG_TUTORIAL_FLAGS {

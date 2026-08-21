@@ -16,6 +16,7 @@ mod quest;
 mod spell;
 mod talent_reputation;
 mod templates;
+mod weather;
 
 use spacetimedb_sdk::Table;
 

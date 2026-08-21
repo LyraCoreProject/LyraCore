@@ -81,6 +81,7 @@ pub struct WorldEntity {
     pub unit_bytes_2: u32,
     pub bank_bag_slots: u8,
     pub mount_display_id: u32,
+    pub zone_id: u32,
 }
 
 impl __sdk::InModule for WorldEntity {
@@ -165,6 +166,7 @@ pub struct WorldEntityCols {
     pub unit_bytes_2: __sdk::__query_builder::Col<WorldEntity, u32>,
     pub bank_bag_slots: __sdk::__query_builder::Col<WorldEntity, u8>,
     pub mount_display_id: __sdk::__query_builder::Col<WorldEntity, u32>,
+    pub zone_id: __sdk::__query_builder::Col<WorldEntity, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for WorldEntity {
@@ -254,6 +256,7 @@ impl __sdk::__query_builder::HasCols for WorldEntity {
             unit_bytes_2: __sdk::__query_builder::Col::new(table_name, "unit_bytes_2"),
             bank_bag_slots: __sdk::__query_builder::Col::new(table_name, "bank_bag_slots"),
             mount_display_id: __sdk::__query_builder::Col::new(table_name, "mount_display_id"),
+            zone_id: __sdk::__query_builder::Col::new(table_name, "zone_id"),
         }
     }
 }
