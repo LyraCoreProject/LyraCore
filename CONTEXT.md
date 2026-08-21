@@ -192,6 +192,16 @@ _Avoid_: proc cast, internal cast, free cast
 Resolving an auction at buyout or expiry: item and gold to their final owners, displaced bids refunded.
 _Avoid_: resolve, close
 
+### World clock and weather
+
+**Realm Clock**:
+The wall clock the realm runs on, always UTC. There is no realm-timezone setting, so no part of the realm reads host-local time. The Gateway packs it into `SMSG_LOGIN_SETTIMESPEED` once per world entry and the client advances it alone afterwards; the Module reads the same clock to pick the weather season.
+_Avoid_: server time, game time, local time
+
+**Zone Weather**:
+One durable row per zone holding the sky that zone currently shows. The same row is the state a world entry reads and the source a live Relay fires from, so there is no second weather table and no replay ambiguity for a reconnecting client. A zone with no row has fine weather.
+_Avoid_: weather event, weather state table
+
 ### Working method
 
 **Seam**:
