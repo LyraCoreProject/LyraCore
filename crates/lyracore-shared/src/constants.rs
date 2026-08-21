@@ -136,6 +136,8 @@ pub mod sheath_state {
 /// `UNIT_FIELD_FLAGS` bits (vanilla 1.12), stored in `game_world_entity.unit_flags`, sent in the CREATE
 /// and relayed as a VALUES change.
 pub mod unit_flags {
+    /// `UNIT_FLAG_PLAYER_CONTROLLED` (0x00000008) marks a live Character as controlled by a player.
+    pub const PLAYER_CONTROLLED: u32 = 0x0000_0008;
     /// `UNIT_FLAG_NOT_SELECTABLE` (0x02000000) in the vanilla 1.12 UnitFlags enum. The client does
     /// not offer an interaction cursor for such a unit, and server-side service gates must agree.
     pub const NOT_SELECTABLE: u32 = 0x0200_0000;

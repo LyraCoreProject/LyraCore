@@ -944,18 +944,6 @@ fn is_drink_consumable(class: u8, subclass: u8, name: &str) -> bool {
         .split(|c: char| !c.is_ascii_alphanumeric())
         .any(|w| DRINK_WORDS.contains(&w))
 }
-/// The Northshire tutorial-wolf faction remap (work-item 214 pulled this out of the creature_template
-/// loop as a pure, byte-parity-locked function — the DELIBERATE DEVIATION documented at its call site
-/// is unchanged, just relocated here so it's independently unit-testable). Remaps the passive beast
-/// faction (32) to the passive-but-attackable faction template 58, but ONLY for `CreatureFamily` ==
-/// Wolf (1) — every other family, and every non-32 faction, passes through verbatim.
-fn wolf_faction_fixup(faction_raw: u32, family_id: i32) -> u32 {
-    if faction_raw == 32 && family_id == 1 {
-        58
-    } else {
-        faction_raw
-    }
-}
 /// SQL string literal with single-quotes doubled.
 fn sql_str(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
@@ -3857,25 +3845,7 @@ fn build_dump_plan(
                 v
             }
         };
-        // DELIBERATE DEVIATION (operator request, 2026-06-24): Northshire's tutorial wolves (Young Wolf
-        // 299, Timber Wolf 69) ship on the PASSIVE beast faction 32 — neutral to the player, which the
-        // 5875 client treats as non-attackable via the "Attack" action AND Tab-targeting (only a real
-        // right-click while in melee range engages a yellow unit). Players read that as "the wolf can't
-        // be attacked." We make them PASSIVE-BUT-ATTACKABLE like the kobolds by remapping the neutral-wolf
-        // faction (32) to faction template 58 (parent "Creature" faction 7): faction_group = Monster (8)
-        // so the player reads them as hostile/red → /attack + Tab work, but enemy_group = 0 so they do
-        // NOT proximity-aggro (compute_hostile(wolf→player) = 0 & player_group = 0). Net: red, huntable,
-        // but they never jump you — they only retaliate, exactly like the kobolds (ft 25, also Monster +
-        // enemy_group 0). Gated on CreatureFamily == Wolf (1) so only wolves flip; everything else keeps
-        // its cmangos faction. NOT strictly vanilla (real Northshire wolves are yellow/neutral) — a
-        // deliberate playability choice; revert by deleting this block. (Was briefly 38, the aggressive
-        // wolf faction, but that has enemy_group=1 → wolves aggroed low-level players; 58 is the passive
-        // equivalent.) The remap itself is `wolf_faction_fixup` (byte-parity locked by its own unit
-        // tests) — already data-driven on `family_id` before work-item 214; 214 only pulled it out to a
-        // pure, independently-testable function.
-        let faction_raw: u32 = field(&row, ct::FACTION).parse().unwrap_or(0);
-        let family_id: i32 = field(&row, ct::FAMILY).parse().unwrap_or(0);
-        let faction_out: u32 = wolf_faction_fixup(faction_raw, family_id);
+        let faction_template: u32 = field(&row, ct::FACTION).parse().unwrap_or(0);
         // Per-creature melee damage (parity #7): cmangos MinMeleeDmg/MaxMeleeDmg are floats; round to int
         // (vanilla creature swings are whole-number ranges in practice). 0 stays 0 → the module's
         // swing_range_ctx falls back to the flat CREATURE_MELEE range for that creature.
@@ -3912,7 +3882,7 @@ fn build_dump_plan(
             display = display_id,
             level = field(&row, ct::MIN_LEVEL),
             health = field(&row, ct::MIN_LEVEL_HEALTH),
-            faction = faction_out,
+            faction = faction_template,
             npc = field(&row, ct::NPC_FLAGS),
             unit = field(&row, ct::UNIT_FLAGS),
             ctype = field(&row, ct::CREATURE_TYPE),
@@ -5098,15 +5068,6 @@ mod tests {
         assert_eq!(sql_str("Hogger's"), "'Hogger''s'");
     }
 
-    /// Byte-parity lock (work-item 214): the Northshire tutorial-wolf faction remap must keep behaving
-    /// exactly as it did inline before being pulled out into `wolf_faction_fixup`.
-    #[test]
-    fn wolf_faction_fixup_only_remaps_passive_faction_32_wolves() {
-        assert_eq!(wolf_faction_fixup(32, 1), 58); // passive beast faction + Wolf family → remapped
-        assert_eq!(wolf_faction_fixup(32, 0), 32); // faction 32 but NOT a wolf → unchanged
-        assert_eq!(wolf_faction_fixup(14, 1), 14); // a wolf, but not on faction 32 → unchanged
-    }
-
     #[test]
     fn gather_nodes_map_is_well_formed() {
         // Lookup resolves the Copper Vein (mining) + Peacebloom (herb) anchors and rejects a non-node.
@@ -5964,7 +5925,7 @@ mod tests {
     /// Build a `creature_template` INSERT tuple wide enough to reach `ct::GOSSIP_MENU_ID` (col 77):
     /// entry at col 0, gossip_menu_id at col 77, everything else `0`.
     fn creature_template_row(entry: u64, gossip_menu_id: u64) -> String {
-        creature_template_row_with_trainer(entry, gossip_menu_id, 0, 0)
+        creature_template_row_with_faction(entry, gossip_menu_id, 0, 0, 0, 0)
     }
 
     /// `creature_template_row` plus `TrainerType` (71) and `TrainerClass` (73). Both sit below
@@ -5976,9 +5937,22 @@ mod tests {
         trainer_type: u64,
         trainer_class: u64,
     ) -> String {
+        creature_template_row_with_faction(entry, gossip_menu_id, 0, 0, trainer_type, trainer_class)
+    }
+
+    fn creature_template_row_with_faction(
+        entry: u64,
+        gossip_menu_id: u64,
+        faction_template: u64,
+        creature_family: u64,
+        trainer_type: u64,
+        trainer_class: u64,
+    ) -> String {
         let mut cols = vec!["0".to_string(); ct::GOSSIP_MENU_ID + 1];
         cols[ct::ENTRY] = entry.to_string();
         cols[ct::GOSSIP_MENU_ID] = gossip_menu_id.to_string();
+        cols[ct::FACTION] = faction_template.to_string();
+        cols[ct::FAMILY] = creature_family.to_string();
         cols[ct::TRAINER_TYPE] = trainer_type.to_string();
         cols[ct::TRAINER_CLASS] = trainer_class.to_string();
         format!("({})", cols.join(","))
@@ -6959,6 +6933,42 @@ mod tests {
             family: None,
             source_sha: String::new(),
         }
+    }
+
+    #[test]
+    fn creature_template_import_preserves_source_faction_templates() {
+        let dump = format!(
+            "INSERT INTO `creature` VALUES \\
+             (1,299,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0),\\
+             (2,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \\
+             INSERT INTO `creature_template` VALUES {},{};",
+            creature_template_row_with_faction(299, 0, 32, 1, 0, 0),
+            creature_template_row_with_faction(100, 0, 14, 0, 0, 0),
+        );
+        let plan = build_dump_plan(&dump, &test_args(), &None, &None).expect("build_dump_plan");
+        let insert = plan
+            .stmts
+            .iter()
+            .find(|stmt| stmt.starts_with("INSERT INTO game_creature_template"))
+            .expect("creature template insert");
+        let factions: std::collections::HashMap<&str, &str> = insert
+            .split_once(" VALUES ")
+            .expect("template insert values")
+            .1
+            .split("),(")
+            .map(|tuple| {
+                let fields: Vec<&str> = tuple
+                    .trim_start_matches('(')
+                    .trim_end_matches(';')
+                    .trim_end_matches(')')
+                    .split(',')
+                    .collect();
+                (fields[0], fields[6])
+            })
+            .collect();
+
+        assert_eq!(factions.get("299"), Some(&"32"));
+        assert_eq!(factions.get("100"), Some(&"14"));
     }
 
     /// A minimal `quest_template` INSERT tuple wide enough to reach `qt::REW_MONEY_MAX_LEVEL` (col 99):
