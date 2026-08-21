@@ -1857,6 +1857,14 @@ fn weather_changed(view: &WorldView, shard: ShardId, row: &ZoneWeather) {
     }
 }
 
+/// The `game_zone_weather` relay leg, reachable from the world-session tests: the encrypted-wire
+/// test drives the SAME body [`arm_shard`] wires to the table callback, so a live weather row and a
+/// test row take one path. Test-only because a shard's own callback is the sole production caller.
+#[cfg(test)]
+pub(crate) fn relay_zone_weather(view: &WorldView, shard: ShardId, row: &ZoneWeather) {
+    weather_changed(view, shard, row);
+}
+
 /// The self entity's own row says it is standing in a different zone than the viewer's routing
 /// state remembers → move the routing state and send the destination zone's current weather ONCE,
 /// Instant, so the stale source-zone sky is replaced immediately (story 7).
