@@ -13,10 +13,10 @@ use super::{
     InstructionSelection, InstructionTarget, KillCondition, OutOfCombatSightCondition,
     PercentageCondition, PhaseSet, PostureAdmission, QuestTakenPredicate, RandomPhaseInstruction,
     RandomPhaseRangeInstruction, RangedPostureInstruction, ReceiveAiEventCondition,
-    ReceiveEmoteCondition, RecurrencePolicy, SetPhaseInstruction, SpawnCondition,
-    SpawnMapCondition, SpawnZoneOrAreaCondition, SpeakInstruction, SpeechMode, SpellCasterRole,
-    SpellEventCondition, SpellStartMode, SpellTargetRole, SummonInstruction, TargetRangeCondition,
-    TimeWindow,
+    ReceiveEmoteCondition, RecurrencePolicy, SetLethalDamageFloorInstruction, SetPhaseInstruction,
+    SpawnCondition, SpawnMapCondition, SpawnZoneOrAreaCondition, SpeakInstruction, SpeechMode,
+    SpellCasterRole, SpellEventCondition, SpellStartMode, SpellTargetRole, SummonInstruction,
+    TargetRangeCondition, TimeWindow,
 };
 use crate::game_creature_ai_definition;
 #[cfg(feature = "debug_reducers")]
@@ -76,6 +76,14 @@ fn load_definition_batch(ctx: &ReducerContext, packed: &str, replace: bool) -> R
         table.insert(definition);
     }
     Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+pub(crate) fn replace_definition_for_debug(
+    ctx: &ReducerContext,
+    packed: &str,
+) -> Result<(), String> {
+    load_definition_batch(ctx, packed, true)
 }
 
 fn parse_definition_batch(packed: &str) -> Result<Vec<CreatureAiDefinition>, String> {
@@ -547,6 +555,16 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 angle_degrees: parse_i32(angle)?,
             },
         )),
+        ["lethal-floor", enabled] => Ok(CreatureInstruction::SetLethalDamageFloor(
+            SetLethalDamageFloorInstruction {
+                enabled: match *enabled {
+                    "on" => true,
+                    "off" => false,
+                    value => return Err(format!("unknown lethal damage floor state: {value}")),
+                },
+            },
+        )),
+        ["force-death"] => Ok(CreatureInstruction::ForceDeath),
         _ => Err(format!("unknown creature instruction: {encoded}")),
     }
 }
@@ -789,6 +807,27 @@ mod tests {
             };
             assert_eq!(emote.emote_id, index as u32 + 1);
         }
+    }
+
+    #[test]
+    fn native_definition_decodes_named_death_requests() {
+        let rules = "900002,aggro,100,4294967295,once,all,ordinary,any-posture,lethal-floor:on+lethal-floor:off+force-death";
+        let material = format!("entry:6@{rules}");
+        let packed = format!("entry:6@{}@{rules}", definition_revision(&material));
+        let definition = parse_definition(&packed).unwrap();
+
+        assert_eq!(
+            definition.rules[0].instructions,
+            vec![
+                CreatureInstruction::SetLethalDamageFloor(SetLethalDamageFloorInstruction {
+                    enabled: true
+                }),
+                CreatureInstruction::SetLethalDamageFloor(SetLethalDamageFloorInstruction {
+                    enabled: false
+                }),
+                CreatureInstruction::ForceDeath,
+            ]
+        );
     }
 
     #[test]

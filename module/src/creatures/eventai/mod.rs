@@ -7,10 +7,11 @@ mod model;
 mod tables;
 
 mod combat;
+mod death;
 mod edges;
 mod mobility;
 
-pub(crate) use combat::authored_combat;
+pub(crate) use combat::{authored_combat, current_definition_revision};
 #[cfg(test)]
 pub(crate) use combat::{beneficiary_guid, condition, AuthoredCombat};
 pub(crate) use edges::reset_creature_lifecycle;
@@ -32,6 +33,8 @@ pub(crate) use edges::{
 #[cfg(test)]
 pub(crate) use engine::{evaluate, EventAiWorld};
 pub(crate) use fixtures::seed_on_aggro_fixtures;
+#[cfg(feature = "debug_reducers")]
+pub(crate) use loader::replace_definition_for_debug;
 #[cfg(test)]
 pub(crate) use mobility::summon_lifetime_after;
 pub(crate) use mobility::{drop_summon_expiry, ranged_posture};

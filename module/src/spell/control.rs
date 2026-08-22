@@ -723,7 +723,10 @@ mod tests {
     #[test]
     fn both_kill_chokepoints_shed_auras_on_death() {
         let src = include_str!("../combat/death.rs");
-        for signature in ["pub(crate) fn kill_player(", "pub(crate) fn kill_creature("] {
+        for signature in [
+            "pub(crate) fn kill_player(",
+            "fn kill_creature_with_attribution(",
+        ] {
             let body = crate::test_scan::code_of(src, signature);
             assert!(
                 body.contains("crate::spell::remove_auras_on_death(ctx, "),
@@ -731,7 +734,7 @@ mod tests {
                  its buffs and the crowd control that was on it. Body was:\n{body}"
             );
         }
-        let creature = crate::test_scan::code_of(src, "pub(crate) fn kill_creature(");
+        let creature = crate::test_scan::code_of(src, "fn kill_creature_with_attribution(");
         let rewards = creature
             .find("award_killer_rewards(ctx, &target, target_guid, killer_guid)")
             .expect("kill_creature still awards the killer before the corpse work");

@@ -2,9 +2,9 @@
 //! pipeline): `tick_melee`'s three passes (`leash_pass`/`aggro_pass`/`resolve_swing`), the positional
 //! gate (`swing_blocked`), and the resolvers that actually roll + fire a hit (`fire_melee_swing`,
 //! `resolve_offhand_swing`, `fire_ranged_shot`, and the scheduled `ranged_impact` reducer). Every
-//! resolver here routes through `death`'s shared `fold_incoming_damage`/`apply_hit` pipeline — see
-//! `damage_pipeline_drift_tests` below, which pins that wiring. `mod.rs` re-exports this module
-//! (`pub use swing::*`) so every `crate::combat::<sym>` path resolves regardless of which submodule
+//! resolver here routes through `death`'s shared `fold_incoming_damage`/`final_damage`/`apply_hit`
+//! pipeline. See `damage_pipeline_drift_tests` below, which pins that wiring. `mod.rs` re-exports
+//! this module (`pub use swing::*`) so every `crate::combat::<sym>` path resolves regardless of which submodule
 //! actually defines it.
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
@@ -193,9 +193,9 @@ fn aggro_pass(ctx: &ReducerContext) {
 /// tail-of-loop stamp, which that path's various early returns (corpse/CC/lethal) may skip.
 ///
 /// The DAMAGE half is not duplicated at all any more (#370): the same
-/// `fold_incoming_damage` → event → [`apply_hit`] the main-hand swing and the ranged impact use, over
-/// the off-hand's AP-scaled range REDUCED by `apply_offhand_penalty` (vanilla's 50% dual-wield
-/// penalty). What stays off-hand-specific is only what vanilla makes MAIN-HAND-only: it does not arm
+/// `fold_incoming_damage` → `final_damage` → event → [`apply_hit`] the main-hand swing and ranged
+/// impact use, over the off-hand's AP-scaled range reduced by `apply_offhand_penalty` (vanilla's 50%
+/// dual-wield penalty). What stays off-hand-specific is only what vanilla makes MAIN-HAND-only: it does not arm
 /// the Overpower/Revenge react windows, does not fire the seal / next-swing procs, and does not wear
 /// durability (no separate off-hand durability model yet — a deliberate simplification, like the
 /// main-hand's own DURABILITY_WEAR_CHANCE_PCT tuning). It also leaves the IN_COMBAT stamp to the main
@@ -255,10 +255,11 @@ fn resolve_offhand_swing(
     // then the application (rage/skill/lethal fork/health/break-on-damage/threat). Identical to the
     // main-hand swing by construction — this is exactly the copy whose Disarm gate drifted (#361).
     let (dmg, _absorbed) = fold_incoming_damage(ctx, attacker_guid, target_guid, rolled);
-    let lethal = is_lethal(target.health, dmg);
+    let damage = final_damage(ctx, target_guid, dmg);
+    let lethal = is_lethal(target.health, damage.amount);
 
     ctx.db.game_combat_event().insert(CombatEvent {
-        damage: dmg,
+        damage: damage.amount,
         hit_info,
         killing_blow: lethal,
         blocked_amount: blocked,
@@ -271,7 +272,7 @@ fn resolve_offhand_swing(
         ctx,
         attacker_guid,
         target_guid,
-        dmg,
+        damage,
         Hit::weapon(HitSource::OffHand, hit_info == HIT_CRIT),
     )
     .combat_ended()
@@ -699,7 +700,9 @@ fn fire_melee_swing(
     // HERE, before the events, for the wire's `killing_blow` flag; `apply_hit` re-derives it for the
     // fork from the same shared predicate.
     let (dmg, _absorbed) = fold_incoming_damage(ctx, attacker_guid, target_guid, rolled);
-    let lethal = is_lethal(target.health, dmg);
+    let damage = final_damage(ctx, target_guid, dmg);
+    let lethal = is_lethal(target.health, damage.amount);
+    let (projected_swing, projected_seal) = split_damage_projection(damage.amount, seal_portion);
 
     // One swing event per swing; `lethal` (killing_blow) also tells the relay to send
     // SMSG_ATTACKSTOP so the attacker leaves combat stance. Logged before any teardown so the
@@ -711,7 +714,7 @@ fn fire_melee_swing(
     // subtraction is display-only (a pre-modifier flat, so a modified/absorbed swing's split is
     // approximate — totals stay exact).
     events.insert(CombatEvent {
-        damage: dmg.saturating_sub(seal_portion),
+        damage: projected_swing,
         hit_info,
         killing_blow: lethal,
         blocked_amount: blocked,
@@ -732,11 +735,7 @@ fn fire_melee_swing(
         ctx.db.game_spell_cast_event().insert(SpellCastEvent {
             target_guid,
             is_completion: true,
-            damage: if queued_fired {
-                dmg.saturating_sub(seal_portion)
-            } else {
-                0
-            },
+            damage: if queued_fired { projected_swing } else { 0 },
             // school stays at the baseline's 0 (physical — HS/Cleave are weapon strikes).
             is_crit: hit_info == HIT_CRIT,
             // The swing outcome — on a 0-damage fire the relay shapes the GO miss list from it
@@ -748,10 +747,10 @@ fn fire_melee_swing(
     // 114 FIX (b): the seal's holy portion — a log-only row (is_proc_log): the gateway sends ONLY
     // SMSG_SPELLNONMELEEDAMAGELOG named after the seal spell (yellow "Seal of Righteousness hits
     // ... Holy"), never START/GO (nothing casts; the seal aura is already up — vanilla shape).
-    if seal_portion > 0 {
+    if projected_seal > 0 {
         ctx.db.game_spell_cast_event().insert(SpellCastEvent {
             target_guid,
-            damage: seal_portion,
+            damage: projected_seal,
             school: 1, // holy (school_mask 2 → index 1, the mask→index rule in resolve_cast_at)
             is_proc_log: true,
             ..SpellCastEvent::signal_at(ctx, attacker, seal_spell)
@@ -764,7 +763,7 @@ fn fire_melee_swing(
         ctx,
         attacker_guid,
         target_guid,
-        dmg,
+        damage,
         Hit::weapon(HitSource::MainHand, hit_info == HIT_CRIT),
     )
     .combat_ended();
@@ -806,6 +805,11 @@ fn fire_melee_swing(
     // so it lands AFTER every entity write above; `enter_combat` re-fetches fresh.
     enter_combat(ctx, attacker_guid);
     enter_combat(ctx, target_guid);
+}
+
+fn split_damage_projection(final_damage: u32, seal_portion: u32) -> (u32, u32) {
+    let seal = seal_portion.min(final_damage);
+    (final_damage - seal, seal)
 }
 
 /// Fire one RANGED shot (Auto Shot 75 / wand Shoot 5019) that has already passed every eligibility
@@ -885,9 +889,8 @@ fn fire_ranged_shot(
     // melee swing.
     crate::spell::break_stealth(ctx, attacker_guid);
 
-    // The SHARED modifier fold (#370). Vanilla folds absorb at IMPACT, but freezing the whole chain
-    // here keeps the delayed damage LOG equal to what actually lands; the ≤1s divergence window is
-    // noise. The godmode zero is nonetheless RE-CHECKED at impact (a target can toggle it mid-flight).
+    // The SHARED modifier fold (#370). Vanilla folds absorb at impact; this engine freezes that
+    // chain at launch, then resolves the lethal floor and damage log together at impact.
     let (dmg, _absorbed) = fold_incoming_damage(ctx, attacker_guid, target_guid, rolled);
 
     let speed = if subclass == ws::WAND {
@@ -897,7 +900,9 @@ fn fire_ranged_shot(
     };
     let travel_ms = crate::spell::projectile_travel_ms(dist_sq.sqrt(), speed);
     ctx.db.game_combat_event().insert(CombatEvent {
-        damage: dmg,
+        // Launch carries SPELL_GO only. The impact transaction emits the one authoritative damage
+        // log after it resolves fresh health and lethal-floor state.
+        damage: 0,
         hit_info,
         ranged_spell_id,
         ammo_display_id,
@@ -921,6 +926,8 @@ fn fire_ranged_shot(
                 attacker_guid,
                 target_guid,
                 damage: dmg,
+                ranged_spell_id,
+                is_crit: hit_info == HIT_CRIT,
             });
     }
     // Same fresh-row stamp discipline as the melee tail (the off-hand never runs on a ranged row, but
@@ -962,6 +969,7 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
     // arrow land damage that a melee swing at the same instant would zero (issue #361). `false` for a
     // non-godmode target, so this is byte-identical for them.
     let dmg = if target.godmode { 0 } else { shot.damage };
+    let damage = final_damage(ctx, shot.target_guid, dmg);
     // The SHARED pipeline (#370) — the same one the main-hand and off-hand swings route through, so a
     // shot can never again drift from a swing (a godmode-zeroed hit is now a full no-op here too,
     // instead of running the survivor path with a 0 damage value).
@@ -969,9 +977,18 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
         ctx,
         shot.attacker_guid,
         shot.target_guid,
-        dmg,
+        damage,
         Hit::weapon(HitSource::Ranged, false),
     );
+    if damage.amount > 0 && shot.ranged_spell_id != 0 {
+        ctx.db.game_spell_cast_event().insert(SpellCastEvent {
+            target_guid: shot.target_guid,
+            damage: damage.amount,
+            is_crit: shot.is_crit,
+            is_proc_log: true,
+            ..SpellCastEvent::signal_at(ctx, &attacker, shot.ranged_spell_id)
+        });
+    }
     if outcome.duel_completed {
         return;
     }
@@ -983,7 +1000,8 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
 mod damage_pipeline_drift_tests {
     // #361 found TWO live divergences in what was then a copy-pasted post-roll damage pipeline —
     // off-hand swings ignored Disarm, ranged impacts ignored godmode — and pinned each fix in place.
-    // #370 removed the copies: there is now ONE pipeline (`fold_incoming_damage` → `apply_hit`) that
+    // #370 removed the copies: there is now ONE pipeline (`fold_incoming_damage` → `final_damage`
+    // → `apply_hit`) that
     // every damaging path routes through, so the drift class those two tests guard against can no
     // longer be introduced one resolver at a time. These tests therefore moved UP a level: instead of
     // pinning each fix in each copy, they pin that every resolver still goes through the one
@@ -1014,9 +1032,39 @@ mod damage_pipeline_drift_tests {
     }
 
     #[test]
+    fn seal_projection_sums_to_the_floored_final_damage() {
+        assert_eq!(super::split_damage_projection(0, 5), (0, 0));
+        assert_eq!(super::split_damage_projection(3, 5), (0, 3));
+        assert_eq!(super::split_damage_projection(9, 5), (4, 5));
+    }
+
+    #[test]
+    fn ranged_damage_projection_is_emitted_from_the_impact_decision() {
+        let launch = code_of(source("combat/swing.rs"), "fn fire_ranged_shot(");
+        assert!(
+            launch.contains("damage: 0"),
+            "launch emitted a stale damage log"
+        );
+        assert!(
+            !launch.contains("final_damage("),
+            "launch resolved the lethal floor before impact"
+        );
+
+        let impact = code_of(source("combat/swing.rs"), "pub fn ranged_impact(");
+        assert!(impact.contains("let damage = final_damage("));
+        assert!(impact.contains("damage: damage.amount"));
+        assert!(impact.contains("is_proc_log: true"));
+    }
+
+    #[test]
     fn every_damage_resolver_routes_through_apply_hit() {
         for (file, sig) in RESOLVERS {
             let body = code_of(source(file), sig);
+            assert!(
+                body.contains("final_damage("),
+                "`{sig}` in {file} no longer applies the EventAI lethal floor after mitigation. \
+                 Body was:\n{body}"
+            );
             assert!(
                 body.contains("apply_hit("),
                 "`{sig}` in {file} no longer applies its damage through the shared `apply_hit` \
@@ -1051,7 +1099,7 @@ mod damage_pipeline_drift_tests {
             "pub(crate) fn apply_target_damage(",
         );
         assert!(
-            spell.contains("apply_hit(ctx, caster_guid, target_guid, dmg, hit)"),
+            spell.contains("apply_hit(ctx, caster_guid, target_guid, damage, hit)"),
             "`apply_target_damage` must forward its caller's hit verbatim — manufacturing one here \
              would relabel every spell effect's proc event. Body was:\n{spell}"
         );

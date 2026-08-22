@@ -408,6 +408,11 @@ pub struct RangedPostureInstruction {
     pub angle_degrees: i32,
 }
 
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SetLethalDamageFloorInstruction {
+    pub enabled: bool,
+}
+
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]
 pub enum CreatureInstruction {
     Speak(SpeakInstruction),
@@ -421,6 +426,8 @@ pub enum CreatureInstruction {
     RandomPhaseRange(RandomPhaseRangeInstruction),
     Summon(SummonInstruction),
     SetRangedPosture(RangedPostureInstruction),
+    SetLethalDamageFloor(SetLethalDamageFloorInstruction),
+    ForceDeath,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]

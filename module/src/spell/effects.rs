@@ -95,23 +95,24 @@ pub(crate) fn apply_target_damage(
     // copies of it.
     let (dmg, absorbed) =
         crate::combat::fold_incoming_damage(ctx, caster_guid, target_guid, basis.max(0) as u32);
-    if dmg == 0 {
+    let damage = crate::combat::final_damage(ctx, target_guid, dmg);
+    if damage.amount == 0 && dmg == 0 {
         return (0, absorbed); // entirely soaked (or godmode) — no health write, no kill
     }
     // The caster is now IN COMBAT — its own UNIT_FLAG_IN_COMBAT (the pure-caster fix: the auto-attack
     // stance can't show a unit that only ever casts). Before the application below so a killing spell
     // flags it too. Re-fetches the caster, so there is no stale-copy overwrite.
     crate::combat::enter_combat(ctx, caster_guid);
-    // Stage 2: the SHARED application — the lethal fork through `kill_creature` (a PLAYER target is
+    // Stage 3 is the SHARED application: the lethal fork through `kill_creature` (a PLAYER target is
     // floored at 1 hp instead, since there is no spell-death of players yet), the health write, the
     // surviving target's IN_COMBAT stamp, break-on-damage with the `0` attacker sentinel (a spell is
     // not a tracked melee swing, so it must not provoke Retaliation), threat, the engage-on-damage
     // retaliation arm, and the proc pass.
-    crate::combat::apply_hit(ctx, caster_guid, target_guid, dmg, hit);
+    crate::combat::apply_hit(ctx, caster_guid, target_guid, damage, hit);
     // The post-mitigation damage actually dealt + the amount absorbed — the caller (the E_DAMAGE/
     // E_WEAPON_STRIKE arm) sums these into the cast-GO row so the gateway can relay the floating damage
     // number (with the absorbed/resisted breakdown).
-    (dmg, absorbed)
+    (damage.amount, absorbed)
 }
 
 /// Strip DEBUFFS off `target_guid` in the dispel category `category` — each aura whose

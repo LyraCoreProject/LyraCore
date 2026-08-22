@@ -2,18 +2,24 @@
 //! #370's shared damage pipeline). `kill_creature`/`kill_player` are the two chokepoints every lethal
 //! path funnels through so a melee kill, `debug_set_health(0)`, and a lethal DoT tick all produce an
 //! IDENTICAL corpse/release. `fold_incoming_damage` (the MODIFIER stage: outgoing % → incoming % →
-//! absorb → godmode) and `apply_hit` (the APPLICATION stage: rage + skill-ups, the lethal fork through
-//! the two kill chokepoints, the health write, break-on-damage, threat) are the pipeline every damage
-//! resolver in `swing.rs` and `spell::apply_target_damage` routes through — see the banner below.
+//! absorb → godmode), `final_damage` (the EventAI lethal floor), and `apply_hit` (the APPLICATION
+//! stage: rage + skill-ups, the lethal fork through the two kill chokepoints, the health write,
+//! break-on-damage, threat) are the pipeline every damage resolver in `swing.rs` and
+//! `spell::apply_target_damage` routes through. See the banner below.
 //! `mod.rs` re-exports this module (`pub use death::*`) so every `crate::combat::<sym>` path resolves
 //! regardless of which submodule actually defines it.
 
-use spacetimedb::{ReducerContext, Table, TimeDuration};
+use spacetimedb::{table, ReducerContext, Table, TimeDuration};
+
+#[cfg(feature = "debug_reducers")]
+use spacetimedb::ScheduleAt;
 
 use crate::{
     game_aura, game_creature_spawn, game_creature_spline, game_creature_template, game_threat,
     game_world_entity, WorldEntity,
 };
+#[cfg(feature = "debug_reducers")]
+use crate::{game_corpse_loot, game_spell_cast_event};
 
 // The corpse-lifecycle timers below are used by `kill_creature`'s decay-arm step; `RESPAWN_MICROS` has
 // no local reader (the flat-timer fallback lives in `creatures::tick`) but stays here beside
@@ -29,6 +35,452 @@ pub(crate) const CORPSE_DECAY_MICROS: i64 = 60_000_000; // a corpse lingers 60s 
 // real vanilla item id (6265, hand-seeded in `seed.rs` since the .import ETL doesn't reliably carry it).
 pub(crate) const DRAIN_SOUL_SPELL_ID: u32 = 1120;
 pub(crate) const SOUL_SHARD_ENTRY: u32 = 6265;
+
+/// A creature's EventAI-owned lethal floor. Row presence means enabled. It survives engagement and
+/// evade resets, then clears on definition replacement, death, despawn, or respawn. Enabling it
+/// again replaces the row and rearms the first-prevention notification.
+#[table(accessor = game_creature_lethal_damage_floor)]
+pub struct CreatureLethalDamageFloor {
+    #[primary_key]
+    #[unique]
+    pub creature_guid: u64,
+    pub definition_revision: u64,
+    pub notification_sent: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct FinalDamage {
+    pub amount: u32,
+    lethal_prevented: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CreatureDeathAttribution {
+    source_guid: Option<u64>,
+    reward_guid: Option<u64>,
+}
+
+impl CreatureDeathAttribution {
+    fn credited(killer_guid: Option<u64>) -> Self {
+        Self {
+            source_guid: killer_guid,
+            reward_guid: killer_guid,
+        }
+    }
+
+    fn suicide(creature_guid: u64) -> Self {
+        Self {
+            source_guid: Some(creature_guid),
+            reward_guid: None,
+        }
+    }
+}
+
+pub(crate) fn set_lethal_damage_floor(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    definition_revision: u64,
+    enabled: bool,
+) -> bool {
+    let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
+        return false;
+    };
+    if creature.is_player() || creature.dead {
+        return false;
+    }
+    let floors = ctx.db.game_creature_lethal_damage_floor();
+    if !enabled {
+        floors.creature_guid().delete(creature_guid);
+        return true;
+    }
+    let row = CreatureLethalDamageFloor {
+        creature_guid,
+        definition_revision,
+        notification_sent: false,
+    };
+    match floors.creature_guid().find(creature_guid) {
+        Some(_) => {
+            floors.creature_guid().update(row);
+        }
+        None => {
+            floors.insert(row);
+        }
+    }
+    true
+}
+
+pub(crate) fn clear_lethal_damage_floor(ctx: &ReducerContext, creature_guid: u64) {
+    ctx.db
+        .game_creature_lethal_damage_floor()
+        .creature_guid()
+        .delete(creature_guid);
+}
+
+pub(crate) fn clear_stale_lethal_damage_floor(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    current_revision: u64,
+) {
+    let floors = ctx.db.game_creature_lethal_damage_floor();
+    if floors
+        .creature_guid()
+        .find(creature_guid)
+        .is_some_and(|row| row.definition_revision != current_revision)
+    {
+        floors.creature_guid().delete(creature_guid);
+    }
+}
+
+pub(crate) fn force_creature_death(ctx: &ReducerContext, creature_guid: u64) -> bool {
+    kill_creature_with_attribution(
+        ctx,
+        creature_guid,
+        CreatureDeathAttribution::suicide(creature_guid),
+    )
+}
+
+pub(crate) fn final_damage(
+    ctx: &ReducerContext,
+    target_guid: u64,
+    post_mitigation: u32,
+) -> FinalDamage {
+    let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) else {
+        return FinalDamage {
+            amount: post_mitigation,
+            lethal_prevented: false,
+        };
+    };
+    let floors = ctx.db.game_creature_lethal_damage_floor();
+    let protected = !target.is_player()
+        && !target.dead
+        && floors.creature_guid().find(target_guid).is_some_and(|row| {
+            let current = crate::creatures::current_definition_revision(ctx, target_guid);
+            if row.definition_revision == current.value {
+                true
+            } else {
+                floors.creature_guid().delete(target_guid);
+                false
+            }
+        });
+    lethal_floor_amount(target.health, post_mitigation, protected)
+}
+
+fn lethal_floor_amount(health: u32, post_mitigation: u32, protected: bool) -> FinalDamage {
+    let lethal_prevented = protected && is_lethal(health, post_mitigation);
+    FinalDamage {
+        amount: if lethal_prevented {
+            health.saturating_sub(1)
+        } else {
+            post_mitigation
+        },
+        lethal_prevented,
+    }
+}
+
+fn commit_death_prevention(ctx: &ReducerContext, creature_guid: u64, attacker_guid: u64) {
+    let floors = ctx.db.game_creature_lethal_damage_floor();
+    let Some(mut row) = floors.creature_guid().find(creature_guid) else {
+        return;
+    };
+    if row.notification_sent {
+        return;
+    }
+    row.notification_sent = true;
+    floors.creature_guid().update(row);
+    crate::hooks::fire_on_death_prevented(
+        ctx,
+        &crate::hooks::DeathPreventedPayload {
+            creature_guid,
+            attacker_guid,
+        },
+    );
+}
+
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_stage_lethal_damage_floor_fixture(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+) -> Result<(), String> {
+    let entities = ctx.db.game_world_entity();
+    let mut creature = entities
+        .guid()
+        .find(creature_guid)
+        .ok_or_else(|| format!("fixture creature does not exist: {creature_guid}"))?;
+    if creature.is_player() || creature.dead {
+        return Err("fixture target must be a live creature".to_string());
+    }
+    creature.health = 10;
+    creature.stance = 1;
+    entities.guid().update(creature);
+    let definition_revision = crate::creatures::current_definition_revision(ctx, creature_guid);
+    if definition_revision.value == 0
+        || !set_lethal_damage_floor(ctx, creature_guid, definition_revision.value, true)
+    {
+        return Err("could not enable the fixture lethal floor".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_set_lethal_damage_floor_fixture(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    enabled: bool,
+) -> Result<(), String> {
+    let revision = crate::creatures::current_definition_revision(ctx, creature_guid);
+    set_lethal_damage_floor(ctx, creature_guid, revision.value, enabled)
+        .then_some(())
+        .ok_or_else(|| "could not update the fixture lethal floor".to_string())
+}
+
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_replace_definition_then_apply_damage_floor_fixture(
+    ctx: &ReducerContext,
+    attacker_guid: u64,
+    target_guid: u64,
+    packed_definition: String,
+    rolled: u32,
+) -> Result<(), String> {
+    crate::creatures::replace_definition_for_debug(ctx, &packed_definition)?;
+    debug_apply_lethal_damage_floor_fixture(ctx, attacker_guid, target_guid, rolled)
+}
+
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_stage_ranged_lethal_damage_floor_fixture(
+    ctx: &ReducerContext,
+    attacker_guid: u64,
+    target_guid: u64,
+    damage: u32,
+    delay_ms: u32,
+) -> Result<(), String> {
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(attacker_guid)
+        .ok_or_else(|| "fixture ranged attacker does not exist".to_string())?;
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(target_guid)
+        .ok_or_else(|| "fixture ranged target does not exist".to_string())?;
+    let land_at = ctx
+        .timestamp
+        .checked_add(TimeDuration::from_micros(i64::from(delay_ms) * 1_000))
+        .unwrap_or(ctx.timestamp);
+    ctx.db
+        .game_ranged_impact_schedule()
+        .insert(crate::RangedImpactSchedule {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Time(land_at),
+            attacker_guid,
+            target_guid,
+            damage,
+            ranged_spell_id: 75,
+            is_crit: false,
+        });
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_set_lethal_damage_floor_health_fixture(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    health: u32,
+) -> Result<(), String> {
+    let entities = ctx.db.game_world_entity();
+    let mut creature = entities
+        .guid()
+        .find(creature_guid)
+        .ok_or_else(|| "fixture creature does not exist".to_string())?;
+    if creature.dead || health == 0 || health > creature.max_health {
+        return Err("fixture health must keep the creature alive".to_string());
+    }
+    creature.health = health;
+    entities.guid().update(creature);
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_verify_ranged_lethal_damage_floor_fixture(
+    ctx: &ReducerContext,
+    attacker_guid: u64,
+    creature_guid: u64,
+    expected_health: u32,
+    expected_damage_log: u32,
+) -> Result<(), String> {
+    let creature = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(creature_guid)
+        .ok_or_else(|| "fixture ranged target is absent".to_string())?;
+    if creature.health != expected_health {
+        return Err(format!(
+            "fixture ranged health mismatch: actual={} expected={expected_health}",
+            creature.health
+        ));
+    }
+    let damage = ctx
+        .db
+        .game_spell_cast_event()
+        .iter()
+        .filter(|event| {
+            event.caster_guid == attacker_guid
+                && event.target_guid == creature_guid
+                && event.spell_id == 75
+                && event.is_proc_log
+        })
+        .map(|event| event.damage)
+        .max()
+        .unwrap_or(0);
+    if damage != expected_damage_log {
+        return Err(format!(
+            "fixture ranged damage log mismatch: actual={damage} expected={expected_damage_log}"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_apply_lethal_damage_floor_fixture(
+    ctx: &ReducerContext,
+    attacker_guid: u64,
+    target_guid: u64,
+    rolled: u32,
+) -> Result<(), String> {
+    let target = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(target_guid)
+        .ok_or_else(|| format!("fixture target does not exist: {target_guid}"))?;
+    if target.dead {
+        return Err("fixture target is dead".to_string());
+    }
+    let (post_mitigation, _) = fold_incoming_damage(ctx, attacker_guid, target_guid, rolled);
+    let damage = final_damage(ctx, target_guid, post_mitigation);
+    apply_hit(
+        ctx,
+        attacker_guid,
+        target_guid,
+        damage,
+        Hit::weapon(HitSource::MainHand, false),
+    );
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_force_lethal_damage_floor_fixture(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+) -> Result<(), String> {
+    force_creature_death(ctx, creature_guid)
+        .then_some(())
+        .ok_or_else(|| "fixture ForceDeath did not kill a live creature".to_string())
+}
+
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_respawn_lethal_damage_floor_fixture(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+) -> Result<(), String> {
+    let entities = ctx.db.game_world_entity();
+    if !entities.guid().delete(creature_guid) {
+        return Err("fixture creature does not exist".to_string());
+    }
+    let spawns = ctx.db.game_creature_spawn();
+    let mut spawn = spawns
+        .guid()
+        .find(creature_guid)
+        .ok_or_else(|| "fixture creature has no spawn".to_string())?;
+    spawn.respawn_at = ctx.timestamp;
+    spawns.guid().update(spawn);
+    crate::creatures::tick::pass_respawn(ctx);
+    entities
+        .guid()
+        .find(creature_guid)
+        .filter(|creature| !creature.dead)
+        .map(|_| ())
+        .ok_or_else(|| "fixture creature did not respawn".to_string())
+}
+
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+#[allow(clippy::too_many_arguments)]
+pub fn debug_verify_lethal_damage_floor_fixture(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    expected_health: u32,
+    expected_dead: bool,
+    expected_floor: bool,
+    expected_notification: bool,
+    expected_absorb: i32,
+) -> Result<(), String> {
+    let creature = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(creature_guid)
+        .ok_or_else(|| "fixture creature is absent".to_string())?;
+    if expected_health != u32::MAX && creature.health != expected_health {
+        return Err(format!(
+            "fixture health mismatch: actual={} expected={expected_health}",
+            creature.health
+        ));
+    }
+    if creature.dead != expected_dead {
+        return Err(format!(
+            "fixture death mismatch: actual={} expected={expected_dead}",
+            creature.dead
+        ));
+    }
+    if !expected_dead
+        && ctx
+            .db
+            .game_corpse_loot()
+            .by_corpse()
+            .filter(&creature_guid)
+            .next()
+            .is_some()
+    {
+        return Err("a surviving fixture creature received corpse loot".to_string());
+    }
+    let floor = ctx
+        .db
+        .game_creature_lethal_damage_floor()
+        .creature_guid()
+        .find(creature_guid);
+    if floor.is_some() != expected_floor
+        || floor
+            .as_ref()
+            .is_some_and(|row| row.notification_sent != expected_notification)
+    {
+        return Err("fixture lethal-floor state mismatch".to_string());
+    }
+    let absorb = ctx
+        .db
+        .game_aura()
+        .by_target()
+        .filter(&creature_guid)
+        .filter(|aura| aura.eff_kind == crate::spell::A_ABSORB)
+        .map(|aura| aura.amount_remaining)
+        .sum::<i32>();
+    if absorb != expected_absorb {
+        return Err(format!(
+            "fixture absorb mismatch: actual={absorb} expected={expected_absorb}"
+        ));
+    }
+    Ok(())
+}
 
 // Tables' pure formulas/consts and the sibling submodules' re-exports (`roll_money`, `is_engaged`, ...)
 // are all pulled in from `mod.rs` (`pub use tables::*` + `pub use folds::*`/`engage::*`/`swing::*`) so
@@ -46,6 +498,16 @@ use super::*;
 /// (no-op) for a missing guid, a player, or an already-dead unit. `killer = None` = no XP credit
 /// (a DoT with no attacker, a debug kill). [entity]
 pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Option<u64>) -> bool {
+    kill_creature_with_attribution(ctx, target_guid, CreatureDeathAttribution::credited(killer))
+}
+
+fn kill_creature_with_attribution(
+    ctx: &ReducerContext,
+    target_guid: u64,
+    attribution: CreatureDeathAttribution,
+) -> bool {
+    let killer = attribution.source_guid;
+    let reward_killer = attribution.reward_guid;
     let entities = ctx.db.game_world_entity();
     let Some(mut target) = entities.guid().find(target_guid) else {
         return false;
@@ -53,6 +515,7 @@ pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Opti
     if target.is_player() || target.dead {
         return false; // creatures only, and never re-kill a corpse
     }
+    clear_lethal_damage_floor(ctx, target_guid);
     // A PET death (owner_guid != 0) is a CLEAN DESPAWN: no XP/loot/corpse/decay. A pet has NO
     // game_creature_spawn row, so the decay pass can never reap a dead pet — without this it would linger as
     // a stale, lootable corpse until the owner re-summons/logs out/dies. Delete it + free its engagements;
@@ -90,12 +553,18 @@ pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Opti
     // eligibility must never drift between the two.
     // XP + quest-credit + Drain-Soul-shard rewards for the killer (and its group) — extracted so the
     // death sequence below reads as a table of contents; see `award_killer_rewards` (issue #382).
-    let kill_recipients = killer
+    let kill_recipients = reward_killer
         .map(|killer_guid| award_killer_rewards(ctx, &target, target_guid, killer_guid))
         .unwrap_or_default();
     // Money + item loot onto the corpse, group-loot stamping, and the LOOTABLE flag — see
     // `roll_corpse_loot` (issue #382).
-    roll_corpse_loot(ctx, &mut target, target_guid, killer, &kill_recipients);
+    roll_corpse_loot(
+        ctx,
+        &mut target,
+        target_guid,
+        reward_killer,
+        &kill_recipients,
+    );
     target.health = 0;
     target.dead = true;
     // #519: a creature killed mid-leg (flee/patrol/chase) still carries an in-flight
@@ -193,9 +662,9 @@ pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Opti
             }
         }
     }
-    // Notify-hooks, fired LAST so handlers observe the fully-committed death: on_death for the victim
-    // (every creature-death path funnels through this fn), and on_kill when a player got credit
-    // (killer-centric, one per credited kill).
+    // Notify-hooks fire last so handlers observe the fully committed death: on_death for the victim
+    // (every creature-death path funnels through this function), and on_kill when the death has a
+    // known source. Reward ownership remains independent of this source identity.
     crate::hooks::fire_on_death(
         ctx,
         &crate::hooks::DeathPayload {
@@ -430,16 +899,17 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
 //  near-verbatim copies — the main-hand swing, the off-hand swing, the ranged projectile impact, and
 //  `spell::apply_target_damage`. They drifted twice (issue #361: the off-hand ignored Disarm, the
 //  ranged impact ignored godmode), which is what a copy of a pipeline always eventually does. The
-//  pipeline now lives here, exactly once, in two stages:
+//  pipeline now lives here, exactly once, in three stages:
 //
 //    1. `fold_incoming_damage` — the MODIFIER stage: outgoing % → incoming % → absorb → godmode.
 //       Every caller that rolls a fresh number runs it; the ranged IMPACT skips it because its
 //       damage was already folded (and frozen) at launch, and applies only the godmode re-check.
-//    2. `apply_hit` — the APPLICATION stage: rage + skill-ups, the lethal fork through the shared
+//    2. `final_damage`: the EventAI lethal floor, after every modifier and before any damage effect.
+//    3. `apply_hit`: the APPLICATION stage: rage + skill-ups, the lethal fork through the shared
 //       `kill_player`/`kill_creature` chokepoints, the health write, break-on-damage, and threat.
 //
-//  Between the two stages each caller writes its OWN wire event (a white swing event, a yellow spell
-//  log, a projectile launch), which is why they are two functions and not one.
+//  Each caller writes its own wire event between the folds and application, so the stages remain
+//  separate operations.
 // ===========================================================================================
 
 /// Where a hit came from. [`HitSource::is_weapon`] is the ONE axis [`apply_hit`] branches on, so
@@ -591,10 +1061,8 @@ pub(crate) fn fold_incoming_damage(
     (dealt, incoming - dealt)
 }
 
-/// Stage 2 of the shared pipeline — **the one chokepoint every damaging hit in this module routes
-/// through**. Applies `dmg` (already post-mitigation: run it through [`fold_incoming_damage`] first,
-/// unless it was frozen earlier like a ranged projectile's) to `target_guid`, credited to
-/// `attacker_guid`, and returns what it did.
+/// Stage 3 of the shared pipeline. Applies the [`FinalDamage`] produced after
+/// [`fold_incoming_damage`] to `target_guid`, credited to `attacker_guid`, and returns what it did.
 ///
 /// In order:
 ///  1. **Attacker gains** (weapon hits only) — rage for dealing damage, and a weapon skill-up when a
@@ -624,7 +1092,7 @@ pub(crate) fn apply_hit(
     ctx: &ReducerContext,
     attacker_guid: u64,
     target_guid: u64,
-    dmg: u32,
+    damage: FinalDamage,
     hit: Hit,
 ) -> HitOutcome {
     let miss = HitOutcome {
@@ -635,9 +1103,10 @@ pub(crate) fn apply_hit(
     let Some(mut target) = entities.guid().find(target_guid) else {
         return miss; // the target left the world between the roll and here
     };
-    if dmg == 0 || target.dead {
+    if target.dead || (damage.amount == 0 && !damage.lethal_prevented) {
         return miss;
     }
+    let dmg = damage.amount;
     let weapon = hit.source.is_weapon();
     // Read the attacker ONCE, fresh: a caller's in-hand snapshot may predate its own writes this tick
     // (the queued-strike rage deduction, an earlier engagement's swing), and the spell path may have
@@ -652,6 +1121,10 @@ pub(crate) fn apply_hit(
     let attacker_is_player = attacker.as_ref().map(|a| a.is_player()).unwrap_or(false);
     let attacker_owner = attacker.as_ref().map(|a| a.owner_guid).unwrap_or(0);
     let target_is_player = target.is_player();
+    if damage.lethal_prevented && dmg == 0 {
+        commit_death_prevention(ctx, target_guid, attacker_guid);
+        return miss;
+    }
 
     // 1. Attacker-side gains, before the fork (rage lands on the killing blow too).
     if weapon {
@@ -737,6 +1210,9 @@ pub(crate) fn apply_hit(
         target.power = (target.power + rage_from_damage(dmg, false)).min(target.max_power);
     }
     entities.guid().update(target);
+    if damage.lethal_prevented {
+        commit_death_prevention(ctx, target_guid, attacker_guid);
+    }
     // Damage kept the fight alive: restart the pursuit deadline and re-remember where the creature
     // stands. Both guids go in, so a creature hitting the player refreshes the leash just like the
     // player hitting it. The lethal branch above already returned — a dead pair has no engagement left.
@@ -784,7 +1260,7 @@ pub(crate) fn apply_hit(
 
 #[cfg(test)]
 mod lethality_tests {
-    use super::{is_lethal, HitOutcome};
+    use super::{is_lethal, lethal_floor_amount, CreatureDeathAttribution, HitOutcome};
 
     // The one shared lethality predicate: the melee swing needs it up front for its wire event's
     // `killing_blow` flag and `apply_hit` needs it again for the fork, so they must not be two
@@ -802,6 +1278,35 @@ mod lethality_tests {
         assert!(is_lethal(10, 10)); // exactly lethal
         assert!(is_lethal(10, 11)); // overkill
         assert!(!is_lethal(10, 9)); // one short — the target survives at 1 hp
+    }
+
+    #[test]
+    fn lethal_floor_changes_only_protected_lethal_damage() {
+        assert_eq!(lethal_floor_amount(10, 4, true).amount, 4);
+        assert_eq!(lethal_floor_amount(10, 10, false).amount, 10);
+        assert_eq!(lethal_floor_amount(10, 10, true).amount, 9);
+        assert_eq!(lethal_floor_amount(1, 20, true).amount, 0);
+    }
+
+    #[test]
+    fn forced_death_names_self_without_granting_kill_rewards() {
+        let attribution = CreatureDeathAttribution::suicide(77);
+        assert_eq!(attribution.source_guid, Some(77));
+        assert_eq!(attribution.reward_guid, None);
+
+        let force = crate::test_scan::code_of(
+            include_str!("death.rs"),
+            "pub(crate) fn force_creature_death(",
+        );
+        assert!(force.contains("CreatureDeathAttribution::suicide(creature_guid)"));
+        let death = crate::test_scan::code_of(
+            include_str!("death.rs"),
+            "fn kill_creature_with_attribution(",
+        );
+        assert!(death.contains("let killer = attribution.source_guid"));
+        assert!(death.contains("let reward_killer = attribution.reward_guid"));
+        assert!(death.contains("let kill_recipients = reward_killer"));
+        assert!(death.contains("killer_guid: killer.unwrap_or(0)"));
     }
 
     #[test]
@@ -834,7 +1339,7 @@ mod lethality_tests {
     #[test]
     fn death_hooks_run_before_engagement_reset_on_player_and_pet_death() {
         let src = include_str!("death.rs");
-        let creature = crate::test_scan::code_of(src, "pub(crate) fn kill_creature(");
+        let creature = crate::test_scan::code_of(src, "fn kill_creature_with_attribution(");
         let pet_end = creature
             .find("let victim_entry = target.entry")
             .expect("pet death stays before ordinary creature death");
@@ -862,8 +1367,10 @@ mod lethality_tests {
 
     #[test]
     fn creature_death_carries_the_selected_opponent_across_disengage() {
-        let body =
-            crate::test_scan::code_of(include_str!("death.rs"), "pub(crate) fn kill_creature(");
+        let body = crate::test_scan::code_of(
+            include_str!("death.rs"),
+            "fn kill_creature_with_attribution(",
+        );
         assert_in_order(
             &body,
             [
@@ -902,12 +1409,11 @@ mod corpse_residue_tripwire {
     #[test]
     fn kill_creature_purges_corpse_residue_before_rolling_fresh_loot() {
         let src = include_str!("death.rs");
-        let kill_creature_body = code_of(
-            src,
-            "pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Option<u64>) -> bool {",
-        );
+        let kill_creature_body = code_of(src, "fn kill_creature_with_attribution(");
         assert!(
-            kill_creature_body.contains("roll_corpse_loot(ctx, &mut target, target_guid, killer, &kill_recipients)"),
+            kill_creature_body.contains("roll_corpse_loot(")
+                && kill_creature_body.contains("reward_killer,")
+                && kill_creature_body.contains("&kill_recipients,"),
             "`kill_creature` no longer routes the kill through `roll_corpse_loot` — the purge-before-\
              fresh-roll ordering below is dead code if this call is gone. Body was:\n{kill_creature_body}"
         );

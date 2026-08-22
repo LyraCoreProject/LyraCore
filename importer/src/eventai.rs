@@ -41,6 +41,8 @@ const EVENT_RECEIVE_AI_EVENT: u32 = 30;
 const EVENT_SELECT_ATTACKING: u32 = 32;
 const EVENT_FACING: u32 = 33;
 const EVENT_SPELL_HIT_TARGET: u32 = 34;
+#[cfg(test)]
+const EVENT_DEATH_PREVENTED: u32 = 35;
 const EVENT_TARGET_NOT_REACHABLE: u32 = 36;
 
 const ACTION_TEXT: u32 = 1;
@@ -64,7 +66,9 @@ const ACTION_RANDOM_PHASE_RANGE: u32 = 31;
 const ACTION_SUMMON_ID: u32 = 32;
 const ACTION_KILLED_MONSTER: u32 = 33;
 const ACTION_SET_INSTANCE_DATA_GUID: u32 = 35;
+const ACTION_DIE: u32 = 37;
 const ACTION_CALL_FOR_HELP: u32 = 39;
+const ACTION_SET_DEATH_PREVENTION: u32 = 42;
 const ACTION_THROW_AI_EVENT: u32 = 45;
 const ACTION_START_RELAY: u32 = 53;
 const ACTION_ATTACK_START: u32 = 55;
@@ -239,6 +243,7 @@ struct ApprovalRules {
     events: BTreeSet<u64>,
     actions: BTreeSet<u64>,
     targets: BTreeSet<u64>,
+    death_prevention_states: BTreeSet<u64>,
     event_flag_bits: u32,
     cast_flag_bits: u32,
     dependencies: BTreeSet<String>,
@@ -383,6 +388,7 @@ pub(crate) fn source_profile(name: &str) -> Result<SourceProfile, String> {
             events: numbers("events")?,
             actions: numbers("actions")?,
             targets: numbers("targets")?,
+            death_prevention_states: numbers("death_prevention_states")?,
             event_flag_bits: bit_mask("event_flag_bits")?,
             cast_flag_bits: bit_mask("cast_flag_bits")?,
             dependencies: strings("dependencies")?,
@@ -621,6 +627,18 @@ impl SourceProfile {
                 "EventAI target census count mismatch: actions={target_count} targets={observed_target_count}"
             ));
         }
+        if let Some(states) = self.expected_source_census.get("death_prevention_states") {
+            let actions = actions
+                .get(&u64::from(ACTION_SET_DEATH_PREVENTION))
+                .copied()
+                .unwrap_or(0);
+            let state_count = states.values().sum::<u64>();
+            if actions != state_count {
+                return Err(format!(
+                    "EventAI death-prevention census count mismatch: actions={actions} states={state_count}"
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -668,6 +686,10 @@ impl SourceProfile {
                 .raw_value
                 .parse()
                 .is_ok_and(|value| self.approvals.targets.contains(&value)),
+            "death_prevention_state" => key
+                .raw_value
+                .parse()
+                .is_ok_and(|value| self.approvals.death_prevention_states.contains(&value)),
             "event_flag" => mask_has_no_residual(&key.raw_value, self.approvals.event_flag_bits),
             "cast_flag" => mask_has_no_residual(&key.raw_value, self.approvals.cast_flag_bits),
             "dependency" => self.approvals.dependencies.contains(&key.raw_value),
@@ -724,6 +746,7 @@ struct Coverage {
     source_target: BTreeMap<u64, u64>,
     flags: BTreeMap<u64, u64>,
     cast_flags: BTreeMap<u64, u64>,
+    death_prevention_states: BTreeMap<u64, u64>,
     dropped: BTreeMap<String, u64>,
     dropped_values: BTreeMap<(String, u64), u64>,
     dropped_rule_values: BTreeMap<(String, u64), BTreeSet<u64>>,
@@ -832,6 +855,7 @@ impl Coverage {
             "targets" => self.source_target.clone(),
             "event_flags" => self.flags.clone(),
             "cast_flags" => self.cast_flags.clone(),
+            "death_prevention_states" => self.death_prevention_states.clone(),
             _ => BTreeMap::new(),
         }
     }
@@ -843,6 +867,7 @@ impl Coverage {
             "targets": self.source_target,
             "event_flags": self.flags,
             "cast_flags": self.cast_flags,
+            "death_prevention_states": self.death_prevention_states,
         })
     }
 
@@ -1379,6 +1404,21 @@ impl EventAiSource {
                     rule.id,
                     None,
                 );
+                if action.raw_kind == ACTION_SET_DEATH_PREVENTION {
+                    let state = match action.encoded.as_str() {
+                        "lethal-floor:off" => 0,
+                        "lethal-floor:on" => 1,
+                        _ => unreachable!("the native death-prevention encoding is exhaustive"),
+                    };
+                    plan.coverage.result(
+                        "death_prevention_state",
+                        state,
+                        classification,
+                        reason,
+                        rule.id,
+                        None,
+                    );
+                }
                 if let Some(target) = action.raw_target {
                     Coverage::source_value(&mut plan.coverage.target, target as u64);
                     plan.coverage
@@ -1569,6 +1609,16 @@ fn record_rule_dimensions(
                 None,
             );
         }
+        if action[0] == ACTION_SET_DEATH_PREVENTION {
+            coverage.result(
+                "death_prevention_state",
+                action[1],
+                classification,
+                reason,
+                rule.id,
+                None,
+            );
+        }
     }
 }
 
@@ -1712,6 +1762,9 @@ fn parse_rules(dump: &str, coverage: &mut Coverage) -> Vec<RawRule> {
                 }
                 if kind == ACTION_CAST {
                     Coverage::source_value(&mut coverage.cast_flags, action[3] as u64);
+                }
+                if kind == ACTION_SET_DEATH_PREVENTION {
+                    Coverage::source_value(&mut coverage.death_prevention_states, action[1] as u64);
                 }
             }
             Some(RawRule {
@@ -2458,6 +2511,40 @@ fn map_action(
                 normalizations: Vec::new(),
             })
         }
+        ACTION_DIE if action[1..] == [0, 0, 0] => Ok(NativeAction {
+            encoded: "force-death".to_string(),
+            raw_kind: kind,
+            raw_target: None,
+            raw_cast_flags: None,
+            dependencies: Vec::new(),
+            texts: Vec::new(),
+            summon_entry: None,
+            summon_location: None,
+            normalizations: Vec::new(),
+        }),
+        ACTION_SET_DEATH_PREVENTION if action[1] <= 1 && action[2..] == [0, 0] => {
+            Ok(NativeAction {
+                encoded: format!("lethal-floor:{}", if action[1] == 0 { "off" } else { "on" }),
+                raw_kind: kind,
+                raw_target: None,
+                raw_cast_flags: None,
+                dependencies: Vec::new(),
+                texts: Vec::new(),
+                summon_entry: None,
+                summon_location: None,
+                normalizations: Vec::new(),
+            })
+        }
+        ACTION_DIE => Err(vec![MappingFailure::source(
+            "action",
+            ACTION_DIE as u64,
+            "invalid_force_death_parameters",
+        )]),
+        ACTION_SET_DEATH_PREVENTION => Err(vec![MappingFailure::source(
+            "death_prevention_state",
+            u64::from(action[1]),
+            "invalid_death_prevention_state",
+        )]),
         ACTION_SET_PHASE
         | ACTION_INCREMENT_PHASE
         | ACTION_RANDOM_PHASE
@@ -2866,6 +2953,67 @@ mod tests {
         for posture in ["any-posture", "ranged-only", "melee-only"] {
             assert!(definition.contains(posture), "{definition}");
         }
+    }
+
+    #[test]
+    fn death_actions_emit_named_combat_requests_and_refuse_unknown_state() {
+        let source = parse(&dump(&[
+            rule(
+                10,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [
+                    [ACTION_SET_DEATH_PREVENTION as i64, 1, 0, 0],
+                    [ACTION_SET_DEATH_PREVENTION as i64, 0, 0, 0],
+                    [ACTION_DIE as i64, 0, 0, 0],
+                ],
+            ),
+            rule(
+                11,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [
+                    [ACTION_SET_DEATH_PREVENTION as i64, 2, 0, 0],
+                    [0; 4],
+                    [0; 4],
+                ],
+            ),
+        ]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+
+        assert!(plan.definition_rows[0].ends_with("lethal-floor:on+lethal-floor:off+force-death"));
+        assert_eq!(plan.dropped("invalid_death_prevention_state", 2), 1);
+        let manifest =
+            plan.compatibility_manifest(&fixture_profile(&plan), "fixture", LOADER_CONTRACT);
+        let rendered: serde_json::Value = serde_json::from_str(manifest.render()).unwrap();
+        assert_result(
+            &rendered,
+            "death_prevention_state",
+            "0",
+            "emitted",
+            "emitted",
+        );
+        assert_result(
+            &rendered,
+            "death_prevention_state",
+            "1",
+            "emitted",
+            "emitted",
+        );
+        assert_result(
+            &rendered,
+            "death_prevention_state",
+            "2",
+            "dropped",
+            "invalid_death_prevention_state",
+        );
     }
 
     #[test]
@@ -3356,6 +3504,33 @@ mod tests {
         assert_eq!(source.coverage.template_schedule_overlaps, 2_108);
         assert_eq!(source.coverage.creature_spell_list_overlaps, 38);
         assert_eq!(source.coverage.cast_action_subjects, 3_556);
+        let death_prevention_states = source
+            .rules
+            .iter()
+            .flat_map(|rule| rule.actions)
+            .filter(|action| action[0] == ACTION_SET_DEATH_PREVENTION)
+            .fold(BTreeMap::new(), |mut counts, action| {
+                *counts.entry(action[1]).or_insert(0) += 1;
+                counts
+            });
+        assert_eq!(death_prevention_states, BTreeMap::from([(0, 9), (1, 21)]));
+        assert_eq!(
+            source
+                .rules
+                .iter()
+                .flat_map(|rule| rule.actions)
+                .filter(|action| action[0] == ACTION_DIE)
+                .count(),
+            11
+        );
+        assert_eq!(
+            source
+                .rules
+                .iter()
+                .filter(|rule| rule.event == EVENT_DEATH_PREVENTED)
+                .count(),
+            0
+        );
         let profile = source_profile(SOURCE_PROFILE_NAME).unwrap();
         for (dimension, expected) in profile.expected_source_census {
             assert_eq!(

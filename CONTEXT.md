@@ -268,6 +268,15 @@ The bounded record of a failed Invocation: the Runtime Script, the event, the fa
 (syntax, runtime or fuel), and a truncated message. The only thing a failed Invocation produces.
 _Avoid_: error log, stack trace
 
+**Lethal Damage Floor**:
+Combat-owned protection that reduces a creature's final lethal damage so it remains at one health.
+It is applied after mitigation and absorbs, persists across Engagements, and is cleared by its
+definition revision or creature lifetime.
+
+**Forced Death**:
+An authored request that bypasses the Lethal Damage Floor and enters the canonical creature-death
+operation.
+
 ### Auctions
 
 **Settlement**:

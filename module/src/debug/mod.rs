@@ -58,12 +58,11 @@ use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration}
 
 use crate::{
     build_creature_entity, game_aura, game_character, game_config, game_creature_move_schedule,
-    game_creature_spawn, game_creature_template, game_gameobject, game_gameobject_pool,
-    game_gameobject_pool_member, game_gameobject_template, game_gameobject_unlocked,
-    game_creature_spline, game_entity_motion, game_ground_area, game_item_instance,
-    game_item_template, game_melee_attack,
-    game_quest_template, game_spell, game_spell_effect, game_world_entity, CreatureMoveSchedule,
-    CreatureSpawn, GroundArea, ItemInstance, ServerConfig,
+    game_creature_spawn, game_creature_spline, game_creature_template, game_entity_motion,
+    game_gameobject, game_gameobject_pool, game_gameobject_pool_member, game_gameobject_template,
+    game_gameobject_unlocked, game_ground_area, game_item_instance, game_item_template,
+    game_melee_attack, game_quest_template, game_spell, game_spell_effect, game_world_entity,
+    CreatureMoveSchedule, CreatureSpawn, GroundArea, ItemInstance, ServerConfig,
 };
 
 /// Teleport `character_guid` to `(map_id, x, y, z, o)` via the shared `world::teleport_player` core: it
@@ -94,9 +93,9 @@ pub fn debug_teleport(
 }
 
 /// Deal `amount` DIRECT damage to a live entity through the REAL shared damage pipeline — the same
-/// `fold_incoming_damage` → `apply_hit` every swing and spell routes through, as a MAIN-HAND hit. So a
-/// debug poke drives everything a real melee swing drives: the attacker's rage and weapon skill-up,
-/// absorb, the defender's rage and defense skill-up, break-on-damage, cast pushback, threat,
+/// `fold_incoming_damage` → `final_damage` → `apply_hit` every swing and spell routes through, as a
+/// MAIN-HAND hit. So a debug poke drives everything a real melee swing drives: the attacker's rage
+/// and weapon skill-up, absorb, the defender's rage and defense skill-up, break-on-damage, cast pushback, threat,
 /// Retaliation and the proc pass. That last one is why it routes here rather than writing health: a
 /// scripted 100-hit run against a Proc finishes in seconds instead of waiting on swing timers.
 /// Unlike `debug_set_health` (a raw field write, NO side effects), this behaves like being hit. Never
@@ -126,11 +125,12 @@ pub fn debug_apply_damage(
     let capped = amount.min(e.health.saturating_sub(1));
     let (dmg, _absorbed) =
         crate::combat::fold_incoming_damage(ctx, attacker_guid, target_guid, capped);
+    let damage = crate::combat::final_damage(ctx, target_guid, dmg);
     crate::combat::apply_hit(
         ctx,
         attacker_guid,
         target_guid,
-        dmg,
+        damage,
         crate::combat::Hit::weapon(crate::combat::HitSource::MainHand, false),
     );
     Ok(())

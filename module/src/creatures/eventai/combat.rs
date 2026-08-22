@@ -562,6 +562,13 @@ pub(crate) fn authored_combat(ctx: &ReducerContext, creature_guid: u64) -> Autho
     authored
 }
 
+pub(crate) fn current_definition_revision(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+) -> DefinitionRevision {
+    definition_for(ctx, creature_guid).revision
+}
+
 pub(super) fn definition_for(ctx: &ReducerContext, creature_guid: u64) -> EventAiDefinition {
     let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
         return EventAiDefinition::empty(creature_guid);

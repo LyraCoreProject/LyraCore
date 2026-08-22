@@ -108,6 +108,13 @@ pub(crate) trait EventAiWorld {
     );
     /// The fresh summon joins the fight against `target_guid`.
     fn eventai_engage_summon(&mut self, summon_guid: u64, target_guid: u64);
+    fn eventai_set_lethal_damage_floor(
+        &mut self,
+        creature_guid: u64,
+        revision: DefinitionRevision,
+        enabled: bool,
+    ) -> bool;
+    fn eventai_force_death(&mut self, creature_guid: u64) -> bool;
 }
 
 pub(crate) fn evaluate<W: EventAiWorld>(world: &mut W, request: EventAiRequest<'_>) -> u64 {
@@ -379,6 +386,9 @@ fn execute_instruction<W: EventAiWorld>(
         CreatureInstruction::Summon(_) | CreatureInstruction::SetRangedPosture(_) => {
             super::mobility::execute(world, context, instruction, linked_choice)
         }
+        CreatureInstruction::SetLethalDamageFloor(_) | CreatureInstruction::ForceDeath => {
+            super::death::execute(world, context, instruction)
+        }
     }
 }
 
@@ -587,7 +597,9 @@ fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
                 | CreatureInstruction::CallForHelp(_)
                 | CreatureInstruction::SetPhase(_)
                 | CreatureInstruction::IncrementPhase(_)
-                | CreatureInstruction::SetRangedPosture(_) => false,
+                | CreatureInstruction::SetRangedPosture(_)
+                | CreatureInstruction::SetLethalDamageFloor(_)
+                | CreatureInstruction::ForceDeath => false,
             })
 }
 
@@ -974,6 +986,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
         creature_guid: u64,
         revision: DefinitionRevision,
     ) -> CreatureState {
+        crate::combat::clear_stale_lethal_damage_floor(self.ctx, creature_guid, revision.value);
         let rule_state = self.ctx.db.game_creature_ai_rule_state();
         for row in rule_state
             .by_creature()
@@ -1188,5 +1201,18 @@ impl EventAiWorld for DatabaseWorld<'_> {
 
     fn eventai_engage_summon(&mut self, summon_guid: u64, target_guid: u64) {
         super::mobility::engage_summon(self.ctx, summon_guid, target_guid)
+    }
+
+    fn eventai_set_lethal_damage_floor(
+        &mut self,
+        creature_guid: u64,
+        revision: DefinitionRevision,
+        enabled: bool,
+    ) -> bool {
+        crate::combat::set_lethal_damage_floor(self.ctx, creature_guid, revision.value, enabled)
+    }
+
+    fn eventai_force_death(&mut self, creature_guid: u64) -> bool {
+        crate::combat::force_creature_death(self.ctx, creature_guid)
     }
 }

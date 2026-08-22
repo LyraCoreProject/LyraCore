@@ -12,11 +12,12 @@
 //! | event               | fires from                                             | payload |
 //! |---------------------|--------------------------------------------------------|---------|
 //! | `on_damage_taken`   | `spell::break_auras_on_damage` — the single helper every real-damage path (melee swing, direct spell, DoT tick) already calls | [`DamageTakenPayload`] |
+//! | `on_death_prevented` | combat's shared damage path, once after a protected creature survives its first lethal hit | [`DeathPreventedPayload`] |
 //! | `on_creature_spawn` | `creatures::insert_creature_entity` — the single wrapper every creature-entity insert routes through (seed, respawn, debug spawn, pet summon, tame) | [`CreatureSpawnPayload`] |
 //! | `on_levelup`        | `xp::grant_xp`'s ding loop, once per level gained      | [`LevelupPayload`] |
 //! | `on_group_invite`   | `group::group_invite`, after the invite row + event are written | [`GroupInvitePayload`] |
 //! | `on_death`          | `combat::kill_creature` (creature corpse AND pet despawn), plus each player-death site (melee tick, spell damage, `debug_set_health(0)`) | [`DeathPayload`] |
-//! | `on_kill`           | `combat::kill_creature` when a player `killer` gets credit | [`KillPayload`] |
+//! | `on_kill`           | `combat::kill_creature` when the death has a known source | [`KillPayload`] |
 //! | `on_aggro`          | `combat::arm_creature_engagement`, after a creature's first outgoing engagement is armed | [`AggroPayload`] |
 //! | `on_cast_resolved`  | `spell::resolve_cast_at` success exit — every cast path funnels through it | [`CastResolvedPayload`] |
 //! | `on_loot`           | `items::apply_take_loot` success — player + debug loot both route here | [`LootPayload`] |
@@ -44,6 +45,14 @@ pub struct DamageTakenPayload {
     pub target_guid: u64,
     pub attacker_guid: u64,
     pub periodic: bool,
+}
+
+/// A creature's lethal floor prevented its first death since protection was enabled. Fired after
+/// the surviving health value and the notification latch are durable. Later protected hits remain
+/// quiet until the floor is enabled again.
+pub struct DeathPreventedPayload {
+    pub creature_guid: u64,
+    pub attacker_guid: u64,
 }
 
 /// A creature `game_world_entity` row was just inserted (world seed, respawn pass, debug spawn, or
@@ -77,19 +86,20 @@ pub struct LevelupPayload {
 /// A unit DIED. Fires for every death path: a creature killed via `combat::kill_creature` (melee
 /// killing blow, lethal spell/DoT, `debug_kill_creature`, `debug_set_health(0)`) INCLUDING the pet
 /// clean-despawn branch, and a PLAYER death at each of its sites (melee tick, spell-damage path,
-/// `debug_set_health(0)`). `killer_guid` is the credited killer or `0` when the path has none (a DoT
-/// with no attacker, a debug kill). Fired AFTER the death is committed (row updated/deleted), so
-/// handlers observe the post-death world.
+/// `debug_set_health(0)`). `killer_guid` identifies the unit that caused the death, or `0` when the
+/// path has none. It is independent of reward ownership: Forced Death names the creature itself but
+/// grants no kill reward. Fired after the death is committed, so consumers observe the post-death
+/// world.
 pub struct DeathPayload {
     pub victim_guid: u64,
     pub killer_guid: u64,
     pub victim_is_player: bool,
 }
 
-/// A PLAYER got kill CREDIT for a creature (inside `combat::kill_creature`,
-/// `killer = Some`). Complements `on_death`: this is the killer-centric event (one per credited
-/// kill), `on_death` is the victim-centric one (one per death, credited or not). `victim_entry` /
-/// `victim_level` are snapshotted before the corpse's fields are cleared.
+/// A creature death has a known source unit. Complements `on_death`: this is the source-centric
+/// event, while `on_death` is victim-centric. The source may be the dying creature itself for Forced
+/// Death and does not imply reward ownership. `victim_entry` and `victim_level` are captured before
+/// the corpse fields are cleared.
 pub struct KillPayload {
     pub killer_guid: u64,
     pub victim_guid: u64,
@@ -175,7 +185,8 @@ pub struct GossipSelectPayload {
 /// `combat::kill_creature`'s non-pet branch right after `on_death`, with the encounter-grade
 /// identity `on_death` lacks: the victim's `entry` and `instance_id`, SNAPSHOTTED before the corpse
 /// row was mutated. Pet clean-despawns and player deaths do NOT fire this (encounters key on wild
-/// creatures); `killer_guid` is the credited killer or 0 (same convention as `on_death`).
+/// creatures); `killer_guid` identifies the death source or is 0, using the same convention as
+/// `on_death`. Reward ownership is separate.
 pub struct CreatureDeathPayload {
     pub creature_guid: u64,
     pub entry: u32,

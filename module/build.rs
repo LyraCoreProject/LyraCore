@@ -79,6 +79,7 @@ const REFERENCE_PACKAGE: &str = "example";
 /// panics below with this list.
 const HOOK_EVENTS: &[(&str, &str)] = &[
     ("on_damage_taken", "crate::hooks::DamageTakenPayload"),
+    ("on_death_prevented", "crate::hooks::DeathPreventedPayload"),
     ("on_creature_spawn", "crate::hooks::CreatureSpawnPayload"),
     ("on_levelup", "crate::hooks::LevelupPayload"),
     ("on_group_invite", "crate::hooks::GroupInvitePayload"),

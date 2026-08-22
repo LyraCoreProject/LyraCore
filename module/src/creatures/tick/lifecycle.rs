@@ -44,6 +44,7 @@ use super::*;
 pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
     crate::combat::disengage(ctx, guid); // melee rows + threat (clear_for_unit) + stale selections
     crate::threat::clear_taunt_lock(ctx, guid);
+    crate::combat::clear_lethal_damage_floor(ctx, guid);
     crate::creatures::reset_creature_lifecycle(ctx, guid);
     crate::creatures::drop_summon_expiry(ctx, guid);
     ctx.db.game_creature_spline().guid().delete(guid); // the LIVE leg row (perf 2.3)
@@ -52,7 +53,6 @@ pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
     crate::loot::reap_corpse_loot_family(ctx, guid); // item rows (withheld-safe) + eligibility + rolls + votes
     ctx.db.game_world_entity().guid().delete(guid); // last — the on_delete relay destroys the object
 }
-
 
 /// Pass 3 — decay (runs before respawn): a corpse whose decay window elapsed is DESTROYed and its
 /// respawn timer armed to a FUTURE time (so respawn does NOT re-create it the same tick). Reaps the
@@ -174,7 +174,6 @@ pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
     visited
 }
 
-
 /// Pass 2 — respawn: re-create any creature whose live entity is gone and whose `respawn_at`
 /// elapsed, from its persistent spawn record + template. Runs AFTER decay (decay arms a future
 /// `respawn_at`, so a just-decayed creature isn't re-spawned this tick).
@@ -199,6 +198,7 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
         .collect();
     for spawn in due {
         let guid = spawn.guid;
+        crate::combat::clear_lethal_damage_floor(ctx, guid);
         if let Some(tmpl) = templates.entry().find(spawn.entry) {
             super::spawn::insert_creature_entity(
                 ctx,
@@ -353,6 +353,10 @@ mod despawn_checklist_tripwire {
             (
                 "crate::creatures::reset_creature_lifecycle(ctx, guid)",
                 "the creature's EventAI rule state, phase, and ranged posture",
+            ),
+            (
+                "crate::combat::clear_lethal_damage_floor(ctx, guid)",
+                "the EventAI-owned lethal damage floor",
             ),
             (
                 "crate::creatures::drop_summon_expiry(ctx, guid)",

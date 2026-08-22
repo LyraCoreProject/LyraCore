@@ -23,6 +23,8 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 
 #[path = "harness/eventai_combat.rs"]
 mod eventai_combat;
+#[path = "harness/eventai_death.rs"]
+mod eventai_death;
 #[path = "harness/eventai_edges.rs"]
 mod eventai_edges;
 #[path = "harness/eventai_legacy.rs"]
@@ -225,6 +227,8 @@ struct Scenario {
     eventai_areas: RefCell<HashMap<u64, u32>>,
     eventai_returning_home: RefCell<HashSet<u64>>,
     eventai_summon_expiry: RefCell<HashMap<u64, ScenarioSummonExpiry>>,
+    eventai_lethal_floors: RefCell<HashMap<u64, DefinitionRevision>>,
+    eventai_forced_deaths: RefCell<Vec<u64>>,
     eventai_next_summon: Cell<u64>,
     /// Ordered text effects emitted by authored rules.
     eventai_speech: RefCell<Vec<(u64, u8, String)>>,
@@ -417,6 +421,14 @@ impl Scenario {
 
     fn eventai_emotes(&self) -> Vec<(u64, u32, u32, u64)> {
         self.eventai_emotes.borrow().clone()
+    }
+
+    fn eventai_lethal_floor(&self, guid: u64) -> Option<DefinitionRevision> {
+        self.eventai_lethal_floors.borrow().get(&guid).copied()
+    }
+
+    fn eventai_forced_deaths(&self) -> Vec<u64> {
+        self.eventai_forced_deaths.borrow().clone()
     }
 
     fn eventai_diagnostics(&self) -> Vec<Diagnostic> {
@@ -1662,6 +1674,9 @@ impl EventAiWorld for Scenario {
         revision: DefinitionRevision,
     ) -> CreatureState {
         self.eventai_rule_state.borrow_mut().remove(&creature_guid);
+        self.eventai_lethal_floors
+            .borrow_mut()
+            .retain(|guid, owner| *guid != creature_guid || *owner == revision);
         let mut states = self.eventai_creature_state.borrow_mut();
         let state = states.entry(creature_guid).or_default();
         state.phase = 0;
@@ -1875,6 +1890,43 @@ impl EventAiWorld for Scenario {
 
     fn eventai_engage_summon(&mut self, summon_guid: u64, target_guid: u64) {
         EngageSink::engage(self, summon_guid, target_guid, Pull::Assisted);
+    }
+
+    fn eventai_set_lethal_damage_floor(
+        &mut self,
+        creature_guid: u64,
+        revision: DefinitionRevision,
+        enabled: bool,
+    ) -> bool {
+        if !self.creatures.borrow().contains_key(&creature_guid)
+            || self.corpses.borrow().contains(&creature_guid)
+        {
+            return false;
+        }
+        if enabled {
+            self.eventai_lethal_floors
+                .borrow_mut()
+                .insert(creature_guid, revision);
+        } else {
+            self.eventai_lethal_floors
+                .borrow_mut()
+                .remove(&creature_guid);
+        }
+        true
+    }
+
+    fn eventai_force_death(&mut self, creature_guid: u64) -> bool {
+        if !self.creatures.borrow().contains_key(&creature_guid)
+            || self.corpses.borrow().contains(&creature_guid)
+        {
+            return false;
+        }
+        self.eventai_lethal_floors
+            .borrow_mut()
+            .remove(&creature_guid);
+        self.corpses.borrow_mut().insert(creature_guid);
+        self.eventai_forced_deaths.borrow_mut().push(creature_guid);
+        true
     }
 }
 
