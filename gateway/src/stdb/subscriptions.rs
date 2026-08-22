@@ -2830,6 +2830,11 @@ pub(crate) fn item_instance_update_outbound(
     old: &ItemInstance,
     row: &ItemInstance,
 ) -> Vec<Outbound> {
+    let old_slot_is_empty = old.slot != row.slot
+        && !db
+            .game_item_instance()
+            .iter()
+            .any(|item| item.owner_guid == self_guid && item.slot == old.slot);
     let mut out = if row.slot == old.slot && row.stack_count > old.stack_count {
         item_gain_feedback(
             db,
@@ -2843,39 +2848,12 @@ pub(crate) fn item_instance_update_outbound(
         Vec::new()
     };
     if old.slot != row.slot {
-        if let Some(values) = codec::build_inv_slot_values(self_guid, old.slot, 0) {
-            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
-                Box::new(values),
-            )));
-        }
-        if let Some(values) = codec::build_inv_slot_values(self_guid, row.slot, row.guid) {
-            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
-                Box::new(values),
-            )));
-        }
-        if let Some(values) = codec::build_visible_item_values(self_guid, old.slot, 0) {
-            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
-                Box::new(values),
-            )));
-        }
-        if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, row.entry) {
-            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
-                Box::new(values),
-            )));
-        }
-        for (slot, guid) in [(old.slot, 0), (row.slot, row.guid)] {
-            if let Some((bag_slot, slot_in_bag)) = bag_content_parts(slot) {
-                if let Some(bag) = db
-                    .game_item_instance()
-                    .iter()
-                    .find(|item| item.owner_guid == self_guid && item.slot == bag_slot)
-                {
-                    let (opcode, body) =
-                        codec::build_container_slot_values(bag.guid, slot_in_bag, guid);
-                    out.push(Outbound::Raw { opcode, body });
-                }
-            }
-        }
+        append_final_item_slots(self_guid, old.slot, row.slot, &mut out, |slot| {
+            db.game_item_instance()
+                .iter()
+                .find(|item| item.owner_guid == self_guid && item.slot == slot)
+                .map(|item| (item.guid, item.entry))
+        });
     }
     if old.stack_count != row.stack_count || old.durability != row.durability {
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
@@ -2886,12 +2864,53 @@ pub(crate) fn item_instance_update_outbound(
             )),
         )));
     }
-    if old.slot != row.slot && (old.slot <= 18 || row.slot <= 18)
+    let moved_into_equipment = old.slot != row.slot && row.slot <= 18;
+    let emptied_equipment = old.slot != row.slot && old.slot <= 18 && old_slot_is_empty;
+    if moved_into_equipment || emptied_equipment
         || row.slot <= 18 && (old.durability == 0) != (row.durability == 0)
     {
         append_item_armor_and_sheet(db, self_guid, &mut out);
     }
     out
+}
+
+fn append_final_item_slots(
+    self_guid: u64,
+    old_slot: u8,
+    new_slot: u8,
+    out: &mut Vec<Outbound>,
+    item_in_slot: impl Fn(u8) -> Option<(u64, u32)>,
+) {
+    let old_item = item_in_slot(old_slot);
+    let new_item = item_in_slot(new_slot).unwrap_or_default();
+    let slots = old_item
+        .is_none()
+        .then_some((old_slot, (0, 0)))
+        .into_iter()
+        .chain([(new_slot, new_item)]);
+    for (slot, (guid, _)) in slots.clone() {
+        if let Some(values) = codec::build_inv_slot_values(self_guid, slot, guid) {
+            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(values),
+            )));
+        }
+    }
+    for (slot, (_, entry)) in slots.clone() {
+        if let Some(values) = codec::build_visible_item_values(self_guid, slot, entry) {
+            out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(values),
+            )));
+        }
+    }
+    for (slot, (guid, _)) in slots {
+        if let Some((bag_slot, slot_in_bag)) = bag_content_parts(slot) {
+            if let Some((bag_guid, _)) = item_in_slot(bag_slot) {
+                let (opcode, body) =
+                    codec::build_container_slot_values(bag_guid, slot_in_bag, guid);
+                out.push(Outbound::Raw { opcode, body });
+            }
+        }
+    }
 }
 
 fn append_item_armor_and_sheet(db: &RemoteTables, self_guid: u64, out: &mut Vec<Outbound>) {
@@ -4179,6 +4198,134 @@ mod tests {
                                                             // caller, which only ever looks up a bag that actually exists) — pin its actual unclamped
                                                             // behavior past 191 rather than asserting an invariant it doesn't enforce.
         assert_eq!(bag_content_parts(192), Some((23, 0)));
+    }
+
+    #[test]
+    fn occupied_equipment_swap_projects_committed_slot_occupants() {
+        use wow_world_messages::vanilla::{Guid, ItemSlot, Object, UpdateMask, VisibleItemIndex};
+
+        const CHARACTER: u64 = 7;
+        const EQUIPMENT_SLOT: u8 = 0;
+        const BACKPACK_SLOT: u8 = 23;
+        const DISPLACED_GUID: u64 = 101;
+        const INCOMING_GUID: u64 = 202;
+        const INCOMING_ENTRY: u32 = 1337;
+
+        let committed = [
+            (EQUIPMENT_SLOT, INCOMING_GUID, INCOMING_ENTRY),
+            (BACKPACK_SLOT, DISPLACED_GUID, 42),
+        ];
+        let item_in_slot = |slot| {
+            committed
+                .iter()
+                .find(|item| item.0 == slot)
+                .map(|item| (item.1, item.2))
+        };
+        let mut outbound = Vec::new();
+
+        append_final_item_slots(
+            CHARACTER,
+            EQUIPMENT_SLOT,
+            BACKPACK_SLOT,
+            &mut outbound,
+            item_in_slot,
+        );
+        append_final_item_slots(
+            CHARACTER,
+            BACKPACK_SLOT,
+            EQUIPMENT_SLOT,
+            &mut outbound,
+            item_in_slot,
+        );
+
+        let mut equipment = Vec::new();
+        let mut backpack = Vec::new();
+        let mut visible_head = Vec::new();
+        for message in &outbound {
+            let Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update)) = message else {
+                continue;
+            };
+            let Object::Values {
+                mask1: UpdateMask::Player(player),
+                ..
+            } = &update.objects[0]
+            else {
+                continue;
+            };
+            equipment.extend(player.player_field_inv(ItemSlot::Head));
+            backpack.extend(player.player_field_inv(ItemSlot::Inventory0));
+            visible_head.extend(
+                player
+                    .player_visible_item(VisibleItemIndex::Index0)
+                    .map(|item| item.item),
+            );
+        }
+
+        assert_eq!(equipment, [Guid::new(INCOMING_GUID)]);
+        assert_eq!(backpack, [Guid::new(DISPLACED_GUID)]);
+        assert_eq!(visible_head, [INCOMING_ENTRY]);
+        assert!(!equipment.contains(&Guid::new(0)));
+        assert!(!backpack.contains(&Guid::new(0)));
+    }
+
+    #[test]
+    fn empty_equipment_destination_clears_backpack_and_sets_equipment() {
+        use wow_world_messages::vanilla::{Guid, ItemSlot, Object, UpdateMask};
+
+        let mut outbound = Vec::new();
+        append_final_item_slots(7, 23, 0, &mut outbound, |slot| {
+            (slot == 0).then_some((202, 1337))
+        });
+
+        let mut equipment = Vec::new();
+        let mut backpack = Vec::new();
+        for message in &outbound {
+            let Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update)) = message else {
+                continue;
+            };
+            let Object::Values {
+                mask1: UpdateMask::Player(player),
+                ..
+            } = &update.objects[0]
+            else {
+                continue;
+            };
+            equipment.extend(player.player_field_inv(ItemSlot::Head));
+            backpack.extend(player.player_field_inv(ItemSlot::Inventory0));
+        }
+
+        assert_eq!(equipment, [Guid::new(202)]);
+        assert_eq!(backpack, [Guid::new(0)]);
+    }
+
+    #[test]
+    fn ordinary_backpack_move_clears_source_and_sets_destination() {
+        use wow_world_messages::vanilla::{Guid, ItemSlot, Object, UpdateMask};
+
+        let mut outbound = Vec::new();
+        append_final_item_slots(7, 23, 24, &mut outbound, |slot| {
+            (slot == 24).then_some((202, 1337))
+        });
+
+        let mut source = Vec::new();
+        let mut destination = Vec::new();
+        for message in &outbound {
+            let Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update)) = message else {
+                continue;
+            };
+            let Object::Values {
+                mask1: UpdateMask::Player(player),
+                ..
+            } = &update.objects[0]
+            else {
+                continue;
+            };
+            source.extend(player.player_field_inv(ItemSlot::Inventory0));
+            destination.extend(player.player_field_inv(ItemSlot::Inventory1));
+        }
+
+        assert_eq!(source, [Guid::new(0)]);
+        assert_eq!(destination, [Guid::new(202)]);
     }
 
     #[test]
