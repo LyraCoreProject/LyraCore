@@ -823,7 +823,7 @@ fn fire_ranged_shot(
     now_ms: u32,
 ) {
     use crate::items::weapon_subclass as ws;
-    let (dmin, dmax, delay, subclass) = weapon;
+    let (dmin, dmax, _delay, subclass) = weapon;
     let attacker_guid = attacker.guid;
     let target_guid = target.guid;
     let melee = ctx.db.game_melee_attack();
@@ -863,9 +863,13 @@ fn fire_ranged_shot(
     // Ranged AP fold: a launcher scales with the shooter's Agility-derived ranged attack power, folded
     // into the weapon range by speed exactly like melee; a wand is FLAT weapon damage (no ranged AP in
     // vanilla). Known limitation: no ranged-AP aura (e.g. Aspect of the Hawk) — we have none.
-    let (rdmin, rdmax) = if launcher && attacker.is_player() {
-        let rap = ranged_attack_power(effective_agility(ctx, attacker), attacker.level);
-        weapon_swing_range_ap(rap, dmin, dmax, delay)
+    let (rdmin, rdmax) = if attacker.is_player() {
+        let (_, rdmin, rdmax) = ranged_sheet_values(
+            effective_agility(ctx, attacker),
+            attacker.level,
+            Some(weapon),
+        );
+        (rdmin, rdmax)
     } else {
         (dmin, dmax)
     };

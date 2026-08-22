@@ -652,7 +652,7 @@ pub fn build_creature_entity(
         run_speed_mult_bp: 10_000, // 1× — GM `.speed` targets players only
         godmode: false,         // GM `.god` targets players only
         resting: false,         // creatures never rest (196)
-        // A creature never calls `recompute_sheet` (no character sheet) — all ten sheet fields stay 0.
+        // A creature never calls `recompute_sheet`, so its sheet fields stay 0.
         sheet_str_bonus: 0,
         sheet_agi_bonus: 0,
         sheet_sta_bonus: 0,
@@ -666,6 +666,9 @@ pub fn build_creature_entity(
         bank_bag_slots: 0,   // a creature owns no bank slots
         mount_display_id: 0, // creatures do not use the player taxi presentation field
         zone_id: 0,          // unresolved: nothing routes zone-scoped delivery to a creature
+        sheet_ranged_ap: 0,
+        sheet_ranged_dmg_min: 0,
+        sheet_ranged_dmg_max: 0,
     }
 }
 
@@ -828,6 +831,9 @@ pub fn build_player_entity(
         // logged out with, which is 0 for a character that has never resolved one.
         zone_id: crate::terrain::zone_id_at(ctx, character.map_id, character.x, character.y)
             .unwrap_or(character.zone_id),
+        sheet_ranged_ap: 0,
+        sheet_ranged_dmg_min: 0,
+        sheet_ranged_dmg_max: 0,
     };
     // An interrupted connection does not cancel a paid flight. Restore its presentation while the
     // scheduler continues from its original authoritative timestamp.

@@ -71,6 +71,13 @@ pub struct EntityView {
     pub stamina: u32,
     pub intellect: u32,
     pub spirit: u32,
+    pub sheet_ap_base: u32,
+    pub sheet_ap_mods: i32,
+    pub sheet_dmg_min: u32,
+    pub sheet_dmg_max: u32,
+    pub sheet_ranged_ap: u32,
+    pub sheet_ranged_dmg_min: u32,
+    pub sheet_ranged_dmg_max: u32,
     pub npc_flags: u32, // UNIT_NPC_FLAGS — gossip/vendor/etc. for a creature; 0 for a player
     /// Owning player for a SUMMONED unit (warlock pet) — drives UNIT_FIELD_SUMMONEDBY/CREATEDBY on
     /// the pet CREATE so the 5875 client can bind it to the owner's pet frame. 0 = wild.
@@ -304,15 +311,8 @@ pub fn build_create_object(
         let (ub1_a, ub1_b, ub1_c, ub1_d) = unpack4(entity.unit_bytes_1); // ghost vis bit in byte 3 (slice 5)
         let (ub2_a, ub2_b, ub2_c, ub2_d) = unpack4(entity.unit_bytes_2); // sheath state in byte 0 (#101)
 
-        // Character-sheet weapon damage (PARITY with module `combat::tables`): attack power =
-        // (level*3 + str*2) - 20 (saturating); the UNARMED swing range = base[1..=3] + the
-        // AP*attack_time/(14*1000) bonus. The module stays authoritative for the actual swing — this
-        // only feeds the paperdoll's UNIT_FIELD_MINDAMAGE/MAXDAMAGE/ATTACK_POWER (below). A future
-        // pass folds the equipped main-hand weapon's range in (today these are unarmed-only).
-        let attack_power = (entity.level * 3 + entity.strength * 2).saturating_sub(20);
-        let dmg_bonus = attack_power * entity.base_attack_time_ms / 14_000;
-        let (min_damage, max_damage) = (1 + dmg_bonus, 3 + dmg_bonus);
-
+        // Melee and ranged paperdoll values are stored Module projections. CREATE reads them
+        // unchanged so it agrees with later partial sheet updates.
         let mut builder = UpdatePlayer::builder()
             .set_object_guid(Guid::new(entity.guid))
             .set_object_scale_x(entity.scale_x)
@@ -365,15 +365,23 @@ pub fn build_create_object(
             // Weapon damage for the character sheet's Main-Hand panel. gtker's UpdatePlayer has no
             // default for these float/int fields, so leaving them unset makes the 5875 client read
             // uninitialized floats → "-1.#IND" (NaN) in the damage/DPS tooltip. Send the derived values.
-            .set_unit_attack_power(attack_power as i32)
+            .set_unit_attack_power(entity.sheet_ap_base as i32)
+            .set_unit_attack_power_mods(
+                entity.sheet_ap_mods.max(0) as u16,
+                (-entity.sheet_ap_mods).max(0) as u16,
+            )
             // NOTE: do NOT set UNIT_FIELD_ATTACK_POWER_MULTIPLIER — the client treats it as `1 + value`,
             // so sending 1.0 DOUBLES the displayed attack power (134 → 268) and does NOT fix the paperdoll
             // tooltip's "x0%"/1.#INF (that `percent` comes from a different field — still TODO). Leaving it
             // unset (default 0.0 ⇒ ×1.0) keeps the attack-power readout correct. The melee-damage STAT line
             // (UNIT_FIELD_MINDAMAGE/MAXDAMAGE) already displays correctly (20–22); the slot hover tooltip's
             // INF is a separate cosmetic issue and combat is server-authoritative regardless.
-            .set_unit_mindamage(min_damage as f32)
-            .set_unit_maxdamage(max_damage as f32)
+            .set_unit_mindamage(entity.sheet_dmg_min as f32)
+            .set_unit_maxdamage(entity.sheet_dmg_max as f32)
+            .set_unit_ranged_attack_power(entity.sheet_ranged_ap as i32)
+            .set_unit_ranged_attack_power_mods(0, 0)
+            .set_unit_minrangeddamage(entity.sheet_ranged_dmg_min as f32)
+            .set_unit_maxrangeddamage(entity.sheet_ranged_dmg_max as f32)
             // PLAYER_FIELD_MOD_DAMAGE_DONE_PCT[physical] = 1.0 — THE fix for the Main-Hand tooltip's
             // "1.#INF - 1.#INF x0%" / "-1.$" DPS. It's the `percent` the 5875 paperdoll DIVIDES weapon
             // damage by (UnitDamage's 7th return: `displayDamage = MINDAMAGE / percent`); unset it arrives

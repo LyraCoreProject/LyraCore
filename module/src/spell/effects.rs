@@ -310,6 +310,11 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     let ap_base = crate::combat::melee_attack_power_for(class, eff_str, eff_agi, e.level);
     let ap_mods = crate::combat::aura_attack_power_bonus(ctx, unit_guid) as i32;
     let (dmg_min, dmg_max) = crate::combat::swing_range_ctx(ctx, &e);
+    let (ranged_ap, ranged_dmg_min, ranged_dmg_max) = crate::combat::ranged_sheet_values(
+        eff_agi,
+        e.level,
+        crate::combat::equipped_ranged_weapon(ctx, unit_guid),
+    );
     // #532: melee crit for the sheet is a plain READ of the same fold the swing table rolls
     // against — never a second crit formula.
     let crit_bp = crate::combat::effective_crit_bp(ctx, &e);
@@ -324,6 +329,9 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
         && dmg_min == e.sheet_dmg_min
         && dmg_max == e.sheet_dmg_max
         && crit_bp == e.sheet_crit_bp
+        && ranged_ap == e.sheet_ranged_ap
+        && ranged_dmg_min == e.sheet_ranged_dmg_min
+        && ranged_dmg_max == e.sheet_ranged_dmg_max
     {
         return; // nothing moved — skip the write (baseline-safe no-op)
     }
@@ -337,6 +345,9 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     e.sheet_dmg_min = dmg_min;
     e.sheet_dmg_max = dmg_max;
     e.sheet_crit_bp = crit_bp;
+    e.sheet_ranged_ap = ranged_ap;
+    e.sheet_ranged_dmg_min = ranged_dmg_min;
+    e.sheet_ranged_dmg_max = ranged_dmg_max;
     entities.guid().update(e);
 }
 

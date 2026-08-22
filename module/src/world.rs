@@ -285,7 +285,7 @@ pub struct WorldEntity {
     #[default(0i64)]
     pub cell: i64,
     /// Character-sheet numbers (#517): `spell::recompute_sheet` is the SINGLE chokepoint that writes
-    /// these nine fields (base + `A_MOD_STAT`/`A_MOD_COMBAT(ATTACK_POWER)` aura + equipped gear incl.
+    /// these sheet fields (base + `A_MOD_STAT`/`A_MOD_COMBAT(ATTACK_POWER)` aura + equipped gear incl.
     /// enchants — the exact same folds `combat::swing_range_ctx` rolls against), so the gateway's
     /// `build_sheet_stats_values` is a plain row read, never a second copy of aura/gear semantics. A
     /// SIGNED bonus per attribute (`effective = base ± this`, e.g. `strength + sheet_str_bonus`); AP is
@@ -356,6 +356,15 @@ pub struct WorldEntity {
     /// its owner next moves, teleports, or relogs.
     #[default(0)]
     pub zone_id: u32,
+    /// Ranged character-sheet projection. Launchers store their Agility-derived ranged attack
+    /// power and speed-scaled weapon range; wands store zero power and their flat weapon range.
+    /// `spell::recompute_sheet` writes all three fields. Existing rows and creatures default to 0.
+    #[default(0)]
+    pub sheet_ranged_ap: u32,
+    #[default(0)]
+    pub sheet_ranged_dmg_min: u32,
+    #[default(0)]
+    pub sheet_ranged_dmg_max: u32,
 }
 
 impl WorldEntity {

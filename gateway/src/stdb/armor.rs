@@ -18,7 +18,8 @@
 //! [`sheet_stats`] (the STR/AGI/STA/INT/SPI/AP/damage-range/crit half of the paperdoll, #517 + #532) is
 //! NOT a gateway-side fold like the Armor half above — it is a plain READ of
 //! `module::spell::recompute_sheet`'s output, END-appended onto `game_world_entity` (`sheet_*_bonus`/
-//! `sheet_ap_base`/`sheet_ap_mods`/`sheet_dmg_min`/`sheet_dmg_max`/`sheet_crit_bp`). Those columns
+//! `sheet_ap_base`/`sheet_ap_mods`/`sheet_dmg_min`/`sheet_dmg_max`/`sheet_crit_bp` and the ranged
+//! attack-power/damage projection). Those columns
 //! already ride the player CREATE relay (the same row), so — unlike Armor — there is no
 //! coordinator-cache gap to patch: an aura present at login already shows on the very first CREATE, no
 //! on-aura re-push needed. Do NOT re-introduce a second aura/gear fold here for those numbers; extend
@@ -97,6 +98,9 @@ pub(crate) fn sheet_stats(db: &RemoteTables, guid: u64) -> Option<crate::codec::
         ap_mods: e.sheet_ap_mods,
         dmg_min: e.sheet_dmg_min,
         dmg_max: e.sheet_dmg_max,
+        ranged_attack_power: e.sheet_ranged_ap,
+        ranged_dmg_min: e.sheet_ranged_dmg_min,
+        ranged_dmg_max: e.sheet_ranged_dmg_max,
         // #532: PLAYER_CRIT_PERCENTAGE wants a float percent; `sheet_crit_bp` is basis points
         // (100 bp == 1%), so divide by 100.0 — the sheet value IS `effective_crit_bp`'s output,
         // no second crit formula.

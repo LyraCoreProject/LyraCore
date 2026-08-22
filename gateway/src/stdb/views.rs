@@ -160,6 +160,13 @@ pub(crate) fn entity_view(e: WorldEntity, durable_zone: u32) -> crate::codec::En
         stamina: e.stamina,
         intellect: e.intellect,
         spirit: e.spirit,
+        sheet_ap_base: e.sheet_ap_base,
+        sheet_ap_mods: e.sheet_ap_mods,
+        sheet_dmg_min: e.sheet_dmg_min,
+        sheet_dmg_max: e.sheet_dmg_max,
+        sheet_ranged_ap: e.sheet_ranged_ap,
+        sheet_ranged_dmg_min: e.sheet_ranged_dmg_min,
+        sheet_ranged_dmg_max: e.sheet_ranged_dmg_max,
         npc_flags: e.npc_flags,
         // Default the sheet's EFFECTIVE armor to the row's BASE armor (peers/creatures don't fold gear —
         // your sheet only shows your own armor). The self-login CREATE overrides this with the gear-folded
